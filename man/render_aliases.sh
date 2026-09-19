@@ -11,22 +11,39 @@
 # page has been rendered. The text copy is gzipped under the plain name: the
 # three hundred applet aliases of the family pages would otherwise be seven
 # megabytes, and `man` opens a page by its signature, so a gzipped file
-# reads like a plain one. An alias whose target is not a page is skipped and
-# counted here; `mancheck` is what refuses it, so a tree whose pages are still
-# being written builds.
+# reads like a plain one. OUTDIR/aliases.made lists the files this run made;
+# the next run removes what the previous one listed first, so an alias taken
+# out of the list leaves no copy behind for an image to stage. An alias
+# whose target is not a page, or a copy that cannot be written, fails the
+# run: `mancheck` names the fault, and the build stops here so that no image
+# stages an incomplete manual.
 set -u
 aliases=$1
 out=$2
-skipped=0
+made=$out/aliases.made
+if [ -f "$made" ]; then
+    while read -r old; do
+        rm -f "$old"
+    done < "$made"
+fi
+: > "$made.new"
 while read -r name section target; do
     case "$name" in ''|'#'*) continue ;; esac
     src="$out/cat$section/$target.$section"
     if [ ! -f "$src" ]; then
-        skipped=$((skipped + 1))
-        continue
+        echo "render_aliases: $name($section) names no rendered page $target" >&2
+        exit 1
     fi
-    gzip -9 -n -c "$src" > "$out/cat$section/$name.$section"
-    cp "$out/html/$target.$section.html" "$out/html/$name.$section.html"
+    text="$out/cat$section/$name.$section"
+    html="$out/html/$name.$section.html"
+    gzip -9 -n -c "$src" > "$text.new" && mv "$text.new" "$text" || {
+        echo "render_aliases: $text: cannot write the copy" >&2
+        exit 1
+    }
+    cp "$out/html/$target.$section.html" "$html.new" && mv "$html.new" "$html" || {
+        echo "render_aliases: $html: cannot write the copy" >&2
+        exit 1
+    }
+    printf '%s\n%s\n' "$text" "$html" >> "$made.new"
 done < "$aliases"
-[ "$skipped" -eq 0 ] || echo "render_aliases: $skipped aliases name a page not rendered yet; mancheck refuses them" >&2
-exit 0
+mv "$made.new" "$made"

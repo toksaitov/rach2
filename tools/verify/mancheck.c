@@ -46,27 +46,29 @@ struct name {
 static struct name pages[NAMES], aliases[NAMES], wanted[NAMES];
 static int npages, naliases, nwanted;
 static int failures;
+static int programs_listed, applets_read; /* what each inventory source gave */
 
 static void fail(const char *fmt, const char *a, const char *b)
 {
-    printf("mancheck: ");
-    printf(fmt, a, b);
-    printf("\n");
+    fprintf(stderr, "mancheck: ");
+    fprintf(stderr, fmt, a, b);
+    fprintf(stderr, "\n");
     failures++;
 }
 
-static void add(struct name *list, int *n, const char *text, const char *section,
-                const char *target, const char *from)
+/* Adds a name to a list; returns 0 when the list had it already. */
+static int add(struct name *list, int *n, const char *text, const char *section,
+               const char *target, const char *from)
 {
     int i;
 
     if (strlen(text) >= NAME_MAX_LEN || *n >= NAMES) {
         fail("%s: a name too long or too many names", text, "");
-        return;
+        return 1;
     }
     for (i = 0; i < *n; i++) {
         if (strcmp(list[i].text, text) == 0 && strcmp(list[i].section, section) == 0) {
-            return;
+            return 0;
         }
     }
     strcpy(list[*n].text, text);
@@ -74,6 +76,7 @@ static void add(struct name *list, int *n, const char *text, const char *section
     strcpy(list[*n].target, target ? target : "");
     list[*n].from = from;
     (*n)++;
+    return 1;
 }
 
 static int has_page(const char *text, const char *section)
@@ -150,7 +153,12 @@ static void read_aliases(const char *path)
             fail("%s: an alias line is not NAME SECTION TARGET: %s", path, line);
             continue;
         }
-        add(aliases, &naliases, name, section, target, "alias");
+        if (has_page(name, section)) {
+            fail("alias %s is also a page of section %s", name, section);
+        }
+        if (!add(aliases, &naliases, name, section, target, "alias")) {
+            fail("alias %s is listed twice in section %s", name, section);
+        }
     }
     fclose(f);
 }
@@ -168,14 +176,24 @@ static void read_manifest(const char *path)
     while (fgets(line, sizeof(line), f)) {
         char kind[32], mode[32], guest[256], host[512];
         const char *base;
+        int fields;
 
-        if (sscanf(line, "%31s %31s %255s %511s", kind, mode, guest, host) < 3) {
+        if (line[0] == '#') {
+            continue;
+        }
+        fields = sscanf(line, "%31s %31s %255s %511s", kind, mode, guest, host);
+        if (fields < 3) {
             continue;
         }
         if (strcmp(kind, "exec-dir") == 0) {
-            DIR *d = opendir(host);
+            DIR *d;
             struct dirent *e;
 
+            if (fields < 4) {
+                fail("%s: an exec-dir entry without a host directory: %s", path, guest);
+                continue;
+            }
+            d = opendir(host);
             if (!d) {
                 continue; /* not built here; programs.mk covers the utilities */
             }
@@ -204,7 +222,7 @@ static void read_manifest(const char *path)
         } else {
             continue;
         }
-        if (strchr(base, '/') || strcmp(base, "busybox") == 0) {
+        if (strchr(base, '/')) {
             continue;
         }
         add(wanted, &nwanted, base, "1", NULL, path);
@@ -226,6 +244,7 @@ static void read_programs_mk(const char *path)
     }
     while (fgets(line, sizeof(line), f)) {
         char *p = line, *word;
+        int continued;
 
         if (!in_list) {
             if (strncmp(line, "UTILITIES", 9) == 0 || strncmp(line, "SBIN_PROGS", 10) == 0) {
@@ -239,14 +258,16 @@ static void read_programs_mk(const char *path)
                 continue;
             }
         }
+        continued = strchr(line, '\\') != NULL; /* strtok cuts the line below */
         for (word = strtok(p, " \t\n\\"); word; word = strtok(NULL, " \t\n\\")) {
             if (strncmp(word, "init-", 5) == 0) {
                 add(wanted, &nwanted, "init", "1", NULL, path);
             } else if (strcmp(word, "adduser-crash") != 0) {
                 add(wanted, &nwanted, word, "1", NULL, path);
+                programs_listed++;
             }
         }
-        if (!strchr(line, '\\')) {
+        if (!continued) {
             in_list = 0;
         }
     }
@@ -283,12 +304,13 @@ static void read_applets(const char *path)
                 name[len] = '\0';
                 for (i = 0; i < len; i++) {
                     if (!islower((unsigned char)name[i]) && !isdigit((unsigned char)name[i]) &&
-                        name[i] != '_' && name[i] != '-' && name[i] != '.') {
+                        name[i] != '_' && name[i] != '-' && name[i] != '.' && name[i] != '[') {
                         ok = 0;
                     }
                 }
-                if (ok && strcmp(name, "busybox") != 0) {
+                if (ok) {
                     add(wanted, &nwanted, name, "1", NULL, "applet");
+                    applets_read++;
                 }
             }
             p = q + 1;
@@ -331,7 +353,8 @@ static void read_syscalls(const char *header, const char *source)
             while (isspace((unsigned char)*r)) {
                 r++;
             }
-            if (strchr(p, '(') < q || !isdigit((unsigned char)*r)) {
+            if ((strchr(p, '(') != NULL && strchr(p, '(') < q) ||
+                !isdigit((unsigned char)*r)) {
                 continue;
             }
             (void)strtoul(r, (char **)&r, 0);
@@ -360,10 +383,11 @@ static void check_recovery(const char *listpath, const char *manifest)
     char line[256];
 
     if (!f) {
+        fail("%s: cannot read the recovery page list", listpath, "");
         return;
     }
     while (fgets(line, sizeof(line), f)) {
-        char name[NAME_MAX_LEN], section[4], want[512], mline[1024];
+        char name[NAME_MAX_LEN], section[4], want[512], from[512], mline[1024];
         FILE *m;
         int staged = 0;
 
@@ -374,14 +398,24 @@ static void check_recovery(const char *listpath, const char *manifest)
             fail("recovery needs %s(%s) and there is no such page", name, section);
             continue;
         }
-        snprintf(want, sizeof(want), " /usr/share/man/cat%s/%s.%s ", section, name, section);
+        snprintf(want, sizeof(want), "/usr/share/man/cat%s/%s.%s", section, name, section);
+        snprintf(from, sizeof(from), "build/man/cat%s/%s.%s", section, name, section);
         m = fopen(manifest, "r");
         if (!m) {
             fail("%s: cannot read the recovery manifest", manifest, "");
             break;
         }
         while (fgets(mline, sizeof(mline), m)) {
-            if (strstr(mline, want)) {
+            char kind[32], mode[32], guest[256], host[512];
+
+            /* An active `file` line staging the rendered page at its path;
+             * a comment or a line naming another file does not count. */
+            if (mline[0] == '#' ||
+                sscanf(mline, "%31s %31s %255s %511s", kind, mode, guest, host) != 4) {
+                continue;
+            }
+            if (strcmp(kind, "file") == 0 && strcmp(guest, want) == 0 &&
+                strcmp(host, from) == 0) {
                 staged = 1;
             }
         }
@@ -427,6 +461,14 @@ int main(int argc, char **argv)
     for (i = 7; i < argc; i++) {
         read_manifest(argv[i]);
     }
+    /* An inventory source that gave nothing is a wrong file, not an empty
+     * machine: a directory opens and reads as empty. */
+    if (applets_read == 0) {
+        fail("%s: no applet name was read from the table", argv[4], "");
+    }
+    if (programs_listed == 0) {
+        fail("%s: no utility was read from the program lists", argv[5], "");
+    }
     for (i = 0; i < nwanted; i++) {
         if (strcmp(wanted[i].section, "2") == 0) {
             calls++;
@@ -444,9 +486,12 @@ int main(int argc, char **argv)
     }
     snprintf(path, sizeof(path), "%s/recovery", argv[1]);
     check_recovery(path, argv[6]);
+    if (calls == 0) {
+        fail("%s: no registered call was read", argv[3], "");
+    }
     if (failures) {
-        printf("mancheck: %d names without a page or a fault, over %d pages and %d aliases\n",
-               failures, npages, naliases);
+        fprintf(stderr, "mancheck: %d names without a page or a fault, over %d pages and %d aliases\n",
+                failures, npages, naliases);
         return 1;
     }
     printf("mancheck: ok: %d pages and %d aliases cover %d programs and applets and %d calls\n",

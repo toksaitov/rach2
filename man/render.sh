@@ -25,7 +25,16 @@ mandoc -T lint -W warning "$src" || {
     exit 1
 }
 mkdir -p "$out/cat$section" "$out/html"
-mandoc -I os=Rach2 -T ascii "$src" | sed "s/.$bs//g" > "$out/cat$section/$name.new" &&
+# The renderer's status is checked on its own: in a pipeline only the last
+# command's would be, and a page it failed on would be published as the
+# empty or partial text it left.
+mandoc -I os=Rach2 -T ascii "$src" > "$out/cat$section/$name.raw" || {
+    rm -f "$out/cat$section/$name.raw"
+    echo "render: $src: mandoc could not render the page" >&2
+    exit 1
+}
+sed "s/.$bs//g" < "$out/cat$section/$name.raw" > "$out/cat$section/$name.new" &&
+    rm -f "$out/cat$section/$name.raw" &&
     mv "$out/cat$section/$name.new" "$out/cat$section/$name" || exit 1
 mandoc -I os=Rach2 -T html "$src" > "$out/html/$name.html.new" &&
     mv "$out/html/$name.html.new" "$out/html/$name.html" || exit 1

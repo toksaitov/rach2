@@ -445,8 +445,10 @@ MAN_SOURCES = $(wildcard man/man[0-9]/*.[0-9])
 MAN_CAT = $(patsubst man/man%,build/man/cat%,$(MAN_SOURCES))
 build/man/cat%: man/man% man/render.sh | preflight
 	sh man/render.sh $< build/man
-# The aliases are copies of rendered pages, made after every page; the stamp
-# is what an image rule depends on beside the pages themselves.
+# The aliases are copies of rendered pages, made after every page; the
+# renderer lists what it made in build/man/aliases.made and removes the
+# previous run's files first, and the stamp is what an image rule depends
+# on beside the pages themselves.
 build/man/.aliases: man/aliases man/render_aliases.sh $(MAN_CAT)
 	sh man/render_aliases.sh man/aliases build/man && touch $@
 MAN_ALL = $(MAN_CAT) build/man/.aliases
@@ -549,13 +551,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
-# dropbear SSH server and client, Doom, and an /etc + /root tree). 16 MB: enough
-# for the capstones and the shareware Doom WAD, and it still fits under the
-# kernel's 32 MB physical-RAM cap once the kernel and its frames are accounted
-# for (the module is loaded just above 1 MB). gen_demo_key.sh provisions the SSH
-# login keys and gen_demo_password.sh the account passwords and /etc/shadow,
-# each when absent; the check targets ensure the busybox/dropbear binaries are
-# real.
+# dropbear SSH server and client, Doom, the manual, and an /etc + /root tree).
+# 24 MiB: the tree is under 16 MiB without the manual, and the manual's pages
+# and gzipped alias copies take about 2.5 MiB more, with room left for a page
+# to grow. gen_demo_key.sh provisions the SSH login keys and
+# gen_demo_password.sh the account passwords and /etc/shadow, each when
+# absent; the check targets ensure the busybox/dropbear binaries are real.
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 24
 
@@ -566,7 +567,7 @@ $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS
 # sets the owners with debugfs, and passes it through e2fsck and the set-id
 # guard's own ext2 reader before it is named. The prerequisites are the KRFFS
 # image's, so the two are built from one tree.
-$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
@@ -634,7 +635,7 @@ RECOVERY_KEY_TAG = -with-key
 endif
 RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
 RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) $(MAN_ALL) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	@sh tools/image/keyname.sh $@
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
@@ -644,7 +645,7 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
 # partition is larger than the 32 MB resident page-cache cap on purpose, so it
 # can later prove an on-disk file system bigger than what fits in RAM at once.
-os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(MAN_ALL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
 
 # `make rach2-sealed-disk`: the disk milestone 25 seals into the laptop, written
