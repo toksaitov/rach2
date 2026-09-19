@@ -58,8 +58,9 @@ They accept root's writes on ordinary and recovery kernels.
 The metal kernel's read-only ATA and AHCI driver policy prevents writes
 through them as well as other writes to those disks.
 .Ss Reservations and mounts
-On the recovery kernel, each disk permits one write-capable open-file
-description across its whole-disk and partition nodes.
+Each disk permits one write-capable open-file description across its
+whole-disk node and the two boot devices in every build, and across its
+partition nodes as well on the recovery kernel.
 The boot devices share the selected boot disk's reservation.
 A second write-capable open on that disk fails with
 .Er EBUSY .
@@ -67,9 +68,9 @@ A second write-capable open on that disk fails with
 also permits only one open-file description at a time, including readers.
 .Pp
 A mount claims its sector range.
-On the recovery kernel,
-a write-capable open overlapping that range fails with
-.Er EBUSY ;
+A write-capable open overlapping that range fails with
+.Er EBUSY ,
+on the recovery kernel for partition nodes too;
 a mount overlapping an open writer fails with the same error.
 The claims also exclude overlapping whole-disk and partition mounts.
 .Ss Partition table reread
@@ -79,8 +80,10 @@ request on a whole-disk node rereads the partition table and rebuilds
 the partition nodes.
 It fails with
 .Er EBUSY
-while a partition is mounted or another descriptor is open on that disk,
-including another descriptor in the calling process.
+while the disk or a partition is mounted or another independently
+opened whole-disk or partition-node description exists on that disk,
+in the calling process included; duplicated descriptors and boot-device
+opens are not counted.
 On a partition node it fails with
 .Er ENOTTY .
 .Sh FILES

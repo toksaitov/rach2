@@ -425,3 +425,10 @@ fstatat 2 stat
 sigprocmask 2 sigaction
 sigsuspend 2 sigaction
 fstatfs 2 statfs
+screenlog 4 bootlog
+framefail 4 bootlog
+tty 4 console
+ptmx 4 console
+pts 4 console
+bootpart 4 disk
+grubcore 4 disk

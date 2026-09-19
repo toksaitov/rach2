@@ -32,7 +32,7 @@ With
 .Dv O_APPEND ,
 each write uses the current end of the file, regardless of an intervening seek.
 .Pp
-A read-only mount fails with
+A write to a file on a read-only mount fails with
 .Er EROFS .
 A file attached to a loop device cannot be written directly;
 the call fails with
@@ -61,7 +61,8 @@ and
 set, a newline becomes carriage return followed by newline.
 The return value counts input bytes, before this conversion.
 Pseudoterminal slave output uses the same processing and enters the
-master's output ring.
+master's 4096-byte ring; bytes that arrive while the ring is full, echo
+included, are discarded and still counted as written.
 Writing a slave whose master has closed fails with
 .Er EIO .
 Master writes supply input to the slave's line discipline and may wait
@@ -131,13 +132,15 @@ An individual length above 2147483647, or a length that would make the
 running byte total exceed that value, stops the call.
 An error found after a positive transfer returns the transferred byte
 count instead of the error.
-With no nonempty entries,
+With zero vectors, or a readable vector list of zero-length entries
+only,
 .Fn writev
-returns zero without checking the descriptor.
+returns zero without checking the descriptor; an entry that cannot be
+read gives
+.Er EFAULT .
 .Pp
 The vector is a sequence of separate writes, not one atomic operation.
 On a datagram socket, each nonempty entry sends a separate datagram.
-This differs from Linux's gathered datagram write.
 Musl's buffered output uses
 .Fn writev .
 .Pp
@@ -164,7 +167,9 @@ It requires
 .Bl -tag -width ECONNREFUSED
 .It Er EACCES
 A datagram broadcast was attempted without
-.Dv SO_BROADCAST .
+.Dv SO_BROADCAST ,
+or a loop-control attachment path has a directory the caller cannot
+search.
 .It Er EAGAIN
 A nonblocking pipe, pseudoterminal master, or stream socket cannot
 accept bytes without waiting, or a datagram socket cannot acquire

@@ -39,7 +39,8 @@ The slave is
 where N is the lowest index not used by a live pair.
 A network login uses one pair per session.
 Master writes become slave input.
-Slave output and echo enter the master's ring.
+Slave output and echo enter the master's 4096-byte ring; what arrives
+while it is full is discarded and still counted as written.
 The slave has the same line discipline and job control as the console.
 The pair is freed after both ends close, and its index may be reused.
 .Ss Line discipline and job control
@@ -75,7 +76,8 @@ Set the terminal settings.
 also discards unread input.
 .It Dv TCFLSH
 Discard unread input for selectors 0 and 2.
-Selector 1 does nothing; there is no output queue to flush.
+Selector 1 does nothing, and selector 2 discards unread input only;
+queued pseudoterminal output is unchanged.
 .It Dv TIOCGPGRP
 Read the foreground process group ID.
 .It Dv TIOCSPGRP

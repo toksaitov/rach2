@@ -24,7 +24,7 @@ Any child.
 Any child in the caller's process group.
 .It Less than -1
 Any child whose process group ID equals
-.Li -pid .
+.Ql -pid .
 The value -2147483648 matches no child.
 .El
 .Pp
@@ -67,7 +67,8 @@ for a continuation.
 performs the same wait and accepts an optional
 .Fa rusage
 pointer.
-On reap, the kernel zeroes the 72-byte i386 resource usage structure;
+When the kernel reaps a child, it zeroes the 72-byte i386 resource usage
+structure;
 per-process resource usage is not tracked.
 Stop and continue reports do not fill this structure.
 Nonnull status and resource usage pointers are checked for write
@@ -94,7 +95,7 @@ system call.
 These functions return the process ID of the child whose state was
 reported, or 0 when
 .Dv WNOHANG
-finds a matching child but no reportable event.
+is set and a matching child has no reportable state change.
 On failure they return -1 and set
 .Va errno .
 The kernel returns a negative error number on failure.
