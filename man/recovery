@@ -1,0 +1,15 @@
+# The pages the recovery image carries: NAME SECTION, one a line. Every
+# command the interactive recovery and the installer direct a person to
+# use is here, and man(1) itself; mancheck requires each to be a page and
+# to be staged by the recovery manifest.
+rach2-install 8
+rach2-recover 8
+reflash 8
+bootctl 8
+growroot 8
+resize2fs 8
+recovery 7
+e2fsck 8
+mount 8
+netup 8
+man 1

@@ -445,8 +445,23 @@ MAN_SOURCES = $(wildcard man/man[0-9]/*.[0-9])
 MAN_CAT = $(patsubst man/man%,build/man/cat%,$(MAN_SOURCES))
 build/man/cat%: man/man% man/render.sh | preflight
 	sh man/render.sh $< build/man
+# The aliases are copies of rendered pages, made after every page; the stamp
+# is what an image rule depends on beside the pages themselves.
+build/man/.aliases: man/aliases man/render_aliases.sh $(MAN_CAT)
+	sh man/render_aliases.sh man/aliases build/man && touch $@
+MAN_ALL = $(MAN_CAT) build/man/.aliases
 .PHONY: man
-man: $(MAN_CAT)
+man: $(MAN_ALL)
+MANCHECK = build/tools/verify/mancheck
+$(MANCHECK): tools/verify/mancheck.c
+	@mkdir -p build/tools/verify
+	cc -O2 -Wall -Wextra -o $@ $<
+# `make mancheck`: every program, applet and call has a page; see the tool.
+.PHONY: mancheck
+mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
+	$(MANCHECK) man rach2/sys/syscall.h rach2/sys/syscall.c build/vendor/busybox/applet_tables-main.h \
+	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
+	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
 
 test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
@@ -541,7 +556,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # login keys and gen_demo_password.sh the account passwords and /etc/shadow,
 # each when absent; the check targets ensure the busybox/dropbear binaries are
 # real.
-$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_CAT) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
@@ -715,7 +730,7 @@ $(FS_DEMO_DIR)/empty.krffs: krffs/mkfs.krffs.c | krffs
 fs-demo-images: $(FS_DEMO_IMAGES)
 .PHONY: fs-demo-images
 SEALED_EXT2 = build/images/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_CAT) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets, which
