@@ -3086,9 +3086,53 @@ static char *allow_path_beside(const char *argv0)
     return path;
 }
 
-int main(int argc, char **argv)
+/* Releases what an allow list holds: every entry's declarations and the
+   applet and init lists. The list itself stays, for one on the stack. */
+static void allow_clear(struct allow *a)
 {
-    struct allow *allow;
+    int i, j;
+
+    for (i = 0; i < a->n; i++) {
+        struct entry *e = &a->entries[i];
+
+        for (j = 0; j < e->n_setid; j++) {
+            free(e->setid[j].path);
+            free(e->setid[j].source);
+        }
+        free(e->setid);
+        for (j = 0; j < e->n_trusted; j++) {
+            free(e->trusted[j].path);
+            free(e->trusted[j].verb);
+            free(e->trusted[j].value);
+        }
+        free(e->trusted);
+        free(e->stem);
+        free(e->sentinel_path);
+        free(e->init);
+    }
+    free(a->entries);
+    list_free(&a->forbidden_applets);
+    free(a->applet_sentinel);
+    list_free(&a->suid_applets);
+    list_free(&a->suid_on);
+    list_free(&a->suid_off);
+    list_free(&a->init_strict);
+    list_free(&a->init_shellful);
+    list_free(&a->shell_strings);
+    list_free(&a->sysroot_paths);
+    list_free(&a->sysroot_programs);
+}
+
+/* Frees an allow list read by `read_allow`. */
+static void allow_free(struct allow *a)
+{
+    allow_clear(a);
+    free(a);
+}
+
+/* The program under its options, given the allow list beside it. */
+static int run(int argc, char **argv, struct allow *allow)
+{
     struct list problems = { NULL, 0, 0 };
     const char *image = NULL, *manifest = NULL, *applets = NULL;
     long offset = 0, size = 0;
@@ -3136,8 +3180,6 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-
-    allow = read_allow(allow_path_beside(argv[0]));
 
     if (do_selftest)
         return selftest(allow);
@@ -3332,6 +3374,15 @@ int main(int argc, char **argv)
                "entries staged)\n", manifests.n, entries);
     }
     return 0;
+}
+
+int main(int argc, char **argv)
+{
+    struct allow *allow = read_allow(allow_path_beside(argv[0]));
+    int rc = run(argc, argv, allow);
+
+    allow_free(allow);
+    return rc;
 }
 
 /* ---- the selftest: every half over fixtures ----
@@ -4543,6 +4594,7 @@ static int selftest(struct allow *allow)
         validate_table(&bad, &got);
         st_case("a declared entry carrying no set-id bit", &got, 0,
                 "has no set-id bit");
+        allow_clear(&bad);
     }
 
     /* A manifest the table names but the tree lacks: the require-all rule
@@ -4677,6 +4729,7 @@ static int selftest(struct allow *allow)
     }
 
     st_clean();
+    allow_clear(&img_allow);
     if (st_bad) {
         printf("check-setid: selftest: %d of %d cases failed\n", st_bad,
                st_ran);
