@@ -577,12 +577,16 @@ static int cmd_netconsole(int argc, char **argv)
             seq_broken = 1;
         expect_seq++;
         if (log_len + length + 1 > log_cap) {
+            unsigned char *grown;
+
             log_cap = (log_len + length + 1) * 2;
-            log = realloc(log, log_cap);
-            if (log == NULL) {
+            grown = realloc(log, log_cap);
+            if (grown == NULL) {
                 fprintf(stderr, "netconsole_check: out of memory\n");
+                free(log);
                 return 2;
             }
+            log = grown;
         }
         memcpy(log + log_len, body + NC_HDR_LEN, length);
         log_len += length;
@@ -600,6 +604,10 @@ static int cmd_netconsole(int argc, char **argv)
         nc_fail("sequence numbers are not 0..%ld in order", expect_seq - 1);
     if (log == NULL)
         log = calloc(1, 1);
+    if (log == NULL) {
+        fprintf(stderr, "netconsole_check: out of memory\n");
+        return 2;
+    }
     log[log_len] = '\0';
     for (i = 0; i < n_expect; i++) {
         /* memmem by hand: the log may hold NUL bytes. */
