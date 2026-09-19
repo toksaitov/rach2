@@ -1088,7 +1088,10 @@ static void exec_program(int argc, char *argv[])
     uint32_t user_esp;
     uint8_t random16[16];
     int init_is_starting;
-    static char *default_envp[] = {"PATH=/bin:/usr/bin:/", "HOME=/", "TERM=rach2", 0};
+    static char env_path[] = "PATH=/bin:/usr/bin:/";
+    static char env_home[] = "HOME=/";
+    static char env_term[] = "TERM=rach2";
+    static char *default_envp[] = {env_path, env_home, env_term, 0};
 
     if (argc < 1 || !argv || !argv[0]) {
         console_puts("exec: No program specified");
