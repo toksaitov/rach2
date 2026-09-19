@@ -8,10 +8,10 @@
 # machine finds the page TARGET of that section. BusyBox's `man` follows no
 # links between preformatted pages, so each alias is a copy of the rendered
 # target under its own name, in OUTDIR/catN and OUTDIR/html, made after every
-# page has been rendered. The text copy is gzipped under the plain name: the
-# three hundred applet aliases of the family pages would otherwise be seven
-# megabytes, and `man` opens a page by its signature, so a gzipped file
-# reads like a plain one. OUTDIR/aliases.made lists the files this run made;
+# page has been rendered. The rendered text is gzipped under the plain name
+# already, and the copy keeps it so: the three hundred applet aliases of the
+# family pages would otherwise be seven megabytes. OUTDIR/aliases.made lists
+# the files this run made;
 # the next run removes what the previous one listed first, so an alias taken
 # out of the list leaves no copy behind for an image to stage. An alias
 # whose target is not a page, or a copy that cannot be written, fails the
@@ -36,7 +36,7 @@ while read -r name section target; do
     fi
     text="$out/cat$section/$name.$section"
     html="$out/html/$name.$section.html"
-    gzip -9 -n -c "$src" > "$text.new" && mv "$text.new" "$text" || {
+    cp "$src" "$text.new" && mv "$text.new" "$text" || {
         echo "render_aliases: $text: cannot write the copy" >&2
         exit 1
     }

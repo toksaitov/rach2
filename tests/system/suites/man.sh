@@ -41,15 +41,15 @@ READALL="n=0; for f in /usr/share/man/cat*/*; do b=\${f##*/}; man \${b##*.} \${b
 # The lines are matched as fixed text: the harness's expect takes a regular
 # expression, so the parentheses and dots of a page's header are escaped.
 # shellcheck disable=SC2016 # the dollar is a member of the class
-first=$(head -1 "$PAGE" | sed 's/[][\.*^$()|+?{}]/\\&/g')
+first=$(gunzip -c "$PAGE" | head -1 | sed 's/[][\.*^$()|+?{}]/\\&/g')
 # shellcheck disable=SC2016
-last=$(tail -1 "$PAGE" | sed 's/[][\.*^$()|+?{}]/\\&/g')
+last=$(gunzip -c "$PAGE" | tail -1 | sed 's/[][\.*^$()|+?{}]/\\&/g')
 
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --timeout 600 --steptmo 480 --ok "MANDONE" --never "BAD /" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=$READALL" \
-    "expect=MANALL $expected[^0-9]" "send=man rach2" "expect=$first" "sendraw=G" "expect=$last" \
+    "expect=MANALL ${expected}[^0-9]" "send=man rach2" "expect=$first" "sendraw=G" "expect=$last" \
     "sendraw=q" "expect=# " "send=echo MAN\"\"DONE" "expect=MANDONE" > /dev/null 2>&1; then
     count=$(grep -a "MANALL [0-9]" "$LOG" | tail -1 | tr -d '\r' | sed 's/.*MANALL //')
     echo "man-test: every staged page, $count of them, is what man gives through a pipe, byte for byte: OK"
@@ -63,7 +63,7 @@ RLOG=${LOG%.log}-recovery.log
 if "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --timeout 300 --steptmo 240 --ok "MANDONE" --never "BAD /" --log "$RLOG" \
     "expect=recovery image" "expect=# " "send=$READALL" \
-    "expect=MANALL $rexpected[^0-9]" "send=echo MAN\"\"DONE" "expect=MANDONE" > /dev/null 2>&1; then
+    "expect=MANALL ${rexpected}[^0-9]" "send=echo MAN\"\"DONE" "expect=MANDONE" > /dev/null 2>&1; then
     count=$(grep -a "MANALL [0-9]" "$RLOG" | tail -1 | tr -d '\r' | sed 's/.*MANALL //')
     echo "man-test: the recovery image gives its $count pages through the pipe the same way: OK"
 else

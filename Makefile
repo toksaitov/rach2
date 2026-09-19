@@ -552,13 +552,16 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
 # dropbear SSH server and client, Doom, the manual, and an /etc + /root tree).
-# 24 MiB: the tree is under 16 MiB without the manual, and the manual's pages
-# and gzipped alias copies take about 2.5 MiB more, with room left for a page
-# to grow. gen_demo_key.sh provisions the SSH login keys and
+# 20 MiB: the tree is under 16 MiB without the manual, and the manual's
+# gzipped pages and alias copies take under 3 MiB more. The module sits in
+# the kernel's 32 MiB identity-mapped window, where the DMA buffers and the
+# kernel stacks are carved, so every megabyte given to it is taken from
+# those: a 24 MiB image made the self-build suite five times slower under
+# KVM. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets ensure the busybox/dropbear binaries are real.
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 24
+	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 20
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
 # the root `rach2.root=ext2` mounts: 1 GiB, the partition's size, sparse on

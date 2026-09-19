@@ -9,10 +9,13 @@
 # wrong, then rendered with `mandoc -T ascii` and its overstrikes removed: the
 # renderer marks bold and underline with backspaces, which the console has no
 # use for and BusyBox's `man` would hand to a `col` this system does not
-# build. The text goes to OUTDIR/catN/NAME.N, which the manifests stage under
-# /usr/share/man on the images, and an HTML rendering to OUTDIR/html/NAME.N.html
-# for reading off the machine. The operating system named in the page's header
-# and footer is Rach2, given here so every page says it once.
+# build. The text goes gzipped, under the plain name, to OUTDIR/catN/NAME.N,
+# which the manifests stage under /usr/share/man on the images: `man` opens a
+# page by its signature, so a gzipped page reads like a plain one, and the
+# manual then costs the RAM image a third of what plain text would. An HTML
+# rendering goes to OUTDIR/html/NAME.N.html for reading off the machine. The
+# operating system named in the page's header and footer is Rach2, given here
+# so every page says it once.
 set -u
 src=$1
 out=$2
@@ -33,7 +36,7 @@ mandoc -I os=Rach2 -T ascii "$src" > "$out/cat$section/$name.raw" || {
     echo "render: $src: mandoc could not render the page" >&2
     exit 1
 }
-sed "s/.$bs//g" < "$out/cat$section/$name.raw" > "$out/cat$section/$name.new" &&
+sed "s/.$bs//g" < "$out/cat$section/$name.raw" | gzip -9 -n > "$out/cat$section/$name.new" &&
     rm -f "$out/cat$section/$name.raw" &&
     mv "$out/cat$section/$name.new" "$out/cat$section/$name" || exit 1
 mandoc -I os=Rach2 -T html "$src" > "$out/html/$name.html.new" &&
