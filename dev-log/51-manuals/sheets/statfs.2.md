@@ -26,7 +26,8 @@ A statfs64 from a mount's own statfs: the numbers vfat reports. */
 
 ### helper statfs_fill
 
-Fill a statfs64 for one of the three file systems this machine mounts.
+Fill a statfs64 for the boot root or one of the two synthetic mounts;
+`statfs_fill_mount` answers for a mounted volume from its own statfs.
 Only the root has blocks: it is KRFFS, and the region's size and its free
 nodes' usable bytes are both real, reported in 1024-byte units because that
 is what `df` prints in by default. The two synthetic mounts report their own
@@ -44,7 +45,8 @@ EBX is the descriptor, ECX the caller's size, EDX the buffer.
 
 ### helper statfs_fill
 
-Fill a statfs64 for one of the three file systems this machine mounts.
+Fill a statfs64 for the boot root or one of the two synthetic mounts;
+`statfs_fill_mount` answers for a mounted volume from its own statfs.
 Only the root has blocks: it is KRFFS, and the region's size and its free
 nodes' usable bytes are both real, reported in 1024-byte units because that
 is what `df` prints in by default. The two synthetic mounts report their own
