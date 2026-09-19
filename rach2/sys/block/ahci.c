@@ -1332,11 +1332,6 @@ void ahci_start(void)
          ahci_ndisks);
 }
 
-uint32_t ahci_interrupts(void)
-{
-    return ahci_messages;
-}
-
 /* The last IDENTIFY answer, which the registry reads the strings from. */
 static volatile uint16_t ahci_idbuf[BLOCK_SECTOR_SIZE / 2];
 

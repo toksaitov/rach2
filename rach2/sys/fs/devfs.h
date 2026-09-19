@@ -190,6 +190,5 @@ int devfs_lseek_zero(struct fd_entry *e);
  * @return 1 when `n` named a device, 0 past the end.
  */
 int devfs_dirent(int n, const char **name, uint32_t *ino);
-const char *devfs_name(int i);
 
 #endif /* _DEVFS_H_ */

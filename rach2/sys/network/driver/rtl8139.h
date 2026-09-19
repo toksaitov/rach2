@@ -95,12 +95,6 @@ int rtl8139_init(struct netdev *nd, int nth);
  *  chip appends the CRC). len must be <= RTL_TX_BUF_SIZE. */
 int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len);
 
-/** Configured I/O base. */
-uint16_t rtl8139_iobase(void);
-
-/** Configured IRQ line. */
-uint8_t rtl8139_irq_line(void);
-
 /** Reason the most recent rtl8139_init() returned 0; valid only after a 0
  * return. */
 const char *rtl8139_error(void);

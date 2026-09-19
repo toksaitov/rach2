@@ -129,11 +129,6 @@ void schedule(void)
     }
 }
 
-void sched_yield(void)
-{
-    schedule();
-}
-
 /**
  * Preempt from an interrupt handler.
  *
@@ -194,11 +189,6 @@ void sched_service_point(void)
 static volatile int _in_idle_wait = 0;
 static volatile uint32_t _idle_ticks = 0;
 static volatile uint32_t _busy_ticks = 0;
-
-int sched_in_idle_wait(void)
-{
-    return _in_idle_wait;
-}
 
 uint32_t sched_idle_ticks(void)
 {

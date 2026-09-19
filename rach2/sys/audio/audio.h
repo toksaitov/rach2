@@ -85,9 +85,6 @@ extern audio_driver_t speaker_driver;
 /** Detect and initialize the best available audio driver. */
 void init_audio(void);
 
-/* Shut the active driver down and clear `audio`. */
-void shutdown_audio(void);
-
 /* Name of the active driver, or "None" when none is active. */
 const char *audio_get_driver_name(void);
 

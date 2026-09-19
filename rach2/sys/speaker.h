@@ -25,7 +25,4 @@ void speaker_on(uint32_t frequency);
 /** Silence the speaker. */
 void speaker_off(void);
 
-/** True while the speaker is gated on. */
-bool speaker_is_on(void);
-
 #endif /* _SPEAKER_H_ */

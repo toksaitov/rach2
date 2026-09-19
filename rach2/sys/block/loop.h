@@ -51,9 +51,6 @@ int loop_backs(struct vfs_mount *mnt, void *node);
  * sweep. */
 void loop_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
-/** Whether `mnt` holds the file of any loop device. */
-int loop_holds_mount(struct vfs_mount *mnt);
-
 /**
  * Take down every loop device standing on `device`, which has gone: nothing
  * can reach its file again, so the loop device goes with it and the mount

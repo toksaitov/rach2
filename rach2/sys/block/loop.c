@@ -208,18 +208,6 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
-int loop_holds_mount(struct vfs_mount *mnt)
-{
-    int i;
-
-    for (i = 0; i < LOOP_DEVICES; i++) {
-        if (loops[i].mnt == mnt) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /**
  * Let go of everything the attachment holds. The buffers go first: a device
  * whose file is released while the cache still has its blocks would write

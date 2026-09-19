@@ -413,17 +413,3 @@ void vga_mode13h_set_palette(const uint8_t *data)
         outb(VGA_DAC_DATA, data[i] >> 2);
     }
 }
-
-uint8_t *vga_mode13h_get_framebuffer(void)
-{
-    return (uint8_t *)VGA_GFX_FRAMEBUFFER;
-}
-
-/** Copy a full VGA_GFX_SIZE frame to the framebuffer; ignored unless in
- * graphics mode and src is non-NULL. */
-void vga_mode13h_blit(const uint8_t *src)
-{
-    if (src && vga_graphics_mode) {
-        k_memcpy((void *)VGA_GFX_FRAMEBUFFER, src, VGA_GFX_SIZE);
-    }
-}

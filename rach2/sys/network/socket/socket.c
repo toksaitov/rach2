@@ -64,27 +64,6 @@ static uint32_t socket_next_inode(void)
 }
 
 /**
- * The socket carrying `inode`, or NULL if no live socket has it.
- *
- * The identity /proc, an fd symlink and fstat all report is this number, so a
- * program that reads one of them can find the socket behind the other two.
- */
-struct socket *socket_by_inode(uint32_t inode)
-{
-    socket_t *s;
-
-    if (inode == 0) {
-        return NULL;
-    }
-    for (s = sockets; s; s = s->next) {
-        if (s->inode == inode) {
-            return s;
-        }
-    }
-    return NULL;
-}
-
-/**
  * A socket from the heap, on the list and initialised for the given type.
  *
  * Returns a socket with refcount 1 and clean protocol state, or NULL when

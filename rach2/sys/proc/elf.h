@@ -204,8 +204,4 @@ struct vm_space; /* mm/vm.h */
 int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,
                    uint32_t stack_growth);
 
-/** Load PT_LOAD segments of an in-memory image into `dir`; 0 ok, -1 on
- * error. */
-int elf_load(const void *data, uint32_t size, struct page_dir *dir);
-
 #endif /* _ELF_H_ */

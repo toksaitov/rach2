@@ -79,7 +79,4 @@
 /** Probe for an SB16 at base port `base`; true if detected. */
 bool sb16_probe(uint16_t base);
 
-/** Return the DSP version as (major << 8) | minor. */
-uint16_t sb16_get_version(void);
-
 #endif /* _SB16_H_ */

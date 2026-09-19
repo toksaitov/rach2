@@ -32,9 +32,6 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode);
 /** Stop transfers on a channel by masking it. */
 void dma_stop(uint8_t channel);
 
-/** Bytes remaining in the current transfer on a channel. */
-uint32_t dma_get_count(uint8_t channel);
-
 /** Report whether a buffer is a legal ISA DMA region for the channel width. */
 bool dma_address_valid(uint32_t address, uint32_t length, bool is_16bit);
 

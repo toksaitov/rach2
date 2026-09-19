@@ -58,8 +58,3 @@ void speaker_off(void)
 
     _speaker_on = false;
 }
-
-bool speaker_is_on(void)
-{
-    return _speaker_on;
-}

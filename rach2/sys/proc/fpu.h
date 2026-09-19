@@ -31,9 +31,6 @@
  */
 void fpu_init(void);
 
-/** Whether the FXSR format is in use, so SSE is on. */
-int fpu_has_fxsr(void);
-
 /**
  * Save the live floating-point state into `area` without changing it.
  *

@@ -47,9 +47,6 @@ int ahci_init(void);
  */
 void ahci_start(void);
 
-/** How many messages the controller has sent. */
-uint32_t ahci_interrupts(void);
-
 /** Dump the discovered HBA's global and per-port registers to serial. */
 void ahci_dump(void);
 

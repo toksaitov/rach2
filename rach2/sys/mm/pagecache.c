@@ -475,11 +475,6 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
     pc_fs_size = (fs_size + (PC_PAGE_SIZE - 1u)) & ~(PC_PAGE_SIZE - 1u);
 }
 
-int pc_has_backing(void)
-{
-    return pc_read != 0;
-}
-
 int pc_set_capacity(uint32_t slots)
 {
     uint32_t i;

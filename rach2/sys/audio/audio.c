@@ -115,14 +115,6 @@ void init_audio(void)
     audio_boot_status = "No audio";
 }
 
-void shutdown_audio(void)
-{
-    if (audio && audio->shutdown) {
-        audio->shutdown();
-    }
-    audio = NULL;
-}
-
 const char *audio_get_driver_name(void)
 {
     if (audio) {

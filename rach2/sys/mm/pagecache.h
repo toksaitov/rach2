@@ -71,10 +71,6 @@ uint32_t pc_resident(void);
  */
 void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
 
-/* Whether a backing store is currently set (the window is a live file
- * system). */
-int pc_has_backing(void);
-
 /*
  * Service a fault at `fault_address` in the window. Returns 1 if handled
  * (the page is now mapped, read-only on a read or read-write on a write), or

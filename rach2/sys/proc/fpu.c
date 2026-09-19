@@ -126,11 +126,6 @@ void fpu_init(void)
     klog(KLOG_DEBUG, "fpu", "fxsr: %s, sse: %s", use_fxsr ? "on" : "off", have_sse ? "on" : "off");
 }
 
-int fpu_has_fxsr(void)
-{
-    return use_fxsr;
-}
-
 void fpu_save(void *area)
 {
     uint32_t flags;

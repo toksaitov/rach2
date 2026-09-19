@@ -217,40 +217,6 @@ void dma_stop(uint8_t channel)
 }
 
 /**
- * Return the bytes remaining in the current transfer on `channel`.
- *
- * The count register reads back low byte then high byte under the same
- * flip-flop discipline as writing it, and has one less than the residual.
- * For 16-bit channels the register counts words, so the result is doubled to
- * report bytes.
- */
-uint32_t dma_get_count(uint8_t channel)
-{
-    uint16_t count_port, flipflop_port;
-    uint32_t count;
-
-    if (channel > 7)
-        return 0;
-
-    count_port = dma_get_count_port(channel);
-    flipflop_port = (channel < 4) ? DMA1_FLIPFLOP : DMA2_FLIPFLOP;
-
-    outb(flipflop_port, 0);
-
-    /* low byte then high byte, sequenced by the flip-flop */
-    count = inb(count_port);
-    count |= (uint32_t)inb(count_port) << 8;
-
-    count++;
-
-    if (channel >= 4) {
-        count <<= 1;
-    }
-
-    return count;
-}
-
-/**
  * Report whether [address, address+length) is a legal ISA DMA buffer.
  *
  * ISA DMA reaches only the low 16MB. The controller increments the address

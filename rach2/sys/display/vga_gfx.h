@@ -51,10 +51,4 @@ void vga_mode13h_exit(void);
 /** Load a 256-entry RGB palette into the DAC. */
 void vga_mode13h_set_palette(const uint8_t *data);
 
-/** Return a pointer to the Mode 13h framebuffer at 0xA0000. */
-uint8_t *vga_mode13h_get_framebuffer(void);
-
-/** Copy a full VGA_GFX_SIZE frame to the framebuffer. */
-void vga_mode13h_blit(const uint8_t *src);
-
 #endif /* _VGA_GFX_H_ */

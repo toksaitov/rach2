@@ -481,35 +481,6 @@ static uint64_t krffs_find_child(krffs_mount_t *mount, uint64_t dir_id, const ch
 }
 
 /**
- * Find a node whose name hashes to that of `name`, ignoring the hierarchy.
- *
- * `with_root` also matches the root node. This is the flat-namespace lookup,
- * which can collide with same-named files in different directories; the
- * hierarchical walk below is the real path resolver.
- */
-static uint64_t krffs_find_offset_by_hash(krffs_mount_t *mount, const char *name, int with_root)
-{
-    uint64_t offset = 0;
-    uint64_t steps = 0;
-    uint64_t bound = krffs_max_steps(mount);
-    uint64_t hash = krffs_calculate_djb_hash((const uint8_t *)name);
-    krffs_brief_t brief;
-
-    do {
-        if (krffs_brief(mount, offset, &brief) != 0) {
-            return KRFFS_NO_NODE;
-        }
-        if ((brief.type == KRFFS_RESERVED_NODE || (with_root && brief.type == KRFFS_ROOT_NODE)) &&
-            brief.id == hash) {
-            return offset;
-        }
-        offset = krffs_step(mount, offset, brief.size);
-    } while (offset != 0 && ++steps < bound);
-
-    return KRFFS_NO_NODE;
-}
-
-/**
  * The child of the directory at `dir` named `name`, one step of a walk.
  *
  * `dir` is an offset, and offset 0 is the root directory. Answers
@@ -2314,19 +2285,6 @@ krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *no
 }
 
 /**
- * Return the node preceding `node`, using its stored previous_node_size.
- */
-krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *node)
-{
-    if (!fs || !node) {
-        return NULL;
-    }
-
-    return krffs_wrap_node_position(fs,
-                                    (krffs_node_t *)(((char *)node) - node->previous_node_size));
-}
-
-/**
  * Return the node following `node`, advancing by its own size.
  */
 krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
@@ -2344,33 +2302,6 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
     }
 
     return krffs_wrap_node_position(fs, (krffs_node_t *)(((char *)node) + node->size));
-}
-
-/**
- * Find a reserved node whose name hashes to that of `name`.
- *
- * Scans the whole list by DJB id, ignoring the directory hierarchy, so it
- * can collide with same-named files in different directories. The
- * hierarchical walk is the real path resolver; this remains for
- * flat-namespace callers.
- */
-krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name)
-{
-    if (fs != krffs_fs || !name) {
-        return NULL; /* the pointer interface is the root's */
-    }
-    return krffs_node_of(krffs_find_offset_by_hash(&krffs_root_mount, name, 0));
-}
-
-/**
- * Like krffs_find_reserved_node_by_name, but also matches the root node.
- */
-krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name)
-{
-    if (fs != krffs_fs || !name) {
-        return NULL; /* the pointer interface is the root's */
-    }
-    return krffs_node_of(krffs_find_offset_by_hash(&krffs_root_mount, name, 1));
 }
 
 /**
@@ -2405,24 +2336,6 @@ krffs_node_t *krffs_resolve(const char *path)
         return NULL;
     }
     return krffs_node_of(krffs_walk(&krffs_root_mount, path));
-}
-
-/**
- * Like krffs_resolve, but report the failure kind through `err`.
- *
- * Sets *err to 0 on success, -ENOENT for a missing component, or -ENOTDIR for a
- * non-directory in the path. The syscall layer uses this to return the right
- * errno from open, stat, chdir, and the *at calls.
- */
-krffs_node_t *krffs_resolve_e(const char *path, int *err)
-{
-    if (!krffs_fs) {
-        if (err) {
-            *err = -ENOENT;
-        }
-        return NULL;
-    }
-    return krffs_node_of(krffs_walk_err(&krffs_root_mount, path, err));
 }
 
 /**
@@ -2687,24 +2600,6 @@ krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size,
     return node;
 }
 
-/**
- * Copy `name` into a reserved node and set its id to DJB(name).
- *
- * Used for regular files, whose id is never referenced by a child. Directory
- * ids must instead come from krffs_mix_id so that parent_id lookups stay
- * unique.
- */
-void krffs_set_reserved_node_name(krffs_node_t *node, const char *name)
-{
-    if (!node || !name) {
-        return;
-    }
-
-    _krffs_strncpy((char *)node->name, name, KRFFS_FILE_NAME_BUFFER_SIZE);
-    node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
-    node->id = krffs_calculate_djb_hash(node->name);
-}
-
 krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size,
                                            krffs_node_t *original)
 {
@@ -2779,41 +2674,6 @@ uint32_t krffs_free_bytes(void)
         return 0;
     }
     return krffs_free_at(&krffs_root_mount);
-}
-
-/**
- * Print every reserved node's name and size to the serial console.
- */
-void krffs_list_files(void)
-{
-    uint64_t offset = 0;
-    uint64_t steps = 0;
-    uint64_t bound;
-    uint32_t count = 0;
-    krffs_node_t head;
-
-    if (!krffs_fs) {
-        console_printf("KRFFS: No file system mounted\n");
-        return;
-    }
-
-    console_printf("KRFFS files:\n");
-    bound = krffs_max_steps(&krffs_root_mount);
-
-    do {
-        if (krffs_head(&krffs_root_mount, offset, &head) != 0) {
-            break;
-        }
-        if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
-            console_printf("  [%d] %s (%d bytes)\n", count, head.name, (uint32_t)head.data_size);
-            count++;
-        }
-        offset = krffs_step(&krffs_root_mount, offset, head.size);
-    } while (offset != 0 && ++steps < bound);
-
-    if (count == 0) {
-        console_printf("  (no files)\n");
-    }
 }
 
 /**

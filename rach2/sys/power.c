@@ -226,11 +226,6 @@ static const struct power_io power_mmio = {power_outb, kbc_ready, power_io_settl
                                            smbios_bios_vendor};
 static const struct power_io *power_io = &power_mmio;
 
-void power_set_io(const struct power_io *ops)
-{
-    power_io = ops ? ops : &power_mmio;
-}
-
 /**
  * Whether the firmware's own reset command is this firmware's.
  *

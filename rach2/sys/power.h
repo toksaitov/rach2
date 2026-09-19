@@ -31,6 +31,5 @@ void power_stop(int how);
  * reaches. The machine's binding is the real one; NULL restores it.
  */
 struct power_io;
-void power_set_io(const struct power_io *ops);
 
 #endif /* _POWER_H_ */

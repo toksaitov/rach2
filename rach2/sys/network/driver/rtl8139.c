@@ -187,15 +187,6 @@ int rtl8139_init(struct netdev *nd, int nth)
     return NETDEV_UP;
 }
 
-/* Boot-summary accessors (see net_print_info). */
-uint16_t rtl8139_iobase(void)
-{
-    return iobase;
-}
-uint8_t rtl8139_irq_line(void)
-{
-    return rtl_pci.irq;
-}
 const char *rtl8139_error(void)
 {
     return rtl_err;

@@ -391,11 +391,6 @@ bool sb16_probe(uint16_t base)
     return true;
 }
 
-uint16_t sb16_get_version(void)
-{
-    return dsp_version;
-}
-
 /**
  * Locate the SB16, install its IRQ handler, and program the mixer.
  *

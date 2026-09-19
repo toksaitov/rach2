@@ -1574,17 +1574,6 @@ int devfs_dirent(int n, const char **name, uint32_t *ino)
     return 0;
 }
 
-const char *devfs_name(int i)
-{
-    if (i >= DEVFS_NDEV) {
-        return disk_node_present(i - DEVFS_NDEV) ? disk_nodes[i - DEVFS_NDEV].name : NULL;
-    }
-    if (i < 0 || !devfs_entry_present(i)) {
-        return NULL;
-    }
-    return dev_table[i].name;
-}
-
 uint32_t devfs_fd_mode(struct fd_entry *e)
 {
     const struct devfs_entry *dev;

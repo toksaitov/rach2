@@ -131,11 +131,6 @@ void socket_init(void);
 /** Allocate a socket with refcount 1; NULL if the pool is full. */
 struct socket *socket_alloc(int type);
 
-/** The socket a given inode names, or NULL. `/proc/<pid>/fd/N` renders the
- * number; nothing looks one up by it yet, but the pool is the only place that
- * could. */
-struct socket *socket_by_inode(uint32_t inode);
-
 /** Add a reference (fork/dup2 sharing). */
 void socket_ref(struct socket *sock);
 

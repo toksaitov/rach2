@@ -258,21 +258,13 @@ extern krffs_file_system_t *krffs_fs;
 /* Node traversal: the next, previous, and wrapped position in the circular
  * list. */
 krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node);
-krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *node);
 krffs_node_t *krffs_wrap_node_position(krffs_file_system_t *fs, krffs_node_t *node);
-
-/* Flat-namespace lookup by name; the second variant also matches the root. */
-krffs_node_t *krffs_find_reserved_node_by_name(krffs_file_system_t *fs, const char *name);
-krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, const char *name);
 
 /** The child of `dir` named `name` (one walk step); NULL if absent. */
 krffs_node_t *krffs_child(krffs_node_t *dir, const char *name);
 
 /** Resolve `path` to its node, or NULL if absent. */
 krffs_node_t *krffs_resolve(const char *path);
-
-/** As krffs_resolve, but *err reports -ENOENT or -ENOTDIR, 0 on success. */
-krffs_node_t *krffs_resolve_e(const char *path, int *err);
 
 /** Free every orphan a crash left behind; call at mount. Returns the count. */
 uint32_t krffs_reap_orphans(void);
@@ -326,7 +318,6 @@ int krffs_readdir(const char *path, uint32_t index, char *name_out, uint32_t buf
 /* Node primitives (internal, exposed for testing). */
 krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size,
                                          uint64_t previous_node_size);
-void krffs_set_reserved_node_name(krffs_node_t *node, const char *name);
 
 /* K&R first-fit allocator: allocate, resize, free a reserved node. */
 krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size,
@@ -360,6 +351,5 @@ const char *krffs_mount_options(void);
  * `/proc/meminfo`'s file-system half. Zero before a mount. */
 uint32_t krffs_total_bytes(void);
 uint32_t krffs_free_bytes(void);
-void krffs_list_files(void);
 
 #endif /* _KRFFS_H_ */

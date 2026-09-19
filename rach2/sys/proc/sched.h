@@ -18,9 +18,6 @@ int sched_is_enabled(void);
  * contract. */
 void schedule(void);
 
-/** Voluntarily give up the CPU to the next READY process. */
-void sched_yield(void);
-
 /** From an interrupt handler: switch now, or at the current system call's
  * exit when the process is inside one; see sched.c. */
 void sched_preempt(void);
@@ -62,10 +59,6 @@ void idle_wait_irq_on(void);  /* sti; hlt */
  * and a tick can be lost, so these are what the timer actually delivered. */
 uint32_t sched_idle_ticks(void);
 uint32_t sched_busy_ticks(void);
-
-/** Whether the processor is parked in an idle wait right now; the timer asks
- * this at entry, before a wakeup can change any process's state. */
-int sched_in_idle_wait(void);
 
 /** Count one delivered tick as idle or busy. Called by the timer alone. */
 void sched_account_tick(void);

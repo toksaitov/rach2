@@ -23,29 +23,6 @@ static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
 
 /* What the interface has carried, for /proc/net/dev. Counted here rather than
    in the drivers, because this is the one place every frame passes. */
-/*
- * The machine's counters, which are the first interface's. Every count is
- * kept on the interface it belongs to; this reads them back for the callers
- * that still ask about the machine rather than about an interface.
- */
-static struct eth_counts counts;
-
-const struct eth_counts *ethernet_counts(void)
-{
-    struct netdev *nd = netdev_first();
-
-    if (nd) {
-        counts.rx_packets = nd->rx_packets;
-        counts.rx_bytes = nd->rx_bytes;
-        counts.rx_errors = nd->rx_errors;
-        counts.rx_dropped = nd->rx_dropped;
-        counts.tx_packets = nd->tx_packets;
-        counts.tx_bytes = nd->tx_bytes;
-        counts.tx_dropped = nd->tx_dropped;
-    }
-    return &counts;
-}
-
 /**
  * Dispatch a received Ethernet frame to ARP or IP by EtherType.
  *
