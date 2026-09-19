@@ -217,8 +217,7 @@ int main(int argc, char **argv)
         fprintf(
             stderr,
             "Usage: %s <file> <node position> <options>\n",
-            argc >= 1 ?
-                argv[0] : "edfs.krffs"
+            argv[0]
         );
 
         goto cleanup;  /* help requested: a success exit */
@@ -229,8 +228,7 @@ int main(int argc, char **argv)
             stderr,
             "edfs.krffs: an option or its argument was missing or invalid\n"
             "Usage: %s <file> <node position> <options>\n",
-            argc >= 1 ?
-                argv[0] : "edfs.krffs"
+            argv[0]
         );
 
         exit_status =
@@ -243,8 +241,7 @@ int main(int argc, char **argv)
             "Not all first parameters are valid.\n"
             "\n"
             "Usage: %s <file> <node position> <options>\n",
-            argc >= 1 ?
-                argv[0] : "edfs.krffs"
+            argv[0]
         );
 
         exit_status =

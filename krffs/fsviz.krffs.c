@@ -175,8 +175,7 @@ int main(int argc, char **argv)
         fprintf(
             stderr,
             "Usage: %s <file> [-t]\n",
-            argc >= 1 ?
-                argv[0] : "fsviz.krffs"
+            argv[0]
         );
 
         goto cleanup;
@@ -186,8 +185,7 @@ int main(int argc, char **argv)
             "The first parameter is invalid.\n"
             "\n"
             "Usage: %s <file> [-t]\n",
-            argc >= 1 ?
-                argv[0] : "fsviz.krffs"
+            argv[0]
         );
 
         exit_status =

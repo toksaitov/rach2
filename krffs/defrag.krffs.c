@@ -112,8 +112,7 @@ int main(int argc, char **argv)
         fprintf(
             stderr,
             "Usage: %s <file>\n",
-            argc >= 1 ?
-                argv[0] : "defrag.krffs"
+            argv[0]
         );
 
         goto cleanup;
@@ -123,8 +122,7 @@ int main(int argc, char **argv)
             "The first parameter is invalid.\n"
             "\n"
             "Usage: %s <file>\n",
-            argc >= 1 ?
-                argv[0] : "defrag.krffs"
+            argv[0]
         );
 
         exit_status =
