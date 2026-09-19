@@ -46,21 +46,14 @@ static void sink(char c)
 /** Format with the argument words given, and compare the whole result. */
 static void row(const char *want, const char *format, int n, ...)
 {
-    /* The words are laid out as the kernel's callers lay them out: one stack
-       slot each, first argument first, which is what `k_vprintf` walks. */
-    char *args[8];
     va_list ap;
-    int i;
 
-    va_start(ap, n);
-    for (i = 0; i < n && i < 8; i++) {
-        args[i] = va_arg(ap, char *);
-    }
-    va_end(ap);
-
+    (void)n;
     used = 0;
     memset(out, 0, sizeof(out));
-    k_vprintf(sink, format, args);
+    va_start(ap, n);
+    k_vprintf(sink, format, ap);
+    va_end(ap);
     out[used] = '\0';
     if (strcmp(out, want) != 0) {
         fails++;

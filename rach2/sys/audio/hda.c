@@ -3022,4 +3022,6 @@ static void hda_set_volume(int volume)
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
    set_volume. */
-audio_driver_t hda_driver = {"Intel HD Audio", AUDIO_DRIVER_HDA, hda_init, hda_shutdown, hda_start, hda_stop, hda_is_playing, hda_set_callback, hda_write, hda_set_volume};
+audio_driver_t hda_driver = {"Intel HD Audio", AUDIO_DRIVER_HDA, hda_init,       hda_shutdown,
+                             hda_start,        hda_stop,         hda_is_playing, hda_set_callback,
+                             hda_write,        hda_set_volume};

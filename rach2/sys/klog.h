@@ -24,6 +24,7 @@
  */
 
 #include "lib/kint.h"
+#include <stdarg.h>
 
 /** Syslog's numbers, so a record needs no translation later. */
 #define KLOG_CRIT  2
@@ -60,7 +61,7 @@ void klog(int level, const char *subsystem, const char *format, ...);
  * function's arguments that way is an i386 fact, and a test that drives the
  * record builder should not have to be running on i386 to do it.
  */
-void klog_v(int level, const char *subsystem, const char *format, char **args);
+void klog_v(int level, const char *subsystem, const char *format, va_list ap);
 
 /**
  * Read out of the ring, oldest byte first.

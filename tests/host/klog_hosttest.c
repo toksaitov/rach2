@@ -12,11 +12,8 @@
  * ready, a record longer than the buffer, and a record raised from inside the
  * delivery of another, which is what an interrupt handler that prints does.
  *
- * The records are raised through `klog_v` rather than `klog`. Reaching a
- * variadic function's arguments by walking the stack from the last named one
- * is true on i386 and not on the machine this test compiles for, so the words
- * are handed over as an array: one per argument, in order, which is the same
- * thing the kernel's own call builds.
+ * The records are raised through `klog`, with the arguments a kernel call
+ * would pass.
  *
  * Two things are checked about interrupts, and one of them is checked
  * indirectly. That a re-entrant record does not tear the one being delivered,
@@ -33,10 +30,6 @@
 extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/klog.h"
-
-/* One argument word, the way the kernel's own call would push it: an integer
-   in the low bytes of a stack slot, which is where `k_vprintf` reads it. */
-#define WORD(v) ((char *)(long)(v))
 
 static int fails;
 
@@ -299,12 +292,7 @@ int main(void)
        text, and one newline. */
     reset();
     kernel_ticks = 1234;
-    {
-        char *args[1];
-
-        args[0] = WORD(0);
-        klog_v(KLOG_ERR, "ahci", "command: timed out on port %d", args);
-    }
+    klog(KLOG_ERR, "ahci", "command: timed out on port %d", 0);
     ring_text(text, sizeof(text));
     CHECK("the record is the whole line",
           streq(text, "<3>[12.34] ahci: command: timed out on port 0\n"));
@@ -312,30 +300,14 @@ int main(void)
     /* Every conversion the kernel formatter has, since a record is the only
        place most of them are now used. */
     reset();
-    {
-        char *args[7];
-
-        args[0] = WORD(-5);
-        args[1] = WORD(5);
-        args[2] = WORD(8);
-        args[3] = WORD(255);
-        args[4] = WORD(255);
-        args[5] = (char *)"text";
-        args[6] = WORD('z');
-        klog_v(KLOG_INFO, "fmt", "%d %b %o %x %X %s %c %%", args);
-    }
+    klog(KLOG_INFO, "fmt", "%d %b %o %x %X %s %c %%", -5, 5, 8, 255, 255, "text", 'z');
     ring_text(text, sizeof(text));
     CHECK("the conversions are the kernel's own",
           streq(text, "<6>[0.00] fmt: -5 101 10 ff FF text z %\n"));
 
     /* A null string is the formatter's, not a fault. */
     reset();
-    {
-        char *args[1];
-
-        args[0] = (char *)0;
-        klog_v(KLOG_INFO, "fmt", "name: %s", args);
-    }
+    klog(KLOG_INFO, "fmt", "name: %s", (char *)0);
     ring_text(text, sizeof(text));
     CHECK("a null string prints as the formatter renders it", has(text, "name: (null)\n"));
 
@@ -379,12 +351,7 @@ int main(void)
        delimiter, and the ring evicts by finding one: a record carrying its
        own would be dropped in halves, leaving a tail with no header. */
     reset();
-    {
-        char *args[1];
-
-        args[0] = (char *)"first\nsecond";
-        klog_v(KLOG_INFO, "nl", "text: %s", args);
-    }
+    klog(KLOG_INFO, "nl", "text: %s", "first\nsecond");
     ring_text(text, sizeof(text));
     CHECK("a newline inside the text does not end the record", count_lines(text) == 1);
     CHECK("and is kept as a space", streq(text, "<6>[0.00] nl: text: first second\n"));
@@ -459,10 +426,7 @@ int main(void)
     /* Eviction: the ring drops whole records, so it never begins mid-line. */
     reset();
     for (i = 0; i < 2000; i++) {
-        char *args[1];
-
-        args[0] = WORD((int)i);
-        klog_v(KLOG_DEBUG, "fill", "record: %d of two thousand", args);
+        klog(KLOG_DEBUG, "fill", "record: %d of two thousand", (int)i);
     }
     CHECK("the ring holds no more than its size", klog_len() <= KLOG_RING_SIZE);
     CHECK("and no less than it can, within one record", klog_len() > KLOG_RING_SIZE - 64);

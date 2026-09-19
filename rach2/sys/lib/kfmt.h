@@ -1,6 +1,8 @@
 #ifndef _KFMT_H_
 #define _KFMT_H_
 
+#include <stdarg.h>
+
 /*
  * The kernel's one text formatter.
  *
@@ -28,6 +30,6 @@ typedef void (*putc_fn_t)(char);
  * first argument and is consumed left to right; each consumed slot is one
  * stack word, which is why integers and characters are read as `int`.
  */
-void k_vprintf(putc_fn_t putc_fn, const char *format, char **args);
+void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap);
 
 #endif /* _KFMT_H_ */

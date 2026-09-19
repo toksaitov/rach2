@@ -125,7 +125,7 @@ static void build_u32(uint32_t v)
  * its own goes: `build_putc` has already turned it into one.
  */
 static void klog_build(struct klog_record *r, int level, const char *subsystem, const char *format,
-                       char **args)
+                       va_list ap)
 {
     uint32_t ticks = kernel_ticks;
 
@@ -149,7 +149,7 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     build_str(subsystem);
     build_putc(':');
     build_putc(' ');
-    k_vprintf(build_putc, format, args);
+    k_vprintf(build_putc, format, ap);
 
     while (build_at > r->text && build_at[-1] == ' ') {
         build_at--;
@@ -492,14 +492,8 @@ static void klog_drain(void)
             klog_delivering = 0;
             kirq_restore(flags);
             if (lost > 0) {
-                /* `klog_v` with the count in an array, and not `klog` with it
-                   as an argument: reaching a variadic call's arguments by
-                   walking the stack is true on i386 and not on the machine
-                   the host test compiles this file for. */
-                char *args[1];
-
-                args[0] = (char *)(long)lost;
-                klog_v(KLOG_WARN, "klog", "dropped: %d record(s) the queue could not hold", args);
+                klog(KLOG_WARN, "klog", "dropped: %d record(s) the queue could not hold",
+                     (int)lost);
             }
             return;
         }
@@ -531,7 +525,7 @@ static void klog_drain(void)
  * way through, would be worse than the wait. The delivery that interrupted it
  * writes it out when its own record is finished.
  */
-void klog_v(int level, const char *subsystem, const char *format, char **args)
+void klog_v(int level, const char *subsystem, const char *format, va_list ap)
 {
     struct klog_record r;
     uint32_t flags;
@@ -544,7 +538,7 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
         level = KLOG_DEBUG;
     }
     flags = kirq_save();
-    klog_build(&r, level, subsystem, format, args);
+    klog_build(&r, level, subsystem, format, ap);
     nested = klog_delivering || console_writing;
     if (nested) {
         pending_put(&r);
@@ -568,10 +562,11 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
 
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    char **args = (char **)&format;
+    va_list ap;
 
-    ++args;
-    klog_v(level, subsystem, format, args);
+    va_start(ap, format);
+    klog_v(level, subsystem, format, ap);
+    va_end(ap);
 }
 
 /* ---- the console ---- */
@@ -716,10 +711,11 @@ void console_puts(const char *str)
 
 void console_printf(const char *format, ...)
 {
-    char **args = (char **)&format;
+    va_list ap;
 
-    ++args;
+    va_start(ap, format);
     vga_text_hold();
-    k_vprintf(console_putc, format, args);
+    k_vprintf(console_putc, format, ap);
     vga_text_release();
+    va_end(ap);
 }

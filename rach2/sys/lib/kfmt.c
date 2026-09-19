@@ -2,7 +2,7 @@
 #include "kstd.h"
 
 /**
- * Format `format` against the varargs in `args`, emitting each byte through
+ * Format `format` against the arguments in `ap`, emitting each byte through
  * `putc_fn`.
  *
  * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
@@ -10,9 +10,8 @@
  * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
  * percent). A numeric conversion takes an optional `0` flag
  * and an optional single-digit width between the percent and the letter, so
- * `%02x` writes a byte as two hex digits. `args` points at the first argument
- * and is consumed left to right; each consumed slot is one stack word, which
- * is why integers and characters are read as `int`.
+ * `%02x` writes a byte as two hex digits. `ap` is consumed left to right; a
+ * character is read as `int`, which is what the call passed.
  *
  * An unknown conversion is emitted verbatim AND CONSUMES NOTHING, so every
  * argument after it in the same call is read one slot early. That is why the
@@ -20,7 +19,7 @@
  * for `%02x` before the flag and width were understood printed the literal
  * text `02x` and then read the wrong value for every field after it.
  */
-void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
+void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
 {
     char c, buffer[_K_PRINTF_BUFFER_SIZE_];
     const char *str;
@@ -45,19 +44,19 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
 
             switch (c) {
             case 'd':
-                k_itoa(*((unsigned int *)args++), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
+                k_itoa(va_arg(ap, unsigned int), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
                 str = buffer;
                 goto string;
             case 'b':
             case 'o':
             case 'x':
             case 'X':
-                k_itoa(*((int *)args++), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
+                k_itoa(va_arg(ap, int), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
                 str = buffer;
                 goto string;
 
             case 's':
-                str = *args++;
+                str = va_arg(ap, const char *);
                 if (!str)
                     str = "(null)";
 
@@ -79,7 +78,7 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
                 break;
 
             case 'c':
-                putc_fn((char)*((int *)args++));
+                putc_fn((char)va_arg(ap, int));
                 break;
 
             case 0:
