@@ -884,7 +884,6 @@ static int alloc_cluster(struct fat_mount *fm, struct fat_batch *batch, uint32_t
  * run is joined; `zero` 2 writes the zeros through, for a directory
  * cluster, which is joined without a sync of its own. A failure frees what
  * was taken. */
-static int free_chain(struct fat_mount *fm, uint32_t first);
 
 static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first, uint32_t *last)
 {
@@ -2462,7 +2461,6 @@ static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
     return 0;
 }
 
-static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index);
 
 /* ---- the check of a dirty volume at mount ----
  *

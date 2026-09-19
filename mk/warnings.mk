@@ -15,7 +15,8 @@ KWARN = -Wpedantic -Wno-long-long \
         -Wduplicated-cond -Wjump-misses-init -Wformat-security \
         -Wformat-signedness -Wnested-externs -Winit-self \
         -Wmissing-prototypes \
-        -Wwrite-strings
+        -Wwrite-strings \
+        -Wredundant-decls
 
 # Rejected, with the reason:
 #

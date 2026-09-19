@@ -634,7 +634,6 @@ static void command_end(struct msc_device *m, int status)
 
 static void serve_end(struct msc_device *m, int status);
 static int send_request_sense(struct msc_device *m);
-static void refuse(struct msc_device *m, const char *why);
 static void step_command_done(struct msc_device *m);
 
 /**

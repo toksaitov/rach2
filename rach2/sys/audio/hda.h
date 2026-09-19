@@ -194,8 +194,6 @@ typedef struct {
  */
 #define HDA_BDL_MAX_ENTRIES 256
 
-/* Intel HD Audio driver. */
-extern audio_driver_t hda_driver;
 
 /** Periodic service hook; call from the timer tick. */
 void hda_tick(void);

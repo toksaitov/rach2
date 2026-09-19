@@ -76,8 +76,6 @@
  */
 #define SB16_BUFFER_SIZE 160
 
-/** The Sound Blaster 16 audio driver. */
-extern audio_driver_t sb16_driver;
 
 /** Probe for an SB16 at base port `base`; true if detected. */
 bool sb16_probe(uint16_t base);
