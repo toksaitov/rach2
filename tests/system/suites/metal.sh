@@ -188,22 +188,27 @@ fi
 
 # Nothing has been typed and nothing will be. The SSH server is up because init
 # started it, or it is not up at all.
-# A connection the machine reset or refused before its session began is
-# tried again, a few times: a machine slow to answer under a loaded
-# emulator says nothing about what the command would have printed, and the
-# harness tries a port again the same way. A session that ran is never
-# repeated, since the command may have written something.
+# A connection the machine refused, or that ended before the two sides had
+# exchanged their identification, is tried again, three times a second
+# apart: a machine slow to answer under a loaded emulator says nothing about
+# what the command would have printed. A reset after that point is not
+# tried again, since the command may have run and read its input, and a
+# caller that sets `SSH_ONCE` gets one attempt, which the readiness loop
+# does, keeping its bound its own.
 ssh_run() {
     tries=0
     while :; do
-        ssh -i "$KEY" -p "$PORT" \
+        if ssh -i "$KEY" -p "$PORT" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
             -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
-            root@127.0.0.1 "$1" 2>"$LOG.ssh"
-        status=$?
+            root@127.0.0.1 "$1" 2>"$LOG.ssh"; then
+            status=0
+        else
+            status=$?
+        fi
         cat "$LOG.ssh" >> "$LOG"
-        if [ "$status" -ne 255 ] || [ "$tries" -ge "$(scaled 5)" ] ||
-            ! grep -q 'kex_exchange_identification\|Connection reset by\|Connection refused\|Connection timed out' "$LOG.ssh"; then
+        if [ "$status" -ne 255 ] || [ -n "${SSH_ONCE:-}" ] || [ "$tries" -ge 3 ] ||
+            ! grep -q 'kex_exchange_identification\|ssh_exchange_identification\|Connection refused\|Connection timed out' "$LOG.ssh"; then
             return "$status"
         fi
         tries=$((tries + 1))
@@ -214,7 +219,7 @@ ssh_run() {
 
 i=0
 while [ "$i" -lt "$(scaled 60)" ]; do
-    if ssh_run 'echo METAL_READY' 2>/dev/null | grep -q METAL_READY; then
+    if SSH_ONCE=1 ssh_run 'echo METAL_READY' 2>/dev/null | grep -q METAL_READY; then
         break
     fi
     # interval: a try of SSH every two seconds until the server answers

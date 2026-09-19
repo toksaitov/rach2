@@ -119,21 +119,25 @@ bad() {
     echo "  FAIL: $1"
 }
 
-# A connection the machine reset or refused before its session began is
-# tried again, a few times: a machine slow to answer, under a loaded
-# emulator in the rehearsal, says nothing about what the command would have
-# printed. A session that ran is never repeated, since the command may have
-# written something.
+# A connection the machine refused, or that ended before the two sides had
+# exchanged their identification, is tried again, three times a second
+# apart: a machine slow to answer, under a loaded emulator in the
+# rehearsal, says nothing about what the command would have printed. A
+# reset after that point is not tried again, since the command may have run
+# and read its input.
 account() {
     tries=0
     while :; do
-        ssh -i "$KEY" -p "$PORT" \
+        if ssh -i "$KEY" -p "$PORT" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
             -o ConnectTimeout=10 -o BatchMode=yes \
-            "$USER_NAME@$HOST" "$1" 2>"$LOCAL_TMP/ssh.err"
-        status=$?
-        if [ "$status" -ne 255 ] || [ "$tries" -ge 5 ] ||
-            ! grep -q 'kex_exchange_identification\|Connection reset by\|Connection refused\|Connection timed out' "$LOCAL_TMP/ssh.err"; then
+            "$USER_NAME@$HOST" "$1" 2>"$LOCAL_TMP/ssh.err"; then
+            status=0
+        else
+            status=$?
+        fi
+        if [ "$status" -ne 255 ] || [ "$tries" -ge 3 ] ||
+            ! grep -q 'kex_exchange_identification\|ssh_exchange_identification\|Connection refused\|Connection timed out' "$LOCAL_TMP/ssh.err"; then
             return "$status"
         fi
         tries=$((tries + 1))
