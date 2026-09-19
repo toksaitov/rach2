@@ -79,13 +79,13 @@ DESCRIPTION
      when that was asked for.
 
      The demonstration accounts and keys the image carries are removed from the
-     installed root. The KRFFS root beside it and the recovery partition keep
-     theirs, since they are the way back into a machine whose new root will not
-     come up.
+     installed root. The recovery partition keeps its own, since it is the way
+     back into a machine whose root will not come up.
 
      --update IMAGE DISK writes a root file system image into the root
-     partition of a machine that is already installed, without touching its
-     table. The disk must be one this system installed: its first partition
+     partition of a machine that is already installed; the table is touched
+     only to grow that partition into the free space after it, as the install
+     did. The disk must be one this system installed: its first partition
      must be a boot partition bootctl can read and the root it replaces must
      carry /etc/rach2. The account files, the SSH policy, the server's host
      keys and the accounts' own keys, root's included and their absence with
@@ -107,10 +107,12 @@ DESCRIPTION
      The image is judged before the root it replaces is destroyed: its length
      must be a whole number of sectors and must fit the partition, its first
      bytes must be an ext2 file system, and its SHA-256 must match IMAGE.sha256
-     when one is there. The saved boot entry is moved to the fallback before
-     the write and the new root is armed for one trial boot after it, so a root
-     that does not come up, or a write cut off by a power cut, leaves a machine
-     that boots the system it had.
+     when one is there. The saved boot entry is moved to recovery before the
+     write and any armed trial is cancelled, since both kernel entries boot the
+     one root and recovery runs from RAM; after the write the new root is
+     armed for one trial boot, so a root that does not come up, or a write cut
+     off by a power cut, leaves a machine that comes up in recovery, and
+     bootctl commit makes the new root the default once it has been tried.
 
 EXIT STATUS
      0 when the disk carries the system and, for an update, when the new root
