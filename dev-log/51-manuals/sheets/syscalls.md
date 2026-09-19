@@ -367,9 +367,10 @@ read-only from then on.
 
 rename(2): EBX = old path, ECX = new path. Returns 0 or -errno.
 As in `unlink`, every refusal is decided here, because `krffs_rename`
-answers all of them with a bare -1 that userspace reads as `EPERM`. The
-two directory cases are the ones POSIX separates and this file system
-does not: a directory SOURCE is `-EPERM`, since a directory's children
+answers all of them with a bare -1, which the wrapper reports as `EIO`.
+The two directory cases are the ones POSIX separates and the memory root
+does not (a mounted KRFFS volume answers `EIO` for both, and ext2 moves
+directories): a directory SOURCE is `-EPERM`, since a directory's children
 reference its id and a move would orphan them, so the rename cannot be
 performed at all; a directory DESTINATION under a plain source is
 `-EISDIR`, the case that errno is reserved for. The rest follow the
@@ -773,7 +774,7 @@ unknown sub-call.
 ### helper do_recvmsg
 
 Receive one datagram into a scatter list (recvmsg, socketcall 17).
-The DHCP client is what needs this: it reads its raw socket through
+The DHCP client is what needs this: it reads its packet socket through
 `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
 control data, and finding none it verifies the UDP checksum itself. So the
 scatter half is the whole of the work here. The control buffer is answered
@@ -933,14 +934,15 @@ checks the descriptor, so a closed fd is -EBADF and not a quiet zero.
 The buffers are then filled in order, and what "in order" costs depends on
 what is behind the descriptor, because a second read is not always the same
 thing as reading on.
-A regular file is read again for each buffer. Its read returns at once and
-its bytes carry no message boundary, so a walk is the single scatter read.
+A regular file is read again for each buffer. Its bytes carry no message
+boundary, so a walk is the single scatter read.
 A datagram socket is NOT read again: one datagram is one message, and a
 second read would take the next one while the first one's tail was dropped.
-The waiting datagram is copied out piece by piece instead, through
-`socket_dgram_peek`, and consumed once at the end, so the whole of it fills
-as many buffers as it needs and the remainder past the last one is discarded
-the way a plain `read` discards it.
+The waiting datagram is copied whole into a kernel buffer through
+`socket_dgram_peek` and consumed at once, under the network lock, and the
+buffer is then scattered piece by piece, so the whole of it fills as many
+buffers as it needs and the remainder past the last one is discarded the
+way a plain `read` discards it.
 A pipe, a stream socket, a device or a `/proc` file is read again only while
 it says it has more, since a read of an empty one blocks for input nobody has
 written. Asking and then reading is safe for two reasons together: no other
@@ -998,9 +1000,9 @@ read, 0 when there are none, or a negative errno.
 This is what fills the second and later buffers of a `readv` on anything
 whose bytes arrive, not sit there. Readiness is asked of the backing
 object itself: the ops vtable answers `poll`, and a stream socket has a
-non-blocking read of its own. Nothing can consume the bytes between the
-question and the read, since a system call here runs with interrupts off from
-end to end.
+non-blocking read of its own. No other process can consume the bytes
+between the question and the read, since a system call is not preempted
+here, and an interrupt only adds bytes.
 A terminal answers 0 whatever it has. Its read returns one line, and a
 second line into the next buffer would answer a question the reader did not
 ask.
@@ -1656,7 +1658,7 @@ boolean options as 0 (off). Always reports a 4-byte int result. */
 ### SC_RECVMSG = 17 -> do_recvmsg
 
 Receive one datagram into a scatter list (recvmsg, socketcall 17).
-The DHCP client is what needs this: it reads its raw socket through
+The DHCP client is what needs this: it reads its packet socket through
 `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
 control data, and finding none it verifies the UDP checksum itself. So the
 scatter half is the whole of the work here. The control buffer is answered

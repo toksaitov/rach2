@@ -4,7 +4,7 @@ NAME: read - the system call family: read, readv.
 
 The page names every member in NAME with .Nm, gives each its prototype in SYNOPSIS as musl declares it (the header and the C prototype; the number in the table is the ABI, EAX), describes the behaviour of this kernel with its differences from Linux where a caller would notice, lists every error the handler returns in ERRORS with when, and ties an example to a probe of the default suite where one exists (tests/*.c). Aliases: every member other than the page name is already listed in man/aliases as an alias of this page; touch no file but the page.
 
-Notes from the milestone: Regular files, directories (EISDIR), pipes, the console, ptys, sockets, devices; short reads; EINTR; nonblocking; readv scatter.
+Notes from the milestone: Regular files, directories (EBADF), pipes, the console, ptys, sockets, devices; short reads; EINTR; nonblocking; readv scatter.
 
 Sources: the handler comments below, extracted from rach2/sys/syscall.c (read the handler and the helpers it calls for what the comment does not say); rach2/sys/fs/Readme.md, vfs.Readme.md, network/Readme.md; the kernel Readme.
 
@@ -44,14 +44,15 @@ checks the descriptor, so a closed fd is -EBADF and not a quiet zero.
 The buffers are then filled in order, and what "in order" costs depends on
 what is behind the descriptor, because a second read is not always the same
 thing as reading on.
-A regular file is read again for each buffer. Its read returns at once and
-its bytes carry no message boundary, so a walk is the single scatter read.
+A regular file is read again for each buffer. Its bytes carry no message
+boundary, so a walk is the single scatter read.
 A datagram socket is NOT read again: one datagram is one message, and a
 second read would take the next one while the first one's tail was dropped.
-The waiting datagram is copied out piece by piece instead, through
-`socket_dgram_peek`, and consumed once at the end, so the whole of it fills
-as many buffers as it needs and the remainder past the last one is discarded
-the way a plain `read` discards it.
+The waiting datagram is copied whole into a kernel buffer through
+`socket_dgram_peek` and consumed at once, under the network lock, and the
+buffer is then scattered piece by piece, so the whole of it fills as many
+buffers as it needs and the remainder past the last one is discarded the
+way a plain `read` discards it.
 A pipe, a stream socket, a device or a `/proc` file is read again only while
 it says it has more, since a read of an empty one blocks for input nobody has
 written. Asking and then reading is safe for two reasons together: no other
@@ -109,9 +110,9 @@ read, 0 when there are none, or a negative errno.
 This is what fills the second and later buffers of a `readv` on anything
 whose bytes arrive, not sit there. Readiness is asked of the backing
 object itself: the ops vtable answers `poll`, and a stream socket has a
-non-blocking read of its own. Nothing can consume the bytes between the
-question and the read, since a system call here runs with interrupts off from
-end to end.
+non-blocking read of its own. No other process can consume the bytes
+between the question and the read, since a system call is not preempted
+here, and an interrupt only adds bytes.
 A terminal answers 0 whatever it has. Its read returns one line, and a
 second line into the next buffer would answer a question the reader did not
 ask.

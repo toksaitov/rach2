@@ -4,7 +4,7 @@ NAME: rename - the system call family: rename.
 
 The page names every member in NAME with .Nm, gives each its prototype in SYNOPSIS as musl declares it (the header and the C prototype; the number in the table is the ABI, EAX), describes the behaviour of this kernel with its differences from Linux where a caller would notice, lists every error the handler returns in ERRORS with when, and ties an example to a probe of the default suite where one exists (tests/*.c). Aliases: every member other than the page name is already listed in man/aliases as an alias of this page; touch no file but the page.
 
-Notes from the milestone: Within one mount; over an open file; directories; EBUSY for a loop-backed file.
+Notes from the milestone: Within one mount; over an open file; directories; EBUSY on the memory root for replacing a different file a loop device stands on.
 
 Sources: the handler comments below, extracted from rach2/sys/syscall.c (read the handler and the helpers it calls for what the comment does not say); rach2/sys/fs/Readme.md, vfs.Readme.md, network/Readme.md; the kernel Readme.
 
@@ -13,9 +13,10 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 rename(2): EBX = old path, ECX = new path. Returns 0 or -errno.
 As in `unlink`, every refusal is decided here, because `krffs_rename`
-answers all of them with a bare -1 that userspace reads as `EPERM`. The
-two directory cases are the ones POSIX separates and this file system
-does not: a directory SOURCE is `-EPERM`, since a directory's children
+answers all of them with a bare -1, which the wrapper reports as `EIO`.
+The two directory cases are the ones POSIX separates and the memory root
+does not (a mounted KRFFS volume answers `EIO` for both, and ext2 moves
+directories): a directory SOURCE is `-EPERM`, since a directory's children
 reference its id and a move would orphan them, so the rename cannot be
 performed at all; a directory DESTINATION under a plain source is
 `-EISDIR`, the case that errno is reserved for. The rest follow the

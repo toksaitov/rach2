@@ -25,7 +25,7 @@ capacity. Honors MSG_DONTWAIT and O_NONBLOCK. */
 ## recvmsg: socketcall 17, handler do_recvmsg
 
 Receive one datagram into a scatter list (recvmsg, socketcall 17).
-The DHCP client is what needs this: it reads its raw socket through
+The DHCP client is what needs this: it reads its packet socket through
 `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
 control data, and finding none it verifies the UDP checksum itself. So the
 scatter half is the whole of the work here. The control buffer is answered
