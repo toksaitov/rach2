@@ -445,7 +445,6 @@ static int regex_compile(struct regex *re, const char *pattern)
 
         if (*p == '$' && p[1] == '\0') {
             re->anchor_end = 1;
-            p++;
             break;
         }
         memset(it, 0, sizeof(*it));
