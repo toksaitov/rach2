@@ -1512,7 +1512,10 @@ static void boot_write(struct build *b, uint64_t first)
  * The whole volume is held in memory while it is built, so what it can write
  * is bounded by the host's memory.
  */
-static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char **adds, int nadds)
+/* Build a volume of `sectors` at `offset` with the files `adds` name into
+   `b->img`, which the caller writes out and frees. */
+static int build_volume_image(struct build *bp, uint64_t sectors, uint64_t offset, char **adds,
+                              int nadds)
 {
     struct build b;
     struct dw root;
@@ -1521,7 +1524,6 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
     uint32_t c, used;
     unsigned n, i;
     int k;
-    FILE *f;
 
     memset(&b, 0, sizeof(b));
     b.partition_offset = offset;
@@ -1652,6 +1654,32 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
     b.percent = (unsigned)((uint64_t)used * 100 / b.clusters);
     boot_write(&b, 0);
     boot_write(&b, 12);
+    *bp = b;
+    return 0;
+}
+
+/* A volume of `sectors` for a harness that holds it in memory, without
+   files: the image, or NULL; its length in `bytes`. */
+unsigned char *mkexfatfixture_build(unsigned long sectors, unsigned long *bytes)
+{
+    struct build b;
+
+    if (build_volume_image(&b, sectors, 0, NULL, 0) != 0) {
+        return NULL;
+    }
+    *bytes = (unsigned long)b.sectors * b_bps(&b);
+    return b.img;
+}
+
+static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char **adds, int nadds)
+{
+    struct build b;
+    FILE *f;
+    int rc = build_volume_image(&b, sectors, offset, adds, nadds);
+
+    if (rc != 0) {
+        return rc;
+    }
     f = fopen(out, "wb");
     if (!f || fwrite(b.img, 1, (size_t)b.sectors * b_bps(&b), f) != (size_t)b.sectors * b_bps(&b)) {
         fprintf(stderr, "mkexfatfixture: cannot write %s\n", out);
@@ -2087,6 +2115,7 @@ finish:
     return 0;
 }
 
+#ifndef FIXTURE_NO_MAIN
 int main(int argc, char **argv)
 {
     int i;
@@ -2133,3 +2162,4 @@ int main(int argc, char **argv)
     }
     return build(argv[1], argc == 3 ? argv[2] : 0);
 }
+#endif

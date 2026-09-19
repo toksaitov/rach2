@@ -784,7 +784,10 @@ static int check_image(const char *path, unsigned long offset_sectors, int list)
     return 1;
 }
 
-int main(int argc, char **argv)
+/* Build the volume for `option` into `img` (TOTAL sectors), with `fat` and
+   `fat2` beside it; the caller writes it out and frees the three. Returns
+   0, or 2 when the option or its input is refused. */
+static int build_fat(const char *option)
 {
     unsigned long spc, cbytes, clusters, slot_clusters, kernel_clusters;
     unsigned long fallback_clusters, kernel_first, fallback_first;
@@ -798,27 +801,9 @@ int main(int argc, char **argv)
                                    "grub-editenv!!!\n"
                                    "saved_entry=candidate\n";
     unsigned char env[1024];
-    FILE *f;
 
-    if (argc >= 3 && strcmp(argv[1], "--check") == 0) {
-        unsigned long off = 0;
-        int list = 0, i;
-
-        for (i = 3; i < argc; i++) {
-            if (strcmp(argv[i], "--list") == 0)
-                list = 1;
-            else
-                off = strtoul(argv[i], NULL, 10);
-        }
-        return check_image(argv[2], off, list);
-    }
-    if (argc < 2 || argc > 3) {
-        fprintf(stderr, "usage: mkfatfixture <out> [option] | mkfatfixture --check <image> "
-                        "[offset-sectors] [--list]\n");
-        return 2;
-    }
-    if (argc == 3)
-        opt = argv[2];
+    if (option)
+        opt = option;
 
     spc = (is("--cluster8") || is("--cluster8-past-end")) ? 8 : DEFAULT_SPC;
     cbytes = spc * SECTOR;
@@ -1247,7 +1232,45 @@ int main(int argc, char **argv)
     memset(img + CLUSTER_OFF(menu_first), '#', MENU_BYTES);
     if (is("--lost-chain"))
         memset(img + CLUSTER_OFF(6000), 'L', 3 * cbytes);
+    return 0;
+}
 
+/* The volume for a harness that holds it in memory: the image, or NULL
+   when the option is refused; its length in `bytes`. */
+unsigned char *mkfatfixture_build(const char *option, unsigned long *bytes)
+{
+    if (build_fat(option) != 0) {
+        return NULL;
+    }
+    *bytes = (unsigned long)TOTAL * SECTOR;
+    return img;
+}
+
+#ifndef FIXTURE_NO_MAIN
+int main(int argc, char **argv)
+{
+    FILE *f;
+
+    if (argc >= 3 && strcmp(argv[1], "--check") == 0) {
+        unsigned long off = 0;
+        int list = 0, i;
+
+        for (i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--list") == 0)
+                list = 1;
+            else
+                off = strtoul(argv[i], NULL, 10);
+        }
+        return check_image(argv[2], off, list);
+    }
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr, "usage: mkfatfixture <out> [option] | mkfatfixture --check <image> "
+                        "[offset-sectors] [--list]\n");
+        return 2;
+    }
+    if (build_fat(argc == 3 ? argv[2] : 0) != 0) {
+        return 2;
+    }
     f = fopen(argv[1], "wb");
     if (f == NULL || fwrite(img, 1, (size_t)TOTAL * SECTOR, f) != (size_t)TOTAL * SECTOR ||
         fclose(f) != 0) {
@@ -1259,3 +1282,4 @@ int main(int argc, char **argv)
     free(fat2);
     return 0;
 }
+#endif
