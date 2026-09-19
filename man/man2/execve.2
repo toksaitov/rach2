@@ -55,7 +55,8 @@ interpreter [argument] script original-arguments...
 .Pp
 The original
 .Fa argv Ns [0]
-is omitted; the script's resolved path is inserted instead.
+is omitted; the supplied script path, made absolute with repeated slashes
+and dot components removed, is inserted instead.
 The expanded argument vector must still fit 63 entries.
 Only one interpreter level is supported: an interpreter that is itself
 a script is refused.
@@ -114,13 +115,16 @@ The kernel interface returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/musl/execargmusl.c
-executes itself with vectors at the 63-entry and 3072-byte limits and
-checks the values received by the new image.
+executes itself with vectors at the 63-entry and 3072-byte limits: the
+63-argument case checks the count and the last argument the new image
+received, and the other cases check that the execution succeeded.
 It also exceeds each limit and checks that
 .Fn execve
-returns
+returns -1 with
+.Va errno
+set to
 .Er E2BIG
-with the caller still running.
+and the caller still running.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG

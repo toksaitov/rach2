@@ -24,8 +24,9 @@ The KRFFS root is treated as a directory with mode 0755.
 The kernel records an absolute path for the new working directory.
 On KRFFS it reconstructs that path from the directory's parents.
 On another file system it uses the resolved directory's path operation
-when available, otherwise the request with dot components collapsed
-after resolution.
+when it has one, the reconstruction succeeds and the mount's prefix plus
+the path fits the stored size; otherwise it stores the request with dot
+components collapsed after resolution.
 The working directory may also be a synthetic directory under
 .Pa /dev
 or
@@ -108,9 +109,10 @@ Path lookup or metadata access fails, including access to a removed device.
 .It Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Er ENAMETOOLONG
-The supplied path, its joined absolute form or the stored working
-directory exceeds 255 bytes, a component exceeds 255 bytes, or
-symbolic-link expansion exceeds 511 bytes.
+The supplied path or its joined absolute form exceeds 255 bytes, a
+component exceeds 255 bytes, or symbolic-link expansion exceeds 511
+bytes; a reconstructed path too long to store falls back to the
+collapsed request instead.
 .It Er ENOENT
 The path is empty or a component or synthetic process directory is missing.
 A symbolic link has an empty target.

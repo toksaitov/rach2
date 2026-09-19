@@ -37,11 +37,15 @@ onto
 .Fa newfd .
 If
 .Fa newfd
-is open, its previous backing references are released first;
-close errors are ignored.
-If both arguments are equal and valid, the call returns
+is open, the kernel closes it first; close errors are ignored.
+If both arguments are equal and valid, and below the current descriptor
+limit, the call returns
 .Fa newfd
-without changing it, including its close-on-exec flag.
+without changing it, including its close-on-exec flag; an existing
+descriptor at or above a lowered
+.Dv RLIMIT_NOFILE
+gives
+.Er EBADF .
 Otherwise the new descriptor's
 .Dv FD_CLOEXEC
 flag is clear.
@@ -68,12 +72,12 @@ and
 a negative destination or one at or above this limit gives
 .Er EBADF .
 .Pp
-An open-file description releases a pipe, terminal, pseudo-terminal,
-or other operations-backed object when its last reference closes.
+The kernel releases a pipe, terminal or pseudo-terminal when the last
+descriptor referring to its open-file description is closed.
 Socket references are counted separately for each descriptor;
 each duplicate adds a reference.
-Replacing an open destination also releases any framebuffer ownership
-associated with it.
+Replacing an open destination that holds the last reference to its
+description also releases the framebuffer when the caller owns it.
 .Pp
 The i386 system call numbers are 41 for
 .Fn dup ,
@@ -106,7 +110,7 @@ is invalid, or
 is negative or at or above the descriptor limit.
 .It Bq Er EINVAL
 .Fn dup3
-was given equal descriptors or flags other than
+was given equal descriptors or flags other than 0 or
 .Dv O_CLOEXEC .
 .It Bq Er EMFILE
 .Fn dup

@@ -53,7 +53,12 @@ argument to use that interface directly.
 Musl also accepts
 .Dv AT_SYMLINK_NOFOLLOW
 through a separate sequence of calls; a symbolic-link target gives
-.Er EOPNOTSUPP .
+.Er EOPNOTSUPP ,
+and for another target the sequence ends in a call on
+.Pa /proc/self/fd/N ,
+which the kernel treats as fixed synthetic metadata: root then receives
+success without a change, and other callers
+.Er EPERM .
 Other flags give
 .Er EINVAL .
 .Ss Stored modes
