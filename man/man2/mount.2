@@ -125,8 +125,22 @@ The kernel reserves a slot before running the file-system constructor,
 holds the covered directory, and keeps a reference to its parent mount.
 The mount becomes active only after the constructor succeeds.
 A failure releases the claim and references acquired by the call.
-An active mount's source, target, type, and options appear in
-.Pa /proc/mounts .
+An active mount's source, target and type appear in
+.Pa /proc/mounts
+with
+.Ql ro
+or
+.Ql rw
+and whichever of
+.Ql nosuid ,
+.Ql nodev ,
+.Ql noexec ,
+.Ql noatime ,
+.Ql nodiratime
+and
+.Ql relatime
+are set; the silent flag and the file system's own options are not
+shown.
 KRFFS and ext2 ignore the option string; FAT32 and exFAT parse it.
 .Ss Unmounting
 .Fn umount2
@@ -178,7 +192,7 @@ The kernel interface returns the negative error number.
 .Sh FILES
 .Bl -tag -width /proc/mounts
 .It Pa /proc/mounts
-Active mounts and their options.
+Active mounts with the flags listed above.
 Mounts whose devices have been removed are omitted.
 .El
 .Sh ERRORS
@@ -218,11 +232,14 @@ A target component does not exist, the source device is not published,
 or the selected loop device is unattached.
 .It Bq Er ENOMEM
 Memory for path resolution, a mount record, or file-system state is
-unavailable, or the sector-claim table or a file-system pool is full.
+unavailable, or the sector-claim table is full.
 .It Bq Er ENOTDIR
 The mount target or a directory component is not a directory.
 .It Bq Er EPERM
 The caller's effective user ID is not 0.
+.It Bq Er EROFS
+An exFAT unmount could not write its metadata after an earlier write
+failure.
 .It Bq Er ESRCH
 There is no current process.
 .El
