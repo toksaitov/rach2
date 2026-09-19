@@ -204,7 +204,7 @@ int main(int argc, char **argv)
     unsigned long ends[4], starts[4];
     unsigned long disk_sectors;
     unsigned long disk_id = 0, ext_lba = 0, ext_count = 0;
-    struct logical log[16];
+    struct logical log[16] = { { 0, 0, 0 } };
     long disk_bytes;
     FILE *f;
     int i, active = 0, lba_units = 0, have_id = 0, primaries = 0, logicals = 0;
