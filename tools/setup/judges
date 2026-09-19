@@ -1,0 +1,15 @@
+# tools/setup/judges: the versions that judge this tree, recorded on the
+# testing host, where every suite, set and analysis runs. `doctor.sh` prints
+# the version it finds beside the one here; a check whose verdict depends on
+# a tool's version, clang-format above all, is judged by the version here
+# and nowhere else. One line per tool: the command, a colon, and the line
+# its version option prints.
+cc: cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+i686-elf-gcc: i686-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+clang: Ubuntu clang version 21.1.8 (6ubuntu1)
+clang-format: Ubuntu clang-format version 21.1.8 (6ubuntu1)
+cppcheck: Cppcheck 2.19.0
+shellcheck: version: 0.11.0
+sparse: 0.6.4 (Ubuntu: 0.6.4-5ubuntu3)
+pmccabe: @(#) pmccabe 2.8
+qemu-system-i386: QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)

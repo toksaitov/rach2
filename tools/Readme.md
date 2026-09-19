@@ -138,11 +138,13 @@ prefix works; one built for another target does not.
   looked for off the path, sourced by `preflight.sh`, `doctor.sh` and
   `image/mkext2.sh`; it puts the first directory that has all three at the
   front, so that the three come from one installation.
-* `setup/doctor.sh` is the wider machine report, in four tiers: what a build
+* `setup/doctor.sh` is the wider machine report, in five tiers: what a build
   and run need, which is everything `preflight.sh` requires plus QEMU; the
   three tools `tests/run style` refuses to start without; the four mtools
-  commands the GRUB disk suites need; and the optional `xorriso`, Docker (the
-  `vendor/grub` regeneration procedure only), Git, and FUSE. It checks that
+  commands the GRUB disk suites need; the optional `xorriso`, Docker (the
+  `vendor/grub` regeneration procedure only), Git, and FUSE; and the judges,
+  each tool's version beside the one `setup/judges` records from the testing
+  host, a different version reported and not counted missing. It checks that
   tools run rather than that their names are present, probing `awk`, `sed`,
   and `ssh-keygen` by doing the work the build does with them, since none of
   the three accepts `--version` everywhere. For FUSE it runs `pkg-config

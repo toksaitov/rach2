@@ -214,6 +214,34 @@ else
     row "[----]" "FUSE" "optional, for make -C krffs mount; $(hint fuse)"
 fi
 
+# The judges: each tool's version beside the one tools/setup/judges records
+# from the testing host. A different version is reported, not counted
+# missing: the tree builds and runs with it, and only the recorded one
+# decides a check whose verdict depends on the version. The version line is
+# the one the tool's option prints, so the record and the report agree byte
+# for byte or not at all.
+version_line() {
+    case "$1" in
+    shellcheck) shellcheck --version 2>/dev/null | sed -n 's/^\(version: .*\)$/\1/p' | head -1 ;;
+    pmccabe)    pmccabe -V 2>&1 | head -1 ;;
+    *)          "$1" --version </dev/null 2>/dev/null | head -1 ;;
+    esac
+}
+echo
+echo "The judges, against tools/setup/judges (the testing host's versions):"
+sed -n 's/^\([a-z0-9-]*\): \(.*\)$/\1|\2/p' "$(dirname "$0")/judges" | while IFS='|' read -r tool recorded; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        row "[----]" "$tool" "absent here; the testing host judges with $recorded"
+        continue
+    fi
+    found=$(version_line "$tool")
+    if [ "$found" = "$recorded" ]; then
+        row "[PASS]" "$tool" "$found"
+    else
+        row "[OTHER]" "$tool" "$found; the record says $recorded"
+    fi
+done
+
 echo
 if [ "$missing" -eq 0 ]; then
     echo "doctor: all required tools present"
