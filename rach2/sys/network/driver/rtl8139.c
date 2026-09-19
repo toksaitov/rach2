@@ -138,7 +138,7 @@ int rtl8139_init(struct netdev *nd, int nth)
      * satisfies the chip's DMA alignment). Point the chip at it; Rach2 is
      * identity-mapped, so the pointer is also the physical (DMA) address. */
     if (!rx_buf) {
-        rx_buf = (uint8_t *)mem_reserve(RTL_RX_BUF_SIZE, true);
+        rx_buf = mem_reserve_ptr(RTL_RX_BUF_SIZE, true);
         if (!rx_buf) {
             rtl_err = "RTL8139 cannot allocate RX ring";
             return NETDEV_FAILED;

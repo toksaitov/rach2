@@ -119,13 +119,16 @@ static int pc_slot_storage(struct pc_entry *e)
 #ifdef PAGECACHE_HOSTTEST
     return e->page != 0;
 #else
+    void *frame;
+
     if (e->phys) {
         return 1;
     }
     if (!mem_may_take(0)) {
         return 0; /* the reserve's: a resident page gives way instead */
     }
-    e->phys = (uintptr_t)alloc_kernel_frame();
+    frame = alloc_kernel_frame();
+    e->phys = (uintptr_t)frame;
     if (!e->phys) {
         return 0;
     }

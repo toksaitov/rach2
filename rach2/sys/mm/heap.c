@@ -77,3 +77,10 @@ retry:
 
     return result;
 }
+
+void *mem_reserve_ptr(size_t size, bool align)
+{
+    uintptr_t at = mem_reserve(size, align);
+
+    return at ? (void *)at : NULL;
+}

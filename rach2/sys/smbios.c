@@ -150,10 +150,13 @@ static int table_of(const uint8_t *anchor, uint32_t *at, uint32_t *len)
  */
 static const uint8_t *table_at(uint32_t at, uint32_t len)
 {
+    uintptr_t mapped;
+
     if (at + len <= (uint32_t)HARD_MEMORY_LIMIT) {
         return (const uint8_t *)at;
     }
-    return (const uint8_t *)map_mmio((uintptr_t)at, (size_t)len);
+    mapped = map_mmio((uintptr_t)at, (size_t)len);
+    return (const uint8_t *)mapped;
 }
 
 /**

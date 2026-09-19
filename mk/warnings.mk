@@ -19,7 +19,8 @@ KWARN = -Wpedantic -Wno-long-long \
         -Wredundant-decls \
         -Wduplicated-branches \
         -Wswitch-default \
-        -Wswitch-enum
+        -Wswitch-enum \
+        -Wbad-function-cast
 
 # Rejected, with the reason:
 #

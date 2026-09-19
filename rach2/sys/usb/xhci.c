@@ -1177,6 +1177,13 @@ static uint32_t *trb_at(uint32_t *ring, uint32_t index)
     return &ring[index * TRB_WORDS];
 }
 
+/** A TRB's address as the controller takes it: the rings are in the
+   identity-mapped window, so the virtual address is the physical one. */
+static uint32_t trb_addr(uint32_t *trb)
+{
+    return (uint32_t)(uintptr_t)trb;
+}
+
 /**
  * The address of a port's status and control register.
  *
@@ -1278,7 +1285,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
         }
         hc->command_aborting = 0;
         op_w32(hc, XHCI_CRCR,
-               (uint32_t)(uintptr_t)trb_at(hc->cmd_ring, hc->cmd_enqueue) | hc->cmd_cycle);
+               trb_addr(trb_at(hc->cmd_ring, hc->cmd_enqueue)) | hc->cmd_cycle);
         op_w32(hc, XHCI_CRCR + 4, 0);
     }
 
@@ -1824,7 +1831,7 @@ int xhci_events(struct xhci_ctrl *hc)
          * set and the controller silent from then on.
          */
         w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP,
-            (uint32_t)(uintptr_t)trb_at(hc->event_ring, hc->event_index) | ERDP_HANDLER);
+            trb_addr(trb_at(hc->event_ring, hc->event_index)) | ERDP_HANDLER);
         w32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, 0);
     }
     return (int)taken;

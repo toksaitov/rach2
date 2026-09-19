@@ -118,7 +118,7 @@ static page_table_t *alloc_page_table(void)
         return table;
     }
 
-    table = (page_table_t *)mem_reserve(sizeof(page_table_t), true);
+    table = mem_reserve_ptr(sizeof(page_table_t), true);
     if (table) {
         /* Mark the frame as used in the frame table. mem_reserve allocates
          * memory after init_paging without updating the table; without this,
@@ -159,7 +159,7 @@ static page_dir_t *alloc_page_dir(void)
         return dir;
     }
 
-    dir = (page_dir_t *)mem_reserve(sizeof(page_dir_t), true);
+    dir = mem_reserve_ptr(sizeof(page_dir_t), true);
     if (dir) {
         /* Mark the frames as used in the table. page_dir_t is 8KB (2 pages),
          * so mark both frames. */
@@ -199,7 +199,7 @@ void init_paging(struct frame_map *map)
     _frames_number = map->top_frame ? map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    _frames = (uint32_t *)mem_reserve(_frames_number * sizeof(uint32_t), true);
+    _frames = mem_reserve_ptr(_frames_number * sizeof(uint32_t), true);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
     }
@@ -227,7 +227,7 @@ void init_paging(struct frame_map *map)
         }
     }
 
-    _kernel_dir = (page_dir_t *)mem_reserve(sizeof(page_dir_t), true);
+    _kernel_dir = mem_reserve_ptr(sizeof(page_dir_t), true);
     if (_kernel_dir == NULL) {
         k_panic("init_paging: no reserved memory for the kernel page directory");
     }
