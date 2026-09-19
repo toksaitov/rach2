@@ -19,15 +19,17 @@ chmod core for the chmod/chown family.
 A KRFFS path stores through `krffs_chmod_node` under the owner-or-root rule.
 A pty slave (`/dev/pts/N`) stores on the pty, the state dropbear moves
 before handing the terminal to the user. Every other synthetic /dev or
-/proc object has fixed root-owned metadata: a no-change request validates
-and succeeds, a change is refused. `name` is absolute with the leading '/'
-stripped, matching do_access.
+/proc object has fixed root-owned metadata: root's request succeeds
+without a change, anyone else's is refused. `name` is absolute with the
+leading '/' stripped, matching do_access.
 
 
 ## fchmod: number 94, handler sys_fchmod
 
-fchmod(fd, mode): the descriptor form. A KRFFS-backed regular file's stored
-perms are updated; any other descriptor (device/pipe/socket/tty) is a no-op.
+fchmod(fd, mode): the descriptor form, under the rules do_chmod keeps:
+a KRFFS node or a node of another mounted file system stores the mode, a
+pty slave stores it on the pty, and every other descriptor has fixed
+metadata (root succeeds without a change, anyone else is refused).
 
 ### helper krffs_chmod_node
 

@@ -225,8 +225,9 @@ or the mount's over an open handle.
 
 Change the current working directory (chdir(2)).
 EBX = path. Returns 0 or -errno. Stores the canonical absolute path of the
-resolved directory (a KRFFS directory or a synthetic /dev or /proc
-directory); a regular file is -ENOTDIR, a missing path -ENOENT.
+resolved directory (a KRFFS directory, a directory of another mounted
+file system, or a synthetic /dev or /proc directory); a regular file is
+-ENOTDIR, a missing path -ENOENT.
 
 ### helper cred_access_ref
 
@@ -259,9 +260,9 @@ chmod core for the chmod/chown family.
 A KRFFS path stores through `krffs_chmod_node` under the owner-or-root rule.
 A pty slave (`/dev/pts/N`) stores on the pty, the state dropbear moves
 before handing the terminal to the user. Every other synthetic /dev or
-/proc object has fixed root-owned metadata: a no-change request validates
-and succeeds, a change is refused. `name` is absolute with the leading '/'
-stripped, matching do_access.
+/proc object has fixed root-owned metadata: root's request succeeds
+without a change, anyone else's is refused. `name` is absolute with the
+leading '/' stripped, matching do_access.
 
 
 ## 16 lchown -> sys_chown
@@ -492,9 +493,10 @@ only the return value).
 sys_brk - set the program break (heap top). Arg: EBX = requested break.
 Returns the resulting break: the new value on success, or the unchanged
 current break if the request is out of range. This is the contract musl's
-__brk relies on (it compares the return to its request). The heap is a
-single demand-paged VMA [heap_start, page_up(brk)); growing only extends
-the region (pages fault in lazily), shrinking frees the pages above.
+allocator relies on when it issues SYS_brk (it compares the return to its
+request; musl's public brk() never issues the call). The heap is a single
+demand-paged VMA [heap_start, page_up(brk)); growing only extends the
+region (pages fault in lazily), shrinking frees the pages above.
 
 
 ## 52 umount2 -> sys_umount2
@@ -704,8 +706,10 @@ high halves; the file system answers a length past what it can hold.
 
 ## 94 fchmod -> sys_fchmod
 
-fchmod(fd, mode): the descriptor form. A KRFFS-backed regular file's stored
-perms are updated; any other descriptor (device/pipe/socket/tty) is a no-op.
+fchmod(fd, mode): the descriptor form, under the rules do_chmod keeps:
+a KRFFS node or a node of another mounted file system stores the mode, a
+pty slave stores it on the pty, and every other descriptor has fixed
+metadata (root succeeds without a change, anyone else is refused).
 
 ### helper krffs_chmod_node
 
@@ -1102,9 +1106,10 @@ NUL, or -errno. */
 
 sys_mmap2 - map anonymous memory. Args: EBX=addr (hint, ignored),
 ECX=length, EDX=prot, ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped
-base address, or -errno. Only MAP_ANONYMOUS|MAP_PRIVATE is supported (what
-musl's allocator uses); the region is placed by bumping mmap_top down and
-is demand-paged + zero-filled on touch.
+base address, or -errno. MAP_ANONYMOUS is required and MAP_FIXED refused;
+MAP_PRIVATE and MAP_SHARED are not checked, and every mapping is private
+(what musl's allocator uses); the region is placed by bumping mmap_top
+down and is demand-paged + zero-filled on touch.
 
 ### helper vma_exhausted
 

@@ -13,8 +13,9 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 Change the current working directory (chdir(2)).
 EBX = path. Returns 0 or -errno. Stores the canonical absolute path of the
-resolved directory (a KRFFS directory or a synthetic /dev or /proc
-directory); a regular file is -ENOTDIR, a missing path -ENOENT.
+resolved directory (a KRFFS directory, a directory of another mounted
+file system, or a synthetic /dev or /proc directory); a regular file is
+-ENOTDIR, a missing path -ENOENT.
 
 ### helper cred_access_ref
 

@@ -14,18 +14,20 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 sys_brk - set the program break (heap top). Arg: EBX = requested break.
 Returns the resulting break: the new value on success, or the unchanged
 current break if the request is out of range. This is the contract musl's
-__brk relies on (it compares the return to its request). The heap is a
-single demand-paged VMA [heap_start, page_up(brk)); growing only extends
-the region (pages fault in lazily), shrinking frees the pages above.
+allocator relies on when it issues SYS_brk (it compares the return to its
+request; musl's public brk() never issues the call). The heap is a single
+demand-paged VMA [heap_start, page_up(brk)); growing only extends the
+region (pages fault in lazily), shrinking frees the pages above.
 
 
 ## mmap2: number 192, handler sys_mmap2
 
 sys_mmap2 - map anonymous memory. Args: EBX=addr (hint, ignored),
 ECX=length, EDX=prot, ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped
-base address, or -errno. Only MAP_ANONYMOUS|MAP_PRIVATE is supported (what
-musl's allocator uses); the region is placed by bumping mmap_top down and
-is demand-paged + zero-filled on touch.
+base address, or -errno. MAP_ANONYMOUS is required and MAP_FIXED refused;
+MAP_PRIVATE and MAP_SHARED are not checked, and every mapping is private
+(what musl's allocator uses); the region is placed by bumping mmap_top
+down and is demand-paged + zero-filled on touch.
 
 ### helper vma_exhausted
 
