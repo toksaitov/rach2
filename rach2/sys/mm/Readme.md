@@ -73,7 +73,7 @@ The kernel also prefaults ranges before passing user buffers to code that access
 
 The page cache maps a backing store into a supervisor-only window at `PCWIN_BASE` (`0xD0000000`). The window ends at the lowest 32-bit PCI memory BAR within it, or at the 512 MiB cap when no BAR intervenes. Its page tables are allocated before the first process starts.
 
-The cache reserves no data frames at boot. A slot takes a frame from the top of the identity-mapped window when first filled and returns it through `pc_shrink` under memory pressure. The cache can therefore use up to 1024 frames, 4 MiB, but allocates only what it needs and memory permits. Each resident page has a hash entry, a clock-replacement state, and dirty, accessed, and pinned flags.
+The cache reserves no data frames at boot. A slot takes a frame from the top of the identity-mapped window when first filled and returns it through `pc_shrink` under memory pressure. The cache can therefore use up to 2048 frames, 8 MiB, but allocates only what it needs and memory permits; a compile on a KRFFS disk root needs the header page of every node in the ring resident beside its hot set, since a lookup walks the ring, and 1024 frames fell short of that once the manual's pages joined the ring. Each resident page has a hash entry, a clock-replacement state, and dirty, accessed, and pinned flags.
 
 `pc_set_backing` installs page-sized read and write callbacks. `rach2.fswindow` uses a Multiboot module as the backing store. A disk root uses the selected ATA or AHCI block device through an MBR partition view.
 

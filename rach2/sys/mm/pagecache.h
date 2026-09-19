@@ -24,12 +24,16 @@
 /* Policy: the most resident pages, in PAGE_SIZE frames, and a power of two,
    since the lookup hash is sized at twice this. A page's frame is taken
    when the page is first read and given back under memory pressure
-   (`pc_shrink`), so the cache holds at most 4 MiB and often less. 1024 is
-   what a compile on the machine needs for its hot set: at 256 every compile
-   re-read most of the compiler, the headers and the objects from the disk,
-   which measured at more than a minute per file. */
+   (`pc_shrink`), so the cache holds at most 8 MiB and often less. A compile
+   on a KRFFS disk root needs its hot set resident: the compiler, the headers
+   and the objects, and the header page of every node in the ring, since a
+   lookup walks the ring. At 256 slots every compile re-read most of that
+   from the disk, at more than a minute per file; at 1024 the self-build
+   suite ran at speed until the manual's pages put the ring's header pages
+   past the slots, and every lookup then evicted the hot set, at five times
+   the suite's time. 2048 holds both with room for the ring to grow. */
 #ifndef PC_SLOTS
-#define PC_SLOTS 1024u
+#define PC_SLOTS 2048u
 #endif
 
 

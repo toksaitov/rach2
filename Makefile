@@ -644,7 +644,7 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
 # RAM-disk module. A 64 MB disk with a 48 MB KRFFS partition at LBA 2048; the
-# partition is larger than the 32 MB resident page-cache cap on purpose, so it
+# partition is larger than the 8 MiB resident page-cache cap on purpose, so it
 # can later prove an on-disk file system bigger than what fits in RAM at once.
 os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(MAN_ALL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
