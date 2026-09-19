@@ -44,6 +44,8 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
     case 'x':
         radix = 16;
         break;
+    default:
+        break;
     }
 
     if (radix < 2 || radix > 36)

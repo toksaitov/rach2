@@ -423,6 +423,8 @@ void k_putc(char c)
             vga_putc_raw(c);
         }
         break;
+    default:
+        break;
     }
 
     vga_text_place_cursor();
@@ -444,12 +446,13 @@ void k_puts(const char *str)
 
 void k_printf(const char *format, ...)
 {
-    char **args = (char **)&format;
-    ++args;
+    va_list ap;
 
+    va_start(ap, format);
     vga_text_hold();
-    k_vprintf(k_putc, format, args);
+    k_vprintf(k_putc, format, ap);
     vga_text_release();
+    va_end(ap);
 }
 
 /* The port instructions, which a host test that includes this file stands

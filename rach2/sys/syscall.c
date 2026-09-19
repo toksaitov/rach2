@@ -9442,6 +9442,8 @@ static int32_t sys_ioctl(isr_params_t *params)
                 return 0;
             }
             return -ENODEV;
+        default:
+            break;
         }
     }
 
