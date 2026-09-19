@@ -194,7 +194,6 @@ typedef struct {
  */
 #define HDA_BDL_MAX_ENTRIES 256
 
-
 /** Periodic service hook; call from the timer tick. */
 void hda_tick(void);
 

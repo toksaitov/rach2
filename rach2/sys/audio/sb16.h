@@ -76,7 +76,6 @@
  */
 #define SB16_BUFFER_SIZE 160
 
-
 /** Probe for an SB16 at base port `base`; true if detected. */
 bool sb16_probe(uint16_t base);
 
