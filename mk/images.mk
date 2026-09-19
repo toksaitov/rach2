@@ -3,8 +3,8 @@
 # The root Makefile includes this file after it has named the kernels and the
 # RAM images, and before the test include: every rule here makes something the
 # machine or a stick carries, so it is the build's and not a suite's, and a
-# suite that needs one of these names it as a prerequisite. tools/verify/check.sh
-# refuses a rule under tests/ that makes a product.
+# suite that needs one of these names it as a prerequisite.
+# tools/verify/check.sh refuses a rule under tests/ that makes a product.
 #
 # The three tools the stick scripts run: the MBR writer, which krffs/mkdisk.sh
 # builds on demand as well; the stick image's judge, linked with the kernel's
