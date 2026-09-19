@@ -359,8 +359,9 @@ static int selftest(void)
                   "sys_exit: init process 4 exited with status 7, "
                   "returning to kernel shell\n",
                   "status=7", 0},
-                 /* A probe shares the serial console with the kernel, so the phrase
-                    alone must not be a verdict: this one prints it and then dies. */
+                 /* A probe shares the serial console with the kernel, so the
+                    phrase alone must not be a verdict: this one prints it and
+                    then dies. */
                  {"probe forges the marker text, then is killed",
                   "probe: exited with status 0, returning to kernel shell\n"
                   "terminate: init process 4 killed by signal 11, "
