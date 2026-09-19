@@ -1,0 +1,79 @@
+.Dd September 19, 2026
+.Dt ISH 1
+.Os
+.Sh NAME
+.Nm ish
+.Nd freestanding command shell
+.Sh SYNOPSIS
+.Nm
+.Nm
+.Fl c Ar COMMAND
+.Sh DESCRIPTION
+.Nm
+is the command shell of the test and os-simple images.
+It is a static i386 program with its own startup code and system-call
+wrappers and links no C library.
+It runs one command at a time.
+It is not a POSIX shell and has no script language.
+.Pp
+In interactive mode,
+.Nm
+reads standard input until end of file and prints no prompt.
+The input buffer holds 255 bytes; the argument array holds 255 tokens.
+.Pp
+With
+.Fl c ,
+.Nm
+runs one command and exits with its status.
+Only
+.Ql argv[2]
+is used as the command.
+.Pp
+The parser splits words on ASCII whitespace.
+It implements no quotes, escapes, variables, globbing, pipelines,
+command lists, subshells, or background jobs.
+For external commands, the separate tokens
+.Ql <
+and
+.Ql >
+redirect standard input and standard output.
+Output redirection creates or truncates the file at mode 0644.
+.Pp
+The builtins are:
+.Bl -tag -width Ds
+.It Cm cd Op Ar DIR
+Change the working directory to
+.Ar DIR ,
+or to
+.Ev HOME
+when no directory is given.
+The status is 0 on success and 1 on failure.
+.It Cm exit Op Ar STATUS
+Exit the shell with the given status.
+.El
+.Pp
+An external command is tried as written, then through each nonempty element of
+.Ev PATH .
+A constructed path is limited to 1024 bytes.
+The child inherits the shell's environment.
+.Pp
+On os-simple, the shell is installed as
+.Pa /bin/ish
+and
+.Pa /bin/sh ;
+on the test image, as
+.Pa /ish
+and
+.Pa /bin/sh .
+.Sh EXIT STATUS
+With
+.Fl c ,
+the status is the child's exit status after a normal exit,
+127 when no executable path resolves,
+126 when the command cannot be started, or
+.Ql 128 + SIGNAL
+when a signal kills the child.
+Interactive mode discards each command's status.
+.Sh SEE ALSO
+.Xr sh 1 ,
+.Xr rach2 7

@@ -1,0 +1,116 @@
+.Dd September 19, 2026
+.Dt INIT 8
+.Os
+.Sh NAME
+.Nm init
+.Nd reap orphaned processes and maintain the console session and services
+.Sh SYNOPSIS
+.Nm /sbin/init
+.Sh DESCRIPTION
+.Nm
+runs as process 1.
+It reaps orphaned children, continues stopped children, and respawns
+the console session when it exits.
+A pause between attempts prevents a failing login from being retried
+continuously.
+It never exits; the kernel panics if init dies.
+.Pp
+One source produces four builds, selected by the image and installed as
+.Pa /sbin/init :
+.Bl -tag -width init-recovery
+.It Sy init-shell
+Starts
+.Pa /bin/sh
+on the console in test images.
+.It Sy init-login
+Starts only
+.Pa /bin/login .
+No shell fallback is compiled into this build.
+.It Sy init-metal
+Starts the console login and supervises Dropbear.
+On a boot with
+.Ql rach2.ip=none ,
+it configures the network as described in
+.Xr netup 8 .
+.It Sy init-recovery
+Provides the network and service functions of the metal build
+and the recovery duties.
+With
+.Ql rach2.fsck
+on the boot line, it first runs
+.Ql e2fsck -p
+on each of
+.Pa /dev/disk0p1
+through
+.Pa /dev/disk0p4
+whose superblock has the ext2 magic.
+Its console session is a shell without a login, since the image has no
+accounts of the machine's; see
+.Xr recovery 7 .
+.El
+.Pp
+Every build clears one level of
+.Pa /var/run
+at boot and reads
+.Pa /etc/rach2/limits .
+It sets these resource limits on itself before starting any child;
+see
+.Xr limits 7 .
+It starts
+.Pa /bin/update
+and keeps it running.
+.Pp
+Services receive
+.Pa /dev/null
+as standard input.
+The service log is
+.Pa /var/log/services .
+When the log is available, init directs service standard output and
+standard error there.
+During operation, it empties the log in place when it has reached
+256 KiB and writes:
+.Dl init: the service log reached its limit and was emptied
+.Pp
+The console is reserved for the console session.
+The kernel stops writing to the screen when init starts;
+see
+.Xr bootlog 4 .
+The SSH server is started with
+.Fl g
+unless
+.Xr sshd.conf 5
+permits its omission.
+.Pp
+.Nm
+handles the signals sent by the BusyBox shutdown applets:
+.Bl -tag -width SIGUSR1
+.It Dv SIGUSR1
+Halt the machine.
+.It Dv SIGUSR2
+Power off the machine.
+.It Dv SIGTERM
+Restart the machine.
+.El
+.Sh FILES
+.Bl -tag -width /etc/rach2/sshd.conf
+.It Pa /etc/rach2/limits
+Initial resource limits.
+.It Pa /etc/rach2/sshd.conf
+SSH server policy.
+.It Pa /var/log/services
+Service output and diagnostics.
+.It Pa /var/run
+Entries cleared at boot, without descending into subdirectories.
+.El
+.Sh DIAGNOSTICS
+The recovery file system check reports its status as:
+.Dl init: e2fsck: /dev/disk0pN: status S
+.Sh SEE ALSO
+.Xr login 1 ,
+.Xr bootlog 4 ,
+.Xr sshd.conf 5 ,
+.Xr limits 7 ,
+.Xr recovery 7 ,
+.Xr halt 8 ,
+.Xr netup 8 ,
+.Xr update 8
