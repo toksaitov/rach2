@@ -173,6 +173,9 @@ dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 dir 0755 /usr/share/man
 tree 0644 /usr/share/man/cat1 build/man/cat1
+tree 0644 /usr/share/man/cat2 build/man/cat2
+tree 0644 /usr/share/man/cat4 build/man/cat4
+tree 0644 /usr/share/man/cat5 build/man/cat5
 tree 0644 /usr/share/man/cat7 build/man/cat7
 tree 0644 /usr/share/man/cat8 build/man/cat8
 
