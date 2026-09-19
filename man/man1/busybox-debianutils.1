@@ -21,7 +21,7 @@
 .Ar DIRECTORY
 .Nm start-stop-daemon
 .Op Ar OPTIONS
-.Op Fl S | Fl K
+.Brq Fl S | Fl K
 .Ar ...
 .Op Fl - Ar ARGS ...
 .Nm which
@@ -97,7 +97,10 @@ Rach2 has no
 .Fn setpriority
 system call; this option fails before starting the program.
 .It Fl c Ar USER Ns Op : Ns Op Ar GRP
-Change user and, if specified, group.
+Take the user's identity and supplementary groups, with the user's primary
+group unless
+.Ar GRP
+names another.
 .It Fl m
 Write the process ID to the file specified by
 .Fl p .
@@ -109,7 +112,10 @@ Options for stopping processes with
 .It Fl s Ar SIG
 Signal to send.
 .It Fl t
-Only match processes; return status 0 if a match is found.
+Only match processes.
+Without
+.Fl o ,
+the status is 0 when at least one process matches and can be signalled.
 .El
 .Pp
 Other options:
@@ -117,7 +123,7 @@ Other options:
 .It Fl o
 Return status 0 if nothing is done.
 .It Fl v
-Produce verbose output.
+Accepted but has no effect.
 .It Fl q
 Suppress output.
 .El

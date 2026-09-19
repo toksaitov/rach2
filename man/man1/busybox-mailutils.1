@@ -23,7 +23,7 @@
 .Op Fl tv
 .Op Fl f Ar SENDER
 .Oo
-.Fl amLOGIN No 4<user_pass.txt | Fl au Ns Ar USER Fl ap Ns Ar PASS
+.Fl amLOGIN No 4< Ns Pa user_pass.txt | Fl au Ns Ar USER Fl ap Ns Ar PASS
 .Oc
 .Op Fl w Ar SECS
 .Op Fl H Ar 'PROG ARGS' | Fl S Ar HOST
@@ -55,7 +55,8 @@ Filter the contents of MIME sections through
 This must be the last option.
 .El
 .Pp
-Other options are silently ignored.
+The compatibility options above are accepted and ignored; an unknown
+option is refused.
 .Ss sendmail
 .Bl -tag -width "-S HOST[:PORT]"
 .It Fl t
@@ -113,7 +114,8 @@ but no
 or
 .Fl ap ,
 the user name and password are read from file descriptor 4.
-Other options are silently ignored.
+The compatibility options above are accepted and ignored; an unknown
+option is refused.
 .Sh HISTORY
 The applet descriptions are adapted from BusyBox 1.36.1 usage text,
 licensed under GPL-2.0.

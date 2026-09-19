@@ -235,7 +235,12 @@
 .Oc
 .Oo
 .Cm ibs Ns = Ns Ar "N"
-.Cm obs Ns = Ns Ar "N/bs=N"
+.Oc
+.Oo
+.Cm obs Ns = Ns Ar "N"
+.Oc
+.Oo
+.Cm bs Ns = Ns Ar "N"
 .Oc
 .Oo
 .Cm count Ns = Ns Ar "N"
@@ -687,7 +692,7 @@
 .Oc
 .Ar ...
 .Nm sort
-.Op Fl nrughMcszbdfiokt
+.Op Fl nrughMcszbdfi
 .Op Fl o Ar FILE
 .Op Fl k Ar START[.OFS][OPTS][,END[.OFS][OPTS]]
 .Op Fl t Ar CHAR
@@ -840,8 +845,13 @@
 .Fl cduiz
 .Oc
 .Oo
-.Fl f,s,w
-.Ar "N"
+.Fl f Ar "N"
+.Oc
+.Oo
+.Fl s Ar "N"
+.Oc
+.Oo
+.Fl w Ar "N"
 .Oc
 .Oo
 .Ar "FILE"
@@ -1050,7 +1060,10 @@ or a link in
 to each
 .Ar TARGET .
 .It Nm logname
-Print the current user's name.
+Print the
+.Ev LOGNAME
+environment variable, which musl's login-name lookup reads; the applet
+fails when it is unset or longer than its buffer.
 .It Nm ls
 List directory contents.
 .It Nm md5sum
@@ -1220,7 +1233,7 @@ Print system information.
 .It Nm unexpand
 Convert spaces to tabs and write to standard output.
 .It Nm uniq
-Discard duplicate lines.
+Discard adjacent duplicate lines.
 .It Nm unix2dos
 Convert
 .Ar FILE
@@ -1370,9 +1383,11 @@ Create hard links.
 .It Fl s
 Create symbolic links.
 .It Fl T
-Refuse to copy if
+Use
 .Ar DEST
-is a directory.
+directly instead of placing
+.Ar SOURCE
+inside it.
 .It Fl t Ar "DIR"
 Copy all sources into
 .Ar DIR .
@@ -1614,7 +1629,9 @@ Print all except
 .Ar N
 last lines.
 .It Fl c Ar "[-]N[bkm]"
-Print first
+Print the first
+.Ar N
+bytes; with a leading minus, everything except the last
 .Ar N
 bytes.
 .It Fl q
@@ -1647,7 +1664,10 @@ Create directories.
 .It Fl D
 Create leading target directories.
 .It Fl s
-Strip symbol table.
+Strip the symbol table by running
+.Nm strip ,
+which the images do not carry: the file is copied, then the failure to
+run it is reported.
 .It Fl p
 Preserve date.
 .It Fl o Ar "USER"
@@ -1760,9 +1780,11 @@ Prompt before overwriting.
 .It Fl n
 Do not overwrite an existing file.
 .It Fl T
-Refuse to move if
+Use
 .Ar DEST
-is a directory.
+directly instead of placing
+.Ar SOURCE
+inside it.
 .It Fl t Ar "DIR"
 Move all sources into
 .Ar DIR .
@@ -1787,7 +1809,12 @@ for none.
 .Ss nproc
 .Bl -tag -width Ds
 .It Fl -all
-Print the number of installed CPUs.
+Print the number of installed CPUs, which on Rach2 has no
+.Pa /sys
+directory to count, so the answer is 1, as it is without the option, since
+the kernel has no
+.Fn sched_getaffinity
+either.
 .It Fl -ignore Ns = Ns Ar N
 Exclude
 .Ar N
@@ -1830,7 +1857,7 @@ Include parents.
 .Ss seq
 .Bl -tag -width Ds
 .It Fl w
-Pad to last with leading zeros.
+Pad the numbers with leading zeros to equal width.
 .It Fl s Ar "SEP"
 String separator.
 .El
@@ -1978,9 +2005,11 @@ Rach2 has no syncfs system call; this option does not flush them, and the applet
 .Ss tail
 .Bl -tag -width Ds
 .It Fl c Ar "[+]N[bkm]"
-Print last
+Print the last
 .Ar N
-bytes.
+bytes; with a leading plus, from byte
+.Ar N
+onward.
 .It Fl n Ar "N[bkm]"
 Print last
 .Ar N
@@ -2041,9 +2070,12 @@ Take complement of
 Delete input characters coded
 .Ar STRING1 .
 .It Fl s
-Squeeze multiple output characters of
-.Ar STRING2
-into one character.
+Squeeze a run of one selected character into one; the characters are those
+of
+.Ar STRING2 ,
+or of
+.Ar STRING1
+when it is the only string.
 .El
 .Ss truncate
 .Bl -tag -width Ds
@@ -2095,9 +2127,9 @@ characters.
 .It Fl c
 Prefix lines by the number of occurrences.
 .It Fl d
-Only print duplicate lines.
+Only print lines repeated on adjacent lines, once.
 .It Fl u
-Only print unique lines.
+Only print lines not repeated on an adjacent line.
 .It Fl i
 Ignore case.
 .It Fl z

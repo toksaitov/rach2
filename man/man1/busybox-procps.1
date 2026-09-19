@@ -128,6 +128,13 @@ It reads
 Find processes using files or ports.
 .It Nm iostat
 Report CPU and I/O statistics.
+Rach2 has no
+.Pa /proc/diskstats ,
+so the device report and
+.Fl d
+fail;
+.Fl c
+selects the CPU report alone.
 .It Nm kill
 Send a signal to the specified process IDs through
 .Xr kill 2 .
@@ -137,10 +144,11 @@ Send a signal to the named processes through
 .Xr kill 2 .
 The default signal is TERM.
 .It Nm killall5
-Send a signal to all processes outside the current session.
+Send a signal to all processes outside the current session, process 1 and
+the processes of session zero excepted.
 The default signal is TERM.
 .It Nm lsof
-Display all open files.
+Display all open files, its own excepted.
 .It Nm mpstat
 Report statistics for each processor.
 .It Nm nmeter
@@ -159,8 +167,13 @@ to processes selected by the regular expression
 .Ar PATTERN .
 .It Nm pmap
 Display process memory usage.
+Rach2 has no
+.Pa /proc/PID/smaps ,
+so no mapping is reported.
 .It Nm powertop
 Analyze power consumption on Intel laptops.
+Rach2 has none of the power-state and timer-statistics files it reads, so
+it measures nothing.
 .It Nm ps
 List processes, reading
 .Pa /proc/PID/stat
@@ -173,6 +186,11 @@ or
 .Ar PID .
 .It Nm pwdx
 Display the current directory of each specified process.
+Rach2 has no
+.Pa /proc/PID/cwd ,
+so the applet reports
+.Ql No such process
+for every process.
 .It Nm smemcap
 Collect memory usage data from
 .Pa /proc
@@ -225,15 +243,19 @@ Total memory.
 .It Ql %s
 Allocated swap.
 .It Ql %f
-Number of file descriptors in use.
+Number of file descriptors in use, from
+.Pa /proc/sys/fs/file-nr ,
+which Rach2 does not have.
 .It Ql %Ni
 Total or specific interrupt rate.
 .It Ql %x
-Context switch rate.
+Context switch rate, which Rach2 reports as a fixed zero.
 .It Ql %p
 Forks.
 .It Ql %[pn]
-Number of processes.
+Number of processes, from
+.Pa /proc/loadavg ,
+which Rach2 does not have.
 .It Ql %b
 Block I/O.
 .It Ql %Nt
@@ -253,11 +275,16 @@ End lines with carriage return instead of line feed.
 Display CPU use and sort by process ID, memory, CPU use, or time,
 respectively.
 .It Ic S
-Display memory.
+Display memory; on Rach2 it ends with
+.Ql no process info in /proc ,
+since there is no
+.Pa /proc/PID/smaps .
 .It Ic R
 Reverse the sort order.
 .It Ic H
-Toggle thread display.
+Toggle thread display; Rach2 has no
+.Pa /proc/PID/task ,
+and the scanner then skips every process.
 .It Ic 1
 Toggle the multiprocessor display.
 .It Ic Q , No Ctrl-C
@@ -372,7 +399,8 @@ Use quiet output.
 .It Fl o Ar COL1,COL2=HEADER
 Select the columns to display.
 .It Fl T
-Display threads.
+Display threads, which finds none on Rach2 (no
+.Pa /proc/PID/task ) .
 .El
 .Ss pstree
 .Bl -tag -width "-p"
@@ -401,9 +429,10 @@ iterations.
 .It Fl d Ar SEC
 Set the delay between updates.
 .It Fl m
-Display memory, as with the memory display key.
+Display memory, as with the memory display key, which on Rach2 ends with
+.Ql no process info in /proc .
 .It Fl H
-Display threads.
+Display threads, which finds none on Rach2.
 .El
 .Ss watch
 .Bl -tag -width "-n SEC"

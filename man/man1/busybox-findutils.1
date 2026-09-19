@@ -29,7 +29,9 @@
 .Nm grep
 .Op Fl HhnlLoqvsrRiwFE
 .Op Fl m Ar N
-.Op Fl A | Fl B | Fl C Ar N
+.Op Fl A Ar N
+.Op Fl B Ar N
+.Op Fl C Ar N
 .Brq Ar PATTERN | Fl e Ar PATTERN ... | Fl f Ar FILE ...
 .Op Ar FILE
 .Ar ...
@@ -225,7 +227,9 @@ Print only the count of matching lines.
 .It Fl o
 Print only the matching part of a line.
 .It Fl q
-Suppress output; return 0 if a pattern is found, 1 otherwise.
+Suppress normal output.
+The status is 0 when a line is selected, 1 when none is, and 2 on an error;
+a selected line makes it 0 even after an earlier file failed to open.
 .It Fl v
 Select lines that do not match.
 .It Fl s
@@ -284,7 +288,9 @@ Pass at most this many arguments to the command.
 .It Fl s Ar N
 Limit the command line to this many bytes.
 .It Fl P Ar N
-Run at most this many commands in parallel.
+Run at most this many commands in parallel; zero or a negative
+.Ar N
+means 100.
 .It Fl x
 Exit if the size limit is exceeded.
 .El

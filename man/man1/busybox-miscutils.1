@@ -91,18 +91,22 @@
 .Ar ...
 .Nm mt
 .Op Fl f Ar DEVICE
-.Ar OPCODE VALUE
+.Ar OPCODE
+.Op Ar VALUE
 .Nm readahead
-.Op Ar FILE
-.Ar ...
+.Ar FILE ...
 .Nm runlevel
 .Op Ar FILE
 .Nm rx
 .Ar FILE
 .Nm setfattr
 .Op Fl h
-.Fl n Ns | Ns Fl x Ar ATTR
+.Fl n Ar ATTR
 .Op Fl v Ar VALUE
+.Ar FILE ...
+.Nm setfattr
+.Op Fl h
+.Fl x Ar ATTR
 .Ar FILE ...
 .Nm setserial
 .Op Fl abGvz
@@ -176,10 +180,16 @@ Edit a file in hexadecimal.
 View files, or standard input, one screen at a time.
 .It Nm lsscsi
 Display SCSI bus and device information from
-.Pa /sys/bus/scsi/devices .
+.Pa /sys/bus/scsi/devices ,
+which Rach2 does not have; nothing is listed.
 .It Nm makedevs
-Create files specified in a device table under
-.Ar rootdir .
+Make the directories a device table names under
+.Ar rootdir
+and set the owners and modes of its entries.
+The table's regular files must exist already, and its device nodes and
+FIFOs cannot be made, since Rach2 has no
+.Fn mknod
+system call.
 .It Nm man
 Display manual pages; see
 .Xr man 1 .
@@ -193,8 +203,10 @@ to standard output.
 Run a script from a specification file with Makefile-like syntax.
 .It Nm mt
 Control a magnetic tape drive.
+Rach2 has no tape devices and does not implement their requests.
 .It Nm readahead
 Preload files into RAM.
+Rach2 does not implement the readahead system call, so the applet fails.
 .It Nm runlevel
 Find the previous and current system runlevels.
 Print
@@ -204,8 +216,11 @@ if the utmp file does not exist or contains no runlevel record.
 Receive a file using the XMODEM protocol.
 .It Nm setfattr
 Set or remove extended file attributes.
+Rach2 does not implement the extended-attribute system calls, so the
+applet fails.
 .It Nm setserial
 Print or set serial port parameters.
+Rach2 does not implement the serial configuration requests.
 .It Nm strings
 Display printable strings in binary files.
 .It Nm time
@@ -217,7 +232,8 @@ List files and directories in a tree structure.
 .It Nm ts
 Copy standard input to standard output, adding a timestamp to each line.
 .It Nm ttysize
-Print the dimensions of the terminal on standard input, or 80 by 24.
+Print the dimensions of the terminal, asked of standard input, then
+standard output, then standard error; 80 by 24 when none answers.
 .It Nm volname
 Show the CD volume name of
 .Ar DEVICE ;
@@ -436,7 +452,9 @@ Append the result instead of overwriting the output file.
 .Ss ts
 .Bl -tag -width "-s"
 .It Fl s
-Print time since startup.
+Print the time elapsed since
+.Nm ts
+started.
 .It Fl i
 Print time since the previous line.
 .El

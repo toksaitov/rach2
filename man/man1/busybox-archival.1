@@ -62,7 +62,7 @@
 .Op Fl cfk
 .Oo Ar FILE Oc Ns ...
 .Nm lzop
-.Op Fl cfUvd123456789CF
+.Op Fl cfUvd123456CF
 .Oo Ar FILE Oc Ns ...
 .Nm rpm
 .Fl i Ar PACKAGE.rpm
@@ -198,8 +198,10 @@ and
 .Nm lzop
 accepts:
 .Bl -tag -width Ds
-.It Fl 1 No through Fl 9
-Select the compression level.
+.It Fl 1 No through Fl 6
+Select the compression level; levels 2 through 6 use one method.
+Levels 7 through 9 are not built and fail with
+.Ql high compression not compiled in .
 .It Fl d
 Decompress.
 .It Fl c
@@ -348,7 +350,9 @@ Decompress xz archives.
 .It Fl j
 Use bzip2 compression or decompression.
 .It Fl a
-Select compression or decompression by the archive's extension.
+When creating an archive, select the compression by the archive's name.
+Extraction detects the compression from the data, not the name.
+A name asking for xz or lzma fails, since those applets only decompress.
 .It Fl h
 Follow symbolic links.
 .It Fl T Ar FILE

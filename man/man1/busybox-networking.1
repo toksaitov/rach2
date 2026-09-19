@@ -114,7 +114,7 @@
 .Op Fl r Ar REALM
 .Op Fl h Ar HOME
 .Nm httpd
-.Fl d | Fl e | Fl m
+.Bro Fl d | Fl e | Fl m Brc
 .Ar STRING
 .Nm ifconfig
 .Op Fl a
@@ -258,7 +258,11 @@
 .Op Fl -header Ar STR
 .Op Fl -post-data Ar STR | Fl -post-file Ar FILE
 .Op Fl Y Cm on/off
-.Ar ...
+.Op Fl -no-check-certificate
+.Op Fl P Ar DIR
+.Op Fl U Ar AGENT
+.Op Fl T Ar SEC
+.Ar URL ...
 .Nm whois
 .Op Fl i
 .Op Fl h Ar SERVER
@@ -286,6 +290,8 @@ and
 .Bl -tag -width dnsdomainname
 .It Nm arp
 Display or change the ARP cache.
+Rach2 answers the display; the requests that add or delete an entry are not
+implemented, so those changes fail.
 .It Nm arping
 Send ARP requests or replies.
 .It Nm dnsd
@@ -296,9 +302,12 @@ Display the DNS domain name.
 Provide a fake ident authentication service.
 .It Nm ftpd
 Serve FTP requests as an inetd service.
-Change the root directory to
-.Ar DIR ;
-if this fails when run without root privilege, change the current directory
+Rach2 has no
+.Fn chroot
+system call, so
+.Ar DIR
+becomes only the current directory and clients are not confined to it;
+the applet falls back to that change whatever its privilege, and it
 to it instead.
 .It Nm ftpget
 Download a file through FTP using TCP.
@@ -331,12 +340,18 @@ using
 .Pa /etc/resolv.conf .
 .It Nm ntpd
 Run an NTP client or server.
+Rach2 has neither the clock-adjusting nor the clock-setting calls the
+client uses, so an update of the clock fails;
+.Fl w
+queries the peers without setting the clock.
 .It Nm pscan
 Scan
 .Ar HOST
 and print its open ports.
 .It Nm route
 Display or edit the kernel routing tables.
+The kernel keeps the connected subnet and one default gateway; adding
+another route fails.
 .It Nm ssl_client
 Run the BusyBox SSL client.
 .It Nm tcpsvd
@@ -370,14 +385,18 @@ for each packet, redirecting further packets from the same peer address
 and port to that program.
 .It Nm vconfig
 Create and remove virtual Ethernet devices.
+Rach2 does not implement the VLAN request, so the operations fail.
 .It Nm wget
-Run the BusyBox wget TCP client.
+Retrieve files through HTTP or FTP.
 .It Nm whois
 Query WHOIS information about
 .Ar NAME .
 .El
 .Ss ifconfig arguments
-The BusyBox usage lists these additional interface settings:
+The BusyBox usage lists these additional interface settings.
+The kernel answers the address, the netmask and the up and down flags;
+setting the MTU or the hardware address fails, and of the flags only up
+and down change anything.
 .Bl -tag -width "[[-]pointopoint [ADDRESS]]" -compact
 .It Cm add Ar ADDRESS Ns Op / Ns Ar PREFIXLEN
 .It Cm del Ar ADDRESS Ns Op / Ns Ar PREFIXLEN
@@ -653,6 +672,9 @@ display connected sockets.
 .It Fl t , u , w , x
 Select TCP, UDP, raw, or Unix sockets, respectively.
 Without these options, select all socket types.
+Rach2 supplies
+.Pa /proc/net/tcp
+only; the UDP, raw and Unix listings find no file to read.
 .It Fl e
 Display additional information.
 .It Fl n

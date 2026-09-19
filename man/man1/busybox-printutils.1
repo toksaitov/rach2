@@ -18,9 +18,9 @@
 .Ar ...
 .Op Fl fs
 .Nm lpr
-.Fl P Ar queue Ns Op @ Ns Ar host Ns Op : Ns Ar port
-.Fl U Ar USERNAME
-.Fl J Ar TITLE
+.Op Fl P Ar queue Ns Op @ Ns Ar host Ns Op : Ns Ar port
+.Op Fl U Ar USERNAME
+.Op Fl J Ar TITLE
 .Fl Vmh
 .Op Ar FILE
 .Ar ...
@@ -34,9 +34,9 @@ Receive print jobs for queues in
 That directory must contain device nodes, directories, or symbolic links
 to them, with names matching the print queues.
 Jobs for a device node are sent directly to the device.
-Other jobs are stored in the queue directory and
+Other jobs are stored in the queue directory and, when a
 .Ar HELPER
-is called with the file name in the
+is given, it is called after a complete job with the file name in the
 .Ev DATAFILE
 environment variable.
 .It Nm lpq

@@ -2,7 +2,7 @@
 
 NAME: busybox-printutils - the print tools: the BusyBox applets of its `printutils` directory as built for Rach2 (BusyBox 1.36.1, vendor/busybox/rach2.config), one family page with an alias for each applet.
 
-The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `lpd`, `lpq`, `lpr`: no printer here.
+The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `lpd`, `lpq`, `lpr`: no printer here. Found at the proofreading: lpr's -P, -U, -J and -Vmh are optional, with defaults from lpqr_main(); lpd calls HELPER only when one is given, after a complete job, and otherwise leaves the job in the queue directory.
 
 
 The usage text BusyBox carries, per applet:
