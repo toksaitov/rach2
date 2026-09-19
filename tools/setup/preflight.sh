@@ -28,7 +28,7 @@ SELF="$REPO/tools/setup/preflight.sh"
 # debugfs sets the owners a build that is not root cannot, e2fsck checks it.
 TOOLS="make cc i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip \
        i686-elf-objcopy awk sed tar gzip bzip2 patch ssh-keygen \
-       mke2fs debugfs e2fsck"
+       mke2fs debugfs e2fsck mandoc"
 
 # Where e2fsprogs is found when it is not on the path: the Homebrew keg, which
 # does not link it, and the administrator's directories Debian keeps it in.
@@ -41,6 +41,7 @@ hint() {
         cc)         echo "install Xcode Command Line Tools or a C compiler package" ;;
         ssh-keygen) echo "install the OpenSSH client package" ;;
         mke2fs|debugfs|e2fsck) echo "brew install e2fsprogs, or apt install e2fsprogs" ;;
+        mandoc)     echo "brew install mandoc, or apt install mandoc; the images carry the manual pages it renders" ;;
         *)          echo "install it with your package manager" ;;
     esac
 }

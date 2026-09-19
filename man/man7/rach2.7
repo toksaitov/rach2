@@ -1,0 +1,36 @@
+.Dd September 19, 2026
+.Dt RACH2 7
+.Os
+.Sh NAME
+.Nm rach2
+.Nd an educational operating system for the 32-bit PC
+.Sh DESCRIPTION
+Rach2 is a kernel and a small userland for the 32-bit x86 PC, written to be
+read.
+The kernel is freestanding C89; the userland is the ported musl C library,
+the BusyBox shell and tools, the Dropbear SSH server, the TinyCC compiler
+and the pdpmake
+.Xr make 1 ,
+so the system can rebuild its own kernel.
+.Pp
+The system boots from a KRFFS image in memory or from an ext2 root on a
+disk, mounts FAT32, exFAT, ext2 and KRFFS volumes, drives ATA and AHCI
+disks, USB keyboards and sticks, and RTL8139, e1000 and RTL8168 network
+cards, and answers SSH.
+.Sh FILES
+.Bl -tag -width /usr/share/man
+.It Pa /usr/share/man
+The manual pages, as plain text under
+.Pa catN .
+.It Pa /src
+The kernel, shell and utility sources, on the images that carry a compiler.
+.It Pa /proc
+The kernel's counters and tables, one file each.
+.El
+.Sh SEE ALSO
+.Xr man 1 ,
+.Xr sh 1
+.Sh HISTORY
+Rach2 is developed as a teaching system; its milestones are recorded in the
+source tree under
+.Pa dev-log .

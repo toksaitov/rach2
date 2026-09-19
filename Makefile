@@ -436,6 +436,18 @@ utils: $(LIBC_STAMP)
 
 images: test-image os-simple-image os-real-image os-real-ext2
 
+# The manual pages: mdoc under man/, one file per page in its section's
+# directory, rendered by man/render.sh to plain text under build/man/catN,
+# which the manifests stage under /usr/share/man, and to HTML under
+# build/man/html for reading off the machine. An image that carries pages
+# names $(MAN_CAT) among its prerequisites, so a changed page restages it.
+MAN_SOURCES = $(wildcard man/man[0-9]/*.[0-9])
+MAN_CAT = $(patsubst man/man%,build/man/cat%,$(MAN_SOURCES))
+build/man/cat%: man/man% man/render.sh | preflight
+	sh man/render.sh $< build/man
+.PHONY: man
+man: $(MAN_CAT)
+
 test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
@@ -529,7 +541,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # login keys and gen_demo_password.sh the account passwords and /etc/shadow,
 # each when absent; the check targets ensure the busybox/dropbear binaries are
 # real.
-$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_CAT) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
@@ -703,7 +715,7 @@ $(FS_DEMO_DIR)/empty.krffs: krffs/mkfs.krffs.c | krffs
 fs-demo-images: $(FS_DEMO_IMAGES)
 .PHONY: fs-demo-images
 SEALED_EXT2 = build/images/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_CAT) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets, which

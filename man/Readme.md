@@ -1,0 +1,7 @@
+# The manual pages
+
+The pages under `man/` are the system's manual, one `mdoc` file per page in the directory of its section: `man1` for programs, `man2` for system calls, `man3` for the few library interfaces that are this project's own, `man4` for devices, `man5` for file formats, `man7` for overviews and `man8` for administration. `rach2(7)` is the entry point.
+
+`make man` renders every page with `man/render.sh`: `mandoc -T lint` at the warning level refuses a page with a fault, `mandoc -T ascii` renders it with the operating system named as Rach2, and the overstrikes the renderer marks bold and underline with are removed, since the console has no use for them. The text goes to `build/man/catN/NAME.N` and an HTML rendering to `build/man/html/NAME.N.html`, which is not committed. The images stage the `catN` directories under `/usr/share/man`, where BusyBox's `man` looks for a preformatted page before a source, and stage `/bin/col` as a script that copies its input, because `man` puts its output through `col -b -p -x` when standard output is not a terminal and the pages need no such filter. `mandoc` is a required build tool: `tools/setup/preflight.sh` refuses a build without it and `tools/setup/doctor.sh` names the package.
+
+`tests/run man` boots the os-real image and reads `rach2(7)` through a pipe, which must be the staged page byte for byte, and on the console under the pager, whose first and last lines must appear.

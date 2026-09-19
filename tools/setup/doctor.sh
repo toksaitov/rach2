@@ -36,6 +36,7 @@ hint() {
                              || echo "apt install openssh-client" ;;
     mtools)   [ "$MAC" = 1 ] && echo "brew install mtools" || echo "apt install mtools" ;;
     e2fsprogs) [ "$MAC" = 1 ] && echo "brew install e2fsprogs" || echo "apt install e2fsprogs" ;;
+    mandoc)   [ "$MAC" = 1 ] && echo "brew install mandoc" || echo "apt install mandoc" ;;
     xorriso)  [ "$MAC" = 1 ] && echo "brew install xorriso" || echo "apt install xorriso" ;;
     docker)   [ "$MAC" = 1 ] && echo "brew install --cask docker (Docker Desktop)" \
                              || echo "apt install docker.io" ;;
@@ -159,6 +160,7 @@ else
     missing=$((missing + 1))
 fi
 
+req mandoc       mandoc
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang-format clang-format
