@@ -1,0 +1,14 @@
+# resize2fs(8)
+
+NAME: resize2fs - grow or shrink an ext2 file system. Source: vendor/e2fsprogs/e2fsprogs-1.47.4/resize/resize2fs.8.in (the upstream page, GPL-2.0, which the page adapts), vendor/e2fsprogs/build_e2fsprogs.sh, vendor/e2fsprogs/patches/, krffs/manifests/rach2-recovery.manifest, utils/growroot.c, utils/Readme.md "Boot and recovery programs".
+* The program is e2fsprogs 1.47.4's resize2fs, built static against the ported musl (`--enable-resizer`) and staged only on the recovery image as `/sbin/resize2fs`.
+* SYNOPSIS as upstream: `resize2fs [-fFpPMbs] [-d debug-flags] [-S RAID-stride] [-z undo_file] device [size]`. The size is in file-system blocks, or with a suffix `K`, `M`, `G`, `T` or `s` (512-byte sectors); without it, the partition's size, which the kernel reports through `BLKGETSIZE64`. The size may not exceed the partition.
+* On Rach2 the volume must be unmounted: the kernel has no on-line resize, and the recovery system mounts nothing from the disk it works on. Upstream's on-line resize paragraphs do not apply and the page says so. Run `e2fsck -f` before resizing, as upstream requires; resize2fs refuses a volume not checked since its last mount unless `-f` is given.
+* Options, from upstream: `-b` turn on the 64bit feature; `-d debug-flags`; `-f` force, skipping the checks; `-F` flush the device's buffer cache first; `-M` shrink to the minimum size; `-p` print progress for each stage (off-line only); `-P` print the minimum size and do nothing; `-s` turn off the 64bit feature; `-S RAID-stride`; `-z undo_file`. Take each description from the upstream page, shortened.
+* EXIT STATUS: 0 on success; nonzero on any failure, with the reason on standard error. growroot reports it as `resize2fs status N`.
+* This system's use: `growroot` runs `resize2fs DEVICE` after its two checks, to grow the file system to the partition it just enlarged; a run killed during the resize leaves a volume `e2fsck -f -p` repairs and a second `growroot` finishes (`tests/run grow` proves both). The installer asks `rach2-install` to grow the root through growroot when the person says yes.
+* What differs from Linux: raw sector windows and whole-sector I/O as for e2fsck(8) (patch `raw-device-io.patch`); `/etc/mtab` is empty, so the mounted check finds nothing. The program keeps the volume's bitmaps in memory: growroot refuses a machine with less than 7 MiB of `MemTotal` before running it.
+* FILES: /sbin/resize2fs.
+* EXAMPLES: `e2fsck -f /dev/disk0p3 && resize2fs /dev/disk0p3` from the recovery system; `growroot MBRID=ID,3` does both with the table change first.
+* SEE ALSO: e2fsck(8), growroot(8), recovery(7), disk(7).
+* HISTORY: adapted from the e2fsprogs 1.47.4 manual page, GPL-2.0.
