@@ -11,8 +11,9 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 ## stat: number 106, handler sys_stat
 
-stat(106) follows symlinks; lstat(107) does not. musl falls back to these
-from statx for AT_FDCWD paths, so both must exist for stat()/lstat() to work.
+stat(106) follows symlinks; lstat(107) does not. musl maps SYS_stat and
+SYS_lstat to the 64-bit forms, 195 and 196, so these two serve a caller
+that issues the old numbers itself.
 
 
 ## lstat: number 107, handler sys_lstat

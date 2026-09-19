@@ -17,8 +17,9 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 Truncate an open file to `length` (ftruncate(2)).
 The descriptor must be a writable file on a mounted file system. A
-successful shrink or extend clears the set-id bits for an unprivileged
-caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
+successful shrink or extend clears set-uid, and set-gid where group execute
+is set, for an unprivileged caller, like a write. `SYS_FTRUNCATE` takes
+the length in ECX, and
 `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
 high halves; the file system answers a length past what it can hold.
 
@@ -31,7 +32,8 @@ high halves; the file system answers a length past what it can hold.
 
 Truncate an open file to `length` (ftruncate(2)).
 The descriptor must be a writable file on a mounted file system. A
-successful shrink or extend clears the set-id bits for an unprivileged
-caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
+successful shrink or extend clears set-uid, and set-gid where group execute
+is set, for an unprivileged caller, like a write. `SYS_FTRUNCATE` takes
+the length in ECX, and
 `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
 high halves; the file system answers a length past what it can hold.

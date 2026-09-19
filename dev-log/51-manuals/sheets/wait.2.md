@@ -13,7 +13,8 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 sys_waitpid - wait for a child to change state.
 Args: EBX = pid (-1 = any child), ECX = status pointer, EDX = options.
-Returns the reaped child's PID, 0 (WNOHANG, none ready), or -errno.
+Returns the PID of the child reaped, or reported stopped or continued,
+0 (WNOHANG, none ready), or -errno.
 
 ### helper do_wait
 

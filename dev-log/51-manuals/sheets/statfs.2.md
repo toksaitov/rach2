@@ -38,7 +38,8 @@ a 16 MB file system 77 percent full. `f_files` is zero throughout, which says
 
 ## fstatfs64: number 269, handler sys_fstatfs64
 
-fstatfs64(2): the same numbers, named by an open descriptor.
+fstatfs64(2): the same numbers, named by an open descriptor; a /proc
+descriptor answers proc's and a device's answers devfs's.
 EBX is the descriptor, ECX the caller's size, EDX the buffer.
 
 ### helper statfs_fill

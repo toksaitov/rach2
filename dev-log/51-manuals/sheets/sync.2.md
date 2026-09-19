@@ -23,11 +23,13 @@ read-only from then on.
 ## fsync: number 118, handler sys_fsync
 
 Flush a file's data to stable storage (fsync(2); also serves fdatasync).
-EBX = fd. Validates the descriptor (any open fd; the type is not checked),
-then writes back every dirty page of the disk-backed window via `pc_sync`.
-The flush is whole-cache, not per-file, a safe superset of the
-contract. When KRFFS is the RAM module the cache is empty, so the flush is
-a no-op and the call only validates the fd. Returns 0, -EBADF for a bad
+EBX = fd. Validates the descriptor (any open fd; the type is not checked).
+A descriptor on a mounted volume goes to the type's fsync through
+`vfs_fsync`; any other writes back every dirty page of the disk-backed
+window via `pc_sync`. That flush is whole-cache, not per-file, a safe
+superset of the contract. When KRFFS is the RAM module the cache is empty,
+so the flush is a no-op and the call only validates the fd. Returns 0,
+-EBADF for a bad
 descriptor, or -EIO when a disk writeback fails. dropbear writes its host
 key with the open/write/fsync/rename idiom and treats an fsync error as
 fatal, so the -EIO is real backpressure.

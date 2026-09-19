@@ -113,7 +113,8 @@ dropped here. No descriptor is both an ops object and a socket.
 
 sys_waitpid - wait for a child to change state.
 Args: EBX = pid (-1 = any child), ECX = status pointer, EDX = options.
-Returns the reaped child's PID, 0 (WNOHANG, none ready), or -errno.
+Returns the PID of the child reaped, or reported stopped or continued,
+0 (WNOHANG, none ready), or -errno.
 
 ### helper do_wait
 
@@ -643,9 +644,9 @@ readlink core (readlink(2)/readlinkat(2)).
 The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
 ttyname reads), and the symbolic links of a mounted type that has them,
 read through the type. The result is the byte count and is NOT
-NUL-terminated (the readlink contract; musl appends its own terminator and
-treats a full buffer as truncation). `name` is the path, leading '/'
-stripped.
+NUL-terminated (the readlink contract; musl's readlink passes the count
+through, and its ttyname_r is what appends a terminator and treats a full
+buffer as truncation). `name` is the path, leading '/' stripped.
 
 
 ## 88 reboot -> sys_reboot
@@ -699,8 +700,9 @@ that number would be silenced by a report it never made.
 
 Truncate an open file to `length` (ftruncate(2)).
 The descriptor must be a writable file on a mounted file system. A
-successful shrink or extend clears the set-id bits for an unprivileged
-caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
+successful shrink or extend clears set-uid, and set-gid where group execute
+is set, for an unprivileged caller, like a write. `SYS_FTRUNCATE` takes
+the length in ECX, and
 `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
 high halves; the file system answers a length past what it can hold.
 
@@ -787,8 +789,9 @@ the sender's hardware address and who the frame was addressed to.
 
 ## 106 stat -> sys_stat
 
-stat(106) follows symlinks; lstat(107) does not. musl falls back to these
-from statx for AT_FDCWD paths, so both must exist for stat()/lstat() to work.
+stat(106) follows symlinks; lstat(107) does not. musl maps SYS_stat and
+SYS_lstat to the 64-bit forms, 195 and 196, so these two serve a caller
+that issues the old numbers itself.
 
 
 ## 107 lstat -> sys_lstat
@@ -814,19 +817,22 @@ waitpid, may be 0 for wait4) is zero-filled on reap. With WNOHANG, returns
 ## 116 sysinfo -> sys_sysinfo
 
 System statistics (sysinfo(2)).
-Fills the 64-byte i386 struct sysinfo: uptime in seconds, a live-process
-count, mem_unit = 1; CPU load and memory/swap figures are reported as zero
-(not tracked). EBX = struct sysinfo *.
+Fills the 64-byte i386 struct sysinfo: uptime in seconds, the count of
+process records including unreaped children, total and free RAM from the
+frame counts, mem_unit = 1; CPU load, shared, buffer and swap figures are
+reported as zero (not tracked). EBX = struct sysinfo *.
 
 
 ## 118 fsync -> sys_fsync
 
 Flush a file's data to stable storage (fsync(2); also serves fdatasync).
-EBX = fd. Validates the descriptor (any open fd; the type is not checked),
-then writes back every dirty page of the disk-backed window via `pc_sync`.
-The flush is whole-cache, not per-file, a safe superset of the
-contract. When KRFFS is the RAM module the cache is empty, so the flush is
-a no-op and the call only validates the fd. Returns 0, -EBADF for a bad
+EBX = fd. Validates the descriptor (any open fd; the type is not checked).
+A descriptor on a mounted volume goes to the type's fsync through
+`vfs_fsync`; any other writes back every dirty page of the disk-backed
+window via `pc_sync`. That flush is whole-cache, not per-file, a safe
+superset of the contract. When KRFFS is the RAM module the cache is empty,
+so the flush is a no-op and the call only validates the fd. Returns 0,
+-EBADF for a bad
 descriptor, or -EIO when a disk writeback fails. dropbear writes its host
 key with the open/write/fsync/rename idiom and treats an fsync error as
 fatal, so the -EIO is real backpressure.
@@ -1134,8 +1140,9 @@ that number would be silenced by a report it never made.
 
 Truncate an open file to `length` (ftruncate(2)).
 The descriptor must be a writable file on a mounted file system. A
-successful shrink or extend clears the set-id bits for an unprivileged
-caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
+successful shrink or extend clears set-uid, and set-gid where group execute
+is set, for an unprivileged caller, like a write. `SYS_FTRUNCATE` takes
+the length in ECX, and
 `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
 high halves; the file system answers a length past what it can hold.
 
@@ -1385,7 +1392,8 @@ a 16 MB file system 77 percent full. `f_files` is zero throughout, which says
 
 ## 269 fstatfs64 -> sys_fstatfs64
 
-fstatfs64(2): the same numbers, named by an open descriptor.
+fstatfs64(2): the same numbers, named by an open descriptor; a /proc
+descriptor answers proc's and a device's answers devfs's.
 EBX is the descriptor, ECX the caller's size, EDX the buffer.
 
 ### helper statfs_fill
@@ -1459,9 +1467,9 @@ readlink core (readlink(2)/readlinkat(2)).
 The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
 ttyname reads), and the symbolic links of a mounted type that has them,
 read through the type. The result is the byte count and is NOT
-NUL-terminated (the readlink contract; musl appends its own terminator and
-treats a full buffer as truncation). `name` is the path, leading '/'
-stripped.
+NUL-terminated (the readlink contract; musl's readlink passes the count
+through, and its ttyname_r is what appends a terminator and treats a full
+buffer as truncation). `name` is the path, leading '/' stripped.
 
 
 ## 306 fchmodat -> sys_fchmodat
@@ -1569,8 +1577,10 @@ flag bits are rejected.
 
 ### SC_SOCKET = 1 -> do_socket
 
-socket(2): only AF_INET (domain 2), SOCK_STREAM, and SOCK_DGRAM. Returns a
-new socket fd or -errno. */
+socket(2): AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
+ioctl-only descriptor of IPPROTO_RAW), and AF_PACKET with SOCK_DGRAM; the
+raw and packet forms take effective uid 0. Returns a new socket fd or
+-errno. */
 
 
 ### SC_BIND = 2 -> do_bind

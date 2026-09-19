@@ -29,9 +29,9 @@ readlink core (readlink(2)/readlinkat(2)).
 The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
 ttyname reads), and the symbolic links of a mounted type that has them,
 read through the type. The result is the byte count and is NOT
-NUL-terminated (the readlink contract; musl appends its own terminator and
-treats a full buffer as truncation). `name` is the path, leading '/'
-stripped.
+NUL-terminated (the readlink contract; musl's readlink passes the count
+through, and its ttyname_r is what appends a terminator and treats a full
+buffer as truncation). `name` is the path, leading '/' stripped.
 
 
 ## readlinkat: number 305, handler sys_readlinkat
@@ -44,6 +44,6 @@ readlink core (readlink(2)/readlinkat(2)).
 The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
 ttyname reads), and the symbolic links of a mounted type that has them,
 read through the type. The result is the byte count and is NOT
-NUL-terminated (the readlink contract; musl appends its own terminator and
-treats a full buffer as truncation). `name` is the path, leading '/'
-stripped.
+NUL-terminated (the readlink contract; musl's readlink passes the count
+through, and its ttyname_r is what appends a terminator and treats a full
+buffer as truncation). `name` is the path, leading '/' stripped.
