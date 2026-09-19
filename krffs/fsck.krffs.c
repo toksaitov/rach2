@@ -19,12 +19,9 @@
 #include <unistd.h>
 #endif
 
-static const int KRFFS_Invalid_Link_Error            = -10,
-                 KRFFS_Out_of_Range_Node_Error       = -11,
-                 KRFFS_Invalid_Magic_Signature_Error = -12,
-                 KRFFS_Unknown_Node_Type_Error       = -13,
-                 KRFFS_Node_Size_Error               = -14,
-                 KRFFS_Repairs_Needed_Error          = -15;
+static const int KRFFS_Invalid_Link_Error = -10, KRFFS_Out_of_Range_Node_Error = -11,
+                 KRFFS_Invalid_Magic_Signature_Error = -12, KRFFS_Unknown_Node_Type_Error = -13,
+                 KRFFS_Node_Size_Error = -14, KRFFS_Repairs_Needed_Error = -15;
 
 /**
  * One named node, gathered by the walk so the check can find two of them.
@@ -42,17 +39,14 @@ struct krffs_name_entry {
     uint64_t hash;
     uint64_t position;
     uint64_t size;
-    bool     is_dir;
-    bool     drop;
+    bool is_dir;
+    bool drop;
 };
 
 /** The node `position` bytes into the mapped file system. */
-static struct krffs_node *krffs_node_at(
-                              struct krffs_file_system *file_system,
-                              uint64_t position
-                          )
+static struct krffs_node *krffs_node_at(struct krffs_file_system *file_system, uint64_t position)
 {
-    return (struct krffs_node *) ((char *) file_system->node + position);
+    return (struct krffs_node *)((char *)file_system->node + position);
 }
 
 /**
@@ -122,20 +116,17 @@ static int krffs_compare_name_entries(const void *left, const void *right)
  */
 int main(int argc, char **argv)
 {
-    int exit_status =
-        EXIT_SUCCESS;
+    int exit_status = EXIT_SUCCESS;
 
     int file_descriptor = -1;
     /* Declared here and not beside its use: `cleanup` frees it, and the help
        text, the argument errors and every failure before the walk jump
        straight there. */
     struct krffs_name_entry *entries = NULL;
-    struct krffs_file_system file_system = {
-        .node = NULL
-    };
+    struct krffs_file_system file_system = {.node = NULL};
 
-    bool has_help_option  = false;
-    bool is_strict        = false;
+    bool has_help_option = false;
+    bool is_strict = false;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--strict") == 0) {
             is_strict = true;
@@ -149,84 +140,58 @@ int main(int argc, char **argv)
     }
 
     if (argc <= 1 || has_help_option) {
-        fprintf(
-            stderr,
-            "Usage: %s <file> [--offset N --size N] [--strict]\n",
-            argv[0]
-        );
+        fprintf(stderr, "Usage: %s <file> [--offset N --size N] [--strict]\n", argv[0]);
 
         goto cleanup;
     } else if (argv[1][0] == '-') {
-        fprintf(
-            stderr,
-            "The first parameter is invalid.\n"
-            "\n"
-            "Usage: %s <file> [--offset N --size N] [--strict]\n",
-            argv[0]
-        );
+        fprintf(stderr,
+                "The first parameter is invalid.\n"
+                "\n"
+                "Usage: %s <file> [--offset N --size N] [--strict]\n",
+                argv[0]);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
-    char *path =
-        argv[1];
+    char *path = argv[1];
 
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
-        fprintf(
-            stderr,
-            "Failed to open the file system file at '%s'.\n",
-            path
-        );
+        fprintf(stderr, "Failed to open the file system file at '%s'.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
-        fprintf(
-            stderr,
-            "Failed to get file information for '%s'.\n",
-            path
-        );
+        fprintf(stderr, "Failed to get file information for '%s'.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     if (!S_ISREG(file_info.st_mode)) {
-        fprintf(
-            stderr,
-            "The file system file at '%s' is not a regular file.\n",
-            path
-        );
+        fprintf(stderr, "The file system file at '%s' is not a regular file.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     off_t region_offset;
     size_t region_size;
-    if (krffs_parse_region_args(
-            argc, argv, (uint64_t) file_info.st_size,
-            sizeof(*file_system.node) * 2, &region_offset, &region_size) != 0) {
-        exit_status =
-            EXIT_FAILURE;
+    if (krffs_parse_region_args(argc, argv, (uint64_t)file_info.st_size,
+                                sizeof(*file_system.node) * 2, &region_offset, &region_size) != 0) {
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
-    file_system.size =
-        region_size;
+    file_system.size = region_size;
 
     /*
         Map the file into memory through the kernel's virtual memory system.
@@ -234,20 +199,11 @@ int main(int argc, char **argv)
         `krffs_sync_mapping` asks for them to be written back; unmapping is
         this host's `munmap` and promises nothing about when they land.
      */
-    if ((file_system.node =
-             krffs_map_file(
-                 file_descriptor,
-                 region_offset,
-                 file_system.size
-             )) == (void *) -1) {
-        fprintf(
-            stderr,
-            "Failed to map the file system file at '%s' into memory.\n",
-            path
-        );
+    if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
+        (void *)-1) {
+        fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
@@ -257,29 +213,21 @@ int main(int argc, char **argv)
         stay mapped to it.
      */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
-        fprintf(
-            stderr,
-            "Failed to close the file system file at '%s'.\n",
-            path
-        );
+        fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
     file_descriptor = -1;
 
     if (file_system.node->magic != KRFFS_File_System_Magic) {
-        fprintf(
-            stderr,
-            "The file system was not found at '%s'. "
-            "The file system was not created or the file is corrupted.\n",
-            path
-        );
+        fprintf(stderr,
+                "The file system was not found at '%s'. "
+                "The file system was not created or the file is corrupted.\n",
+                path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
@@ -287,15 +235,12 @@ int main(int argc, char **argv)
     puts("The filesystem signature is correct.");
 
     if (file_system.node->type != KRFFS_Root_Node) {
-        fprintf(
-            stderr,
-            "The root file system node was not found at '%s'. "
-            "The file system was not created or the file is corrupted.\n",
-            path
-        );
+        fprintf(stderr,
+                "The root file system node was not found at '%s'. "
+                "The file system was not created or the file is corrupted.\n",
+                path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
@@ -318,100 +263,72 @@ int main(int argc, char **argv)
     size_t entry_count = 0;
     size_t entry_capacity = 0;
 
-    struct krffs_node *previous_node =
-        file_system.node;
-    struct krffs_node *node =
-        previous_node;
+    struct krffs_node *previous_node = file_system.node;
+    struct krffs_node *node = previous_node;
 
     /* The walk judges every size before it steps by one, so a node too small
      * to hold a header ends it. The bound below is the second answer to the
      * same question: a chain that does not return to the root within the most
      * nodes the mapping could hold is corrupt, not endless. */
-    uint64_t steps =
-        0;
-    uint64_t max_steps =
-        file_system.size / sizeof(struct krffs_node) + 1;
+    uint64_t steps = 0;
+    uint64_t max_steps = file_system.size / sizeof(struct krffs_node) + 1;
 
     puts("Checking the filesystem structure...");
 
     do {
         if (++steps > max_steps) {
-            fprintf(
-                stderr,
-                "The node chain does not return to the root within the file "
-                "system bound. The file is corrupt. Won't proceed.\n"
-            );
+            fprintf(stderr, "The node chain does not return to the root within the file "
+                            "system bound. The file is corrupt. Won't proceed.\n");
 
-            exit_status =
-                KRFFS_Invalid_Link_Error;
+            exit_status = KRFFS_Invalid_Link_Error;
 
             break;
         }
 
         if (previous_node > node) {
-            printf(
-                "- invalid link to %"PRIu64" "
-                "where base is %"PRIu64" "
-                "and limit %"PRIu64"\n"
-                "\n",
-                (uint64_t) node,
-                (uint64_t) file_system.node,
-                (uint64_t) file_system.node + file_system.size
-            );
+            printf("- invalid link to %" PRIu64 " "
+                   "where base is %" PRIu64 " "
+                   "and limit %" PRIu64 "\n"
+                   "\n",
+                   (uint64_t)node, (uint64_t)file_system.node,
+                   (uint64_t)file_system.node + file_system.size);
 
-            fprintf(
-                stderr,
-                "The previous node link makes an invalid loop. "
-                "Should point to the first node. "
-                "Won't proceed.\n"
-            );
+            fprintf(stderr, "The previous node link makes an invalid loop. "
+                            "Should point to the first node. "
+                            "Won't proceed.\n");
 
-            exit_status =
-                KRFFS_Invalid_Link_Error;
+            exit_status = KRFFS_Invalid_Link_Error;
 
             break;
         }
 
         if (!krffs_is_node_in_file_system(&file_system, node)) {
-            printf(
-                "- out of range node at %"PRIu64" "
-                "where base is %"PRIu64" "
-                "and limit %"PRIu64"\n"
-                "\n",
-                (uint64_t) node,
-                (uint64_t) file_system.node,
-                (uint64_t) file_system.node +
-                file_system.size
-            );
+            printf("- out of range node at %" PRIu64 " "
+                   "where base is %" PRIu64 " "
+                   "and limit %" PRIu64 "\n"
+                   "\n",
+                   (uint64_t)node, (uint64_t)file_system.node,
+                   (uint64_t)file_system.node + file_system.size);
 
-            fprintf(
-                stderr,
-                "Found an out of range node. Won't proceed.\n"
-            );
+            fprintf(stderr, "Found an out of range node. Won't proceed.\n");
 
-            exit_status =
-                KRFFS_Out_of_Range_Node_Error;
+            exit_status = KRFFS_Out_of_Range_Node_Error;
 
             break;
         }
 
         if (node->magic != KRFFS_File_System_Magic) {
-            printf(
-                "- invalid file system signature at %"PRIu64" "
-                "in a node of type '%s'\n"
-                "\n",
-                (uint64_t) node,
-                node->type == KRFFS_Free_Node ?
-                    "free" : (node->type == KRFFS_Reserved_Node ? "reserved" : "unknown")
-            );
+            printf("- invalid file system signature at %" PRIu64 " "
+                   "in a node of type '%s'\n"
+                   "\n",
+                   (uint64_t)node,
+                   node->type == KRFFS_Free_Node
+                       ? "free"
+                       : (node->type == KRFFS_Reserved_Node ? "reserved" : "unknown"));
 
-            fprintf(
-                stderr,
-                "Found an invalid file system signature. Won't proceed.\n"
-            );
+            fprintf(stderr, "Found an invalid file system signature. Won't proceed.\n");
 
-            exit_status =
-                KRFFS_Invalid_Magic_Signature_Error;
+            exit_status = KRFFS_Invalid_Magic_Signature_Error;
 
             break;
         }
@@ -421,20 +338,13 @@ int main(int argc, char **argv)
            it: a size under a header would wrap that subtraction, and a size
            past the region would step outside the mapping. */
         if (node->size < sizeof(struct krffs_node) ||
-            node->size > file_system.size -
-                krffs_get_node_relative_position(&file_system, node)) {
-            printf(
-                "- node at position %"PRIu64": a size of %"PRIu64" bytes in "
-                "a region of %"PRIu64"\n",
-                krffs_get_node_relative_position(&file_system, node),
-                node->size,
-                (uint64_t) file_system.size
-            );
-            fprintf(
-                stderr,
-                "Found a node whose size is not one this region can hold. "
-                "Won't proceed.\n"
-            );
+            node->size > file_system.size - krffs_get_node_relative_position(&file_system, node)) {
+            printf("- node at position %" PRIu64 ": a size of %" PRIu64 " bytes in "
+                   "a region of %" PRIu64 "\n",
+                   krffs_get_node_relative_position(&file_system, node), node->size,
+                   (uint64_t)file_system.size);
+            fprintf(stderr, "Found a node whose size is not one this region can hold. "
+                            "Won't proceed.\n");
             exit_status = KRFFS_Node_Size_Error;
             break;
         }
@@ -448,17 +358,11 @@ int main(int argc, char **argv)
            passes over for the same reason. */
         if (node->type != KRFFS_Free_Node &&
             node->data_size > node->size - sizeof(struct krffs_node)) {
-            printf(
-                "- node at position %"PRIu64": %"PRIu64" bytes of data in "
-                "%"PRIu64" bytes of node\n",
-                krffs_get_node_relative_position(&file_system, node),
-                node->data_size,
-                node->size
-            );
-            fprintf(
-                stderr,
-                "Found a node whose data does not fit in it. Won't proceed.\n"
-            );
+            printf("- node at position %" PRIu64 ": %" PRIu64 " bytes of data in "
+                   "%" PRIu64 " bytes of node\n",
+                   krffs_get_node_relative_position(&file_system, node), node->data_size,
+                   node->size);
+            fprintf(stderr, "Found a node whose data does not fit in it. Won't proceed.\n");
             exit_status = KRFFS_Node_Size_Error;
             break;
         }
@@ -476,41 +380,29 @@ int main(int argc, char **argv)
                 }
             }
             if (i == KRFFS_FILE_NAME_BUFFER_SIZE) {
-                printf(
-                    "- node at position %"PRIu64" has a name with no end\n"
-                    "\n",
-                    krffs_get_node_relative_position(&file_system, node)
-                );
-                fprintf(
-                    stderr,
-                    "Found a node whose name is not terminated. "
-                    "Won't proceed.\n"
-                );
+                printf("- node at position %" PRIu64 " has a name with no end\n"
+                       "\n",
+                       krffs_get_node_relative_position(&file_system, node));
+                fprintf(stderr, "Found a node whose name is not terminated. "
+                                "Won't proceed.\n");
                 exit_status = KRFFS_Node_Size_Error;
                 break;
             }
         }
 
         if (steps > 1 && node->previous_node_size != previous_node->size) {
-            printf(
-                "! backward link at position %"PRIu64": %"PRIu64" bytes, "
-                "the node before is %"PRIu64"\n",
-                krffs_get_node_relative_position(&file_system, node),
-                node->previous_node_size,
-                previous_node->size
-            );
+            printf("! backward link at position %" PRIu64 ": %" PRIu64 " bytes, "
+                   "the node before is %" PRIu64 "\n",
+                   krffs_get_node_relative_position(&file_system, node), node->previous_node_size,
+                   previous_node->size);
             backlinks++;
         }
 
         if (node->type == KRFFS_Root_Node) {
-            printf(
-                "* root node at position %"PRIu64" (owner %u:%u)\n",
-                krffs_get_node_relative_position(&file_system, node),
-                (unsigned) node->uid,
-                (unsigned) node->gid
-            );
-        } else if (node->type == KRFFS_Reserved_Node &&
-                   node->name[0] == '\0') {
+            printf("* root node at position %" PRIu64 " (owner %u:%u)\n",
+                   krffs_get_node_relative_position(&file_system, node), (unsigned)node->uid,
+                   (unsigned)node->gid);
+        } else if (node->type == KRFFS_Reserved_Node && node->name[0] == '\0') {
             /* An orphan: a reserved node no path names, left by a crash between
                the last unlink or rename and the last close. A writable mount
                of a volume whose dirty flag is set reaps these; a read-only
@@ -518,20 +410,14 @@ int main(int argc, char **argv)
                here so an operator reading fsck's output is not left
                wondering what the space is. */
             orphans++;
-            printf(
-                "+ orphan node at position %"PRIu64": %"PRIu64" bytes "
-                "(%"PRIu64" bytes for data, owner %u:%u), to be reclaimed\n",
-                krffs_get_node_relative_position(&file_system, node),
-                node->size,
-                node->data_size,
-                (unsigned) node->uid,
-                (unsigned) node->gid
-            );
+            printf("+ orphan node at position %" PRIu64 ": %" PRIu64 " bytes "
+                   "(%" PRIu64 " bytes for data, owner %u:%u), to be reclaimed\n",
+                   krffs_get_node_relative_position(&file_system, node), node->size,
+                   node->data_size, (unsigned)node->uid, (unsigned)node->gid);
         } else if (node->type == KRFFS_Reserved_Node) {
             if (entry_count == entry_capacity) {
                 size_t wanted = entry_capacity ? entry_capacity * 2 : 64;
-                struct krffs_name_entry *grown =
-                    realloc(entries, wanted * sizeof(*entries));
+                struct krffs_name_entry *grown = realloc(entries, wanted * sizeof(*entries));
 
                 if (!grown) {
                     fprintf(stderr, "Out of memory reading the names.\n");
@@ -542,58 +428,34 @@ int main(int argc, char **argv)
                 entry_capacity = wanted;
             }
             entries[entry_count].parent_id = node->parent_id;
-            entries[entry_count].hash =
-                krffs_calculate_djb_hash(node->name);
-            entries[entry_count].position =
-                krffs_get_node_relative_position(&file_system, node);
+            entries[entry_count].hash = krffs_calculate_djb_hash(node->name);
+            entries[entry_count].position = krffs_get_node_relative_position(&file_system, node);
             entries[entry_count].size = node->size;
-            entries[entry_count].is_dir =
-                (node->mode & FSCK_S_IFMT) == FSCK_S_IFDIR;
+            entries[entry_count].is_dir = (node->mode & FSCK_S_IFMT) == FSCK_S_IFDIR;
             entries[entry_count].drop = false;
             entry_count++;
 
-            printf(
-                "+ reserved node with ID %"PRIu64" at position %"PRIu64": "
-                "%"PRIu64" bytes (%"PRIu64" bytes for data, owner %u:%u) - [%.255s]\n",
-                node->id,
-                krffs_get_node_relative_position(&file_system, node),
-                node->size,
-                node->data_size,
-                (unsigned) node->uid,
-                (unsigned) node->gid,
-                node->name
-            );
+            printf("+ reserved node with ID %" PRIu64 " at position %" PRIu64 ": "
+                   "%" PRIu64 " bytes (%" PRIu64 " bytes for data, owner %u:%u) - [%.255s]\n",
+                   node->id, krffs_get_node_relative_position(&file_system, node), node->size,
+                   node->data_size, (unsigned)node->uid, (unsigned)node->gid, node->name);
         } else if (node->type == KRFFS_Free_Node) {
-            printf(
-                "- free node at position %"PRIu64": %"PRIu64" bytes\n",
-                krffs_get_node_relative_position(&file_system, node),
-                node->size
-            );
+            printf("- free node at position %" PRIu64 ": %" PRIu64 " bytes\n",
+                   krffs_get_node_relative_position(&file_system, node), node->size);
         } else {
-            printf(
-                "- unknown node at position %"PRIu64"\n"
-                "\n",
-                krffs_get_node_relative_position(&file_system, node)
-            );
+            printf("- unknown node at position %" PRIu64 "\n"
+                   "\n",
+                   krffs_get_node_relative_position(&file_system, node));
 
-            fprintf(
-                stderr,
-                "Found a node of an unknown type. Won't proceed.\n"
-            );
+            fprintf(stderr, "Found a node of an unknown type. Won't proceed.\n");
 
-            exit_status =
-                KRFFS_Unknown_Node_Type_Error;
+            exit_status = KRFFS_Unknown_Node_Type_Error;
 
             break;
         }
 
-        previous_node =
-            node;
-        node =
-            krffs_get_next_node(
-                &file_system,
-                node
-            );
+        previous_node = node;
+        node = krffs_get_next_node(&file_system, node);
     } while (node != file_system.node);
 
     /* The chain closed at the root, so `previous_node` is the last node and its
@@ -603,12 +465,9 @@ int main(int argc, char **argv)
        against the region above, so a walk that closes has spanned it. */
     if (exit_status == EXIT_SUCCESS) {
         if (file_system.node->previous_node_size != previous_node->size) {
-            printf(
-                "! backward link at the root: %"PRIu64" bytes, "
-                "the last node is %"PRIu64"\n",
-                file_system.node->previous_node_size,
-                previous_node->size
-            );
+            printf("! backward link at the root: %" PRIu64 " bytes, "
+                   "the last node is %" PRIu64 "\n",
+                   file_system.node->previous_node_size, previous_node->size);
             backlinks++;
         }
     }
@@ -622,16 +481,14 @@ int main(int argc, char **argv)
     if (exit_status == EXIT_SUCCESS && entry_count > 1) {
         size_t i;
 
-        qsort(entries, entry_count, sizeof(*entries),
-              krffs_compare_name_entries);
+        qsort(entries, entry_count, sizeof(*entries), krffs_compare_name_entries);
 
         for (i = 0; i + 1 < entry_count; i++) {
             size_t j;
 
             for (j = i + 1;
                  !entries[i].drop && j < entry_count &&
-                 entries[j].parent_id == entries[i].parent_id &&
-                 entries[j].hash == entries[i].hash;
+                 entries[j].parent_id == entries[i].parent_id && entries[j].hash == entries[i].hash;
                  j++) {
                 struct krffs_node *first = krffs_node_at(&file_system, entries[i].position);
                 struct krffs_node *second = krffs_node_at(&file_system, entries[j].position);
@@ -639,8 +496,7 @@ int main(int argc, char **argv)
                 size_t drop;
 
                 if (entries[j].drop ||
-                    strncmp((const char *) first->name,
-                            (const char *) second->name,
+                    strncmp((const char *)first->name, (const char *)second->name,
                             KRFFS_FILE_NAME_BUFFER_SIZE) != 0) {
                     continue;
                 }
@@ -660,16 +516,11 @@ int main(int argc, char **argv)
                 entries[drop].drop = true;
                 duplicates++;
 
-                printf(
-                    "! name [%.255s] twice in one directory: "
-                    "position %"PRIu64" (%"PRIu64" bytes) kept, "
-                    "position %"PRIu64" (%"PRIu64" bytes) dropped\n",
-                    first->name,
-                    entries[keep].position,
-                    entries[keep].size,
-                    entries[drop].position,
-                    entries[drop].size
-                );
+                printf("! name [%.255s] twice in one directory: "
+                       "position %" PRIu64 " (%" PRIu64 " bytes) kept, "
+                       "position %" PRIu64 " (%" PRIu64 " bytes) dropped\n",
+                       first->name, entries[keep].position, entries[keep].size,
+                       entries[drop].position, entries[drop].size);
             }
         }
     }
@@ -678,15 +529,10 @@ int main(int argc, char **argv)
        as it was found. */
     if (exit_status == EXIT_SUCCESS && is_strict &&
         (was_dirty || orphans != 0 || duplicates != 0 || backlinks != 0)) {
-        fprintf(
-            stderr,
-            "The file system needs repair: %s%"PRIu64" orphan node(s), "
-            "%"PRIu64" repeated name(s), %"PRIu64" backward link(s).\n",
-            was_dirty ? "not cleanly unmounted, " : "",
-            orphans,
-            duplicates,
-            backlinks
-        );
+        fprintf(stderr,
+                "The file system needs repair: %s%" PRIu64 " orphan node(s), "
+                "%" PRIu64 " repeated name(s), %" PRIu64 " backward link(s).\n",
+                was_dirty ? "not cleanly unmounted, " : "", orphans, duplicates, backlinks);
         exit_status = KRFFS_Repairs_Needed_Error;
     }
 
@@ -714,8 +560,7 @@ int main(int argc, char **argv)
             file_system.node->previous_node_size = behind->size;
             fixed++;
         }
-        printf("Rebuilt %"PRIu64" backward link(s) from the forward chain.\n",
-               fixed);
+        printf("Rebuilt %" PRIu64 " backward link(s) from the forward chain.\n", fixed);
     }
 
     /* The node that loses a repeated name has no name left, so the pass below
@@ -728,8 +573,7 @@ int main(int argc, char **argv)
                 krffs_node_at(&file_system, entries[i].position)->name[0] = '\0';
             }
         }
-        printf("Dropped %"PRIu64" repeated name(s) an interrupted move left.\n",
-               duplicates);
+        printf("Dropped %" PRIu64 " repeated name(s) an interrupted move left.\n", duplicates);
     }
 
     /* Reclaim every orphan: a reserved node with no name, kept alive in a
@@ -749,15 +593,13 @@ int main(int argc, char **argv)
     if (exit_status == EXIT_SUCCESS) {
         uint64_t reclaimed = 0;
         uint64_t walked = 0;
-        struct krffs_node *scan = krffs_get_next_node(&file_system,
-                                                      file_system.node);
+        struct krffs_node *scan = krffs_get_next_node(&file_system, file_system.node);
         struct krffs_node *prev = file_system.node;
 
         while (scan != file_system.node && walked <= max_steps) {
             walked++;
             if (scan->type == KRFFS_Reserved_Node && scan->name[0] == '\0') {
-                struct krffs_node *merged =
-                    (prev->type == KRFFS_Free_Node) ? prev : scan;
+                struct krffs_node *merged = (prev->type == KRFFS_Free_Node) ? prev : scan;
 
                 krffs_remove_reserved_node(&file_system, scan);
                 reclaimed++;
@@ -767,14 +609,13 @@ int main(int argc, char **argv)
             scan = krffs_get_next_node(&file_system, scan);
         }
         if (reclaimed != 0) {
-            printf("Reclaimed %"PRIu64" orphan node(s) no path could reach.\n",
-                   reclaimed);
+            printf("Reclaimed %" PRIu64 " orphan node(s) no path could reach.\n", reclaimed);
         }
     }
 
     if (exit_status == EXIT_SUCCESS && was_dirty) {
         puts("Clearing the dirty flag.");
-        file_system.node->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
+        file_system.node->mode &= (uint16_t)~KRFFS_MODE_DIRTY;
     }
 
     if (exit_status == EXIT_SUCCESS) {
@@ -789,22 +630,13 @@ cleanup:
 
     if (file_descriptor != -1) {
         if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
-            fprintf(
-                stderr,
-                "Failed to close the file system file.\n"
-            );
+            fprintf(stderr, "Failed to close the file system file.\n");
         }
     }
 
-    if (file_system.node != NULL && file_system.node != (void *) -1) {
-        if (krffs_unmap_file(
-                file_system.node,
-                file_system.size
-            ) == -1) {
-            fprintf(
-                stderr,
-                "Failed to unmap the file system file.\n"
-            );
+    if (file_system.node != NULL && file_system.node != (void *)-1) {
+        if (krffs_unmap_file(file_system.node, file_system.size) == -1) {
+            fprintf(stderr, "Failed to unmap the file system file.\n");
         }
     }
 

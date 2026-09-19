@@ -54,33 +54,31 @@ int main(int argc, char **argv)
     int exit_status = EXIT_SUCCESS;
 
     int file_descriptor = -1;
-    struct krffs_file_system file_system = {
-        .node = NULL
-    };
+    struct krffs_file_system file_system = {.node = NULL};
 
     bool has_help_option = false;
 
     bool has_set_magic_option = false;
-    uint16_t magic = (uint16_t) -1;
+    uint16_t magic = (uint16_t)-1;
 
     bool has_set_type_option = false;
-    uint8_t type = (uint8_t) -1;
+    uint8_t type = (uint8_t)-1;
 
     bool has_set_id_option = false;
-    uint64_t new_id = (uint64_t) -1;
+    uint64_t new_id = (uint64_t)-1;
 
     bool has_set_name_option = false;
     uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE];
     name[0] = '\0';
 
     bool has_set_size_option = false;
-    uint64_t size = (uint64_t) -1;
+    uint64_t size = (uint64_t)-1;
 
     bool has_set_prev_size_option = false;
-    uint64_t previous_node_size = (uint64_t) -1;
+    uint64_t previous_node_size = (uint64_t)-1;
 
     bool has_set_data_size_option = false;
-    uint64_t data_size = (uint64_t) -1;
+    uint64_t data_size = (uint64_t)-1;
 
     bool failed_to_parse_options = false;
 
@@ -101,7 +99,7 @@ int main(int argc, char **argv)
     uint64_t pos;
     if (argc > 2) {
         errno = 0;
-        pos = (uint64_t) strtoll(argv[2], &end_ptr, base);
+        pos = (uint64_t)strtoll(argv[2], &end_ptr, base);
         if (argv[2] == end_ptr || *end_ptr != '\0' || errno != 0) {
             failed_to_parse_options = true;
         }
@@ -117,10 +115,10 @@ int main(int argc, char **argv)
                 errno = 0;
                 magic_value = strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0 ||
-                        magic_value > 0xFFFFu) {
+                    magic_value > 0xFFFFu) {
                     failed_to_parse_options = true; /* not a 16-bit magic */
                 } else {
-                    magic = (uint16_t) magic_value;
+                    magic = (uint16_t)magic_value;
                 }
             } else {
                 failed_to_parse_options = true;
@@ -149,7 +147,7 @@ int main(int argc, char **argv)
             has_set_id_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                new_id = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
+                new_id = (uint64_t)strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -160,11 +158,7 @@ int main(int argc, char **argv)
         } else if (!has_set_name_option && strcmp(argv[i], "--set-name") == 0) {
             has_set_name_option = true;
             if (i + 1 < argc) {
-                strncpy(
-                    (char *) name,
-                    argv[i + 1],
-                    KRFFS_FILE_NAME_BUFFER_SIZE
-                );
+                strncpy((char *)name, argv[i + 1], KRFFS_FILE_NAME_BUFFER_SIZE);
                 name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
             } else {
                 failed_to_parse_options = true;
@@ -174,7 +168,7 @@ int main(int argc, char **argv)
             has_set_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
+                size = (uint64_t)strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -186,7 +180,7 @@ int main(int argc, char **argv)
             has_set_prev_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                previous_node_size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
+                previous_node_size = (uint64_t)strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -198,7 +192,7 @@ int main(int argc, char **argv)
             has_set_data_size_option = true;
             if (i + 1 < argc) {
                 errno = 0;
-                data_size = (uint64_t) strtoull(argv[i + 1], &end_ptr, base);
+                data_size = (uint64_t)strtoull(argv[i + 1], &end_ptr, base);
                 if (argv[i + 1] == end_ptr || *end_ptr != '\0' || errno != 0) {
                     failed_to_parse_options = true;
                 }
@@ -214,118 +208,80 @@ int main(int argc, char **argv)
     }
 
     if (has_help_option) {
-        fprintf(
-            stderr,
-            "Usage: %s <file> <node position> <options>\n",
-            argv[0]
-        );
+        fprintf(stderr, "Usage: %s <file> <node position> <options>\n", argv[0]);
 
-        goto cleanup;  /* help requested: a success exit */
+        goto cleanup; /* help requested: a success exit */
     } else if (argc <= 2 || failed_to_parse_options) {
         /* A missing or unparseable argument must report failure, not exit 0 as
          * if the edit succeeded; a calling script relies on the status. */
-        fprintf(
-            stderr,
-            "edfs.krffs: an option or its argument was missing or invalid\n"
-            "Usage: %s <file> <node position> <options>\n",
-            argv[0]
-        );
+        fprintf(stderr,
+                "edfs.krffs: an option or its argument was missing or invalid\n"
+                "Usage: %s <file> <node position> <options>\n",
+                argv[0]);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     } else if (argv[1][0] == '-' || argv[2][0] == '-') {
-        fprintf(
-            stderr,
-            "Not all first parameters are valid.\n"
-            "\n"
-            "Usage: %s <file> <node position> <options>\n",
-            argv[0]
-        );
+        fprintf(stderr,
+                "Not all first parameters are valid.\n"
+                "\n"
+                "Usage: %s <file> <node position> <options>\n",
+                argv[0]);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
-    char *path =
-        argv[1];
+    char *path = argv[1];
 
     if ((file_descriptor = PLATFORM_PREFIX(open(path, O_RDWR))) == -1) {
-        fprintf(
-            stderr,
-            "Failed to open the file system file at '%s'.\n",
-            path
-        );
+        fprintf(stderr, "Failed to open the file system file at '%s'.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     struct stat file_info;
     if (fstat(file_descriptor, &file_info) == -1) {
-        fprintf(
-            stderr,
-            "Failed to get file information for '%s'.\n",
-            path
-        );
+        fprintf(stderr, "Failed to get file information for '%s'.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     if (!S_ISREG(file_info.st_mode)) {
-        fprintf(
-            stderr,
-            "The file system file at '%s' is not a regular file.\n",
-            path
-        );
+        fprintf(stderr, "The file system file at '%s' is not a regular file.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     off_t region_offset;
     size_t region_size;
-    if (krffs_parse_region_args(
-            argc, argv, (uint64_t) file_info.st_size,
-            sizeof(*file_system.node) * 2, &region_offset, &region_size) != 0) {
-        exit_status =
-            EXIT_FAILURE;
+    if (krffs_parse_region_args(argc, argv, (uint64_t)file_info.st_size,
+                                sizeof(*file_system.node) * 2, &region_offset, &region_size) != 0) {
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
-    file_system.size =
-        region_size;
+    file_system.size = region_size;
 
     /*
         Writes to memory at `file_system.node` after a successful
         `krffs_map_file` reach the file directly, either at once or at
         `krffs_unmap_file` or `krffs_sync_mapping`.
      */
-    if ((file_system.node =
-             krffs_map_file(
-                 file_descriptor,
-                 region_offset,
-                 file_system.size
-             )) == (void *) -1) {
-        fprintf(
-            stderr,
-            "Failed to map the file system file at '%s' into memory.\n",
-            path
-        );
+    if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
+        (void *)-1) {
+        fprintf(stderr, "Failed to map the file system file at '%s' into memory.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
@@ -334,14 +290,9 @@ int main(int argc, char **argv)
         The mapping survives closing the file; the pages stay backed by it.
      */
     if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
-        fprintf(
-            stderr,
-            "Failed to close the file system file at '%s'.\n",
-            path
-        );
+        fprintf(stderr, "Failed to close the file system file at '%s'.\n", path);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
@@ -363,17 +314,10 @@ int main(int argc, char **argv)
             }
 
             if (has_set_name_option) {
-                strncpy(
-                    (char *) node->name,
-                    (const char *) name,
-                    KRFFS_FILE_NAME_BUFFER_SIZE
-                );
+                strncpy((char *)node->name, (const char *)name, KRFFS_FILE_NAME_BUFFER_SIZE);
                 node->name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
 
-                node->id =
-                    krffs_calculate_djb_hash(
-                        (uint8_t *) node->name
-                    );
+                node->id = krffs_calculate_djb_hash((uint8_t *)node->name);
             }
 
             if (has_set_size_option) {
@@ -388,38 +332,22 @@ int main(int argc, char **argv)
                 node->data_size = data_size;
             }
 
-            krffs_sync_mapping(
-                node,
-                sizeof(*node)
-            );
+            krffs_sync_mapping(node, sizeof(*node));
 
             break;
         }
-    } while ((node =
-                krffs_get_next_node(
-                    &file_system,
-                    node
-                )) != file_system.node);
+    } while ((node = krffs_get_next_node(&file_system, node)) != file_system.node);
 
 cleanup:
     if (file_descriptor != -1) {
         if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
-            fprintf(
-                stderr,
-                "Failed to close the file system file.\n"
-            );
+            fprintf(stderr, "Failed to close the file system file.\n");
         }
     }
 
-    if (file_system.node != NULL && file_system.node != (void *) -1) {
-        if (krffs_unmap_file(
-                file_system.node,
-                file_system.size
-            ) == -1) {
-            fprintf(
-                stderr,
-                "Failed to unmap the file system file.\n"
-            );
+    if (file_system.node != NULL && file_system.node != (void *)-1) {
+        if (krffs_unmap_file(file_system.node, file_system.size) == -1) {
+            fprintf(stderr, "Failed to unmap the file system file.\n");
         }
     }
 

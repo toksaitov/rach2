@@ -35,27 +35,22 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
     if (strchr(password, '\n') == NULL) {
-        int next =
-            fgetc(stdin);
+        int next = fgetc(stdin);
 
         if (next != EOF && next != '\n') {
-            fprintf(stderr, "mkhash: password longer than %d bytes\n",
-                    (int) sizeof(password) - 1);
+            fprintf(stderr, "mkhash: password longer than %d bytes\n", (int)sizeof(password) - 1);
             return EXIT_FAILURE;
         }
     }
 
-    length =
-        strcspn(password, "\r\n");
-    password[length] =
-        '\0';
+    length = strcspn(password, "\r\n");
+    password[length] = '\0';
     if (length == 0) {
         fprintf(stderr, "mkhash: empty password\n");
         return EXIT_FAILURE;
     }
 
-    hash =
-        __crypt_sha512(password, argv[1], output);
+    hash = __crypt_sha512(password, argv[1], output);
     if (hash == NULL || hash[0] == '*') {
         fprintf(stderr, "mkhash: crypt rejected the setting\n");
         return EXIT_FAILURE;

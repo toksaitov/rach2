@@ -26,19 +26,13 @@ static int krffs_parse_u64(const char *s, uint64_t *out)
     if (end == s || *end != '\0' || errno != 0) {
         return -1;
     }
-    *out = (uint64_t) value;
+    *out = (uint64_t)value;
 
     return 0;
 }
 
-int krffs_parse_region_args(
-        int argc,
-        char **argv,
-        uint64_t file_size,
-        uint64_t min_size,
-        off_t *out_offset,
-        size_t *out_size
-    )
+int krffs_parse_region_args(int argc, char **argv, uint64_t file_size, uint64_t min_size,
+                            off_t *out_offset, size_t *out_size)
 {
     uint64_t offset = 0;
     uint64_t size = 0;
@@ -61,13 +55,13 @@ int krffs_parse_region_args(
     }
 
     if (offset % KRFFS_REGION_ALIGN != 0) {
-        fprintf(stderr, "krffs: --offset %llu is not %d-aligned\n",
-                (unsigned long long) offset, KRFFS_REGION_ALIGN);
+        fprintf(stderr, "krffs: --offset %llu is not %d-aligned\n", (unsigned long long)offset,
+                KRFFS_REGION_ALIGN);
         return -1;
     }
     if (offset > file_size) {
         fprintf(stderr, "krffs: --offset %llu is past the file end (%llu)\n",
-                (unsigned long long) offset, (unsigned long long) file_size);
+                (unsigned long long)offset, (unsigned long long)file_size);
         return -1;
     }
     /* A nonzero offset means a partition, which does not extend to the end of
@@ -81,24 +75,24 @@ int krffs_parse_region_args(
         size = file_size - offset;
     }
     /* file_size - offset cannot underflow: offset <= file_size above. */
-    if (size < min_size || size > file_size - offset || size > (uint64_t) SIZE_MAX) {
+    if (size < min_size || size > file_size - offset || size > (uint64_t)SIZE_MAX) {
         fprintf(stderr,
                 "krffs: region (offset %llu, size %llu) does not fit a %llu-byte "
                 "file system in a %llu-byte file\n",
-                (unsigned long long) offset, (unsigned long long) size,
-                (unsigned long long) min_size, (unsigned long long) file_size);
+                (unsigned long long)offset, (unsigned long long)size, (unsigned long long)min_size,
+                (unsigned long long)file_size);
         return -1;
     }
     /* KRFFS stores its size in a uint32_t, so a region must stay under 4
      * GiB. */
     if (size > KRFFS_MAX_REGION_SIZE) {
         fprintf(stderr, "krffs: region size %llu exceeds the %u-byte KRFFS limit\n",
-                (unsigned long long) size, (unsigned) KRFFS_MAX_REGION_SIZE);
+                (unsigned long long)size, (unsigned)KRFFS_MAX_REGION_SIZE);
         return -1;
     }
 
-    *out_offset = (off_t) offset;
-    *out_size = (size_t) size;
+    *out_offset = (off_t)offset;
+    *out_size = (size_t)size;
 
     return 0;
 }
@@ -113,8 +107,7 @@ int krffs_parse_region_args(
 void krffs_get_time_of_day(struct timeval *time_of_day)
 {
 #ifdef WINDOWS
-    static const uint64_t epoch =
-        116444736000000000ULL;
+    static const uint64_t epoch = 116444736000000000ULL;
 
     SYSTEMTIME system_time;
     GetSystemTime(&system_time);
@@ -123,13 +116,10 @@ void krffs_get_time_of_day(struct timeval *time_of_day)
     SystemTimeToFileTime(&system_time, &file_time);
 
     ULARGE_INTEGER time;
-    time.QuadPart =
-        ((uint64_t) file_time.dwHighDateTime << 32) | file_time.dwLowDateTime;
+    time.QuadPart = ((uint64_t)file_time.dwHighDateTime << 32) | file_time.dwLowDateTime;
 
-    time_of_day->tv_sec =
-        (long) ((time.QuadPart - epoch) / 10000000L);
-    time_of_day->tv_usec =
-        (long) (system_time.wMilliseconds * 1000);
+    time_of_day->tv_sec = (long)((time.QuadPart - epoch) / 10000000L);
+    time_of_day->tv_usec = (long)(system_time.wMilliseconds * 1000);
 #else
     gettimeofday(time_of_day, NULL);
 #endif
@@ -143,64 +133,31 @@ void krffs_get_time_of_day(struct timeval *time_of_day)
  * `mmap` on Unix and `MapViewOfFile` on Windows. Returns `(void *) -1` on
  * failure.
  */
-void *krffs_map_file(
-          int file_descriptor,
-          off_t offset,
-          size_t size
-      )
+void *krffs_map_file(int file_descriptor, off_t offset, size_t size)
 {
 #ifdef WINDOWS
-    void *result =
-        (void *) -1;
+    void *result = (void *)-1;
 
-    DWORD offset_high =
-        (DWORD) ((uint64_t) offset >> 32);
-    DWORD offset_low =
-        (DWORD) ((uint64_t) offset & 0xFFFFFFFF);
+    DWORD offset_high = (DWORD)((uint64_t)offset >> 32);
+    DWORD offset_low = (DWORD)((uint64_t)offset & 0xFFFFFFFF);
 
-    HANDLE file_handle =
-        (HANDLE) _get_osfhandle(file_descriptor);
+    HANDLE file_handle = (HANDLE)_get_osfhandle(file_descriptor);
 
-    HANDLE mapping_handle =
-        CreateFileMapping(
-            file_handle,
-            NULL,
-            PAGE_READWRITE,
-            0,
-            0,
-            NULL
-        );
+    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READWRITE, 0, 0, NULL);
 
     if (mapping_handle) {
-        result =
-            MapViewOfFile(
-                mapping_handle,
-                FILE_MAP_WRITE,
-                offset_high,
-                offset_low,
-                size
-            );
+        result = MapViewOfFile(mapping_handle, FILE_MAP_WRITE, offset_high, offset_low, size);
 
         if (result) {
-            CloseHandle(
-                mapping_handle
-            );
+            CloseHandle(mapping_handle);
         } else {
-            result =
-                (void *) -1;
+            result = (void *)-1;
         }
     }
 
     return result;
 #else
-    return mmap(
-               NULL,
-               size,
-               PROT_READ | PROT_WRITE,
-               MAP_SHARED,
-               file_descriptor,
-               offset
-           );
+    return mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, file_descriptor, offset);
 #endif
 }
 
@@ -212,64 +169,31 @@ void *krffs_map_file(
  * work on an image whose file permissions allow no write. Returns
  * `(void *) -1` on failure, as `mmap` does.
  */
-void *krffs_map_file_readonly(
-          int file_descriptor,
-          off_t offset,
-          size_t size
-      )
+void *krffs_map_file_readonly(int file_descriptor, off_t offset, size_t size)
 {
 #ifdef WINDOWS
-    void *result =
-        (void *) -1;
+    void *result = (void *)-1;
 
-    DWORD offset_high =
-        (DWORD) ((uint64_t) offset >> 32);
-    DWORD offset_low =
-        (DWORD) ((uint64_t) offset & 0xFFFFFFFF);
+    DWORD offset_high = (DWORD)((uint64_t)offset >> 32);
+    DWORD offset_low = (DWORD)((uint64_t)offset & 0xFFFFFFFF);
 
-    HANDLE file_handle =
-        (HANDLE) _get_osfhandle(file_descriptor);
+    HANDLE file_handle = (HANDLE)_get_osfhandle(file_descriptor);
 
-    HANDLE mapping_handle =
-        CreateFileMapping(
-            file_handle,
-            NULL,
-            PAGE_READONLY,
-            0,
-            0,
-            NULL
-        );
+    HANDLE mapping_handle = CreateFileMapping(file_handle, NULL, PAGE_READONLY, 0, 0, NULL);
 
     if (mapping_handle) {
-        result =
-            MapViewOfFile(
-                mapping_handle,
-                FILE_MAP_READ,
-                offset_high,
-                offset_low,
-                size
-            );
+        result = MapViewOfFile(mapping_handle, FILE_MAP_READ, offset_high, offset_low, size);
 
         if (result) {
-            CloseHandle(
-                mapping_handle
-            );
+            CloseHandle(mapping_handle);
         } else {
-            result =
-                (void *) -1;
+            result = (void *)-1;
         }
     }
 
     return result;
 #else
-    return mmap(
-               NULL,
-               size,
-               PROT_READ,
-               MAP_SHARED,
-               file_descriptor,
-               offset
-           );
+    return mmap(NULL, size, PROT_READ, MAP_SHARED, file_descriptor, offset);
 #endif
 }
 
@@ -279,22 +203,12 @@ void *krffs_map_file_readonly(
  * Uses a synchronous `msync` (`MS_SYNC`) on Unix and `FlushViewOfFile` on
  * Windows. Returns 0 on success and -1 on failure.
  */
-int krffs_sync_mapping(
-        void *address,
-        size_t size
-    )
+int krffs_sync_mapping(void *address, size_t size)
 {
 #ifdef WINDOWS
-    return FlushViewOfFile(
-               address,
-               size
-           ) == 0 ? -1 : 0;
+    return FlushViewOfFile(address, size) == 0 ? -1 : 0;
 #else
-    return msync(
-               address,
-               size,
-               MS_SYNC
-           );
+    return msync(address, size, MS_SYNC);
 #endif
 }
 
@@ -305,19 +219,11 @@ int krffs_sync_mapping(
  * is ignored and `address` must be the first mapped page. Returns 0 on
  * success and -1 on failure.
  */
-int krffs_unmap_file(
-        void *address,
-        size_t size
-    )
+int krffs_unmap_file(void *address, size_t size)
 {
 #ifdef WINDOWS
-    return UnmapViewOfFile(
-               address
-           ) == 0 ? -1 : 0;
+    return UnmapViewOfFile(address) == 0 ? -1 : 0;
 #else
-    return munmap(
-               address,
-               size
-           );
+    return munmap(address, size);
 #endif
 }

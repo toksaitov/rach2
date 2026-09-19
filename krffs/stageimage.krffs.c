@@ -53,9 +53,8 @@ static bool is_valid_guest_path(const char *path)
     if (strcmp(path, "/") == 0) {
         return true;
     }
-    if (path[len - 1] == '/' ||
-        strstr(path, "//") != NULL ||
-        strstr(path, "/./") != NULL || strstr(path, "/../") != NULL) {
+    if (path[len - 1] == '/' || strstr(path, "//") != NULL || strstr(path, "/./") != NULL ||
+        strstr(path, "/../") != NULL) {
         return false;
     }
     if (len >= 2 && strcmp(path + len - 2, "/.") == 0) {
@@ -117,19 +116,19 @@ static char *read_whole_file(const char *path, size_t *len)
         fclose(f);
         return NULL;
     }
-    buf = (char *) malloc((size_t) n + 1);
+    buf = (char *)malloc((size_t)n + 1);
     if (!buf) {
         fclose(f);
         return NULL;
     }
-    if ((size_t) n != 0 && fread(buf, 1, (size_t) n, f) != (size_t) n) {
+    if ((size_t)n != 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) {
         free(buf);
         fclose(f);
         return NULL;
     }
     fclose(f);
     buf[n] = '\0';
-    *len = (size_t) n;
+    *len = (size_t)n;
     return buf;
 }
 
@@ -141,10 +140,9 @@ static char *read_whole_file(const char *path, size_t *len)
  */
 static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 {
-    uint64_t h =
-        (parent_id + 1) * 1099511628211ULL;
+    uint64_t h = (parent_id + 1) * 1099511628211ULL;
 
-    h ^= krffs_calculate_djb_hash((uint8_t *) name);
+    h ^= krffs_calculate_djb_hash((uint8_t *)name);
     h *= 1099511628211ULL;
 
     return h ? h : 1;
@@ -155,19 +153,14 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
  *
  * Mirrors the kernel's `krffs_find_child` and is what keeps staging idempotent.
  */
-static struct krffs_node *find_child(
-                              struct krffs_file_system *file_system,
-                              uint64_t parent_id,
-                              const char *name
-                          )
+static struct krffs_node *find_child(struct krffs_file_system *file_system, uint64_t parent_id,
+                                     const char *name)
 {
-    struct krffs_node *node =
-        file_system->node;
+    struct krffs_node *node = file_system->node;
 
     do {
-        if (node->type == KRFFS_Reserved_Node &&
-            node->parent_id == parent_id &&
-            strcmp((const char *) node->name, name) == 0) {
+        if (node->type == KRFFS_Reserved_Node && node->parent_id == parent_id &&
+            strcmp((const char *)node->name, name) == 0) {
             return node;
         }
     } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
@@ -182,15 +175,12 @@ static struct krffs_node *find_child(
  */
 static uint64_t total_free_space(struct krffs_file_system *file_system)
 {
-    struct krffs_node *node =
-        file_system->node;
-    uint64_t free_bytes =
-        0;
+    struct krffs_node *node = file_system->node;
+    uint64_t free_bytes = 0;
 
     do {
         if (node->type == KRFFS_Free_Node) {
-            free_bytes +=
-                node->size;
+            free_bytes += node->size;
         }
     } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
 
@@ -204,16 +194,9 @@ static uint64_t total_free_space(struct krffs_file_system *file_system)
  * otherwise), and an optional `data` payload. Returns the new node's id, or 0
  * on failure (a full image).
  */
-static uint64_t stage_node(
-                    struct krffs_file_system *file_system,
-                    uint64_t parent_id,
-                    const char *name,
-                    uint16_t mode,
-                    uint32_t uid,
-                    uint32_t gid,
-                    const char *data,
-                    uint64_t data_size
-                )
+static uint64_t stage_node(struct krffs_file_system *file_system, uint64_t parent_id,
+                           const char *name, uint16_t mode, uint32_t uid, uint32_t gid,
+                           const char *data, uint64_t data_size)
 {
     struct krffs_node *node;
     /* Every staged node has this one fixed instant: one second past the
@@ -222,22 +205,15 @@ static uint64_t stage_node(
        file that does not exist, and a student must be able to run make over
        the staged sources in place. Anything the machine builds is stamped by
        its real clock and is therefore newer than any staged source. */
-    struct krffs_node_time staged_time = {
-        1, 0
-    };
+    struct krffs_node_time staged_time = {1, 0};
 
-    if (data_size > (uint64_t) SIZE_MAX) {
+    if (data_size > (uint64_t)SIZE_MAX) {
         fprintf(stderr, "stageimage: '%s' is too large to stage.\n", name);
 
         return 0;
     }
 
-    node =
-        krffs_allocate_reserved_node(
-            file_system,
-            data_size,
-            NULL
-        );
+    node = krffs_allocate_reserved_node(file_system, data_size, NULL);
 
     if (!node) {
         fprintf(stderr, "stageimage: not enough space for '%s'.\n", name);
@@ -249,33 +225,24 @@ static uint64_t stage_node(
        parent-aware id below. */
     krffs_set_reserved_node_name(node, name);
 
-    node->parent_id =
-        parent_id;
-    node->id =
-        krffs_mix_id(parent_id, name);
-    node->mode =
-        mode;
-    node->uid =
-        uid;
-    node->gid =
-        gid;
-    node->data_size =
-        data_size;
+    node->parent_id = parent_id;
+    node->id = krffs_mix_id(parent_id, name);
+    node->mode = mode;
+    node->uid = uid;
+    node->gid = gid;
+    node->data_size = data_size;
 
     /* allocate_reserved_node does not clear the timestamps, so set them to
        the fixed staged instant, not inherit stale free-block bytes. */
-    node->access_time =
-        staged_time;
-    node->modification_time =
-        staged_time;
-    node->attribute_change_time =
-        staged_time;
+    node->access_time = staged_time;
+    node->modification_time = staged_time;
+    node->attribute_change_time = staged_time;
 
     if (data_size > 0 && data) {
-        memcpy((char *) (node + 1), data, (size_t) data_size);
+        memcpy((char *)(node + 1), data, (size_t)data_size);
     }
 
-    krffs_sync_mapping(node, sizeof(*node) + (size_t) data_size);
+    krffs_sync_mapping(node, sizeof(*node) + (size_t)data_size);
 
     return node->id;
 }
@@ -295,15 +262,14 @@ static uint64_t stage_node(
 static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *path)
 {
     char buf[256];
-    uint64_t parent =
-        0;
+    uint64_t parent = 0;
     char *p;
     char *save = NULL;
 
     if (path[0] != '/') {
         fprintf(stderr, "stageimage: directory path '%s' is not absolute.\n", path);
 
-        return (uint64_t) -1;
+        return (uint64_t)-1;
     }
     if (path[1] == '\0') {
         return 0;
@@ -311,35 +277,30 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
     if (strlen(path) >= sizeof(buf)) {
         fprintf(stderr, "stageimage: path '%s' is too long.\n", path);
 
-        return (uint64_t) -1;
+        return (uint64_t)-1;
     }
     strcpy(buf, path + 1);
 
     for (p = strtok_r(buf, "/", &save); p != NULL; p = strtok_r(NULL, "/", &save)) {
-        struct krffs_node *existing =
-            find_child(file_system, parent, p);
+        struct krffs_node *existing = find_child(file_system, parent, p);
         uint64_t id;
 
         if (existing != NULL) {
             if (!is_dir_node(existing)) {
-                fprintf(stderr,
-                        "stageimage: path '%s' descends through non-directory '%s'.\n",
+                fprintf(stderr, "stageimage: path '%s' descends through non-directory '%s'.\n",
                         path, p);
 
-                return (uint64_t) -1;
+                return (uint64_t)-1;
             }
-            id =
-                existing->id;
+            id = existing->id;
         } else {
-            id =
-                stage_node(file_system, parent, p,
-                           (uint16_t) (KRFFS_MODE_IFDIR | 0755), 0, 0, NULL, 0);
+            id = stage_node(file_system, parent, p, (uint16_t)(KRFFS_MODE_IFDIR | 0755), 0, 0, NULL,
+                            0);
             if (id == 0) {
-                return (uint64_t) -1;
+                return (uint64_t)-1;
             }
         }
-        parent =
-            id;
+        parent = id;
     }
 
     return parent;
@@ -361,8 +322,7 @@ static char *split_path(const char *path, char *path_buf, size_t bufsz, char *di
         return NULL;
     }
     strcpy(path_buf, path);
-    slash =
-        strrchr(path_buf, '/');
+    slash = strrchr(path_buf, '/');
     if (slash == NULL || slash[1] == '\0') {
         return NULL;
     }
@@ -373,15 +333,13 @@ static char *split_path(const char *path, char *path_buf, size_t bufsz, char *di
         }
         strcpy(dir_out, "/");
     } else {
-        size_t dlen =
-            (size_t) (slash - path_buf);
+        size_t dlen = (size_t)(slash - path_buf);
 
         if (dlen >= dirsz) {
             return NULL;
         }
         memcpy(dir_out, path_buf, dlen);
-        dir_out[dlen] =
-            '\0';
+        dir_out[dlen] = '\0';
     }
 
     return slash + 1;
@@ -425,8 +383,7 @@ static unsigned long tree_nodes;
 
 static void tree_note(uint16_t mode, uint32_t uid, uint32_t gid, const char *path)
 {
-    printf("node 0%o %lu %lu %s\n", (unsigned) mode, (unsigned long) uid,
-           (unsigned long) gid, path);
+    printf("node 0%o %lu %lu %s\n", (unsigned)mode, (unsigned long)uid, (unsigned long)gid, path);
     tree_nodes++;
 }
 
@@ -449,7 +406,7 @@ static bool tree_mkdir_p(const char *host_path, bool note_last)
             buf[i] = '\0';
             if (mkdir(buf, 0755) == 0) {
                 if (i > skip) {
-                    tree_note((uint16_t) (S_IFDIR | 0755), 0, 0, buf + skip);
+                    tree_note((uint16_t)(S_IFDIR | 0755), 0, 0, buf + skip);
                 }
             } else if (errno != EEXIST) {
                 return false;
@@ -459,7 +416,7 @@ static bool tree_mkdir_p(const char *host_path, bool note_last)
     }
     if (mkdir(buf, 0755) == 0) {
         if (note_last && strlen(buf) > skip) {
-            tree_note((uint16_t) (S_IFDIR | 0755), 0, 0, buf + skip);
+            tree_note((uint16_t)(S_IFDIR | 0755), 0, 0, buf + skip);
         }
         return true;
     }
@@ -470,59 +427,54 @@ static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid
 {
     char host[1024];
 
-    if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host) ||
+    if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int)sizeof(host) ||
         !tree_mkdir_p(host, false)) {
         fprintf(stderr, "stageimage: cannot make '%s%s'.\n", tree_root, path);
 
         return false;
     }
-    tree_note((uint16_t) (S_IFDIR | mode), uid, gid, path);
+    tree_note((uint16_t)(S_IFDIR | mode), uid, gid, path);
 
     return true;
 }
 
-static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gid,
-                      const char *data, uint64_t data_size)
+static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gid, const char *data,
+                      uint64_t data_size)
 {
     char host[1024];
     char *slash;
     FILE *out;
     int fd;
 
-    if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host)) {
+    if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int)sizeof(host)) {
         fprintf(stderr, "stageimage: path too long '%s'.\n", path);
 
         return false;
     }
-    slash =
-        strrchr(host, '/');
-    *slash =
-        '\0';
+    slash = strrchr(host, '/');
+    *slash = '\0';
     if (!tree_mkdir_p(host, true)) {
         fprintf(stderr, "stageimage: cannot make '%s'.\n", host);
 
         return false;
     }
-    *slash =
-        '/';
+    *slash = '/';
     /* A name already there is the same path staged twice, as in an image;
        the exclusive create decides that in one step, and follows no link. */
-    fd =
-        open(host, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    fd = open(host, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
     if (fd < 0 && errno == EEXIST) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
 
         return false;
     }
-    out =
-        fd < 0 ? NULL : fdopen(fd, "wb");
-    if (out == NULL || (data_size != 0 && fwrite(data, 1, (size_t) data_size, out) != data_size) ||
+    out = fd < 0 ? NULL : fdopen(fd, "wb");
+    if (out == NULL || (data_size != 0 && fwrite(data, 1, (size_t)data_size, out) != data_size) ||
         fclose(out) != 0) {
         fprintf(stderr, "stageimage: cannot write '%s'.\n", host);
 
         return false;
     }
-    tree_note((uint16_t) (S_IFREG | mode), uid, gid, path);
+    tree_note((uint16_t)(S_IFREG | mode), uid, gid, path);
 
     return true;
 }
@@ -554,8 +506,8 @@ static bool tree_stamp(const char *host_path)
             if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
                 continue;
             }
-            if (snprintf(child, sizeof(child), "%s/%s", host_path,
-                         e->d_name) >= (int) sizeof(child) ||
+            if (snprintf(child, sizeof(child), "%s/%s", host_path, e->d_name) >=
+                    (int)sizeof(child) ||
                 !tree_stamp(child)) {
                 ok = false;
             }
@@ -566,8 +518,8 @@ static bool tree_stamp(const char *host_path)
     return ok && utimensat(AT_FDCWD, host_path, times, AT_SYMLINK_NOFOLLOW) == 0;
 }
 
-static bool stage_dir(struct krffs_file_system *file_system, const char *path,
-                      uint16_t mode, uint32_t uid, uint32_t gid)
+static bool stage_dir(struct krffs_file_system *file_system, const char *path, uint16_t mode,
+                      uint32_t uid, uint32_t gid)
 {
     char path_buf[256];
     char dir_buf[256];
@@ -592,41 +544,34 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path,
         return tree_dir(path, mode, uid, gid);
     }
 
-    name =
-        split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
+    name = split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
     if (name == NULL) {
         fprintf(stderr, "stageimage: malformed directory path '%s'.\n", path);
 
         return false;
     }
 
-    parent_id =
-        resolve_dir(file_system, dir_buf);
-    if (parent_id == (uint64_t) -1) {
+    parent_id = resolve_dir(file_system, dir_buf);
+    if (parent_id == (uint64_t)-1) {
         return false;
     }
 
-    node =
-        find_child(file_system, parent_id, name);
+    node = find_child(file_system, parent_id, name);
     if (node != NULL) {
         if (!is_dir_node(node)) {
             fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
 
             return false;
         }
-        node->mode =
-            (uint16_t) (KRFFS_MODE_IFDIR | mode);
-        node->uid =
-            uid;
-        node->gid =
-            gid;
+        node->mode = (uint16_t)(KRFFS_MODE_IFDIR | mode);
+        node->uid = uid;
+        node->gid = gid;
         krffs_sync_mapping(node, sizeof(*node));
 
         return true;
     }
 
-    return stage_node(file_system, parent_id, name,
-                      (uint16_t) (KRFFS_MODE_IFDIR | mode), uid, gid,
+    return stage_node(file_system, parent_id, name, (uint16_t)(KRFFS_MODE_IFDIR | mode), uid, gid,
                       NULL, 0) != 0;
 }
 
@@ -635,15 +580,8 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path,
  * directories as needed. A path under /dev or /proc is rejected. Returns false
  * on any failure.
  */
-static bool stage_file(
-                struct krffs_file_system *file_system,
-                const char *path,
-                uint16_t mode,
-                uint32_t uid,
-                uint32_t gid,
-                const char *data,
-                uint64_t data_size
-            )
+static bool stage_file(struct krffs_file_system *file_system, const char *path, uint16_t mode,
+                       uint32_t uid, uint32_t gid, const char *data, uint64_t data_size)
 {
     char path_buf[256];
     char dir_buf[256];
@@ -664,17 +602,15 @@ static bool stage_file(
         return tree_file(path, mode, uid, gid, data, data_size);
     }
 
-    name =
-        split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
+    name = split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
     if (name == NULL) {
         fprintf(stderr, "stageimage: malformed file path '%s'.\n", path);
 
         return false;
     }
 
-    dir_id =
-        resolve_dir(file_system, dir_buf);
-    if (dir_id == (uint64_t) -1) {
+    dir_id = resolve_dir(file_system, dir_buf);
+    if (dir_id == (uint64_t)-1) {
         return false;
     }
 
@@ -687,8 +623,7 @@ static bool stage_file(
         return false;
     }
 
-    return stage_node(file_system, dir_id, name, mode, uid, gid,
-                      data, data_size) != 0;
+    return stage_node(file_system, dir_id, name, mode, uid, gid, data, data_size) != 0;
 }
 
 /**
@@ -699,43 +634,32 @@ static bool stage_file(
 static bool parse_mode(const char *s, uint16_t *out, uint32_t *uid, uint32_t *gid)
 {
     char *end;
-    unsigned long v =
-        strtoul(s, &end, 8);
+    unsigned long v = strtoul(s, &end, 8);
 
     if (*s == '\0' || v > 07777u || (*end != '\0' && *end != ':')) {
         return false;
     }
-    *out =
-        (uint16_t) v;
-    *uid =
-        0;
-    *gid =
-        0;
+    *out = (uint16_t)v;
+    *uid = 0;
+    *gid = 0;
 
     if (*end == ':') {
         const char *start;
         unsigned long long u;
         unsigned long long g;
 
-        start =
-            end + 1;
-        u =
-            strtoull(start, &end, 10);
+        start = end + 1;
+        u = strtoull(start, &end, 10);
         if (end == start || *end != ':') {
             return false;
         }
-        start =
-            end + 1;
-        g =
-            strtoull(start, &end, 10);
-        if (end == start || *end != '\0' ||
-            u > 0xFFFFFFFFull || g > 0xFFFFFFFFull) {
+        start = end + 1;
+        g = strtoull(start, &end, 10);
+        if (end == start || *end != '\0' || u > 0xFFFFFFFFull || g > 0xFFFFFFFFull) {
             return false;
         }
-        *uid =
-            (uint32_t) u;
-        *gid =
-            (uint32_t) g;
+        *uid = (uint32_t)u;
+        *gid = (uint32_t)g;
     }
 
     return true;
@@ -749,35 +673,41 @@ static bool parse_mode(const char *s, uint16_t *out, uint32_t *uid, uint32_t *gi
  */
 static size_t unescape_text(char *s)
 {
-    char *r =
-        s;
-    char *w =
-        s;
+    char *r = s;
+    char *w = s;
 
     while (*r) {
         if (*r == '\\' && r[1]) {
             r++;
             switch (*r) {
-            case 'n': *w++ = '\n'; break;
-            case 't': *w++ = '\t'; break;
-            case '\\': *w++ = '\\'; break;
-            default: *w++ = '\\'; *w++ = *r; break;
+            case 'n':
+                *w++ = '\n';
+                break;
+            case 't':
+                *w++ = '\t';
+                break;
+            case '\\':
+                *w++ = '\\';
+                break;
+            default:
+                *w++ = '\\';
+                *w++ = *r;
+                break;
             }
             r++;
         } else {
             *w++ = *r++;
         }
     }
-    *w =
-        '\0';
+    *w = '\0';
 
-    return (size_t) (w - s);
+    return (size_t)(w - s);
 }
 
 /** Order two directory entries by name, for the `qsort` in both stagers. */
 static int compare_names(const void *a, const void *b)
 {
-    return strcmp(*(const char *const *) a, *(const char *const *) b);
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
 /**
@@ -793,24 +723,15 @@ static int compare_names(const void *a, const void *b)
  * the file system's, and on APFS it is a hash of the name. Returns false on
  * a host or staging error.
  */
-static bool stage_exec_dir(
-                struct krffs_file_system *file_system,
-                const char *guestdir,
-                const char *hostdir,
-                uint16_t mode,
-                uint32_t uid,
-                uint32_t gid
-            )
+static bool stage_exec_dir(struct krffs_file_system *file_system, const char *guestdir,
+                           const char *hostdir, uint16_t mode, uint32_t uid, uint32_t gid)
 {
     DIR *d;
     struct dirent *e;
-    char **names =
-        NULL;
-    size_t count =
-        0;
+    char **names = NULL;
+    size_t count = 0;
     size_t i;
-    bool ok =
-        true;
+    bool ok = true;
 
     record_input(hostdir);
     d = opendir(hostdir);
@@ -831,20 +752,15 @@ static bool stage_exec_dir(
         if (e->d_name[0] == '.') {
             continue;
         }
-        grown =
-            realloc(names, (count + 1) * sizeof(*names));
+        grown = realloc(names, (count + 1) * sizeof(*names));
         if (grown == NULL) {
-            ok =
-                false;
+            ok = false;
             break;
         }
-        names =
-            grown;
-        names[count] =
-            strdup(e->d_name);
+        names = grown;
+        names[count] = strdup(e->d_name);
         if (names[count] == NULL) {
-            ok =
-                false;
+            ok = false;
             break;
         }
         count++;
@@ -854,8 +770,7 @@ static bool stage_exec_dir(
        part way would otherwise be staged as if it were whole. */
     if (errno != 0) {
         fprintf(stderr, "stageimage: cannot read host dir '%s'.\n", hostdir);
-        ok =
-            false;
+        ok = false;
     }
     closedir(d);
     if (ok) {
@@ -870,12 +785,10 @@ static bool stage_exec_dir(
         size_t len = 0;
         int n;
 
-        n =
-            snprintf(hostpath, sizeof(hostpath), "%s/%s", hostdir, names[i]);
-        if (n < 0 || (size_t) n >= sizeof(hostpath)) {
+        n = snprintf(hostpath, sizeof(hostpath), "%s/%s", hostdir, names[i]);
+        if (n < 0 || (size_t)n >= sizeof(hostpath)) {
             fprintf(stderr, "stageimage: host path under '%s' is too long.\n", hostdir);
-            ok =
-                false;
+            ok = false;
             break;
         }
         /* lstat, not stat, so a symlink is left out: only a real regular file
@@ -885,12 +798,10 @@ static bool stage_exec_dir(
             continue;
         }
 
-        data =
-            read_whole_file(hostpath, &len);
+        data = read_whole_file(hostpath, &len);
         if (data == NULL) {
             fprintf(stderr, "stageimage: cannot read '%s'.\n", hostpath);
-            ok =
-                false;
+            ok = false;
             break;
         }
 
@@ -899,15 +810,13 @@ static bool stage_exec_dir(
         } else {
             n = snprintf(guestpath, sizeof(guestpath), "%s/%s", guestdir, names[i]);
         }
-        if (n < 0 || (size_t) n >= sizeof(guestpath)) {
+        if (n < 0 || (size_t)n >= sizeof(guestpath)) {
             fprintf(stderr, "stageimage: guest path under '%s' is too long.\n", guestdir);
             free(data);
-            ok =
-                false;
+            ok = false;
             break;
         }
-        ok =
-            stage_file(file_system, guestpath, mode, uid, gid, data, len);
+        ok = stage_file(file_system, guestpath, mode, uid, gid, data, len);
         free(data);
     }
 
@@ -929,9 +838,8 @@ static bool stage_exec_dir(
  * owned by uid 1000 staged under a root-owned 0700 directory would otherwise
  * hand that directory away.
  */
-static bool stage_dir_if_absent(struct krffs_file_system *file_system,
-                                const char *path, uint16_t mode,
-                                uint32_t uid, uint32_t gid)
+static bool stage_dir_if_absent(struct krffs_file_system *file_system, const char *path,
+                                uint16_t mode, uint32_t uid, uint32_t gid)
 {
     char path_buf[256];
     char dir_buf[256];
@@ -946,7 +854,7 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system,
         char host[1024];
         struct stat st;
 
-        if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host)) {
+        if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int)sizeof(host)) {
             return false;
         }
         if (lstat(host, &st) == 0) {
@@ -961,20 +869,17 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system,
 
         return stage_dir(file_system, path, mode, uid, gid);
     }
-    name =
-        split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
+    name = split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
     if (name == NULL) {
         fprintf(stderr, "stageimage: malformed directory path '%s'.\n", path);
 
         return false;
     }
-    parent_id =
-        resolve_dir(file_system, dir_buf);
-    if (parent_id == (uint64_t) -1) {
+    parent_id = resolve_dir(file_system, dir_buf);
+    if (parent_id == (uint64_t)-1) {
         return false;
     }
-    node =
-        find_child(file_system, parent_id, name);
+    node = find_child(file_system, parent_id, name);
     if (node != NULL) {
         if (!is_dir_node(node)) {
             fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
@@ -1013,9 +918,8 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system,
  *
  * Returns false on any error.
  */
-static bool stage_tree(struct krffs_file_system *file_system,
-                       const char *guestdir, const char *hostdir,
-                       uint16_t mode, uint32_t uid, uint32_t gid)
+static bool stage_tree(struct krffs_file_system *file_system, const char *guestdir,
+                       const char *hostdir, uint16_t mode, uint32_t uid, uint32_t gid)
 {
     struct dirent *e;
     struct stat root_st;
@@ -1037,8 +941,10 @@ static bool stage_tree(struct krffs_file_system *file_system,
        everything below is checked with lstat, and a symlinked root would walk
        a tree the manifest did not name. */
     if (lstat(hostdir, &root_st) != 0 || !S_ISDIR(root_st.st_mode)) {
-        fprintf(stderr, "stageimage: '%s' is not a directory; 'tree' takes "
-                        "one, and follows no symlink to reach it.\n", hostdir);
+        fprintf(stderr,
+                "stageimage: '%s' is not a directory; 'tree' takes "
+                "one, and follows no symlink to reach it.\n",
+                hostdir);
         closedir(d);
 
         return false;
@@ -1092,7 +998,7 @@ static bool stage_tree(struct krffs_file_system *file_system,
         int n;
 
         n = snprintf(hostpath, sizeof(hostpath), "%s/%s", hostdir, names[i]);
-        if (n < 0 || (size_t) n >= sizeof(hostpath)) {
+        if (n < 0 || (size_t)n >= sizeof(hostpath)) {
             fprintf(stderr, "stageimage: host path under '%s' is too long.\n", hostdir);
             ok = false;
             break;
@@ -1102,7 +1008,7 @@ static bool stage_tree(struct krffs_file_system *file_system,
         } else {
             n = snprintf(guestpath, sizeof(guestpath), "%s/%s", guestdir, names[i]);
         }
-        if (n < 0 || (size_t) n >= sizeof(guestpath)) {
+        if (n < 0 || (size_t)n >= sizeof(guestpath)) {
             fprintf(stderr, "stageimage: guest path under '%s' is too long.\n", guestdir);
             ok = false;
             break;
@@ -1118,8 +1024,10 @@ static bool stage_tree(struct krffs_file_system *file_system,
             continue;
         }
         if (!S_ISREG(st.st_mode)) {
-            fprintf(stderr, "stageimage: '%s' is neither a regular file nor a "
-                            "directory; 'tree' stages no other kind.\n", hostpath);
+            fprintf(stderr,
+                    "stageimage: '%s' is neither a regular file nor a "
+                    "directory; 'tree' stages no other kind.\n",
+                    hostpath);
             ok = false;
             break;
         }
@@ -1159,8 +1067,7 @@ static bool stage_tree(struct krffs_file_system *file_system,
 static bool apply_line(struct krffs_file_system *file_system, char *line)
 {
     char *save = NULL;
-    char *verb =
-        strtok_r(line, " \t", &save);
+    char *verb = strtok_r(line, " \t", &save);
     char *mode_s;
     char *path;
     uint16_t mode;
@@ -1171,12 +1078,9 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         return true;
     }
 
-    mode_s =
-        strtok_r(NULL, " \t", &save);
-    path =
-        strtok_r(NULL, " \t", &save);
-    if (mode_s == NULL || path == NULL ||
-        !parse_mode(mode_s, &mode, &uid, &gid)) {
+    mode_s = strtok_r(NULL, " \t", &save);
+    path = strtok_r(NULL, " \t", &save);
+    if (mode_s == NULL || path == NULL || !parse_mode(mode_s, &mode, &uid, &gid)) {
         fprintf(stderr, "stageimage: malformed '%s' directive.\n", verb);
 
         return false;
@@ -1186,25 +1090,21 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         return stage_dir(file_system, path, mode, uid, gid);
     }
     if (strcmp(verb, "text") == 0) {
-        char *text =
-            strtok_r(NULL, "", &save);
+        char *text = strtok_r(NULL, "", &save);
         size_t len;
 
         if (text == NULL) {
-            text =
-                (char *) "";
+            text = (char *)"";
         }
         while (*text == ' ' || *text == '\t') {
             text++;
         }
-        len =
-            unescape_text(text);
+        len = unescape_text(text);
 
         return stage_file(file_system, path, mode, uid, gid, text, len);
     }
     if (strcmp(verb, "file") == 0 || strcmp(verb, "optional-file") == 0) {
-        char *hostpath =
-            strtok_r(NULL, " \t", &save);
+        char *hostpath = strtok_r(NULL, " \t", &save);
         char *data;
         size_t len = 0;
         bool ok;
@@ -1230,22 +1130,19 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
 
             return false;
         }
-        data =
-            read_whole_file(hostpath, &len);
+        data = read_whole_file(hostpath, &len);
         if (data == NULL) {
             fprintf(stderr, "stageimage: cannot read '%s'.\n", hostpath);
 
             return false;
         }
-        ok =
-            stage_file(file_system, path, mode, uid, gid, data, len);
+        ok = stage_file(file_system, path, mode, uid, gid, data, len);
         free(data);
 
         return ok;
     }
     if (strcmp(verb, "tree") == 0) {
-        char *hostdir =
-            strtok_r(NULL, " \t", &save);
+        char *hostdir = strtok_r(NULL, " \t", &save);
 
         if (hostdir == NULL) {
             fprintf(stderr, "stageimage: 'tree' needs a host dir.\n");
@@ -1256,9 +1153,10 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
            paths it would privilege is a property of what happens to be in the
            host tree, and a tree is deeper than one directory. */
         if (mode & 06000) {
-            fprintf(stderr, "stageimage: 'tree' stages mode %04o into %s; a "
-                            "set-id tree privileges whatever is in the host "
-                            "directory. Name the one binary with 'file'.\n",
+            fprintf(stderr,
+                    "stageimage: 'tree' stages mode %04o into %s; a "
+                    "set-id tree privileges whatever is in the host "
+                    "directory. Name the one binary with 'file'.\n",
                     mode, path);
 
             return false;
@@ -1267,8 +1165,7 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
         return stage_tree(file_system, path, hostdir, mode, uid, gid);
     }
     if (strcmp(verb, "exec-dir") == 0) {
-        char *hostdir =
-            strtok_r(NULL, " \t", &save);
+        char *hostdir = strtok_r(NULL, " \t", &save);
 
         if (hostdir == NULL) {
             fprintf(stderr, "stageimage: 'exec-dir' needs a host dir.\n");
@@ -1299,13 +1196,9 @@ static bool apply_line(struct krffs_file_system *file_system, char *line)
  */
 int main(int argc, char **argv)
 {
-    int exit_status =
-        EXIT_SUCCESS;
-    int file_descriptor =
-        -1;
-    struct krffs_file_system file_system = {
-        .node = NULL
-    };
+    int exit_status = EXIT_SUCCESS;
+    int file_descriptor = -1;
+    struct krffs_file_system file_system = {.node = NULL};
     struct stat file_info;
     FILE *manifest;
     char line[2048];
@@ -1315,21 +1208,17 @@ int main(int argc, char **argv)
         /* A fresh directory, so that nothing a previous run left can end up
            in an image; mke2fs takes whatever is there. */
         if (mkdir(argv[3], 0755) != 0) {
-            fprintf(stderr, "stageimage: cannot make '%s' (it must not exist): %s.\n",
-                    argv[3], strerror(errno));
+            fprintf(stderr, "stageimage: cannot make '%s' (it must not exist): %s.\n", argv[3],
+                    strerror(errno));
 
             return EXIT_FAILURE;
         }
-        tree_root =
-            argv[3];
+        tree_root = argv[3];
     } else if (argc < 3 || argv[1][0] == '-' || argv[2][0] == '-') {
-        fprintf(
-            stderr,
-            "Usage: %s <manifest> <image> [--offset BYTES --size BYTES]\n"
-            "       %s <manifest> --tree <directory>\n",
-            argc >= 1 ? argv[0] : "stageimage.krffs",
-            argc >= 1 ? argv[0] : "stageimage.krffs"
-        );
+        fprintf(stderr,
+                "Usage: %s <manifest> <image> [--offset BYTES --size BYTES]\n"
+                "       %s <manifest> --tree <directory>\n",
+                argc >= 1 ? argv[0] : "stageimage.krffs", argc >= 1 ? argv[0] : "stageimage.krffs");
 
         return EXIT_FAILURE;
     }
@@ -1347,51 +1236,40 @@ int main(int argc, char **argv)
     if (fstat(file_descriptor, &file_info) == -1 || !S_ISREG(file_info.st_mode)) {
         fprintf(stderr, "stageimage: '%s' is not a regular file.\n", argv[2]);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     off_t region_offset;
     size_t region_size;
-    if (krffs_parse_region_args(
-            argc, argv, (uint64_t) file_info.st_size,
-            sizeof(struct krffs_node) * 2, &region_offset, &region_size) != 0) {
-        exit_status =
-            EXIT_FAILURE;
+    if (krffs_parse_region_args(argc, argv, (uint64_t)file_info.st_size,
+                                sizeof(struct krffs_node) * 2, &region_offset, &region_size) != 0) {
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
-    file_system.size =
-        region_size;
+    file_system.size = region_size;
 
-    if ((file_system.node =
-             krffs_map_file(
-                 file_descriptor,
-                 region_offset,
-                 file_system.size
-             )) == (void *) -1) {
+    if ((file_system.node = krffs_map_file(file_descriptor, region_offset, file_system.size)) ==
+        (void *)-1) {
         fprintf(stderr, "stageimage: cannot map '%s'.\n", argv[2]);
 
-        file_system.node =
-            NULL;
-        exit_status =
-            EXIT_FAILURE;
+        file_system.node = NULL;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     PLATFORM_PREFIX(close(file_descriptor));
-    file_descriptor =
-        -1;
+    file_descriptor = -1;
 
     if (file_system.node->magic != KRFFS_File_System_Magic) {
-        fprintf(stderr, "stageimage: no KRFFS file system in '%s' (run mkfs.krffs first).\n", argv[2]);
+        fprintf(stderr, "stageimage: no KRFFS file system in '%s' (run mkfs.krffs first).\n",
+                argv[2]);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
@@ -1406,57 +1284,44 @@ int main(int argc, char **argv)
        twenty-four bytes. The value is the same instant every staged node gets
        (see stage_file). */
     {
-        struct krffs_node_time staged_time = {
-            1, 0
-        };
+        struct krffs_node_time staged_time = {1, 0};
 
-        file_system.node->uid =
-            0;
-        file_system.node->gid =
-            0;
-        file_system.node->access_time =
-            staged_time;
-        file_system.node->modification_time =
-            staged_time;
-        file_system.node->attribute_change_time =
-            staged_time;
+        file_system.node->uid = 0;
+        file_system.node->gid = 0;
+        file_system.node->access_time = staged_time;
+        file_system.node->modification_time = staged_time;
+        file_system.node->attribute_change_time = staged_time;
     }
     krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
 
 stage:
-    manifest =
-        fopen(argv[1], "r");
+    manifest = fopen(argv[1], "r");
     if (manifest == NULL) {
         fprintf(stderr, "stageimage: cannot open manifest '%s'.\n", argv[1]);
 
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
 
         goto cleanup;
     }
 
     while (fgets(line, sizeof(line), manifest) != NULL) {
-        size_t n =
-            strlen(line);
+        size_t n = strlen(line);
 
         /* A line that exactly fills the buffer with no newline was truncated by
            fgets; staging its prefix and reading the rest as a bogus directive
            would both be wrong, so reject it. */
         if (n == sizeof(line) - 1 && line[n - 1] != '\n') {
             fprintf(stderr, "stageimage: manifest line too long (over %d bytes).\n",
-                    (int) sizeof(line) - 2);
-            exit_status =
-                EXIT_FAILURE;
+                    (int)sizeof(line) - 2);
+            exit_status = EXIT_FAILURE;
 
             break;
         }
         while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
-            line[--n] =
-                '\0';
+            line[--n] = '\0';
         }
         if (!apply_line(&file_system, line)) {
-            exit_status =
-                EXIT_FAILURE;
+            exit_status = EXIT_FAILURE;
 
             break;
         }
@@ -1465,34 +1330,26 @@ stage:
     /* An end that was not the end of the file is a read that failed. */
     if (exit_status == EXIT_SUCCESS && ferror(manifest)) {
         fprintf(stderr, "stageimage: cannot read manifest '%s'.\n", argv[1]);
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
     }
     if (fclose(manifest) != 0 && exit_status == EXIT_SUCCESS) {
         fprintf(stderr, "stageimage: cannot close manifest '%s'.\n", argv[1]);
-        exit_status =
-            EXIT_FAILURE;
+        exit_status = EXIT_FAILURE;
     }
 
     if (exit_status == EXIT_SUCCESS && tree_root != NULL) {
         if (!tree_stamp(tree_root)) {
             fprintf(stderr, "stageimage: cannot set the times under '%s'.\n", tree_root);
-            exit_status =
-                EXIT_FAILURE;
+            exit_status = EXIT_FAILURE;
         } else {
             printf("stageimage: materialised '%s' from '%s' (%lu nodes).\n", tree_root, argv[1],
                    tree_nodes);
         }
     } else if (exit_status == EXIT_SUCCESS) {
-        free_after =
-            total_free_space(&file_system);
-        printf(
-            "stageimage: built '%s' from '%s' (%llu of %llu bytes used, %llu free).\n",
-            argv[2], argv[1],
-            (unsigned long long) (file_system.size - free_after),
-            (unsigned long long) file_system.size,
-            (unsigned long long) free_after
-        );
+        free_after = total_free_space(&file_system);
+        printf("stageimage: built '%s' from '%s' (%llu of %llu bytes used, %llu free).\n", argv[2],
+               argv[1], (unsigned long long)(file_system.size - free_after),
+               (unsigned long long)file_system.size, (unsigned long long)free_after);
     }
 
 cleanup:
@@ -1500,7 +1357,7 @@ cleanup:
         PLATFORM_PREFIX(close(file_descriptor));
     }
 
-    if (file_system.node != NULL && file_system.node != (void *) -1) {
+    if (file_system.node != NULL && file_system.node != (void *)-1) {
         krffs_unmap_file(file_system.node, file_system.size);
     }
 

@@ -22,8 +22,7 @@ static const uint16_t KRFFS_File_System_Root_Node_Mode = 0755;
 /**
  * File system handle. Nodes point into the pages mapped from the backing file.
  */
-struct krffs_file_system
-{
+struct krffs_file_system {
     struct krffs_node *node;
     off_t size;
 };
@@ -32,8 +31,6 @@ struct krffs_file_system
  * Initializes the file system, writing a root metadata node followed by a
  * free-space node that spans the rest of the mapping.
  */
-struct krffs_file_system *krffs_initialize_file_system(
-                              struct krffs_file_system *file_system
-                          );
+struct krffs_file_system *krffs_initialize_file_system(struct krffs_file_system *file_system);
 
 #endif

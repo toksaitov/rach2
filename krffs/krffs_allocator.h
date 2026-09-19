@@ -14,11 +14,8 @@ struct krffs_node;
  * header. `original_node`, when not `NULL`, identifies the block being
  * relocated so its contents can be carried over.
  */
-struct krffs_node *krffs_allocate_reserved_node(
-           struct krffs_file_system *file_system,
-           uint64_t size,
-           struct krffs_node *original_node
-       );
+struct krffs_node *krffs_allocate_reserved_node(struct krffs_file_system *file_system,
+                                                uint64_t size, struct krffs_node *original_node);
 
 /**
  * Resizes a reserved block to `size` bytes.
@@ -26,11 +23,8 @@ struct krffs_node *krffs_allocate_reserved_node(
  * This is the `realloc` of the K&R first-fit allocator. When `node` cannot grow
  * in place it relocates the block, copying the contents to a fresh reservation.
  */
-struct krffs_node *krffs_resize_reserved_node(
-           struct krffs_file_system *file_system,
-           struct krffs_node *node,
-           uint64_t size
-       );
+struct krffs_node *krffs_resize_reserved_node(struct krffs_file_system *file_system,
+                                              struct krffs_node *node, uint64_t size);
 
 /**
  * Frees a reserved block, returning it to the free pool.
@@ -38,9 +32,6 @@ struct krffs_node *krffs_resize_reserved_node(
  * This is the `free` of the K&R first-fit allocator: it marks `node` free and
  * coalesces it with adjacent free blocks.
  */
-void krffs_remove_reserved_node(
-         struct krffs_file_system *file_system,
-         struct krffs_node *node
-     );
+void krffs_remove_reserved_node(struct krffs_file_system *file_system, struct krffs_node *node);
 
 #endif

@@ -47,7 +47,7 @@ enum krffs_node_type {
 #define KRFFS_MODE_DIRTY 0004000u
 
 /** A node timestamp, byte-packed as part of the on-disk node record. */
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct krffs_node_time {
     int64_t seconds;
     int64_t nanoseconds;
@@ -58,21 +58,17 @@ struct krffs_node_time {
 struct krffs_node_time krffs_get_current_node_time();
 
 /** Returns the seconds field of `node_time` as a `time_t`. */
-time_t krffs_get_time_from_node_time(
-           const struct krffs_node_time *node_time
-       );
+time_t krffs_get_time_from_node_time(const struct krffs_node_time *node_time);
 
 /** Converts `node_time` to a `struct timespec`. */
-struct timespec krffs_get_timespec_from_node_time(
-           const struct krffs_node_time *node_time
-       );
+struct timespec krffs_get_timespec_from_node_time(const struct krffs_node_time *node_time);
 
 /**
  * Metadata node describing one block of the file system. This is the on-disk
  * record: `#pragma pack(1)` removes padding, so the field order and widths here
  * are the KRFFS v2 ABI, shared byte-for-byte with the kernel.
  */
-#pragma pack(push,1)
+#pragma pack(push, 1)
 struct krffs_node {
     uint16_t magic;
     uint8_t type;
@@ -87,90 +83,58 @@ struct krffs_node {
     uint64_t size;
     uint64_t previous_node_size;
     uint64_t data_size;
-    uint64_t parent_id;  /* id of the containing directory (v2 hierarchy) */
+    uint64_t parent_id; /* id of the containing directory (v2 hierarchy) */
 };
 #pragma pack(pop)
 
 /** Stamps `node` as a free node and flushes its header. */
-struct krffs_node *krffs_initialize_free_node(
-                       struct krffs_node *node,
-                       uint64_t size,
-                       uint64_t previous_node_size
-                   );
+struct krffs_node *krffs_initialize_free_node(struct krffs_node *node, uint64_t size,
+                                              uint64_t previous_node_size);
 
 /** Stamps `node` as the root node of the file system. */
-struct krffs_node *krffs_initialize_root_node(
-                       struct krffs_node *node,
-                       uint64_t size,
-                       uint64_t previous_node_size
-                   );
+struct krffs_node *krffs_initialize_root_node(struct krffs_node *node, uint64_t size,
+                                              uint64_t previous_node_size);
 
 /** Copies `name` into `node->name` and refreshes the `id` hash from it. */
-void krffs_set_reserved_node_name(
-         struct krffs_node *node,
-         const char *name
-     );
+void krffs_set_reserved_node_name(struct krffs_node *node, const char *name);
 
 /** Folds a node pointer back into the file system's address range. */
-struct krffs_node *krffs_wrap_node_position(
-                       struct krffs_file_system *file_system,
-                       struct krffs_node *node
-                   );
+struct krffs_node *krffs_wrap_node_position(struct krffs_file_system *file_system,
+                                            struct krffs_node *node);
 
 /** Returns the node preceding `node` in the ring. */
-struct krffs_node *krffs_get_previous_node(
-                       struct krffs_file_system *file_system,
-                       struct krffs_node *node
-                   );
+struct krffs_node *krffs_get_previous_node(struct krffs_file_system *file_system,
+                                           struct krffs_node *node);
 
 /** Returns the node following `node` in the ring. */
-struct krffs_node *krffs_get_next_node(
-                       struct krffs_file_system *file_system,
-                       struct krffs_node *node
-                   );
+struct krffs_node *krffs_get_next_node(struct krffs_file_system *file_system,
+                                       struct krffs_node *node);
 
 /** Returns the byte offset of `node` from the start of the mapping. */
-uint64_t krffs_get_node_relative_position(
-             struct krffs_file_system *file_system,
-             struct krffs_node *node
-         );
+uint64_t krffs_get_node_relative_position(struct krffs_file_system *file_system,
+                                          struct krffs_node *node);
 
 /** Reports whether `node` lies within the file system's mapping. */
-bool krffs_is_node_in_file_system(
-         struct krffs_file_system *file_system,
-         struct krffs_node *node
-     );
+bool krffs_is_node_in_file_system(struct krffs_file_system *file_system, struct krffs_node *node);
 
 /** Returns the first reserved node named `name`, or `NULL` if none. */
-struct krffs_node *krffs_find_reserved_node_by_name(
-                       struct krffs_file_system *file_system,
-                       const char *name
-                   );
+struct krffs_node *krffs_find_reserved_node_by_name(struct krffs_file_system *file_system,
+                                                    const char *name);
 
 /** Like `krffs_find_reserved_node_by_name`, but also matches the root node. */
-struct krffs_node *krffs_find_reserved_or_root_node_by_name(
-                       struct krffs_file_system *file_system,
-                       const char *name
-                   );
+struct krffs_node *krffs_find_reserved_or_root_node_by_name(struct krffs_file_system *file_system,
+                                                            const char *name);
 
 /** Counts the free nodes in the file system. */
-size_t krffs_count_free_nodes(
-           struct krffs_file_system *file_system
-       );
+size_t krffs_count_free_nodes(struct krffs_file_system *file_system);
 
 /** Sums the payload space available across all free nodes. */
-uint64_t krffs_calculate_total_free_space(
-             struct krffs_file_system *file_system
-         );
+uint64_t krffs_calculate_total_free_space(struct krffs_file_system *file_system);
 
 /** Counts the reserved nodes in the file system. */
-size_t krffs_count_reserved_nodes(
-           struct krffs_file_system *file_system
-       );
+size_t krffs_count_reserved_nodes(struct krffs_file_system *file_system);
 
 /** Sums the payload space allocated across all reserved nodes. */
-uint64_t krffs_calculate_total_reserved_space(
-             struct krffs_file_system *file_system
-         );
+uint64_t krffs_calculate_total_reserved_space(struct krffs_file_system *file_system);
 
 #endif

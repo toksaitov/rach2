@@ -12,136 +12,67 @@
 
 extern struct krffs_file_system *KRFFS_File_System;
 
-static inline void fill_stat_buffer_for_node(
-                       struct PLATFORM_STAT *stat_buffer,
-                       struct krffs_node *node,
-                       uint16_t file_type,
-                       uint16_t hard_links_count
-                   )
+static inline void fill_stat_buffer_for_node(struct PLATFORM_STAT *stat_buffer,
+                                             struct krffs_node *node, uint16_t file_type,
+                                             uint16_t hard_links_count)
 {
-    stat_buffer->st_nlink =
-        hard_links_count;
-    stat_buffer->st_size =
-        node->data_size;
+    stat_buffer->st_nlink = hard_links_count;
+    stat_buffer->st_size = node->data_size;
     /* Take the type from `file_type` and the 07777 permission and set-id bits
        from the node; on the root node keep the nine bits alone, so the reserved
        dirty-mount flag there (which overlaps the setuid bit) never leaks into
        the user-visible mode. */
     stat_buffer->st_mode =
-        file_type | (node->mode &
-                     (KRFFS_File_System && node == KRFFS_File_System->node ?
-                          0777u : 07777u));
-    stat_buffer->st_uid =
-        node->uid;
-    stat_buffer->st_gid =
-        node->gid;
+        file_type |
+        (node->mode & (KRFFS_File_System && node == KRFFS_File_System->node ? 0777u : 07777u));
+    stat_buffer->st_uid = node->uid;
+    stat_buffer->st_gid = node->gid;
 #if defined(APPLE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
-    stat_buffer->st_atimespec =
-        krffs_get_timespec_from_node_time(
-            &node->access_time
-        );
-    stat_buffer->st_mtimespec =
-        krffs_get_timespec_from_node_time(
-            &node->modification_time
-        );
-    stat_buffer->st_ctimespec =
-        krffs_get_timespec_from_node_time(
-            &node->attribute_change_time
-        );
+    stat_buffer->st_atimespec = krffs_get_timespec_from_node_time(&node->access_time);
+    stat_buffer->st_mtimespec = krffs_get_timespec_from_node_time(&node->modification_time);
+    stat_buffer->st_ctimespec = krffs_get_timespec_from_node_time(&node->attribute_change_time);
 #elif defined(WINDOWS)
-    stat_buffer->st_atim =
-        krffs_get_timespec_from_node_time(
-            &node->access_time
-        );
-    stat_buffer->st_mtim =
-        krffs_get_timespec_from_node_time(
-            &node->modification_time
-        );
-    stat_buffer->st_ctim =
-        krffs_get_timespec_from_node_time(
-            &node->attribute_change_time
-        );
+    stat_buffer->st_atim = krffs_get_timespec_from_node_time(&node->access_time);
+    stat_buffer->st_mtim = krffs_get_timespec_from_node_time(&node->modification_time);
+    stat_buffer->st_ctim = krffs_get_timespec_from_node_time(&node->attribute_change_time);
 #else
-    stat_buffer->st_atime =
-        krffs_get_time_from_node_time(
-            &node->access_time
-        );
-    stat_buffer->st_mtime =
-        krffs_get_time_from_node_time(
-            &node->modification_time
-        );
-    stat_buffer->st_ctime =
-        krffs_get_time_from_node_time(
-            &node->attribute_change_time
-        );
+    stat_buffer->st_atime = krffs_get_time_from_node_time(&node->access_time);
+    stat_buffer->st_mtime = krffs_get_time_from_node_time(&node->modification_time);
+    stat_buffer->st_ctime = krffs_get_time_from_node_time(&node->attribute_change_time);
 #endif
 }
 
-int krffs_getattr(
-        const char *path,
-        struct PLATFORM_STAT *stat_buffer
-    )
+int krffs_getattr(const char *path, struct PLATFORM_STAT *stat_buffer)
 {
     int result = 0;
 
-    memset(
-        stat_buffer,
-        0,
-        sizeof(*stat_buffer)
-    );
+    memset(stat_buffer, 0, sizeof(*stat_buffer));
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         struct krffs_node *root_node = KRFFS_File_System->node;
         if (!root_node) {
-            fprintf(
-                stderr,
-                "The root node '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The root node '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             ++path;
 
             struct krffs_node *node =
-                krffs_find_reserved_or_root_node_by_name(
-                    KRFFS_File_System,
-                    path
-                );
+                krffs_find_reserved_or_root_node_by_name(KRFFS_File_System, path);
 
             if (!node) {
-                fprintf(
-                    stderr,
-                    "The file '%s' was not found.\n",
-                    path
-                );
+                fprintf(stderr, "The file '%s' was not found.\n", path);
 
-                result =
-                    -ENOENT;
+                result = -ENOENT;
             } else {
                 if (node->type == KRFFS_Root_Node) {
-                    fill_stat_buffer_for_node(
-                        stat_buffer,
-                        root_node,
-                        S_IFDIR,
-                        2
-                    );
+                    fill_stat_buffer_for_node(stat_buffer, root_node, S_IFDIR, 2);
                 } else {
-                    fill_stat_buffer_for_node(
-                        stat_buffer,
-                        node,
-                        S_IFREG,
-                        1
-                    );
+                    fill_stat_buffer_for_node(stat_buffer, node, S_IFREG, 1);
                 }
             }
         }
@@ -150,50 +81,33 @@ int krffs_getattr(
     return result;
 }
 
-int krffs_readdir(
-        const char *path,
-        void *buffer,
-        fuse_fill_dir_t filler,
-        PLATFORM_OFF_T offset,
-        struct fuse_file_info *file_info
-    )
+int krffs_readdir(const char *path, void *buffer, fuse_fill_dir_t filler, PLATFORM_OFF_T offset,
+                  struct fuse_file_info *file_info)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         struct krffs_node *root_node = KRFFS_File_System->node;
         if (!root_node) {
-            fprintf(
-                stderr,
-                "The root node '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The root node '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             ++path;
 
-            if (strcmp((char *) root_node->name, path) != 0) {
-                fprintf(
-                    stderr,
-                    "This file system does not support directories. "
-                    "Invalid path '%s'.\n",
-                    path
-                );
+            if (strcmp((char *)root_node->name, path) != 0) {
+                fprintf(stderr,
+                        "This file system does not support directories. "
+                        "Invalid path '%s'.\n",
+                        path);
 
-                result =
-                    -ENOENT;
+                result = -ENOENT;
             } else {
-                filler(buffer, ".",  NULL, 0);
+                filler(buffer, ".", NULL, 0);
                 filler(buffer, "..", NULL, 0);
 
                 struct krffs_node *node = KRFFS_File_System->node;
@@ -203,19 +117,11 @@ int krffs_readdir(
                        held it, which a shutdown can leave behind. It is
                        unreachable by lookup here too, so it must not appear in
                        a listing as a blank entry. */
-                    if (node->type == KRFFS_Reserved_Node &&
-                            node->name[0] != '\0') {
-                        filler(
-                            buffer,
-                            (const char *) node->name,
-                            NULL, 0
-                        );
+                    if (node->type == KRFFS_Reserved_Node && node->name[0] != '\0') {
+                        filler(buffer, (const char *)node->name, NULL, 0);
                     }
-                } while ((node =
-                              krffs_get_next_node(
-                                  KRFFS_File_System,
-                                  node
-                              )) != KRFFS_File_System->node);
+                } while ((node = krffs_get_next_node(KRFFS_File_System, node)) !=
+                         KRFFS_File_System->node);
             }
         }
     }
@@ -223,205 +129,119 @@ int krffs_readdir(
     return result;
 }
 
-int krffs_open(
-        const char *path,
-        struct fuse_file_info *file_info
-    )
+int krffs_open(const char *path, struct fuse_file_info *file_info)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         }
     }
 
     return result;
 }
 
-int krffs_read(
-        const char *path,
-        char *buffer,
-        size_t size,
-        PLATFORM_OFF_T offset,
-        struct fuse_file_info *file_info
-    )
+int krffs_read(const char *path, char *buffer, size_t size, PLATFORM_OFF_T offset,
+               struct fuse_file_info *file_info)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
-            void *base =
-                node + 1;
-            uint64_t data_size =
-                node->data_size;
+            void *base = node + 1;
+            uint64_t data_size = node->data_size;
 
-            if ((uint64_t) offset < data_size) {
-                if ((uint64_t) offset + size > data_size) {
-                    size =
-                        data_size - offset;
+            if ((uint64_t)offset < data_size) {
+                if ((uint64_t)offset + size > data_size) {
+                    size = data_size - offset;
                 }
 
-                memcpy(
-                    buffer,
-                    ((char *) base) + offset,
-                    size
-                );
+                memcpy(buffer, ((char *)base) + offset, size);
 
-                node->access_time =
-                    krffs_get_current_node_time();
+                node->access_time = krffs_get_current_node_time();
             } else {
                 size = 0;
             }
 
-            result =
-                (int) size;
+            result = (int)size;
         }
     }
 
     return result;
 }
 
-int krffs_mknod(
-        const char *path,
-        mode_t mode,
-        dev_t device
-    )
+int krffs_mknod(const char *path, mode_t mode, dev_t device)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         struct krffs_node *root_node = KRFFS_File_System->node;
         if (!root_node) {
-            fprintf(
-                stderr,
-                "The root node '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The root node '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             ++path;
 
-            struct krffs_node *node =
-                krffs_find_reserved_node_by_name(
-                    KRFFS_File_System,
-                    path
-                );
+            struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
             if (node) {
-                fprintf(
-                    stderr,
-                    "The file '%s' already exists.\n",
-                    path
-                );
+                fprintf(stderr, "The file '%s' already exists.\n", path);
 
-                result =
-                    -EEXIST;
+                result = -EEXIST;
             } else {
-                node = krffs_allocate_reserved_node(
-                    KRFFS_File_System,
-                    0,
-                    NULL
-                );
+                node = krffs_allocate_reserved_node(KRFFS_File_System, 0, NULL);
 
                 if (!node) {
-                    fprintf(
-                        stderr,
-                        "Not enough space for a new file at '%s'.\n",
-                        path
-                    );
+                    fprintf(stderr, "Not enough space for a new file at '%s'.\n", path);
 
-                    result =
-                        -ENOSPC;
+                    result = -ENOSPC;
                 } else {
-                    krffs_set_reserved_node_name(
-                        node,
-                        path
-                    );
+                    krffs_set_reserved_node_name(node, path);
 
-                    node->mode =
-                        mode;
+                    node->mode = mode;
 
                     struct fuse_context *context = fuse_get_context();
                     if (context) {
-                        node->uid =
-                            context->uid;
-                        node->gid =
-                            context->gid;
+                        node->uid = context->uid;
+                        node->gid = context->gid;
                     }
 
-                    struct krffs_node_time current_node_time =
-                        krffs_get_current_node_time();
+                    struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
-                    node->access_time =
-                        current_node_time;
-                    node->modification_time =
-                        current_node_time;
-                    node->attribute_change_time =
-                        current_node_time;
+                    node->access_time = current_node_time;
+                    node->modification_time = current_node_time;
+                    node->attribute_change_time = current_node_time;
 
-                    root_node->modification_time =
-                        current_node_time;
-                    root_node->attribute_change_time =
-                        current_node_time;
+                    root_node->modification_time = current_node_time;
+                    root_node->attribute_change_time = current_node_time;
                 }
             }
         }
@@ -430,89 +250,51 @@ int krffs_mknod(
     return result;
 }
 
-int krffs_create(
-        const char *path,
-        mode_t mode,
-        struct fuse_file_info *file_info
-    )
+int krffs_create(const char *path, mode_t mode, struct fuse_file_info *file_info)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         struct krffs_node *root_node = KRFFS_File_System->node;
         if (!root_node) {
-            fprintf(
-                stderr,
-                "The root node '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The root node '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             ++path;
 
-            struct krffs_node *node =
-                krffs_find_reserved_node_by_name(
-                    KRFFS_File_System,
-                    path
-                );
+            struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
             if (!node) {
-                node = krffs_allocate_reserved_node(
-                    KRFFS_File_System,
-                    0,
-                    NULL
-                );
+                node = krffs_allocate_reserved_node(KRFFS_File_System, 0, NULL);
 
                 if (!node) {
-                    fprintf(
-                        stderr,
-                        "Not enough space for a new file at '%s'.\n",
-                        path
-                    );
+                    fprintf(stderr, "Not enough space for a new file at '%s'.\n", path);
 
-                    result =
-                        -ENOSPC;
+                    result = -ENOSPC;
                 } else {
-                    krffs_set_reserved_node_name(
-                        node,
-                        path
-                    );
+                    krffs_set_reserved_node_name(node, path);
 
-                    node->mode =
-                        mode;
+                    node->mode = mode;
 
                     struct fuse_context *context = fuse_get_context();
                     if (context) {
-                        node->uid =
-                            context->uid;
-                        node->gid =
-                            context->gid;
+                        node->uid = context->uid;
+                        node->gid = context->gid;
                     }
 
-                    struct krffs_node_time current_node_time =
-                        krffs_get_current_node_time();
+                    struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
-                    node->access_time =
-                        current_node_time;
-                    node->modification_time =
-                        current_node_time;
-                    node->attribute_change_time =
-                        current_node_time;
+                    node->access_time = current_node_time;
+                    node->modification_time = current_node_time;
+                    node->attribute_change_time = current_node_time;
 
-                    root_node->modification_time =
-                        current_node_time;
-                    root_node->attribute_change_time =
-                        current_node_time;
+                    root_node->modification_time = current_node_time;
+                    root_node->attribute_change_time = current_node_time;
                 }
             }
         }
@@ -521,119 +303,64 @@ int krffs_create(
     return result;
 }
 
-int krffs_write(
-        const char *path,
-        const char *buffer,
-        size_t size,
-        PLATFORM_OFF_T offset,
-        struct fuse_file_info *file_info
-    )
+int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_T offset,
+                struct fuse_file_info *file_info)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
-            void *base =
-                node + 1;
-            uint64_t available_data_size =
-                node->size - sizeof(*node);
+            void *base = node + 1;
+            uint64_t available_data_size = node->size - sizeof(*node);
 
             uint64_t new_size = offset + size;
             if (new_size <= available_data_size) {
                 if (new_size > node->data_size) {
-                    node->data_size =
-                        new_size;
+                    node->data_size = new_size;
                 }
 
-                krffs_sync_mapping(
-                    node,
-                    sizeof(*node)
-                );
+                krffs_sync_mapping(node, sizeof(*node));
 
-                void *destination =
-                    ((char *) base) + offset;
+                void *destination = ((char *)base) + offset;
 
-                memcpy(
-                    destination,
-                    buffer,
-                    size
-                );
+                memcpy(destination, buffer, size);
 
-                krffs_sync_mapping(
-                    destination,
-                    size
-                );
+                krffs_sync_mapping(destination, size);
 
-                node->modification_time =
-                    krffs_get_current_node_time();
+                node->modification_time = krffs_get_current_node_time();
 
-                result =
-                    (int) size;
+                result = (int)size;
             } else {
-                node =
-                    krffs_resize_reserved_node(
-                        KRFFS_File_System,
-                        node,
-                        new_size
-                    );
+                node = krffs_resize_reserved_node(KRFFS_File_System, node, new_size);
 
                 if (!node) {
-                    fprintf(
-                        stderr,
-                        "Not enough space for a new file at '%s'.\n",
-                        path
-                    );
+                    fprintf(stderr, "Not enough space for a new file at '%s'.\n", path);
 
-                    result =
-                        -ENOSPC;
+                    result = -ENOSPC;
                 } else {
-                    base =
-                        node + 1;
+                    base = node + 1;
 
-                    void *destination =
-                        ((char *) base) + offset;
+                    void *destination = ((char *)base) + offset;
 
-                    memcpy(
-                        destination,
-                        buffer,
-                        size
-                    );
+                    memcpy(destination, buffer, size);
 
-                    krffs_sync_mapping(
-                        destination,
-                        size
-                    );
+                    krffs_sync_mapping(destination, size);
 
-                    node->modification_time =
-                        krffs_get_current_node_time();
+                    node->modification_time = krffs_get_current_node_time();
 
-                    result =
-                        (int) size;
+                    result = (int)size;
                 }
             }
         }
@@ -642,40 +369,23 @@ int krffs_write(
     return result;
 }
 
-int krffs_fsync(
-        const char *path,
-        int is_data_sync,
-        struct fuse_file_info *file_info
-    )
+int krffs_fsync(const char *path, int is_data_sync, struct fuse_file_info *file_info)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_or_root_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_or_root_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         }
 
         /* Writes go straight to the mapping; there is no buffer to flush. */
@@ -684,83 +394,45 @@ int krffs_fsync(
     return result;
 }
 
-int krffs_truncate(
-        const char *path,
-        PLATFORM_OFF_T new_size
-    )
+int krffs_truncate(const char *path, PLATFORM_OFF_T new_size)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
-            uint64_t data_size =
-                node->data_size;
+            uint64_t data_size = node->data_size;
 
-            node =
-                krffs_resize_reserved_node(
-                    KRFFS_File_System,
-                    node,
-                    new_size
-                );
+            node = krffs_resize_reserved_node(KRFFS_File_System, node, new_size);
 
             if (!node) {
-                fprintf(
-                    stderr,
-                    "Not enough space for a new file at '%s'.\n",
-                    path
-                );
+                fprintf(stderr, "Not enough space for a new file at '%s'.\n", path);
 
-                result =
-                    -ENOSPC;
+                result = -ENOSPC;
             } else {
-                if ((uint64_t) new_size > data_size) {
-                    void *base =
-                        node + 1;
+                if ((uint64_t)new_size > data_size) {
+                    void *base = node + 1;
 
-                    void *destination =
-                        ((char *) base) + data_size;
-                    uint64_t size =
-                        (uint64_t) new_size - data_size;
+                    void *destination = ((char *)base) + data_size;
+                    uint64_t size = (uint64_t)new_size - data_size;
 
-                    memset(
-                        destination,
-                        0,
-                        size
-                    );
+                    memset(destination, 0, size);
 
-                    krffs_sync_mapping(
-                        destination,
-                        size
-                    );
+                    krffs_sync_mapping(destination, size);
                 }
 
-                node->modification_time =
-                    krffs_get_current_node_time();
+                node->modification_time = krffs_get_current_node_time();
             }
         }
     }
@@ -768,77 +440,45 @@ int krffs_truncate(
     return result;
 }
 
-int krffs_rename(
-        const char *path,
-        const char *new_path
-    )
+int krffs_rename(const char *path, const char *new_path)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         struct krffs_node *root_node = KRFFS_File_System->node;
         if (!root_node) {
-            fprintf(
-                stderr,
-                "The root node '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The root node '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             ++path;
             ++new_path;
 
             struct krffs_node *node_at_path =
-                krffs_find_reserved_node_by_name(
-                    KRFFS_File_System,
-                    path
-                );
+                krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
             if (!node_at_path) {
-                fprintf(
-                    stderr,
-                    "The file '%s' was not found.\n",
-                    path
-                );
+                fprintf(stderr, "The file '%s' was not found.\n", path);
 
-                result =
-                    -ENOENT;
+                result = -ENOENT;
             } else {
                 struct krffs_node *node_at_new_path =
-                    krffs_find_reserved_node_by_name(
-                        KRFFS_File_System,
-                        new_path
-                    );
+                    krffs_find_reserved_node_by_name(KRFFS_File_System, new_path);
 
                 if (node_at_new_path) {
-                    krffs_remove_reserved_node(
-                        KRFFS_File_System,
-                        node_at_new_path
-                    );
+                    krffs_remove_reserved_node(KRFFS_File_System, node_at_new_path);
                 }
 
-                krffs_set_reserved_node_name(
-                    node_at_path,
-                    new_path
-                );
+                krffs_set_reserved_node_name(node_at_path, new_path);
 
-                struct krffs_node_time current_node_time =
-                    krffs_get_current_node_time();
+                struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
-                root_node->modification_time =
-                    current_node_time;
-                root_node->attribute_change_time =
-                    current_node_time;
+                root_node->modification_time = current_node_time;
+                root_node->attribute_change_time = current_node_time;
             }
         }
     }
@@ -851,55 +491,31 @@ int krffs_unlink(const char *path)
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         struct krffs_node *root_node = KRFFS_File_System->node;
         if (!root_node) {
-            fprintf(
-                stderr,
-                "The root node '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The root node '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             ++path;
 
-            struct krffs_node *node =
-                krffs_find_reserved_node_by_name(
-                    KRFFS_File_System,
-                    path
-                );
+            struct krffs_node *node = krffs_find_reserved_node_by_name(KRFFS_File_System, path);
 
             if (!node) {
-                fprintf(
-                    stderr,
-                    "The file '%s' was not found.\n",
-                    path
-                );
+                fprintf(stderr, "The file '%s' was not found.\n", path);
 
-                result =
-                    -ENOENT;
+                result = -ENOENT;
             } else {
-                krffs_remove_reserved_node(
-                    KRFFS_File_System,
-                    node
-                );
+                krffs_remove_reserved_node(KRFFS_File_System, node);
 
-                struct krffs_node_time current_node_time =
-                    krffs_get_current_node_time();
+                struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
-                root_node->modification_time =
-                    current_node_time;
-                root_node->attribute_change_time =
-                    current_node_time;
+                root_node->modification_time = current_node_time;
+                root_node->attribute_change_time = current_node_time;
             }
         }
     }
@@ -907,225 +523,127 @@ int krffs_unlink(const char *path)
     return result;
 }
 
-int krffs_utimens(
-        const char *path,
-        const struct timespec time[2]
-    )
+int krffs_utimens(const char *path, const struct timespec time[2])
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_or_root_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_or_root_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
-            struct krffs_node_time current_node_time =
-                krffs_get_current_node_time();
+            struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
-            node->access_time =
-                current_node_time;
-            node->modification_time =
-                current_node_time;
+            node->access_time = current_node_time;
+            node->modification_time = current_node_time;
 
-            krffs_sync_mapping(
-                node,
-                sizeof(*node)
-            );
+            krffs_sync_mapping(node, sizeof(*node));
         }
     }
 
     return result;
 }
 
-int krffs_chmod(
-        const char *path,
-        mode_t mode
-    )
+int krffs_chmod(const char *path, mode_t mode)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_or_root_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_or_root_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
             /* Update the 07777 permission and set-id bits, as the kernel's
                chmod does; on the root node update the nine bits alone, so the
                reserved dirty-mount flag there is neither forged nor cleared. */
-            uint16_t writable =
-                node == KRFFS_File_System->node ? 0777u : 07777u;
+            uint16_t writable = node == KRFFS_File_System->node ? 0777u : 07777u;
 
-            node->mode =
-                (uint16_t) ((node->mode & (uint16_t) ~writable) | (mode & writable));
-            node->attribute_change_time =
-                krffs_get_current_node_time();
+            node->mode = (uint16_t)((node->mode & (uint16_t)~writable) | (mode & writable));
+            node->attribute_change_time = krffs_get_current_node_time();
 
-            krffs_sync_mapping(
-                node,
-                sizeof(*node)
-            );
+            krffs_sync_mapping(node, sizeof(*node));
         }
     }
 
     return result;
 }
 
-int krffs_chown(
-        const char *path,
-        uid_t uid,
-        gid_t gid
-    )
+int krffs_chown(const char *path, uid_t uid, gid_t gid)
 {
     int result = 0;
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         ++path;
 
-        struct krffs_node *node =
-            krffs_find_reserved_or_root_node_by_name(
-                KRFFS_File_System,
-                path
-            );
+        struct krffs_node *node = krffs_find_reserved_or_root_node_by_name(KRFFS_File_System, path);
 
         if (!node) {
-            fprintf(
-                stderr,
-                "The file '%s' was not found.\n",
-                path
-            );
+            fprintf(stderr, "The file '%s' was not found.\n", path);
 
-            result =
-                -ENOENT;
+            result = -ENOENT;
         } else {
-            node->uid =
-                uid;
-            node->gid =
-                gid;
-            node->attribute_change_time =
-                krffs_get_current_node_time();
+            node->uid = uid;
+            node->gid = gid;
+            node->attribute_change_time = krffs_get_current_node_time();
 
-            krffs_sync_mapping(
-                node,
-                sizeof(*node)
-            );
+            krffs_sync_mapping(node, sizeof(*node));
         }
     }
 
     return result;
 }
 
-int krffs_statfs(
-        const char *path,
-        struct statvfs *statvfs_buffer
-    )
+int krffs_statfs(const char *path, struct statvfs *statvfs_buffer)
 {
     int result = 0;
 
-    memset(
-        statvfs_buffer,
-        0,
-        sizeof(*statvfs_buffer)
-    );
+    memset(statvfs_buffer, 0, sizeof(*statvfs_buffer));
 
     if (!KRFFS_File_System) {
-        fprintf(
-            stderr,
-            "No file system to work with.\n"
-        );
+        fprintf(stderr, "No file system to work with.\n");
 
-        result =
-            -ENOENT;
+        result = -ENOENT;
     } else {
         if (!path) {
-            result =
-                -EFAULT;
+            result = -EFAULT;
         } else {
-            static const unsigned long StatFS_Block_Size =
-                1024;
+            static const unsigned long StatFS_Block_Size = 1024;
 
-            uint64_t total_space =
-                KRFFS_File_System->size;
-            uint64_t total_free_space =
-                krffs_calculate_total_free_space(
-                    KRFFS_File_System
-                );
-            size_t reserved_node_count =
-                krffs_count_reserved_nodes(
-                    KRFFS_File_System
-                );
+            uint64_t total_space = KRFFS_File_System->size;
+            uint64_t total_free_space = krffs_calculate_total_free_space(KRFFS_File_System);
+            size_t reserved_node_count = krffs_count_reserved_nodes(KRFFS_File_System);
 
-            statvfs_buffer->f_bsize  =
-                StatFS_Block_Size;
-            statvfs_buffer->f_frsize =
-                StatFS_Block_Size;
-            statvfs_buffer->f_blocks =
-                (fsblkcnt_t) ((total_space - 1) /
-                                  StatFS_Block_Size + 1);
-            statvfs_buffer->f_bfree =
-                (fsblkcnt_t) ((total_free_space - 1) /
-                                  StatFS_Block_Size + 1);
-            statvfs_buffer->f_bavail =
-                statvfs_buffer->f_bfree;
-            statvfs_buffer->f_files =
-                (fsfilcnt_t) reserved_node_count;
-            statvfs_buffer->f_ffree =
-                0;
-            statvfs_buffer->f_favail =
-                statvfs_buffer->f_ffree;
-            statvfs_buffer->f_namemax =
-                KRFFS_FILE_NAME_BUFFER_SIZE - 1;
+            statvfs_buffer->f_bsize = StatFS_Block_Size;
+            statvfs_buffer->f_frsize = StatFS_Block_Size;
+            statvfs_buffer->f_blocks = (fsblkcnt_t)((total_space - 1) / StatFS_Block_Size + 1);
+            statvfs_buffer->f_bfree = (fsblkcnt_t)((total_free_space - 1) / StatFS_Block_Size + 1);
+            statvfs_buffer->f_bavail = statvfs_buffer->f_bfree;
+            statvfs_buffer->f_files = (fsfilcnt_t)reserved_node_count;
+            statvfs_buffer->f_ffree = 0;
+            statvfs_buffer->f_favail = statvfs_buffer->f_ffree;
+            statvfs_buffer->f_namemax = KRFFS_FILE_NAME_BUFFER_SIZE - 1;
         }
     }
 
