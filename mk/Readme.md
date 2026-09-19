@@ -7,6 +7,8 @@ The files under `mk/` define the common GNU Make settings for in-house host buil
 * `build.mk` defaults `TOP` to `..`, `COMPONENT` to the current directory name, and `BUILD` to `$(TOP)/build/$(COMPONENT)`. A Makefile can override each value before including it.
 * `rules.mk` supplies a `$(BUILD)/%.o` C compile rule and includes the resulting `.d` files. `ish/` uses it directly. Other components have compile rules for their own source and link layouts.
 * `fingerprint.mk` writes the component's resolved configuration (compiler path and identity, flags) to `$(BUILD)/.config` at parse time, touching it only on a change. Objects and programs depend on it, so a flag edit or a reinstalled compiler rebuilds the affected tree automatically.
+* `host.mk` is the one rule text every host program is compiled with: `HOSTCC`, `HOSTCFLAGS` (`-O2 -Wall -Wextra -Werror`) and `HOST_LINK`, which links a rule's C prerequisites into its target. The checkers under `tools/`, the runners and fixture makers under `tests/`, and the image tools are all built through it, so a flag added there reaches every program that decides a verdict.
+* `images.mk` holds the products that are not RAM images: the metal and recovery ISOs, the stick image and the install stick, and the three tools the stick scripts run. The root Makefile includes it before the test include, and `tools/verify/check.sh` refuses a rule under `tests/` that makes a product.
 
 ## Output directories
 

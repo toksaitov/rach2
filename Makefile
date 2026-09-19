@@ -319,43 +319,43 @@ build/krffs/stageimage.krffs build/krffs/fsck.krffs: build/krffs/mkfs.krffs
 # to grep in the TinyCC policy check.
 $(BINFIND): tools/inspect/binfind.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # The ELF validator (tools/inspect/elfcheck.c): user executables against the
 # loader and the static-only policy, kernels against the multiboot loaders.
 $(ELFCHECK): tools/inspect/elfcheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # The set-id guard (tools/inspect/setidcheck.c), reading its declarations from
 # tools/inspect/setid.allow.
 $(SETIDCHECK): tools/inspect/setidcheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # The configuration checkers (tools/inspect/cfgcheck.c): the GRUB core's
 # embedded configuration and the sealed disk's fixed address.
 $(CFGCHECK): tools/inspect/cfgcheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # The prose checks (tools/verify/prosecheck.c): comment width, the banned
 # vocabulary, the phrase counts the report tabulates, and the dev-log index.
 $(PROSECHECK): tools/verify/prosecheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # The guest-build guard (tools/verify/guestcheck.c): the three guest makefiles
 # against the host build they mirror.
 $(GUESTCHECK): tools/verify/guestcheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # The digest tool (tools/verify/sha256.c), replacing sha256sum and shasum. The
 # scripts that need it before make has run compile it themselves.
 $(SHA256TOOL): tools/verify/sha256.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 
 # --- validation stamps. A validator is a prerequisite of a stamp that sits
 #     between a published artifact and its consumers, so editing the checker
@@ -454,7 +454,7 @@ man: $(MAN_ALL)
 MANCHECK = build/tools/verify/mancheck
 $(MANCHECK): tools/verify/mancheck.c
 	@mkdir -p build/tools/verify
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # `make mancheck`: every program, applet and call has a page; see the tool.
 .PHONY: mancheck
 mancheck: $(MANCHECK) $(BUSYBOX_STAMP)
@@ -561,7 +561,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 18
 
-# The same manifest as an ext2 volume, the sealed disk's fourth partition and
+# The same manifest as an ext2 volume, the sealed disk's third partition and
 # the root `rach2.root=ext2` mounts: 1 GiB, the partition's size, sparse on
 # the host. tools/image/mkext2.sh stages it through stageimage's tree mode,
 # formats it with the host's mke2fs on the one profile the driver writes,
@@ -620,8 +620,9 @@ $(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DE
 rach2-metal-image: $(METAL_IMAGE)
 
 # The recovery RAM image: what the recovery kernel loads as its root. It is the
-# metal profile plus the two programs that repair a disk, and it mounts nothing
-# from the disk it is repairing, which is what lets it rewrite that disk's root.
+# metal profile plus the programs that repair a disk and the pages that describe
+# them, and it mounts nothing from the disk it is repairing, which is what lets
+# it rewrite that disk's root.
 #
 # A recovery image that carries a key and one that carries none are identical
 # from outside a booted machine, so the difference is in the name of every
@@ -649,37 +650,25 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(MAN_ALL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
 
-# `make rach2-sealed-disk`: the disk milestone 25 seals into the laptop, written
-# once over a USB adapter and not removed again. Its geometry is the milestone's
-# contract and every number here is checked against the built image: a 64 MiB
-# FAT32 boot partition at 4 KiB clusters (one sector per cluster puts a 64 MiB
-# volume past both of bootslot's bounds), a 500 MiB root, and a 64 MiB recovery
-# partition whose kernel and RAM image GRUB can reach when partition 1 cannot be
-# read at all. The fourth partition is the ext2 root, 1 GiB at 630 MiB, where
-# the installed machine's fourth partition already begins, the same manifest
-# as an ext2 volume, which the candidate entries boot while the fallback
-# entries keep the KRFFS root, so a candidate root that does not come up falls
-# back through the trial to a system that does. The image is 1655 MiB,
-# 3389440 sectors.
+# `make rach2-sealed-disk`: the disk the installer writes to a machine and the
+# machine boots from. Its geometry is a contract the builder checks against the
+# built image: a 64 MiB FAT32 boot partition at 1 MiB, at 4 KiB clusters (one
+# sector per cluster puts a 64 MiB volume past both of bootslot's bounds), a
+# 64 MiB recovery partition after it whose kernel and RAM image GRUB reaches
+# when partition 1 cannot be read at all, and the ext2 root, 1 GiB at 130 MiB,
+# the same manifest as an ext2 volume, which the candidate and the fallback
+# entries both boot. The image is 1155 MiB.
 #
 # The address is `rach2.ip=none`: this machine is carried between buildings and
 # takes whatever the network there gives it, through `ifup -a` and udhcpc, which
 # init runs before it starts the SSH server. A fixed address on the boot line
-# would be one more thing to edit at the desk, and editing it is the thing this
-# milestone exists to avoid. The two static-address entries in the menu are the
-# answer to a network with no server at all, and they carry a fixed address
-# instead: a line cannot carry both, since the kernel refuses an address given
-# twice and the machine would come up with none.
-#
-# This target is the geometry and the boot line. The boot menu, the GRUB core
-# slots and the recovery contents are added by the phases that own them. The
-# fixed address the two static entries carry, for the day the network this
-# machine is plugged into has no server: the same defaults the metal stick uses,
-# overridable at build time for anywhere else. The menu takes a prefix and the
-# recovery script takes a dotted mask, and the two must be the same subnet with
-# the gateway inside it; the configuration checker holds them to that before a
-# disk is written, since a machine whose menu and fallback disagree is one
-# nobody can reach by either.
+# would be one more thing to edit at the desk. The recovery image's
+# `rescue-static` takes the fixed address below when no lease arrives, for the
+# day the network has no server; the address, mask, prefix and gateway are
+# overridable at build time for anywhere else, and the configuration checker
+# holds the prefix, the mask and the script to one subnet with the gateway
+# inside it before a disk is written, since a machine whose record and fallback
+# disagree is one nobody can reach by either.
 SEALED_ADDRESS ?= 192.168.0.105
 SEALED_MASK ?= 255.255.255.0
 SEALED_PREFIX ?= 24
@@ -758,17 +747,6 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 
-# The demo credentials, as file targets. Both generators are idempotent and do
-# nothing when their output is there, which was enough while one thing ran at a
-# time: with `make -j` and a pool of suites, two of them mint a key at once and
-# race on the temporary file, which is `mv: authorized_keys.tmp: No such file
-# or directory`. Make builds each once, and everything that needs them says so.
-krffs/authorized_keys:
-
-krffs/shadow:
-
-DEMO_CREDS = krffs/authorized_keys krffs/shadow
-
 
 # The public test entry: the source checks, the native tests, and the core
 # tier, in that order. The first two rebuild the kernel with their own flags
@@ -792,10 +770,8 @@ os-simple-iso: os-simple-image
 	sh tools/image/mkiso.sh os-simple
 os-real-iso: os-real-image
 	sh tools/image/mkiso.sh os-real
-rach2-metal-iso: rach2-metal rach2-metal-image
-	sh tools/image/mkiso.sh rach2-metal
-rach2-recovery-iso: rach2-recovery rach2-recovery-image
-	sh tools/image/mkiso.sh $(RECOVERY_NAME)
+rach2-metal-iso: rach2-metal rach2-metal-image build/images/rach2-metal.iso
+rach2-recovery-iso: rach2-recovery rach2-recovery-image $(RECOVERY_ISO)
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image.
 # A stamp only proves its build RAN; the artifact can be deleted OR truncated
@@ -897,6 +873,8 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # The test suites: every `run-NAME` target, the fixtures they write, the eight
 # test tools, and `prepare-all`. Included rather than kept apart so that one
 # dependency graph covers the product and the variants only a suite needs.
+include mk/host.mk
+include mk/images.mk
 include tests/system/suites.mk
 
 # Fail if a rach2 .c on disk is missing from C_SRC, so a new kernel source

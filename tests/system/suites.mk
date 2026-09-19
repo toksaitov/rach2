@@ -78,68 +78,62 @@ HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
 RUNUTIL         = build/tests/system/runutil
-# The stick and disk tools (their rules are with the usbdisk suite), named
-# here because a prerequisite list expands its variables where it is read.
+# The test-side disk tools, named here because a prerequisite list expands
+# its variables where it is read; their rules are with the suites that use
+# them. The stick tools and the sticks themselves are the product's,
+# in mk/images.mk.
 MKGPT           = build/tools/image/mkgpt
 GROWSET         = build/tools/inspect/growset
-MKMBR           = build/tools/image/mkmbr
-STICKCHECK      = build/tools/image/stickcheck
+INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 # The deadline tool: the suites' wall-clock limit with process-group kill,
 # replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
 # tools.
 $(DEADLINE): tests/system/runner/deadline.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # The capture checker (tests/system/checkers/pcapcheck.c): what the guest put on
 # the wire, judged from QEMU's filter-dump file.
 $(PCAPCHECK): tests/system/checkers/pcapcheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # The disk fixtures (tests/system/fixtures/mkfixture.c): the bootprobe partition
 # pattern and the 260 GB sparse disk.
 $(MKFIXTURE): tests/system/fixtures/mkfixture.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # The FAT32 fixture builder and its volume check (tests/host/mkfatfixture.c):
 # the suites walk a volume the kernel wrote with `--check`.
 MKFATFIXTURE = build/tests/host/mkfatfixture
 $(MKFATFIXTURE): tests/host/mkfatfixture.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
-# The exFAT builder and reader (tests/host/mkexfatfixture.c), for `tests/run
-# exfat`: it builds the empty volume the suite writes and walks and reads
-# what the kernel wrote.
-MKEXFATFIXTURE = build/tests/host/mkexfatfixture
-$(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc
-	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # The host end of a connection (tests/system/runner/hostpeer.c): the live TCP
 # connection procfiles looks for in /proc/net/tcp, and the echo server the
 # socket suite sends to.
 $(HOSTPEER): tests/system/runner/hostpeer.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # What a machine played, measured off the recording QEMU's wav backend writes
 # (tests/system/checkers/wavcheck.c). The maths library is the only one any
 # test tool here links.
 $(WAVCHECK): tests/system/checkers/wavcheck.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $< -lm
+	$(HOST_LINK) -lm
 # The three runners (tests/system/runner/): the serial harness every suite
 # drives, the probe runner one boot scores, and the pty driver the SSH suites
 # answer their password prompts through.
 $(HARNESS): tests/system/runner/harness.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 $(RUNTESTS): tests/system/runner/runtests.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 $(PTYDRIVE): tests/system/runner/ptydrive.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 $(RUNUTIL): tests/system/runner/runutil.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # `make test`: the automated end-to-end pass over the test image. Boots it
 # headless (-cpu max) and runs every probe, failing if any does not exit 0. The
 # few probes with a special contract (fork-exit-code, stdin, faults, network)
@@ -176,13 +170,6 @@ run-default: rach2 test-image $(RUNTESTS)
 components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests utils
-# The install sticks, named here because `prepare-images` below names them and
-# make expands a prerequisite when it reads the rule. Their own rules are with
-# the suite that reads them.
-# The stick takes the recovery ISO's name with it: a stick whose recovery
-# answers this tree's key is not the stick anybody else runs.
-INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick$(RECOVERY_KEY_TAG).img
-INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(RUNUTIL) \
@@ -1367,48 +1354,12 @@ run-diskrate: $(DEMO_CREDS) rach2 tests krffs os-real-image test-image $(MKEXFAT
 # tree had no writer and the suite needs a table to read.
 $(MKGPT): tools/image/mkgpt.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
+	$(HOST_LINK)
 # The grow set (tools/inspect/growset.c), for `tests/run grow`: the sectors
 # a grow writes, checked against what the grow in QEMU changed.
 $(GROWSET): tools/inspect/growset.c utils/growset.c
 	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -o $@ $<
-# The MBR writer, which krffs/mkdisk.sh builds on demand as well; named here
-# so a suite that runs before any disk image was made still has it.
-$(MKMBR): tools/image/mkmbr.c
-	@mkdir -p $(dir $@)
-	cc -O2 -o $@ $<
-# The stick image's judge (tools/image/stickcheck.c), linked with the
-# kernel's own MBR reader so the rules it applies are the kernel's.
-$(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h
-	@mkdir -p $(dir $@)
-	cc -O2 -Wall -Wextra -I rach2/sys -I rach2/sys/lib -o $@ tools/image/stickcheck.c rach2/sys/block/mbr.c
-# The stick image (tools/image/mkstick.sh): the metal hybrid ISO followed by
-# an exFAT volume, judged whole by stickcheck and walked by mkexfatfixture.
-STICK_IMAGE = $(IMAGES_DIR)/rach2-stick.img
-rach2-stick-image: $(STICK_IMAGE)
-$(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-	sh tools/image/mkstick.sh build/images/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-build/images/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh
-	sh tools/image/mkiso.sh rach2-metal
-# The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
-# by an exFAT volume carrying the sealed disk image and the manifest naming its
-# length and hash. It is what a person boots to install this system.
-#
-# Both install suites read it, so `prepare-images` builds it once before the
-# pool starts: two suites that each named its rule would otherwise run the same
-# recovery ISO build at the same time, in the one directory that build uses,
-# and neither would find what it wrote. They still name it, so a suite run on
-# its own builds what it needs.
-rach2-install-stick: $(INSTALL_STICK)
-$(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) tools/image/mkinstallstick.sh \
-                  $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-	@sh tools/image/keyname.sh $@
-	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(SEALED_DISK) $@ \
-	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-$(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools/image/keyname.sh
-	@sh tools/image/keyname.sh $@
-	sh tools/image/mkiso.sh $(RECOVERY_NAME)
+	$(HOST_LINK)
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image
 # it carries has the shape the sealed disk has, a boot partition,

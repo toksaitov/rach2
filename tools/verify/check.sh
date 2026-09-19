@@ -281,6 +281,19 @@ if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
 else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1
 fi
+# No recipe under tests/ makes a product: the images, disks, ISOs and sticks
+# the machine or a stick carries are the build's (the root Makefile and mk/),
+# and a suite names one only as a prerequisite. A product is a file under
+# build/images named rach2-*, or one of the sealed and recovery names.
+# shellcheck disable=SC2016 # the dollar is grep's, a literal $(NAME) target
+products=$(grep -n '^\(build/images/rach2-[a-z0-9-]*\.[a-z0-9]*\|\$(SEALED_DISK)\|\$(SEALED_EXT2)\|\$(RECOVERY_ISO)\|\$(RECOVERY_IMAGE)\|\$(METAL_IMAGE)\|\$(STICK_IMAGE)\|\$(INSTALL_STICK)\|\$(OS_REAL_IMAGE)\|\$(OS_SIMPLE_IMAGE)\|\$(TEST_IMAGE)\) *:' "$REPO/tests/system/suites.mk" || true)
+if [ -z "$products" ]; then
+    echo "  PASS (no product rule under tests/)"
+else
+    echo "  FAIL: a rule under tests/ makes a product:"
+    echo "$products" | sed 's/^/    tests\/system\/suites.mk:/'
+    fail=1
+fi
 
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
