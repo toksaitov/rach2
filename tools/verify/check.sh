@@ -9,8 +9,9 @@
 #
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
 #   skip) 1. the kernel build with -Werror (the zero-warning policy, enforced)
-#   2. cppcheck (c89, warning+style) with tools/verify/cppcheck.suppress, and
-#      the host programs (tools/, tests/system/, krffs/) at c99
+#   2. cppcheck (c89; warning, style, performance, portability) with
+#      tools/verify/cppcheck.suppress, and the host programs (tools/,
+#      tests/system/, krffs/) at c99
 #   (--error-exitcode) 3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format on every in-house file and any named as arguments, judged
@@ -36,6 +37,8 @@
 #  18. the manual against the machine (tools/verify/mancheck.c): a page or
 #      an alias for every staged program, applet and registered call, every
 #      page lint-clean, the recovery pages staged
+#  19. clang's positive list over the kernel, judged by the recorded version
+#  20. sparse over the kernel with the address-space annotations checked
 #
 # Usage:
 #     ./check.sh [file.c ...]      # extra files to hard clang-format check
@@ -111,7 +114,7 @@ done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
 
 # 1. kernel build (-Werror)
-hr "1/18 kernel build (-Werror)"
+hr "1/20 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
 else
@@ -120,7 +123,7 @@ fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
-hr "2/18 cppcheck (c89, warning+style)"
+hr "2/20 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
@@ -137,7 +140,7 @@ ls "$REPO"/tests/host/pwauth_hosttest.c "$REPO"/tests/musl/pwauthmusl.c \
    "$REPO"/tests/musl/saltnoent.c "$REPO"/tests/musl/creddisk.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
 ls "$REPO"/krffs/krffs_reader.c "$REPO"/krffs/krffs_reader.h \
    "$REPO"/krffs/readfile.krffs.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=2 \
+if cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,portability --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1; then
@@ -153,7 +156,7 @@ fi
     find "$REPO/tests/system" "$REPO/krffs" -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print
 } 2>/dev/null | sort >"$VDIR/_hostsrcs.txt"
-if cppcheck --std=c99 --platform=unix64 --enable=warning,style --error-exitcode=2 \
+if cppcheck --std=c99 --platform=unix64 --enable=warning,style,performance,portability --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_hostsrcs.txt" >"$VDIR/verify_cppcheck_host.log" 2>&1; then
@@ -167,7 +170,7 @@ fi
 #    legacy QEMU run/build scripts waive SC2086 (option word-splitting is
 #    intentional) and SC2034 (vars shared across sourced fragments); SC1091
 #    covers the dynamic source path in both.
-hr "3/18 shellcheck"
+hr "3/20 shellcheck"
 sc=0
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 $(ls tests/run tests/system/suites/*.sh tests/system/accept/*.sh tests/system/grow_machine.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
@@ -179,7 +182,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/18 conventions (no //, ASCII, header guards, marked idle wait)"
+hr "4/20 conventions (no //, ASCII, header guards, marked idle wait)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -213,7 +216,7 @@ if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 #    tool's version: two majors format four files of this tree differently.
 #    So the check is judged by the version tools/setup/judges records, the
 #    testing host's; another version reports the count and decides nothing.
-hr "5/18 clang-format"
+hr "5/20 clang-format"
 recorded=$(sed -n 's/^clang-format: //p' "$REPO/tools/setup/judges")
 found=$(clang-format --version </dev/null 2>/dev/null | head -1)
 drift=0
@@ -234,7 +237,7 @@ else
 fi
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
-hr "6/18 readelf ABI (fresh musl link)"
+hr "6/20 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"
     if i686-elf-gcc -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
@@ -265,7 +268,7 @@ fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
 #    so a newly added kernel source cannot be silently dropped from the build.
-hr "7/18 kernel source list (C_SRC vs disk) and the guest build lists"
+hr "7/20 kernel source list (C_SRC vs disk) and the guest build lists"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
@@ -299,7 +302,7 @@ fi
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
 # tree.
-hr "8/18 text style"
+hr "8/20 text style"
 if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
 else
@@ -341,7 +344,7 @@ fi
 # consuming no argument, so every field after it in that message is read one
 # slot early. That printed `at 02x:02x.0` on the machine and, worse, the wrong
 # numbers beside it.
-hr "9/18 message formats"
+hr "9/20 message formats"
 if "$REPO/tools/verify/fmtcheck.sh" >"$VDIR/verify_fmt.log" 2>&1; then
     echo "  PASS (fmtcheck)"
 else
@@ -351,7 +354,7 @@ else
     fail=1
 fi
 
-hr "10/18 runner rules (runtests and harness selftests)"
+hr "10/20 runner rules (runtests and harness selftests)"
 HARNESSBIN="$REPO/build/tests/system/harness"
 make -C "$REPO" --no-print-directory build/tests/system/harness >/dev/null || exit 1
 if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1 &&
@@ -365,7 +368,7 @@ fi
 # This half reads sources only, so it belongs with the source checks; the image
 # inventory that reads a built artifact runs from mkimage.sh and mkdisk.sh
 # instead.
-hr "11/18 set-id guard (selftest + manifest sweep)"
+hr "11/20 set-id guard (selftest + manifest sweep)"
 setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
@@ -389,7 +392,7 @@ fi
 #     twice with the real host tools, so those are BUILT here first, the way
 #     step 1 builds the kernel it checks: a check that tested whatever binary
 #     happened to be lying in build/ would report on another day's source.
-hr "12/18 image reproducibility (one tree, one image)"
+hr "12/20 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
     fail=1
@@ -411,7 +414,7 @@ fi
 #     generator must join wrapped recipes, select only compile commands, and
 #     refuse to publish an invalid database, and the suite checker must refuse
 #     each form of a guessed duration and accept each marked interval.
-hr "13/18 checker selftests"
+hr "13/20 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
 make -C "$REPO" --no-print-directory build/tools/inspect/elfcheck build/tools/inspect/cfgcheck \
@@ -429,7 +432,7 @@ fi
 #     so every finished milestone must have an entry, the entries must be in the
 #     directories' numeric order, and a directory holding only a plan must have
 #     none. The selftest proves the rules reject; the run proves this index.
-hr "14/18 dev-log index"
+hr "14/20 dev-log index"
 if "$PROSECHECK" devlog >"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
@@ -441,7 +444,7 @@ fi
 #     suite nothing runs. Neither shows up anywhere else: make accepts an
 #     unknown goal only by failing, which happens on the day someone asks for
 #     that suite, and a target no one names is silent forever.
-hr "15/18 test registry against tests/system/suites.mk"
+hr "15/20 test registry against tests/system/suites.mk"
 {
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort > "$VDIR/_reg.txt"
     grep -o '^run-[a-z0-9-]*' "$REPO/tests/system/suites.mk" | sed 's/^run-//' \
@@ -477,7 +480,7 @@ fi
 #     transitive, so a product reached through an image counts as prepared.
 #     `prepare-all` builds its halves from its recipe, so the recipe is read
 #     for the targets it names; a half dropped from it is found.
-hr "16/18 run- targets' products against prepare-all"
+hr "16/20 run- targets' products against prepare-all"
 make -C "$REPO" -pn prepare-all > "$VDIR/_db.txt" 2>/dev/null || { echo "  FAIL: make -pn prepare-all failed"; fail=1; }
 unprepared=$(awk '
     /^#/ || /^$/ { next }
@@ -520,7 +523,7 @@ fi
 #     suite, a `wait=N` harness step and an upper bound on a duration in a
 #     probe are guesses at a machine's speed; each is refused unless it is
 #     an interval marked with a reason that tests/system/intervals lists.
-hr "17/18 suites' waits and criteria (suitecheck)"
+hr "17/20 suites' waits and criteria (suitecheck)"
 if sh "$REPO/tools/verify/suitecheck.sh" >"$VDIR/verify_suites.log" 2>&1; then
     echo "  PASS"
 else
@@ -533,13 +536,60 @@ fi
 #     the manifests stage, every BusyBox applet and every registered system
 #     call has a page or an alias, every alias names a page, every page passes
 #     mandoc's lint, and the recovery image stages the pages man/recovery lists.
-hr "18/18 the manual against the machine (mancheck)"
+hr "18/20 the manual against the machine (mancheck)"
 if make -s -C "$REPO" mancheck >"$VDIR/verify_man.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: a program, applet or call has no page, or a page is faulty; see $VDIR/verify_man.log:"
     grep "^mancheck:" "$VDIR/verify_man.log" | head -5 | sed 's/^/    /'
     fail=1
+fi
+
+# 19. clang as a second front end over the kernel, with a short positive
+#     list: the flags -Weverything showed to have signal here. Judged by the
+#     clang version tools/setup/judges records; another version reports the
+#     count and decides nothing, as the format check does.
+hr "19/20 clang's positive list over the kernel"
+recorded=$(sed -n 's/^clang: //p' "$REPO/tools/setup/judges")
+found=$(clang --version </dev/null 2>/dev/null | head -1)
+CLANG_WARN="-Wcast-align -Wconditional-uninitialized -Wshadow-all -Wtypedef-redefinition -Wcomma"
+: >"$VDIR/verify_clang.log"
+res=$(clang -print-resource-dir 2>/dev/null)
+clang_bad=0
+for f in $(make -s -C "$REPO/rach2" print-c-src); do
+    # shellcheck disable=SC2086
+    (cd "$REPO/rach2" && clang --target=i686-elf -m32 -ansi -ffreestanding -nostdinc -isystem "$res/include" \
+        -fsyntax-only $CLANG_WARN "$f") >>"$VDIR/verify_clang.log" 2>&1 || clang_bad=$((clang_bad + 1))
+done
+clang_warnings=$(grep -c "warning:" "$VDIR/verify_clang.log")
+if [ "$found" != "$recorded" ]; then
+    echo "  SKIP ($clang_warnings warning(s) under $found; the record says $recorded, and the testing host judges)"
+elif [ "$clang_bad" -eq 0 ] && [ "$clang_warnings" -eq 0 ]; then
+    echo "  PASS (0 warnings over $(make -s -C "$REPO/rach2" print-c-src | wc -w | tr -d ' ') files)"
+else
+    echo "  FAIL: $clang_warnings warning(s); see $VDIR/verify_clang.log"; fail=1
+fi
+
+# 20. sparse with __CHECKER__ defined, so the __user annotations the kernel
+#     carries are checked: a user pointer dereferenced directly, or passed
+#     where a kernel pointer is expected, is a finding. -Wno-non-pointer-null
+#     is the one category left out; tools/verify/exceptions.md says why.
+hr "20/20 sparse over the kernel's address spaces"
+if ! command -v sparse >/dev/null 2>&1; then
+    echo "  SKIP (sparse is absent here; the testing host judges)"
+else
+    gccinc=$(i686-elf-gcc -print-file-name=include)
+    : >"$VDIR/verify_sparse.log"
+    for f in $(make -s -C "$REPO/rach2" print-c-src); do
+        (cd "$REPO/rach2" && sparse -D__CHECKER__ -m32 -ansi -ffreestanding -nostdinc -I"$gccinc" \
+            -Wno-decl -Wno-non-pointer-null "$f") >>"$VDIR/verify_sparse.log" 2>&1
+    done
+    sparse_n=$(grep -c "warning:\|error:" "$VDIR/verify_sparse.log")
+    if [ "$sparse_n" -eq 0 ]; then
+        echo "  PASS (0 findings)"
+    else
+        echo "  FAIL: $sparse_n finding(s); see $VDIR/verify_sparse.log"; fail=1
+    fi
 fi
 
 hr "result"
