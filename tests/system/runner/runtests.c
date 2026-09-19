@@ -182,7 +182,7 @@ static size_t past_prefix(const unsigned char *text, size_t len, size_t at)
     if (i + 4 > len || text[i] != '<' || text[i + 2] != '>')
         return at;
     i += 3;
-    if (i >= len || text[i] != '[')
+    if (text[i] != '[')
         return at;
     i++;
     while (i < len && ((text[i] >= '0' && text[i] <= '9') || text[i] == '.'))
