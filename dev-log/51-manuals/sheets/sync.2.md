@@ -36,5 +36,4 @@ fatal, so the -EIO is real backpressure.
 
 
 ## fdatasync: number 148, handler sys_fsync
-
-
+* Found at the proofreading: Dropbear installs its generated host key with link() and a direct-write fallback and logs an fsync failure without failing, so the page makes no claim about it.

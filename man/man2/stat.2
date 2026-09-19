@@ -4,6 +4,8 @@
 .Sh NAME
 .Nm stat ,
 .Nm lstat ,
+.Nm fstat ,
+.Nm fstatat ,
 .Nm stat64 ,
 .Nm lstat64 ,
 .Nm fstat64 ,
@@ -158,7 +160,14 @@ A followed
 link reports the target descriptor's attributes, so its inode agrees
 with
 .Fn fstat .
-Device and proc-file descriptors likewise use their objects' identities.
+Proc-file descriptors use their source files' inode numbers; a master
+descriptor opened through
+.Pa /dev/ptmx
+reports zero for
+.Fa st_dev ,
+.Fa st_rdev
+and
+.Fa st_ino .
 .Pp
 Device numbers use the major number shifted left eight bits, combined
 with the minor number.
@@ -260,9 +269,15 @@ The final inode field is at byte offset 88.
 Musl converts this structure to its public
 .Vt struct stat ,
 which has 64-bit time fields.
+The attributes above are the 64-bit interfaces'.
 Calls 106 and 107 instead fill the older, narrower structure with
 16-bit mode, link count, and owner fields and 32-bit sizes and inode numbers.
-They do not check for truncation when converting wider attributes.
+They do not check for truncation when converting wider attributes, they
+report the fixed attributes of the boot root for
+.Pa /
+even on an ext2 root, and they leave
+.Fa st_rdev
+zero for a device inode on a mounted volume.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set
@@ -311,8 +326,6 @@ or process no longer exists.
 A node needed for path resolution cannot be allocated.
 .It Bq Er ENOTDIR
 A path component or relative-path base descriptor is not a directory.
-.It Bq Er EOVERFLOW
-A stored file size exceeds the file system driver's 32-bit offset range.
 .El
 .Sh SEE ALSO
 .Xr chmod 2 ,

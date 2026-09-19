@@ -420,3 +420,8 @@ setregid 2 setuid
 setresgid 2 setuid
 setresuid 2 setuid
 setreuid 2 setuid
+fstat 2 stat
+fstatat 2 stat
+sigprocmask 2 sigaction
+sigsuspend 2 sigaction
+fstatfs 2 statfs

@@ -172,15 +172,13 @@ exceeds its buffer.
 A pathname or creation target is empty, a required component is absent,
 or the process or descriptor referred to by a proc link no longer exists.
 .It Bq Er ENOMEM
-A required file-system node cannot be allocated.
+A required file-system node or the text buffer of a proc link cannot be
+allocated.
 .It Bq Er ENOSPC
 The file system has no inode or data space available for the link or
 its directory entry.
 .It Bq Er ENOTDIR
 A path component or relative-path base descriptor is not a directory.
-.It Bq Er EOVERFLOW
-A stored file size encountered during lookup exceeds the file system
-driver's 32-bit offset range.
 .It Bq Er EPERM
 The writable file system does not support symbolic-link creation.
 .It Bq Er EROFS

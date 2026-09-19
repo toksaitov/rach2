@@ -14,7 +14,7 @@ sets the calling process's file creation mask to
 .Fa mask
 and returns the previous mask.
 Only the low nine permission bits are kept:
-.Li "mask & 0777" .
+.Ql "mask & 0777" .
 .Pp
 On KRFFS, including the boot root, and on ext2, new files and directories
 receive the requested permission bits with the process mask removed.
@@ -30,7 +30,7 @@ EBX contains the new mask.
 .Fn umask
 returns the previous mask.
 On failure, musl returns
-.Li (mode_t)-1
+.Ql (mode_t)-1
 and sets
 .Va errno .
 The kernel returns the negative error number.

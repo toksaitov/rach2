@@ -5,11 +5,11 @@
 .Nm syscalls
 .Nd system call interface and number index
 .Sh SYNOPSIS
-.Li int 0x80
+.Dl int 0x80
 .Sh DESCRIPTION
 Rach2 uses the Linux i386 system call numbers and register interface.
 A program executes
-.Li int 0x80
+.Ql int 0x80
 with the system call number in EAX.
 Arguments, in order, are in EBX, ECX, EDX, ESI, EDI, and EBP.
 The result is returned in EAX; a failure is a negative error number.

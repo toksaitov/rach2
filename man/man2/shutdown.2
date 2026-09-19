@@ -56,6 +56,14 @@ returns zero on success.
 On failure it returns -1 and sets
 .Va errno .
 The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+shuts a connected client down with
+.Dv SHUT_WR ,
+checks that a send then fails with
+.Er EPIPE ,
+and checks that a blocking and a nonblocking read return zero.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EFAULT

@@ -41,14 +41,14 @@ For a KRFFS boot-root file, or a descriptor without a mount, it flushes
 the entire page cache.
 That flush does nothing on a direct RAM root.
 The mounted KRFFS, FAT32, exFAT, and ext2 implementations flush the
-device's dirty buffers, rather than only the named file's data.
+device's dirty buffers, rather than only the named file's data; a mounted
+KRFFS volume gone read-only after a failed write skips its dirty buffers,
+and the device flush that follows can succeed with them still dirty.
 .Pp
 .Fn fdatasync
 uses the same handler as
 .Fn fsync
 and has the same behavior.
-Dropbear writes its host key with an open, write, fsync, rename sequence
-and treats an fsync error as fatal.
 .Pp
 The i386 system call numbers are 36 for
 .Fn sync ,

@@ -3,6 +3,7 @@
 .Os
 .Sh NAME
 .Nm statfs ,
+.Nm fstatfs ,
 .Nm statfs64 ,
 .Nm fstatfs64
 .Nd get file-system statistics
@@ -18,8 +19,13 @@ reports the file system containing
 .Fa path
 in
 .Fa buf .
-The path must name an existing object and is resolved with symbolic links
-followed.
+On an ordinary file system the path must name an existing object and is
+resolved with symbolic links followed; a synthetic path is not checked
+for existence, so
+.Pa /dev/nonexistent
+answers devfs's numbers and
+.Pa /proc/PID/fd/N
+proc's, without following the descriptor.
 .Fn fstatfs
 selects the file system by an open descriptor.
 .Pp
@@ -143,7 +149,8 @@ The default suite's
 .Pa tests/vfsprobe.c
 calls
 .Nm statfs64
-with an 84-byte result buffer and checks the distinct magic numbers
+with the result structure size set to 84 bytes and checks the distinct
+magic numbers
 for the KRFFS root and
 .Pa /proc .
 .Sh ERRORS
@@ -169,16 +176,14 @@ Path resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
 A copied path, component, or symbolic-link expansion exceeds its buffer.
 .It Bq Er ENOENT
-The path is empty or a required component does not exist.
+The path is empty or, on an ordinary file system, a required component
+does not exist.
 .It Bq Er ENOMEM
 A node needed for path resolution cannot be allocated.
 .It Bq Er ENOSYS
 The descriptor type has no file-system statistics.
 .It Bq Er ENOTDIR
 A path component is not a directory.
-.It Bq Er EOVERFLOW
-A stored file size encountered during lookup exceeds the file system
-driver's 32-bit offset range.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,

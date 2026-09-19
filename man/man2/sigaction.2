@@ -3,6 +3,8 @@
 .Os
 .Sh NAME
 .Nm sigaction ,
+.Nm sigprocmask ,
+.Nm sigsuspend ,
 .Nm rt_sigaction ,
 .Nm rt_sigprocmask ,
 .Nm rt_sigsuspend ,
@@ -88,7 +90,8 @@ An ignored signal does not interrupt a blocking wait.
 A caught, stopping, or terminating signal can interrupt a wait;
 an operation that has transferred data may return a partial count.
 .Pp
-CPU exceptions are different: they terminate the process directly
+Unhandled user-mode CPU exceptions are different: they terminate the
+process directly
 without consulting its signal mask or disposition.
 A handler for a fault signal can run when that signal is posted,
 but cannot recover from the corresponding CPU exception.
