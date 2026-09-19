@@ -249,7 +249,10 @@ static char *guest_text(const char *name)
 
             while (*what == ' ' || *what == '\t')
                 what++;
-            snprintf(sub, sizeof(sub), "%s/%s", dir, what);
+            if (snprintf(sub, sizeof(sub), "%s/%s", dir, what) >=
+                (int) sizeof(sub))
+                fail("the path of %s, included by %s, is longer than this "
+                     "reads", what, name);
             subtext = read_file(sub);
             if (subtext == NULL)
                 fail("cannot read %s, included by %s", what, name);
@@ -1181,8 +1184,11 @@ static void scan_includes(struct graph *g, const char *dir)
                             if (close < e) {
                                 snprintf(rel, sizeof(rel), "%.*s",
                                          (int) (close - q), q);
-                                snprintf(resolved, sizeof(resolved), "%s/%s",
-                                         dir, rel);
+                                if (snprintf(resolved, sizeof(resolved),
+                                             "%s/%s", dir, rel) >=
+                                    (int) sizeof(resolved))
+                                    fail("the path of %s under %s is longer "
+                                         "than this reads", rel, dir);
                                 normalize_path(resolved);
                                 push(&node.includes, resolved);
                             }

@@ -339,7 +339,7 @@ static void dump_set(const unsigned char *e, unsigned n)
 static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat, const char *path,
                       int depth)
 {
-    char text[400], child[300], name[800];
+    char text[1400], child[1200], name[800];
     uint32_t *cl;
     unsigned ncl = 0, i, orphans = 0, nnames = 0;
     uint32_t c = first;

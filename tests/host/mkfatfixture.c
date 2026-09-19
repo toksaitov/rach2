@@ -323,7 +323,7 @@ static long chk_walk(struct chk *c, unsigned long first, const char *name, long 
 {
     unsigned long n = first;
     long count = 0;
-    char text[300];
+    char text[900];
 
     while (n != 0) {
         uint32_t next;
@@ -447,7 +447,7 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
     unsigned char lfn_sum = 0;
     unsigned lfn_units[20 * 13];
     char longname[520];
-    char text[300], alias[16], child[300];
+    char text[900], alias[16], child[300];
     unsigned short id = ++c->chains;
 
     if (!clusters_seen || !names) {

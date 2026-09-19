@@ -981,6 +981,17 @@ struct milestone {
     int finished;
 };
 
+/* Writes `a/b` followed by `tail` to `dst`, or exits when the path does
+   not fit: a shorter path would name another file. */
+static void join_path(char *dst, size_t cap, const char *a, const char *b,
+                      const char *tail)
+{
+    if (snprintf(dst, cap, "%s/%s%s", a, b, tail) >= (int) cap) {
+        fprintf(stderr, "prosecheck: path too long: %s/%s%s\n", a, b, tail);
+        exit(2);
+    }
+}
+
 static int read_milestones(const char *devlog, struct milestone *out, int max)
 {
     DIR *dir = opendir(devlog);
@@ -1005,7 +1016,7 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
                 ok = 0;
         if (!ok)
             continue;
-        snprintf(full, sizeof(full), "%s/%s", devlog, ent->d_name);
+        join_path(full, sizeof(full), devlog, ent->d_name, "");
         if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode))
             continue;
         if (n == max) {
@@ -1013,13 +1024,18 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
                     "directories; the rest would go unchecked\n", max);
             exit(2);
         }
-        snprintf(out[n].name, sizeof(out[n].name), "%s", ent->d_name);
+        if (strlen(ent->d_name) >= sizeof(out[n].name)) {
+            fprintf(stderr, "prosecheck: milestone directory name too long: "
+                    "%s\n", ent->d_name);
+            exit(2);
+        }
+        strcpy(out[n].name, ent->d_name);
         out[n].number = (p[0] - '0') * 10 + (p[1] - '0');
         out[n].finished = 0;
-        snprintf(full, sizeof(full), "%s/%s/Readme.md", devlog, ent->d_name);
+        join_path(full, sizeof(full), devlog, ent->d_name, "/Readme.md");
         if (stat(full, &st) == 0 && S_ISREG(st.st_mode))
             out[n].finished = 1;
-        snprintf(full, sizeof(full), "%s/%s/results.md", devlog, ent->d_name);
+        join_path(full, sizeof(full), devlog, ent->d_name, "/results.md");
         if (stat(full, &st) == 0 && S_ISREG(st.st_mode))
             out[n].finished = 1;
         n++;
@@ -1160,8 +1176,8 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
         if (!seen) {
             char msg[512];
 
-            snprintf(msg, sizeof(msg), "dev-log/%s is finished and has no "
-                     "entry in the index", expected[i]);
+            snprintf(msg, sizeof(msg), "dev-log/%.127s is finished and has "
+                     "no entry in the index", expected[i]);
             spans_push(problems, strdup(msg));
         }
     }
@@ -1182,8 +1198,9 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
                 if (strcmp(entries[i], expected[i]) != 0) {
                     char msg[512];
 
-                    snprintf(msg, sizeof(msg), "the index's entry %d is %s "
-                             "where the directories give %s; the entries must "
+                    snprintf(msg, sizeof(msg), "the index's entry %d is "
+                             "%.127s where the directories give %.127s; the "
+                             "entries must "
                              "be in the milestones' numeric order, because a "
                              "reader takes the last one as the current state",
                              i + 1, entries[i], expected[i]);
@@ -1404,7 +1421,7 @@ static int selftest(void)
         char claude[1024];
         struct spans body = { NULL, 0, 0 };
 
-        snprintf(claude, sizeof(claude), "%s/CLAUDE.md", repo);
+        join_path(claude, sizeof(claude), repo, "CLAUDE.md", "");
         text = read_text(claude, &n);
         if (text != NULL) {
             prose_of(claude, text, n, 0, &body);

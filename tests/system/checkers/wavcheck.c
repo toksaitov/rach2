@@ -51,6 +51,7 @@ static int wav_open(const char *path, FILE **out, struct wav *w)
     unsigned char hdr[12];
     FILE *f = fopen(path, "rb");
 
+    memset(w, 0, sizeof(*w));
     if (f == NULL) {
         fprintf(stderr, "wavcheck: %s: cannot be read\n", path);
         return 2;

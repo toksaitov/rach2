@@ -215,6 +215,10 @@ static int monitor_open(void)
     if (monitor_fd >= 0) {
         return 0;
     }
+    if (strlen(monitor_path) >= sizeof(addr.sun_path)) {
+        printf("HARNESS: monitor path too long: %s\n", monitor_path);
+        return -1;
+    }
     for (tries = 0; tries < (int)scaled(100.0); tries++) {
         monitor_fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (monitor_fd < 0) {
@@ -222,7 +226,7 @@ static int monitor_open(void)
         }
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
-        strncpy(addr.sun_path, monitor_path, sizeof(addr.sun_path) - 1);
+        memcpy(addr.sun_path, monitor_path, strlen(monitor_path) + 1);
         if (connect(monitor_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
             break;
         }
