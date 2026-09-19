@@ -51,6 +51,7 @@ MUSL_CRYPT = $(TOP)/vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
 # pkg-config.
 CONFIG_TEXT = $(CC) $(CFLAGS)
 include ../mk/fingerprint.mk
+$(OBJECTS): | fingerprint
 
 .PHONY : all mount libc-check fuse-check
 all : $(TARGETS)

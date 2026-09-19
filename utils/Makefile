@@ -55,6 +55,7 @@ SBIN_TARGETS = $(addprefix $(BUILD)/sbin/, $(SBIN_PROGS))
 # or reinstalled compiler rebuilds every program automatically.
 CONFIG_TEXT = $(CC) $(CFLAGS) $(LINK_PRE) $(LINK_POST)
 include ../mk/fingerprint.mk
+$(TARGETS) $(SBIN_TARGETS): | fingerprint
 
 .PHONY: all clean libc-check prune-stale
 

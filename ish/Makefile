@@ -24,6 +24,7 @@ OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))
 # reinstalled compiler rebuilds every object automatically.
 CONFIG_TEXT = $(CC) $(CFLAGS) $(LDFLAGS)
 include ../mk/fingerprint.mk
+$(OBJECTS): | fingerprint
 
 .PHONY: all clean
 

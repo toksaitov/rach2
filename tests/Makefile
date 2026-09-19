@@ -48,6 +48,7 @@ TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
 CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
 include ../mk/fingerprint.mk
+$(TARGETS): | fingerprint
 
 .PHONY: all clean
 
