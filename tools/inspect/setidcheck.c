@@ -156,6 +156,14 @@ static int cmp_str(const void *a, const void *b)
     return strcmp(*(char *const *) a, *(char *const *) b);
 }
 
+/* Sorts a list's items; an empty list has no array to hand to qsort,
+   whose first argument the C library declares never null. */
+static void list_sort(struct list *l)
+{
+    if (l->n > 0)
+        qsort(l->items, (size_t) l->n, sizeof(char *), cmp_str);
+}
+
 static void list_free(struct list *l)
 {
     int i;
@@ -828,13 +836,13 @@ static void declared_paths(const struct entry *e, struct list *out)
 
     for (i = 0; i < e->n_setid; i++)
         list_push(&tmp, e->setid[i].path);
-    qsort(tmp.items, (size_t) tmp.n, sizeof(char *), cmp_str);
+    list_sort(&tmp);
     for (i = 0; i < tmp.n; i++)
         list_push(out, tmp.items[i]);
     tmp.n = 0;
     for (i = 0; i < e->n_trusted; i++)
         list_push(&tmp, e->trusted[i].path);
-    qsort(tmp.items, (size_t) tmp.n, sizeof(char *), cmp_str);
+    list_sort(&tmp);
     for (i = 0; i < tmp.n; i++)
         list_push(out, tmp.items[i]);
     free(tmp.items);
@@ -1116,7 +1124,7 @@ static void check_manifest(const char *path, const struct allow *allow,
 
     for (i = 0; i < e->n_setid; i++)
         list_push(&sorted, e->setid[i].path);
-    qsort(sorted.items, (size_t) sorted.n, sizeof(char *), cmp_str);
+    list_sort(&sorted);
     for (i = 0; i < sorted.n; i++) {
         const struct setid_decl *decl = setid_find(e, sorted.items[i]);
         const struct staged *s = staged_find(&staged, decl->path);
@@ -1142,7 +1150,7 @@ static void check_manifest(const char *path, const struct allow *allow,
 
     for (i = 0; i < e->n_trusted; i++)
         list_push(&sorted, e->trusted[i].path);
-    qsort(sorted.items, (size_t) sorted.n, sizeof(char *), cmp_str);
+    list_sort(&sorted);
     for (i = 0; i < sorted.n; i++) {
         const struct trusted_decl *t = NULL;
         const struct staged *s;
@@ -1212,7 +1220,7 @@ static void validate_table(const struct allow *allow, struct list *problems)
 
     for (i = 0; i < allow->n; i++)
         list_push(&stems, allow->entries[i].stem);
-    qsort(stems.items, (size_t) stems.n, sizeof(char *), cmp_str);
+    list_sort(&stems);
     for (i = 0; i < stems.n; i++) {
         const struct entry *e = find_entry((struct allow *) allow,
                                            stems.items[i]);
@@ -1224,7 +1232,7 @@ static void validate_table(const struct allow *allow, struct list *problems)
                  e->stem);
         for (j = 0; j < e->n_setid; j++)
             list_push(&paths, e->setid[j].path);
-        qsort(paths.items, (size_t) paths.n, sizeof(char *), cmp_str);
+        list_sort(&paths);
         for (j = 0; j < paths.n; j++) {
             const struct setid_decl *d = setid_find(e, paths.items[j]);
 
@@ -2227,7 +2235,7 @@ static void check_image(const char *image, const char *manifest,
             if (im.nodes[i].mode & S_SETID)
                 list_push(&sorted, im.nodes[i].path);
         }
-    qsort(sorted.items, (size_t) sorted.n, sizeof(char *), cmp_str);
+    list_sort(&sorted);
     for (i = 0; i < sorted.n; i++) {
         const struct node *sn = path_find(&im, sorted.items[i]);
         const struct setid_decl *decl = setid_find(e, sorted.items[i]);
@@ -2258,7 +2266,7 @@ static void check_image(const char *image, const char *manifest,
     sorted.n = 0;
     for (i = 0; i < e->n_setid; i++)
         list_push(&sorted, e->setid[i].path);
-    qsort(sorted.items, (size_t) sorted.n, sizeof(char *), cmp_str);
+    list_sort(&sorted);
     for (i = 0; i < sorted.n; i++) {
         const struct setid_decl *decl = setid_find(e, sorted.items[i]);
         const struct node *sn = path_find(&im, decl->path);
@@ -2274,7 +2282,7 @@ static void check_image(const char *image, const char *manifest,
     sorted.n = 0;
     for (i = 0; i < e->n_trusted; i++)
         list_push(&sorted, e->trusted[i].path);
-    qsort(sorted.items, (size_t) sorted.n, sizeof(char *), cmp_str);
+    list_sort(&sorted);
     for (i = 0; i < sorted.n; i++) {
         const struct trusted_decl *t = NULL;
         const struct node *tn;
@@ -2475,7 +2483,7 @@ static void some(struct list *paths, char *out, size_t out_len)
     int i, shown = paths->n < 3 ? paths->n : 3;
     size_t used = 0;
 
-    qsort(paths->items, (size_t) paths->n, sizeof(char *), cmp_str);
+    list_sort(paths);
     out[0] = '\0';
     for (i = 0; i < shown; i++)
         appendf(out, out_len, &used, "%s%s", i ? ", " : "",
@@ -2833,7 +2841,7 @@ static void check_suid_applets(const struct allow *allow, const char *path,
         appendf(declared, sizeof(declared), &used, "%s`%s`", i ? ", " : "",
                 allow->suid_applets.items[i]);
     if (extra.n > 0) {
-        qsort(extra.items, (size_t) extra.n, sizeof(char *), cmp_str);
+        list_sort(&extra);
         used = 0;
         joined[0] = '\0';
         for (i = 0; i < extra.n; i++)
@@ -2844,7 +2852,7 @@ static void check_suid_applets(const struct allow *allow, const char *path,
              declared);
     }
     if (missing.n > 0) {
-        qsort(missing.items, (size_t) missing.n, sizeof(char *), cmp_str);
+        list_sort(&missing);
         used = 0;
         joined[0] = '\0';
         for (i = 0; i < missing.n; i++)
@@ -2948,7 +2956,7 @@ static void check_suid_config(const struct allow *allow, const char *path,
                 list_push(&order, i < allow->suid_on.n
                           ? allow->suid_on.items[i]
                           : allow->suid_off.items[i - allow->suid_on.n]);
-        qsort(order.items, (size_t) order.n, sizeof(char *), cmp_str);
+        list_sort(&order);
         for (j = 0; j < order.n; j++) {
             for (i = 0; i < n_sym; i++) {
                 const char *symbol = i < allow->suid_on.n
@@ -3001,7 +3009,7 @@ static void check_inits(const struct allow *allow, const char *directory,
         list_push(&names, allow->init_strict.items[i]);
     for (i = 0; i < allow->init_shellful.n; i++)
         list_push(&names, allow->init_shellful.items[i]);
-    qsort(names.items, (size_t) names.n, sizeof(char *), cmp_str);
+    list_sort(&names);
     for (i = 0; i < names.n; i++) {
         char path[512];
         size_t len;
@@ -3289,11 +3297,10 @@ int main(int argc, char **argv)
                     "krffs/manifests\n");
             return 2;
         }
-        qsort(manifests.items, (size_t) manifests.n, sizeof(char *),
-              cmp_str);
+        list_sort(&manifests);
         for (i = 0; i < allow->n; i++)
             list_push(&stems, allow->entries[i].stem);
-        qsort(stems.items, (size_t) stems.n, sizeof(char *), cmp_str);
+        list_sort(&stems);
         for (i = 0; i < stems.n; i++) {
             char want[512];
 
@@ -3379,7 +3386,7 @@ static void trusted_lines(const struct entry *e, char *out, size_t out_len)
 
     for (i = 0; i < e->n_trusted; i++)
         list_push(&paths, e->trusted[i].path);
-    qsort(paths.items, (size_t) paths.n, sizeof(char *), cmp_str);
+    list_sort(&paths);
     out[0] = '\0';
     for (i = 0; i < paths.n; i++)
         for (j = 0; j < e->n_trusted; j++)
