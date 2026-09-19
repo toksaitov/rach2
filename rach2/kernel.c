@@ -108,12 +108,6 @@ static bool rescue_mode = false;
  * real /sbin/init is PID 1 (debug shell NOT home), init's death is a panic. */
 bool debug_shell_is_home = false;
 
-/* Line buffer the keyboard handler fills for a userspace stdin read; the
- * reader blocks until Enter completes a line. */
-#define STDIN_BUFFER_SIZE 256
-char stdin_buffer[STDIN_BUFFER_SIZE];
-volatile size_t stdin_pos = 0;
-volatile bool stdin_ready = false;
 volatile process_t *stdin_waiting_proc = NULL;
 
 static void check_timing(void);
@@ -3027,8 +3021,6 @@ void shell_reset_input(void)
     cmd_pos = 0;
     cmd_ready = false;
     stdin_waiting_proc = NULL;
-    stdin_ready = false;
-    stdin_pos = 0;
     /* A launched program re-claims the terminal (exec_program sets
      * sid/fg_pgid). One interrupts-off update so the timer-IRQ drain never sees
      * a torn owner. */

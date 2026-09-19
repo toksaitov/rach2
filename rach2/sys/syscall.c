@@ -319,14 +319,6 @@ static void kstack_free(uintptr_t top)
 /* Fork child return point in isr_handler.s */
 extern void isr_return(void);
 
-/*
- * Stdin buffer from kernel.c - used for userspace stdin reads.
- * The keyboard handler fills this buffer when a process is waiting.
- */
-#define STDIN_BUFFER_SIZE 256
-extern char stdin_buffer[STDIN_BUFFER_SIZE];
-extern volatile size_t stdin_pos;
-extern volatile bool stdin_ready;
 extern volatile process_t *stdin_waiting_proc;
 
 /*
