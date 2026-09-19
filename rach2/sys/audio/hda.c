@@ -349,14 +349,15 @@ static void hda_trace_putc(char c)
 
 static void hda_probe_log(const char *format, ...)
 {
-    char **args = (char **)&format;
+    va_list ap;
 
     if (!hda_probe_log_enabled) {
         return;
     }
 
-    ++args;
-    k_vprintf(hda_trace_putc, format, args);
+    va_start(ap, format);
+    k_vprintf(hda_trace_putc, format, ap);
+    va_end(ap);
 }
 
 /**
@@ -1455,14 +1456,11 @@ static bool hda_find_output(void)
             uint8_t wtype0 = (caps0 >> 20) & 0xF;
             if (wtype0 == HDA_WIDGET_AUDIO_OUT) {
                 hp_dac_nid = hp_conn[hp_sel];
-                hp_conn_sel_idx = hp_sel;
-            } else if (wtype0 == HDA_WIDGET_AUDIO_MIX || wtype0 == HDA_WIDGET_AUDIO_SEL) {
-                /* Keep the selected upstream widget; DAC will be configured
-                 * later opportunistically */
-                hp_conn_sel_idx = hp_sel;
-            } else {
-                hp_conn_sel_idx = hp_sel;
             }
+            /* A mixer, a selector or anything else keeps the selected
+             * upstream widget; the DAC is chosen below when none was
+             * found here. */
+            hp_conn_sel_idx = hp_sel;
         }
 
         /* If we didn't get a DAC, pick the first DAC in the list */
@@ -1758,10 +1756,11 @@ static void hda_shutdown(void)
    asked for it: the screen and the port, and neither the log nor the wire. */
 static void hda_log(const char *format, ...)
 {
-    char **args = (char **)&format;
+    va_list ap;
 
-    ++args;
-    k_vprintf(console_putc, format, args);
+    va_start(ap, format);
+    k_vprintf(console_putc, format, ap);
+    va_end(ap);
 }
 
 static const char *hda_widget_type_name(uint8_t type)

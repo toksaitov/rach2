@@ -4266,13 +4266,9 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_blksize = 4096;
             kst->st_dev = DEVFS_FSID;
         }
-    } else if (entry->type == FD_TYPE_PTM) {
-        /* A pty master (/dev/ptmx): a character device. */
-        kst->st_mode = 020666; /* S_IFCHR | 0666 */
-        kst->st_nlink = 1;
-        kst->st_blksize = 4096;
     } else {
-        /* A framebuffer/mouse fd: report a character device, size 0. */
+        /* A pty master, a framebuffer or a mouse fd: a character device,
+         * size 0. */
         kst->st_mode = 020666; /* S_IFCHR | 0666 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
