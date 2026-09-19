@@ -73,10 +73,7 @@ ELFCHECK = ../build/tools/inspect/elfcheck
 
 $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 	@mkdir -p $(dir $@)
-	@if [ ! -x $(ELFCHECK) ] || [ ../tools/inspect/elfcheck.c -nt $(ELFCHECK) ]; then \
-	    mkdir -p $(dir $(ELFCHECK)); \
-	    cc -O2 -Wall -Wextra -o $(ELFCHECK) ../tools/inspect/elfcheck.c; \
-	fi
+	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@ ...'; \
 	$(LD) $(LDFLAGS) -o "$$tmp" $^ && \

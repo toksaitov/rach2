@@ -123,7 +123,7 @@ fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
-hr "2/20 cppcheck (c89, warning+style)"
+hr "2/20 cppcheck (c89; warning, style, performance, portability)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
