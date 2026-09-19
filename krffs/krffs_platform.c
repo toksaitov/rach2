@@ -123,10 +123,8 @@ void krffs_get_time_of_day(struct timeval *time_of_day)
     SystemTimeToFileTime(&system_time, &file_time);
 
     ULARGE_INTEGER time;
-    time.LowPart =
-        file_time.dwLowDateTime;
-    time.HighPart =
-        file_time.dwHighDateTime;
+    time.QuadPart =
+        ((uint64_t) file_time.dwHighDateTime << 32) | file_time.dwLowDateTime;
 
     time_of_day->tv_sec =
         (long) ((time.QuadPart - epoch) / 10000000L);
