@@ -10,3 +10,4 @@ NAME: loopctl - attach a file to a loop device, detach one, or list them. Source
 * While attached, the file cannot be written or truncated (EBUSY), and on the memory root it cannot be unlinked or renamed over either; its mount cannot be unmounted until the device is detached; a stick that is pulled takes its loop device with it.
 * EXAMPLE: `loopctl attach /demo/ext2.img` prints nothing; `loopctl` lists `loop0`; `mount -t ext2 /dev/loop0 /mnt`; `umount /mnt; loopctl detach 0`. `tests/run loopdev` runs the attach, mount, write, unmount and detach.
 * SEE ALSO: mount(8), disk(7).
+* Found at the proofreading: ELOOP counts the links to the backing device (block_depth), so a loop device may stand on a disk once, and an image on the RAM root allows two nested loop devices.

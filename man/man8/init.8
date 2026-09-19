@@ -30,8 +30,10 @@ No shell fallback is compiled into this build.
 Starts the console login and supervises Dropbear.
 On a boot with
 .Ql rach2.ip=none ,
-it configures the network as described in
-.Xr netup 8 .
+it runs BusyBox's
+.Ql ifup -a
+to configure the network; see
+.Xr ifup 1 .
 .It Sy init-recovery
 Provides the network and service functions of the metal build
 and the recovery duties.

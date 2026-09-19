@@ -26,7 +26,7 @@ Exactly one disk must have the signature.
 Growth is limited by the next partition's start, the end of the disk,
 or the MBR limit of 2^32 sectors, whichever comes first.
 A logical partition after the entry stops the growth, because its
-records lie where the grown entry would write.
+records lie in the space the partition would occupy after growth.
 An entry already at that size is left unchanged.
 Nothing is moved and no other partition is changed.
 .Pp
@@ -45,7 +45,9 @@ Run
 .Ql e2fsck -f -n
 on the volume.
 This check writes nothing.
-A nonzero status stops the run and requests repair first.
+If it returns a nonzero status,
+.Nm
+exits and reports that the volume must be repaired first.
 .It
 Run
 .Ql e2fsck -f -p .
@@ -66,12 +68,14 @@ and the resize as
 A run stopped after changing the entry can be started again;
 it finds the entry already at its new size and continues with the checks
 and resize.
-A damaged volume is not repaired by this tool.
-The read-only check stops the run and requests repair first.
+A damaged volume is not repaired by this tool: on a nonzero status from
+the read-only check,
+.Nm
+exits and reports that the volume must be repaired first.
 .Pp
 Before reading the disks,
 .Nm
-refuses a machine whose
+exits if
 .Ql MemTotal
 is less than 7 MiB.
 The file system checker and resizer keep the bitmaps in memory.
@@ -83,8 +87,9 @@ from
 .Pa /proc/disk
 around the table change and resize.
 .Sh EXIT STATUS
-Refusals and failed operations exit with status 1.
-Invalid syntax exits with status 2 and prints:
+.Nm
+exits with status 1 if it rejects the operation or an operation fails.
+For invalid syntax, it exits with status 2 and prints:
 .Dl usage: growroot MBRID=ID,N [--measure]
 .Sh EXAMPLES
 Grow primary entry 3 on the disk with MBR signature 1acef00d:

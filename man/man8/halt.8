@@ -76,7 +76,8 @@ without going through init.
 .It Fl n
 Omit the applet's sync call.
 .It Fl w
-Only write a wtmp record.
+Return successfully without stopping the machine; no wtmp record is
+written on Rach2, whose musl has empty wtmp functions.
 This option is listed for
 .Nm halt .
 .El

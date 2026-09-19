@@ -15,7 +15,9 @@
 .Nm
 reads the ext2 superblock and descriptors from
 .Ar VOLUME
-and computes the grown volume's geometry as resize2fs does.
+and computes the grown volume's geometry as resize2fs does, for the one
+layout it accepts: 4096-byte blocks, a resize inode with enough reserved
+descriptor blocks, no RAID stride, and the bitmap layout it checks.
 .Ar VOLUME
 is a file containing the volume, either an image or a partition copied
 from a disk.
@@ -32,14 +34,16 @@ The ranges are followed by
 .Ql total SECTORS
 and the grown volume's geometry.
 .Pp
-The host recovery-plan tool includes this program's source, so the plan
-and recovery use the same calculation.
-The machine helper compares the calculated list with the supplied ranges
+The host and the recovery image both compile
+.Pa utils/growset.c ,
+so the plan and recovery use the same calculation.
+.Pa tools/dev/machine_grow.sh
+compares the calculated list with the supplied ranges
 before saving or writing.
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl -save
-Include the full seed overwrite.
+Include all sectors of the input volume in the calculated ranges.
 The input file's length must match the volume size given by the
 superblock's block count.
 .It Fl -ranges

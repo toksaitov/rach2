@@ -114,8 +114,9 @@ The file is already attached, even through another hard link;
 the device has a mount or a held buffer;
 or a detach was attempted while an attachment was in progress.
 .It Er ELOOP
-The file is on a loop-mounted volume.
-A chain may contain only one loop device.
+The chain of devices under the file is too deep: the kernel counts the
+links to the backing device, so one loop device may stand on a disk,
+while an image on the RAM root allows two nested loop devices.
 .It Er EINVAL
 The file length is not a whole number of sectors,
 the device number is outside 0 through 3,
