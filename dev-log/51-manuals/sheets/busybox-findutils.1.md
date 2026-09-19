@@ -2,7 +2,7 @@
 
 NAME: busybox-findutils - find, grep and xargs: the BusyBox applets of its `findutils` directory as built for Rach2 (BusyBox 1.36.1, vendor/busybox/rach2.config), one family page with an alias for each applet.
 
-The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `find`, `grep`, `egrep`, `fgrep`, `xargs` as built.
+The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `find`, `grep`, `egrep`, `fgrep`, `xargs` as built. Found at the writing: a failed `find` action does not always stop the file's evaluation; it continues through `-o`.
 
 
 The usage text BusyBox carries, per applet:
