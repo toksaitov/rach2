@@ -22,6 +22,7 @@
 #include "../../io/poll.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
+#include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"
 
 /* The live sockets, each allocated from the heap when opened and freed
@@ -513,16 +514,18 @@ static int send_space_ready(void *arg)
 }
 
 /**
- * The reason a connection ended, as a negative errno, or -1 when none was
- * recorded.
+ * The reason a connection ended, as a negative errno, or `fallback` when
+ * none was recorded.
  *
  * A read or a write of a connection that is gone used to answer a bare -1,
  * which the C library reads as `EPERM`: a program woken because this machine's
  * address changed under it was told it lacked permission. The reason is in the
  * block already, put there by whatever ended the connection, so it is what the
- * call returns.
+ * call returns; a connection that ended without one, shut down by this end,
+ * answers what POSIX names for it, `-EPIPE` to a sender and `-ECONNRESET` to
+ * a reader.
  */
-static int tcp_dead_error(struct tcb *tcb)
+static int tcp_dead_error(struct tcb *tcb, int fallback)
 {
     if (tcb && tcb->so_error != 0) {
         int err = (int)tcb->so_error;
@@ -530,7 +533,7 @@ static int tcp_dead_error(struct tcb *tcb)
         tcb->so_error = 0;
         return -err;
     }
-    return -1;
+    return fallback;
 }
 
 /**
@@ -554,7 +557,7 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
         if (sent == -1) {
             /* The bare refusal a closed block gives, turned into the reason it
                closed. Anything else negative already names itself. */
-            return tcp_dead_error(sock->tcb);
+            return tcp_dead_error(sock->tcb, -EPIPE);
         }
         if (sent != 0 || len == 0) {
             return sent; /* queued some, an error (< 0), or a 0-length request */
@@ -562,7 +565,7 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
         /* The ring is full and the request is nonzero. */
         if (!sock->tcb || (sock->tcb->state != TCP_ESTABLISHED &&
                            sock->tcb->state != TCP_CLOSE_WAIT)) {
-            return tcp_dead_error(sock->tcb);
+            return tcp_dead_error(sock->tcb, -EPIPE);
         }
         if (nonblock) {
             return SOCK_EAGAIN;
@@ -665,7 +668,7 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0 && !tcb->fin_received && tcb->state == TCP_CLOSED) {
-        return tcp_dead_error(tcb); /* reset or closed with no data */
+        return tcp_dead_error(tcb, -ECONNRESET); /* reset or closed with no data */
     }
     if (avail == 0) return 0;   /* EOF (FIN, no buffered data) */
 
@@ -690,13 +693,14 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
     struct tcb *tcb;
     uint32_t avail, copy_len;
 
-    if (!sock || !sock->tcb) return -1;
+    if (!sock) return -1;
+    if (!sock->tcb) return 0; /* detached by a shutdown: end of input, as the blocking read says */
     tcb = sock->tcb;
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
         if (tcb->fin_received)        return 0;            /* EOF */
-        if (tcb->state == TCP_CLOSED) return tcp_dead_error(tcb);
+        if (tcb->state == TCP_CLOSED) return tcp_dead_error(tcb, -ECONNRESET);
         return SOCK_EAGAIN;                                /* no data yet */
     }
 

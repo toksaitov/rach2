@@ -1,0 +1,200 @@
+.Dd September 19, 2026
+.Dt READ 2
+.Os
+.Sh NAME
+.Nm read ,
+.Nm readv
+.Nd read bytes from a descriptor
+.Sh SYNOPSIS
+.In unistd.h
+.Ft ssize_t
+.Fn read "int fd" "void *buf" "size_t count"
+.In sys/uio.h
+.Ft ssize_t
+.Fn readv "int fd" "const struct iovec *iov" "int iovcnt"
+.Sh DESCRIPTION
+.Fn read
+reads up to
+.Fa count
+bytes from
+.Fa fd
+into
+.Fa buf .
+A successful call may return fewer bytes than requested.
+A zero-length read checks that the descriptor exists, then returns zero
+without inspecting the buffer or checking the descriptor's read mode.
+.Pp
+Regular files are read at the open-file description's offset.
+A positive result advances that offset by the number of bytes read.
+Descriptors shared through duplication or fork share the offset.
+Directories cannot be read with these calls: a nonzero read returns
+.Er EBADF .
+Use
+.Xr getdents64 2
+to read directory entries.
+.Pp
+A pipe read returns the available bytes, up to the requested count.
+An empty pipe waits while a writer remains open and returns zero after
+the last writer closes.
+The console and pseudoterminal slaves use the terminal line discipline:
+canonical input waits for a line; raw input follows the
+.Dv VMIN
+setting.
+A pseudoterminal master reads output from the slave and returns zero
+after all slaves close and the buffered output is drained.
+A slave drains buffered input after its master closes, then returns zero.
+.Pp
+A background process reading its controlling terminal receives
+.Dv SIGTTIN .
+If that signal is blocked or ignored, the read fails with
+.Er EIO .
+When the caller owns the framebuffer, a console read instead returns
+raw keyboard scancodes without waiting.
+.Pp
+A stream socket returns buffered bytes and returns zero after the peer's
+FIN once its buffered data is exhausted.
+A datagram read consumes one message and discards any bytes beyond the
+buffer capacity.
+A zero-byte datagram returns zero without indicating end of input.
+Protocol-bearing raw sockets can also be read; an ioctl-only socket
+returns
+.Er EOPNOTSUPP .
+.Pp
+.Dv O_NONBLOCK
+makes an empty pipe, terminal, pseudoterminal, or socket return
+.Er EAGAIN
+instead of waiting, unless it is at end of input.
+A signal can interrupt a wait with
+.Er EINTR .
+Files under
+.Pa /proc
+read from the snapshot made when opened.
+Other devices use their own read operation.
+Mouse reads return whole packets without waiting and return zero when
+the buffer cannot hold one packet.
+.Ss Scatter reads
+.Fn readv
+reads into the
+.Fa iovcnt
+buffers described by
+.Fa iov :
+.Bd -literal -offset indent
+struct iovec {
+        void *iov_base;
+        size_t iov_len;
+};
+.Ed
+.Pp
+Buffers are filled in order; zero-length entries are skipped.
+The count must be between 0 and 1024, and the sum of the lengths must
+not exceed 2147483647.
+The kernel checks the whole vector list and write access to every
+nonempty destination before taking input.
+An invalid destination therefore fails before consuming input.
+A list requesting no bytes still checks the descriptor and returns zero
+only if it exists.
+.Pp
+The first nonempty buffer uses an ordinary read, which may wait.
+For a regular file, reading continues through successive buffers until
+a short read or error.
+For a pipe, stream socket, device, or
+.Pa /proc
+file, later buffers are read only while input can be obtained without waiting.
+A terminal is read only once, into the first nonempty buffer.
+.Pp
+For a
+.Dv SOCK_DGRAM
+socket, exactly one message is taken into a kernel buffer before it is
+scattered across the destinations.
+Bytes beyond the combined capacity are discarded.
+If a destination overwrites the caller's own vector list, later copies
+are checked again; a failed copy stops the transfer and returns the
+number already copied.
+The consumed message is not restored.
+.Pp
+Musl's buffered input uses
+.Fn readv
+and handles short returns by reading again.
+The i386 system call numbers are 3 for
+.Nm read
+and 145 for
+.Nm readv .
+.Sh RETURN VALUES
+On success, these functions return the number of bytes read.
+Zero denotes end of a file or stream, a zero-length request, an empty
+datagram, or a device's empty result.
+.Fn readv
+returns the total across the buffers; an error after a positive partial
+transfer returns that total.
+On failure they return -1 and set
+.Va errno .
+The raw kernel calls return a negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/readvmusl.c
+reads a file containing
+.Ql AAAABBBBCCCC
+into three four-byte buffers with
+.Fn readv .
+It requires a return of 12 and the contents
+.Ql AAAA ,
+.Ql BBBB ,
+and
+.Ql CCCC
+in that order.
+It also checks pipe and datagram reads and that an invalid later buffer
+leaves input queued.
+.Sh ERRORS
+.Bl -tag -width ECONNREFUSED
+.It Er EAGAIN
+A nonblocking input would have to wait.
+.It Er EBADF
+The descriptor is invalid, is not open for reading, has no read
+operation, or refers to a directory.
+.It Er ECONNREFUSED
+A stream connection was refused.
+.It Er ECONNRESET
+A stream connection was reset.
+.It Er EFAULT
+The buffer or vector list cannot be accessed as required, or there is
+no current process.
+.It Er EFBIG
+An ext2 read requires a block beyond the file system's addressing limit.
+.It Er EINTR
+A signal interrupted a wait, or a background terminal read posted
+.Dv SIGTTIN .
+.It Er EINVAL
+The vector count is outside 0 through 1024, the total vector length
+exceeds 2147483647, or a file system has no read operation.
+A raw disk window also returns this error when the offset or count is
+not a multiple of 512 bytes.
+.It Er EIO
+A file system or device read failed, a device was removed, or the
+random device has no usable seed.
+A background terminal read also gives this error when
+.Dv SIGTTIN
+is blocked or ignored.
+.It Er ENETRESET
+A stream connection was ended by a network configuration change.
+.It Er ENXIO
+A raw disk window is not present.
+.It Er EOPNOTSUPP
+The descriptor is an ioctl-only socket.
+.It Er ECONNRESET
+A closed stream has no recorded error to report.
+.It Er EPERM
+A loop device node was read directly.
+.It Er ETIMEDOUT
+A stream connection timed out.
+.El
+.Pp
+A raw disk read also propagates the block device's error when no sector
+has yet been returned.
+.Sh SEE ALSO
+.Xr fcntl 2 ,
+.Xr getdents64 2 ,
+.Xr lseek 2 ,
+.Xr pipe 2 ,
+.Xr poll 2 ,
+.Xr recv 2 ,
+.Xr write 2

@@ -44,6 +44,7 @@ typedef unsigned char uint8_t;
 #define EDESTADDRREQ   89
 
 #define SC_RECVFROM 12
+#define SC_SHUTDOWN 13
 
 #define AF_INET     2
 #define SOCK_STREAM 1
@@ -75,6 +76,7 @@ typedef unsigned char uint8_t;
 #define CLOSED_PORT      7300
 
 #define EADDRINUSE  98
+#define EPIPE       32
 #define EINPROGRESS 115
 #define EISCONN     106
 
@@ -1062,6 +1064,26 @@ static void tcp_ports(void)
     if (socketcall(SC_CONNECT, args) != -EADDRINUSE)
         fail("a repeated local-remote pairing was not refused");
     sys_close(second);
+
+    /* A stream this end shut down has no connection to send on and no reason
+     * recorded for it: the send is EPIPE, as POSIX names it, and a read is
+     * the end of input, not the bare refusal that reads as EPERM. */
+    args[0] = (uint32_t)cs;
+    args[1] = 1; /* SHUT_WR */
+    if (socketcall(SC_SHUTDOWN, args) != 0)
+        fail("shutdown of the client");
+    args[0] = (uint32_t)cs;
+    args[1] = (uint32_t)"x";
+    args[2] = 1;
+    args[3] = 0;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_SENDTO, args) != -EPIPE)
+        fail("a send after shutdown is not EPIPE");
+    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)
+        fail("nonblocking after shutdown");
+    if (sys_read(cs, sa, 1) != 0)
+        fail("a read after shutdown is not the end of input");
 
     sys_close(as);
     sys_close(cs);

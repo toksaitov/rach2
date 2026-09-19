@@ -1,0 +1,187 @@
+.Dd September 19, 2026
+.Dt RECV 2
+.Os
+.Sh NAME
+.Nm recv ,
+.Nm recvfrom ,
+.Nm recvmsg
+.Nd receive socket data
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft ssize_t
+.Fn recv "int fd" "void *buf" "size_t len" "int flags"
+.Ft ssize_t
+.Fn recvfrom "int fd" "void *restrict buf" "size_t len" "int flags" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
+.Ft ssize_t
+.Fn recvmsg "int fd" "struct msghdr *msg" "int flags"
+.Sh DESCRIPTION
+.Fn recv
+and
+.Fn recvfrom
+copy up to
+.Fa len
+bytes from socket
+.Fa fd
+to
+.Fa buf .
+A stream receive returns available bytes and may return less than requested.
+After a peer's FIN, buffered data is returned before end of input.
+A datagram receive takes one message and discards bytes beyond the
+buffer capacity.
+A zero-length datagram is consumed and returns zero.
+A zero-capacity datagram receive also consumes the message.
+.Pp
+An empty receive waits unless
+.Dv MSG_DONTWAIT
+is set in
+.Fa flags
+or the descriptor has
+.Dv O_NONBLOCK
+set.
+These nonblocking forms return
+.Er EAGAIN
+when no input is available and the stream has not ended.
+A signal may interrupt a wait with
+.Er EINTR .
+Other flag bits are ignored:
+.Dv MSG_PEEK
+does not preserve the message,
+.Dv MSG_WAITALL
+does not wait to fill the buffer, and
+.Dv MSG_TRUNC
+does not request the original message length.
+.Ss Source addresses
+.Fn recvfrom
+reports a datagram's sender when both
+.Fa addr
+and
+.Fa addrlen
+are non-null.
+Before the call,
+.Pf * Fa addrlen
+is the buffer capacity in bytes.
+The address is truncated to that capacity and the full address length
+is written to
+.Pf * Fa addrlen .
+If either pointer is null, no address is returned.
+On a stream, supplied address buffers are checked but no source address
+or length is written.
+If receiving the data fails, no source address or length is written.
+.Pp
+An IPv4 socket returns a 16-byte
+.Vt sockaddr_in
+with its sender's address and port in network byte order.
+A packet socket returns a 20-byte
+.Vt sockaddr_ll
+with the sender's hardware address, protocol, interface, hardware type,
+and packet type.
+Packet-socket data omits the Ethernet header.
+A protocol-bearing raw ICMP socket returns the whole IPv4 datagram.
+An ioctl-only raw socket has no receive operation.
+.Ss Scatter receives
+.Fn recvmsg
+supports
+.Dv SOCK_DGRAM
+sockets, including packet sockets.
+It rejects stream and
+.Dv SOCK_RAW
+sockets.
+.Fa msg Ns ->msg_iov
+and
+.Fa msg Ns ->msg_iovlen
+describe up to 1024 buffers, filled in order from exactly one datagram.
+Any remainder beyond their capacity is discarded.
+Each nonempty buffer must have at most 2147483647 bytes.
+A list with no capacity still consumes a datagram.
+.Pp
+.Fa msg Ns ->msg_name
+receives the sender in the same form as
+.Fn recvfrom .
+.Fa msg Ns ->msg_namelen
+is the input capacity and receives the full address length even when
+the address is truncated.
+It receives zero when
+.Va msg_name
+is null.
+The message header, vector entries, nonempty data buffers, and the
+portion of the address buffer to be written are checked before input
+is consumed.
+.Pp
+No ancillary data is supplied.
+The control buffer is unused and
+.Fa msg Ns ->msg_controllen
+is set to zero.
+.Fa msg Ns ->msg_flags
+is also set to zero, even when data is truncated.
+.Ss Kernel interface
+These operations use
+.Xr socketcall 2
+(i386 system call 102): operation 10 for
+.Nm recv ,
+12 for
+.Nm recvfrom ,
+and 17 for
+.Nm recvmsg .
+Musl implements
+.Fn recv
+through
+.Fn recvfrom
+with null address pointers.
+The direct kernel operation 10 accepts streams and datagrams but rejects
+all raw sockets; the musl wrapper can receive raw ICMP data through
+operation 12.
+.Sh RETURN VALUES
+On success, these functions return the bytes copied.
+Zero can mean stream end of input, an empty datagram, or a receive with
+no buffer capacity.
+On failure they return -1 and set
+.Va errno .
+The raw kernel operations return a negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+sends
+.Ql loopback-udp
+to a UDP socket through
+.Li 127.0.0.1
+and receives it with
+.Fn recvfrom .
+It checks the payload and the reported source address and port.
+.Sh ERRORS
+.Bl -tag -width ECONNREFUSED
+.It Er EAGAIN
+No message or stream data is available for a nonblocking receive.
+.It Er ECONNREFUSED
+A stream connection was refused.
+.It Er ECONNRESET
+A stream connection was reset.
+.It Er EFAULT
+The socketcall arguments, data buffers, message header, vector list,
+or address buffers cannot be accessed as required.
+For recv and recvfrom, a length exceeding 2147483647 also gives this error;
+recvmsg gives it for an individual buffer exceeding that size.
+.It Er EINTR
+A signal interrupted the wait.
+.It Er EINVAL
+.Fa msg Ns ->msg_iovlen
+exceeds 1024.
+.It Er ENETRESET
+A stream connection was ended by a network configuration change.
+.It Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Er EOPNOTSUPP
+A raw socket was passed to kernel operation 10, an ioctl-only socket
+was passed to recvfrom, or a socket other than
+.Dv SOCK_DGRAM
+was passed to recvmsg.
+.It Er ECONNRESET
+A closed stream has no recorded error to report.
+.It Er ETIMEDOUT
+A stream connection timed out.
+.El
+.Sh SEE ALSO
+.Xr read 2 ,
+.Xr send 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2

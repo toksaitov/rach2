@@ -1,0 +1,180 @@
+.Dd September 19, 2026
+.Dt SEND 2
+.Os
+.Sh NAME
+.Nm send ,
+.Nm sendto
+.Nd send data on a socket
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft ssize_t
+.Fn send "int fd" "const void *buf" "size_t len" "int flags"
+.Ft ssize_t
+.Fn sendto "int fd" "const void *buf" "size_t len" "int flags" "const struct sockaddr *addr" "socklen_t addrlen"
+.Sh DESCRIPTION
+These functions send
+.Fa len
+bytes from
+.Fa buf
+on socket
+.Fa fd .
+Musl implements
+.Fn send
+as
+.Fn sendto
+with a null destination and zero address length.
+Both therefore use subcall 11 of i386
+.Xr socketcall 2 ,
+system call 102.
+The separate kernel
+.Nm send
+operation, subcall 9, accepts only stream sockets.
+.Ss Streams
+A stream sends to its connected peer.
+.Fn sendto
+ignores
+.Fa addr
+and
+.Fa addrlen
+for a stream.
+A send copies as many bytes as fit into the send buffer and may return
+a short count.
+When the buffer is full, a nonzero send waits for space unless
+.Dv MSG_DONTWAIT
+is set in
+.Fa flags
+or the descriptor has
+.Dv O_NONBLOCK .
+Other flag bits are ignored.
+A signal can interrupt the wait.
+.Pp
+A stream must be in the established or close-wait state.
+If it cannot send, a pending TCP error is returned and cleared.
+With no pending error, for a stream this end shut down, the call fails
+with
+.Er EPIPE .
+No SIGPIPE is generated.
+.Ss Datagrams
+For an IPv4 datagram socket,
+.Fa addr
+specifies the destination address and port in a
+.Vt sockaddr_in .
+If the destination pointer is null or
+.Fa addrlen
+is zero, the socket must have a peer set by
+.Xr connect 2 .
+An explicit destination overrides that peer for this send.
+A supplied address must contain at least its first eight bytes.
+The port and address are in network byte order.
+Destinations in 127/8 are replaced by the kernel's local IPv4 address.
+.Pp
+An unbound socket is first assigned an ephemeral source port.
+A datagram may contain at most 1472 bytes; an empty datagram is valid.
+The limited broadcast and subnet broadcast addresses require
+.Dv SO_BROADCAST .
+Flags do not affect datagram sends.
+.Pp
+The stack does not fragment outgoing datagrams.
+An unresolved next-hop hardware address causes an ARP request and the
+current datagram is discarded, although the send reports success.
+.Ss Raw and packet sockets
+Flags do not affect raw or packet sends.
+A raw ICMP send requires an explicit IPv4 destination.
+The caller supplies the ICMP message, including its checksum; the
+kernel adds the IPv4 header and uses the socket's
+.Dv IP_TTL .
+The syscall accepts at most 1500 message bytes, subject to the link
+layer's limit on the resulting IPv4 datagram.
+An ioctl-only raw socket cannot send.
+.Pp
+An
+.Dv AF_PACKET
+datagram send requires a 20-byte
+.Vt sockaddr_ll
+with a six-byte destination hardware address.
+The protocol must be IPv4 or ARP; a zero protocol uses the socket's
+protocol.
+A nonzero interface index selects a registered interface.
+Index zero uses the socket's bound interface, or the first interface
+when none is bound.
+The payload must contain 1 through 1500 bytes.
+The kernel adds the Ethernet header.
+.Sh RETURN VALUES
+On success, these functions return the number of bytes accepted.
+A stream may return fewer bytes than requested.
+A successful datagram send returns
+.Fa len .
+Success does not establish delivery to the peer.
+On failure they return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+binds a UDP socket, sends a message to that port at 127.0.0.1 with
+subcall 11, then receives and compares the payload.
+It also checks an empty datagram.
+.Sh ERRORS
+.Bl -tag -width "[EDESTADDRREQ]"
+.It Bq Er EACCES
+A UDP broadcast was attempted without
+.Dv SO_BROADCAST .
+.It Bq Er EAFNOSUPPORT
+A raw ICMP destination has an address family other than
+.Dv AF_INET .
+.It Bq Er EAGAIN
+A nonblocking stream send found no buffer space, or an ephemeral UDP
+port could not be assigned.
+.It Bq Er ECONNREFUSED
+A pending TCP error reports that the connection was refused.
+.It Bq Er ECONNRESET
+A pending TCP error reports that the connection was reset.
+.It Bq Er EDESTADDRREQ
+An unconnected UDP socket was given no destination, or a raw ICMP
+socket was given no destination or fewer than eight address bytes.
+.It Bq Er EFAULT
+The payload or required address cannot be read, the length exceeds
+the signed 32-bit range, or the
+.Fn socketcall
+argument array cannot be read.
+.It Bq Er EINTR
+A signal interrupted a stream send waiting for buffer space.
+.It Bq Er EINVAL
+A supplied UDP address is shorter than eight bytes, a packet address
+is shorter than 20 bytes, its hardware-address length is not six, or
+its effective protocol is neither IPv4 nor ARP.
+.It Bq Er EMSGSIZE
+A UDP payload exceeds 1472 bytes, a raw ICMP or packet payload exceeds
+1500 bytes, a packet payload is empty, or the resulting IPv4 datagram
+exceeds the link limit.
+.It Bq Er ENETDOWN
+A packet send has no interface through which to transmit.
+.It Bq Er ENETRESET
+A pending TCP error reports that a local address change ended the
+connection.
+.It Bq Er ENETUNREACH
+No route exists for an IPv4 datagram.
+.It Bq Er ENOBUFS
+The local IPv4 delivery queue is full or the link layer cannot accept
+an IPv4 datagram.
+.It Bq Er ENODEV
+A packet destination specifies an unregistered interface index.
+.It Bq Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Bq Er EOPNOTSUPP
+The socket is ioctl-only, subcall 9 was used on a non-stream socket,
+or a raw ICMP send requested a broadcast destination.
+.It Bq Er EPIPE
+A stream is not in a sending state and has no pending TCP error.
+.It Bq Er ETIMEDOUT
+A pending TCP error reports that the connection timed out.
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr recv 2 ,
+.Xr setsockopt 2 ,
+.Xr shutdown 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2
