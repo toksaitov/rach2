@@ -772,6 +772,13 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 # tier is the system suites that between them exercise every subsystem, chosen
 # to finish in under two minutes. The runner owns the registry, so this holds
 # no suite knowledge of its own.
+# The slow analysers (tools/verify/analyze.sh): -fanalyzer, the exhaustive
+# cppcheck, clang-tidy and the linker's dead-code report. Run at a
+# milestone's close; the style suite keeps to the fast checks.
+.PHONY: analyze
+analyze:
+	sh tools/verify/analyze.sh
+
 test:
 	@./tests/run style
 	@./tests/run host

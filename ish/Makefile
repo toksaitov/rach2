@@ -10,6 +10,9 @@ include ../mk/build.mk
 CC := $(CROSS_CC)
 
 CFLAGS = -m32 -ffreestanding $(DEPFLAGS)
+# Flags an analysis adds from the command line (tools/verify/analyze.sh).
+EXTRA ?=
+CFLAGS += $(EXTRA)
 LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000 -Wl,--build-id=none
 
 # Everything builds out of tree under $(BUILD) (build/ish/, from mk/build.mk):

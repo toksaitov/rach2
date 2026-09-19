@@ -31,6 +31,9 @@ CRTN    := $(PREFIX)/lib/crtn.o
 
 CFLAGS  = -m32 -static -nostdlib -nostartfiles -isystem $(PREFIX)/include \
           -O2 -Wall -Wextra $(DEPFLAGS)
+# Flags an analysis adds from the command line (tools/verify/analyze.sh).
+EXTRA ?=
+CFLAGS += $(EXTRA)
 # crt1/crti come before the program objects; libc + libgcc + crtn after.
 LINK_PRE  = $(CRT1) $(CRTI)
 LINK_POST = $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN) -Wl,-z,noexecstack

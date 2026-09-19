@@ -35,7 +35,9 @@ include ../mk/warnings.mk
 CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -Wdeclaration-after-statement $(KWARN) $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
 # -z noseparate-code: newer binutils split read-only data into a third
 # PT_LOAD by default; the loader and elfcheck take the two-segment layout.
-LDFLAGS = -m elf_i386 -z noseparate-code -T $(LINKER_SCRIPT).ld
+LDFLAGS = -m elf_i386 -z noseparate-code -T $(LINKER_SCRIPT).ld $(LDEXTRA)
+# Linker flags an analysis adds from the command line (tools/verify/analyze.sh).
+LDEXTRA ?=
 
 # Harness build (`make HARNESS=1`): the kernel reports each process exit status
 # to QEMU's isa-debug-exit device so the test harness reads a real exit code.
