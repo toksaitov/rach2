@@ -36,9 +36,11 @@ rexpected=$(grep -cv '^#' man/recovery | tr -d ' ')
 [ "$pages" -gt 0 ] || fail "no rendered page under $MANDIR"
 # Every staged page by its own name, then every alias of the table against
 # its target's page, each loop one line typed at the shell; the recovery
-# boot has only the pages.
+# boot has only the pages. A mismatch prints `BAD /...`, which the run's
+# never-pattern refuses; the alias line spells its slash in quotes so that
+# the console's echo of the typed command does not contain the pattern.
 READPAGES="for f in \$M/cat*/*; do b=\${f##*/}; man \${b##*.} \${b%.*} > /tmp/p; gunzip -c \$f > /tmp/q; cmp -s /tmp/p /tmp/q && test -s /tmp/p || echo BAD \$f; n=\$((n+1)); done"
-READALIASES="while read -r a s t; do case \$a in '#'*|'') continue;; esac; man \$s \$a > /tmp/p; gunzip -c \$M/cat\$s/\$t.\$s > /tmp/q; cmp -s /tmp/p /tmp/q && test -s /tmp/p || echo BAD \$a; n=\$((n+1)); done < \$M/aliases"
+READALIASES="while read -r a s t; do case \$a in '#'*|'') continue;; esac; man \$s \$a > /tmp/p; gunzip -c \$M/cat\$s/\$t.\$s > /tmp/q; cmp -s /tmp/p /tmp/q && test -s /tmp/p || echo BAD \"/\"alias/\$a; n=\$((n+1)); done < \$M/aliases"
 
 [ -s "$PAGE" ] || fail "the rendered page $PAGE is missing or empty"
 # The lines are matched as fixed text: the harness's expect takes a regular
