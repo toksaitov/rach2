@@ -1151,6 +1151,10 @@ static void check_manifest(const char *path, const struct allow *allow,
         for (j = 0; j < e->n_trusted; j++)
             if (strcmp(e->trusted[j].path, sorted.items[i]) == 0)
                 t = &e->trusted[j];
+        if (t == NULL) {
+            fprintf(stderr, "check-setid: %s is sorted but not declared\n", sorted.items[i]);
+            exit(2);
+        }
         s = staged_find(&staged, t->path);
         if (s == NULL && strcmp(t->verb, "optional-file") == 0) {
             continue; /* a build without the key it would have staged */
@@ -2278,6 +2282,10 @@ static void check_image(const char *image, const char *manifest,
         for (j = 0; j < e->n_trusted; j++)
             if (strcmp(e->trusted[j].path, sorted.items[i]) == 0)
                 t = &e->trusted[j];
+        if (t == NULL) {
+            fprintf(stderr, "check-setid: %s is sorted but not declared\n", sorted.items[i]);
+            exit(2);
+        }
         tn = path_find(&im, t->path);
         if (tn == NULL && strcmp(t->verb, "optional-file") == 0) {
             continue; /* a build that had no key to stage; see the parser */
