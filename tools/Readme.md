@@ -158,7 +158,7 @@ prefix works; one built for another target does not.
 * Run scoped cppcheck with `verify/cppcheck.suppress`.
 * Run ShellCheck on project shell scripts.
 * Check source conventions such as ASCII text, C comment form, header guards, and marked idle waits.
-* Require clang-format on the new-code set and report legacy differences as advice.
+* Require clang-format on every in-house C file, judged by the clang-format version `setup/judges` records; another version reports how many files it would change and decides nothing. The reformat commits are in `.git-blame-ignore-revs`, and `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes blame look through them.
 * Link a fresh musl program and inspect its ELF ABI.
 * Check the shared source manifests and the guest build descriptions.
 * Run the mechanical text, comment-width, and banned-prose checks.

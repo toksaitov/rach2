@@ -13,8 +13,8 @@
 #      the host programs (tools/, tests/system/, krffs/) at c99
 #   (--error-exitcode) 3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
-#   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
-#      and on any files named as arguments; advisory across the legacy tree
+#   5. clang-format on every in-house file and any named as arguments, judged
+#      by the version tools/setup/judges records
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
 #   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC), no
 #      product rule under tests/, and every source in a compilation database
@@ -101,42 +101,6 @@ inhouse_ch()
     find tools \( -name '*.c' -o -name '*.h' \) 2>/dev/null
 }
 
-# New code the port introduces; must be clang-format clean (unlike the legacy
-# tree, which we never reformat).
-#
-# The globs do not reach tests/musl/ or utils/, and must not be widened to:
-# those are legacy trees this check deliberately leaves unformatted, and a
-# wholesale extension fails today on files nobody is asking to reformat. So a
-# new source under either is listed here BY NAME, in the commit that creates it.
-# A file added without being listed here is never format-checked, which is the
-# failure this comment exists to prevent.
-newcode_ch()
-{
-    find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
-         \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
-    ls tests/host/*.c tests/host/*.h tests/*probe.c 2>/dev/null
-    # By name, per the rule above: fdstale is a probe in everything but its
-    # name, idreport is the helper the credential probes drive, and the
-    # *probe.c glob reaches neither.
-    ls tests/fdstale.c tests/idreport.c 2>/dev/null
-    # By name, per the rule above: the credential library is new code under
-    # utils/, and its two guest tests are under tests/musl/; no glob here
-    # reaches either tree. The host test's compat headers are a directory down
-    # from tests/host, which the glob above does not descend into.
-    ls utils/pwauth.c utils/pwauth.h utils/passwd.c utils/adduser.c utils/login.c 2>/dev/null
-    ls tests/musl/pwauthmusl.c tests/musl/saltnoent.c tests/musl/creddisk.c \
-       tests/musl/passwdmusl.c tests/musl/addusermusl.c \
-       tests/musl/loginmusl.c tests/musl/readvmusl.c tests/musl/vmamusl.c \
-       tests/musl/clockmusl.c tests/musl/statmusl.c \
-       tests/musl/stampmusl.c \
-       tests/musl/execargmusl.c \
-       tests/musl/spawnmusl.c 2>/dev/null
-    ls tests/host/compat/crypt.h tests/host/compat/shadow.h \
-       tests/host/compat/sys/random.h 2>/dev/null
-    # By name, per the rule above: the extractor and its path walk are new
-    # code in the otherwise legacy krffs tree, which no glob here reaches.
-    ls krffs/krffs_reader.c krffs/krffs_reader.h krffs/readfile.krffs.c 2>/dev/null
-}
 
 # 0. required tools
 hr "preflight: tools present"
@@ -244,24 +208,30 @@ if [ -n "$idle_bad" ]; then
 fi
 if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
-# 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy
-# tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
+# 5. clang-format over every in-house file, with --Werror so a real run
+#    failure is a real failure (not a 0 count). The verdict depends on the
+#    tool's version: two majors format four files of this tree differently.
+#    So the check is judged by the version tools/setup/judges records, the
+#    testing host's; another version reports the count and decides nothing.
 hr "5/18 clang-format"
-strict_fail=0
-# shellcheck disable=SC2046
-for f in $(newcode_ch) "$@"; do
-    [ -f "$f" ] || continue
-    if clang-format --style=file --dry-run --Werror "$f" >/dev/null 2>&1; then :; else
-        echo "  FAIL (strict): $f"; strict_fail=1
-    fi
-done
-[ "$strict_fail" -eq 0 ] && echo "  PASS (new code clean)" || fail=1
+recorded=$(sed -n 's/^clang-format: //p' "$REPO/tools/setup/judges")
+found=$(clang-format --version </dev/null 2>/dev/null | head -1)
 drift=0
 # shellcheck disable=SC2046
-for f in $(inhouse_ch); do
-    clang-format --style=file --dry-run --Werror "$f" >/dev/null 2>&1 || drift=$((drift + 1))
+for f in $(inhouse_ch) "$@"; do
+    [ -f "$f" ] || continue
+    if clang-format --style=file --dry-run --Werror "$f" >/dev/null 2>&1; then :; else
+        [ "$found" = "$recorded" ] && echo "  FAIL: $f"
+        drift=$((drift + 1))
+    fi
 done
-echo "  advisory: $drift in-house files differ from .clang-format (legacy not reformatted)"
+if [ "$found" != "$recorded" ]; then
+    echo "  SKIP ($drift file(s) differ under $found; the record says $recorded, and the testing host judges)"
+elif [ "$drift" -eq 0 ]; then
+    echo "  PASS (every in-house file)"
+else
+    fail=1
+fi
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
 hr "6/18 readelf ABI (fresh musl link)"

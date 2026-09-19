@@ -1,7 +1,8 @@
 # Rach2 house style: LLVM base, 4-space, Allman braces on functions but K&R on
 # control statements, pointers bound right, includes left as written, 100 cols.
-# Used as a *check only* on the files a phase touches (clang-format --dry-run
-# -Werror); the existing tree is never reformatted wholesale.
+# Every in-house C file is formatted with it; tests/run style refuses one
+# that differs, judged by the clang-format version tools/setup/judges
+# records. The reformat commits are listed in .git-blame-ignore-revs.
 ---
 Language: Cpp
 BasedOnStyle: LLVM

@@ -1,0 +1,9 @@
+# The commits that reformatted the tree with clang-format, text-only, one per
+# component. `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes
+# blame look through them to the change that wrote each line.
+05eeeefee14de2dedb2d506880ea257699e740ba
+9bf74c86842155f459f3896f53c5fb955921b90c
+be6fe9d75832f0bb32d32ca95b0c7977a3c6ced0
+519d4ad3b510439d9448ba9b77b70e6fd768870f
+e827515678f976de7be3ccf7cf2bd49d1a377e6c
+94ca3df18e56cd9d9c1b1d97c980b29c6ad902e4
