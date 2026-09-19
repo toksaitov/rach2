@@ -10,6 +10,12 @@
 # inside the C89 that GCC and TinyCC share, and a construct outside it is
 # found at compile time, not by `tests/run selfbuild` minutes later.
 # -Wno-long-long stays because the 64-bit integer types are that dialect's.
+#
+# -Wframe-larger-than=4096 is the frame bound against the 16 KiB kernel
+# stack each process has: a quarter of it for one frame, so an interrupt
+# taken on the deepest chain still has room. The four frames above it on
+# 2026-09-19 (a debug shell command, two tty reads, the USB scan) moved
+# their buffers off the stack. The bound is the owner's to move.
 KWARN = -Wpedantic -Wno-long-long \
         -Wshadow -Wstrict-prototypes -Wpointer-arith -Wundef -Wlogical-op \
         -Wduplicated-cond -Wjump-misses-init -Wformat-security \
@@ -22,7 +28,8 @@ KWARN = -Wpedantic -Wno-long-long \
         -Wswitch-enum \
         -Wbad-function-cast \
         -Wcast-qual \
-        -Wcast-align=strict
+        -Wcast-align=strict \
+        -Wframe-larger-than=4096
 
 # Rejected, with the reason:
 #

@@ -169,7 +169,8 @@ static struct {
     uint32_t request_count;
     uint8_t work[PART_WORK_BYTES];
     struct part_table table;
-} scan = {-1, 0, {0}, {{0}}, 0, 0, 0, 0, 0, 0, 0, {0}, {0}};
+    uint8_t got[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE]; /* what a finished request read */
+} scan = {-1, 0, {0}, {{0}}, 0, 0, 0, 0, 0, 0, 0, {0}, {0}, {0}};
 
 static int scan_read(void *ctx, uint64_t lba, uint32_t count, void *buf)
 {
@@ -273,9 +274,9 @@ static void scan_advance(void)
          * the device's until it answers, so it is asked after until it
          * has, and only then is the scan let go of. */
         int status = 0;
-        uint8_t got[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE];
 
-        if (scan.request && !block_request_ended(scan.request, scan.generation, got, &status)) {
+        if (scan.request &&
+            !block_request_ended(scan.request, scan.generation, scan.got, &status)) {
             return;
         }
         scan.request = 0;
@@ -284,10 +285,9 @@ static void scan_advance(void)
     }
     if (scan.request) {
         int status = 0;
-        uint8_t got[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE];
         uint32_t i;
 
-        if (!block_request_ended(scan.request, scan.generation, got, &status)) {
+        if (!block_request_ended(scan.request, scan.generation, scan.got, &status)) {
             return;
         }
         scan.request = 0;
@@ -301,7 +301,7 @@ static void scan_advance(void)
         }
         for (i = 0; i < scan.request_count; i++) {
             scan.lba[scan.cached] = scan.request_lba + i;
-            k_memcpy(scan.sector[scan.cached], got + i * BLOCK_SECTOR_SIZE, BLOCK_SECTOR_SIZE);
+            k_memcpy(scan.sector[scan.cached], scan.got + i * BLOCK_SECTOR_SIZE, BLOCK_SECTOR_SIZE);
             scan.cached++;
         }
     }

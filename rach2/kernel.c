@@ -2723,7 +2723,9 @@ static void process_command(const char *cmd)
         }
     } else if (str_starts_with(cmd, "elf ")) {
         const char *filename = cmd + 4;
-        char buffer[8192];
+        /* Static, not on the 16 KiB stack: the shell runs one command at a
+         * time on the console. */
+        static char buffer[8192];
         int bytes_read;
         uint32_t file_size;
         uint32_t entry_point;

@@ -2098,7 +2098,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_CONSOLE) {
-        unsigned char kbuf[N_TTY_READ_MAX];
+        unsigned char kbuf[N_TTY_READ_CHUNK];
         uint32_t want;
         int n;
 

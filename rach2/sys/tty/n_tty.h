@@ -69,6 +69,8 @@ struct ktermios {
 
 #define N_TTY_LINE_MAX 256  /* longest editable canonical line */
 #define N_TTY_READ_MAX 4096 /* the cooked/raw bytes ready for read(); a power of two */
+#define N_TTY_READ_CHUNK \
+    1024 /* what one read() copies through its stack bounce; the caller loops */
 
 /* What the discipline did with its input, for `/proc/console`: the bytes
  * it dropped and why, the bytes it handed to readers, and the most it held. */

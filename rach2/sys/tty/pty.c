@@ -401,7 +401,7 @@ static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
-    unsigned char kbuf[N_TTY_READ_MAX];
+    unsigned char kbuf[N_TTY_READ_CHUNK];
     uint32_t want;
     int n;
 
