@@ -642,6 +642,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 {
     uint32_t flags = irq_save();
     int answered = 0;
+    uint32_t overdue;
 
     /* A request freed since the device captured its address is not on the
      * list, and one made since at the same address has a generation of its
@@ -689,10 +690,11 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
             }
         }
     }
+    overdue = request->overdue;
     req_let_go(request, 0);
     irq_restore(flags);
-    if (request->overdue) {
-        klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)request->overdue);
+    if (overdue) {
+        klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)overdue);
     }
     wq_wake_all(&pool_wq);
 }

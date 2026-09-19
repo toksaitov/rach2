@@ -5895,7 +5895,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
     int was_init = (current_proc->pid == init_pid && init_pid != 0);
 
     klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
-         current_proc ? (int)current_proc->pid : -1, where);
+         (int)current_proc->pid, where);
 
     /* If the console-owning session leader is the one whose exec failed,
      * release the controlling terminal before zombifying so the timer-IRQ

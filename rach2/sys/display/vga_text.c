@@ -287,12 +287,12 @@ void vga_text_sync(void)
     uint32_t line;
     unsigned int row;
     unsigned int col;
+    uint16_t *cells;
 
     for (row = 0; row < VGA_TEXT_ROWS; ++row) {
         line = _viewport_top_line + row;
-
-        if (vga_text_has_line(line)) {
-            uint16_t *cells = vga_text_line_ptr(line);
+        cells = vga_text_line_ptr(line);
+        if (cells != NULL) {
             for (col = 0; col < VGA_TEXT_COLS; ++col) {
                 vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, cells[col]);
             }

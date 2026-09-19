@@ -37,11 +37,21 @@ void kheap_init(void);
 /** Give back what `kmalloc` returned; NULL is accepted and ignored. */
 void kfree(void *p);
 
+/* The allocator attribute is for the callers. Inside the allocator's own
+   file it is left off: the analyser would take kzalloc's call of kmalloc
+   for an allocation, follow kmalloc's body, and report the block it hands
+   back as lost. */
+#ifdef KHEAP_INSIDE
+#define KHEAP_MALLOC
+#else
+#define KHEAP_MALLOC K_MALLOC(kfree)
+#endif
+
 /** `size` bytes, or NULL; the memory is not zeroed. */
-void *kmalloc(size_t size) K_MALLOC(kfree);
+void *kmalloc(size_t size) KHEAP_MALLOC;
 
 /** `size` bytes zeroed, or NULL. */
-void *kzalloc(size_t size) K_MALLOC(kfree);
+void *kzalloc(size_t size) KHEAP_MALLOC;
 
 /**
  * `count` pages, virtually contiguous and page-aligned, or NULL. `phys`,

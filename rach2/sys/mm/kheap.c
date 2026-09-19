@@ -2,6 +2,7 @@
  * kheap.c: the kernel heap, as kheap.h describes it.
  */
 
+#define KHEAP_INSIDE
 #include "kheap.h"
 
 #include "../klog.h"

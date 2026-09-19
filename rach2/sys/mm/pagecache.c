@@ -172,8 +172,15 @@ static void pc_hash_rebuild(void)
     for (i = 0; i < PC_SLOTS; ++i) {
         if (pc_slots[i].valid) {
             uint32_t h = pc_page_of(pc_slots[i].disk_off) & (PC_HASH_SIZE - 1u);
+            uint32_t probes = 0;
+
+            /* The table has more entries than there are slots, so an
+             * empty one is found within the table's length. */
             while (pc_hash[h] != PC_HASH_EMPTY) {
                 h = (h + 1u) & (PC_HASH_SIZE - 1u);
+                if (++probes == PC_HASH_SIZE) {
+                    k_panic("pagecache: the hash table has no empty entry");
+                }
             }
             pc_hash[h] = (int32_t)i;
         }

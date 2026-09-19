@@ -14,7 +14,17 @@
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
 
+/* The hash rebuild panics when its table has no empty entry, which the
+   sizes make impossible; the stub below traps, which fails the test. */
+void k_panic(const char *s);
+
 #include "mm/pagecache.c"
+
+void k_panic(const char *s)
+{
+    (void)s;
+    __builtin_trap();
+}
 
 static int fails;
 
