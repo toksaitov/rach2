@@ -93,6 +93,13 @@ for t in tests/host/*_hosttest.c; do
     fi
 
     out="$VDIR/$base"
+    # With HOST_PRINT_COMMANDS set, print the compile command of each test
+    # and compile nothing: the compilation database generator reads them.
+    if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
+        # shellcheck disable=SC2086
+        echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
+        continue
+    fi
     # Name a missing dep here: passed on to the compiler it would surface as a
     # bare "no such file", which reads as a broken test. A dep under the
     # extracted musl tree has one specific cause and one specific repair, and

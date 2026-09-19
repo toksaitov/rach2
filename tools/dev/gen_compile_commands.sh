@@ -3,16 +3,18 @@
 # gen_compile_commands.sh: generate compile_commands.json, the LSP compilation
 # database clangd reads for per-file flags. Run it directly.
 #
-# GCC has no clang-style -MJ, so the database is generated FROM the build's own
-# commands: each in-house component is dry-run (`make -Bn`), wrapped recipe
-# lines are joined back into one command each, and every joined command whose
-# first word is the i686-elf cross GCC becomes one entry per C source operand
-# (directory + file + the complete command). This covers the FREESTANDING /
-# musl in-house code: the kernel (rach2) and the guest programs (tests, ish,
-# utils). The host krffs FUSE tools (built with the host `cc` and dynamic
-# `pkg-config` flags), and the vendored musl/busybox/dropbear and Doom trees,
-# are intentionally excluded: clangd-on-the-kernel is the goal and those carry
-# flags that do not belong in a portable database.
+# GCC has no clang-style -MJ, so the databases are generated FROM the build's
+# own commands: each unit is dry-run (`make -Bn`, or a build script's print
+# mode), wrapped recipe lines are joined back into one command each, and every
+# joined command whose first word is the unit's compiler becomes one entry per
+# C source operand (directory + file + the complete command). There is one
+# database per unit under build/compile_commands/: the four kernel variants
+# (rach2, rach2-recovery, rach2-metal, rach2-harness), the guest programs
+# (tests, ish, utils, musl-programs, doom), the host programs (krffs, tools,
+# host-tests). The union is compile_commands.json at the root, for clangd.
+# tools/verify/dbcheck.sh requires every in-house C source to be in one of
+# them. The vendored musl, busybox, dropbear and doomgeneric trees are
+# excluded: their flags do not belong in a portable database.
 #
 # The finished database is validated before it is published: the generator
 # emits a known JSON subset, so a raw control character or a malformed entry
@@ -64,20 +66,24 @@ join_continuations() {
 }
 
 # Read joined commands from $1 and print one database entry per C source
-# operand of each cross-compile command, with $2 as the escaped directory.
-# Selection keys on the FIRST word of the command: Homebrew installs libgcc
-# under a path containing `i686-elf-gcc`, so matching the whole line would
-# select linker lines and continuation fragments through that path.
+# operand of each compile command, with $2 as the escaped directory and $3
+# the compiler the unit uses: `cross` selects the i686-elf GCC, `host` the
+# host compiler, cc or what CC names. Selection keys on the FIRST word of the
+# command: Homebrew installs libgcc under a path containing `i686-elf-gcc`,
+# so matching the whole line would select linker lines and continuation
+# fragments through that path.
 emit_entries() {
     dump_file=$1
     dir_json=$2
+    which=${3:-cross}
     while IFS= read -r line; do
         set -f
         # shellcheck disable=SC2086 # word-splitting the command is the point
         set -- $line
         set +f
-        case "${1-}" in
-            *i686-elf-*gcc) ;;
+        case "$which:${1-}" in
+            cross:*i686-elf-*gcc) ;;
+            host:cc|host:gcc|host:clang|host:"${CC:-cc}") ;;
             *) continue ;;
         esac
         cmd_json=$(json_escape "$line")
@@ -229,43 +235,60 @@ entries=$(mktemp)
 dump_raw=$(mktemp)
 dump=$(mktemp)
 out_tmp=$(mktemp)
+unit_tmp=$(mktemp)
 rawlist=$(mktemp)
 expected=$(mktemp)
 missing=$(mktemp)
-trap 'rm -f "$entries" "$dump_raw" "$dump" "$out_tmp" "$rawlist" "$expected" "$missing"' EXIT INT TERM
+trap 'rm -f "$entries" "$dump_raw" "$dump" "$out_tmp" "$unit_tmp" "$rawlist" "$expected" "$missing"' EXIT INT TERM
+DBDIR="$REPO/build/compile_commands"
+mkdir -p "$DBDIR"
 
-# In-house, cross-compiled components (host krffs tools + vendored/Doom trees
-# excluded).
-for comp in rach2 tests ish utils; do
-    dir="$REPO/$comp"
-    [ -d "$dir" ] || continue
-    # Dry-run an always-make build. Capture it to a file (a pipe would lose the
-    # exit status), so a toolchain/Make failure is a hard error, not a silent
-    # empty DB.
-    if ! ( cd "$dir" && make -Bn ) >"$dump_raw" 2>/dev/null; then
-        echo "compile_commands: 'make -Bn' failed in $comp/: cannot generate the database" >&2
+# One unit: its name, the directory its commands run in, the compiler kind,
+# and the command that prints its build. The unit's database is validated
+# before it is published, and its entries join the union.
+unit() {
+    name=$1; dir=$2; kind=$3; shift 3
+    if ! ( cd "$dir" && "$@" ) >"$dump_raw" 2>/dev/null; then
+        echo "compile_commands: $name: '$*' failed in $dir: cannot generate the database" >&2
         echo "       (is the i686-elf cross toolchain installed? try 'sh tools/setup/doctor.sh')" >&2
         exit 1
     fi
     join_continuations <"$dump_raw" >"$dump"
-    emit_entries "$dump" "$(json_escape "$dir")" >>"$entries"
-done
+    : >"$unit_tmp"
+    emit_entries "$dump" "$(json_escape "$dir")" "$kind" >"$unit_tmp"
+    if [ ! -s "$unit_tmp" ]; then
+        echo "compile_commands: $name: no compile command was found" >&2
+        exit 1
+    fi
+    build_array "$unit_tmp" >"$DBDIR/$name.json.new"
+    if ! validate_db "$DBDIR/$name.json.new"; then
+        echo "compile_commands: $name: validation failed; the database was not published" >&2
+        exit 1
+    fi
+    mv "$DBDIR/$name.json.new" "$DBDIR/$name.json"
+    cat "$unit_tmp" >>"$entries"
+}
 
-# Build the JSON array into a TEMP file. It is promoted to
-# compile_commands.json only after validation and coverage pass, so a failure
-# never leaves a bad/partial DB in place.
+unit rach2 "$REPO/rach2" cross make -Bn
+unit rach2-recovery "$REPO/rach2" cross make -Bn COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
+unit rach2-metal "$REPO/rach2" cross make -Bn COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
+unit rach2-harness "$REPO/rach2" cross make -Bn COMPONENT=rach2-harness HARNESS=1
+unit tests "$REPO/tests" cross make -Bn
+unit ish "$REPO/ish" cross make -Bn
+unit utils "$REPO/utils" cross make -Bn
+unit doom "$REPO/ports/doom" cross make -Bn
+unit musl-programs "$REPO/tests/musl" cross env MUSL_PRINT_COMMANDS=1 sh build.sh
+unit krffs "$REPO/krffs" host make -Bn all mount
+host_tools=$(make -s -C "$REPO" print-host-tools)
+# shellcheck disable=SC2086
+unit tools "$REPO" host make -Bn $host_tools
+unit host-tests "$REPO" host env HOST_PRINT_COMMANDS=1 sh tests/system/suites/host.sh
+
 build_array "$entries" >"$out_tmp"
-
 if ! validate_db "$out_tmp"; then
     echo "compile_commands: validation failed; the database was not published" >&2
     exit 1
 fi
-
-# Coverage assertion: every kernel source listed in C_SRC must have made it into
-# the database. Capture the list to a file FIRST (a pipe would lose
-# print-c-src's exit status and an empty list would vacuously "pass"), then
-# require it to have succeeded and be non-empty before checking each source is
-# present.
 if ! make --no-print-directory -C "$REPO/rach2" print-c-src >"$rawlist" 2>/dev/null; then
     echo "compile_commands: 'make -C rach2 print-c-src' failed: cannot verify kernel coverage" >&2
     exit 1
@@ -283,14 +306,9 @@ if [ -s "$missing" ]; then
     sed 's/^/  /' "$missing" >&2
     exit 1
 fi
-
-# Validation and coverage passed; promote the temp DB into place (guarded: the
-# script does not run under set -e, so an unchecked mv could fall through and
-# falsely report success).
 if ! mv "$out_tmp" "$OUT"; then
     echo "compile_commands: failed to write $OUT" >&2
     exit 1
 fi
-
 n=$(grep -c '"file"' "$OUT" 2>/dev/null || echo 0)
-echo "compile_commands.json: $n entries -> $OUT"
+echo "compile_commands.json: $n entries -> $OUT, $(find "$DBDIR" -name '*.json' | wc -l | tr -d ' ') unit databases under build/compile_commands"

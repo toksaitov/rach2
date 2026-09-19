@@ -98,6 +98,13 @@ for src in *.c; do
         fi
         deps="$deps $REPO/$dep"
     done
+    # With MUSL_PRINT_COMMANDS set, print each program's compile command and
+    # compile nothing: the compilation database generator reads them.
+    if [ -n "${MUSL_PRINT_COMMANDS:-}" ]; then
+        # shellcheck disable=SC2086
+        echo "$CC -static -nostdlib -nostartfiles -isystem $PREFIX/include -I ../../utils -O2 -o $OUT/$prog $PREFIX/lib/crt1.o $PREFIX/lib/crti.o $src $deps $PREFIX/lib/libc.a $LIBGCC $PREFIX/lib/crtn.o"
+        continue
+    fi
     # shellcheck disable=SC2086
     stale "$OUT/$prog" "$src" $deps "$PREFIX/lib/libc.a" \
         "$SCRIPT_DIR/build.sh" || continue

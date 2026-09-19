@@ -15,7 +15,8 @@
 #   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
 #      and on any files named as arguments; advisory across the legacy tree
 #   6. a readelf ABI check on a freshly linked musl binary (entry + load range)
-#   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC)
+#   7. the kernel source-list guard (every rach2 .c on disk is in C_SRC), no
+#      product rule under tests/, and every source in a compilation database
 #   8. text style, in three parts: textcheck.sh for non-ASCII and dashes,
 #      prosecheck for the 80-column comment rule and for the vocabulary a
 #      script can decide (both beside this file).
@@ -294,6 +295,15 @@ else
     echo "  FAIL: a rule under tests/ makes a product:"
     echo "$products" | sed 's/^/    tests\/system\/suites.mk:/'
     fail=1
+fi
+# Every in-house source is compiled by something: the generator writes one
+# compilation database per unit from the builds' dry runs, and dbcheck.sh
+# finds a source no unit, includer or test fixture script names.
+if sh "$REPO/tools/dev/gen_compile_commands.sh" >"$VDIR/verify_dbcheck.log" 2>&1 &&
+   sh "$REPO/tools/verify/dbcheck.sh" >>"$VDIR/verify_dbcheck.log" 2>&1; then
+    echo "  PASS ($(tail -1 "$VDIR/verify_dbcheck.log"))"
+else
+    echo "  FAIL: see $VDIR/verify_dbcheck.log"; fail=1
 fi
 
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
