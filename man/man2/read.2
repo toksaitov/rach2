@@ -63,7 +63,10 @@ returns
 .Dv O_NONBLOCK
 makes an empty pipe, terminal, pseudoterminal, or socket return
 .Er EAGAIN
-instead of waiting, unless it is at end of input.
+instead of waiting, unless it is at end of input; a read that would not
+wait, an empty noncanonical terminal with
+.Dv VMIN
+zero or a console read by the framebuffer owner, returns zero.
 A signal can interrupt a wait with
 .Er EINTR .
 Files under
@@ -99,7 +102,9 @@ For a regular file, reading continues through successive buffers until
 a short read or error.
 For a pipe, stream socket, device, or
 .Pa /proc
-file, later buffers are read only while input can be obtained without waiting.
+file, later buffers are read only while the descriptor reports read
+readiness; a device that reports it immediately, a disk among them, can
+still sleep in the read itself.
 A terminal is read only once, into the first nonempty buffer.
 .Pp
 For a
@@ -154,7 +159,8 @@ operation, or refers to a directory.
 .It Er ECONNREFUSED
 A stream connection was refused.
 .It Er ECONNRESET
-A stream connection was reset.
+A stream connection was reset, or a closed stream with no buffered data,
+no received FIN and no recorded error was read.
 .It Er EFAULT
 The buffer or vector list cannot be accessed as required, or there is
 no current process.
@@ -166,8 +172,12 @@ A signal interrupted a wait, or a background terminal read posted
 .It Er EINVAL
 The vector count is outside 0 through 1024, the total vector length
 exceeds 2147483647, or a file system has no read operation.
-A raw disk window also returns this error when the offset or count is
-not a multiple of 512 bytes.
+A boot window,
+.Pa /dev/bootpart
+or
+.Pa /dev/grubcore ,
+also returns this error when the offset or count is not a multiple of
+512 bytes; disk and partition nodes take any byte range.
 .It Er EIO
 A file system or device read failed, a device was removed, or the
 random device has no usable seed.
@@ -176,12 +186,13 @@ A background terminal read also gives this error when
 is blocked or ignored.
 .It Er ENETRESET
 A stream connection was ended by a network configuration change.
+.It Er ENOTCONN
+The stream socket is not connected and has not been shut down.
 .It Er ENXIO
-A raw disk window is not present.
+A boot window is not present; a removed disk's node gives
+.Er EIO .
 .It Er EOPNOTSUPP
 The descriptor is an ioctl-only socket.
-.It Er ECONNRESET
-A closed stream has no recorded error to report.
 .It Er EPERM
 A loop device node was read directly.
 .It Er ETIMEDOUT

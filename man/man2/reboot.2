@@ -42,26 +42,26 @@ The i386 system call number is 88.
 Its arguments are a first magic number in EBX, a second magic number
 in ECX, and the command in EDX.
 The first magic must be
-.Li 0xfee1dead .
+.Ql 0xfee1dead .
 The accepted second values are
-.Li 0x28121969 ,
-.Li 0x05121996 ,
-.Li 0x16041998 ,
+.Ql 0x28121969 ,
+.Ql 0x05121996 ,
+.Ql 0x16041998 ,
 and
-.Li 0x20112000 .
+.Ql 0x20112000 .
 Musl supplies the first magic and
-.Li 0x28121969
+.Ql 0x28121969
 for the caller.
 .Pp
 The command values are
-.Li 0x01234567
+.Ql 0x01234567
 for restart,
-.Li 0xcdef0123
+.Ql 0xcdef0123
 for halt,
-.Li 0x4321fedc
+.Ql 0x4321fedc
 for power off,
 zero for disabling keyboard reboot, and
-.Li 0x89abcdef
+.Ql 0x89abcdef
 for the unsupported enable operation.
 .Sh RETURN VALUES
 .Dv RB_DISABLE_CAD

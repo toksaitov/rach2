@@ -122,8 +122,10 @@ the change, then copies the previous values out.
 An output-copy failure can therefore return
 .Er EFAULT
 after changing the limits.
-When a change is refused, a valid old-limit buffer still receives the
-previous values.
+The previous values are copied out after the change is attempted, so a
+valid old-limit buffer receives them when the change is refused too; a
+failure to read the new limits, to find the target or in the permission
+check returns before the buffer is written.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .
