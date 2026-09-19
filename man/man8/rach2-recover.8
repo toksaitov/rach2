@@ -74,7 +74,9 @@ Write the image at offset 0 with
 then read it back with
 .Ql reflash --verify .
 A write failure or differing readback hash is reported.
-Ask the kernel to read the new partition table.
+Run
+.Ql diskctl reread
+to reload the partition table.
 If it cannot, report that the image was written and verified and that
 the machine must be rebooted before anything on that disk is mounted.
 On success, report that the disk was restored and read back.

@@ -87,7 +87,9 @@ which reports progress every sixteen mebibytes.
 .It
 Read the written range back and compare its hash with the image's hash.
 .It
-Ask the kernel to read the new partition table.
+Run
+.Ql diskctl reread
+to reload the partition table.
 .It
 Write
 .Pa /etc/passwd ,
@@ -109,8 +111,8 @@ permitting root to log in over SSH with a password.
 Grow the root into the free space after it, if requested.
 .El
 .Pp
-The three account files and the SSH policy are also archived on the
-recovery partition.
+If the installer finds a recovery partition, the three account files and
+the SSH policy are also archived on it.
 Passwords are stored as hashes.
 The archive preserves the accounts for an update when the root cannot
 be read.
@@ -139,8 +141,11 @@ the recovery partition's archive and the last ext2 partition is replaced.
 When the root and archive can both be read but differ, each differing
 configuration file is reported and the root's copy is kept.
 .Pp
-Before the root is written, the archive is refreshed from the retained
-configuration and marked as an update in progress.
+Before the root is written, and when a recovery partition is there, the
+archive is refreshed from the retained configuration and marked as an
+update in progress; the old archive is removed before the new one is
+renamed into its place, so an interruption between the two leaves no
+archive.
 After the accounts are restored, the archive is written again without
 the mark.
 An update interrupted after writing the image and before restoring the

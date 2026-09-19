@@ -75,7 +75,7 @@ If an interrupted resize leaves errors, run
 to repair the volume.
 After repair, run
 .Xr growroot 8
-again to finish the grow.
+again to complete the resize.
 The
 .Ql rach2-install
 installer uses growroot when the person agrees to grow the root.
@@ -105,7 +105,10 @@ Minimum size calculation for
 .It Fl f
 Force the resize, overriding some safety checks.
 .It Fl F
-Flush the device's buffer cache before resizing.
+Flush the device's buffer cache before resizing; on Rach2 the flush
+request answers
+.Er ENOTTY
+and the run ends before the resize.
 .It Fl M
 Shrink to the smallest size permitted by the stored files.
 .It Fl p
@@ -124,12 +127,17 @@ file system.
 .It Fl z Ar undo_file
 Save each block's old contents in an undo file before overwriting it.
 An empty argument selects
-.Pa resize2fs-device.e2undo
-in the directory specified by
-.Ev E2FSPROGS_UNDO_DIR ,
+.Pa resize2fs-device.e2undo ,
 with
 .Ql device
-replaced by the device name.
+replaced by the device name, in the directory
+.Ev E2FSPROGS_UNDO_DIR
+names, or
+.Pa /var/lib/e2fsprogs
+when it is unset; a value that is empty or
+.Ql none ,
+or a directory that cannot be written, disables the undo file without a
+word.
 The undo file cannot recover from a power failure or system crash.
 .El
 .Sh FILES

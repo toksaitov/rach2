@@ -51,7 +51,8 @@ or
 .Pa /dev/bootpart .
 The source's sector range is reserved for the life of the mount.
 Another mount on that range, or an open descriptor that permits writes
-to a window over it, prevents the mount.
+to a disk or partition device whose sector range overlaps it, prevents the
+mount.
 .Pp
 BusyBox can resolve
 .Ql LABEL=
@@ -83,9 +84,22 @@ Other flags are rejected, including those requested by
 .Ql bind ,
 and
 .Ql move .
-The options honoured are recorded in
-.Pa /proc/mounts ,
-with six fields in fstab format.
+.Pa /proc/mounts
+records each mount with six fields in fstab format, its options
+.Ql ro
+or
+.Ql rw
+and whichever of
+.Ql nosuid ,
+.Ql nodev ,
+.Ql noexec ,
+.Ql noatime ,
+.Ql nodiratime
+and
+.Ql relatime
+are set;
+.Ql silent
+and the file system's own options are not shown.
 .Pp
 The
 .Nm umount
@@ -101,8 +115,17 @@ The
 options are:
 .Bl -tag -width "-t fstype"
 .It Fl a
-Mount all file systems in
-.Pa /etc/fstab .
+Mount the file systems in
+.Pa /etc/fstab ,
+skipping
+.Ql noauto
+and swap entries, occupied mount points and the entries
+.Fl t
+or
+.Fl O
+exclude;
+.Fl T
+selects another table.
 .It Fl f
 Perform a dry run.
 .It Fl v

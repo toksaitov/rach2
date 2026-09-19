@@ -53,7 +53,8 @@ entry is optional.
 A static stanza is validated in full before any
 .Xr ioctl 2
 changes the interface.
-A live or incomplete DHCP claim prevents static configuration.
+Static configuration fails if the DHCP client's PID file identifies a
+running process or contains no valid positive process ID.
 .Pp
 On a boot with
 .Ql rach2.ip=none ,

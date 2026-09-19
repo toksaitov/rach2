@@ -26,9 +26,10 @@ If the output does not contain
 it exits with status 0 and no message.
 Otherwise it reports:
 .Dl rescue: no lease arrived; taking the fixed address
-It reads the DHCP client's process ID from
-.Pa /var/run/udhcpc.eth0.pid ,
-sends SIGTERM, and waits up to ten seconds for the client to stop.
+When
+.Pa /var/run/udhcpc.eth0.pid
+holds a process ID, it sends that client SIGTERM and waits up to ten
+seconds for it to stop; without one it goes on without stopping a client.
 If the client does not stop, it reports:
 .Dl rescue: the DHCP client will not stop; leaving the address alone
 and exits with status 1.
@@ -45,8 +46,8 @@ A damaged boot partition can cause the machine to enter recovery
 through the GRUB core image's own configuration.
 On a network without DHCP, the fixed address permits SSH access
 without someone choosing a menu entry at the keyboard.
-The script stops the DHCP client first so a late lease cannot replace
-the address during an SSH session.
+The script stops a recorded DHCP client first so a late lease cannot
+replace the address during an SSH session.
 .Pp
 The address, mask, and gateway are the sealed disk's settings,
 .Ql SEALED_ADDRESS ,
@@ -68,7 +69,13 @@ DHCP client's process ID.
 .Sh EXIT STATUS
 .Bl -tag -width 1 -compact
 .It 0
-An address was already assigned, or the fixed address and route were set.
+The output of
+.Ql ifconfig eth0
+did not contain
+.Ql addr:0.0.0.0 ,
+which a failed
+.Nm ifconfig
+also leaves, or the fixed address and route were set.
 .It 1
 The DHCP client would not stop, or the address or route could not be set.
 .El
