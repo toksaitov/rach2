@@ -39,7 +39,12 @@ A TCP bind records the port.
 It rejects a nonzero port that already has a live listener, but does
 not reserve the port against another bind before
 .Xr listen 2 .
-Binding TCP port zero leaves port selection to the later operation.
+Binding TCP port zero assigns no port:
+.Xr connect 2
+then selects an ephemeral one, and
+.Xr listen 2
+fails with
+.Er EDESTADDRREQ .
 .Pp
 There is no loopback interface.
 At the socket boundary, a destination in

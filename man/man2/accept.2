@@ -13,7 +13,8 @@
 removes a completed connection from the accept queue of
 .Fa fd
 and returns a new descriptor for it.
-The descriptor should refer to a listening TCP socket.
+.Fa fd
+should refer to a listening TCP socket.
 The new descriptor is blocking and has close-on-exec clear.
 .Pp
 If the queue is empty, the call waits for a connection.
@@ -21,7 +22,7 @@ On a listener with
 .Dv O_NONBLOCK
 set, an empty queue instead gives
 .Er EAGAIN .
-A pending signal interrupts the wait with
+An unblocked, nonignored pending signal interrupts the wait with
 .Er EINTR .
 .Pp
 If both

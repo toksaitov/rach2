@@ -37,10 +37,18 @@ is the BusyBox applet from
 .Ql busybox-suid .
 .Bl -tag -width "-s shell"
 .It Fl , Fl l
-Clear the environment, enter the target user's home directory,
-and run a login shell.
+Run a login shell: the environment is replaced except for
+.Ev TERM ,
+whatever
+.Fl m
+or
+.Fl p
+asked, and the target user's home directory is entered, with a warning
+and
+.Pa /
+instead when it cannot be.
 .It Fl m , Fl p
-Preserve the environment.
+Preserve the environment, except in login mode.
 .It Fl s Ar shell
 Run the specified shell.
 .It Fl c Ar command

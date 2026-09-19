@@ -103,7 +103,9 @@ unnamed structure.
 .It Fl fdollars-in-identifiers
 Allow dollar signs in identifiers.
 .It Fl O Ns Op Ar level
-Ignored.
+Does not select an optimization level; a positive numeric level defines
+.Dv __OPTIMIZE__
+as 1.
 Unsupported GCC
 .Fl f
 and
@@ -128,7 +130,8 @@ Stop compilation if warnings are issued.
 .It Fl Wall
 Enable all warnings except
 .Fl Werror ,
-.Fl Wunsupported
+.Fl Wunsupported ,
+.Fl Wgcc-compat
 and
 .Fl Wwrite-strings .
 .El
@@ -151,9 +154,13 @@ Directories given by
 are searched before those in
 .Ev LIBRARY_PATH .
 .It Fl B Ar dir
-Set the directory for compiler libraries and headers.
+Set the directory of the compiler's runtime archive.
 The default is
-.Pa /lib/tcc .
+.Pa /lib/tcc ;
+the header paths stay
+.Pa /lib/tcc/include
+and
+.Pa /include .
 .It Fl static
 Link a static executable.
 Required for an executable on Rach2.
@@ -176,13 +183,14 @@ Linker options include:
 .Bl -tag -width Ds
 .It Fl Wl,-rpath= Ns Ar path
 Record a search path for dynamic libraries.
-Rach2 has no dynamic linker.
+Rach2 has no dynamic linker, and the static output carries no
+.Dv DT_RPATH .
 .It Fl Wl,--enable-new-dtags
 Use
 .Dv DT_RUNPATH
 instead of
 .Dv DT_RPATH
-for a dynamic-library search path.
+for a dynamic-library search path; the static output carries neither.
 .It Fl Wl,--oformat= Ns Ar format
 Select the output format.
 The default is
@@ -198,11 +206,13 @@ Set the text address in the executable layout.
 .It Fl Wl,-section-alignment= Ns Ar value
 Set section alignment in the executable layout.
 .It Fl Wl,-file-alignment= Ns Ar value
-Set file alignment in the executable layout.
+An option of the Windows target; the Rach2 compiler rejects it as an
+unsupported linker option.
 .It Fl Wl,-image-base= Ns Ar address
 Set the image base in the executable layout.
 .It Fl Wl,-stack= Ns Ar size
-Set the stack size in the executable layout.
+An option of the Windows target; the Rach2 compiler rejects it as an
+unsupported linker option.
 .It Fl Wl,-subsystem= Ns Ar subsystem
 Select a subsystem for PE executables, such as
 .Ql console ,
@@ -213,7 +223,7 @@ This is an option for the Windows target.
 .It Fl Wl,-Bsymbolic
 Set the
 .Dv DT_SYMBOLIC
-tag.
+tag, which the static output does not carry.
 .It Fl Wl,-whole-archive
 Link every object in archives.
 .It Fl Wl,-no-whole-archive
@@ -227,7 +237,8 @@ Generate debugging information.
 Request allocation and array or pointer bounds checks.
 This option is not built on Rach2.
 .It Fl bt Ar n
-Set the number of callers displayed in stack traces.
+Set the number of callers displayed in stack traces during execution from
+memory, which Rach2 rejects; the option has no effect on file output.
 .El
 .Ss Other options
 .Bl -tag -width Ds
@@ -252,8 +263,12 @@ or
 floating-point ABI on the ARM target.
 .It Fl mno-sse
 Disable SSE registers on the x86_64 target.
-.It Fl m32 , Fl m64
-Pass the command line to the i386 or x86_64 cross compiler.
+.It Fl m32
+Continue with this i386 compiler.
+.It Fl m64
+Run
+.Nm x86_64-tcc ,
+which the images do not install.
 .El
 .Sh FILES
 .Bl -tag -width /lib/tcc/libtcc1.a
