@@ -9,8 +9,14 @@
 .Sh DESCRIPTION
 Each file is generated into a buffer when opened.
 Every read through that descriptor uses the same snapshot.
-A report that cannot be generated in full is refused rather than
-served short.
+A report whose text cannot be allocated is refused with
+.Er ENOMEM ,
+and
+.Pa /proc/disk ,
+the one file with a fixed buffer, is refused with
+.Er EOVERFLOW
+when it fills; a USB record longer than its 96-byte buffer is cut short,
+its newline possibly with it.
 .Sh FILES
 .Bl -ohang
 .It Pa /proc/cmdline
@@ -100,7 +106,8 @@ and
 with a tab between fields.
 Each remaining line is a tab followed by a type accepted for mounting.
 .It Pa /proc/interrupts
-One line per vector that has received an interrupt:
+One line per PIC or MSI vector, numbered 32 through 63, with a nonzero
+interrupt count:
 .Dl VECTOR: COUNT PIC|MSI NAMES
 Fields are separated by tabs.
 Shared handlers have comma-separated names; an unnamed vector has
@@ -111,11 +118,14 @@ and
 .Ql FBK: COUNT usb fallback ,
 for APIC spurious interrupts and USB work found by the timer fallback.
 .It Pa /proc/loop
-One line per attached loop device:
+One line per occupied loop device:
 .Dl loopN BYTES rw|ro writes WRITES syncs SYNCS PATH
 The fields give its size in bytes, write permission, write and sync
-counts, and the path used for attachment.
-An unattached device has no line.
+counts, and the first 63 bytes of the path used for attachment, or
+.Ql (gone)
+for a device whose medium was removed while a mount or a transfer still
+holds it.
+An unused device has no line.
 .It Pa /proc/meminfo
 Named memory counts, one
 .Ql name: value

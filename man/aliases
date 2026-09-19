@@ -432,3 +432,7 @@ ptmx 4 console
 pts 4 console
 bootpart 4 disk
 grubcore 4 disk
+loop-control 4 loop
+zero 4 null
+full 4 null
+urandom 4 random

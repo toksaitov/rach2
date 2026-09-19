@@ -43,8 +43,8 @@ Device numbers range from 0 through 3.
 .Xr loopctl 8
 writes these commands.
 .Pp
-An attached file must be regular and its length must be a whole number
-of sectors.
+An attached file must be regular and have a positive length that is a
+whole number of sectors.
 A file may have only one attachment; another hard link to it is the
 same file for this purpose.
 A file on a loop-mounted volume cannot be attached to another loop device.
@@ -61,12 +61,15 @@ Detach fails with
 .Er EBUSY
 while the device has a mount, a buffer is held, or an attachment
 is still in progress.
-Removing a medium also removes loop devices attached to files on it.
+Removing a medium marks the loop devices attached to files on it as gone;
+one with a mount or a transfer in progress is released when that ends.
 .Pp
 .Pa /proc/loop
-has one line per attached device, giving the device, its size in bytes,
-whether it accepts writes, its write and sync counts, and the path
-used to attach it.
+has one line per occupied device, giving the device, its size in bytes,
+whether it accepts writes, its write and sync counts, and the first 63
+bytes of the path used to attach it, or
+.Ql (gone)
+for a retained device whose medium was removed.
 .Sh FILES
 .Bl -tag -width /dev/loop-control
 .It Pa /dev/loop0 No through Pa /dev/loop3
@@ -84,8 +87,8 @@ The caller is not root.
 The file is already attached, an operation conflicts with an attachment,
 or the device cannot yet be detached.
 .It Er EINVAL
-The file is not regular, its length is not a whole number of sectors,
-or the device number is outside 0 through 3.
+The file is not regular, its length is zero or not a whole number of
+sectors, or the device number is outside 0 through 3.
 .It Er ELOOP
 The file is on a loop-mounted volume.
 .El
