@@ -73,8 +73,23 @@
 .Ar SERVICE_DIR
 .Sh DESCRIPTION
 These are the runit applets of BusyBox 1.36.1 as built for Rach2.
-Nothing on the Rach2 images uses them.
-They run as BusyBox builds them.
+Nothing on the Rach2 images uses them, and the supervisors do not work
+here: Rach2 registers neither
+.Fn flock
+nor
+.Fn fchdir ,
+so
+.Nm runsv
+fails at its lock,
+.Nm runsvdir
+fails after scanning its directory, and
+.Nm svlogd
+cannot enter its log directory; and
+.Nm envdir
+and
+.Nm chpst Fl e
+end before running their program, since reading the directory changes
+into it.
 .Bl -tag -width setuidgid
 .It Nm chpst
 Change process state, then run
@@ -161,27 +176,37 @@ and
 in the environment.
 .It Fl e Ar DIR
 Set environment variables from files in
-.Ar DIR .
-Each file name becomes a variable name; its first line becomes the value.
+.Ar DIR :
+each file name not beginning with a period becomes a variable, its value
+the file's first 255 bytes with trailing whitespace removed, and an empty
+file unsets the variable.
+On Rach2 the option ends the program before it runs, as above.
 .It Fl / Ar DIR
 Change the root directory to
 .Ar DIR .
+Rach2 has no
+.Fn chroot ,
+so the option reports an error and ends before running the program.
 .It Fl n Ar NICE
 Add
 .Ar NICE
 to the nice value.
+Rach2 has no priority calls, so the option reports an error and ends
+before running the program.
 .It Fl m Ar BYTES
-Set memory limits.
+Set memory limits: on Rach2, the address-space limit through the implied
+.Fl a ;
+the other three have no effect.
 .It Fl d Ar BYTES
-Limit the data segment.
+Limit the data segment; no effect on Rach2.
 .It Fl o Ar N
 Limit open files per process.
 .It Fl p Ar N
 Limit processes per user ID.
 .It Fl f Ar BYTES
-Limit output file sizes.
+Limit output file sizes; no effect on Rach2.
 .It Fl c Ar BYTES
-Limit core file size.
+Limit core file size; no effect on Rach2.
 .It Fl v
 Produce verbose output.
 .It Fl P
@@ -206,27 +231,26 @@ with the signal number after processing a signal.
 Limit the total size of all segments.
 .It Fl m Ar BYTES
 Equivalent to
-.Fl d Ar BYTES Fl s Ar BYTES Fl l Ar BYTES Fl a Ar BYTES .
+.Fl d Ar BYTES Fl s Ar BYTES Fl l Ar BYTES Fl a Ar BYTES ;
+on Rach2 only the address-space limit takes effect.
 .It Fl d Ar BYTES
-Limit the data segment.
+Limit the data segment; no effect on Rach2.
 .It Fl s Ar BYTES
-Limit the stack segment.
+Limit the stack segment; no effect on Rach2.
 .It Fl l Ar BYTES
-Limit locked memory.
+Limit locked memory; no effect on Rach2.
 .It Fl o Ar N
 Limit open files per process.
 .It Fl p Ar N
 Limit processes per user ID.
 .It Fl f Ar BYTES
-Limit output file sizes.
+Limit output file sizes; no effect on Rach2.
 .It Fl c Ar BYTES
-Limit core file size.
+Limit core file size; no effect on Rach2.
 .It Fl r Ar BYTES
-Limit resident set size.
+Limit resident set size; no effect on Rach2.
 .It Fl t Ar N
-Limit CPU time; the process receives SIGXCPU after
-.Ar N
-seconds.
+Limit CPU time; no effect on Rach2, which sends no SIGXCPU.
 .El
 .Ss svc
 .Bl -tag -width "-pchaitk"
@@ -260,10 +284,10 @@ Timestamp with
 .Ql @tai64n .
 .It Fl tt
 Timestamp with
-.Ql yyyy-mm-dd_hh:mm:ss.sssss .
+.Ql yyyy-mm-dd_hh:mm:ss.sssssssss .
 .It Fl ttt
 Timestamp with
-.Ql yyyy-mm-ddThh:mm:ss.sssss .
+.Ql yyyy-mm-ddThh:mm:ss.sssssssss .
 .It Fl v
 Produce verbose output.
 .El

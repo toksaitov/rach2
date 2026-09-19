@@ -79,7 +79,13 @@ or add that user to
 .It Nm chpasswd
 Read
 .Ql user:password
-lines from standard input and update
+lines from standard input and update each user's hash in
+.Pa /etc/shadow ,
+writing
+.Ql x
+in
+.Pa /etc/passwd ;
+a user without a shadow entry gets the hash in
 .Pa /etc/passwd .
 .It Nm cryptpw
 Print a password hash.
@@ -149,6 +155,9 @@ The default is
 .It Fl R Ar DIR
 Change the root directory to
 .Ar DIR .
+Rach2 has no
+.Fn chroot ,
+so the option fails before any password changes.
 .El
 .Ss cryptpw and mkpasswd
 .Bl -tag -width "-S SALT"

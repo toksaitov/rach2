@@ -51,7 +51,10 @@ Installing a kernel requires a
 .Ql rach2.slot=
 token identifying a candidate, fallback, or recovery boot.
 Committing requires
-.Ql rach2.slot=candidate .
+.Ql rach2.slot=candidate
+and an environment block whose
+.Ql next_entry
+is present and empty, the mark a consumed trial leaves.
 .Pp
 The commands are:
 .Bl -tag -width Ds
@@ -103,7 +106,9 @@ After installation, the command reports:
 .Dl bootctl: run `bootctl commit` after the new kernel boots
 .It Cm commit
 Make the booted candidate trial the saved default.
-Only a machine running the candidate may commit it.
+Only a machine running the candidate, with the consumed trial's empty
+.Ql next_entry
+in its environment block, may commit it.
 Success is reported as:
 .Dl bootctl: committed: the candidate is the saved default
 .It Cm trial Ar ENTRY
@@ -135,7 +140,8 @@ slot is refused.
 Replace the i386-pc GRUB core image through
 .Pa /dev/grubcore .
 The image must be 2 through 1024 sectors long.
-Write and verify the inactive gap tail, then switch LBA 1 to the new tail.
+The unused part of the core-image area after the master boot record is
+written and verified, then sector 1 is updated to refer to it.
 Sector 0 is never written.
 .It Cm env Ar KEY Op Ar VALUE
 Read or set
@@ -187,8 +193,8 @@ An unavailable GRUB window is reported as:
 .Dl bootctl: this machine has no boot loader window (no /dev/grubcore)
 .Pp
 A partition that cannot be read as a boot partition is reported with
-its path and the reason: its first sector could not be read, or that
-sector has no FAT signature.
+its path and the reason, for example that its first sector could not be
+read or that the sector has no FAT signature.
 For such a refusal with
 .Fl -target ,
 the command also reports

@@ -152,7 +152,8 @@ actions run without waiting, followed by the
 actions.
 A
 .Cm respawn
-action restarts whenever its process exits, without a restart rate limit.
+action restarts whenever its process exits; init does not disable an
+action whose process repeatedly exits.
 The
 .Cm askfirst
 action does the same, but prints
@@ -177,14 +178,14 @@ Without
 BusyBox init uses these entries:
 .Bd -literal -offset indent
 ::sysinit:/etc/init.d/rcS
-::askfirst:/bin/sh
-::ctrlaltdel:/sbin/reboot
-::shutdown:/sbin/swapoff -a
-::shutdown:/bin/umount -a -r
-::restart:/sbin/init
-tty2::askfirst:/bin/sh
-tty3::askfirst:/bin/sh
-tty4::askfirst:/bin/sh
+::askfirst:-/bin/sh
+::ctrlaltdel:reboot
+::shutdown:umount -a -r
+::shutdown:swapoff -a
+::restart:init
+tty2::askfirst:-/bin/sh
+tty3::askfirst:-/bin/sh
+tty4::askfirst:-/bin/sh
 .Ed
 .Sh OPTIONS
 The following options apply to
@@ -210,7 +211,8 @@ The
 usage also lists:
 .Bl -tag -width "-d SEC"
 .It Fl w
-Write a wtmp record only.
+Return successfully without stopping the machine; the wtmp record it
+would write is nothing here, since musl's wtmp functions are empty.
 .El
 .Sh FILES
 .Bl -tag -width /var/log/bootchart.tgz
