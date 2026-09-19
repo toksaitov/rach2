@@ -30,16 +30,26 @@ see
 .Bl -tag -width syslogd
 .It Nm klogd
 Log kernel messages to syslog.
-It has no kernel messages to read on Rach2.
+It uses
+.Fn klogctl ,
+which Rach2 does not implement: its read fails and it exits.
 .It Nm logger
 Write
 .Ar MESSAGE ,
 or standard input, to syslog.
+On Rach2 the message is not delivered, since the kernel refuses the Unix
+domain socket to the log; with
+.Fl s
+it still goes to standard error.
 .It Nm logread
 Display messages in the circular buffer of
 .Nm syslogd .
 .It Nm syslogd
 Provide system logging.
+On Rach2 it cannot start, since the kernel refuses the Unix domain socket
+it listens on; and
+.Nm logread
+needs the System V IPC the kernel does not have.
 .El
 .Sh OPTIONS
 .Ss klogd
@@ -47,7 +57,7 @@ Provide system logging.
 .It Fl c Ar N
 Print messages more urgent than priority
 .Ar N
-to the console.
+to the console; without effect on Rach2, where the daemon does not run.
 The priority is from 1 to 8.
 .It Fl n
 Run in the foreground.
@@ -88,8 +98,6 @@ the default is to log only over the network.
 .Bl -tag -width /dev/bootlog
 .It Pa /dev/bootlog
 Rach2 kernel log.
-.It Pa /proc/kmsg
-Absent on Rach2.
 .El
 .Sh EXAMPLES
 .Dl logger "hello"

@@ -10,7 +10,7 @@
 .Op Fl b
 .Op Fl l Ar SECONDS
 .Nm
-.Fl i Ar INTERFACE
+.Op Fl i Ar INTERFACE
 .Fl k
 .Sh DESCRIPTION
 .Nm
@@ -20,7 +20,9 @@ and resolver configuration.
 A packet socket receives replies before the interface has an address.
 .Pp
 The client maintains the lease for as long as it runs.
-It renews at T1 and rebinds at T2.
+It renews at T1, the renewal time, and rebinds at T2, the rebinding time:
+the server's values when it gives valid ones, otherwise one half and seven
+eighths of the lease.
 At expiry or on DHCPNAK, it removes the address and starts discovery again.
 Leases shorter than 10 seconds are ignored.
 Leases longer than one week, or the limit selected with
@@ -28,7 +30,7 @@ Leases longer than one week, or the limit selected with
 are capped.
 There is no configure-once mode.
 .Pp
-Only one client may hold an interface.
+Only one client may configure an interface at a time.
 The client creates
 .Pa /var/run/dhcpc.INTERFACE.pid
 with
@@ -69,7 +71,8 @@ Acquire and maintain a lease on eth0, entering the background after
 the first discovery round:
 .Dl dhcpc -b
 .Ql tests/run dhcp
-exercises lease acquisition, renewal, and expiry.
+exercises lease acquisition, renewal, and the address's removal with
+.Fl k .
 .Sh SEE ALSO
 .Xr busybox-networking 1 ,
 .Xr netup 8

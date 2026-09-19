@@ -436,3 +436,5 @@ loop-control 4 loop
 zero 4 null
 full 4 null
 urandom 4 random
+dbclient 8 dropbear
+dropbearkey 8 dropbear

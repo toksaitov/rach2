@@ -44,7 +44,10 @@ It has no zlib compression, syslog, utmp, wtmp, lastlog, or login message
 of the day.
 The executable is not position-independent.
 .Pp
-Init-metal and recovery's init start the server at boot and supervise it.
+Init-metal starts the server at boot and supervises it; recovery's init
+does so only when
+.Pa /root/.ssh/authorized_keys
+is a readable file with a line that is neither blank nor a comment.
 They use
 .Fl g
 to disable root password logins unless
@@ -57,7 +60,8 @@ On a RAM root, missing host keys are generated with
 An installed root keeps its host keys.
 The public keys authorized for an account are in
 .Pa ~/.ssh/authorized_keys .
-Recovery accepts the key it was built with.
+Recovery accepts the key it was built with, and starts no server without
+one.
 .Pp
 There is no sftp server, so
 .Nm scp
@@ -84,7 +88,8 @@ Close the connection after three consecutive keepalives receive no response.
 .It Fl I Ar seconds
 Disconnect after this many seconds without transmitted or received traffic.
 .It Fl z
-Disable the default AF21 quality-of-service marking on network traffic.
+Disable the requests for quality-of-service marking, which Rach2 accepts
+and ignores.
 .It Fl V
 Print the version.
 .El
@@ -214,6 +219,8 @@ A mismatch with a known host key still aborts the connection.
 Given twice, this option disables all host-key checking.
 .It Fl A
 Forward authentication-agent connections to the remote host.
+Agent authentication and forwarding do not work on Rach2, which refuses
+the Unix domain socket the agent is reached through.
 The client can use an OpenSSH-style agent through
 .Ev SSH_AUTH_SOCK
 for public-key authentication without forwarding it.

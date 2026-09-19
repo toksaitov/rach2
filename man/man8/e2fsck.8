@@ -22,8 +22,8 @@ a partition node such as
 .Pa /dev/disk0p3 .
 The volume must be unmounted.
 The recovery system mounts nothing from the disk it repairs.
-Rach2 volumes use ext2 without a journal, so journal recovery does not
-run on them.
+Rach2's ext2 volumes have no journal, so journal recovery does not run on
+them.
 .Pp
 Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl.
 .Nm
@@ -38,7 +38,7 @@ Only
 and
 .Xr resize2fs 8
 are built as guest e2fsprogs programs.
-No e2fsprogs volume formatter or manual editor is installed.
+Neither mke2fs nor debugfs is installed.
 .Pp
 The partition nodes provide raw sector access.
 The library uses whole 512-byte sectors at sector-aligned offsets,
@@ -158,7 +158,9 @@ Disable that optimization.
 This is the default unless changed in
 .Pa /etc/e2fsck.conf .
 .It Ql readahead_kb=value
-Use the specified number of KiB to prefetch metadata.
+Request that the specified number of KiB of metadata be prefetched; on
+Rach2 the prefetch does nothing, since the advisory call it uses is not
+implemented.
 Zero disables readahead.
 The default is the size of two block groups' inode tables;
 readahead is disabled if that exceeds 1/50 of physical memory.
@@ -187,7 +189,10 @@ simulate the required allocation and return a nonzero status if it fails.
 .It Fl f
 Check even a file system marked clean.
 .It Fl F
-Flush the device's buffer cache before checking.
+Flush the device's buffer cache before checking; on Rach2 the flush
+request answers
+.Er ENOTTY
+and the run ends before the check.
 .It Fl k
 With
 .Fl c ,
