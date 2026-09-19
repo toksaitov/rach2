@@ -22,7 +22,7 @@
  * `count {c|hash|md} FILE ...` prints `words N` and one `phrase N` line
  * per watched phrase, over the files named. The watch list is measured and
  * never gated: a high multiple is a question to ask, not a defect. Prose
- * is counted one comment at a time, each normalized first (its `*`, `//`
+ * is counted one comment at a time, each normalized first (its `*`, slash
  * and `#` decoration removed and its whitespace collapsed), because
  * without that the numbers measure formatting instead of writing: a phrase
  * broken across a line break would not be counted at all, a lone `*` would
@@ -139,7 +139,7 @@ static void spans_free(struct spans *s)
 }
 
 /* One comment, with its decoration gone and its whitespace collapsed:
-   leading `*`, `//` or `#` runs at the start of each line, then every run
+   leading `*`, slash or `#` runs at the start of each line, then every run
    of whitespace becomes one space. Returns a fresh string, or NULL when
    nothing is left. */
 static char *normalize(const char *text, size_t len)
