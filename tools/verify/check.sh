@@ -285,7 +285,8 @@ fi
 # the machine or a stick carries are the build's (the root Makefile and mk/),
 # and a suite names one only as a prerequisite. A product is a file under
 # build/images named rach2-*, or one of the sealed and recovery names.
-# shellcheck disable=SC2016 # the dollar is grep's, a literal $(NAME) target
+# The dollar is grep's, a literal $(NAME) target.
+# shellcheck disable=SC2016
 products=$(grep -n '^\(build/images/rach2-[a-z0-9-]*\.[a-z0-9]*\|\$(SEALED_DISK)\|\$(SEALED_EXT2)\|\$(RECOVERY_ISO)\|\$(RECOVERY_IMAGE)\|\$(METAL_IMAGE)\|\$(STICK_IMAGE)\|\$(INSTALL_STICK)\|\$(OS_REAL_IMAGE)\|\$(OS_SIMPLE_IMAGE)\|\$(TEST_IMAGE)\) *:' "$REPO/tests/system/suites.mk" || true)
 if [ -z "$products" ]; then
     echo "  PASS (no product rule under tests/)"
