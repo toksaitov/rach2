@@ -5,3 +5,4 @@ NAME: passwd - change an account's password. Source: utils/passwd.c header, util
 * On os-real `passwd` is BusyBox's applet from the set-id build: `passwd [-a ALG] [-dlu] [USER]`: `-a ALG` the crypt algorithm, `-d` set an empty password, `-l` lock, `-u` unlock.
 * EXAMPLE: `passwd`; `tests/run account` changes a password and logs in with it.
 * SEE ALSO: passwd(5), login(1), su(1), adduser(8).
+* Found at the proofreading: BusyBox's -d, -l and -u need real uid 0 and the user operand.

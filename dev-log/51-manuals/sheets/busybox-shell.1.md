@@ -2,7 +2,7 @@
 
 NAME: busybox-shell - the shells: the BusyBox applets of its `shell` directory as built for Rach2 (BusyBox 1.36.1, vendor/busybox/rach2.config), one family page with an alias for each applet.
 
-The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `sh` and `ash` are sh(1); `hush` is built as well; `cttyhack` gives a shell a controlling terminal.
+The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `sh` and `ash` are sh(1); `hush` is built as well; `cttyhack` gives a shell a controlling terminal. Found at the proofreading: the upstream example `setsid cttyhack sh` cannot take a controlling terminal here, since /dev/tty answers ENXIO after setsid and cttyhack's console interfaces are absent.
 
 
 The usage text BusyBox carries, per applet:

@@ -53,6 +53,7 @@ Without
 .Nm
 searches the working directory for
 .Pa PDPmakefile ,
+which strict POSIX mode selected before the input is read skips,
 .Pa makefile
 and
 .Pa Makefile ,
@@ -67,20 +68,22 @@ Enable strict POSIX mode.
 This must be the first command-line option.
 .It Fl C Ar dir
 Change to
-.Ar dir
+.Ar dir ;
+strict POSIX mode rejects the option.
 before execution.
 Repeated options are relative to the preceding directory;
 .Ql -C / -C etc
 is equivalent to
 .Ql -C /etc .
 .It Fl e
-Let environment variables override macro assignments.
+Let environment variables override the makefile's macro assignments;
+command-line assignments still take precedence.
 .It Fl f Ar file
 Read the makefile
 .Ar file .
 Repeated options read the files in the order given.
 .It Fl h
-Print help.
+Print help; strict POSIX mode rejects the option.
 .It Fl i
 Ignore unsuccessful command exits and continue.
 This is equivalent to the special target
@@ -88,18 +91,23 @@ This is equivalent to the special target
 without prerequisites.
 .It Fl j Ar num_jobs
 Ignored.
-Accepted for compatibility with other make implementations.
+Accepted for compatibility with other make implementations; POSIX.1-2017
+mode rejects it.
 Recipes run serially.
 .It Fl k
 Continue processing after an error.
 Do not execute recipes for targets that depend on failed targets.
 .It Fl n
 Print commands without executing them, except commands prefixed with
-.Ql + .
+.Ql +
+or expanding
+.Va MAKE ,
+and the recipes that rebuild included makefiles, which still run.
 .It Fl p
 Print macro definitions and rules during execution.
 .It Fl q
-Execute no rules.
+Execute no rules, except commands prefixed with
+.Ql + .
 Exit successfully if the requested targets are up to date, or with status 1
 otherwise.
 .It Fl r
@@ -114,7 +122,10 @@ This is equivalent to the special target
 .Ql .SILENT
 without prerequisites.
 .It Fl t
-Touch target files instead of executing rules.
+Touch target files instead of executing rules, except commands prefixed
+with
+.Ql + ,
+which run.
 Ignore targets that are up to date or have no rules.
 .It Fl x Ar pragma
 Enable an extension in strict POSIX mode.
@@ -126,8 +137,9 @@ Assign
 to
 .Ar macro ,
 overriding its definition in the input.
-Assignments and targets may be mixed on the command line;
-assignments are processed first.
+Assignments and targets may be mixed on the command line, as an
+extension; strict POSIX mode requires the assignments first.
+Assignments are processed first.
 .El
 .Ss Pragmas
 Pragmas selectively enable extensions in strict POSIX mode.
@@ -171,7 +183,7 @@ This may also require
 .It Pa /bin/make
 The pdpmake executable.
 .It Pa PDPmakefile , makefile , Makefile
-Default input makefiles, in search order.
+Default input makefiles, in search order; strict POSIX mode skips the first.
 .It Pa /src/rach2/guest.mk
 Kernel makefile.
 .It Pa /src/utils/guest.mk
@@ -284,7 +296,12 @@ and
 .Ql $*
 have values in target rules.
 .It
-A target is removed when its build command receives a signal.
+A target is removed when its build command ends on a signal and errors
+are not ignored, unless the target is precious or phony or
+.Fl n
+or
+.Fl p
+is in effect.
 .It
 Inference rules and
 .Ql .DEFAULT

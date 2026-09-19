@@ -26,7 +26,8 @@ Print the locations of matching pages.
 .El
 .Pp
 .Ev COLUMNS
-overrides the output width.
+sets the width the pager displays at; the installed pages are preformatted
+and are not reformatted to it.
 .Pp
 The manual sections are:
 .Bl -tag -width Ds -compact
@@ -57,7 +58,12 @@ and
 checking
 .Pa catN
 before
-.Pa manN .
+.Pa manN ;
+these are the defaults when
+.Ev MANPATH
+is unset, and a
+.Ev MANPATH
+given is searched instead.
 .Pp
 When standard output is a terminal, the pager is selected from
 .Ev MANPAGER ,

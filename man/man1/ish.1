@@ -37,7 +37,13 @@ For external commands, the separate tokens
 and
 .Ql >
 redirect standard input and standard output.
-Output redirection creates or truncates the file at mode 0644.
+The arguments must come before the redirections, and when both streams
+are redirected the output must come before the input; a form that breaks
+this order loses the arguments or the output redirection.
+Output redirection creates the file with requested mode 0644, subject to
+the file-creation mask, or truncates an existing file.
+The files are opened for a builtin too, though a builtin's streams are not
+redirected.
 .Pp
 The builtins are:
 .Bl -tag -width Ds

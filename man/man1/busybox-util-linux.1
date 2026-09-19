@@ -246,19 +246,28 @@ Read volumes through the disk nodes described in
 Display a calendar.
 .It Nm chrt
 Request a scheduling priority and class for a process.
+Rach2 does not implement the scheduling calls, so the request fails.
 .It Nm fallocate
 Preallocate space for a file.
+Rach2 does not implement the call, so the request fails.
 .It Nm fatattr
 Change FAT file attributes.
+Rach2 does not implement the FAT attribute requests, so the change fails.
 .It Nm fbset
 Show or modify frame buffer settings.
+Rach2 has no
+.Pa /dev/fb0
+and does not implement the Linux frame buffer requests.
 .It Nm fdflush
 Request that a floppy drive detect a disk change.
+Rach2 has no floppy devices and does not implement the request.
 .It Nm fdformat
 Format a floppy disk.
+Rach2 has no floppy devices and does not implement the request.
 .It Nm fdisk
 Read or change a partition table.
-Writing a table requires the recovery kernel.
+Writing a table to a raw disk node requires the recovery kernel; an image
+file can be written on any kernel.
 .It Nm findfs
 Find a file system device by label or UUID.
 Read volumes through the disk nodes described in
@@ -270,6 +279,7 @@ Rach2 registers no
 system call, so the request fails.
 .It Nm freeramdisk
 Request that all memory used by a RAM disk be freed.
+Rach2 has no such device and does not implement the request.
 .It Nm fsck.minix
 Check a MINIX file system and optionally repair it.
 .It Nm getopt
@@ -284,8 +294,10 @@ Request a read or update of the hardware real-time clock (RTC).
 Rach2 publishes no RTC device node, so the applet fails.
 .It Nm ipcrm
 Remove System V shared memory segments, message queues, or semaphores.
+Rach2 has no System V IPC, so the applet fails.
 .It Nm ipcs
 Display System V shared memory, message queue, or semaphore information.
+Rach2 has no System V IPC, so the applet fails.
 .It Nm last
 List the last users who logged in.
 .It Nm linux32 , Nm linux64
@@ -326,27 +338,38 @@ Check whether a directory is a mount point.
 Refuse a login.
 .It Nm nsenter
 Request entry into namespaces and run a program.
+Rach2 has no namespaces, so the request fails.
 .It Nm pivot_root
 Request that the current root file system be moved to
 .Ar PUT_OLD
 and
 .Ar NEW_ROOT
 be made the root file system.
+Rach2 does not implement the call, so the request fails.
 .It Nm rdate
-Set and print the time from
+Print, or attempt to set, the time from
 .Ar HOST
 using RFC 868.
+Rach2 has no
+.Fn settimeofday
+handler, so setting the clock fails;
+.Fl p
+prints the remote time.
 .It Nm rdev
 Print the device node for the file system mounted at
 .Pa / .
 .It Nm readprofile
-Read kernel profiling counters.
+Read kernel profiling counters from
+.Pa /proc/profile ,
+which Rach2 does not have.
 .It Nm renice
 Request a change to a running process's scheduling priority.
+Rach2 does not implement the priority calls, so the request fails.
 .It Nm rev
 Reverse the characters in each line of a file.
 .It Nm rtcwake
 Request a system sleep state until a specified wakeup time.
+Rach2 has neither the RTC nor the suspend interfaces it uses.
 .It Nm script
 Record a terminal session in
 .Ar OUTFILE ,
@@ -360,19 +383,25 @@ Run a program with the selected uname emulation:
 for 32 bits or
 .Cm linux64
 for 64 bits.
+Rach2 does not implement the personality call, so the request fails.
 .It Nm setsid
-Run a program in a new session without a controlling terminal.
-Keyboard signals such as Ctrl-C do not affect the program.
+Run a program in a new session.
+Without
+.Fl c ,
+the program has no controlling terminal and keyboard signals such as
+Ctrl-C do not affect it.
 .It Nm swapoff , Nm swapon
 Request that swapping on a device stop or start, respectively.
 Rach2 does not support swap.
 .It Nm taskset
 Set or get CPU affinity.
+Rach2 does not implement the affinity calls, so the applet fails.
 .It Nm umount
 Unmount file systems; see
 .Xr mount 8 .
 .It Nm unshare
 Request separate namespaces for a program.
+Rach2 has no namespaces, so the request fails.
 .It Nm xxd
 Display a hexadecimal dump of a file or standard input.
 .El
@@ -632,7 +661,7 @@ Do not fork before executing the program.
 .El
 .Ss rdate
 .Fl s
-only sets the system time;
+only sets the system time, which fails on Rach2;
 .Fl p
 only prints the time.
 .Ss readprofile

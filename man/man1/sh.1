@@ -17,11 +17,13 @@
 .Oc
 .Sh DESCRIPTION
 This page describes BusyBox 1.36.1 ash as built for Rach2.
-On os-real,
+On os-real, the metal disk and recovery,
 .Pa /bin/sh
 and
 .Pa /bin/busybox
-contain the same program.
+contain the same program; os-simple and the test image install
+.Xr ish 1
+as their shell instead.
 .Pp
 The shell is a login shell when
 .Ql argv[0]
@@ -90,7 +92,6 @@ System login profile.
 .Sh EXAMPLES
 .Dl sh -c 'echo $((1 + 2))'
 .Sh SEE ALSO
-.Xr busybox 1 ,
 .Xr login 1 ,
 .Xr limits 7
 .Sh HISTORY

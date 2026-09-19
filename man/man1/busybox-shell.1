@@ -61,8 +61,16 @@ entry for BusyBox init:
 Give a shell running as process ID 1 a controlling terminal:
 .Dl exec cttyhack sh
 .Pp
-Start an interactive shell from a boot shell script:
-.Dl setsid cttyhack sh
+The upstream example of starting an interactive shell from a boot script,
+.Ql setsid cttyhack sh ,
+does not work here: after
+.Nm setsid ,
+.Pa /dev/tty
+answers
+.Er ENXIO ,
+and the console interfaces
+.Nm cttyhack
+searches are not on Rach2.
 .Sh SEE ALSO
 .Xr sh 1
 .Sh HISTORY

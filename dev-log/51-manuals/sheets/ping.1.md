@@ -5,3 +5,4 @@ NAME: ping - send ICMP echo requests. Source: utils/ping.c header, utils/Readme.
 * On os-real this program is `/bin/ping`; BusyBox's ping applet is not built.
 * EXAMPLE: `ping 10.0.2.2`; `tests/run ping` runs it.
 * SEE ALSO: ping(2), nc(1), busybox-networking(1).
+* Found at the proofreading: each SC_PING operation may send up to four echo requests, so four operations are not four requests; the resolver falls back to /hosts and /resolv.conf when the /etc files are absent, and stops retrying when a matching response arrives; no suite runs the command (tests/run ping runs /pingtest).

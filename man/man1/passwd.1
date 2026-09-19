@@ -12,15 +12,18 @@
 .Ss os-real
 .Nm
 .Op Fl a Ar algorithm
-.Op Fl dlu
 .Op Ar user
+.Nm
+.Op Fl a Ar algorithm
+.Fl d | Fl l | Fl u
+.Ar user
 .Sh DESCRIPTION
 On os-simple,
 .Nm
 is the project program, installed set-user-ID root.
 The account defaults to the caller's own account.
 Changing another account's password requires a real user ID of 0.
-Root need not supply the old password; other callers must prove the
+Root need not supply the old password; other callers must enter the
 account's current password first.
 .Pp
 The new password is entered twice.
@@ -52,6 +55,12 @@ Set an empty password.
 Lock the account.
 .It Fl u
 Unlock the account.
+.El
+.Pp
+The three operations require a real user ID of 0 and name the
+.Ar user ;
+BusyBox refuses them without the operand.
+.Bl -tag -width Ds
 .El
 .Sh FILES
 .Bl -tag -width /etc/shadow

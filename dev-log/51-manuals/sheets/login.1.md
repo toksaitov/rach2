@@ -9,3 +9,4 @@ Two programs answer to this name and the page covers both, saying which image ha
 * FILES: /etc/passwd, /etc/shadow, /etc/motd, /etc/profile (BusyBox's login; the project's does not read it).
 * EXAMPLE: the console prompt `rach2 login:`, answered with `root` and the password; `tests/run login` and `tests/run account` run it.
 * SEE ALSO: su(1), passwd(1), sh(1), passwd(5), shadow(5).
+* Found at the proofreading: BusyBox's `-f` is root's alone; `-p` keeps the environment except HOME and SHELL, USER and LOGNAME for an account other than root, and the unsafe variables a set-id invocation drops.

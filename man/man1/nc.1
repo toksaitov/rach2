@@ -58,7 +58,8 @@ provide a persistent server.
 .It Fl l
 Listen for incoming connections.
 .It Fl n
-Do not resolve names through DNS.
+Suppress the reverse name lookup in verbose reports of incoming
+connections; host operands are still resolved.
 .It Fl o Ar file
 Write a hexadecimal dump of traffic to the file.
 .It Fl p Ar port
@@ -76,11 +77,6 @@ Use zero-I/O mode for scanning.
 .El
 .Sh EXAMPLES
 .Dl nc 10.0.2.2 80
-The
-.Ql tests/run socket
-and
-.Ql tests/run tcp
-suites use the project client with their hostpeer server.
 .Sh DIAGNOSTICS
 The project client prints
 .Ql "usage: nc <host> <port>"

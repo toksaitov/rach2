@@ -9,8 +9,9 @@
 .Op Ar host
 .Sh DESCRIPTION
 .Nm
-sends four ICMP echo requests to
-.Ar host .
+attempts four ping operations to
+.Ar host ;
+each may send up to four echo requests.
 The default host is
 .Ql 10.0.2.2 ,
 QEMU's gateway.
@@ -19,13 +20,19 @@ Root privilege is not required.
 The host may be an IPv4 address or a name.
 Names are looked up in
 .Pa /etc/hosts ,
-then through a DNS A query to the first valid
+or
+.Pa /hosts
+when that file is absent, then through a DNS A query to the first valid
 .Ql nameserver
 in
-.Pa /etc/resolv.conf .
+.Pa /etc/resolv.conf ,
+or
+.Pa /resolv.conf
+when that file is absent.
 The default DNS server is
 .Ql 10.0.2.3 .
-DNS retries last about six seconds.
+The resolver retries for about six seconds unless a matching response
+arrives.
 .Pp
 Each request uses the kernel's private
 .Dv SC_PING
@@ -53,6 +60,8 @@ BusyBox's ping applet is not built.
 Host names and addresses.
 .It Pa /etc/resolv.conf
 DNS server configuration.
+.It Pa /hosts , /resolv.conf
+The files read when the two above are absent.
 .El
 .Sh EXIT STATUS
 .Nm
@@ -62,13 +71,10 @@ It returns 1 if no replies arrive, the host cannot be resolved, or
 another request is in flight.
 .Sh EXAMPLES
 .Dl ping 10.0.2.2
-The
-.Ql tests/run ping
-suite runs this command.
 .Sh DIAGNOSTICS
 .Bl -tag -width Ds
 .It Ql ping: another ping in flight
-Another request occupies the machine's single ICMP echo request.
+Another ICMP echo request is in progress.
 .El
 .Sh SEE ALSO
 .Xr busybox-networking 1 ,

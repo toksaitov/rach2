@@ -7,3 +7,4 @@ NAME: man - read a manual page. BusyBox's applet as built here; sources: BusyBox
 * The sections: 1 programs, 2 system calls, 4 devices, 5 file formats, 7 overviews, 8 administration; rach2(7) is the entry.
 * EXAMPLE: `man rach2`, `man 2 open`, `man bootctl`. `tests/run man` reads rach2(7) both ways.
 * Adapted from BusyBox's documentation, GPL-2.0. SEE ALSO: rach2(7), less(1) (phase 4 family page).
+* Found at the proofreading: COLUMNS is the pager's display width, the preformatted pages are not reformatted; the two search directories are the defaults when MANPATH is unset, and man.c takes a MANPATH given.

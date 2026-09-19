@@ -31,11 +31,21 @@ Init's session child starts it.
 The options are:
 .Bl -tag -width "-h host"
 .It Fl f
-Do not authenticate the specified user.
+Skip password authentication for the specified user.
+Only root may use this option.
 .It Fl h Ar host
 Record the host the user came from.
 .It Fl p
-Preserve the environment.
+Preserve the environment, except that
+.Ev HOME
+and
+.Ev SHELL
+are set afresh,
+.Ev USER
+and
+.Ev LOGNAME
+too for an account other than root, and unsafe variables are removed from
+a set-id invocation.
 .El
 .Pp
 The
