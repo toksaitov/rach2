@@ -607,7 +607,7 @@ static int clear_next(struct hub *h, int port)
     int feature;
 
     if (p->to_clear & POWER_OFF_BIT) {
-        p->to_clear &= (uint16_t)~POWER_OFF_BIT;
+        p->to_clear = (uint16_t)(p->to_clear & ~POWER_OFF_BIT);
         return request(h, TYPE_CLASS_PORT_OUT, REQ_CLEAR_FEATURE, PORT_POWER, port, 0,
                        REQ_POWER_OFF, port) == 0;
     }

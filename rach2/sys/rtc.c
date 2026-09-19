@@ -106,8 +106,8 @@ int rtc_snapshots_agree(const rtc_snapshot_t *a, const rtc_snapshot_t *b)
 
     return a->second == b->second && a->minute == b->minute && a->hour == b->hour &&
            a->day == b->day && a->month == b->month && a->year == b->year &&
-           (uint8_t)(a->status_a & (uint8_t)~RTC_STATUS_A_UPDATING) ==
-               (uint8_t)(b->status_a & (uint8_t)~RTC_STATUS_A_UPDATING) &&
+           (uint8_t)(a->status_a & ~RTC_STATUS_A_UPDATING) ==
+               (uint8_t)(b->status_a & ~RTC_STATUS_A_UPDATING) &&
            a->status_b == b->status_b && a->status_d == b->status_d;
 }
 
@@ -201,7 +201,7 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
     hour_reg = raw->hour;
     if (!(raw->status_b & RTC_STATUS_B_24_HOUR)) {
         pm = (hour_reg & RTC_HOUR_PM) != 0;
-        hour_reg = (uint8_t)(hour_reg & (uint8_t)~RTC_HOUR_PM);
+        hour_reg = (uint8_t)(hour_reg & ~RTC_HOUR_PM);
     }
 
     if (binary) {

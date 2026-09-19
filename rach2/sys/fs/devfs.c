@@ -723,7 +723,7 @@ static void dev_disk_close(fd_entry_t *e)
  * file system may not have. The control node takes one line per write:
  * `attach N /path`, `attach - /path` for the first free device, `detach N`.
  */
-static int32_t loop_node_read(fd_entry_t *entry, char *buffer, uint32_t count)
+static int32_t loop_node_read(fd_entry_t *entry, char __user *buffer, uint32_t count)
 {
     (void)entry;
     (void)buffer;
@@ -731,7 +731,7 @@ static int32_t loop_node_read(fd_entry_t *entry, char *buffer, uint32_t count)
     return -EPERM;
 }
 
-static int32_t loop_node_write(fd_entry_t *entry, const char *buffer, uint32_t count)
+static int32_t loop_node_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
     (void)entry;
     (void)buffer;
@@ -739,12 +739,19 @@ static int32_t loop_node_write(fd_entry_t *entry, const char *buffer, uint32_t c
     return -EPERM;
 }
 
-static int32_t loopctl_write(fd_entry_t *entry, const char *buffer, uint32_t count)
+static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
+    char line[LOOP_PATH_MAX + 16];
     int rc;
 
     (void)entry;
-    rc = loop_control_write(buffer, count);
+    if (count == 0 || count >= sizeof(line)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(line, buffer, count) != 0) {
+        return -EFAULT;
+    }
+    rc = loop_control_write(line, count);
     return rc < 0 ? (int32_t)rc : (int32_t)count;
 }
 
@@ -753,13 +760,20 @@ static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_po
 
 /* `/dev/framefail`: a count written to it arms the test switch in the
  * frame allocator; EPERM unless `rach2.framefail` is on the boot line. */
-static int32_t framefail_write(fd_entry_t *entry, const char *buffer, uint32_t count)
+static int32_t framefail_write(fd_entry_t *entry, const char __user *buffer, uint32_t count)
 {
+    char digits[16];
     uint32_t n = 0, i;
 
     (void)entry;
-    for (i = 0; i < count && buffer[i] >= '0' && buffer[i] <= '9'; i++) {
-        n = n * 10u + (uint32_t)(buffer[i] - '0');
+    if (count > sizeof(digits)) {
+        count = sizeof(digits);
+    }
+    if (copy_from_user(digits, buffer, count) != 0) {
+        return -EFAULT;
+    }
+    for (i = 0; i < count && digits[i] >= '0' && digits[i] <= '9'; i++) {
+        n = n * 10u + (uint32_t)(digits[i] - '0');
     }
     if (i == 0) {
         return -EINVAL;

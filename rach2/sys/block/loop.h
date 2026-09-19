@@ -66,6 +66,10 @@ void loop_device_gone(block_device_t *device);
 int loop_line(int index, char *buffer, uint32_t cap);
 
 /** The write handler behind /dev/loop-control. */
+/** The longest backing path a control line may name; a line is that plus
+    its command word, and a longer write is refused. */
+#define LOOP_PATH_MAX 64
+
 int loop_control_write(const char *buffer, uint32_t count);
 
 #endif /* _LOOP_H_ */

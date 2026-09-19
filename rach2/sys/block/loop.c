@@ -32,8 +32,6 @@
 #include "../lib/kstring.h"
 #include "../proc/process.h"
 
-#define LOOP_PATH_MAX 64
-
 struct loop_device {
     block_device_t dev; /* first: a device pointer is a loop pointer */
     int used;           /* the slot is taken, whether or not it is attached */
