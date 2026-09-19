@@ -151,6 +151,14 @@ static int cmp_str(const void *a, const void *b)
     return strcmp(*(char *const *) a, *(char *const *) b);
 }
 
+/* Sorts a list's items; an empty list has no array to hand to qsort,
+   whose first argument the C library declares never null. */
+static void list_sort(struct list *l)
+{
+    if (l->n > 0)
+        qsort(l->item, (size_t) l->n, sizeof(char *), cmp_str);
+}
+
 /* Whitespace-split `text` onto `out`. */
 static void split_into(struct list *out, const char *text)
 {
@@ -865,7 +873,7 @@ static void host_utils_map(struct progmap *map)
             snprintf(own, sizeof(own), "%s.c", programs.item[i]);
             push(&found, own);
         }
-        qsort(found.item, (size_t) found.n, sizeof(char *), cmp_str);
+        list_sort(&found);
         join_into(joined, sizeof(joined), &found);
         push(&map->program, programs.item[i]);
         push(&map->sources, joined);
@@ -946,7 +954,7 @@ static int check_utils(void)
             if (len > 2 && strcmp(words.item[k] + len - 2, ".c") == 0)
                 push(&found, words.item[k]);
         }
-        qsort(found.item, (size_t) found.n, sizeof(char *), cmp_str);
+        list_sort(&found);
         join_into(joined, sizeof(joined), &found);
         if (strcmp(joined, map.sources.item[i]) != 0)
             fail("utils/guest.mk %s builds from %s; the host builds from %s",
@@ -966,7 +974,7 @@ static int check_utils(void)
             if (len > 2 && strcmp(words.item[k] + len - 2, ".c") == 0)
                 push(&found, words.item[k]);
         }
-        qsort(found.item, (size_t) found.n, sizeof(char *), cmp_str);
+        list_sort(&found);
         join_into(joined, sizeof(joined), &found);
         if (strcmp(joined, map.sources.item[i]) != 0)
             fail("utils/guest.mk %s compiles %s in its recipe; the host "
