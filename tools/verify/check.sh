@@ -443,15 +443,9 @@ fi
 #     each form of a guessed duration and accept each marked interval.
 hr "13/18 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
-if [ ! -x "$ELFCHECK" ] || [ "$REPO/tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
-    mkdir -p "${ELFCHECK%/*}"
-    cc -O2 -o "$ELFCHECK" "$REPO/tools/inspect/elfcheck.c" || exit 1
-fi
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
-if [ ! -x "$CFGCHECK" ] || [ "$REPO/tools/inspect/cfgcheck.c" -nt "$CFGCHECK" ]; then
-    mkdir -p "${CFGCHECK%/*}"
-    cc -O2 -o "$CFGCHECK" "$REPO/tools/inspect/cfgcheck.c" || exit 1
-fi
+make -C "$REPO" --no-print-directory build/tools/inspect/elfcheck build/tools/inspect/cfgcheck \
+    >/dev/null || exit 1
 if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    "$CFGCHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
