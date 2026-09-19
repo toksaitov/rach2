@@ -1,0 +1,45 @@
+.Dd September 19, 2026
+.Dt SSHD.CONF 5
+.Os
+.Sh NAME
+.Nm sshd.conf
+.Nd SSH server policy file
+.Sh SYNOPSIS
+.Pa /etc/rach2/sshd.conf
+.Sh DESCRIPTION
+Init reads
+.Pa /etc/rach2/sshd.conf
+before starting Dropbear.
+Root password logins are disabled by default.
+The file has one setting:
+.Dl root-password-login yes
+This setting makes init start Dropbear without
+.Fl g ,
+permitting root to log in with a password.
+The line
+.Ql root-password-login yesterday
+does not enable password login.
+If the file is absent, root may log in by key only.
+.Pp
+The RAM images and recovery contain no such file.
+.Xr rach2-install 8
+writes it on the installed root, and
+.Fl Fl update
+preserves it when replacing the root file system.
+.Pp
+Missing host keys are generated at the first connection, so a RAM root
+has new keys each boot and an installed root keeps its own.
+.Sh FILES
+.Bl -tag -width /home/NAME/.ssh/authorized_keys
+.It Pa /etc/rach2/sshd.conf
+SSH login policy read by init.
+.It Pa /root/.ssh/authorized_keys
+Keys authorized to log in as root.
+.It Pa /home/NAME/.ssh/authorized_keys
+Keys authorized to log in as the account
+.Ar NAME .
+.El
+.Sh SEE ALSO
+.Xr recovery 7 ,
+.Xr dropbear 8 ,
+.Xr rach2-install 8
