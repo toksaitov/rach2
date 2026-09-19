@@ -62,9 +62,8 @@ The kernel interface returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/forktest.c
-creates a child, has it exit with a chosen status, and checks that
-.Xr waitpid 2
-returns that child's ID and exit status.
+creates a child that exits with status 42, waits for it, and checks for a
+normal exit with that status.
 .Pa tests/ofdprobe.c
 checks that a child advances the file offset seen by its parent.
 .Sh ERRORS

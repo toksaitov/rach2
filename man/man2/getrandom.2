@@ -17,9 +17,7 @@ bytes into
 from the kernel's ChaCha20 cryptographic pseudorandom number generator.
 The i386 system call number is 355.
 musl uses this call for
-.Fn getrandom
-and
-.Fn arc4random .
+.Fn getrandom .
 .Pp
 The generator is seeded once at boot.
 The kernel first tries RDSEED, then RDRAND.

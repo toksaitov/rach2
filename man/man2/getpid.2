@@ -91,13 +91,29 @@ The query functions return the requested ID.
 returns the new session ID, which is the caller's process ID.
 .Fn setpgid
 returns 0 on success.
-On failure, these functions return -1 and set
-.Va errno .
-The kernel interface returns the negative error number.
+On failure,
+.Fn getpgid ,
+.Fn getsid ,
+.Fn setpgid
+and
+.Fn setsid
+return -1 and set
+.Va errno ;
+musl's
+.Fn getpid ,
+.Fn getppid
+and
+.Fn getpgrp
+return the kernel's result as it is.
+The kernel interface returns the negative error number; its
+.Er ESRCH
+for no current process is the handler's condition, not one a program
+meets.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/jobprobe.c
-forks a child, checks its inherited group and session, calls
+forks a child, checks that its process group differs from its process ID
+and that two session queries agree, calls
 .Fn setpgid "0" "0" ,
 and checks that the child's process group ID equals its process ID.
 A separate child calls

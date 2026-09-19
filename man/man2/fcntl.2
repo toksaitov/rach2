@@ -111,7 +111,12 @@ The other supported commands return 0.
 On failure,
 .Fn fcntl
 returns -1 and sets
-.Va errno .
+.Va errno ,
+except that musl's
+.Dv F_GETOWN
+fallback returns the raw -22 of
+.Er EINVAL
+for an open descriptor without setting it.
 The kernel interface returns the negative error number.
 .Sh EXAMPLES
 The default suite's
