@@ -1532,13 +1532,13 @@ static int selftest(void)
            without backticks or without the colon is prose, and a tilde
            fence hides its contents too. */
         {
-            static const char text[] =
+            static const char sample[] =
                 "* `25-sealed`: an entry.\n"
                 "  * `24-metal`: indented, so a sub-item.\n"
                 "* not-a-milestone: no backticks.\n"
                 "* `26-portable` no colon after the name.\n"
                 "~~~\n* `07-init`: fenced with tildes.\n~~~\n";
-            int n_entries = read_entries(text, sizeof(text) - 1, entries, 64);
+            int n_entries = read_entries(sample, sizeof(sample) - 1, entries, 64);
 
             st_check(n_entries == 1 &&
                      strcmp(entries[0], "25-sealed") == 0,
