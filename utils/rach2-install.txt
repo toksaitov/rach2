@@ -50,16 +50,18 @@ DESCRIPTION
                        is asked again rather than ending the run. What is given
                        is copied into the account's ~/.ssh/authorized_keys.
 
-     the root's size   Whether to grow the root into the whole disk. The
-                       default is yes; no leaves the root the size the image
+     the root's size   Whether to grow the root into the whole disk. An
+                       empty answer, y or yes grows it; any other answer
+                       leaves the root the size the image
                        has.
 
      the confirmation  Everything that was answered is shown together: the
                        disk and what it is, the account, the keys, and whether
                        the root will be grown. The disk's own name must then be
-                       typed back. The word stop stops without writing;
-                       anything else is said to be wrong and asked again, so a
-                       typo does not throw away the answers above it.
+                       typed back. The words stop, STOP, Stop, quit and q
+                       stop without writing; anything else is said to be
+                       wrong and asked again, so a typo does not throw away
+                       the answers above it.
 
      The four files are archived on the recovery partition as well, the
      passwords as the hashes they are, so that an update of a root that no
@@ -96,13 +98,18 @@ DESCRIPTION
      of the table; where both read and disagree, each file that differs is
      named and the root's copy is kept. The archive is written from what was
      kept before the root is written, marked as an update in progress, and
-     written again without the mark after the accounts are back, each time
-     whole or not at all; an update that stopped between the two leaves the
-     image's accounts on the root and the mark on the archive, and the next
-     update takes the archive. The recovery partition is mounted with the
+     written again without the mark after the accounts are back; each
+     writing makes the new archive beside the old one and then removes the
+     old and renames the new into its place, so an update stopped between
+     the removal and the rename leaves no archive. An update that stopped
+     between the two writings leaves the image's accounts on the root and
+     the mark on the archive, and the next update takes the archive. A
+     file the old root did not have, a policy or a host key, leaves the
+     image's copy in place. The recovery partition is mounted with the
      archive readable by root alone. The image's home directories and the
-     keys in them are removed whatever was kept; an account whose home was
-     not kept gets an empty one.
+     keys in them are removed whatever was kept; when no home was kept, an
+     empty one is made for each account whose uid is 1000 or more and whose
+     home lies under /home.
 
      The image is judged before the root it replaces is destroyed: its length
      must be a whole number of sectors and must fit the partition, its first
