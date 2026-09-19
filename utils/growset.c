@@ -246,7 +246,7 @@ int main(int argc, char **argv)
     sparse = (rd32(sb + 100) & 0x0001ul) != 0;
     resize = (rd32(sb + 92) & 0x0010ul) != 0;
     reserved = resize ? rd16(sb + 206) : 0;
-    if (bs != 4096 || !resize) {
+    if (!resize) {
         fprintf(stderr,
                 "growset: %s: the volume is not the 4096-byte-block, resize_inode "
                 "profile this computes for\n",
