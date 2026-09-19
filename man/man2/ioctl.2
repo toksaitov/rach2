@@ -1,0 +1,316 @@
+.Dd September 19, 2026
+.Dt IOCTL 2
+.Os
+.Sh NAME
+.Nm ioctl
+.Nd control a device
+.Sh SYNOPSIS
+.In sys/ioctl.h
+.Ft int
+.Fn ioctl "int fd" "int request" "..."
+.Sh DESCRIPTION
+.Fn ioctl
+performs
+.Fa request
+on the object referred to by
+.Fa fd .
+The third argument, called
+.Fa arg
+below, is a pointer or an integer as the request requires.
+The i386 system call number is 54: EBX is the descriptor, ECX the request,
+and EDX the argument.
+.Pp
+The descriptor is checked before the request.
+Sockets first handle network-interface requests.
+The console and pseudo-terminal slaves share the terminal requests below.
+A descriptor with device operations handles its remaining requests through
+those operations; the framebuffer and console handle their private requests.
+An unsupported request returns
+.Er ENOTTY .
+The mouse has no ioctl requests.
+.Ss Terminal requests
+The console and pseudo-terminal slaves accept:
+.Bl -tag -width "TIOCGWINSZ"
+.It Dv TCGETS
+Copy the 36-byte kernel termios to
+.Fa arg .
+This is the i386 kernel layout with 19 control characters, not musl's
+larger termios structure with 32 control characters and speed fields.
+.It Dv TCSETS , TCSETSW , TCSETSF
+Read a 36-byte kernel termios from
+.Fa arg
+and install it.
+.Dv TCSETSW
+acts immediately, like
+.Dv TCSETS .
+.Dv TCSETSF
+also discards unread input.
+.It Dv TCFLSH
+The integer
+.Fa arg
+selects the queue:
+.Dv TCIFLUSH
+(0) and
+.Dv TCIOFLUSH
+(2) discard unread input.
+.Dv TCOFLUSH
+(1) succeeds without action because there is no output queue.
+Other values are invalid.
+.It Dv FIONREAD
+Write an
+.Vt int
+count of immediately readable bytes through
+.Fa arg .
+The input source is drained first.
+Canonical mode reports a complete cooked line; raw mode reports the
+queued byte count.
+A pending end-of-file reports zero.
+.It Dv TIOCGWINSZ , TIOCSWINSZ
+Read or replace the terminal's
+.Vt "struct winsize"
+through
+.Fa arg .
+Setting it through the console or slave does not send
+.Dv SIGWINCH .
+.It Dv TIOCGPGRP
+Write the foreground process group ID through the
+.Vt int
+pointer
+.Fa arg .
+.It Dv TIOCSPGRP
+Read a positive process group ID through the
+.Vt int
+pointer
+.Fa arg
+and make it foreground.
+The terminal must belong to the caller's session, and the group must
+have a member in that session.
+.It Dv TIOCSCTTY
+Make this the session's controlling terminal and set its foreground
+group to the caller's process group.
+The caller must be a session leader; a terminal belonging to another
+session cannot be taken.
+Other terminals belonging to this session are detached.
+Reclaiming the same terminal is permitted.
+.Fa arg
+is ignored and cannot force a takeover.
+.It Dv TIOCNOTTY
+Detach the terminal if it belongs to the caller's session.
+Otherwise succeed without action.
+.El
+.Ss Pipes and pseudo-terminals
+Pipes and both pseudo-terminal ends accept
+.Dv FIONBIO :
+.Fa arg
+points to an
+.Vt int ;
+nonzero enables nonblocking mode in the shared open file description,
+and zero disables it.
+Pipes and pseudo-terminal masters also accept
+.Dv FIONREAD
+to return their queued byte count through an
+.Vt int
+pointer.
+.Pp
+A pseudo-terminal master additionally accepts:
+.Bl -tag -width "TIOCSPTLCK"
+.It Dv TIOCGPTN
+Write the pseudo-terminal number through an
+.Vt int
+pointer.
+.It Dv TIOCSPTLCK
+Read an
+.Vt int
+through
+.Fa arg .
+Nonzero locks the slave; zero unlocks it.
+.It Dv TIOCGWINSZ , TIOCSWINSZ
+Read or replace the slave's window size.
+Setting it through the master sends
+.Dv SIGWINCH
+to the slave's foreground group, if one is set.
+.El
+.Ss Disk requests
+Raw disk windows accept:
+.Bl -tag -width "BLKGETSIZE64"
+.It Dv BLKGETSIZE64
+Write the window's byte size as an eight-byte unsigned integer through
+.Fa arg .
+Both request numbers 0x80041272 and 0x80081272 are accepted.
+.It Dv BLKGETSIZE
+Request 0x1260 writes the count of 512-byte sectors as a 32-bit unsigned
+integer through
+.Fa arg .
+A count larger than 4294967295 is refused.
+.It Dv BLKRRPART
+Request 0x125f rereads the partition table on a whole-disk node.
+A partition node does not accept it.
+The rescan is refused while the disk has another open descriptor or
+a mounted partition.
+.Fa arg
+is ignored.
+.El
+.Ss Framebuffer requests
+A framebuffer descriptor accepts these private requests:
+.Bl -tag -width "FB_SETPALETTE"
+.It Dv FB_MODE_13H No (0x4601)
+Return success without action; opening the framebuffer already selected
+mode 13h.
+.It Dv FB_MODE_TEXT No (0x4602)
+Return to text mode and clear framebuffer ownership.
+.It Dv FB_SETPALETTE No (0x4603)
+Read 768 bytes from
+.Fa arg
+as 256 RGB triples and set the palette.
+.El
+.Ss Console sound requests
+These requests require a console descriptor.
+They are not selected merely by descriptor number 1 or 2.
+.Bl -tag -width "AUDIO_SET_VOLUME"
+.It Dv KIOCSOUND
+A zero integer argument silences the PC speaker.
+A nonzero argument is the requested frequency in hertz.
+.It Dv AUDIO_GET_INFO No (0x4101)
+Write two 32-bit unsigned fields through
+.Fa arg :
+the driver type (0 none, 1 PC speaker, 2 Sound Blaster 16, 3 Intel HDA)
+and whether sample output is available (0 or 1).
+A null argument succeeds without writing.
+.It Dv AUDIO_START No (0x4102)
+Read three 32-bit unsigned fields through
+.Fa arg :
+sample rate in samples per second, format (0 unsigned 8-bit, 1 signed
+16-bit little-endian), and channels (1 mono, 2 stereo).
+Pass them to the active driver's start operation.
+.It Dv AUDIO_STOP No (0x4103)
+Stop the active driver.
+.It Dv AUDIO_WRITE No (0x4104)
+Read a structure containing a sample-buffer pointer followed by a
+32-bit unsigned byte count through
+.Fa arg .
+Validate the buffer and pass it to the active driver.
+The return value is the byte count queued, which may be less than requested.
+.It Dv AUDIO_SET_VOLUME No (0x4105)
+Pass the integer argument to the active driver as a percentage from
+0 through 100.
+The sample drivers clamp it to that range; the PC speaker ignores it.
+.El
+.Ss Network-interface requests
+A socket descriptor accepts interface queries using a 32-byte i386
+.Vt "struct ifreq" .
+.Dv SIOCGIFNAME
+takes an interface index and returns its name.
+The other queries select the interface by name:
+.Dv SIOCGIFINDEX ,
+.Dv SIOCGIFHWADDR ,
+.Dv SIOCGIFADDR ,
+.Dv SIOCGIFNETMASK ,
+.Dv SIOCGIFBRDADDR ,
+.Dv SIOCGIFMTU ,
+and
+.Dv SIOCGIFFLAGS
+return its index, hardware address, IPv4 address, netmask, broadcast
+address, MTU, and flags, respectively.
+.Pp
+.Dv SIOCSIFADDR ,
+.Dv SIOCSIFNETMASK ,
+.Dv SIOCSIFBRDADDR ,
+and
+.Dv SIOCSIFFLAGS
+require effective user ID 0.
+They set the address or netmask, check the derived broadcast address,
+or change the interface's
+.Dv IFF_UP
+state.
+Other flag bits are ignored by the setter.
+An address set without its mask uses a provisional classful mask until
+the separate netmask request; an address that is not a host under that
+mask waits unconfigured for the netmask.
+Repeating the existing configured address leaves its mask unchanged.
+.Pp
+.Dv SIOCADDRT
+and
+.Dv SIOCDELRT
+take an 84-byte i386
+.Vt "struct rtentry"
+and require effective user ID 0.
+They set or remove the selected interface's default gateway.
+A null device-name pointer selects the first interface.
+Adding the interface's existing subnet route succeeds without action;
+removing it or changing any other non-default route is unsupported.
+.Sh RETURN VALUES
+.Fn ioctl
+returns 0 or the request's result on success.
+On failure it returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+An audio driver's bare -1 return is interpreted as
+.Er EPERM .
+.Sh EXAMPLES
+The default suite's
+.Pa tests/jobprobe.c
+creates a session, claims the console with
+.Dv TIOCSCTTY ,
+reads its foreground group with
+.Dv TIOCGPGRP ,
+and changes that group with
+.Dv TIOCSPGRP .
+It checks the refusals for a foreign group, a negative group ID, and a
+terminal detached by
+.Dv TIOCNOTTY .
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EBADF
+.Fa fd
+is invalid.
+.It Bq Er EBUSY
+.Dv BLKRRPART
+found another descriptor open on the disk or a claim on its partitions.
+.It Bq Er EFAULT
+A required argument or buffer cannot be read or written in user memory.
+.Dv AUDIO_START
+and
+.Dv AUDIO_WRITE
+also return this error when there is no active driver.
+.It Bq Er EFBIG
+The sector count requested by
+.Dv BLKGETSIZE
+does not fit 32 bits.
+.It Bq Er EINVAL
+The flush selector is outside 0 through 2, the foreground group ID
+is not positive, or an interface address, mask, broadcast address, or
+gateway is invalid.
+Adding a default route with gateway zero is invalid.
+.It Bq Er EIO
+The partition rescan could not read the disk's first sector.
+.It Bq Er ENODEV
+The named network interface or index does not exist, or
+.Dv AUDIO_STOP
+or
+.Dv AUDIO_SET_VOLUME
+has no active driver.
+.It Bq Er ENOTTY
+The object does not support the request, a disk size query has no live
+raw window, or
+.Dv TIOCSPGRP
+selected a terminal outside the caller's session.
+.It Bq Er EOPNOTSUPP
+A route change other than a default route or addition of the existing
+subnet route was requested.
+.It Bq Er EPERM
+A controlling-terminal claim is forbidden, the proposed foreground group
+is outside the terminal's session, or a network setter or route change
+was requested without effective user ID 0.
+An audio driver also gives this error for a refused start or write:
+Sound Blaster 16 refuses rates outside 5000 through 44100, HDA may fail
+to reset its stream, sample writes require active playback and a nonzero
+size, and the PC speaker cannot accept samples.
+.It Bq Er ESRCH
+There is no current process, or the default route to remove is absent
+or has a different nonzero gateway from the one supplied.
+.El
+.Sh SEE ALSO
+.Xr fcntl 2 ,
+.Xr socket 2 ,
+.Xr console 4 ,
+.Xr disk 4

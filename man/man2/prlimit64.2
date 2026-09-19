@@ -1,0 +1,163 @@
+.Dd September 19, 2026
+.Dt PRLIMIT64 2
+.Os
+.Sh NAME
+.Nm prlimit64 ,
+.Nm getrlimit ,
+.Nm setrlimit ,
+.Nm ugetrlimit
+.Nd get or set process resource limits
+.Sh SYNOPSIS
+.Fd #define _GNU_SOURCE
+.In sys/resource.h
+.Ft int
+.Fn getrlimit "int resource" "struct rlimit *rlim"
+.Ft int
+.Fn setrlimit "int resource" "const struct rlimit *rlim"
+.Ft int
+.Fn prlimit "pid_t pid" "int resource" "const struct rlimit *new_limit" "struct rlimit *old_limit"
+.Fd #define prlimit64 prlimit
+.Sh DESCRIPTION
+.Fn getrlimit
+reads a resource's limits for the calling process.
+.Fn setrlimit
+sets them.
+Each limit has a soft value,
+.Va rlim_cur ,
+and a hard value,
+.Va rlim_max ,
+in
+.Vt struct rlimit .
+Musl declares both fields as the 64-bit type
+.Vt rlim_t .
+.Dv RLIM_INFINITY
+denotes no limit.
+.Pp
+With
+.Dv _GNU_SOURCE
+defined, musl declares
+.Fn prlimit
+and defines
+.Nm prlimit64
+as a macro for it.
+.Fa pid
+selects the process; zero selects the caller.
+Another process may be selected by a caller with effective user ID 0
+or the same real user ID as that process.
+If
+.Fa new_limit
+is non-null, it supplies new values.
+If
+.Fa old_limit
+is non-null, it receives the values from before the attempted change.
+Either or both pointers may be null.
+.Pp
+Three resources are stored and enforced:
+.Bl -tag -width RLIMIT_NOFILE
+.It Dv RLIMIT_NPROC
+The number of processes with the same real user ID across the machine.
+Fork returns
+.Er EAGAIN
+when the parent's soft limit is reached.
+Real user ID 0 is exempt.
+A change of real user ID moves the process to the new user's count.
+.It Dv RLIMIT_NOFILE
+One greater than the highest descriptor number the process may receive.
+The hard limit cannot exceed 1024, even for root.
+Open returns
+.Er EMFILE
+when no descriptor below the soft limit is free.
+Dup2 returns
+.Er EBADF
+for a destination at or above the soft limit.
+.It Dv RLIMIT_AS
+The bytes covered by the process's virtual memory regions.
+Growth beyond the soft limit makes mmap return
+.Er ENOMEM ,
+leaves the break unchanged in brk, and prevents stack growth.
+.El
+.Pp
+For these resources the soft limit must not exceed the hard limit.
+A process may lower its hard limits; only a caller with effective user
+ID 0 may raise a hard limit.
+Fork inherits both values and exec preserves them.
+The kernel's initial soft and hard limits are 4096 processes,
+1024 descriptors, and unlimited address space.
+Init may replace these defaults as described in
+.Xr limits 7 .
+.Pp
+.Dv RLIMIT_STACK
+always reports 8388608 bytes for both values.
+Every other resource number, including an unknown number, reports
+unlimited values.
+Setting any resource other than the three stored resources succeeds
+without changing anything, even if its soft value exceeds its hard value.
+.Pp
+The kernel stores limits in 32 bits.
+A 64-bit value with a nonzero high word, or the value 4294967295,
+is treated as unlimited.
+An unlimited value is returned with all 64 bits set.
+.Pp
+The i386 system call
+.Nm prlimit64
+is number 340.
+Musl uses it for
+.Fn prlimit ,
+.Fn getrlimit ,
+and
+.Fn setrlimit .
+The older calls
+.Nm getrlimit
+(76),
+.Nm setrlimit
+(75), and
+.Nm ugetrlimit
+(191) use two unsigned 32-bit fields, with 4294967295 as infinity.
+Musl has no separate
+.Fn ugetrlimit
+declaration; its getrlimit fallback uses that kernel number on i386.
+.Pp
+The kernel copies new values in, records the previous values, attempts
+the change, then copies the previous values out.
+An output-copy failure can therefore return
+.Er EFAULT
+after changing the limits.
+When a change is refused, a valid old-limit buffer still receives the
+previous values.
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure and set
+.Va errno .
+The raw kernel calls return a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/limitprobe.c
+sets the descriptor limit to eight, checks that open returns
+.Er EMFILE
+when those descriptors are occupied, and checks that dup2 refuses a
+destination at or above eight with
+.Er EBADF .
+It also checks process and address-space limits, inheritance, and the
+privilege required to raise a hard limit.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EFAULT
+A required limit buffer cannot be read or written.
+.It Er EINVAL
+For a stored resource, the new soft limit exceeds the new hard limit.
+.It Er EPERM
+A caller without effective user ID 0 tries to raise a stored hard limit
+or select a process with a different real user ID.
+The requested descriptor hard limit exceeds 1024.
+Selecting a process record that is unused or a zombie also gives this
+error.
+.It Er ESRCH
+No process record exists for
+.Fa pid .
+.El
+.Sh SEE ALSO
+.Xr brk 2 ,
+.Xr dup 2 ,
+.Xr fork 2 ,
+.Xr mmap 2 ,
+.Xr open 2 ,
+.Xr limits 7

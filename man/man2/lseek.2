@@ -1,0 +1,141 @@
+.Dd September 19, 2026
+.Dt LSEEK 2
+.Os
+.Sh NAME
+.Nm lseek ,
+.Nm llseek
+.Nd change an open file's offset
+.Sh SYNOPSIS
+.In unistd.h
+.Ft off_t
+.Fn lseek "int fd" "off_t offset" "int whence"
+.Sh DESCRIPTION
+.Fn lseek
+changes the offset of the open file description referred to by
+.Fa fd .
+Descriptors made by duplication or inherited across
+.Xr fork 2
+share this offset.
+The new position is determined by
+.Fa offset
+and
+.Fa whence :
+.Bl -tag -width "SEEK_END"
+.It Dv SEEK_SET No (0)
+Set the offset to
+.Fa offset
+bytes from the beginning.
+.It Dv SEEK_CUR No (1)
+Add
+.Fa offset
+to the current position.
+.It Dv SEEK_END No (2)
+Add
+.Fa offset
+to the current file size or raw disk window size.
+.El
+.Pp
+Other origins are not implemented.
+A negative displacement is permitted if the resulting position is not
+before the beginning.
+File and raw disk offsets are checked before addition or subtraction;
+an out-of-range result is refused without changing the offset.
+For an ordinary file, a seek relative to the current position or end
+uses the position or size while holding the shared description's lock.
+.Ss Devices and limits
+Raw disk windows accept 64-bit seeks, including positions beyond the
+end of the window.
+The 64-bit call permits file and raw disk positions through
+9223372036854775807.
+The older 32-bit call cannot return a position above 2147483647 and
+refuses it with
+.Er EOVERFLOW .
+.Pp
+The boot log is seekable; its 64-bit call accepts positions through
+4294967295.
+Seeks on
+.Pa /dev/null ,
+.Pa /dev/zero ,
+and
+.Pa /dev/full
+always return position 0, ignoring the displacement and origin.
+Pipes, the console, the mouse, and other device nodes, including
+.Pa /dev/random
+and
+.Pa /dev/urandom ,
+are not seekable and return
+.Er ESPIPE .
+Other descriptor types, including sockets, directories, pseudo-terminals,
+the framebuffer, and proc files, return
+.Er EBADF .
+.Ss System call interface
+Musl's
+.Vt off_t
+is 64 bits on i386, and its
+.Fn lseek
+uses system call 140,
+.Nm llseek
+.Pq also called Li _llseek .
+Musl declares no separate
+.Nm llseek
+function.
+EBX is the descriptor, ECX and EDX are the high and low 32-bit words of
+the signed displacement, ESI points to the 64-bit result, and EDI is
+the origin.
+This call returns 0 and writes the new position through the result pointer.
+A null result pointer is refused for files, raw disk windows, and the
+boot log; the three devices that always seek to zero accept it.
+A failed copy to a nonnull result pointer can occur after the offset
+has changed.
+.Pp
+The older system call 19 takes the descriptor in EBX, a signed 32-bit
+displacement in ECX, and the origin in EDX.
+It returns the new 32-bit position directly.
+Both kernel calls return a negative error number on failure.
+.Sh RETURN VALUES
+.Fn lseek
+returns the new offset from the beginning on success.
+On failure it returns
+.Li (off_t)-1
+and sets
+.Va errno .
+.Sh EXAMPLES
+The default suite's
+.Pa tests/fdstale.c
+unlinks an open file and seeks to its end through the retained descriptor.
+It checks both system call 19 and the 64-bit call used by musl, requiring
+each to report the original file size.
+.Sh ERRORS
+.Bl -tag -width "[EOVERFLOW]"
+.It Bq Er EBADF
+.Fa fd
+is invalid, its type is not supported by the seek handler, or the
+ordinary file description no longer identifies a valid file.
+.It Bq Er EFAULT
+The 64-bit result cannot be written to user memory, or a required
+result pointer is null.
+.It Bq Er EINVAL
+The origin is unsupported, the resulting position would be negative,
+the 64-bit boot-log position exceeds 4294967295, or the file system
+cannot supply the file's attributes.
+The devices that always seek to zero do not check the origin.
+.It Bq Er EIO
+The file's metadata could not be read or its device was removed.
+.It Bq Er ENXIO
+A raw disk window was withdrawn while its descriptor remained open.
+.It Bq Er EOVERFLOW
+The resulting file or raw disk position exceeds the call's representable
+range.
+.It Bq Er ESPIPE
+The descriptor refers to a pipe, the console, the mouse, or a device
+without a seek operation.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr dup 2 ,
+.Xr open 2 ,
+.Xr read 2 ,
+.Xr write 2 ,
+.Xr bootlog 4 ,
+.Xr disk 4

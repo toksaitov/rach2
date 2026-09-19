@@ -1,0 +1,44 @@
+.Dd September 19, 2026
+.Dt RANDOM 4
+.Os
+.Sh NAME
+.Nm random ,
+.Nm urandom
+.Nd entropy devices
+.Sh SYNOPSIS
+.Pa /dev/random
+.Pp
+.Pa /dev/urandom
+.Sh DESCRIPTION
+Both devices read from the kernel's single ChaCha20 random byte stream,
+the same source used by
+.Xr getrandom 2 .
+Neither device blocks waiting for entropy.
+.Pa /dev/random
+is not a blocking entropy pool as on Linux.
+.Pp
+The generator is seeded at boot.
+The kernel first tries RDSEED, then RDRAND.
+A complete seed from either instruction is trusted.
+If neither supplies a complete seed, the kernel uses the timestamp
+counter, CMOS seconds, and the PIT tick.
+This fallback is untrusted; reads from either device then fail with
+.Er EIO .
+.Pp
+The boot record identifies the source:
+.Bd -literal -offset indent
+entropy: ready: RDSEED, trusted
+entropy: ready: RDRAND, trusted
+entropy: ready: jitter, best-effort; the crypto RNG fails closed
+.Ed
+.Sh FILES
+Both devices have mode 0666.
+.Bl -tag -width /dev/urandom
+.It Pa /dev/random
+Major 1, minor 8.
+.It Pa /dev/urandom
+Major 1, minor 9.
+.El
+.Sh SEE ALSO
+.Xr getrandom 2 ,
+.Xr null 4

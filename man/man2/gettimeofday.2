@@ -1,0 +1,248 @@
+.Dd September 19, 2026
+.Dt GETTIMEOFDAY 2
+.Os
+.Sh NAME
+.Nm gettimeofday ,
+.Nm clock_gettime ,
+.Nm times ,
+.Nm utimensat
+.Nd read clocks and set file timestamps
+.Sh SYNOPSIS
+.In sys/time.h
+.Ft int
+.Fn gettimeofday "struct timeval *restrict tv" "void *restrict tz"
+.In time.h
+.Ft int
+.Fn clock_gettime "clockid_t clockid" "struct timespec *tp"
+.In sys/times.h
+.Ft clock_t
+.Fn times "struct tms *buf"
+.In sys/stat.h
+.In fcntl.h
+.Ft int
+.Fn utimensat "int dirfd" "const char *path" "const struct timespec times[2]" "int flags"
+.Sh DESCRIPTION
+.Fn gettimeofday
+reports real time in
+.Fa tv ,
+as seconds and microseconds.
+The
+.Fa tz
+argument is ignored.
+Real time is the CMOS clock reading taken at boot plus elapsed timer ticks.
+If the clock could not be read, the result is time since boot.
+The hardware clock is read once; no service corrects the clock afterward.
+.Pp
+.Fn clock_gettime
+stores seconds and nanoseconds in
+.Fa tp .
+Only two clock IDs are supported:
+.Bl -tag -width "CLOCK_MONOTONIC"
+.It Dv CLOCK_REALTIME
+ID 0.
+The same real time reported by
+.Fn gettimeofday .
+.It Dv CLOCK_MONOTONIC
+ID 1.
+Time since boot, computed from the kernel's 32-bit tick counter.
+.El
+.Pp
+Both clocks have 10 ms resolution.
+The PIT microsecond clock used for kernel diagnostics reads the counter
+within a tick; these system calls do not expose that finer clock.
+.Pp
+.Fn times
+returns the monotonic tick count in units of 1/100 second.
+Per-process CPU time is not tracked.
+If
+.Fa buf
+is nonnull, all four fields,
+.Va tms_utime ,
+.Va tms_stime ,
+.Va tms_cutime ,
+and
+.Va tms_cstime ,
+are set to zero.
+A null
+.Fa buf
+is allowed.
+.Ss File timestamps
+.Fn utimensat
+sets the access and modification times of
+.Fa path .
+An absolute path ignores
+.Fa dirfd .
+A relative path is resolved against the current working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD ,
+or against the directory referred to by
+.Fa dirfd
+otherwise.
+.Pp
+The
+.Fa times
+argument points to two timespecs: access time first, modification time second.
+A null pointer sets both to the current time.
+For either element, a
+.Va tv_nsec
+of
+.Dv UTIME_NOW
+selects the current time;
+.Dv UTIME_OMIT
+leaves that timestamp unchanged.
+When both elements specify
+.Dv UTIME_OMIT ,
+neither timestamp nor the change time is changed.
+.Pp
+Setting both timestamps to the current time requires ownership, write
+permission on the file, or effective user ID 0.
+Any other change requires ownership or effective user ID 0.
+Omitting both timestamps requires neither, but the path must still resolve.
+.Pp
+The
+.Fa flags
+argument is 0 or
+.Dv AT_SYMLINK_NOFOLLOW .
+The latter changes a symbolic link's own timestamps instead of following it.
+Other bits are rejected.
+The kernel does not range-check explicit nanosecond values.
+.Pp
+Timestamp changes are supported on KRFFS, ext2, FAT32, and exFAT,
+subject to the file system's stored precision.
+On KRFFS, FAT32, and exFAT, a successful request on the volume's root
+directory leaves its timestamps unchanged.
+The KRFFS boot root accepts these requests without checking ownership.
+Synthetic files under
+.Pa /dev
+and
+.Pa /proc
+return
+.Er EROFS ,
+including when both timestamps are omitted.
+.Ss System call interface
+The i386 system call numbers are 78 for
+.Fn gettimeofday ,
+265 for
+.Fn clock_gettime ,
+43 for
+.Fn times ,
+and 320 for
+.Fn utimensat .
+The time structures in this kernel interface have 32-bit seconds fields.
+Real time in this ABI ends in 2038.
+.Pp
+musl first tries
+.Fn clock_gettime64
+.Pq system call 403 ,
+which the kernel does not implement, then converts the result of the
+32-bit call into its public timespec.
+musl implements
+.Fn gettimeofday
+through
+.Fn clock_gettime ;
+it accepts a null
+.Fa tv
+and returns 0.
+The raw
+.Fn gettimeofday
+system call requires a writable, nonnull timeval.
+.Sh RETURN VALUES
+.Fn gettimeofday ,
+.Fn clock_gettime ,
+and
+.Fn utimensat
+return 0 on success.
+.Fn times
+returns the tick count.
+Kernel failures return a negative error number; system call wrappers
+return -1 and set
+.Va errno .
+musl's
+.Fn gettimeofday
+returns 0 and writes its result in user space.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/timeprobe.c
+reads
+.Dv CLOCK_MONOTONIC
+twice and checks that the second result is not earlier than the first.
+.Pa tests/miscprobe.c
+checks that
+.Fn times
+sets the four process-time fields to zero.
+.Sh ERRORS
+The kernel handlers return the following errors:
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+For
+.Fn utimensat ,
+an ancestor directory denies search permission, or a caller that is
+neither the owner nor privileged tries to set both times to the current
+time without write permission.
+.It Bq Er EBADF
+.Fn utimensat
+was given an invalid directory descriptor for a relative path, or the
+descriptor refers to a removed KRFFS boot-root directory.
+.It Bq Er EBUSY
+The
+.Fn utimensat
+path enters a mount being mounted or unmounted.
+.It Bq Er EFAULT
+A required buffer cannot be read or written.
+The raw
+.Fn gettimeofday
+timeval or
+.Fn clock_gettime
+timespec is null.
+For
+.Fn utimensat ,
+the path is null or there is no current process.
+.It Bq Er EINVAL
+.Fa clockid
+is neither
+.Dv CLOCK_REALTIME
+nor
+.Dv CLOCK_MONOTONIC ,
+or
+.Fn utimensat
+has flag bits other than
+.Dv AT_SYMLINK_NOFOLLOW .
+.It Bq Er EIO
+For
+.Fn utimensat ,
+the backing device has been removed, or a file-system read or metadata
+write fails.
+.It Bq Er ELOOP
+The
+.Fn utimensat
+path requires more than 40 symbolic links to be followed.
+.It Bq Er ENAMETOOLONG
+The
+.Fn utimensat
+path, a component, a reconstructed directory path, or an expanded
+symbolic-link path exceeds the resolver's buffer limit.
+.It Bq Er ENOENT
+The
+.Fn utimensat
+path is empty or a component does not exist.
+.It Bq Er ENOMEM
+The file system cannot allocate a node while resolving the
+.Fn utimensat
+path.
+.It Bq Er ENOTDIR
+A component of the
+.Fn utimensat
+path is not a directory, or a descriptor used as the base of a relative
+path is not a directory.
+.It Bq Er EPERM
+A caller that is neither the owner nor privileged requests a timestamp
+change other than setting both times to the current time.
+.It Bq Er EROFS
+.Fn utimensat
+targets a synthetic file, or a timestamp update reaches a read-only
+mount or a file system without a timestamp-setting operation.
+.El
+.Sh SEE ALSO
+.Xr nanosleep 2 ,
+.Xr stat 2

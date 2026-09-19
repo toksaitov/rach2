@@ -1,0 +1,146 @@
+.Dd September 19, 2026
+.Dt SOCKET 2
+.Os
+.Sh NAME
+.Nm socket
+.Nd create a socket
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn socket "int domain" "int type" "int protocol"
+.Sh DESCRIPTION
+.Fn socket
+creates a socket and returns a descriptor open for reading and writing.
+.Fa domain
+selects the address family,
+.Fa type
+the socket type, and
+.Fa protocol
+the protocol where the type requires one.
+.Pp
+The supported combinations are:
+.Bl -tag -width "AF_INET, SOCK_STREAM"
+.It Dv AF_INET , SOCK_STREAM
+A TCP stream socket.
+.Fa protocol
+is ignored.
+.It Dv AF_INET , SOCK_DGRAM
+A UDP datagram socket.
+.Fa protocol
+is ignored.
+.It Dv AF_INET , SOCK_RAW
+A raw ICMP socket when
+.Fa protocol
+is
+.Dv IPPROTO_ICMP
+(1).
+.Dv IPPROTO_RAW
+(255) creates a descriptor for network configuration ioctls only;
+data operations return
+.Er EOPNOTSUPP .
+Other raw protocols are refused.
+Effective user ID 0 is required for either raw form.
+.It Dv AF_PACKET , SOCK_DGRAM
+A packet socket.
+Effective user ID 0 is required.
+The low 16 bits of
+.Fa protocol
+must contain the Ethernet protocol in network byte order:
+IPv4 (0x0800), ARP (0x0806), or zero.
+Zero leaves the protocol unspecified until
+.Xr bind 2 .
+.El
+.Pp
+Other address families, including
+.Dv AF_UNIX
+and
+.Dv AF_INET6 ,
+are not supported.
+.Pp
+Musl accepts
+.Dv SOCK_NONBLOCK
+and
+.Dv SOCK_CLOEXEC
+in
+.Fa type .
+The kernel socket operation rejects these bits.
+Musl retries with the bits removed, then uses
+.Xr fcntl 2
+to set
+.Dv O_NONBLOCK
+or
+.Dv FD_CLOEXEC .
+These flags are therefore set after creation.
+.Pp
+Socket objects are allocated from the kernel heap, without a fixed pool
+limit, and are freed when their last reference closes.
+Descriptors duplicated by
+.Xr dup 2
+or inherited through
+.Xr fork 2
+refer to the same socket.
+Descriptor allocation remains subject to the process's descriptor limit.
+.Pp
+The kernel interface is operation 1 of
+.Xr socketcall 2
+(i386 system call 102).
+Its argument block contains
+.Fa domain , type ,
+and
+.Fa protocol
+as three 32-bit words.
+.Sh RETURN VALUES
+.Fn socket
+returns a nonnegative descriptor on success.
+On failure it returns -1 and sets
+.Va errno .
+The kernel operation returns a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+creates an
+.Dv AF_INET , SOCK_DGRAM
+socket with protocol 0, binds it, and sends and receives a datagram
+through
+.Li 127.0.0.1 .
+.Sh ERRORS
+.Bl -tag -width "[EPROTONOSUPPORT]"
+.It Bq Er EAFNOSUPPORT
+.Fa domain
+is neither
+.Dv AF_INET
+nor
+.Dv AF_PACKET .
+.It Bq Er EFAULT
+The socketcall argument block cannot be read.
+.It Bq Er EINVAL
+The socket type is not accepted, including a raw kernel request with
+creation flags, or a packet protocol is neither zero, IPv4, nor ARP.
+An
+.Dv AF_PACKET , SOCK_RAW
+request also returns this error.
+.It Bq Er EMFILE
+The process cannot allocate another descriptor or open-file description.
+.It Bq Er ENOBUFS
+The raw ICMP registration and receive queue cannot be allocated.
+.It Bq Er ENOMEM
+The socket object cannot be allocated.
+.It Bq Er EPERM
+A raw IPv4 socket or packet socket was requested without effective user ID 0.
+.It Bq Er EPROTONOSUPPORT
+An IPv4 raw protocol is neither
+.Dv IPPROTO_RAW
+nor
+.Dv IPPROTO_ICMP .
+.It Bq Er ESOCKTNOSUPPORT
+A privileged caller requested
+.Dv AF_PACKET , SOCK_STREAM .
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr fcntl 2 ,
+.Xr listen 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr socketcall 2

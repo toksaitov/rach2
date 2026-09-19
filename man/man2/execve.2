@@ -1,0 +1,169 @@
+.Dd September 19, 2026
+.Dt EXECVE 2
+.Os
+.Sh NAME
+.Nm execve
+.Nd replace the current process image
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn execve "const char *path" "char *const argv[]" "char *const envp[]"
+.Sh DESCRIPTION
+.Fn execve
+replaces the calling process's image with the program at
+.Fa path .
+A relative path is resolved from the current working directory.
+The loader supports static, little-endian ELF32 executables for i386
+with type
+.Dv ET_EXEC .
+There is no dynamic linker.
+.Pp
+.Fa argv
+and
+.Fa envp
+are null-terminated arrays of pointers to null-terminated strings.
+They become the new program's arguments and environment on a System V
+i386 initial stack.
+A null pointer for either array supplies an empty vector.
+Each vector may contain at most 63 strings.
+Together their strings may occupy at most 3072 bytes, counting each
+terminating null byte.
+The copied path, including any current-directory prefix and its null
+terminator, must fit 256 bytes.
+.Pp
+The kernel checks search permission on ancestor directories and execute
+permission on the program.
+Even effective user ID 0 requires at least one execute bit on a regular file.
+Execution from the synthetic
+.Pa /dev
+and
+.Pa /proc
+mounts, or from a mount with
+.Dv MS_NOEXEC ,
+is refused.
+.Ss Interpreter scripts
+A file beginning with
+.Ql #!
+names an interpreter by an absolute path on its first line.
+Spaces and tabs before the path are skipped.
+The remainder after the interpreter path, with surrounding spaces and
+tabs removed, is at most one argument.
+The resulting argument vector is:
+.Bd -literal -offset indent
+interpreter [argument] script original-arguments...
+.Ed
+.Pp
+The original
+.Fa argv Ns [0]
+is omitted; the script's resolved path is inserted instead.
+The expanded argument vector must still fit 63 entries.
+Only one interpreter level is supported: an interpreter that is itself
+a script is refused.
+A first line that fills the 128-byte read buffer without a newline is
+also refused.
+The interpreter is checked for execute permission and loaded as an ELF
+executable.
+.Ss Credentials and descriptors
+For an ELF executable, set-user-ID changes the effective user ID to the
+file's owner.
+Set-group-ID changes the effective group ID to the file's group only
+when group execute is also set.
+A mount with
+.Dv MS_NOSUID
+suppresses both changes.
+Script execution applies neither the script's nor the interpreter's
+set-ID bits.
+Real IDs are unchanged; saved IDs become the resulting effective IDs.
+The initial stack's
+.Dv AT_SECURE
+value is set when an effective ID differs from its real ID.
+.Pp
+Descriptors marked
+.Dv FD_CLOEXEC
+are closed once the executable header has been accepted, before the
+old address space is freed.
+This includes descriptors 0, 1, and 2 if marked.
+Other open descriptors remain available to the new image.
+.Ss Failure
+The path, arguments, and environment are copied into a workspace
+belonging to the current process.
+The executable header and access permissions are checked before the
+old image is destroyed.
+A failure at this stage returns to the caller without replacing its
+image, changing its credentials, or closing its marked descriptors.
+.Pp
+Program segments and the initial stack are loaded after the old user
+pages are freed.
+A failure then terminates the process; it cannot return to the caller.
+This includes malformed program segments, allocation or load failures,
+and an image whose address-space regions exceed
+.Dv RLIMIT_AS .
+The parent receives a wait status indicating
+.Dv SIGKILL .
+If the process is the normal system init, its death panics the kernel.
+.Pp
+The i386 system call number is 11.
+EBX contains the path pointer, ECX the argument-vector pointer, and
+EDX the environment-vector pointer.
+.Sh RETURN VALUES
+.Fn execve
+does not return on success.
+A failure before destruction of the old image returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/execargmusl.c
+executes itself with vectors at the 63-entry and 3072-byte limits and
+checks the values received by the new image.
+It also exceeds each limit and checks that
+.Fn execve
+returns
+.Er E2BIG
+with the caller still running.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er E2BIG
+An argument or environment vector exceeds 63 entries, the strings exceed
+their shared 3072-byte budget, or script expansion exceeds the entry limit.
+.It Bq Er EACCES
+Search or execute permission was denied, the program or interpreter is
+on a noexec mount, or its path resolves into a synthetic mount.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted.
+.It Bq Er EFAULT
+The path, a vector, or a string cannot be read from user memory.
+.It Bq Er EINVAL
+The file system cannot supply a required attribute or read operation.
+.It Bq Er EIO
+Reading the program or file system metadata failed, or the device was removed.
+.It Bq Er EISDIR
+Reading the executable failed because the file system reported a directory.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+The path, its current-directory prefix, a component, or a symbolic-link
+expansion exceeds its buffer.
+.It Bq Er ENOENT
+The path is empty, or a component of the program or interpreter path
+does not exist.
+.It Bq Er ENOEXEC
+The executable header is invalid and no valid interpreter line is present,
+the interpreter path is empty or relative, the first line fills the
+128-byte buffer without a newline, or the interpreter is not a valid
+ELF executable.
+.It Bq Er ENOMEM
+The exec workspace or storage needed to resolve or open the program
+could not be allocated.
+.It Bq Er ENOTDIR
+A path component used as a directory is not a directory.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr chown 2 ,
+.Xr exit 2 ,
+.Xr fcntl 2 ,
+.Xr fork 2 ,
+.Xr prlimit64 2 ,
+.Xr wait 2

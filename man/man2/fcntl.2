@@ -1,0 +1,151 @@
+.Dd September 19, 2026
+.Dt FCNTL 2
+.Os
+.Sh NAME
+.Nm fcntl ,
+.Nm fcntl64
+.Nd control a file descriptor
+.Sh SYNOPSIS
+.In fcntl.h
+.Ft int
+.Fn fcntl "int fd" "int cmd" "..."
+.Sh DESCRIPTION
+.Fn fcntl
+performs
+.Fa cmd
+on the open descriptor
+.Fa fd .
+The optional third argument is an integer or a pointer, as specified
+by the command.
+Musl implements this function through i386 system call 221,
+.Nm fcntl64 ;
+it declares no separate
+.Fn fcntl64
+function.
+The kernel takes the descriptor in EBX, the command in ECX, and the
+third argument in EDX.
+.Pp
+The supported commands are:
+.Bl -tag -width F_DUPFD_CLOEXEC
+.It Dv F_DUPFD
+Duplicate
+.Fa fd
+onto the lowest unused descriptor at or above the integer argument.
+The new descriptor shares the open-file description and has
+.Dv FD_CLOEXEC
+clear.
+Return the new descriptor.
+.It Dv F_DUPFD_CLOEXEC
+As
+.Dv F_DUPFD ,
+but set
+.Dv FD_CLOEXEC
+on the new descriptor.
+.It Dv F_GETFD
+Return
+.Dv FD_CLOEXEC
+if it is set, or 0 otherwise.
+.It Dv F_SETFD
+Set or clear
+.Dv FD_CLOEXEC
+according to that bit in the integer argument.
+Ignore other bits.
+.It Dv F_GETFL
+Return the access mode,
+.Dv O_RDONLY ,
+.Dv O_WRONLY ,
+or
+.Dv O_RDWR ,
+combined with the stored
+.Dv O_APPEND
+and
+.Dv O_NONBLOCK
+flags.
+.It Dv F_SETFL
+Replace the open-file description's
+.Dv O_APPEND
+and
+.Dv O_NONBLOCK
+flags with those bits from the integer argument.
+Ignore other bits, including the access mode and
+.Dv O_CLOEXEC .
+.It Dv F_GETLK , F_GETLK64
+Write
+.Dv F_UNLCK
+to the first short integer,
+.Va l_type ,
+in the caller's lock structure.
+Leave its other fields unchanged.
+No conflicting lock is reported.
+.It Dv F_SETLK , F_SETLKW , F_SETLK64 , F_SETLKW64
+Return success without inspecting the lock structure, storing a lock,
+or waiting.
+These operations provide no exclusion between processes.
+.El
+.Pp
+Every other command is refused with
+.Er EINVAL .
+The kernel accepts both the older lock command numbers 5, 6, and 7
+and the 64-bit lock command numbers 12, 13, and 14.
+.Pp
+.Dv FD_CLOEXEC
+belongs to one descriptor and causes it to close during
+.Xr execve 2 .
+The file offset and status flags belong to the shared open-file
+description, so changes are visible through descriptors duplicated by
+.Xr dup 2
+or inherited by
+.Xr fork 2 .
+.Dv O_APPEND
+selects the file end for regular-file writes.
+.Dv O_NONBLOCK
+affects operations that implement nonblocking I/O, including socket
+connection and receive operations.
+.Sh RETURN VALUES
+The duplication commands return a new descriptor.
+.Dv F_GETFD
+and
+.Dv F_GETFL
+return the requested flags.
+The other supported commands return 0.
+On failure,
+.Fn fcntl
+returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/ofdprobe.c
+sets
+.Dv FD_CLOEXEC
+with
+.Dv F_SETFD ,
+reads it back with
+.Dv F_GETFD ,
+then duplicates the descriptor with
+.Xr dup2 2
+and checks that the new descriptor's flag is clear.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
+.It Bq Er EFAULT
+A lock query cannot write
+.Va l_type
+through the supplied pointer.
+.It Bq Er EINVAL
+The command is unsupported, or a duplication command's minimum
+descriptor is negative or at or above the process's descriptor limit.
+.It Bq Er EMFILE
+No free descriptor exists at or above the requested minimum and below
+the limit, or the required descriptor storage could not be allocated.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr dup 2 ,
+.Xr execve 2 ,
+.Xr fork 2 ,
+.Xr open 2 ,
+.Xr prlimit64 2

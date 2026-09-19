@@ -1,0 +1,76 @@
+.Dd September 19, 2026
+.Dt PING 2
+.Os
+.Sh NAME
+.Nm ping
+.Nd perform an ICMP echo round trip
+.Sh SYNOPSIS
+.In unistd.h
+.In sys/syscall.h
+.Bd -literal -offset indent
+unsigned int args[1];
+
+args[0] = address;
+syscall(SYS_socketcall, 0x1000, args);
+.Ed
+.Sh DESCRIPTION
+.Nm
+is Rach2's private
+.Xr socketcall 2
+operation 0x1000.
+musl declares no
+.Fn ping
+function; the operation is issued through
+.Fn syscall .
+The raw i386 interface uses EAX = 102, EBX = 0x1000, and ECX pointing
+to an array of one 32-bit word.
+That word is the destination IPv4 address in host byte order.
+For example, 0x0a000202 denotes 10.0.2.2.
+Addresses in 127/8 are replaced with the machine's current local address.
+.Pp
+The call sends an ICMP echo request and waits for a reply.
+It makes at most four attempts, each with a deadline of 100 ticks
+or one second.
+The first attempt may populate the ARP cache without sending the echo.
+The caller sleeps while waiting, allowing other processes to run.
+.Pp
+Only one call may be in progress on the machine.
+A second caller receives
+.Er EBUSY
+without sending a request.
+The request slot is released on success, timeout, or interruption by
+a signal.
+.Sh RETURN VALUES
+The result is the elapsed tick count for the successful attempt.
+Each tick is 10 ms; a result of zero is valid.
+Earlier attempts are not included.
+On failure,
+.Fn syscall
+returns -1 and sets
+.Va errno .
+The raw kernel interface returns the negative error number.
+.Sh EXAMPLES
+The call above, with
+.Va address
+set to 0x0a000202, is the operation used by
+.Pa utils/ping.c
+to reach 10.0.2.2.
+.Pa tests/pingtest.c
+checks replies, timeout, refusal of concurrent calls, progress by
+another process during the wait, and release of the request slot.
+It runs in the separate ping suite, not the default suite.
+.Sh ERRORS
+.Bl -tag -width "[ETIMEDOUT]"
+.It Bq Er EBUSY
+Another ping call is in progress.
+.It Bq Er EFAULT
+The argument word cannot be read from user memory.
+.It Bq Er EINTR
+A signal interrupted the wait.
+.It Bq Er ETIMEDOUT
+No matching reply arrived during the four attempts.
+Transmit errors are not returned separately by this operation.
+.El
+.Sh SEE ALSO
+.Xr ping 1 ,
+.Xr socketcall 2

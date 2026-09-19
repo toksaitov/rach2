@@ -1,0 +1,51 @@
+.Dd September 19, 2026
+.Dt NULL 4
+.Os
+.Sh NAME
+.Nm null ,
+.Nm zero ,
+.Nm full
+.Nd empty devices
+.Sh SYNOPSIS
+.Pa /dev/null
+.Pp
+.Pa /dev/zero
+.Pp
+.Pa /dev/full
+.Sh DESCRIPTION
+These devices are provided by the kernel's devfs file system, mounted at
+.Pa /dev .
+.Pp
+Reads from
+.Pa /dev/null
+return end of file.
+Writes are discarded.
+.Pp
+Reads from
+.Pa /dev/zero
+return bytes with value zero, without end.
+.Pp
+Reads from
+.Pa /dev/full
+return bytes with value zero.
+Writes fail with
+.Er ENOSPC .
+.Sh FILES
+All three devices have mode 0666.
+Their major and minor numbers, as reported by
+.Xr stat 2 ,
+are:
+.Bl -tag -width /dev/zero
+.It Pa /dev/null
+Major 1, minor 3.
+.It Pa /dev/zero
+Major 1, minor 5.
+.It Pa /dev/full
+Major 1, minor 7.
+.El
+.Sh SEE ALSO
+.Xr bootlog 4 ,
+.Xr console 4 ,
+.Xr disk 4 ,
+.Xr loop 4 ,
+.Xr random 4

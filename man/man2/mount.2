@@ -1,0 +1,234 @@
+.Dd September 19, 2026
+.Dt MOUNT 2
+.Os
+.Sh NAME
+.Nm mount ,
+.Nm umount2
+.Nd attach or detach a file system
+.Sh SYNOPSIS
+.In sys/mount.h
+.Ft int
+.Fn mount "const char *source" "const char *target" "const char *type" "unsigned long flags" "const void *data"
+.Ft int
+.Fn umount2 "const char *target" "int flags"
+.Sh DESCRIPTION
+.Fn mount
+attaches the file system on
+.Fa source
+at the directory
+.Fa target .
+.Fa type
+selects the file-system type,
+.Fa flags
+supplies mount flags, and
+.Fa data
+points to a null-terminated option string.
+A null
+.Fa data
+is treated as an empty string.
+Both calls require effective user ID 0.
+.Pp
+The supported types are
+.Ql vfat ,
+.Ql exfat ,
+.Ql ext2 ,
+and
+.Ql krffs .
+.Dv MS_RDONLY ,
+.Dv MS_NOSUID ,
+and
+.Dv MS_NOEXEC
+are enforced.
+.Dv MS_NODEV ,
+.Dv MS_NOATIME ,
+.Dv MS_NODIRATIME ,
+.Dv MS_RELATIME ,
+and
+.Dv MS_SILENT
+are recorded in the mount table.
+Other bits, including
+.Dv MS_REMOUNT ,
+.Dv MS_BIND ,
+and
+.Dv MS_MOVE ,
+are refused.
+See
+.Xr mount 8
+for the command interface.
+.Pp
+The source must name a published block device under
+.Pa /dev :
+a disk or partition containing a volume,
+.Pa /dev/bootpart ,
+or an attached loop device.
+The source string is used directly; a relative source is not resolved
+against the working directory.
+A read-only source makes the mount read-only regardless of
+.Fa flags .
+.Ss Argument checks and mounting
+The handler checks for a current process and privilege before copying
+any strings.
+It copies the source, then the target, makes the target absolute,
+then copies the type and options.
+The source, target, type, and options must fit buffers of 64, 256, 16,
+and 128 bytes respectively, including the terminating null byte.
+A relative target is joined to the current working directory.
+Repeated slashes and dot components are removed;
+.Ql ..
+is resolved by walking the parent directories.
+.Pp
+The VFS then performs these checks in order:
+.Bl -enum
+.It
+Recognize the type, or return
+.Er ENODEV .
+.It
+Reject unsupported flag bits with
+.Er EINVAL .
+.It
+Resolve and hold the target, returning any path-resolution error.
+.It
+Require the absolute target path to fit 63 bytes, excluding the null
+byte, or return
+.Er ENAMETOOLONG .
+.It
+Reject the root directory and targets under
+.Pa /dev
+or
+.Pa /proc
+with
+.Er EINVAL .
+.It
+Reject the root of an already placed mount with
+.Er EBUSY .
+.It
+Read the target's attributes and require a directory, or return
+.Er ENOTDIR .
+.It
+Reconstruct a target on the KRFFS boot root within the same 63-byte
+limit, or return
+.Er ENAMETOOLONG .
+.It
+Under the parent directory's namespace lock, reject a covered or
+reserved target with
+.Er EBUSY .
+.El
+.Pp
+The kernel then resolves the source device and claims its sector range.
+An overlapping mount or write-capable raw descriptor prevents the
+claim, even when another device name denotes the same sectors.
+A loop device is identified by the device itself and permits one mount.
+The claim remains until unmount.
+.Pp
+The mount table grows from eight slots as needed.
+The kernel reserves a slot before running the file-system constructor,
+holds the covered directory, and keeps a reference to its parent mount.
+The mount becomes active only after the constructor succeeds.
+A failure releases the claim and references acquired by the call.
+An active mount's source, target, type, and options appear in
+.Pa /proc/mounts .
+KRFFS and ext2 ignore the option string; FAT32 and exFAT parse it.
+.Ss Unmounting
+.Fn umount2
+requires
+.Fa target
+to resolve to the root of a mount.
+.Fa flags
+must be zero;
+.Dv MNT_FORCE ,
+.Dv MNT_DETACH ,
+.Dv UMOUNT_NOFOLLOW ,
+and all other nonzero values return
+.Er EINVAL .
+The root,
+.Pa /dev ,
+and
+.Pa /proc
+are permanent and return
+.Er EBUSY .
+.Pp
+The mount stops accepting new operations and waits for operations
+already in progress to finish.
+An open-file description, working directory, or child mount in any
+process then makes it busy.
+A loop device attached to a file on the mount also prevents unmounting.
+.Pp
+The file system syncs and prepares to unmount; the kernel writes dirty
+cache buffers, flushes the device, and invalidates its cached buffers.
+Only then does it release the file system, covered directory, and claim.
+Failure before release restores the mount to active state.
+.Pp
+A mount whose device has been removed can be unmounted once its
+references are released, without writes to the absent device.
+If a removed ancestor prevents path lookup, the recorded target can
+identify a unique active child mount below it.
+Children must be unmounted before their parents.
+.Ss System call interface
+The i386 system call number for
+.Fn mount
+is 21, with source in EBX, target in ECX, type in EDX, flags in ESI,
+and data in EDI.
+The number for
+.Fn umount2
+is 52, with target in EBX and flags in ECX.
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh FILES
+.Bl -tag -width /proc/mounts
+.It Pa /proc/mounts
+Active mounts and their options.
+Mounts whose devices have been removed are omitted.
+.El
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+An ancestor directory denies search permission.
+.It Bq Er EBUSY
+The target is covered, reserved, or in a mount undergoing a transition;
+the source overlaps a claimed range or an open raw writer;
+the source device is already mounted; or an unmount is prevented by
+references or cache buffers still held or dirty.
+Unmounting a permanent mount also returns this error.
+.It Bq Er EFAULT
+A required string pointer is null or a string cannot be read from
+user memory.
+.It Bq Er EFBIG
+A KRFFS source device exceeds the size the file system can address.
+.It Bq Er EINVAL
+A flag is unsupported, the mount target is the root or in a synthetic
+namespace, the source is not a supported block device, or the unmount
+target is not a mount root.
+A constructor also returns this error for invalid options or volume
+structure it cannot accept.
+.It Bq Er EIO
+Path lookup or file-system I/O failed, the backing device was removed,
+or unmount writeback or device flushing failed.
+.It Bq Er ELOOP
+Target resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+A copied string or joined path exceeds its buffer, the mount target
+exceeds 63 bytes, or a path component or symbolic-link expansion is
+too long.
+.It Bq Er ENODEV
+The file-system type is unknown.
+.It Bq Er ENOENT
+A target component does not exist, the source device is not published,
+or the selected loop device is unattached.
+.It Bq Er ENOMEM
+Memory for path resolution, a mount record, or file-system state is
+unavailable, or the sector-claim table or a file-system pool is full.
+.It Bq Er ENOTDIR
+The mount target or a directory component is not a directory.
+.It Bq Er EPERM
+The caller's effective user ID is not 0.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr mkdir 2 ,
+.Xr open 2 ,
+.Xr loop 4 ,
+.Xr proc 5 ,
+.Xr mount 8

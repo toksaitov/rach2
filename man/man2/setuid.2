@@ -1,0 +1,176 @@
+.Dd September 19, 2026
+.Dt SETUID 2
+.Os
+.Sh NAME
+.Nm setuid ,
+.Nm setgid ,
+.Nm setreuid ,
+.Nm setregid ,
+.Nm setresuid ,
+.Nm setresgid ,
+.Nm setgroups ,
+.Nm setuid32 ,
+.Nm setgid32 ,
+.Nm setreuid32 ,
+.Nm setregid32 ,
+.Nm setresuid32 ,
+.Nm setresgid32 ,
+.Nm setgroups32
+.Nd change process credentials
+.Sh SYNOPSIS
+.Fd "#define _GNU_SOURCE"
+.In unistd.h
+.Ft int
+.Fn setuid "uid_t uid"
+.Ft int
+.Fn setgid "gid_t gid"
+.Ft int
+.Fn setreuid "uid_t ruid" "uid_t euid"
+.Ft int
+.Fn setregid "gid_t rgid" "gid_t egid"
+.Ft int
+.Fn setresuid "uid_t ruid" "uid_t euid" "uid_t suid"
+.Ft int
+.Fn setresgid "gid_t rgid" "gid_t egid" "gid_t sgid"
+.In grp.h
+.Ft int
+.Fn setgroups "size_t size" "const gid_t *list"
+.Sh DESCRIPTION
+These functions change the calling process's real, effective, and saved
+user and group IDs, or its supplementary group list.
+Privilege for every function is determined by effective user ID 0,
+including the group-ID functions.
+.Pp
+.Fn setuid
+sets all three user IDs to
+.Fa uid
+for a privileged caller.
+For an unprivileged caller, it changes only the effective user ID,
+and the requested value must equal the current real or saved user ID.
+.Fn setgid
+applies the same rules to group IDs.
+.Pp
+.Fn setreuid
+sets the real and effective user IDs.
+An argument of
+.Ql (uid_t)-1
+leaves that field unchanged.
+A privileged caller may choose any other value.
+An unprivileged caller may set the real ID to the current real or
+effective ID, and the effective ID to the current real, effective, or
+saved ID.
+The saved ID becomes the resulting effective ID if the real-ID argument
+is not -1, or if the effective-ID argument is neither -1 nor the
+pre-call real ID.
+.Fn setregid
+applies the same rules to group IDs, with
+.Ql (gid_t)-1
+for an unchanged field.
+.Pp
+.Fn setresuid
+sets the real, effective, and saved user IDs independently.
+An argument of
+.Ql (uid_t)-1
+leaves its field unchanged.
+A privileged caller may choose any other value.
+Each value requested by an unprivileged caller must equal one of the
+three user IDs held before the call.
+.Fn setresgid
+applies the same rules to group IDs.
+.Pp
+The kernel does not treat -1 specially for the single-argument
+.Fn setuid
+and
+.Fn setgid
+calls.
+The permission checks for a multi-ID call precede all changes.
+.Pp
+.Fn setgroups
+replaces the supplementary group list with the
+.Fa size
+entries at
+.Fa list .
+Only a privileged caller may do so.
+At most eight entries are accepted.
+A zero size clears the list without reading
+.Fa list .
+The complete list is copied before the credentials change.
+.Fn getgroups
+with size zero reports the current count; see
+.Xr getuid 2 .
+.Pp
+A change of real user ID makes the process count against the new user's
+total for
+.Dv RLIMIT_NPROC .
+These setters do not enforce that limit.
+.Xr fork 2
+counts processes by their current real user IDs and compares the count
+with the caller's soft limit.
+Real user ID 0 is exempt.
+.Ss System call numbers
+Musl uses the i386 32-bit ID calls:
+213 for
+.Nm setuid32 ,
+214 for
+.Nm setgid32 ,
+203 for
+.Nm setreuid32 ,
+204 for
+.Nm setregid32 ,
+208 for
+.Nm setresuid32 ,
+210 for
+.Nm setresgid32 ,
+and 206 for
+.Nm setgroups32 .
+It declares the functions without the
+.Li 32
+suffix and provides no separate prototypes for these kernel names.
+The
+.Fn setresuid
+and
+.Fn setresgid
+declarations require
+.Dv _GNU_SOURCE ;
+.Fn setgroups
+requires
+.Dv _GNU_SOURCE
+or
+.Dv _BSD_SOURCE .
+.Sh RETURN VALUES
+These functions return zero on success.
+On failure they return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/credprobe.c
+sets supplementary groups 1000 and 2000 as root and reads them back.
+It then sets only the effective user ID to 1000 with
+.Fn setreuid ,
+checks real ID 0 and effective and saved IDs 1000, and verifies that
+.Fn setgroups
+now fails with
+.Er EPERM .
+.Pp
+.Pa tests/limitprobe.c
+changes a child's real user ID to 1000 and verifies that it contributes
+to that user's process count when a subsequent fork reaches
+.Dv RLIMIT_NPROC .
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+An entry of the supplementary group list cannot be read.
+.It Bq Er EINVAL
+.Fa size
+exceeds eight.
+This check precedes the privilege check.
+.It Bq Er EPERM
+An unprivileged caller requested an ID change outside the permitted
+values, or called
+.Fn setgroups .
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr getuid 2 ,
+.Xr prlimit64 2

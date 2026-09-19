@@ -1,0 +1,142 @@
+.Dd September 19, 2026
+.Dt RENAME 2
+.Os
+.Sh NAME
+.Nm rename
+.Nd rename a file within a mount
+.Sh SYNOPSIS
+.In stdio.h
+.Ft int
+.Fn rename "const char *oldpath" "const char *newpath"
+.Sh DESCRIPTION
+.Fn rename
+changes the name
+.Fa oldpath
+to
+.Fa newpath .
+Relative paths are resolved from the current working directory.
+The two parent directories must be on the same mount.
+A final symbolic link is renamed or replaced as an entry; its target
+is not followed.
+.Pp
+An existing regular-file destination may be replaced.
+An open descriptor continues to refer to the file it opened, including
+when that file's name is replaced.
+On KRFFS, a replaced file with open descriptors becomes nameless and
+its storage is freed at the last close.
+It is absent from lookup and directory listings.
+.Pp
+Search permission is required on ancestor directories and write
+permission on both parent directories.
+The parent write checks precede lookup of the source.
+In a sticky directory, removing the source entry or replacing the
+destination entry additionally requires effective user ID 0, ownership
+of the directory, or ownership of the affected entry.
+The KRFFS boot root is treated as mode 0755 and non-sticky.
+.Pp
+The KRFFS boot root refuses a directory source with
+.Er EPERM
+and a directory destination under a nondirectory source with
+.Er EISDIR .
+A mounted KRFFS volume also refuses directory renames, generally with
+.Er EIO ;
+an open directory destination gives
+.Er EISDIR .
+Ext2, FAT32, and exFAT can rename directories.
+A directory destination must be empty and not held open, and a directory
+cannot be moved into itself or below itself.
+A directory and a nondirectory cannot replace each other.
+.Pp
+Either path naming the root is refused with
+.Er EINVAL .
+Mount points cannot be renamed or replaced.
+The synthetic
+.Pa /dev
+and
+.Pa /proc
+namespaces are read-only.
+On the KRFFS boot root, replacing a different file that backs an attached
+loop device returns
+.Er EBUSY .
+This is a check on the destination, not the source.
+Ext2 permits renaming or replacing a loop-backed file because the loop
+device retains its inode.
+.Pp
+The i386 system call number is 38.
+.Sh RETURN VALUES
+.Fn rename
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The raw kernel call returns a negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/fdstale.c
+has a child open a file while its parent renames a replacement onto
+that name.
+The child reads the original contents through its descriptor;
+opening the name again reads the replacement.
+.Sh ERRORS
+.Bl -tag -width ENAMETOOLONG
+.It Er EACCES
+Search permission was denied on an ancestor directory, or write
+permission was denied on either parent directory.
+.It Er EBUSY
+A path entered a mount being mounted or unmounted, either entry is a
+mount point, or a destination directory is held open.
+On the KRFFS boot root, a different destination file backs an attached
+loop device.
+.It Er EFAULT
+A path cannot be read from user memory, or there is no current process.
+.It Er EFBIG
+An ext2 directory cannot grow further or a required block exceeds the
+file system's addressing limit.
+.It Er EINVAL
+Either path names the root, a destination has no leaf component, a
+directory would move into itself or below itself, or a file system
+rejects the name or cannot supply required attributes.
+.It Er EIO
+File system data or metadata could not be read or written, or the
+device was removed.
+KRFFS also maps a refusal from its rename operation to this error.
+.It Er EISDIR
+A nondirectory would replace a directory on the KRFFS boot root, ext2,
+FAT32, or exFAT.
+A mounted KRFFS volume also gives this error for an open directory
+destination.
+.It Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Er EMLINK
+An ext2 directory move would exceed the new parent's limit of 65000 links.
+.It Er ENAMETOOLONG
+A path, component, or symbolic-link expansion is too long.
+The copied path, including any current-directory prefix and its
+terminating null byte, must fit 256 bytes.
+.It Er ENOENT
+A path is empty, a parent component is missing, or the source does not
+exist on a file system that reports this error.
+.It Er ENOMEM
+A file system could not allocate memory needed for path resolution
+or the rename.
+.It Er ENOSPC
+The destination directory cannot allocate space for the new entry.
+.It Er ENOTDIR
+A path component used as a directory is not a directory, or a directory
+source would replace a nondirectory on ext2, FAT32, or exFAT.
+.It Er ENOTEMPTY
+A directory destination is not empty on ext2, FAT32, or exFAT.
+.It Er EPERM
+The source is a directory on the KRFFS boot root, or a sticky-directory
+rule forbids removal or replacement.
+.It Er EROFS
+The mount is read-only, the file system has no rename operation,
+either parent is synthetic, or an exFAT directory involved in the
+rename cannot be modified.
+.It Er EXDEV
+The parent directories are on different mounts.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr link 2 ,
+.Xr open 2 ,
+.Xr unlink 2 ,
+.Xr loop 4

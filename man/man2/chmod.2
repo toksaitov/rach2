@@ -1,0 +1,170 @@
+.Dd September 19, 2026
+.Dt CHMOD 2
+.Os
+.Sh NAME
+.Nm chmod ,
+.Nm fchmod ,
+.Nm fchmodat
+.Nd change file permission bits
+.Sh SYNOPSIS
+.In sys/stat.h
+.Ft int
+.Fn chmod "const char *path" "mode_t mode"
+.Ft int
+.Fn fchmod "int fd" "mode_t mode"
+.In fcntl.h
+.Ft int
+.Fn fchmodat "int dirfd" "const char *path" "mode_t mode" "int flags"
+.Sh DESCRIPTION
+.Fn chmod
+changes the permission and special mode bits of
+.Fa path .
+The caller must own the file, as judged by its effective user ID, or
+have effective user ID 0.
+File type bits are not changed.
+.Fn fchmod
+applies the change to the file or directory referred to by
+.Fa fd .
+.Pp
+Relative paths are resolved from the current working directory.
+.Fn fchmodat
+instead resolves a relative path from directory descriptor
+.Fa dirfd ,
+or from the working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD .
+An absolute path ignores
+.Fa dirfd .
+Ancestor search permissions still apply when a directory descriptor
+is used.
+The kernel follows symbolic links.
+.Pp
+The kernel calls are 15 for
+.Fn chmod ,
+94 for
+.Fn fchmod
+and 306 for
+.Fn fchmodat .
+Call 306 takes no flags argument.
+Pass zero as the musl
+.Fa flags
+argument to use that interface directly.
+Musl also accepts
+.Dv AT_SYMLINK_NOFOLLOW
+through a separate sequence of calls; a symbolic-link target gives
+.Er EOPNOTSUPP .
+Other flags give
+.Er EINVAL .
+.Ss Stored modes
+KRFFS and ext2 store the low twelve bits of
+.Fa mode :
+the owner, group and other read, write and execute bits, set-user-ID,
+set-group-ID and sticky bits.
+A KRFFS root retains its fixed mode even when an authorized change
+reports success.
+.Pp
+On the KRFFS boot root, an unprivileged owner setting the mode of a
+regular file loses the set-group-ID bit when the file's group is neither
+the caller's effective group nor a supplementary group.
+On other mounts this clearing also applies to directories.
+.Pp
+A non-root write or truncate clears set-user-ID on a regular file and
+clears set-group-ID when group execute is set.
+Changing the owner or group applies the same clearing even for root.
+An unchanged owner and group leave these bits alone.
+.Pp
+FAT32 and exFAT store only a read-only attribute.
+The requested bits outside 0222 must match the mode derived from the
+mount's umask, or the change gives
+.Er EPERM .
+Any requested write bit clears the read-only attribute; no write bits
+sets it.
+Their root directory has no entry to change and remains unchanged.
+.Pp
+A pseudoterminal slave under
+.Pa /dev/pts
+stores the low nine permission bits on the terminal, by path or descriptor,
+under the owner-or-root rule.
+Other synthetic objects and descriptors have fixed metadata.
+For these, effective user ID 0 receives success without a change;
+other callers receive
+.Er EPERM ,
+even when requesting the existing mode.
+.Pp
+A read-only mount refuses a mode update with
+.Er EROFS
+after the ownership check.
+.Sh RETURN VALUES
+These functions return 0 on success.
+On failure they return -1 and set
+.Va errno .
+The raw kernel calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default-suite probe
+.Pa tests/modeprobe.c
+has an unprivileged owner outside a file's group request mode 02710.
+It checks that the call succeeds and stores mode 0710, with set-group-ID
+cleared.
+.Sh ERRORS
+.Bl -tag -width ENAMETOOLONG
+.It Er EACCES
+Search permission is denied on a directory in the path.
+Musl's
+.Dv AT_SYMLINK_NOFOLLOW
+sequence can also require read permission when it opens the target.
+.It Er EBADF
+.Fa fd
+is invalid, its pseudoterminal no longer exists, or a relative path
+uses an invalid or stale
+.Fa dirfd .
+.It Er EBUSY
+Path resolution enters a mount being mounted or unmounted.
+.It Er EFAULT
+The path cannot be read from user memory.
+.It Er EINVAL
+Musl rejects the
+.Fa flags
+argument to
+.Fn fchmodat .
+.It Er EIO
+Path lookup or metadata access fails, including access to a removed device.
+.It Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Er EMFILE
+Musl's
+.Dv AT_SYMLINK_NOFOLLOW
+sequence cannot allocate a descriptor for the target.
+.It Er ENAMETOOLONG
+The supplied path or its joined absolute form exceeds 255 bytes, a
+directory descriptor's path cannot be reconstructed within its buffer,
+a component exceeds 255 bytes, or symbolic-link expansion exceeds
+511 bytes.
+.It Er ENOENT
+The path is empty, a component or pseudoterminal is missing, or a
+symbolic link has an empty target.
+.It Er ENOMEM
+Path lookup cannot allocate a file-system node.
+.It Er ENOTDIR
+A path component used as a directory is not a directory, or a relative
+path uses a nondirectory
+.Fa dirfd .
+.It Er EOPNOTSUPP
+Musl's
+.Dv AT_SYMLINK_NOFOLLOW
+handling encountered a symbolic link.
+.It Er EPERM
+The caller is neither owner nor root, an unprivileged caller addresses
+fixed metadata, or FAT32 or exFAT cannot represent the requested mode.
+.It Er EROFS
+The mount is read-only or the file system has no attribute-setting operation.
+.It Er ESRCH
+The raw
+.Fn fchmod
+call has no current process.
+.El
+.Sh SEE ALSO
+.Xr access 2 ,
+.Xr chown 2 ,
+.Xr stat 2 ,
+.Xr umask 2

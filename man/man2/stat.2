@@ -1,0 +1,324 @@
+.Dd September 19, 2026
+.Dt STAT 2
+.Os
+.Sh NAME
+.Nm stat ,
+.Nm lstat ,
+.Nm stat64 ,
+.Nm lstat64 ,
+.Nm fstat64 ,
+.Nm fstatat64
+.Nd get file attributes
+.Sh SYNOPSIS
+.In sys/stat.h
+.Ft int
+.Fn stat "const char *restrict path" "struct stat *restrict buf"
+.Ft int
+.Fn lstat "const char *restrict path" "struct stat *restrict buf"
+.Ft int
+.Fn fstat "int fd" "struct stat *buf"
+.Ft int
+.Fn fstatat "int dirfd" "const char *restrict path" "struct stat *restrict buf" "int flags"
+.Sh DESCRIPTION
+.Fn stat
+reports the attributes of
+.Fa path
+in
+.Fa buf ,
+following a final symbolic link.
+.Fn lstat
+reports the link itself.
+Both follow links in preceding components.
+.Fn fstat
+reports the object referred to by
+.Fa fd .
+An open KRFFS root directory descriptor reports the root directory.
+.Pp
+.Fn fstatat
+resolves a relative
+.Fa path
+from the directory referred to by
+.Fa dirfd ,
+or from the current working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD
+(-100).
+An absolute path ignores
+.Fa dirfd .
+The descriptor is converted to a path, so ancestor search permissions
+still apply.
+The copied path, including any directory prefix and terminating null
+byte, must fit 256 bytes.
+.Pp
+.Dv AT_SYMLINK_NOFOLLOW
+in
+.Fa flags
+selects the final symbolic link itself, on ext2 or under
+.Pa /proc .
+Without it the link is followed.
+The kernel also accepts
+.Dv AT_NO_AUTOMOUNT
+and
+.Dv AT_EMPTY_PATH
+as flag bits, but they have no effect.
+An empty path returns
+.Er ENOENT
+at the kernel interface.
+Musl handles an empty path with exactly
+.Dv AT_EMPTY_PATH
+and a nonnegative descriptor through
+.Fn fstat .
+Other flag bits return
+.Er EINVAL ,
+except when the copied path is
+.Pa /
+on a KRFFS root, where the kernel does not check flags.
+.Ss Reported attributes
+.Va st_mode
+contains the file type and permission bits;
+.Va st_uid
+and
+.Va st_gid
+are its owner and group.
+.Va st_nlink
+is the reported link count,
+.Va st_size
+the byte size, and
+.Va st_ino
+the inode identity.
+.Va st_dev
+identifies the file system;
+.Va st_rdev
+identifies a device node's device.
+.Pp
+The kernel reports an I/O block size of 4096 in
+.Va st_blksize .
+For stored files,
+.Va st_blocks
+is the byte size rounded up to 512-byte units, including on ext2.
+It does not measure the blocks actually allocated to a sparse file.
+.Bl -tag -width "Mounted KRFFS"
+.It KRFFS root
+Nodes other than the root directory report stored owner, group, size,
+and access, modification, and attribute-change times, including nanoseconds.
+The link count is 1.
+The root directory has inode 0, mode 0755, and its own stored times;
+without a mounted KRFFS image, the time helper uses boot time.
+The file-system device number is 0.
+.It Mounted KRFFS
+Attributes and times come from the stored node.
+Directories report two links and files one.
+The inode is the node's byte offset plus one; relocation changes it.
+.It ext2
+Owner, group, mode, link count, size, and the three times come from the inode.
+Times have second precision.
+.Fn lstat
+reports a symbolic link's type and target length.
+Device inodes report their stored device numbers even though they cannot
+be opened as devices.
+.It FAT32
+Owner and group are the mount's values.
+Permissions are 0777 with the mount mask removed; the read-only attribute
+also removes write bits.
+The link count is 1 and the size is the directory entry's stored size.
+Modification time has two-second precision, access time has date precision,
+and creation time is reported as
+.Va st_ctim
+with hundredths of a second.
+Stored times are interpreted as UTC.
+.It exFAT
+Owner, group, permissions, and link count follow the FAT32 rules.
+The size is the stored data length.
+Creation time is reported as
+.Va st_ctim .
+Creation and modification times include the stored 10 ms increments.
+A valid stored UTC offset is applied; otherwise the time is treated as UTC.
+.El
+.Pp
+Reads do not advance access times.
+An ext2, FAT32, exFAT, or additional KRFFS mount reports
+.Va st_dev
+as 0x10 plus their mount-table index, including an ext2 root at index 0.
+.Ss Synthetic objects
+.Pa /dev
+uses
+.Va st_dev
+5 and
+.Pa /proc
+uses 6.
+Synthetic objects, sockets, and pipes report boot time for all three
+times, zero nanoseconds, one link, and zero size.
+Proc text files report zero size even when reading them returns data.
+Unfollowed proc links report symbolic-link type and mode 0777.
+.Pp
+A socket or pipe descriptor reports the object's own inode.
+A followed
+.Pa /proc/<pid>/fd/<n>
+link reports the target descriptor's attributes, so its inode agrees
+with
+.Fn fstat .
+Device and proc-file descriptors likewise use their objects' identities.
+.Pp
+Device numbers use the major number shifted left eight bits, combined
+with the minor number.
+The named device nodes have these major and minor numbers:
+.Bl -column "loop0 through loop3" "Major" "Minor" -offset indent
+.It Sy Node Ta Sy Major Ta Sy Minor
+.It Pa null Ta 1 Ta 3
+.It Pa zero Ta 1 Ta 5
+.It Pa full Ta 1 Ta 7
+.It Pa random Ta 1 Ta 8
+.It Pa urandom Ta 1 Ta 9
+.It Pa tty Ta 5 Ta 0
+.It Pa console Ta 5 Ta 1
+.It Pa ptmx Ta 5 Ta 2
+.It Pa pts/N Ta 136 Ta N
+.It Pa bootpart Ta 240 Ta 0
+.It Pa disk0 Ta 240 Ta 1
+.It Pa bootlog Ta 240 Ta 2
+.It Pa grubcore Ta 240 Ta 3
+.It Pa loop0 No through Pa loop3 Ta 240 Ta 32 through 35
+.It Pa loop-control Ta 240 Ta 36
+.It Pa framefail Ta 240 Ta 37
+.It Pa screenlog Ta 240 Ta 38
+.El
+.Pp
+Names in the table are relative to
+.Pa /dev .
+For
+.Pa disk0pM
+with M from 1 through 4, the minor is 3 + M.
+Other
+.Pa diskN
+and
+.Pa diskNpM
+nodes use minor 64 + 16*N + M, with M zero for a whole disk.
+Disk nodes are block devices; the other listed device nodes are
+character devices.
+Only devices present in the namespace can be queried.
+.Ss System call interface
+The i386 calls are
+.Nm stat
+(106),
+.Nm lstat
+(107),
+.Nm stat64
+(195),
+.Nm lstat64
+(196),
+.Nm fstat64
+(197), and
+.Nm fstatat64
+(300).
+Path calls take the path in EBX and result pointer in ECX;
+.Nm fstat64
+takes the descriptor in EBX and result pointer in ECX.
+.Nm fstatat64
+takes directory descriptor, path, result pointer, and flags in EBX,
+ECX, EDX, and ESI.
+.Pp
+Musl tries
+.Nm statx
+and, on
+.Er ENOSYS ,
+uses the 64-bit stat calls.
+It maps
+.Fn stat ,
+.Fn lstat ,
+.Fn fstat ,
+and
+.Fn fstatat
+to the corresponding 64-bit kernel interfaces.
+With
+.Dv _LARGEFILE64_SOURCE ,
+musl defines
+.Nm stat64 , lstat64 , fstat64 ,
+and
+.Nm fstatat64
+as macros for these public functions; they have no separate prototypes.
+.Pp
+The kernel stat64 result is 96 bytes in the i386 layout.
+Its fields, in order, are:
+.Bd -literal -offset indent
+uint64_t st_dev;
+uint8_t  pad0[4];
+uint32_t old_st_ino;
+uint32_t st_mode, st_nlink, st_uid, st_gid;
+uint64_t st_rdev;
+uint8_t  pad3[4];
+int64_t  st_size;
+uint32_t st_blksize;
+uint64_t st_blocks;
+uint32_t st_atime, st_atime_nsec;
+uint32_t st_mtime, st_mtime_nsec;
+uint32_t st_ctime, st_ctime_nsec;
+uint64_t st_ino;
+.Ed
+.Pp
+The final inode field is at byte offset 88.
+Musl converts this structure to its public
+.Vt struct stat ,
+which has 64-bit time fields.
+Calls 106 and 107 instead fill the older, narrower structure with
+16-bit mode, link count, and owner fields and 32-bit sizes and inode numbers.
+They do not check for truncation when converting wider attributes.
+.Sh RETURN VALUES
+These functions return 0 on success.
+On failure they return -1 and set
+.Va errno .
+The kernel calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/vfsprobe.c
+checks that
+.Nm stat64
+reports a mode set by
+.Xr chmod 2
+and a modification time set by
+.Xr utimensat 2 .
+.Pa tests/procprobe.c
+checks that a socket's
+.Nm fstat64
+inode agrees with its proc descriptor link and TCP listing.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission on an ancestor directory was denied.
+.It Bq Er EBADF
+The descriptor is invalid, or a relative path uses a removed directory
+descriptor.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted.
+.It Bq Er EFAULT
+A path or result pointer cannot be accessed as required, is null,
+or there is no current process.
+.It Bq Er EINVAL
+Unsupported
+.Fn fstatat
+flag bits were supplied, or required attributes cannot be obtained.
+.It Bq Er EIO
+File-system metadata or I/O failed, or a mount's device was removed.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+A copied or reconstructed path, component, or symbolic-link expansion
+exceeds its buffer.
+.It Bq Er ENOENT
+The path is empty, a required component is absent, or a synthetic entry
+or process no longer exists.
+.It Bq Er ENOMEM
+A node needed for path resolution cannot be allocated.
+.It Bq Er ENOTDIR
+A path component or relative-path base descriptor is not a directory.
+.It Bq Er EOVERFLOW
+A stored file size exceeds the file system driver's 32-bit offset range.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr chown 2 ,
+.Xr open 2 ,
+.Xr statfs 2 ,
+.Xr symlink 2 ,
+.Xr utimensat 2 ,
+.Xr proc 5

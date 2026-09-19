@@ -1,0 +1,176 @@
+.Dd September 19, 2026
+.Dt SETSOCKOPT 2
+.Os
+.Sh NAME
+.Nm setsockopt ,
+.Nm getsockopt
+.Nd set or get socket options
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn setsockopt "int fd" "int level" "int optname" "const void *optval" "socklen_t optlen"
+.Ft int
+.Fn getsockopt "int fd" "int level" "int optname" "void *restrict optval" "socklen_t *restrict optlen"
+.Sh DESCRIPTION
+These functions set or get option
+.Fa optname
+at protocol
+.Fa level
+on socket
+.Fa fd .
+For
+.Fn setsockopt ,
+.Fa optval
+points to the value and
+.Fa optlen
+is its length in bytes.
+For
+.Fn getsockopt ,
+.Fa optlen
+points to the capacity of
+.Fa optval ;
+on success it receives the number of bytes copied.
+.Pp
+Except for
+.Dv SO_BINDTODEVICE ,
+results are four-byte integers, truncated to the caller's capacity.
+Both output pointers must be nonnull even when that capacity is zero.
+A truncated result reports its copied length, not four.
+.Ss Socket options
+The following options use
+.Dv SOL_SOCKET :
+.Bl -tag -width SO_BINDTODEVICE
+.It Dv SO_REUSEADDR
+Set or get a boolean stored on the socket.
+UDP sockets may share a port only when both have this option set and
+have the same effective user ID.
+TCP listener ports can be reused after the listener closes without
+this option, but two live listeners cannot share a port.
+.It Dv SO_BROADCAST
+Set or get permission to send UDP to the limited or subnet broadcast
+address.
+.It Dv SO_TYPE
+Get the socket's actual type.
+Setting it succeeds without changing the type.
+.It Dv SO_ERROR
+Get and clear the pending TCP connection error.
+The result is zero when no error is pending or no TCP connection
+record is attached.
+The error is cleared before output pointers are checked, so a failed
+copy can consume it.
+Setting this option has no effect.
+.It Dv SO_BINDTODEVICE
+The value is an interface-name string.
+A nonempty name must identify a registered interface; an empty string
+clears the setting.
+A positive length is required.
+At most 16 bytes are read, and the last byte of that buffer is forced
+to zero.
+Larger input buffers are accepted.
+The kernel stores only whether the setting is nonempty.
+Getting it returns
+.Ql eth0
+when set, or an empty string when clear, including the terminating
+null byte if space permits.
+The setting does not restrict socket traffic to an interface.
+.It Dv SO_KEEPALIVE
+Accepted without effect; reads as integer zero.
+.It Dv SO_RCVTIMEO
+Accepted without effect.
+It does not bound a receive wait.
+Getting it returns an integer zero, truncated to the supplied capacity,
+rather than a timeval.
+.El
+.Pp
+The
+.Dv SO_REUSEADDR
+and
+.Dv SO_BROADCAST
+values must have room for an integer.
+Zero disables the option; any nonzero value enables it.
+.Ss Protocol options
+.Bl -tag -width PACKET_AUXDATA
+.It Dv IP_TTL
+At level
+.Dv IPPROTO_IP ,
+set or get the IPv4 hop limit.
+Setting it requires an integer from 1 through 255.
+UDP and raw ICMP sends use the stored value.
+.It Dv IP_HDRINCL
+At level
+.Dv IPPROTO_IP ,
+both calls fail with
+.Er ENOPROTOOPT .
+.It Dv TCP_NODELAY
+At level
+.Dv IPPROTO_TCP ,
+accepted without effect; reads as integer zero.
+The stack already sends promptly.
+.It Dv PACKET_AUXDATA
+At level
+.Dv SOL_PACKET ,
+.Fn setsockopt
+fails with
+.Er ENOPROTOOPT .
+The stack supplies no ancillary packet data.
+.Fn getsockopt
+returns integer zero.
+.El
+.Pp
+Other options and levels are accepted without effect by
+.Fn setsockopt
+and return integer zero through
+.Fn getsockopt .
+Except for the interface-name and
+.Dv PACKET_AUXDATA
+cases, setting an option with a declared length of at least four
+bytes reads the first integer even if the option is ignored.
+Shorter values are ignored unless the option explicitly requires an
+integer.
+.Pp
+These operations are subcalls 14 and 15, respectively, of i386
+.Xr socketcall 2 ,
+system call 102.
+.Sh RETURN VALUES
+These functions return zero on success.
+On failure they return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[ENOPROTOOPT]"
+.It Bq Er EFAULT
+A required option value or length cannot be read or written, a required
+pointer is null, or the
+.Fn socketcall
+argument array cannot be read.
+.It Bq Er EINVAL
+The length for
+.Dv SO_BINDTODEVICE
+is nonpositive as a signed 32-bit value;
+an
+.Dv SO_REUSEADDR ,
+.Dv SO_BROADCAST ,
+or
+.Dv IP_TTL
+value is shorter than an integer; or the hop limit is outside 1 through 255.
+.It Bq Er ENODEV
+A nonempty
+.Dv SO_BINDTODEVICE
+name does not identify a registered interface.
+.It Bq Er ENOPROTOOPT
+.Dv IP_HDRINCL
+was requested, or
+.Fn setsockopt
+was used for
+.Dv PACKET_AUXDATA .
+.It Bq Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2

@@ -1,0 +1,167 @@
+.Dd September 19, 2026
+.Dt CONNECT 2
+.Os
+.Sh NAME
+.Nm connect
+.Nd connect a socket to a peer
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn connect "int fd" "const struct sockaddr *addr" "socklen_t addrlen"
+.Sh DESCRIPTION
+.Fn connect
+sets the peer of socket
+.Fa fd
+from
+.Fa addr .
+.Fa addrlen
+is the address length in bytes.
+For an IPv4 peer, the kernel reads the first eight bytes of a
+.Vt sockaddr_in :
+the family, port, and address.
+The port and address are in network byte order.
+The operation is subcall 3 of i386
+.Xr socketcall 2 ,
+system call 102.
+.Ss Stream sockets
+On a
+.Dv SOCK_STREAM
+socket, the call starts the TCP handshake.
+A previously bound local port is retained; otherwise an unused ephemeral
+port from 49152 through 65535 is selected.
+A duplicate pairing of local port, peer address, and peer port is refused.
+.Pp
+A blocking socket waits until the handshake completes or fails.
+A pending signal interrupts the wait with
+.Er EINTR .
+With
+.Dv O_NONBLOCK ,
+the call returns 0 if the connection is already established or
+.Er EINPROGRESS
+otherwise.
+The caller can wait for completion with
+.Xr poll 2
+and read
+.Dv SO_ERROR
+with
+.Xr getsockopt 2 .
+Reading
+.Dv SO_ERROR
+clears the pending error.
+.Pp
+A second connect on a socket still in
+.Dv SYN_SENT
+fails with
+.Er EALREADY .
+A listening socket, or one with any other attached TCP control block,
+gives
+.Er EISCONN ;
+this includes a control block left closed after failure.
+Close the descriptor and create a new socket for another attempt.
+.Pp
+The initial retransmission timeout is one second.
+It doubles on timeout to a maximum of 60 seconds.
+Seven successive expiries permit retransmission; the eighth ends the
+connection.
+A failed blocking handshake returns
+.Er ECONNREFUSED ,
+including a handshake that timed out.
+The pending socket error distinguishes a timeout
+.Pq Er ETIMEDOUT
+from a reset during active open
+.Pq Er ECONNREFUSED .
+A reset after establishment records
+.Er ECONNRESET .
+These pending errors are reported by
+.Dv SO_ERROR
+and cause
+.Dv POLLERR .
+.Ss Datagram sockets
+On an IPv4
+.Dv SOCK_DGRAM
+socket, the call records a destination for sends and restricts received
+datagrams to that peer.
+There is no handshake or wait.
+An unbound socket acquires an ephemeral local port.
+Another connect replaces the peer.
+.Pp
+An address with family
+.Dv AF_UNSPEC
+disconnects a datagram socket and leaves its local binding in place.
+Only the two-byte family is needed for this request.
+A stream socket cannot be disconnected this way.
+Raw sockets and packet sockets do not support
+.Fn connect .
+.Ss Local connections
+A destination in 127/8 is replaced with the current local IPv4 address.
+There is no separate
+.Li lo
+interface.
+Self-addressed packets are queued for delivery at system call exit or
+by the timer; they do not require a network peer.
+Address queries report the canonical local address, not 127.0.0.1.
+.Sh RETURN VALUES
+.Fn connect
+returns 0 on success.
+On failure, including a nonblocking connection in progress, it returns
+-1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+connects to its own TCP listener through 127.0.0.1, exchanges data in
+both directions, and checks the reported peer address.
+It also connects to a closed local port and requires
+.Er ECONNREFUSED .
+.Sh ERRORS
+.Bl -tag -width "[EADDRNOTAVAIL]"
+.It Bq Er EADDRINUSE
+The bound local port is already paired with the same peer address and port.
+.It Bq Er EADDRNOTAVAIL
+No ephemeral TCP port is available.
+.It Bq Er EAFNOSUPPORT
+A datagram address has a family other than
+.Dv AF_INET
+or
+.Dv AF_UNSPEC ,
+or a stream socket was given
+.Dv AF_UNSPEC .
+The stream handler does not reject other nonzero family values before
+interpreting the address as IPv4.
+.It Bq Er EAGAIN
+An unbound datagram socket could not acquire an ephemeral binding.
+.It Bq Er EALREADY
+A TCP handshake is already in progress in
+.Dv SYN_SENT .
+.It Bq Er ECONNREFUSED
+The blocking TCP handshake ended without an established connection.
+.It Bq Er EFAULT
+The address, or the socketcall argument array, cannot be read from user memory.
+.It Bq Er EINPROGRESS
+A nonblocking TCP handshake has started but is not yet established.
+.It Bq Er EINTR
+A signal interrupted the blocking wait.
+.It Bq Er EINVAL
+.Fa addrlen
+is less than two bytes, or less than eight for a nonzero address family.
+.It Bq Er EISCONN
+The stream socket is listening or already has a TCP control block in
+a state other than
+.Dv SYN_SENT .
+.It Bq Er ENOBUFS
+A TCP control block could not be allocated.
+.It Bq Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Bq Er EOPNOTSUPP
+The socket is raw, belongs to
+.Dv AF_PACKET ,
+or is neither a supported datagram nor stream socket.
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr getsockopt 2 ,
+.Xr poll 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2

@@ -1,0 +1,49 @@
+.Dd September 19, 2026
+.Dt UMASK 2
+.Os
+.Sh NAME
+.Nm umask
+.Nd set the file creation mask
+.Sh SYNOPSIS
+.In sys/stat.h
+.Ft mode_t
+.Fn umask "mode_t mask"
+.Sh DESCRIPTION
+.Fn umask
+sets the calling process's file creation mask to
+.Fa mask
+and returns the previous mask.
+Only the low nine permission bits are kept:
+.Li "mask & 0777" .
+.Pp
+On KRFFS, including the boot root, and on ext2, new files and directories
+receive the requested permission bits with the process mask removed.
+For example, a mask of 0027 changes requested permissions 0666 to 0640
+and 0777 to 0750.
+FAT32 and exFAT ignore the creation mode and report permissions from
+their mount mask and read-only attribute; the process mask does not
+determine their permissions.
+.Pp
+The i386 system call number is 60.
+EBX contains the new mask.
+.Sh RETURN VALUES
+.Fn umask
+returns the previous mask.
+On failure, musl returns
+.Li (mode_t)-1
+and sets
+.Va errno .
+The kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/miscprobe.c
+sets the mask to 0027, checks that the previous mask was 0022, and
+restores 0022, checking that the returned mask is 0027.
+.Pa tests/ownprobe.c
+checks that a mask of 0027 produces a file with permissions 0640 from
+0666 and a directory with permissions 0750 from 0777.
+.Sh ERRORS
+.Bl -tag -width "[ESRCH]"
+.It Bq Er ESRCH
+There is no current process.
+.El

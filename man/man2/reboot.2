@@ -1,0 +1,92 @@
+.Dd September 19, 2026
+.Dt REBOOT 2
+.Os
+.Sh NAME
+.Nm reboot
+.Nd halt, power off, or restart the machine
+.Sh SYNOPSIS
+.In sys/reboot.h
+.Ft int
+.Fn reboot "int command"
+.Sh DESCRIPTION
+.Fn reboot
+performs the operation selected by
+.Fa command .
+The caller must have effective user ID 0.
+Privilege is checked before the magic numbers or command.
+.Bl -tag -width RB_HALT_SYSTEM
+.It Dv RB_AUTOBOOT
+Restart the machine.
+.It Dv RB_HALT_SYSTEM
+Halt the processor, leaving power on.
+The console displays
+.Ql halt: system halted .
+.It Dv RB_POWER_OFF
+Power off the machine.
+If the platform does not power off, halt instead.
+.It Dv RB_DISABLE_CAD
+Return success without changing state.
+Keyboard reboot is permanently disabled.
+.It Dv RB_ENABLE_CAD
+Return
+.Er EINVAL ;
+keyboard reboot is not implemented.
+.El
+.Pp
+Other commands are rejected.
+The three stop commands perform the kernel shutdown procedure and do
+not return.
+A restart that fails to reset the platform also ends in a halt.
+.Pp
+The i386 system call number is 88.
+Its arguments are a first magic number in EBX, a second magic number
+in ECX, and the command in EDX.
+The first magic must be
+.Li 0xfee1dead .
+The accepted second values are
+.Li 0x28121969 ,
+.Li 0x05121996 ,
+.Li 0x16041998 ,
+and
+.Li 0x20112000 .
+Musl supplies the first magic and
+.Li 0x28121969
+for the caller.
+.Pp
+The command values are
+.Li 0x01234567
+for restart,
+.Li 0xcdef0123
+for halt,
+.Li 0x4321fedc
+for power off,
+zero for disabling keyboard reboot, and
+.Li 0x89abcdef
+for the unsupported enable operation.
+.Sh RETURN VALUES
+.Dv RB_DISABLE_CAD
+returns 0.
+The halt, power-off, and restart commands do not return.
+On failure,
+.Fn reboot
+returns -1 and sets
+.Va errno .
+The raw kernel call returns a negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/rebootprobe.c
+checks
+.Dv RB_DISABLE_CAD
+with all four accepted second magic numbers, rejects bad magic numbers
+and unsupported commands, and checks that an unprivileged child cannot
+power off the machine.
+It does not stop the machine.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EINVAL
+A magic number is wrong or the command is unsupported.
+.It Er EPERM
+The caller's effective user ID is not 0.
+.El
+.Sh SEE ALSO
+.Xr halt 8

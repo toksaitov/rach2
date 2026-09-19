@@ -1,0 +1,187 @@
+.Dd September 19, 2026
+.Dt STATFS 2
+.Os
+.Sh NAME
+.Nm statfs ,
+.Nm statfs64 ,
+.Nm fstatfs64
+.Nd get file-system statistics
+.Sh SYNOPSIS
+.In sys/statfs.h
+.Ft int
+.Fn statfs "const char *path" "struct statfs *buf"
+.Ft int
+.Fn fstatfs "int fd" "struct statfs *buf"
+.Sh DESCRIPTION
+.Fn statfs
+reports the file system containing
+.Fa path
+in
+.Fa buf .
+The path must name an existing object and is resolved with symbolic links
+followed.
+.Fn fstatfs
+selects the file system by an open descriptor.
+.Pp
+The result fields are:
+.Bl -tag -width "f_files, f_ffree"
+.It Va f_type
+The file-system magic number.
+.It Va f_bsize
+The byte unit of the block counts.
+.It Va f_blocks
+The total count in those units.
+.It Va f_bfree
+The free count in those units.
+.It Va f_bavail
+Equal to
+.Va f_bfree ;
+no separate allowance for an unprivileged caller is reported.
+.It Va f_files , f_ffree
+Zero; inode counts are not reported.
+.It Va f_fsid
+Zero.
+.It Va f_namelen
+255, the reported maximum name length in bytes.
+.It Va f_frsize
+Equal to
+.Va f_bsize .
+.It Va f_flags
+Zero, including on read-only mounts.
+.El
+.Pp
+Reserved fields are zero.
+The file-system values are:
+.Bl -tag -width "Mounted KRFFS"
+.It KRFFS boot root
+Magic 0x4b524646.
+The block unit is 1024 bytes.
+Total space is the image region's size divided by 1024;
+free space is the free nodes' usable bytes divided by 1024.
+.It Mounted KRFFS
+Magic 0x4b52.
+Total and free space are the mounted volume's corresponding byte counts
+divided by 1024, with a block unit of 1024.
+.It ext2
+Magic 0xef53.
+The block unit is the volume's block size.
+Total and free counts are the volume's block counts.
+An ext2 root uses these values too.
+.It FAT32
+Magic 0x4d44.
+The block unit is the cluster size, and the counts are total and free
+data clusters.
+Free clusters are counted when needed and the count is maintained
+as allocation changes.
+.It exFAT
+Magic 0x2011bab0.
+The block unit is the cluster size, and the counts are total and free
+clusters.
+Free space is counted from the allocation bitmap when needed and the
+count is maintained as allocation changes.
+.It Pa /proc
+Magic 0x9fa0, block unit 1024, and zero block counts.
+.It Pa /dev
+Magic 0x1373, block unit 1024, and zero block counts.
+.El
+.Pp
+For
+.Fn fstatfs ,
+proc-file descriptors report the proc values.
+Device, console, pseudo-terminal master, and synthetic directory
+descriptors report the devfs values.
+This includes synthetic directory descriptors under
+.Pa /proc .
+Ordinary file and directory descriptors report their mount's values.
+Other descriptor types, including pipes, sockets, and pseudo-terminal
+slaves, return
+.Er ENOSYS .
+.Ss System call interface
+The i386 kernel calls are
+.Nm statfs64
+(268) and
+.Nm fstatfs64
+(269).
+EBX is the path pointer or descriptor, ECX is the result structure size,
+and EDX is the result pointer.
+The size must be 84 bytes.
+.Pp
+The kernel structure contains 32-bit
+.Va f_type
+and
+.Va f_bsize ;
+five 64-bit counts
+.Va f_blocks , f_bfree , f_bavail , f_files ,
+and
+.Va f_ffree ;
+two 32-bit
+.Va f_fsid
+words; 32-bit
+.Va f_namelen , f_frsize ,
+and
+.Va f_flags ;
+and four reserved 32-bit words.
+.Pp
+Musl's
+.Fn statfs
+and
+.Fn fstatfs
+issue these calls and supply the size.
+With
+.Dv _LARGEFILE64_SOURCE ,
+.Nm statfs64
+and
+.Nm fstatfs64
+are macros for these functions and have no separate prototypes.
+.Sh RETURN VALUES
+These functions return 0 on success.
+On failure they return -1 and set
+.Va errno .
+The kernel calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/vfsprobe.c
+calls
+.Nm statfs64
+with an 84-byte result buffer and checks the distinct magic numbers
+for the KRFFS root and
+.Pa /proc .
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission on a path component was denied.
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted.
+.It Bq Er EFAULT
+A path or result pointer is null or cannot be accessed as required,
+or there is no current process.
+.It Bq Er EINVAL
+The kernel result size is not 84 bytes, or the selected file system
+has no statistics operation.
+.It Bq Er EIO
+File-system I/O or metadata validation failed, or a mount's device
+was removed.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+A copied path, component, or symbolic-link expansion exceeds its buffer.
+.It Bq Er ENOENT
+The path is empty or a required component does not exist.
+.It Bq Er ENOMEM
+A node needed for path resolution cannot be allocated.
+.It Bq Er ENOSYS
+The descriptor type has no file-system statistics.
+.It Bq Er ENOTDIR
+A path component is not a directory.
+.It Bq Er EOVERFLOW
+A stored file size encountered during lookup exceeds the file system
+driver's 32-bit offset range.
+.El
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr open 2 ,
+.Xr stat 2 ,
+.Xr proc 5

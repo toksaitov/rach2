@@ -1,0 +1,336 @@
+.Dd September 19, 2026
+.Dt OPEN 2
+.Os
+.Sh NAME
+.Nm open ,
+.Nm openat ,
+.Nm creat ,
+.Nm close
+.Nd open, create, or close a file descriptor
+.Sh SYNOPSIS
+.In fcntl.h
+.Ft int
+.Fn open "const char *path" "int flags" "..."
+.Ft int
+.Fn openat "int dirfd" "const char *path" "int flags" "..."
+.Ft int
+.Fn creat "const char *path" "mode_t mode"
+.In unistd.h
+.Ft int
+.Fn close "int fd"
+.Sh DESCRIPTION
+.Fn open
+opens
+.Fa path
+and returns a file descriptor.
+A relative path is resolved from the current working directory.
+.Fn openat
+uses that directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD
+(-100), or the directory referred to by
+.Fa dirfd
+otherwise.
+An absolute path ignores
+.Fa dirfd .
+A directory descriptor is converted to a path; it does not bypass
+search permission on ancestors.
+.Pp
+The access mode in
+.Fa flags
+is
+.Dv O_RDONLY
+(0),
+.Dv O_WRONLY
+(1), or
+.Dv O_RDWR
+(2), requesting read, write, or both permissions.
+Search permission is required on ancestor directories.
+File permissions are checked using the caller's effective user and
+group IDs.
+Effective user ID 0 overrides these permission checks.
+.Pp
+The following flags apply to files on mounted file systems:
+.Bl -tag -width "O_DIRECTORY"
+.It Dv O_CREAT
+Create the file if it does not exist.
+The additional argument is
+.Vt mode_t
+.Fa mode .
+The parent must exist and permit writing.
+On KRFFS and ext2, the new file receives the caller's effective user
+and group IDs and permission bits
+.Li "mode & 07777 & ~umask" .
+FAT32 and exFAT ignore the requested mode and report the mount's user
+ID, group ID, and permissions 0777 with the mount mask removed.
+Their read-only attribute removes write permission.
+An existing file's ownership and mode are unchanged.
+.It Dv O_EXCL
+With
+.Dv O_CREAT ,
+fail if the final name exists, including a symbolic link.
+.It Dv O_TRUNC
+Truncate an existing regular file to zero.
+This requires write permission even with
+.Dv O_RDONLY .
+Truncating a directory is refused.
+A nonprivileged truncation clears set-user-ID and clears set-group-ID
+when group execute is set.
+A file backing an attached loop device cannot be truncated.
+.It Dv O_APPEND
+Place each write at the current end of the file.
+.It Dv O_NONBLOCK
+Set nonblocking status on the open-file description.
+Operations that support this status return
+.Er EAGAIN
+when they would wait.
+.It Dv O_CLOEXEC
+Close the descriptor on successful
+.Xr execve 2 .
+.It Dv O_DIRECTORY
+Require an existing target to be a directory.
+.It Dv O_NOFOLLOW
+Do not follow a final symbolic link; return
+.Er ELOOP
+instead.
+.El
+.Pp
+Other flag bits are not checked by the ordinary-file open handler and
+have no effect there.
+In particular, synchronous I/O flags do not cause writes to be flushed.
+.Dv O_APPEND
+and
+.Dv O_NONBLOCK
+belong to the open-file description and are shared by duplicated or
+inherited descriptors.
+The close-on-exec flag belongs to the individual descriptor.
+.Pp
+By default, a final symbolic link is followed.
+With
+.Dv O_CREAT ,
+a dangling link causes its missing target to be created.
+Path resolution follows at most 40 symbolic links.
+The copied path, including any directory prefix, must fit 256 bytes
+with its terminating null byte.
+.Pp
+On an existing ordinary target, the checks for
+.Dv O_CREAT Ns | Ns Dv O_EXCL ,
+a final symbolic link under
+.Dv O_NOFOLLOW ,
+a directory opened for writing or truncation, and a non-directory
+under
+.Dv O_DIRECTORY
+precede the read-only mount and access checks.
+A write open, creation, or truncation on a read-only mount returns
+.Er EROFS .
+The root directory can be opened for reading and directory enumeration.
+.Pp
+.Fn creat
+is equivalent to
+.Fn open
+with
+.Dv O_WRONLY Ns | Ns Dv O_CREAT Ns | Ns Dv O_TRUNC
+and the specified
+.Fa mode .
+It truncates an existing regular file and refuses a directory,
+including the root, with
+.Er EISDIR .
+.Ss Descriptors and close
+An ordinary open starts at offset zero with a new open-file description.
+Descriptors are allocated from the lowest available number.
+The process's table starts with 16 entries and grows up to 1024,
+subject to its descriptor resource limit.
+Allocation failure returns
+.Er EMFILE .
+The kernel checks available descriptor capacity before creating or
+truncating an ordinary file, but a later allocation can still fail.
+.Pp
+.Fn close
+releases
+.Fa fd ,
+including descriptors 0, 1, and 2, for reuse.
+It drops the descriptor's socket reference and its reference to the
+shared open-file description.
+A pipe or terminal end is released when its last descriptor closes;
+a mounted file's final close releases its per-open handle, node, and
+mount reference.
+The owning process's final framebuffer close restores text mode.
+The same releases occur on descriptor replacement by
+.Xr dup2 2 ,
+close-on-exec, and process exit.
+.Pp
+Closing an ordinary descriptor for a file backing a loop device does
+not detach the device.
+The attachment retains its own file and mount references.
+Closing a file opened on a loop-backed mount releases it in the same
+way as a file on another mount.
+.Ss Synthetic files and devices
+The namespaces under
+.Pa /dev
+and
+.Pa /proc
+do not permit file creation.
+Existing device entries open through their device operations and
+enforce their access permissions.
+Device handling of flags differs from ordinary files.
+ext2 device inodes cannot be opened as devices and return
+.Er EACCES .
+.Pp
+Proc files contain a snapshot taken at open.
+They refuse write access or
+.Dv O_CREAT
+with
+.Er EACCES ,
+after checking exclusive creation and
+.Dv O_DIRECTORY .
+Synthetic directories refuse write access with
+.Er EISDIR
+but ignore
+.Dv O_TRUNC
+when opened read-only.
+.Pp
+The special paths
+.Pa /fb
+and
+.Pa /mouse
+open the framebuffer and mouse directly.
+The kernel open handler ignores flags and mode for these paths.
+The framebuffer opens for reading and writing and is owned by one
+process at a time; the mouse opens for reading and requires an
+available mouse device.
+.Ss System call interface
+The i386 system call numbers are 5 for
+.Fn open ,
+295 for
+.Fn openat ,
+8 for
+.Fn creat ,
+and 6 for
+.Fn close .
+.Fn open
+takes path, flags, and mode in EBX, ECX, and EDX;
+.Fn openat
+takes directory descriptor, path, flags, and mode in EBX, ECX, EDX,
+and ESI.
+.Fn creat
+takes path and mode in EBX and ECX;
+.Fn close
+takes the descriptor in EBX.
+.Pp
+The i386 musl implementation uses the legacy open system call for
+.Fn open
+and stdio file opens.
+Its
+.Fn creat
+calls
+.Fn open
+with the flags described above.
+.Sh RETURN VALUES
+.Fn open ,
+.Fn openat ,
+and
+.Fn creat
+return a nonnegative descriptor on success.
+.Fn close
+returns 0.
+On failure these functions return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/dirprobe.c
+opens
+.Pa /work
+as a directory and uses its descriptor with
+.Fn openat
+to read
+.Pa rel.txt
+inside it.
+It also checks append behavior and the mode passed to a creating
+.Fn openat
+call.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search or file access permission was denied, creation lacked parent
+write permission, a proc file was opened for writing or creation,
+or an ext2 device inode was opened.
+.It Bq Er EBADF
+.Fn close
+was given an invalid descriptor, or a relative
+.Fn openat
+path uses an invalid or removed directory descriptor.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted;
+truncation was requested on a file backing a loop device;
+the framebuffer belongs to another process; or a raw device's
+exclusive-open or sector-claim rules prevent the open.
+.It Bq Er EEXIST
+Exclusive creation found an existing name.
+.It Bq Er EFAULT
+The path is null or cannot be read from user memory, or an open or
+creation call has no current process.
+.It Bq Er EFBIG
+An ext2 parent directory cannot grow further or a required block
+exceeds the file system's addressing limit.
+.It Bq Er EINVAL
+A file system rejects the new name, required attributes cannot be
+obtained, or truncation selects an ext2 object that is not a regular file.
+.It Bq Er EIO
+File-system I/O failed, the device was removed, or a pseudo-terminal
+slave is still locked.
+.It Bq Er EISDIR
+A directory was opened for writing, or an ordinary directory was
+selected for truncation.
+.It Bq Er ELOOP
+A final symbolic link was selected with
+.Dv O_NOFOLLOW ,
+or path resolution would follow more than 40 links.
+.It Bq Er EMFILE
+The process cannot allocate another descriptor or open-file description.
+.It Bq Er ENAMETOOLONG
+A copied path, directory prefix, component, reconstructed directory
+path, or symbolic-link expansion is too long.
+.It Bq Er ENFILE
+The kernel cannot allocate a synthetic-directory record or pseudo-terminal.
+.It Bq Er ENODEV
+The special mouse device was requested but no mouse is available.
+.It Bq Er ENOENT
+The path is empty, a required component does not exist, or a synthetic
+entry or process no longer exists.
+.It Bq Er ENOMEM
+A file-system node, per-open handle, or proc snapshot cannot be allocated.
+.It Bq Er ENOSPC
+The file system has no room to create the file or its directory entry.
+.It Bq Er ENOTDIR
+A path component or relative-path base descriptor is not a directory,
+or an existing target is not a directory under
+.Dv O_DIRECTORY .
+.It Bq Er ENXIO
+.Pa /dev/tty
+was opened without a controlling terminal, or the requested
+pseudo-terminal has no open master.
+.It Bq Er EOVERFLOW
+The generated
+.Pa /proc/disk
+snapshot exceeds its size limit.
+.It Bq Er EROFS
+Creation or truncation requires a write on a read-only mount, a
+non-root mount was opened for writing while read-only, creation was
+requested in a synthetic namespace, or a required write operation
+is not implemented.
+.It Bq Er ESRCH
+.Fn close
+was called without a current process.
+.El
+.Sh SEE ALSO
+.Xr dup 2 ,
+.Xr fcntl 2 ,
+.Xr getdents64 2 ,
+.Xr mount 2 ,
+.Xr read 2 ,
+.Xr umask 2 ,
+.Xr write 2 ,
+.Xr loop 4 ,
+.Xr proc 5

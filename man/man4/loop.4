@@ -1,0 +1,96 @@
+.Dd September 19, 2026
+.Dt LOOP 4
+.Os
+.Sh NAME
+.Nm loop ,
+.Nm loop-control
+.Nd devices backed by regular files
+.Sh DESCRIPTION
+The four loop devices,
+.Pa /dev/loop0
+through
+.Pa /dev/loop3 ,
+allow a file system in a regular file to be mounted.
+They are owned by root with mode 0400, major number 240,
+and minor numbers 32 through 35 respectively.
+They are reported as character devices by stat;
+only
+.Xr mount 2
+accesses their contents.
+.Pp
+The control node,
+.Pa /dev/loop-control ,
+is owned by root with mode 0600, major number 240, and minor number 36.
+Only root can attach a file.
+The node accepts one command per write:
+.Bl -tag -width Ds
+.It Ql attach N /path
+Attach the file to device
+.Ar N .
+.It Ql attach - /path
+Attach the file to the first free device.
+.It Ql attach ro N /path
+Attach the file to device
+.Ar N
+read-only.
+Every mount of this device is read-only, regardless of the requested options.
+.It Ql detach N
+Detach device
+.Ar N .
+.El
+.Pp
+Device numbers range from 0 through 3.
+.Xr loopctl 8
+writes these commands.
+.Pp
+An attached file must be regular and its length must be a whole number
+of sectors.
+A file may have only one attachment; another hard link to it is the
+same file for this purpose.
+A file on a loop-mounted volume cannot be attached to another loop device.
+A chain may contain only one loop device.
+.Pp
+While attached, the file cannot be written or truncated.
+On the memory root, it also cannot be unlinked or renamed over.
+The volume containing the file cannot be unmounted until the device
+is detached.
+These operations fail with
+.Er EBUSY .
+.Pp
+Detach fails with
+.Er EBUSY
+while the device has a mount, a buffer is held, or an attachment
+is still in progress.
+Removing a medium also removes loop devices attached to files on it.
+.Pp
+.Pa /proc/loop
+has one line per attached device, giving the device, its size in bytes,
+whether it accepts writes, its write and sync counts, and the path
+used to attach it.
+.Sh FILES
+.Bl -tag -width /dev/loop-control
+.It Pa /dev/loop0 No through Pa /dev/loop3
+Loop devices.
+.It Pa /dev/loop-control
+Attachment and detachment commands.
+.It Pa /proc/loop
+Attachments and counters.
+.El
+.Sh DIAGNOSTICS
+.Bl -tag -width EACCES
+.It Er EACCES
+The caller is not root.
+.It Er EBUSY
+The file is already attached, an operation conflicts with an attachment,
+or the device cannot yet be detached.
+.It Er EINVAL
+The file is not regular, its length is not a whole number of sectors,
+or the device number is outside 0 through 3.
+.It Er ELOOP
+The file is on a loop-mounted volume.
+.El
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr disk 4 ,
+.Xr loopctl 8 ,
+.Xr mount 8

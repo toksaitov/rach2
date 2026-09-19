@@ -1,0 +1,257 @@
+.Dd September 19, 2026
+.Dt WRITE 2
+.Os
+.Sh NAME
+.Nm write ,
+.Nm writev
+.Nd write bytes to a descriptor
+.Sh SYNOPSIS
+.In unistd.h
+.Ft ssize_t
+.Fn write "int fd" "const void *buf" "size_t count"
+.In sys/uio.h
+.Ft ssize_t
+.Fn writev "int fd" "const struct iovec *iov" "int iovcnt"
+.Sh DESCRIPTION
+.Fn write
+writes up to
+.Fa count
+bytes from
+.Fa buf
+to
+.Fa fd .
+A successful call may write fewer bytes than requested.
+The operation depends on the descriptor's backing object.
+.Ss Regular files
+A regular file is written through its mounted file system at the
+open-file description's offset.
+A positive result advances that offset by the number of bytes written.
+Duplicated descriptors and descriptors inherited through fork share
+the offset and status flags.
+With
+.Dv O_APPEND ,
+each write uses the current end of the file, regardless of an intervening seek.
+.Pp
+A read-only mount fails with
+.Er EROFS .
+A file attached to a loop device cannot be written directly;
+the call fails with
+.Er EBUSY .
+A write of one or more bytes by an unprivileged process clears setuid and,
+when group execute is set, setgid.
+.Ss Pipes and terminals
+A pipe write waits when the pipe is full.
+With
+.Dv O_NONBLOCK ,
+it returns the bytes already written, or
+.Er EAGAIN
+if none fit.
+When no reader remains, the caller receives
+.Dv SIGPIPE ;
+the call returns the bytes already written, or
+.Er EPIPE
+if none were written.
+.Pp
+Console output passes through the terminal output processor to both
+the screen and serial port.
+With
+.Dv OPOST
+and
+.Dv ONLCR
+set, a newline becomes carriage return followed by newline.
+The return value counts input bytes, before this conversion.
+Pseudoterminal slave output uses the same processing and enters the
+master's output ring.
+Writing a slave whose master has closed fails with
+.Er EIO .
+Master writes supply input to the slave's line discipline and may wait
+for input space, or fail with
+.Er EAGAIN
+when nonblocking.
+.Pp
+A background process writing its controlling terminal receives
+.Dv SIGTTOU
+when
+.Dv TOSTOP
+is set.
+If the signal is blocked or ignored, the write fails with
+.Er EIO ;
+otherwise it posts the signal and returns
+.Er EINTR .
+.Ss Sockets
+A stream socket queues bytes for TCP transmission.
+If no send space is available, it waits unless
+.Dv O_NONBLOCK
+is set.
+A short return counts only the bytes queued.
+A connection no longer able to send returns its recorded error, or
+.Er EPIPE
+when no error was recorded.
+This write path does not generate
+.Dv SIGPIPE
+for a socket.
+.Pp
+A datagram socket must have a connected peer.
+Each write sends one datagram, with at most 1472 payload bytes.
+A broadcast destination requires
+.Dv SO_BROADCAST .
+Other socket types return
+.Er EOPNOTSUPP .
+.Ss Devices
+Devices with a write operation use that operation.
+Whole-disk and partition nodes return
+.Er EPERM
+on the ordinary kernel; their recovery-kernel writes and writes through
+the bounded boot devices require root and sector alignment.
+See
+.Xr disk 4 .
+.Pp
+A framebuffer write requires graphics mode and copies at most 64000
+bytes to the start of the mode 13h framebuffer.
+.Ss Gather writes
+.Fn writev
+writes the buffers described by
+.Fa iov
+in order:
+.Bd -literal -offset indent
+struct iovec {
+        void *iov_base;
+        size_t iov_len;
+};
+.Ed
+.Pp
+The vector count must be between 0 and 1024.
+Zero-length entries are skipped.
+Each nonempty entry is passed to the same operation as
+.Fn write .
+The call stops at the first short write or error.
+.Pp
+The kernel reads and checks each vector as it reaches it.
+An individual length above 2147483647, or a length that would make the
+running byte total exceed that value, stops the call.
+An error found after a positive transfer returns the transferred byte
+count instead of the error.
+With no nonempty entries,
+.Fn writev
+returns zero without checking the descriptor.
+.Pp
+The vector is a sequence of separate writes, not one atomic operation.
+On a datagram socket, each nonempty entry sends a separate datagram.
+This differs from Linux's gathered datagram write.
+Musl's buffered output uses
+.Fn writev .
+.Pp
+The i386 system call numbers are 4 for
+.Nm write
+and 146 for
+.Nm writev .
+.Sh RETURN VALUES
+On success, these functions return the number of bytes written.
+.Fn writev
+returns the total across the buffers.
+On failure they return -1 and set
+.Va errno .
+The raw kernel calls return a negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/errnoprobe.c
+issues system call 146 with standard output as the descriptor,
+.Ql 0xFFFFF000
+as the vector address, and a vector count of 1.
+It requires
+.Er EFAULT .
+.Sh ERRORS
+.Bl -tag -width ECONNREFUSED
+.It Er EACCES
+A datagram broadcast was attempted without
+.Dv SO_BROADCAST .
+.It Er EAGAIN
+A nonblocking pipe, pseudoterminal master, or stream socket cannot
+accept bytes without waiting, or a datagram socket cannot acquire
+an ephemeral port.
+.It Er EBADF
+The descriptor is invalid, is not open for writing, or has no write operation.
+A framebuffer descriptor also gives this error outside graphics mode.
+.It Er EBUSY
+A regular file backs a loop device, or a loop-control command encounters
+an occupied device, an attached file, a mount, a held buffer, or a transfer.
+.It Er ECONNREFUSED
+A stream connection was refused.
+.It Er ECONNRESET
+A stream connection was reset.
+.It Er EDESTADDRREQ
+A datagram socket has no connected peer.
+.It Er EFAULT
+The buffer or vector list cannot be read as required.
+.It Er EFBIG
+A file write exceeds the file system's size or addressing limit.
+.It Er EINTR
+A signal interrupted a wait, or a background terminal write posted
+.Dv SIGTTOU .
+.It Er EINVAL
+The vector count is outside 0 through 1024, a vector length exceeds
+2147483647, or the next length would overflow the running byte total.
+A raw write has an offset or length not divisible by 512.
+A device control write has an invalid argument or command.
+.It Er EIO
+A file system or device write failed, including a write to a protected stick.
+A pseudoterminal slave has lost its master.
+A background terminal write with
+.Dv TOSTOP
+also gives this error when
+.Dv SIGTTOU
+is blocked or ignored.
+.It Er ELOOP
+A loop-control attachment would exceed the permitted device nesting,
+or its path has too many symbolic links.
+.It Er EMSGSIZE
+A datagram payload exceeds 1472 bytes.
+.It Er ENAMETOOLONG
+A path in a loop-control command exceeds a resolver limit.
+.It Er ENETRESET
+A stream connection was ended by a network configuration change.
+.It Er ENETUNREACH
+No interface has a route to the datagram destination.
+.It Er ENOBUFS
+The local datagram queue is full, or the network device cannot accept
+the outgoing frame.
+.It Er ENOENT
+A loop-control command names an absent file or an unattached device.
+.It Er ENOMEM
+Resolving or opening a loop-control attachment requires unavailable memory.
+.It Er ENOSPC
+A file system has insufficient space,
+a raw write starts at or crosses the end of its window, or the descriptor
+refers to
+.Pa /dev/full .
+.It Er ENOTDIR
+A component of a loop-control attachment path is not a directory.
+.It Er ENXIO
+A raw disk window is not present.
+.It Er EOPNOTSUPP
+The socket type does not support this write path.
+.It Er EPERM
+A whole-disk or partition node was written on the ordinary kernel,
+a raw write was attempted without effective user ID 0,
+a loop device node was written directly, or the frame-allocation test
+device was written without its boot option.
+.It Er EPIPE
+A pipe has no reader, or a stream socket can no longer send and has
+no recorded error.
+.It Er EROFS
+The mount is read-only or its type has no write operation.
+.It Er ESRCH
+There is no current process.
+.It Er ETIMEDOUT
+A stream connection timed out.
+.El
+.Sh SEE ALSO
+.Xr fcntl 2 ,
+.Xr open 2 ,
+.Xr pipe 2 ,
+.Xr read 2 ,
+.Xr send 2 ,
+.Xr bootlog 4 ,
+.Xr console 4 ,
+.Xr disk 4 ,
+.Xr loop 4

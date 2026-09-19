@@ -1,0 +1,185 @@
+.Dd September 19, 2026
+.Dt SELECT 2
+.Os
+.Sh NAME
+.Nm select ,
+.Nm newselect ,
+.Nm pselect6 ,
+.Nm pselect
+.Nd wait for descriptor readiness
+.Sh SYNOPSIS
+.In sys/select.h
+.Ft int
+.Fn select "int nfds" "fd_set *restrict readfds" "fd_set *restrict writefds" "fd_set *restrict exceptfds" "struct timeval *restrict timeout"
+.Ft int
+.Fn pselect "int nfds" "fd_set *restrict readfds" "fd_set *restrict writefds" "fd_set *restrict exceptfds" "const struct timespec *restrict timeout" "const sigset_t *restrict sigmask"
+.Sh DESCRIPTION
+These functions wait for a descriptor to become ready, a timeout to
+expire, or a signal to interrupt the wait.
+The sets select descriptors from 0 through
+.Fa nfds
+minus one.
+The value of
+.Fa nfds
+must be between 0 and
+.Dv FD_SETSIZE
+(1024), inclusive.
+A null set pointer selects no descriptors in that direction.
+Each nonnull pointer must address a complete 128-byte
+.Vt fd_set ,
+even when
+.Fa nfds
+is small or zero.
+.Pp
+Use
+.Fn FD_ZERO
+to clear a set,
+.Fn FD_SET
+to add a descriptor,
+.Fn FD_CLR
+to remove one, and
+.Fn FD_ISSET
+to test membership.
+On success, the sets contain only the ready descriptors.
+Bits at or above
+.Fa nfds
+are cleared.
+.Bl -tag -width exceptfds
+.It Fa readfds
+Input is available, or the descriptor reports a hangup or error.
+End of input counts as readable.
+.It Fa writefds
+Output can proceed, or the descriptor reports an error.
+A hangup alone does not count as writable.
+.It Fa exceptfds
+Exceptional input is requested.
+No descriptor currently reports this condition.
+.El
+.Pp
+Regular files and directories report requested read and write readiness
+immediately.
+Pipes use their buffered data, free space, and peer lifetime.
+Terminals use the line discipline's input state; pseudoterminals also
+report peer hangup.
+Console readiness is restricted to the descriptor's read and write modes.
+.Pp
+Datagram, packet, and protocol-bearing raw sockets are readable when a
+packet is queued and are always writable.
+A listening stream is readable when a connection awaits acceptance.
+A connected stream is readable with buffered input or a received FIN,
+and writable in the established or close-wait state while its send
+buffer has space.
+A pending connection error counts as read and write readiness in the
+requested sets; a closed stream counts as readable.
+An ioctl-only socket reports an error and thus counts as ready in either
+requested read or write set.
+.Pp
+Files under
+.Pa /proc
+report read readiness even at end of file.
+Character devices, the framebuffer, and the mouse report requested
+read and write readiness immediately.
+Mouse readiness does not indicate that a packet is available.
+.Ss Timeouts and signals
+For
+.Fn select ,
+.Fa timeout
+is a relative interval in seconds and microseconds.
+For
+.Fn pselect ,
+it is in seconds and nanoseconds.
+A null pointer waits indefinitely; a zero interval performs one scan
+without waiting.
+With no selected descriptors, a finite interval acts as a sleep.
+Timeouts are rounded up to 10 ms timer ticks and are not written back.
+.Pp
+The raw
+.Nm select
+and
+.Nm newselect
+calls require nonnegative seconds and microseconds from 0 through 999999.
+They first round up to milliseconds, then to ticks.
+Seconds above 2147482 produce a timeout of 2147483647 milliseconds
+before tick rounding.
+Musl normalizes excess microseconds before issuing the call.
+.Pp
+The raw
+.Nm pselect6
+call requires nonnegative seconds and nanoseconds from 0 through 999999999.
+Its deadline calculation caps seconds at 21474836 and the total interval
+at 2147483647 ticks.
+.Pp
+The
+.Fa sigmask
+argument is ignored.
+Unlike Linux,
+.Fn pselect
+does not replace the signal mask atomically around the wait.
+A pending deliverable signal interrupts the call if no selected
+descriptor is ready.
+.Ss System call numbers
+The old i386
+.Nm select
+call, number 82, takes a pointer in EBX to five 32-bit arguments:
+the descriptor count, three set pointers, and the timeout pointer.
+The
+.Nm newselect
+call, number 142, takes these arguments in registers.
+Both use a timeval with 32-bit fields.
+Musl's
+.Fn select
+uses number 142.
+.Pp
+The
+.Nm pselect6
+call, number 308, uses a timespec with 32-bit fields.
+Musl's
+.Fn pselect
+uses this call.
+Musl declares no functions named
+.Fn newselect
+or
+.Fn pselect6 .
+For positive seconds above the signed 32-bit maximum, both library functions
+first try
+.Nm pselect6_time64
+(413), which this kernel answers with
+.Er ENOSYS ,
+then fall back with clamped seconds.
+.Sh RETURN VALUES
+On success, these functions return the total number of set bits in the
+returned sets, or zero on timeout.
+A descriptor ready for both reading and writing counts twice.
+On failure they return -1 and set
+.Va errno .
+The raw kernel calls return a negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/pollprobe.c
+writes one byte to a pipe, selects its reader through system call 142
+with no timeout, and checks for a return value of one and the reader's
+bit in the returned set.
+.Sh ERRORS
+.Bl -tag -width "[ENOMEM]"
+.It Bq Er EBADF
+A selected descriptor below
+.Fa nfds
+is not open, including one beyond the allocated descriptor table.
+.It Bq Er EFAULT
+A complete descriptor set cannot be read or written, the timeout cannot
+be read, or the old call's argument array cannot be read.
+.It Bq Er EINTR
+No selected descriptor was ready and a deliverable signal was pending.
+.It Bq Er EINVAL
+The descriptor count or timeout is outside the accepted range.
+.It Bq Er ENOMEM
+The kernel could not allocate the descriptor or wait arrays.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr pipe 2 ,
+.Xr poll 2 ,
+.Xr read 2 ,
+.Xr socket 2 ,
+.Xr write 2

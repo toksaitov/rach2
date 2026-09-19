@@ -1,0 +1,193 @@
+.Dd September 19, 2026
+.Dt SYMLINK 2
+.Os
+.Sh NAME
+.Nm symlink ,
+.Nm symlinkat ,
+.Nm readlink ,
+.Nm readlinkat
+.Nd create or read a symbolic link
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn symlink "const char *target" "const char *linkpath"
+.Ft int
+.Fn symlinkat "const char *target" "int dirfd" "const char *linkpath"
+.Ft ssize_t
+.Fn readlink "const char *restrict path" "char *restrict buf" "size_t bufsiz"
+.Ft ssize_t
+.Fn readlinkat "int dirfd" "const char *restrict path" "char *restrict buf" "size_t bufsiz"
+.Sh DESCRIPTION
+.Fn symlink
+creates
+.Fa linkpath
+with the symbolic-link text
+.Fa target .
+The target is stored without resolving it and need not exist.
+An existing destination, including a dangling symbolic link, is not
+replaced.
+An empty target is refused.
+.Pp
+Only ext2 supports creation of symbolic links.
+The parent directory must permit writing, and path resolution requires
+search permission on ancestor directories.
+A read-only mount or synthetic namespace returns
+.Er EROFS .
+Writable KRFFS, FAT32, and exFAT mounts return
+.Er EPERM
+because they have no symbolic-link creation operation.
+.Pp
+.Fn readlink
+copies up to
+.Fa bufsiz
+bytes of a link's text into
+.Fa buf
+and returns the number copied.
+It does not follow the final link or append a terminating null byte.
+A short buffer truncates the text without an error.
+A return equal to
+.Fa bufsiz
+does not distinguish an exact fit from truncation.
+The caller must provide its own terminator when using the result as
+a C string.
+.Pp
+Besides ext2 links,
+.Fn readlink
+supports
+.Pa /proc/self ,
+whose text is the caller's numeric process ID, and
+.Pa /proc/<pid>/fd/<n> ,
+whose text describes that process's open descriptor.
+Reading an ordinary file or a node on a file system without a readlink
+operation returns
+.Er EINVAL .
+.Pp
+The raw kernel readlink calls reject a null result pointer or a zero
+buffer size with
+.Er EINVAL .
+For a zero size, musl instead supplies a private one-byte buffer and
+returns zero if the read succeeds.
+.Ss Relative paths and limits
+.Fn symlinkat
+resolves a relative
+.Fa linkpath
+from
+.Fa dirfd ;
+.Fn readlinkat
+does the same for
+.Fa path .
+.Dv AT_FDCWD
+(-100) selects the current working directory.
+An absolute path ignores
+.Fa dirfd .
+Other descriptors must refer to a directory and are converted to its
+path; ancestor search permissions still apply.
+The descriptor does not change the interpretation of the stored
+.Fa target .
+.Pp
+When a link is followed, an absolute target is resolved from the root
+and a relative target from the directory containing the link.
+At most 40 links are followed while resolving one path; a forty-first
+returns
+.Er ELOOP .
+.Pp
+The copied link pathname, including a current-directory or descriptor
+prefix and terminating null byte, must fit 256 bytes.
+.Fn symlink
+and
+.Fn symlinkat
+can store at most 511 target bytes.
+A target combined with the remaining path during resolution must also
+fit 511 bytes, excluding the terminator.
+.Fn readlink
+uses an internal 512-byte target buffer; an ext2 link too large for that
+buffer returns
+.Er ENAMETOOLONG
+even if the caller supplies more space.
+.Ss System call interface
+The i386 system call numbers and register arguments are:
+.Bl -tag -width "readlinkat (305)"
+.It Nm symlink No (83)
+EBX is the target pointer and ECX the new link pathname.
+.It Nm symlinkat No (304)
+EBX is the target pointer, ECX the directory descriptor, and EDX the
+new link pathname.
+.It Nm readlink No (85)
+EBX is the path pointer, ECX the buffer, and EDX its size.
+.It Nm readlinkat No (305)
+EBX is the directory descriptor, ECX the path pointer, EDX the buffer,
+and ESI its size.
+.El
+.Sh RETURN VALUES
+.Fn symlink
+and
+.Fn symlinkat
+return 0 on success.
+.Fn readlink
+and
+.Fn readlinkat
+return the number of bytes copied.
+On failure these functions return -1 and set
+.Va errno .
+The kernel calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/procprobe.c
+reads the proc descriptor link for a socket, appends a null byte itself,
+and checks that the reported inode agrees with
+.Xr fstat64 2
+and
+.Pa /proc/net/tcp .
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission on an ancestor directory or write permission on the
+new link's parent was denied.
+.It Bq Er EBADF
+A relative path uses an invalid or removed directory descriptor.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted.
+.It Bq Er EEXIST
+The new link's name already exists.
+.It Bq Er EFAULT
+A pathname, target, or result buffer cannot be accessed as required,
+a required pathname or target pointer is null, or there is no current
+process.
+.It Bq Er EFBIG
+The ext2 parent directory cannot grow further or a required block
+exceeds the addressing limit.
+.It Bq Er EINVAL
+The creation path is the root; the object to read is not a symbolic link;
+the file system has no readlink operation; or a raw kernel readlink call
+has a null buffer or zero size.
+.It Bq Er EIO
+File-system I/O or metadata validation failed, a stored link is malformed,
+or a mount's device was removed.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+A copied or reconstructed path, component, target, or link expansion
+exceeds its buffer.
+.It Bq Er ENOENT
+A pathname or creation target is empty, a required component is absent,
+or the process or descriptor referred to by a proc link no longer exists.
+.It Bq Er ENOMEM
+A required file-system node cannot be allocated.
+.It Bq Er ENOSPC
+The file system has no inode or data space available for the link or
+its directory entry.
+.It Bq Er ENOTDIR
+A path component or relative-path base descriptor is not a directory.
+.It Bq Er EOVERFLOW
+A stored file size encountered during lookup exceeds the file system
+driver's 32-bit offset range.
+.It Bq Er EPERM
+The writable file system does not support symbolic-link creation.
+.It Bq Er EROFS
+Creation was requested on a read-only mount or in a synthetic namespace.
+.El
+.Sh SEE ALSO
+.Xr link 2 ,
+.Xr open 2 ,
+.Xr stat 2 ,
+.Xr proc 5

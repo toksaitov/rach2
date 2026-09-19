@@ -1,0 +1,178 @@
+.Dd September 19, 2026
+.Dt SYSCALLS 2
+.Os
+.Sh NAME
+.Nm syscalls
+.Nd system call interface and number index
+.Sh SYNOPSIS
+.Li int 0x80
+.Sh DESCRIPTION
+Rach2 uses the Linux i386 system call numbers and register interface.
+A program executes
+.Li int 0x80
+with the system call number in EAX.
+Arguments, in order, are in EBX, ECX, EDX, ESI, EDI, and EBP.
+The result is returned in EAX; a failure is a negative error number.
+Musl uses its Linux i386 system call layer unchanged.
+.Pp
+This section describes the calls implemented by Rach2.
+A number not registered in the kernel's dispatch table returns
+.Er ENOSYS ,
+including Linux calls not implemented here.
+A registered number does not imply that every Linux option or behavior
+is implemented; the individual pages describe each call.
+.Ss System call numbers
+The kernel registers the following 120 calls.
+.Bl -column "Number" "System call" -compact
+.It Sy Number Ta Sy System call
+.It 1 Ta Xr exit 2
+.It 2 Ta Xr fork 2
+.It 3 Ta Xr read 2
+.It 4 Ta Xr write 2
+.It 5 Ta Xr open 2
+.It 6 Ta Xr close 2
+.It 7 Ta Xr waitpid 2
+.It 8 Ta Xr creat 2
+.It 9 Ta Xr link 2
+.It 10 Ta Xr unlink 2
+.It 11 Ta Xr execve 2
+.It 12 Ta Xr chdir 2
+.It 15 Ta Xr chmod 2
+.It 16 Ta Xr lchown 2
+.It 19 Ta Xr lseek 2
+.It 20 Ta Xr getpid 2
+.It 21 Ta Xr mount 2
+.It 29 Ta Xr pause 2
+.It 33 Ta Xr access 2
+.It 36 Ta Xr sync 2
+.It 37 Ta Xr kill 2
+.It 38 Ta Xr rename 2
+.It 39 Ta Xr mkdir 2
+.It 40 Ta Xr rmdir 2
+.It 41 Ta Xr dup 2
+.It 42 Ta Xr pipe 2
+.It 43 Ta Xr times 2
+.It 45 Ta Xr brk 2
+.It 52 Ta Xr umount2 2
+.It 54 Ta Xr ioctl 2
+.It 57 Ta Xr setpgid 2
+.It 60 Ta Xr umask 2
+.It 63 Ta Xr dup2 2
+.It 64 Ta Xr getppid 2
+.It 65 Ta Xr getpgrp 2
+.It 66 Ta Xr setsid 2
+.It 74 Ta Xr sethostname 2
+.It 75 Ta Xr setrlimit 2
+.It 76 Ta Xr getrlimit 2
+.It 78 Ta Xr gettimeofday 2
+.It 82 Ta Xr select 2
+.It 83 Ta Xr symlink 2
+.It 85 Ta Xr readlink 2
+.It 88 Ta Xr reboot 2
+.It 91 Ta Xr munmap 2
+.It 93 Ta Xr ftruncate 2
+.It 94 Ta Xr fchmod 2
+.It 95 Ta Xr fchown 2
+.It 102 Ta Xr socketcall 2
+.It 106 Ta Xr stat 2
+.It 107 Ta Xr lstat 2
+.It 114 Ta Xr wait4 2
+.It 116 Ta Xr sysinfo 2
+.It 118 Ta Xr fsync 2
+.It 119 Ta Xr sigreturn 2
+.It 122 Ta Xr uname 2
+.It 132 Ta Xr getpgid 2
+.It 140 Ta Xr llseek 2
+.It 142 Ta Xr newselect 2
+.It 145 Ta Xr readv 2
+.It 146 Ta Xr writev 2
+.It 147 Ta Xr getsid 2
+.It 148 Ta Xr fdatasync 2
+.It 162 Ta Xr nanosleep 2
+.It 168 Ta Xr poll 2
+.It 173 Ta Xr rt_sigreturn 2
+.It 174 Ta Xr rt_sigaction 2
+.It 175 Ta Xr rt_sigprocmask 2
+.It 179 Ta Xr rt_sigsuspend 2
+.It 182 Ta Xr chown 2
+.It 183 Ta Xr getcwd 2
+.It 190 Ta Xr vfork 2
+.It 191 Ta Xr ugetrlimit 2
+.It 192 Ta Xr mmap2 2
+.It 194 Ta Xr ftruncate64 2
+.It 195 Ta Xr stat64 2
+.It 196 Ta Xr lstat64 2
+.It 197 Ta Xr fstat64 2
+.It 198 Ta Xr lchown32 2
+.It 199 Ta Xr getuid32 2
+.It 200 Ta Xr getgid32 2
+.It 201 Ta Xr geteuid32 2
+.It 202 Ta Xr getegid32 2
+.It 203 Ta Xr setreuid32 2
+.It 204 Ta Xr setregid32 2
+.It 205 Ta Xr getgroups32 2
+.It 206 Ta Xr setgroups32 2
+.It 207 Ta Xr fchown32 2
+.It 208 Ta Xr setresuid32 2
+.It 209 Ta Xr getresuid32 2
+.It 210 Ta Xr setresgid32 2
+.It 211 Ta Xr getresgid32 2
+.It 212 Ta Xr chown32 2
+.It 213 Ta Xr setuid32 2
+.It 214 Ta Xr setgid32 2
+.It 220 Ta Xr getdents64 2
+.It 221 Ta Xr fcntl64 2
+.It 238 Ta Xr tkill 2
+.It 243 Ta Xr set_thread_area 2
+.It 252 Ta Xr exit_group 2
+.It 258 Ta Xr set_tid_address 2
+.It 265 Ta Xr clock_gettime 2
+.It 268 Ta Xr statfs64 2
+.It 269 Ta Xr fstatfs64 2
+.It 270 Ta Xr tgkill 2
+.It 295 Ta Xr openat 2
+.It 298 Ta Xr fchownat 2
+.It 300 Ta Xr fstatat64 2
+.It 303 Ta Xr linkat 2
+.It 304 Ta Xr symlinkat 2
+.It 305 Ta Xr readlinkat 2
+.It 306 Ta Xr fchmodat 2
+.It 307 Ta Xr faccessat 2
+.It 308 Ta Xr pselect6 2
+.It 309 Ta Xr ppoll 2
+.It 320 Ta Xr utimensat 2
+.It 330 Ta Xr dup3 2
+.It 331 Ta Xr pipe2 2
+.It 340 Ta Xr prlimit64 2
+.It 355 Ta Xr getrandom 2
+.El
+.Ss Socket operations
+The following operation numbers select calls through system call 102,
+.Xr socketcall 2 .
+.Bl -column "Operation" "System call" -compact
+.It Sy Operation Ta Sy System call
+.It 1 Ta Xr socket 2
+.It 2 Ta Xr bind 2
+.It 3 Ta Xr connect 2
+.It 4 Ta Xr listen 2
+.It 5 Ta Xr accept 2
+.It 6 Ta Xr getsockname 2
+.It 7 Ta Xr getpeername 2
+.It 9 Ta Xr send 2
+.It 10 Ta Xr recv 2
+.It 11 Ta Xr sendto 2
+.It 12 Ta Xr recvfrom 2
+.It 13 Ta Xr shutdown 2
+.It 14 Ta Xr setsockopt 2
+.It 15 Ta Xr getsockopt 2
+.It 17 Ta Xr recvmsg 2
+.It 0x1000 Ta Xr ping 2
+.El
+.Sh ERRORS
+.Bl -tag -width "[ENOSYS]"
+.It Bq Er ENOSYS
+The system call number is not registered.
+.El
+.Sh SEE ALSO
+.Xr socketcall 2 ,
+.Xr rach2 7

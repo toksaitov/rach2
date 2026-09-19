@@ -1,0 +1,125 @@
+.Dd September 19, 2026
+.Dt PIPE 2
+.Os
+.Sh NAME
+.Nm pipe ,
+.Nm pipe2
+.Nd create an anonymous pipe
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn pipe "int pipefd[2]"
+.Ft int
+.Fn pipe2 "int pipefd[2]" "int flags"
+.Sh DESCRIPTION
+.Fn pipe
+creates a pipe and stores its read descriptor in
+.Fa pipefd Ns [0]
+and its write descriptor in
+.Fa pipefd Ns [1] .
+The pipe has a 4096-byte buffer.
+Bytes are read in the order written.
+.Pp
+.Fn pipe2
+does the same, with flags applied to both ends.
+The permitted flags, declared in
+.In fcntl.h ,
+are:
+.Bl -tag -width "O_NONBLOCK"
+.It Dv O_NONBLOCK
+Set nonblocking I/O on both open-file descriptions.
+An empty read with a writer still open returns
+.Er EAGAIN ;
+a write to a full pipe returns
+.Er EAGAIN
+if no bytes have been written.
+.It Dv O_CLOEXEC
+Set the close-on-exec flag on both descriptors.
+A successful
+.Xr execve 2
+closes them.
+.El
+.Pp
+Other flag bits are refused.
+.Fn pipe
+is equivalent to
+.Fn pipe2
+with flags zero.
+.Pp
+Without
+.Dv O_NONBLOCK ,
+reads wait while the buffer is empty and a writer remains open;
+writes wait while it is full and a reader remains open.
+These waits allow other processes to run.
+A signal interrupting a wait produces
+.Er EINTR
+if no bytes have been transferred.
+A read returns the available bytes, up to the requested count.
+A write that stops after transferring bytes returns that count.
+.Pp
+Once every write descriptor has closed, reads consume the remaining
+buffered bytes and then return 0 for end of file.
+A nonempty write after every read descriptor has closed posts
+.Dv SIGPIPE
+and returns
+.Er EPIPE
+if no bytes have been written.
+If the reader disappears after some bytes have been written, the
+write posts the signal and returns the byte count.
+.Pp
+Descriptors duplicated or inherited across
+.Xr fork 2
+share their end's open-file description.
+The end closes only when its last descriptor closes.
+The pipe is freed when both ends have closed.
+.Pp
+The i386 system call numbers are 42 for
+.Fn pipe
+and 331 for
+.Fn pipe2 .
+EBX points to the two-element descriptor array;
+.Fn pipe2
+takes its flags in ECX.
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure and set
+.Va errno .
+The kernel interface returns the negative error number.
+Failure releases any pipe and descriptors allocated by the call.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/pipeprobe.c
+writes ten bytes, reads them back in order, closes the writer, and
+checks for end of file.
+It also fills a nonblocking pipe and checks
+.Er EAGAIN ,
+then closes a pipe's reader and checks
+.Er EPIPE
+and delivery of
+.Dv SIGPIPE .
+.Sh ERRORS
+Creation can fail with:
+.Bl -tag -width "[EMFILE]"
+.It Bq Er EFAULT
+The two descriptors cannot be copied to user memory.
+.It Bq Er EINVAL
+.Fn pipe2
+was given a flag other than
+.Dv O_NONBLOCK
+or
+.Dv O_CLOEXEC .
+.It Bq Er EMFILE
+Two descriptors cannot be allocated within the process's descriptor
+limit, or memory for a descriptor table or open-file description is
+unavailable.
+.It Bq Er ENFILE
+The kernel heap cannot allocate the pipe.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr close 2 ,
+.Xr dup 2 ,
+.Xr fcntl 2 ,
+.Xr fork 2 ,
+.Xr read 2 ,
+.Xr write 2

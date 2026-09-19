@@ -1,0 +1,154 @@
+.Dd September 19, 2026
+.Dt ACCESS 2
+.Os
+.Sh NAME
+.Nm access ,
+.Nm faccessat
+.Nd check file existence and permissions
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn access "const char *path" "int mode"
+.In fcntl.h
+.Ft int
+.Fn faccessat "int dirfd" "const char *path" "int mode" "int flags"
+.Sh DESCRIPTION
+.Fn access
+checks whether
+.Fa path
+exists and grants the permissions requested by
+.Fa mode .
+.Dv F_OK
+(zero) checks existence only.
+The other modes may be combined with bitwise OR:
+.Bl -tag -width W_OK
+.It Dv R_OK
+Read permission.
+.It Dv W_OK
+Write permission.
+.It Dv X_OK
+Execute permission for a file, or search permission for a directory.
+.El
+.Pp
+The kernel uses the caller's real user and group IDs and supplementary
+groups for both directory search and the target's permissions.
+The owner bits apply when the real user ID matches the owner;
+otherwise the group bits apply when a group matches, and the other bits
+apply when none does.
+Real user ID 0 bypasses the mode-bit check, except that a regular file
+on KRFFS or another disk file system needs at least one execute bit for
+.Dv X_OK .
+For example, an existing
+.Pa /proc/PID/stat
+grants
+.Dv F_OK
+and
+.Dv R_OK
+but denies
+.Dv W_OK
+to a caller whose real user ID is nonzero.
+After the permission check succeeds,
+.Dv W_OK
+on a read-only mount other than the KRFFS boot root gives
+.Er EROFS .
+.Pp
+Relative paths are resolved from the current working directory.
+.Fn faccessat
+instead resolves them from the directory descriptor
+.Fa dirfd ,
+or from the working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD .
+An absolute path ignores
+.Fa dirfd .
+The descriptor is resolved to a path and does not bypass ancestor
+search permissions.
+Symbolic links are followed.
+.Pp
+The kernel calls are 33 for
+.Fn access
+and 307 for
+.Fn faccessat .
+Call 307 takes only
+.Fa dirfd ,
+.Fa path
+and
+.Fa mode .
+Pass zero as
+.Fa flags
+to use it directly through musl.
+Musl rejects flags other than
+.Dv AT_EACCESS .
+With that flag and equal real and effective IDs it uses the same call.
+With differing IDs its helper requires the unimplemented
+.Fn clone
+call and fails with
+.Er EBUSY .
+.Sh RETURN VALUES
+These functions return 0 when all requested checks succeed.
+On failure they return -1 and set
+.Va errno .
+The raw kernel calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default-suite probe
+.Pa tests/permprobe.c
+checks that an unprivileged caller can read
+.Pa /hello.txt
+but receives
+.Er EACCES
+when testing it with
+.Dv W_OK .
+.Pa tests/searchprobe.c
+checks real-ID permission decisions with unequal real and effective IDs.
+.Sh ERRORS
+.Bl -tag -width ENAMETOOLONG
+.It Er EACCES
+Search permission is denied on a path component, or the target denies a
+requested permission.
+.It Er EBADF
+A relative path uses an invalid or stale
+.Fa dirfd .
+.It Er EBUSY
+Path resolution enters a mount being mounted or unmounted.
+Musl also uses this error when its
+.Dv AT_EACCESS
+helper cannot complete.
+.It Er EFAULT
+The path cannot be read from user memory.
+.It Er EINVAL
+.Fa mode
+has bits other than
+.Dv R_OK ,
+.Dv W_OK
+and
+.Dv X_OK ,
+or musl rejects
+.Fa flags .
+.It Er EIO
+Path lookup or metadata access fails, including access to a removed device.
+.It Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Er ENAMETOOLONG
+The supplied path or its joined absolute form exceeds 255 bytes, a
+directory descriptor's path cannot be reconstructed within its buffer,
+a component exceeds 255 bytes, or symbolic-link expansion exceeds
+511 bytes.
+.It Er ENOENT
+The path is empty, a component is missing, or a symbolic link has an
+empty target.
+.It Er ENOMEM
+Path lookup cannot allocate a file-system node.
+.It Er ENOTDIR
+A path component used as a directory is not a directory, or a relative
+path uses a nondirectory
+.Fa dirfd .
+.It Er EROFS
+.Dv W_OK
+was requested on a read-only mount other than the KRFFS boot root
+after its mode check succeeded.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr open 2 ,
+.Xr stat 2

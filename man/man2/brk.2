@@ -1,0 +1,198 @@
+.Dd September 19, 2026
+.Dt BRK 2
+.Os
+.Sh NAME
+.Nm brk ,
+.Nm mmap2 ,
+.Nm munmap
+.Nd change the heap and anonymous memory mappings
+.Sh SYNOPSIS
+.Fd "#define _BSD_SOURCE"
+.In unistd.h
+.Ft int
+.Fn brk "void *addr"
+.Ft long
+.Fn syscall "long number" "..."
+.In sys/syscall.h
+.In sys/mman.h
+.Ft void *
+.Fn mmap "void *addr" "size_t length" "int prot" "int flags" "int fd" "off_t offset"
+.Ft int
+.Fn munmap "void *addr" "size_t length"
+.Sh DESCRIPTION
+These kernel calls change the process's virtual memory areas (VMAs).
+Pages are 4096 bytes.
+Establishing a heap range or an anonymous mapping reserves virtual
+addresses; physical frames are allocated and zeroed on first access.
+Success does not guarantee that a later fault can obtain a frame.
+An unresolved user-mode fault terminates the process with
+.Dv SIGSEGV .
+.Ss Program break
+The raw
+.Fn brk
+call, number 45, takes the requested break in EBX and returns the
+resulting break.
+A zero request queries the current break.
+The heap occupies one writable VMA from the heap base to the break
+rounded up to a page boundary.
+Growth extends that area; shrinkage releases the pages above the new
+rounded boundary.
+.Pp
+A request below the heap base, above the stack limit, overlapping
+another area, exceeding
+.Dv RLIMIT_AS ,
+or requiring a VMA that cannot be allocated leaves the break unchanged.
+The break itself need not be page-aligned.
+.Pp
+Musl's public
+.Fn brk
+function always fails with
+.Er ENOMEM .
+It does not issue kernel call 45.
+The kernel interface is available through
+.Fn syscall
+with
+.Dv SYS_brk .
+.Ss Anonymous mappings
+Musl exposes
+.Fn mmap ,
+which uses kernel call 192,
+.Nm mmap2 .
+It has no public function named
+.Fn mmap2 .
+The raw call takes
+.Fa addr ,
+.Fa length ,
+.Fa prot ,
+.Fa flags ,
+.Fa fd
+and a page offset in EBX, ECX, EDX, ESI, EDI and EBP respectively.
+The offset in the public
+.Fn mmap
+interface is in bytes; musl divides it by 4096.
+.Pp
+The kernel requires
+.Dv MAP_ANONYMOUS
+and rejects
+.Dv MAP_FIXED .
+File mappings are not implemented.
+The address hint, file descriptor and page offset are ignored.
+.Dv MAP_PRIVATE
+and
+.Dv MAP_SHARED
+are not checked; every accepted mapping has private copy-on-write
+behavior across fork.
+Other flag bits are ignored.
+.Pp
+.Fa length
+is rounded up to a page boundary.
+The kernel allocates downward from the process's mapping top, refusing
+to cross the heap or overlap another area.
+Unmapping does not raise that allocation top.
+.Pp
+.Fa prot
+uses
+.Dv PROT_READ ,
+.Dv PROT_WRITE
+and
+.Dv PROT_EXEC .
+Write permission also grants read permission on this i386 kernel.
+.Dv PROT_NONE
+(zero) denies access.
+Execute permission is recorded but is not checked separately from
+read permission on a fault.
+Other protection bits are ignored.
+.Ss Unmapping
+.Fn munmap ,
+kernel call 91, removes the range beginning at the page-aligned
+.Fa addr .
+.Fa length
+must be nonzero; the end is rounded up to a page boundary.
+The range must not wrap or extend beyond
+.Ql 0xC0000000 .
+The call removes, trims or splits overlapping VMAs and frees their
+resident frames in the range.
+Unmapped pages and pages never accessed require no frame release.
+.Ss Limits
+The soft
+.Dv RLIMIT_AS
+limits the total bytes described by the process's VMAs.
+The VMA array grows as needed to at most
+.Dv VMA_LIMIT
+(65536) entries, including the program, heap and stack areas.
+Splitting an area for
+.Fn munmap
+can require an additional entry.
+.Sh RETURN VALUES
+The raw
+.Fn brk
+call returns the resulting break; a refused change normally returns
+the old break, not a negative error number.
+Musl's
+.Fn brk
+returns -1 and sets
+.Va errno
+to
+.Er ENOMEM .
+.Pp
+.Fn mmap
+returns the mapped address, or
+.Dv MAP_FAILED
+and sets
+.Va errno .
+.Fn munmap
+returns 0, or -1 and sets
+.Va errno .
+The raw mapping calls return negative error numbers on failure.
+.Sh EXAMPLES
+The default-suite probe
+.Pa tests/vmprobe.c
+queries the raw break, grows it by four pages, checks zero-filled
+memory and writes, then restores the break.
+It also maps eight anonymous read-write pages, checks their contents,
+and unmaps them.
+.Sh DIAGNOSTICS
+An unsuccessful VMA insertion by
+.Nm mmap2
+or split by
+.Fn munmap
+reports once per process:
+.Dl vm: OPERATION: pid PID (NAME) has used all N of its mappings
+This message can also result from failure to allocate VMA storage,
+rather than reaching the count limit.
+.Sh ERRORS
+.Bl -tag -width ENOMEM
+.It Er EINVAL
+.Fa length
+is zero.
+For
+.Fn munmap ,
+the address is not page-aligned, is at or above
+.Ql 0xC0000000 ,
+or the range extends past that address.
+Musl also rejects an
+.Fn mmap
+offset that is negative, not page-aligned, or not representable as the
+kernel's page offset.
+.It Er ENOMEM
+An anonymous mapping has no suitable address range, would exceed
+.Dv RLIMIT_AS ,
+or cannot obtain a VMA entry.
+Unmapping cannot obtain an entry needed to split an area.
+Musl also rejects mapping lengths at least
+.Dv PTRDIFF_MAX
+and every public
+.Fn brk
+request.
+.It Er ENOSYS
+A mapping lacks
+.Dv MAP_ANONYMOUS
+or requests
+.Dv MAP_FIXED .
+.It Er ESRCH
+The kernel has no current process.
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr prlimit64 2 ,
+.Xr memory 7

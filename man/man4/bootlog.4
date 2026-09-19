@@ -1,0 +1,78 @@
+.Dd September 19, 2026
+.Dt BOOTLOG 4
+.Os
+.Sh NAME
+.Nm bootlog ,
+.Nm screenlog ,
+.Nm framefail
+.Nd kernel log, screen log level, and frame allocation test device
+.Sh SYNOPSIS
+.Pa /dev/bootlog
+.Pp
+.Pa /dev/screenlog
+.Pp
+.Pa /dev/framefail
+.Sh DESCRIPTION
+.Ss Kernel log
+.Pa /dev/bootlog
+reads the retained kernel records from the current boot.
+.Pp
+Read the log in one request.
+The
+.Xr dmesg 1
+script reads this device.
+.Ss Screen log level
+.Pa /dev/screenlog
+controls which kernel records appear on the screen.
+A read returns the level as one digit followed by a newline.
+A write takes its first digit as the new level and accepts the whole write.
+An empty write returns zero; a first byte other than a decimal digit
+fails with
+.Er EINVAL .
+.Pp
+Levels are clamped to 2 through 7.
+The screen shows records at or below the selected number:
+.Bl -tag -width 6 -compact
+.It 2
+Critical errors.
+.It 3
+Errors.
+.It 4
+Warnings.
+.It 6
+Information.
+.It 7
+Debug messages.
+.El
+.Pp
+Critical errors cannot be hidden.
+The setting controls kernel screen output while init owns the console.
+.Ss Frame allocation test
+.Pa /dev/framefail
+is a test device for allocation-failure probes.
+A write beginning with a decimal count arms a failure on that numbered
+frame allocation during a system call.
+The failure occurs once; a count of zero disarms it.
+Bytes after the initial decimal digits are ignored, and a successful
+write returns its full byte count.
+A write without an initial digit fails with
+.Er EINVAL .
+Arming requires
+.Ql rach2.framefail
+on the kernel command line; otherwise the write fails with
+.Er EPERM .
+Reads return end of file.
+.Sh FILES
+All three nodes are character devices owned by root.
+.Bl -tag -width /dev/screenlog
+.It Pa /dev/bootlog
+Major 240, minor 2; mode 0400.
+.It Pa /dev/screenlog
+Major 240, minor 38; mode 0600.
+.It Pa /dev/framefail
+Major 240, minor 37; mode 0600.
+.El
+.Sh SEE ALSO
+.Xr dmesg 1 ,
+.Xr console 4 ,
+.Xr proc 5

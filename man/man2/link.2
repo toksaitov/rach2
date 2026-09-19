@@ -1,0 +1,191 @@
+.Dd September 19, 2026
+.Dt LINK 2
+.Os
+.Sh NAME
+.Nm link ,
+.Nm linkat ,
+.Nm unlink
+.Nd create a hard link or remove a file name
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn link "const char *oldpath" "const char *newpath"
+.Ft int
+.Fn linkat "int olddirfd" "const char *oldpath" "int newdirfd" "const char *newpath" "int flags"
+.Ft int
+.Fn unlink "const char *path"
+.Sh DESCRIPTION
+.Fn link
+creates
+.Fa newpath
+as another name for the file at
+.Fa oldpath .
+Hard links are implemented only on ext2, within one mount, and cannot
+refer to directories.
+The destination must not already exist.
+Both paths and the source are checked before the kernel reports that
+the file system does not support hard links.
+The final symbolic link in
+.Fa oldpath
+is not followed.
+.Pp
+.Fn link
+and
+.Fn unlink
+resolve relative paths from the current working directory.
+.Fn linkat
+resolves a relative
+.Fa oldpath
+from
+.Fa olddirfd
+and a relative
+.Fa newpath
+from
+.Fa newdirfd .
+Each directory argument may be
+.Dv AT_FDCWD
+to use the current working directory.
+An absolute path ignores its directory argument.
+Directory descriptors are resolved to paths; they do not bypass search
+permission on ancestor directories.
+.Pp
+For
+.Fn linkat ,
+.Dv AT_SYMLINK_FOLLOW
+in
+.Fa flags
+follows the source's final symbolic link.
+.Dv AT_EMPTY_PATH
+is accepted as a flag but has no effect: an empty path still returns
+.Er ENOENT .
+Other flag bits return
+.Er EINVAL .
+These constants are declared in
+.In fcntl.h .
+.Pp
+.Fn unlink
+removes
+.Fa path
+without following its final symbolic link.
+On the KRFFS boot root, a file with an open descriptor becomes nameless
+and remains accessible through that descriptor until the last close.
+It is absent from path lookup and directory listings.
+Without an open descriptor, its storage is freed at unlink.
+A file on that root which backs an attached loop device instead returns
+.Er EBUSY .
+On ext2, the loop device retains the inode and the file may be unlinked.
+.Pp
+Path traversal requires search permission on each ancestor directory.
+Creating a link requires write permission on the destination directory;
+unlinking requires write permission on the containing directory.
+In a sticky directory, unlink also requires effective user ID 0,
+ownership of the directory, or ownership of the entry.
+Write permission on the entry alone does not satisfy the sticky rule.
+The directory write check precedes the sticky check.
+The KRFFS boot root is treated as mode 0755 and non-sticky.
+.Pp
+A directory is removed with
+.Xr rmdir 2 .
+.Fn unlink
+returns
+.Er EISDIR
+for the root or a directory on the KRFFS boot root, ext2, FAT32, or exFAT.
+A mounted KRFFS volume reports
+.Er EIO
+for its directory refusal.
+A mount point is busy, and the synthetic
+.Pa /dev
+and
+.Pa /proc
+namespaces are read-only.
+.Pp
+The i386 system call numbers are 9 for
+.Nm link ,
+303 for
+.Nm linkat ,
+and 10 for
+.Nm unlink .
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/fdstale.c
+opens a file, unlinks its name, and reads the original contents through
+the descriptor.
+It checks that seeking to the end still returns the file's size and
+that opening the removed name returns
+.Er ENOENT ,
+both before and after the last close.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission was denied on an ancestor directory, or write
+permission was denied on the directory being changed.
+.It Bq Er EBADF
+A relative
+.Fn linkat
+path uses an invalid or stale directory descriptor.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted,
+.Fn unlink
+selected a mount point, or the file on the KRFFS boot root backs an
+attached loop device.
+.It Bq Er EEXIST
+The ext2 destination name already exists.
+.It Bq Er EFAULT
+A path cannot be read from user memory, or there is no current process.
+.It Bq Er EFBIG
+An ext2 directory cannot grow further or a required directory block
+exceeds the file system's addressing limit.
+.It Bq Er EINVAL
+.Fn linkat
+was given unsupported flags, a destination has no leaf component,
+or the file system cannot supply required attributes.
+.It Bq Er EIO
+File system metadata could not be read or written, or the device was removed.
+A mounted KRFFS volume also returns this error when unlinking a missing
+entry or a directory.
+.It Bq Er EISDIR
+.Fn unlink
+selected the root or a directory on the KRFFS boot root, ext2, FAT32,
+or exFAT.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er EMLINK
+The ext2 source already has 65000 links.
+.It Bq Er ENAMETOOLONG
+A path, directory prefix, component, or symbolic-link expansion is too long.
+The copied path and its directory prefix must fit 256 bytes, including
+the terminating null byte.
+.It Bq Er ENOENT
+A path is empty, the source or a required path component does not exist,
+or the entry to unlink does not exist on a file system that reports
+this error.
+.It Bq Er ENOMEM
+The file system could not allocate storage needed to resolve a path.
+.It Bq Er ENOSPC
+There is no space available to extend the ext2 destination directory.
+.It Bq Er ENOTDIR
+A component used as a directory is not a directory, or a relative
+.Fn linkat
+path uses a descriptor that is not a directory.
+.It Bq Er EPERM
+A hard link was requested to a directory, to a synthetic object, or on
+a writable file system without hard links, or the sticky-directory
+rule forbids removal.
+The KRFFS boot root refuses hard links before checking read-only state.
+.It Bq Er EROFS
+The operation requires a write on a read-only mount or in a synthetic
+namespace, or the file system has no unlink operation.
+.It Bq Er EXDEV
+The hard-link source and destination are on different mounts.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr open 2 ,
+.Xr rename 2 ,
+.Xr rmdir 2 ,
+.Xr symlink 2 ,
+.Xr loop 4

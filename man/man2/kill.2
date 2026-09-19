@@ -1,0 +1,126 @@
+.Dd September 19, 2026
+.Dt KILL 2
+.Os
+.Sh NAME
+.Nm kill ,
+.Nm tkill ,
+.Nm tgkill
+.Nd send a signal to a process or process group
+.Sh SYNOPSIS
+.In signal.h
+.Ft int
+.Fn kill "pid_t pid" "int sig"
+.Sh DESCRIPTION
+.Fn kill
+posts signal
+.Fa sig
+to the processes selected by
+.Fa pid .
+Signals 1 through 64 are accepted.
+Signal 0 checks existence and permission without posting a signal.
+.Bl -tag -width "pid < -1"
+.It Fa pid No > 0
+Select the process with this process ID.
+.It Fa pid No = 0
+Select the caller's process group.
+.It Fa pid No < -1
+Select the process group whose ID is
+.No - Ns Fa pid .
+.It Fa pid No = -1
+Broadcast to all processes is not implemented and returns
+.Er ESRCH .
+.El
+.Pp
+Zombie processes are not targets.
+A group request posts the signal to every member the caller may signal.
+It succeeds if at least one member is permitted, returns
+.Er EPERM
+if members exist but none is permitted, and returns
+.Er ESRCH
+if no live member exists.
+.Pp
+A caller with effective user ID 0 may signal any target.
+Otherwise, either the caller's real or effective user ID must match the
+target's real or saved user ID.
+For
+.Dv SIGCONT
+only, membership in the target's session also permits the call.
+This session exception does not apply to signal 0.
+.Ss Thread signal calls
+Rach2 has no threads.
+The kernel calls
+.Nm tkill
+and
+.Nm tgkill
+address a process by its process ID.
+.Nm tkill
+takes a positive thread ID and a signal.
+.Nm tgkill
+takes a positive thread group ID, a positive thread ID, and a signal;
+both IDs must identify the same process.
+Zero and negative IDs are errors in these calls, never group selectors.
+Their permission and signal rules are those of
+.Fn kill .
+.Pp
+The i386 system call numbers are 37 for
+.Nm kill ,
+238 for
+.Nm tkill ,
+and 270 for
+.Nm tgkill .
+For
+.Nm tkill ,
+EBX is the thread ID and ECX the signal.
+For
+.Nm tgkill ,
+EBX is the thread group ID, ECX the thread ID, and EDX the signal.
+Musl declares neither function.
+Its
+.Fn raise
+uses
+.Nm tkill
+to signal the caller; a direct
+.Fn syscall
+is needed to issue
+.Nm tgkill .
+.Sh RETURN VALUES
+.Fn kill
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The kernel calls return 0 on success or the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/jobprobe.c
+places a child in its own process group, sends
+.Dv SIGTERM
+with
+.Li kill(-cpid, SIGTERM) ,
+and checks that the child's wait status reports that signal.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EINVAL
+The signal is outside 0 through 64, or a thread ID or thread group ID
+given to
+.Nm tkill
+or
+.Nm tgkill
+is not positive.
+.It Bq Er EPERM
+The caller may not signal the target, or may not signal any live member
+of the selected group.
+.It Bq Er ESRCH
+No selected live process exists, the selected group has no live members,
+or
+.Nm tgkill
+was given IDs that do not identify the same process.
+.Fn kill
+also returns this error for
+.Fa pid
+-1 or the most negative 32-bit integer, and for
+.Fa pid
+0 when there is no current process.
+.El
+.Sh SEE ALSO
+.Xr getuid 2 ,
+.Xr sigaction 2 ,
+.Xr wait 2

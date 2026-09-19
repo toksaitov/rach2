@@ -1,0 +1,102 @@
+.Dd September 19, 2026
+.Dt GETSOCKNAME 2
+.Os
+.Sh NAME
+.Nm getsockname ,
+.Nm getpeername
+.Nd get a socket's local or peer address
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn getsockname "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
+.Ft int
+.Fn getpeername "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
+.Sh DESCRIPTION
+.Fn getsockname
+returns the local address of socket
+.Fa fd
+in
+.Fa addr .
+For an IPv4 stream or datagram socket, the result is a 16-byte
+.Vt sockaddr_in
+containing the kernel's local IPv4 address
+.Pq Va net_ip_addr
+and the socket's bound or ephemeral port.
+It reports that address rather than 127.0.0.1 for a local connection.
+.Pp
+For an
+.Dv AF_PACKET
+socket,
+.Fn getsockname
+returns a 20-byte
+.Vt sockaddr_ll
+with the socket's protocol, interface index 1, Ethernet hardware type,
+and the six-byte local MAC address.
+.Pp
+.Fn getpeername
+returns a connected peer's IPv4 address and port in a
+.Vt sockaddr_in .
+A stream socket has a peer after the TCP handshake from
+.Xr connect 2
+or
+.Xr accept 2
+has completed, including the subsequent closing states while its
+connection record remains attached.
+A listener, a socket still completing its handshake, or a closed
+connection has no peer to report.
+A datagram socket has a peer after
+.Xr connect 2
+has set one.
+.Pp
+Before either call,
+.Fa addrlen
+must point to the capacity of
+.Fa addr
+in bytes.
+The kernel copies at most that capacity and writes the full address
+length back through
+.Fa addrlen ,
+even when the address is truncated.
+Both pointers must be nonnull, including when the capacity is zero.
+In an IPv4 result, the family is in host byte order and the port and
+address are in network byte order.
+.Pp
+These operations are subcalls 6 and 7, respectively, of i386
+.Xr socketcall 2 ,
+system call 102.
+.Sh RETURN VALUES
+These functions return 0 on success.
+On failure they return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+uses
+.Fn getsockname
+to obtain the local IPv4 address.
+After connecting to a local TCP listener, it uses
+.Fn getpeername
+to check that the peer has that address and the listener's port.
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EFAULT
+Either pointer is null, the address length cannot be read or written,
+the address cannot be copied to user memory, or the
+.Fn socketcall
+argument array cannot be read.
+.It Bq Er ENOTCONN
+.Fn getpeername
+was called on a socket with no connected peer.
+.It Bq Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Bq Er EOPNOTSUPP
+The socket is a raw socket.
+.El
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2

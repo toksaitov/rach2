@@ -1,0 +1,136 @@
+.Dd September 19, 2026
+.Dt GETPID 2
+.Os
+.Sh NAME
+.Nm getpid ,
+.Nm getppid ,
+.Nm getpgid ,
+.Nm getpgrp ,
+.Nm setpgid ,
+.Nm getsid ,
+.Nm setsid
+.Nd get or set process, process group, and session IDs
+.Sh SYNOPSIS
+.In unistd.h
+.Ft pid_t
+.Fn getpid "void"
+.Ft pid_t
+.Fn getppid "void"
+.Ft pid_t
+.Fn getpgid "pid_t pid"
+.Ft pid_t
+.Fn getpgrp "void"
+.Ft int
+.Fn setpgid "pid_t pid" "pid_t pgid"
+.Ft pid_t
+.Fn getsid "pid_t pid"
+.Ft pid_t
+.Fn setsid "void"
+.Sh DESCRIPTION
+.Fn getpid
+returns the calling process's ID.
+.Fn getppid
+returns its parent's ID.
+.Fn getpgid
+returns the process group ID of
+.Fa pid ;
+.Fn getsid
+returns its session ID.
+For either call, a
+.Fa pid
+of 0 selects the caller.
+.Fn getpgrp
+takes no arguments and returns the caller's process group ID.
+.Pp
+.Fn setpgid
+sets the process group ID of
+.Fa pid
+to
+.Fa pgid .
+A
+.Fa pid
+of 0 selects the caller.
+A
+.Fa pgid
+of 0 selects the target's own process ID, making it a group leader.
+The target must be the caller or its child and must not be a zombie or
+a session leader.
+Unless the target is forming its own group, the destination group must
+already have a member in the target's session.
+The group's original leader need not still be alive.
+.Pp
+The kernel does not check whether a child has called
+.Xr execve 2
+or whether the child's session differs from the caller's session.
+The destination group is checked against the target's session.
+.Pp
+.Fn setsid
+creates a session and a process group, both with the caller's process ID.
+The caller becomes the leader of both.
+A caller that already leads a process group cannot create a session.
+The console session and controlling terminal are described in
+.Xr console 4 .
+.Pp
+The i386 system call numbers are 20 for
+.Fn getpid ,
+64 for
+.Fn getppid ,
+132 for
+.Fn getpgid ,
+65 for
+.Fn getpgrp ,
+57 for
+.Fn setpgid ,
+147 for
+.Fn getsid ,
+and 66 for
+.Fn setsid .
+.Sh RETURN VALUES
+The query functions return the requested ID.
+.Fn setsid
+returns the new session ID, which is the caller's process ID.
+.Fn setpgid
+returns 0 on success.
+On failure, these functions return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/jobprobe.c
+forks a child, checks its inherited group and session, calls
+.Fn setpgid "0" "0" ,
+and checks that the child's process group ID equals its process ID.
+A separate child calls
+.Fn setsid
+and checks that both its session ID and process group ID equal its process ID.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EINVAL
+.Fn setpgid
+was given a negative
+.Fa pgid .
+.It Bq Er EPERM
+The target of
+.Fn setpgid
+is a session leader, or the destination is neither its own process ID
+nor an existing group in its session.
+For
+.Fn setsid ,
+the caller already leads a process group.
+.It Bq Er ESRCH
+There is no current process, or the process requested by
+.Fn getpgid ,
+.Fn getsid ,
+or
+.Fn setpgid
+does not exist.
+For
+.Fn setpgid ,
+this error also means that the target is unused, is a zombie, or is
+neither the caller nor its child.
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr kill 2 ,
+.Xr waitpid 2 ,
+.Xr console 4

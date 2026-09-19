@@ -1,0 +1,262 @@
+.Dd September 19, 2026
+.Dt SIGACTION 2
+.Os
+.Sh NAME
+.Nm sigaction ,
+.Nm rt_sigaction ,
+.Nm rt_sigprocmask ,
+.Nm rt_sigsuspend ,
+.Nm sigreturn ,
+.Nm rt_sigreturn ,
+.Nm pause
+.Nd control signal dispositions and masks
+.Sh SYNOPSIS
+.In signal.h
+.Ft int
+.Fn sigaction "int sig" "const struct sigaction *restrict act" "struct sigaction *restrict oldact"
+.Ft int
+.Fn sigprocmask "int how" "const sigset_t *restrict set" "sigset_t *restrict oldset"
+.Ft int
+.Fn sigsuspend "const sigset_t *mask"
+.In unistd.h
+.Ft int
+.Fn pause void
+.Sh DESCRIPTION
+.Fn sigaction
+installs the disposition in
+.Fa act
+for signal
+.Fa sig .
+If
+.Fa oldact
+is non-null, it receives the previous disposition.
+A null
+.Fa act
+leaves the disposition unchanged.
+The kernel rejects even a query for
+.Dv SIGKILL
+or
+.Dv SIGSTOP ;
+neither can be caught, ignored, or blocked.
+.Pp
+The kernel accepts signal numbers 1 through 64.
+Numbers 1 through 31 have their Linux i386 meanings.
+Musl reserves numbers 32 through 34 and rejects them in
+.Fn sigaction .
+Pending signals occupy one bit each; repeated instances coalesce.
+There is no queue of real-time signals or sender information.
+.Ss Dispositions
+.Va sa_handler
+selects
+.Dv SIG_DFL ,
+.Dv SIG_IGN ,
+or a handler address.
+Installing
+.Dv SIG_IGN
+also discards an instance already pending.
+The default actions are:
+.Bl -tag -width "Terminate"
+.It Ignore
+.Dv SIGCHLD , SIGURG , SIGWINCH ,
+and
+.Dv SIGCONT .
+.It Stop
+.Dv SIGSTOP , SIGTSTP , SIGTTIN ,
+and
+.Dv SIGTTOU .
+.It Terminate
+Every other accepted signal number.
+.El
+.Pp
+Posting
+.Dv SIGCONT
+resumes a stopped process and removes pending stop signals, regardless
+of its disposition or blocked status.
+A stop signal removes pending
+.Dv SIGCONT .
+.Dv SIGKILL
+makes a stopped process runnable so it can terminate.
+Stop and continue events notify the parent with
+.Dv SIGCHLD
+and are reported by
+.Xr wait 2 .
+The booted init process cannot be stopped.
+.Pp
+Signals act on return to user mode from a system call or interrupt.
+The lowest-numbered pending, unblocked signal is selected first.
+An ignored signal does not interrupt a blocking wait.
+A caught, stopping, or terminating signal can interrupt a wait;
+an operation that has transferred data may return a partial count.
+.Pp
+CPU exceptions are different: they terminate the process directly
+without consulting its signal mask or disposition.
+A handler for a fault signal can run when that signal is posted,
+but cannot recover from the corresponding CPU exception.
+.Ss Handlers
+While a handler runs, its
+.Va sa_mask
+is added to the blocked mask.
+The delivered signal is also blocked unless
+.Dv SA_NODEFER
+is set.
+.Dv SIGKILL
+and
+.Dv SIGSTOP
+are removed from this mask.
+.Dv SA_RESETHAND
+resets the disposition to default before entering the handler.
+.Pp
+With
+.Dv SA_SIGINFO ,
+the handler receives pointers to signal information and context storage.
+Only
+.Va si_signo
+is filled; the remaining information and context storage are zero.
+They do not contain a complete Linux signal context.
+.Pp
+All action flags are stored and returned.
+.Dv SA_RESTART
+does not restart interrupted system calls.
+.Dv SA_ONSTACK , SA_NOCLDSTOP ,
+and
+.Dv SA_NOCLDWAIT
+have no special effect.
+.Ss Masks and waiting
+.Fn sigprocmask
+returns the previous mask through a non-null
+.Fa oldset .
+If
+.Fa set
+is non-null,
+.Fa how
+selects
+.Dv SIG_BLOCK
+(0) to add its signals,
+.Dv SIG_UNBLOCK
+(1) to remove them, or
+.Dv SIG_SETMASK
+(2) to replace the mask.
+With a null
+.Fa set ,
+the mask is unchanged and
+.Fa how
+is ignored.
+.Pp
+.Fn pause
+waits for a signal that can act.
+.Fn sigsuspend
+installs
+.Fa mask
+for the wait and restores the previous mask before returning.
+Unlike Linux, the kernel restores that mask before delivering the signal.
+If the old mask blocks the signal that ended the wait, the signal remains
+pending; otherwise the handler runs with the restored mask, modified by
+the handler's own masking rules.
+.Ss System call interface
+Musl's
+.Vt sigset_t
+occupies 128 bytes.
+The kernel uses an 8-byte set: two 32-bit words for signals 1 through 32
+and 33 through 64, with bit
+.Li sig-1
+representing a signal.
+Musl passes this smaller size to the kernel.
+.Pp
+The i386 system call numbers and register arguments are:
+.Bl -tag -width "rt_sigprocmask (175)"
+.It Nm rt_sigaction No (174)
+EBX is the signal, ECX the new action pointer, EDX the old action pointer,
+and ESI the set size, which must be 8.
+The kernel action is five 32-bit words: handler address, flags, restorer
+address, and the two mask words.
+.Fn sigaction
+converts between this layout and the public structure.
+.It Nm rt_sigprocmask No (175)
+EBX is
+.Fa how ,
+ECX the new set pointer, EDX the old set pointer, and ESI the set size, 8.
+Musl's
+.Fn sigprocmask
+uses this call.
+.It Nm rt_sigsuspend No (179)
+EBX points to the temporary set and ECX is its size, 8.
+Musl's
+.Fn sigsuspend
+uses this call.
+.It Nm pause No (29)
+No arguments.
+.It Nm sigreturn No (119)
+Musl's plain-handler restorer pops the signal argument before issuing
+the call.
+The saved frame begins 8 bytes below the user stack pointer.
+.It Nm rt_sigreturn No (173)
+Musl's
+.Dv SA_SIGINFO
+restorer issues the call without popping the signal argument.
+The saved frame begins 4 bytes below the user stack pointer.
+.El
+.Pp
+Musl declares no public functions for the
+.Li rt_*
+calls or
+.Nm sigreturn .
+It supplies the restorer address when installing an action.
+The kernel always uses that address; it supplies no fallback restorer.
+.Pp
+Both return calls validate the same kernel-built frame and restore the
+saved registers, instruction and stack pointers, floating-point state,
+and pre-handler signal mask.
+Segment selectors and processor flags are restricted to safe user values.
+An unreadable or invalid frame, including an invalid floating-point
+image, terminates the process with
+.Dv SIGSEGV .
+.Sh RETURN VALUES
+.Fn sigaction
+and
+.Fn sigprocmask
+return 0 on success.
+On failure they return -1 and set
+.Va errno .
+.Fn pause
+and
+.Fn sigsuspend
+return -1 with
+.Va errno
+set to
+.Er EINTR
+when the wait ends and execution continues.
+The kernel calls return negative error numbers.
+The signal-return calls resume saved execution, including its EAX value.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/sigprobe.c
+installs a
+.Dv SIGUSR1
+handler, blocks and posts the signal, then unblocks it and checks that
+the handler runs and returns through
+.Nm rt_sigreturn .
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+An action or signal-set pointer cannot be read or written as required.
+.It Bq Er EINTR
+The wait in
+.Fn pause
+or
+.Fn sigsuspend
+ended because a signal could act.
+.It Bq Er EINVAL
+The signal is outside 1 through 64, is
+.Dv SIGKILL
+or
+.Dv SIGSTOP ,
+or is reserved by musl;
+a kernel set size is not 8; or
+.Fa how
+is invalid when a new mask is supplied.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr kill 2 ,
+.Xr wait 2

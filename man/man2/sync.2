@@ -1,0 +1,89 @@
+.Dd September 19, 2026
+.Dt SYNC 2
+.Os
+.Sh NAME
+.Nm sync ,
+.Nm fsync ,
+.Nm fdatasync
+.Nd flush buffered file system writes
+.Sh SYNOPSIS
+.In unistd.h
+.Ft void
+.Fn sync "void"
+.Ft int
+.Fn fsync "int fd"
+.Ft int
+.Fn fdatasync "int fd"
+.Sh DESCRIPTION
+.Fn sync
+flushes buffered file system writes to stable storage.
+For each active mount with a device that is still present and admits an
+operation, it runs the file system's sync operation, writes the device's
+dirty buffers, and, if those writes succeed, flushes the device.
+It then writes every dirty page of the disk-backed KRFFS window.
+The page-cache flush does nothing when KRFFS is a direct RAM module.
+.Pp
+.Fn sync
+ignores write-back errors.
+Buffers whose writes fail remain dirty for a later attempt.
+A failed buffer write makes mounts on that device read-only for the
+rest of their lifetime.
+.Pp
+.Fn fsync
+accepts any open descriptor
+.Fa fd ;
+it does not check the descriptor's type.
+For a descriptor on a mounted file system, it runs that file system's
+fsync operation, or writes the device's dirty buffers if the file
+system has no such operation.
+On success it also flushes the device.
+For a KRFFS boot-root file, or a descriptor without a mount, it flushes
+the entire page cache.
+That flush does nothing on a direct RAM root.
+The mounted KRFFS, FAT32, exFAT, and ext2 implementations flush the
+device's dirty buffers, rather than only the named file's data.
+.Pp
+.Fn fdatasync
+uses the same handler as
+.Fn fsync
+and has the same behavior.
+Dropbear writes its host key with an open, write, fsync, rename sequence
+and treats an fsync error as fatal.
+.Pp
+The i386 system call numbers are 36 for
+.Fn sync ,
+118 for
+.Fn fsync ,
+and 148 for
+.Fn fdatasync .
+The descriptor is passed in EBX.
+.Sh RETURN VALUES
+.Fn sync
+has no return value; its kernel call always returns 0.
+.Fn fsync
+and
+.Fn fdatasync
+return 0 on success, or -1 on failure with
+.Va errno
+set.
+The kernel returns a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/vfsprobe.c
+opens a file read-only, calls
+.Fn fsync
+on its descriptor, and requires success.
+.Sh ERRORS
+.Fn fsync
+and
+.Fn fdatasync
+can fail with:
+.Bl -tag -width "[ESRCH]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
+.It Bq Er EIO
+A write-back or device flush failed, or the mounted device was removed.
+.It Bq Er ESRCH
+There is no current process.
+.El

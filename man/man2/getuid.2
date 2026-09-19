@@ -1,0 +1,144 @@
+.Dd September 19, 2026
+.Dt GETUID 2
+.Os
+.Sh NAME
+.Nm getuid ,
+.Nm geteuid ,
+.Nm getgid ,
+.Nm getegid ,
+.Nm getresuid ,
+.Nm getresgid ,
+.Nm getgroups ,
+.Nm getuid32 ,
+.Nm geteuid32 ,
+.Nm getgid32 ,
+.Nm getegid32 ,
+.Nm getresuid32 ,
+.Nm getresgid32 ,
+.Nm getgroups32
+.Nd get process credentials
+.Sh SYNOPSIS
+.Fd "#define _GNU_SOURCE"
+.In unistd.h
+.Ft uid_t
+.Fn getuid void
+.Ft uid_t
+.Fn geteuid void
+.Ft gid_t
+.Fn getgid void
+.Ft gid_t
+.Fn getegid void
+.Ft int
+.Fn getgroups "int size" "gid_t list[]"
+.Ft int
+.Fn getresuid "uid_t *ruid" "uid_t *euid" "uid_t *suid"
+.Ft int
+.Fn getresgid "gid_t *rgid" "gid_t *egid" "gid_t *sgid"
+.Sh DESCRIPTION
+These functions read the calling process's credentials.
+The initial user and group IDs are all 0, for root, until a login server
+changes them.
+.Pp
+.Fn getuid
+and
+.Fn geteuid
+return the real and effective user IDs, respectively.
+.Fn getgid
+and
+.Fn getegid
+return the real and effective group IDs.
+.Pp
+.Fn getresuid
+writes the real, effective, and saved user IDs through
+.Fa ruid ,
+.Fa euid ,
+and
+.Fa suid .
+.Fn getresgid
+writes the corresponding group IDs through
+.Fa rgid ,
+.Fa egid ,
+and
+.Fa sgid .
+These two declarations require
+.Dv _GNU_SOURCE .
+The pointers are written in that order; a failed copy may leave earlier
+results written.
+.Pp
+.Fn getgroups
+copies the supplementary group IDs to
+.Fa list ,
+which has room for
+.Fa size
+entries.
+With
+.Fa size
+0, it returns the number of entries without accessing
+.Fa list .
+The kernel stores at most eight supplementary groups.
+The effective group ID is not added to this list.
+.Ss System call numbers
+Musl uses the i386 32-bit ID calls:
+199 for
+.Nm getuid32 ,
+201 for
+.Nm geteuid32 ,
+200 for
+.Nm getgid32 ,
+202 for
+.Nm getegid32 ,
+209 for
+.Nm getresuid32 ,
+211 for
+.Nm getresgid32 ,
+and 205 for
+.Nm getgroups32 .
+It declares the functions without the
+.Li 32
+suffix and provides no separate prototypes for these kernel names.
+.Sh RETURN VALUES
+.Fn getuid ,
+.Fn geteuid ,
+.Fn getgid ,
+and
+.Fn getegid
+return the requested ID and have no error return.
+.Fn getresuid
+and
+.Fn getresgid
+return 0 on success.
+.Fn getgroups
+returns the number of supplementary groups.
+On failure, the latter three functions return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/credprobe.c
+sets supplementary groups 1000 and 2000, reads them back, queries their
+count with size 0, and checks that size 1 gives
+.Er EINVAL .
+It also changes the effective user ID to 1000 while keeping real user
+ID 0, then checks that
+.Fn getresuid
+reports real ID 0 and effective and saved IDs 1000.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+An output pointer for
+.Fn getresuid
+or
+.Fn getresgid ,
+or a required entry of
+.Fa list
+for
+.Fn getgroups ,
+cannot be written in user memory.
+.It Bq Er EINVAL
+.Fn getgroups
+was given a negative
+.Fa size
+or a nonzero size smaller than the supplementary group count.
+.El
+.Sh SEE ALSO
+.Xr setuid 2

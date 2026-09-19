@@ -1,0 +1,103 @@
+.Dd September 19, 2026
+.Dt SET_THREAD_AREA 2
+.Os
+.Sh NAME
+.Nm set_thread_area ,
+.Nm set_tid_address
+.Nd set the process TLS base and obtain its thread ID
+.Sh SYNOPSIS
+.Fd "#define _GNU_SOURCE"
+.In unistd.h
+.In sys/syscall.h
+.Ft long
+.Fn syscall "long number" "..."
+.Sh DESCRIPTION
+Musl declares no public function for either call.
+Use
+.Fn syscall
+with
+.Dv SYS_set_thread_area
+(i386 number 243) or
+.Dv SYS_set_tid_address
+(258).
+Each call takes one pointer argument in EBX.
+Musl's internal
+.Fn __set_thread_area
+issues number 243; its
+.Fn __init_tp
+initialization routine issues number 258.
+.Pp
+.Nm set_thread_area
+sets the base of the calling process's thread-local storage (TLS).
+The argument points to the following 16-byte kernel ABI structure;
+each field is a 32-bit word:
+.Bd -literal -offset indent
+struct user_desc {
+        unsigned int entry_number;
+        unsigned int base_addr;
+        unsigned int limit;
+        unsigned int flags;
+};
+.Ed
+.Pp
+The kernel provides one TLS descriptor, entry 6 in the global descriptor
+table (GDT).
+.Va entry_number
+must be 0xffffffff to request allocation, or 6 to replace that entry.
+Both requests select the same entry.
+.Va base_addr
+is stored in the process record and applied to the GDT descriptor.
+The base is reapplied on every context switch.
+.Pp
+The
+.Va flags
+word must request a present, writable, 32-bit data segment:
+bit 0 must be set, bits 1 and 2 must be zero, bit 3 must be zero, and
+bit 5 must be zero.
+The limit-in-pages bit (4), useable bit (6), remaining flag bits, and
+.Va limit
+are ignored.
+The descriptor retains its full 4 GiB limit.
+Musl supplies flags 0x51 and limit 0xfffff.
+.Pp
+The call writes 6 back to
+.Va entry_number .
+The caller can then load
+.Ql "(entry_number << 3) | 3"
+(0x33) into %gs.
+If this writeback fails, the new TLS base has already been installed.
+.Pp
+.Nm set_tid_address
+returns the caller's process ID as its thread ID.
+Rach2 has no threads.
+The clear-child-tid pointer is accepted without validation and ignored;
+the kernel neither records it nor clears it at exit.
+.Sh RETURN VALUES
+.Nm set_thread_area
+returns zero on success.
+.Nm set_tid_address
+returns the process ID.
+The raw calls return a negative error number on failure;
+.Fn syscall
+instead returns -1 and sets
+.Va errno .
+.Sh EXAMPLES
+The default suite's
+.Pa tests/tlsprobe.c
+requests entry 0xffffffff with flags 0x51 and a base pointing to its
+thread control block, then loads the returned selector into %gs.
+It checks stored values across system calls, timer interrupts, and
+context switches, including a child with a different TLS base.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+.Nm set_thread_area
+cannot read the descriptor or write back its entry number.
+.It Bq Er EINVAL
+The requested entry number or segment flags are not supported.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr getpid 2

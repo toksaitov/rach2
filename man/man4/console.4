@@ -1,0 +1,109 @@
+.Dd September 19, 2026
+.Dt CONSOLE 4
+.Os
+.Sh NAME
+.Nm console ,
+.Nm tty ,
+.Nm ptmx ,
+.Nm pts
+.Nd console and pseudoterminals
+.Sh SYNOPSIS
+.Pa /dev/console
+.Pp
+.Pa /dev/tty
+.Pp
+.Pa /dev/ptmx
+.Pp
+.Pa /dev/pts/N
+.Sh DESCRIPTION
+.Pa /dev/console
+is the kernel console.
+Output goes to the screen and COM1 serial port.
+Keyboard and serial input pass through one terminal line discipline.
+The kernel's screen log level is controlled through
+.Pa /dev/screenlog ;
+see
+.Xr bootlog 4 .
+.Pp
+.Pa /dev/tty
+opens the caller's controlling terminal, either the console or a
+pseudoterminal slave.
+A caller without a controlling terminal gets
+.Er ENXIO .
+.Pp
+Each open of
+.Pa /dev/ptmx
+allocates a pseudoterminal pair and returns its master.
+The slave is
+.Pa /dev/pts/N ,
+where N is the lowest index not used by a live pair.
+A network login uses one pair per session.
+Master writes become slave input.
+Slave output and echo enter the master's ring.
+The slave has the same line discipline and job control as the console.
+The pair is freed after both ends close, and its index may be reused.
+.Ss Line discipline and job control
+Canonical mode collects input into lines; raw mode permits input without
+waiting for a complete line.
+Echo and signal generation are controlled by the terminal settings.
+With signal generation enabled, the interrupt and suspend characters,
+normally Ctrl-C and Ctrl-Z, send
+.Dv SIGINT
+and
+.Dv SIGTSTP
+to the foreground process group.
+.Pp
+A background process reading its controlling terminal receives
+.Dv SIGTTIN .
+A background write generates
+.Dv SIGTTOU
+only when
+.Dv TOSTOP
+is set.
+If the applicable signal is blocked or ignored, the operation fails with
+.Er EIO .
+.Ss Terminal requests
+The console and pseudoterminal slaves answer these
+.Xr ioctl 2
+requests:
+.Bl -tag -width TIOCSPGRP
+.It Dv TCGETS
+Read the terminal settings.
+.It Dv TCSETS , TCSETSW , TCSETSF
+Set the terminal settings.
+.Dv TCSETSF
+also discards unread input.
+.It Dv TCFLSH
+Discard unread input for selectors 0 and 2.
+Selector 1 does nothing; there is no output queue to flush.
+.It Dv TIOCGPGRP
+Read the foreground process group ID.
+.It Dv TIOCSPGRP
+Set the foreground process group.
+The terminal must be the caller's controlling terminal, and the group
+must belong to that session.
+.It Dv TIOCSCTTY
+Make this terminal the session's controlling terminal.
+The caller must be a session leader, and the terminal must not belong
+to another session.
+.It Dv TIOCGWINSZ
+Read the terminal window size.
+.It Dv TIOCNOTTY
+Detach the terminal from the caller's session if that session controls it.
+.El
+.Sh FILES
+.Bl -tag -width /dev/console
+.It Pa /dev/console
+Character device, major 5, minor 1; mode 0666.
+.It Pa /dev/tty
+Character device, major 5, minor 0; mode 0666.
+.It Pa /dev/ptmx
+Character device, major 5, minor 2; mode 0666.
+.It Pa /dev/pts/N
+Pseudoterminal slave N.
+.El
+.Sh SEE ALSO
+.Xr login 1 ,
+.Xr getpid 2 ,
+.Xr ioctl 2 ,
+.Xr bootlog 4

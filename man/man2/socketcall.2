@@ -1,0 +1,115 @@
+.Dd September 19, 2026
+.Dt SOCKETCALL 2
+.Os
+.Sh NAME
+.Nm socketcall
+.Nd dispatch a socket operation
+.Sh SYNOPSIS
+Linux i386 system call 102.
+EAX is 102, EBX is the operation number, and ECX points to an array
+of 32-bit arguments.
+.Sh DESCRIPTION
+.Nm
+implements the socket operations through one system call number.
+The kernel copies the number of argument words required by the operation
+from user memory in one checked read, then invokes the operation.
+Musl declares no
+.Fn socketcall
+function; its socket functions issue this call when their direct system
+call returns
+.Er ENOSYS .
+.Pp
+The supported operations are listed below.
+Arguments are in array order; pointers occupy one word.
+.Bl -column "0x1000" "getsockname(2)" "Arguments"
+.It Sy Number Ta Sy Operation Ta Sy Arguments
+.It 1 Ta Xr socket 2 Ta domain, type, protocol
+.It 2 Ta Xr bind 2 Ta fd, addr, addrlen
+.It 3 Ta Xr connect 2 Ta fd, addr, addrlen
+.It 4 Ta Xr listen 2 Ta fd, backlog
+.It 5 Ta Xr accept 2 Ta fd, addr, addrlen
+.It 6 Ta Xr getsockname 2 Ta fd, addr, addrlen
+.It 7 Ta Xr getpeername 2 Ta fd, addr, addrlen
+.It 9 Ta Xr send 2 Ta fd, buf, len, flags
+.It 10 Ta Xr recv 2 Ta fd, buf, len, flags
+.It 11 Ta Xr sendto 2 Ta fd, buf, len, flags, addr, addrlen
+.It 12 Ta Xr recvfrom 2 Ta fd, buf, len, flags, addr, addrlen
+.It 13 Ta Xr shutdown 2 Ta fd, how
+.It 14 Ta Xr setsockopt 2 Ta fd, level, option, value, len
+.It 15 Ta Xr getsockopt 2 Ta fd, level, option, value, len
+.It 17 Ta Xr recvmsg 2 Ta fd, msg, flags
+.It 0x1000 Ta Xr ping 2 Ta address
+.El
+.Pp
+An address length for
+.Fn accept ,
+.Fn getsockname ,
+.Fn getpeername ,
+or
+.Fn recvfrom
+is a pointer to a length.
+The length for
+.Fn getsockopt
+is also a pointer.
+Other lengths in the table are values.
+.Pp
+Operations 8
+.Pq Fn socketpair ,
+16
+.Pq Fn sendmsg ,
+and 18
+.Pq Fn accept4
+are not implemented and return
+.Er EINVAL .
+Every other unlisted operation also returns
+.Er EINVAL .
+.Pp
+.Fn recvmsg
+receives one datagram into a scatter list.
+It reports the sender through
+.Va msg_name
+as a
+.Vt sockaddr_in
+for IPv4 or a
+.Vt sockaddr_ll
+for a packet socket, including its hardware address and packet type.
+It supplies no ancillary data and sets
+.Va msg_controllen
+to zero.
+The DHCP client uses this call and checks the UDP checksum itself
+when no
+.Dv PACKET_AUXDATA
+is returned.
+.Sh RETURN VALUES
+The kernel returns the selected operation's result, or a negative error
+number.
+Musl's public socket functions translate a negative error number to -1
+and set
+.Va errno .
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+uses operation 1 to create a UDP socket, operation 2 to bind it,
+operation 11 to send a datagram, and operation 12 to receive it.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+The required argument words cannot be read from user memory.
+.It Bq Er EINVAL
+The operation number is not implemented.
+.El
+.Pp
+Errors from the selected operation are returned unchanged.
+Their conditions are documented on the corresponding pages.
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr getsockname 2 ,
+.Xr listen 2 ,
+.Xr ping 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr setsockopt 2 ,
+.Xr shutdown 2 ,
+.Xr socket 2

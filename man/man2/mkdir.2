@@ -1,0 +1,156 @@
+.Dd September 19, 2026
+.Dt MKDIR 2
+.Os
+.Sh NAME
+.Nm mkdir ,
+.Nm rmdir
+.Nd create or remove a directory
+.Sh SYNOPSIS
+.In sys/stat.h
+.Ft int
+.Fn mkdir "const char *path" "mode_t mode"
+.In unistd.h
+.Ft int
+.Fn rmdir "const char *path"
+.Sh DESCRIPTION
+.Fn mkdir
+creates the directory
+.Fa path .
+Its parent must exist and the final name must not already exist.
+Creating the root directory or a mount point returns
+.Er EEXIST .
+.Pp
+On KRFFS and ext2, the new directory receives the caller's effective
+user and group IDs and the permission bits
+.Li "mode & 07777 & ~umask" .
+FAT32 and exFAT ignore the requested mode and use the mount's user ID,
+group ID, and mask.
+Their reported permissions are 0777 with the mount mask removed;
+the read-only attribute removes write permission.
+.Pp
+.Fn rmdir
+removes an empty directory without following a symbolic link in the
+final component.
+It cannot remove a mount point or the root directory.
+A nonempty directory returns
+.Er ENOTEMPTY .
+On a mounted KRFFS volume, a missing final entry or a final entry that
+is not a directory also returns
+.Er ENOTEMPTY ;
+an open entry returns
+.Er EBUSY .
+.Pp
+On the KRFFS boot root, an open directory can be removed.
+Subsequent directory reads and relative
+.Li *at
+calls through its descriptor return
+.Er EBADF .
+A mounted KRFFS volume refuses removal of an open directory.
+ext2, FAT32, and exFAT also refuse removal while an open descriptor or
+working directory refers to the directory.
+.Pp
+Relative paths are resolved from the current working directory.
+Both calls require search permission on ancestor directories and
+write permission on the parent.
+The owner, group, and other permission bits are checked using the
+caller's effective IDs; effective user ID 0 overrides these checks.
+The KRFFS root directory is treated as mode 0755 and non-sticky.
+.Pp
+In a sticky directory,
+.Fn rmdir
+also requires ownership of the entry, ownership of the parent, or
+effective user ID 0.
+Write permission on the entry alone does not permit removal.
+The parent write check precedes the sticky check.
+.Pp
+Neither call changes the synthetic namespaces under
+.Pa /dev
+and
+.Pa /proc .
+Changes on a read-only mount return
+.Er EROFS .
+.Pp
+The i386 system call numbers are 39 for
+.Fn mkdir
+and 40 for
+.Fn rmdir .
+Both take the path in EBX;
+.Fn mkdir
+takes the mode in ECX.
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/dirprobe.c
+creates
+.Pa /d
+with mode 0755, checks that another creation fails, and creates a file
+inside it.
+It checks that removal of the nonempty directory fails, then removes
+the file and the empty directory.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission on an ancestor or write permission on the parent
+was denied.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted, or
+.Fn rmdir
+selected a mount point or a directory whose references prevent removal.
+.It Bq Er EEXIST
+The name passed to
+.Fn mkdir
+already exists, including the root and mount points.
+.It Bq Er EFAULT
+The path is null or cannot be read from user memory, or there is no
+current process.
+.It Bq Er EFBIG
+An ext2 directory cannot grow further or a required block exceeds its
+addressing limit.
+.It Bq Er EINVAL
+.Fn rmdir
+was given the root path, a parent resolution has no final component,
+the file system rejects a new name, or required attributes cannot be
+obtained.
+.It Bq Er EIO
+The backing device was removed, or file system metadata could not be
+read or written.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er EMLINK
+The ext2 parent already has 65000 links.
+.It Bq Er ENAMETOOLONG
+A path, component, reconstructed parent path, or symbolic-link
+expansion is too long.
+The copied path and its working-directory prefix must fit 256 bytes,
+including the terminating null byte.
+.It Bq Er ENOENT
+The path is empty, an ancestor is missing, no root is mounted, or
+the entry to remove is absent on a file system that reports this error.
+.It Bq Er ENOMEM
+The file system could not allocate a node or other required memory.
+.It Bq Er ENOSPC
+There is no space for the new directory or its parent entry.
+.It Bq Er ENOTDIR
+An ancestor is not a directory, or
+.Fn rmdir
+selected a non-directory on a file system that reports this error.
+.It Bq Er ENOTEMPTY
+The directory is not empty.
+A mounted KRFFS volume also uses this error for a missing final entry
+or a final entry that is not a directory.
+.It Bq Er EPERM
+The sticky-directory rule forbids removal.
+.It Bq Er EROFS
+The operation requires a change to a read-only mount or synthetic
+namespace, or the file system does not implement the operation.
+exFAT also refuses removal of a directory it has marked unwritable.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr mount 2 ,
+.Xr open 2 ,
+.Xr umask 2 ,
+.Xr unlink 2

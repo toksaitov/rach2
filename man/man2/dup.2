@@ -1,0 +1,123 @@
+.Dd September 19, 2026
+.Dt DUP 2
+.Os
+.Sh NAME
+.Nm dup ,
+.Nm dup2 ,
+.Nm dup3
+.Nd duplicate a file descriptor
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn dup "int oldfd"
+.Ft int
+.Fn dup2 "int oldfd" "int newfd"
+.Ft int
+.Fn dup3 "int oldfd" "int newfd" "int flags"
+.Sh DESCRIPTION
+.Fn dup
+duplicates
+.Fa oldfd
+onto the lowest unused descriptor.
+The descriptors share one open-file description, including the file
+offset and the
+.Dv O_APPEND
+and
+.Dv O_NONBLOCK
+status flags.
+Closing one descriptor leaves the other usable.
+The new descriptor's
+.Dv FD_CLOEXEC
+flag is clear.
+.Pp
+.Fn dup2
+duplicates
+.Fa oldfd
+onto
+.Fa newfd .
+If
+.Fa newfd
+is open, its previous backing references are released first;
+close errors are ignored.
+If both arguments are equal and valid, the call returns
+.Fa newfd
+without changing it, including its close-on-exec flag.
+Otherwise the new descriptor's
+.Dv FD_CLOEXEC
+flag is clear.
+.Pp
+.Fn dup3
+performs the same replacement, but equal descriptors fail with
+.Er EINVAL .
+The
+.Fa flags
+argument must be 0 or
+.Dv O_CLOEXEC .
+The latter sets
+.Dv FD_CLOEXEC
+on the new descriptor.
+.Pp
+The descriptor table starts with 16 entries and grows to at most 1024.
+The soft
+.Dv RLIMIT_NOFILE
+limit is one greater than the highest new descriptor allowed.
+For
+.Fn dup2
+and
+.Fn dup3 ,
+a negative destination or one at or above this limit gives
+.Er EBADF .
+.Pp
+An open-file description releases a pipe, terminal, pseudo-terminal,
+or other operations-backed object when its last reference closes.
+Socket references are counted separately for each descriptor;
+each duplicate adds a reference.
+Replacing an open destination also releases any framebuffer ownership
+associated with it.
+.Pp
+The i386 system call numbers are 41 for
+.Fn dup ,
+63 for
+.Fn dup2 ,
+and 330 for
+.Fn dup3 .
+.Sh RETURN VALUES
+These functions return the new descriptor on success.
+On failure they return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/dup2test.c
+opens
+.Pa dup2test.tmp ,
+duplicates its descriptor onto standard output, writes
+.Ql Hello from dup2! ,
+and reads the file back to check the redirection.
+.Pa tests/ofdprobe.c
+checks that reads through duplicate descriptors share an offset and
+that a duplicate remains usable after the original closes.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EBADF
+.Fa oldfd
+is invalid, or
+.Fa newfd
+is negative or at or above the descriptor limit.
+.It Bq Er EINVAL
+.Fn dup3
+was given equal descriptors or flags other than
+.Dv O_CLOEXEC .
+.It Bq Er EMFILE
+.Fn dup
+cannot allocate a free descriptor below the limit, or storage for a
+descriptor or an enlarged table could not be allocated.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr close 2 ,
+.Xr execve 2 ,
+.Xr fcntl 2 ,
+.Xr fork 2 ,
+.Xr prlimit64 2

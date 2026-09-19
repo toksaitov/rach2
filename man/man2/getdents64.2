@@ -1,0 +1,191 @@
+.Dd September 19, 2026
+.Dt GETDENTS64 2
+.Os
+.Sh NAME
+.Nm getdents64
+.Nd read directory entries
+.Sh SYNOPSIS
+.Fd "#define _GNU_SOURCE"
+.Fd "#define _LARGEFILE64_SOURCE"
+.In dirent.h
+.Ft int
+.Fn getdents64 "int fd" "struct dirent *dirp" "size_t count"
+.Sh DESCRIPTION
+.Fn getdents64
+reads directory entries from
+.Fa fd
+into the
+.Fa count Ns -byte
+buffer at
+.Fa dirp .
+It returns complete, variable-length records and advances the cursor
+in the descriptor's shared open-file description.
+The next call continues from that cursor.
+.Pp
+musl defines
+.Fn getdents64
+as a macro for
+.Fn getdents
+when
+.Dv _LARGEFILE64_SOURCE
+is defined.
+The declaration of
+.Fn getdents
+requires
+.Dv _GNU_SOURCE
+or
+.Dv _BSD_SOURCE .
+Its wrapper limits
+.Fa count
+to
+.Dv INT_MAX
+and invokes i386 system call 220.
+.Ss Record layout
+Each record has the Linux
+.Vt linux_dirent64
+layout:
+.Bl -tag -width "d_reclen"
+.It Va d_ino
+Unsigned 64-bit inode number at byte offset 0.
+.It Va d_off
+Signed 64-bit cursor for the next entry at byte offset 8.
+Its meaning depends on the file system; it is not a byte offset into
+the returned buffer.
+.It Va d_reclen
+Unsigned 16-bit length of this record at byte offset 16.
+Advance by this value to reach the next record.
+.It Va d_type
+Unsigned 8-bit file type at byte offset 18.
+.It Va d_name
+Null-terminated name beginning at byte offset 19.
+.El
+.Pp
+The record length is rounded up to a multiple of eight bytes.
+Padding bytes are zero.
+For stored file systems,
+.Va d_type
+is
+.Dv DT_DIR
+for a directory and
+.Dv DT_REG
+for every other entry, including an ext2 symbolic link.
+Synthetic directories also report
+.Dv DT_CHR
+for device entries and
+.Dv DT_LNK
+for links.
+.Ss File systems
+KRFFS lists named children stored in the directory.
+It omits unlinked files still held open and does not synthesize
+.Ql \&.
+or
+.Ql .. .
+Deleting entries between batches does not skip the surviving entries.
+Creating or relocating a child during enumeration can cause that child
+to be omitted or repeated.
+.Pp
+ext2 lists its stored directory entries, including
+.Ql \&.
+and
+.Ql .. ,
+and skips unused entries.
+FAT32 lists live entries, using a valid long name when it fits or the
+short name otherwise; it skips deleted entries and volume labels.
+Its stored
+.Ql \&.
+and
+.Ql ..
+entries are returned when present.
+exFAT lists valid file entry sets and does not synthesize dot entries.
+.Pp
+Every synthetic directory begins with
+.Ql \&.
+and
+.Ql .. .
+.Pa /dev
+lists published device registry entries.
+.Pa /dev/pts
+lists allocated pseudo-terminal slaves by number.
+.Pa /proc
+lists
+.Pa cmdline ,
+.Pa disk ,
+.Pa uptime ,
+.Pa stat ,
+.Pa meminfo ,
+.Pa mounts ,
+.Pa net ,
+.Pa self ,
+.Pa usb ,
+.Pa loop ,
+and
+.Pa console ,
+followed by process directories.
+.Pa /proc/net
+lists
+.Pa dev ,
+.Pa route ,
+.Pa arp ,
+and
+.Pa tcp .
+.Pa /proc/<pid>
+lists
+.Pa stat ,
+.Pa cmdline ,
+and
+.Pa fd ;
+.Pa /proc/<pid>/fd
+lists that process's open descriptors as links named by descriptor number.
+Enumeration of the root file system does not add synthetic mount names.
+.Sh RETURN VALUES
+.Fn getdents64
+returns the number of bytes written, or 0 at the end of the directory.
+If a directory read or user-memory copy fails after records have been
+written, it returns the bytes already written.
+On failure before any records are written, it returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/dirprobe.c
+creates
+.Pa /e/a
+and
+.Pa /e/b ,
+opens
+.Pa /e ,
+and reads its entries into a 256-byte buffer.
+It walks the records by
+.Va d_reclen
+and requires exactly the two names on KRFFS, with one
+.Ql \&.
+and one
+.Ql ..
+as well on ext2.
+.Sh ERRORS
+.Bl -tag -width "[ENOTDIR]"
+.It Bq Er EBADF
+.Fa fd
+is invalid, its directory has been removed from the KRFFS boot root,
+or its open-file description has no mount.
+.It Bq Er EFAULT
+There is no current process,
+.Fa dirp
+is null,
+.Fa count
+is zero, or the buffer is not writable user memory.
+The kernel validates the whole requested buffer before reading entries.
+.It Bq Er EINVAL
+The buffer cannot hold the next record and no record has been written,
+or the file system has no directory-reading operation.
+.It Bq Er EIO
+The root is not mounted, the backing device has been removed, or a
+file-system read fails or encounters invalid directory data.
+.It Bq Er ENOTDIR
+The descriptor does not refer to a directory.
+.El
+.Sh SEE ALSO
+.Xr dup 2 ,
+.Xr open 2 ,
+.Xr stat 2 ,
+.Xr proc 5

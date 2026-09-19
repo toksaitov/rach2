@@ -1,0 +1,86 @@
+.Dd September 19, 2026
+.Dt GETRANDOM 2
+.Os
+.Sh NAME
+.Nm getrandom
+.Nd read bytes from the kernel random generator
+.Sh SYNOPSIS
+.In sys/random.h
+.Ft ssize_t
+.Fn getrandom "void *buf" "size_t buflen" "unsigned flags"
+.Sh DESCRIPTION
+.Fn getrandom
+writes up to
+.Fa buflen
+bytes into
+.Fa buf
+from the kernel's ChaCha20 cryptographic pseudorandom number generator.
+The i386 system call number is 355.
+musl uses this call for
+.Fn getrandom
+and
+.Fn arc4random .
+.Pp
+The generator is seeded once at boot.
+The kernel first tries RDSEED, then RDRAND.
+A complete key from either instruction is treated as trusted entropy.
+If neither supplies a complete key, the kernel uses an untrusted seed
+derived from the timestamp counter, CMOS seconds, and the PIT tick.
+There is no later entropy accumulation or automatic rekeying.
+.Pp
+The boot record identifies the source as
+.Ql entropy: ready: RDSEED, trusted ,
+.Ql entropy: ready: RDRAND, trusted ,
+or
+.Ql entropy: ready: jitter, best-effort; the crypto RNG fails closed .
+The last form does not indicate a trusted source.
+.Pp
+The
+.Fa flags
+argument is a bitwise OR of zero or more of:
+.Bl -tag -width "GRND_NONBLOCK"
+.It Dv GRND_NONBLOCK
+Accepted with no effect.
+The call never blocks waiting for entropy.
+.It Dv GRND_RANDOM
+Accepted with no effect.
+There is only one random byte stream.
+.It Dv GRND_INSECURE
+Permit bytes from the untrusted fallback seed.
+Without this flag, a nonempty request fails with
+.Er EIO
+when the source is untrusted.
+.El
+.Pp
+Unknown flag bits and lengths greater than 2147483647 are rejected.
+A zero-length request returns 0 after flag validation, without checking
+the buffer or the entropy source.
+.Sh RETURN VALUES
+.Fn getrandom
+returns the number of bytes written.
+If a user-memory copy fails after some bytes have been written, it
+returns that partial count.
+On failure before any bytes have been written, it returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/timeprobe.c
+makes two 16-byte requests with flags 0, requires each to return 16,
+and checks that the two buffers differ.
+This example requires a trusted entropy source.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+A nonempty request has a null buffer, or the first copy to user memory fails.
+.It Bq Er EINVAL
+An unknown flag bit is set, or
+.Fa buflen
+exceeds 2147483647.
+.It Bq Er EIO
+The entropy source is untrusted and
+.Dv GRND_INSECURE
+was not specified.
+.El
+.Sh SEE ALSO
+.Xr random 4

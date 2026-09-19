@@ -1,0 +1,120 @@
+.Dd September 19, 2026
+.Dt UNAME 2
+.Os
+.Sh NAME
+.Nm uname ,
+.Nm sethostname ,
+.Nm sysinfo
+.Nd get system identity and statistics or set the host name
+.Sh SYNOPSIS
+.In sys/utsname.h
+.Ft int
+.Fn uname "struct utsname *buf"
+.In unistd.h
+.Ft int
+.Fn sethostname "const char *name" "size_t len"
+.In sys/sysinfo.h
+.Ft int
+.Fn sysinfo "struct sysinfo *info"
+.Sh DESCRIPTION
+.Fn uname
+writes the system identity to
+.Fa buf .
+The six fields are 65-byte arrays containing null-terminated strings:
+.Bl -tag -width "domainname"
+.It Va sysname
+.Ql Rach2 .
+.It Va nodename
+The mutable host name, initially
+.Ql rach2 .
+.It Va release
+.Ql 1.0.0 .
+.It Va version
+.Ql "Rach2 musl port" .
+.It Va machine
+.Ql i686 .
+.It Va domainname
+.Ql (none) .
+Musl exposes this field as
+.Va domainname
+with
+.Dv _GNU_SOURCE
+defined, and as
+.Va __domainname
+otherwise.
+.El
+.Pp
+.Fn sethostname
+copies
+.Fa len
+bytes from
+.Fa name
+and appends a null byte to set the single system host name.
+The length must be from 0 through 64.
+A length of 0 sets an empty name without reading
+.Fa name .
+The name is returned in
+.Fn uname Ns 's
+.Va nodename
+field and by musl's
+.Fn gethostname .
+The handler makes no uid check.
+.Pp
+.Fn sysinfo
+writes the 64-byte i386 system statistics structure to
+.Fa info .
+It reports:
+.Bl -tag -width "totalram, freeram"
+.It Va uptime
+Seconds since boot.
+.It Va procs
+The number of process records, including unreaped children.
+.It Va totalram , freeram
+Total managed and free physical RAM, from the frame counts, in bytes.
+.It Va mem_unit
+1.
+.It Va loads
+Three zeros; load averages are not tracked.
+.It Va sharedram , bufferram , totalswap , freeswap , totalhigh , freehigh
+Zero.
+.El
+.Pp
+The i386 system call numbers are 122 for
+.Fn uname ,
+74 for
+.Fn sethostname ,
+and 116 for
+.Fn sysinfo .
+The pointer is passed in EBX; for
+.Fn sethostname ,
+ECX contains the length.
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure with
+.Va errno
+set.
+The kernel returns a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/miscprobe.c
+calls
+.Fn sysinfo
+and checks that
+.Va procs
+is at least 1 and
+.Va mem_unit
+is 1.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+The result of
+.Fn uname
+or
+.Fn sysinfo
+cannot be written to user memory, or
+.Fn sethostname
+cannot read the specified name bytes.
+.It Bq Er EINVAL
+The length passed to
+.Fn sethostname
+is outside the range 0 through 64.
+.El

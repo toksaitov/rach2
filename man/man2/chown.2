@@ -1,0 +1,182 @@
+.Dd September 19, 2026
+.Dt CHOWN 2
+.Os
+.Sh NAME
+.Nm chown ,
+.Nm lchown ,
+.Nm chown32 ,
+.Nm lchown32 ,
+.Nm fchown ,
+.Nm fchown32 ,
+.Nm fchownat
+.Nd change file ownership
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn chown "const char *path" "uid_t owner" "gid_t group"
+.Ft int
+.Fn lchown "const char *path" "uid_t owner" "gid_t group"
+.Ft int
+.Fn fchown "int fd" "uid_t owner" "gid_t group"
+.Ft int
+.Fn fchownat "int dirfd" "const char *path" "uid_t owner" "gid_t group" "int flags"
+.Sh DESCRIPTION
+These calls change a file's owner and group.
+An
+.Fa owner
+of
+.Li (uid_t)-1
+leaves the owner unchanged; a
+.Fa group
+of
+.Li (gid_t)-1
+leaves the group unchanged.
+.Pp
+.Fn chown
+and
+.Fn lchown
+resolve
+.Fa path
+relative to the current working directory unless it is absolute.
+On this kernel both use the same resolver and follow symbolic links on
+file systems that implement them.
+.Fn lchown
+does not select the link itself.
+.Fn fchown
+uses the open descriptor
+.Fa fd .
+.Pp
+.Fn fchownat
+resolves a relative
+.Fa path
+from the directory descriptor
+.Fa dirfd ,
+or from the current working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD .
+An absolute path ignores
+.Fa dirfd .
+The kernel ignores
+.Fa flags ,
+including
+.Dv AT_SYMLINK_NOFOLLOW .
+An empty path fails even with
+.Dv AT_EMPTY_PATH .
+.Ss Ownership rules
+Changing the owner requires effective user ID 0.
+Changing the group requires effective user ID 0, or ownership of the file
+and membership in the requested group.
+A request that changes neither field requires no ownership privilege.
+Path resolution still requires search permission on ancestor directories.
+.Pp
+KRFFS and ext2 store ownership per file.
+On a writable mounted KRFFS volume, an otherwise permitted change to its
+root returns success without storing the IDs.
+FAT32 and exFAT report the mount's owner and group; a change to either
+is refused.
+A pseudo-terminal slave under
+.Pa /dev/pts
+stores its own owner and group, but changing either requires effective
+user ID 0.
+Other synthetic objects under
+.Pa /dev
+and
+.Pa /proc ,
+and other descriptor kinds, have fixed root ownership.
+They accept only 0 or -1 for each ID.
+.Pp
+When either stored ID changes, set-user-ID is cleared on a nondirectory.
+Set-group-ID is also cleared when group execute is set.
+This applies even to a privileged caller.
+Directories keep both bits; a file without group execute keeps
+set-group-ID.
+A request that changes neither ID changes neither mode nor timestamps.
+.Ss System call numbers
+The i386 numbers are 182 for
+.Nm chown ,
+16 for
+.Nm lchown ,
+212 for
+.Nm chown32 ,
+198 for
+.Nm lchown32 ,
+95 for
+.Nm fchown ,
+207 for
+.Nm fchown32 ,
+and 298 for
+.Nm fchownat .
+Each older number and its 32-bit variant use the same handler and
+32-bit ID arguments.
+Musl uses the 32-bit variants for
+.Fn chown ,
+.Fn lchown ,
+and
+.Fn fchown ;
+it declares no separate functions with the
+.Li 32
+suffix.
+.Sh RETURN VALUES
+These functions return 0 on success.
+On failure they return -1 and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/ownprobe.c
+changes
+.Pa /own.txt
+to owner and group 1000, then changes its group to 2000 through the open
+descriptor.
+After dropping privilege, it checks that the owner can change the group
+to supplementary group 3000 and that group 4000 is refused.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission was denied on an ancestor directory.
+.It Bq Er EBADF
+.Fa fd
+is invalid, a pseudo-terminal slave descriptor has no live terminal,
+or a relative
+.Fn fchownat
+path uses an invalid or stale directory descriptor.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted.
+.It Bq Er EFAULT
+The path cannot be read from user memory.
+The path forms also return this error if there is no current process.
+.It Bq Er EINVAL
+The file system cannot supply the required attributes.
+.It Bq Er EIO
+File system metadata could not be read or written, or the device was removed.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+The path, its expansion relative to a directory, a component, or a
+symbolic-link expansion is too long.
+The copied path and its directory prefix must fit 256 bytes,
+including the terminating null byte.
+.It Bq Er ENOENT
+The path is empty or a required path component does not exist.
+.It Bq Er ENOMEM
+The file system could not allocate storage needed to resolve the path.
+.It Bq Er ENOTDIR
+A path component used as a directory is not a directory, or
+.Fa dirfd
+is not a directory descriptor for a relative path.
+.It Bq Er EPERM
+The caller lacks permission to make the ownership change, or the object
+has fixed ownership.
+.It Bq Er EROFS
+A change requires an attribute write on a read-only mount or a file
+system without an attribute-setting operation.
+A request that changes neither ID does not perform that write.
+.It Bq Er ESRCH
+.Fn fchown
+has no current process.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr execve 2 ,
+.Xr stat 2

@@ -1,0 +1,118 @@
+.Dd September 19, 2026
+.Dt BIND 2
+.Os
+.Sh NAME
+.Nm bind
+.Nd assign a socket's local port or interface
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn bind "int fd" "const struct sockaddr *addr" "socklen_t addrlen"
+.Sh DESCRIPTION
+.Fn bind
+sets the local port or interface of the socket
+.Fa fd
+from the address at
+.Fa addr .
+.Fa addrlen
+is the address length in bytes.
+The kernel interface is
+.Xr socketcall 2
+operation 2.
+.Ss IPv4 sockets
+For TCP and UDP, the port is read in network byte order from a
+.Vt sockaddr_in .
+At least eight address bytes are required.
+The address and family fields are not checked for these socket types;
+binding does not restrict a socket to an IPv4 address.
+A nonzero port below 1024 requires effective user ID 0.
+.Pp
+A UDP bind registers the port for receiving datagrams.
+Port zero selects a free port from 49152 through 65535.
+Two sockets may share a port only when all sockets using it have
+.Dv SO_REUSEADDR
+set and the binding owners have the same effective user ID.
+Rebinding first removes the socket's previous UDP registration, even
+when the new registration fails.
+.Pp
+A TCP bind records the port.
+It rejects a nonzero port that already has a live listener, but does
+not reserve the port against another bind before
+.Xr listen 2 .
+Binding TCP port zero leaves port selection to the later operation.
+.Pp
+There is no loopback interface.
+At the socket boundary, a destination in
+.Ql 127/8
+is an alias for the current primary local address.
+Address-reporting calls return that canonical address.
+.Pp
+A raw ICMP socket accepts address zero, the primary local address, or
+an address in
+.Ql 127/8 .
+Another address gives
+.Er EADDRNOTAVAIL .
+The raw socket used only for interface queries rejects binding.
+.Ss Packet sockets
+An
+.Dv AF_PACKET
+socket takes a 20-byte
+.Vt sockaddr_ll .
+Its interface index may be zero for all interfaces or the index of an
+existing interface.
+The protocol, in network byte order, may select IPv4 or ARP; zero keeps
+the socket's existing protocol.
+Changing the interface or protocol discards queued packets.
+.Sh RETURN VALUES
+.Fn bind
+returns 0 on success.
+On failure it returns -1 and sets
+.Va errno .
+The raw kernel call returns a negative error number on failure.
+.Sh EXAMPLES
+The default-suite probe
+.Pa tests/loopprobe.c
+binds a UDP socket to address zero and port 7100, then sends a datagram
+to
+.Ql 127.0.0.1:7100
+and reads it back.
+It also checks that two TCP binds can precede a listener, but a bind
+to an existing listener's port fails with
+.Er EADDRINUSE .
+.Sh ERRORS
+.Bl -tag -width EADDRNOTAVAIL
+.It Er EACCES
+A caller without effective user ID 0 requested a nonzero port below 1024.
+.It Er EADDRINUSE
+A UDP port cannot be shared, no ephemeral port is available, or memory
+for a UDP binding cannot be allocated.
+A TCP port already has a live listener.
+.It Er EADDRNOTAVAIL
+A raw ICMP bind requests an address other than zero, the primary local
+address, or an address in
+.Ql 127/8 .
+.It Er EFAULT
+The socketcall argument array or the required address bytes cannot be read.
+.It Er EINVAL
+The address length is negative or less than eight bytes, a packet
+address is shorter than 20 bytes, or a packet protocol is neither zero,
+IPv4 nor ARP.
+.It Er ENOBUFS
+Memory for a packet-socket binding cannot be allocated.
+.It Er ENODEV
+The packet address names an interface index other than zero or an
+existing interface.
+.It Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Er EOPNOTSUPP
+The socket is the raw descriptor used only for interface queries.
+.El
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr connect 2 ,
+.Xr getsockname 2 ,
+.Xr listen 2 ,
+.Xr setsockopt 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2

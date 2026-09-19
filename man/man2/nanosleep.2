@@ -1,0 +1,76 @@
+.Dd September 19, 2026
+.Dt NANOSLEEP 2
+.Os
+.Sh NAME
+.Nm nanosleep
+.Nd suspend the calling process for an interval
+.Sh SYNOPSIS
+.In time.h
+.Ft int
+.Fn nanosleep "const struct timespec *req" "struct timespec *rem"
+.Sh DESCRIPTION
+.Fn nanosleep
+suspends the calling process for the interval in
+.Fa req .
+The
+.Va tv_sec
+field specifies seconds and
+.Va tv_nsec
+specifies nanoseconds.
+Seconds must be nonnegative; nanoseconds must be from 0 through 999999999.
+.Pp
+The kernel rounds the interval up to whole 10 ms ticks and blocks the
+process until its tick deadline.
+Other runnable processes continue to execute.
+If a signal interrupts the sleep, the call fails with
+.Er EINTR
+and stores the time left to the rounded deadline in
+.Fa rem ,
+unless that pointer is null.
+The remainder has 10 ms resolution.
+.Ss System call interface
+The i386 system call number is 162.
+EBX points to the request and ECX to the optional remainder.
+The kernel timespec consists of two signed 32-bit fields: seconds,
+then nanoseconds.
+The kernel limits the seconds used in the tick calculation to 21474836
+and the resulting interval to 2147483647 ticks.
+.Pp
+The raw call writes a zero remainder on normal completion.
+If interrupted, it attempts to write the remainder but returns
+.Er EINTR
+even if that copy fails.
+.Pp
+musl converts its public timespec to the kernel's 32-bit structure.
+It copies the remainder back to the caller only on
+.Er EINTR ;
+on success, the caller's
+.Fa rem
+is unchanged.
+.Sh RETURN VALUES
+.Fn nanosleep
+returns 0 on completion, or -1 on failure and sets
+.Va errno .
+The raw kernel call returns a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/timeprobe.c
+requests a 150 ms sleep through system call 162 after forking a child.
+It checks the elapsed interval and that the child made progress while
+the parent slept.
+.Sh ERRORS
+The kernel handler returns:
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+The request is null or cannot be read, there is no current process,
+or the remainder cannot be written after normal completion.
+The musl wrapper reads the public request and writes the public
+remainder in user space.
+.It Bq Er EINTR
+A pending signal interrupted the sleep.
+.It Bq Er EINVAL
+Seconds are negative, or nanoseconds are outside the permitted range.
+.El
+.Sh SEE ALSO
+.Xr gettimeofday 2 ,
+.Xr sigaction 2

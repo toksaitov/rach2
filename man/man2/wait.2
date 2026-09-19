@@ -1,0 +1,126 @@
+.Dd September 19, 2026
+.Dt WAIT 2
+.Os
+.Sh NAME
+.Nm waitpid ,
+.Nm wait4
+.Nd wait for a child to change state
+.Sh SYNOPSIS
+.In sys/wait.h
+.Ft pid_t
+.Fn waitpid "pid_t pid" "int *status" "int options"
+.Ft pid_t
+.Fn wait4 "pid_t pid" "int *status" "int options" "struct rusage *rusage"
+.Sh DESCRIPTION
+.Fn waitpid
+waits for a state change in a child selected by
+.Fa pid :
+.Bl -tag -width "Greater than 0"
+.It Greater than 0
+The child with that process ID.
+.It -1
+Any child.
+.It 0
+Any child in the caller's process group.
+.It Less than -1
+Any child whose process group ID equals
+.Li -pid .
+The value -2147483648 matches no child.
+.El
+.Pp
+By default, the call waits for a child to exit and reaps it.
+The
+.Fa options
+argument may combine these bits:
+.Bl -tag -width "WCONTINUED (8)"
+.It Dv WNOHANG No (1)
+Return 0 if a matching child exists but has no reportable state change.
+.It Dv WUNTRACED No (2)
+Also report a stopped child.
+.It Dv WCONTINUED No (8)
+Also report a continued child.
+.El
+.Pp
+Other option bits are ignored.
+Stop and continue events are reported once and do not reap the child.
+.Pp
+If
+.Fa status
+is not null, it receives the Linux-encoded wait status.
+Use
+.Dv WIFEXITED
+and
+.Dv WEXITSTATUS
+for normal exit,
+.Dv WIFSIGNALED
+and
+.Dv WTERMSIG
+for signal death,
+.Dv WIFSTOPPED
+and
+.Dv WSTOPSIG
+for a stop, and
+.Dv WIFCONTINUED
+for a continuation.
+.Pp
+.Fn wait4
+performs the same wait and accepts an optional
+.Fa rusage
+pointer.
+On reap, the kernel zeroes the 72-byte i386 resource usage structure;
+per-process resource usage is not tracked.
+Stop and continue reports do not fill this structure.
+Nonnull status and resource usage pointers are checked for write
+access before any child is reaped.
+.Pp
+The i386 system call numbers are 7 for
+.Nm waitpid
+and 114 for
+.Nm wait4 .
+EBX contains
+.Fa pid ,
+ECX the status pointer, and EDX the options.
+For
+.Nm wait4 ,
+ESI contains the resource usage pointer.
+Musl's
+.Fn wait
+and
+.Fn waitpid
+use the
+.Nm wait4
+system call.
+.Sh RETURN VALUES
+These functions return the process ID of the child whose state was
+reported, or 0 when
+.Dv WNOHANG
+finds a matching child but no reportable event.
+On failure they return -1 and set
+.Va errno .
+The kernel returns a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/forktest.c
+forks a child that exits with status 42, waits for it, and checks
+.Dv WIFEXITED
+and
+.Dv WEXITSTATUS .
+.Pa tests/jobprobe.c
+stops a child and waits with
+.Dv WUNTRACED ,
+continues it and waits with
+.Dv WCONTINUED ,
+then kills it and checks the reported signal.
+.Sh ERRORS
+.Bl -tag -width "[ECHILD]"
+.It Bq Er ECHILD
+No child matches
+.Fa pid .
+.It Bq Er EFAULT
+A nonnull status or resource usage pointer does not refer to writable
+user memory.
+.It Bq Er EINTR
+A deliverable signal is pending while the call would otherwise block.
+.It Bq Er ESRCH
+There is no current process.
+.El

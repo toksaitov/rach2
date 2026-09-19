@@ -1,0 +1,94 @@
+.Dd September 19, 2026
+.Dt EXIT 2
+.Os
+.Sh NAME
+.Nm exit ,
+.Nm exit_group
+.Nd terminate the calling process
+.Sh SYNOPSIS
+.In unistd.h
+.Ft _Noreturn void
+.Fn _exit "int status"
+.In stdlib.h
+.Ft _Noreturn void
+.Fn _Exit "int status"
+.Ft _Noreturn void
+.Fn exit "int status"
+.Sh DESCRIPTION
+The
+.Nm exit
+and
+.Nm exit_group
+system calls terminate the current process.
+Rach2 has no threads, and both calls use the same handler.
+Their i386 system call numbers are 1 and 252, respectively;
+EBX contains
+.Fa status .
+The low eight bits of
+.Fa status
+are made available to the parent through
+.Xr wait 2 .
+.Pp
+Musl's
+.Fn _exit
+calls
+.Fn _Exit ,
+which issues
+.Nm exit_group
+and falls back to
+.Nm exit
+if it returns.
+Musl declares no
+.Fn exit_group
+function.
+The
+.Fn exit
+function declared in
+.In stdlib.h
+performs library termination work, including registered exit functions
+and standard I/O cleanup, before calling
+.Fn _Exit .
+That work is not performed by the system call.
+.Pp
+The kernel releases the process's open files and current working
+directory, reparents its children to init, marks it as a zombie, and
+wakes its parent.
+The scheduler then selects another process.
+If none is ready, the kernel waits for interrupts and checks again.
+The parent reclaims a normal child's remaining mappings, descriptor-table
+storage, process record, and kernel stack when it waits for the child.
+.Pp
+The death of the normal system init is fatal and panics the kernel.
+When the kernel debug shell is the supervisor, a transient init instead
+ends and reaps every other user process before returning to that shell.
+A process in a kernel operation completes the operation and releases
+its locks before the terminating signal takes effect.
+A process running in user mode receives the signal on return from an
+interrupt.
+Kernel threads and the idle process remain.
+The scheduler is disabled when control returns to the debug shell.
+.Sh RETURN VALUES
+These calls do not return to the calling program.
+They report no errors.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/forktest.c
+forks a child that exits with status 42.
+The parent waits and checks that the child exited normally with that
+status.
+.Sh DIAGNOSTICS
+When the debug shell is the supervisor, each exit logs:
+.Dl process: exited with status STATUS
+The normal init and login-shell system does not print this line;
+the shell provides the command status through
+.Ql $? .
+.Pp
+A transient init returning to the debug shell also logs
+.Ql "sys_exit: init process PID exited with status STATUS, returning to kernel shell" .
+.Pp
+It prints the console message:
+.Dl Init process exited. Returning to kernel debug shell.
+.Sh SEE ALSO
+.Xr execve 2 ,
+.Xr fork 2 ,
+.Xr wait 2

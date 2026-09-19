@@ -1,0 +1,86 @@
+.Dd September 19, 2026
+.Dt LISTEN 2
+.Os
+.Sh NAME
+.Nm listen
+.Nd listen for incoming connections on a socket
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn listen "int fd" "int backlog"
+.Sh DESCRIPTION
+.Fn listen
+makes the stream socket
+.Fa fd
+passive and allocates a TCP control block in the
+.Dv LISTEN
+state.
+Connections completed on it are queued for
+.Xr accept 2 .
+The operation is subcall 4 of i386
+.Xr socketcall 2 ,
+system call 102.
+.Pp
+The socket must have a nonzero local port assigned by
+.Xr bind 2 .
+This kernel does not assign a port at
+.Fn listen .
+Only one live listener may use a port.
+A socket that is already listening or has any attached TCP control block
+cannot be made a listener by another call.
+Datagram and raw sockets do not support this operation.
+.Pp
+The kernel ignores
+.Fa backlog .
+Each listener has a 16-entry circular accept array, with one entry unused
+to distinguish a full queue from an empty one.
+It can queue at most 15 completed connections.
+When the queue is full, a new connection request is refused with a TCP
+reset before a connection is allocated.
+The first such refusal is recorded in the kernel log; later refusals at
+this check are not recorded.
+If the queue fills while a handshake is completing, that connection is
+closed and the queue refusal is logged.
+.Pp
+TCP control blocks are allocated from the kernel heap, with no fixed
+pool size.
+Failure to allocate the listener's control block returns
+.Er ENOBUFS .
+.Sh RETURN VALUES
+.Fn listen
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/loopprobe.c
+binds two stream sockets to the same port before either listens.
+The first
+.Fn listen
+succeeds and the second returns
+.Er EADDRINUSE .
+The probe also checks that listening without a bound port returns
+.Er EDESTADDRREQ .
+.Sh ERRORS
+.Bl -tag -width "[EDESTADDRREQ]"
+.It Bq Er EADDRINUSE
+A live listener already uses the local port.
+.It Bq Er EDESTADDRREQ
+The socket has no nonzero local port.
+.It Bq Er EFAULT
+The socketcall argument array cannot be read from user memory.
+.It Bq Er EINVAL
+The socket is already listening or has a TCP control block.
+.It Bq Er ENOBUFS
+The kernel could not allocate a TCP control block.
+.It Bq Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Bq Er EOPNOTSUPP
+The socket is not a stream socket.
+.El
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr bind 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2

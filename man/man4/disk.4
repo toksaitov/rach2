@@ -1,0 +1,105 @@
+.Dd September 19, 2026
+.Dt DISK 4
+.Os
+.Sh NAME
+.Nm disk ,
+.Nm bootpart ,
+.Nm grubcore
+.Nd raw disk, partition, and boot devices
+.Sh SYNOPSIS
+.Pa /dev/diskN
+.Pp
+.Pa /dev/diskNpM
+.Pp
+.Pa /dev/bootpart
+.Pp
+.Pa /dev/grubcore
+.Sh DESCRIPTION
+.Pa /dev/diskN
+accesses disk N, and
+.Pa /dev/diskNpM
+accesses partition M of that disk.
+Disk numbers follow registration order; released numbers are reused
+from the lowest available number.
+Partition numbers are 1 through 4 for MBR primary entries, 5 upward
+for logical partitions in chain order, and the array position counted
+from 1 for GPT entries.
+The MBR extended entry has no node.
+.Pp
+Whole-disk nodes are published for every disk by the recovery kernel
+or when
+.Ql rach2.diskdiag
+is on the boot command line.
+A USB stick's whole-disk node is always published.
+The nodes are block devices with mode 0400, accessible only to root.
+Reads accept any byte range.
+A read from a pulled stick fails with
+.Er EIO .
+.Pp
+Only the recovery kernel accepts writes through whole-disk and partition
+nodes, and each write requires effective user ID 0.
+The ordinary kernel returns
+.Er EPERM .
+Write offsets and lengths must be multiples of the 512-byte sector size.
+A raw write to a write-protected stick fails with
+.Er EIO .
+.Ss Boot devices
+.Pa /dev/bootpart
+accesses MBR entry 1 of the selected boot disk.
+The entry must describe a FAT32 partition starting at or after LBA 2048,
+smaller than 2 GiB, and overlapping no other partition.
+.Pa /dev/grubcore
+accesses LBA 1 through 2047 when no partition overlaps that range.
+It does not include sector zero.
+.Pp
+Both boot devices are character devices with mode 0600.
+Their reads and writes require sector-aligned offsets and lengths.
+They accept root's writes on ordinary and recovery kernels.
+The metal kernel's read-only ATA and AHCI driver policy prevents writes
+through them as well as other writes to those disks.
+.Ss Reservations and mounts
+On the recovery kernel, each disk permits one write-capable open-file
+description across its whole-disk and partition nodes.
+The boot devices share the selected boot disk's reservation.
+A second write-capable open on that disk fails with
+.Er EBUSY .
+.Pa /dev/grubcore
+also permits only one open-file description at a time, including readers.
+.Pp
+A mount claims its sector range.
+On the recovery kernel,
+a write-capable open overlapping that range fails with
+.Er EBUSY ;
+a mount overlapping an open writer fails with the same error.
+The claims also exclude overlapping whole-disk and partition mounts.
+.Ss Partition table reread
+The
+.Dv BLKRRPART
+request on a whole-disk node rereads the partition table and rebuilds
+the partition nodes.
+It fails with
+.Er EBUSY
+while a partition is mounted or another descriptor is open on that disk,
+including another descriptor in the calling process.
+On a partition node it fails with
+.Er ENOTTY .
+.Sh FILES
+All these devices use major number 240.
+.Bl -tag -width /dev/diskNpM
+.It Pa /dev/diskN
+Minor 1 for disk 0; minor 64 + 16N for later disks.
+.It Pa /dev/diskNpM
+Minors 4 through 7 for disk 0's first four partitions;
+minor 64 + M for its later partitions.
+For later disks, the minor is 64 + 16N + M.
+.It Pa /dev/bootpart
+Minor 0.
+.It Pa /dev/grubcore
+Minor 3.
+.El
+.Sh SEE ALSO
+.Xr loop 4 ,
+.Xr disk 7 ,
+.Xr bootctl 8 ,
+.Xr mount 8 ,
+.Xr reflash 8

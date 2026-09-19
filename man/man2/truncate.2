@@ -1,0 +1,104 @@
+.Dd September 19, 2026
+.Dt TRUNCATE 2
+.Os
+.Sh NAME
+.Nm ftruncate ,
+.Nm ftruncate64
+.Nd change the length of an open file
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn ftruncate "int fd" "off_t length"
+.Sh DESCRIPTION
+.Fn ftruncate
+sets the length of the file referred to by
+.Fa fd
+to
+.Fa length
+bytes.
+The descriptor must refer to a writable file on a mounted file system.
+KRFFS, FAT32, exFAT, and ext2 support both shrinking and extending files.
+An extended region reads as zeros.
+A file attached to a loop device cannot be truncated, even to its
+current length.
+.Pp
+After a successful call by a process whose effective uid is not 0,
+the set-user-ID bit is cleared.
+The set-group-ID bit is cleared if group execute permission is set.
+.Pp
+KRFFS and FAT32 accept lengths through 4294967295 bytes, subject to
+available space.
+The exFAT length limit is 9223372036854775807 bytes.
+The ext2 limit depends on the volume's block size and is bounded by
+its block pointers and 32-bit sector count.
+The file system refuses a length beyond its limit.
+.Ss System call interface
+Musl's
+.Vt off_t
+is 64 bits on i386.
+Its
+.Fn ftruncate
+uses system call 194,
+.Nm ftruncate64 .
+EBX is the descriptor; ECX and EDX are the low and high 32-bit halves
+of the length.
+With
+.Dv _LARGEFILE64_SOURCE
+defined, musl defines
+.Nm ftruncate64
+as a macro for
+.Fn ftruncate ;
+there is no separate prototype.
+.Pp
+The older system call 93,
+.Nm ftruncate ,
+takes the descriptor in EBX and an unsigned 32-bit length in ECX.
+The 64-bit handler also treats the length as unsigned and leaves
+the limit check to the file system.
+A negative length passed through musl therefore exceeds the file
+system's limit and yields
+.Er EFBIG
+when the descriptor and mount checks succeed.
+.Sh RETURN VALUES
+.Fn ftruncate
+returns 0 on success, or -1 on failure with
+.Va errno
+set.
+The kernel returns a negative error number on failure.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/vfsprobe.c
+opens a three-byte file for reading and writing, truncates it to one
+byte, and checks that a seek to the end returns 1.
+.Sh ERRORS
+.Bl -tag -width "[ENOSPC]"
+.It Bq Er EBADF
+.Fa fd
+is invalid, does not refer to a file, or has no mounted open-file
+description.
+.It Bq Er EBUSY
+The file backs an attached loop device.
+.It Bq Er EFBIG
+The requested length exceeds the file system's limit.
+.It Bq Er EINVAL
+The descriptor is not writable, or ext2 was given a nonregular file.
+.It Bq Er EIO
+The device was removed, an input/output operation failed, or KRFFS
+could not resolve or resize the file.
+The KRFFS boot-root adapter also returns this error when there is
+insufficient space to extend the file.
+.It Bq Er ENOENT
+exFAT could not find the containing directory while updating the file's
+directory entries.
+.It Bq Er ENOMEM
+exFAT could not allocate a node for the containing directory.
+.It Bq Er ENOSPC
+A mounted KRFFS, FAT32, or exFAT volume has insufficient space to
+extend the file.
+.It Bq Er ENXIO
+A FAT32 or exFAT cluster chain ends before a required cluster.
+.It Bq Er EROFS
+The file system is read-only or has no truncate operation.
+.It Bq Er ESRCH
+There is no current process.
+.El

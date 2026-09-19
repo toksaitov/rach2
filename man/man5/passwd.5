@@ -1,0 +1,115 @@
+.Dd September 19, 2026
+.Dt PASSWD 5
+.Os
+.Sh NAME
+.Nm passwd ,
+.Nm shadow ,
+.Nm group
+.Nd account files
+.Sh SYNOPSIS
+.Pa /etc/passwd
+.Pp
+.Pa /etc/shadow
+.Pp
+.Pa /etc/group
+.Sh DESCRIPTION
+The account files contain one record per line, with fields separated
+by colons.
+The project account tools limit names to 63 bytes and passwords to
+100 bytes.
+BusyBox's
+.Xr login 1 ,
+.Xr su 1 ,
+and
+.Xr passwd 1
+read the same files with shadow password and SHA crypt support.
+.Ss Passwd records
+.Pa /etc/passwd
+has mode 0644.
+Each record has seven fields:
+.Dl name:x:uid:gid:gecos:home:shell
+The fields give the account name, a marker for the password in
+.Pa /etc/shadow ,
+the numeric user and group IDs, descriptive text, the home directory,
+and the login shell.
+.Ss Shadow records
+.Pa /etc/shadow
+is accessible only to root.
+Each record has nine fields:
+.Dl name:hash:lastchg:min:max:warn:inactive:expire:flag
+The first two fields are the account name and password hash.
+SHA-512 crypt hashes have the form
+.Ql $6$salt$... .
+A field beginning with
+.Ql \&!
+locks password authentication.
+The project credential library also rejects an empty hash field.
+BusyBox's login and su accept an empty field without a password.
+.Pp
+The remaining fields record the last password change, minimum and maximum
+password ages, warning period, inactivity period, account expiration,
+and a reserved flag field.
+The project
+.Xr adduser 8
+writes them empty:
+.Dl name:!:::::::
+The project
+.Xr passwd 1
+requires these fields to be empty or decimal and preserves them when
+replacing the hash.
+The project credential library reads the hash for authentication;
+it does not enforce the aging fields.
+.Ss Group records
+.Pa /etc/group
+has records of the form:
+.Dl name:x:gid:members
+The fields give the group name, a password placeholder, the numeric
+group ID, and the member list.
+.Ss Credential transactions
+Project credential writers create
+.Pa /etc/.pwlock
+with mode 0600 and record their process ID in it.
+They do not remove a lock left by another writer, even if that process
+has died.
+After a killed writer, root removes the abandoned lock with:
+.Dl rm /etc/.pwlock
+.Pp
+A replacement for
+.Ar FILE
+is written to
+.Pa FILE.tmp.PID
+and renamed over the original.
+Readers take no lock and see either complete version of the file.
+.Pp
+The project
+.Xr adduser 8
+publishes a locked shadow record first, then the group record, then
+the home directory with mode 0700, and finally the passwd record.
+An interruption therefore leaves no passwd account without a locked
+shadow record.
+.Ss Demonstration accounts
+The os-simple and os-real images contain the demonstration accounts
+.Ql root
+and
+.Ql test .
+The installer replaces the demonstration account records in the
+installed root.
+.Sh FILES
+.Bl -tag -width /etc/.pwlock
+.It Pa /etc/passwd
+Account names, identities, home directories, and shells.
+.It Pa /etc/shadow
+Password hashes and aging fields.
+.It Pa /etc/group
+Group identities and members.
+.It Pa /etc/.pwlock
+Project credential writers' lock.
+.It Pa FILE.tmp.PID
+Replacement for an account file, before rename.
+.El
+.Sh SEE ALSO
+.Xr login 1 ,
+.Xr passwd 1 ,
+.Xr su 1 ,
+.Xr sshd.conf 5 ,
+.Xr adduser 8

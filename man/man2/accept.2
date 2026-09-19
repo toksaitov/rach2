@@ -1,0 +1,104 @@
+.Dd September 19, 2026
+.Dt ACCEPT 2
+.Os
+.Sh NAME
+.Nm accept
+.Nd accept a queued connection
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn accept "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
+.Sh DESCRIPTION
+.Fn accept
+removes a completed connection from the accept queue of
+.Fa fd
+and returns a new descriptor for it.
+The descriptor should refer to a listening TCP socket.
+The new descriptor is blocking and has close-on-exec clear.
+.Pp
+If the queue is empty, the call waits for a connection.
+On a listener with
+.Dv O_NONBLOCK
+set, an empty queue instead gives
+.Er EAGAIN .
+A pending signal interrupts the wait with
+.Er EINTR .
+.Pp
+If both
+.Fa addr
+and
+.Fa addrlen
+are non-null, the call reports the peer's IPv4 address and port.
+Before the call,
+.Pf * Fa addrlen
+is the capacity of
+.Fa addr
+in bytes.
+At most that many bytes of the 16-byte
+.Vt sockaddr_in
+are copied, and
+.Pf * Fa addrlen
+is set to 16 even if the result was truncated.
+The family is in host byte order; the address and port are in network
+byte order.
+If either pointer is null, no address is returned.
+An address-copy failure closes the new descriptor and discards the
+dequeued connection.
+.Pp
+The accept queue holds at most 15 completed connections.
+The TCP listener drops an incoming SYN when the free-frame count is at
+or below the memory reserve, before allocating the connection.
+Such a drop produces no error from
+.Fn accept .
+.Pp
+The kernel interface is
+.Xr socketcall 2
+operation 5.
+.Sh RETURN VALUES
+On success,
+.Fn accept
+returns the new descriptor.
+On failure it returns -1 and sets
+.Va errno .
+The raw kernel call returns a negative error number on failure.
+.Sh EXAMPLES
+The default-suite probe
+.Pa tests/loopprobe.c
+binds a TCP listener to port 7200, connects a second socket to
+.Ql 127.0.0.1:7200 ,
+accepts with both address pointers null, and exchanges data through the
+accepted connection.
+.Sh ERRORS
+.Bl -tag -width EOPNOTSUPP
+.It Er EAGAIN
+The listener is nonblocking and its accept queue is empty.
+.It Er EFAULT
+The socketcall argument array cannot be read, or the peer address or
+length cannot be read or written as required.
+.It Er EINTR
+A signal interrupted the wait.
+.It Er EMFILE
+No descriptor or open-file description could be allocated for the
+connection.
+The dequeued connection is discarded.
+.It Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Er EOPNOTSUPP
+.Fa fd
+refers to a raw socket.
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr listen 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2 ,
+.Xr memory 7
+.Sh BUGS
+The handler does not check that the socket is listening or is a stream
+socket, except that it rejects raw sockets.
+An empty queue on another socket can therefore wait indefinitely or
+return
+.Er EAGAIN
+when nonblocking.

@@ -1,0 +1,88 @@
+.Dd September 19, 2026
+.Dt FORK 2
+.Os
+.Sh NAME
+.Nm fork ,
+.Nm vfork
+.Nd create a child process
+.Sh SYNOPSIS
+.In unistd.h
+.Ft pid_t
+.Fn fork "void"
+.Ft pid_t
+.Fn vfork "void"
+.Sh DESCRIPTION
+.Fn fork
+creates a child process with its own process record, address space, and
+file descriptor table.
+User pages are copied on write: parent and child initially share their
+contents, but a write by either process does not change the other's memory.
+.Pp
+The child inherits the parent's program name, credentials, supplementary
+groups, working directory, file creation mask, resource limits, session,
+and process group.
+It inherits signal dispositions and the blocked signal mask;
+its pending signal set is empty.
+The inherited program name remains visible in
+.Pa /proc/<pid>/stat
+until
+.Xr execve 2
+replaces it.
+.Pp
+Inherited descriptors refer to the same open-file descriptions as the
+parent's descriptors.
+They share file offsets and status flags.
+Parent and child can close their descriptors independently.
+.Pp
+The soft
+.Dv RLIMIT_NPROC
+limit bounds the number of processes with the parent's real user ID,
+including the parent.
+A parent with real user ID 0 is exempt.
+.Pp
+.Fn vfork
+uses the same kernel handler as
+.Fn fork .
+Unlike Linux
+.Fn vfork ,
+it does not suspend the parent or share one address space with the child.
+The child has the same copy-on-write address space as a
+.Fn fork
+child.
+.Pp
+The i386 system call numbers are 2 for
+.Fn fork
+and 190 for
+.Fn vfork .
+.Sh RETURN VALUES
+The parent receives the child's process ID; the child receives 0.
+On failure, the function returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/forktest.c
+creates a child, has it exit with a chosen status, and checks that
+.Xr waitpid 2
+returns that child's ID and exit status.
+.Pa tests/ofdprobe.c
+checks that a child advances the file offset seen by its parent.
+.Sh ERRORS
+.Bl -tag -width "[ENOMEM]"
+.It Bq Er EAGAIN
+The number of processes with the parent's real user ID has reached the
+parent's soft
+.Dv RLIMIT_NPROC
+limit.
+.It Bq Er ENOMEM
+The kernel could not allocate the child's process record, page tables,
+user page state, kernel stack, memory region records, or descriptor table.
+.It Bq Er ESRCH
+There is no current process.
+.El
+.Sh SEE ALSO
+.Xr execve 2 ,
+.Xr exit 2 ,
+.Xr getpid 2 ,
+.Xr prlimit64 2 ,
+.Xr waitpid 2

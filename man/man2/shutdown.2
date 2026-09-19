@@ -1,0 +1,83 @@
+.Dd September 19, 2026
+.Dt SHUTDOWN 2
+.Os
+.Sh NAME
+.Nm shutdown
+.Nd shut down a connected stream socket
+.Sh SYNOPSIS
+.In sys/socket.h
+.Ft int
+.Fn shutdown "int fd" "int how"
+.Sh DESCRIPTION
+.Fn shutdown
+operates on the connected TCP socket
+.Fa fd .
+A listener, an unconnected socket, and a datagram socket cannot be
+shut down.
+A stream has a connection for this purpose after its handshake has
+completed and while its connection record remains attached in a
+subsequent closing state.
+.Pp
+The
+.Fa how
+argument selects a direction:
+.Bl -tag -width SHUT_RDWR
+.It Dv SHUT_RD
+Value 0.
+Accepted without effect.
+Input remains available.
+.It Dv SHUT_WR
+Value 1.
+Start the normal TCP close and detach the connection record from the
+socket.
+In the established or close-wait state, queued output is sent before
+the FIN, so the peer receives end of input after those bytes.
+In other connected closing states, the connection record is freed.
+.It Dv SHUT_RDWR
+Value 2.
+The same operation as
+.Dv SHUT_WR .
+.El
+.Pp
+Unlike Linux, a write-side shutdown does not preserve the connection
+for continued receiving.
+It uses the same TCP close operation as the final close of the socket.
+The descriptor remains open, but a later
+.Fn shutdown
+fails with
+.Er ENOTCONN .
+.Pp
+This operation is subcall 13 of i386
+.Xr socketcall 2 ,
+system call 102.
+.Sh RETURN VALUES
+.Fn shutdown
+returns zero on success.
+On failure it returns -1 and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EFAULT
+The
+.Fn socketcall
+argument array cannot be read.
+.It Bq Er EINVAL
+.Fa how
+is not 0, 1, or 2.
+.It Bq Er ENOTCONN
+The socket is not a connected stream, including a listener, a
+datagram socket, an incomplete handshake, or a socket whose
+connection record has been detached.
+.It Bq Er ENOTSOCK
+.Fa fd
+is invalid or does not refer to a socket.
+.It Bq Er EOPNOTSUPP
+The socket is a raw socket.
+.El
+.Sh SEE ALSO
+.Xr connect 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr socket 2 ,
+.Xr socketcall 2
