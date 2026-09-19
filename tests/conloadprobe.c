@@ -7,9 +7,12 @@
  * over. The probe reads the lines in four stages and requires each one in
  * order with its sum: (A) 200 lines typed back to back while the reader is
  * parked in read, at least one of whose bytes the port's interrupt must
- * have moved, which `irq-bytes` counts and a tick-paced drain alone never
- * does; the stage's time is printed and not judged, since it is the
- * machine's and a bound on it was one machine's; (B) 60 lines typed while
+ * have moved, which `irq-bytes` counts: the port is drained into the
+ * console's ring by its interrupt and by the tick alike, and the reader
+ * takes from the ring, so how many bytes the interrupt moves is the
+ * machine's, a fast reader leaving it few, and a share would fail one
+ * machine; a tick-paced drain alone moves none; the stage's time is
+ * printed and not judged, since it is the machine's; (B) 60 lines typed while
  * the probe spins for two seconds without reading, type-ahead into a
  * session nobody is reading; (C) 200 lines typed while a child in its own
  * group holds the
@@ -549,15 +552,7 @@ void probe_main(unsigned int *sp)
     print_num(now_ms() - start);
     print("\n");
     print_counters();
-    /* The bytes came in through the port's interrupt, not only the tick:
-     * the reader parks in poll before a line's first byte, and that byte
-     * reaches the port while nothing else is draining it, so the
-     * interrupt's service is what takes it. How many more it takes is the
-     * machine's: a fast reader pumps the port itself between the
-     * interrupt's services and leaves them a fraction of the bytes, which
-     * a hypervisor shows and a fixed share would fail. A byte count is
-     * required and not a service count, since a service count would pass
-     * one interrupt that took nothing while the tick took every byte. */
+    /* Bytes, not services: a service that took nothing would count. */
     if (irq_before == 0xFFFFFFFFu || counter("irq-bytes ") == irq_before) {
         print_counters();
         fail("the port's interrupt served no bytes during stage A");
