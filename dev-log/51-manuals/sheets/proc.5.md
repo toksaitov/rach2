@@ -1,0 +1,6 @@
+# proc(5)
+
+NAME: proc - the kernel's tables and counters as files. Source: rach2/sys/fs/procfs.c (each render function's comment gives its file's lines), rach2/sys/block/Readme.md "Disk information" (/proc/disk), the network Readme (/proc/net/*), the loop section (/proc/loop), tests/procprobe.c (what the probes require of the files: a snapshot at open, served whole, a bound each).
+* A file is generated into a buffer when opened and read from there, so every read of one descriptor sees one moment; each file has a bound and a text past it is refused rather than served short.
+* The files, each with its line format: `/proc/cmdline`, `/proc/console` (the console counters: uart bytes and overruns, irq and tick drains, reader drains, ring and queue high marks, line and queue drops), `/proc/disk` (disk(7)), `/proc/filesystems`, `/proc/interrupts` (per vector), `/proc/loop`, `/proc/meminfo`, `/proc/mounts` (six fields), `/proc/net/arp`, `/proc/net/dev`, `/proc/net/route`, `/proc/net/tcp`, `/proc/stat` (the cpu line: busy and idle ticks; the drains; the latency lines; loopback counters), `/proc/uptime`, `/proc/usb`, and per process `/proc/PID/stat` and `/proc/PID/cmdline` (`/proc/self/...` names the caller: say whether it exists, from the code).
+* SEE ALSO: rach2(7), disk(7), memory(7), bootlog(4).

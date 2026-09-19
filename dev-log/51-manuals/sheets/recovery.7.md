@@ -1,0 +1,13 @@
+# recovery(7)
+
+NAME: recovery - the recovery system and the ways back into a machine. Sources: Readme.md "Installing and updating a machine" and "Working the machine from the host"; utils/Readme.md "Init and account programs", "Boot and recovery programs"; krffs/manifests/rach2-recovery.manifest; utils/rach2-recover.
+
+* The recovery system is a RAM root booted from the install stick's first partition or from the disk's own recovery entry (`bootctl trial recovery`, then reboot); its kernel has recovery authority (it writes `/dev/diskN` for root) and the read-write driver policy. It mounts nothing from the disk it repairs.
+* Its init (`init-metal` with recovery) runs `e2fsck -p` on every ext2 partition first when the boot line has `rach2.fsck`, recording `init: e2fsck: /dev/disk0pN: status S` (0 clean, 1 repaired, 4 faults left, 8 error); configures the network (DHCP, or `rach2.ip=`); starts Dropbear, answering the key it was built with; puts the console behind login.
+* What it carries: rach2-install, rach2-recover, reflash, bootctl, growroot, growset, growboot, diskctl, e2fsck, resize2fs, update, rescue-static, ping, dmesg, the BusyBox tools, and the pages this manual lists for it (phase 4 stages them).
+* The three paths, from the project Readme, and that they are not interchangeable: a kernel into a boot slot from the running system (`bootctl kernel FILE`, reboot, `bootctl status`, `bootctl commit`); a root file system from recovery with `rach2-install --update IMAGE /dev/diskN` (keeps accounts, SSH policy, host keys; recovery stays the saved default until the trial root is verified, then commit); the recovery partition itself with `reflash` from the disk's recovery entry (the partition is not mounted then), the saved default staying the candidate for that write; a torn write there is repaired from the stick.
+* The menu, `rach2-recover`: 1 what this machine has (disks with model, serial, bytes, table; partitions), 2 check a file system, 3 put a saved image back on a disk, 4 install a kernel on a boot partition, 5 a shell, 6 leave; every step can be left without doing anything and says in one line what it did.
+* The kernel debug shell: `rach2.rescue` on the boot line skips init; `exec PROGRAM` runs a program from the root; the console then belongs to the shell.
+* The machine's disk does not leave its bay: every procedure is over SSH or at the console, and a write that cannot be undone from the stick is not made.
+* FILES: /etc/rach2/sshd.conf (root-password-login), /root/.ssh/authorized_keys, /proc/disk, /proc/cmdline, /dev/bootlog.
+* SEE ALSO: rach2-install(8), rach2-recover(8), bootctl(8), reflash(8), growroot(8), disk(7).
