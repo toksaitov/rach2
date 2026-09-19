@@ -1498,7 +1498,7 @@ uint32_t devfs_rdev(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;
@@ -1509,7 +1509,7 @@ uint32_t devfs_fd_ino(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;
@@ -1520,7 +1520,7 @@ int devfs_lseek_zero(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;
@@ -1531,7 +1531,7 @@ const char *devfs_fd_name(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return "?";
     }
     dev = e->dev;
@@ -1578,7 +1578,7 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;
@@ -1628,7 +1628,7 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;
@@ -1718,7 +1718,7 @@ int devfs_fd_is_raw(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;
@@ -1730,7 +1730,7 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
     const struct devfs_entry *dev;
     struct disk_window *w;
 
-    if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
+    if (!e || e->type != FD_TYPE_DEVICE || !e->dev) {
         return 0;
     }
     dev = e->dev;

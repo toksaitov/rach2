@@ -257,6 +257,7 @@ void fd_init_stdio(fd_table_t *table)
         table->entries[i].ofd = ofd_alloc();
         table->entries[i].ops = NULL;
         table->entries[i].priv = NULL;
+        table->entries[i].dev = NULL;
         table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;
     }
 }
@@ -296,6 +297,7 @@ int fd_alloc_from(fd_table_t *table, int minfd)
         table->entries[i].ofd = ofd;
         table->entries[i].ops = NULL;
         table->entries[i].priv = NULL;
+        table->entries[i].dev = NULL;
     }
     return i;
 }
@@ -330,6 +332,7 @@ int fd_free(fd_table_t *table, int fd)
     table->entries[fd].ofd = NULL;
     table->entries[fd].ops = NULL;
     table->entries[fd].priv = NULL;
+    table->entries[fd].dev = NULL;
     table->entries[fd].flags = 0;
 
     return 0;
