@@ -6,28 +6,49 @@
 .Nd read a manual page
 .Sh SYNOPSIS
 .Nm
-.Op Fl aw
 .Op Ar SECTION
-.Ar MANPAGE Ns Op .SECTION
-.Ar ...
+.Ar NAME
 .Sh DESCRIPTION
 .Nm
-is the BusyBox manual reader.
+prints the manual page
+.Ar NAME ,
+from section
+.Ar SECTION
+when one is given and otherwise from the first of sections 1, 8, 2, 4, 5
+and 7 that has it.
 The Rach2 manual begins with
 .Xr rach2 7 .
-A section may be given before the page name or as a suffix to it.
 .Pp
-The options are:
-.Bl -tag -width Ds
-.It Fl a
-Display every matching page.
-.It Fl w
-Print the locations of matching pages.
-.El
+The pages are preformatted text, gzipped, under
+.Pa /usr/share/man/catN/NAME.N ,
+rendered on the host by mandoc.
+.Pa /usr/share/man/aliases
+lists the names a page answers for besides its own, one
+.Ql NAME SECTION TARGET
+a line: every BusyBox applet is an alias of its family page, and every
+member of a system-call family is an alias of the family's page.
+.Nm
+looks a name up as an alias first, then as a page.
 .Pp
+When standard output is a terminal, the page goes through the pager named
+by
+.Ev MANPAGER ,
+then
+.Ev PAGER ,
+then BusyBox
+.Xr less 1 ,
+whose display width
 .Ev COLUMNS
-sets the width the pager displays at; the installed pages are preformatted
-and are not reformatted to it.
+sets; the pages are not reformatted to it.
+Otherwise the page goes to standard output as it is, so
+.Ql man NAME > FILE
+copies the page byte for byte.
+.Pp
+.Nm
+is a shell script of this project.
+BusyBox's man applet is not built: it finds a page only as a file, and a
+file for each of the four hundred aliases would put that many nodes on
+every root, which the RAM root and a KRFFS disk walk on every lookup.
 .Pp
 The manual sections are:
 .Bl -tag -width Ds -compact
@@ -44,61 +65,21 @@ Overviews.
 .It 8
 Administration.
 .El
-.Pp
-Pages are preformatted text under
-.Pa /usr/share/man/catN/NAME.N ,
-rendered on the host by mandoc.
-The system has no
-.Pa man.conf .
-.Nm
-searches
-.Pa /usr/man
-and
-.Pa /usr/share/man ,
-checking
-.Pa catN
-before
-.Pa manN ;
-these are the defaults when
-.Ev MANPATH
-is unset, and a
-.Ev MANPATH
-given is searched instead.
-.Pp
-When standard output is a terminal, the pager is selected from
-.Ev MANPAGER ,
-then
-.Ev PAGER ,
-then BusyBox
-.Xr less 1 .
-This build of less supports searches, marks, line numbers, and a status line.
-.Pp
-When standard output is not a terminal,
-.Nm
-uses
-.Ql col -b -p -x
-instead of the pager.
-The system's
-.Pa /bin/col
-copies its input unchanged because the installed pages have no overstrikes.
-Thus
-.Ql man NAME > FILE
-copies the page byte for byte.
 .Sh FILES
 .Bl -tag -width /usr/share/man/catN/NAME.N
 .It Pa /usr/share/man/catN/NAME.N
 Installed preformatted pages.
-.It Pa /bin/col
-Filter used when standard output is not a terminal.
+.It Pa /usr/share/man/aliases
+The names a page answers for.
 .El
 .Sh EXIT STATUS
-The exit status does not reflect the pager's exit status.
+The exit status is the pager's or 0, 1 when no page has the name, and 2
+for a wrong argument count, which prints
+.Ql usage: man [SECTION] NAME .
 .Sh EXAMPLES
 .Dl man rach2
 .Dl man 2 open
-.Dl man bootctl
+.Dl man ls
 .Sh SEE ALSO
 .Xr less 1 ,
 .Xr rach2 7
-.Sh HISTORY
-Adapted from BusyBox documentation, licensed under GPL-2.0.

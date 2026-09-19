@@ -73,11 +73,6 @@
 .Nm makedevs
 .Op Fl d Ar device_table
 .Ar rootdir
-.Nm man
-.Op Fl aw
-.Op Ar SECTION
-.Ar MANPAGE Ns Op .SECTION
-.Ar ...
 .Nm microcom
 .Op Fl d Ar DELAY_MS
 .Op Fl t Ar TIMEOUT_MS
@@ -190,9 +185,6 @@ The table's regular files must exist already, and its device nodes and
 FIFOs cannot be made, since Rach2 has no
 .Fn mknod
 system call.
-.It Nm man
-Display manual pages; see
-.Xr man 1 .
 .It Nm microcom
 Copy bytes from standard input to
 .Ar TTY
@@ -342,16 +334,6 @@ fields apply to device special files.
 A
 .Ql -
 may be used for a blank field.
-.Ss man
-.Bl -tag -width "-a"
-.It Fl a
-Display all matching pages.
-.It Fl w
-Show page locations.
-.El
-.Pp
-.Ev COLUMNS
-overrides the output width.
 .Ss microcom
 .Bl -tag -width "-t TIMEOUT"
 .It Fl d Ar DELAY

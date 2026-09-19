@@ -1,6 +1,0 @@
-#!/bin/sh
-# col: the filter BusyBox's man puts its output through when standard output
-# is not a terminal, given as `col -b -p -x`. The staged pages already have
-# their overstrikes removed on the host, so the options are ignored and the
-# input is copied through unchanged.
-exec cat

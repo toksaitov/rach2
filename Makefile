@@ -445,13 +445,10 @@ MAN_SOURCES = $(wildcard man/man[0-9]/*.[0-9])
 MAN_CAT = $(patsubst man/man%,build/man/cat%,$(MAN_SOURCES))
 build/man/cat%: man/man% man/render.sh | preflight
 	sh man/render.sh $< build/man
-# The aliases are copies of rendered pages, made after every page; the
-# renderer lists what it made in build/man/aliases.made and removes the
-# previous run's files first, and the stamp is what an image rule depends
-# on beside the pages themselves.
-build/man/.aliases: man/aliases man/render_aliases.sh $(MAN_CAT)
-	sh man/render_aliases.sh man/aliases build/man && touch $@
-MAN_ALL = $(MAN_CAT) build/man/.aliases
+# The aliases are a table the images stage as it is, man/aliases, which
+# the man script reads; the manifests name it, so the image rules depend
+# on it through their manifest deps.
+MAN_ALL = $(MAN_CAT)
 .PHONY: man
 man: $(MAN_ALL)
 MANCHECK = build/tools/verify/mancheck
@@ -552,16 +549,17 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
 # dropbear SSH server and client, Doom, the manual, and an /etc + /root tree).
-# 20 MiB: the tree is under 16 MiB without the manual, and the manual's
-# gzipped pages and alias copies take under 3 MiB more. The module sits in
+# 18 MiB: the tree is under 16 MiB without the manual, and the manual's
+# gzipped pages and alias table take under 1 MiB more. The module sits in
 # the kernel's 32 MiB identity-mapped window, where the DMA buffers and the
-# kernel stacks are carved, so every megabyte given to it is taken from
-# those: a 24 MiB image made the self-build suite five times slower under
-# KVM. gen_demo_key.sh provisions the SSH login keys and
+# kernel stacks are carved, so it is kept small; and the manual's aliases
+# are a table and not files, since the RAM root and a KRFFS disk walk
+# every node on a lookup and four hundred alias files made the self-build
+# suite five times slower. gen_demo_key.sh provisions the SSH login keys and
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets ensure the busybox/dropbear binaries are real.
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 20
+	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 18
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
 # the root `rach2.root=ext2` mounts: 1 GiB, the partition's size, sparse on

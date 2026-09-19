@@ -29,7 +29,7 @@ file 0755 /bin/ping build/utils/ping
 # The boot log reader, matching os-real: `dmesg` here is a script over
 # /dev/bootlog, because this kernel has no klogctl ring.
 file 0755 /bin/dmesg krffs/dmesg.script
-file 0755 /bin/col krffs/col.script
+file 0755 /bin/man krffs/man.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 # Attaches a file to a loop device so a file system in a file can be mounted
 # (utils/Readme.md); it writes /dev/loop-control, which is root's.
@@ -153,6 +153,7 @@ dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 dir 0755 /usr/share/man
+file 0644 /usr/share/man/aliases man/aliases
 tree 0644 /usr/share/man/cat1 build/man/cat1
 tree 0644 /usr/share/man/cat2 build/man/cat2
 tree 0644 /usr/share/man/cat4 build/man/cat4

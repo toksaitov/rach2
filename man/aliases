@@ -405,7 +405,6 @@ mmap 2 brk
 umount 8 mount
 cc 1 tcc
 dropbearmulti 8 dropbear
-col 1 man
 [ 1 busybox-coreutils
 [[ 1 busybox-coreutils
 geteuid 2 getuid
