@@ -1,0 +1,7 @@
+# dropbear(8)
+
+NAME: dropbear, dbclient, dropbearkey, dropbearmulti - the SSH server, client and key generator. Source: vendor/dropbear/Readme.md, vendor/dropbear/localoptions.h; utils/init.c (how init starts the server); Dropbear's own manual pages in the extracted source (dropbear.8, dbclient.1, dropbearkey.8) under Dropbear's MIT licence: adapt their option lists.
+* One static multi-call binary, `/bin/dropbearmulti`, dispatching on its first argument: `dropbearmulti dropbear [server options]`, `dropbearmulti dbclient [client options]`, `dropbearmulti dropbearkey [key options]`; the images stage only the multi-call name, so a person types `dropbearmulti dbclient HOST`. Dropbear 2022.83, with Curve25519, ECDH, ChaCha20-Poly1305, AES-128 and AES-256 CTR, Ed25519, public-key and password authentication; no zlib, no syslog, no utmp or wtmp or lastlog, no login MOTD, no PIE.
+* How it runs here: init-metal and recovery's init start the server at boot as a supervised service, with `-g` (no root password login) unless sshd.conf(5) says otherwise; each login gets a pty of its own (console(4)); host keys are generated at boot on a RAM root and kept on an installed root; the keys that open an account are `~/.ssh/authorized_keys` (recovery answers the key it was built with). There is no sftp server, so `scp` does not work: a file goes in with `ssh HOST 'cat > FILE' < FILE`.
+* EXAMPLE: from the host, `ssh -i krffs/rach2_demo_ed25519 root@ADDRESS`; `tests/run ssh` and `metal` log in.
+* SEE ALSO: sshd.conf(5), init(8), recovery(7).

@@ -2,7 +2,7 @@
 
 NAME: ioctl - the system call family: ioctl.
 
-The page names every member in NAME with .Nm, gives each its prototype in SYNOPSIS as musl declares it (the header and the C prototype; the number in the table is the ABI, EAX), describes the behaviour of this kernel with its differences from Linux where a caller would notice, lists every error the handler returns in ERRORS with when, and ties an example to a probe of the default suite where one exists (tests/*.c). Aliases: every member other than the page name goes into man/aliases as `MEMBER 2 ioctl`; the writer adds those lines.
+The page names every member in NAME with .Nm, gives each its prototype in SYNOPSIS as musl declares it (the header and the C prototype; the number in the table is the ABI, EAX), describes the behaviour of this kernel with its differences from Linux where a caller would notice, lists every error the handler returns in ERRORS with when, and ties an example to a probe of the default suite where one exists (tests/*.c). Aliases: every member other than the page name is already listed in man/aliases as an alias of this page; touch no file but the page.
 
 Notes from the milestone: The requests answered, by device: the terminal (TCGETS, TCSETS and the family, TIOCGPGRP, TIOCSPGRP, TIOCSCTTY, TIOCGWINSZ), the disk nodes (BLKRRPART), the mouse and framebuffer if any; ENOTTY otherwise.
 
