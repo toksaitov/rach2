@@ -1118,6 +1118,14 @@ static void normalize_path(char *path)
     snprintf(path, 1024, "%s", out);
 }
 
+/* The first byte of `p` that is not a space or a tab, or `e`. */
+static const char *skip_blanks(const char *p, const char *e)
+{
+    while (p < e && (*p == ' ' || *p == '\t'))
+        p++;
+    return p;
+}
+
 static void scan_includes(struct graph *g, const char *dir)
 {
     DIR *d = opendir(dir);
@@ -1164,20 +1172,14 @@ static void scan_includes(struct graph *g, const char *dir)
             while (*p != '\0') {
                 const char *end = strchr(p, '\n');
                 size_t l = end != NULL ? (size_t) (end - p) : strlen(p);
-                const char *q = p;
                 const char *e = p + l;
+                const char *q = skip_blanks(p, e);
 
-                while (q < e && (*q == ' ' || *q == '\t'))
-                    q++;
                 if (q < e && *q == '#') {
-                    q++;
-                    while (q < e && (*q == ' ' || *q == '\t'))
-                        q++;
+                    q = skip_blanks(q + 1, e);
                     if ((size_t) (e - q) > 8 &&
                         strncmp(q, "include", 7) == 0) {
-                        q += 7;
-                        while (q < e && (*q == ' ' || *q == '\t'))
-                            q++;
+                        q = skip_blanks(q + 7, e);
                         if (q < e && *q == '"') {
                             const char *close = ++q;
                             char rel[1024], resolved[1024];
