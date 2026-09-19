@@ -28,6 +28,9 @@ file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 # built: that one wants a raw socket, which this kernel gives root alone,
 # where ours works for anyone through the kernel's own ping operation.
 file 0755 /bin/ping build/utils/ping
+# The periodic sync init keeps running: without it the disk root took a
+# failing exec every second and its writes waited for a sync nobody asked for.
+file 0755 /bin/update build/utils/update
 # The boot log, under the name a person expects. This machine has no
 # console to watch it scroll past, so reading it afterwards is the only
 # way to see it; `klogctl` does not exist here, and the log is a device.

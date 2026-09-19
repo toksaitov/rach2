@@ -9,7 +9,8 @@
 .Sh DESCRIPTION
 .Nm
 takes no arguments.
-Init starts one instance at boot on every image and keeps it running.
+On every image with an init, init starts one instance at boot and starts
+it again, after a second, whenever it exits.
 It repeatedly sleeps for thirty seconds and calls
 .Xr sync 2
 to write cached data to disk, whether or not another program calls
