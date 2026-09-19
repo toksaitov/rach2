@@ -4,7 +4,7 @@
 #include "ish_common.h"
 
 static const char ISH_Directory_Separator = '/';
-static const char ISH_Path_Separator      = ':';
+static const char ISH_Path_Separator = ':';
 
 /** Length of the NUL-terminated `string`, not counting the terminator. */
 unsigned long ish_get_cstring_length(const char *string);
@@ -22,10 +22,12 @@ int ish_convert_to_lowercase(int character);
 int ish_convert_to_uppercase(int character);
 
 /** Carve the first separated token out of `string`, mutating the source. */
-char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character), char **cursor_after_token);
+char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character),
+                                 char **cursor_after_token);
 
 /** Find the first separated token in `string` without mutating it. */
-char *ish_get_token_in_cstring(char *string, int (*is_separator)(int character), char **cursor_after_token);
+char *ish_get_token_in_cstring(char *string, int (*is_separator)(int character),
+                               char **cursor_after_token);
 
 /** Whether `string` begins with `prefix`. */
 int ish_cstring_starts_with(const char *prefix, const char *string);
@@ -43,6 +45,7 @@ int ish_are_cstrings_equal_ignoring_case(const char *string, const char *another
 int ish_get_integer_from_cstring(const char *string);
 
 /** Join two path elements into `combined_path` separated by a `/`. */
-void ish_combine_path_elements(const char *path_element, const char *another_path_element, char *combined_path, unsigned long maximum_combined_path_length);
+void ish_combine_path_elements(const char *path_element, const char *another_path_element,
+                               char *combined_path, unsigned long maximum_combined_path_length);
 
 #endif

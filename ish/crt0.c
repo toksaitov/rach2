@@ -26,15 +26,9 @@ void _start(void)
     char **envp;
     int ret;
 
-    __asm__ __volatile__ (
-        "movl 4(%%ebp), %0"
-        : "=r"(argc)
-    );
+    __asm__ __volatile__("movl 4(%%ebp), %0" : "=r"(argc));
 
-    __asm__ __volatile__ (
-        "leal 8(%%ebp), %0"
-        : "=r"(argv)
-    );
+    __asm__ __volatile__("leal 8(%%ebp), %0" : "=r"(argv));
 
     envp = argv + argc + 1;
 

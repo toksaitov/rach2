@@ -135,10 +135,11 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
 #endif
     if (stat(executable, stat_result) != 0) {
         executable = 0;
-        for (char *cursor = paths; cursor && !executable; ) {
+        for (char *cursor = paths; cursor && !executable;) {
             char *path = ish_get_token_in_cstring(cursor, ish_is_path_separator, &cursor);
             if (path) {
-                ish_combine_path_elements(path, arguments[0], candidate, Max_Executable_Path_Length);
+                ish_combine_path_elements(path, arguments[0], candidate,
+                                          Max_Executable_Path_Length);
                 if (stat(candidate, stat_result) == 0) {
                     executable = candidate;
                 }
@@ -200,7 +201,6 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         close(stdout_descriptor);
     }
 
-
     return status;
 }
 
@@ -218,8 +218,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
  */
 int main(int argc, char **argv, char **envp)
 {
-    char *home = ish_get_first_environment_variable(Environment_Variable_Home, sizeof(Environment_Variable_Home), envp);
-    char *paths = ish_get_first_environment_variable(Environment_Variable_Path, sizeof(Environment_Variable_Path), envp);
+    char *home = ish_get_first_environment_variable(Environment_Variable_Home,
+                                                    sizeof(Environment_Variable_Home), envp);
+    char *paths = ish_get_first_environment_variable(Environment_Variable_Path,
+                                                     sizeof(Environment_Variable_Path), envp);
 
     char input[Max_Input_String_Length + 1];
     input[Max_Input_String_Length] = '\0';

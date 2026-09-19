@@ -11,7 +11,8 @@
  * of tokens after the first (the token count minus one, or 0 when empty), so it
  * is the operand count for the command in `arguments[0]`.
  */
-unsigned long ish_build_argument_array_from_input(char *input, char **arguments, unsigned long max_argument_count)
+unsigned long ish_build_argument_array_from_input(char *input, char **arguments,
+                                                  unsigned long max_argument_count)
 {
     unsigned long argument_index = 0;
     char *cursor = input;
@@ -29,7 +30,8 @@ unsigned long ish_build_argument_array_from_input(char *input, char **arguments,
     return argument_count;
 }
 
-char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments, const char *argument_lexeme);
+char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments,
+                                                      const char *argument_lexeme);
 
 /**
  * Return the value of the first environment entry whose name starts with `key`.
@@ -39,7 +41,8 @@ char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments, const ch
  * `key_length` bytes into that entry, so for a `key` that includes the `=`
  * the result is the value. Returns NULL when no entry matches.
  */
-char *ish_get_first_environment_variable(const char *key, unsigned long key_length, char **environment)
+char *ish_get_first_environment_variable(const char *key, unsigned long key_length,
+                                         char **environment)
 {
     ish_check(key && environment);
 
@@ -65,7 +68,8 @@ char *ish_get_first_environment_variable(const char *key, unsigned long key_leng
  */
 char *ish_extract_last_stdin_redirection_file(char **arguments)
 {
-    return _ish_extract_next_parameter_for_argument_lexeme(arguments, ISH_Standard_Input_Redirection_Lexeme);
+    return _ish_extract_next_parameter_for_argument_lexeme(arguments,
+                                                           ISH_Standard_Input_Redirection_Lexeme);
 }
 
 /**
@@ -75,7 +79,8 @@ char *ish_extract_last_stdin_redirection_file(char **arguments)
  */
 char *ish_extract_last_stdout_redirection_file(char **arguments)
 {
-    return _ish_extract_next_parameter_for_argument_lexeme(arguments, ISH_Standard_Output_Redirection_Lexeme);
+    return _ish_extract_next_parameter_for_argument_lexeme(arguments,
+                                                           ISH_Standard_Output_Redirection_Lexeme);
 }
 
 /**

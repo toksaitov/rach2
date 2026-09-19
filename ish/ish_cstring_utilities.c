@@ -4,8 +4,9 @@ unsigned long ish_get_cstring_length(const char *string)
 {
     ish_check(string);
     const char *start = string;
-    for ( ; *string; ++string);
-    return (unsigned long) (string - start);
+    for (; *string; ++string)
+        ;
+    return (unsigned long)(string - start);
 }
 
 /**
@@ -27,12 +28,12 @@ char *ish_replace_first_character_in_cstring(char *string, char character, char 
 
 int ish_is_space(int character)
 {
-    return character == ' ' || (unsigned int) character - '\t' < 5;
+    return character == ' ' || (unsigned int)character - '\t' < 5;
 }
 
 int ish_is_digit(int character)
 {
-    return (unsigned int) character - '0' < 10;
+    return (unsigned int)character - '0' < 10;
 }
 
 int ish_is_path_separator(int character)
@@ -42,12 +43,12 @@ int ish_is_path_separator(int character)
 
 int ish_is_lowercase(int character)
 {
-    return (unsigned int) character - 'a' < 26;
+    return (unsigned int)character - 'a' < 26;
 }
 
 int ish_is_uppercase(int character)
 {
-    return (unsigned int) character - 'A' < 26;
+    return (unsigned int)character - 'A' < 26;
 }
 
 int ish_convert_to_lowercase(int character)
@@ -82,7 +83,8 @@ int ish_convert_to_uppercase(int character)
  * terminator (the start of the rest), or `0` at end of input, so it can seed
  * the next call.
  */
-char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character), char **cursor_after_token)
+char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character),
+                                 char **cursor_after_token)
 {
     char *result = 0;
 
@@ -125,7 +127,8 @@ char *ish_carve_token_in_cstring(char *string, int (*is_separator)(int character
  * `cursor_after_token` is non-null it receives the separator that ends the
  * token (the start of the rest), or `0` at end of input.
  */
-char *ish_get_token_in_cstring(char *string, int (*is_separator)(int character), char **cursor_after_token)
+char *ish_get_token_in_cstring(char *string, int (*is_separator)(int character),
+                               char **cursor_after_token)
 {
     char *result = 0;
 
@@ -201,7 +204,8 @@ int ish_are_cstrings_equal(const char *string, const char *another_string)
 int ish_are_cstrings_equal_ignoring_case(const char *string, const char *another_string)
 {
     ish_check(string && another_string);
-    while (*string && ish_convert_to_lowercase(*string) == ish_convert_to_lowercase(*another_string)) {
+    while (*string &&
+           ish_convert_to_lowercase(*string) == ish_convert_to_lowercase(*another_string)) {
         ++string;
         ++another_string;
     }
@@ -227,10 +231,10 @@ int ish_get_integer_from_cstring(const char *string)
 
     int negative = 0;
     switch (*string) {
-        case '-':
-            negative = 1;
-        case '+':
-            ++string;
+    case '-':
+        negative = 1;
+    case '+':
+        ++string;
     }
 
     /* Accumulate the magnitude in unsigned arithmetic so a value beyond INT_MAX
@@ -254,13 +258,15 @@ int ish_get_integer_from_cstring(const char *string)
  * before the terminator; the output is silently truncated if the inputs do not
  * fit.
  */
-void ish_combine_path_elements(const char *path_element, const char *another_path_element, char *combined_path, unsigned long maximum_combined_path_length)
+void ish_combine_path_elements(const char *path_element, const char *another_path_element,
+                               char *combined_path, unsigned long maximum_combined_path_length)
 {
     ish_check(path_element && another_path_element && combined_path);
 
     unsigned long i = 0;
 
-    while (i < maximum_combined_path_length && *path_element && !ish_is_path_separator(*path_element)) {
+    while (i < maximum_combined_path_length && *path_element &&
+           !ish_is_path_separator(*path_element)) {
         combined_path[i++] = *path_element++;
     }
 
