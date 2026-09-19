@@ -14,8 +14,9 @@
  * directory entry within its block with a `rec_len` of at least its header
  * and a multiple of four, a name within the entry.
  *
- * The kernel's file offset is 32 bits: an inode whose size does not fit
- * answers `EOVERFLOW` to `open` and `stat` and is left as it is on disk.
+ * A file's size is 64 bits, read and written with its high word; a write
+ * or truncate past the largest file the volume's block pointers and its
+ * 32-bit `i_blocks` address answers `EFBIG` (`past_limit`).
  * A device node reports its numbers in `stat` and cannot be opened, because
  * devices live in `/dev`. `ext2.Readme.md` has the contract.
  */
