@@ -577,6 +577,14 @@ static long regex_search(const struct regex *re, const unsigned char *text, size
 /* ---- the guest process ---- */
 
 static pid_t child_pid = -1;
+
+static void on_term(int sig)
+{
+    (void)sig;
+    if (child_pid > 0)
+        kill(child_pid, SIGTERM);
+    _exit(143);
+}
 static int child_out = -1;
 static int child_in = -1;
 static int child_status;
@@ -1089,11 +1097,12 @@ static int step_tcp(int port)
  * command, which is a line typed before the shell was reading and missing
  * its first bytes; a probe that is running is not typed at twice, since
  * the shell would run it again when it ends. Under `ok`, the run's token,
- * the step ends when the token has arrived since the line was typed: a
- * machine that stays at its prompt afterwards is not waited for to the
- * limit, which a set's factor can put past the runner's idle limit.
+ * the step ends when the token has arrived since the line was typed, or
+ * when a `--never` text has: a machine that stays at its prompt afterwards
+ * is not waited for to the limit, which a set's factor can put past the
+ * runner's idle limit.
  */
-static void step_execq(const char *name, const char *ok)
+static void step_execq(const char *name, const char *ok, const char *const *nevers, int n_never)
 {
     double step_end = now() + steptmo;
     double sent = 0;
@@ -1120,6 +1129,12 @@ static void step_execq(const char *name, const char *ok)
         pump(now() + 0.5);
         if (ok != NULL && contains(buf + mark, buf_len - mark, ok))
             break;
+        /* A text the run must never print ends the step as well: the run
+           fails on it afterwards, and a probe that failed at once is not
+           waited for to the step's limit. */
+        for (i = 0; i < (size_t)n_never; i++)
+            if (contains(buf + mark, buf_len - mark, nevers[i]))
+                return;
     }
 }
 
@@ -1319,6 +1334,10 @@ int main(int argc, char **argv)
     child_in = in_pipe[1];
     fcntl(child_out, F_SETFL, O_NONBLOCK);
     signal(SIGPIPE, SIG_IGN);
+    /* A suite that stops this harness stops its machine with it: the
+       machine is the harness's child, and one left running would hold its
+       disk images and its forwarded port through the rows after. */
+    signal(SIGTERM, on_term);
 
     trace_path = getenv("RACH2_TRACE");
     if (trace_path != NULL)
@@ -1581,7 +1600,7 @@ int main(int argc, char **argv)
                 step_failures++;
             trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
-            step_execq(step + 6, ok);
+            step_execq(step + 6, ok, nevers, n_never);
         } else {
             fprintf(stderr, "unknown step: %s\n", step);
             step_failures++;
