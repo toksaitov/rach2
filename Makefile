@@ -80,6 +80,7 @@ OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
 OS_REAL_EXT2    = $(IMAGES_DIR)/os-real.ext2
 METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
+OS_REAL_GRUB_DISK = $(IMAGES_DIR)/os-real-grub.disk
 MKIMAGE         = krffs/mkimage.sh
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
@@ -772,6 +773,26 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 	RACH2_DISK_HELLO=krffs/demo/hello.txt \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
+
+
+# The GRUB disk `rach2/run_from_disk.sh` boots: the os-real system as an ext2
+# root on the third partition, reached through the boot loader with no kernel
+# given to the emulator, which is the path a machine takes. The suites build
+# their own disks in tests/system/suites.mk; this one exists for a person.
+.PHONY: os-real-grub-disk
+os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	@$(MAKE) --no-print-directory $(OS_REAL_GRUB_DISK)
+
+$(OS_REAL_GRUB_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \
+                      krffs/manifests/os-real.manifest tools/image/mkdisk_grub.sh $(DISK_TOOLS)
+	RACH2_DISK_BOOT_MB=64 \
+	RACH2_DISK_CLUSTER=8 \
+	RACH2_DISK_RECOVERY_MB=64 \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	RACH2_DISK_EXT2_MB=1024 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_EXT2) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(OS_REAL_GRUB_DISK)
 
 
 # The public test entry: the source checks, the native tests, and the core

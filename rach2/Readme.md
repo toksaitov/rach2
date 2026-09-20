@@ -28,7 +28,7 @@ The metal and recovery kernels use separate component names and object trees. A 
 
 The Multiboot header and entry point are in `loader.s`; `link.ld` places the GNU-linked image at physical address `0x00100000`. The kernel uses a flat GDT with ring-0 and ring-3 code and data segments, a TSS, and a per-process `%gs` TLS segment. The IDT contains the 32 CPU exceptions, the 16 remapped 8259 PIC interrupts at vectors 32 to 47, 16 vectors at 48 to 63 for messages from PCI devices, the local APIC's spurious vector at 255, and the user-callable system-call gate at vector `0x80`. The PIT runs at 100 Hz.
 
-The local APIC is enabled at boot because a message from a PCI device is a write to its page. Nothing else uses it: the timer stays the PIT, and the 8259 pair still delivers the keyboard, the mouse and the disks through `LINT0` as an external interrupt, which is the state firmware leaves and which `sys/lapic.c` restores if it finds anything else. `sys/lapic.c` refuses by name, and the kernel then has no message vectors: a processor with no APIC, one without the model-specific registers, one in x2APIC mode, an APIC base this kernel cannot reach or map, and a machine booted with `rach2.nomsi`. Straight after the tick starts, the boot checks that the 8259's interrupts still arrive; `lapic: timer: no tick in 50 ms; writing lint0 again` says they did not and that `LINT0` was written a second time, and a line after it says whether that worked. `/proc/interrupts` says which vectors have taken interrupts and under what names (see [synthetic file systems](sys/fs/synthfs.Readme.md)), and `/proc/stat`'s `intr` line is every interrupt the kernel has routed. The xHCI takes its interrupts as messages when the APIC is enabled and the controller's capability allows; otherwise it uses its PCI line through the 8259 when one is available. The timer pumps it every tick in either case, so a lost interrupt does not stop service; see [USB](sys/usb/Readme.md). The HDA audio controller enables messages under the same conditions and retains its legacy interrupt handler and timer servicing. Each driver calls `isr_alloc_vector`, which returns the lowest unallocated vector from 48 through 127, so the assignments depend on the order in which the drivers request them. Each successful enable reports `messages on vector N` in the boot log. Once an interrupt has arrived, `/proc/interrupts` lists the vector with its handler name, `xhci` or `hda`.
+The local APIC is enabled at boot because a message from a PCI device is a write to its page. Nothing else uses it: the timer stays the PIT, and the 8259 pair still delivers the keyboard, the mouse and the disks through `LINT0` as an external interrupt, which is the state firmware leaves and which `sys/lapic.c` restores if it finds anything else. `sys/lapic.c` refuses by name, and the kernel then has no message vectors: a processor with no APIC, one without the model-specific registers, one in x2APIC mode, an APIC base this kernel cannot reach or map, and a machine booted with `rach2.nomsi`. Straight after the tick starts, the boot checks that the 8259's interrupts still arrive; `lapic: timer: no tick in 50 ms; writing lint0 again` says they did not and that `LINT0` was written a second time, and a line after it says whether that worked. `/proc/interrupts` says which vectors have taken interrupts and under what names (see [synthetic file systems](sys/fs/synthfs.Readme.md)), and `/proc/stat`'s `intr` line is every interrupt the kernel has routed. The xHCI takes its interrupts as messages when the APIC is enabled and the controller's capability allows; otherwise it uses its PCI line through the 8259 when one is available. The timer pumps it every tick in either case, so a lost interrupt does not stop service; see [USB](sys/usb/Readme.md). The HDA audio controller enables messages under the same conditions and retains its legacy interrupt handler and timer servicing. Each driver calls `isr_alloc_vector`, which returns the lowest unallocated vector from 48 through 63, so the assignments depend on the order in which the drivers request them. Each successful enable reports `messages on vector N` in the boot log. Once an interrupt has arrived, `/proc/interrupts` lists the vector with its handler name, `xhci` or `hda`.
 
 The kernel builds its physical-memory map from the Multiboot memory map using 64-bit arithmetic and manages every usable whole frame below 4 GiB after boot reservations. Only the first 32 MiB is identity-mapped. Device memory-mapped I/O (MMIO) is mapped into the kernel's region beginning at `0xF0000000`. Process records are allocated from the kernel heap without a fixed count. Each process's descriptor table grows from 16 entries to a limit of 1024. User address spaces have demand-paged VMAs, copy-on-write fork, a growing stack, and shared supervisor-only kernel mappings. See [memory management](sys/mm/Readme.md).
 
@@ -102,7 +102,7 @@ make os-real-grub-disk
 (cd rach2 && ./run_from_disk.sh)
 ```
 
-The ISO path boots GRUB from a CD image. `run_from_disk.sh` boots BIOS, the disk MBR, and GRUB without QEMU's `-kernel` or `-initrd` options. To stop at the first instruction and attach GDB, build the kernel and run `./debug.sh` from `rach2/`.
+The ISO path boots GRUB from a CD image. `run_from_disk.sh` boots BIOS, the disk MBR, and GRUB without QEMU's `-kernel` or `-initrd` options, on the disk `make os-real-grub-disk` builds: the os-real system as an ext2 root on the third partition, with the boot and recovery partitions before it, which is the layout a machine has. To stop at the first instruction and attach GDB, build the kernel and run `./debug.sh` from `rach2/`.
 
 ## Kernel command line
 
@@ -210,37 +210,77 @@ The commands are grouped here by purpose:
 
 The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` move through it; typing returns to the live prompt. Each byte of live output is one write to the adapter's memory, and a scroll moves the display's start address rather than rewriting the screen, since that memory is slow on hardware and a trapped access under a hypervisor. COM1 carries the same boot and shell output to QEMU's `-serial stdio` path.
 
-## Source map
+## The subsystems
 
-| Path | Responsibility |
-|------|----------------|
-| `loader.s`, `link.ld` | Multiboot entry, kernel stack, ring-3 entry, and host link layout. |
-| `kernel.c` | Boot sequence, built-in self-tests, init handoff, and debug shell. |
-| `sys/tables/`, `sys/isr*`, `sys/pic*`, `sys/pit*` | GDT, TSS, IDT, exception, interrupt, and timer setup. |
-| `sys/proc/` | Processes, scheduler, ELF loading, user images, signals, TLS, and wait queues. |
-| `sys/mm/` | Physical frames, paging, VMAs, user copies, module placement, and page cache. |
-| `sys/fs/` | The mount table and resolver, KRFFS, the buffer cache, FAT32, exFAT, descriptors, `/dev`, and `/proc`. |
-| `sys/ipc/`, `sys/io/`, `sys/tty/` | Pipes, readiness APIs, line discipline, job control, and pseudo-terminals. |
-| `sys/block/` | ATA, AHCI, the block request, MBR and GUID tables, the stick as a disk, disk policy, partition and raw disk windows, and the lag test device. |
-| `sys/network/` | RTL8139, e1000, and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |
-| `sys/display/`, `sys/audio/`, `sys/kbd*`, `sys/mouse*`, `sys/speaker*` | VGA, audio, and PS/2 input drivers. |
-| `sys/board*`, `sys/power*`, `sys/pci*`, `sys/rtc*`, `sys/serial*` | Platform discovery, shutdown, PCI, clock, and COM1. |
-| `sys/klog*` | The kernel log: one record, four destinations, and the debug shell's own console calls. |
-| `sys/input.c` | Where a keystroke goes, whichever keyboard produced it. |
-| `sys/usb/` | The xHCI controller, the device core, the hub driver, the boot-protocol keyboard and mouse, and the mass-storage class driver. |
-| `sys/lib/` | Freestanding integer, string, character, signal, user-ABI, text formatting, interrupt bracket, and random support. |
+One paragraph per subsystem, with the document that owns it. Each names the
+files it is in, so this section is the map from a question to the place it is
+answered.
 
-Subsystem references:
+The entry and the tables are `loader.s`, `link.ld`, `kernel.c`, `sys/tables/`,
+`sys/isr*`, `sys/pic*` and `sys/pit*`: the Multiboot header and the kernel
+stack, the link layout at 1 MiB, the boot sequence and its self-tests, the
+handoff to init, the debug shell, and the GDT, TSS and IDT the Architecture
+section above describes. No document of their own; this Readme owns them.
 
-* [Memory management](sys/mm/Readme.md)
-* [Signals](sys/proc/signal.Readme.md)
-* [Thread-local storage](sys/proc/tls.Readme.md)
-* [Random generator](sys/lib/krandom.Readme.md)
-* [Mounts and the VFS](sys/fs/vfs.Readme.md), [KRFFS](sys/fs/Readme.md), [FAT32](sys/fs/fat32.Readme.md), [exFAT](sys/fs/exfat.Readme.md), and [synthetic files](sys/fs/synthfs.Readme.md)
-* [Pipes](sys/ipc/Readme.md) and [I/O multiplexing](sys/io/Readme.md)
-* [Block storage](sys/block/Readme.md)
-* [Networking](sys/network/Readme.md)
-* [USB](sys/usb/Readme.md)
+Processes are `sys/proc/`: process records, the round-robin scheduler, the
+ELF loader, the initial user image, wait queues, and the floating-point state
+each process keeps. [Signals](sys/proc/signal.Readme.md) owns the
+dispositions, the masks and the delivery frame, and
+[thread-local storage](sys/proc/tls.Readme.md) the `%gs` base musl's startup
+asks for.
+
+Memory is `sys/mm/`, described by [its Readme](sys/mm/Readme.md): the physical frame map
+built from the firmware's, the kernel's own virtual layout above 3 GiB with a
+heap that frees, per-process page tables, virtual memory areas, copy-on-write
+fork, demand paging, the checked user-pointer boundary, and the disk page
+cache.
+
+Files are `sys/fs/`, described by [its Readme](sys/fs/Readme.md) for KRFFS and
+the descriptors and by [vfs.Readme.md](sys/fs/vfs.Readme.md) for the mount
+table, the resolver and the buffer cache. The four types `mount(2)` places have documents of their
+own: [KRFFS](sys/fs/krffs.Readme.md), [FAT32](sys/fs/fat32.Readme.md),
+[exFAT](sys/fs/exfat.Readme.md) and [ext2](sys/fs/ext2.Readme.md).
+[Synthetic files](sys/fs/synthfs.Readme.md) owns `/dev` and `/proc`, which are
+generated from kernel state and stored nowhere.
+
+Block storage is `sys/block/`, described by [its Readme](sys/block/Readme.md):
+the ATA and
+AHCI drivers behind one interface, the block request with its deadlines and
+its pool, MBR and GUID partition tables, the loop device over a file, a stick
+as a disk, the raw windows, the disk registry, and the read-only and recovery
+build switches.
+
+USB is `sys/usb/`, described by [its Readme](sys/usb/Readme.md): the xHCI
+controller
+driver, the device core and its enumeration state machine, and the three class
+drivers: the boot-protocol keyboard and mouse, the hub, and mass storage. One
+pump drains the event ring, from the controller's interrupt and from the
+timer.
+
+Networking is `sys/network/`, described by
+[its Readme](sys/network/Readme.md): the RTL8139, e1000 and RTL8168GU drivers, Ethernet, ARP, IPv4, ICMP, UDP and TCP,
+the socket interface behind `socketcall`, packet and raw sockets, and the
+broadcast netconsole.
+
+Terminals and pipes are `sys/tty/`, `sys/ipc/` and `sys/io/`, the last two
+described by [the pipe Readme](sys/ipc/Readme.md) and
+[the readiness Readme](sys/io/Readme.md). `sys/tty/` holds the line discipline, job control and pseudo-terminals, and
+`sys/input.c` decides where a keystroke goes, whichever keyboard produced it,
+as the Input section above describes.
+
+The devices and the platform are `sys/display/`, `sys/audio/`, `sys/kbd*`,
+`sys/mouse*`, `sys/speaker*`, `sys/board*`, `sys/power*`, `sys/pci*`,
+`sys/rtc*` and `sys/serial*`: VGA text and mode 13h, Sound Blaster 16, Intel HD
+Audio and the PC speaker, the PS/2 keyboard and mouse, the board power
+profiles, the shutdown paths, PCI discovery, the clock and COM1. No documents
+of their own; the Messages, Input and Debug shell sections above describe
+what a reader meets first.
+
+The log and the library are `sys/klog*` and `sys/lib/`: one record and its
+four destinations, described under Messages, and the freestanding integer, string,
+character, signal, user-ABI and text-formatting support every other file
+rests on. [The random generator](sys/lib/krandom.Readme.md) is its own
+document.
 
 ## Hardware and limits
 
@@ -254,7 +294,7 @@ The kernel currently supports:
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32, exFAT, ext2 and KRFFS partitions mount through `mount(2)`, read and written, with hard and symbolic links on ext2. A regular file can be a block device: `/dev/loop0` to `/dev/loop3` stand on one, so a file system in a file mounts like any other volume. USB is keyboards, mice and flash drives through xHCI, on root ports and behind USB 2.0 hubs, with twelve table entries shared by every device, hubs included, and two hubs driven at once; a SuperSpeed hub is driven with its high-speed half beside it, and the transaction translator for a slow device behind a high-speed hub is the controller's, proved only on the notebook. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32, exFAT, ext2 and KRFFS partitions mount through `mount(2)`, read and written, with hard and symbolic links on ext2. A regular file can be a block device: `/dev/loop0` to `/dev/loop3` stand on one, so a file system in a file mounts like any other volume. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with sixteen device table entries shared by every device, hubs included, and eight hubs driven at once; a SuperSpeed hub is driven with its high-speed half beside it, and the transaction translator for a slow device behind a high-speed hub is the controller's, proved only on the notebook. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The direct physical-memory limit is 32 MiB.
 
 Process records are allocated from the kernel heap without a fixed count; a fork the heap cannot serve returns `ENOMEM`. Each process's descriptor table grows from sixteen to 1024 entries, and an open past that limit returns `EMFILE`. With three descriptors already used for stdio, `fdfull` opens 1021 files, checks that the next open returns `EMFILE`, and checks that a closed descriptor can be reused. Sockets and TCP control blocks are allocated from the heap without a fixed count. In separate stages, `tests/run pools` opens forty-eight pipes, forty ptys and forty-eight sockets, and creates forty child processes. Each stage keeps its objects alive together. It then makes and closes a thousand pipes, a thousand ptys and a thousand sockets; after each cycle, the heap's bytes in use must equal the starting value and its page count must be within two of the starting count.
 
@@ -262,4 +302,4 @@ Process records are allocated from the kernel heap without a fixed count; a fork
 
 ## Verification
 
-`make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`, which is the 21 system suites that between them exercise every subsystem. `tests/run host` compiles selected kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer. `tests/run style` builds the kernel with warnings as errors, runs the static and text checks, compares source lists, and validates the linked ELF. `tests/run NAME` runs the specialized boot, disk, network, shutdown, and self-build suites; `tests/registry` lists them.
+`make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`, the tier `tests/registry` marks `core`, which between them exercise every subsystem. `tests/run host` compiles selected kernel logic natively under AddressSanitizer and UndefinedBehaviorSanitizer. `tests/run style` builds the kernel with warnings as errors, runs the static and text checks, compares source lists, and validates the linked ELF. `tests/run NAME` runs the specialized boot, disk, network, shutdown, and self-build suites; `tests/registry` lists them.
