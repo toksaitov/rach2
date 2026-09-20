@@ -150,6 +150,28 @@ prefix works; one built for another target does not.
   the three accepts `--version` everywhere. For FUSE it runs `pkg-config
   --exists` for `fuse`, then for `fuse-t`.
 
+## Working an installed machine from the host
+
+The procedures a machine is installed and updated by are the manual's: `rach2-install(8)`, `recovery(7)`, `bootctl(8)`, `reflash(8)` and `disk(7)`. What is here is what the host does around them, and the machine's own address, geometry and offsets are in the milestone records under `dev-log/`.
+
+Every root has an SSH host key of its own, generated at boot for the RAM roots, so a fresh known-hosts file per system is the rule:
+
+    ssh -i krffs/rach2_demo_ed25519 -o UserKnownHostsFile=/tmp/k-NAME \
+        -o StrictHostKeyChecking=accept-new root@ADDRESS
+
+Write `-i KEY` before the destination: after it, ssh reads the two words as part of the remote command, offers the default identities instead, and the machine refuses a login that looks correct. Root logs in by key alone, since `init` starts the server with `-g`; `su` from the unprivileged account is the other way in. There is no sftp server, so a file goes over with `ssh ... 'cat > /tmp/f' < f` and comes back with `ssh ... 'cat /tmp/f' > f`.
+
+Check the credentials before writing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra`. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
+
+    ssh-keygen -y -f krffs/rach2_demo_ed25519 | cut -d' ' -f2
+    cut -d' ' -f2 krffs/authorized_keys
+
+A root written with keys whose private halves are on another machine can then be reached only from recovery.
+
+The kernel's log leaves on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the boot line. `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` keeps it, which is the only record of a panic on a machine with no serial port: the screen shows one line and the boot log dies with the machine.
+
+The recovery stick is `build/images/rach2-recovery-stick.img` written to the whole stick, its second partition then formatted as a save volume; the boot test is `build/images/rach2-stick.img` written the same way. `accept/metal_accept.sh HOST [PORT] [STICK-SERIAL]` is the scripted half of acceptance, described in [the system tests' Readme](../tests/system/Readme.md).
+
 ## `tests/run style`
 
 `verify/check.sh` runs a preflight followed by twenty-one numbered checks:

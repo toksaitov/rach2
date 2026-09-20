@@ -4,6 +4,24 @@
 
 Rach2 is a small educational operating system for 32-bit x86. It boots into a Unix-like system with accounts, a shell, a writable file system, networking, SSH, audio, a C compiler, and Doom. Rach2 can rebuild its own kernel, shell, and utilities from source.
 
+## System
+
+The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
+
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+
+The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
+
+Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 and USB 3.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A stick that answers can be pulled out at any moment, the read in flight answering `EIO` and the mount going once its files close; one that had stopped answering panicked the kernel once when pulled, which milestone 43 records as open. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
+
+## Images
+
+* `test` contains the guest probes and their fixtures.
+* `os-simple` uses the project's own init, login, ISH shell, and utilities.
+* `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`. `make os-real-ext2` builds the same manifest as an ext2 volume, `build/images/os-real.ext2`, which the kernel boots from a disk partition with `rach2.root=ext2`.
+
+Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make rach2-stick-image` builds `build/images/rach2-stick.img`, the metal ISO followed by an exFAT volume, which a machine boots from a USB socket and then mounts through `/dev/diskNp2`, using the stick's disk number from `/proc/usb`. With no other disk registered, the source is `/dev/disk0p2`. The root Makefile names them. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
+
 ## Build and run
 
 A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, QEMU, mtools, e2fsprogs, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its own tools before compiling and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
@@ -26,24 +44,6 @@ Other useful targets are:
 
 Image targets only build artifacts. The run scripts and test targets start QEMU.
 
-## Images
-
-* `test` contains the guest probes and their fixtures.
-* `os-simple` uses the project's own init, login, ISH shell, and utilities.
-* `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`. `make os-real-ext2` builds the same manifest as an ext2 volume, `build/images/os-real.ext2`, which the kernel boots from a disk partition with `rach2.root=ext2`.
-
-Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make rach2-stick-image` builds `build/images/rach2-stick.img`, the metal ISO followed by an exFAT volume, which a machine boots from a USB socket and then mounts through `/dev/diskNp2`, using the stick's disk number from `/proc/usb`. With no other disk registered, the source is `/dev/disk0p2`. The root Makefile names them. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
-
-## System
-
-The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
-
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
-
-The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
-
-Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 and USB 3.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A stick that answers can be pulled out at any moment, the read in flight answering `EIO` and the mount going once its files close; one that had stopped answering panicked the kernel once when pulled, which milestone 43 records as open. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
-
 ## Building on Rach2
 
 `os-real` installs TinyCC, pdpmake, and the project sources. The kernel is under `/src/rach2`, the utilities under `/src/utils`, and ISH under `/src/ish`. Each directory has a POSIX `guest.mk` for pdpmake.
@@ -61,11 +61,17 @@ Rach2 has no dynamic linker, so guest executables are static. [TinyCC](vendor/tc
 
 ## Limits
 
-The kernel manages every usable whole frame of physical memory below 4 GiB described by the firmware's map, after boot reservations. Process records are allocated from the kernel heap without a fixed count, and each process's descriptor table grows from 16 entries to a limit of 1024. `prlimit64` maintains limits on processes per real user and on descriptors and address-space bytes per process; init reads their initial settings from `/etc/rach2/limits`, or leaves the kernel defaults when the file is absent. Programs are static, a root is KRFFS or ext2, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with twelve table entries shared by every device, hubs included, and two hubs at once. Under twenty SSH sessions building the kernel at once for an hour on the Lenovo, the longest gap between timer ticks was 30 ms and the longest wait for a request slot 27 ms, with the console never waiting (`dev-log/43-machine/hardware.md`). Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
+The kernel manages every usable whole frame of physical memory below 4 GiB that the firmware's map describes, after boot reservations, and identity-maps the first 32 MiB. Process records, sockets, pipes, mounts and file-system nodes are allocated from the kernel heap without a fixed count; a fork or an open the heap cannot serve answers `ENOMEM`. Each process's descriptor table grows from 16 entries to a limit of 1024. `prlimit64` maintains limits on processes per real user and on descriptors and address-space bytes per process; init reads their initial settings from `/etc/rach2/limits`, or leaves the kernel defaults when the file is absent.
+
+Programs are static, a root is KRFFS or ext2, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with sixteen device table entries shared by every device, hubs included, and eight hubs at once. Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics.
+
+[`limits(7)`](man/man7/limits.7) is the manual's page of these numbers, and the [kernel Readme](rach2/Readme.md#hardware-and-limits) states them beside what enforces each one. `dev-log/53-audit/bounds.md` is the inventory of every bound in the tree with its class and its reason.
 
 ## Hardware status
 
-QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. Since milestone 43 the laptop boots the complete `os-real` system from an ext2 root through the AHCI controller. That root was the fourth partition of four until 2026-09-14, with a KRFFS root on the second that the boot menu's fallback entry booted; the disk this tree builds has three partitions and one root, and a machine installed before that date keeps the layout it was installed with. the move was rehearsed in emulation by `tests/run sealed` and is recorded step by step in `dev-log/43-machine/hardware.md`. RTL8168GU networking and keyed SSH work, file system changes persist across reboots and a power cut, and a kernel install through `bootctl`, a root written through `reflash` and the boot menu rewritten have each completed on the machine. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, on a root port and behind the owner's USB 3.0 hub, whose SuperSpeed half is driven too; the owner's flash drive works in both partition-table formats on every socket and behind the hub, and the laptop boots from the stick image. On 2026-09-12 `rach2-install` wrote the system onto that SSD from the stick, with the owner naming the disk, and grew the root to 487106928 sectors, about 232 GiB, where the sealed layout's root was a 1 GiB ext2 in a 2 GiB partition; the machine has root and one account, answers SSH on both, and carries the install's boot slots. The metal acceptance passes 66 rows there when it is run as root, and twenty SSH sessions reported 361 successful kernel-build completions with none failed, across separate 3600-second guest-tick windows including final builds completed after their deadlines. This count does not measure throughput within one wall-clock hour. `dev-log/43-machine/notes.md` lists what the machine showed that the emulator had not, with what was fixed and what is still open. `dev-log/50-shortcomings/Readme.md` records the install, the devices and the load row, and the 47 problems those milestones and that sitting produced. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the earlier hardware results.
+QEMU is the development and test environment. Rach2 also runs on a Lenovo G50-70 from an SSD in the laptop's SATA bay, where it boots the complete `os-real` system from an ext2 root through the AHCI controller, answers SSH over RTL8168GU networking, drives a USB keyboard, mouse, hub and flash drive, and runs Doom. The machine was installed from the stick by `rach2-install` on 2026-09-12 and its root grown to the whole disk.
+
+What each sitting measured, and what the machine showed that the emulator had not, is in the milestone records, which are where those numbers live and are not repeated here: [milestone 43](dev-log/43-machine/hardware.md) for the machine's own readings, its identity, geometry and offsets, [milestone 50](dev-log/50-shortcomings/Readme.md) for the install, the devices and the load row, and [milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) for the earlier results. `dev-log/50-shortcomings/plan.md` is the open list of what is still wrong.
 
 ## What a fresh disk holds
 
@@ -98,7 +104,7 @@ umount /mnt/k
 loopctl detach 0
 ```
 
-The other three go the same way, each with its own file and type: `/demo/fat32.img` as `vfat`, `/demo/exfat.img` as `exfat`, `/demo/ext2.img` as `ext2`. Changing only the `-t` leaves the KRFFS image attached and the wrong driver reading it. There are four loop devices and two KRFFS volumes may be mounted at once. A write or a truncation of an attached image answers `EBUSY`; on ext2 the file can still be renamed or unlinked, and the image survives that because the loop device holds its inode, so unmount and detach before replacing or removing it.
+The other three go the same way, each with its own file and type: `/demo/fat32.img` as `vfat`, `/demo/exfat.img` as `exfat`, `/demo/ext2.img` as `ext2`. Changing only the `-t` leaves the KRFFS image attached and the wrong driver reading it. There are four loop devices, and a mount of any type takes its record from the kernel heap, so what limits the volumes mounted at once is memory. A write or a truncation of an attached image answers `EBUSY`; on ext2 the file can still be renamed or unlinked, and the image survives that because the loop device holds its inode, so unmount and detach before replacing or removing it.
 
 There is no KRFFS formatter on the machine. An image of one's own is a copy of the empty one:
 
@@ -117,104 +123,11 @@ An image of another size is built on the host and copied over: `sh krffs/mkimage
 
 ## Installing and updating a machine
 
-A machine is installed from the stick `make rach2-install-stick` writes: the recovery system, and after it an exFAT volume carrying the whole disk image and a manifest naming that image's length and SHA-256. Boot the stick, log in at the console as root, and run `rach2-install`. It lists the disks it could write with what each one is and why the others were passed over, asks for root's password, the first account's name, password and keys, whether to grow the root into the whole disk, and then for the disk's own name typed back. Nothing is written before that answer. It then checks the image against the manifest, writes it, reads it back and compares, has the kernel read the new table, writes the accounts and the SSH policy into the root, and grows it. `utils/rach2-install.txt` is the reference; `rach2-recover` is the menu for a machine that will not boot, which lists what the machine has, checks a file system, puts a saved image back and installs a kernel.
+The procedures are the manual's, written once and read on the machine as well as here: [`rach2-install(8)`](man/man8/rach2-install.8) installs a machine from the stick `make rach2-install-stick` builds, [`recovery(7)`](man/man7/recovery.7) describes the recovery system and the three update paths, a kernel through [`bootctl(8)`](man/man8/bootctl.8), a root through `rach2-install --update`, and a partition the installer does not know about through [`reflash(8)`](man/man8/reflash.8), and [`disk(7)`](man/man7/disk.7) describes the raw windows those writes go through. `man rach2` on a running machine is the same text.
 
-The laptop is maintained over SSH from a host that has built the artifacts; nothing here needs the disk out of the bay. There are three paths and they are not interchangeable. A kernel goes into a boot slot from the running system. A whole root file system goes in from the recovery system with `rach2-install --update`, which keeps the accounts, the SSH policy and the host keys the machine has; the raw `reflash` path below is what that is built on and what remains for a partition the installer does not know about.
+The measured facts of the one installed machine, its address, its disk's geometry and the offsets a raw write depends on, are in [`dev-log/43-machine/hardware.md`](dev-log/43-machine/hardware.md). Read them from there rather than from memory: a command with an offset from an older layout writes into the middle of a partition this one has.
 
-A kernel, from the ordinary system:
-
-```sh
-KEY=krffs/rach2_demo_ed25519
-ssh -i $KEY root@ADDRESS 'cat > /tmp/kernel' < build/rach2/kernel   # the machine has no sftp server, so scp does not work
-ssh -i $KEY root@ADDRESS 'bootctl kernel /tmp/kernel'
-ssh -i $KEY root@ADDRESS reboot
-ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
-```
-
-`bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs one reboot and leaves the machine on the fallback: the candidate slot holds the new kernel and the saved default is the fallback until a later install or commit changes them.
-
-A root file system, from the machine's own recovery entry, keeping the machine's accounts. Two identities are in play and they are not the same: the recovery system carries the demonstration key it was built with, and an installed root carries whatever the install put there, which is the first account's key and root's password. `rach2-install --update` is on a recovery system built at milestone 49 or later; the Lenovo's recovery partition is milestone 43's, so it is written from a booted install stick before this path is available there.
-
-```sh
-RKEY=krffs/rach2_demo_ed25519         # recovery's own key, as it was built
-ssh -i $RKEY root@ADDRESS 'bootctl trial recovery' && ssh -i $RKEY root@ADDRESS reboot
-# recovery boots a RAM root, takes a DHCP address, and answers SSH on it
-ssh -i $RKEY root@ADDRESS 'cat > /tmp/root.ext2' < build/images/rach2-metal-disk.ext2
-ssh -i $RKEY root@ADDRESS 'rach2-install --update /tmp/root.ext2 /dev/disk0'
-ssh -i $RKEY root@ADDRESS reboot
-# then, on the installed system, with its own credentials:
-ssh -i IKEY USER@ADDRESS 'cat /proc/mounts'      # read the root's line yourself
-ssh -i IKEY USER@ADDRESS 'bootctl status'        # and the slot report
-ssh -i IKEY USER@ADDRESS 'bootctl commit'        # only when both say what they should
-```
-
-`--update` copies the account files, the SSH policy and the host keys off the root before it writes and writes them back after, or takes the account files and the policy from the archive the install left on the recovery partition when the root no longer reads, naming each file where the two disagree, grows the root into its partition again, makes recovery the saved default before the write, cancels any trial already armed, and arms one trial boot of the new root after it; the machine that comes back is either the new root, which `commit` then makes the default, or recovery, which is where a write cut in half returns. The fallback entry cannot save a root: both kernel entries mount the same one, and the fallback is the previous kernel. `commit` is a person's decision after reading the mount table and the slot report, as it is for a kernel: a root that mounted read-only answers SSH too, and `bootctl` reads the slot and the command line, not the mount. The raw path `--update` is built on, for a partition it does not know about:
-
-The partition `--update` does not know about is the recovery one, and this is how that is written. It is done from the disk's own recovery entry, which runs from RAM, so the partition being written is not mounted; the saved default stays the candidate for this one write, because what is being overwritten is the system a torn write would otherwise return to. If it does tear, the stick is the way back.
-
-```sh
-dd if=build/images/rach2-sealed.disk of=recovery.img bs=512 skip=133120 count=131072
-ssh -i $KEY root@ADDRESS 'bootctl trial recovery' && ssh -i $KEY root@ADDRESS reboot
-# recovery boots a RAM root, takes a DHCP address, and answers SSH on it
-gzip -c recovery.img | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 68157440 67108864'
-ssh -i $KEY root@ADDRESS 'dd if=/dev/disk0 bs=512 skip=133120 count=131072 | sha256sum'
-ssh -i $KEY root@ADDRESS reboot
-```
-
-The offsets are the sealed layout that `make rach2-sealed-disk` fixes: a 1 MiB gap, a 64 MiB FAT boot partition at byte 1048576, a 64 MiB recovery partition at byte 68157440, sector 133120, a spare MiB, and the 1 GiB ext2 root at byte 136314880, sector 266240. A 500 MiB KRFFS root stood between the boot and recovery partitions until 2026-09-14, and the ext2 root began at byte 660602880; a command with an old number writes into the middle of a partition this layout has, which is why these numbers are read from here and not remembered. Compare the hash the machine reports with `shasum -a 256 recovery.img` on the host before rebooting.
-
-The ext2 root, from recovery, the same way with its own offsets, and checked there before anything boots it:
-
-```sh
-ssh -i $KEY root@ADDRESS 'bootctl env saved_entry recovery'   # from recovery, before the write; a torn write returns here
-gzip -c build/images/rach2-metal-disk.ext2 | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 136314880 1073741824'
-ssh -i $KEY root@ADDRESS 'e2fsck -fn /dev/disk0p3'
-ssh -i $KEY root@ADDRESS 'bootctl env saved_entry recovery && bootctl trial candidate' && ssh -i $KEY root@ADDRESS reboot
-ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status'
-# only when the root line reads /dev/disk0p3 / ext2 rw,relatime and the boot is the candidate:
-ssh -i $KEY root@ADDRESS 'bootctl commit'
-```
-
-Both kernel entries boot the same root, so a root that does not come up is not something the fallback can save: the saved default is recovery for the whole of a write, and the boot after a failed trial is recovery with nothing armed. `commit` is a person's decision after reading the mount table and the slot report, because `bootctl` checks the slot and the command line and not the mount: a root the check mounted read-only answers SSH too, and committing it would make a read-only system the default. A root that mounts read-only because its check found a fault is repaired from recovery with `e2fsck -y /dev/disk0p3`, which is a program a person runs at the shell recovery gives them. There is no menu entry that repairs: a boot is not a repair tool, and one that checked every ext2 partition on the way past would do it at every start. `rach2.fsck` still makes recovery's `init` run `e2fsck -p` on every ext2 partition before it starts anything, for a machine whose console is the only way in: add it to the recovery entry's line at the GRUB menu with `e`. The recovery on the laptop's own second partition is the tree's since milestone 43, with `e2fsck` and the USB stack; a recovery partition is rewritten the way the boot partition is, under "Working the machine from the host".
-
-### Working the machine from the host
-
-The procedures milestone 43 used on the machine:
-
-* Every root has an SSH host key of its own, generated at boot for the RAM roots, so a fresh known-hosts file per system is the rule: `ssh -i krffs/rach2_demo_ed25519 -o UserKnownHostsFile=/tmp/k-NAME -o StrictHostKeyChecking=accept-new root@192.168.0.106`. The ordinary and recovery roots take their address from DHCP, 192.168.0.106 on the owner's network; a boot from the metal stick takes the fixed 192.168.0.105. Root logs in by key only, since `init` starts the server with `-g`, which forbids root password logins; `su` from the `test` account with the demo password is the other way in. Write `-i KEY` before the destination: after it, ssh takes the two words as part of the remote command, offers the default identities instead, and the machine refuses a login that looks correct. There is no sftp server: copy a file with `ssh ... 'cat > /tmp/f' < f`, and back with `ssh ... 'cat /tmp/f' > f`.
-* `/dev/disk0`, the raw window, is published with `rach2.diskdiag` on the boot line or automatically by the recovery kernel, and is writable only in the recovery kernel. A machine with several disks also has `/dev/disk1` and so on, numbered in registration order. Every partition read or write goes through recovery: `bootctl trial recovery && reboot` from the running root boots the disk's recovery entry, which is a RAM root with `reflash`; `bootctl env saved_entry recovery` makes it the default for the length of a repair. A recovery booted from the stick could not arm a trial or set the saved entry in this milestone's runs; arm trials from the disk's recovery entry or from the root.
-* A one-boot command line that the fixed menu does not offer, such as `rach2.nomsi` or `rach2.blocklag=30`, is a staged menu file: `bootctl config FILE` puts it in `/boot/boot.cfg`, where GRUB sources it before its own next-entry handling, and a file that consumes the trial itself boots exactly once. The form that works, with the root's own line and the extra tokens at its end:
-
-  ```
-  if [ "${next_entry}" = "candidate" ]; then
-      set next_entry=
-      save_env next_entry
-      set root=(hd0,msdos1)
-      multiboot /boot/kernel rach2.root=ext2 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.nomsi
-      boot
-  fi
-  ```
-
-  Stage it, `bootctl trial candidate`, reboot; afterwards stage a file holding one comment line so the slot is empty again.
-* The boot partition and the recovery partition are FAT volumes rewritten whole: read the partition from recovery into a file on the host (`dd if=/dev/disk0 bs=512 skip=START count=SECTORS` over ssh), keep that file as the saved copy, put the new file into a copy with `mcopy -o -i COPY.img NEWFILE ::/boot/NAME`, and `gzip -c COPY.img | ssh ... 'gunzip | reflash /dev/disk0 BYTE SIZE'`, then hash the partition back. The boot partition is sector 2048 for 131072 sectors, byte 1048576; the recovery partition sector 133120 for 131072, byte 68157440; the ext2 root sector 266240 for 2097152, byte 136314880. A saved copy also goes on the stick's save volume, mounted on the machine as the stick's second partition; a 64 MiB copy through the FAT driver there takes minutes, so `gzip` it first.
-* The disk rule in `CLAUDE.md` applies to every write that is not `bootctl kernel`: the recovery stick booted and shown to reach `reflash`, the sectors saved on the host and on the stick, recovery the saved default until the write is verified, and the owner's approval naming the device at the time.
-* The recovery stick is `build/images/rach2-recovery-stick.img` written to the whole stick on the Mac, its 8 GiB second partition then formatted with `newfs_msdos -F 32 -v RACH2SAVE /dev/rdiskNs2`, N being the stick's number in `diskutil list`; the data stick for a test is the same stick formatted on the Mac with `diskutil eraseDisk ExFAT NAME GPT /dev/diskN` or `MBR`; the boot test is `build/images/rach2-stick.img` written the same way. The owner chooses the stick at the BIOS boot menu and takes the first GRUB entry.
-* `reboot` and `reboot -f` both unmount the ext2 root cleanly; only a power cut leaves it dirty for the check. `poweroff` turns the machine off; `halt` takes no `-p`.
-* The acceptance script is `sh tests/system/accept/metal_accept.sh 192.168.0.106 22`, run from the host with the hub, the keyboard, the mouse and a stick plugged in; it writes its known-hosts file under `build/images/`.
-* The kernel's log goes out on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the line; `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` on the Mac keeps it, which is the only record of a panic, since the screen shows one line and the boot log dies with the machine.
-* The laptop's hardware clock holds UTC, set so in the BIOS setup on 2026-09-04; the kernel reads the clock as UTC and has no notion of a zone, so a clock left on local time puts every file's time hours out.
-* `/proc/usb`, `/proc/interrupts`, `/proc/disk`, `/proc/meminfo` and `dmesg` are the machine's own readings; `bootctl status` reports the slots and the saved and next entries.
-
-Check the credentials before flashing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra` belonging to whoever works on the machine. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
-
-```sh
-ssh-keygen -y -f krffs/rach2_demo_ed25519 | cut -d' ' -f2
-cut -d' ' -f2 krffs/authorized_keys
-```
-
-A root flashed with keys whose private halves are on another machine can then be reached only from recovery.
-
-Recovery can also be selected at the GRUB menu by a person at the machine. It mounts nothing from the disk it repairs. [Milestone 25](dev-log/25-sealed/Readme.md#phase-g-recovery-and-whole-disk-reflash) designed both paths, and `make sealed-test` rehearses them in emulation.
+What the host does around those procedures, the SSH form, the credential check before a root write, and the netconsole capture, is in the [tools Readme](tools/Readme.md#working-an-installed-machine-from-the-host). Every write to that disk that is not a kernel install through `bootctl` is under the hardware rule in [`CLAUDE.md`](CLAUDE.md): the recovery stick booted and shown to work, the sectors saved on the host and on the stick, recovery the saved default until the write is verified, and the owner's approval naming the device at the time.
 
 ## Repository map
 

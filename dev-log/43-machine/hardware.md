@@ -338,6 +338,31 @@ The machine the milestone leaves plays the tree's own shareware IWAD as
 
 `tests/run all` on the final tree: 70 suites, all passed.
 
+## The installed disk, as it stands
+
+The geometry a raw write to this machine depends on, read from the machine
+after milestone 50's install. The general procedures are the manual's
+(`recovery(7)`, `reflash(8)`, `disk(7)`); these are the numbers they take.
+
+| Partition | Node | What it is | Start | Length |
+|-----------|------|------------|-------|--------|
+| 1 | `/dev/disk0p1` | boot: GRUB, the two kernel slots, the menu | sector 2048, byte 1048576 | 131072 sectors, 64 MiB |
+| 2 | `/dev/disk0p2` | recovery: the recovery kernel and its RAM root | sector 133120, byte 68157440 | 131072 sectors, 64 MiB |
+| 3 | `/dev/disk0p3` | the ext2 root, grown into the disk | sector 266240, byte 136314880 | 487106928 sectors |
+
+The MBR identifier is `1acef00d`, the boot partition's FAT serial the same
+and the recovery partition's `1acef003`. Both kernel entries boot partition
+3 as `rach2.root=MBRID=1acef00d,3 rach2.rootfstype=ext2`, so the fallback
+entry is the previous kernel and not another system; recovery boots a RAM
+root and mounts nothing from the disk. A layout before 2026-09-14 had a
+KRFFS root between the boot and recovery partitions and the ext2 root at
+byte 660602880; a command with those numbers writes into the middle of a
+partition this disk has.
+
+The machine's hardware clock holds UTC, set so in the BIOS setup on
+2026-09-04. The kernel reads the clock as UTC and has no notion of a zone,
+so a clock left on local time puts every file's time hours out.
+
 ## Milestone 50: the sitting
 
 The disk installed again from the stick's image of the tree at
