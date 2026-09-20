@@ -463,8 +463,10 @@ static int32_t sys_nanosleep(isr_params_t *params)
     return 0;
 }
 
-/* getrandom flag bits (Linux). We never block and have one source, so they only
- * gate validation here. */
+/* getrandom flag bits (Linux). Nothing here blocks and there is one source,
+ * so `GRND_NONBLOCK` and `GRND_RANDOM` only have their values checked;
+ * `GRND_INSECURE` decides whether an untrusted generator answers with bytes
+ * or with `EIO`. */
 #define GRND_NONBLOCK 0x0001u
 
 #define GRND_RANDOM 0x0002u
@@ -1139,16 +1141,18 @@ static int32_t sys_sethostname(isr_params_t *params)
     return 0;
 }
 
-/* Name each missing syscall behind `rach2.trace=enosys`, once per number PER
- * PROCESS, not once per boot. Per boot was the first shape and it hides
+/* Name each missing syscall behind `rach2.trace=enosys`, once per number for
+ * the process that last asked for it, not once per boot. Per boot was the first shape and it hides
  * exactly what such a trace is for: `login` asks for setitimer early, so a
  * later program asking for the same number would say nothing, and a reader
  * comparing before and after would conclude the later program asked for
  * nothing. Recording which process last reported a number costs one word per
- * number and makes each program's own gaps visible.
+ * number and makes each program's own gaps visible; two programs asking for
+ * the same number in turn each say so, since the word holds one of them.
  *
- * A number the table cannot hold is printed every time, since there is nowhere
- * to remember it; nothing should ever ask for one, and a boot that fills the
+ * A number past the table is remembered as one number and one process, so a
+ * program asking for the same one twice says it once and two numbers in turn
+ * say it each time; nothing should ever ask for one, and a boot that fills the
  * console with one is telling the truth about a program in a retry loop. Off
  * unless the flag is on the command line, so no other boot sees a line it did
  * not before. */
@@ -1240,12 +1244,12 @@ static void _syscall_handler(isr_params_t *params)
     }
     /* Deliver what this call put on the loopback ring, here at its exit rather
      * than only on the next tick, so a local transfer is not paced at a ring a
-     * tick. The threshold is three datagrams of the ring's 48: at one or two
+     * tick. The threshold is three datagrams, `LOOP_DRAIN_AT`, of the ring's 64: at one or two
      * the delivery is left to the timer, which is what lets the two crossing
      * SYNs of a simultaneous open both be queued before either is delivered.
      * The sender's own frames are gone by here, so no delivery runs under
      * them. Interrupts are off, the drain refuses to run inside itself, and it
-     * takes at most 192 datagrams; what is left is taken by the next call's
+     * takes at most four times the ring's 64 slots in one run; what is left is taken by the next call's
      * exit or by the timer. */
     if (ip_loop_crowded()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);

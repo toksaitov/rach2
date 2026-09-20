@@ -9,7 +9,8 @@
  * milestone 53 divided it along its arms; the bodies did not change.
  */
 
-/* User stack base address (stack grows down from here) */
+/* The initial user stack's lowest address: one page is mapped here, and
+   `build_user_stack` fills it downward from the page's end. */
 #define USER_STACK_BASE 0xBFFFF000
 
 extern volatile uint32_t fb_owner_pid;
