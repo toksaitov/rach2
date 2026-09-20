@@ -1129,7 +1129,7 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
 }
 
 /* Free clusters are the bitmap's zero bits, counted once and kept. */
-static int count_free(struct ex_mount *em)
+K_NOINLINE static int count_free(struct ex_mount *em)
 {
     uint32_t c = 0, free_count = 0;
 
@@ -1215,7 +1215,7 @@ static int not_exfat(void)
 
 /* The boot checksum of the region at sector `first`: the rotate-and-add
  * sum over its eleven sectors, skipping VolumeFlags and PercentInUse. */
-static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
+K_NOINLINE static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
 {
     uint32_t s = 0;
     uint32_t sec, i;
@@ -1240,7 +1240,7 @@ static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
 
 /* The stored boot checksum at sector `n`: every 32-bit word of the sector
  * repeats it, or the sector is not a checksum sector. */
-static int checksum_sector(struct ex_mount *em, uint64_t n, uint32_t *sum)
+K_NOINLINE static int checksum_sector(struct ex_mount *em, uint64_t n, uint32_t *sum)
 {
     uint8_t raw[512];
     uint32_t i;
@@ -1263,7 +1263,7 @@ static int checksum_sector(struct ex_mount *em, uint64_t n, uint32_t *sum)
  * and the runs expanding to exactly 65536 mappings with no zero-length,
  * truncated or overlong run. Fills the held form when it fits. 0 with the
  * checksum in `sum`, -1 for a table that breaks a rule, or -EIO. */
-static int upcase_check(struct ex_mount *em, uint32_t *sum)
+K_NOINLINE static int upcase_check(struct ex_mount *em, uint32_t *sum)
 {
     uint64_t at = 0;
     uint32_t s = 0, u = 0, markers = 0, m;
@@ -3728,7 +3728,7 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
 
 /* 0 when the volume is consistent or was repaired, 1 when it mounts
  * read-only with the fault named, or a negative error. */
-static int ex_check_volume(struct ex_mount *em)
+K_NOINLINE static int ex_check_volume(struct ex_mount *em)
 {
     struct check_state w;
     uint32_t stack_first[CHECK_DEPTH], stack_resume[CHECK_DEPTH], stack_names[CHECK_DEPTH],
