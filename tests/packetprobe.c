@@ -329,6 +329,9 @@ struct sockaddr_ll_probe {
     uint8_t sll_addr[8];
 };
 
+/* An all-zero address, for clearing one before a call fills it. */
+static const struct sockaddr_ll_probe zero_sll;
+
 struct iovec_probe {
     void *iov_base;
     size_t iov_len;
@@ -812,16 +815,7 @@ void _start(void)
         for (i = 0; i < sizeof(sll); i++) {
             ((uint8_t *)&sll)[i] = 0xa5;
         }
-        /* Cleared first, so every field below is the kernel's answer and not
-           what this program put there before the bind. */
-        {
-            unsigned int z;
-            char *p = (char *)&sll;
-
-            for (z = 0; z < sizeof(sll); z++) {
-                p[z] = 0;
-            }
-        }
+        sll = zero_sll; /* so each field below is the kernel's answer */
         senderlen = sizeof(sll);
         args[0] = (uint32_t)arp_fd;
         args[1] = (uint32_t)&sll;

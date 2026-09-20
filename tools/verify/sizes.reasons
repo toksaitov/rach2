@@ -601,7 +601,7 @@ tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the 
 tests/ownprobe.c:child_main lines 134 a probe, one sequence of steps in the order the log records them
 
 tests/packetprobe.c:_start complexity 145 a probe, one sequence of steps in the order the log records them
-tests/packetprobe.c:_start lines 681 a probe, one sequence of steps in the order the log records them
+tests/packetprobe.c:_start lines 682 a probe, one sequence of steps in the order the log records them
 
 tests/partsprobe.c:probe_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/partsprobe.c:probe_main lines 115 a probe, one sequence of steps in the order the log records them
