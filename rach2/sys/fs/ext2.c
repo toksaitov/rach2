@@ -2216,6 +2216,14 @@ static int ext2_fsync(struct vfs_mount *mnt, void *handle)
     return bcache_sync(em_of(mnt)->dev);
 }
 
+/**
+ * Write `count` bytes of `buf` at `offset`, growing the file as needed.
+ *
+ * A failure anywhere is the error and not a short count. The batch still ends
+ * on that path, so bytes it marked reach the disk past a size that covers
+ * them; they are unreachable through the inode, and the next write to that
+ * range overwrites them.
+ */
 static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                           uint64_t offset)
 {
@@ -2316,10 +2324,7 @@ out:
         (void)batch_end(em); /* a failure inside the batch: what it marked still goes out */
     }
     vfs_ns_unlock(mnt);
-    /* A failure anywhere is the error, never a count. The batch above still
-     * ends, so bytes it marked reach the disk past a size that covers them;
-     * they are unreachable through the inode and the next write overwrites
-     * them. */
+    /* A failure anywhere is the error, never a count. */
     return rc != 0 ? rc : (int32_t)count;
 }
 

@@ -37,7 +37,7 @@ krffs/stageimage.krffs.c:stage_node params 8 one procedure over a file format, i
 krffs/stageimage.krffs.c:stage_tree lines 127 one procedure over a file format, in the order the format is read
 
 rach2/kernel.c:check_strings nesting 6 a parser over an external format, one check per field in the format's order
-rach2/kernel.c:exec_program lines 164 a dispatcher, one arm per command, read as a table
+rach2/kernel.c:exec_program lines 165 one program loaded and entered, its stages in the order the loader takes them
 rach2/kernel.c:k_main complexity 77 the boot sequence, in the order the hardware requires
 rach2/kernel.c:k_main lines 507 the boot sequence, in the order the hardware requires
 rach2/kernel.c:process_command complexity 122 a dispatcher, one arm per command, read as a table
@@ -143,7 +143,7 @@ rach2/sys/fs/krffs.c:krffs_repair_at complexity 42 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_repair_at lines 130 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_resize_at lines 121 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/krffsmount.c:krffs_volume_mount lines 101 one file system operation over the on-disk format, each step a rule of the format

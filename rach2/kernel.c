@@ -2558,6 +2558,72 @@ broken:
          what, len, src, dst);
 }
 
+#ifdef RACH2_RECOVERY
+/**
+ * Prove the whole-disk write path: WRITE, FLUSH and READ of one sector.
+ *
+ * The last sector lies past every MBR partition and past the boot gap, so the
+ * round-trip disturbs neither a mounted file system nor a future bootloader.
+ * A GPT disk is the exception: its backup header is that same sector, and
+ * overwriting it leaves a disk only a repair tool can open. LBA 1 says which
+ * kind this is.
+ */
+static void disk_write_roundtrip(void)
+{
+    static const char gpt_signature[] = "EFI PART";
+    static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
+    static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
+    uint64_t lba;
+    uint32_t i;
+    int is_gpt = 1;
+    int ok = 1;
+
+    if (_krffs_on_disk) {
+        console_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
+        return;
+    }
+    if (block_ready() != 0 || !block0) {
+        console_printf("disk: no boot disk\n");
+        return;
+    }
+    if (block0->read(block0, 1, 1, disk_sector) != 0) {
+        console_printf("disk: LBA 1 unreadable; the last sector is not written\n");
+        return;
+    }
+    for (i = 0; i < 8; ++i) {
+        if (disk_sector[i] != (uint8_t)gpt_signature[i]) {
+            is_gpt = 0;
+            break;
+        }
+    }
+    if (is_gpt) {
+        console_printf("disk: GPT disk; the last sector is its backup header, not "
+                       "a scratch sector\n");
+        return;
+    }
+
+    lba = block0->sector_count - 1;
+    for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
+        disk_scratch[i] = (uint8_t)(i ^ 0x5A);
+    }
+    if (block0->write(block0, lba, 1, disk_scratch) != 0) {
+        console_printf("disk: write of the last sector failed\n");
+        return;
+    }
+    if (block0->read(block0, lba, 1, disk_sector) != 0) {
+        console_printf("disk: read-back of the last sector failed\n");
+        return;
+    }
+    for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
+        if (disk_sector[i] != disk_scratch[i]) {
+            ok = 0;
+            break;
+        }
+    }
+    console_printf("disk: last-sector round-trip %s\n", ok ? "OK" : "MISMATCH");
+}
+#endif
+
 static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
@@ -2640,58 +2706,7 @@ static void process_command(const char *cmd)
         }
     } else if (str_equal(cmd, "disk write")) {
 #ifdef RACH2_RECOVERY
-        static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
-        static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
-
-        if (_krffs_on_disk) {
-            console_printf("disk: re-probe refused while KRFFS is mounted from disk\n");
-        } else if (block_ready() != 0 || !block0) {
-            console_printf("disk: no boot disk\n");
-        } else {
-            /* The last sector lies past every MBR partition and past the boot
-               gap, so the round-trip that proves WRITE + FLUSH + READ
-               disturbs neither a mounted file system nor a future bootloader.
-               A GPT disk is the exception: its backup header is that same
-               sector, and overwriting it leaves a disk only a repair tool can
-               open. LBA 1 says which kind this is. */
-            static const char gpt_signature[] = "EFI PART";
-            uint64_t lba = block0->sector_count - 1;
-            uint32_t i;
-            int is_gpt = 1;
-
-            if (block0->read(block0, 1, 1, disk_sector) != 0) {
-                console_printf("disk: LBA 1 unreadable; the last sector is not written\n");
-                return;
-            }
-            for (i = 0; i < 8; ++i) {
-                if (disk_sector[i] != (uint8_t)gpt_signature[i]) {
-                    is_gpt = 0;
-                    break;
-                }
-            }
-            if (is_gpt) {
-                console_printf("disk: GPT disk; the last sector is its backup header, not "
-                               "a scratch sector\n");
-                return;
-            }
-            for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
-                disk_scratch[i] = (uint8_t)(i ^ 0x5A);
-            }
-            if (block0->write(block0, lba, 1, disk_scratch) != 0) {
-                console_printf("disk: write of the last sector failed\n");
-            } else if (block0->read(block0, lba, 1, disk_sector) != 0) {
-                console_printf("disk: read-back of the last sector failed\n");
-            } else {
-                int ok = 1;
-                for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
-                    if (disk_sector[i] != disk_scratch[i]) {
-                        ok = 0;
-                        break;
-                    }
-                }
-                console_printf("disk: last-sector round-trip %s\n", ok ? "OK" : "MISMATCH");
-            }
-        }
+        disk_write_roundtrip();
 #else
         console_printf("disk: writing the whole disk needs a recovery kernel\n");
 #endif
