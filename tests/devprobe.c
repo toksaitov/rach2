@@ -161,8 +161,7 @@ void _start(void)
        reads past the table it is in. `BLKRRPART` is 0x125F and ENOTTY 25. */
     fd = do_open("/dev/null", O_RDONLY);
     check(fd >= 0, "open /dev/null for the ioctl row");
-    check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25,
-          "a disk's BLKRRPART on /dev/null is ENOTTY");
+    check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25, "a disk's BLKRRPART on /dev/null is ENOTTY");
     syscall1(SYS_CLOSE, fd);
 
     fd = do_open("/dev/null", O_WRONLY);
