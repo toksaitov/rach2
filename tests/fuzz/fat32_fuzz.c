@@ -40,10 +40,15 @@ static uint32_t le32_at(const unsigned char *p)
     return le16_at(p) | (le16_at(p + 2) << 16);
 }
 
-/* The region at `at` takes the input's bytes from `from`, and zeros where
-   the input ends early: a short input then loses the regions after its
-   end instead of keeping the seed's, so libFuzzer cannot shorten an input
-   to its first bytes and call the coverage the same. */
+/**
+ * The region at `at` takes the input's bytes from `from`, and zeros where the
+ * input ends early.
+ *
+ * A short input then loses the regions after its end instead of keeping the
+ * seed's, so libFuzzer cannot shorten an input to its first bytes and call
+ * the coverage the same. Nothing is read from `data` when the input ends
+ * before `from`, since `data + from` would be past the allocation.
+ */
 static void scatter(const unsigned char *data, unsigned long size, unsigned long at,
                     unsigned long from, unsigned long len)
 {
@@ -52,7 +57,9 @@ static void scatter(const unsigned char *data, unsigned long size, unsigned long
     if (have > len) {
         have = len;
     }
-    __builtin_memcpy(fs_image + at, data + from, have);
+    if (have > 0) {
+        __builtin_memcpy(fs_image + at, data + from, have);
+    }
     __builtin_memset(fs_image + at + have, 0, len - have);
 }
 

@@ -2,9 +2,11 @@
  * Fuzz harness for the exFAT driver (sys/fs/exfat.c): the input is the two
  * boot regions, the start of the table and the start of the cluster heap,
  * scattered into a 1 MiB volume the fixture maker builds in memory. The
- * boot checksum sector of each region is recomputed after the scatter, or
- * every mutation of a boot sector would die at the checksum and the fields
- * behind it would never be read.
+ * boot checksum sector of each region is recomputed after the scatter, since
+ * the driver refuses a region whose checksum does not match and the fields
+ * behind the boot sector would never be read. The driver accepts either
+ * region, and its checksum skips bytes 106, 107 and 112, so a mutation of
+ * those three reaches it whatever the checksum says.
  *
  * fuzz-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * fuzz-deps: rach2/sys/fs/fatcommon.c
@@ -37,10 +39,15 @@ static uint32_t le32_at(const unsigned char *p)
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-/* The region at `at` takes the input's bytes from `from`, and zeros where
-   the input ends early: a short input then loses the regions after its
-   end instead of keeping the seed's, so libFuzzer cannot shorten an input
-   to its first bytes and call the coverage the same. */
+/**
+ * The region at `at` takes the input's bytes from `from`, and zeros where the
+ * input ends early.
+ *
+ * A short input then loses the regions after its end instead of keeping the
+ * seed's, so libFuzzer cannot shorten an input to its first bytes and call
+ * the coverage the same. Nothing is read from `data` when the input ends
+ * before `from`, since `data + from` would be past the allocation.
+ */
 static void scatter(const unsigned char *data, unsigned long size, unsigned long at,
                     unsigned long from, unsigned long len)
 {
@@ -49,12 +56,16 @@ static void scatter(const unsigned char *data, unsigned long size, unsigned long
     if (have > len) {
         have = len;
     }
-    __builtin_memcpy(fs_image + at, data + from, have);
+    if (have > 0) {
+        __builtin_memcpy(fs_image + at, data + from, have);
+    }
     __builtin_memset(fs_image + at + have, 0, len - have);
 }
 
-/* The boot checksum of one region, sectors 0 to 10 folded into sector 11,
-   skipping the three bytes the specification leaves out. */
+/**
+ * The boot checksum of one region, sectors 0 to 10 folded into sector 11,
+ * skipping the three bytes the specification leaves out.
+ */
 static void boot_checksum(unsigned char *region)
 {
     uint32_t sum = 0;

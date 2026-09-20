@@ -10,8 +10,8 @@
 #            over its corpus under tests/fuzz/corpus/NAME
 #   fuzz     the libFuzzer program, built with clang, for the long runs
 #
-# The programs land under build/tests/fuzz as NAME and NAME-fuzz. With
-# HOST_PRINT_COMMANDS set, the replay build prints its compile commands and
+# The compiler writes the programs to build/tests/fuzz as NAME and NAME-fuzz.
+# With HOST_PRINT_COMMANDS set, the replay build prints its compile commands and
 # compiles nothing, for the compilation database.
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"

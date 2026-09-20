@@ -1,7 +1,7 @@
 #ifndef _FUZZ_H_
 #define _FUZZ_H_
 
-/*
+/**
  * What every harness under tests/fuzz defines: one entry that takes an
  * input and its length, runs the parser under test over it, and returns 0.
  * libFuzzer calls it from its own main; built with FUZZ_REPLAY, the main
@@ -11,6 +11,11 @@
  * The length is the host's size_t, spelled as unsigned long: the kernel's
  * headers define size_t as the machine's 32-bit one, and this is the one
  * place the two meet.
+ *
+ * The replay buffer is one byte larger than `FUZZ_INPUT_MAX`, so a file that
+ * fills it is seen to be too long rather than replayed short: an input the
+ * fuzzer found and a replay shortened is a different input, and a regression
+ * test that passes on it proves nothing.
  */
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size);
 
@@ -28,10 +33,6 @@ extern int printf(const char *format, ...);
 
 int main(int argc, char **argv)
 {
-    /* One byte past the largest input a harness takes, so a file that fills
-       the buffer is seen to be too long rather than replayed short: an input
-       the fuzzer found and this shortened is a different input, and a
-       regression test that passes on it proves nothing. */
     unsigned char *buf = malloc(FUZZ_INPUT_MAX + 1);
     int i;
 

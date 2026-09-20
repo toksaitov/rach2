@@ -4,9 +4,9 @@
 /*
  * What the three block file system harnesses share: the kernel calls their
  * drivers make, stubbed as the host tests stub them; a block device over a
- * volume held in memory; and one walk that mounts the volume, lists its
- * root, reads every file there and unmounts. A harness fills `fs_image`
- * with its volume and calls `fs_exercise` with its type.
+ * volume held in memory; and one walk that mounts the volume, lists up to 64
+ * of its root's entries, reads each file among them and unmounts. A harness
+ * fills `fs_image` with its volume and calls `fs_exercise` with its type.
  */
 #include "../../rach2/sys/fs/vfs.h"
 #include "../../rach2/sys/fs/bcache.h"
@@ -114,7 +114,7 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
 
 static block_device_t fs_dev = {512, 0, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
 
-/* The last mount's answer, for a driver of the harness that asks. */
+/* The return code of the last mount, for a harness that reads it. */
 static int fs_last_mount_rc;
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
@@ -125,9 +125,17 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     return device->read(device, lba, count, data);
 }
 
-/* Mount the volume in `fs_image` as `type`, list the root, read up to
-   4 KiB of every file the root names, and unmount. A refusal at any step
-   is the driver's answer to the input; the sanitizers watch the rest. */
+/**
+ * Mount the volume in `fs_image` as `type`, list up to 64 of the root's
+ * entries, read up to 4 KiB of each file among them, and unmount.
+ *
+ * A step that returns an error ends the walk there, which is a valid result
+ * for a mutated volume; what the harness is looking for is what the
+ * sanitizers report.
+ *
+ * The block cache outlives the call, so it is invalidated first: a block the
+ * last input's mount read would otherwise be returned for this input's bytes.
+ */
 static void fs_exercise(const struct vfs_type *type)
 {
     struct vfs_mount mnt;
@@ -144,8 +152,6 @@ static void fs_exercise(const struct vfs_type *type)
     mnt.ns_holder = -1;
     fs_dev.sector_size = 512;
     fs_dev.sector_count = fs_image_bytes / 512;
-    /* The cache outlives the call: a block the last input's mount read
-     * would otherwise answer for this input's bytes. */
     (void)bcache_invalidate(&fs_dev);
     fs_last_mount_rc = type->mount(&mnt, &fs_dev, 0, "");
     if (fs_last_mount_rc != 0) {
