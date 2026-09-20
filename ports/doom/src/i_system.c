@@ -134,6 +134,10 @@ static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
     return zonemem;
 }
 
+/**
+ * Allocate the zone and record its actual MiB size for the platform report.
+ * A platform suggestion below MIN_RAM leaves the initial request unchanged.
+ */
 byte *I_ZoneBase (int *size)
 {
     byte *zonemem;
@@ -164,6 +168,7 @@ byte *I_ZoneBase (int *size)
     }
 
     zonemem = AutoAllocMemory(size, default_ram, min_ram);
+    DG_zone_mib = *size / (1024 * 1024);
 
     printf("zone memory: %p, %x allocated for zone\n", 
            zonemem, *size);
@@ -247,16 +252,11 @@ void I_BindVariables(void)
 }
 */
 
-//
-// I_Quit
-//
-
+/** Run exit callbacks in reverse registration order and exit successfully. */
 void I_Quit (void)
 {
     atexit_listentry_t *entry;
 
-    // Run through all exit functions
- 
     entry = exit_funcs; 
 
     while (entry != NULL)
@@ -267,9 +267,8 @@ void I_Quit (void)
 
 #if ORIGCODE
     SDL_Quit();
-
-    exit(0);
 #endif
+    exit(0);
 }
 
 #if !defined(_WIN32) && !defined(__MACOSX__) && !defined(__DJGPP__)

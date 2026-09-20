@@ -142,6 +142,24 @@ and
 are set; the silent flag and the file system's own options are not
 shown.
 KRFFS and ext2 ignore the option string; FAT32 and exFAT parse it.
+.Ss Dirty-volume checks
+Before a writable mount, FAT32 checks a dirty volume with limits of
+32 directory levels including the root and 16 surplus tails.
+Duplicate-name comparison requires each ordinary short entry to lie
+within the first 4096 directory slots; long-name and deleted slots
+count toward that position.
+Exceeding any bound makes the mount read-only and logs the reason.
+.Pp
+KRFFS repair compares at most 4096 named reserved nodes.
+A dirty volume with more fails a writable mount with
+.Er EIO
+before repair writes begin.
+A read-only mount skips repair.
+.Pp
+An ext2 volume with its valid bit clear or error bit set is checked
+before a writable mount.
+A consistent volume can mount writable; a structural fault makes it
+read-only.
 .Ss Unmounting
 .Fn umount2
 requires

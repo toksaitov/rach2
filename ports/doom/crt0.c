@@ -46,11 +46,6 @@ void _exit(int status)
     __builtin_unreachable();
 }
 
-void exit(int status)
-{
-    _exit(status);
-}
-
 int read(int fd, void *buf, size_t count)
 {
     int ret;

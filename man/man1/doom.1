@@ -6,6 +6,9 @@
 .Nd play Doom on the framebuffer
 .Sh SYNOPSIS
 .Nm
+.Op Fl mb Ar N
+.Op Fl iwad Ar path
+.Op Ar engine-options
 .Sh DESCRIPTION
 .Nm
 is the doomgeneric engine with a Rach2 platform layer.
@@ -35,21 +38,51 @@ A WAD game-data file is required.
 The build stages the shareware WAD at
 .Pa /demo/doom1.wad
 as an optional file when it is present at build time.
+The default WAD, framebuffer and mouse paths are absolute, so the game
+can start from any directory.
+Arguments are forwarded to the engine.
+.Fl iwad Ar path
+overrides the default WAD; a relative path uses the current directory.
+.Pp
+The zone allocation starts at 16 MiB.
+The platform suggests whole MiB of free memory minus 8 MiB;
+only suggestions from 6 through 15 MiB replace the initial request.
+Smaller suggestions leave it at 16 MiB.
+Failed allocations are retried in 1 MiB steps down to 6 MiB.
+.Fl mb Ar N
+requests exactly N MiB without those retries.
+Pages are allocated on first access, so allocation success does not
+guarantee enough physical memory.
+.Pp
+Confirming Quit in the menu runs the engine's exit callbacks, closes the
+devices, restores text mode, prints the final performance report and
+exits with status zero.
+The report also appears every ten seconds and includes the allocated zone size.
+.Pp
+Normal save slots do not work.
+The runtime's directory creation, removal and rename stubs always fail.
+The engine can report a successful save without updating the slot.
 .Sh FILES
 .Bl -tag -width /demo/doom1.wad
 .It Pa /bin/doom
 Static game executable.
 .It Pa /fb
 Framebuffer device.
+.It Pa /mouse
+Optional mouse device.
 .It Pa /demo/doom1.wad
 Game data, supplied separately.
 .El
 .Sh EXAMPLES
-.Dl cd / && doom
+.Dl doom -mb 10
 .Pp
 In the source tree,
 .Ql tests/run doom
-runs the game for ten seconds and counts its disk commands.
+launches the game from
+.Pa /root ,
+checks that it remains running after ten seconds, checks framebuffer
+initialization and a zone of at least 10 MiB, and counts disk commands.
+It does not judge visual or audible quality.
 .Sh SEE ALSO
 .Xr gettimeofday 2 ,
 .Xr console 4 ,

@@ -16,7 +16,7 @@ A name is one component, not a path, and a file is found by its directory and it
 
 The root's mode has one bit the format reserves, `KRFFS_MODE_DIRTY`: the kernel sets it before the first change of a writable mount and clears it at unmount only after writing pending buffers and flushing the device cache. The cleared flag is then written and flushed separately. A mount made read-only by a write failure keeps the flag set; `fsync` and `sync` still attempt pending buffer writes and report writeback errors to the VFS. An image found with the bit set says a check is owed, not what is wrong with it.
 
-A writable mount of a volume whose bit is set repairs it before it publishes the mount: the three faults below, each counted in the line it writes to the log. A read-only mount repairs nothing, since nothing it does reads a backward link, and says that a check is owed. The repair compares every named node with every other to find one name on two nodes, so a volume with more named nodes than the pass will compare is refused rather than half-checked, and `fsck.krffs` on the host, which sorts them, is what such a volume is for.
+A writable mount of a volume whose bit is set repairs it before it publishes the mount: the three faults below, each counted in the line it writes to the log. A read-only mount repairs nothing, since nothing it does reads a backward link, and says that a check is owed. The repair compares named reserved nodes in pairs to find duplicate names. It permits at most 4096 such nodes. A dirty volume above that limit fails a writable mount with `EIO` before repair writes begin; `fsck.krffs` on the host can repair it without this bound.
 
 ## What a mount requires
 

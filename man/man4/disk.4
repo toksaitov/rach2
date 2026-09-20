@@ -31,6 +31,8 @@ or when
 .Ql rach2.diskdiag
 is on the boot command line.
 A USB stick's whole-disk node is always published.
+ATA and AHCI whole-disk windows cover at most 2^32 sectors, or 2 TiB.
+USB whole-disk windows cover the full reported sector count.
 The nodes are block devices with mode 0400, accessible only to root.
 Reads accept any byte range.
 A read from a pulled stick fails with
@@ -43,6 +45,11 @@ The ordinary kernel returns
 Write offsets and lengths must be multiples of the 512-byte sector size.
 A raw write to a write-protected stick fails with
 .Er EIO .
+.Pp
+ATA and AHCI flush the device cache after each successful write command,
+so a successful raw write to either is durable on return.
+USB raw writes issue ordinary SCSI writes without a device-cache flush;
+success does not guarantee that the data is durable.
 .Ss Boot devices
 .Pa /dev/bootpart
 accesses MBR entry 1 of the selected boot disk.

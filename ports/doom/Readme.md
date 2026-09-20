@@ -14,7 +14,9 @@ make ports/doom
 
 The component Makefile uses `i686-elf-gcc` with GNU99, freestanding static i386 flags, local replacement headers, and a fixed text address of `0x08048000`. Header dependencies rebuild the affected objects. The output is `build/ports/doom/doom`.
 
-The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, nine Linux i386-compatible syscall wrappers, the file interface used by the engine, a small libc subset, and a bump heap over the process's `brk` range, grown 64 KiB at a time. `free` does not reclaim memory. The engine's zone, where a level's lumps live, is sized at start from `MemFree` in `/proc/meminfo` less 8 MiB, at least 6 MiB and at most the engine's 16 MiB default, so a 32 MiB machine gets some 12 MiB; `-mb N` overrides it. A zone too small for the WAD rereads the disk all game long, which is what a 28 MB IWAD did with the 6 MiB zone of the fixed heap this replaced.
+The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, nine Linux i386-compatible syscall wrappers, the file interface used by the engine, a small libc subset, and a bump heap over the process's `brk` range, grown 64 KiB at a time. `free` does not reclaim memory.
+
+The engine's zone stores game data. Its initial request is 16 MiB. The platform reads `MemFree` from `/proc/meminfo`, converts it to whole MiB and subtracts 8 MiB. The engine uses that suggestion only when it is at least 6 MiB and less than 16 MiB. A smaller suggestion leaves the request at 16 MiB: 13 MiB free suggests 5 MiB but requests 16 MiB. This is not a lower-bound clamp. If allocation fails, the engine retries in 1 MiB steps down to 6 MiB. The runtime reserves addresses through `brk`; physical pages are allocated on first access, so a successful allocation does not ensure enough physical memory for the zone. `-mb N` requests exactly N MiB without those retries.
 
 Run `make -C ports/doom clean` only when the component output must be removed. Ordinary rebuilds do not need it.
 
@@ -22,18 +24,18 @@ Run `make -C ports/doom clean` only when the component output must be removed. O
 
 `doomgeneric_rach2.c` supplies the doomgeneric callbacks:
 
-* `DG_Init` opens `fb` and the optional `mouse` device relative to the current directory, clears local state, and records the start time.
+* `DG_Init` opens `/fb` and the optional `/mouse` device, clears local state, and records the start time.
 * `DG_DrawFrame` sends a changed 256-entry RGB palette through `FB_SETPALETTE`, writes the 320 by 200 indexed frame, and polls both input devices.
 * `DG_GetTicksMs` and `DG_SleepMs` use `gettimeofday`; sleep is a busy wait.
 * `DG_GetKey` returns queued key transitions read from standard input.
 * `DG_SetWindowTitle` does nothing because Rach2 has no window system.
-* `DG_Shutdown` closes the framebuffer and mouse descriptors.
+* `DG_Shutdown` closes the mouse and framebuffer descriptors and prints the final report after text mode returns. The port's `exit` calls it, including when an engine callback exits directly.
 
-The local runtime wraps `exit`, `read`, `write`, `open`, `close`, `lseek`, `ioctl`, and `gettimeofday`. File access uses those wrappers. The port does not link musl.
+The local runtime wraps `exit`, `read`, `write`, `open`, `close`, `lseek`, `ioctl`, and `gettimeofday`. File access uses those wrappers. The port does not link musl. Its `mkdir`, `remove`, and `rename` stubs always fail. Normal save slots do not work: the engine ignores the failed rename of the temporary save and can report success without updating the slot.
 
 ### Graphics and input
 
-The framebuffer path is `/fb` when Doom starts from `/`. Opening it selects VGA mode 13h. Each frame is 64,000 palette indices. Palette updates pass 768 RGB bytes to the kernel.
+The framebuffer path is `/fb`, independent of the working directory. Opening it selects VGA mode 13h. Each frame is 64,000 palette indices. Palette updates pass 768 RGB bytes to the kernel.
 
 Keyboard input arrives as PS/2 set 1 scan codes on standard input. The platform layer maps letters, digits, arrows, modifiers, function keys, Enter, Escape, Tab, and the usual Doom action keys. Its queue can contain at most 31 unread transitions.
 
@@ -87,14 +89,15 @@ cd rach2
 ./run.sh os-real speaker
 ```
 
-After login, start Doom from the root directory:
+After login, start Doom from any directory:
 
 ```
-cd /
 doom
 ```
 
-The port prints one line every ten seconds and once more when it quits, after the text screen is back: `doom: N frames in M ms, the longest L ms; music emulator E ms in C calls for S samples after V events, mixer X ms; zone Z MiB`. It is how the notebook's slowness with a 28 MB WAD was traced to the music path. The port discards its incoming argument vector and always passes `-iwad doom1.wad` to the engine. That path is relative, while the manifest stages `/doom1.wad`. Starting in another directory fails to find the WAD and prints `IWAD file 'doom1.wad' not found!`.
+The port prints one line every ten seconds and once more on normal quit, after the text screen returns: `doom: N frames in M ms, the longest L ms; music emulator E ms in C calls for S samples after V events, mixer X ms; zone Z MiB`. The zone field reports the allocated size. Confirming Quit in the menu runs the engine's exit callbacks, restores text mode, prints the report and exits with status zero.
+
+The port forwards command-line arguments to the engine and appends `-iwad /demo/doom1.wad` as the default. An explicit `-iwad PATH` takes precedence; a relative PATH is resolved from the current directory. For example, `doom -mb 10` requests a 10 MiB zone with the staged WAD.
 
 The same binary can use the kernel HDA driver on supported hardware. Hardware boot and disk-image procedures are described in the root and kernel Readmes.
 
@@ -117,4 +120,6 @@ The same binary can use the kernel HDA driver on supported hardware. Hardware bo
 build/tools/inspect/elfcheck build/ports/doom/doom
 ```
 
-The root `make` rebuilds the port and the images that carry it. The repository has no automated test that launches Doom, validates an IWAD, or judges graphics and audio output. Test those paths by booting os-real and running the program as shown above.
+The root `make` rebuilds the port and the images that carry it. `tests/run doom` launches Doom from `/root` on a disk root, checks that it remains running after ten seconds, checks framebuffer initialization and a zone of at least 10 MiB, and records disk command counts. It requires the separately supplied WAD. These checks do not establish visual or audible quality; check those by booting os-real and playing the game.
+
+`tests/host/doom_platform_hosttest.c` checks argument forwarding, zone selection, normal quit and direct exit from a callback with simulated device calls. `sh tests/host/doom_platform_mutate.sh` compiles and runs it alone under ASan and UBSan, requires each compiled fault to fail, then restores, touches and rebuilds the source and requires a pass. It does not boot the kernel or render a frame.

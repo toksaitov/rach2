@@ -1,6 +1,6 @@
 # Audio
 
-`audio.c` selects Intel HDA, Sound Blaster 16, or the PC speaker, in that order. HDA and SB16 play PCM samples; the speaker fallback cannot. The interface in `audio.h` supports a kernel callback or queued writes. User programs use the console audio requests described by [ioctl(2)](../../../man/man2/ioctl.2). `audiotest` opens `/dev/console` explicitly, so it can run from an SSH session whose standard descriptors are a pty.
+`audio.c` selects Intel HDA, Sound Blaster 16, or the PC speaker, in that order. HDA and SB16 play PCM samples; the speaker fallback cannot. The interface in `audio.h` supports a kernel callback or queued writes. A write returns the byte count accepted, which may be short or zero when the ring is full; the caller must retry any unaccepted bytes. Callbacks fill DMA buffers during start and run in interrupt context during playback, so they must not sleep. SB16 accepts sample rates from 5000 through 44100 Hz. User programs use the console audio requests described by [ioctl(2)](../../../man/man2/ioctl.2). `audiotest` opens `/dev/console` explicitly, so it can run from an SSH session whose standard descriptors are a pty.
 
 ## HDA formats
 
@@ -18,9 +18,9 @@ Discovery prefers the firmware-selected connection and follows a primary pin dir
 
 `cat /proc/audio` reads cached driver state without issuing codec verbs. It identifies the active driver, the HDA codec and function group, the primary and headphone paths and their expanded indices, and each DAC's effective capability masks with the node they came from. The selected pins' and mixer's packed connection entries and expanded lists follow. The stream line records the last successful request, the programmed rate, and the controller and converter format words read back during setup. Before playback those fields are zero. Stopping clears `playing` but retains the last setup. Each open creates a snapshot; reopen to see a later stream. [proc(5)](../../../man/man5/proc.5) describes the fields.
 
-The metal RAM image, metal disk root and os-real stage `/bin/audiotest`. For example, `audiotest 32000 2 440` plays a 440 Hz square wave from 32000 Hz input for two seconds, then stops. `cat /proc/audio` shows which hardware rate was used. Both commands work through SSH on a system updated with this kernel and diagnostic; no rescue boot or console command is needed. The installed notebook is unchanged by this source change. [audiotest(1)](../../../man/man1/audiotest.1) describes the arguments and limits.
+The metal RAM image, metal disk root and os-real stage `/bin/audiotest`. For example, `audiotest 32000 2 440` plays a 440 Hz square wave from 32000 Hz input for two seconds, then stops. `cat /proc/audio` shows which hardware rate was used. Both commands work through SSH when the kernel and diagnostic are installed. [audiotest(1)](../../../man/man1/audiotest.1) describes the arguments and limits.
 
-The report proves neither the DAC's physical sample clock nor the audible pin. A later Lenovo check must compare its reported lists with the chosen path, measure tone frequency at each supported rate, and check speakers and headphones. Those readings and tone starts can be collected over SSH; acoustic measurement still needs equipment at the machine.
+The report records the selected codec path and programmed formats. It does not measure the DAC's physical sample clock or identify which output is audible.
 
 ## Verification
 

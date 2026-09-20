@@ -11,7 +11,7 @@ An operations-backed descriptor calls its `file_ops.poll` method and supplies th
 The main backing rules are:
 
 * A pipe uses its buffered byte count and peer lifetime. Its complete readiness contract is in the [pipe documentation](../ipc/Readme.md).
-* A tty is readable when its line discipline has input ready and is always writable. A pseudoterminal also reports peer hangup.
+* A tty is readable when its line discipline has input ready and is always writable. Console readiness is restricted to the descriptor's access mode: `POLLIN` requires read access and `POLLOUT` requires write access. A read-only console descriptor polled only for output reports no readiness. A pseudoterminal also reports peer hangup.
 * Datagram and protocol-bearing raw sockets are readable when a packet is queued and always writable. A listening stream socket is readable when an accepted connection is queued. A connected stream socket is readable with buffered data or a received FIN; it is writable in `ESTABLISHED` or `CLOSE_WAIT` while its send ring has space. Socket errors and a closed stream report `POLLERR` and `POLLHUP` as applicable. See the [network documentation](../network/Readme.md).
 * Procfs snapshots report read readiness, including at EOF. Devfs character devices report requested read and write readiness.
 
@@ -25,7 +25,9 @@ The core disables interrupts and scans every entry once. If one is ready, a deli
 
 A pipe operation, socket path, terminal path, or signal can wake the process. The 100 Hz timer wakes a finite wait at its deadline. After any wake, the process removes itself from every queue and scans again. The scan and all queue insertions happen while interrupts are disabled, so a readiness change cannot occur between the test and the sleep.
 
-If no descriptor is ready, a pending signal returns `EINTR`; the kernel does not restart the call for `SA_RESTART`. A finite timeout is rounded up to a 10 ms tick. A zero timeout performs one scan without waiting. `poll` with no entries and a finite timeout acts as a sleep.
+If no descriptor is ready, a pending signal returns `EINTR`; the kernel does not restart the call for `SA_RESTART`. A finite timeout is rounded up to a 10 ms tick. A zero timeout performs one scan without waiting. `poll` with no entries and a finite timeout acts as a sleep. A negative `poll` timeout or a null timeout pointer for `select`, `_newselect`, `ppoll`, or `pselect6` waits indefinitely, until readiness or a deliverable signal.
+
+Finite waits saturate without an error. `select` and `_newselect` convert any seconds value above 2147482 to 2147483647 milliseconds before tick rounding, about 24.9 days. `ppoll` and `pselect6` cap seconds at 21474836, round nanoseconds up to ticks, and cap the sum at 2147483647 ticks, about 248.6 days. Larger requested intervals are shortened. These kernel limits apply even when the timeout fits the 32-bit ABI; they are separate from musl's time64 fallback described below.
 
 ## `select` translation
 

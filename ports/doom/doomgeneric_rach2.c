@@ -10,8 +10,10 @@
 #include "doomkeys.h"
 #include "d_event.h"
 #include "i_video.h"
+#include "i_system.h"
 
 #include <stdint.h>
+#include <string.h>
 extern int printf(const char *fmt, ...);
 #include <stddef.h>
 
@@ -21,6 +23,7 @@ extern int close(int fd);
 extern int read(int fd, void *buf, size_t count);
 extern int write(int fd, const void *buf, size_t count);
 extern int ioctl(int fd, unsigned long request, ...);
+extern void _exit(int status);
 
 struct timeval {
     long tv_sec;
@@ -467,9 +470,8 @@ void DG_SetWindowTitle(const char *title)
     /* No window title in VGA Mode 13h */
 }
 
-/*
- * Platform-specific cleanup
- * Called when Doom exits (if we add proper cleanup)
+/**
+ * Close input and graphics devices, then report after text mode returns.
  */
 void DG_Shutdown(void)
 {
@@ -481,30 +483,44 @@ void DG_Shutdown(void)
         close(fb_fd);
         fb_fd = -1;
     }
-    report(); /* after the text screen is back, so the line stays visible */
+    report();
 }
 
-/*
- * Main entry point for Doom on Rach2
+/**
+ * Restore the platform before terminating, including exits from callbacks.
+ * D_Endoom may exit before I_Quit finishes traversing its callback list.
+ */
+void exit(int status)
+{
+    DG_Shutdown();
+    _exit(status);
+}
+
+/**
+ * Pass the command line to Doom with the staged IWAD as the default.
+ * The engine uses the first matching option, so a caller's -iwad wins.
+ * Keep the argument array alive for the engine's lifetime.
  */
 int main(int argc, char **argv)
 {
-    /* The staged wad, named absolutely so any working directory serves. */
-    static char *doom_argv[] = { "doom", "-iwad", "/demo/doom1.wad", NULL };
-    int doom_argc = 3;
+    int i;
+    int doom_argc = (argc > 0 ? argc : 1) + 2;
+    char **doom_argv = malloc((doom_argc + 1) * sizeof(*doom_argv));
 
-    (void)argc;
-    (void)argv;
+    if (doom_argv == NULL) {
+        I_Error("doom: cannot allocate arguments");
+    }
+    doom_argv[0] = argc > 0 ? argv[0] : "doom";
+    for (i = 1; i < argc; i++) {
+        doom_argv[i] = argv[i];
+    }
+    doom_argv[doom_argc - 2] = "-iwad";
+    doom_argv[doom_argc - 1] = "/demo/doom1.wad";
+    doom_argv[doom_argc] = NULL;
 
-    /* Initialize doomgeneric engine with fixed args */
     doomgeneric_Create(doom_argc, doom_argv);
 
-    /* Main game loop */
     while (1) {
         doomgeneric_Tick();
     }
-
-    /* Never reached, but for completeness */
-    DG_Shutdown();
-    return 0;
 }

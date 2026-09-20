@@ -203,7 +203,9 @@ Read a structure containing a sample-buffer pointer followed by a
 32-bit unsigned byte count through
 .Fa arg .
 Validate the buffer and pass it to the active driver.
-The return value is the byte count queued, which may be less than requested.
+The return value is the byte count queued, which may be less than requested
+or zero when the playback ring is full.
+The caller must retry bytes that were not accepted.
 .It Dv AUDIO_SET_VOLUME No (0x4105)
 Pass the integer argument to the active driver as a percentage from
 0 through 100.
