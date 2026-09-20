@@ -32,6 +32,10 @@ port from 49152 through 65535 is selected.
 A duplicate pairing of local port, peer address, and peer port is refused.
 .Pp
 A blocking socket waits until the handshake completes or fails.
+The call succeeds even if the peer's FIN arrives before the caller resumes.
+The connection is then in
+.Dv CLOSE_WAIT ;
+a read returns any queued data followed by EOF.
 A pending signal interrupts the wait with
 .Er EINTR .
 With

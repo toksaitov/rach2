@@ -72,6 +72,9 @@
  * open. */
 volatile uint32_t fb_owner_pid = 0;
 
+extern volatile uint32_t kernel_uptime_seconds;
+extern volatile uint32_t kernel_second_ticks;
+
 /*
  * ioctl request codes (Linux compatible subset)
  */
@@ -334,14 +337,16 @@ static int32_t sys_gettimeofday(isr_params_t *params)
  * loops mean by a clock. Both run at the 10 ms tick resolution, and neither is
  * disciplined by anything: the machine reads the CMOS once and then keeps its
  * own time. musl falls back here from clock_gettime64 (403), which this kernel
- * does not provide, so times are 32-bit here and this ABI ends in 2038.
+ * does not provide. The signed seconds field ends in 2038 for real time
+ * and after about 68 years since boot for monotonic time. Reading the uptime
+ * pair with interrupts masked avoids both a torn second and tick-count wrap.
  */
 static int32_t sys_clock_gettime(isr_params_t *params)
 {
     int clk = (int)params->ebx;
     struct kernel_timespec __user *ts = (struct kernel_timespec __user *)params->ecx;
     struct kernel_timespec kts;
-    uint32_t ticks;
+    uint32_t flags;
 
     if (!ts) {
         return -EFAULT;
@@ -358,9 +363,10 @@ static int32_t sys_clock_gettime(isr_params_t *params)
         kts.tv_sec = (int32_t)seconds;
         kts.tv_nsec = (int32_t)nanoseconds;
     } else {
-        ticks = kernel_ticks;
-        kts.tv_sec = (int32_t)(ticks / 100);
-        kts.tv_nsec = (int32_t)((ticks % 100) * 10000000); /* 1e7 ns per tick */
+        flags = kirq_save();
+        kts.tv_sec = (int32_t)kernel_uptime_seconds;
+        kts.tv_nsec = (int32_t)(kernel_second_ticks * 10000000);
+        kirq_restore(flags);
     }
 
     if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
@@ -720,6 +726,40 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
 }
 
 /**
+ * Change framebuffer mode or palette only for the process that owns it.
+ *
+ * A descriptor can survive a return to text mode and another process's open.
+ * Mode 13h reacquires an unowned display; other requests require ownership.
+ */
+static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
+{
+    if (request != FB_MODE_13H && request != FB_MODE_TEXT && request != FB_SETPALETTE) {
+        return -ENOTTY;
+    }
+    if (fb_owner_pid != current_proc->pid && (fb_owner_pid != 0 || request != FB_MODE_13H)) {
+        return -EBUSY;
+    }
+    switch (request) {
+    case FB_MODE_13H:
+        if (!vga_graphics_mode) {
+            vga_mode13h_enter();
+        }
+        fb_owner_pid = current_proc->pid;
+        return 0;
+    case FB_MODE_TEXT:
+        vga_mode13h_exit();
+        fb_owner_pid = 0;
+        return 0;
+    default:
+        if (!arg || !user_buffer_ok(arg, 768, 0)) {
+            return -EFAULT;
+        }
+        vga_mode13h_set_palette((const uint8_t *)arg);
+        return 0;
+    }
+}
+
+/**
  * Device control (ioctl(2)).
  *
  * EBX = fd, ECX = request, EDX = arg. A tty fd (console or pty slave) routes
@@ -795,29 +835,7 @@ static int32_t sys_ioctl(isr_params_t *params)
      * close(0/1/2) is legal). */
 
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
-        switch (request) {
-        case FB_SETPALETTE:
-            if (arg != 0) {
-                /* 256 RGB triples = 768 bytes read straight from user. */
-                if (!user_buffer_ok(arg, 768, 0)) {
-                    return -EFAULT;
-                }
-                vga_mode13h_set_palette((const uint8_t *)arg);
-                return 0;
-            }
-            return -EFAULT;
-
-        case FB_MODE_13H:
-            return 0; /* already in mode 13h while fb is open */
-
-        case FB_MODE_TEXT:
-            vga_mode13h_exit();
-            fb_owner_pid = 0;
-            return 0;
-
-        default:
-            return -ENOTTY;
-        }
+        return framebuffer_ioctl(request, arg);
     }
 
     if (entry->type == FD_TYPE_CONSOLE) {

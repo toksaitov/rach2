@@ -150,13 +150,20 @@ a mounted partition.
 is ignored.
 .El
 .Ss Framebuffer requests
-A framebuffer descriptor accepts these private requests:
+A framebuffer descriptor accepts the private requests below.
+Mode and palette changes require ownership by the calling process.
+A stale or inherited descriptor cannot change another process's display;
+the request returns
+.Er EBUSY .
 .Bl -tag -width "FB_SETPALETTE"
 .It Dv FB_MODE_13H No (0x4601)
-Return success without action; opening the framebuffer already selected
-mode 13h.
+Acquire an unowned display and enter mode 13h.
+If the caller already owns the display in graphics mode, preserve its
+contents and palette.
 .It Dv FB_MODE_TEXT No (0x4602)
 Return to text mode and clear framebuffer ownership.
+An unowned display gives
+.Er EBUSY .
 .It Dv FB_SETPALETTE No (0x4603)
 Read 768 bytes from
 .Fa arg
@@ -267,6 +274,8 @@ is invalid.
 .It Bq Er EBUSY
 .Dv BLKRRPART
 found another descriptor open on the disk or a claim on its partitions.
+A framebuffer mode or palette request belongs to another process,
+or a text-mode or palette request has no owner.
 .It Bq Er EFAULT
 A required argument or buffer cannot be read or written in user memory.
 .Dv AUDIO_START

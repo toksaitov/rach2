@@ -38,6 +38,10 @@ Normal exit, signal death and an exec that fails after the old image is gone rel
 
 Each boot initializes the architecture, memory, timer, RTC, entropy, input, process, audio, storage, file-system, terminal, and network layers, then runs the built-in kernel self-tests. A normal boot starts `/sbin/init` as PID 1. If that init later dies, the kernel halts. A mounted image without `/sbin/init`, such as the test image, enters the kernel debug shell instead.
 
+`clock_gettime(CLOCK_MONOTONIC)` snapshots the uptime seconds and the ticks within that second with interrupts masked. It retains 10 ms resolution across the 32-bit tick counter's wrap at about 497 days. The syscall's signed 32-bit seconds field limits monotonic time to about 68 years since boot.
+
+Opening `/fb` acquires the display for the calling process and enters VGA mode 13h. Framebuffer mode and palette ioctls reject a descriptor held by another process with `EBUSY`, including one inherited by fork or retained after releasing the display. `FB_MODE_TEXT` releases ownership; `FB_MODE_13H` reacquires an unowned display and restores graphics mode. A repeated graphics request by the owner preserves the current image and palette.
+
 ## Root selection
 
 The kernel accepts one root:
@@ -141,7 +145,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.apicdiag` | Print what the machine's firmware left in the local APIC and what MSI capabilities the xHCI and HDA controllers have. It changes nothing. |
 | `rach2.nomsi` | Leave the local APIC alone and take every interrupt through the 8259 pair. |
 | `rach2.nofxsr` | Save the floating-point state with `fnsave` and `frstor` even where `cpuid` reports FXSR; CR4.OSFXSR stays clear, so an SSE instruction is an invalid opcode. `tests/run fpu` boots it. |
-| `rach2.usblatency` | Print, for every USB keystroke a reader takes, the times of four points on its path: the controller's interrupt, the transfer event, the reader's wakeup and the read. |
+| `rach2.usblatency` | Print keystroke times relative to the software event drain and count USB pumps and getrandom bytes before a blocked console reader is dispatched. |
 | `rach2.msidrop=N` | Test option: silence the USB controller's messages after N of them, so the timer's fallback pump can be seen to keep the machine working. |
 | `rach2.hcfail=N` | Test option: refuse the Nth xHCI controller that would have come up, counting from zero, so a machine whose controllers all work can show what happens to the others when one does not. |
 | `rach2.nicfail=N` | Test option: refuse the Nth network card that would have come up, counting from zero, so a machine whose cards all work can show the interfaces the others take. |

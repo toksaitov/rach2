@@ -769,13 +769,17 @@ static int32_t do_ping(uint32_t dst_ip)
     return (int32_t)icmp_ping(canonical_dst_ip(dst_ip));
 }
 
-/* Wait predicate: a stream connect has finished its handshake one way or the
- * other (established, or the TCB went away / reset). */
+/** A peer's FIN does not undo the completed handshake. */
+static int connect_established(struct socket *sock)
+{
+    return sock->tcb && (sock->tcb->state == TCP_ESTABLISHED || sock->tcb->state == TCP_CLOSE_WAIT);
+}
+
+/** Wake once the handshake has completed or the connection has failed. */
 static int connect_done(void *arg)
 {
     struct socket *sock = (struct socket *)arg;
-    return sock->tcb == NULL || sock->tcb->state == TCP_ESTABLISHED ||
-           sock->tcb->state == TCP_CLOSED;
+    return sock->tcb == NULL || connect_established(sock) || sock->tcb->state == TCP_CLOSED;
 }
 
 /* Wait predicate: a listening socket has a connection queued for accept. */
@@ -904,7 +908,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     /* A non-blocking socket does not wait out the handshake: report it as
      * in-progress (or already done) and let the caller poll for completion. */
     if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK)) {
-        if (entry->sock->tcb && entry->sock->tcb->state == TCP_ESTABLISHED) {
+        if (connect_established(entry->sock)) {
             return 0;
         }
         return -EINPROGRESS;
@@ -917,7 +921,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
         return rc;
     }
 
-    if (!entry->sock->tcb || entry->sock->tcb->state != TCP_ESTABLISHED) {
+    if (!connect_established(entry->sock)) {
         return -ECONNREFUSED;
     }
     return 0;

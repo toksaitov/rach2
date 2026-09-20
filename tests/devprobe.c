@@ -24,11 +24,18 @@ typedef unsigned int size_t;
 #define SYS_GETPID   20
 #define SYS_READLINK 85
 #define SYS_IOCTL    54
+#define SYS_FORK     2
+#define SYS_WAITPID  7
+#define SYS_PIPE     42
 
 #define O_RDONLY 0
 #define O_WRONLY 1
 
-#define ENOSPC 28
+#define ENOSPC        28
+#define EBUSY         16
+#define FB_MODE_13H   0x4601
+#define FB_MODE_TEXT  0x4602
+#define FB_SETPALETTE 0x4603
 
 static int syscall1(int n, int a)
 {
@@ -127,6 +134,69 @@ static int streq_n(const char *a, const char *b, int n)
     return 1;
 }
 
+/** Check mode reentry and a descriptor retained across two display owners. */
+static void framebuffer(void)
+{
+    int ready[2], next[2];
+    int fd, child, other, status = 0;
+    char one = 1;
+    static char palette[768];
+
+    check(syscall1(SYS_PIPE, (int)(size_t)ready) == 0, "framebuffer ready pipe");
+    check(syscall1(SYS_PIPE, (int)(size_t)next) == 0, "framebuffer command pipe");
+    fd = do_open("/fb", O_WRONLY);
+    check(fd >= 0, "open framebuffer");
+    check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == 0, "framebuffer text mode");
+    check(syscall3(SYS_IOCTL, fd, FB_MODE_13H, 0) == 0, "framebuffer graphics reentry");
+    check(syscall3(SYS_WRITE, fd, (int)(size_t)&one, 1) == 1,
+          "graphics reentry restores writable display");
+    child = syscall1(SYS_FORK, 0);
+    check(child >= 0, "framebuffer fork");
+    if (child < 0) {
+        syscall1(SYS_CLOSE, fd);
+        return;
+    }
+    if (child == 0) {
+        syscall1(SYS_CLOSE, ready[0]);
+        syscall1(SYS_CLOSE, next[1]);
+        check(do_open("/fb", O_WRONLY) == -EBUSY, "second opener cannot take owned display");
+        check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == -EBUSY,
+              "inherited descriptor cannot release parent's display");
+        syscall3(SYS_WRITE, ready[1], (int)(size_t)&one, 1);
+        check(do_read(next[0], &one, 1) == 1, "wait for display release");
+        other = do_open("/fb", O_WRONLY);
+        check(other >= 0, "second opener acquires released display");
+        syscall3(SYS_WRITE, ready[1], (int)(size_t)&one, 1);
+        check(do_read(next[0], &one, 1) == 1, "wait for stale requests");
+        check(syscall3(SYS_WRITE, other, (int)(size_t)&one, 1) == 1,
+              "stale requests preserve owner's graphics mode");
+        syscall1(SYS_CLOSE, other);
+        syscall1(SYS_CLOSE, fd);
+        sys_exit(fails != 0);
+    }
+    syscall1(SYS_CLOSE, ready[1]);
+    syscall1(SYS_CLOSE, next[0]);
+    check(do_read(ready[0], &one, 1) == 1, "wait for inherited descriptor check");
+    check(syscall3(SYS_WRITE, fd, (int)(size_t)&one, 1) == 1,
+          "second opener preserves first owner's graphics mode");
+    check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == 0, "first owner releases display");
+    syscall3(SYS_WRITE, next[1], (int)(size_t)&one, 1);
+    check(do_read(ready[0], &one, 1) == 1, "wait for second owner");
+    check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == -EBUSY,
+          "stale descriptor cannot release second owner's display");
+    check(syscall3(SYS_IOCTL, fd, FB_MODE_13H, 0) == -EBUSY,
+          "stale descriptor cannot acquire second owner's display");
+    check(syscall3(SYS_IOCTL, fd, FB_SETPALETTE, (int)(size_t)palette) == -EBUSY,
+          "stale descriptor cannot set second owner's palette");
+    check(do_open("/fb", O_WRONLY) == -EBUSY, "second owner retains display");
+    syscall3(SYS_WRITE, next[1], (int)(size_t)&one, 1);
+    check(syscall3(SYS_WAITPID, child, (int)(size_t)&status, 0) == child && status == 0,
+          "framebuffer child checks pass");
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, ready[0]);
+    syscall1(SYS_CLOSE, next[1]);
+}
+
 void _start(void)
 {
     char buf[64];
@@ -211,6 +281,7 @@ void _start(void)
         check(n == 12 && streq_n(buf, "/dev/console", 12), "/proc/self/fd/0 -> /dev/console");
     }
 
+    framebuffer();
     if (fails == 0) {
         puts("DEVPROBE OK");
     } else {

@@ -44,8 +44,8 @@ The same real time reported by
 .Fn gettimeofday .
 .It Dv CLOCK_MONOTONIC
 ID 1.
-Time since boot, computed from the kernel's 32-bit tick counter, which
-wraps after about 497 days.
+Time since boot, read from uptime seconds and ticks within the current second.
+The clock continues across the 32-bit tick counter's wrap at about 497 days.
 .El
 .Pp
 Both clocks have 10 ms resolution.
@@ -133,7 +133,8 @@ The i386 system call numbers are 78 for
 and 320 for
 .Fn utimensat .
 The time structures in this kernel interface have 32-bit seconds fields.
-The signed 32-bit seconds field overflows in 2038.
+The signed 32-bit seconds field overflows in 2038 for real time and after
+about 68 years since boot for monotonic time.
 .Pp
 musl first tries
 .Fn clock_gettime64

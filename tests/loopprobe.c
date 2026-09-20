@@ -1276,11 +1276,69 @@ static void tcp_simultaneous(void)
         fail("the crossing SYNs never established a connection that has data");
 }
 
+/** A server may close immediately after accept; connect still succeeds. */
+static void tcp_accept_close(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16];
+    char byte;
+    int listener, client, accepted, pid, status = 0;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    listener = socketcall(SC_SOCKET, args);
+    if (listener < 0)
+        fail("immediate-close listener");
+    make_sockaddr(sa, TCP_PORT + 6, 0, 0, 0, 0);
+    args[0] = (uint32_t)listener;
+    args[1] = (uint32_t)sa;
+    args[2] = sizeof(sa);
+    if (socketcall(SC_BIND, args) != 0)
+        fail("immediate-close bind");
+    args[1] = 1;
+    if (socketcall(SC_LISTEN, args) != 0)
+        fail("immediate-close listen");
+    pid = sys_fork();
+    if (pid < 0)
+        fail("immediate-close fork");
+    if (pid == 0) {
+        args[0] = (uint32_t)listener;
+        args[1] = 0;
+        args[2] = 0;
+        accepted = socketcall(SC_ACCEPT, args);
+        if (accepted < 0)
+            sys_exit(1);
+        sys_close(accepted);
+        sys_close(listener);
+        sys_exit(0);
+    }
+    sys_close(listener);
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    client = socketcall(SC_SOCKET, args);
+    if (client < 0)
+        fail("immediate-close client");
+    make_sockaddr(sa, TCP_PORT + 6, 127, 0, 0, 1);
+    args[0] = (uint32_t)client;
+    args[1] = (uint32_t)sa;
+    args[2] = sizeof(sa);
+    if (socketcall(SC_CONNECT, args) != 0)
+        fail("immediate-close connect");
+    if (sys_read(client, &byte, 1) != 0)
+        fail("immediate-close eof");
+    sys_close(client);
+    if (sys_waitpid(pid, &status) != pid || status != 0)
+        fail("immediate-close child");
+}
+
 void _start(void)
 {
     learn_canon_ip();
     udp_loop();
     tcp_loop();
+    tcp_accept_close();
     tcp_loop_bulk();
     tcp_loop_pingpong();
     tcp_refused();
