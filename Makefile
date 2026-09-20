@@ -86,6 +86,7 @@ ELFCHECK        = build/tools/inspect/elfcheck
 SETIDCHECK      = build/tools/inspect/setidcheck
 CFGCHECK        = build/tools/inspect/cfgcheck
 PROSECHECK      = build/tools/verify/prosecheck
+SIZECHECK       = build/tools/verify/sizecheck
 GUESTCHECK      = build/tools/verify/guestcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
@@ -342,6 +343,13 @@ $(CFGCHECK): tools/inspect/cfgcheck.c
 # The prose checks (tools/verify/prosecheck.c): comment width, the banned
 # vocabulary, the phrase counts the report tabulates, and the dev-log index.
 $(PROSECHECK): tools/verify/prosecheck.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+
+# The size limits (tools/verify/sizecheck.c): function lines, parameters,
+# nesting, and the complexity pmccabe measures, judged against the ceilings
+# in tools/verify/sizes.reasons.
+$(SIZECHECK): tools/verify/sizecheck.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 
@@ -905,7 +913,7 @@ include tests/system/suites.mk
 # Every host program the tree compiles, for the compilation database
 # generator, which dry-runs their rules; named after the includes that
 # define them.
-HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) \
+HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) $(SIZECHECK) \
              $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
