@@ -84,10 +84,11 @@ static int visit(struct bootslot *bs, uint32_t cluster)
 }
 
 /**
- * Walk the chain from `first`, marking every cluster visited and recording it
- * into `file` when one is given (the directories pass NULL and are bounded
- * the same way). The bound is the volume's own cluster count, so a loop that
- * somehow survives the visited bitmap still terminates.
+ * Walk the chain from `first`, marking every cluster visited.
+ *
+ * Record clusters when `file` is non-NULL; otherwise return only the chain
+ * length through `len_out` when supplied. The bound is the volume's own
+ * cluster count, so a loop that survives the visited bitmap still terminates.
  */
 static int walk_chain(struct bootslot *bs, uint32_t first, struct bootslot_file *file,
                       uint32_t *len_out, char *err, size_t errlen)
@@ -432,6 +433,16 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     return 0;
 }
 
+/**
+ * Validate the in-memory headers of an ELF32 i386 kernel.
+ *
+ * Load file ranges must fit `size`, and load memory ranges must fit the
+ * 32-bit address space at or above 1 MiB. `present` gives the available
+ * prefix; the ELF and program headers must fit that prefix. The entry point
+ * must lie in a load's file-backed bytes. The exclusive memory end must
+ * be representable in 32 bits. The Multiboot flags must be ALIGN|MEMINFO;
+ * other flags change how the loader reads the image.
+ */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen)
 {
@@ -467,21 +478,10 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     if (!found) {
         return fail(err, errlen, "no multiboot header in the first 8192 bytes");
     }
-    /* The flags decide HOW the loader reads the image; both Rach2 layouts
-       carry exactly ALIGN|MEMINFO (3), and anything else (the a.out kludge
-       above all) would change the load. The same rule the host ELF
-       validator (tools/inspect/elfcheck.c) has. */
     if (le32(image + off + 4) != 3) {
         return fail(err, errlen, "the multiboot flags are not ALIGN|MEMINFO");
     }
 
-    /* The loader contract, the way the host ELF validator judges it: a
-       sane program-header table, at least one load that stays inside
-       the file and the megabyte-up address space, and an entry point inside
-       a load's file-backed bytes. `present` is how much of the image is in
-       memory (a fallback check reads only the head); every range is judged
-       against the full `size`, and the headers themselves must sit in the
-       bytes at hand. */
     e_entry = le32(image + 24);
     e_phoff = le32(image + 28);
     e_phnum = le16(image + 44);
@@ -510,6 +510,9 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
         }
         if (p_vaddr < 0x100000u) {
             return fail(err, errlen, "a load sits below the megabyte");
+        }
+        if (p_memsz > 0xFFFFFFFFu - p_vaddr) {
+            return fail(err, errlen, "a load leaves the 32-bit address space");
         }
         if (le32(ph + 12) != p_vaddr) {
             return fail(err, errlen, "a load's physical address differs from its virtual");
@@ -663,12 +666,15 @@ int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, ch
     return env_edit(bs, key, value, NULL, err, errlen);
 }
 
+/**
+ * Remove a key without writing an empty value.
+ *
+ * Removing `next_entry` cancels a trial without supplying the empty marker
+ * that `bootslot_commit` requires. That marker is written when GRUB selects
+ * a trial, before loading its kernel.
+ */
 int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen)
 {
-    /* The key is dropped, not set empty, and the difference is the whole
-       trial state machine: `bootslot_commit` reads an empty `next_entry` as the
-       consumed marker GRUB leaves after a trial actually booted. Writing that
-       marker by hand would let a kernel that never ran be committed. */
     return env_edit(bs, NULL, NULL, key, err, errlen);
 }
 
@@ -755,16 +761,53 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
 }
 
 /**
- * Copy the committed candidate slot into the fallback file and read it
- * back. Refused while the candidate is not the saved default or a trial is
- * armed: a committed candidate is a kernel that booted and was accepted,
- * and an armed line means the slot was refilled since. The fallback's
- * first sector, which holds the headers the install validates, is zeroed
- * before the copy and written last, so a copy that stops part way leaves
- * a fallback with no header, which the next install refuses by name until
- * `bootctl fallback` runs again, rather than one with a new head over old
- * bytes that it would accept.
+ * Copy the candidate slot into the fallback file and read it back.
+ *
+ * Require `saved_entry=candidate` and no nonempty `next_entry` before
+ * copying the candidate slot.
+ *
+ * Invalidate the fallback's first sector, copy and verify the remaining
+ * sectors, then restore and verify the first sector. A failure before that
+ * final write leaves no valid ELF header. A failure during the final write
+ * may leave a partial header.
  */
+/**
+ * Whether the environment block names `id` as its saved default.
+ *
+ * `want` is the caller's scratch buffer, filled with the line the block must
+ * hold, so this allocates nothing.
+ */
+static int env_names_default(const uint8_t *env, const char *id, char *want, size_t want_size)
+{
+    uint32_t i, n = 13;
+
+    memcpy(want, "\nsaved_entry=", 13);
+    for (i = 0; id[i] != '\0' && n + 2 < want_size; i++) {
+        want[n++] = id[i];
+    }
+    want[n++] = '\n';
+    want[n] = '\0';
+    for (i = 0; i + n <= ENV_BYTES; i++) {
+        if (memcmp(env + i, want, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether the environment block holds a trial that has not been committed. */
+static int env_trial_armed(const uint8_t *env)
+{
+    uint32_t i;
+
+    for (i = 0; i + 13 <= ENV_BYTES; i++) {
+        if (memcmp(env + i, "\nnext_entry=", 12) == 0 && env[i + 12] != '\n') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
@@ -788,24 +831,11 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     if (bootslot_read_env(bs, env, err, errlen) != 0) {
         return -1;
     }
-    memcpy(want, "\nsaved_entry=", 13);
-    n = 13;
-    for (i = 0; id[i] != '\0' && n + 2 < sizeof(want); i++) {
-        want[n++] = id[i];
-    }
-    want[n++] = '\n';
-    want[n] = '\0';
-    for (i = 0; i + n <= ENV_BYTES; i++) {
-        if (memcmp(env + i, want, n) == 0) {
-            committed = 1;
-        }
-    }
-    for (i = 0; i + 13 <= ENV_BYTES; i++) {
-        if (memcmp(env + i, "\nnext_entry=", 12) == 0 && env[i + 12] != '\n') {
-            return fail(err, errlen,
-                        "a trial is armed: the candidate slot is not the kernel "
-                        "that was committed");
-        }
+    committed = env_names_default(env, id, want, sizeof(want));
+    if (env_trial_armed(env)) {
+        return fail(err, errlen,
+                    "a trial is armed: the candidate slot is not the kernel "
+                    "that was committed");
     }
     if (!committed) {
         return fail(err, errlen,
@@ -825,7 +855,7 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     if (file_write_sector(bs, &bs->fallback, 0, sector) != 0) {
         return fail(err, errlen, "the fallback file does not write");
     }
-    for (s = nsectors; s-- > 0;) {
+    for (s = nsectors; s-- > 1;) {
         if (file_read_sector(bs, &bs->kernel, s, sector) != 0) {
             return fail(err, errlen, "the candidate slot does not read");
         }
@@ -833,7 +863,7 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
             return fail(err, errlen, "the fallback file does not write");
         }
     }
-    for (s = 0; s < nsectors; s++) {
+    for (s = 1; s < nsectors; s++) {
         if (file_read_sector(bs, &bs->kernel, s, sector) != 0 ||
             file_read_sector(bs, &bs->fallback, s, back) != 0) {
             return fail(err, errlen, "the fallback file does not read back");
@@ -842,9 +872,24 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
             return fail(err, errlen, "the fallback's bytes do not match the candidate's");
         }
     }
+    if (file_write_sector(bs, &bs->fallback, 0, head) != 0) {
+        return fail(err, errlen, "the fallback file does not write");
+    }
+    if (file_read_sector(bs, &bs->fallback, 0, back) != 0) {
+        return fail(err, errlen, "the fallback file does not read back");
+    }
+    if (memcmp(head, back, BOOTSLOT_SECTOR) != 0) {
+        return fail(err, errlen, "the fallback's bytes do not match the candidate's");
+    }
     return 0;
 }
 
+/**
+ * Set `saved_entry=candidate` when the environment contains an empty
+ * `next_entry` and no nonempty occurrence. The caller must establish that
+ * this boot runs the candidate. GRUB writes the empty marker when selecting
+ * a trial, before loading its kernel.
+ */
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
@@ -852,21 +897,6 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
 
     int consumed = 0;
 
-    /* Three trial states live in the block. A line with a value
-       (next_entry=candidate) means an install happened after this machine
-       booted, so the slot no longer has the running kernel. The empty line
-       (next_entry=, the value GRUB's scripted consumption saves) means the
-       running candidate came through a trial boot; only that state may commit.
-       No line at all is a fresh disk or an interrupted install, and an
-       interrupted install's slot has partial bytes, so committing without the
-       consumed marker would save bytes that never booted.
-
-       What is matched is the key and not any particular value, so a trial of
-       any entry is seen. The leading newline makes it a whole line and not a
-       suffix of some other key: the writer preserves lines it does not know, so
-       a block could hold an `x_next_entry=candidate` that is nobody's trial
-       state, and the block's header line guarantees every real variable has a
-       newline before it. */
     if (bootslot_read_env(bs, env, err, errlen) != 0) {
         return -1;
     }

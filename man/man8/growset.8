@@ -55,8 +55,10 @@ the map check's results follow the pairs.
 .It Fl -lba Ar START
 Use disk-relative sector numbers, with the volume starting at
 .Ar START .
-Include the disk's first page, where growroot
-rewrites the partition entry.
+With a nonzero
+.Ar START ,
+include sectors 0 through 7 because the grow test records writes in
+4096-byte qcow2 clusters.
 .It Fl -map Ar JSON
 Check QEMU's written extents in
 .Ar JSON

@@ -76,13 +76,15 @@ struct bootslot {
  *  chain legal, loop-free and disjoint. */
 int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, size_t errlen);
 
-/** Validate `image` as a bootable kernel: ELF32 `ET_EXEC` for `EM_386`, the
- *  multiboot header four-byte-aligned in the first 8192 bytes with a checksum
- *  that sums to zero, a loader-shaped program-header table whose loads stay
- *  inside the file and at or above the megabyte, and an entry point inside a
- *  load. `present` is how many bytes of `image` are in memory (a fallback
- *  check reads only the head); ranges are judged against the full `size`.
- *  Pure. */
+/**
+ * Validate ELF32 i386 kernel headers without changing the image.
+ *
+ * Load file ranges must fit `size`. Load memory ranges start at or above
+ * 1 MiB and have a representable 32-bit exclusive end. ELF and program
+ * headers must fit `present`, the available prefix. The entry point must
+ * lie in a load's file-backed bytes. A four-byte-aligned Multiboot header
+ * in the first 8192 bytes must have ALIGN|MEMINFO flags and a valid checksum.
+ */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen);
 
@@ -94,19 +96,23 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
 int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, char *err,
                      size_t errlen);
 
-/** Write `saved_entry=candidate`, making the booted candidate the saved
- *  default. Requires the consumed-trial marker (`next_entry=`) in the block:
- *  an armed line means the slot was refilled after this boot, and no line at
- *  all means a fresh disk or an interrupted install, and neither state's
- *  slot bytes are the running kernel. */
+/**
+ * Write `saved_entry=candidate` when `next_entry` is present and empty.
+ *
+ * GRUB saves this marker before loading the trial kernel; it does not prove
+ * a completed boot. The caller must check `rach2.slot=candidate`.
+ */
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen);
 
-/** Copy the committed candidate slot into the fallback file and read it
- *  back byte for byte, so a machine whose fallback is old is given the
- *  kernel it runs. Refused while the saved entry is not the candidate's,
- *  while a trial is armed, and on a disk whose fallback file is shorter than
- *  the slot, which every disk built before milestone 50 has. The caller
- *  boots the new fallback once, `trial fallback`, before trusting it. */
+/**
+ * Copy and verify the candidate slot as the fallback, restoring its header
+ * only after the remaining sectors have been verified.
+ *
+ * Require `saved_entry=candidate`, no nonempty `next_entry`, and a fallback
+ * file at least as long as the candidate slot. These environment values do
+ * not establish which kernel ran. A failed final write may leave a partial
+ * header. Boot the copied fallback once before relying on it.
+ */
 int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen);
 
 /**
@@ -121,10 +127,10 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen);
  * next boot. The padding is '#', not zeros because GRUB reads the whole
  * file and a comment is what an empty tail has to look like to it.
  *
- * This is not atomic and cannot be: one slot overwritten in place can be left
- * holding a prefix of a new menu above the tail of an old one. What makes that
- * survivable is elsewhere, in the immutable stub, which defines every entry the
- * machine needs before it reads this file and never lets it choose the default.
+ * An interrupted write can leave a new prefix above an old tail. The stub
+ * defines the required entries before sourcing this file. The file is
+ * unrestricted GRUB script and can change the variables used to select the
+ * default or boot a kernel directly.
  *
  * Refuses text larger than the slot, and a disk that has no slot at all,
  * without writing anything.
@@ -147,11 +153,9 @@ int bootslot_env_set(struct bootslot *bs, const char *key, const char *value, ch
 /**
  * Remove one key from the environment block, preserving every other line.
  *
- * Removing is not the same as setting empty, and for `next_entry` the
- * difference decides whether a kernel may be committed: an empty value is the
- * consumed marker GRUB's scripted consumption leaves after a trial boot, and
- * `bootslot_commit` requires it. A key that is simply absent is a machine with
- * no trial, which is what cancelling one means.
+ * An empty `next_entry` is the marker `bootslot_commit` requires. GRUB saves
+ * it before loading a trial kernel. Removing the key cancels the trial
+ * without supplying that marker.
  */
 int bootslot_env_drop(struct bootslot *bs, const char *key, char *err, size_t errlen);
 

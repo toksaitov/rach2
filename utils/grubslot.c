@@ -1,8 +1,5 @@
-/*
- * grubslot.c: the two core-image tails in the post-MBR gap, as arithmetic.
- *
- * Pure: bytes in, bytes out, no device. The tool drives a real disk through it
- * and a host test drives the same code over crafted sectors.
+/**
+ * Validate and replace GRUB core images using caller-supplied sector I/O.
  */
 
 #include <string.h>

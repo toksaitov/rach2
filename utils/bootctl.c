@@ -35,13 +35,6 @@
  * machine turns on, through an allowlist, not as a general editor,
  * because that block has no checksum and GRUB parses it at boot with no
  * recourse if it is malformed.
- *
- * The tool runs only on a machine that GRUB booted from a slot: it requires
- * a `rach2.slot=` token on /proc/cmdline before installing and
- * `rach2.slot=candidate` before committing, which also covers a QEMU -kernel
- * boot that happens to have a boot-partition disk attached. The device it
- * writes, /dev/bootpart, exists only on such a disk and opens for root
- * alone.
  */
 
 #include <errno.h>
@@ -63,16 +56,6 @@ static char errbuf[128];
 /* The device fd behind the bootslot_io callbacks. */
 static int devfd = -1;
 
-/*
- * The boot partition this run acts on: this machine's own unless `--target`
- * named another.
- *
- * The kernel publishes `/dev/bootpart` as the first partition of the disk it
- * probed first, which from a recovery stick can be the internal disk or the
- * stick itself, so a program repairing a named disk must be able to say which
- * one it means. `grub` and `commit` refuse the option, since both act on the
- * disk this machine booted from.
- */
 static const char default_boot_partition[] = "/dev/bootpart";
 static const char *boot_partition = default_boot_partition;
 
@@ -394,9 +377,11 @@ static int allowed(const char *const *list, int count, const char *word)
  * which is the only thing this can check. It is not a completeness test and
  * does not pretend to be one: a transfer cut after a whole menuentry produces a
  * file that parses, and nothing here can tell it from what the sender meant. A
- * caller who needs that compares a digest. What makes a wrong menu survivable
- * is the stub, which defines every entry the machine needs before it reads this
- * file and never lets it choose the default.
+ * caller who needs that compares a digest.
+ *
+ * The stub defines the required entries before sourcing this file. The file
+ * is unrestricted GRUB script and can change the variables used to select
+ * the default or boot a kernel directly.
  */
 static int cmd_config(const char *path)
 {
@@ -528,14 +513,10 @@ static int cmd_trial(const char *id)
 }
 
 /**
- * Make the committed candidate the fallback kernel too.
+ * Copy the saved candidate into the fallback file.
  *
- * The fallback file is written only by an install that builds the disk,
- * so a machine that has been updated through the candidate slot for a long
- * time keeps a fallback as old as its disk. This copies the slot into the
- * fallback file and reads it back, refused while the candidate is not the
- * saved default or a trial is armed; `bootctl trial fallback` then boots
- * the new fallback once before it is relied on.
+ * Candidate installs leave the fallback unchanged. This command copies the
+ * saved candidate into the fallback file and verifies the copy.
  */
 static int cmd_fallback(void)
 {
@@ -555,9 +536,8 @@ static int cmd_fallback(void)
 /**
  * Clear an armed trial, so the next boot takes the saved default.
  *
- * The key is removed and not set empty. An empty `next_entry` is the marker
- * GRUB leaves behind after a trial has actually booted, and `commit` requires
- * it, so writing it here would let a kernel that never ran be made the default.
+ * Remove the key rather than write the empty marker that `commit` requires.
+ * That marker is written when GRUB selects a trial, before loading its kernel.
  */
 static int cmd_cancel(void)
 {
@@ -595,8 +575,8 @@ static int gap_io(int fd, uint32_t lba, uint8_t *buf, int writing)
 /**
  * Read or write one gap sector through an open `/dev/grubcore`.
  *
- * The window's offsets are the disk's own LBAs, so this is `gap_io` with the
- * signature `grubslot_install` calls it through.
+ * The callback receives disk LBAs; `gap_io` converts them to byte offsets
+ * relative to the window beginning at LBA 1.
  */
 static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
 {
@@ -679,7 +659,18 @@ static void usage(void)
     fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
 
-/** Resolve the command line and run the verb it names. */
+/**
+ * Resolve the command line and run the verb it names.
+ *
+ * Kernel installation requires a recognized `rach2.slot=` token; commit
+ * requires `rach2.slot=candidate`. Boot-partition commands require readable
+ * `/proc/cmdline` and use `/dev/bootpart` unless `--target` selects another
+ * partition. GRUB replacement uses `/dev/grubcore`.
+ *
+ * The kernel selects the boot disk from `rach2.boot=`, otherwise from an
+ * identity-selected root, otherwise from disk 0. `--target` selects another
+ * boot partition for this invocation; `grub` and `commit` do not accept it.
+ */
 int main(int argc, char **argv)
 {
     const char *arg;

@@ -1,31 +1,3 @@
-/**
- * Grow a root partition and its ext2 file system into the free space after
- * it: `growroot MBRID=ID,N [--measure]`.
- *
- * The partition is named by identity, the disk's MBR signature and the
- * entry number, as the kernel's `rach2.root=` is, so a clone of the disk
- * behind it is not taken for it and a table entry is never grown by its
- * position alone. The entry is a primary one. The space it may grow into
- * is what lies between its end and the next entry's start, or the disk's
- * end, or the MBR's reach of 2^32 sectors, whichever comes first; a
- * partition that already fills that space is left as it is. Nothing is
- * moved and nothing else is touched.
- *
- * The steps, in order: the entry is rewritten with the new sector count,
- * the kernel is asked to read the table again, `e2fsck -f -p` checks the
- * volume, and `resize2fs` grows it to the partition. A run stopped after
- * the first step and started again finds the entry already at its size
- * and does the rest; a run stopped inside `resize2fs` leaves a volume the
- * checker on the next run repairs, and `resize2fs` then finishes. Writing
- * the table needs the recovery kernel, the one that lets a whole-disk
- * node take writes, and a table read again while the disk is in use is
- * refused; both refusals are reported as what they are.
- *
- * `resize2fs` and `e2fsck` keep the volume's bitmaps in memory, so a
- * machine below the memory the grow of a root to this disk's size was
- * measured to need is refused by name before anything is read.
- */
-
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
@@ -229,7 +201,10 @@ static int run(const char *path, const char *arg, const char *node)
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-/** Whether the partition at `start` of `/dev/diskN` has the ext2 magic. */
+/**
+ * Return whether partition node `node` has the ext2 superblock magic.
+ * Return zero if the node cannot be opened or read.
+ */
 static int is_ext2(const char *node)
 {
     unsigned char sector[512];
@@ -246,6 +221,22 @@ static int is_ext2(const char *node)
     return ok;
 }
 
+/**
+ * Grow an unmounted primary ext2 partition from recovery.
+ *
+ * Check the memory threshold before reading disks. Bound growth by the
+ * next partition, the disk's end and the MBR address limit. Reject a later
+ * logical partition because its extended-partition records are absent
+ * from `/proc/disk`. Before writing, reread the MBR through the writer's
+ * descriptor and recheck the identity, target entry and proposed free range.
+ *
+ * After updating and rereading the partition table, run `e2fsck -fn`.
+ * Continue with `e2fsck -fp` and `resize2fs` only when the read-only check
+ * succeeds. A volume requiring repair must be repaired separately before
+ * retrying. Repairs can write outside the ranges saved for the grow.
+ * Writing the table requires the recovery kernel; rereading the table
+ * fails while the disk is in use.
+ */
 int main(int argc, char **argv)
 {
     unsigned long want_id, id, mem;
@@ -268,8 +259,6 @@ int main(int argc, char **argv)
         puts("growroot: clock: CLOCK_MONOTONIC uses delivered 10 ms ticks on Rach2; "
              "lost ticks can undercount elapsed time");
     }
-    /* Before the disk is even looked for: a machine too small is told so
-     * with nothing read and nothing written. */
     mem = memory_kib();
     if (mem < GROWROOT_MEMORY_KIB) {
         snprintf(text, sizeof(text), "%lu MiB of memory; growing a root needs %u MiB", mem / 1024,
@@ -309,8 +298,6 @@ int main(int argc, char **argv)
     if (p->type != 0x83 || !is_ext2(part_node)) {
         return fail(part_node, "not an ext2 partition");
     }
-    /* The space after the entry: up to the next entry, the disk's end or
-     * the MBR's reach. */
     end = p->start + p->count;
     limit = disk_sectors[disk];
     if (limit > MBR_REACH) {
@@ -320,11 +307,6 @@ int main(int argc, char **argv)
         if (parts[i].disk != disk || &parts[i] == p) {
             continue;
         }
-        /* A logical partition is described by a record that lies outside
-         * it, in the extended partition that holds it, and `/proc/disk`
-         * does not name that container. Growing up to the logical's own
-         * start would write over the record that names it, so a logical
-         * partition after this entry stops the growth altogether. */
         if (parts[i].number >= 5 && parts[i].start >= end) {
             return fail(part_node, "an extended partition lies after it, and its records are "
                                    "not where this can see them");
@@ -351,10 +333,6 @@ int main(int argc, char **argv)
         if (fd < 0) {
             return fail(dev, strerror(errno));
         }
-        /* The disk is judged again with the writer's descriptor open, since
-         * the identity and the entry were read through descriptors that are
-         * closed by now and another writer on this system could have put a
-         * different table there in between. */
         if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
             close(fd);
             return fail(dev, "the first sector did not read; nothing written");
@@ -378,11 +356,6 @@ int main(int argc, char **argv)
                 close(fd);
                 return fail(dev, "the table changed while this was deciding; nothing written");
             }
-            /* The limit came from a table read through a descriptor that
-             * is closed by now. Another writer can add an entry in the
-             * space this is about to take without moving this entry or
-             * the disk's signature, so the space itself is judged again
-             * against the table the writer sees. */
             for (other = 0; other < 4; other++) {
                 const unsigned char *o = sector + MBR_ENTRIES + 16 * other;
                 unsigned long long o_start, o_count;
@@ -444,10 +417,6 @@ int main(int argc, char **argv)
     if (measured("table", "after")) {
         return 1;
     }
-    /* A repairing pass writes wherever the damage is, and `growset`
-     * computes only the blocks a grow itself writes, so a volume that
-     * needs repair cannot be undone from the set saved before this. It is
-     * checked read-only first and refused rather than repaired. */
     printf("growroot: check: e2fsck -f -n %s\n", part_node);
     fflush(stdout);
     if (measured("check-readonly", "before")) {

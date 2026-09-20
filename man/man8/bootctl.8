@@ -34,6 +34,9 @@ trial boot entries.
 It normally uses
 .Pa /dev/bootpart ,
 which only root may open.
+The kernel selects the boot disk from
+.Ql rach2.boot= ,
+otherwise from an identity-selected root, otherwise from disk 0.
 The
 .Fl -target Ar PARTITION
 option selects a named boot partition, such as
@@ -55,6 +58,9 @@ Committing requires
 and an environment block whose
 .Ql next_entry
 is present and empty, the mark a consumed trial leaves.
+GRUB saves this marker before loading the selected kernel.
+The environment fields can be edited and do not prove that a boot completed
+or identify the kernel bytes that ran.
 .Pp
 The commands are:
 .Bl -tag -width Ds
@@ -94,7 +100,11 @@ line reports
 or
 .Ql not from a slot (no rach2.slot= on /proc/cmdline) .
 .It Cm kernel Ar FILE
-Validate the file and the fallback kernel.
+Validate the file and the fallback kernel's header prefix.
+ELF load file ranges must fit the file size.
+Load memory ranges must start at or above 1 MiB and have a representable
+32-bit exclusive end.
+The entry point must lie in a load's file-backed bytes.
 Set
 .Ql saved_entry=fallback ,
 write the candidate slot, read it back byte for byte, and set
@@ -105,10 +115,12 @@ After installation, the command reports:
 .Dl bootctl: installed: N bytes in the candidate slot; the next boot tries it once, and a failure falls back
 .Dl bootctl: run `bootctl commit` after the new kernel boots
 .It Cm commit
-Make the booted candidate trial the saved default.
-Only a machine running the candidate, with the consumed trial's empty
+Make the candidate the saved default.
+Require
+.Ql rach2.slot=candidate
+and a present, empty
 .Ql next_entry
-in its environment block, may commit it.
+in the environment block.
 Success is reported as:
 .Dl bootctl: committed: the candidate is the saved default
 .It Cm trial Ar ENTRY
@@ -126,14 +138,25 @@ The key is removed rather than set to the empty value left by a consumed trial.
 Success is reported as:
 .Dl bootctl: cancelled: the next boot takes the saved default
 .It Cm fallback
-Copy the committed candidate into the fallback slot and read it back.
+Copy the candidate into the fallback slot and read it back.
+Require
+.Ql saved_entry=candidate ,
+no nonempty
+.Ql next_entry ,
+and a fallback file at least as long as the candidate slot.
+Invalidate the fallback's first sector, copy and verify the remaining
+sectors, then restore and verify the first sector.
+A failed payload write or readback leaves an invalid header that stops
+a later install.
+A failed final write may leave a partial header.
 The command then prints:
 .Dl bootctl: run `bootctl trial fallback` to boot it once
 .It Cm config Ar FILE
 Write and verify the fixed menu slot.
 GRUB reads this file after defining its stub entries.
-The stub defines every required entry before reading the staged file,
-so a damaged menu leaves the machine bootable.
+The stub defines the required entries before sourcing this file.
+The file is unrestricted GRUB script and can change the variables used
+to select the default or boot a kernel directly.
 An empty file, a file larger than the slot, or a disk without a menu
 slot is refused.
 .It Cm grub Ar FILE

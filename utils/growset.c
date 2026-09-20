@@ -10,9 +10,7 @@
  * way `resize2fs` does, and prints one `range START COUNT WHAT` line per
  * run of sectors the grow writes, sorted and merged, relative to the
  * volume's start, or to the disk's when `--lba` gives the partition's
- * first sector, in which case the disk's first page, where `growroot`
- * rewrites the entry, is in the set too. The last lines are `total
- * SECTORS` and the geometry.
+ * first sector. The last lines are `total SECTORS` and the geometry.
  *
  * `--map JSON` checks the set against a grow that ran: JSON is what
  * `qemu-img map --output=json` printed for the overlay the grow wrote
@@ -189,6 +187,22 @@ static int check_map(const char *path)
     return outside ? 1 : 0;
 }
 
+/**
+ * Compute the write ranges for a supported ext2 grow.
+ *
+ * Require 4096-byte blocks and a resize inode with enough descriptor reserve
+ * to avoid moving blocks. Reject a recorded RAID stride or stripe width,
+ * and check each existing group's bitmap positions against the plain layout:
+ * the group's start after any superblock, descriptors and reserve. Clearing
+ * the recorded stride does not move bitmaps; resize2fs derives its placement
+ * from the layout itself.
+ *
+ * Drop a final partial group when it cannot fit its tables and fifty blocks,
+ * as resize2fs does. Sort and merge the computed ranges and express them in
+ * sectors relative to the volume or, with `--lba`, to the disk.
+ * With a nonzero `--lba`, include sectors 0 through 7 because the grow test
+ * records writes in 4096-byte qcow2 clusters.
+ */
 int main(int argc, char **argv)
 {
     unsigned long long lba = 0, sectors, new_blocks, total = 0;
@@ -265,11 +279,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "growset: the seed length differs from its block count\n");
         return 1;
     }
-    /* resize2fs places a new group's bitmaps by a stride, and it takes
-     * that stride from the volume's own layout rather than from the
-     * recorded value, which `tune2fs -E stride=0` can clear without
-     * moving anything. So the recorded value is refused when it is set,
-     * and the layout is checked group by group further down. */
     if (rd16(sb + 356) != 0 || rd16(sb + 358) != 0) {
         fprintf(stderr,
                 "growset: %s: the volume declares a RAID stride or stripe width, "
@@ -288,8 +297,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "growset: %llu sectors is smaller than the volume\n", sectors);
         return 1;
     }
-    /* The last group as resize2fs keeps it: a remainder too small for its
-     * own tables and fifty blocks is dropped. */
     groups_new = (unsigned long)((new_blocks - first_data + bpg - 1) / bpg);
     gd_new = (groups_new * 32 + bs - 1) / bs;
     rem = (unsigned long)((new_blocks - first_data) % bpg);
@@ -311,11 +318,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "growset: the descriptors did not read\n");
         return 1;
     }
-    /* Every existing group has its bitmaps where the plain layout puts
-     * them: at the group's start, past its superblock copy, descriptors
-     * and reserve when it has them. A volume laid out by a stride is
-     * refused here, since the blocks a grow would write are not the ones
-     * computed below. */
     for (g = 0; g < groups; g++) {
         const unsigned char *d = gd + g * 32;
         unsigned long long start = first_data + (unsigned long long)g * bpg;
@@ -364,8 +366,6 @@ int main(int argc, char **argv)
             add(at, 2 + itb, "a new group's bitmaps and inode table");
         }
     }
-    /* Sorted and merged, in sectors of the disk or the volume; the table
-     * sector first when the volume sits on a disk. */
     qsort(ranges, nranges, sizeof(ranges[0]), by_start);
     for (i = 0; i < nranges;) {
         unsigned long long start = ranges[i].start, end = start + ranges[i].count;
@@ -389,8 +389,6 @@ int main(int argc, char **argv)
     }
     nranges = merged;
     if (lba > 0) {
-        /* The table sector, with the rest of its page: a device written
-         * through a page cache records the page. */
         add(0, 8, "the partition table");
         qsort(ranges, nranges, sizeof(ranges[0]), by_start);
     }
