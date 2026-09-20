@@ -923,8 +923,13 @@ static int check_recovery(void)
 }
 
 /**
- * Read from `fd` until `buffer` has `needle` or `ms` milliseconds pass.
- * Returns 1 when the text arrived and 0 otherwise.
+ * Read from `fd` until `buffer` has `count` occurrences of `needle`, or `ms`
+ * milliseconds pass. Returns 1 when they arrived and 0 otherwise.
+ *
+ * A caller that waits for a reprinted prompt needs the later copy and not the
+ * first, since what it is really waiting out is the flush that precedes the
+ * reprint, so the occurrences already in the buffer are counted rather than
+ * matched.
  *
  * Every read of the master is bounded, because a probe that blocks on a
  * terminal nobody is writing to would hang the whole suite, not fail it.
@@ -932,20 +937,28 @@ static int check_recovery(void)
  * slave is not open yet reads as end of file, and the child does its own open
  * after the fork.
  */
-static int expect_on(int fd, const char *needle, char *buffer, size_t size, long ms)
+static int expect_nth_on(int fd, const char *needle, int count, char *buffer, size_t size, long ms)
 {
     size_t filled = strlen(buffer);
+    size_t len = strlen(needle);
     long waited = 0;
 
     while (waited < ms) {
-        ssize_t n = read(fd, buffer + filled, size - 1 - filled);
+        const char *at = buffer;
+        int seen = 0;
+        ssize_t n;
 
+        while ((at = strstr(at, needle)) != NULL) {
+            seen++;
+            at += len;
+        }
+        if (seen >= count) {
+            return 1;
+        }
+        n = read(fd, buffer + filled, size - 1 - filled);
         if (n > 0) {
             filled += (size_t)n;
             buffer[filled] = '\0';
-            if (strstr(buffer, needle) != NULL) {
-                return 1;
-            }
             continue;
         }
         if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -956,6 +969,12 @@ static int expect_on(int fd, const char *needle, char *buffer, size_t size, long
     }
 
     return 0;
+}
+
+/** Read from `fd` until `buffer` has `needle`, within `ms`. */
+static int expect_on(int fd, const char *needle, char *buffer, size_t size, long ms)
+{
+    return expect_nth_on(fd, needle, 1, buffer, size, ms);
 }
 
 /**
@@ -1510,10 +1529,20 @@ static void prompt_resume_leader(const char *name, int master, int report)
  * The stub stops the reader at exactly that point. Unlike the stale-owner case
  * the terminal stays with the reader, so what follows is an ordinary `fg` and
  * an ordinary password, and every character of it must survive.
+ *
+ * The continue is not the moment to type. The resume re-applies the echo-off
+ * modes with `TCSAFLUSH`, which discards whatever is typed already, and the
+ * mode change the stop interrupted does it once more as it returns; each
+ * flush is followed by a prompt, so a password typed after the second prompt
+ * is the first one no flush can take. Typing on the leader's report alone
+ * loses the password whenever the reader has not reached those flushes yet,
+ * which is a race the round-robin scheduler used to win and that no
+ * scheduling order promises.
  */
 static int check_prompt_stop_before_read(void)
 {
     char verdict[8];
+    char prompts[128];
     pid_t leader;
     int master;
     int channel[2];
@@ -1541,11 +1570,20 @@ static int check_prompt_stop_before_read(void)
 
         return fail("could not fork the session leader the pre-read stop case needs");
     }
-    if (read(channel[0], verdict, 1) != 1 || verdict[0] != 'r') {
+    if (read_verdict(channel[0], leader, verdict, 1, 10000) != 1 || verdict[0] != 'r') {
         close(master);
         close(channel[0]);
 
         return fail("the pre-read stop case never saw its reader resume");
+    }
+    prompts[0] = '\0';
+    if (!expect_nth_on(master, "Password: ", 2, prompts, sizeof(prompts), 10000)) {
+        kill(leader, SIGKILL);
+        close(master);
+        close(channel[0]);
+        (void)waitpid(leader, &status, 0);
+
+        return fail("the pre-read stop case never saw the prompt its reader reprints");
     }
     if (write(master, "secret\n", 7) != 7) {
         close(master);
@@ -1553,7 +1591,7 @@ static int check_prompt_stop_before_read(void)
 
         return fail("could not type the password the pre-read stop case checks");
     }
-    if (read(channel[0], verdict, 1) != 1) {
+    if (read_verdict(channel[0], leader, verdict, 1, 10000) != 1) {
         close(master);
         close(channel[0]);
 
