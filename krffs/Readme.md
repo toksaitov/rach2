@@ -51,6 +51,8 @@ The root Makefile owns the named image profiles and their dependencies. The root
 
 `gen_demo_key.sh` provisions separate Ed25519 keypairs for root and the test account. Optional `authorized_keys.extra` and `test_authorized_keys.extra` files add local public keys; the script rejects private-key material and malformed lines. `RACH2_REPLACE_KEYS=1` replaces existing generated pairs.
 
+`make recovery-key` seeds `recovery_authorized_keys` from `authorized_keys` when absent and preserves an existing recovery list. `make recovery-key RECOVERY_EXTRA_KEYS=/path/operator.pub` explicitly replaces that list with the builder's `authorized_keys` followed by the operator's public keys. `gen_recovery_key.sh` checks each extra key with `ssh-keygen`, rejects empty files and private keys, and publishes only a changed, complete list. This lets recovery built on one host trust an operator on another without copying a private key. Run this command before the separate `make rach2-install-stick`; recovery selects its artifact names when Make starts. The [host procedure](../tools/Readme.md#working-an-installed-machine-from-the-host) gives the commands.
+
 `gen_demo_password.sh` provisions the two development passwords and a matching `/etc/shadow`. It uses `mkhash.krffs`, writes credentials with a restrictive umask, and publishes the two-line shadow file atomically. Existing credentials remain unchanged unless `RACH2_REPLACE_PASSWORDS=1` is set. `RACH2_ROOT_PASSWORD` and `RACH2_TEST_PASSWORD` supply replacement values.
 
 ## The format the tools and the kernel share

@@ -544,11 +544,13 @@ krffs/shadow: | build/krffs/mkfs.krffs
 # that key starts no SSH server at all and the only way in is the keyboard,
 # which is what its absence means. `tests/run` mints it before it builds
 # anything, since the suites that update a machine do it through recovery over
-# SSH; a plain `make` does not, so an image built by hand answers nobody unless
-# somebody asked for a key.
+# SSH; a plain `make` does not. RECOVERY_EXTRA_KEYS names an operator's public
+# key file; when set, recovery-key replaces the recovery list with this tree's
+# keys and that file. Without it, an existing recovery list is preserved.
 .PHONY: recovery-key
-recovery-key: krffs/recovery_authorized_keys
-	@echo "recovery-key: the recovery system will answer this tree's key"
+recovery-key: krffs/authorized_keys
+	sh krffs/gen_recovery_key.sh krffs/authorized_keys krffs/recovery_authorized_keys "$(RECOVERY_EXTRA_KEYS)"
+	@echo "recovery-key: ready: krffs/recovery_authorized_keys"
 
 # An order-only prerequisite, so the demo key being newer never overwrites a
 # key somebody put here by hand: this rule mints one where there is none and
