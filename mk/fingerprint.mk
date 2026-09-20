@@ -21,22 +21,21 @@ _goal_before_fingerprint := $(.DEFAULT_GOAL)
 # products so a parallel sibling is not deleted mid-compile.
 CONFIG_PURGE ?= $(BUILD)
 
-# The fingerprint file is a regular prerequisite of every object and
-# program of the component, and its recipe runs on every make: it reads the
-# current configuration and writes the file when it is missing or differs.
-# What a stale configuration would leave behind is removed first: when the
-# file differs, and when there is no file but the build directory already has
-# something in it, since those products were built under a configuration
-# nothing recorded. The objects are then gone and the file is newer than any
-# that a shared directory kept. Make then decides each object by its date,
-# after this recipe, which is what an earlier form got wrong: it removed the
-# tree from an order-only step, and under `make -j` the objects make had already looked at vanished
-# under it, so a link asked for files that were gone. The purge is kept for
-# the system make (GNU 3.81), which compares whole seconds: an object
-# compiled in the same second the file was written would otherwise survive
-# as stale. A dry run does not run the recipe and leaves the file out of the
-# decision, so `make -n` prints what the recorded configuration would build
-# and removes nothing.
+# The fingerprint file is a regular prerequisite of every object and program of
+# the component, and its recipe runs on every make: it reads the current
+# configuration and writes the file when it is missing or differs. What a stale
+# configuration would leave behind is removed first: when the file differs, and
+# when there is no file but the build directory already has something in it,
+# since those products were built under a configuration nothing recorded. The
+# objects are then gone and the file is newer than any that a shared directory
+# kept. Make then decides each object by its date, after this recipe, which is
+# what an earlier form got wrong: it removed the tree from an order-only step,
+# and under `make -j` the objects make had already looked at vanished under it,
+# so a link asked for files that were gone. The purge is kept for the system
+# make (GNU 3.81), which compares whole seconds: an object compiled in the same
+# second the file was written would otherwise survive as stale. A dry run does
+# not run the recipe and leaves the file out of the decision, so `make -n`
+# prints what the recorded configuration would build and removes nothing.
 ifeq ($(findstring n,$(firstword -$(MAKEFLAGS))),)
 $(CONFIG): FORCE
 endif

@@ -918,23 +918,24 @@ check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
 	done
 
 # Privilege climbs through a declared set of paths and no others. The sweep
-# reads every manifest against a per-image allowlist, so a set-id line
-# anywhere, under any of the six mode-bearing directives, fails the build
-# rather than a boot. Every artifact a check reads becomes a prerequisite
-# here, in the phase that adds the check, because make does not order the
-# siblings of a prerequisite list. The manifest sweep needs no build product, but the
+# reads every manifest against a per-image allowlist, so a set-id line anywhere,
+# under any of the six mode-bearing directives, fails the build rather than a
+# boot. Every artifact a check reads becomes a prerequisite here, in the phase
+# that adds the check, because make does not order the siblings of a
+# prerequisite list. The manifest sweep needs no build product, but the
 # applet-table check reads one, so this target is ordered against the busybox
-# stamp. Unordered it would fail a correct tree on a header that does not exist
-# yet, or, in the case that matters, read the PREVIOUS configuration's table
-# after rach2.config was edited, pass, and let the image stage the busybox whose
+# stamp.
+# Unordered it would fail a correct tree on a header that does not exist yet,
+# or, in the case that matters, read the PREVIOUS configuration's table after
+# rach2.config was edited, pass, and let the image stage the busybox whose
 # re-enabled applet the check exists to forbid: build_busybox.sh opens by
 # removing and re-extracting the tree, so for most of a rebuild the header is
-# absent and before that it is stale. The applet half reads two generated
-# applet tables and the init half reads the three init binaries the allowlist
-# names, so both are ordered after what produces them, the way phase 3's rule
-# requires: unordered, a parallel build
-# scans a build/utils/sbin/ that holds yesterday's artifacts and passes while
-# today's are staged.
+# absent and
+# before that it is stale. The applet half reads two generated applet tables and
+# the init half reads the three init binaries the allowlist names, so both are
+# ordered after what produces them, the way phase 3's rule requires: unordered,
+# a parallel build scans a build/utils/sbin/ that holds yesterday's artifacts
+# and passes while today's are staged.
 check-setid: $(BUSYBOX_STAMP) utils $(SETIDCHECK)
 	@$(SETIDCHECK)
 	@$(SETIDCHECK) --applets
