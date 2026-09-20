@@ -26,7 +26,7 @@ The `-O2` kernel builds and passes the core tier's 36 suites. Building it found 
 
 The eight fuzz harnesses each ran ten minutes from their corpora without a crash or a sanitizer report.
 
-Each check was proved by a mutation that makes it fail. The reading of the whole tree that this milestone is for found nineteen faults in the code, which `dev-log/50-shortcomings/plan.md` records as entries 111 through 129; eleven are fixed here and eight are carried. The two most serious were found by reading a comment against the code it describes: a boot whose `/sbin/init` could not be read for any reason other than absence fell through to the kernel debug shell, which authenticates nobody, and the recovery shell's disk round-trip overwrote a GPT disk's backup partition table.
+Each check was proved by a mutation that makes it fail. The reading of the whole tree that this milestone is for found nineteen faults in the code, which `dev-log/50-shortcomings/plan.md` records as entries 111 through 129; eleven are fixed here and eight are carried. The sitting added three more, entries 130 to 132, all in the deployment path rather than in the system. The two most serious were found by reading a comment against the code it describes: a boot whose `/sbin/init` could not be read for any reason other than absence fell through to the kernel debug shell, which authenticates nobody, and the recovery shell's disk round-trip overwrote a GPT disk's backup partition table.
 
 ## What was accepted
 
@@ -35,7 +35,18 @@ Each check was proved by a mutation that makes it fail. The reading of the whole
 * Kernel build: the repository defaults, `i686-elf-gcc` with `-ansi -Werror -Wextra -Wdeclaration-after-statement` and no libgcc. The `-O2` variant adds `-O2` and nothing else. Native host tests use `-std=c99 -fsanitize=address,undefined -fno-sanitize-recover=all -O1`, and the fuzz harnesses the same sanitizers with libFuzzer.
 * Test commands, each once on the testing host with 64 workers under KVM: `tests/run all`, which reported `run: result: all 88 suites passed`; `make analyze`, which reported `analyze: PASS`; `RACH2_KERNEL=o2 tests/run core`, which reported `run: result: all 36 suites passed`; and each of the eight fuzz harnesses for 600 seconds from its committed corpus, all exiting zero.
 * Judges: `i686-elf-gcc` wraps `i686-linux-gnu-gcc` (Ubuntu 15.2.0-16ubuntu1) 15.2.0, and the native `cc` is that compiler. clang and clang-format are Ubuntu 21.1.8, cppcheck 2.19.0, ShellCheck 0.11.0, sparse 0.6.4, pmccabe 2.8, QEMU 10.2.1. `tools/setup/judges` records them, and `doctor.sh` prints what a machine has beside them.
-* Hardware: the testing host is an AMD Ryzen 9 7950X3D under WSL2 with nested KVM, where every suite, set and analysis ran. The Mac mini was used for editing, single compiles and the mutation proofs. There was no machine sitting in this milestone; the deployment is phase 13's and the owner's.
+* Hardware: the testing host is an AMD Ryzen 9 7950X3D under WSL2 with nested KVM, where every suite, set and analysis ran. The Mac mini was used for editing, single compiles and the mutation proofs. The sitting on 2026-09-20 deployed to the Lenovo G50-70, a Samsung SSD 870 EVO of 488397168 sectors on AHCI port 0.
+
+The sitting wrote four regions of that disk, each from the sealed image the install stick carries and each read back:
+
+```
+7a2389ad8a1aa953c0d7ee0db260343aaf15c0ffcde5eada279fb1ef7e5a04bd  the boot loader's core image, 1048064 bytes in the post-MBR gap
+79a5551f5fa62f379a1048ed28017e12d899780ae70e915e7bcfab3ac7a351ce  partition 1, the menu and both kernel slots, 64 MiB
+8fbca6069b61692c7e34e75c731da20b58dd1cfe974bc82b1fb3a2676c954a8b  partition 2, the recovery system, 64 MiB
+fa55ea43e6384815497729d18f419edacb3d4e6a8a46c95c384622c38f88e57a  partition 3, the ext2 root, 1 GiB before it was grown
+```
+
+The root was then grown to 488130928 sectors, the rest of the disk. The master boot record was not written, so the machine keeps its own table. Four boots prove the writes: the candidate from the disk with the grown root, the fallback under a trial, the disk's recovery entry, and the candidate again as the saved default. `dev-log/53-audit/notes.md` records what the sitting found, including the two ways the deployment path does not yet work.
 
 The closing set ran on 2026-09-20 from 12:07:13 to 12:25:19 host time, 18 min 6 s, with 7800 suite-seconds through the pool. The longest suites were sealed (669 s), diskrate (378 s), grow (325 s), runner (313 s) and install (302 s).
 
