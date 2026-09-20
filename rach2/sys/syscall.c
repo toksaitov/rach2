@@ -72,48 +72,48 @@ volatile uint32_t fb_owner_pid = 0;
 /*
  * ioctl request codes (Linux compatible subset)
  */
-#define KIOCSOUND     0x4B2F /* Set PC speaker frequency (0 = off) */
+#define KIOCSOUND 0x4B2F /* Set PC speaker frequency (0 = off) */
 
-#define TCGETS        0x5401 /* Get terminal attributes (termios) */
+#define TCGETS 0x5401 /* Get terminal attributes (termios) */
 
-#define TCSETS        0x5402 /* Set terminal attributes now */
+#define TCSETS 0x5402 /* Set terminal attributes now */
 
-#define TCSETSW       0x5403 /* Set after the output drains */
+#define TCSETSW 0x5403 /* Set after the output drains */
 
-#define TCSETSF       0x5404 /* Set after output drains, flush input */
+#define TCSETSF 0x5404 /* Set after output drains, flush input */
 
-#define TCFLSH        0x540B /* Flush input and/or output queues */
+#define TCFLSH 0x540B /* Flush input and/or output queues */
 
-#define FIONREAD      0x541B /* Bytes available to read */
+#define FIONREAD 0x541B /* Bytes available to read */
 
-#define TIOCGWINSZ    0x5413 /* Get terminal window size */
+#define TIOCGWINSZ 0x5413 /* Get terminal window size */
 
-#define TIOCSWINSZ    0x5414 /* Set terminal window size */
+#define TIOCSWINSZ 0x5414 /* Set terminal window size */
 
-#define TIOCSCTTY     0x540E /* Make this tty the controlling terminal */
+#define TIOCSCTTY 0x540E /* Make this tty the controlling terminal */
 
-#define TIOCGPGRP     0x540F /* Get the foreground process group */
+#define TIOCGPGRP 0x540F /* Get the foreground process group */
 
-#define TIOCSPGRP     0x5410 /* Set the foreground process group */
+#define TIOCSPGRP 0x5410 /* Set the foreground process group */
 
-#define TIOCNOTTY     0x5422 /* Detach from the controlling terminal */
+#define TIOCNOTTY 0x5422 /* Detach from the controlling terminal */
 
-#define FB_MODE_13H   0x4601 /* Switch to VGA Mode 13h */
+#define FB_MODE_13H 0x4601 /* Switch to VGA Mode 13h */
 
-#define FB_MODE_TEXT  0x4602 /* Switch back to text mode */
+#define FB_MODE_TEXT 0x4602 /* Switch back to text mode */
 
 #define FB_SETPALETTE 0x4603 /* Set 256-color palette (768 bytes) */
 
 /*
  * Audio ioctl request codes
  */
-#define AUDIO_GET_INFO   0x4101 /* Get audio driver info */
+#define AUDIO_GET_INFO 0x4101 /* Get audio driver info */
 
-#define AUDIO_START      0x4102 /* Start audio playback */
+#define AUDIO_START 0x4102 /* Start audio playback */
 
-#define AUDIO_STOP       0x4103 /* Stop audio playback */
+#define AUDIO_STOP 0x4103 /* Stop audio playback */
 
-#define AUDIO_WRITE      0x4104 /* Write audio samples */
+#define AUDIO_WRITE 0x4104 /* Write audio samples */
 
 #define AUDIO_SET_VOLUME 0x4105 /* Set volume (0-100) */
 
@@ -154,11 +154,11 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
 /* The magics Linux's reboot(2) demands, which musl passes for the caller: a
  * first word, one of four accepted second words, and then the command. */
-#define REBOOT_MAGIC1  0xfee1deadu
+#define REBOOT_MAGIC1 0xfee1deadu
 
-#define REBOOT_MAGIC2  672274793u /* 0x28121969 */
+#define REBOOT_MAGIC2 672274793u /* 0x28121969 */
 
-#define REBOOT_MAGIC2A 85072278u  /* 0x05121996 */
+#define REBOOT_MAGIC2A 85072278u /* 0x05121996 */
 
 #define REBOOT_MAGIC2B 369367448u /* 0x16041998 */
 
@@ -166,15 +166,15 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
 
 /* The commands. Two of them are negative read as a signed int, which is why
  * everything here compares raw 32-bit values. */
-#define REBOOT_CMD_RESTART   0x01234567u
+#define REBOOT_CMD_RESTART 0x01234567u
 
-#define REBOOT_CMD_HALT      0xcdef0123u
+#define REBOOT_CMD_HALT 0xcdef0123u
 
 #define REBOOT_CMD_POWER_OFF 0x4321fedcu
 
-#define REBOOT_CMD_CAD_ON    0x89abcdefu
+#define REBOOT_CMD_CAD_ON 0x89abcdefu
 
-#define REBOOT_CMD_CAD_OFF   0x00000000u
+#define REBOOT_CMD_CAD_OFF 0x00000000u
 
 /**
  * reboot(2): stop the machine. EBX = magic1, ECX = magic2, EDX = command.
@@ -251,8 +251,7 @@ static int32_t sys_reboot(isr_params_t *params)
  * @return 0, `-EINVAL` for a bad whence or a result before the start, or
  *         `-EOVERFLOW` for one past what an offset can hold.
  */
-int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence,
-                                uint64_t *out)
+int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out)
 {
     uint64_t base;
     uint64_t mag;
@@ -468,7 +467,7 @@ static int32_t sys_nanosleep(isr_params_t *params)
  * gate validation here. */
 #define GRND_NONBLOCK 0x0001u
 
-#define GRND_RANDOM   0x0002u
+#define GRND_RANDOM 0x0002u
 
 #define GRND_INSECURE 0x0004u
 

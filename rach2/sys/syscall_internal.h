@@ -76,8 +76,7 @@ int32_t sys_fsync(isr_params_t *params);
 
 int32_t sys_sync(isr_params_t *params);
 
-int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence,
-                                uint64_t *out);
+int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out);
 
 int32_t sys_lseek(isr_params_t *params);
 
@@ -86,7 +85,7 @@ int sock_is_query(const struct socket *sock);
 int32_t sys_read(isr_params_t *params);
 
 int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
-                           uint16_t *src_port);
+                    uint16_t *src_port);
 
 int32_t sys_readv(isr_params_t *params);
 
@@ -215,11 +214,11 @@ int user_access_ok(uint32_t addr, uint32_t len);
 
 int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 
-int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
-                          const uint8_t *buf, uint16_t len);
+int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
+                   uint16_t len);
 
 /* The query-only raw descriptor a DHCP client asks the interface through. */
-#define SOCK_RAW     3
+#define SOCK_RAW 3
 
 int32_t sys_socketcall(isr_params_t *params);
 

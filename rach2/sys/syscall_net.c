@@ -99,40 +99,40 @@
     } while (0)
 
 /* socketcall sub-function numbers (Linux standard). */
-#define SC_SOCKET      1
+#define SC_SOCKET 1
 
-#define SC_BIND        2
+#define SC_BIND 2
 
-#define SC_CONNECT     3
+#define SC_CONNECT 3
 
-#define SC_LISTEN      4
+#define SC_LISTEN 4
 
-#define SC_ACCEPT      5
+#define SC_ACCEPT 5
 
 #define SC_GETSOCKNAME 6
 
 #define SC_GETPEERNAME 7
 
-#define SC_SEND        9
+#define SC_SEND 9
 
-#define SC_RECV        10
+#define SC_RECV 10
 
-#define SC_SENDTO      11
+#define SC_SENDTO 11
 
-#define SC_RECVFROM    12
+#define SC_RECVFROM 12
 
-#define SC_SHUTDOWN    13
+#define SC_SHUTDOWN 13
 
-#define SC_SETSOCKOPT  14
+#define SC_SETSOCKOPT 14
 
-#define SC_GETSOCKOPT  15
+#define SC_GETSOCKOPT 15
 
-#define SC_RECVMSG     17
+#define SC_RECVMSG 17
 
 /* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
  * used to squat on 15 == Linux getsockopt, which a real server needs).
  * Userspace callers (utils/ping.c, tests/pingtest.c) use the same value. */
-#define SC_PING        0x1000
+#define SC_PING 0x1000
 
 /**
  * Canonicalize a destination address at the socket boundary.
@@ -156,8 +156,8 @@ static uint32_t canonical_dst_ip(uint32_t ip)
  * A program that broadcasts by accident wakes the whole network, and the
  * option exists so that it has to mean it.
  */
-int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
-                          const uint8_t *buf, uint16_t len)
+int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
+                   uint16_t len)
 {
     int r;
 
@@ -192,21 +192,21 @@ static uint8_t raw_send_buf[1500];
 /* recv flags: only MSG_DONTWAIT is honored. */
 #define MSG_DONTWAIT 0x40
 
-#define IPPROTO_RAW  255
+#define IPPROTO_RAW 255
 
 #define IPPROTO_ICMP 1
 
 /* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
  * datagrams leave with, and the option that would hand the caller the header,
  * which this stack does not implement. */
-#define SOL_IP     0
+#define SOL_IP 0
 
-#define IP_TTL     2
+#define IP_TTL 2
 
 #define IP_HDRINCL 3
 
 /* setsockopt levels and the one packet option that is answered. */
-#define SOL_PACKET     263
+#define SOL_PACKET 263
 
 #define PACKET_AUXDATA 8
 
@@ -222,19 +222,19 @@ static uint8_t raw_send_buf[1500];
  * offset of each field beside it: family 0 (2 bytes), protocol 2 (2), ifindex
  * 4 (4), hatype 8 (2), pkttype 10 (1), halen 11 (1), addr 12 (8), for 20 in
  * all. A caller declaring fewer bytes is refused, not read past. */
-#define SOCKADDR_LL_LEN      20
+#define SOCKADDR_LL_LEN 20
 
 #define SOCKADDR_LL_PROTOCOL 2
 
-#define SOCKADDR_LL_IFINDEX  4
+#define SOCKADDR_LL_IFINDEX 4
 
-#define SOCKADDR_LL_HATYPE   8
+#define SOCKADDR_LL_HATYPE 8
 
-#define ARPHRD_ETHER         1 /* sll_hatype for an Ethernet interface */
+#define ARPHRD_ETHER 1 /* sll_hatype for an Ethernet interface */
 
-#define SOCKADDR_LL_HALEN    11
+#define SOCKADDR_LL_HALEN 11
 
-#define SOCKADDR_LL_ADDR     12
+#define SOCKADDR_LL_ADDR 12
 
 /**
  * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen)
@@ -1183,9 +1183,9 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
  * EOF); SHUT_RD alone is accepted as a no-op. We have no lingering half-open
  * state, so a write-side shutdown sends the FIN exactly as close() would
  * (documented). */
-#define SHUT_RD   0
+#define SHUT_RD 0
 
-#define SHUT_WR   1
+#define SHUT_WR 1
 
 #define SHUT_RDWR 2
 
@@ -1216,25 +1216,25 @@ static int32_t do_shutdown(int fd, int how)
 }
 
 /* Socket-option levels/names recognized by get/setsockopt. */
-#define SOL_SOCKET      1
+#define SOL_SOCKET 1
 
-#define SO_REUSEADDR    2
+#define SO_REUSEADDR 2
 
-#define SO_TYPE         3
+#define SO_TYPE 3
 
-#define SO_ERROR        4
+#define SO_ERROR 4
 
-#define SO_BROADCAST    6
+#define SO_BROADCAST 6
 
 #define SO_BINDTODEVICE 25
 
-#define IFNAMSIZ        16
+#define IFNAMSIZ 16
 
-#define SO_KEEPALIVE    9
+#define SO_KEEPALIVE 9
 
-#define IPPROTO_TCP     6
+#define IPPROTO_TCP 6
 
-#define TCP_NODELAY     1
+#define TCP_NODELAY 1
 
 /* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
  * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
@@ -1430,19 +1430,19 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * not modelled, because a struct here would have to match a layout
  * this kernel does not otherwise depend on.
  */
-#define MSGHDR_LEN        28
+#define MSGHDR_LEN 28
 
-#define MSGHDR_NAME       0
+#define MSGHDR_NAME 0
 
-#define MSGHDR_NAMELEN    4
+#define MSGHDR_NAMELEN 4
 
-#define MSGHDR_IOV        8
+#define MSGHDR_IOV 8
 
-#define MSGHDR_IOVLEN     12
+#define MSGHDR_IOVLEN 12
 
 #define MSGHDR_CONTROLLEN 20
 
-#define MSGHDR_FLAGS      24
+#define MSGHDR_FLAGS 24
 
 /**
  * Receive one datagram into a scatter list (recvmsg, socketcall 17).

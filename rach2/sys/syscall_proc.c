@@ -1555,9 +1555,9 @@ fail_built:
 }
 
 /* waitpid/wait4 options. */
-#define WNOHANG    1
+#define WNOHANG 1
 
-#define WUNTRACED  2 /* also report a child that has STOPPED */
+#define WUNTRACED 2 /* also report a child that has STOPPED */
 
 #define WCONTINUED 8 /* also report a child that has CONTINUED */
 
@@ -2869,15 +2869,15 @@ int32_t sys_getgroups(isr_params_t *params)
 
 /* The resources: three are kept in the record and enforced, RLIMIT_STACK
  * reports the stack growth cap, and the rest are unlimited. */
-#define RLIMIT_STACK_RES  3
+#define RLIMIT_STACK_RES 3
 
-#define RLIMIT_NPROC_RES  6
+#define RLIMIT_NPROC_RES 6
 
 #define RLIMIT_NOFILE_RES 7
 
-#define RLIMIT_AS_RES     9
+#define RLIMIT_AS_RES 9
 
-#define RLIM_INF32        RLIM_INFINITY32
+#define RLIM_INF32 RLIM_INFINITY32
 
 /** The record's slot for `resource`, or -1 for one that is not kept. */
 static int rlimit_slot(uint32_t resource)
@@ -3041,15 +3041,15 @@ int32_t sys_prlimit64(isr_params_t *params)
  * permissions and only anonymous private mappings; file-backed mmap would need
  * a page cache.
  */
-#define PROT_READ     0x1
+#define PROT_READ 0x1
 
-#define PROT_WRITE    0x2
+#define PROT_WRITE 0x2
 
-#define PROT_EXEC     0x4
+#define PROT_EXEC 0x4
 
-#define MAP_PRIVATE   0x02
+#define MAP_PRIVATE 0x02
 
-#define MAP_FIXED     0x10
+#define MAP_FIXED 0x10
 
 #define MAP_ANONYMOUS 0x20
 
