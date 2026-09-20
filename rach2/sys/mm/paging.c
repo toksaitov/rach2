@@ -985,14 +985,16 @@ uint32_t frame_free_count(void)
  *
  * The tables are counted rather than walked to an end address: `va_start +
  * size` at the top of the address space wraps below the start, and a loop
- * bounded by that sum would allocate nothing and report success.
+ * bounded by that sum would allocate nothing and report success. The refusal
+ * is written as a subtraction from zero, which is the space above `va_start`
+ * except at `va_start` itself, where the whole space is above it.
  */
 int premap_kernel_window(uintptr_t va_start, size_t size)
 {
     uintptr_t addr;
     uintptr_t tables, i;
 
-    if (size > (uintptr_t)0 - va_start) {
+    if (va_start != 0 && size > (uintptr_t)0 - va_start) {
         return -1;
     }
     tables = size / (PAGE_SIZE * 1024) + ((size % (PAGE_SIZE * 1024)) ? 1u : 0u);
