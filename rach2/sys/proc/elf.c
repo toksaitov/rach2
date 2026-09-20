@@ -22,8 +22,11 @@
  *
  * The image must carry the ELF magic `0x7F 'E' 'L' 'F'`, be 32-bit
  * little-endian of the current version, type `ET_EXEC` for machine `EM_386`,
- * and have a non-zero entry point and a program header table that lies wholly
- * within the first `size` bytes.
+ * and have a non-zero entry point and a program header table of entries this
+ * kernel's size that lies wholly within the first `size` bytes. The bound is
+ * taken by division and not by addition, since an offset near 2^32 and a
+ * table length would wrap a sum and pass a table that starts past the image;
+ * the caller reads the table straight after this returns.
  */
 bool elf_check(const void *data, uint32_t size)
 {
@@ -62,7 +65,11 @@ bool elf_check(const void *data, uint32_t size)
         return false;
     }
 
-    if ((uint32_t)ehdr->e_phoff + (uint32_t)ehdr->e_phnum * (uint32_t)ehdr->e_phentsize > size) {
+    if (ehdr->e_phentsize != sizeof(Elf32_Phdr)) {
+        return false;
+    }
+    if ((uint32_t)ehdr->e_phoff > size ||
+        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf32_Phdr)) {
         return false;
     }
 

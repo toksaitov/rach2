@@ -255,6 +255,38 @@ static void reentrant_load(void)
     }
 }
 
+/**
+ * `elf_check` bounds the program header table without wrapping.
+ *
+ * The debug shell's `elf` command reads the table straight after this call,
+ * so an offset near 2^32 whose sum with the table length wraps below `size`
+ * would send it outside the buffer it read.
+ */
+static void header_table_bounds(void)
+{
+    Elf32_Ehdr *e;
+
+    base_image(1);
+    set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
+    e = (Elf32_Ehdr *)img_buf;
+    CHECK(elf_check(img_buf, img_size));
+
+    e->e_phoff = 0xfffffff0u;
+    e->e_phnum = 1;
+    CHECK(!elf_check(img_buf, img_size));
+
+    e->e_phoff = (uint32_t)sizeof(Elf32_Ehdr);
+    e->e_phnum = 0xffffu;
+    CHECK(!elf_check(img_buf, img_size));
+
+    e->e_phnum = 1;
+    e->e_phentsize = 0;
+    CHECK(!elf_check(img_buf, img_size));
+
+    e->e_phentsize = (uint16_t)sizeof(Elf32_Phdr);
+    CHECK(elf_check(img_buf, img_size));
+}
+
 int main(void)
 {
     page_dir_t dir;
@@ -322,6 +354,7 @@ int main(void)
     CHECK(run(&dir, &out) == -1 && alloc_reached == 1);
 
     reentrant_load();
+    header_table_bounds();
 
     return (fails > 100) ? 100 : fails;
 }
