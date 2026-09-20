@@ -24,26 +24,13 @@ Command logs and `result.status` stay in the printed work directory on the store
 
 ## Machine setup
 
-To build and boot Rach2 a machine needs GNU Make, a host C compiler, the
-`i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, e2fsprogs 1.43
-or later, mandoc, which renders the manual pages the images stage, and the
-POSIX text utilities. The build finds `mke2fs`, `debugfs`
-and `e2fsck` on the path, under the Homebrew keg, which is never linked, or
-under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run
-style` it also needs cppcheck, ShellCheck, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which
-`tests/registry` names for each of them; a plain `make` builds the three RAM
-images and reaches none of it. Nothing is fetched
-during a build: the five vendored projects are pinned tarballs already in the
-tree.
+To build and boot Rach2 a machine needs GNU Make, a host C compiler, the `i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, e2fsprogs 1.43 or later, mandoc, which renders the manual pages the images stage, and the POSIX text utilities. The build finds `mke2fs`, `debugfs` and `e2fsck` on the path, under the Homebrew keg, which is never linked, or under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run style` it also needs cppcheck, ShellCheck, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which `tests/registry` names for each of them; a plain `make` builds the three RAM images and reaches none of it. Nothing is fetched during a build: the five vendored projects are pinned tarballs already in the tree.
 
-Install those, then run `sh tools/setup/doctor.sh`. It reports every tool in
-four tiers and prints the install command for whatever is missing.
+Install those, then run `sh tools/setup/doctor.sh`. It reports every tool in five groups and prints the install command for whatever is missing.
 
 ### macOS
 
-Xcode's command line tools supply `make` and `cc`; Homebrew supplies the rest.
-Install Homebrew first if the machine has none, and run the `shellenv` line its
-installer prints, because it does not put `brew` on the path itself.
+Xcode's command line tools supply `make` and `cc`; Homebrew supplies the rest. Install Homebrew first if the machine has none, and run the `shellenv` line its installer prints, because it does not put `brew` on the path itself.
 
     xcode-select --install
     /bin/bash -c "$(curl -fsSL \
@@ -53,10 +40,7 @@ installer prints, because it does not put `brew` on the path itself.
     brew install i686-elf-gcc i686-elf-binutils qemu mtools e2fsprogs mandoc \
                  cppcheck shellcheck clang-format rsync
 
-`ssh-keygen` ships with macOS. `xorriso` builds the ISOs (`make isos`) and
-the stick images made from them, which `tests/run usbdisk` boots, so a run of
-the whole set needs it. `pkg-config` with the `fuse-t` cask lets `make -C
-krffs mount` mount an image on the host, which no build or suite needs.
+`ssh-keygen` ships with macOS. `xorriso` builds the ISOs (`make isos`) and the stick images made from them, which `tests/run usbdisk` boots, so a run of the whole set needs it. `pkg-config` with the `fuse-t` cask lets `make -C krffs mount` mount an image on the host, which no build or suite needs.
 
 ### Debian and Ubuntu
 
@@ -65,15 +49,9 @@ The archive has everything except the cross toolchain.
     sudo apt install build-essential curl qemu-system-x86 mtools e2fsprogs \
                      mandoc openssh-client cppcheck shellcheck clang-format
 
-`xorriso` builds the ISOs and the stick images made from them, which
-`tests/run usbdisk` boots. `pkg-config` with `libfuse-dev` lets `make -C
-krffs mount` mount an image, which no build or suite needs.
+`xorriso` builds the ISOs and the stick images made from them, which `tests/run usbdisk` boots. `pkg-config` with `libfuse-dev` lets `make -C krffs mount` mount an image, which no build or suite needs.
 
-No Debian package provides an `i686-elf` toolchain by that name, but the
-`i686-linux-gnu` cross compiler in the archive builds this tree: the kernel and
-the guest programs are freestanding, and the ported musl, BusyBox and Dropbear
-link against the libgcc it carries. The tree calls the tools by their
-`i686-elf-` names, so link them under those names on your path.
+No Debian package provides an `i686-elf` toolchain by that name, but the `i686-linux-gnu` cross compiler in the archive builds this tree: the kernel and the guest programs are freestanding, and the ported musl, BusyBox and Dropbear link against the libgcc it carries. The tree calls the tools by their `i686-elf-` names, so link them under those names on your path.
 
     sudo apt install gcc-i686-linux-gnu binutils-i686-linux-gnu
     mkdir -p "$HOME/bin"
@@ -81,13 +59,7 @@ link against the libgcc it carries. The tree calls the tools by their
         ln -sf "/usr/bin/i686-linux-gnu-$t" "$HOME/bin/i686-elf-$t"
     done
 
-The compiler itself is not linked but wrapped, because the archive's is a
-Linux-targeting GCC: it defines `__linux__`, compiles for PIE, adds the stack
-protector, control-flow protection, stack-clash probes and unwind tables, and
-sets `_FORTIFY_SOURCE`. A bare `i686-elf-gcc` does none of that, and the
-ports and the guest programs are written for the bare one: a `tcc` compiled
-for PIE and linked static reads its globals through a table the link never
-made, and faults at address 0x1c. `$HOME/bin/i686-elf-gcc` is this script:
+The compiler itself is not linked but wrapped, because the archive's is a Linux-targeting GCC: it defines `__linux__`, compiles for PIE, adds the stack protector, control-flow protection, stack-clash probes and unwind tables, and sets `_FORTIFY_SOURCE`. A bare `i686-elf-gcc` does none of that, and the ports and the guest programs are written for the bare one: a `tcc` compiled for PIE and linked static reads its globals through a table the link never made, and faults at address 0x1c. `$HOME/bin/i686-elf-gcc` is this script:
 
     #!/bin/sh
     exec /usr/bin/i686-linux-gnu-gcc \
@@ -96,64 +68,28 @@ made, and faults at address 0x1c. `$HOME/bin/i686-elf-gcc` is this script:
         -fno-unwind-tables -U_FORTIFY_SOURCE -U__linux__ -U__gnu_linux__ -Ulinux \
         "$@"
 
-The archive's version is the lower bound this tree supports: GCC 15.2 and
-binutils 2.46 on Ubuntu 26.04. Two defaults of that binutils are answered in
-the makefiles rather than the wrapper: the linker's `-z separate-code`, which
-would give the kernel a third `PT_LOAD` segment, and `--build-id`, whose note
-section would land on the `.text` of a program linked at a fixed address.
+The archive's version is the lower bound this tree supports: GCC 15.2 and binutils 2.46 on Ubuntu 26.04. Two defaults of that binutils are answered in the makefiles rather than the wrapper: the linker's `-z separate-code`, which would give the kernel a third `PT_LOAD` segment, and `--build-id`, whose note section would land on the `.text` of a program linked at a fixed address.
 
 ### The testing host
 
-The suites, the sets and the analyses run on the testing host that `CLAUDE.md`
-names, reached as `ssh testing`: Ubuntu 26.04 under WSL2 on a Windows machine
-with 32 threads and 200 GB of memory, with a copy of this tree at
-`/home/testing/rach2`. It is set up as any Debian or Ubuntu host above, with
-the analysers the audit milestone runs added:
+The suites, the sets and the analyses run on the testing host that `CLAUDE.md` names, reached as `ssh testing`: Ubuntu 26.04 under WSL2 on a Windows machine with 32 threads and 200 GB of memory, with a copy of this tree at `/home/testing/rach2`. It is set up as any Debian or Ubuntu host above, with the analysers the audit milestone runs added:
 
     sudo apt install clang clang-tidy clang-tools sparse pmccabe mandoc xorriso
 
-The ssh server on that machine answers in an MSYS shell, so anything meant for
-WSL starts through `wsl.exe`; `dev/testing.sh` does that for the sync and the
-run, and is the way to reach the copy. Its home directory is on WSL's own
-file system, not under `/mnt/c`, which is slow for a build.
+The ssh server on that machine answers in an MSYS shell, so anything meant for WSL starts through `wsl.exe`; `dev/testing.sh` does that for the sync and the run, and is the way to reach the copy. Its home directory is on WSL's own file system, not under `/mnt/c`, which is slow for a build.
 
-The machine has `/dev/kvm`, since `nestedVirtualization=true` is set in the
-Windows user's `.wslconfig` and the account is in the `kvm` group, and the
-runner takes it when nothing says otherwise. `dev/testing.sh run` says
-otherwise, with `RACH2_QEMU_ACCEL=tcg`: that KVM is nested under Hyper-V,
-and the ATA driver polls a port after every sector it writes, each poll an
-exit through two hypervisors, so a 64 MiB write measured 236 s there and
-25 s emulated, and the 4 KiB write rows outran the runner's silence limit.
-That is the host's setting, like its worker count, not the runner's rule.
+The machine has `/dev/kvm`, since `nestedVirtualization=true` is set in the Windows user's `.wslconfig` and the account is in the `kvm` group, and the runner takes it when nothing says otherwise. `dev/testing.sh run` says otherwise, with `RACH2_QEMU_ACCEL=tcg`: that KVM is nested under Hyper-V, and the ATA driver polls a port after every sector it writes, each poll an exit through two hypervisors, so a 64 MiB write measured 236 s there and 25 s emulated, and the 4 KiB write rows outran the runner's silence limit. That is the host's setting, like its worker count, not the runner's rule.
 
-The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures
-with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call
-`i686-elf-gcc` by name. A toolchain under that same command prefix works
-wherever it is installed, and so does the wrapped `i686-linux-gnu` toolchain
-described above.
+The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call `i686-elf-gcc` by name. A toolchain under that same command prefix works wherever it is installed, and so does the wrapped `i686-linux-gnu` toolchain described above.
 
 ### The two checkers
 
 * `setup/preflight.sh` is the build's own cached tool check. `make` and
-  `tests/run` run it at each entry; it stats the recorded tool paths on a
-  cache hit and repeats its compile probes only when the environment changed.
-  A missing tool fails the build, named, before compilation. `--report`
-  prints one line per tool without caching.
+`tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before compilation. `--report` prints one line per tool without caching.
 * `setup/e2fsprogs_path.sh` is the one place the three e2fsprogs programs are
-  looked for off the path, sourced by `preflight.sh`, `doctor.sh` and
-  `image/mkext2.sh`; it puts the first directory that has all three at the
-  front, so that the three come from one installation.
+looked for off the path, sourced by `preflight.sh`, `doctor.sh` and `image/mkext2.sh`; it puts the first directory that has all three at the front, so that the three come from one installation.
 * `setup/doctor.sh` is the wider machine report, in five tiers: what a build
-  and run need, which is everything `preflight.sh` requires plus QEMU; the
-  three tools `tests/run style` refuses to start without; the four mtools
-  commands the disk and FAT suites need; the optional `xorriso`, Docker (the
-  `vendor/grub` regeneration procedure only), Git, and FUSE; and the judges,
-  each tool's version beside the one `setup/judges` records from the testing
-  host, a different version reported and not counted missing. It checks that
-  tools run rather than that their names are present, probing `awk`, `sed`,
-  and `ssh-keygen` by doing the work the build does with them, since none of
-  the three accepts `--version` everywhere. For FUSE it runs `pkg-config
-  --exists` for `fuse`, then for `fuse-t`.
+and run need, which is everything `preflight.sh` requires plus QEMU; the three tools `tests/run style` refuses to start without; the three mtools commands the disk and FAT suites need; the optional `xorriso`, Docker (the `vendor/grub` regeneration procedure only), Git, and FUSE; and the judges, each tool's version beside the one `setup/judges` records from the testing host, a different version reported and not counted missing. It checks that tools run rather than that their names are present, probing `awk`, `sed`, and `ssh-keygen` by doing the work the build does with them, since none of the three accepts `--version` everywhere. For FUSE it runs `pkg-config --exists` for `fuse`, then for `fuse-t`.
 
 ## Working an installed machine from the host
 
@@ -175,7 +111,7 @@ A root written with keys whose private halves are on another machine is then rea
 
 The kernel's log leaves on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the boot line. `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` keeps it, which is the only record of a panic on a machine with no serial port: the screen shows one line and the boot log dies with the machine.
 
-The recovery stick is `build/images/rach2-recovery-stick.img` written to the whole stick, its second partition then formatted as a save volume; the boot test is `build/images/rach2-stick.img` written the same way. `accept/metal_accept.sh HOST [PORT] [STICK-SERIAL]` is the scripted half of acceptance, described in [the system tests' Readme](../tests/system/Readme.md).
+The recovery stick is `build/images/rach2-recovery-stick.img` written to the whole stick, its second partition then formatted as a save volume; the boot test is `build/images/rach2-stick.img` written the same way. `tests/system/accept/metal_accept.sh HOST [PORT] [STICK-SERIAL]` is the scripted half of acceptance, described in [the system tests' Readme](../tests/system/Readme.md).
 
 ## `tests/run style`
 
