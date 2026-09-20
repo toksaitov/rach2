@@ -23,6 +23,7 @@ typedef unsigned int size_t;
 #define SYS_CLOSE    6
 #define SYS_GETPID   20
 #define SYS_READLINK 85
+#define SYS_IOCTL    54
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -153,6 +154,15 @@ void _start(void)
     fd = do_open("/dev/null", O_RDONLY);
     check(fd >= 0, "open /dev/null");
     check(do_read(fd, buf, 64) == 0, "/dev/null read is EOF (0)");
+    syscall1(SYS_CLOSE, fd);
+
+    /* A disk's own ioctl asked of a device that is not a disk: the request
+       reaches every device, and a record that is not a disk node read as one
+       reads past the table it is in. `BLKRRPART` is 0x125F and ENOTTY 25. */
+    fd = do_open("/dev/null", O_RDONLY);
+    check(fd >= 0, "open /dev/null for the ioctl row");
+    check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25,
+          "a disk's BLKRRPART on /dev/null is ENOTTY");
     syscall1(SYS_CLOSE, fd);
 
     fd = do_open("/dev/null", O_WRONLY);

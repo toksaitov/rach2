@@ -506,12 +506,14 @@ static const struct disk_node *disk_node_of(const struct devfs_entry *dev)
     return (const struct disk_node *)dev;
 }
 
-/* The node behind a descriptor open on a disk window: the descriptor's
-   operations are `diskwin_ops`, which is how the caller was reached, so
-   the entry is a node without a check. */
+/* The node behind a descriptor open on a disk window, or NULL for a
+   descriptor open on anything else. `dev_ioctl` is reached by every device,
+   not only the windows, so the entry's operations are what says whether its
+   record is a node: a plain `devfs_entry` read as one reads past the table
+   it is in. */
 static const struct disk_node *disk_node_of_fd(const fd_entry_t *e)
 {
-    return (const struct disk_node *)e->dev;
+    return e->dev ? disk_node_of(e->dev) : 0;
 }
 
 static struct disk_window *disk_node_window(const struct disk_node *node)
