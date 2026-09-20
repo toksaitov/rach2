@@ -2,18 +2,6 @@
 
 This directory contains the host implementation of KRFFS and the tools that create, inspect, and stage the file-system images used by Rach2. The kernel implementation is documented in `rach2/sys/fs/Readme.md`. GRUB disk construction belongs to `tools/image/mkdisk_grub.sh` and is documented in `tools/Readme.md`.
 
-## Build
-
-The component uses the host C compiler and builds eight binaries under `build/krffs/`:
-
-```sh
-make -C krffs
-```
-
-The default build needs neither FUSE nor `pkg-config`. The FUSE mount is a separate optional target, `make -C krffs mount`, whose two objects use the flags reported by `pkg-config fuse` or `pkg-config fuse-t`; without an installed FUSE it fails with an installation hint. The other tools do not include FUSE headers or link with FUSE. Header dependencies are written beside the objects under `build/krffs/`.
-
-`mkhash.krffs` compiles the SHA-512 crypt implementation from the extracted musl 1.2.5 source. The root build orders KRFFS after `check-libc`. In a fresh tree, run the root `make` before a standalone `make -C krffs`.
-
 ## Tools
 
 * `krffs` (optional, `make -C krffs mount`) mounts a whole-file image through the FUSE 2.6 interface. It forces single-threaded FUSE operation.
@@ -33,22 +21,6 @@ The image tools other than the FUSE mount accept a backing-file region where app
 ```
 
 `mkfs.krffs`, `fsck.krffs`, `fsviz.krffs`, `edfs.krffs`, `stageimage.krffs`, and `readfile.krffs` support regions. A nonzero offset must be a multiple of 1 MiB and requires an explicit size. The region must fit in the backing file and may be at most 4095 MiB. `defrag.krffs` has the limitation noted above. The FUSE mount accepts a whole-file image, not a region.
-
-## Format
-
-KRFFS v2 is a packed sequence of variable-size nodes. The last node wraps to the root, and each node stores its own size and the previous node's size. The three node types are root, free, and reserved. Reserved nodes represent files and directories.
-
-Each node stores:
-
-* the `KR` magic and node type;
-* a 64-bit hash identifier and the containing directory's identifier;
-* a 256-byte name buffer, for at most 255 name bytes plus the terminator;
-* mode, uid, gid, and access, modification, and attribute-change times;
-* total node size, previous node size, and data size.
-
-The allocator uses first fit, splits a free node when the remainder can hold a node header, and coalesces adjacent free nodes. Identifiers are hashes; the host and kernel implementations do not detect collisions.
-
-`stageimage.krffs` writes parent-aware identifiers and directory modes. The FUSE mount remains a flat root directory: it has no `mkdir`, `rmdir`, hard-link, or symbolic-link operation. It supports lookup, listing, create, read, write, truncate, unlink, rename, timestamps, mode, ownership, sync, and file-system statistics for root-level files.
 
 ## Manifests and images
 
@@ -81,6 +53,25 @@ The root Makefile owns the named image profiles and their dependencies. The root
 
 `gen_demo_password.sh` provisions the two development passwords and a matching `/etc/shadow`. It uses `mkhash.krffs`, writes credentials with a restrictive umask, and publishes the two-line shadow file atomically. Existing credentials remain unchanged unless `RACH2_REPLACE_PASSWORDS=1` is set. `RACH2_ROOT_PASSWORD` and `RACH2_TEST_PASSWORD` supply replacement values.
 
+## The format the tools and the kernel share
+
+The format itself, the order in which a change reaches the medium and what a
+check may repair are [the kernel's document](../rach2/sys/fs/krffs.Readme.md);
+what follows is what a host tool must know to write an image the kernel will
+mount. KRFFS v2 is a packed sequence of variable-size nodes. The last node wraps to the root, and each node stores its own size and the previous node's size. The three node types are root, free, and reserved. Reserved nodes represent files and directories.
+
+Each node stores:
+
+* the `KR` magic and node type;
+* a 64-bit hash identifier and the containing directory's identifier;
+* a 256-byte name buffer, for at most 255 name bytes plus the terminator;
+* mode, uid, gid, and access, modification, and attribute-change times;
+* total node size, previous node size, and data size.
+
+The allocator uses first fit, splits a free node when the remainder can hold a node header, and coalesces adjacent free nodes. Identifiers are hashes; the host and kernel implementations do not detect collisions.
+
+`stageimage.krffs` writes parent-aware identifiers and directory modes. The FUSE mount remains a flat root directory: it has no `mkdir`, `rmdir`, hard-link, or symbolic-link operation. It supports lookup, listing, create, read, write, truncate, unlink, rename, timestamps, mode, ownership, sync, and file-system statistics for root-level files.
+
 ## Mounting a scratch image
 
 Build the optional mount tool with `make -C krffs mount`, then create the image and mount point under the ignored build directory:
@@ -95,6 +86,18 @@ build/krffs/krffs build/krffs/example.krffs build/krffs/mount
 The mounted directory supports ordinary root-level file operations. Use the host's FUSE unmount command when finished: `umount build/krffs/mount` on macOS, or `fusermount -u build/krffs/mount` on Linux with FUSE 2.
 
 `create_file_system.krffs.sh [SIZE_MB]` is a convenience wrapper that recreates `build/krffs/file_system.krffs`; its default size is 10 MiB.
+
+## Build
+
+The component uses the host C compiler and builds eight binaries under `build/krffs/`:
+
+```sh
+make -C krffs
+```
+
+The default build needs neither FUSE nor `pkg-config`. The FUSE mount is a separate optional target, `make -C krffs mount`, whose two objects use the flags reported by `pkg-config fuse` or `pkg-config fuse-t`; without an installed FUSE it fails with an installation hint. The other tools do not include FUSE headers or link with FUSE. Header dependencies are written beside the objects under `build/krffs/`.
+
+`mkhash.krffs` compiles the SHA-512 crypt implementation from the extracted musl 1.2.5 source. The root build orders KRFFS after `check-libc`. In a fresh tree, run the root `make` before a standalone `make -C krffs`.
 
 ## Verification
 
