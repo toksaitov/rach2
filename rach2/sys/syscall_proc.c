@@ -1249,19 +1249,6 @@ checked:
     }
     k_memset(stack_page, 0, PAGE_SIZE);
 
-    /*
-     * Initial user stack layout (growing down from USER_STACK_BASE +
-     * PAGE_SIZE):
-     *
-     *   [arg strings]   - null-terminated strings
-     *   [NULL]          - envp terminator
-     *   [NULL]          - argv terminator
-     *   [argv[argc-1]]  - pointers to arg strings
-     *   ...
-     *   [argv[0]]
-     *   [argc]          <- ESP points here
-     */
-
     /* Build the SysV/i386 initial stack (argc, the argv and real envp pointer
      * arrays, and the auxv) in the freshly zeroed page. build_user_stack copies
      * the strings in and 16-byte-aligns the entry ESP; the layout is verified
@@ -1802,8 +1789,8 @@ static uint32_t safe_user_seg(uint32_t sel)
 }
 
 /* The signal masks are 64-bit, so a read-modify-write is two stores on i386;
- * signal_post runs from IRQ context (Ctrl-C) as well as syscalls, so guard
- * every pending/blocked mutation with interrupts off to avoid a lost update.
+ * signal_post runs from IRQ context (Ctrl-C) as well as from a syscall, so a
+ * mutation an interrupt can meet half done is made with interrupts off.
  * Returns the prior IF so the caller can restore it. */
 static uint32_t sig_irq_save(void)
 {
@@ -2360,10 +2347,9 @@ static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
     tf->cs = 0x1b;      /* privilege-critical: always the user code selector */
     tf->user_ss = 0x23; /* privilege-critical: always the user data selector */
     /* Restore the saved data/TLS selectors so %gs keeps the per-process TLS
-     * selector (0x33) the handler ran with; coerce anything that is not a
-     * ring-3 selector to flat user data so a forged frame cannot smuggle a
-     * kernel selector to iret (a bogus ring-3 selector at worst faults the
-     * process). */
+     * selector the handler ran with; `safe_user_seg` keeps only the two this
+     * kernel has, since the return path loads them at ring 0 and a selector
+     * past the GDT's limit would fault the kernel and not the process. */
     tf->ds = safe_user_seg(frame.saved.ds);
     tf->es = safe_user_seg(frame.saved.es);
     tf->fs = safe_user_seg(frame.saved.fs);
@@ -3008,8 +2994,10 @@ static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
 
 /* prlimit64(340): EBX=pid (0/self), ECX=resource, EDX=new (rlimit64* or NULL),
  * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. The
- * old limits are reported before the new are set, as POSIX's `setrlimit`
- * and `getrlimit` see them. This is the form musl issues for both. */
+ * old limits are read before the new are set, as POSIX's `setrlimit` and
+ * `getrlimit` see them, and written to the caller after: a copy that fails
+ * leaves the new limits in place, as it does on Linux. This is the form musl
+ * issues for both. */
 int32_t sys_prlimit64(isr_params_t *params)
 {
     uint32_t pid = params->ebx;
