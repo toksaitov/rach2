@@ -103,7 +103,7 @@ The effective options are `SO_BROADCAST`, `SO_REUSEADDR`, `SO_BINDTODEVICE` for 
 
 ## Packet and raw sockets
 
-A packet socket binds to interface index 0 or 1 and to IPv4 or ARP. Each binding and its queue are allocated together from the heap, without a fixed count of bindings. Each has an eight-entry queue of payloads up to 1500 bytes. A full queue drops the newest frame. Receive omits the Ethernet header and reports the sender, protocol, interface, hardware type, and packet type in a 20-byte `sockaddr_ll`. Send accepts a nonempty payload of at most 1500 bytes plus a destination MAC address and supplies the Ethernet header.
+A packet socket binds to interface index zero, for every interface, or to any index the machine has, and to IPv4 or ARP. Each binding and its queue are allocated together from the heap, without a fixed count of bindings. Each has an eight-entry queue of payloads up to 1500 bytes. A full queue drops the newest frame. Receive omits the Ethernet header and reports the sender, protocol, interface, hardware type, and packet type in a 20-byte `sockaddr_ll`. Send accepts a nonempty payload of at most 1500 bytes plus a destination MAC address and supplies the Ethernet header.
 
 Each raw ICMP registration and its queue are allocated together from the heap, without a fixed count of registrations. Each has an eight-entry queue of whole IPv4 datagrams up to 1500 bytes. Every matching socket receives a copy; a full queue drops the newest datagram. A raw send preserves the caller's ICMP bytes and checksum, adds the IPv4 header, and applies the socket's `IP_TTL`. The syscall accepts an ICMP message as large as 1500 bytes, but Ethernet later drops a message from 1481 through 1500 bytes because the added IPv4 header exceeds its MTU; the syscall still reports the original length.
 
@@ -119,7 +119,7 @@ Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP
 
 ## Verification
 
-The default suite runs 72 guest probes over the emulated card and SLIRP. It includes `loopprobe`, which covers UDP and TCP against the local address without touching the wire, and `sockettest` and `dnstest`, which reach SLIRP's own services. `tests/run pools` separately opens forty-eight sockets at once, then makes and closes a thousand sockets and requires the heap's bytes in use to remain unchanged and its page count to remain within two of the starting count. A probe that needs a peer on the host has a suite of its own.
+The default suite runs its whole probe list over the emulated card and SLIRP. It includes `loopprobe`, which covers UDP and TCP against the local address without touching the wire, and `sockettest` and `dnstest`, which reach SLIRP's own services. `tests/run pools` separately opens forty-eight sockets at once, then makes and closes a thousand sockets and requires the heap's bytes in use to remain unchanged and its page count to remain within two of the starting count. A probe that needs a peer on the host has a suite of its own.
 
 The specialized network targets are:
 

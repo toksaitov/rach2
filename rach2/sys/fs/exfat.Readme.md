@@ -48,7 +48,7 @@ Timestamps are decoded from their bit fields, which are FAT32's date and time in
 
 ## Limits
 
-Mount records are allocated from the heap without a fixed count. A cluster is at most 32 MiB, the format's limit. The logical sector must be 512 bytes; any other size is refused by name, which excludes the SDXC cards and drives formatted with 4 KiB sectors. The format's `DataLength` reaches 2^64 less one byte; 4 GiB less one is reachable here, because the kernel's file offset is 32 bits. The 2^22-bit walk bitmap shared with FAT32 and ext2 covers 512 GB at 128 KiB clusters; a dirty volume beyond it mounts read-only and says why. The walk holds 32 levels of directories, 4096 names along the path it is walking, sixteen surplus tails, sixteen checksum-only sets and sixty-four orphan secondaries; a volume that needs more mounts read-only and says which.
+Mount records are allocated from the heap without a fixed count. A cluster is at most 32 MiB, the format's limit. The logical sector must be 512 bytes; any other size is refused by name, which excludes the SDXC cards and drives formatted with 4 KiB sectors. The format's `DataLength` reaches 2^64 less one byte; 4 GiB less one is reachable here, because the kernel's file offset is 32 bits. The walk bitmap shared with FAT32 and ext2 is taken from the heap for the volume's cluster count, one walk at a time; a dirty volume whose bitmap the heap cannot supply mounts read-only and says why. The walk holds 32 levels of directories, 4096 names along the path it is walking, sixteen surplus tails, sixteen checksum-only sets and sixty-four orphan secondaries; a volume that needs more mounts read-only and says which.
 
 ## Verification
 

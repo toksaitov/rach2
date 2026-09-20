@@ -69,7 +69,7 @@ The block backend (`krffsmount.c`) reads and writes the region through the buffe
 
 A cache is not a medium, so the order below is kept by syncing between a write and the field that publishes it. On a memory backend that costs nothing; on a volume it is what the cache has written when the machine stops. A write that the cache refuses stops the operation before the field that would have published it.
 
-A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. The core keeps nothing else per node; the mounted volume keeps a record per open file, sixteen to a volume, holding where the node is, where it was before it last moved, how many opens hold it, and whether its name has been taken away.
+A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. The core keeps nothing else per node; the mounted volume keeps a record per open file, taken from the heap, holding where the node is, where it was before it last moved, how many opens hold it, and whether its name has been taken away.
 
 ## The allocator
 

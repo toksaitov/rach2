@@ -42,7 +42,7 @@ System call and interrupt entry save `%gs`, `%fs`, `%es`, and `%ds` separately b
 * `rach2/sys/proc/tls.h` defines the `user_desc` layout and flags.
 * `rach2/sys/proc/tls.c` validates the supported descriptor fields and returns the requested base.
 * `rach2/sys/tables/gdt.c` owns GDT entry 6 and its base update.
-* `rach2/sys/syscall.c` implements system call 243 and the `fork` and `execve` TLS rules.
+* `rach2/sys/syscall.c` registers system call 243; `rach2/sys/syscall_proc.c` holds the `fork` and `execve` TLS rules.
 * `rach2/sys/proc/process.h` stores the per-process base; `rach2/sys/proc/process.c` checks the assembly-visible field offsets at boot.
 * `rach2/sys/proc/switch.s` applies the incoming base during a context switch.
 * `rach2/sys/isr.h` and `rach2/sys/isr_handler.s` define and preserve the saved segment-register frame.

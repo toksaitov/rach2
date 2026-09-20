@@ -8,7 +8,7 @@ Rach2 implements anonymous byte pipes through `pipe` and `pipe2`. A pipe has a r
 
 The two ends start with separate open-file descriptions. `dup`, `dup2`, `dup3`, `F_DUPFD`, `F_DUPFD_CLOEXEC`, and `fork` share the open-file description for the end they copy. Its status flags are shared too, so `O_NONBLOCK` changes made through `fcntl` or `FIONBIO` are visible through duplicates of that end. `FD_CLOEXEC` remains a descriptor flag.
 
-Closing a descriptor releases an end only when the last descriptor sharing its open-file description closes. Closing the last writer wakes readers to drain buffered data and observe EOF. Closing the last reader wakes writers for `SIGPIPE`. The pipe is allocated from the kernel heap when made and freed after both ends close; there is no fixed count of pipes, and a process can hold at most 16 descriptors.
+Closing a descriptor releases an end only when the last descriptor sharing its open-file description closes. Closing the last writer wakes readers to drain buffered data and observe EOF. Closing the last reader wakes writers for `SIGPIPE`. The pipe is allocated from the kernel heap when made and freed after both ends close; there is no fixed count of pipes, and a process's descriptor table grows from sixteen entries to 1024.
 
 Each live pipe has a nonzero inode distinct from every other live pipe. Both ends report that inode as a FIFO with permissions 0666 through `fstat`, and `/proc/<pid>/fd/<fd>` renders it as `pipe:[inode]`.
 

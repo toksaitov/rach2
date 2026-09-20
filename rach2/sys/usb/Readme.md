@@ -38,7 +38,7 @@ A device is opened at a location, `struct usb_location` in `hcd.h`: the root por
 
 ## The one pump, and the two contexts
 
-The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. It runs from the controller's interrupt and from the 100 Hz timer, which calls it every tick whether or not an interrupt arrived. To enable messages, the driver calls `isr_alloc_vector` for the lowest unallocated vector from 48 through 127. On success the boot log reports `usb: interrupts: messages on vector N`, and `/proc/interrupts` identifies the handler as `xhci` once an interrupt has arrived. If messages cannot be enabled, the driver tries the controller's PCI interrupt line; the timer remains active in either case.
+The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. It runs from the controller's interrupt and from the 100 Hz timer, which calls it every tick whether or not an interrupt arrived. To enable messages, the driver calls `isr_alloc_vector` for the lowest unallocated vector from 48 through 63. On success the boot log reports `usb: interrupts: messages on vector N`, and `/proc/interrupts` identifies the handler as `xhci` once an interrupt has arrived. If messages cannot be enabled, the driver tries the controller's PCI interrupt line; the timer remains active in either case.
 
 Whichever turns it, the interrupt flag stays as that context found it. The handler runs from an interrupt gate and the timer's handler does too, and the pump saves and restores the flag rather than enabling interrupts on its way out. That is what keeps the two from being inside the ring at once on this one processor. A pump that returns with the flag raised records `usb: pump: interrupts were enabled inside it`, once.
 
@@ -86,11 +86,11 @@ It is remembered by port, in a word of bits, and not by holding an entry in the 
 | Endpoint numbers reachable on a device | 0 to 15, which is thirty-one directions; a boot device uses two and a stick two |
 | Controllers driven | 4; each one past that is named at its address and not driven |
 | Root ports reached | 16 |
-| Scratchpad pages given | 32 |
+| Scratchpad pages given | 512, the most the one page holding their addresses can name; a controller asking for more is refused by name |
 | Keyboards and mice driven at once | as many as the slots hold, with one modifier state between them |
 | Flash drives driven at once | 8 class-driver devices, with up to 4 logical units each; the USB disk layer has 8 unit records, and the registry has 8 disk records shared with ATA and AHCI |
-| Hubs driven at once | 2, each with up to 15 ports used |
-| Tree depth | 2 hubs, the hub driver's table; the route string could say 5 |
+| Hubs driven at once | 8, each with up to 15 ports used |
+| Tree depth | 5 tiers, which is what the route string says; a sixth fails the device with a record |
 | Requests waiting on one stick | 16, the request pool's own size |
 | A stick's request deadline | ten seconds, in the block layer and in the driver alike |
 
@@ -140,7 +140,7 @@ When a hub is pulled, or a hub reports a port's connection gone, everything belo
 
 ## What is absent, and why
 
-* **Hubs behind hubs on the notebook.** A hub below a hub is driven, two hubs being the driver's table; a third hub is not. A SuperSpeed hub is driven from milestone 43, proved by the host model and the notebook's hub; QEMU has no SuperSpeed hub.
+* **Hubs behind hubs on the notebook.** A hub below a hub is driven, eight hubs being the driver's table. A SuperSpeed hub is driven from milestone 43, proved by the host model and the notebook's hub; QEMU has no SuperSpeed hub.
 * **Report descriptors.** Above.
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
 * **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.
