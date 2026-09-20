@@ -12,7 +12,7 @@ The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 pro
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
-Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 and USB 3.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A stick that answers can be pulled out at any moment, the read in flight answering `EIO` and the mount going once its files close; one that had stopped answering panicked the kernel once when pulled, which milestone 43 records as open. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
+Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 and USB 3.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A stick that answers can be pulled out at any moment: the read in flight answers `EIO`, and the mount stays until it is unmounted, which is what a volume should be unmounted before its stick is pulled. A stick that had stopped answering once panicked the kernel when pulled; entry 1 of the shortcomings record closes that in milestone 50, with a host test for a class reset that never answers and `tests/run usbdisk` for a removal with a command in flight. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
 
 ## Images
 
@@ -24,7 +24,7 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 ## Build and run
 
-A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, QEMU, mtools, e2fsprogs, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its own tools before compiling and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
+A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, QEMU, mtools, e2fsprogs, mandoc, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its own tools before compiling and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
 
 ```sh
 git clone https://github.com/toksaitov/rach2.git
@@ -71,7 +71,7 @@ Programs are static, a root is KRFFS or ext2, and the network stack implements I
 
 QEMU is the development and test environment. Rach2 also runs on a Lenovo G50-70 from an SSD in the laptop's SATA bay, where it boots the complete `os-real` system from an ext2 root through the AHCI controller, answers SSH over RTL8168GU networking, drives a USB keyboard, mouse, hub and flash drive, and runs Doom. The machine was installed from the stick by `rach2-install` on 2026-09-12 and its root grown to the whole disk.
 
-What each sitting measured, and what the machine showed that the emulator had not, is in the milestone records, which are where those numbers live and are not repeated here: [milestone 43](dev-log/43-machine/hardware.md) for the machine's own readings, its identity, geometry and offsets, [milestone 50](dev-log/50-shortcomings/Readme.md) for the install, the devices and the load row, and [milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) for the earlier results. `dev-log/50-shortcomings/plan.md` is the open list of what is still wrong.
+What the hardware showed that the emulator had not is in the milestone records and is not repeated here: [milestone 43](dev-log/43-machine/hardware.md) for the machine's own readings, its identity, geometry and offsets, [milestone 50](dev-log/50-shortcomings/Readme.md) for the install, the devices and the load measurements, and [milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) for the earlier results. `dev-log/50-shortcomings/plan.md` is the open list of what is still wrong.
 
 ## What a fresh disk holds
 
@@ -123,7 +123,7 @@ An image of another size is built on the host and copied over: `sh krffs/mkimage
 
 ## Installing and updating a machine
 
-The procedures are the manual's, written once and read on the machine as well as here: [`rach2-install(8)`](man/man8/rach2-install.8) installs a machine from the stick `make rach2-install-stick` builds, [`recovery(7)`](man/man7/recovery.7) describes the recovery system and the three update paths, a kernel through [`bootctl(8)`](man/man8/bootctl.8), a root through `rach2-install --update`, and a partition the installer does not know about through [`reflash(8)`](man/man8/reflash.8), and [`disk(7)`](man/man7/disk.7) describes the raw windows those writes go through. `man rach2` on a running machine is the same text.
+The procedures are the manual's, written once and read on the machine as well as here: [`rach2-install(8)`](man/man8/rach2-install.8) installs a machine from the stick `make rach2-install-stick` builds, [`recovery(7)`](man/man7/recovery.7) describes the recovery system and the three update paths, a kernel through [`bootctl(8)`](man/man8/bootctl.8), a root through `rach2-install --update`, and a partition the installer does not know about through [`reflash(8)`](man/man8/reflash.8), and [`disk(7)`](man/man7/disk.7) describes the raw windows those writes go through. On a running machine `man rach2` is the system's overview, and those five pages are read by name.
 
 The measured facts of the one installed machine, its address, its disk's geometry and the offsets a raw write depends on, are in [`dev-log/43-machine/hardware.md`](dev-log/43-machine/hardware.md). Read them from there rather than from memory: a command with an offset from an older layout writes into the middle of a partition this one has.
 
