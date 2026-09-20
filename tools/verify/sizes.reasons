@@ -460,7 +460,7 @@ tests/host/pwauth_hosttest.c:check_release lines 101 a test's rows, each a case,
 tests/host/pwauth_hosttest.c:check_report_blocks complexity 29 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_report_blocks lines 123 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_restore_reentry lines 123 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_rewrite complexity 46 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:check_rewrite complexity 48 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_rewrite lines 175 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_teardown complexity 32 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_teardown lines 133 a test's rows, each a case, read as one table
@@ -788,7 +788,6 @@ utils/netup.c:apply_static lines 135 one procedure over a file format, in the or
 utils/passwd.c:main complexity 47 one procedure over a file format, in the order the format is read
 utils/passwd.c:main lines 247 one procedure over a file format, in the order the format is read
 
-utils/pwauth.c:cred_rewrite lines 101 one procedure over a file format, in the order the format is read
 utils/pwauth.c:cred_txn_begin_at lines 127 one procedure over a file format, in the order the format is read
 utils/pwauth.c:pwauth_read_password complexity 28 one procedure over a file format, in the order the format is read
 utils/pwauth.c:pwauth_read_password lines 154 one procedure over a file format, in the order the format is read

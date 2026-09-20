@@ -14,16 +14,11 @@
  * Root changes any password without proving the old one; everyone else proves
  * the account's current password first.
  *
- * Everything happens inside one credential transaction, taken before any file
- * is opened and dropped only after the replacement is published. That ordering
- * is deliberate: the account is found, the old password is
- * checked, and the new file is built from ONE image of the databases, read
- * under the lock. `getspnam` is not called anywhere here, since it would be a
- * second, independent read that can see a different file than the one about to
- * be replaced, and an authentication that passed against a line the replacement
- * then overwrote is a lost update wearing a success message. `pwauth_check`
- * takes the stored hash as a string exactly so a caller can supply it from
- * wherever it found the account.
+ * Read and authenticate before acquiring the credential lock. Under the lock,
+ * reread both databases and recheck the target's uniqueness, the caller's
+ * ownership, and the stored hash. Build the replacement from the current shadow
+ * file, preserving its other fields, and validate the resulting record before
+ * publication.
  *
  * A name that appears more than once in either database is refused, naming the
  * file that has it, and nothing is changed. musl's parsers all stop at the
@@ -38,11 +33,8 @@
  * and nothing falls back. The new password is read twice and must agree, and an
  * empty one is refused: an empty shadow field admits everyone.
  *
- * No signal handlers are installed. The transaction owns the four deaths for
- * its whole lifetime, restores the terminal, drops any temporary file and
- * leaves through `exit` so the registered release drops the lock; a program
- * that caught a signal only to fix the terminal would leave the lock behind,
- * and the transaction is the only place that knows it is held.
+ * The credential library manages signal dispositions during password input
+ * and the transaction.
  */
 
 #define _GNU_SOURCE /* crypt */
@@ -379,11 +371,8 @@ static int shadow_line_ok(const char *line)
 
 /**
  * Copy the hash field of `user`'s line in the shadow `text` into `out`.
- * Returns 0 when the line was there and the field fit.
- *
- * An account with no shadow line is not an error to report differently from a
- * wrong password: both end in the same refusal, so nothing is learned by
- * trying a name.
+ * Return 0 after copying the hash. Return -1 if the account is absent or the
+ * hash does not fit.
  */
 static int hash_of(const char *text, const char *user, char *out, size_t size)
 {
@@ -505,18 +494,6 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    /* The survey runs without the lock, and everything the user has to type
-     * happens before it is taken. An earlier draft took the transaction first,
-     * so that the account found, the hash authenticated against and the file
-     * replaced were one image by construction; that is the right property and
-     * the wrong way to get it, because the lock was then held across two or
-     * three terminal reads. Any account could start `passwd`, leave it at the
-     * prompt, and stop every other writer for as long as it liked, on a machine
-     * with sixteen process slots. The property is kept below instead, by
-     * checking under the lock that the record authenticated against is still
-     * the record about to be replaced: what an early lock made impossible, a
-     * late one makes detectable, and detectable is enough because the only
-     * right answer to "it changed while you were typing" is to say so. */
     if (slurp(PASSWD_FILE, passwd_text, sizeof(passwd_text)) < 0 ||
         slurp(SHADOW_FILE, shadow_text, sizeof(shadow_text)) < 0) {
         return 1;
@@ -645,12 +622,6 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    /* The snapshot authenticated against must still be the one being replaced.
-     * Anything else means another writer published between the prompt and the
-     * lock, and rewriting then would put back a record built from a file that
-     * no longer exists: the other change would be erased by a caller who never
-     * saw it. This is the whole of what the early lock bought, and unlike the
-     * early lock it costs nobody a held lock while they think. */
     if (count_entries(shadow_text, target) != 1 ||
         hash_of(shadow_text, target, current, sizeof(current)) != 0) {
         fprintf(stderr, "passwd: %s: %s is no longer named once there\n", SHADOW_FILE, target);

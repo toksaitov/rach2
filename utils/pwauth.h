@@ -37,13 +37,9 @@
  * nothing at all. The library therefore has its own transaction, and it is
  * a lock file: `cred_txn_begin` creates `CRED_LOCK_PATH` with
  * `O_CREAT|O_EXCL|O_WRONLY` at mode 0600 and writes the holder's pid as one
- * decimal line. The exclusive create is the whole of the exclusion, because a
- * syscall on this kernel does not yield, so nothing can interleave between the
- * existence test and the create. A file, not a directory because it
- * has the holder's pid, and the pid is what lets a refusal name the process
- * an operator has to deal with. Every writer takes it before its first read and
- * has it through its last rename; `cred_rewrite` refuses outright when it is
- * not held, so a caller that forgot cannot ship quietly.
+ * decimal line. The exclusive create provides the exclusion. A writer may
+ * authenticate before locking, then reread and recheck the records under the
+ * lock before publishing. `cred_rewrite` refuses when the lock is not held.
  *
  * A transaction belongs to the process that took it. A `fork` copies the
  * library's state but not the holding: the child has nothing, its
@@ -67,9 +63,9 @@
  * pid and unlinking the name there is no `funlink` and no way to bind the
  * removal to the file that was inspected, so a second breaker can have already
  * removed that lock and created its own, and the unlink then takes a live
- * writer's lock. The library holds itself to that: its own release and its own
- * publish unlink and rename only while the file still records this process, so
- * one lock cleared by hand cannot cascade through every writer after it. Third,
+ * writer's lock. The library checks the recorded PID before release and
+ * publication, but a later pathname operation is not atomic with that check.
+ * Third,
  * the cost of refusing is bounded and falls on the right person, because no
  * reader takes the lock: `su`, `login` and dropbear authenticate with none, so
  * nothing about entering the box depends on it, and what a `SIGKILL`ed or
@@ -83,24 +79,12 @@
  * caller installs handlers of its own, and a lock left behind is root's to
  * remove.
  *
- * What the library cannot promise, stated here, not left to be
- * discovered. Every name it acts on is resolved twice: once when it reads the
- * lock and once when it unlinks or renames, and this kernel has no call that
- * binds the second to the file the first saw. There is no `funlink`, no rename
- * taking a descriptor for its source, and no inode identity worth comparing,
- * since `st_ino` is a hash of the name here and two files that carried one name
- * in turn share it. So a release that has just read its own pid out of the lock
- * can still unlink a successor's, if recovery removed the lock and the
- * successor
- * took the name inside that window; and a publish that has just checked the
- * lock
- * still renames by name. The window is one scheduling boundary wide (this
- * kernel
- * does not preempt inside a syscall, and the read and the unlink have nothing
- * between them), and it opens only after the never-break rule has already been
- * broken by hand. It is narrowed as far as the syscall surface allows and it is
- * not closed. Closing it needs a primitive this kernel does not have: an unlink
- * and a rename that name an open descriptor, not a path.
+ * The library checks the recorded PID before publishing. KRFFS inode numbers
+ * are name hashes; ext2 provides inode numbers. Neither a PID check nor an
+ * inode comparison makes a later pathname operation atomic with the check.
+ * Release checks the recorded PID before unlinking the lock. Manual removal
+ * and replacement between that check and the unlink can still cause removal
+ * of a successor's lock. The same limitation applies to publication by rename.
  *
  * Ordering, which no lock supplies. A change spanning several files can still
  * crash between two renames, and the transaction cannot fix that; the ordering
@@ -179,13 +163,14 @@ int pwauth_verify(const char *user, const char *password);
 
 /**
  * Print `prompt` and read one line from standard input into `buf`, returning 0
- * on success and -1 on end of input or a read error.
+ * on success and -1 on end of input, a read error, or a terminal-mode error.
  *
  * The prompt goes to file descriptor 2 unbuffered whatever standard input is,
  * and only the echo suppression is conditional on `isatty(0)`; that is what
  * lets a driver holding a pipe on fd 0 rendezvous on the prompt instead of
  * guessing at a sleep. On a terminal the modes are saved with `tcgetattr` and a
- * copy with `ECHO` cleared installed, restored on every exit path. It never
+ * copy with `ECHO` cleared installed. A failure to read or apply those modes
+ * refuses input. Saved modes are restored on return. It never
  * opens `/dev/tty`: a probe can run with fd 0 bound to the console and no
  * controlling terminal at all, where a `/dev/tty` reader would block forever.
  *
@@ -323,15 +308,10 @@ int pwauth_mint_salt(char *out, size_t size);
  * The release is registered with `atexit` before the lock is created, and an
  * acquire whose registration fails is refused, not held: `atexit`
  * allocates once its builtin slots are full and can therefore fail, and a
- * transaction with nothing left to drop it would leak the lock on the very
- * ordinary `exit` this promises to cover. So an ordinary `exit` cannot leak the
- * lock, and every signal that can kill the writer is handled for the
- * transaction's whole lifetime, because `atexit` runs on no signal death: the
- * handler restores the terminal, unlinks any temporary file `cred_rewrite` left
- * open, and leaves through `exit` so the registered release drops the lock,
- * not the handler duplicating it. That is why a caller installs no
- * handlers of its own: the lock outlives the terminal read, and the terminal
- * read is only one part of what a signal must undo.
+ * transaction with no registered release could leave its lock on ordinary
+ * exit. The handler restores the terminal, attempts to remove any temporary
+ * file and exits through the registered release. Removal failures are
+ * reported and require manual cleanup.
  *
  * Which signals those are is decided by what the kernel does, not by the four a
  * writer expects. It terminates a process by default for every signal but the
@@ -347,14 +327,10 @@ int pwauth_mint_salt(char *out, size_t size);
  * it, so no death can be served while the file exists and nothing yet says
  * whose it is.
  *
- * Two residues are left, and a caller should know both. `SIGKILL` and `SIGSTOP`
- * cannot be caught, and signals 32, 33 and 34 are reserved by this libc, which
- * refuses them from `sigaction` and `sigaddset` alike, here and on Linux. A
- * writer ended by any of those five leaves its lock behind, and the next writer
- * reports it instead of breaking it. `SIGPIPE` is caught for that same
- * lifetime and for the same reason as the deaths: a writer reports as it goes,
- * and a diagnostic written to a standard error that is a pipe with no reader
- * would otherwise kill it where no `atexit` runs and leave the lock in `/etc`.
+ * `_Exit`, `SIGKILL`, CPU faults, and delivery of musl-reserved signals 32-34
+ * can terminate the process without this cleanup. SIGSTOP suspends it without
+ * cleanup until it resumes. SIGPIPE is caught during the transaction so a
+ * failed diagnostic write cannot prevent release.
  * It is caught, not ignored because an exec carries an ignored
  * disposition into the new image and resets a caught one, and a child forked
  * under a transaction must not hand this library's `SIGPIPE` policy to a
@@ -362,10 +338,9 @@ int pwauth_mint_salt(char *out, size_t size);
  * back by `cred_txn_end`, and `SIGPIPE` last of all, once there is nothing left
  * to report.
  *
- * An acquire that cannot record the holder pid fails and removes the lock it
- * just created instead of holding an empty one: an empty lock is what every
- * later acquire reports as recording no holder and tells an operator to remove,
- * which would put a live writer's lock in their hands.
+ * An acquire that cannot record the holder PID attempts to remove the lock
+ * and reports any removal failure. A lock whose removal fails requires manual
+ * cleanup.
  *
  * A second `cred_txn_begin` in one process is a programming error and not
  * contention, so it is refused immediately, without touching the file. The
@@ -392,7 +367,9 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries);
  * reach the disk, and -1 when this process holds no transaction or when the
  * release could not finish.
  *
- * The lock is unlinked only while it still records this process, for the second
+ * Release checks the recorded PID before unlinking the lock. Manual removal
+ * and replacement between that check and the unlink can still cause removal
+ * of a successor's lock. The PID check is made for the second
  * reason a lock is never broken: the name is not proof of the file. A release
  * that finds another writer's lock at the name leaves it and reports nothing,
  * having none of its own to drop, and returns 0: nothing of this transaction's
@@ -412,8 +389,9 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries);
  * it as a failure to finish cleanly and does not retry: there is nothing left
  * to retry, the lock being already gone from the system it is running on.
  *
- * There is no separate abort. `cred_rewrite` leaves no temporary file behind
- * whichever way it went, so every exit path may simply end the transaction.
+ * There is no separate abort. Ending the transaction retries removal of an
+ * unpublished temporary file and returns -1 if removal fails. The diagnostic
+ * names the file that requires manual cleanup.
  * What it may already have done is publish: a `CRED_UNFLUSHED` replacement is
  * live, and ending the transaction neither undoes it nor pretends otherwise.
  */
@@ -446,8 +424,8 @@ int cred_txn_end(void);
  * `chown` clears the set-id bits. And the temporary file's mode becomes the
  * result's mode, because a rename changes only the name and the parent, so
  * inheriting the original's mode and owner is the only thing that keeps a file
- * that exists to be unreadable from becoming readable. There is no hard-link
- * backup because this file system has no links at all.
+ * that exists to be unreadable from becoming readable. The library creates no
+ * hard-link backup.
  *
  * What the two lock checks do not buy is stated in the file header: the rename
  * that follows the second one is still by name, and no call here can bind it to
@@ -464,8 +442,9 @@ int cred_txn_end(void);
  * console.
  *
  * The return is what the caller must report, and the three differ where it
- * matters most. A failure before the rename unlinks the temporary file,
- * leaves the target byte for byte as it was, and is `CRED_UNCHANGED`, the
+ * matters most. Before the rename, attempt to remove the unpublished file and
+ * report any removal failure. Leave the target unchanged. A file whose removal
+ * fails requires manual cleanup. Return `CRED_UNCHANGED`, the
  * one a caller may report as "unchanged". A failure of the second flush or
  * of the close is `CRED_UNFLUSHED`: the file system already has the new
  * file, the disk may still carry the old one, and the caller must report a

@@ -47,8 +47,8 @@
 
 #include "pwauth.h"
 
-/* Above the kernel's per-process descriptor cap (MAX_FDS is 16). */
-#define MAX_FD 64
+/* Rach2 permits descriptors 0 through 1023. */
+#define MAX_FD 1024
 
 /** Print the usage line and return the exit status a usage error takes. */
 static int usage(void)
@@ -71,6 +71,12 @@ static const char *base_name(const char *path)
     return slash ? slash + 1 : path;
 }
 
+/**
+ * Close every open descriptor above standard error before changing identity.
+ * The real root user bypasses password verification. Other callers must
+ * authenticate the target account. An unknown target is reported before
+ * prompting.
+ */
 int main(int argc, char **argv)
 {
     const char *user = NULL;
@@ -107,9 +113,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Root becomes anyone without proof; everyone else proves the target's
-     * password. A wrong password, an absent account and a locked one are one
-     * refusal, so nothing can be learned by trying. */
     if (getuid() != 0) {
         char password[256];
 
@@ -120,7 +123,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Nothing the caller left open should reach the target's shell. */
     for (fd = 3; fd < MAX_FD; fd++) {
         close(fd);
     }

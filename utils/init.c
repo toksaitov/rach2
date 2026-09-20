@@ -132,11 +132,9 @@ static void report_no_login(void)
  * be closed here, since closing it needs a wait that unmasks atomically and
  * this kernel's `ppoll` takes a signal mask without applying it.
  *
- * Nothing is torn down first. The kernel flushes the page cache and clears the
- * dirty-mount flag inside the call, with scheduling already off, so no
- * committed write is lost; what is given up is the chance to ask the programs
- * on the machine to stop politely, which would mean a scheduling policy of
- * init's own invention at the last moment of the machine's life.
+ * The kernel disables scheduling and attempts to flush the file systems
+ * before stopping. Shutdown continues if a flush fails. Init does not first
+ * terminate user processes.
  */
 static void shutdown_handler(int sig)
 {
@@ -252,27 +250,23 @@ static void open_service_log(void)
     }
 }
 
-/* Where a service's output goes: the log when there is one, and the null
- * device when there is not. Never the console. A machine with no writable
- * /var still owes the person at it an undisturbed login. */
+/** Return the service log descriptor, or the null descriptor as fallback. */
 static int service_sink(void)
 {
     return service_log_fd >= 0 ? service_log_fd : service_null_fd;
 }
 
-/* In a child, before its exec: nothing on stdin, and both output streams into
- * the log. A service that finds the console on stdin can read the keystrokes
- * meant for the login. */
+/**
+ * Connect standard input to `/dev/null` and both output streams to the service
+ * log, falling back to `/dev/null`. Exit the child if redirection fails.
+ */
 static void service_output(void)
 {
     int sink = service_sink();
 
-    if (service_null_fd >= 0) {
-        (void)dup2(service_null_fd, 0);
-    }
-    if (sink >= 0) {
-        (void)dup2(sink, 1);
-        (void)dup2(sink, 2);
+    if (service_null_fd < 0 || sink < 0 || dup2(service_null_fd, 0) < 0 || dup2(sink, 1) < 0 ||
+        dup2(sink, 2) < 0) {
+        _exit(126);
     }
 }
 
@@ -561,32 +555,63 @@ static void configure_network(void)
 }
 
 /**
- * Whether this system lets root log in over SSH with a password.
- *
- * The RAM images and recovery do not: root arrives by key there, and the
- * console is the way in when the key is not to hand. An installed system is
- * another matter, since the person who installed it chose root's password at
- * the install and may have no key at all, so `rach2-install` writes
- * `root-password-login yes` into `/etc/rach2/sshd.conf` and this reads it. A
- * file that is not there, or that says anything else, leaves the refusal in
- * place. The whole line is matched and not a prefix of it, so a line reading
- * `root-password-login yesterday` is not this setting.
+ * Configure networking in a redirected child, then wait for it.
+ * A failed fork skips configuration. Redirection failure exits only the child;
+ * init keeps the console descriptors used by later login sessions.
+ */
+static void start_network(void)
+{
+    pid_t network = fork();
+
+    if (network == 0) {
+        service_output();
+        configure_network();
+        _exit(0);
+    }
+    if (network > 0) {
+        while (waitpid(network, NULL, 0) < 0 && errno == EINTR) {
+        }
+    }
+}
+
+/**
+ * Return 1 for a line containing exactly `root-password-login yes`, apart
+ * from trailing whitespace. Return 0 if the file is unavailable or contains
+ * no such line.
  */
 static int root_password_login(void)
 {
     FILE *f = fopen("/etc/rach2/sshd.conf", "r");
-    char line[128];
-    int yes = 0;
+    static const char setting[] = "root-password-login yes";
+    size_t matched = 0;
+    int c, bad = 0, yes = 0;
 
     if (!f) {
         return 0;
     }
-    while (fgets(line, (int)sizeof(line), f)) {
-        if (strncmp(line, "root-password-login yes", 23) == 0 &&
-            (line[23] == '\0' || line[23] == '\n' || line[23] == '\r' || line[23] == ' ' ||
-             line[23] == '\t')) {
-            yes = 1;
+    for (;;) {
+        c = fgetc(f);
+        if (c == '\n' || c == EOF) {
+            if (!bad && matched == sizeof(setting) - 1) {
+                yes = 1;
+            }
+            if (c == EOF) {
+                break;
+            }
+            matched = 0;
+            bad = 0;
+        } else if (matched < sizeof(setting) - 1) {
+            if (c == setting[matched]) {
+                matched++;
+            } else {
+                bad = 1;
+            }
+        } else if (c != ' ' && c != '\t' && c != '\r' && c != '\v' && c != '\f') {
+            bad = 1;
         }
+    }
+    if (ferror(f)) {
+        yes = 0;
     }
     fclose(f);
     return yes;
@@ -857,37 +882,7 @@ int main(void)
         if (!network_done) {
             network_done = 1;
             if (boot_wants_userland_network()) {
-                /* This runs after the login shell is on the console, so its
-                   own diagnostics go where the services' do.
-
-                   Both descriptors are saved before either stream moves. With
-                   a low file limit the second `dup` can fail, and redirecting
-                   anyway would leave the log on init's stderr for good: every
-                   later login inherits fd 2, and its cleanup keeps it, so an
-                   unprivileged shell would hold a writable descriptor onto a
-                   root-owned file. If either save fails, nothing is
-                   redirected and the output stays where it is. */
-                int sink = service_sink();
-                int saved_out = dup(1);
-                int saved_err = saved_out >= 0 ? dup(2) : -1;
-                int moved = 0;
-
-                if (saved_out >= 0 && saved_err >= 0 && sink >= 0) {
-                    (void)fcntl(saved_out, F_SETFD, FD_CLOEXEC);
-                    (void)fcntl(saved_err, F_SETFD, FD_CLOEXEC);
-                    moved = dup2(sink, 1) >= 0 && dup2(sink, 2) >= 0;
-                }
-                configure_network();
-                if (moved) {
-                    (void)dup2(saved_out, 1);
-                    (void)dup2(saved_err, 2);
-                }
-                if (saved_out >= 0) {
-                    (void)close(saved_out);
-                }
-                if (saved_err >= 0) {
-                    (void)close(saved_err);
-                }
+                start_network();
             }
         }
 

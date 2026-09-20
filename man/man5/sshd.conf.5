@@ -19,6 +19,9 @@ permitting root to log in with a password.
 The line
 .Ql root-password-login yesterday
 does not enable password login.
+Only trailing whitespace may follow
+.Ql root-password-login yes ;
+additional text disables that line.
 If the file is absent, root may log in by key only.
 .Pp
 The RAM images and recovery contain no such file.

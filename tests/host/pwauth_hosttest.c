@@ -850,6 +850,8 @@ static void check_salt_map(void)
  * reported as published, not as unchanged. The refusal with no
  * transaction held is first, because a caller that forgot the lock must not be
  * able to publish.
+ * A directory at the temporary path must remain in place and produce a
+ * diagnostic naming the failed removal and required manual cleanup.
  */
 static void check_rewrite(void)
 {
@@ -920,9 +922,6 @@ static void check_rewrite(void)
         fail("cred_rewrite left the stale temporary file behind");
     }
 
-    /* An uncreatable temporary, made so by a directory standing at its name:
-     * the unlink cannot remove it and the exclusive create then finds it there,
-     * which is the EEXIST the library reports, not retries. */
     if (mkdir(Target_tmp, 0700) != 0) {
         fail("could not stand a directory where the temporary file goes");
     }
@@ -932,8 +931,9 @@ static void check_rewrite(void)
     if (rc == 0) {
         fail("cred_rewrite reported success with no temporary file to write");
     }
-    if (strstr(report, "cannot create the replacement") == NULL) {
-        fail("cred_rewrite failed to create its temporary file and did not say so");
+    if (strstr(report, "cannot remove the old temporary file") == NULL ||
+        strstr(report, "remove it manually") == NULL || strstr(report, Target_tmp) == NULL) {
+        fail("cred_rewrite failed to remove its temporary path without a cleanup diagnostic");
     }
     if (slurp(Target, content, sizeof(content)) < 0 || strcmp(content, "four\n") != 0) {
         fail("cred_rewrite changed the target after failing before the rename");

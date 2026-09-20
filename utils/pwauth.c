@@ -75,6 +75,7 @@ static struct termios Tty_quiet;
 static volatile sig_atomic_t Tty_have_modes;
 static volatile sig_atomic_t Tty_echo_off;
 static volatile sig_atomic_t Tty_resumed;
+static volatile sig_atomic_t Tty_failed;
 
 /* The prompt in flight, kept because a resume has to reprint it. */
 static const char *volatile Prompt = "";
@@ -300,24 +301,31 @@ static void pwauth_pipe_handler(int sig)
 }
 
 /**
- * Unlink the temporary file a `cred_rewrite` has in flight, if there is one.
- *
- * Async-signal-safe, and the reason the transaction records the name at all: a
- * writer killed between the create and the rename must not leave a partial
- * credential file beside the real one.
+ * Attempt to remove the unpublished file. Return -1 on removal failure and
+ * keep its name for the caller's diagnostic and a later retry. Use only
+ * async-signal-safe calls.
  */
-static void cred_drop_temp(void)
+static int cred_drop_temp(void)
 {
     if (Txn_tmp[0] != '\0') {
-        unlink(Txn_tmp);
+        if (unlink(Txn_tmp) != 0 && errno != ENOENT) {
+            return -1;
+        }
         Txn_tmp[0] = '\0';
     }
+    return 0;
+}
+
+/** Report failed removal after restoring the caller's death-signal mask. */
+static void cred_report_temp(const char *path)
+{
+    fprintf(stderr, "pwauth: %s: cannot remove temporary file; remove it manually\n", path);
 }
 
 /**
- * Take echo away, if this process group owns the terminal. Returns 1 when the
- * modes were applied and 0 when they were not, which is the caller's cue that
- * the terminal belongs to somebody else.
+ * Disable echo while this process group owns the terminal. Return 1 when the
+ * modes were applied, 0 when another process group owns the terminal, and -1
+ * when setting the modes fails.
  *
  * The question and the answer are one step, with the job-control signals
  * blocked around them, because the answer goes stale the moment a stop is
@@ -335,17 +343,21 @@ static int pwauth_echo_off(void)
 {
     sigset_t stops, previous;
     pid_t owner;
-    int taken = 0;
+    int taken = 0, was_off;
 
     pwauth_stop_signals(&stops);
     sigprocmask(SIG_BLOCK, &stops, &previous);
     owner = tcgetpgrp(0);
     if (owner <= 0 || owner == getpgrp()) {
+        was_off = Tty_echo_off;
         Tty_echo_off = 1;
         if (tcsetattr(0, TCSAFLUSH, &Tty_quiet) != 0) {
-            Tty_echo_off = 0;
+            Tty_echo_off = was_off;
+            Tty_failed = 1;
+            taken = -1;
+        } else {
+            taken = 1;
         }
-        taken = 1;
     }
     sigprocmask(SIG_SETMASK, &previous, NULL);
 
@@ -391,7 +403,6 @@ static void pwauth_death_handler(int sig)
     Tty_have_modes = 0;
     pwauth_tty_restore();
     if (cred_txn_mine()) {
-        cred_drop_temp();
         if (Exit_under_way) {
             return;
         }
@@ -454,7 +465,7 @@ static void pwauth_cont_handler(int sig)
     (void)sig;
     pwauth_install(SIGTSTP, pwauth_tstp_handler, NULL);
     Tty_resumed = 1;
-    if (Tty_have_modes && !pwauth_echo_off()) {
+    if (Tty_have_modes && pwauth_echo_off() <= 0) {
         return;
     }
     pwauth_prompt();
@@ -495,8 +506,44 @@ int pwauth_verify(const char *user, const char *password)
 }
 
 /**
+ * Save terminal modes and disable echo only for the foreground process group.
+ * A background reader keeps the saved modes for its next foreground resume.
+ * Return -1 if reading or setting the modes fails, otherwise 0.
+ */
+static int pwauth_prepare_tty(void)
+{
+    if (!isatty(0)) {
+        return 0;
+    }
+    if (tcgetattr(0, &Tty_saved) != 0) {
+        return -1;
+    }
+    Tty_quiet = Tty_saved;
+    Tty_quiet.c_lflag &= ~(tcflag_t)ECHO;
+    Tty_have_modes = 1;
+    return pwauth_echo_off() < 0 ? -1 : 0;
+}
+
+/** Refuse a byte if disabling echo failed before or during the read. */
+static ssize_t pwauth_read_byte(char *c)
+{
+    ssize_t n = -1;
+
+    if (!Tty_failed) {
+        n = read(0, c, 1);
+    }
+    if (Tty_failed) {
+        errno = EIO;
+        return -1;
+    }
+    return n;
+}
+
+/**
  * Print `prompt` and read one line from standard input into `buf`. Returns 0 on
- * a complete line, -1 on end of input with nothing read or on a read error.
+ * a complete line, -1 on empty EOF, a read error, or a terminal-mode error.
+ * Reject NUL bytes and input longer than the smaller of the caller's buffer
+ * and PWAUTH_MAX_PASSWORD. A failed echo change on resume refuses the line.
  *
  * The read loops on `-EINTR` because this kernel accepts `SA_RESTART` and does
  * not honor it, so every signal that reaches a blocked read returns it and a
@@ -524,11 +571,6 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
     struct sigaction saved_tstp, saved_cont, saved_pipe, saved_death[PWAUTH_SIG_MAX];
     sigset_t stops, saved_mask;
     size_t len = 0;
-    /* The shortest limit any reader in this image imposes, applied here so that
-     * every caller gets it, not each remembering to ask for it: `su`
-     * passes a buffer of its own size, and a password it accepted but dropbear
-     * refuses is an account that works at the console and not over the network.
-     * A caller with a smaller buffer still gets its own size. */
     size_t room = size - 1 < (size_t)PWAUTH_MAX_PASSWORD ? size - 1 : (size_t)PWAUTH_MAX_PASSWORD;
     int deaths = 0;
     int over = 0;
@@ -543,6 +585,7 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
     Prompt = prompt ? prompt : "";
     Prompt_len = (sig_atomic_t)strlen(prompt ? prompt : "");
     Tty_resumed = 0;
+    Tty_failed = 0;
 
     pwauth_install(SIGPIPE, pwauth_pipe_handler, &saved_pipe);
     pwauth_install(SIGTSTP, pwauth_tstp_handler, &saved_tstp);
@@ -556,25 +599,8 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
         deaths = 1;
     }
 
-    /* The flag is claimed before the call that takes echo away, not after it: a
-     * stop served in between would otherwise find a silenced terminal the
-     * restore believes it never touched.
-     *
-     * Echo is taken away only while this process group owns the terminal, which
-     * is the same question the resume asks before it re-applies them. A reader
-     * started in the background (`su &` is one keystroke) would otherwise
-     * silence a terminal belonging to the shell that started it and then stop
-     * on `SIGTTIN` at the first read, since this kernel raises nothing for the
-     * `tcsetattr` and only the read is guarded: the shell would come back to a
-     * console that echoes nothing, and killing the stopped job would not undo
-     * it. The modes are still prepared and `Tty_have_modes` still set, so the
-     * `SIGCONT` that follows a `fg` applies them through the resume path, which
-     * is where a background reader is meant to acquire them. */
-    if (isatty(0) && tcgetattr(0, &Tty_saved) == 0) {
-        Tty_quiet = Tty_saved;
-        Tty_quiet.c_lflag &= ~(tcflag_t)ECHO;
-        Tty_have_modes = 1;
-        (void)pwauth_echo_off();
+    if (pwauth_prepare_tty() != 0) {
+        goto done;
     }
 
     pwauth_prompt();
@@ -597,7 +623,7 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
             over = 0;
             bad = 0;
         }
-        n = read(0, &c, 1);
+        n = pwauth_read_byte(&c);
 
         /* And a resume that arrived during the read, where the byte in hand may
          * have been typed and echoed before the stop was served. That one is
@@ -636,6 +662,7 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
             over = 1;
         }
     }
+done:
     buf[len] = '\0';
 
     pwauth_stop_signals(&stops);
@@ -664,7 +691,10 @@ int pwauth_read_password(const char *prompt, char *buf, size_t size)
      * would be told the change succeeded and then be unable to enter what they
      * had entered. The buffer's size is the caller's statement of what it can
      * use, so the correct answer is that the line was too long. */
-    if (bad) {
+    if (Tty_failed) {
+        memset(buf, 0, size);
+        rc = -1;
+    } else if (bad) {
         memset(buf, 0, size);
         fprintf(stderr, "pwauth: the entry holds a NUL byte, which no reader here can store\n");
         rc = -1;
@@ -724,48 +754,39 @@ int pwauth_mint_salt(char *out, size_t size)
 }
 
 /**
- * Parse the holder pid recorded in the open lock descriptor `fd` into `out`.
- * Returns 1 when one decimal pid was read, 0 when the file records none, and -1
- * when the file could not be read at all.
- *
- * A file that is empty, has no digits, or has anything after them but
- * blanks
- * records no holder. That is what a writer killed between the create and the
- * write leaves, and it must read as "no holder", not as some pid the
- * digits happen to spell. More than nine digits is refused for the same reason
- * and keeps the accumulation inside a 32-bit `long` besides.
- *
- * A read that fails is the third answer and not the second. "The file records
- * no
- * holder" is a fact about a file that was read; a failed read is the absence of
- * any fact, and a caller that folded the two together would act on a lock it
- * never saw. It takes the descriptor, not the name so a release can ask
- * this question without opening anything.
+ * Read one positive decimal PID followed only by spaces, tabs, carriage
+ * returns, or newlines. Return 1 on success, 0 for malformed contents, and -1
+ * on a read error. Reject more than nine digits.
  */
 static int cred_parse_pid(int fd, long *out)
 {
-    char buf[32];
+    unsigned char buf[32];
     long value = 0;
-    int i, digits = 0;
-    ssize_t n;
+    int digits = 0, suffix = 0;
+    ssize_t n, i;
 
-    n = read(fd, buf, sizeof(buf) - 1);
-    if (n < 0) {
-        return -1;
-    }
-    if (n == 0) {
-        return 0;
-    }
-    buf[n] = '\0';
-    for (i = 0; buf[i] >= '0' && buf[i] <= '9'; i++) {
-        if (++digits > 9) {
-            return 0;
+    for (;;) {
+        n = read(fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
         }
-        value = value * 10 + (buf[i] - '0');
-    }
-    for (; buf[i] != '\0'; i++) {
-        if (buf[i] != '\n' && buf[i] != '\r' && buf[i] != ' ' && buf[i] != '\t') {
-            return 0;
+        if (n == 0) {
+            break;
+        }
+        for (i = 0; i < n; i++) {
+            if (!suffix && buf[i] >= '0' && buf[i] <= '9') {
+                if (++digits > 9) {
+                    return 0;
+                }
+                value = value * 10 + (buf[i] - '0');
+            } else if (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n') {
+                suffix = 1;
+            } else {
+                return 0;
+            }
         }
     }
     if (digits == 0 || value <= 0) {
@@ -806,17 +827,9 @@ static int cred_read_pid(const char *path, long *out)
  * `CRED_LOCK_OTHER` for another writer's lock or none at all, or
  * `CRED_LOCK_UNKNOWN` when it could not be read.
  *
- * A publish cannot prove from the name alone that the file at `Txn_lock` is the
- * one this transaction created. There is no `funlink`, and comparing inode
- * numbers would not help on this file system, where `st_ino` is a hash of the
- * name and two files that carried one name in turn share it. That is the
- * header's second reason for never breaking a lock, and it applies to the
- * library's own publish: root removing a lock the library reported as stale,
- * and
- * the next writer creating its own at the same name, is all it takes for an
- * unconditional replacement to write over a live writer's work. The recorded
- * pid
- * is the only identity available, so it is the one the publish checks.
+ * The library checks the recorded PID before publishing. KRFFS inode numbers
+ * are name hashes; ext2 provides inode numbers. Neither a PID check nor an
+ * inode comparison makes a later pathname operation atomic with the check.
  *
  * The third answer is why this is not a predicate. This opens a file, so it
  * fails when there is no descriptor to open it with, and a caller told only
@@ -1019,77 +1032,42 @@ static void cred_pipe_restore(void)
 }
 
 /**
- * Drop the lock on the way out of the process, registered with `atexit`.
+ * Attempt to release the transaction on exit and report cleanup failures.
  *
- * This is the one release. An ordinary `exit`, a `return` from `main`, and the
- * `exit` a death handler leaves through all reach it, so no path out of a
- * writer can leak the lock except one the process never survives to run code
- * on. A process that inherited the state across a fork reaches it too, and must
- * do nothing at all: the lock is its parent's.
+ * A forked child discards inherited transaction state and restores dispositions
+ * without unlinking its parent's lock. Discard the inherited lock descriptor
+ * and restore the saved death-signal and SIGPIPE dispositions.
  *
- * A release that fails here has nobody to return to, so the report is the whole
- * of what can be done: the line it prints is what tells an operator that the
- * `rm` the next writer will ask for is theirs to do. `cred_lock_release` hands
- * that line back instead of printing it, so it can be said out here with the
- * deaths already given back and `SIGPIPE` still caught, which is the only order
- * in which a diagnostic can neither hang the writer nor kill it.
- *
- * The deaths are blocked for the whole of it, because this runs inside `exit`
- * and the handler leaves through `exit`: a death served here would find a
- * transaction still held and call `exit` from within `exit`, which the standard
- * leaves undefined. The way it fails in this libc is worth naming,
- * since it is not a hang. `__funcs_on_exit` walks a file-scope cursor that it
- * has already stepped past the running function, and it drops its lock before
- * calling one, so the second `exit` does not deadlock: it resumes the walk
- * below this function and reaches `_Exit`. What is abandoned is the rest of
- * this function, which is to say the release itself, so the lock file stays in
- * `/etc`: the recursion loses exactly the thing the registered release exists
- * to guarantee, and rewrites the process's status to 1 on the way out.
- *
- * The mask goes back before returning instead of being left for `_Exit` to
- * carry off, because what follows here is the rest of `exit`: other registered
- * functions and the flush of every stream. A writer that left them blocked
- * through a flush onto a pipe with no reader would be unkillable by anything
- * but `SIGKILL` for as long as that write blocked, which is a worse fault than
- * the one being closed. Giving it back is safe precisely here: the transaction
- * has been forgotten by then, so a death arriving after it finds nothing held,
- * restores the default disposition and re-raises, and the process dies of the
- * signal it was sent instead of re-entering `exit`.
- *
- * A death served after the caller's `exit` and before this is entered is
- * covered too, but not by the mask, which does not exist yet: it is covered by
- * `cred_exit_started`, registered after this one and therefore run before it,
- * which marks the exit so that the handler returns instead of starting a second
- * one. Between the two, every ordinary exit is accounted for. The one thing
- * neither closes is a `_Exit` or a `SIGKILL`, which run no registered function
- * at all, and for those the lock is reported by the next writer rather than
- * broken by it.
+ * Block the selected death signals until transaction state is discarded.
+ * Restore SIGPIPE after diagnostics. `cred_exit_started` prevents a second
+ * exit from skipping this callback. `_Exit`, `SIGKILL`, CPU faults, and
+ * delivery of musl-reserved signals 32-34 can terminate the process without
+ * this cleanup.
  */
 static void cred_txn_atexit(void)
 {
     sigset_t deaths, saved_mask;
     const char *report = NULL;
+    char temp[sizeof(Txn_tmp)] = "";
     int mine, installed;
 
     pwauth_death_set(&deaths);
     sigprocmask(SIG_BLOCK, &deaths, &saved_mask);
-    /* Owning the lock and carrying the library's state are different questions,
-     * and an heir answers them differently: a child forked under a transaction
-     * has the state and not the lock. It must not release, which is its
-     * parent's to do, and it must still drop what it inherited, which is a
-     * descriptor on `/etc/.pwlock` and five dispositions that are not its
-     * program's. Leaving those installed hands every later registered function
-     * and the flush of every stream a signal policy nobody chose, and has a
-     * descriptor in a table of sixteen. */
     mine = cred_txn_mine();
     installed = Txn_held;
     if (mine) {
+        if (cred_drop_temp() != 0) {
+            memcpy(temp, Txn_tmp, sizeof(temp));
+        }
         (void)cred_lock_release(&report);
     }
     if (installed) {
         cred_txn_forget();
     }
     sigprocmask(SIG_SETMASK, &saved_mask, NULL);
+    if (temp[0] != '\0') {
+        cred_report_temp(temp);
+    }
     if (report != NULL) {
         fprintf(stderr, "pwauth: %s: %s\n", Txn_lock, report);
     }
@@ -1116,9 +1094,8 @@ static void cred_txn_atexit(void)
  * the walk of registered functions steps its cursor past a function before
  * calling it, so a death arriving after the release has been selected and
  * before it has been entered would start a second `exit` that resumes below the
- * release and skips it, leaving the lock behind on the ordinary exit `pwauth.h`
- * promises cannot leak it. Running first is the whole of this function's job:
- * from here on every death finds an exit in progress and returns to it.
+ * release and skips its cleanup attempt. Running first marks the exit before
+ * the release, so the death handler returns to the exit already in progress.
  */
 static void cred_exit_started(void)
 {
@@ -1127,36 +1104,23 @@ static void cred_exit_started(void)
 
 /**
  * Take the writer's exclusive lock at `lock_path`, retrying `tries` times.
- * Returns 0 when it is held, -1 otherwise.
+ * Return 0 when it is held, -1 otherwise.
  *
- * The lock is held from the create, and the deaths are blocked from just before
- * it until the pid has been written. Everything that makes the file this
- * process's (the state, the registered release, the handlers, the pid itself)
- * goes in inside that mask, so no death signal can arrive while the file exists
- * and the state does not yet say so: without the mask, a `^C` in that window
- * takes the default disposition and kills the writer with a fresh, empty lock
- * in `/etc` that no `atexit` runs to remove and no later writer will remove for
- * it. What is left is a crash, not a signal, which no handler can cover
- * anyway. A write that fails, not crashes undoes the whole acquire here,
- * since a held lock that records no holder is one every later writer is told to
- * remove.
+ * Block the selected death signals and SIGPIPE from creation until the PID
+ * and transaction state are recorded. A failed PID write attempts to remove
+ * the lock and reports any removal failure. A lock whose removal fails
+ * requires manual cleanup. `_Exit`, `SIGKILL`, CPU faults, and delivery of
+ * musl-reserved signals 32-34 can terminate the process without this cleanup.
+ * The retry sleeps with the caller's signal mask restored.
  *
- * The retry sleeps with the mask back as it was: a writer waiting ten seconds
- * for another one's lock must still answer a `^C`.
+ * A forked child discards the inherited lock descriptor and restores the saved
+ * death-signal and SIGPIPE dispositions with the death signals blocked.
+ * Register the release before the exit marker so the marker runs first. Once
+ * registered, the marker prevents later exit callbacks from acquiring a
+ * transaction. Refuse an acquisition if either registration fails.
  *
- * `O_CLOEXEC` because a transaction does not survive an exec: the new image has
- * no `atexit` release and no state, so the lock would outlive its holder, and a
- * writable descriptor on a file in root-owned `/etc` is not something a setuid
- * program hands to a program it runs.
- *
- * `SIGPIPE` is caught for the transaction's whole lifetime, beside the deaths
- * and for the same reason: its default action is to kill the process,
- * and a writer reports as it goes. A diagnostic written to a standard error
- * that is a pipe with no reader would otherwise end the process where no
- * `atexit` runs, with the lock file left in `/etc` for an operator to find and
- * remove. The handler turns that into a failed `write`, which every report here
- * already tolerates. It is a handler and not `SIG_IGN` for a reason
- * `pwauth_pipe_handler` gives.
+ * Use O_CLOEXEC because a transaction cannot survive exec. Catch SIGPIPE until
+ * the last diagnostic so a closed diagnostic pipe cannot prevent cleanup.
  */
 int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
 {
@@ -1185,14 +1149,6 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
     if (Txn_held) {
         sigset_t inherited, previous;
 
-        /* Inherited across a fork: this process has nothing, and must put the
-         * dispositions back before it takes a transaction of its own. Blocked
-         * while it does, for the reason `cred_txn_atexit` blocks the same set:
-         * the teardown restores four dispositions one call at a time, and a
-         * death arriving partway through finds this library's handler still
-         * installed and the state already saying the lock is not ours, which is
-         * the branch that forces the default and re-raises. A caller that had
-         * the signal ignored would be killed by it. */
         pwauth_death_set(&inherited);
         sigprocmask(SIG_BLOCK, &inherited, &previous);
         cred_txn_forget();
@@ -1204,16 +1160,6 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
         return -1;
     }
 
-    /* The release is registered before the lock exists, and a registration that
-     * fails refuses the acquire. `atexit` allocates once its builtin slots are
-     * full and can therefore fail, and an acquire that shrugged that off would
-     * hold a lock nothing is left to drop: an ordinary `exit` would then leak
-     * it, which is exactly what `pwauth.h` promises cannot happen. Registering
-     * first instead of unwinding afterwards costs nothing, since neither
-     * registered function does anything at all unless a transaction is held.
-     * The order is itself a contract: the release goes in first so that it runs
-     * last, and `cred_exit_started` second so that it runs first and every
-     * death served during the walk finds an exit already under way. */
     if (!Txn_atexit_done) {
         if (atexit(cred_txn_atexit) != 0 || atexit(cred_exit_started) != 0) {
             fprintf(stderr, "%s: cannot register the release of %s\n", prog, lock_path);
@@ -1278,10 +1224,13 @@ int cred_txn_begin_at(const char *prog, const char *lock_path, int tries)
          * it had already decided to give up, unable to be interrupted by
          * anything but `SIGKILL`, which is the one signal that leaves the lock
          * where it is. */
-        unlink(lock_path);
+        failed = unlink(lock_path) != 0 && errno != ENOENT;
         cred_txn_forget();
         sigprocmask(SIG_SETMASK, &saved_mask, NULL);
         fprintf(stderr, "%s: cannot record the holder pid in %s\n", prog, lock_path);
+        if (failed) {
+            fprintf(stderr, "%s: %s: cannot remove lock; remove it manually\n", prog, lock_path);
+        }
         cred_pipe_restore();
         return -1;
     }
@@ -1307,8 +1256,9 @@ int cred_txn_begin(const char *prog)
  * The lock goes before the dispositions come back, and not the other way
  * around: a signal arriving in between must still find a handler that knows the
  * lock is gone, where the default action would have killed the process with the
- * lock still in place. It goes only if it still records this process, so a
- * release cannot take a lock some later writer created at the same name.
+ * lock still in place. Release checks the recorded PID before unlinking the
+ * lock. Manual removal and replacement between that check and the unlink can
+ * still cause removal of a successor's lock.
  *
  * A failed release is reported to the caller and not only to the operator,
  * since
@@ -1323,12 +1273,23 @@ int cred_txn_end(void)
 {
     sigset_t ending, saved_mask;
     const char *report = NULL;
+    char temp[sizeof(Txn_tmp)] = "";
     int rc;
 
     if (!cred_txn_mine()) {
         return -1;
     }
-    rc = cred_lock_release(&report);
+    rc = cred_drop_temp();
+    if (rc != 0) {
+        memcpy(temp, Txn_tmp, sizeof(temp));
+    }
+    {
+        int released = cred_lock_release(&report);
+
+        if (rc == 0) {
+            rc = released;
+        }
+    }
     /* Blocked across the teardown alone, and not across the report: the
      * dispositions go back one call at a time, and a death served midway finds
      * the handler installed over state that already says the lock is not ours,
@@ -1339,6 +1300,9 @@ int cred_txn_end(void)
     sigprocmask(SIG_BLOCK, &ending, &saved_mask);
     cred_txn_forget();
     sigprocmask(SIG_SETMASK, &saved_mask, NULL);
+    if (temp[0] != '\0') {
+        cred_report_temp(temp);
+    }
     if (report != NULL) {
         fprintf(stderr, "pwauth: %s: %s\n", Txn_lock, report);
     }
@@ -1367,9 +1331,9 @@ static const char *cred_lock_detail(int state)
  * Undo a replacement that failed before its rename, report `detail`, and return
  * `CRED_UNCHANGED`.
  *
- * The temporary file goes and the target is left exactly as it was, which is
- * what makes a failed replacement a refusal, not a half-written
- * database.
+ * Attempt to remove the unpublished file and report any removal failure.
+ * Leave the target unchanged. A file whose removal fails requires manual
+ * cleanup.
  */
 static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode_t saved_umask)
 {
@@ -1377,7 +1341,9 @@ static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode
     if (fd >= 0) {
         close(fd);
     }
-    cred_drop_temp();
+    if (cred_drop_temp() != 0) {
+        cred_report_temp(Txn_tmp);
+    }
     umask(saved_umask);
     return CRED_UNCHANGED;
 }
@@ -1388,9 +1354,10 @@ static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode
  *
  * The error handling is deliberately asymmetric about the rename, which is the
  * moment the new file becomes the real one, and the three returns are that
- * asymmetry made visible to the caller. Before the rename, every failure
- * removes the temporary file, leaves the target byte for byte as it was, and is
- * `CRED_UNCHANGED`: the caller may report that nothing changed. After it, the
+ * asymmetry made visible to the caller. Before the rename, attempt to remove
+ * the unpublished file and report any removal failure. Leave the target
+ * unchanged and return `CRED_UNCHANGED`. A file whose removal fails requires
+ * manual cleanup. After the rename, the
  * temporary name is gone and the descriptor has followed the file, so a failure
  * is reported and never undone, since unlinking would destroy what was just
  * published; the caller is told `CRED_UNFLUSHED`, because the new file is the
@@ -1404,6 +1371,10 @@ static int cred_rewrite_abort(int fd, const char *path, const char *detail, mode
  * at the temporary name. Between them the temporary belongs to this writer
  * alone: its name has the pid, so two writers loose at once (which takes a
  * broken lock to arrange) still cannot meet on one file.
+ *
+ * Record the temporary name before creation with death signals blocked. The
+ * name begins with the target path; a handler reading a partial copy could
+ * unlink the target. Clearing the first byte later is one store.
  */
 int cred_rewrite(const char *path, const char *text, size_t len)
 {
@@ -1422,6 +1393,10 @@ int cred_rewrite(const char *path, const char *text, size_t len)
         fprintf(stderr, "pwauth: a replacement needs both a path and its text\n");
         return CRED_UNCHANGED;
     }
+    if (cred_drop_temp() != 0) {
+        cred_report_temp(Txn_tmp);
+        return CRED_UNCHANGED;
+    }
     named = snprintf(tmp, sizeof(tmp), CRED_TMP_FORMAT, path, (int)getpid());
     if (named < 0 || (size_t)named >= sizeof(tmp)) {
         fprintf(stderr, "pwauth: %s: path too long for a temporary\n", path);
@@ -1437,24 +1412,14 @@ int cred_rewrite(const char *path, const char *text, size_t len)
         return CRED_UNCHANGED;
     }
 
-    /* The name goes in before the file exists, not after: a death served
-     * between the create and the record would otherwise leave a temporary file
-     * the handler cannot see. Unlinking a name this call did not create is what
-     * the pre-emptive unlink below already does, under the same rule.
-     *
-     * It goes in with the deaths blocked because the copy is not one store, and
-     * a handler that read it half-written would read `path` itself: the
-     * temporary's name is the target's with a suffix, so the truncation at one
-     * particular length is exactly the credential database, and
-     * `cred_drop_temp` would unlink it. Clearing the name needs no mask, since
-     * only the first byte is cleared and a handler either sees the whole name
-     * or none of it. */
     saved_umask = umask(077);
     pwauth_death_set(&deaths);
     sigprocmask(SIG_BLOCK, &deaths, &saved_mask);
     snprintf(Txn_tmp, sizeof(Txn_tmp), "%s", tmp);
     sigprocmask(SIG_SETMASK, &saved_mask, NULL);
-    unlink(tmp);
+    if (unlink(tmp) != 0 && errno != ENOENT) {
+        return cred_rewrite_abort(-1, path, "cannot remove the old temporary file", saved_umask);
+    }
     fd = open(tmp, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (fd < 0) {
         Txn_tmp[0] = '\0';

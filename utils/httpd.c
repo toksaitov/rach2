@@ -4,9 +4,10 @@
  * Serves a status page over the from-scratch TCP/IP stack. The page is a
  * diagnostic readout: it reports the parts of the request the stack actually
  * decoded (the client's `IP:port` from `accept()`, the request line and
- * User-Agent from `recv()`) alongside uptime and per-connection counters, so a
- * reload visibly proves a full SYN, ESTABLISHED, data, FIN, TIME_WAIT cycle
- * round-tripped. Anything reflected from the request is HTML-escaped.
+ * User-Agent from `recv()`) alongside uptime and per-connection counters.
+ * Records are added before transmission. They show accepted requests, not
+ * completed connection teardown or reclaimed TCP control blocks. Anything
+ * reflected from the request is HTML-escaped.
  *
  * It binds port 80 by default (reachable at the SLIRP address `10.0.2.15:80`)
  * and uses only the blocking socket calls (`socket`, `bind`, `listen`,
@@ -468,8 +469,6 @@ static int build_body(uint32_t uptime_s)
     put_bytes(&o, total_bytes);
     put_s(&o, "</b></div>");
 
-    /* Recent connections: source ports vary per connection, so this doubles as
-     * proof the stack opens, serves and reclaims many distinct TCBs. */
     put_s(&o, "<div class=sec>recent connections</div><table>");
     now = (uint32_t)now_sec();
     for (i = 0; i < peer_count; i++) {

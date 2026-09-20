@@ -29,7 +29,10 @@ at
 writes one chunk of standard input to the socket, reads one reply chunk,
 and writes that reply to standard output.
 It repeats until end of input or an error.
-Transfer is half duplex: each input chunk is followed by one reply chunk.
+Each read takes at most 1024 bytes.
+Input chunks need not contain complete lines, and a reply may span several reads.
+Both output paths complete partial writes.
+A write failure stops transfer and returns a nonzero status.
 .Pp
 The host is an IPv4 address or a name resolved as described in
 .Xr ping 1 .

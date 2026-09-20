@@ -81,7 +81,10 @@ prints
 .Ql "login: too many tries"
 and exits; init starts it again.
 A bare newline does not count as an attempt.
-Names longer than 63 characters are not accepted.
+Names longer than 63 characters are discarded.
+A partial name at end of input is terminated and processed by the same rule.
+A failure to disable password echo stops input.
+Before prompting, the program closes descriptors 3 through 1023.
 .Pp
 After authentication,
 .Nm

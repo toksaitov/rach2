@@ -138,5 +138,11 @@ The exit host test proves the shared helper's intermediate ordering with substit
 * `grubslot_hosttest.c` checks the two GRUB core-image tails, blocklist validation and patching, alternating installation, slot clearing, and readback failure.
 * `mkhash_hosttest.c` checks the vendored musl SHA-512 crypt against published vectors and rejects a malformed setting.
 * `pwauth_hosttest.c` checks password comparison, salt-byte mapping, credential-file replacement, locking, flush failures, fork and exit cleanup, signal state, and terminal teardown.
+`sh tests/host/account_mutate.sh` compiles the four tests below against private utility sources. Each fixed test must pass. Fifteen compiled faults must fail their named assertions, and the restored, touched sources must pass after each fault. A trap stops test processes before restoring sources. Logs, binaries, sources and checksums remain under the printed `build/tests/account-proof.*` directory. These tests model descriptors and selected calls; they do not boot Rach2 or test its terminal driver, identity enforcement, or TCP stack.
+
+* `pwauthfault_hosttest.c` checks complete lock-file validation, initial and resumed echo failures, and diagnostics and return values after failed lock and temporary-file removal.
+* `accounttools_hosttest.c` checks physical sudoers lines, login name termination at EOF, and closure of descriptors through 1023 before identity changes.
+* `initpolicy_hosttest.c` checks exact SSH policy lines, each failed redirection, and preservation of init's console descriptors during network setup.
+* `ncwrite_hosttest.c` checks both output paths with partial writes, interruptions, zero returns, and errors.
 * `pwauthatexit_hosttest.c` checks that a transaction fails and leaves no lock when the library cannot register both exit handlers.
 * `sectorcopy_hosttest.c` checks decimal size parsing, 64-bit disk bounds, whole-sector streaming, short and long input, partial I/O, errors, and the 2048-sector write batches, exactly three of 1 MiB, 1 MiB and 32 KiB for a 2 MiB + 32 KiB image.

@@ -68,14 +68,10 @@
  * confusingly or, worse, match somebody else. */
 #define LOGIN_NAME_MAX (PWAUTH_MAX_NAME + 1)
 
-/* The descriptors a fresh session should hold. Anything above them belongs to
- * whatever ran before and is not the account's to inherit. */
-#define LOGIN_MAX_FDS 16
+/* Rach2 permits descriptors 0 through 1023. */
+#define LOGIN_MAX_FDS 1024
 
-/* A hash of nothing anyone knows, hashed against when the name names no
- * account so that a refusal costs what an acceptance costs. Only the `$6$`
- * prefix and the shape matter, since it is `crypt`'s work and not its answer
- * that this is for. */
+/* SHA-512 comparison input for an absent passwd entry. */
 #define LOGIN_DUMMY_HASH \
     "$6$rach2login$"     \
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
@@ -109,15 +105,10 @@ static void sane_terminal(void)
 }
 
 /**
- * Read a line from standard input into `buf` without its newline. Returns 0 on
- * a line, -1 at end of input. A line too long for the buffer is drained through
- * its newline and returned empty, which the caller treats as a name that named
- * nothing: keeping the prefix would answer for a different account than the one
- * typed.
- *
- * Read a byte at a time through `read`, not `fgets`: the prompt is answered one
- * line at a time and nothing beyond the newline may be swallowed into a buffer
- * the next prompt does not own.
+ * Read a name into `buf`, which must have at least one byte. Terminate every
+ * successful result. Return 0 for a line or partial line at EOF, and -1 for
+ * empty EOF or a read error. Discard an overlong line and return an empty
+ * string. Read one byte at a time so the next prompt keeps its input.
  */
 static int read_line(char *buf, size_t size)
 {
@@ -136,7 +127,10 @@ static int read_line(char *buf, size_t size)
             return -1;
         }
         if (got == 0) {
-            return len > 0 ? 0 : -1;
+            if (len == 0 && !over) {
+                return -1;
+            }
+            break;
         }
         if (c == '\n' || c == '\r') {
             break;
@@ -156,7 +150,7 @@ static int read_line(char *buf, size_t size)
 }
 
 /**
- * Close every descriptor a login should not hand on. Returns nothing.
+ * Close every open descriptor above standard error before changing identity.
  *
  * The three standard ones are the session's terminal and stay. Anything else
  * open here was opened by whatever ran before this program, and an account that
@@ -253,6 +247,7 @@ static void become(const struct passwd *pw)
 
 /**
  * Ask who is there until somebody proves it, then become them.
+ * Perform a dummy SHA-512 comparison when no passwd entry exists.
  */
 int main(void)
 {
@@ -281,19 +276,9 @@ int main(void)
         if (pwauth_read_password("Password: ", password, sizeof(password)) != 0) {
             return 1;
         }
-        /* The account is looked up whether or not the name is one, and the
-         * answer is the same either way: a refusal that came faster or read
-         * differently for an unknown name would tell whoever is at the console
-         * which accounts exist. */
         pw = getpwnam(name);
         proved = pwauth_verify(name, password);
         if (!pw) {
-            /* The same work, so the same time. `pwauth_verify` returns without
-             * hashing when no account answers to the name, and SHA-512 crypt is
-             * the whole cost of this loop, so a refusal that skipped it would
-             * come back a hundred times faster and tell whoever is at the
-             * console which accounts exist. The answer is discarded; the cost
-             * is the point. */
             (void)pwauth_check(LOGIN_DUMMY_HASH, password);
         }
         memset(password, 0, sizeof(password));

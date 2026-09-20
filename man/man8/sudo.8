@@ -29,10 +29,13 @@ Blank lines and lines beginning with
 are ignored.
 The check uses the caller's real user ID, which the caller cannot forge.
 A missing or unreadable file permits no one.
+Lines longer than 127 bytes before the newline are rejected in full;
+a continuation of a comment cannot authorize a user.
 .Pp
 For a permitted caller,
 .Nm
-assumes full root identity through its saved ID and executes
+closes descriptors 3 through 1023 before changing identity,
+assumes full root identity through its saved ID, and executes
 .Ar COMMAND
 by its explicit path, passing the remaining arguments to it.
 The command receives a clean environment containing only

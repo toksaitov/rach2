@@ -25,19 +25,79 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 #define SUDOERS "/etc/sudoers"
 
-/* Above the kernel's per-process descriptor cap (MAX_FDS is 16); closing up to
- * here covers every descriptor the caller could have left open. */
-#define MAX_FD 64
+/* Rach2 permits descriptors 0 through 1023. */
+#define MAX_FD 1024
 
 /* A fixed, minimal environment for the command: never the caller's, which a
  * setuid program cannot trust. */
 static char *const clean_env[] = {(char *)"PATH=/bin:/usr/bin", (char *)"HOME=/root", NULL};
 
-/* True if `uid` appears on its own line in /etc/sudoers (decimal, `#` comments
- * and blank lines ignored). A missing or unreadable file permits no one. */
+/**
+ * Read one line into `line`, returning its length, -1 at the end, or -2 for a
+ * line this reader refuses: one with a NUL byte or longer than the buffer.
+ */
+static int sudoers_line(FILE *f, char *line, size_t size)
+{
+    size_t len = 0;
+    int c, bad = 0;
+
+    while ((c = fgetc(f)) != EOF && c != '\n') {
+        if (c == 0 || len == size - 1) {
+            bad = 1;
+        } else {
+            line[len++] = (char)c;
+        }
+    }
+    if (ferror(f) || (c == EOF && len == 0 && !bad)) {
+        return -1;
+    }
+    if (bad) {
+        return -2;
+    }
+    line[len] = '\0';
+    return (int)len;
+}
+
+/**
+ * Return whether `line` names `uid` and nothing else.
+ *
+ * A line is the uid in decimal with space around it and nothing more, so a
+ * uid written inside a comment or beside another word permits nobody.
+ */
+static int line_names_uid(const char *line, unsigned long uid)
+{
+    const char *s = line;
+    char *end;
+    unsigned long v;
+
+    while (*s == ' ' || *s == '\t') {
+        s++;
+    }
+    if (*s < '0' || *s > '9') {
+        return 0;
+    }
+    errno = 0;
+    v = strtoul(s, &end, 10);
+    if (errno == ERANGE || end == s) {
+        return 0;
+    }
+    while (*end == ' ' || *end == '\t') {
+        end++;
+    }
+    return *end == '\0' && v == uid;
+}
+
+/**
+ * Return 1 when a complete line of /etc/sudoers names `uid` and nothing else.
+ *
+ * Blank lines and comments are skipped, and a line this reader refuses is
+ * skipped rather than read in part. A missing or unreadable file permits no
+ * one.
+ */
 static int permitted(unsigned long uid)
 {
     FILE *f = fopen(SUDOERS, "r");
@@ -47,22 +107,16 @@ static int permitted(unsigned long uid)
     if (!f) {
         return 0;
     }
-    while (fgets(line, sizeof(line), f)) {
-        char *s = line;
-        char *end;
-        unsigned long v;
+    for (;;) {
+        int len = sudoers_line(f, line, sizeof(line));
 
-        while (*s == ' ' || *s == '\t') {
-            s++;
+        if (len == -1) {
+            break;
         }
-        if (*s == '#' || *s == '\n' || *s == '\0') {
+        if (len == -2) {
             continue;
         }
-        v = strtoul(s, &end, 10);
-        while (*end == ' ' || *end == '\t' || *end == '\n') {
-            end++;
-        }
-        if (end != s && *end == '\0' && v == uid) {
+        if (line_names_uid(line, uid)) {
             ok = 1;
             break;
         }
@@ -71,6 +125,9 @@ static int permitted(unsigned long uid)
     return ok;
 }
 
+/**
+ * Close every open descriptor above standard error before changing identity.
+ */
 int main(int argc, char **argv)
 {
     unsigned long ruid = (unsigned long)getuid();
@@ -86,8 +143,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Nothing the caller left open should reach the root command; close every
-     * descriptor above the standard three. */
     for (fd = 3; fd < MAX_FD; fd++) {
         close(fd);
     }

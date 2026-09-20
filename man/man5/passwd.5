@@ -69,6 +69,9 @@ group ID, and the member list.
 Project credential writers create
 .Pa /etc/.pwlock
 with mode 0600 and record their process ID in it.
+A valid lock contains one positive decimal PID of at most nine digits
+followed only by spaces, tabs, carriage returns, or newlines.
+Validation reads the complete file and rejects embedded NUL bytes.
 They do not remove a lock left by another writer, even if that process
 has died.
 After a killed writer, root removes the abandoned lock with:
@@ -80,6 +83,17 @@ is written to
 .Pa FILE.tmp.PID
 and renamed over the original.
 Readers take no lock and see either complete version of the file.
+Failure before rename leaves the target unchanged and attempts to remove
+the temporary file.
+A failed PID write likewise attempts to remove the new lock.
+Removal errors report the file requiring manual cleanup.
+Transaction release retries temporary-file removal and returns failure
+if removal still fails.
+.Pp
+Immediate exit, SIGKILL, CPU faults, and musl-reserved signals 32 through 34
+can bypass cleanup.
+Release checks the recorded PID before unlinking the lock; manual removal
+and replacement between the check and unlink can still remove a successor's lock.
 .Pp
 The project
 .Xr adduser 8

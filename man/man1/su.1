@@ -81,7 +81,7 @@ The program holds no credential lock.
 .Pp
 After authentication,
 .Nm
-closes descriptors 3 through 63, clears supplementary groups,
+closes every descriptor above standard error through 1023, clears supplementary groups,
 sets the group ID, and sets the user ID, in that order.
 In login mode it then enters the target's home directory;
 a failure is fatal.
