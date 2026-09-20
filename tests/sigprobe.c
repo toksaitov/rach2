@@ -32,7 +32,8 @@ typedef unsigned int size_t;
 #define SIGUSR1 10
 #define SIGTERM 15
 
-#define SA_RESTORER 0x04000000u
+#define SA_RESTORER  0x04000000u
+#define SA_RESETHAND 0x80000000u
 
 #define SIG_BLOCK   0
 #define SIG_UNBLOCK 1
@@ -143,16 +144,21 @@ static void forge_handler(int sig)
     *SAVED_GS_FROM_ARG(&sig) = BAD_SELECTOR;
 }
 
-static void install(int signo, void (*h)(int))
+static void install_with(int signo, void (*h)(int), unsigned long extra)
 {
     struct k_sigaction ka;
 
     ka.handler = h;
-    ka.flags = SA_RESTORER;
+    ka.flags = SA_RESTORER | extra;
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
     check(syscall4(SYS_RT_SIGACTION, signo, (int)(size_t)&ka, 0, 8) == 0, "rt_sigaction");
+}
+
+static void install(int signo, void (*h)(int))
+{
+    install_with(signo, h, 0);
 }
 
 void _start(void)
@@ -202,6 +208,15 @@ void _start(void)
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
     check(forge_ran == 1, "the forging handler ran");
     check(syscall1(SYS_GETPID, 0) > 0, "the machine survives a forged selector in the frame");
+
+    /* 5. A one-shot handler runs once. `SA_RESETHAND` puts the disposition
+       back for the next signal, not for this one: a delivery that entered the
+       disposition it had just cleared would jump to address zero. */
+    install_with(SIGUSR1, usr1_handler, SA_RESETHAND);
+    handler_ran = 0;
+    handler_sig = 0;
+    syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
+    check(handler_ran == 1 && handler_sig == SIGUSR1, "a one-shot handler runs on its signal");
 
     if (fails == 0) {
         puts("SIGPROBE OK");

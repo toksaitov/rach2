@@ -2250,6 +2250,7 @@ struct sig_frame {
  */
 static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *sa)
 {
+    uint32_t handler;
     struct sig_frame frame;
     uint32_t sp = tf->user_esp;
     uint32_t frame_addr;
@@ -2289,12 +2290,15 @@ static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *s
     newblock &= ~KSIG_UNCATCHABLE;
     current_proc->sig_blocked = newblock;
 
+    /* The handler this delivery enters, taken before `SA_RESETHAND` puts the
+     * disposition back: the reset is for the next signal, not for this one. */
+    handler = sa->handler;
     if (sa->flags & SA_RESETHAND) {
         sa->handler = KSIG_DFL; /* one-shot */
     }
 
     /* Enter the handler: eip = handler, esp = frame (args just above it). */
-    tf->eip = sa->handler;
+    tf->eip = handler;
     tf->user_esp = frame_addr;
     return 0;
 }
