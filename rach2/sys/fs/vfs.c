@@ -856,7 +856,8 @@ int vfs_device_holds(block_device_t *dev)
         }
         /* The mount itself is one hold, and each description, working
          * directory, covering mount and operation in flight on it is
-         * another; the last of them is what an unmount waits for. */
+         * another. An unmount waits out the operations in flight and refuses
+         * with EBUSY while anything else still holds it. */
         held += 1 + (int)mounts[i]->refs + (int)mounts[i]->inprogress;
     }
     return held;

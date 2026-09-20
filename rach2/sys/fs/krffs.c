@@ -60,7 +60,9 @@ static void _krffs_strncpy(char *dest, const char *src, uint32_t n)
  * The memory backend: the image is mapped and one memcpy reaches it.
  *
  * A root is mounted this way, whether it is a Multiboot module in place or a
- * disk region the page-cache window maps, so neither read nor write can fault.
+ * disk region the page-cache window maps. The window is demand-paged, so a
+ * copy through it can take a fault that the page cache fills; what it cannot
+ * do is take a fault the kernel has no handler for.
  */
 
 static int krffs_memory_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
@@ -403,18 +405,22 @@ uint64_t krffs_max_steps(krffs_mount_t *mount)
  *
  * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for
  * the root, whose own node is the first one and has no parent reference). A
- * directory node's id is mix(parent_id, name), unique because sibling names
- * are unique, so children reference it unambiguously. Resolution matches
- * each path component by (name, parent_id), descending only into
- * directories. Regular files' ids are never referenced, so they keep the
- * legacy DJB(name) value for compatibility.
+ * directory node's id is mix(parent_id, name), so children reference it.
+ * Two different names can mix to one id, since the mix goes through a 32-bit
+ * hash of the name, and two directories with one id would share their
+ * children; mkdir looks for the id before it makes the directory and refuses
+ * the second name. Resolution matches each path component by (name,
+ * parent_id), descending only into directories. Regular files' ids are never
+ * referenced, so they keep the legacy DJB(name) value for compatibility.
  */
 
 /**
- * Combine a parent directory id and a child name into a unique node id.
+ * Combine a parent directory id and a child name into a node id.
  *
- * FNV-1a style mixing. Never returns 0, which is reserved for the root's
- * logical id (KRFFS_ROOT_ID).
+ * FNV-1a style mixing over the name's DJB hash. Never returns 0, which is
+ * reserved for the root's logical id (KRFFS_ROOT_ID). The name goes in as a
+ * 32-bit hash, so two names can give one id; `krffs_id_taken` is what keeps
+ * two directories from holding it at once.
  */
 static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
 {
@@ -1152,12 +1158,14 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
              * after the type that publishes a node. A stop between the two
              * leaves one name on two nodes, which the check resolves, and
              * never leaves the file with neither. */
-            /* The old node must go: two nodes with one name is a state the
-             * check resolves at the next mount, but a running kernel would
-             * walk to the old one and read what the file used to be, so the
-             * caller is told this did not work. */
-            if (moved != KRFFS_NO_NODE && krffs_remove_at(mount, offset) != 0) {
-                return KRFFS_NO_NODE;
+            /* The old node must go. A removal that fails may have marked it
+             * free already, so the caller is sent to the new node either way:
+             * the copy is complete and published there, and an old node still
+             * reserved is a duplicate the check resolves at the next mount.
+             * Sending the caller back to the old offset is what must not
+             * happen, since that offset may be inside a free node now. */
+            if (moved != KRFFS_NO_NODE) {
+                (void)krffs_remove_at(mount, offset);
             }
             return moved;
         }
@@ -1581,6 +1589,34 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_
  * Returns 0 on success, -1 if the parent directory is missing or the name is
  * already taken.
  */
+/**
+ * Whether a directory on the medium already has the logical id `id`.
+ *
+ * Two names can mix to one id. A second directory with a taken id would share
+ * its children with the first, since a child names its parent by id alone, so
+ * the creation is refused instead.
+ */
+static int krffs_id_taken(krffs_mount_t *mount, uint64_t id)
+{
+    uint64_t scan = 0;
+    uint64_t steps = 0;
+    uint64_t bound = krffs_max_steps(mount);
+    krffs_brief_t entry;
+
+    do {
+        if (krffs_brief(mount, scan, &entry) != 0) {
+            return 0;
+        }
+        if (entry.type == KRFFS_RESERVED_NODE && KRFFS_IS_DIR(entry.mode) && entry.id == id &&
+            krffs_has_name(mount, scan)) {
+            return 1;
+        }
+        scan = krffs_step(mount, scan, entry.size);
+    } while (scan != 0 && ++steps < bound);
+
+    return 0;
+}
+
 int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
 {
     uint64_t node;
@@ -1604,14 +1640,18 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
         return -1;
     }
 
+    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {
+        return -1;
+    }
+
     node = krffs_allocate_at(mount, 0, KRFFS_NO_NODE);
     if (node == KRFFS_NO_NODE) {
         return -1;
     }
 
-    /* A directory has its name, the S_IFDIR mode, an empty body, and a
-     * unique id (mix of parent and name) that its children reference as their
-     * parent_id. */
+    /* A directory has its name, the S_IFDIR mode, an empty body, and an id
+     * (the mix of parent and name, checked free above) that its children
+     * reference as their parent_id. */
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     rc |= krffs_put_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
@@ -1736,7 +1776,8 @@ int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index, cha
 }
 
 /**
- * Free every orphan left on the medium by a crash. Returns how many it reaped.
+ * Free every orphan left on the medium by a crash. Returns how many it freed;
+ * one a write refused is left where it is and counted as none.
  *
  * An orphan is a reserved node no path names, kept alive only by the
  * descriptors holding it, and freed by the last close. A crash between the two
@@ -1783,9 +1824,10 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
             if (krffs_brief(mount, previous, &before) == 0 && before.type == KRFFS_FREE_NODE) {
                 merged = previous;
             }
-            krffs_remove_at(mount, node);
-            reaped++;
-            node = merged; /* free; the step below advances past it */
+            if (krffs_remove_at(mount, node) == 0) {
+                reaped++;
+                node = merged;
+            }
             if (krffs_brief(mount, node, &head) != 0) {
                 break;
             }
@@ -2462,12 +2504,12 @@ uint32_t krffs_get_file_size(const char *path)
 /**
  * Resize the file at `path` to `new_size` bytes, zero-filling any growth.
  *
- * A relocation cannot reach a descriptor through this call: growth is the only
- * thing a resize ever moves a node for, and every caller in the tree truncates
- * to zero (the O_TRUNC and creat paths, and the debug shell). A shrink keeps
- * the node where it is, so the holders the syscall layer tracks stay valid. A
- * future caller that grows a file here would have to repoint them, the way the
- * write path does.
+ * Growth is the only thing a resize ever moves a node for, and this call
+ * reports status alone, so a caller that may grow a file looks the node up
+ * again and repoints its holders; `kfs_truncate_locked` in the VFS does
+ * exactly that for `ftruncate`. The callers that truncate to zero, the
+ * O_TRUNC and creat paths and the debug shell, have nothing to repoint: a
+ * shrink keeps the node where it is.
  */
 int krffs_truncate(const char *path, uint32_t new_size)
 {

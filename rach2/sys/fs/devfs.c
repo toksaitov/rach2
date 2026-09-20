@@ -390,8 +390,10 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
  * the returned offset and its state is unknown: the block interface answers
  * with zero or an errno and cannot report a partial command, while the ATA
  * driver writes sector by sector inside one and can fail after several have
- * gone. That batch is `RAW_BATCH_SECTORS` sectors, or fewer if it was the last
- * one the request had room for. Everything past it was never attempted. A
+ * gone. That batch is at most `RAW_BATCH_SECTORS` sectors, and fewer when the
+ * device's own request limit is lower, when the static buffer was taken
+ * because the pool was out, or when it was the last batch the request had
+ * room for. Everything past it was never attempted. A
  * caller continues by writing again from the returned offset, which covers the
  * unknown batch as well as the rest. Batching widened that unknown range from
  * the single sector it used to be; narrowing it back would take a block
@@ -1609,6 +1611,15 @@ void devfs_disk_withdraw(void)
     }
 }
 
+/**
+ * Publish disk `d`: `/dev/diskN` over the whole medium, and `/dev/diskNp1`
+ * upward over each partition the table described.
+ *
+ * The whole node is published whatever the table said, because a medium with
+ * no table at all is a volume in its own right and is mounted through that
+ * node; one with a table is read through it as well, which is how a partition
+ * table is inspected without mounting anything.
+ */
 void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
 {
     if (!d || window_sectors == 0) {
@@ -1707,15 +1718,7 @@ void devfs_grubcore_publish(struct block_device *backing)
     grubcore.present = 1;
 }
 
-/**
- * Publish the stick numbered `n`: `/dev/usbN` over the whole medium, and
- * `/dev/usbNp1` upward over each partition the table described.
- *
- * The whole node is published whatever the table said, because a stick with
- * no table at all is a volume in its own right and is mounted through that
- * node; a stick with a table is read through it as well, which is how a
- * partition table is inspected without mounting anything.
- */
+/** Whether the description `e` names one of the raw whole-disk windows. */
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     const struct devfs_entry *dev;

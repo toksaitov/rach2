@@ -165,7 +165,8 @@ static struct ext2_mount *em_of(struct vfs_mount *mnt)
 
 /**
  * Copy `len` bytes at byte offset `off` of the volume into `dst`, one cache
- * block at a time. The volume is bounded to 16 GiB by the constructor.
+ * block at a time. The offset is 64 bits, so the volume's size is the block
+ * layer's business and not this reader's.
  */
 static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t len)
 {
@@ -905,7 +906,9 @@ static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 /* ---- the writer ---- */
 
 /*
- * Every metadata write goes through `bcache_write` in the order below, and
+ * Every metadata write goes out in the order below, through `bcache_write`
+ * outside a batch and through `bcache_dirty_ordered` inside one, where the
+ * batch's own end writes it, and
  * a file's bytes go through `bcache_dirty` and are synced before a size
  * that covers them is written. The rules, from `ext2.Readme.md`: an inode
  * is freed by writing it zeroed with its deletion time before its bitmap
@@ -1079,7 +1082,8 @@ static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
     return write_bytes(em, at, raw, sizeof(raw), !em->batch);
 }
 
-/* The primary descriptor of group `g`, written through. */
+/* The primary descriptor of group `g`, written through, or left for the
+   batch to write when one is open. */
 static int gd_store(struct ext2_mount *em, uint32_t g)
 {
     uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
@@ -1193,7 +1197,8 @@ static int sb_store(struct ext2_mount *em)
     return write_bytes(em, 1024 + 58, raw, 2, 1);
 }
 
-/* One bit of a bitmap block, read or written through. */
+/* One bit of a bitmap block, read through, and written through or left for
+   the batch when one is open. */
 static int bit_get(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int *out)
 {
     uint8_t byte;
@@ -2311,8 +2316,10 @@ out:
         (void)batch_end(em); /* a failure inside the batch: what it marked still goes out */
     }
     vfs_ns_unlock(mnt);
-    /* Bytes in the cache that no size covers are not written: a failure
-     * anywhere is the error, never a count. */
+    /* A failure anywhere is the error, never a count. The batch above still
+     * ends, so bytes it marked reach the disk past a size that covers them;
+     * they are unreachable through the inode and the next write overwrites
+     * them. */
     return rc != 0 ? rc : (int32_t)count;
 }
 
