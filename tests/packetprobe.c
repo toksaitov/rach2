@@ -812,6 +812,16 @@ void _start(void)
         for (i = 0; i < sizeof(sll); i++) {
             ((uint8_t *)&sll)[i] = 0xa5;
         }
+        /* Cleared first, so every field below is the kernel's answer and not
+           what this program put there before the bind. */
+        {
+            unsigned int z;
+            char *p = (char *)&sll;
+
+            for (z = 0; z < sizeof(sll); z++) {
+                p[z] = 0;
+            }
+        }
         senderlen = sizeof(sll);
         args[0] = (uint32_t)arp_fd;
         args[1] = (uint32_t)&sll;

@@ -518,6 +518,13 @@ static const struct disk_node *disk_node_of_fd(const fd_entry_t *e)
     return e->dev ? disk_node_of(e->dev) : 0;
 }
 
+/**
+ * The window a node names: the whole medium, or one of its partitions.
+ *
+ * `node` is the caller's to check; every caller of this that took it from a
+ * descriptor answers `ENOTTY` or `EIO` for a descriptor that names no node.
+ */
+
 static struct disk_window *disk_node_window(const struct disk_node *node)
 {
     if (node->part == 0) {
@@ -532,8 +539,12 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
 static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     const struct disk_node *node = disk_node_of_fd(e);
-    struct disk_window *w = disk_node_window(node);
+    struct disk_window *w;
 
+    if (!node) {
+        return -EIO;
+    }
+    w = disk_node_window(node);
     if (!w->present) {
         return -EIO; /* a stick pulled out from under the reader */
     }
@@ -570,6 +581,9 @@ static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t co
 {
     const struct disk_node *node = disk_node_of_fd(e);
 
+    if (!node) {
+        return -EIO;
+    }
     return raw_window_write(disk_node_window(node), e, buf, count);
 }
 #else
@@ -723,7 +737,9 @@ static void dev_disk_close(fd_entry_t *e)
     const struct disk_node *node = disk_node_of_fd(e);
 
     raw_close(e);
-    node->disk->opens--;
+    if (node) {
+        node->disk->opens--;
+    }
 }
 
 /*
