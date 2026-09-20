@@ -231,8 +231,13 @@ static void writer(const char *path)
 /**
  * Count completed files since the preceding loaded stage.
  *
- * Take the count when the console work ends. Waiting for the first file
- * afterwards would let a writer that made no progress in the stage pass.
+ * The count is taken when the stage's console work ends and is printed for the
+ * record, not judged. How many 256 KiB files a writer finishes inside a stage
+ * is that stage's length and the machine's rate: the same stage measured 4720
+ * ms alone and 930 ms in a set of twenty machines, and finished one file in
+ * the first and none in the second. What the scheduler owes a woken writer is
+ * a count, the dispatches it waits, and `tests/host/sched_hosttest.c` holds
+ * that bound where no other machine's load can move it.
  */
 static void writer_progressed(const char *stage)
 {
@@ -252,9 +257,6 @@ static void writer_progressed(const char *stage)
     print(": ");
     print_num(n);
     print("\n");
-    if (n == 0) {
-        fail("no writer completion in the loaded stage");
-    }
 }
 
 static void start_load(void)
