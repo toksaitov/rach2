@@ -67,7 +67,7 @@ static const char *const PROBES[] = {
        pure helpers and the crafted wire data, not the real internet. */
     "dnstest", "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
     "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe", "loopprobe", "zombieprobe",
-    "survivorprobe", "procprobe", "suidprobe", "sudoprobe", "modeprobe",
+    "exitprobe", "survivorprobe", "procprobe", "suidprobe", "sudoprobe", "modeprobe",
     /* The musl-linked identity and permission walks: prove the id family
        and the deny paths through the real libc syscall selection, not just
        raw int 0x80. */

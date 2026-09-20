@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 21, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -16,6 +16,10 @@ command installs Rach2 on a disk of the running machine.
 It runs from the recovery system on the install stick.
 The stick contains a whole disk image and a manifest giving its name,
 length, and SHA-256.
+Its exFAT volume also contains
+.Pa rach2-metal-disk.ext2
+for root updates, with room beside the images for saved copies of the
+64 MiB boot and recovery partitions.
 The manifest identifies the stick, regardless of its position among
 the machine's disks.
 The
@@ -180,10 +184,20 @@ A failure before the image write stops the run without starting that write.
 Boot the install stick, log in at the console as root, and run:
 .Dl rach2-install
 .Pp
-From a host, update a machine running its own recovery entry, with the
-new image already at
-.Pa /tmp/root.ext2 :
-.Dl ssh -i $RKEY root@ADDRESS 'rach2-install --update /tmp/root.ext2 /dev/disk0'
+From recovery, identify the target disk and the stick in
+.Pa /proc/disk .
+With the target at disk0 and the install stick at disk1, mount the stick
+and use its separate root image:
+.Bd -literal -offset indent
+mkdir -p /stick
+mount -t exfat /dev/disk1p2 /stick
+rach2-install --update /stick/rach2-metal-disk.ext2 /dev/disk0
+umount /stick
+.Ed
+Save the sectors the procedure will overwrite before running the update.
+The space reserved for the boot and recovery copies does not cover a
+backup of a grown root.
+The RAM root has no room for the 1 GiB update image.
 .Sh SEE ALSO
 .Xr disk 7 ,
 .Xr recovery 7 ,

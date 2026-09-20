@@ -46,15 +46,15 @@ $(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIX
 	sh tools/image/mkstick.sh build/images/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 
 # The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
-# by an exFAT volume carrying the sealed disk image and the manifest naming its
-# length and hash. It is what a person boots to install this system. The stick
+# by an exFAT volume with the sealed disk, its manifest, the root update image
+# and 256 MiB for metadata and saved sectors. The stick
 # takes the recovery ISO's name with it: a stick whose recovery answers this
 # tree's key is not the stick anybody else runs.
 INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick$(RECOVERY_KEY_TAG).img
 rach2-install-stick: $(INSTALL_STICK)
-$(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) tools/image/mkinstallstick.sh \
+$(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) $(SEALED_EXT2) mk/images.mk tools/image/mkinstallstick.sh \
                   $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	@sh tools/image/keyname.sh $@
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(SEALED_DISK) $@ \
-	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(SEALED_EXT2) 256
 .PHONY: rach2-stick-image rach2-install-stick

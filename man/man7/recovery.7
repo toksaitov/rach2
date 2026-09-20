@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 21, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -73,6 +73,11 @@ and run
 .It Root file system
 From recovery, run
 .Ql rach2-install --update IMAGE /dev/diskN .
+Mount the install stick's exFAT partition and use its
+.Pa rach2-metal-disk.ext2
+as
+.Ar IMAGE ;
+the RAM root cannot store this 1 GiB file.
 This preserves the accounts and the SSH policy, and the host keys when the
 old root could be read; the recovery archive holds no host keys.
 Recovery remains the saved default until the trial root has been verified;
@@ -90,6 +95,10 @@ A torn write is repaired from the install stick.
 The machine's disk stays in its bay.
 These procedures run over SSH or at the console.
 Do not make a write that cannot be undone from the stick.
+The install stick has room beside its two images for saved copies of
+the 64 MiB boot and recovery partitions.
+This reserve does not cover a backup of a grown root.
+Check the space required by the actual save set before writing.
 .Ss Recovery menu
 .Xr rach2-recover 8
 offers these choices:
