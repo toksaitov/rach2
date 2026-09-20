@@ -1,6 +1,6 @@
 # Mounts and the VFS
 
-`vfs.h` and `vfs.c` are the mount table, the resolver, and the operation interface every mounted file system answers. Three mounts are permanent: the root, which is KRFFS through the adapter at the end of `vfs.c` or another type placed by the boot path; and `/dev` and `/proc`, answered by `synthfs.c`. `vfat` (`fat32.c`, [fat32.Readme.md](fat32.Readme.md)), `exfat` (`exfat.c`, [exfat.Readme.md](exfat.Readme.md)), `ext2` (`ext2.c`, [ext2.Readme.md](ext2.Readme.md)) and `krffs` (`krffsmount.c`, [krffs.Readme.md](krffs.Readme.md)) are the types `mount(2)` places. A file system `mount(2)` installs, and an ext2 root, read and write the disk through the buffer cache; a KRFFS root on a disk reads and writes through the page cache instead (`bcache.h`), which goes through the block request described in [block/Readme.md](../block/Readme.md).
+The virtual file system, the VFS, is the mount table, the path resolver and the operation interface every mounted file system answers, declared in `vfs.h` and implemented in `vfs.c`. Three mounts are permanent: the root, which is KRFFS through the adapter at the end of `vfs.c` or another type placed by the boot path; and `/dev` and `/proc`, answered by `synthfs.c`. `vfat` (`fat32.c`, [fat32.Readme.md](fat32.Readme.md)), `exfat` (`exfat.c`, [exfat.Readme.md](exfat.Readme.md)), `ext2` (`ext2.c`, [ext2.Readme.md](ext2.Readme.md)) and `krffs` (`krffsmount.c`, [krffs.Readme.md](krffs.Readme.md)) are the types `mount(2)` places. A file system `mount(2)` installs, and an ext2 root, read and write the disk through the buffer cache; a KRFFS root on a disk reads and writes through the page cache instead (`bcache.h`), which goes through the block request described in [block/Readme.md](../block/Readme.md).
 
 ## The mount table
 
@@ -78,22 +78,7 @@ The second is a write that fails while the device is still there. A write that f
 
 ## Limits
 
-The counts here come from the heap and not from a table. The mount table starts at eight slots
-and doubles when they are taken; the synthetic nodes, the nodes of every
-placed type, the KRFFS volume records and their per-open records all come from
-the kernel heap, so what bounds them is memory, and a mount or an open the
-heap cannot serve answers `ENOMEM`. What remains fixed is the shape of a path
-and the rules a caller is held to: a target path of 63 bytes, a name of 255, a
-followed link's target and the rest of its path in 511, forty links along one
-path, eight claims in `devfs.c`, four buffers held per process, and a buffer
-the cache makes as it needs them, up to the smaller of half of what the two
-caches may hold under memory pressure and half of the heap's pages, and never
-to a limit below sixteen. The block request
-below is sixteen live requests unless `rach2.blockpool` says otherwise, of
-at most 2048 sectors and of what a device's own limit allows, each given four
-deadline periods of thirty seconds, as [`block/Readme.md`](../block/Readme.md)
-describes. `dev-log/53-audit/bounds.md` is the whole inventory, with each
-bound's class and reason.
+The counts here come from the heap and not from a table. The mount table starts at eight slots and doubles when they are taken; the synthetic nodes, the nodes of every placed type, the KRFFS volume records and their per-open records all come from the kernel heap, so what bounds them is memory, and a mount or an open the heap cannot serve answers `ENOMEM`. What remains fixed is the shape of a path and the rules a caller is held to: a target path of 63 bytes, a name of 255, a followed link's target and the rest of its path in 511, forty links along one path, eight claims in `devfs.c`, four buffers held per process, and a buffer the cache makes as it needs them, up to the smaller of half of what the two caches may hold under memory pressure and half of the heap's pages, and never to a limit below sixteen. The block request below is sixteen live requests unless `rach2.blockpool` says otherwise, of at most 2048 sectors and of what a device's own limit allows, each given four deadline periods of thirty seconds, as [`block/Readme.md`](../block/Readme.md) describes. `dev-log/53-audit/bounds.md` is the whole inventory, with each bound's class and reason.
 
 ## What is absent
 

@@ -41,7 +41,7 @@ Staged nodes use the fixed time one second after the Unix epoch, and the root is
 
 `manifest_deps.sh MANIFEST` prints the host paths a manifest stages, which the image rules take as prerequisites, so that a rebuilt program rebuilds the image that carries it; an optional file that is absent is left out. A staged directory is printed as the files under it, since a directory keeps its time when a program in it is relinked, and since the source trees a `tree` line stages, `utils`, `rach2` and `ish`, are also the names of phony targets, which make holds to be out of date every time.
 
-`stageimage.krffs MANIFEST --tree DIR` materialises the manifest into a host directory instead of an image: one host file or directory per node, every node at the fixed staged instant, and one line `node MODE UID GID PATH` on standard output for each, with the POSIX type bits in the mode; a directory a path passes through that no entry names is a node too, root's and 0755, so that the image does not keep the builder's identity and umask on it. A file is created exclusively and through no link, so a name staged twice is refused at the second. The directory must not exist, so that nothing a previous run left can end up in an image. `tools/image/mkext2.sh` hands the directory to `mke2fs` and the lines to `debugfs`, which sets the owners and the set-id bits a build that is not root cannot put on a host file.
+`stageimage.krffs MANIFEST --tree DIR` materialises the manifest into a host directory instead of an image: one host file or directory per node, every node at the fixed staged instant, and one line `node MODE UID GID PATH` on standard output for each, with the POSIX type bits in the mode; a directory a path passes through that no entry names becomes a node of its own, owned by uid 0 and gid 0 with mode 0755, so that the image does not keep the builder's identity and umask on it. A file is created exclusively and through no link, so a name staged twice is refused at the second. The directory must not exist, so that nothing a previous run left can end up in an image. `tools/image/mkext2.sh` hands the directory to `mke2fs` and the lines to `debugfs`, which sets the owners and the set-id bits a build that is not root cannot put on a host file.
 
 `mkimage.sh MANIFEST OUTPUT [SIZE_MB]` creates a whole-file RAM image. The default size is 10 MiB. It builds a temporary file, runs `mkfs.krffs` and `stageimage.krffs`, checks it, and renames it over the output only after every step succeeds.
 
@@ -55,10 +55,7 @@ The root Makefile owns the named image profiles and their dependencies. The root
 
 ## The format the tools and the kernel share
 
-The format itself, the order in which a change reaches the medium and what a
-check may repair are [the kernel's document](../rach2/sys/fs/krffs.Readme.md);
-what follows is what a host tool must know to write an image the kernel will
-mount. KRFFS v2 is a packed sequence of variable-size nodes. The last node wraps to the root, and each node stores its own size and the previous node's size. The three node types are root, free, and reserved. Reserved nodes represent files and directories.
+The format itself, the order in which a change reaches the medium and what a check may repair are [the kernel's document](../rach2/sys/fs/krffs.Readme.md); what follows is what a host tool must know to write an image the kernel will mount. KRFFS v2 is a packed sequence of variable-size nodes. The last node wraps to the root, and each node stores its own size and the previous node's size. The three node types are root, free, and reserved. Reserved nodes represent files and directories.
 
 Each node stores:
 
