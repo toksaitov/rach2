@@ -91,16 +91,23 @@ rm -rf build/tests/system/imagerace.d
 say "a file written below a staged directory does not put the image out of date: OK"
 
 # And the other half of entry 5 of milestone 50: a staged program rebuilt on
-# a built tree still restages its image, which is the whole reason the
-# staged paths are prerequisites. The probe is not touched: make is asked
-# what it would do if it had been, with `-W`, so the shared image stays up
-# to date for the suites that boot it beside this one, whose own make would
-# otherwise restage it in the moment the probe looked new.
-stale=$(MAKEFLAGS= make --no-print-directory -n -W build/tests/vmprobe "$TESTIMG" 2>&1 |
-        grep -E "mkimage\.sh" | grep -c "$TESTIMG")
-[ "$stale" = 1 ] || bad "$TESTIMG is not out of date after a program it stages was rebuilt"
+# a built tree still restages its image, which is the whole reason the staged
+# paths are prerequisites. `make -W` can no longer ask that of the shared
+# tree: a staged path now has a rule of its own that waits for its component
+# and makes make read the file's time again, and that second read takes back
+# the time `-W` supplied. What the production tree can still be asked is its
+# database, which says both halves of the arrangement: the image names the
+# program among its prerequisites, and the program waits for the component
+# that builds it. The behaviour itself, an edited probe reaching the image in
+# one `make`, is proved with a real build against a copy of these makefiles
+# by imagerace_probe.sh at the end of this suite.
+db=$(MAKEFLAGS= make --no-print-directory -p -n "$TESTIMG" 2>/dev/null)
+printf '%s\n' "$db" | grep -q "^build/tests/vmprobe: tests\$" ||
+    bad "a staged program does not wait for the component that builds it"
+printf '%s\n' "$db" | grep -q "^$TESTIMG:.* build/tests/vmprobe " ||
+    bad "$TESTIMG does not name a program it stages among its prerequisites"
 [ "$fails" = 0 ] || exit 1
-say "an image is out of date once a program it stages is rebuilt: OK"
+say "an image names the programs it stages, and each waits for its component: OK"
 
 # Source to image, end to end, in a tree of this suite's own: a program, a
 # manifest that stages it, and a makefile with the image rule in the shape
