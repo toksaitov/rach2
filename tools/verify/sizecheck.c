@@ -1,7 +1,8 @@
 /**
  * sizecheck: the size limits on functions, read from the source.
  *
- * Every function in the files given is measured four ways: the lines of
+ * Every function the first arm of each conditional defines is measured four
+ * ways: the lines of
  * its body, the parameters it takes, the deepest block nesting inside it,
  * and, when pmccabe's table is given, its cyclomatic complexity. A function
  * over a limit is a finding unless the reasons file has an entry for it:
@@ -10,6 +11,11 @@
  * function may not grow past the value it records, and an entry for a
  * function that is within the limit again is stale and reported, so the
  * file shrinks as the code does and never grows without a reason written.
+ *
+ * A file's text is read as one configuration, the first arm of every
+ * preprocessor conditional: the two arms of a `#ifdef` can each open a brace
+ * that a shared `#endif` closes, which a reader that took both could not
+ * balance. A function defined only in a later arm is therefore not measured.
  *
  * The parse relies on the house format: a definition's closing parenthesis
  * ends a line at column zero's statement and the next line opens the body
@@ -58,7 +64,7 @@ static int report;
 
 static long lim_lines = 100, lim_params = 6, lim_nesting = 4, lim_complexity = 25;
 
-/* pmccabe's table: one line per function, the modified count first. */
+/** pmccabe's table: one line per function, the modified count first. */
 struct complexity {
     char file[PATH_MAX_LEN];
     char name[NAME_MAX_LEN];
@@ -67,6 +73,14 @@ struct complexity {
 static struct complexity *complexities;
 static int ncomplexities;
 
+/**
+ * Reads the reasons file into `reasons`.
+ *
+ * A line is `FILE:FUNCTION MEASURE VALUE REASON`. The reason is what the
+ * entry is for, so an entry with no text after the value is refused, as is
+ * one this program cannot parse: an unreadable entry that let a function
+ * through would be a limit removed by accident.
+ */
 static void read_reasons(const char *path)
 {
     FILE *f = fopen(path, "r");
@@ -102,11 +116,26 @@ static void read_reasons(const char *path)
         r->file[colon - line] = '\0';
         memcpy(r->name, colon + 1, (size_t)(sp - colon - 1));
         r->name[sp - colon - 1] = '\0';
-        if (sscanf(sp + 1, "%15s %ld", r->measure, &r->value) != 2 ||
-            strlen(sp + 1) < strlen(r->measure) + 4) {
-            fprintf(stderr, "sizecheck: %s:%d: %s:%s: the measure, its value and a reason\n", path,
-                    lineno, r->file, r->name);
-            exit(2);
+        {
+            const char *why = sp + 1;
+            int fields = sscanf(why, "%15s %ld", r->measure, &r->value);
+
+            while (*why == ' ') {
+                why++;
+            }
+            why += strcspn(why, " "); /* past the measure */
+            while (*why == ' ') {
+                why++;
+            }
+            why += strcspn(why, " "); /* past the value */
+            while (*why == ' ') {
+                why++;
+            }
+            if (fields != 2 || *why == '\0' || *why == '\n') {
+                fprintf(stderr, "sizecheck: %s:%d: %s:%s: the measure, its value and a reason\n",
+                        path, lineno, r->file, r->name);
+                exit(2);
+            }
         }
         if (strcmp(r->measure, "lines") != 0 && strcmp(r->measure, "params") != 0 &&
             strcmp(r->measure, "nesting") != 0 && strcmp(r->measure, "complexity") != 0) {
@@ -156,7 +185,6 @@ static void read_pmccabe(const char *path)
         }
         memcpy(cx->file, where, (size_t)(paren - where));
         cx->file[paren - where] = '\0';
-        /* the name follows "(LINE): " in the line, after `where` */
         {
             const char *p = strstr(line, "): ");
             size_t n;
@@ -190,8 +218,10 @@ static long complexity_of(const char *file, const char *name)
     return -1;
 }
 
-/* A measured excess against the reasons: counted as a finding, or as an
-   excess the file allows. */
+/**
+ * A measured excess against the reasons: counted as a finding, or as an excess
+ * the file allows.
+ */
 static void judge(const char *file, const char *name, const char *measure, long value, long limit)
 {
     int i;
@@ -220,9 +250,11 @@ static void judge(const char *file, const char *name, const char *measure, long 
     findings++;
 }
 
-/* The code of one line with its comments and string contents removed, so a
-   brace or a comma inside them is not counted; `inc` carries a comment
-   across lines. */
+/**
+ * The code of one line with its comments and string contents removed, so a
+ * brace or a comma inside them is not counted. `inc` is non-zero while a
+ * block comment opened on an earlier line is still open.
+ */
 static void bare(const char *in, char *out, size_t cap, int *inc)
 {
     size_t i = 0, o = 0;
@@ -277,13 +309,17 @@ static int is_definition_end(const char *code)
     if (code[n - 1] == ')') {
         return 1;
     }
-    /* an attribute macro after the closing parenthesis */
     return strstr(code, ") K_NORETURN") != NULL;
 }
 
-/* The index of the buffered line a signature starts at: the nearest one
-   that begins at column zero, since clang-format indents a continuation.
-   -1 when the buffered lines do not end a definition. */
+/**
+ * The index of the buffered line a signature starts at: the nearest one that
+ * begins at column zero, since clang-format indents a continuation. -1 when
+ * the buffered lines do not end a definition.
+ *
+ * An attribute macro such as `K_NORETURN` may stand between the closing
+ * parenthesis and the body, so one is accepted there.
+ */
 static int signature_start(char lines[][LINE_MAX_LEN], int nprev)
 {
     int i;
@@ -299,8 +335,13 @@ static int signature_start(char lines[][LINE_MAX_LEN], int nprev)
     return isalpha((unsigned char)lines[i][0]) ? i : -1;
 }
 
-/* The parameters a list opened at `open` declares: the commas at its own
-   level plus one, or none for `()` and `(void)`. */
+/**
+ * The parameters a list opened at `open` declares: the commas at its own level
+ * plus one, or none for `()` and `(void)`.
+ *
+ * `(void)` alone is no parameter, while `(void *ctx)` is one, so the word is
+ * the empty list only where it ends the list rather than begins a type.
+ */
 static long count_params(const char *open)
 {
     const char *p;
@@ -320,8 +361,6 @@ static long count_params(const char *open)
     if (*p == ')') {
         return 0;
     }
-    /* `(void)` alone is no parameter; `(void *ctx)` is one, so the word has
-       to end the list rather than begin a type. */
     if (strncmp(p, "void", 4) == 0) {
         const char *q = p + 4;
 
@@ -335,11 +374,15 @@ static long count_params(const char *open)
     return commas + 1;
 }
 
-/* The parenthesis that opens the parameter list of `sig`: the last one at
-   depth zero whose own closing parenthesis ends the signature. An attribute
-   before the name, `static void __attribute__((noreturn)) f(int x)`, opens a
-   parenthesis of its own first, and a reader that took the first would call
-   the function `__attribute__` and count its own argument as the list. */
+/**
+ * The parenthesis that opens the parameter list of `sig`: the last one at
+ * depth zero whose own closing parenthesis ends the signature.
+ *
+ * An attribute before the name, `static void __attribute__((noreturn))
+ * f(int x)`, opens a parenthesis of its own first, and a reader that took the
+ * first would call the function `__attribute__` and count its own argument as
+ * the list.
+ */
 static char *declarator_paren(char *sig)
 {
     char *p, *last = 0;
@@ -358,8 +401,10 @@ static char *declarator_paren(char *sig)
     return last;
 }
 
-/* The name and the parameter count of the definition whose signature the
-   buffered lines end, or 0 when they do not end one. */
+/**
+ * The name and the parameter count of the definition whose signature the
+ * buffered lines end, or 0 when they do not end one.
+ */
 static int parse_signature(char lines[][LINE_MAX_LEN], int nprev, char *name, long *params)
 {
     char sig[SIG_MAX_LEN] = "";
@@ -394,10 +439,16 @@ static int parse_signature(char lines[][LINE_MAX_LEN], int nprev, char *name, lo
     return 1;
 }
 
-/* One configuration's text, as a compiler sees it: the first arm of every
-   conditional is taken and the rest dropped. The two arms of a `#ifdef` can
-   each open a brace a shared `#endif` closes, which a reader that took both
-   could not balance. This reads one directive and moves the state. */
+/**
+ * Moves the conditional state over one preprocessor directive.
+ *
+ * The first arm of every conditional is read and the later arms are dropped;
+ * no condition is tested. Reading every arm is not possible here: the arms of
+ * a `#ifdef` can open different numbers of braces, and a count over all of
+ * them ends a function's body in the wrong place.
+ *
+ * `skip` holds one flag per open conditional and `depth` the number open.
+ */
 static void conditional(const char *code, int *skip, int *depth)
 {
     const char *d = code + 1;
@@ -419,7 +470,9 @@ static void conditional(const char *code, int *skip, int *depth)
     }
 }
 
-/* Whether the lines here are in an arm this reading drops. */
+/**
+ * Whether the lines here are in an arm this reading drops.
+ */
 static int skipped(const int *skip, int depth)
 {
     int k;
@@ -432,8 +485,10 @@ static int skipped(const int *skip, int depth)
     return 0;
 }
 
-/* The braces of one body line: `depth` is the block depth after it and
-   `nesting` the deepest block the body has opened. */
+/**
+ * The braces of one body line: `depth` is the block depth after it and
+ * `nesting` the deepest block the body has opened.
+ */
 static void scan_body_line(const char *code, int *depth, int *nesting)
 {
     int i;
@@ -468,10 +523,18 @@ static void finish_function(const char *path, const char *name, long params, int
     }
 }
 
+/**
+ * Measures every function one file defines.
+ *
+ * The last `SIG_LINES` lines before a body are kept, since a signature can
+ * span several of them. A definition with a longer signature would be
+ * measured from the lines that are left, which is a different function, so
+ * the file is refused instead.
+ */
 static void check_file(const char *path)
 {
     FILE *f = fopen(path, "r");
-    static char lines[SIG_LINES][LINE_MAX_LEN]; /* the signature may span a few lines */
+    static char lines[SIG_LINES][LINE_MAX_LEN];
     char line[LINE_MAX_LEN], code[LINE_MAX_LEN];
     int inc = 0, nprev = 0, depth = 0, in_body = 0, body_lines = 0, nesting = 0, overlong = 0;
     int cond_depth = 0, cond_skip[COND_MAX];
@@ -520,9 +583,6 @@ static void check_file(const char *path)
             overlong = 0;
         } else {
             if (nprev == SIG_LINES) {
-                /* A definition whose signature is longer than the buffer
-                   would be measured from the lines that are left, which is
-                   a different function; it is refused instead. */
                 overlong = 1;
                 memmove(lines[0], lines[1], sizeof(lines[0]) * (SIG_LINES - 1));
                 nprev = SIG_LINES - 1;

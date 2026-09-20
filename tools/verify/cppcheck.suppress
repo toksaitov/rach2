@@ -68,3 +68,12 @@ unusedStructMember:*tests/system/fixtures/vfs_unmount.c
 # to such an array to one with `const` inside, so the parameter cppcheck asks
 # for would need a cast at every call.
 constParameter:*tools/verify/prosecheck.c
+
+# The budget test holds descriptors rather than reading them: the value of the
+# second socket is what keeps it drawn from the pool the test measures.
+unreadVariable:*tests/musl/budgetmusl.c
+
+# cppcheck's library marks raise() and abort() as never returning. abort()
+# does not return, and the `_exit` after it is there for a reader; raise() of
+# a blocked signal returns to its caller, which is the case the test covers.
+unreachableCode:*tests/musl/sigmusl.c

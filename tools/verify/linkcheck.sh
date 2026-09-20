@@ -7,9 +7,14 @@
 # A document that points at a file a commit moved is worse than one that says
 # nothing: a reader follows it and learns that the tree cannot be trusted.
 # URLs are left alone, since this runs with no network, and so is an anchor of
-# the form `L120`, which names a line and not a heading. `dev-log/` is
-# excluded: those records are history, and a path inside one is written as the
-# repository sees it rather than as a link from that directory.
+# the form `L120`, which names a line and not a heading. A link inside a code
+# span is an example of the form and not a link, so code spans are removed
+# first. `dev-log/` is excluded: those records are history, and a path inside
+# one is relative to the repository root rather than to the document.
+#
+# An anchor is a heading's text in lower case, with spaces turned to hyphens
+# and everything that is not a letter, a digit, a hyphen or an underscore
+# dropped.
 #
 # Usage: linkcheck.sh [FILE...]   (default: the in-house documents)
 #
@@ -38,8 +43,6 @@ for f in $files; do
         continue
     fi
     dir=$(dirname "$f")
-    # A link inside a code span is an example, not a link: `[text](target)`
-    # in this file's own description of the form would otherwise be one.
     # shellcheck disable=SC2016 # the backticks are Markdown, not a command
     sed 's/`[^`]*`//g' "$f" | grep -o '\[[^][]*\]([^()]*)' | sed 's/.*(\(.*\))/\1/' |
     while read -r target; do
@@ -56,9 +59,6 @@ for f in $files; do
         fi
         case "$anchor" in ''|L[0-9]*) continue ;; esac
         case "$path" in *.md) ;; *) continue ;; esac
-        # A heading makes an anchor of its text: lower case, spaces hyphens,
-        # and everything that is not a letter, a digit, a hyphen or an
-        # underscore dropped.
         if ! grep '^#' "$path" | sed 's/^#* *//' | tr '[:upper:]' '[:lower:]' |
              tr ' ' '-' | sed 's/[^a-z0-9_-]//g' | grep -qx -- "$anchor"; then
             echo "linkcheck: $f: $target has no heading '$anchor'" >> "$out"

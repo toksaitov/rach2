@@ -4,19 +4,26 @@
 # and not by the style suite, which stays about a minute.
 #
 #   1. GCC's -fanalyzer over the kernel and the guest programs, under
-#      -Werror, with -Wanalyzer-too-complex so a path the analyser gives up
-#      on is reported and not silently green: those are counted and listed
-#      by program point, not held against the build, since a dispatcher's
-#      call graph exceeds the analyser's budget by design. The allocators
-#      carry the malloc attributes and k_panic is noreturn (sys/lib/kdef.h),
-#      which is what lets it follow a block from kmalloc to kfree or to a
-#      leak.
-#   2. cppcheck at --check-level=exhaustive over the same two lists the style
-#      suite checks at the normal level, with the same suppressions.
+#      -Werror, with -Wanalyzer-too-complex so a path the analyser stops
+#      following is reported and not silently green: those are counted and
+#      listed by program point, not held against the build, since a
+#      dispatcher's call graph exceeds the analyser's budget by design. The
+#      allocators are declared with the malloc attributes and k_panic with
+#      noreturn (sys/lib/kdef.h), which is what lets it follow a block from
+#      kmalloc to kfree or to a leak.
+#   2. cppcheck at --check-level=exhaustive over the two lists
+#      tools/verify/srclists.sh writes, the ones the style suite checks at the
+#      normal level, with the same suppressions.
 #   3. clang-tidy's bugprone-* and misc-* checks and the cognitive
 #      complexity report over the kernel, advisory: the count and the log,
 #      never a verdict, since the checks overlap the two above and the
-#      complexity numbers are read by a person.
+#      complexity numbers are read by a person. clang-tidy takes a directory
+#      and reads compile_commands.json in it, so the kernel's own database is
+#      copied there and the host tests' commands for the same sources are not
+#      the ones it reads. Left out: misc-include-cleaner (header hygiene, no
+#      fault), the swappable parameters check (every pair of integers), and
+#      the reserved identifier check, which names the _NAME_H_ guards the
+#      tree requires.
 #   4. The linker's dead-code report: the kernel linked with function and
 #      data sections and --gc-sections, every section the linker dropped
 #      printed. The linker honours assembly references, which cppcheck's
@@ -56,13 +63,8 @@ hr "2/4 cppcheck at the exhaustive level"
 if [ "$fast" -eq 1 ]; then
     echo "  SKIP (--fast)"
 else
-    find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_asrcs.txt"
-    echo "$REPO/rach2/kernel.c" >>"$VDIR/_asrcs.txt"
-    {
-        find "$REPO/tools" -name '*.c' -o -name '*.h'
-        find "$REPO/tests/system" "$REPO/krffs" -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
-             -o \( -name '*.c' -o -name '*.h' \) -print
-    } 2>/dev/null | sort >"$VDIR/_ahostsrcs.txt"
+    . "$REPO/tools/verify/srclists.sh"
+    srclists "$REPO" "$VDIR" _a
     if cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,portability \
           --check-level=exhaustive --error-exitcode=2 \
           --suppress=missingInclude --suppress=missingIncludeSystem \
@@ -88,15 +90,9 @@ elif ! sh "$REPO/tools/dev/gen_compile_commands.sh" >"$VDIR/analyze_db.log" 2>&1
     echo "  FAIL: the compilation databases were not generated; see $VDIR/analyze_db.log"; fail=1
 else
     res=$(clang -print-resource-dir 2>/dev/null)
-    # clang-tidy takes a directory and reads compile_commands.json in it; the
-    # kernel's own database goes there, so the host tests' commands for the
-    # same sources are not the ones it picks.
     mkdir -p "$VDIR/tidy_db"
     cp "$REPO/build/compile_commands/rach2.json" "$VDIR/tidy_db/compile_commands.json"
     : >"$VDIR/analyze_tidy.log"
-    # Left out: misc-include-cleaner (header hygiene, no fault), the swappable
-    # parameters check (every pair of integers), and the reserved identifier
-    # check, which names the _NAME_H_ guards the tree requires.
     for f in $(make -s -C "$REPO/rach2" print-c-src); do
         clang-tidy -p "$VDIR/tidy_db" \
             --checks='-*,bugprone-*,misc-*,readability-function-cognitive-complexity,-misc-include-cleaner,-bugprone-easily-swappable-parameters,-bugprone-reserved-identifier' \

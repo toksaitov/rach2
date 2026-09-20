@@ -47,8 +47,8 @@ rach2/kernel.c:root_spec_matches complexity 31 a parser over an external format,
 
 rach2/sys/audio/audio_debug.c:audio_debug_handle_command complexity 36 a dispatcher, one arm per command, read as a table
 rach2/sys/audio/audio_debug.c:audio_debug_handle_command lines 132 a dispatcher, one arm per command, read as a table
-rach2/sys/audio/audio_debug.c:audio_run_write_test lines 110 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/audio_debug.c:audio_run_write_test nesting 5 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/audio_debug.c:audio_run_write_test lines 110 a test routine, one stage after another, read from the top
+rach2/sys/audio/audio_debug.c:audio_run_write_test nesting 5 a test routine, one stage after another, read from the top
 
 rach2/sys/audio/hda.c:hda_debug_dump lines 152 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_debug_dump_codec nesting 5 a hardware sequence, the registers written in the order the datasheet requires
@@ -72,7 +72,7 @@ rach2/sys/block/loop.c:loop_attach lines 136 one device operation, its steps in 
 
 rach2/sys/block/partition.c:follow_logical params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
-rach2/sys/block/request.c:block_request complexity 30 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/block/request.c:block_request complexity 30 one transfer split into the parts a device accepts, each with its own error path
 
 rach2/sys/board.c:board_init lines 123 a hardware sequence, the registers written in the order the datasheet requires
 
@@ -202,7 +202,7 @@ rach2/sys/proc/uimage.c:build_user_stack params 9 the parameters are the fields 
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 139 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/syscall.c:init_syscall lines 141 a table, one entry per system call number
 rach2/sys/syscall.c:sys_ioctl complexity 43 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 162 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
@@ -223,8 +223,8 @@ rach2/sys/syscall_fs.c:sys_chdir complexity 34 one system call's contract, its c
 rach2/sys/syscall_fs.c:sys_chdir lines 134 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_chdir nesting 5 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fchown complexity 27 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:sys_fcntl64 lines 131 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys_getdents64 lines 130 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:sys_getdents64 lines 132 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_lseek lines 125 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_rename complexity 36 one system call's contract, its checks in the order the manual page lists the errors
@@ -236,7 +236,7 @@ rach2/sys/syscall_fs.c:write_fd complexity 41 one system call's contract, its ch
 rach2/sys/syscall_fs.c:write_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/syscall_net.c:do_bind complexity 32 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_bind lines 117 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_bind lines 118 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect lines 132 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_getsockopt complexity 34 a dispatcher, one arm per command, read as a table

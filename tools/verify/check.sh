@@ -12,7 +12,9 @@
 #   2. cppcheck (c89; warning, style, performance, portability) with
 #      tools/verify/cppcheck.suppress, and the host programs (tools/,
 #      tests/system/, krffs/) at c99
-#   (--error-exitcode) 3. shellcheck on the in-house shell scripts
+#      (--error-exitcode; a differing cppcheck version reports its findings and
+#      decides nothing, but a cppcheck that fails to run fails the step)
+#   3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format on every in-house file and any named as arguments, judged
 #      by the version tools/setup/judges records
@@ -55,10 +57,10 @@ set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# The checkers this script runs are asked of make rather than compiled here:
-# one recipe builds each, under mk/host.mk's -Werror, and a hand compile
-# would publish a binary at the same path that make then calls current, so
-# the warning build would be skipped until another dependency changed.
+# Make builds the checkers this script runs, one recipe each under mk/host.mk's
+# -Werror. A hand compile here would write a binary at the same path that make
+# then reads as current, so the warning build would be skipped until another
+# dependency changed.
 ASCIISCAN="$REPO/build/tools/verify/asciiscan"
 RUNTESTS="$REPO/build/tests/system/runtests"
 GUESTCHECK="$REPO/build/tools/verify/guestcheck"
@@ -84,24 +86,14 @@ hr() { printf -- '---- %s ----\n' "$*"; }
 inhouse_ch()
 {
     find rach2 \( -name '*.c' -o -name '*.h' \) 2>/dev/null
-    # vendor/musl/ has only the vendored musl tree (install/, musl-*/) plus
-    # any future in-house shim; prune the vendored parts so they are never
-    # checked.
     find vendor/musl -path '*/install' -prune -o -path '*/musl-*' -prune -o \
          \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
-    # The other hand-written programs: the krffs host tools (minus the vendored
-    # termbox2 and vs-dokany), the utils, the ish shell, and every test (the
-    # probes, the vm family, the musl integration tests, and the host
-    # tests).
     find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
-    # The host programs under tools/: the image builders, the inspectors,
-    # the setup checks and the verifiers.
     find tools \( -name '*.c' -o -name '*.h' \) 2>/dev/null
 }
 
 
-# 0. required tools
 hr "preflight: tools present"
 miss=0
 for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format; do
@@ -109,7 +101,6 @@ for t in i686-elf-gcc i686-elf-readelf cppcheck shellcheck clang-format; do
 done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
 
-# 1. kernel build (-Werror)
 hr "1/22 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
@@ -117,8 +108,10 @@ else
     echo "  FAIL: see $VDIR/verify_build.log"; fail=1
 fi
 
-# 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
-#    crash or a finding both fail (a silent 0-count cannot mask either).
+# 2. cppcheck: --error-exitcode=2 makes a finding exit 2, so a silent 0-count
+#    cannot mask one. Any other non-zero status is cppcheck itself failing to
+#    run, which fails the step under every version; only the findings are the
+#    recorded version's to judge.
 hr "2/22 cppcheck (c89; warning, style, performance, portability)"
 # cppcheck's findings change between majors in both directions: 2.19 reports
 # a modulo of one in a mutation hook and an uninitialised word 2.21 does not,
@@ -128,45 +121,31 @@ hr "2/22 cppcheck (c89; warning, style, performance, portability)"
 # for clang-format.
 cpp_recorded=$(sed -n 's/^cppcheck: //p' "$REPO/tools/setup/judges")
 cpp_found=$(cppcheck --version 2>/dev/null | head -1)
-find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
-echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
-ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-ls "$REPO"/tests/fdstale.c "$REPO"/tests/idreport.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-ls "$REPO"/utils/pwauth.c "$REPO"/utils/pwauth.h "$REPO"/utils/passwd.c \
-   "$REPO"/utils/adduser.c "$REPO"/utils/login.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-ls "$REPO"/tests/host/pwauth_hosttest.c "$REPO"/tests/musl/pwauthmusl.c \
-   "$REPO"/tests/musl/passwdmusl.c \
-   "$REPO"/tests/musl/addusermusl.c \
-   "$REPO"/tests/musl/loginmusl.c \
-   "$REPO"/tests/musl/readvmusl.c "$REPO"/tests/musl/vmamusl.c \
-   "$REPO"/tests/musl/clockmusl.c "$REPO"/tests/musl/statmusl.c \
-   "$REPO"/tests/musl/stampmusl.c "$REPO"/tests/musl/execargmusl.c "$REPO"/tests/musl/spawnmusl.c \
-   "$REPO"/tests/musl/saltnoent.c "$REPO"/tests/musl/creddisk.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-ls "$REPO"/krffs/krffs_reader.c "$REPO"/krffs/krffs_reader.h \
-   "$REPO"/krffs/readfile.krffs.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
-if cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,portability --error-exitcode=2 \
+. "$REPO/tools/verify/srclists.sh"
+srclists "$REPO" "$VDIR" _
+cpp_rc=0
+cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,portability --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
-      --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1; then
+      --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1 || cpp_rc=$?
+if [ "$cpp_rc" -eq 0 ]; then
     echo "  PASS (0 findings)"
+elif [ "$cpp_rc" -ne 2 ]; then
+    echo "  FAIL: cppcheck exited $cpp_rc, see $VDIR/verify_cppcheck.log"; fail=1
 elif [ "$cpp_found" != "$cpp_recorded" ]; then
     echo "  SKIP ($(grep -c 'error:\|warning:\|style:\|performance:\|portability:' "$VDIR/verify_cppcheck.log") finding(s) under $cpp_found; the record says $cpp_recorded, and the testing host judges)"
 else
     echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
 fi
-# The host programs, in their own dialect and on a 64-bit host: the tools,
-# the runner, the checkers and the fixtures under tests/system, and the KRFFS
-# tools without their vendored terminal library.
-{
-    find "$REPO/tools" -name '*.c' -o -name '*.h'
-    find "$REPO/tests/system" "$REPO/krffs" -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
-         -o \( -name '*.c' -o -name '*.h' \) -print
-} 2>/dev/null | sort >"$VDIR/_hostsrcs.txt"
-if cppcheck --std=c99 --platform=unix64 --enable=warning,style,performance,portability --error-exitcode=2 \
+cpp_rc=0
+cppcheck --std=c99 --platform=unix64 --enable=warning,style,performance,portability --error-exitcode=2 \
       --suppress=missingInclude --suppress=missingIncludeSystem \
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
-      --file-list="$VDIR/_hostsrcs.txt" >"$VDIR/verify_cppcheck_host.log" 2>&1; then
+      --file-list="$VDIR/_hostsrcs.txt" >"$VDIR/verify_cppcheck_host.log" 2>&1 || cpp_rc=$?
+if [ "$cpp_rc" -eq 0 ]; then
     echo "  PASS (host programs: 0 findings)"
+elif [ "$cpp_rc" -ne 2 ]; then
+    echo "  FAIL: cppcheck exited $cpp_rc, see $VDIR/verify_cppcheck_host.log"; fail=1
 elif [ "$cpp_found" != "$cpp_recorded" ]; then
     echo "  SKIP (host programs: $(grep -c 'error:\|warning:\|style:\|performance:\|portability:' "$VDIR/verify_cppcheck_host.log") finding(s) under $cpp_found; the testing host judges)"
 else
@@ -203,13 +182,15 @@ for h in $(inhouse_ch | grep '\.h$'); do
       || grep -qE '^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once' "$h" \
       || { echo "  no header guard: $h"; cv=1; }
 done
-# Every halt in the kernel goes through the marked idle wait in
-# sys/proc/sched.c, which is what lets the timer tell an idle tick from a busy
-# one: there is no idle task, so a blocked process stays current and nothing
-# else says which was which. A site written with a bare `sti; hlt` somewhere
-# else would report its idle time as busy and no test would notice, so the
-# spelling is refused outside the helper. Comments and the header naming it are
-# not code; the asm statement is what is looked for.
+# An idle wait, a halt with interrupts on that expects to resume, goes through
+# the helper in sys/proc/sched.c, which is what lets the timer tell an idle
+# tick from a busy one: there is no idle task, so a blocked process stays
+# current and nothing else says which was which. A wait written as `sti; hlt`
+# somewhere else would report its idle time as busy and no test would notice,
+# so that spelling is refused outside the helper. A `cli; hlt` that stops the
+# machine for good and a halt in early boot, before the scheduler accounts
+# anything, are not idle waits and are left alone. Comments and the header
+# naming the helper are not code; the asm statement is what is looked for.
 idle_bad=$(inhouse_ch | grep -vE 'sys/proc/sched\.c$' \
     | xargs grep -nE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null || true)
 if [ -n "$idle_bad" ]; then
@@ -283,8 +264,8 @@ if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
 else
     echo "  FAIL: see $VDIR/verify_sources.log"; fail=1
 fi
-# No recipe under tests/ makes a product: the images, disks, ISOs and sticks
-# the machine or a stick carries are the build's (the root Makefile and mk/),
+# No recipe under tests/ makes a product: the images, disks, ISOs and sticks a
+# run boots are the build's (the root Makefile and mk/),
 # and a suite names one only as a prerequisite. A product is a file under
 # build/images named rach2-*, or one of the sealed and recovery names.
 # The dollar is grep's, a literal $(NAME) target.
@@ -319,9 +300,7 @@ else
     echo "  FAIL: $tc text-style finding(s); see $VDIR/verify_text.log"; fail=1
 fi
 
-# Comment width. Written for milestone 26 and left unwired until the tree
-# reached zero, because a check that fails on the day it lands teaches everyone
-# to ignore it.
+# Comment width: every comment line in in-house code at 80 columns.
 if "$PROSECHECK" columns >"$VDIR/verify_cols.log" 2>&1; then
     echo "  PASS (comments at 80 columns)"
 else
@@ -342,11 +321,6 @@ else
     echo "  FAIL: $pc banned term use(s); see $VDIR/verify_prose.log"; fail=1
 fi
 
-# The two runner rules that decide a result without a boot: the scoring rule,
-# which turns serial text into every probe's PASS or FAIL, and the harness's
-# escape decoder, which turns a step's text into the bytes a guest is given. A
-# regression in either is invisible in the place that would otherwise catch it,
-# because both are what that place reads its answer from.
 # Message formats. The kernel's own formatter takes a fixed set of
 # conversions, and one it does not know is written out verbatim while
 # consuming no argument, so every field after it in that message is read one
@@ -362,6 +336,11 @@ else
     fail=1
 fi
 
+# The two runner rules that decide a result without a boot: the scoring rule,
+# which turns serial text into every probe's PASS or FAIL, and the harness's
+# escape decoder, which turns a step's text into the bytes a guest is given. A
+# regression in either is invisible in the place that would otherwise catch it,
+# because both are what that place reads its answer from.
 hr "10/22 runner rules (runtests and harness selftests)"
 HARNESSBIN="$REPO/build/tests/system/harness"
 make -C "$REPO" --no-print-directory build/tests/system/harness >/dev/null || exit 1
@@ -507,8 +486,6 @@ unprepared=$(awk '
         if (t ~ /^run-/) runs[t] = 1
         cur = t; next
     }
-    # prepare-all reaches its two halves through its recipe, not its
-    # prerequisites; only the prepare- targets that recipe names count.
     /^\t/ && cur == "prepare-all" {
         n = split($0, f, /[ \t]+/)
         for (i = 1; i <= n; i++) if (f[i] ~ /^prepare-/) deps[cur] = deps[cur] " " f[i]
@@ -586,8 +563,8 @@ else
     echo "  FAIL: $clang_warnings warning(s); see $VDIR/verify_clang.log"; fail=1
 fi
 
-# 20. sparse with __CHECKER__ defined, so the __user annotations the kernel
-#     carries are checked: a user pointer dereferenced directly, or passed
+# 20. sparse with __CHECKER__ defined, so the kernel's __user annotations are
+#     checked: a user pointer dereferenced directly, or passed
 #     where a kernel pointer is expected, is a finding. -Wno-non-pointer-null
 #     is the one category left out; tools/verify/exceptions.md says why.
 hr "20/22 sparse over the kernel's address spaces"
