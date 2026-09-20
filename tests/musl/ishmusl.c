@@ -114,7 +114,7 @@ static int check_input_case(const char *input, const char *output, int expected,
     char *environment[] = {(char *)"PATH=/bin", NULL};
     int source = open("ishmusl.input", O_RDWR | O_CREAT | O_TRUNC, 0600);
     int capture = open("ishmusl.capture", O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    int child = -1;
+    int child;
     int status = 0;
     int result = 1;
     size_t length = strlen(input);
