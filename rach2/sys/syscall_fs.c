@@ -503,32 +503,32 @@ int32_t sys_writev(isr_params_t *params)
 }
 
 /* Linux open flags */
-#define O_APPEND    02000 /* every write lands at end-of-file */
+#define O_APPEND 02000 /* every write lands at end-of-file */
 
-#define O_CREAT     0100
+#define O_CREAT 0100
 
-#define O_EXCL      0200
+#define O_EXCL 0200
 
-#define O_TRUNC     01000
+#define O_TRUNC 01000
 
-#define O_NONBLOCK  04000    /* a would-block operation returns -EAGAIN */
+#define O_NONBLOCK 04000 /* a would-block operation returns -EAGAIN */
 
-#define O_DIRECTORY 0200000  /* the target must be a directory (else -ENOTDIR) */
+#define O_DIRECTORY 0200000 /* the target must be a directory (else -ENOTDIR) */
 
-#define O_NOFOLLOW  0400000  /* a symbolic link at the end answers -ELOOP */
+#define O_NOFOLLOW 0400000 /* a symbolic link at the end answers -ELOOP */
 
-#define O_CLOEXEC   02000000 /* close-on-exec: the fd is dropped across execve */
+#define O_CLOEXEC 02000000 /* close-on-exec: the fd is dropped across execve */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
-#define AT_FDCWD            (-100)
+#define AT_FDCWD (-100)
 
 #define AT_SYMLINK_NOFOLLOW 0x100
 
-#define AT_SYMLINK_FOLLOW   0x400  /* linkat: follow a symlink source */
+#define AT_SYMLINK_FOLLOW 0x400 /* linkat: follow a symlink source */
 
-#define AT_EMPTY_PATH       0x1000 /* *at: operate on the dirfd itself */
+#define AT_EMPTY_PATH 0x1000 /* *at: operate on the dirfd itself */
 
-#define AT_NO_AUTOMOUNT     0x800  /* fstatat: accepted and meaningless here */
+#define AT_NO_AUTOMOUNT 0x800 /* fstatat: accepted and meaningless here */
 
 /**
  * Join base + '/' + rel into pathbuf as an absolute path.
@@ -1174,316 +1174,334 @@ static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
     node->mode = (uint16_t)((node->mode & ~07777u) | (mode & 07777u & ~current_proc->umask));
 }
 
-/**
- * Open core shared by open(5) and openat(295).
- *
- * `name` is a kernel-space path with any leading '/' already stripped; `flags`
- * are the Linux open flags and `mode` the permission bits to stamp on a file
- * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
- * path on any mounted type and installs a descriptor. Returns the fd or
- * -errno. Opening "/" opens the root directory for getdents64. A symbolic
- * link at the end is followed, and one whose target is missing is what
- * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
- * O_CREAT|O_EXCL, which answers EEXIST for the link.
- */
 static int synth_is_link(const struct vpath *vp);
 
-static int32_t do_open(const char *name, int flags, uint32_t mode)
+/**
+ * Whether `name` is the literal `lit`, byte for byte.
+ */
+static int name_is(const char *name, const char *lit)
+{
+    while (*name != '\0' && *name == *lit) {
+        name++;
+        lit++;
+    }
+    return *name == *lit;
+}
+
+/**
+ * The framebuffer descriptor, for an open of the name "fb": one owner at a
+ * time, and the open switches the display to mode 13h.
+ */
+static int32_t open_framebuffer(void)
 {
     fd_entry_t *entry;
-    krffs_node_t *node;
-    struct vfs_ref ref;
-    char through[VFS_WALK_PATH_MAX]; /* the path a dangling link's target makes */
-    int followed = 0;
+    int fd;
+
+    if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
+        return -EBUSY; /* Already in use */
+    }
+
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        return -EMFILE;
+    }
+
+    entry = &current_proc->fds.entries[fd];
+    entry->type = FD_TYPE_FRAMEBUFFER;
+    entry->node = NULL;
+    entry->ofd->offset = 0;
+    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+
+    vga_mode13h_enter();
+    fb_owner_pid = current_proc->pid;
+
+    kbd_clear_scancodes(); /* drop stale scancodes left by the shell */
+
+    return fd;
+}
+
+/**
+ * The mouse descriptor, for an open of the name "mouse".
+ */
+static int32_t open_mouse(void)
+{
+    fd_entry_t *entry;
+    int fd;
+
+    if (!mouse_is_available() && !input_mouse_present()) {
+        return -ENODEV; /* no mouse of any kind was found */
+    }
+
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        return -EMFILE;
+    }
+
+    entry = &current_proc->fds.entries[fd];
+    entry->type = FD_TYPE_MOUSE;
+    entry->node = NULL;
+    entry->ofd->offset = 0;
+    entry->flags = FD_FLAG_READ;
+
+    mouse_clear_packets();
+
+    return fd;
+}
+
+/**
+ * The target of a symbolic link at `name` whose own target is missing, for
+ * O_CREAT to create: as on Linux, the target is what is created. Returns 1
+ * with the target's path in `through`, the link's directory in front of a
+ * relative one; 0 when `name` is not a link; or a negative errno, ELOOP once
+ * `followed` passes the resolver's bound of forty links.
+ */
+static int open_link_target(const char *name, char *through, uint32_t through_size, int *followed)
+{
+    struct vfs_ref linkref;
+    struct vfs_stat lst;
+    int is_link;
+
+    if (vfs_resolve(0, name, VFS_WALK_NOFOLLOW, &linkref, 0, 0) != 0) {
+        return 0;
+    }
+    is_link = !vfs_synth_vpath(linkref.mnt, linkref.node) && linkref.mnt->type->ops->readlink &&
+              vfs_getattr(linkref.mnt, linkref.node, &lst) == 0 &&
+              (lst.mode & 0170000u) == 0120000u;
+    if (is_link) {
+        char target[VFS_WALK_PATH_MAX];
+        int tlen =
+            linkref.mnt->type->ops->readlink(linkref.mnt, linkref.node, target, sizeof(target));
+        uint32_t dlen;
+
+        vfs_ref_release(&linkref);
+        if (tlen < 0) {
+            return tlen;
+        }
+        if (++*followed > VFS_LINK_MAX) {
+            return -ELOOP;
+        }
+        if (target[0] != '/') {
+            /* The link's own directory, then the target. */
+            dlen = (uint32_t)k_strlen(name);
+            while (dlen > 0 && name[dlen - 1] != '/') {
+                dlen--;
+            }
+            if (dlen + (uint32_t)tlen + 1 > through_size) {
+                return -ENAMETOOLONG;
+            }
+            k_memmove(through, name, dlen);
+            k_memcpy(through + dlen, target, (uint32_t)tlen + 1);
+        } else {
+            k_memcpy(through, target + 1, (uint32_t)tlen);
+        }
+        return 1;
+    }
+    vfs_ref_release(&linkref);
+    return 0;
+}
+
+/**
+ * The missing-file half of O_CREAT: hold the parent of `name`, check its
+ * write bit, create under the namespace lock, and stamp the new node with
+ * the caller's identity and masked mode. Returns 0 with `ref` on the new
+ * node, held by its creation; 1 when another creator held the lock first,
+ * so the caller opens what it made; or a negative errno.
+ */
+static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref)
+{
+    struct vfs_ref parent;
+    char leafname[VFS_NAME_MAX + 1];
+    void *made;
+    int rc;
+
+    rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname, sizeof(leafname));
+    if (rc != 0) {
+        return rc;
+    }
+    if (vfs_synth_vpath(parent.mnt, parent.node)) {
+        vfs_ref_release(&parent);
+        return -EROFS; /* nothing is created under /dev or /proc */
+    }
+    if (mnt_is_root(parent.mnt)) {
+        rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+    } else if (parent.mnt->flags & VFS_MS_RDONLY) {
+        rc = -EROFS;
+    } else {
+        rc = (int)cred_access_ref(&parent, CRED_W, 0);
+    }
+    if (rc != 0) {
+        vfs_ref_release(&parent);
+        return rc;
+    }
+    vfs_ns_lock(parent.mnt);
+    rc = vfs_create(parent.mnt, parent.node, leafname,
+                    mnt_is_root(parent.mnt) ? mode : (mode & 07777u & ~current_proc->umask), &made);
+    vfs_ns_unlock(parent.mnt);
+    if (rc == -EEXIST && !(flags & O_EXCL)) {
+        /* Another creator held the lock first: the caller opens what it
+         * made. */
+        vfs_ref_release(&parent);
+        return 1;
+    }
+    if (rc != 0) {
+        vfs_ref_release(&parent);
+        return rc;
+    }
+    if (mnt_is_root(parent.mnt)) {
+        krffs_stamp_new_node((krffs_node_t *)made, mode);
+    }
+    ref->mnt = parent.mnt;
+    ref->node = made; /* held by creation; the parent's hold goes back */
+    if (parent.mnt->type->ops->put) {
+        parent.mnt->type->ops->put(parent.mnt, parent.node);
+    }
+    return 0;
+}
+
+/**
+ * The checks on an existing node of a mounted type, from its attributes in
+ * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the mount's EROFS
+ * for a write-side request, then permission, then O_TRUNC. On an error the
+ * reference is released.
+ */
+static int open_mounted_node(struct vfs_ref *ref, int flags)
+{
+    void *node = ref->node;
+    int rc;
+    struct vfs_stat vst;
+    unsigned acc = (unsigned)flags & 3u;
+    int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
+
+    rc = vfs_getattr(ref->mnt, node, &vst);
+    if (rc != 0) {
+        vfs_ref_release(ref);
+        return rc;
+    }
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        vfs_ref_release(ref);
+        return -EEXIST;
+    }
+    if ((vst.mode & 0170000u) == 0120000u) {
+        vfs_ref_release(ref);
+        return -ELOOP; /* the link itself, under O_NOFOLLOW */
+    }
+    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {
+        vfs_ref_release(ref);
+        return -EISDIR;
+    }
+    if ((vst.mode & 0170000u) != 0040000u && (flags & O_DIRECTORY)) {
+        vfs_ref_release(ref);
+        return -ENOTDIR;
+    }
+    if ((acc != 0 || (flags & O_TRUNC)) && (ref->mnt->flags & VFS_MS_RDONLY)) {
+        vfs_ref_release(ref);
+        return -EROFS;
+    }
+    if (flags & O_TRUNC) {
+        want |= CRED_W;
+    }
+    rc = (int)cred_access_ref(ref, want, 0);
+    if (rc != 0) {
+        vfs_ref_release(ref);
+        return rc;
+    }
+    if (flags & O_TRUNC) {
+        rc = loop_backs(ref->mnt, node) ? -EBUSY : vfs_truncate(ref->mnt, node, 0);
+        if (rc == 0 && !cred_privileged()) {
+            vfs_kill_setid(ref->mnt, node);
+        }
+        if (rc != 0) {
+            vfs_ref_release(ref);
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The same checks on a KRFFS node: O_CREAT|O_EXCL, the directory rules, the
+ * permission the access mode asks for, then O_TRUNC, which only ever shrinks
+ * and so keeps the node where it is. On an error the reference is released.
+ */
+static int open_root_node(struct vfs_ref *ref, int flags)
+{
+    krffs_node_t *node = ref->node;
+    int is_dir = (node == krffs_fs->node) || KRFFS_IS_DIR(node->mode);
+    unsigned acc = (unsigned)flags & 3u;
+    int want;
+    int32_t crc;
+    int rc;
+
+    /* O_CREAT|O_EXCL requires the file not already exist. */
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        vfs_ref_release(ref);
+        return -EEXIST;
+    }
+    /* A directory cannot be opened for writing or truncated into a
+     * file (the access mode is the low two bits); O_DIRECTORY
+     * requires one. */
+    if (is_dir && (acc != 0 || (flags & O_TRUNC))) {
+        vfs_ref_release(ref);
+        return -EISDIR;
+    }
+    if (!is_dir && (flags & O_DIRECTORY)) {
+        vfs_ref_release(ref);
+        return -ENOTDIR;
+    }
+    /* The open itself is permission-checked: the access mode asks for
+     * read, write, or both, and truncation is a write. */
+    if (acc == 0) {
+        want = CRED_R;
+    } else if (acc == 1) {
+        want = CRED_W;
+    } else {
+        want = CRED_R | CRED_W;
+    }
+    if (flags & O_TRUNC) {
+        want |= CRED_W;
+    }
+    crc = cred_access_node(node, want, 0);
+    if (crc != 0) {
+        vfs_ref_release(ref);
+        return crc;
+    }
+    if (flags & O_TRUNC) {
+        /* A truncate to zero only ever shrinks, and a shrink keeps the
+         * node where it is. This branch is already past the -EISDIR for
+         * the root and for any directory, so only a regular file
+         * reaches it. */
+        rc = vfs_truncate(ref->mnt, node, 0);
+        if (rc != 0) {
+            vfs_ref_release(ref);
+            return rc;
+        }
+        if (!cred_privileged()) {
+            cred_kill_setid(node);
+        }
+    }
+    return 0;
+}
+
+/**
+ * The descriptor for an opened node: a directory opens as a FD_TYPE_DIR (its
+ * node is the directory whose children getdents lists); a regular file as
+ * FD_TYPE_FILE. A path that resolved to the root (e.g. "x/..") is the root
+ * directory, stored with a NULL node like a literal "/" open. A node of
+ * another type keeps `node` NULL: the description's own fields name it, and
+ * the KRFFS-only paths (the holder rule, the set-id clear) have nothing to
+ * do with it. Returns the fd or a negative errno, with the reference
+ * released.
+ */
+static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
+{
+    fd_entry_t *entry;
+    krffs_node_t *node = ref->node;
     int fd;
     int rc;
 
-    if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
-        if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
-            return -EBUSY; /* Already in use */
-        }
-
-        fd = fd_alloc(&current_proc->fds);
-        if (fd < 0) {
-            return -EMFILE;
-        }
-
-        entry = &current_proc->fds.entries[fd];
-        entry->type = FD_TYPE_FRAMEBUFFER;
-        entry->node = NULL;
-        entry->ofd->offset = 0;
-        entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
-
-        vga_mode13h_enter();
-        fb_owner_pid = current_proc->pid;
-
-        kbd_clear_scancodes(); /* drop stale scancodes left by the shell */
-
-        return fd;
-    }
-
-    if (name[0] == 'm' && name[1] == 'o' && name[2] == 'u' && name[3] == 's' && name[4] == 'e' &&
-        name[5] == '\0') {
-        if (!mouse_is_available() && !input_mouse_present()) {
-            return -ENODEV; /* no mouse of any kind was found */
-        }
-
-        fd = fd_alloc(&current_proc->fds);
-        if (fd < 0) {
-            return -EMFILE;
-        }
-
-        entry = &current_proc->fds.entries[fd];
-        entry->type = FD_TYPE_MOUSE;
-        entry->node = NULL;
-        entry->ofd->offset = 0;
-        entry->flags = FD_FLAG_READ;
-
-        mouse_clear_packets();
-
-        return fd;
-    }
-
-    if (!fd_can_alloc(&current_proc->fds)) {
-        return -EMFILE; /* known before anything is created or truncated */
-    }
-again:
-    rc = vfs_resolve(
-        0, name,
-        ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL))) ? VFS_WALK_NOFOLLOW : 0,
-        &ref, 0, 0);
-    if (rc == -ENOENT && (flags & O_CREAT)) {
-        /* The missing-file half of O_CREAT: hold the parent, check its
-         * write bit, create under the namespace lock, and stamp the new
-         * node with the caller's identity and masked mode. When the name
-         * is a link whose target is missing, the target is what is
-         * created: the walk continues on the target's path, the link's
-         * directory in front of a relative one, within the same bound of
-         * forty links the resolver keeps. */
-        struct vfs_ref parent;
-        char leafname[VFS_NAME_MAX + 1];
-        void *made;
-        struct vfs_ref linkref;
-
-        if (vfs_resolve(0, name, VFS_WALK_NOFOLLOW, &linkref, 0, 0) == 0) {
-            struct vfs_stat lst;
-            int is_link = !vfs_synth_vpath(linkref.mnt, linkref.node) &&
-                          linkref.mnt->type->ops->readlink &&
-                          vfs_getattr(linkref.mnt, linkref.node, &lst) == 0 &&
-                          (lst.mode & 0170000u) == 0120000u;
-
-            if (is_link) {
-                char target[VFS_WALK_PATH_MAX];
-                int tlen = linkref.mnt->type->ops->readlink(linkref.mnt, linkref.node, target,
-                                                            sizeof(target));
-                uint32_t dlen = 0;
-
-                vfs_ref_release(&linkref);
-                if (tlen < 0) {
-                    return tlen;
-                }
-                if (++followed > VFS_LINK_MAX) {
-                    return -ELOOP;
-                }
-                if (target[0] != '/') {
-                    /* The link's own directory, then the target. */
-                    dlen = (uint32_t)k_strlen(name);
-                    while (dlen > 0 && name[dlen - 1] != '/') {
-                        dlen--;
-                    }
-                    if (dlen + (uint32_t)tlen + 1 > sizeof(through)) {
-                        return -ENAMETOOLONG;
-                    }
-                    k_memmove(through, name, dlen);
-                    k_memcpy(through + dlen, target, (uint32_t)tlen + 1);
-                } else {
-                    k_memcpy(through, target + 1, (uint32_t)tlen);
-                }
-                name = through;
-                goto again;
-            }
-            vfs_ref_release(&linkref);
-        }
-        rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname, sizeof(leafname));
-        if (rc != 0) {
-            return rc;
-        }
-        if (vfs_synth_vpath(parent.mnt, parent.node)) {
-            vfs_ref_release(&parent);
-            return -EROFS; /* nothing is created under /dev or /proc */
-        }
-        if (mnt_is_root(parent.mnt)) {
-            rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-        } else if (parent.mnt->flags & VFS_MS_RDONLY) {
-            rc = -EROFS;
-        } else {
-            rc = (int)cred_access_ref(&parent, CRED_W, 0);
-        }
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_create(parent.mnt, parent.node, leafname,
-                        mnt_is_root(parent.mnt) ? mode : (mode & 07777u & ~current_proc->umask),
-                        &made);
-        vfs_ns_unlock(parent.mnt);
-        if (rc == -EEXIST && !(flags & O_EXCL)) {
-            /* Another creator held the lock first: open what it made. */
-            vfs_ref_release(&parent);
-            goto again;
-        }
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        if (mnt_is_root(parent.mnt)) {
-            krffs_stamp_new_node((krffs_node_t *)made, mode);
-        }
-        ref.mnt = parent.mnt;
-        ref.node = made; /* held by creation; the parent's hold goes back */
-        if (parent.mnt->type->ops->put) {
-            parent.mnt->type->ops->put(parent.mnt, parent.node);
-        }
-        node = made;
-    } else if (rc != 0) {
-        return rc;
-    } else {
-        const struct vpath *vp = vfs_synth_vpath(ref.mnt, ref.node);
-
-        if (vp) {
-            struct vpath vpc = *vp;
-
-            vfs_ref_release(&ref);
-            /* The /proc links, /proc/self and the descriptor links, are
-             * links too: the same two answers as on a mounted type. */
-            if (synth_is_link(&vpc)) {
-                if (flags & O_NOFOLLOW) {
-                    return -ELOOP;
-                }
-                if ((flags & O_CREAT) && (flags & O_EXCL)) {
-                    return -EEXIST;
-                }
-            }
-            return synth_open(&vpc, flags);
-        }
-        node = ref.node;
-        if (!mnt_is_root(ref.mnt)) {
-            /* A node of another type: the checks from its attributes in
-             * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the
-             * mount's EROFS for a write-side request, then permission. */
-            struct vfs_stat vst;
-            unsigned acc = (unsigned)flags & 3u;
-            int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
-
-            rc = vfs_getattr(ref.mnt, node, &vst);
-            if (rc != 0) {
-                vfs_ref_release(&ref);
-                return rc;
-            }
-            if ((flags & O_CREAT) && (flags & O_EXCL)) {
-                vfs_ref_release(&ref);
-                return -EEXIST;
-            }
-            if ((vst.mode & 0170000u) == 0120000u) {
-                vfs_ref_release(&ref);
-                return -ELOOP; /* the link itself, under O_NOFOLLOW */
-            }
-            if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {
-                vfs_ref_release(&ref);
-                return -EISDIR;
-            }
-            if ((vst.mode & 0170000u) != 0040000u && (flags & O_DIRECTORY)) {
-                vfs_ref_release(&ref);
-                return -ENOTDIR;
-            }
-            if ((acc != 0 || (flags & O_TRUNC)) && (ref.mnt->flags & VFS_MS_RDONLY)) {
-                vfs_ref_release(&ref);
-                return -EROFS;
-            }
-            if (flags & O_TRUNC) {
-                want |= CRED_W;
-            }
-            rc = (int)cred_access_ref(&ref, want, 0);
-            if (rc != 0) {
-                vfs_ref_release(&ref);
-                return rc;
-            }
-            if (flags & O_TRUNC) {
-                rc = loop_backs(ref.mnt, node) ? -EBUSY : vfs_truncate(ref.mnt, node, 0);
-                if (rc == 0 && !cred_privileged()) {
-                    vfs_kill_setid(ref.mnt, node);
-                }
-                if (rc != 0) {
-                    vfs_ref_release(&ref);
-                    return rc;
-                }
-            }
-            goto setup;
-        }
-        {
-            int is_dir = (node == krffs_fs->node) || KRFFS_IS_DIR(node->mode);
-
-            /* O_CREAT|O_EXCL requires the file not already exist. */
-            if ((flags & O_CREAT) && (flags & O_EXCL)) {
-                vfs_ref_release(&ref);
-                return -EEXIST;
-            }
-            /* A directory cannot be opened for writing or truncated into a
-             * file (the access mode is the low two bits); O_DIRECTORY
-             * requires one. */
-            if (is_dir && (((unsigned)flags & 3u) != 0 || (flags & O_TRUNC))) {
-                vfs_ref_release(&ref);
-                return -EISDIR;
-            }
-            if (!is_dir && (flags & O_DIRECTORY)) {
-                vfs_ref_release(&ref);
-                return -ENOTDIR;
-            }
-        }
-        /* The open itself is permission-checked: the access mode asks for
-         * read, write, or both, and truncation is a write. */
-        {
-            int want;
-            unsigned acc = (unsigned)flags & 3u;
-            int32_t crc;
-
-            if (acc == 0) {
-                want = CRED_R;
-            } else if (acc == 1) {
-                want = CRED_W;
-            } else {
-                want = CRED_R | CRED_W;
-            }
-            if (flags & O_TRUNC) {
-                want |= CRED_W;
-            }
-            crc = cred_access_node(node, want, 0);
-            if (crc != 0) {
-                vfs_ref_release(&ref);
-                return crc;
-            }
-        }
-        if (flags & O_TRUNC) {
-            /* A truncate to zero only ever shrinks, and a shrink keeps the
-             * node where it is. This branch is already past the -EISDIR for
-             * the root and for any directory, so only a regular file
-             * reaches it. */
-            rc = vfs_truncate(ref.mnt, node, 0);
-            if (rc != 0) {
-                vfs_ref_release(&ref);
-                return rc;
-            }
-            if (!cred_privileged()) {
-                cred_kill_setid(node);
-            }
-        }
-    }
-
-setup:
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
-        vfs_ref_release(&ref);
+        vfs_ref_release(ref);
         return -EMFILE; /* No free fds */
     }
 
@@ -1495,13 +1513,13 @@ setup:
      * the KRFFS-only paths (the holder rule, the set-id clear) have nothing
      * to do with it. */
     entry = &current_proc->fds.entries[fd];
-    if (!mnt_is_root(ref.mnt)) {
+    if (!mnt_is_root(ref->mnt)) {
         struct vfs_stat vst;
 
-        rc = vfs_getattr(ref.mnt, node, &vst);
+        rc = vfs_getattr(ref->mnt, node, &vst);
         if (rc != 0) {
             fd_free(&current_proc->fds, fd);
-            vfs_ref_release(&ref);
+            vfs_ref_release(ref);
             return rc;
         }
         entry->type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
@@ -1522,16 +1540,16 @@ setup:
 
     /* The description takes the resolution's hold and one reference on the
      * mount; its last close gives all of it back through vfs_desc_close. */
-    rc = vfs_open_node(ref.mnt, node, flags, &entry->ofd->fhandle);
+    rc = vfs_open_node(ref->mnt, node, flags, &entry->ofd->fhandle);
     if (rc != 0) {
         fd_free(&current_proc->fds, fd);
-        vfs_ref_release(&ref);
+        vfs_ref_release(ref);
         return rc;
     }
-    entry->ofd->vmnt = ref.mnt;
+    entry->ofd->vmnt = ref->mnt;
     entry->ofd->vnode = node;
-    vfs_desc_open(ref.mnt);
-    vfs_leave(ref.mnt);
+    vfs_desc_open(ref->mnt);
+    vfs_leave(ref->mnt);
 
     /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
      * trunc and cloexec live higher up, so mask before testing; the legacy
@@ -1557,6 +1575,84 @@ setup:
     }
 
     return fd;
+}
+
+/**
+ * Open core shared by open(5) and openat(295).
+ *
+ * `name` is a kernel-space path with any leading '/' already stripped; `flags`
+ * are the Linux open flags and `mode` the permission bits to stamp on a file
+ * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
+ * path on any mounted type and installs a descriptor. Returns the fd or
+ * -errno. Opening "/" opens the root directory for getdents64. A symbolic
+ * link at the end is followed, and one whose target is missing is what
+ * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
+ * O_CREAT|O_EXCL, which answers EEXIST for the link.
+ */
+static int32_t do_open(const char *name, int flags, uint32_t mode)
+{
+    struct vfs_ref ref;
+    char through[VFS_WALK_PATH_MAX]; /* the path a dangling link's target makes */
+    int followed = 0;
+    int rc;
+
+    if (name_is(name, "fb")) {
+        return open_framebuffer();
+    }
+    if (name_is(name, "mouse")) {
+        return open_mouse();
+    }
+    if (!fd_can_alloc(&current_proc->fds)) {
+        return -EMFILE; /* known before anything is created or truncated */
+    }
+again:
+    rc = vfs_resolve(
+        0, name,
+        ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL))) ? VFS_WALK_NOFOLLOW : 0,
+        &ref, 0, 0);
+    if (rc == -ENOENT && (flags & O_CREAT)) {
+        rc = open_link_target(name, through, sizeof(through), &followed);
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc > 0) {
+            name = through;
+            goto again;
+        }
+        rc = open_create(name, flags, mode, &ref);
+        if (rc > 0) {
+            goto again;
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    } else if (rc != 0) {
+        return rc;
+    } else {
+        const struct vpath *vp = vfs_synth_vpath(ref.mnt, ref.node);
+
+        if (vp) {
+            struct vpath vpc = *vp;
+
+            vfs_ref_release(&ref);
+            /* The /proc links, /proc/self and the descriptor links, are
+             * links too: the same two answers as on a mounted type. */
+            if (synth_is_link(&vpc)) {
+                if (flags & O_NOFOLLOW) {
+                    return -ELOOP;
+                }
+                if ((flags & O_CREAT) && (flags & O_EXCL)) {
+                    return -EEXIST;
+                }
+            }
+            return synth_open(&vpc, flags);
+        }
+        rc = mnt_is_root(ref.mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return open_install(&ref, name, flags);
 }
 
 /**
@@ -2320,7 +2416,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  * Returns the bytes copied, or a negative errno.
  */
 int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
-                           uint16_t *src_port)
+                    uint16_t *src_port)
 {
     uint8_t message[SOCK_RECV_BUF_SIZE];
     struct kernel_iovec iov;
@@ -2846,7 +2942,7 @@ struct linux_stat64 {
 };
 
 /* File type bits for st_mode */
-#define S_IFMT  0170000
+#define S_IFMT 0170000
 
 #define S_IFREG 0100000
 
@@ -2967,7 +3063,7 @@ static int32_t fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
 
 /* Stable /dev/pts inodes (distinct from devfs's): the directory, then one per
  * slave (so a slave's (st_dev, st_ino) identity is consistent for ttyname). */
-#define PTS_INO_DIR  3u
+#define PTS_INO_DIR 3u
 
 #define PTS_INO_BASE 0x1000u
 
@@ -3428,7 +3524,7 @@ struct linux_statfs64 {
  * finds what it expects; KRFFS has no assigned magic and uses its own name. */
 #define STATFS_MAGIC_KRFFS 0x4B524646u /* "KRFF" */
 
-#define STATFS_MAGIC_PROC  0x9FA0u
+#define STATFS_MAGIC_PROC 0x9FA0u
 
 #define STATFS_MAGIC_DEVFS 0x1373u
 
@@ -5579,7 +5675,7 @@ out:
 }
 
 /* Special nsec values */
-#define UTIME_NOW  ((1L << 30) - 1L)
+#define UTIME_NOW ((1L << 30) - 1L)
 
 #define UTIME_OMIT ((1L << 30) - 2L)
 
