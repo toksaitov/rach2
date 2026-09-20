@@ -60,8 +60,6 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
-#include "network/netconf.h" /* net_ip_addr for getsockname */
-#include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 #include "syscall_internal.h"
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
@@ -1113,7 +1111,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
 }
 
 /* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd). The
- * SYNTH_DIR_* priv encode/decode macros live in synthfs.h. */
+ * descriptor keeps a record of its own, taken from the heap and freed at the
+ * last close. */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
 {
     fd_entry_t *e;
@@ -3519,9 +3518,10 @@ struct linux_statfs64 {
 
 #define STATFS_BSIZE 1024u
 
-/* The three mounts /proc/mounts names, and the magic each reports. The values
- * are Linux's for the two synthetic ones, so a program that recognises them
- * finds what it expects; KRFFS has no assigned magic and uses its own name. */
+/* The three permanent mounts and the magic each reports; `/proc/mounts` names
+ * these and every volume `mount(2)` has placed. The values are Linux's for the
+ * two synthetic ones, so a program that recognises them finds what it expects;
+ * KRFFS has no assigned magic and uses its own name. */
 #define STATFS_MAGIC_KRFFS 0x4B524646u /* "KRFF" */
 
 #define STATFS_MAGIC_PROC 0x9FA0u
@@ -3568,7 +3568,7 @@ static int32_t statfs_fill(struct linux_statfs64 __user *out, uint32_t magic)
     return 0;
 }
 
-/** A statfs64 from a mount's own statfs: the numbers vfat reports. */
+/** A statfs64 from a mount's own statfs, whichever type answered it. */
 static int32_t statfs_fill_mount(struct linux_statfs64 __user *out, struct vfs_mount *m)
 {
     struct linux_statfs64 st;
@@ -4983,7 +4983,8 @@ int32_t sys_fcntl64(isr_params_t *params)
         int newfd;
         fd_entry_t *dst;
         /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
-         * contract). An arg past the table is -EINVAL; no slot at or above
+         * contract). An arg past the descriptor limit is -EINVAL, since the
+         * table grows to it and no higher; no slot at or above
          * it is -EMFILE. */
         if (arg >= (uint32_t)current_proc->fds.limit) {
             return -EINVAL;
@@ -5988,7 +5989,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
         return 0;
     }
-    /* /proc/net has one file. */
+    /* The four files of /proc/net: dev, route, arp and tcp. */
     if (kind == VNODE_PROC_NET_DIR) {
         /* No `tcp6`: there is no IPv6 here, and a file that existed and was
          * empty would tell netstat the family is present with nothing on it. */
@@ -6180,9 +6181,9 @@ int32_t sys_getdents64(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Records are packed straight into the user buffer below, so range-check
-     * AND fault in the whole [buf, buf+count) span once; every record write
-     * then stays inside present, validated user memory. */
+    /* Each record is built in a kernel buffer and copied out, and the whole
+     * [buf, buf+count) span is range-checked and faulted in once here, so a
+     * copy part way through the batch cannot meet an unmapped page. */
     if (!user_buffer_ok((uint32_t)buf, count, 1)) {
         return -EFAULT;
     }
@@ -6211,9 +6212,10 @@ int32_t sys_getdents64(isr_params_t *params)
     }
 
     /*
-     * The cursor is the byte offset of the last node returned, plus one, and
-     * NOT a count of the children seen so far. That distinction is the whole of
-     * a bug this had: `rm -rf` reads a batch of names, unlinks them, and reads
+     * The cursor is the type's own: for the KRFFS boot root the byte offset
+     * of the last node returned plus one, for a mounted volume whatever its
+     * readdir keeps. It is NOT a count of the children seen so far. That
+     * distinction is the whole of a fault this had: `rm -rf` reads a batch of names, unlinks them, and reads
      * again, and a cursor that counted children renumbered every surviving
      * child when one was removed, so the second read skipped as many entries as
      * the first read had deleted. The files left behind then made the directory
