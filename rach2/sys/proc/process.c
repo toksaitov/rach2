@@ -104,6 +104,19 @@ uint32_t process_forks_since_boot(void)
     return _forks_since_boot;
 }
 
+/* The sleeps a signal ended before their deadline; see process.h. */
+static uint32_t _sleeps_cut_short = 0;
+
+uint32_t process_sleeps_cut_short(void)
+{
+    return _sleeps_cut_short;
+}
+
+void process_count_sleep_cut_short(void)
+{
+    ++_sleeps_cut_short;
+}
+
 void process_count_fork(void)
 {
     ++_forks_since_boot;

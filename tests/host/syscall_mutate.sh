@@ -63,7 +63,7 @@ run_phase()
 
 echo "syscall-mutation: logs: $work"
 run_phase fixed 0 'syscall-test: pass:'
-for mutation in connect-wait connect-result connect-nonblock framebuffer-owner framebuffer-reentry clock; do
+for mutation in connect-wait connect-result connect-nonblock framebuffer-owner framebuffer-reentry clock sleep-mask; do
     python3 - "$work" "$mutation" <<'PY'
 from pathlib import Path
 import sys
@@ -84,6 +84,22 @@ changes = {
     'framebuffer-reentry': ('syscall',
         'if (!vga_graphics_mode) {',
         'if (0) {'),
+    'sleep-mask': ('syscall',
+        'uint32_t flags = kirq_save();\n'
+        '\n'
+        '        if (!signal_pending()) {\n'
+        '            current_proc->wakeup_tick = target;\n'
+        '            current_proc->state = PROC_BLOCKED;\n'
+        '            kirq_restore(flags);\n'
+        '            schedule(); /* yield to any other READY process; the timer wakes us */\n'
+        '        } else {\n'
+        '            kirq_restore(flags);\n'
+        '        }',
+        'if (!signal_pending()) {\n'
+        '            current_proc->wakeup_tick = target;\n'
+        '            current_proc->state = PROC_BLOCKED;\n'
+        '            schedule(); /* yield to any other READY process; the timer wakes us */\n'
+        '        }'),
     'clock': ('syscall',
         'kts.tv_sec = (int32_t)kernel_uptime_seconds;\n'
         '        kts.tv_nsec = (int32_t)(kernel_second_ticks * 10000000);',
@@ -104,6 +120,7 @@ PY
         framebuffer-owner) detail='second owner' ;;
         framebuffer-reentry) detail='graphics reentered' ;;
         clock) detail='monotonic survives tick wrap' ;;
+        sleep-mask) detail='pending check runs with interrupts masked' ;;
     esac
     run_phase "$mutation" 1 "$detail"
     restore

@@ -19,6 +19,7 @@ static int pgrp_in_session(int pgid, int sid);
 static int user_access_ok(uint32_t addr, uint32_t len);
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 static int32_t sys_socketcall(isr_params_t *params);
+static int32_t sys_nanosleep(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
 #include "syscall.c"
@@ -41,6 +42,7 @@ static struct open_file description;
 static uint8_t user[1024];
 static int failures, enters, exits, palettes, masked, saves;
 static int completion, immediate, waits;
+static int pending, pending_masked, blocked_masked, sleeps, cut_short, idles;
 
 #define CHECK(c, detail)                                    \
     do {                                                    \
@@ -232,6 +234,91 @@ static void framebuffer(void)
     CHECK(framebuffer_ioctl(0, 0) == -ENOTTY, "unknown framebuffer request refused");
 }
 
+/**
+ * The pending state the sleep asks about, and the mask of its first question.
+ *
+ * The sleep asks twice: once to decide whether to block, which is the one
+ * that must be masked, and once after the yield to decide whether a signal
+ * ended it, which is not. Only the first is recorded.
+ */
+int signal_pending(void)
+{
+    if (pending_masked < 0) {
+        pending_masked = masked;
+    }
+    return pending;
+}
+
+/** A yield: the sleeper is BLOCKED already, and the mask lifted already. */
+void schedule(void)
+{
+    blocked_masked = masked;
+    sleeps++;
+    if (current_proc->state == PROC_BLOCKED) {
+        kernel_ticks = current_proc->wakeup_tick - 1;
+    }
+}
+
+/** The halt the sleep falls back to: one tick of the model's clock. */
+void idle_wait_irq_on(void)
+{
+    idles++;
+    kernel_ticks++;
+}
+
+/** Count a sleep a signal ended early, as the kernel's own counter does. */
+void process_count_sleep_cut_short(void)
+{
+    cut_short++;
+}
+
+/**
+ * The sleep's pending check and its block are one masked step.
+ *
+ * A signal posted between the two would be recorded and not acted on, since
+ * `signal_post` wakes only a process already blocked, so the sleeper would
+ * wait out its whole deadline with the signal already there. What says the
+ * two are one step is that the check runs masked and the process is already
+ * BLOCKED when the mask is lifted. The third row is the count the kernel
+ * keeps of the sleeps a signal cut short, which rises only for a sleep that
+ * ended before its deadline.
+ */
+static void sleeps_masked(void)
+{
+    isr_params_t p;
+    struct kernel_timespec req, rem;
+
+    k_memset(&p, 0, sizeof(p));
+    req.tv_sec = 0;
+    req.tv_nsec = 30000000; /* three ticks */
+    k_memcpy(user + 32, &req, sizeof(req));
+    p.ebx = 32;
+    p.ecx = 64;
+
+    pending = 0;
+    pending_masked = blocked_masked = -1;
+    sleeps = cut_short = idles = 0;
+    current_proc->state = PROC_RUNNING;
+    kernel_ticks = 1000;
+    CHECK(sys_nanosleep(&p) == 0, "a sleep with no signal runs to its deadline");
+    CHECK(pending_masked == 1, "the pending check runs with interrupts masked");
+    CHECK(blocked_masked == 0, "and the mask is lifted with the sleeper already blocked");
+    CHECK(sleeps > 0, "the sleep yields");
+    CHECK(cut_short == 0, "a sleep that ran its length is not counted as cut short");
+
+    pending_masked = -1;
+    sleeps = cut_short = 0;
+    current_proc->state = PROC_RUNNING;
+    kernel_ticks = 2000;
+    k_memcpy(user + 32, &req, sizeof(req));
+    pending = 1;
+    CHECK(sys_nanosleep(&p) == -EINTR, "a signal already there ends the sleep at once");
+    CHECK(sleeps == 0, "with no yield");
+    CHECK(cut_short == 1, "and the count of sleeps a signal cut short rises");
+    k_memcpy(&rem, user + 64, sizeof(rem));
+    CHECK(rem.tv_nsec == 30000000 && rem.tv_sec == 0, "and the whole request is left");
+}
+
 /** Read across the tick wrap and the following whole-second boundary. */
 static void clocks(void)
 {
@@ -269,8 +356,9 @@ int main(void)
     connects();
     framebuffer();
     clocks();
+    sleeps_masked();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, framebuffer and clock\n");
+    printf("syscall-test: pass: connect, framebuffer, clock and sleep\n");
     return 0;
 }

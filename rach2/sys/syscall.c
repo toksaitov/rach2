@@ -447,6 +447,9 @@ static int32_t sys_nanosleep(isr_params_t *params)
             uint32_t left = ((int32_t)(target - kernel_ticks) > 0) ? (target - kernel_ticks) : 0u;
             current_proc->wakeup_tick = 0;
             current_proc->state = PROC_RUNNING;
+            if (left != 0) {
+                process_count_sleep_cut_short();
+            }
             if (urem) {
                 struct kernel_timespec rem;
                 rem.tv_sec = (int32_t)(left / 100u);

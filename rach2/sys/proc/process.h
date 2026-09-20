@@ -265,6 +265,20 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void));
  */
 uint32_t process_forks_since_boot(void);
 
+/**
+ * How many sleeps a signal has ended before their deadline since boot.
+ *
+ * `/proc/stat` reports it as `sleeps_interrupted`. A signal that reaches a
+ * sleeper is meant to end its sleep where it lands, not at the deadline, and
+ * this is the count that says which happened: a sleep the signal cut short
+ * raises it, and one that ran its whole length does not. It is a count and
+ * not a time, so a test may hold it on any machine.
+ */
+uint32_t process_sleeps_cut_short(void);
+
+/** Count one sleep a signal ended before its deadline. */
+void process_count_sleep_cut_short(void);
+
 void process_count_fork(void);
 
 #endif

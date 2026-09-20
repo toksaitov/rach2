@@ -11,7 +11,12 @@
  *   * a handler that writes a selector naming no descriptor into the saved
  *     `gs` of its own frame, which the kernel loads at ring 0 on the way
  *     back: the machine must survive it, since a process may not choose
- *     what the kernel loads.
+ *     what the kernel loads;
+ *   * a signal sent to a sleeping child, which must end that child's sleep
+ *     where it lands and not at its deadline. What says which happened is
+ *     `sleeps_interrupted` in `/proc/stat`, the kernel's count of the sleeps
+ *     a signal cut short: a sleep that ran its whole length does not raise
+ *     it. The count is the assertion, not the seconds the sleep took.
  *
  * Prints "SIGPROBE OK" on success. Freestanding; direct int 0x80.
  */
@@ -28,6 +33,12 @@ typedef unsigned int size_t;
 #define SYS_KILL           37
 #define SYS_RT_SIGACTION   174
 #define SYS_RT_SIGPROCMASK 175
+#define SYS_READ           3
+#define SYS_OPEN           5
+#define SYS_CLOSE          6
+#define SYS_NANOSLEEP      162
+
+#define O_RDONLY 0
 
 #define SIGUSR1 10
 #define SIGTERM 15
@@ -156,6 +167,59 @@ static void install_with(int signo, void (*h)(int), unsigned long extra)
     check(syscall4(SYS_RT_SIGACTION, signo, (int)(size_t)&ka, 0, 8) == 0, "rt_sigaction");
 }
 
+/** The decimal after `key` in `text`, or -1 if the key is not there. */
+static int number_after(const char *text, int len, const char *key)
+{
+    int klen = (int)strlen(key);
+    int i, j;
+
+    for (i = 0; i + klen <= len; i++) {
+        for (j = 0; j < klen && text[i + j] == key[j]; j++) {
+        }
+        if (j == klen) {
+            int value = 0;
+            i += klen;
+            if (i >= len || text[i] < '0' || text[i] > '9') {
+                return -1;
+            }
+            while (i < len && text[i] >= '0' && text[i] <= '9') {
+                value = value * 10 + (text[i] - '0');
+                i++;
+            }
+            return value;
+        }
+    }
+    return -1;
+}
+
+/** The kernel's count of the sleeps a signal cut short, or -1. */
+static int sleeps_cut_short(void)
+{
+    static char text[2048];
+    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/stat", O_RDONLY, 0);
+    int n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text));
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return -1;
+    }
+    return number_after(text, n, "sleeps_interrupted ");
+}
+
+/** Sleep `ms` milliseconds; returns what the call returned. */
+static int sleep_ms(int ms)
+{
+    int req[2];
+
+    req[0] = ms / 1000;
+    req[1] = (ms % 1000) * 1000000;
+    return syscall2(SYS_NANOSLEEP, (int)(size_t)req, 0);
+}
+
 static void install(int signo, void (*h)(int))
 {
     install_with(signo, h, 0);
@@ -217,6 +281,28 @@ void _start(void)
     handler_sig = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
     check(handler_ran == 1 && handler_sig == SIGUSR1, "a one-shot handler runs on its signal");
+
+    /* 6. A signal ends a sleep where it lands. The child sleeps far longer
+       than this probe waits; the parent signals it and requires the kernel's
+       count of the sleeps a signal cut short to rise, which a sleep that ran
+       to its deadline would not do. */
+    {
+        int before = sleeps_cut_short();
+
+        check(before >= 0, "/proc/stat reports sleeps_interrupted");
+        install(SIGUSR1, usr1_handler);
+        pid = syscall1(SYS_FORK, 0);
+        check(pid >= 0, "fork the sleeper");
+        if (pid == 0) {
+            sys_exit(sleep_ms(30000) == -4 ? 0 : 1); /* -EINTR is -4 */
+        }
+        sleep_ms(100);
+        syscall2(SYS_KILL, pid, SIGUSR1);
+        check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap the sleeper");
+        check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+              "the sleeper's own sleep returned EINTR");
+        check(sleeps_cut_short() > before, "the kernel counted a sleep the signal cut short");
+    }
 
     if (fails == 0) {
         puts("SIGPROBE OK");

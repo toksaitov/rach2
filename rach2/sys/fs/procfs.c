@@ -870,6 +870,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_ch(t, '\n');
     ap_str(t, "processes ");
     ap_u32(t, process_forks_since_boot());
+    ap_str(t, "\nsleeps_interrupted ");
+    ap_u32(t, process_sleeps_cut_short());
     ap_ch(t, '\n');
     /* The longest delays since boot, for the load row; see latency.h. */
     ap_str(t, "latency_timer_us ");

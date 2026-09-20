@@ -267,6 +267,9 @@ Zero.
 Boot time as seconds since the epoch.
 .It Li processes
 Processes created since boot.
+.It Li sleeps_interrupted
+Sleeps a signal ended before their deadline, since boot.
+A sleep that ran its whole length is not counted.
 .It Li latency_timer_us
 Longest gap between timer ticks, in microseconds.
 .It Li latency_disk_us
