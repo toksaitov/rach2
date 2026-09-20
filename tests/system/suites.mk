@@ -350,7 +350,6 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --append "rach2.rescue rach2.nonet" \
 	    --net hubport,id=net0,hubid=0 \
 	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-icount --qemu-arg=shift=3,sleep=off \
 	    --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
 	    --qemu-arg=-audiodev \
 	    --qemu-arg=wav,id=au0,timer-period=500,path=$(IMAGES_DIR)/audio-scale-sb16.wav \
@@ -1497,15 +1496,13 @@ run-subset: rach2 tests krffs test-image $(HARNESS)
 # image untouched.
 run-diskpolicy: rach2 rach2-metal $(HARNESS)
 	sh tests/system/suites/diskpolicy.sh $(BOOT_KERNEL) $(METAL_KERNEL)
-# `tests/run metal`: the metal image reached over SSH with nobody at its
-# console. This is the rehearsal for the Lenovo: the machine is given power and
-# an address on its command line, and nothing is typed at it. What that proves
-# is everything that has to happen by itself for a machine across the room to be
-# usable, so the address configuration, init-metal's supervision of dropbear,
-# key authentication, a pty, and a file crossing intact each way are all one
-# test. It kills the server once as well, because a supervisor that starts a
-# daemon and does not restart it has not been tested.
-run-metal: rach2-metal rach2-metal-image $(MKMBR) $(PTYDRIVE) $(RUNUTIL)
+# `tests/run metal`: unattended SSH on the metal image and acceptance of an
+# installed ext2 root. The RAM boot checks server restart, authentication,
+# transfers, mounts and USB writes. Four serial boots check the installed
+# root's partition, write access and slot without a whole-disk diagnostic node.
+.PHONY: metal-installed-tools
+metal-installed-tools: rach2 utils check-busybox $(HARNESS) $(RUNUTIL) $(DISK_TOOLS)
+run-metal: rach2-metal rach2-metal-image metal-installed-tools $(PTYDRIVE)
 	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) $(METAL_PORT)
 # `tests/run account`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.
