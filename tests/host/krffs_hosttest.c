@@ -26,6 +26,8 @@
 
 #include "../../rach2/sys/fs/krffs.c"
 
+#include "krffs_hash_vectors.h"
+
 extern int printf(const char *fmt, ...);
 extern void *malloc(unsigned long size);
 extern void free(void *p);
@@ -837,7 +839,7 @@ static void hash_rows(void)
     check(krffs_calculate_djb_hash((const uint8_t *)name) == djb && \
               krffs_mix_id(parent, name) == mixed,                  \
           "kernel hash vector");
-#include "krffs_hash_vectors.h"
+    KRFFS_HASH_VECTORS
 #undef HASH_VECTOR
 }
 

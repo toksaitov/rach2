@@ -30,22 +30,20 @@ static int valid_node_ring(struct krffs_file_system *fs)
             return 0;
         }
         node = (struct krffs_node *)((char *)fs->node + position);
-        if (node->magic != KRFFS_File_System_Magic ||
-            node->size < sizeof(*node) || node->size > remaining) {
+        if (node->magic != KRFFS_File_System_Magic || node->size < sizeof(*node) ||
+            node->size > remaining) {
             return 0;
         }
         if (position == 0) {
             if (node->type != KRFFS_Root_Node) {
                 return 0;
             }
-        } else if ((node->type != KRFFS_Free_Node &&
-                    node->type != KRFFS_Reserved_Node) ||
+        } else if ((node->type != KRFFS_Free_Node && node->type != KRFFS_Reserved_Node) ||
                    node->previous_node_size != previous_size) {
             return 0;
         }
-        if (node->type != KRFFS_Free_Node &&
-            (node->data_size > node->size - sizeof(*node) ||
-             !memchr(node->name, '\0', sizeof(node->name)))) {
+        if (node->type != KRFFS_Free_Node && (node->data_size > node->size - sizeof(*node) ||
+                                              !memchr(node->name, '\0', sizeof(node->name)))) {
             return 0;
         }
         previous_size = node->size;

@@ -15,7 +15,6 @@ musl/pipemusl manual pipe test
 musl/pollmusl manual poll test
 musl/ptymusl manual pseudo-terminal test
 musl/rngmusl manual random device test
-musl/sigmusl manual signal test
 musl/sockfillmusl manual socket capacity test
 musl/tcpsendrecv manual tcp peer test
 musl/ttymusl manual terminal test

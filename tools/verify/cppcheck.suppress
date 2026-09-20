@@ -80,4 +80,15 @@ unreachableCode:*tests/musl/sigmusl.c
 
 # The probes reach the kernel through inline assembly, which cppcheck does not
 # read, so an array a system call fills looks to it like one nothing writes.
+# The framebuffer palette in devprobe is the other half of that: 768 bytes of
+# zeroes is what the row hands the kernel, so nothing assigns it here.
 constVariable:*tests/bootprobe.c
+constVariable:*tests/devprobe.c
+unassignedVariable:*tests/devprobe.c
+
+# The interface probe reads a length the kernel writes through a pointer it
+# passes as an integer in the socketcall argument block, so cppcheck sees only
+# the initial `sizeof` and calls every later test of it constant. The probe is
+# freestanding and has no libc, so it clears a structure with a byte loop.
+knownConditionTrueFalse:*tests/netifprobe.c
+useStandardLibrary:*tests/netifprobe.c

@@ -299,7 +299,7 @@ tests/bootprobe.c:_start complexity 42 a probe, one sequence of steps in the ord
 tests/bootprobe.c:_start lines 356 a probe, one sequence of steps in the order the log records them
 tests/bootprobe.c:auth_case lines 171 a probe, one sequence of steps in the order the log records them
 
-tests/conloadprobe.c:probe_main lines 103 a probe, one sequence of steps in the order the log records them
+tests/conloadprobe.c:probe_main lines 109 a probe, one sequence of steps in the order the log records them
 
 tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/credprobe.c:child_main lines 112 a probe, one sequence of steps in the order the log records them
@@ -322,7 +322,7 @@ tests/ext2probe.c:links_rows lines 138 a probe, one sequence of steps in the ord
 tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
 tests/host/ahci_hosttest.c:model_w32 complexity 29 a test's rows, each a case, read as one table
 
-tests/host/ata_hosttest.c:main lines 148 a test's rows, each a case, read as one table
+tests/host/ata_hosttest.c:main lines 150 a test's rows, each a case, read as one table
 
 tests/host/bcache_hosttest.c:main complexity 114 a test's rows, each a case, read as one table
 tests/host/bcache_hosttest.c:main lines 677 a test's rows, each a case, read as one table
@@ -390,7 +390,7 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, eac
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:main complexity 58 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 537 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main lines 539 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 171 a test's rows, each a case, read as one table
@@ -593,7 +593,6 @@ tests/mvtest.c:_start lines 197 a probe, one sequence of steps in the order the 
 
 tests/netifprobe.c:netif_main complexity 131 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:netif_main lines 609 a probe, one sequence of steps in the order the log records them
-tests/netifprobe.c:packet_on_second complexity 27 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:packet_on_second lines 160 a probe, one sequence of steps in the order the log records them
 
 tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the order the log records them
@@ -615,8 +614,8 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
-tests/procprobe.c:probe_main complexity 63 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 471 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main complexity 65 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main lines 482 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 194 a probe, one sequence of steps in the order the log records them

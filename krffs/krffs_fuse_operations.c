@@ -303,6 +303,34 @@ int krffs_create(const char *path, mode_t mode, struct fuse_file_info *file_info
     return result;
 }
 
+/**
+ * Copies `size` bytes into a node's data at `offset` and syncs what changed.
+ *
+ * A write that starts past the old end of file leaves a gap, which POSIX
+ * requires to read as zeroes, so the gap is cleared and synced before the
+ * payload goes down. `old_data_size` is the size the node had before the
+ * caller grew it.
+ */
+static void krffs_write_into_node(struct krffs_node *node, const char *buffer, size_t size,
+                                  PLATFORM_OFF_T offset, uint64_t old_data_size)
+{
+    void *base = node + 1;
+    void *destination = ((char *)base) + offset;
+
+    if ((uint64_t)offset > old_data_size) {
+        void *gap = ((char *)base) + old_data_size;
+        size_t gap_size = (size_t)((uint64_t)offset - old_data_size);
+
+        memset(gap, 0, gap_size);
+        krffs_sync_mapping(gap, gap_size);
+    }
+    memcpy(destination, buffer, size);
+
+    krffs_sync_mapping(destination, size);
+
+    node->modification_time = krffs_get_current_node_time();
+}
+
 /** Write bytes and clear any gap after the old EOF. */
 int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_T offset,
                 struct fuse_file_info *file_info)
@@ -323,7 +351,6 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
 
             result = -ENOENT;
         } else {
-            void *base = node + 1;
             uint64_t available_data_size = node->size - sizeof(*node);
             uint64_t old_data_size = node->data_size;
 
@@ -335,20 +362,7 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
 
                 krffs_sync_mapping(node, sizeof(*node));
 
-                void *destination = ((char *)base) + offset;
-
-                if ((uint64_t)offset > old_data_size) {
-                    void *gap = ((char *)base) + old_data_size;
-                    size_t gap_size = (size_t)((uint64_t)offset - old_data_size);
-
-                    memset(gap, 0, gap_size);
-                    krffs_sync_mapping(gap, gap_size);
-                }
-                memcpy(destination, buffer, size);
-
-                krffs_sync_mapping(destination, size);
-
-                node->modification_time = krffs_get_current_node_time();
+                krffs_write_into_node(node, buffer, size, offset, old_data_size);
 
                 result = (int)size;
             } else {
@@ -359,22 +373,7 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
 
                     result = -ENOSPC;
                 } else {
-                    base = node + 1;
-
-                    void *destination = ((char *)base) + offset;
-
-                    if ((uint64_t)offset > old_data_size) {
-                        void *gap = ((char *)base) + old_data_size;
-                        size_t gap_size = (size_t)((uint64_t)offset - old_data_size);
-
-                        memset(gap, 0, gap_size);
-                        krffs_sync_mapping(gap, gap_size);
-                    }
-                    memcpy(destination, buffer, size);
-
-                    krffs_sync_mapping(destination, size);
-
-                    node->modification_time = krffs_get_current_node_time();
+                    krffs_write_into_node(node, buffer, size, offset, old_data_size);
 
                     result = (int)size;
                 }
@@ -572,8 +571,7 @@ int krffs_utimens(const char *path, const struct timespec time[2])
                 node->modification_time.seconds = time[1].tv_sec;
                 node->modification_time.nanoseconds = time[1].tv_nsec;
             }
-            if (!time || time[0].tv_nsec != UTIME_OMIT ||
-                time[1].tv_nsec != UTIME_OMIT) {
+            if (!time || time[0].tv_nsec != UTIME_OMIT || time[1].tv_nsec != UTIME_OMIT) {
                 node->attribute_change_time = current_node_time;
             }
 

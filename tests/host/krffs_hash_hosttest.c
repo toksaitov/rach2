@@ -9,6 +9,8 @@
 #include "../../krffs/stageimage.krffs.c"
 #undef main
 
+#include "krffs_hash_vectors.h"
+
 /** Check fixed results, including unsigned bytes, wrap and the zero remap. */
 int main(void)
 {
@@ -19,7 +21,7 @@ int main(void)
         fprintf(stderr, "krffs-hash-test: hash vector failed\n");                                  \
         failures++;                                                                                \
     }
-#include "krffs_hash_vectors.h"
+    KRFFS_HASH_VECTORS
 #undef HASH_VECTOR
     printf("krffs-hash-test: result: %d failures\n", failures);
     return failures != 0;
