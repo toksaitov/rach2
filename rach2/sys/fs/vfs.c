@@ -1156,27 +1156,25 @@ static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void 
     return written;
 }
 
-/* A grow can relocate the node, as in `kfs_write`; the path call reports
- * only status, so the node is looked up again and every holder repointed. */
+/**
+ * Truncate the held node and repoint its holders if it moves.
+ */
 static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
-    char path[256];
-    krffs_node_t *n;
+    krffs_node_t *n = handle;
+    int rc;
 
     if (size > 0xFFFFFFFFu) {
         return -EFBIG;
     }
-    if (krffs_node_path(handle, path, sizeof(path)) != 0) {
-        return -EIO;
-    }
-    if (krffs_truncate(path + (path[0] == '/'), (uint32_t)size) != 0) {
-        return -EIO;
-    }
-    n = krffs_resolve(path + (path[0] == '/'));
+    rc = krffs_truncate_node(&n, (uint32_t)size);
     if (n && n != (krffs_node_t *)handle) {
         vfs_repoint(mnt, handle, n);
     }
-    return 0;
+    if (rc == KRFFS_ENOSPACE) {
+        return -ENOSPC;
+    }
+    return rc == 0 ? 0 : -EIO;
 }
 
 static int kfs_fsync_locked(struct vfs_mount *mnt, void *handle)

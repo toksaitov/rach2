@@ -16,6 +16,8 @@
 
 typedef unsigned int size_t;
 
+#include "../rach2/sys/lib/kcpu.c"
+
 #define SYS_EXIT      1
 #define SYS_READ      3
 #define SYS_WRITE     4
@@ -92,12 +94,33 @@ static int bufs_equal(const unsigned char *a, const unsigned char *b, int n)
     return 1;
 }
 
+/** Compare the production helper with a direct leaf-7, subleaf-zero query. */
+static int cpuid_subleaf_zero(void)
+{
+    uint32_t want_a = 7, want_b, want_c = 0, want_d;
+    uint32_t got_a, got_b, got_c, got_d;
+
+    kcpu_id(0, &got_a, 0, 0, 0);
+    if (got_a < 7) {
+        return 1;
+    }
+    __asm__ __volatile__("cpuid" : "+a"(want_a), "=b"(want_b), "+c"(want_c), "=d"(want_d));
+    kcpu_id(0, 0, 0, 0, 0);
+    kcpu_id(7, &got_a, &got_b, &got_c, &got_d);
+    return got_a == want_a && got_b == want_b && got_c == want_c && got_d == want_d;
+}
+
 void _start(void)
 {
     unsigned char a[32], b[32];
     int g, fd, bits;
 
     puts("RNGPROBE START\n");
+
+    if (!cpuid_subleaf_zero()) {
+        puts("RNGPROBE FAIL (cpuid subleaf zero)\n");
+        sys_exit(1);
+    }
 
     g = getrandom(a, (int)sizeof(a), 0);
 

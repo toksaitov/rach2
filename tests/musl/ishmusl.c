@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #define SHELL "/ish"
 
@@ -36,12 +37,11 @@ static int fail(const char *what)
 /**
  * Run `line` through `ish -c` and return the shell's exit status, or -1.
  *
- * The environment is the one this probe was given, which has the `PATH` the
- * shell resolves against.
+ * Use the supplied environment. Bits 0 and 1 of `closed` close stdin and
+ * stdout; `output`, when nonnegative, replaces inherited stdout first.
  */
-static int ish_status(const char *line)
+static int ish_run(const char *line, char **environment, int closed, int output)
 {
-    extern char **environ;
     char *argv[4];
     int status = 0;
     int child = fork();
@@ -50,11 +50,31 @@ static int ish_status(const char *line)
         return -1;
     }
     if (child == 0) {
+        if (output >= 0) {
+            if (dup2(output, 1) < 0) {
+                _exit(125);
+            }
+            close(output);
+        }
+        if (closed & 1) {
+            close(0);
+        }
+        if (closed & 2) {
+            close(1);
+        }
         argv[0] = (char *)"-ish";
         argv[1] = (char *)"-c";
         argv[2] = (char *)line;
         argv[3] = NULL;
-        execve(SHELL, argv, environ);
+#ifdef ISH_HOSTTEST
+        argv[2] = strdup(line);
+        if (argv[2] == NULL) {
+            _exit(125);
+        }
+        _exit(ish_main(3, argv, environment));
+#else
+        execve(SHELL, argv, environment);
+#endif
         _exit(125);
     }
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
@@ -64,6 +84,80 @@ static int ish_status(const char *line)
     return WEXITSTATUS(status);
 }
 
+/** Run a command with the probe's inherited descriptors and environment. */
+static int ish_status(const char *line)
+{
+    extern char **environ;
+
+    return ish_run(line, environ, 0, -1);
+}
+
+/** Require an exact file value, including its length. */
+static int file_equals(const char *path, const char *expected)
+{
+    char buf[64];
+    int fd = open(path, O_RDONLY);
+    ssize_t n;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, buf, sizeof(buf));
+    close(fd);
+    return n == (ssize_t)strlen(expected) && memcmp(buf, expected, (size_t)n) == 0;
+}
+
+/** Redirection must work when open returns either standard descriptor. */
+static int check_descriptors(void)
+{
+    char *environment[] = {"PATH=/bin", NULL};
+    int closed;
+
+    for (closed = 0; closed < 4; closed++) {
+        int capture = open("ishmusl.capture", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        int status;
+
+        if (capture < 0) {
+            return fail("cannot create output capture");
+        }
+        status = ish_run("/bin/echo hello > ishmusl.output", environment, closed, capture);
+        close(capture);
+        if (status != 0 || !file_equals("ishmusl.output", "hello\n") ||
+            !file_equals("ishmusl.capture", "")) {
+            return fail("output redirection lost a standard descriptor");
+        }
+    }
+    unlink("ishmusl.output");
+    unlink("ishmusl.capture");
+    return 0;
+}
+
+/** HOME and PATH require an exact, case-sensitive name followed by '='. */
+static int check_environment(void)
+{
+    char *prefix[] = {"HOMELESS=/no/such/home", "HOME=/", "PATHETIC=/no/such/bin", "PATH=/bin",
+                      NULL};
+    char *lower[] = {"home=/no/such/home", "HOME=/", "path=/no/such/bin", "PATH=/bin", NULL};
+    char *missing[] = {"HOMELESS=/", "home=/", "PATHETIC=/bin", "path=/bin", NULL};
+    char **cases[] = {prefix, lower};
+    unsigned int i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (ish_run("cd", cases[i], 0, -1) != 0) {
+            return fail("home matched a prefix or a different case");
+        }
+        if (ish_run("echo environment > ishmusl.environment", cases[i], 0, -1) != 0 ||
+            !file_equals("ishmusl.environment", "environment\n")) {
+            return fail("path matched a prefix or a different case");
+        }
+    }
+    unlink("ishmusl.environment");
+    if (ish_run("cd", missing, 0, -1) != 1 || ish_run("echo", missing, 0, -1) != 127) {
+        return fail("a similarly named variable supplied home or path");
+    }
+    return 0;
+}
+
 /**
  * Run the cases and report.
  */
@@ -71,6 +165,9 @@ int main(void)
 {
     int rc;
 
+    if (check_descriptors() || check_environment()) {
+        return 1;
+    }
     rc = ish_status("/musl/statushelper 0");
     if (rc != 0) {
         return fail("a command that succeeds did not report 0");

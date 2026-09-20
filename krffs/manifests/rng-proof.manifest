@@ -1,0 +1,2 @@
+# A private copy substitutes the freshly compiled probe's host path.
+file 0755 /rngprobe build/tests/rngprobe

@@ -41,10 +41,15 @@ static void null_sink(void *ctx, unsigned char c)
     (void)c;
 }
 
+/**
+ * Initialize a terminal with default termios, window size and input wait.
+ * An input producer may set `space_wq` to receive flush and termios wakeups.
+ */
 void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
 {
     n_tty_init(&t->ldisc);
     wait_queue_init(&t->input_wq);
+    t->space_wq = NULL;
     t->winsize.ws_row = 25;
     t->winsize.ws_col = 80;
     t->winsize.ws_xpixel = 0;
@@ -171,6 +176,8 @@ static int tty_ready_cond(void *arg)
  * When `nonblock` is set the read never parks: it drains the polled source and,
  * if nothing is ready (and the discipline is not at EOF, which reads as ready),
  * returns -EAGAIN instead of waiting.
+ * The USB latency record checks readiness with interrupts off too: pumping
+ * the console mutates the same discipline as interrupt-side input.
  */
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
 {
@@ -193,12 +200,13 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         return -EAGAIN;
     }
     for (;;) {
-        /* The record's other end: a suite that measures a key's path to a
-           parked reader types on this line, which says the reader is about
-           to park, and not on the program's own word, which it prints
-           before it calls. Only with the record on. */
-        if (usb_stamp_recording() && !tty_ready_cond(t)) {
-            klog(KLOG_INFO, "usb", "latency: reader waiting");
+        if (usb_stamp_recording()) {
+            flags = kirq_save();
+            rc = tty_ready_cond(t);
+            kirq_restore(flags);
+            if (!rc) {
+                klog(KLOG_INFO, "usb", "latency: reader waiting");
+            }
         }
         rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
         if (rc != 0) {
@@ -302,6 +310,8 @@ int tty_inq(struct tty *t)
  * reports something to read. The console's flush also empties the serial
  * ring: input taken from the port but not yet in the discipline is input
  * the program asked to discard.
+ * Wake the optional input-producer queue to recheck space after a flush or
+ * mode change.
  */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
 {
@@ -316,23 +326,24 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
         n_tty_flush(&t->ldisc);
     }
     readable = n_tty_set_termios(&t->ldisc, kt);
+    wq_wake_all(t->space_wq);
     if (readable) {
         wq_wake_all(&t->input_wq);
     }
     kirq_restore(flags);
 }
 
+/** Discard unread input with interrupts off and wake input producers. */
 void tty_flush_input(struct tty *t)
 {
     uint32_t flags;
 
-    /* Interrupts off so the reset is not split by an input IRQ pushing onto the
-     * queue (which would desync head/tail). */
     flags = kirq_save();
     if (t->pump) {
         serial_rx_flush();
     }
     n_tty_flush(&t->ldisc);
+    wq_wake_all(t->space_wq);
     kirq_restore(flags);
 }
 

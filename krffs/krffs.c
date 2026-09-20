@@ -16,6 +16,44 @@
 /** Capacity of the on-stack buffer that has the file system file path. */
 #define KRFFS_PATH_BUFFER_LENGTH 1024
 
+/** Validate the complete node ring before mounting it. */
+static int valid_node_ring(struct krffs_file_system *fs)
+{
+    uint64_t position = 0;
+    uint64_t previous_size = 0;
+
+    while (position < (uint64_t)fs->size) {
+        struct krffs_node *node;
+        uint64_t remaining = (uint64_t)fs->size - position;
+
+        if (remaining < sizeof(*node)) {
+            return 0;
+        }
+        node = (struct krffs_node *)((char *)fs->node + position);
+        if (node->magic != KRFFS_File_System_Magic ||
+            node->size < sizeof(*node) || node->size > remaining) {
+            return 0;
+        }
+        if (position == 0) {
+            if (node->type != KRFFS_Root_Node) {
+                return 0;
+            }
+        } else if ((node->type != KRFFS_Free_Node &&
+                    node->type != KRFFS_Reserved_Node) ||
+                   node->previous_node_size != previous_size) {
+            return 0;
+        }
+        if (node->type != KRFFS_Free_Node &&
+            (node->data_size > node->size - sizeof(*node) ||
+             !memchr(node->name, '\0', sizeof(node->name)))) {
+            return 0;
+        }
+        previous_size = node->size;
+        position += node->size;
+    }
+    return fs->node->previous_node_size == previous_size;
+}
+
 /**
  * Mounts a KRFFS file in a file under FUSE.
  *
@@ -24,8 +62,8 @@
  * absent, or either of the first two arguments looks like an option (begins
  * with `-`), the arguments pass to FUSE untouched.
  *
- * The backing file must be a regular file at least two nodes long and carry
- * the KRFFS signature. It is opened, mapped, validated, and then closed; the
+ * The backing file must be a regular file at least two nodes long and have
+ * a valid node ring. It is opened, mapped, validated, and then closed; the
  * mapping survives the close. The mapped file system is published through
  * `KRFFS_File_System` before `fuse_main` runs. `argv[1]` is rewritten to `-s`
  * so FUSE runs single-threaded.
@@ -111,17 +149,8 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-        The KRFFS signature is the magic of the first node at the start of the
-        file.
-     */
-    if (file_system.node->magic != KRFFS_File_System_Magic) {
-        fprintf(stderr,
-                "The file system was not found at '%s'. The file system was not "
-                "created or the file is corrupted.\n"
-                "\n"
-                "To create a file system use the `mkfs.krffs` program.\n",
-                path);
+    if (!valid_node_ring(&file_system)) {
+        fprintf(stderr, "krffs: invalid node ring: '%s'\n", path);
 
         exit_status = EXIT_FAILURE;
 

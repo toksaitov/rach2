@@ -15,8 +15,8 @@ static const unsigned long Max_Input_String_Length = 255;
 static const unsigned long Max_Argument_Count = 255;
 static const unsigned long Max_Executable_Path_Length = 1024;
 
-static const char Environment_Variable_Home[] = "HOME";
-static const char Environment_Variable_Path[] = "PATH";
+static const char Environment_Variable_Home[] = "HOME=";
+static const char Environment_Variable_Path[] = "PATH=";
 
 static const char Command_Line_Option[] = "-c";
 
@@ -84,10 +84,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
 
     if ((stdin_file && stdin_descriptor < 0) || (stdout_file && stdout_descriptor < 0)) {
         write(2, Redirection_Error_Message, sizeof(Redirection_Error_Message) - 1);
-        if (stdin_descriptor > 0) {
+        if (stdin_descriptor >= 0) {
             close(stdin_descriptor);
         }
-        if (stdout_descriptor > 1) {
+        if (stdout_descriptor >= 0) {
             close(stdout_descriptor);
         }
 
@@ -102,10 +102,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         char *directory = arguments[1] ? arguments[1] : home;
         int moved = directory ? chdir(directory) : -1;
 
-        if (stdin_descriptor > 0) {
+        if (stdin_descriptor >= 0) {
             close(stdin_descriptor);
         }
-        if (stdout_descriptor > 1) {
+        if (stdout_descriptor >= 0) {
             close(stdout_descriptor);
         }
 
@@ -148,10 +148,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     }
 
     if (!executable) {
-        if (stdin_descriptor > 0) {
+        if (stdin_descriptor >= 0) {
             close(stdin_descriptor);
         }
-        if (stdout_descriptor > 1) {
+        if (stdout_descriptor >= 0) {
             close(stdout_descriptor);
         }
 
@@ -161,12 +161,16 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     int status = 0;
     int pid = fork();
     if (pid == 0) {
-        if (stdin_descriptor > 0) {
-            dup2(stdin_descriptor, 0);
+        if (stdin_descriptor >= 0 && stdin_descriptor != 0) {
+            if (dup2(stdin_descriptor, 0) < 0) {
+                exit(Status_Not_Runnable);
+            }
             close(stdin_descriptor);
         }
-        if (stdout_descriptor > 1) {
-            dup2(stdout_descriptor, 1);
+        if (stdout_descriptor >= 0 && stdout_descriptor != 1) {
+            if (dup2(stdout_descriptor, 1) < 0) {
+                exit(Status_Not_Runnable);
+            }
             close(stdout_descriptor);
         }
         execve(executable, arguments, envp);
@@ -189,15 +193,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         status = Status_Not_Runnable;
     }
 
-    /* Only the parent reaches here (the child exec'd or exited). Close the
-     * redirection descriptors it opened, or the shell, which runs as init,
-     * leaks one descriptor per redirected command. The same guards as the
-     * child's dup2 skip the standard fds, which open never returns since the
-     * shell has them. */
-    if (stdin_descriptor > 0) {
+    if (stdin_descriptor >= 0) {
         close(stdin_descriptor);
     }
-    if (stdout_descriptor > 1) {
+    if (stdout_descriptor >= 0) {
         close(stdout_descriptor);
     }
 
@@ -219,9 +218,9 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
 int main(int argc, char **argv, char **envp)
 {
     char *home = ish_get_first_environment_variable(Environment_Variable_Home,
-                                                    sizeof(Environment_Variable_Home), envp);
+                                                    sizeof(Environment_Variable_Home) - 1, envp);
     char *paths = ish_get_first_environment_variable(Environment_Variable_Path,
-                                                     sizeof(Environment_Variable_Path), envp);
+                                                     sizeof(Environment_Variable_Path) - 1, envp);
 
     char input[Max_Input_String_Length + 1];
     input[Max_Input_String_Length] = '\0';

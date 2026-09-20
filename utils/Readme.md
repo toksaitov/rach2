@@ -59,7 +59,7 @@ These are small teaching implementations, not complete POSIX commands. Except fo
 
 `dhcpmsg.[ch]` builds and validates DHCP frames and computes lease boundaries. `netcfg.[ch]` parses the interface file in two passes. `ipcheck.[ch]` gives DHCP and static configuration one IPv4 validator.
 
-`resolv.c` is linked into `ping`, `nc`, and `dnstest`. It tries a strict dotted-quad literal, a hosts file, and one DNS A query in that order. It prefers `/etc/hosts` and `/etc/resolv.conf`; it uses `/hosts` or `/resolv.conf` only when the corresponding `/etc` path is absent. The first valid `nameserver` is used, with `10.0.2.3` as the default. DNS retries for about six seconds.
+`resolv.c` is linked into `ping`, `nc`, and `dnstest`. It tries a strict dotted-quad literal, a hosts file, and one DNS A query in that order. It prefers `/etc/hosts` and `/etc/resolv.conf`; it uses `/hosts` or `/resolv.conf` only when the corresponding `/etc` path is absent. The first valid `nameserver` is used, with `10.0.2.3` as the default. DNS accepts replies only from that server on UDP port 53 and retries for about six seconds.
 
 ## Init and account programs
 

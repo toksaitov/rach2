@@ -1,0 +1,139 @@
+#!/bin/sh
+# Rebuild each driver fault in a private copy under this worktree.
+set -eu
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo"
+mkdir -p build/review-proof
+work=$(mktemp -d "$repo/build/review-proof/drivers.XXXXXX")
+child=
+source=
+cp -R rach2/sys "$work/sys"
+
+restore()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    if [ -n "$source" ]; then
+        cp "$work/saved.c" "$source"
+        touch "$source"
+    fi
+}
+trap restore EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    phase=$1
+    binary="$work/$fault-$phase"
+    extra=
+    if [ "$test" = vga_text ]; then
+        extra="$work/sys/lib/kfmt.c $work/sys/lib/kstd.c"
+    fi
+    # shellcheck disable=SC2086
+    if ! "${CC:-cc}" -std=c99 -g -O1 -ffreestanding \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I "$work/sys" -I "$work/sys/lib" \
+        "tests/host/${test}_hosttest.c" "$work/sys/lib/kstring.c" \
+        "$work/sys/lib/kctypes.c" $extra -o "$binary" \
+        >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    perl -e 'alarm 30; exec @ARGV or die "driver-mutation: exec: $!\n"' \
+        "$binary" ${argument:+"$argument"} >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    if [ "$phase" = mutated ]; then
+        [ "$status" -eq 1 ] && grep -q "$failure" "$binary.log" || exit 1
+    else
+        [ "$status" -eq 0 ] || exit 1
+    fi
+    echo "driver-mutation: result: $fault $phase status $status"
+}
+
+if [ "$#" -eq 0 ]; then
+    set -- frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale callback cursor
+fi
+echo "driver-mutation: logs: $work"
+for fault do
+    argument=
+    case "$fault" in
+        frames) test=sb16; file=audio/sb16.c; argument=frames
+            failure='partial frame stays queued' ;;
+        setup-speaker) test=sb16; file=audio/sb16.c; argument=setup
+            failure='failed setup does not start dma early' ;;
+        setup-*) test=sb16; file=audio/sb16.c; argument=setup
+            failure='failed setup returns failure' ;;
+        callback) test=sb16; file=audio/sb16.c
+            failure='callback continues after priming' ;;
+        scale) test=sb16; file=audio/audio_debug.c
+            failure='sb16 scale selects 44100 hz' ;;
+        gfx-enter|gfx-exit) test=vga_gfx; file=display/vga_gfx.c
+            failure='programs maximum scan line\|text clear excludes interrupts' ;;
+        cursor) test=vga_text; file=display/vga_text.c
+            failure='echo leaves cursor at 0x0100' ;;
+        *) echo "driver-mutation: unknown fault: $fault" >&2; exit 1 ;;
+    esac
+    source="$work/sys/$file"
+    cp "$source" "$work/saved.c"
+    run_phase fixed
+    python3 - "$source" "$fault" <<'PY'
+import pathlib
+import sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+fault = sys.argv[2]
+if fault == "frames":
+    old = "    to_read -= to_read % frame_bytes;"
+    new = "    (void)frame_bytes;"
+elif fault in ("gfx-enter", "gfx-exit", "cursor"):
+    name = {"gfx-enter": "uint8_t *vga_mode13h_enter(void)",
+            "gfx-exit": "void vga_mode13h_exit(void)",
+            "cursor": "void vga_text_release(void)"}[fault]
+    start = s.index(name + "\n{")
+    end = s.index("\n}", start) + 2
+    old = s[start:end]
+    new = old.replace("uint32_t flags = kirq_save();", "uint32_t flags = 0;")
+    new = new.replace("kirq_restore(flags);", "(void)flags;")
+elif fault == "setup-speaker":
+    old = "        goto fail;\n    }\n\n    /* Silence both halves:"
+    new = "        (void)0;\n    }\n\n    /* Silence both halves:"
+elif fault == "setup-transfer":
+    old = "    return dsp_write(dsp_cmd) && dsp_write(mode) && dsp_write(block_size & 0xFF) &&\n" \
+          "           dsp_write((block_size >> 8) & 0xFF);"
+    new = "    dsp_write(dsp_cmd);\n    dsp_write(mode);\n" \
+          "    dsp_write(block_size & 0xFF);\n" \
+          "    dsp_write((block_size >> 8) & 0xFF);\n    return true;"
+elif fault == "setup-dma":
+    old = "        return false;\n    }\n\n    /* DSP 4.xx auto-init:"
+    new = "        (void)0;\n    }\n\n    /* DSP 4.xx auto-init:"
+elif fault == "callback":
+    old = "    if (user_callback) {\n" \
+          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
+          "    } else {\n" \
+          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
+    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
+elif fault == "scale":
+    old = "    if (audio->type == AUDIO_DRIVER_SB16) {\n" \
+          "        sample_rate = 44100;\n    }"
+    new = ""
+else:
+    raise SystemExit("driver-mutation: unknown fault")
+if s.count(old) != 1:
+    raise SystemExit("driver-mutation: source pattern is not unique")
+p.write_text(s.replace(old, new))
+PY
+    run_phase mutated
+    restore
+    run_phase restored
+    cmp "$work/saved.c" "$source"
+    source=
+done

@@ -303,6 +303,7 @@ int krffs_create(const char *path, mode_t mode, struct fuse_file_info *file_info
     return result;
 }
 
+/** Write bytes and clear any gap after the old EOF. */
 int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_T offset,
                 struct fuse_file_info *file_info)
 {
@@ -324,6 +325,7 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
         } else {
             void *base = node + 1;
             uint64_t available_data_size = node->size - sizeof(*node);
+            uint64_t old_data_size = node->data_size;
 
             uint64_t new_size = offset + size;
             if (new_size <= available_data_size) {
@@ -335,6 +337,13 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
 
                 void *destination = ((char *)base) + offset;
 
+                if ((uint64_t)offset > old_data_size) {
+                    void *gap = ((char *)base) + old_data_size;
+                    size_t gap_size = (size_t)((uint64_t)offset - old_data_size);
+
+                    memset(gap, 0, gap_size);
+                    krffs_sync_mapping(gap, gap_size);
+                }
                 memcpy(destination, buffer, size);
 
                 krffs_sync_mapping(destination, size);
@@ -354,6 +363,13 @@ int krffs_write(const char *path, const char *buffer, size_t size, PLATFORM_OFF_
 
                     void *destination = ((char *)base) + offset;
 
+                    if ((uint64_t)offset > old_data_size) {
+                        void *gap = ((char *)base) + old_data_size;
+                        size_t gap_size = (size_t)((uint64_t)offset - old_data_size);
+
+                        memset(gap, 0, gap_size);
+                        krffs_sync_mapping(gap, gap_size);
+                    }
                     memcpy(destination, buffer, size);
 
                     krffs_sync_mapping(destination, size);
@@ -523,6 +539,7 @@ int krffs_unlink(const char *path)
     return result;
 }
 
+/** Set requested timestamps and preserve fields marked UTIME_OMIT. */
 int krffs_utimens(const char *path, const struct timespec time[2])
 {
     int result = 0;
@@ -543,8 +560,22 @@ int krffs_utimens(const char *path, const struct timespec time[2])
         } else {
             struct krffs_node_time current_node_time = krffs_get_current_node_time();
 
-            node->access_time = current_node_time;
-            node->modification_time = current_node_time;
+            if (!time || time[0].tv_nsec == UTIME_NOW) {
+                node->access_time = current_node_time;
+            } else if (time[0].tv_nsec != UTIME_OMIT) {
+                node->access_time.seconds = time[0].tv_sec;
+                node->access_time.nanoseconds = time[0].tv_nsec;
+            }
+            if (!time || time[1].tv_nsec == UTIME_NOW) {
+                node->modification_time = current_node_time;
+            } else if (time[1].tv_nsec != UTIME_OMIT) {
+                node->modification_time.seconds = time[1].tv_sec;
+                node->modification_time.nanoseconds = time[1].tv_nsec;
+            }
+            if (!time || time[0].tv_nsec != UTIME_OMIT ||
+                time[1].tv_nsec != UTIME_OMIT) {
+                node->attribute_change_time = current_node_time;
+            }
 
             krffs_sync_mapping(node, sizeof(*node));
         }
@@ -586,6 +617,7 @@ int krffs_chmod(const char *path, mode_t mode)
     return result;
 }
 
+/** Preserve an owner or group passed as its minus-one sentinel. */
 int krffs_chown(const char *path, uid_t uid, gid_t gid)
 {
     int result = 0;
@@ -604,8 +636,12 @@ int krffs_chown(const char *path, uid_t uid, gid_t gid)
 
             result = -ENOENT;
         } else {
-            node->uid = uid;
-            node->gid = gid;
+            if (uid != (uid_t)-1) {
+                node->uid = uid;
+            }
+            if (gid != (gid_t)-1) {
+                node->gid = gid;
+            }
             node->attribute_change_time = krffs_get_current_node_time();
 
             krffs_sync_mapping(node, sizeof(*node));

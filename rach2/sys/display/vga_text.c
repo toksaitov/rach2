@@ -34,6 +34,7 @@
 #include "vga_text.h"
 #include "vga_gfx.h"
 #include "../kio.h"
+#include "../lib/kirq.h"
 
 #define VGA_TEXT_SCROLLBACK_LINES 512
 #define VGA_TEXT_BLANK_CHAR       ' '
@@ -264,12 +265,15 @@ void vga_text_hold(void)
 /** Release a hold, placing the cursor if it moved while held. */
 void vga_text_release(void)
 {
+    uint32_t flags = kirq_save();
+
     if (_hold > 0) {
         _hold--;
     }
     if (_hold == 0 && _cursor_stale) {
         vga_text_update_cursor();
     }
+    kirq_restore(flags);
 }
 
 /**

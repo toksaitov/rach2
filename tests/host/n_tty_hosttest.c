@@ -13,6 +13,8 @@
 
 #include "tty/n_tty.h"
 
+extern int dprintf(int fd, const char *format, ...);
+
 static int fails;
 
 #define CHECK(cond)    \
@@ -73,12 +75,110 @@ static void feed_str(struct n_tty *t, struct cap *cp, const char *s)
     }
 }
 
+/** Require one read to return exactly the specified bytes and boundary. */
+static void expect_line(struct n_tty *t, const char *expected, int count, const char *detail)
+{
+    unsigned char buf[32];
+    int n = n_tty_read(t, buf, sizeof(buf));
+    int i;
+
+    if (n == count) {
+        for (i = 0; i < n && buf[i] == (unsigned char)expected[i]; i++) {
+        }
+        if (i == n) {
+            return;
+        }
+    }
+    dprintf(2, "n-tty-test: fail: %s\n", detail);
+    fails++;
+}
+
+/** Preserve VEOL bytes and queued boundaries across termios changes. */
+static void veol_lines(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    struct ktermios tio;
+    unsigned char byte;
+
+    n_tty_init(&t);
+    cap_reset(&cp);
+    tio = t.tio;
+    tio.c_cc[VEOL] = ';';
+    n_tty_set_termios(&t, &tio);
+    feed_str(&t, &cp, "ab;");
+    if (!cap_is(&cp, "ab;", 3)) {
+        dprintf(2, "n-tty-test: fail: VEOL echo preserves semicolon\n");
+        fails++;
+    }
+    tio.c_cc[VEOL] = ':';
+    n_tty_set_termios(&t, &tio);
+    feed_str(&t, &cp, "cd:\n");
+    expect_line(&t, "ab;", 3, "VEOL byte and boundary survive termios change");
+    expect_line(&t, "cd:", 3, "new VEOL terminates its own line");
+    expect_line(&t, "\n", 1, "newline remains a separate line");
+
+    feed_str(&t, &cp, "xy:z\n");
+    CHECK(n_tty_read(&t, &byte, 1) == 1 && byte == 'x');
+    expect_line(&t, "y:", 2, "short read retains the queued boundary");
+    expect_line(&t, "z\n", 2, "short read does not consume the next line");
+}
+
+/** A VEOF-completed line ends before later input, including after wrap. */
+static void eof_lines(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    unsigned char byte;
+
+    n_tty_init(&t);
+    cap_reset(&cp);
+    t.rq_head = t.rq_tail = ~0U - 1;
+    feed_str(&t, &cp, "ab");
+    feed(&t, &cp, t.tio.c_cc[VEOF]);
+    feed_str(&t, &cp, "cd\n");
+    expect_line(&t, "ab", 2, "VEOF boundary precedes a later newline");
+    expect_line(&t, "cd\n", 3, "line after VEOF is read separately");
+
+    feed_str(&t, &cp, "ab");
+    feed(&t, &cp, t.tio.c_cc[VEOF]);
+    feed_str(&t, &cp, "cd");
+    feed(&t, &cp, t.tio.c_cc[VEOF]);
+    CHECK(n_tty_read(&t, &byte, 1) == 1 && byte == 'a');
+    expect_line(&t, "b", 1, "short read retains VEOF boundary");
+    expect_line(&t, "cd", 2, "consecutive VEOF lines stay separate");
+    CHECK(n_tty_readable(&t) == 0);
+}
+
+/** Reused ring slots must not retain markers from consumed or flushed lines. */
+static void reused_markers(void)
+{
+    struct n_tty t;
+    struct cap cp;
+    int i;
+
+    n_tty_init(&t);
+    cap_reset(&cp);
+    for (i = 0; i < N_TTY_READ_MAX; i++) {
+        feed(&t, &cp, 'x');
+        feed(&t, &cp, t.tio.c_cc[VEOF]);
+    }
+    n_tty_flush(&t);
+    feed_str(&t, &cp, "ab");
+    feed(&t, &cp, t.tio.c_cc[VEOF]);
+    expect_line(&t, "ab", 2, "ring reuse clears old end markers");
+}
+
 int main(void)
 {
     struct n_tty t;
     struct cap cp;
     unsigned char buf[512];
     int n, i;
+
+    veol_lines();
+    eof_lines();
+    reused_markers();
 
     /* cooked: assemble a line, ERASE rubs out, exact ECHOE feedback */
     n_tty_init(&t);

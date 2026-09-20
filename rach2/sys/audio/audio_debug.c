@@ -179,10 +179,10 @@ static void audio_wait_until(uint32_t target_ticks)
 /**
  * Play a five-note C-major scale through the callback path.
  *
- * Drives the driver in 48 kHz stereo signed-16 mode, retunes the shared tone
- * state once per note, and lets the interrupt-time callback synthesize the
- * samples. The notes split `duration_ms` evenly; the total is clamped to at
- * least 100 ms. Always stops playback on the way out.
+ * Uses stereo signed-16 samples at 48 kHz, or 44.1 kHz on SB16.
+ * Retunes the shared tone state once per note; the interrupt-time callback
+ * generates the samples. The notes split `duration_ms` evenly; the total is
+ * clamped to at least 100 ms. Always stops playback on the way out.
  */
 static void audio_run_scale_test(uint32_t duration_ms)
 {
@@ -198,6 +198,10 @@ static void audio_run_scale_test(uint32_t duration_ms)
     if (!audio) {
         console_puts("No audio driver.");
         return;
+    }
+
+    if (audio->type == AUDIO_DRIVER_SB16) {
+        sample_rate = 44100;
     }
 
     if (duration_ms < 100) {

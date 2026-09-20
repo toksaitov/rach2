@@ -93,7 +93,8 @@ struct n_tty {
     unsigned char line[N_TTY_LINE_MAX]; /* the canonical line under edit */
     int line_len;
     unsigned char rq[N_TTY_READ_MAX]; /* ring of bytes ready for read() */
-    unsigned int rq_head;             /* monotonic; slot = head & (SIZE-1) */
+    unsigned char rq_end[N_TTY_READ_MAX];
+    unsigned int rq_head; /* monotonic; slot = head & (SIZE-1) */
     unsigned int rq_tail;
     int eof;              /* a VEOF on an empty line -> a pending end-of-file */
     unsigned int eof_pos; /* the rq stream position the pending EOF sits at */

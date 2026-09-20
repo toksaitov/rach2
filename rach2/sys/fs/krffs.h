@@ -288,6 +288,7 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 #define KRFFS_ENOSPACE (-2)
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size, uint32_t offset);
 int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, uint32_t offset);
+int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size);
 
 /* Read operations by path. */
 int krffs_open(const char *path);

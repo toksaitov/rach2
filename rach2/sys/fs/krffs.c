@@ -2476,6 +2476,23 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, ui
 }
 
 /**
+ * Truncate an open node and report its location after a possible relocation.
+ */
+int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size)
+{
+    uint64_t node;
+    int rc;
+
+    if (!krffs_fs || !nodep || !*nodep) {
+        return KRFFS_EBAD;
+    }
+    node = krffs_offset_of(*nodep);
+    rc = krffs_truncate_node_at(&krffs_root_mount, node, new_size, &node);
+    *nodep = krffs_node_of(node);
+    return rc;
+}
+
+/**
  * Resolve `path` and write to it via krffs_write_node.
  */
 int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset)
@@ -2513,12 +2530,8 @@ uint32_t krffs_get_file_size(const char *path)
 /**
  * Resize the file at `path` to `new_size` bytes, zero-filling any growth.
  *
- * Growth is the only thing a resize ever moves a node for, and this call
- * reports status alone, so a caller that may grow a file looks the node up
- * again and repoints its holders; `kfs_truncate_locked` in the VFS does
- * exactly that for `ftruncate`. The callers that truncate to zero, the
- * O_TRUNC and creat paths and the debug shell, have nothing to repoint: a
- * shrink keeps the node where it is.
+ * This path interface reports status alone. Descriptor truncation uses
+ * krffs_truncate_node, which also reports a relocated node.
  */
 int krffs_truncate(const char *path, uint32_t new_size)
 {

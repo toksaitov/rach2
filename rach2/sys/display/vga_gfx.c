@@ -7,6 +7,7 @@
 #include "../kio.h"
 #include "../serial.h"
 #include "../lib/kstring.h"
+#include "../lib/kirq.h"
 
 bool vga_graphics_mode = false;
 
@@ -199,7 +200,7 @@ static void vga_set_mode(uint8_t misc, const uint8_t *seq, size_t seq_count, con
  */
 static void vga_save_font(void)
 {
-    volatile uint8_t *font_mem = (volatile uint8_t *)0xA0000;
+    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
     int i, j;
 
     outb(VGA_SEQ_INDEX, 0x02); /* Map Mask */
@@ -234,7 +235,7 @@ static void vga_save_font(void)
  */
 static void vga_restore_font(void)
 {
-    volatile uint8_t *font_mem = (volatile uint8_t *)0xA0000;
+    volatile uint8_t *font_mem = (volatile uint8_t *)VGA_GFX_FRAMEBUFFER;
     int i, j;
 
     outb(VGA_SEQ_INDEX, 0x02); /* Map Mask */
@@ -284,7 +285,10 @@ static void vga_restore_font(void)
  */
 uint8_t *vga_mode13h_enter(void)
 {
+    uint32_t flags = kirq_save();
+
     if (vga_graphics_mode) {
+        kirq_restore(flags);
         return (uint8_t *)VGA_GFX_FRAMEBUFFER;
     }
 
@@ -305,6 +309,7 @@ uint8_t *vga_mode13h_enter(void)
     gfx_current.framebuffer = (uint8_t *)VGA_GFX_FRAMEBUFFER;
     gfx_current.size = VGA_GFX_SIZE;
 
+    kirq_restore(flags);
     return (uint8_t *)VGA_GFX_FRAMEBUFFER;
 }
 
@@ -369,7 +374,10 @@ static void vga_restore_text_palette(void)
  */
 void vga_mode13h_exit(void)
 {
+    uint32_t flags = kirq_save();
+
     if (!vga_graphics_mode) {
+        kirq_restore(flags);
         return;
     }
 
@@ -390,6 +398,7 @@ void vga_mode13h_exit(void)
     gfx_current.size = 0;
 
     k_cls();
+    kirq_restore(flags);
 }
 
 /**

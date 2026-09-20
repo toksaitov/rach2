@@ -25,8 +25,9 @@ struct tty_winsize {
 };
 
 struct tty {
-    struct n_tty ldisc;          /* line discipline: termios + cooked line + read queue */
-    wait_queue_t input_wq;       /* readers parked until input is ready */
+    struct n_tty ldisc;    /* line discipline: termios + cooked line + read queue */
+    wait_queue_t input_wq; /* readers parked until input is ready */
+    wait_queue_t *space_wq;
     uint32_t ready_us;           /* when a line became readable, until a reader has it */
     struct tty_winsize winsize;  /* TIOCGWINSZ window size */
     n_tty_out_fn sink;           /* echo/output byte sink (NULL discards) */

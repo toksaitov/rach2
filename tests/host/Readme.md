@@ -45,7 +45,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 75 native test programs, one per `*_hosttest.c` file.
+The suite contains 76 native test programs, one per `*_hosttest.c` file.
 
 ### Kernel foundations and memory
 
@@ -76,6 +76,8 @@ The suite contains 75 native test programs, one per `*_hosttest.c` file.
 * `vm_hosttest.c` checks VMA insertion, lookup, overlap detection, removal and splitting, and bounded stack growth.
 
 ### Processes, files, and I/O
+
+* `fd_hosttest.c` compiles the descriptor implementation with a namespace substitute that completes a pending relocation during lock acquisition. The operation must receive the updated handle, namespace acquisition must precede the description lock, and release must reverse that order. It also checks a busy shared description and descriptions outside the KRFFS root. This is a lock-order model; it does not run the VFS adapter or a disk interrupt. `tests/run fdlock` runs it with the orphan and raw-offset guest rows.
 
 * `block_hosttest.c` checks partition-view bounds, LBA translation, zero-length rejection, and clamping to the backing device.
 * `lag_hosttest.c` runs the lag wrapper's queue with a backing device that enters the wrapper again from inside a transfer, which is what a caller put to sleep by the driver and overtaken by another looks like to the queue: both requests must be answered after the lag and once more with the duplicate's error, a read's page is scrubbed until its completion, a flush takes a slot the same way, and every slot is free at the end. The wrapper claims a queue slot before it starts the transfer behind it, so a submission that reenters cannot take the same slot.

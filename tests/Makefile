@@ -70,7 +70,9 @@ $(BUILD)/%: %.c
 # sources in one step, where -MF records only the last source's headers, so the
 # build inputs (dnstest.c, resolv.c, netdb.h) are declared as explicit
 # prerequisites; the $(BUILD) .d adds the resolver's transitive headers on top.
-$(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h
+$(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h \
+    $(MUSL_PRE) $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) \
+    $(MUSL_PREFIX)/lib/crtn.o
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(MUSL_CFLAGS) -MF $(BUILD)/dnstest.d -o $@ \
 	    $(MUSL_PRE) dnstest.c ../utils/resolv.c $(MUSL_POST)

@@ -72,8 +72,11 @@ make -C "$REPO" --no-print-directory build/tools/verify/asciiscan \
     build/tools/verify/prosecheck build/tools/verify/sizecheck \
     build/tools/inspect/setidcheck >/dev/null || exit 1
 cd "$REPO" || exit 1
-VDIR=/tmp/rach2_verify
-mkdir -p "$VDIR"
+VDIR=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/rach2_verify.XXXXXX") || {
+    echo "verify-style: cannot create a temporary directory" >&2
+    exit 1
+}
+printf 'verify-style: logs: %s\n' "$VDIR"
 LIBC="$REPO/vendor/musl/install"
 fail=0
 
@@ -93,6 +96,12 @@ inhouse_ch()
     find tools \( -name '*.c' -o -name '*.h' \) 2>/dev/null
 }
 
+
+if ! sh tests/system/verify_temp_test.sh ||
+   ! sh tools/verify/probecheck.sh ||
+   ! sh tests/system/probecheck_test.sh; then
+    fail=1
+fi
 
 hr "preflight: tools present"
 miss=0
@@ -226,6 +235,11 @@ else
 fi
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
+if ! sh tests/system/build_inputs_test.sh >"$VDIR/build-inputs.log" 2>&1; then
+    echo "verify-style: link dependency test failed: $VDIR/build-inputs.log" >&2
+    fail=1
+fi
+
 hr "6/22 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"

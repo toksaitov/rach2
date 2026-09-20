@@ -142,6 +142,9 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 
 The supporting files under `verify/` have narrower jobs:
 
+* `probecheck.sh` requires each built root or musl probe to appear in the default runner, `tests/probe-suites`, or `tests/probe-helpers`. The style suite runs it and `tests/system/probecheck_test.sh`.
+* `check.sh` creates a private directory under `${TMPDIR:-/tmp}`, prints its path and retains its logs. `tests/system/verify_temp_test.sh` executes its directory setup and write statements against planted symlinks in an isolated temporary directory.
+* `tests/system/build_inputs_test.sh`, run by the style suite, builds utilities, `dnstest` and a kernel against private copies of link inputs. Each changed library or startup object must relink the programs with its new marker value; a linker-script edit must produce its new symbol in the validated kernel. The test uses distinct future timestamps so it needs no clock delay.
 * `check_sources.sh` compares `C_SRC` in `rach2/sources.mk` with `kernel.c` and the C files below `rach2/sys/`.
 * `guestcheck.c` checks five contracts: each component's host and guest builds derive from its shared source manifest (`rach2/sources.mk`, `utils/programs.mk`, `ish/sources.mk`), the kernel response file and link line, the utility program-to-source map, the guest file-descriptor and command-size limits, and the three source trees staged under `/src`.
 * `asciiscan.c` reports every line holding a byte outside tab, newline, carriage return, and the printable range 0x20 through 0x7e, which is the set the text checks enforce. `make` builds it as `build/tools/verify/asciiscan`, and `textcheck.sh` runs it over the files it checks.

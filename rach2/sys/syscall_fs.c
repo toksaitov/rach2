@@ -193,6 +193,25 @@ void fd_release_backing(fd_entry_t *e)
     }
 }
 
+/** Dispatch an ops-backed write, serializing a raw device's offset. */
+static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)
+{
+    int raw = devfs_fd_is_raw(entry);
+    int32_t rc;
+
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (raw) {
+        fd_ofd_lock(entry->ofd);
+    }
+    rc = entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
+    if (raw) {
+        fd_ofd_unlock(entry->ofd);
+    }
+    return rc;
+}
+
 /**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
@@ -219,10 +238,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
      * -EBADF, as Linux reports). The plain file and enum types below have no
      * ops and fall through to the enum dispatch. */
     if (entry->ops) {
-        if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF;
-        }
-        return entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
+        return write_ops(entry, buf, count);
     }
 
     if (entry->type == FD_TYPE_SOCKET) {
@@ -1984,6 +2000,28 @@ static int seek_add(uint64_t base, long long off, long long *out)
     return 0;
 }
 
+/** Seek a raw description after any transfer using its offset completes. */
+static int32_t raw_lseek(fd_entry_t *entry, int32_t offset, int whence)
+{
+    uint64_t resolved, raw_size;
+    int32_t rc;
+
+    fd_ofd_lock(entry->ofd);
+    if (!devfs_fd_raw_size(entry, &raw_size)) {
+        fd_ofd_unlock(entry->ofd);
+        return -ENXIO;
+    }
+    rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);
+    if (rc == 0 && resolved > (uint64_t)0x7FFFFFFF) {
+        rc = -EOVERFLOW;
+    }
+    if (rc == 0) {
+        entry->ofd->raw_offset = resolved;
+    }
+    fd_ofd_unlock(entry->ofd);
+    return rc != 0 ? rc : (int32_t)resolved;
+}
+
 int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -2007,26 +2045,10 @@ int32_t sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        uint64_t raw_size;
         uint32_t log_size;
 
         if (devfs_fd_is_raw(entry)) {
-            uint64_t resolved;
-            int32_t rc;
-
-            if (!devfs_fd_raw_size(entry, &raw_size)) {
-                return -ENXIO; /* the window was withdrawn under an open fd */
-            }
-            rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence,
-                                  &resolved);
-            if (rc != 0) {
-                return rc;
-            }
-            if (resolved > (uint64_t)0x7FFFFFFF) {
-                return -EOVERFLOW; /* a real offset this call cannot return */
-            }
-            entry->ofd->raw_offset = resolved;
-            return (int32_t)resolved;
+            return raw_lseek(entry, offset, whence);
         }
         if (devfs_fd_log_size(entry, &log_size)) {
             switch (whence) {
@@ -2126,6 +2148,25 @@ int sock_is_query(const struct socket *sock)
     return sock->type == SOCK_RAW && sock->protocol == 0;
 }
 
+/** Dispatch an ops-backed read, serializing a raw device's offset. */
+static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
+{
+    int raw = devfs_fd_is_raw(entry);
+    int32_t rc;
+
+    if (!(entry->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    if (raw) {
+        fd_ofd_lock(entry->ofd);
+    }
+    rc = entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
+    if (raw) {
+        fd_ofd_unlock(entry->ofd);
+    }
+    return rc;
+}
+
 /**
  * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
@@ -2161,10 +2202,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
      * -EBADF). The plain file and enum types below have no ops and fall through
      * to the enum dispatch. */
     if (entry->ops) {
-        if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF;
-        }
-        return entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
+        return read_ops(entry, buf, count);
     }
 
     /* read() honors O_NONBLOCK (an OFD status flag) exactly like recv(),
@@ -2357,7 +2395,7 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
             return 0;
         }
 
-        return entry->ops->read(entry, buf, count);
+        return read_ops(entry, buf, count);
     }
     if (entry->type == FD_TYPE_SOCKET && entry->sock) {
         int32_t r;
@@ -4805,26 +4843,28 @@ int32_t sys__llseek(isr_params_t *params)
             uint64_t resolved;
             int32_t rc;
 
+            fd_ofd_lock(entry->ofd);
             if (!devfs_fd_raw_size(entry, &raw_size)) {
-                return -ENXIO; /* the window was withdrawn under an open fd */
+                fd_ofd_unlock(entry->ofd);
+                return -ENXIO;
             }
             off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
             rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, off, whence, &resolved);
+            if (rc == 0 && resolved > (uint64_t)0x7FFFFFFFFFFFFFFFull) {
+                rc = -EOVERFLOW;
+            }
+            if (rc == 0 && !result) {
+                rc = -EFAULT;
+            }
+            if (rc == 0) {
+                new_off = (long long)resolved;
+                entry->ofd->raw_offset = resolved;
+            }
+            fd_ofd_unlock(entry->ofd);
             if (rc != 0) {
                 return rc;
             }
-            if (resolved > (uint64_t)0x7FFFFFFFFFFFFFFFull) {
-                return -EOVERFLOW;
-            }
-            if (!result) {
-                return -EFAULT;
-            }
-            new_off = (long long)resolved;
-            entry->ofd->raw_offset = resolved;
-            if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+            return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;
         }
         if (devfs_fd_log_size(entry, &log_size)) {
             return llseek_bootlog(entry, log_size, off_from(offset_high, offset_low), whence,

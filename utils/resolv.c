@@ -441,9 +441,9 @@ static u32 read_nameserver(void)
  *
  * Sends the query and polls for the reply with `MSG_DONTWAIT`, resending
  * periodically: the first datagram to the on-subnet nameserver is dropped
- * while ARP resolves, so a resend is expected. A reply whose id matches is
- * decisive (success, NXDOMAIN, or no A record); other traffic is ignored
- * until the roughly 6s budget expires.
+ * while ARP resolves, so a resend is expected. A reply from that address and
+ * port whose id matches is decisive (success, NXDOMAIN, or no A record);
+ * other traffic is ignored until the roughly 6s budget expires.
  */
 static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
 {
@@ -469,6 +469,10 @@ static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
     sa.sin_family = AF_INET;
     sa.sin_port = htons(DNS_PORT);
     sa.sin_addr.s_addr = htonl(ns);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        close(fd);
+        return -1;
+    }
 
     for (attempt = 0; attempt < 30 && !got; attempt++) {
         sendto(fd, query, (size_t)qlen, 0, (struct sockaddr *)&sa, sizeof(sa));

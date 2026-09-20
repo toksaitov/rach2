@@ -38,6 +38,9 @@ void vga_text_hosttest_stored(void)
 /* The flag register's stand-in: the console keeps interrupts off around a
    byte, and the rows watch that it does. */
 static int masked;
+static int inject_echo;
+static int echo_pending;
+static void deliver_echo(void);
 
 uint32_t kirq_save(void)
 {
@@ -50,6 +53,7 @@ uint32_t kirq_save(void)
 void kirq_restore(uint32_t flags)
 {
     masked = (int)flags;
+    deliver_echo();
 }
 
 #include "display/vga_gfx.h"
@@ -80,6 +84,11 @@ void outb(uint16_t port, uint8_t val)
     port_writes++;
     if (port == 0x3D4) {
         crtc_index = val;
+        if (val == 0x0E && inject_echo) {
+            inject_echo = 0;
+            echo_pending = 1;
+            deliver_echo();
+        }
     } else if (port == 0x3D5) {
         switch (crtc_index) {
         case 0x0C:
@@ -99,6 +108,44 @@ void outb(uint16_t port, uint8_t val)
         default:
             break;
         }
+    }
+}
+
+/** A pending keyboard interrupt echoes one character with interrupts masked. */
+static void deliver_echo(void)
+{
+    if (echo_pending && !masked) {
+        echo_pending = 0;
+        masked = 1;
+        k_putc('x');
+        masked = 0;
+    }
+}
+
+/** Echo across a cursor-byte carry must not split the final hold's update. */
+static void row_release_echo(void)
+{
+    int initial;
+
+    for (initial = 0; initial <= 1; initial++) {
+        k_cls();
+        x = 15;
+        y = 3;
+        vga_text_hold();
+        vga_text_place_cursor();
+        masked = initial;
+        inject_echo = 1;
+        vga_text_release();
+        CHECK(masked == initial, "release restores caller flags");
+        CHECK(_hold == 0 && !_cursor_stale, "release completes outermost hold");
+        if (initial) {
+            CHECK(echo_pending && cursor_address == 0x00FF, "masked caller retains pending echo");
+            kirq_restore(0);
+        }
+        CHECK(!echo_pending && x == 16 && y == 3, "keyboard echo runs once");
+        CHECK(cursor_address == 0x0100, "echo leaves cursor at 0x0100");
+        vga_text_release();
+        CHECK(_hold == 0 && masked == 0, "extra release preserves state");
     }
 }
 
@@ -308,6 +355,7 @@ int main(void)
     row_scrollback();
     row_console();
     row_graphics();
+    row_release_echo();
     if (failures) {
         printf("vga-text-test: %d failure(s)\n", failures);
         return 1;

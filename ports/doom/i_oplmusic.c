@@ -264,21 +264,34 @@ static void InitRegisters(void)
     }
 }
 
-// Load GENMIDI lump
+/** Load a complete GENMIDI instrument table with a valid header. */
 static boolean LoadInstrumentTable(void)
 {
+    int lumpnum;
     byte *lump;
 
-    lump = W_CacheLumpName("genmidi", PU_STATIC);
-    if (lump == NULL)
+    lumpnum = W_CheckNumForName("genmidi");
+    if (lumpnum < 0
+     || W_LumpLength(lumpnum) < 8
+        + (GENMIDI_NUM_INSTRS + GENMIDI_NUM_PERCUSSION)
+          * (int)sizeof(genmidi_instr_t))
     {
         return false;
     }
 
-    // Skip header
+    lump = W_CacheLumpNum(lumpnum, PU_STATIC);
+    if (lump == NULL)
+    {
+        return false;
+    }
+    if (memcmp(lump, GENMIDI_HEADER, 8) != 0)
+    {
+        W_ReleaseLumpNum(lumpnum);
+        return false;
+    }
+
     main_instrs = (genmidi_instr_t *)(lump + 8);
     percussion_instrs = main_instrs + GENMIDI_NUM_INSTRS;
-
     return true;
 }
 
@@ -740,7 +753,12 @@ static void MetaEvent(midi_event_t *event)
     if (event->data.meta.type == MIDI_META_SET_TEMPO && data_len == 3)
     {
         us_per_beat = (data[0] << 16) | (data[1] << 8) | data[2];
-        samples_per_tick = (uint64_t)sample_rate * us_per_beat / (ticks_per_beat * 1000000);
+        samples_per_tick = ((uint64_t)sample_rate * us_per_beat)
+                         / ((uint64_t)ticks_per_beat * 1000000);
+        if (samples_per_tick == 0)
+        {
+            samples_per_tick = 1;
+        }
     }
 }
 
@@ -1062,6 +1080,7 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
 {
     midi_event_t *event;
     int samples_generated = 0;
+    int restarted = 0;
     int samples_to_generate;
 
     /* If music system not initialized, generate silence */
@@ -1083,7 +1102,6 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
         int i;
         int alive = 0;
         uint32_t min_wait = 0xFFFFFFFFu;
-        int restarted = 0;
 
         for (i = 0; i < num_tracks; i++)
         {
@@ -1125,41 +1143,17 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
 
         if (!alive)
         {
-            /* Every track has ended. A looping song starts again, once per
-               call: a song that ends before it yields a sample is empty,
-               and restarting it in the same call would spin for ever. */
-            if (song_looping && !restarted && samples_generated > 0)
+            if (song_looping && !restarted)
             {
                 restarted = 1;
                 RestartSong();
                 continue;
             }
-            if (song_looping && samples_generated == 0)
-            {
-                RestartSong();
-                /* Fall through to generate what the restarted tracks wait
-                   for; if nothing waits, the song is empty and stops. */
-                alive = 0;
-                min_wait = 0xFFFFFFFFu;
-                for (i = 0; i < num_tracks; i++)
-                {
-                    if (!track_done[i] && track_wait[i] > 0)
-                    {
-                        alive = 1;
-                        if (track_wait[i] < min_wait)
-                        {
-                            min_wait = track_wait[i];
-                        }
-                    }
-                }
-            }
-            if (!alive)
-            {
-                music_playing = false;
-                memset(buffer + samples_generated * 2, 0,
-                       (num_samples - samples_generated) * 2 * sizeof(int16_t));
-                return num_samples;
-            }
+
+            music_playing = false;
+            memset(buffer + samples_generated * 2, 0,
+                   (num_samples - samples_generated) * 2 * sizeof(int16_t));
+            return num_samples;
         }
 
         // Generate samples until the nearest event on any track
@@ -1178,6 +1172,7 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
         DG_TimeSpent(3, (uint32_t)samples_to_generate);
 
         samples_generated += samples_to_generate;
+        restarted = 0;
         for (i = 0; i < num_tracks; i++)
         {
             if (!track_done[i])

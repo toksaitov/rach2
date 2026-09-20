@@ -162,6 +162,10 @@ manifest usbdisk-proof
 sentinel /usbdiskprobe 0755:0:0
 init none
 
+manifest rng-proof
+sentinel /rngprobe 0755:0:0
+init none
+
 # The console-login fixtures: the same image but for the init each
 # declares, and neither stages /bin/login. The strict one must refuse and
 # the permissive one must reach a root shell.

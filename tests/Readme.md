@@ -91,6 +91,10 @@ pipemusl pollmusl ptymusl rngmusl sigmusl sockfillmusl tcpsendrecv ttymusl
 
 `tests/registry` lists every suite and `tests/system/suites.mk` defines their recipes. Several suites use the test image without running a program from these two lists.
 
+`tests/run fdlock` runs the native description-lock test, `fdstale` on a KRFFS disk root, and `bootprobe` with delayed raw transfers. The orphan row shrinks an unlinked file and grows it past an allocated neighbour, checking independent and duplicated descriptors, unchanged seek offsets, zero-filled growth and the absent name. The raw rows wait for a child blocked in a transfer before another process reads, writes, or seeks through the inherited description; they check distinct sectors and both offset updates. The `readv` row also waits for the driver-call counter to show the second vector in flight.
+
+`sh tests/system/fdlock_mutate.sh` proves these rows with seven compiled mutations: namespace locking, raw read locking, raw write locking, each raw seek lock, pathname-based orphan truncation, and the later `readv` dispatch. A shell trap stops test processes before restoring source. Every restoration touches the source and rebuilds before the next pass. Logs and artifact checksums remain under the printed `build/fdlock-proof.*` directory. `--direct` runs the same suite Make target through the serial harness without the runner's socket preflight; its QEMU network has no host connection. This mode does not prove the outer runner's checks. Optional fault names select individual proofs: `namespace`, `raw-read`, `raw-write`, `lseek`, `llseek`, `orphan`, or `readv`.
+
 ## Manual runs
 
 Build and boot the test image with the supported run script:

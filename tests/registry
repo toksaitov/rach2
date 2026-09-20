@@ -38,6 +38,7 @@ dhcp|qemu-system-i386|full|dhcp-test*,dhcp.*,dhcp-*,twonet.*,twonet-*,static-*
 netif|qemu-system-i386|full
 netif-e1000|qemu-system-i386|full
 mount|qemu-system-i386,mformat,mcopy,mdir|core
+fdlock|qemu-system-i386|full
 grow|qemu-system-i386,mke2fs,e2fsck,qemu-img|full||512
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu-system-i386|full
@@ -102,7 +103,7 @@ bootorder|qemu-system-i386,mformat,mmd,mcopy|full
 reset|qemu-system-i386|core
 netconsole-e1000|qemu-system-i386|full
 disks|qemu-system-i386,mformat,mtype|core
-audio|qemu-system-i386|core|audio-test*,audio-scale.*
+audio|qemu-system-i386|core|audio-test*,audio-scale.*,audio-scale-sb16.*
 netconsole|qemu-system-i386|core
 crash|qemu-system-i386|core
 pools|qemu-system-i386|core

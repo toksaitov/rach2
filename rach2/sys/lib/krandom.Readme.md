@@ -14,7 +14,7 @@ The running kernel calls `krandom_seed` once and has no later entropy accumulati
 
 `krandom_seed` queries CPUID leaf 0 for the highest supported basic leaf, then tries these sources in order:
 
-1. If leaf 7 is available and EBX bit 18 reports `RDSEED`, collect eight 32-bit words. Each word gets at most 32 instruction attempts. All eight must succeed.
+1. If leaf 7 is available and subleaf zero's EBX bit 18 reports `RDSEED`, collect eight 32-bit words. Each word gets at most 32 instruction attempts. All eight must succeed.
 2. If `RDSEED` is unavailable or any of its eight words fails, discard that attempt. If leaf 1 is available and ECX bit 30 reports `RDRAND`, collect a new eight-word key under the same per-word retry limit. All eight must succeed.
 3. If neither instruction supplies a complete key, read the timestamp counter once, read the CMOS seconds field, and include the current PIT tick. Four values derived from those readings go through `krandom_reseed`.
 
@@ -49,6 +49,8 @@ System call 355, `getrandom`, normally requires a trusted source. Without one it
 `make test` boots with `-cpu max`. When the hardware seed succeeds, `rngprobe` takes its trusted branch, reads two 32-byte buffers from `/dev/urandom`, checks that they differ, and applies a broad monobit range. `timeprobe` and `musl/timemusl` each require two 16-byte `getrandom` calls to differ, so the complete target requires a trusted source. `auxvprobe` checks that `AT_RANDOM` points to a 16-byte value in the initial stack page and that the value is not all zero. `devprobe` checks that successive `/dev/urandom` reads differ.
 
 `tests/run noentropy` boots the test image with `-cpu qemu64`. `musl/saltnoent` requires ordinary `getrandom` to fail with `EIO`, then checks that salt creation changes no output or credential file. The same target runs the fail-closed branch of `musl/passwdmusl`.
+
+`rngprobe` also compiles the production `kcpu_id` helper and compares its leaf-7 result after leaf 0 with an independent subleaf-zero query. CPUs without leaf 7 skip that comparison. `sh tests/system/rng_mutate.sh` builds a private probe and checked KRFFS image for each phase, verifies the staged probe by extraction, and boots it with `-cpu max`. The probe passes, fails when ECX is changed back to an output-only operand, and passes after the source is restored and recompiled. This proves CPUID enumeration; hardware seed retries and source selection remain outside that row.
 
 `tests/musl/rngmusl.c` is staged for a manual trusted-source run. It requests one 32-byte buffer through musl `getrandom` and another through `/dev/urandom`, then requires full, nonzero, different results. No Make target runs it.
 

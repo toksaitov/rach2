@@ -17,6 +17,7 @@
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
+#include "../lib/kirq.h"
 
 /* Linux ioctls. The pty-number requests are pinned exactly (musl uses
  * these). */
@@ -67,25 +68,6 @@ static void pty_free(struct pty *p)
     kfree(p);
 }
 
-/**
- * Save EFLAGS and disable interrupts; pty_irq_restore puts IF back.
- *
- * Guards the m_buf ring. Two producers, the master-write echo and the
- * slave-write output, can interleave under preemption, so the head and tail
- * updates are not lock-free.
- */
-static uint32_t pty_irq_save(void)
-{
-    uint32_t flags;
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-
-static void pty_irq_restore(uint32_t flags)
-{
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
-}
-
 static uint32_t pty_m_avail(struct pty *p)
 {
     return p->m_tail - p->m_head;
@@ -104,14 +86,15 @@ static void pty_slave_sink(void *ctx, unsigned char c)
     struct pty *p = (struct pty *)ctx;
     uint32_t flags;
 
-    flags = pty_irq_save();
+    flags = kirq_save();
     if (p->m_tail - p->m_head < PTY_BUF_SIZE) {
         p->m_buf[p->m_tail & (PTY_BUF_SIZE - 1)] = c;
         p->m_tail++;
     }
-    pty_irq_restore(flags);
+    kirq_restore(flags);
 }
 
+/** Initialize a pair with one queue for master readers, writers and pollers. */
 static struct pty *pty_alloc(void)
 {
     struct pty *p = kzalloc(sizeof(*p));
@@ -130,7 +113,7 @@ static struct pty *pty_alloc(void)
     p->mode = 0620;                         /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
     wait_queue_init(&p->m_read_wq);
-    wait_queue_init(&p->m_write_wq);
+    p->slave.space_wq = &p->m_read_wq;
     p->next = ptys;
     ptys = p;
     return p;
@@ -189,12 +172,12 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
         /* Drain the ring under interrupts off (vs a concurrent slave producer),
          * then copy out to user memory (which may fault) outside the lock. */
-        flags = pty_irq_save();
+        flags = kirq_save();
         for (i = 0; i < chunk; i++) {
             kbuf[i] = p->m_buf[p->m_head & (PTY_BUF_SIZE - 1)];
             p->m_head++;
         }
-        pty_irq_restore(flags);
+        kirq_restore(flags);
         if (copy_to_user((void __user *)(buf + got), kbuf, chunk) != 0) {
             return (got > 0) ? (int32_t)got : -EFAULT;
         }
@@ -232,6 +215,9 @@ static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
     return -1;
 }
 
+/**
+ * Feed slave input and wake master readers for echo after partial writes too.
+ */
 static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -255,6 +241,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             chunk = sizeof(kbuf);
         }
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+            wq_wake_all(&p->m_read_wq);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         for (i = 0; i < chunk; i++) {
@@ -277,7 +264,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
                 if (done + i > 0 || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK))) {
                     return done + i > 0 ? (int32_t)(done + i) : -EAGAIN;
                 }
-                if (wq_wait_event(&p->m_write_wq, ptm_has_room, p) < 0) {
+                if (wq_wait_event(&p->m_read_wq, ptm_has_room, p) < 0) {
                     return -EINTR;
                 }
             }
@@ -293,6 +280,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
+/** Report output, input space and slave hangup on the same master queue. */
 static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -307,7 +295,6 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (p->slave_opens == 0) {
         revents |= POLLHUP; /* every slave hung up */
     }
-    /* The master write is always accepted; the slave discipline absorbs it. */
     if (n_tty_has_room(&p->slave.ldisc)) {
         revents |= (short)(events & POLLOUT);
     }
@@ -448,7 +435,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
             return 0; /* master closed, nothing buffered: persistent EOF */
         }
         if (n > 0) {
-            wq_wake_all(&p->m_write_wq); /* room for a writer held at the queue */
+            wq_wake_all(&p->m_read_wq);
         }
     }
     if (n < 0) {
@@ -460,6 +447,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return n;
 }
 
+/** Queue slave output and wake master readers even if a later copy fails. */
 static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -493,6 +481,7 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             chunk = sizeof(kbuf);
         }
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
+            wq_wake_all(&p->m_read_wq);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         /* Output processing (OPOST/ONLCR) lands the bytes in m_buf via the
@@ -694,7 +683,7 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
     if (sid == 0 || !keep) {
         return;
     }
-    flags = pty_irq_save();
+    flags = kirq_save();
     keep->sid = sid;
     keep->fg_pgid = pgid;
     if (&console_tty != keep && console_tty.sid == sid) {
@@ -707,7 +696,7 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
             p->slave.fg_pgid = 0;
         }
     }
-    pty_irq_restore(flags);
+    kirq_restore(flags);
 }
 
 struct tty *pty_slave_tty(struct fd_entry *e)

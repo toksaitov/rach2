@@ -23,6 +23,7 @@ static void rq_push(struct n_tty *t, unsigned char c)
 {
     if (rq_count(t) < N_TTY_READ_MAX) {
         t->rq[t->rq_tail & (N_TTY_READ_MAX - 1)] = c;
+        t->rq_end[t->rq_tail & (N_TTY_READ_MAX - 1)] = 0;
         t->rq_tail++;
         if (rq_count(t) > t->counters.queue_max) {
             t->counters.queue_max = rq_count(t);
@@ -175,12 +176,19 @@ static void erase_line(struct n_tty *t, n_tty_out_fn out, void *ctx)
 
 /**
  * Move the assembled line into the readable queue and start a fresh line.
+ * Mark its final byte so VEOL changes and a later line cannot erase the
+ * boundary, including a line committed by VEOF without a terminator byte.
  */
 static void commit_line(struct n_tty *t)
 {
     int i;
+    unsigned int start = t->rq_tail;
+
     for (i = 0; i < t->line_len; i++) {
         rq_push(t, t->line[i]);
+    }
+    if (t->rq_tail != start) {
+        t->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 1;
     }
     t->line_len = 0;
 }
@@ -310,9 +318,9 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
             return;
         }
         if (c == '\n' || (tio->c_cc[VEOL] && c == tio->c_cc[VEOL])) {
-            echo(t, out, ctx, '\n');
+            echo(t, out, ctx, c);
             if (t->line_len < N_TTY_LINE_MAX) {
-                t->line[t->line_len++] = '\n';
+                t->line[t->line_len++] = c;
             }
             commit_line(t);
             return;
@@ -414,7 +422,7 @@ int n_tty_read(struct n_tty *t, unsigned char *buf, int count)
             }
             c = rq_pop(t);
             buf[n++] = c;
-            if (c == '\n') {
+            if (c == '\n' || t->rq_end[(t->rq_head - 1) & (N_TTY_READ_MAX - 1)]) {
                 break; /* a canonical read returns at most one line */
             }
         }

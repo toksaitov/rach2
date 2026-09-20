@@ -350,6 +350,17 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	        if (after <= before) { print "audio-test: the audio controller sent no message while it played (" before " then " after ")" > "/dev/stderr"; exit 1; } \
 	        print "audio-test: the audio controller took " after - before " interrupts on its message vector while it played: OK"; \
 	    }' $(AUDIO_LOG)
+	$(HARNESS) --kernel $(BOOT_KERNEL) --append "rach2.rescue rach2.nonet" \
+	    --net hubport,id=net0,hubid=0 \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-icount --qemu-arg=shift=3,sleep=off \
+	    --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
+	    --qemu-arg=-audiodev \
+	    --qemu-arg=wav,id=au0,timer-period=500,path=$(IMAGES_DIR)/audio-scale-sb16.wav \
+	    --log $(IMAGES_DIR)/audio-scale-sb16.log \
+	    --timeout 120 --ok "Done." --never "AUDIO_START failed." \
+	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done."
+	$(WAVCHECK) scale $(IMAGES_DIR)/audio-scale-sb16.wav 262 294 330 349 392
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than the `EIO` this kernel used
 # to return for a full disk, removes the file and writes again. It has a boot of
@@ -395,6 +406,33 @@ run-disk: rach2 tests krffs $(HARNESS)
 # driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
+FD_HOSTTEST = build/tests/host/fd_hosttest
+FDLOCK_IMAGE = $(IMAGES_DIR)/fdlock-test.disk
+$(FD_HOSTTEST): tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
+               rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+	@mkdir -p $(dir $@)
+	$(HOSTCC) -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wno-empty-body \
+	    -fsanitize=address,undefined -fno-sanitize-recover=all \
+	    -o $@ $(filter %.c,$^)
+	$(HOSTCC) -DRACH2_HOSTTEST -MM -MP -MT $@ $(filter %.c,$^) > $@.d
+-include $(FD_HOSTTEST).d
+
+# `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and concurrent raw offsets.
+run-fdlock: rach2 tests krffs $(FD_HOSTTEST) $(MKFIXTURE) $(HARNESS)
+	$(FD_HOSTTEST)
+	$(MKDISK) krffs/manifests/disk-test.manifest $(FDLOCK_IMAGE) 64 48
+	$(HARNESS) --kernel $(BOOT_KERNEL) --net hubport,id=net0,hubid=0 \
+	    --append "rach2.fsdisk rach2.rescue" \
+	    --drive "file=$(FDLOCK_IMAGE),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 120 --ok "FDSTALE OK" --never "FDSTALE FAIL" \
+	    --log $(FDLOCK_IMAGE).orphan.log probe=fdstale
+	$(MKFIXTURE) boot $(FDLOCK_IMAGE)
+	$(HARNESS) --kernel $(BOOT_KERNEL) --net hubport,id=net0,hubid=0 \
+	    --append "rach2.fsdisk rach2.rescue rach2.diskdiag rach2.blocklag=10 rach2.bootprobe=shared" \
+	    --drive "file=$(FDLOCK_IMAGE),format=raw,if=ide,index=0,media=disk" \
+	    --timeout 90 --ok "BOOTPROBE SHARED OK" --never "FAIL" \
+	    --log $(FDLOCK_IMAGE).raw.log probe=bootprobe
+
 run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
@@ -1853,5 +1891,5 @@ run-ssh-e1000:
 # its variable is defined expands to nothing. `tools/verify/check.sh` holds
 # every `run-` target's file prerequisites to `prepare-all`'s closure.
 prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_SMALL_EXT2) \
-                  $(GRUB_TEST_EXT2) \
+                  $(GRUB_TEST_EXT2) $(FD_HOSTTEST) \
                   $(STICK_IMAGE) $(SELFBUILD_EXT2_VOL) $(IMAGE_TOOLS)

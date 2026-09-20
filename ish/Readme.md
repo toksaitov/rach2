@@ -51,7 +51,7 @@ Arguments that must reach the command go before either redirection. Redirections
 
 ## Environment and callers
 
-ISH reads `HOME` for a bare `cd` and `PATH` for command lookup. It does not change its behavior when `argv[0]` begins with a dash.
+ISH reads `HOME` for a bare `cd` and `PATH` for command lookup. Environment names match exactly and are case-sensitive. It does not change its behavior when `argv[0]` begins with a dash.
 
 The project `login` and `su` programs give a shell a fresh environment containing `PATH`, `HOME`, `SHELL`, `USER`, and `LOGNAME`. `su -c` passes `-c` and its command to the target shell. Login mode changes the working directory and places a dash at the start of `argv[0]`; ISH ignores the dash and enters its ordinary input loop.
 
@@ -104,4 +104,4 @@ Run it in a writable copy of `/src/ish`. Root may also build the staged tree in 
 
 ## Verification
 
-`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `make test` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, and redirection failure. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.
+`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `tests/run default` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, redirection failure, redirection with closed standard descriptors, and exact environment names. `tests/host/ish_hosttest.c` runs the last two groups against the hosted shell. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.

@@ -29,13 +29,17 @@
 typedef unsigned int size_t;
 
 #define SYS_EXIT       1
+#define SYS_FORK       2
 #define SYS_READ       3
 #define SYS_WRITE      4
 #define SYS_OPEN       5
 #define SYS_CLOSE      6
+#define SYS_WAITPID    7
 #define SYS_LSEEK      19
 #define SYS_DUP        41
+#define SYS_PIPE       42
 #define SYS_LLSEEK     140
+#define SYS_READV      145
 #define SYS_READLINK   85
 #define SYS_STAT64     195
 #define SYS_FSTAT64    197
@@ -448,6 +452,246 @@ static void window_batch_case(void)
 
 static char written[SECTOR];
 
+/**
+ * Wait until the child is blocked in its raw transfer, after its pipe signal.
+ * The delayed device provides the wait; no elapsed-time assertion is needed.
+ */
+static int raw_child_sleeping(int pid)
+{
+    char path[40], digits[12], status[256];
+    int n = 0, at = 6, fd, got, i, tries;
+    unsigned int value = (unsigned int)pid;
+    const char *prefix = "/proc/";
+    const char *suffix = "/stat";
+
+    for (i = 0; i < 6; i++) {
+        path[i] = prefix[i];
+    }
+    do {
+        digits[n++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    while (n) {
+        path[at++] = digits[--n];
+    }
+    for (i = 0; i <= 5; i++) {
+        path[at++] = suffix[i];
+    }
+    for (tries = 0; tries < 100000; tries++) {
+        fd = syscall3(SYS_OPEN, (int)path, O_RDONLY, 0);
+        if (fd < 0) {
+            return 0;
+        }
+        got = syscall3(SYS_READ, fd, (int)status, sizeof(status));
+        syscall1(SYS_CLOSE, fd);
+        for (i = got - 4; i >= 0; i--) {
+            if (status[i] == ')' && status[i + 1] == ' ') {
+                if (status[i + 2] == 'S') {
+                    return 1;
+                }
+                if (status[i + 2] == 'Z') {
+                    return 0;
+                }
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Check the boot fixture's independent sector pattern. */
+static int raw_pattern(const char *bytes, int which)
+{
+    int i;
+
+    for (i = 0; i < SECTOR; i++) {
+        if ((unsigned char)bytes[i] != (unsigned char)((which * 7 + i) & 255)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Race a read with the second vector of an inherited raw readv. */
+static void raw_readv_case(void)
+{
+    struct {
+        char *base;
+        unsigned int length;
+    } vec[2];
+    char bytes[2 * SECTOR], signal;
+    unsigned long long before = 0, after = 0;
+    int fd, pid, pipefd[2], rc, status, tries;
+
+    fd = syscall3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
+    check(fd >= 0, "open raw readv description");
+    if (fd < 0) {
+        return;
+    }
+    rc = syscall1(SYS_PIPE, (int)pipefd);
+    check(rc == 0, "create raw readv rendezvous");
+    if (rc != 0) {
+        syscall1(SYS_CLOSE, fd);
+        return;
+    }
+    check(proc_disk_field("raw-driver-calls ", &before), "read raw readv starting count");
+    pid = syscall1(SYS_FORK, 0);
+    check(pid >= 0, "fork raw readv");
+    if (pid == 0) {
+        syscall1(SYS_CLOSE, pipefd[0]);
+        vec[0].base = bytes;
+        vec[0].length = SECTOR;
+        vec[1].base = bytes + SECTOR;
+        vec[1].length = SECTOR;
+        if (syscall3(SYS_WRITE, pipefd[1], (int)"x", 1) != 1) {
+            sys_exit(1);
+        }
+        rc = syscall3(SYS_READV, fd, (int)vec, 2);
+        sys_exit(rc != 2 * SECTOR || !raw_pattern(bytes, 0) || !raw_pattern(bytes + SECTOR, 1));
+    }
+    syscall1(SYS_CLOSE, pipefd[1]);
+    if (pid > 0) {
+        check(syscall3(SYS_READ, pipefd[0], (int)&signal, 1) == 1, "child starts raw readv");
+        for (tries = 0; tries < 100000; tries++) {
+            if (!proc_disk_field("raw-driver-calls ", &after) || after >= before + 2) {
+                break;
+            }
+        }
+        check(after == before + 2 && raw_child_sleeping(pid), "second raw vector blocks");
+        rc = syscall3(SYS_READ, fd, (int)bytes, SECTOR);
+        check(rc == SECTOR && raw_pattern(bytes, 2), "raw readv reserves its second sector");
+        status = -1;
+        check(syscall3(SYS_WAITPID, pid, (int)&status, 0) == pid && status == 0,
+              "raw readv child exits successfully");
+        check(syscall3(SYS_LSEEK, fd, 0, SEEK_CUR) == 3 * SECTOR,
+              "raw readv retains all three offset updates");
+    }
+    syscall1(SYS_CLOSE, pipefd[0]);
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** Require both concurrent raw writes at their distinct sector offsets. */
+static void raw_write_readback(int fd)
+{
+    char bytes[SECTOR];
+    int i, rc;
+
+    check(syscall3(SYS_LSEEK, fd, 0, SEEK_SET) == 0, "rewind raw writes");
+    for (i = 0; i < 2; i++) {
+        int j, ok = 1;
+
+        rc = syscall3(SYS_READ, fd, (int)bytes, SECTOR);
+        for (j = 0; j < SECTOR; j++) {
+            if (bytes[j] != (char)('a' + i)) {
+                ok = 0;
+            }
+        }
+        check(rc == SECTOR && ok, "raw writers use separate sectors");
+    }
+}
+
+/**
+ * Race an inherited description's transfer with a read, write or relative seek.
+ * Kinds 0 and 1 cover sector and byte readers; 2 writes; 3 and 4 seek through
+ * the two syscall ABIs. Both calls must advance the shared position once.
+ */
+static void raw_shared_case(int kind)
+{
+    const char *path = kind == 1 ? "/dev/disk0p1" : "/dev/bootpart";
+    char bytes[SECTOR], signal;
+    int pipefd[2], fd, pid, status, rc, i;
+    long long position = -1;
+
+    fd = syscall3(SYS_OPEN, (int)path, kind == 2 ? O_RDWR : O_RDONLY, 0);
+    check(fd >= 0, "open shared raw description");
+    if (fd < 0) {
+        return;
+    }
+    rc = syscall1(SYS_PIPE, (int)pipefd);
+    check(rc == 0, "create raw transfer rendezvous");
+    if (rc != 0) {
+        syscall1(SYS_CLOSE, fd);
+        return;
+    }
+    pid = syscall1(SYS_FORK, 0);
+    check(pid >= 0, "fork raw transfer");
+    if (pid == 0) {
+        syscall1(SYS_CLOSE, pipefd[0]);
+        for (i = 0; i < SECTOR; i++) {
+            bytes[i] = 'a';
+        }
+        if (syscall3(SYS_WRITE, pipefd[1], (int)"x", 1) != 1) {
+            sys_exit(1);
+        }
+        rc = syscall3(kind == 2 ? SYS_WRITE : SYS_READ, fd, (int)bytes, SECTOR);
+        if (rc != SECTOR || (kind < 2 && !raw_pattern(bytes, 0))) {
+            sys_exit(1);
+        }
+        sys_exit(0);
+    }
+    syscall1(SYS_CLOSE, pipefd[1]);
+    if (pid > 0) {
+        check(syscall3(SYS_READ, pipefd[0], (int)&signal, 1) == 1, "child starts raw transfer");
+        check(raw_child_sleeping(pid), "child blocks in raw transfer");
+        if (kind < 2) {
+            rc = syscall3(SYS_READ, fd, (int)bytes, SECTOR);
+            check(rc == SECTOR && raw_pattern(bytes, 1),
+                  "concurrent raw reader consumes second sector");
+        } else if (kind == 2) {
+            for (i = 0; i < SECTOR; i++) {
+                bytes[i] = 'b';
+            }
+            check(syscall3(SYS_WRITE, fd, (int)bytes, SECTOR) == SECTOR,
+                  "concurrent raw writer completes");
+        } else if (kind == 3) {
+            check(syscall3(SYS_LSEEK, fd, SECTOR, SEEK_CUR) == 2 * SECTOR,
+                  "raw lseek waits for transfer offset");
+        } else {
+            rc = syscall5(SYS_LLSEEK, fd, 0, SECTOR, (int)&position, SEEK_CUR);
+            check(rc == 0 && position == 2 * SECTOR, "raw llseek waits for transfer offset");
+        }
+        status = -1;
+        rc = syscall3(SYS_WAITPID, pid, (int)&status, 0);
+        check(rc == pid && status == 0, "raw child exits successfully");
+        check(syscall3(SYS_LSEEK, fd, 0, SEEK_CUR) == 2 * SECTOR,
+              "raw shared offset retains both operations");
+        if (kind == 2) {
+            raw_write_readback(fd);
+        }
+    }
+    syscall1(SYS_CLOSE, pipefd[0]);
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** Require cmdline in the proc directory listing. */
+static void proc_listing_case(void)
+{
+    int fd, n;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc", O_RDONLY, 0);
+    check(fd >= 0, "open /proc as a directory");
+    if (fd >= 0) {
+        char dbuf[512];
+        int saw = 0, off = 0;
+
+        n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof(dbuf));
+        while (off + 19 < n) {
+            unsigned short reclen = *(unsigned short *)(dbuf + off + 16);
+            const char *nm = dbuf + off + 19;
+
+            if (contains(nm, "cmdline")) {
+                saw = 1;
+            }
+            if (reclen == 0) {
+                break;
+            }
+            off += reclen;
+        }
+        check(saw, "getdents /proc lists cmdline");
+        syscall1(SYS_CLOSE, fd);
+    }
+}
+
 void _start(void)
 {
     int fd, rc, n, fixture;
@@ -510,31 +754,21 @@ void _start(void)
           "fstat agrees on mode and the cmdline inode");
     syscall1(SYS_CLOSE, fd);
 
-    /* The /proc listing names cmdline. */
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc", O_RDONLY, 0);
-    check(fd >= 0, "open /proc as a directory");
-    if (fd >= 0) {
-        char dbuf[512];
-        int saw = 0, off = 0;
-
-        n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof(dbuf));
-        while (off + 19 < n) {
-            unsigned short reclen = *(unsigned short *)(dbuf + off + 16);
-            const char *nm = dbuf + off + 19;
-
-            if (contains(nm, "cmdline")) {
-                saw = 1;
-            }
-            if (reclen == 0) {
-                break;
-            }
-            off += reclen;
-        }
-        check(saw, "getdents /proc lists cmdline");
-        syscall1(SYS_CLOSE, fd);
-    }
+    proc_listing_case();
 
     fixture = contains(cmdline, "rach2.bootprobe=fixture");
+
+    if (contains(cmdline, "rach2.bootprobe=shared")) {
+        int kind;
+
+        check(contains(cmdline, "rach2.blocklag="), "raw overlap uses delayed device");
+        raw_readv_case();
+        for (kind = 0; kind < 5; kind++) {
+            raw_shared_case(kind);
+        }
+        puts(fails ? "BOOTPROBE FAILED" : "BOOTPROBE SHARED OK");
+        sys_exit(fails != 0);
+    }
 
     /* A machine that mounted a RAM image and no disk file system still has a
        disk, and milestone 25 gives it both level-one devices: the boot

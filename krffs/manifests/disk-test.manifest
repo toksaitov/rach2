@@ -28,4 +28,5 @@ file 0755 /dirtyprobe build/tests/dirtyprobe
 # device must carry them; and once mounting a RAM image instead of the disk,
 # where both /dev/bootpart and /dev/grubcore must be present anyway.
 file 0755 /bootprobe build/tests/bootprobe
+file 0755 /fdstale build/tests/fdstale
 file 0755 /lagprobe build/tests/lagprobe

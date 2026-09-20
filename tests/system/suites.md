@@ -15,6 +15,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `netif` (full tier; needs qemu-system-i386; 128 MiB): the interface ioctls, which is how a program sets this machine's address.
 * `netif-e1000` (full tier; needs qemu-system-i386; 128 MiB): the netif suite's card half on the e1000 card.
 * `mount` (core tier; needs qemu-system-i386, mformat, mcopy, mdir; 128 MiB): the mount milestone's suite.
+* `fdlock` (full tier; needs qemu-system-i386; 128 MiB): pending KRFFS relocation, orphan truncation, and concurrent raw offsets.
 * `grow` (full tier; needs qemu-system-i386, mke2fs, e2fsck, qemu-img; 512 MiB): a 1 GiB ext2 root grown by `growroot` on the recovery system to a partition the size of the installed machine's disk, its writes checked against the grow set, a grow killed and repaired, one interrupted between the entry and the grow, and the memory it needs.
 * `drill` (full tier; needs qemu-system-i386, ssh, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the recovery drill, boots of one disk that carries the same three partitions the sealed disk has.
 * `account` (full tier; needs qemu-system-i386; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools now and they are different code.

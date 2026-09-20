@@ -73,12 +73,12 @@ all : $(KERNEL_BIN)
 # with the host compiler; a checker newer than the binary rebuilds it first.
 ELFCHECK = ../build/tools/inspect/elfcheck
 
-$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
+$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck
 	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp"' EXIT; \
 	echo '$(LD) $(LDFLAGS) -o $@ ...'; \
-	$(LD) $(LDFLAGS) -o "$$tmp" $^ && \
+	$(LD) $(LDFLAGS) -o "$$tmp" $(ASM_OBJECTS) $(C_OBJECTS) && \
 	$(ELFCHECK) --kernel "$$tmp" && \
 	mv "$$tmp" $@
 

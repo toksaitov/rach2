@@ -60,18 +60,30 @@ static int ofd_idle(void *arg)
     return ((struct open_file *)arg)->busy == 0;
 }
 
+/**
+ * Take the KRFFS namespace before the description so a wait sees relocation.
+ */
 void fd_ofd_lock(struct open_file *ofd)
 {
+    if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {
+        vfs_ns_lock(ofd->vmnt);
+    }
     while (ofd->busy) {
         wq_wait_event_nointr(&ofd_rec_of(ofd)->wq, ofd_idle, ofd);
     }
     ofd->busy = 1;
 }
 
+/**
+ * Release the description before its KRFFS namespace lock.
+ */
 void fd_ofd_unlock(struct open_file *ofd)
 {
     ofd->busy = 0;
     wq_wake_all(&ofd_rec_of(ofd)->wq);
+    if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {
+        vfs_ns_unlock(ofd->vmnt);
+    }
 }
 
 /**

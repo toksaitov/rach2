@@ -14,7 +14,7 @@
  * that survivable.
  */
 
-/** The four registers `cpuid` leaf `leaf` returns. */
+/** The four registers `cpuid` leaf `leaf`, subleaf zero, returns. */
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d);
 
 /** Whether `cpuid` reports the model-specific registers (leaf 1, EDX bit 5). */

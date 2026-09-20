@@ -8,6 +8,7 @@
 //    Reading of MIDI files from memory.
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "doomtype.h"
@@ -149,7 +150,7 @@ static boolean ReadChannelEvent(midi_event_t *event,
     event->data.channel.channel = event_type & 0x0f;
 
     // Read parameters:
-    if (!ReadByte(&b, stream))
+    if (!ReadByte(&b, stream) || (b & 0x80) != 0)
     {
         return false;
     }
@@ -159,7 +160,7 @@ static boolean ReadChannelEvent(midi_event_t *event,
     // Second parameter:
     if (two_param)
     {
-        if (!ReadByte(&b, stream))
+        if (!ReadByte(&b, stream) || (b & 0x80) != 0)
         {
             return false;
         }

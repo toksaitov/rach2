@@ -86,9 +86,9 @@ static uint32_t ring_free(void)
  *
  * Called from syscall context (the sole writer). The write pointer is
  * published only after every byte lands, so the IRQ-side reader never reads a
- * byte this call has not written. The ring counts bytes and not frames, so a
- * write the free space cuts short can leave half of a 16-bit sample at the
- * end; the reader takes what is there and the next write continues it.
+ * byte this call has not written. The ring counts bytes, so a short write
+ * can leave an incomplete frame. The reader leaves that frame queued until
+ * a later write completes it.
  *
  * @return the number of bytes actually stored.
  */
@@ -121,9 +121,13 @@ static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
 {
     uint32_t avail = ring_available();
     uint32_t to_read = (count < avail) ? count : avail;
-    uint32_t silence_needed = count - to_read;
+    uint32_t frame_bytes = (is_16bit ? 2u : 1u) * (current_channels == 2 ? 2u : 1u);
+    uint32_t silence_needed;
     uint32_t i;
     uint32_t rp = ring_read_ptr;
+
+    to_read -= to_read % frame_bytes;
+    silence_needed = count - to_read;
 
     for (i = 0; i < to_read; i++) {
         dest[i] = ring_buffer[rp];
@@ -282,9 +286,11 @@ static void mixer_write(uint8_t reg, uint8_t value)
  *   16-bit uses DMA channel 5, command 0xB6, block size counted in words.
  *
  * Mode byte: bit 4 = signed sample encoding, bit 5 = stereo. The block-size
- * register has the count minus one.
+ * register has the count minus one. Stereo interleaves L/R in consecutive
+ * transfer units; halving the count for stereo would interrupt twice per
+ * DMA half and refill samples that the DAC is still reading.
  */
-static void sb16_start_auto_init(void)
+static bool sb16_start_auto_init(void)
 {
     uint32_t addr = (uint32_t)(uintptr_t)dma_buffer;
     uint16_t block_size;
@@ -292,15 +298,6 @@ static void sb16_start_auto_init(void)
     int dma_channel;
     uint8_t dsp_cmd;
 
-    /*
-     * The DSP block-size register counts transfer units per IRQ (one byte
-     * for 8-bit DMA, one 16-bit word for 16-bit DMA), set to one DMA half.
-     * Stereo only interleaves L/R into consecutive units (signalled by the
-     * mode bit), so it does NOT change the unit count: halving block_size
-     * again for stereo would fire the DSP IRQ twice per half, out of phase
-     * with the DMA, and the handler would refill the half the DAC is still
-     * reading.
-     */
     if (is_16bit) {
         dma_channel = SB16_DMA_16BIT;
         dsp_cmd = DSP_16BIT_OUT_AI;
@@ -316,14 +313,14 @@ static void sb16_start_auto_init(void)
         mode |= 0x20; /* stereo */
     }
 
-    dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
-              DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTOINIT);
+    if (dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
+                  DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTOINIT) < 0) {
+        return false;
+    }
 
     /* DSP 4.xx auto-init: command, mode, length_low, length_high. */
-    dsp_write(dsp_cmd);
-    dsp_write(mode);
-    dsp_write(block_size & 0xFF);
-    dsp_write((block_size >> 8) & 0xFF);
+    return dsp_write(dsp_cmd) && dsp_write(mode) && dsp_write(block_size & 0xFF) &&
+           dsp_write((block_size >> 8) & 0xFF);
 }
 
 /**
@@ -331,19 +328,16 @@ static void sb16_start_auto_init(void)
  *
  * In auto-init mode the DMA controller cycles the double-buffer on its own and
  * the DSP raises this IRQ as each block completes, so the handler only
- * acknowledges the interrupt and refills the finished half from the ring
- * buffer; no DMA restart is needed. ring_read_to_buffer() covers any underrun
- * with silence.
+ * acknowledges the interrupt and refills the finished half from the callback
+ * or the ring buffer; no DMA restart is needed. ring_read_to_buffer() covers
+ * any underrun with silence. The 8-bit and 16-bit transfers acknowledge their
+ * interrupts through different ports.
  */
 static void sb16_irq_handler(isr_params_t *params)
 {
     uint8_t *fill_buffer;
     (void)params;
 
-    /*
-     * Acknowledge the DSP interrupt first. The 8-bit and 16-bit transfers
-     * latch their interrupt on different ports.
-     */
     if (is_16bit) {
         inb(sb16_base + SB16_INT_ACK_16BIT);
     } else {
@@ -361,7 +355,11 @@ static void sb16_irq_handler(isr_params_t *params)
 
     current_buffer = 1 - current_buffer;
 
-    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);
+    if (user_callback) {
+        user_callback(fill_buffer, SB16_BUFFER_SIZE);
+    } else {
+        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);
+    }
 }
 
 /**
@@ -459,7 +457,7 @@ static void sb16_shutdown(void)
  * The DSP 4.xx sample-rate command must precede the transfer command, so the
  * rate is programmed before sb16_start_auto_init() issues 0xC6/0xB6.
  *
- * @return 0 on success, -1 if the rate is outside 5000..44100 Hz.
+ * @return 0 on success, -1 for an unsupported rate or failed setup.
  */
 static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -477,12 +475,11 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
         return -1;
     }
 
-    dsp_write(DSP_SPEAKER_ON);
-
     /* DSP 4.xx sample-rate command must precede the transfer command. */
-    dsp_write(DSP_SET_SAMPLE_RATE);
-    dsp_write((sample_rate >> 8) & 0xFF);
-    dsp_write(sample_rate & 0xFF);
+    if (!dsp_write(DSP_SPEAKER_ON) || !dsp_write(DSP_SET_SAMPLE_RATE) ||
+        !dsp_write((sample_rate >> 8) & 0xFF) || !dsp_write(sample_rate & 0xFF)) {
+        goto fail;
+    }
 
     /* Silence both halves: 0 for 16-bit signed, 128 for 8-bit unsigned. */
     k_memset(dma_buffer, is_16bit ? 0 : 128, SB16_BUFFER_SIZE * 2);
@@ -499,9 +496,17 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
     current_buffer = 0;
     playing = true;
 
-    sb16_start_auto_init();
+    if (!sb16_start_auto_init()) {
+        goto fail;
+    }
 
     return 0;
+
+fail:
+    playing = false;
+    dma_stop(is_16bit ? SB16_DMA_16BIT : SB16_DMA_8BIT);
+    dsp_reset();
+    return -1;
 }
 
 /**

@@ -11,7 +11,7 @@ static const char ISH_Standard_Output_Redirection_Lexeme[] = ">";
 unsigned long ish_build_argument_array_from_input(char *input, char **arguments,
                                                   unsigned long max_argument_count);
 
-/** Value of the first `environment` entry starting with `key` (no case). */
+/** Value of the first entry matching `key`, including its trailing '='. */
 char *ish_get_first_environment_variable(const char *key, unsigned long key_length,
                                          char **environment);
 

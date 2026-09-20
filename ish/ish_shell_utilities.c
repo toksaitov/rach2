@@ -34,12 +34,10 @@ char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments,
                                                       const char *argument_lexeme);
 
 /**
- * Return the value of the first environment entry whose name starts with `key`.
+ * Return the value of the first environment entry matching `key`.
  *
- * Scans `environment` (a NULL-terminated `name=value` array) for the first
- * entry that begins with `key`, compared without case. The result points
- * `key_length` bytes into that entry, so for a `key` that includes the `=`
- * the result is the value. Returns NULL when no entry matches.
+ * `key` includes the trailing '='; `key_length` excludes the terminating
+ * NUL. Matching is case-sensitive. Return NULL when no entry matches.
  */
 char *ish_get_first_environment_variable(const char *key, unsigned long key_length,
                                          char **environment)
@@ -48,7 +46,7 @@ char *ish_get_first_environment_variable(const char *key, unsigned long key_leng
 
     char *result = 0;
     for (char **variable = environment; *variable; ++variable) {
-        if (ish_cstring_starts_with_ignoring_case(key, *variable)) {
+        if (ish_cstring_starts_with(key, *variable)) {
             result = *variable;
             result += key_length;
             break;

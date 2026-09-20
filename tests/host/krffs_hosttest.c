@@ -1,7 +1,7 @@
-/*
+/**
  * krffs_hosttest.c: the file system's core over a backend of its own.
  *
- * host-deps: rach2/sys/fs/krffs.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  *
  * The core addresses nodes by offset and reaches the medium through a
@@ -24,7 +24,7 @@
  * declare them.
  */
 
-#include "../../rach2/sys/fs/krffs.h"
+#include "../../rach2/sys/fs/krffs.c"
 
 extern int printf(const char *fmt, ...);
 extern void *malloc(unsigned long size);
@@ -830,6 +830,17 @@ static int remove_a_file(krffs_mount_t *mount)
     return krffs_unlink_at(mount, "/refused");
 }
 
+/** Check the same fixed hashes as the host image stager. */
+static void hash_rows(void)
+{
+#define HASH_VECTOR(parent, name, djb, mixed)                       \
+    check(krffs_calculate_djb_hash((const uint8_t *)name) == djb && \
+              krffs_mix_id(parent, name) == mixed,                  \
+          "kernel hash vector");
+#include "krffs_hash_vectors.h"
+#undef HASH_VECTOR
+}
+
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -841,6 +852,8 @@ int main(void)
     char name[64];
     int is_dir;
     int i;
+
+    hash_rows();
 
     /* ---- the mount check ---- */
 
