@@ -24,6 +24,7 @@
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
+#include "lib/kirq.h"
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
@@ -374,8 +375,9 @@ static int32_t sys_clock_gettime(isr_params_t *params)
  * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
  * Rounds up to whole 10 ms ticks, then parks the process BLOCKED on its
  * wakeup_tick and yields; the timer wakes it at the deadline while OTHER
- * processes keep running. rem is written as zero on normal completion, or
- * the time left on -EINTR.
+ * processes keep running. The pending check and the block run with interrupts
+ * off, so a signal cannot arrive between them and lose its wakeup. rem is
+ * written as zero on normal completion, or the time left on -EINTR.
  */
 static int32_t sys_nanosleep(isr_params_t *params)
 {
@@ -418,9 +420,19 @@ static int32_t sys_nanosleep(isr_params_t *params)
         target = 1; /* 0 is the "not sleeping" sentinel; never store it as a deadline */
     }
     while ((int32_t)(target - kernel_ticks) > 0) {
-        current_proc->wakeup_tick = target;
-        current_proc->state = PROC_BLOCKED;
-        schedule(); /* yield to any other READY process; the timer wakes us */
+        /* Interrupts off across the check and the block: `signal_post` only
+           wakes a process already BLOCKED, so a signal that arrived between
+           the two would be recorded and not acted on until the deadline. */
+        uint32_t flags = kirq_save();
+
+        if (!signal_pending()) {
+            current_proc->wakeup_tick = target;
+            current_proc->state = PROC_BLOCKED;
+            kirq_restore(flags);
+            schedule(); /* yield to any other READY process; the timer wakes us */
+        } else {
+            kirq_restore(flags);
+        }
         /* A signal cuts the sleep short: stop sleeping, report the time left,
          * and return -EINTR so it is acted on when the syscall returns to user.
          */
