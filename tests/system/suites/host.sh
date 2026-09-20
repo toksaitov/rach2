@@ -193,6 +193,34 @@ for t in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidch
     fi
 done
 
+# The fuzz harnesses under tests/fuzz, built as replay programs and run over
+# their committed corpora: every input a fuzzer found worth keeping, and
+# every minimised crash that became a regression test, passes through its
+# parser under the sanitizers in seconds. The long runs are behind
+# RACH2_FUZZ_SECONDS in tools/verify/analyze.sh.
+if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
+    sh tests/fuzz/build.sh replay
+else
+    any=1
+    if sh tests/fuzz/build.sh replay >"$VDIR/fuzz.clog" 2>&1; then
+        for d in tests/fuzz/corpus/*/; do
+            name=$(basename "$d")
+            if [ ! -x "build/tests/fuzz/$name" ]; then
+                echo "  FAIL (no harness for the corpus): $name"; fail=1
+                continue
+            fi
+            # shellcheck disable=SC2086
+            if $WATCHDOG "build/tests/fuzz/$name" "$d"* >"$VDIR/fuzz_$name.rlog" 2>&1; then
+                echo "  PASS: $name corpus replayed ($(find "$d" -type f | wc -l | tr -d ' ') inputs)"
+            else
+                echo "  FAIL (replay; see $VDIR/fuzz_$name.rlog): $name"; fail=1
+            fi
+        done
+    else
+        echo "  FAIL (the fuzz harnesses did not build; see $VDIR/fuzz.clog)"; fail=1
+    fi
+fi
+
 # Zero discovered tests is a failure, not a quiet pass: the glob breaking or the
 # directory moving would otherwise turn verify-host into a silent green.
 if [ "$any" -eq 0 ]; then
