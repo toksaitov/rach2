@@ -394,6 +394,44 @@ static int parse_signature(char lines[][LINE_MAX_LEN], int nprev, char *name, lo
     return 1;
 }
 
+/* One configuration's text, as a compiler sees it: the first arm of every
+   conditional is taken and the rest dropped. The two arms of a `#ifdef` can
+   each open a brace a shared `#endif` closes, which a reader that took both
+   could not balance. This reads one directive and moves the state. */
+static void conditional(const char *code, int *skip, int *depth)
+{
+    const char *d = code + 1;
+
+    while (*d == ' ' || *d == '\t') {
+        d++;
+    }
+    if (strncmp(d, "if", 2) == 0) {
+        if (*depth < COND_MAX) {
+            skip[*depth] = 0;
+        }
+        (*depth)++;
+    } else if (strncmp(d, "el", 2) == 0 && *depth > 0) {
+        if (*depth <= COND_MAX) {
+            skip[*depth - 1] = 1;
+        }
+    } else if (strncmp(d, "endif", 5) == 0 && *depth > 0) {
+        (*depth)--;
+    }
+}
+
+/* Whether the lines here are in an arm this reading drops. */
+static int skipped(const int *skip, int depth)
+{
+    int k;
+
+    for (k = 0; k < depth && k < COND_MAX; k++) {
+        if (skip[k]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The braces of one body line: `depth` is the block depth after it and
    `nesting` the deepest block the body has opened. */
 static void scan_body_line(const char *code, int *depth, int *nesting)
@@ -446,46 +484,12 @@ static void check_file(const char *path)
     }
     while (fgets(line, sizeof(line), f)) {
         bare(line, code, sizeof(code), &inc);
-        /* One configuration's text, as a compiler sees it: the first arm of
-           every conditional is taken and the rest dropped. The two arms of
-           a `#ifdef` can each open a brace a shared `#endif` closes, which
-           a reader that took both could not balance. */
         if (code[0] == '#') {
-            const char *d = code + 1;
-
-            while (*d == ' ' || *d == '\t') {
-                d++;
-            }
-            if (strncmp(d, "if", 2) == 0) {
-                if (cond_depth < COND_MAX) {
-                    cond_skip[cond_depth] = 0;
-                }
-                cond_depth++;
-                continue;
-            }
-            if (strncmp(d, "el", 2) == 0 && cond_depth > 0) {
-                if (cond_depth <= COND_MAX) {
-                    cond_skip[cond_depth - 1] = 1;
-                }
-                continue;
-            }
-            if (strncmp(d, "endif", 5) == 0 && cond_depth > 0) {
-                cond_depth--;
-                continue;
-            }
+            conditional(code, cond_skip, &cond_depth);
             continue;
         }
-        {
-            int skipping = 0, k;
-
-            for (k = 0; k < cond_depth && k < COND_MAX; k++) {
-                if (cond_skip[k]) {
-                    skipping = 1;
-                }
-            }
-            if (skipping) {
-                continue;
-            }
+        if (skipped(cond_skip, cond_depth)) {
+            continue;
         }
         if (in_body) {
             scan_body_line(code, &depth, &nesting);

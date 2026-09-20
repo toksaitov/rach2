@@ -224,7 +224,7 @@ rach2/sys/syscall_fs.c:sys_chdir lines 134 one system call's contract, its check
 rach2/sys/syscall_fs.c:sys_chdir nesting 5 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fchown complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 131 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys_getdents64 lines 129 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:sys_getdents64 lines 130 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_lseek lines 125 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_rename complexity 36 one system call's contract, its checks in the order the manual page lists the errors

@@ -4699,6 +4699,53 @@ int32_t sys_linkat(isr_params_t *params)
     return rc;
 }
 
+/* The 64-bit displacement `_llseek` takes as two words. */
+static long long off_from(uint32_t high, uint32_t low)
+{
+    return (long long)(((uint64_t)high << 32) | (uint64_t)low);
+}
+
+/**
+ * `_llseek` on `/dev/bootlog`, whose window is the kernel log's ring: the
+ * three origins, the sum taken by `seek_add` so a caller's displacement
+ * cannot overflow the addition, and the resolved offset written back to the
+ * caller. Returns 0 or a negative errno.
+ */
+static int32_t llseek_bootlog(fd_entry_t *entry, uint32_t log_size, long long off, int whence,
+                              long long __user *result)
+{
+    long long new_off = 0;
+    int rc = 0;
+
+    switch (whence) {
+    case 0: /* SEEK_SET */
+        new_off = off;
+        break;
+    case 1: /* SEEK_CUR */
+        rc = seek_add(entry->ofd->offset, off, &new_off);
+        break;
+    case 2: /* SEEK_END */
+        rc = seek_add((uint64_t)log_size, off, &new_off);
+        break;
+    default:
+        return -EINVAL;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (new_off < 0 || new_off > (long long)0xFFFFFFFFu) {
+        return -EINVAL;
+    }
+    if (!result) {
+        return -EFAULT;
+    }
+    entry->ofd->offset = (uint32_t)new_off;
+    if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /**
  * The current size of the file an ordinary descriptor is open on.
  *
@@ -4780,43 +4827,8 @@ int32_t sys__llseek(isr_params_t *params)
             return 0;
         }
         if (devfs_fd_log_size(entry, &log_size)) {
-            off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
-            switch (whence) {
-            case 0: /* SEEK_SET */
-                new_off = off;
-                break;
-            case 1: /* SEEK_CUR */
-                /* The sum in unsigned 64-bit arithmetic, which wraps rather
-                 * than overflowing, and then judged: a signed addition of
-                 * two values a caller chooses is undefined, and the kernel
-                 * built with the trap on it stops the machine. */
-                new_off = (long long)((uint64_t)(long long)entry->ofd->offset + (uint64_t)off);
-                if ((off > 0 && new_off < (long long)entry->ofd->offset) ||
-                    (off < 0 && new_off > (long long)entry->ofd->offset)) {
-                    return -EOVERFLOW;
-                }
-                break;
-            case 2: /* SEEK_END */
-                new_off = (long long)((uint64_t)(long long)log_size + (uint64_t)off);
-                if ((off > 0 && new_off < (long long)log_size) ||
-                    (off < 0 && new_off > (long long)log_size)) {
-                    return -EOVERFLOW;
-                }
-                break;
-            default:
-                return -EINVAL;
-            }
-            if (new_off < 0 || new_off > (long long)0xFFFFFFFFu) {
-                return -EINVAL;
-            }
-            if (!result) {
-                return -EFAULT;
-            }
-            entry->ofd->offset = (uint32_t)new_off;
-            if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+            return llseek_bootlog(entry, log_size, off_from(offset_high, offset_low), whence,
+                                  result);
         }
         if (devfs_lseek_zero(entry)) {
             long long zero = 0;
