@@ -2,6 +2,7 @@
 #include "vendor/multiboot.h"
 
 #include "sys/kio.h"
+#include "sys/lib/kerrno.h"
 #include "sys/proc/fpu.h"
 #include "sys/klog.h"
 #include "sys/serial.h"
@@ -72,7 +73,7 @@ extern char stack[];
 
 extern void enter_usermode(uint32_t eip, uint32_t esp);
 
-/* Policy: the stack the first user-mode entry runs on, reserved at boot. */
+/* The stack the debug shell's ring-3 test runs on, reserved when it runs. */
 #define USER_STACK_SIZE 0x1000
 
 #define CMD_BUFFER_SIZE 64
@@ -203,7 +204,8 @@ static void test_switch(void);
 static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 
-/* Top of the user stack; it grows down from here. */
+/* The page the first user stack is built in. The stack starts at its end,
+   a page higher, and grows down from there. */
 #define USER_STACK_BASE 0xBFFFF000
 
 /**
@@ -274,10 +276,11 @@ static void timer_handler(isr_params_t *params)
  * so the parent's waitpid sees WIFSIGNALED/WTERMSIG. Posts SIGCHLD and wakes a
  * parent blocked in waitpid, releases the descriptor table, frees the user
  * pages, and switches off the dying address space before freeing its page
- * directory. If the process was init, resets the shell input state and jumps
- * back into shell_loop on a fresh kernel stack; otherwise it stays a zombie for
- * the parent's waitpid to collect, and the now-READY parent is scheduled. Does
- * not return for a user process.
+ * directory. A dying init panics through panic_init_died, unless the debug
+ * shell is the supervisor, in which case the shell's input state is reset and
+ * this jumps back into shell_loop on a fresh kernel stack. Any other process
+ * stays a zombie for the parent's waitpid to collect, and the now-READY parent
+ * is scheduled. Does not return for a user process.
  *
  * Declared extern (no header) by mm/paging.c, which calls it from the fault
  * handler, mirroring how syscall.c reaches shell_loop/stack.
@@ -519,8 +522,9 @@ static bool test_timer(void)
  * counts its own 100 Hz reloads. The two arrive at a duration by different
  * arithmetic over the same chip, so a disagreement is an error in one of them,
  * and the device bring-up sequences that ask for microseconds are only as good
- * as this. 200 ms keeps the one-tick quantization under a percent without
- * lengthening the boot noticeably. `*measured_ms` reports what was seen, since
+ * as this. The wait is 200 ms, twenty ticks, so one tick of quantization is
+ * five percent of the reading, well inside the band below and short enough not
+ * to lengthen the boot noticeably. `*measured_ms` reports what was seen, since
  * a wrong figure says more than a failed comparison.
  *
  * The band is 150 to 350 ms, since a delay off by half or double is what a
@@ -567,8 +571,8 @@ static bool test_udelay(uint32_t *measured_ms)
  * the middle of one can only add to it, and this machine writes whole lines
  * to a serial port at eighty-seven microseconds a byte.
  *
- * Then twenty milliseconds are walked in single milliseconds, which is two of
- * the tick's periods and four of the counter's sweeps. A reading that lost
+ * Then fifty milliseconds are walked in single milliseconds, which is five of
+ * the tick's periods and five of the counter's sweeps. A reading that lost
  * which half of the period it was in, or that did not count a wrap, steps
  * backwards there.
  */
@@ -920,9 +924,10 @@ static void test_preempt(void)
  * same virtual address through different page directories; isolation holds if
  * each reads back its own value.
  *
- * The test address must lie ABOVE the identity-mapped region so each process
- * gets its own page table. With modules loaded the identity map extends past
- * the module end (~12 MB), so use 0xD00000 (13 MB).
+ * The address is 0xD00000 (13 MB), inside the 32 MiB the kernel maps by
+ * identity. A private mapping there still gives each process its own page
+ * table: ensure_user_table copies a table the kernel directory shares before
+ * a user page goes into it, so the two processes do not write through one.
  */
 #define ISOLATION_TEST_ADDR 0xD00000
 static volatile uint32_t isolation_result_a = 0;
@@ -1034,18 +1039,6 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     return krffs_read(c->name, (char *)dst, count, off);
 }
 
-/**
- * Load and run an ELF program from KRFFS, entering ring 3 at its entry point.
- *
- * Clones a fresh page directory, streams the program's segments straight from
- * the file (no whole-file buffer, so binary size is unbounded), builds the
- * SysV/i386 initial stack (argc, argv, a default envp, and the auxv with 16
- * random bytes), and allocates the process. The first user program becomes
- * init, and the running program is made the console's controlling-terminal
- * foreground group so a job-control shell does not stop itself on startup.
- * Enters user mode and does not return; on any setup failure it prints a
- * diagnostic and returns to the caller.
- */
 /* The program the boot or the debug shell runs, read through the root's
  * mount when that root is not KRFFS: the node held from the resolution and
  * opened once for the load. One such exec runs at a time. */
@@ -1072,6 +1065,25 @@ static void boot_exec_done(void)
     }
 }
 
+/**
+ * Load and run an ELF program, entering ring 3 at its entry point.
+ *
+ * The program comes from the KRFFS root, or through the mounted root's file
+ * system when that root is not KRFFS. Clones a fresh page directory, streams
+ * the program's segments straight from the file (no whole-file buffer, so
+ * binary size is unbounded), builds the SysV/i386 initial stack (argc, argv,
+ * a default envp, and the auxv with 16 random bytes), and allocates the
+ * process. The first user program becomes init.
+ *
+ * Every program but a real `/sbin/init` is made the console's
+ * controlling-terminal foreground group, so a job-control shell does not stop
+ * itself on startup; init is left without the console for the login sessions
+ * it spawns to claim.
+ *
+ * Enters user mode and does not return. A setup failure prints a diagnostic
+ * and returns to the caller, except that a failure to set up the first
+ * process's memory regions panics, since there is no caller left to tell.
+ */
 static void exec_program(int argc, char *argv[])
 {
     const char *path;
@@ -1153,6 +1165,7 @@ static void exec_program(int argc, char *argv[])
 
     user_stack_page = kmap_temp(user_stack_phys);
     if (!user_stack_page) {
+        console_puts("exec: no temporary mapping for the user stack");
         return;
     }
     k_memset(user_stack_page, 0, PAGE_SIZE);
@@ -1353,8 +1366,13 @@ void panic_init_died(uint32_t pid)
  * the getty dance (a real init must own no controlling terminal, and a bare
  * shell launched here would neither claim the console nor survive its own
  * exit, which would panic). Execs it through exec_program, which does not
- * return on success. Returns here only when the mounted file system has no
- * `/sbin/init` (the test image), so the caller can fall to the debug shell.
+ * return on success. Returns here only when the root holds no `/sbin/init`
+ * (the test image), so the caller can fall to the debug shell.
+ *
+ * A lookup that fails for any other reason, an I/O error or a symbolic link
+ * loop, halts instead. The machine has a root and an init on it, and the
+ * shell the caller would reach authenticates nobody, so a damaged disk must
+ * not be a way to a root prompt.
  */
 static void boot_init_process(void)
 {
@@ -1368,10 +1386,23 @@ static void boot_init_process(void)
 
     {
         struct vfs_ref ref;
+        int rc = vfs_resolve(0, init_path, 0, &ref, 0, 0);
 
-        if (vfs_resolve(0, init_path, 0, &ref, 0, 0) != 0) {
+        if (rc == -ENOENT) {
             klog(KLOG_WARN, "boot", "no /sbin/init in the root; falling back to the debug shell");
             return;
+        }
+        if (rc != 0) {
+            set_fore_color(light_red);
+            klog(KLOG_ERR, "boot", "refused: /sbin/init cannot be read (%d)", rc);
+            set_fore_color(light_grey);
+            klog(KLOG_ERR, "boot",
+                 "the root is mounted and this is not a rach2.rescue boot, so the "
+                 "debug shell, which authenticates nobody, is not the answer to a "
+                 "disk that cannot be read\n");
+            for (;;) {
+                __asm__ __volatile__("cli; hlt");
+            }
         }
         vfs_ref_release(&ref);
     }
@@ -1605,17 +1636,19 @@ void kernel_shutdown(int how)
     } else {
         klog(KLOG_INFO, "shutdown", "no disk mount; nothing to unmount");
     }
-    /* A record rather than a console line, so it reaches the screen, the
-     * port, the ring and the wire alike: a machine being read over netconsole
-     * has no screen, and this is the last thing it says. */
+    /* A record rather than a console line, so it reaches the port, the ring
+     * and the wire, and the screen too on a boot that did not hand the screen
+     * to init: a machine being read over netconsole has no screen, and this is
+     * the last thing it says. */
     klog(KLOG_INFO, "shutdown", "Stopping the system. Goodbye!");
     /* Silence the network card, which until here has been free to write into
      * its receive ring whenever a frame arrives. Nothing after this is put on
      * the wire, and that is a contract rather than an oversight: netconsole
-     * sends the serial stream through this card, so the line above is the
-     * last message submitted to it, and the three lines `power_stop` prints
-     * after it reach serial only. `stop` drains what it was given before it
-     * silences the card, so a submitted frame is a sent one. The
+     * sends the log records through this card, so the line above is the last
+     * one submitted to it, and the records `power_stop` raises after it, one
+     * to three of them depending on the path it takes, reach the port and the
+     * ring only. `stop` drains what it was given before it silences the card,
+     * so a submitted frame is a sent one. The
      * alternative, stopping the card inside `power_stop`, would put subsystem
      * knowledge in the one file whose whole claim is that it has none. */
     usb_stop();
@@ -1670,28 +1703,6 @@ static int root_resolve(const char *spec, struct root_match *m);
 static void part_node_path(char out[24], const struct disk *d, int slot);
 
 /**
- * Publish the boot partition and the boot loader's gap, before any root is
- * chosen.
- *
- * These two devices are level one of the milestone 25 disk model: every image,
- * including the everyday one, may write the kernel slots, the boot menu and
- * GRUB's core image. That has to hold on a machine booting a RAM image and
- * mounting nothing from the disk, which is exactly the recovery case, and the
- * old order made it impossible: `/dev/bootpart` appeared only at the end of a
- * successful KRFFS mount, so a machine with no mounted root had no way to
- * repair the boot partition that had stopped it booting.
- *
- * Nothing is published until sector 0 has been read and judged. `/dev/grubcore`
- * covers the post-MBR gap, which no partition may occupy; a table that puts one
- * there describes a disk where writing the boot loader would destroy a file
- * system, so both devices are withheld, not one. `/dev/bootpart` needs
- * entry 0 judged against the whole table, because a machine booting a RAM image
- * has no mounted root to compare it against.
- *
- * Silent when there is no disk: a machine booting a RAM image on a diskless
- * board is the ordinary case, not a failure.
- */
-/**
  * Choose the disk the boot windows are on.
  *
  * `rach2.boot=` names the boot partition by identity, as `rach2.root=`
@@ -1722,6 +1733,29 @@ static block_device_t *choose_boot_disk(void)
     return block0;
 }
 
+/**
+ * Publish the boot partition and the boot loader's gap, before any root is
+ * chosen.
+ *
+ * These two devices are level one of the milestone 25 disk model: every image,
+ * including the everyday one, may write the kernel slots, the boot menu and
+ * GRUB's core image. That has to hold on a machine booting a RAM image and
+ * mounting nothing from the disk, which is exactly the recovery case, and the
+ * old order made it impossible: `/dev/bootpart` appeared only at the end of a
+ * successful KRFFS mount, so a machine with no mounted root had no way to
+ * repair the boot partition that had stopped it booting.
+ *
+ * Nothing is published until sector 0 has been read and judged, and the two
+ * devices are judged apart. `/dev/grubcore` covers the post-MBR gap, which no
+ * partition may occupy: a table that puts one there describes a disk where
+ * writing the boot loader would destroy a file system, so that window alone
+ * is withheld. `/dev/bootpart` needs entry 0 judged against the whole table,
+ * because a machine booting a RAM image has no mounted root to compare it
+ * against; a partition in the gap does not make entry 0 unwritable.
+ *
+ * Silent when there is no disk: a machine booting a RAM image on a diskless
+ * board is the ordinary case, not a failure.
+ */
 static void discover_boot_devices(void)
 {
     static uint8_t mbr[BLOCK_SECTOR_SIZE];
@@ -2351,16 +2385,12 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
     return -1;
 }
 
-/* How many self-tests ran and how many failed, which the summary reports and
-   `tests/run default` reads. Counted rather than listed because two of the
-   checks below are inline blocks with detail of their own to report. */
-
 /*
  * What the machine says about time, measured on the hardware it runs on.
  *
  * Three things a program cannot check for itself and a host test cannot check
- * at all: that the tick arrives at the rate it claims, that a delay of a given
- * length takes that long, and that the clock and the tick agree. The last
+ * at all: that the tick arrives at all, that a delay of a given length takes
+ * that long, and that the clock and the tick agree. The last
  * earned its place on the laptop this targets, where an interrupt handler took
  * a PIT latch between two samples and 2000 us read as 1361 us
  * (dev-log/43-machine/notes.md).
@@ -2481,7 +2511,8 @@ static void check_strings(void)
                         goto broken;
                     }
                 }
-                /* The move, both ways, over ranges that overlap by sa + 1. */
+                /* The move, both ways, between ranges whose starts are
+                   sa + 1 apart. */
                 what = "move down";
                 src = da + sa + 1;
                 dst = da;
@@ -2617,12 +2648,32 @@ static void process_command(const char *cmd)
         } else if (block_ready() != 0 || !block0) {
             console_printf("disk: no boot disk\n");
         } else {
-            /* The last sector lies past the partition and the boot gap, so the
-               round-trip that proves WRITE + FLUSH + READ disturbs neither a
-               mounted file system nor a future bootloader. */
+            /* The last sector lies past every MBR partition and past the boot
+               gap, so the round-trip that proves WRITE + FLUSH + READ
+               disturbs neither a mounted file system nor a future bootloader.
+               A GPT disk is the exception: its backup header is that same
+               sector, and overwriting it leaves a disk only a repair tool can
+               open. LBA 1 says which kind this is. */
+            static const char gpt_signature[] = "EFI PART";
             uint64_t lba = block0->sector_count - 1;
             uint32_t i;
+            int is_gpt = 1;
 
+            if (block0->read(block0, 1, 1, disk_sector) != 0) {
+                console_printf("disk: LBA 1 unreadable; the last sector is not written\n");
+                return;
+            }
+            for (i = 0; i < 8; ++i) {
+                if (disk_sector[i] != (uint8_t)gpt_signature[i]) {
+                    is_gpt = 0;
+                    break;
+                }
+            }
+            if (is_gpt) {
+                console_printf("disk: GPT disk; the last sector is its backup header, not "
+                               "a scratch sector\n");
+                return;
+            }
             for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
                 disk_scratch[i] = (uint8_t)(i ^ 0x5A);
             }
@@ -2698,6 +2749,7 @@ static void process_command(const char *cmd)
         char buffer[512];
         int bytes_read;
         uint32_t offset = 0;
+        char last = '\n';
 
         if (!krffs_fs) {
             console_puts("No file system mounted.");
@@ -2712,12 +2764,16 @@ static void process_command(const char *cmd)
 
                 while ((bytes_read = krffs_read(filename, buffer, 511, offset)) > 0) {
                     buffer[bytes_read] = '\0';
+                    last = buffer[bytes_read - 1];
                     console_printf("%s", buffer);
                     offset += (uint32_t)bytes_read;
                 }
 
-                if (file_size > 0 && buffer[bytes_read > 0 ? bytes_read - 1 : 0] != '\n') {
-                    console_puts(""); /* terminate the last line if the file lacked one */
+                /* The last byte of the last chunk, kept as it went past: the
+                   loop ends with a read of zero, so the buffer no longer
+                   holds it. */
+                if (file_size > 0 && last != '\n') {
+                    console_puts("");
                 }
                 console_puts("--- EOF ---");
             }
@@ -3014,10 +3070,10 @@ static void process_command(const char *cmd)
  * read, and releases the console controlling terminal so the timer-IRQ drain
  * does not steal the input the debug shell polls itself.
  *
- * The exit paths (sys_exit, terminate, exec_fail_destroyed) call this BEFORE
- * they re-enable interrupts and jump here, so a keyboard IRQ in the jump window
- * cannot observe stale state; shell_loop calls it again on entry as the
- * catch-all for boot and any path that did not.
+ * The exit paths (sys_exit, terminate, exec_fail_destroyed) call this with
+ * interrupts off, before they enable them and jump here, so a keyboard IRQ in
+ * the jump window cannot observe stale state; shell_loop calls it again on
+ * entry as the catch-all for boot and any path that did not.
  */
 void shell_reset_input(void)
 {
@@ -3106,7 +3162,7 @@ void shell_loop(void)
  * Initializes every subsystem in order (serial, GDT/TSS/IDT/ISR, memory and
  * paging, timer, entropy, keyboard and console tty, mouse, syscalls, the
  * process table and scheduler, audio, the RAM disk and KRFFS, the pipe and
- * pty pools, and the network), runs the self-tests, then runs `/sbin/init`
+ * pty lists, and the network), runs the self-tests, then runs `/sbin/init`
  * as PID 1 (or, in rescue mode or on an init-less image, the kernel debug
  * shell). Does not return.
  */
@@ -3188,13 +3244,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    /* With `rach2.netconsole` the serial stream is buffered from here on, so
-     * the memory layout and the device probes below are in the first frames
-     * the network device sends once it comes up. Nothing is transmitted until
-     * then; this only starts collecting. */
-    if (kcmdline_has("rach2.netconsole")) {
-    }
-
     k_cls();
 
     klog(KLOG_DEBUG, "boot", "Initializing system components");
@@ -3273,15 +3322,16 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
     klog(KLOG_DEBUG, "boot", "paging: ready");
 
-    /* Reserve the cache frames and pre-map the disk window in the kernel
-     * directory, before the first fork copies the kernel PDEs. */
+    /* Pre-map the disk window's page tables in the kernel directory, before
+     * the first fork copies the kernel PDEs. No cache frame is taken here: a
+     * slot gets its frame the first time it is filled. */
     init_pagecache();
     klog(KLOG_DEBUG, "boot", "page cache: ready");
 
-    /* The boot report, after every boot-time reservation and before any driver
-     * has configured a device. After, because the page cache reserves frames
-     * and the report's own device peek maps a page, and a figure printed
-     * before those is not the memory the machine has left. */
+    /* The boot report, after the page cache's window is mapped and before the
+     * disk and network drivers have configured a device. After, because the
+     * window's page tables and the report's own device peek take memory, and
+     * a figure printed before those is not what the machine has left. */
     if (kcmdline_has("rach2.diag")) {
         boot_diag_report();
     }
@@ -3350,9 +3400,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
     set_fore_color(light_grey);
 
-    /* Which power controller this machine has, before interrupts are enabled:
-     * with ACPI on, an unhandled SCI is level-triggered and would be taken
-     * forever, so the line it sits on is masked here. A machine no profile
+    /* Which power controller this machine has. With ACPI on, an unhandled SCI
+     * is level-triggered and would be taken forever, so the line it sits on is
+     * masked here. A machine no profile
      * matches keeps exactly the behaviour it had before this existed. */
     {
         const char *why = "";
@@ -3534,8 +3584,10 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     /* The disk diagnostic, asked for by name. It probes a disk only if the
      * mount above did not, publishes /proc/disk and /dev/disk0, and issues
      * nothing but IDENTIFY and a sector read, so the read-only build runs it
-     * unchanged. Without the flag neither object exists, so no image grows a
-     * raw whole-disk node by accident. The recovery build is the exception and
+     * unchanged. Without the flag no disk is probed here and /dev/disk0 does
+     * not appear, so no image grows a raw whole-disk node by accident;
+     * /proc/disk is a synthfs name that always resolves and reports whatever
+     * disks are registered. The recovery build is the exception and
      * needs no flag: the whole-disk window is what that build is for. */
     if (kcmdline_has("rach2.diskdiag") || recovery_publishes_disk()) {
         if (diskinfo_probe(_krffs_on_disk) == 0) {
@@ -3545,11 +3597,10 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    /* Allocate the pipe pool (kept out of BSS) before user processes can
-     * pipe(). */
+    /* Empty the pipe and pty lists before a user process can pipe() or open
+     * /dev/ptmx. Each pipe and each pty is allocated from the heap when it is
+     * created; these only start the lists. */
     pipe_init_pool();
-
-    /* Allocate the pty pool before user processes can open /dev/ptmx. */
     pty_init_pool();
 
     /* The address before the device, so the boot line reports what the machine
@@ -3590,7 +3641,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * PID 1: boot_init_process execs it and does not return while it runs,
      * and init's later death is a panic (panic_init_died), so a normal box
      * never falls to the debug shell. boot_init_process returns here only
-     * when the image has no init (the test image); that case, like an
+     * when the root holds no init (the test image), having halted on a
+     * lookup that failed for any other reason; that case, like an
      * explicit `rach2.rescue` boot, makes the kernel debug shell the
      * supervisor. The shell loops reading commands and `exec`s programs as
      * transient inits that return to it on exit (an is-init death path jmps

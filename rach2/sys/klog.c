@@ -618,8 +618,28 @@ void console_write_end(void)
  *
  * `KLOG_CRIT` is the floor, so a panic reaches the screen whatever a caller
  * asks for: a machine that has stopped must be able to say so to the person
- * in front of it. A level above `KLOG_DEBUG` is taken as `KLOG_DEBUG`.
+ * in front of it. A level past `KLOG_DEBUG` is taken as `KLOG_DEBUG`, and
+ * asking for `KLOG_DEBUG` is the same as asking for `KLOG_INFO`: the screen
+ * is not one of the destinations a `KLOG_DEBUG` record is offered to.
  */
+/**
+ * Let the next record be delivered directly, whatever is in flight.
+ *
+ * For a machine that is about to stop. A record raised inside another
+ * record's delivery, or inside a program's console write, joins the queue and
+ * waits for the drain; a panic never returns to drain it, so its record would
+ * reach the ring and nothing else. This drops the two flags that would have
+ * queued it, which is safe only because nothing after it is expected to run.
+ */
+void klog_deliver_directly(void)
+{
+    uint32_t flags = kirq_save();
+
+    klog_delivering = 0;
+    console_writing = 0;
+    kirq_restore(flags);
+}
+
 void klog_set_screen_level(int level)
 {
     if (level < KLOG_CRIT) {

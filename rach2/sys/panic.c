@@ -114,6 +114,9 @@ void k_panic(const char *str)
     set_back_color(black);
     set_fore_color(white);
 
+    /* Nothing after this runs, so a record waiting in the queue would never
+       be written. */
+    klog_deliver_directly();
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
 
     k_stop();

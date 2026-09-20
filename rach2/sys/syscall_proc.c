@@ -337,15 +337,15 @@ int32_t sys_exit(isr_params_t *params)
 
         current_proc = proc_idle;
         current_proc->state = PROC_RUNNING;
+
+        /* Clear the shell's command line and stdin-wait state while interrupts
+         * are still off, so a keyboard IRQ cannot append to a stale command
+         * buffer or see a dangling stdin waiter. shell_loop resets again on
+         * entry as the catch-all. */
+        shell_reset_input();
         __asm__ __volatile__("sti");
 
         sched_disable();
-
-        /* Clear the shell's command line + stdin-wait state BEFORE re-enabling
-         * interrupts below, so a keyboard IRQ during the jump cannot append to
-         * a stale command buffer or see a dangling stdin waiter. shell_loop
-         * resets again on entry as the catch-all. */
-        shell_reset_input();
 
         /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe
          * because we are in kernel mode and init has been torn down. */

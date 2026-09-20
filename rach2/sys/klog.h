@@ -93,6 +93,12 @@ uint32_t klog_len(void);
  * a program talking to a person turns it down for its own run and puts it
  * back. `KLOG_CRIT` is the floor, so a panic always shows.
  */
+/**
+ * Let the next record be delivered directly, whatever is in flight. For a
+ * machine that is about to stop; see the definition.
+ */
+void klog_deliver_directly(void);
+
 void klog_set_screen_level(int level);
 
 /** The level the screen is showing down to. */
