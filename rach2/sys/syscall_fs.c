@@ -6218,8 +6218,9 @@ int32_t sys_getdents64(isr_params_t *params)
      * distinction is the whole of a fault this had: `rm -rf` reads a batch
      * of names, unlinks them, and reads again, and a cursor that counted
      * children renumbered every surviving child when one was removed, so the
-     * second read skipped as many entries as the first read had deleted. The files left behind then made the directory
-     * refuse to be removed, with `rm` reporting only that it was not empty
+     * second read skipped as many entries as the first read had deleted. The
+     * files left behind then made the directory refuse to be removed, with
+     * `rm` reporting only that it was not empty
      * (tests/unlinkdirprobe.c).
      *
      * What an offset guarantees, exactly. Deleting an entry does not move any
