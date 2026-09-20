@@ -164,33 +164,11 @@ static int interrupt_pending(void);
  * drained. The pump sets it; `usb_poll` reads it. */
 static int pump_saw_pending;
 
-/* Whether the pump that is running drained anything. The keystroke's stamps
- * are only worth printing when it did: the numbers are measured from the
- * event, and a pump that took none has no event of its own. */
-static int pump_took;
-
 /* Whether a pump was found to have enabled interrupts, so the record is
  * printed once and not every tick. */
 static int pump_enabled_interrupts;
 
-/* The stamps of one keystroke's path through this stack, in microseconds:
- * where the handler entered, where the event was taken, and where the key
- * reached the line discipline. `usb_stamp_read` prints them when a reader
- * takes the byte. */
-/* The record is printed only with `rach2.usblatency` on the boot line: on
- * a console it is a line per keystroke, and the stamps are taken either way. */
-static int stamp_record;
 static uint32_t stamp_entry;
-static uint32_t stamp_event;
-static uint32_t stamp_wake;
-static uint32_t wake_event;
-static uint32_t wake_entry;
-static int stamp_pending;
-static int stamp_by_msi;
-
-/* Whether the pump that is running was turned by the controller's message.
- * The keystroke's stamp is taken inside it and takes its answer from here. */
-static int in_msi_pump;
 
 /**
  * Let time pass at boot, which is the one place in this stack where that is
@@ -301,9 +279,8 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
             }
         }
     }
-    pump_took = taken > 0;
+    usb_stamp_pump(stamp_entry, taken > 0 ? pit_now_us() : 0, from_interrupt, taken > 0);
     if (taken > 0) {
-        stamp_event = pit_now_us();
         /*
          * Whether a message for this stack is already waiting at the
          * processor. Asked here and not before the drain: the controller
@@ -373,9 +350,7 @@ static void usb_msi_handler(isr_params_t *params)
 
     stamp_entry = pit_now_us();
     usb_messages++;
-    in_msi_pump = 1;
     (void)usb_pump(0, 1);
-    in_msi_pump = 0;
     if (msi_drop_after != 0 && usb_messages >= msi_drop_after) {
         /* rach2.msidrop=N: the machine loses its edges from here, and the
          * timer's pump is all that is left. It is how the fallback is seen
@@ -515,7 +490,7 @@ static void usb_interrupts_start(void)
     int irq;
     int n;
 
-    stamp_record = kcmdline_has("rach2.usblatency");
+    usb_stamp_init(kcmdline_has("rach2.usblatency"));
     if (kcmdline_value("rach2.msidrop", value, (unsigned int)sizeof(value))) {
         uint32_t after = 0;
         int i;
@@ -582,90 +557,6 @@ void usb_poll(void)
 uint32_t usb_fallback_count(void)
 {
     return usb_fallback;
-}
-
-/**
- * Note that a keystroke from this stack has reached the line discipline.
- *
- * The third of the four stamps the latency record prints. The fourth is
- * taken where a reader takes the byte, which is the terminal's read.
- */
-void usb_stamp_wake(void)
-{
-    if (!pump_took) {
-        /* This pump drained nothing, so the report it is delivering came
-         * from an earlier one and there is no event here to measure from.
-         * Saying nothing is better than printing a number whose base is
-         * several milliseconds old. */
-        stamp_pending = 0;
-        return;
-    }
-    stamp_wake = pit_now_us();
-    /* The other two are copied here, so that the record printed at the read
-     * is one keystroke's throughout. `usb_stamp_read` takes all three back
-     * with interrupts off, since a message landing between its own reads
-     * would otherwise leave it printing two keystrokes at once. */
-    wake_event = stamp_event;
-    wake_entry = stamp_entry;
-    stamp_by_msi = in_msi_pump;
-    stamp_pending = 1;
-}
-
-/**
- * A reader took a byte: print the path this keystroke took, once.
- *
- * The numbers are microseconds from the drain that took the event, which is
- * the first moment this stack knows the event exists; the controller stamps
- * nothing, so the time it wrote the event is not a number any of this can
- * report. The handler's entry comes before that drain and so reads as a
- * negative number, and is zero when the timer's pump took the event instead.
- * Then the line discipline, and then the reader, which is the only one of
- * them with anything but this kernel in it: a program that was still writing
- * its last line when the key arrived reads it late, and that time is the
- * program's.
- *
- * A byte that did not come from this stack prints nothing, and neither does
- * one taken so long after the wake that it cannot be the keystroke's. Without
- * `rach2.usblatency` on the boot line nothing is printed at all: on a machine
- * with a console the record is a line for every key typed. When
- * several keys arrive before a reader takes any of them, the record is the
- * last of them, since there is one set of stamps and not one per byte.
- */
-void usb_stamp_read(void)
-{
-    uint32_t flags;
-    uint32_t read_us;
-    uint32_t event, entry, wake;
-    int by_msi;
-
-    flags = kirq_save();
-    if (!stamp_pending || !stamp_record) {
-        stamp_pending = 0;
-        kirq_restore(flags);
-        return;
-    }
-    stamp_pending = 0;
-    read_us = pit_now_us();
-    event = wake_event;
-    entry = wake_entry;
-    wake = stamp_wake;
-    by_msi = stamp_by_msi;
-    kirq_restore(flags);
-
-    /* A byte taken more than two ticks after the keystroke reached the line
-     * discipline is not that keystroke's: it is a byte from somewhere else,
-     * or one that sat as type-ahead, and the reader's number would say
-     * nothing about this path. */
-    if (read_us - wake > 20000u) {
-        return;
-    }
-    klog(KLOG_INFO, "usb", "latency: msi %d, entry %d, wake %d, read %d, us from the drain", by_msi,
-         by_msi ? (int)(entry - event) : 0, (int)(wake - event), (int)(read_us - event));
-}
-
-int usb_stamp_recording(void)
-{
-    return stamp_record;
 }
 
 void usb_stop(void)

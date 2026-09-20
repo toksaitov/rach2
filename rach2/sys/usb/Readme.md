@@ -19,6 +19,7 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 | `msc.c` | The flash drive, over Bulk-Only Transport. |
 | `hub.c` | The hub: its descriptor, its ports' power, and the port operations for the devices below it. |
 | `usb.c` | The inventory, the bring-up, and the stack's turn from the timer. |
+| `stamp.c` | Keystroke times and work before a blocked reader is dispatched. |
 
 ## Every controller, each on its own
 
@@ -48,7 +49,9 @@ The timer is the fallback for a lost edge, so a missed message costs at most ten
 
 `rach2.nomsi`, a processor whose APIC was refused, and a controller with no MSI capability all leave messages off; the controller then raises its interrupts on the PCI line the firmware routed for it, through the 8259, and `/proc/interrupts` lists that line as `PIC xhci` at its own vector, IRQ 7 on the notebook and IRQ 11 under the emulator. The line is level-triggered, so the handler's acknowledgement clears `USBSTS.EINT` as well as `IMAN.IP`; a controller that names no line is left to the timer alone, which on the notebook read a stick at 103 KB/s where the line reads it at the rate messages do. `rach2.msidrop=N` silences the controller after N messages, which no hardware switch can do on demand, and is how the fallback is seen to work.
 
-With `rach2.usblatency` on the boot line the kernel stamps four points of a keystroke's path and prints them when a reader takes the byte; without it the stamps are taken and nothing is printed, since on a console the record is a line for every key typed. The four: the handler's entry, the drain that took the event, the key reaching the line discipline, and the read. The record is `usb: latency: msi 1, entry -5, wake 5, read 79, us from the drain`. The drain is the base because it is the first moment this stack knows the event exists; the controller stamps nothing, so the time it wrote the event is not a number any of this can report. The last of the four includes whatever the reading program was doing when the key arrived; the first three are this kernel's own. There is one set of stamps and not one per byte, so a burst of keys taken by one read prints the last of them.
+With `rach2.usblatency` on the boot line the kernel records the handler entry, the software event drain, the key reaching the line discipline and the read. Times are microseconds relative to the drain; the controller supplies no timestamp. A slow read remains in the log. The record also reports `tracked`, `dispatch`, `pumps` and `work`: whether a blocked console reader was recorded, whether the scheduler selected it, the number of subsequent USB pumps before that selection, and the bytes `getrandom` completed before that selection. Counts stop at dispatch, so interrupts between dispatch and the terminal's return do not change them. The console arms the reader and prints its waiting token with interrupts masked through queue registration. There is one record for the latest key and one reader, not a record per byte or per terminal. Type-ahead and concurrent readers cannot be attributed individually. Without the boot flag no record is printed.
+
+The USB suite checks zero subsequent pumps for a reader beside a user-mode spinner. Beside a large `getrandom`, it checks at most 4096 completed bytes, the call's service interval. Pumps are diagnostic in that row: a slow host may deliver several timer interrupts during one interval. Both rows require the recorded reader to be dispatched. Times are diagnostic in both rows. The other interrupt rows check delivery and fallback counts; these records cannot measure delay from the controller raising an interrupt.
 
 ## Nothing waits
 

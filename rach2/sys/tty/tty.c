@@ -176,8 +176,8 @@ static int tty_ready_cond(void *arg)
  * When `nonblock` is set the read never parks: it drains the polled source and,
  * if nothing is ready (and the discipline is not at EOF, which reads as ready),
  * returns -EAGAIN instead of waiting.
- * The USB latency record checks readiness with interrupts off too: pumping
- * the console mutates the same discipline as interrupt-side input.
+ * Diagnostic arming and the wait's readiness check share one interrupt mask,
+ * so a key sent after the waiting token cannot precede queue registration.
  */
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
 {
@@ -203,12 +203,17 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         if (usb_stamp_recording()) {
             flags = kirq_save();
             rc = tty_ready_cond(t);
-            kirq_restore(flags);
+            if (!rc && t == &console_tty && current_proc) {
+                usb_stamp_wait(current_proc->pid);
+            }
             if (!rc) {
                 klog(KLOG_INFO, "usb", "latency: reader waiting");
             }
+            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
+            kirq_restore(flags);
+        } else {
+            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
         }
-        rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
         if (rc != 0) {
             return rc; /* -EINTR: a signal cut the wait short */
         }

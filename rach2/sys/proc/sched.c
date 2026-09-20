@@ -1,6 +1,7 @@
 #include "sched.h"
 
 #include "../lib/kirq.h"
+#include "../usb/usb.h"
 #include "../network/ip/ip.h"
 
 /** Nonzero once preemptive scheduling is enabled; schedule() is a no-op
@@ -131,6 +132,7 @@ void schedule(void)
         return;
     }
 
+    usb_stamp_dispatch(next->pid);
     next->woken = 0;
     if (next == current_proc) {
         next->state = PROC_RUNNING;

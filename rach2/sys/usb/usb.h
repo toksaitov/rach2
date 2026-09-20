@@ -68,6 +68,21 @@ void usb_stamp_wake(void);
  */
 void usb_stamp_read(void);
 
+/** Reset the single-reader diagnostic record at USB bring-up. */
+void usb_stamp_init(int enabled);
+
+/** Record a pump with interrupts off, before it delivers input. */
+void usb_stamp_pump(uint32_t entry, uint32_t event, int msi, int took);
+
+/** Arm the blocked console reader, with interrupts off. */
+void usb_stamp_wait(uint32_t pid);
+
+/** Record the reader's selection by the scheduler, with interrupts off. */
+void usb_stamp_dispatch(uint32_t pid);
+
+/** Count completed getrandom bytes until the reader is selected. */
+void usb_stamp_work(uint32_t bytes);
+
 /** Whether `rach2.usblatency` is on, which is when the record is printed. */
 int usb_stamp_recording(void);
 

@@ -460,3 +460,9 @@ int main(void)
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }
+
+/** The terminal test does not track a USB reader. */
+void usb_stamp_wait(uint32_t pid)
+{
+    (void)pid;
+}

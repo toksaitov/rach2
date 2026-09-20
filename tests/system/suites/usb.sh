@@ -25,6 +25,10 @@ OUT="$(dirname "$IMAGE")/usb-test"
 HARNESS=$3
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 
+if [ "${RACH2_USB_ROWS:-all}" = latency ]; then
+    exec sh "$REPO/tests/system/usb_latency.sh" "$KERNEL" "$IMAGE" "$HARNESS"
+fi
+
 fail=0
 note() { echo "usb-test: $1"; }
 bad() { echo "usb-test: $1" >&2; fail=1; }
@@ -302,103 +306,9 @@ else
     bad "a mouse moved over messages had no reports counted on the vector"
 fi
 
-# ---- 12: the stages, recorded. The kernel stamps the controller's event, the
-#          handler's entry, the keystroke reaching the line discipline and the
-#          reader taking it, and prints them from the read. The handler's
-#          entry is required to be within a millisecond of the event it was
-#          raised for, which is what says the key did not wait for a tick, and
-#          the reader is required to have run within two milliseconds of the
-#          wake, which is what says the message's wake put it on the processor
-#          instead of the next tick. The program reads once and writes
-#          afterwards, so no time of its own is inside the numbers. ----
-LAT_LOG="$OUT.latency.log"
-rm -f "$LAT_LOG"
-if run_harness --qemu-arg=-cpu --qemu-arg=max \
-    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
-    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
-    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
-    --append "rach2.usblatency" --log "$LAT_LOG" \
-    --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
-    "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe" \
-    "expect=KEYLAT READING" "expect=usb: latency: reader waiting" key=ret \
-    > /dev/null 2>&1; then
-    # The timer's pump may bring the key before the controller's message,
-    # and the record then says `msi 0`: the wake and the read are judged the
-    # same, and the message's own stages only when the message brought it.
-    # Rows 9 to 11 are where the messages themselves are proved.
-    if ! grep -q "usb: latency:" "$LAT_LOG"; then
-        bad "the keystroke's path was not recorded at all"
-    elif ! awk '/usb: latency: msi [01]/ {
-                    fields = 0;
-                    for (i = 1; i <= NF; i++) {
-                        if ($i == "entry") { entry = $(i + 1) + 0; fields++; }
-                        if ($i == "wake") { wake = $(i + 1) + 0; fields++; }
-                        if ($i == "read") { read = $(i + 1) + 0; fields++; }
-                    }
-                    if (fields != 3) { short_record = 1; }
-                    if (entry < 0) { entry = -entry; }
-                    if ($0 ~ /msi 1/ && entry > 1000) { late = 1; }
-                    if (read < wake) { backwards = 1; }
-                    if (read - wake > 2000) { slow = 1; }
-                    seen = 1;
-                }
-                END { exit !(seen && !short_record && !late && !backwards && !slow) }' \
-            "$LAT_LOG"; then
-        bad "the record is short, or the handler entered late, or the reader waited for a tick"
-    else
-        note "the four stages are recorded, the handler enters at its event and the reader runs on the wake: OK"
-        grep "usb: latency" "$LAT_LOG" | sed 's/^/usb-test:   /'
-    fi
-    if grep -q "usb: pump:" "$LAT_LOG"; then
-        bad "the pump enabled interrupts inside itself"
-    fi
-else
-    bad "the latency boot did not read its line"
+if ! sh "$REPO/tests/system/usb_latency.sh" "$KERNEL" "$IMAGE" "$HARNESS"; then
+    bad "the keystroke dispatch rows failed"
 fi
-# The log is kept when something failed, since it is the only account of what
-# the machine did.
-[ "$fail" -eq 0 ] && rm -f "$LAT_LOG"
-
-# ---- 12b: the same keystroke with the other tenant inside a large
-#           `getrandom` instead of spinning: a call that filled eight
-#           mebibytes without giving way would hold the reader for the
-#           whole call, and the reader's stage would say so. ----
-LAT_LOG="$OUT.latency-random.log"
-rm -f "$LAT_LOG"
-if run_harness --qemu-arg=-cpu --qemu-arg=max \
-    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
-    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
-    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
-    --append "rach2.usblatency" --log "$LAT_LOG" \
-    --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "KEYLAT FAIL" \
-    "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe random" \
-    "seen=KEYLAT HOG" "seen=usb: latency: reader waiting" key=ret \
-    > /dev/null 2>&1; then
-    if ! grep -q "usb: latency:" "$LAT_LOG"; then
-        bad "the keystroke beside the large call was not recorded: a reader held past twenty milliseconds has no record"
-    elif ! awk '/usb: latency: msi [01]/ {
-                    fields = 0; wake = -1; read = -1;
-                    for (i = 1; i <= NF; i++) {
-                        if ($i == "wake" && $(i + 1) ~ /^[0-9]+,?$/) { wake = $(i + 1) + 0; fields++; }
-                        if ($i == "read" && $(i + 1) ~ /^[0-9]+,?$/) { read = $(i + 1) + 0; fields++; }
-                    }
-                    if (fields != 2) { short_record = 1; }
-                    if (read < wake) { backwards = 1; }
-                    if (read - wake > 2000) { slow = 1; }
-                    seen = 1;
-                }
-                END { exit !(seen && !short_record && !backwards && !slow) }' "$LAT_LOG"; then
-        bad "the reader waited for the large call to end: $(grep 'usb: latency' "$LAT_LOG" | tail -1)"
-    else
-        note "a reader woken beside a large getrandom runs on the wake, since the call gives way: OK"
-        grep "usb: latency" "$LAT_LOG" | sed 's/^/usb-test:   /'
-    fi
-else
-    bad "the latency boot beside a large getrandom did not read its line"
-fi
-# The log is kept when something failed, since it is the only account of what
-# the machine did.
-[ "$fail" -eq 0 ] && rm -f "$LAT_LOG"
 
 # ---- 13: the same keystroke without `rach2.usblatency`: the probe reads its
 #          key as before and nothing is printed, since on a console the record

@@ -259,3 +259,9 @@ int main(void)
     dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle\n");
     return 0;
 }
+
+/** The scheduling test does not record USB input. */
+void usb_stamp_dispatch(uint32_t pid)
+{
+    (void)pid;
+}

@@ -30,6 +30,7 @@
 #include "fs/file.h"
 #include "ipc/pipe.h"
 #include "io/poll.h"
+#include "usb/usb.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
 #include "rtc.h"
@@ -531,6 +532,7 @@ static int32_t sys_getrandom(isr_params_t *params)
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         done += chunk;
+        usb_stamp_work(chunk);
         /* A large call gives way every 4 KiB, between two pieces, so a
          * reader the tick woke does not wait for the whole call. */
         if ((done & 4095u) == 0) {

@@ -101,6 +101,7 @@ C_SRC = kernel.c \
         sys/fs/synthfs.c \
         sys/fs/procfs.c \
         sys/usb/usb.c \
+        sys/usb/stamp.c \
         sys/usb/xhci.c \
         sys/usb/core.c \
         sys/usb/hid.c \
