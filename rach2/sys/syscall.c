@@ -61,12 +61,14 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
-#include "network/netconf.h" /* net_ip_addr for getsockname */
+#include "network/netconf.h" /* net_ip_addr, for the boot line's address */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 #include "syscall_internal.h"
 
-/* Only one process owns the framebuffer at a time; when it exits or closes fb,
- * text mode is restored. */
+/* Only one process owns the framebuffer at a time. Text mode is restored when
+ * the owner exits and when it asks for it; a close of one descriptor of a
+ * shared description leaves the mode as it is, since the description is still
+ * open. */
 volatile uint32_t fb_owner_pid = 0;
 
 /*
@@ -184,15 +186,13 @@ static syscall_fn_t _syscall_table[SYSCALL_TABLE_SIZE];
  * unknown command, and 0 for `RB_DISABLE_CAD`.
  *
  * The privilege check comes before the magics, which inverts the order the rest
- * of this file uses, and Linux inverts it the same way. A magic-first handler
- * would let any uid learn the ABI of the one call that stops the machine and
- * erases the evidence of what it was doing; nothing is learned from `-EPERM`.
+ * of this file uses; Linux inverts it the same way.
  *
- * `RB_DISABLE_CAD` returning 0 is what makes the rest testable. Every command
- * that works stops the machine, so without one that succeeds quietly a caller
- * cannot tell an accepted magic from a rejected one: both would answer
- * `-EINVAL`. It asks for a state this kernel is permanently in, since there is
- * no keyboard reboot to disable, so 0 is a true answer. `RB_ENABLE_CAD` asks
+ * `RB_DISABLE_CAD` returning 0 is what makes the rest testable: every other
+ * command that this call accepts stops the machine, so a test has no other way
+ * to ask whether a magic was accepted. It asks for a state this kernel is
+ * permanently in, since there is no keyboard reboot to disable, so 0 is a true
+ * answer. `RB_ENABLE_CAD` asks
  * for a feature that does not exist and answers `-EINVAL`, because a 0 there
  * would be the one reply a caller could not tell from a working one.
  */
@@ -278,9 +278,7 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
         return 0;
     }
 
-    /* -(delta) is undefined when delta is the most negative value, so the
-       magnitude is built from delta + 1, which is always representable. */
-    mag = (uint64_t)(-(delta + 1)) + 1u;
+    mag = (uint64_t)(-(delta + 1)) + 1u; /* -delta is undefined at the minimum */
     if (mag > base) {
         return -EINVAL;
     }
@@ -310,17 +308,13 @@ static int32_t sys_gettimeofday(isr_params_t *params)
         return -EFAULT;
     }
 
-    /* Build the result in a kernel struct, then copy it out (this also closes a
-     * previously unchecked raw write to the user pointer). */
     {
         int64_t seconds;
         int64_t nanoseconds;
 
         get_current_time(&seconds, &nanoseconds);
         ktv.tv_sec = (int32_t)seconds;
-        /* Narrowed before the divide: a 64-bit division would call __divdi3,
-         * and this kernel links no libgcc. A nanosecond field is under 1e9. */
-        ktv.tv_usec = (int32_t)nanoseconds / 1000;
+        ktv.tv_usec = (int32_t)nanoseconds / 1000; /* narrow first: no __divdi3 */
     }
 
     if (copy_to_user(tv, &ktv, sizeof(ktv)) != 0) {
@@ -1142,7 +1136,7 @@ static int32_t sys_sethostname(isr_params_t *params)
 }
 
 /* Name each missing syscall behind `rach2.trace=enosys`, once per number for
- * the process that last asked for it, not once per boot. Per boot was the first shape and it hides
+ * the process that last asked for it, not once per boot. Per boot hides
  * exactly what such a trace is for: `login` asks for setitimer early, so a
  * later program asking for the same number would say nothing, and a reader
  * comparing before and after would conclude the later program asked for
@@ -1244,13 +1238,14 @@ static void _syscall_handler(isr_params_t *params)
     }
     /* Deliver what this call put on the loopback ring, here at its exit rather
      * than only on the next tick, so a local transfer is not paced at a ring a
-     * tick. The threshold is three datagrams, `LOOP_DRAIN_AT`, of the ring's 64: at one or two
-     * the delivery is left to the timer, which is what lets the two crossing
-     * SYNs of a simultaneous open both be queued before either is delivered.
-     * The sender's own frames are gone by here, so no delivery runs under
-     * them. Interrupts are off, the drain refuses to run inside itself, and it
-     * takes at most four times the ring's 64 slots in one run; what is left is taken by the next call's
-     * exit or by the timer. */
+     * tick. The threshold is three datagrams, `LOOP_DRAIN_AT`, of the ring's
+     * 64: at one or two the delivery is left to the timer, which is what
+     * lets the two crossing SYNs of a simultaneous open both be queued
+     * before either is delivered. The sender's own frames are gone by here,
+     * so no delivery runs under them. Interrupts are off, the drain refuses
+     * to run inside itself, and it takes at most four times the ring's slots
+     * in one run; what is left is taken by the next call's exit or by the
+     * timer. */
     if (ip_loop_crowded()) {
         ip_loop_drain_from(IP_LOOP_FROM_CALL);
     }
@@ -1375,10 +1370,12 @@ void init_syscall(void)
     _syscall_table[SYS_LINKAT] = sys_linkat;
     _syscall_table[SYS_SYMLINK] = sys_symlink;
     _syscall_table[SYS_SYMLINKAT] = sys_symlinkat;
-    /* Only the *32 id forms are wired: musl remaps the whole legacy 16-bit
-     * family to them on i386, and the 16-bit ABI's narrower ids and 0xFFFF
-     * keep-sentinel differ, so serving those numbers with 32-bit semantics
-     * would lie to a raw caller. They fall to ENOSYS instead. */
+    /* Of the set-id family only the *32 forms are wired: musl remaps the whole
+     * legacy 16-bit family to them on i386, and the 16-bit ABI's narrower ids
+     * and 0xFFFF keep-sentinel differ, so serving those numbers with 32-bit
+     * semantics would lie to a raw caller. They fall to ENOSYS instead. The
+     * ownership calls below are wired under both numbers, since `chown` takes
+     * its ids the same way in each. */
     _syscall_table[SYS_SETREUID32] = sys_setreuid;
     _syscall_table[SYS_SETREGID32] = sys_setregid;
     _syscall_table[SYS_SETRESUID32] = sys_setresuid;
