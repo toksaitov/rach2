@@ -19,6 +19,9 @@ fail() { echo "ext2-test: FAIL: $1" >&2; exit 1; }
 
 . "$REPO/tools/setup/e2fsprogs_path.sh"
 
+sh "$REPO/tests/system/probe_roots.sh" "$KERNEL" "$DISK.probes" ext2 \
+    || fail "the probes on an ext2 root"
+
 sh "$REPO/tests/system/mkext2fixture.sh" "$DISK" "$MKMBR" > /dev/null || fail "the fixture disk"
 
 run() {

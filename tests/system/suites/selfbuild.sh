@@ -369,6 +369,10 @@ if ! build/tests/system/runtests --kernel "$KEXTRACT" \
         --log "$DISK.probes.log"; then
     fail "the probe suite did not pass on the machine-built kernel"
 fi
+if [ "$ROOT_TYPE" = ext2 ]; then
+    sh "$REPO/tests/system/probe_roots.sh" "$KEXTRACT" "$DISK.ext2-probes" ext2 \
+        || fail "the probes did not pass on the rebuilt kernel's ext2 root"
+fi
 
 # The GRUB half: the same bytes through a real loader. The disk assembly runs
 # under a bound, because a wait without one would hang a run whose every other

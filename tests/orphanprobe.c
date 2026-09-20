@@ -17,9 +17,10 @@
  *
  * Freestanding; direct int 0x80.
  *
- * Needs: to be process 1. It reaps the orphan itself, which only the reaper
- * of orphans does; started from a shell under init the orphan goes to init
- * and this probe waits for a child it will never see.
+ * Needs: to be the kernel's designated init process. The debug shell's exec
+ * supplies this role on either root type; its PID need not be 1. An ordinary
+ * shell or SSH child cannot reap init's orphans. Use a rescue boot for this
+ * probe, not a login session.
  */
 
 typedef unsigned int size_t;

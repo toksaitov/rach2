@@ -117,6 +117,23 @@ cd rach2
 
 At the debug shell, `exec hello` runs a root program and `exec musl/hello` runs a musl program. The run script supplies `-cpu max` by default. A deliberate-fault program returns to the shell only if the kernel contains the fault to that process. Programs that need a disk, host traffic, input timing, or a different CPU should be run through their own suite, or through `build/tests/system/harness` with the setup in `tests/system/suites.mk`.
 
+An installed root needs the probes' fixtures as well as their executables. Run these probes as root on a writable KRFFS or ext2 root, with `/proc` and `/dev` mounted and umask 022. Reserve their scratch names before running them; a failed run can leave files behind. Their prerequisites and file-system branches are:
+
+* `shelltest` executes the `hello` probe at `/hello`. Its working directory does not select that path.
+* `limitprobe` needs readable `/hello`, its own executable at `/limitprobe`, only descriptors 0 through 2 open, `RLIMIT_NOFILE` at 1024/1024, unlimited `RLIMIT_AS`, and no other processes owned by uid 1000 or 1001.
+* `dirprobe` reads the root type from `/proc/mounts`. Ext2 must list `a`, `b`, `.` and `..`; KRFFS must list only `a` and `b`. Reserve `/d`, `/e`, `/g`, `/h`, `/m` and `/work`; `/nope` must be absent.
+* `unlinkdirprobe` uses `/unlinkdir` for forty files. It accepts `.` and `..` only as directories and never unlinks them. Both roots must enumerate every file across intervening deletions.
+* `mvtest` reads the root type from `/proc/mounts`. A directory rename must succeed on ext2 and return `EPERM` on KRFFS. Run from a writable directory on that root, with `mvtest*`, `nonexistent` and `other` absent.
+* `vfsprobe` reads the root type from `/proc/mounts`. KRFFS must reject hard links with `EPERM`; ext2 must preserve the inode, bytes and link count through a second name and its removal. Each root must report its own `statfs` magic. `/vp` and `/procx` must be absent.
+* `dnstest` needs the first readable hosts file, `/etc/hosts` or the fallback `/hosts`, to contain `127.0.0.1 localhost`, `10.0.2.2 gateway`, `10.0.2.3 dns` and `10.0.2.15 rach2`. The default run needs no network. `--live` additionally needs working DNS and external connectivity. A machine's different hosts file is not a resolver failure; supply the fixture on a disposable root.
+* `devprobe` needs `/dev/console` as descriptor 0, its executable named `devprobe`, and the VGA framebuffer available with no other owner. A login shell can supply stdin with `/devprobe < /dev/console`.
+* `orphanprobe` must be the kernel's designated init process. Use `exec /orphanprobe` at the kernel debug shell in a rescue boot. An SSH child cannot acquire this role; the role's PID need not be 1.
+* `modeprobe` needs `/suidhelper`, root privilege and a writable working directory for its `mp_*` fixtures. It clears supplementary groups itself before creating children. Its optional directory argument selects the file system under test.
+
+`tests/run default` runs these ten on the KRFFS test root. `tests/run ext2` also runs them on an ext2 root with the same test manifest. `tests/run selfbuild-ext2` repeats that ext2 run with the kernel built in the guest, in addition to its full KRFFS probe run. `system/probe_roots.sh` checks each staged executable against its build input and requires the kernel's init exit status to be zero. The rescue boot supplies the init role, console descriptors and idle test uids. These rows prove file-system behavior with explicit fixtures; they do not claim an SSH or physical-machine run.
+
+`sh tests/system/probe_roots_mutate.sh` requires all ten probes to pass on both roots. It separately rebuilds kernels that refuse ext2 hard links or report KRFFS's magic for ext2; `vfsprobe` must fail the corresponding assertion with exit status 1. After each mutation the script restores and touches the source, rebuilds, requires the original kernel bytes and reruns both roots. Its exit trap stops the test processes before restoring source. Logs, staged-byte comparisons, checksums and kernels remain under the printed `build/probe-roots-proof.*` directory.
+
 ## Adding a guest test
 
 A root program needs its source name in `tests/Makefile`'s `PROGS`. A musl program needs only a `.c` file in `tests/musl/`; `build.sh` discovers it. The manifest's two `exec-dir` directives stage ordinary outputs automatically.

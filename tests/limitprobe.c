@@ -18,6 +18,11 @@
  * while another user forks; and a process that took that user's identity
  * with `setuid` counts against that user's four.
  *
+ * Needs: root privilege, readable /hello, this binary at /limitprobe, and
+ * only descriptors 0, 1 and 2 open. Start with RLIMIT_NOFILE at 1024/1024,
+ * unlimited RLIMIT_AS, and no other processes owned by uid 1000 or 1001.
+ * Neither path nor limit depends on the root file system's type.
+ *
  * Prints "LIMITPROBE OK" or "LIMITPROBE FAIL: reason". Freestanding;
  * int 0x80.
  */

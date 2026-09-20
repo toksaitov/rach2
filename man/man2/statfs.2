@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 21, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -151,8 +151,11 @@ calls
 .Nm statfs64
 with the result structure size set to 84 bytes and checks the distinct
 magic numbers
-for the KRFFS root and
+for the KRFFS or ext2 root and
 .Pa /proc .
+The expected root magic comes from
+.Pa /proc/mounts .
+The ext2 and selfbuild-ext2 suites also run this probe on an ext2 root.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES

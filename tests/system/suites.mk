@@ -1376,7 +1376,7 @@ run-krffsmount: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
 # mke2fs wrote, with the walker's link rows on the mounted volume.
 EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
-run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(MKMBR) \
+run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(RUNUTIL) $(MKMBR) \
           utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom \
           rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/ext2.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
@@ -1575,7 +1575,7 @@ SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
 $(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
-run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL)
+run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL) $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $(SELFBUILD_EXT2_DISK)

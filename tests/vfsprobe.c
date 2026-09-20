@@ -12,9 +12,9 @@
  * lexical resolver succeeds and a physical one must not. It flipped to 1
  * in the migration commit that removed the lexical step.
  *
- * Needs: a KRFFS root. The rows below state what that file system promises,
- * including a link refused with EPERM and the KRFFS magic from statfs, so a
- * run on another root judges the root and not the kernel.
+ * Needs: root privilege, a writable KRFFS or ext2 root, mounted /proc and
+ * /dev, and absent /vp and /procx paths. The root type in /proc/mounts selects
+ * the hard-link result and statfs magic. An unknown root type fails.
  *
  * Prints "VFSPROBE OK". Freestanding; direct int 0x80.
  */
@@ -68,6 +68,7 @@ typedef unsigned int size_t;
 
 #define STATFS_MAGIC_PROC  0x9FA0
 #define STATFS_MAGIC_KRFFS 0x4B524646
+#define STATFS_MAGIC_EXT2  0xEF53
 
 static int sys1(int n, int a)
 {
@@ -125,6 +126,51 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/**
+ * Read the root type from the mount table independently of statfs.
+ *
+ * Match the mountpoint and type fields of a complete line. Missing or
+ * unsupported roots fail before the probe creates files.
+ */
+static unsigned root_magic(void)
+{
+    char buf[2048];
+    int fd, n, start, end, p;
+
+    fd = sys3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("open /proc/mounts");
+    }
+    n = sys3(SYS_READ, fd, (int)buf, sizeof(buf));
+    sys1(SYS_CLOSE, fd);
+    for (start = 0; start < n; start = end + 1) {
+        for (end = start; end < n && buf[end] != '\n'; end++) {
+        }
+        if (end == n) {
+            break;
+        }
+        for (p = start; p < end && buf[p] != ' '; p++) {
+        }
+        if (p + 3 >= end || buf[p + 1] != '/' || buf[p + 2] != ' ') {
+            continue;
+        }
+        p += 3;
+        if (end - p >= 6 && buf[p] == 'k' && buf[p + 1] == 'r' && buf[p + 2] == 'f' &&
+            buf[p + 3] == 'f' && buf[p + 4] == 's' && buf[p + 5] == ' ') {
+            puts("vfsprobe: root: krffs");
+            return STATFS_MAGIC_KRFFS;
+        }
+        if (end - p >= 5 && buf[p] == 'e' && buf[p + 1] == 'x' && buf[p + 2] == 't' &&
+            buf[p + 3] == '2' && buf[p + 4] == ' ') {
+            puts("vfsprobe: root: ext2");
+            return STATFS_MAGIC_EXT2;
+        }
+        break;
+    }
+    fail("/proc/mounts must list a krffs or ext2 root");
+    return 0;
+}
+
 static unsigned char stbuf[104];
 
 static int xstat(const char *path)
@@ -169,6 +215,47 @@ static int dirents_contain(const unsigned char *b, int n, const char *name)
 
 static unsigned char iobuf[512];
 
+/**
+ * Check the root's hard-link contract and remove the extra name.
+ *
+ * Ext2 must preserve the inode and data through both names, then decrement
+ * the link count on unlink. KRFFS must refuse the link without creating it.
+ */
+static void check_link(unsigned magic)
+{
+    unsigned ino;
+    int fd;
+
+    if (xstat("/vp/d/f") != 0 || st_field(20) != 1) {
+        fail("the link source has one name");
+    }
+    ino = st_field(88);
+    if (magic == STATFS_MAGIC_KRFFS) {
+        if (sys2(SYS_LINK, (int)"/vp/d/f", (int)"/vp/d/h") != -EPERM ||
+            xstat("/vp/d/h") != -ENOENT) {
+            fail("link on krffs is EPERM and creates no name");
+        }
+        return;
+    }
+    if (sys2(SYS_LINK, (int)"/vp/d/f", (int)"/vp/d/h") != 0) {
+        fail("link on ext2 succeeds");
+    }
+    if (xstat("/vp/d/h") != 0 || st_field(88) != ino || st_field(20) != 2 ||
+        xstat("/vp/d/f") != 0 || st_field(88) != ino || st_field(20) != 2) {
+        fail("both ext2 names report one inode with two links");
+    }
+    fd = sys3(SYS_OPEN, (int)"/vp/d/h", O_RDONLY, 0);
+    if (fd < 0 || sys3(SYS_READ, fd, (int)iobuf, 4) != 3 || iobuf[0] != 'a' || iobuf[1] != 'b' ||
+        iobuf[2] != 'c') {
+        fail("read through the ext2 hard link");
+    }
+    sys1(SYS_CLOSE, fd);
+    if (sys1(SYS_UNLINK, (int)"/vp/d/h") != 0 || xstat("/vp/d/h") != -ENOENT ||
+        xstat("/vp/d/f") != 0 || st_field(88) != ino || st_field(20) != 1) {
+        fail("unlink leaves the ext2 source with one link");
+    }
+}
+
 int stat_marked_missing_dotdot(void);
 int stat_marked_file_dotdot(void);
 
@@ -199,6 +286,7 @@ void _start(void)
 {
     int fd, dfd, rc;
     char cwd[64];
+    unsigned magic = root_magic();
 
     /* ---- the tree the rows use ---- */
     if (sys2(SYS_MKDIR, (int)"/vp", 0755) != 0) {
@@ -273,6 +361,9 @@ void _start(void)
         fail("read through the openat descriptor");
     }
     sys1(SYS_CLOSE, fd);
+    if (sys1(SYS_CLOSE, dfd) != 0) {
+        fail("close the openat directory");
+    }
     if (sys3(SYS_OPEN, (int)"/vp/d/f", O_CREAT | O_EXCL | O_RDWR, 0644) != -EEXIST) {
         fail("O_CREAT|O_EXCL on an existing file is EEXIST");
     }
@@ -436,18 +527,14 @@ void _start(void)
         }
     }
 
-    /* ---- links ---- */
-    if (sys2(SYS_LINK, (int)"/vp/d/f", (int)"/vp/d/h") != -EPERM) {
-        fail("link on a file system without links is EPERM");
-    }
+    check_link(magic);
 
     /* ---- statfs identities ---- */
     if (sys3(SYS_STATFS64, (int)"/proc", 84, (int)iobuf) != 0 ||
         *(unsigned *)iobuf != STATFS_MAGIC_PROC) {
         fail("statfs64 of /proc");
     }
-    if (sys3(SYS_STATFS64, (int)"/", 84, (int)iobuf) != 0 ||
-        *(unsigned *)iobuf != STATFS_MAGIC_KRFFS) {
+    if (sys3(SYS_STATFS64, (int)"/", 84, (int)iobuf) != 0 || *(unsigned *)iobuf != magic) {
         fail("statfs64 of the root");
     }
 
