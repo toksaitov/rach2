@@ -160,7 +160,8 @@ step "WROTEMAIN" "printf '#include <stdio.h>\\n#include \"demo.h\"\\nint main(vo
 step "WROTEMK" "printf 'CC=/no/such/compiler\\nprog: main.o lib.o\\n\\t\$(CC) \$(LDFLAGS) -o prog main.o lib.o\\nmain.o: main.c demo.h\\nlib.o: lib.c demo.h\\nclean:\\n\\trm -f prog main.o lib.o\\n.PHONY: clean\\n' > Makefile; echo WROTE\"\"MK"
 step "FIRSTRC" "make CC=tcc > /tmp/first.out 2>&1; echo FIRST\"\"RC=\$?"
 step "FIRSTRAN" "./prog > /tmp/first.run 2>&1; echo FIRST\"\"RAN=\$(cat /tmp/first.run)"
-step "IDLE1" "make CC=tcc > /tmp/idle1.out 2>&1; echo IDLE1\"\"RC=\$? TCC=\$(grep -c tcc /tmp/idle1.out) UP=\$(grep -c 'up to date' /tmp/idle1.out)"
+# interval: the file's time must pass the second, which make compares whole
+step "IDLE1" "sleep 1; make CC=tcc > /tmp/idle1.out 2>&1; echo IDLE1\"\"RC=\$? TCC=\$(grep -c tcc /tmp/idle1.out) UP=\$(grep -c 'up to date' /tmp/idle1.out)"
 # interval: the file's time must pass the second, which make compares whole
 step "CHANGEDLIB" "sleep 1; printf '#include \"demo.h\"\\nint scale(int x){return 3*x;}\\n' > lib.c; echo CHANGED\"\"LIB"
 step "ONERC" "make CC=tcc > /tmp/one.out 2>&1; echo ONE\"\"RC=\$? LIB=\$(grep -c 'c lib.c' /tmp/one.out) MAIN=\$(grep -c 'c main.c' /tmp/one.out) LINK=\$(grep -c 'o prog' /tmp/one.out)"
@@ -188,7 +189,10 @@ fi
 
 # A control, not evidence: this passes on a machine with no clock at all, where
 # every timestamp is equal and nothing is ever out of date. It is here so that a
-# failure below can be told from a make that never worked.
+# failure below can be told from a make that never worked. The second it waits
+# out first is the one make compares: a build that finished inside the same
+# second as its sources leaves them equal, and equal is out of date, so without
+# the wait this control rebuilds whenever the second boundary falls there.
 if ! wait_token "IDLE1RC=0 TCC=0 UP=1" 120; then
     fail "a second make with nothing changed did not report the program up to date"
 fi

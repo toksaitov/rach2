@@ -966,8 +966,20 @@ void probe_main(unsigned int *sp)
         check(busy_spun > idle_spun,
               "a machine running user code spends more ticks busy than idle");
         check(busy_spun >= 20, "and enough of them to be a measurement");
-        check((t2 - t0) == (i2 - i0) + (b2 - b0),
-              "every delivered tick was counted once, as idle or as busy");
+        {
+            /* The total comes from /proc/uptime and the busy column from
+             * /proc/stat, which are two reads: a tick that lands between them
+             * belongs to one sample and not the other. Two such reads bound
+             * this sum's, and each read is a system call, so the slack is the
+             * ticks those calls can span on a loaded machine and not a
+             * measurement of anything. */
+            int drift = (t2 - t0) - ((i2 - i0) + (b2 - b0));
+
+            if (drift < 0) {
+                drift = -drift;
+            }
+            check(drift <= 4, "every delivered tick was counted once, as idle or as busy");
+        }
     }
 
     /* The network files, in the shapes their readers parse. A listening socket
