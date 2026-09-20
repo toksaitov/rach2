@@ -41,9 +41,10 @@ static uint16_t num_input_streams = 0;
 static uint16_t num_output_streams = 0;
 static uint16_t num_bidir_streams = 0;
 
+/* Physical: the streams the controller's register layout addresses. */
+#define HDA_MAX_STREAMS 32
 /* DMA position buffer (optional; more reliable than LPIB on some
  * controllers). */
-#define HDA_MAX_STREAMS 32
 static volatile uint32_t dma_posbuf[HDA_MAX_STREAMS * 2] __attribute__((aligned(128)));
 static volatile bool dma_posbuf_enabled = false;
 static volatile bool dma_posbuf_use = false;

@@ -51,7 +51,7 @@
 #include <string.h>
 
 #define SECTOR     512u
-#define MAX_RANGES 65536
+#define MAX_RANGES 65536 /* the ranges one save set holds; more is refused */
 
 struct range {
     unsigned long long start, count;

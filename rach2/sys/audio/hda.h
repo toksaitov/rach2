@@ -189,9 +189,7 @@ typedef struct {
     uint32_t ioc;       /* Interrupt on completion (bit 0) */
 } __attribute__((packed)) hda_bdl_entry_t;
 
-/*
- * Maximum number of BDL entries
- */
+/* Physical: the most entries a buffer descriptor list may have. */
 #define HDA_BDL_MAX_ENTRIES 256
 
 /** Periodic service hook; call from the timer tick. */

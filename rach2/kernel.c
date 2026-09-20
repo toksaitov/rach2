@@ -72,6 +72,7 @@ extern char stack[];
 
 extern void enter_usermode(uint32_t eip, uint32_t esp);
 
+/* Policy: the stack the first user-mode entry runs on, reserved at boot. */
 #define USER_STACK_SIZE 0x1000
 
 #define CMD_BUFFER_SIZE 64

@@ -16,6 +16,7 @@ struct comp {
     int len;
 };
 
+/* Policy: the components a path under /dev or /proc is split into. */
 #define SYNTH_MAXC 5
 
 /*

@@ -38,6 +38,7 @@ struct kernel_iovec {
     uint32_t iov_len;
 };
 
+/* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 
 int32_t sys_writev(isr_params_t *params);

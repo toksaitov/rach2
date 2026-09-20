@@ -29,7 +29,7 @@
 #include <string.h>
 
 #define SECTOR            512
-#define MAX_IMAGE_SECTORS 1024
+#define MAX_IMAGE_SECTORS 1024 /* a core image of 512 KiB, the post-MBR gap */
 
 static unsigned char *read_file(const char *path, size_t *n)
 {
