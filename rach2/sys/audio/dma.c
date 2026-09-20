@@ -222,12 +222,22 @@ void dma_stop(uint8_t channel)
  * ISA DMA reaches only the low 16MB. The controller increments the address
  * register but not the page register, so a transfer may not cross a page
  * boundary: 64KB for 8-bit channels, 128KB for 16-bit channels.
+ *
+ * An empty transfer is not legal: the count register holds one less than the
+ * byte or word count, so a length of zero would program a full sweep. A
+ * 16-bit channel counts words, so its address and its length are even.
  */
 bool dma_address_valid(uint32_t address, uint32_t length, bool is_16bit)
 {
     uint32_t end, boundary;
 
+    if (length == 0) {
+        return false;
+    }
     if (address >= 0x1000000 || address + length > 0x1000000) {
+        return false;
+    }
+    if (is_16bit && ((address & 1) != 0 || (length & 1) != 0)) {
         return false;
     }
 

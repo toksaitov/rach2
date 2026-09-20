@@ -193,8 +193,11 @@ static volatile uint32_t total_bytes_written = 0;
 /*
  * DMA progress tracked as an absolute period number (LPIB plus wrap count),
  * not just the 0/1 buffer index. After a full CBL wrap the buffer index
- * returns to its old value; an absolute period number distinguishes that
- * from "no progress" so a period transition is never missed.
+ * returns to its old value, and an absolute period number tells that apart
+ * from no progress. The wrap is counted when a reading comes out lower than
+ * the one before it, so this holds as long as the handler reads LPIB more
+ * often than the buffer turns over; a whole revolution between two readings
+ * still looks like none.
  */
 static volatile bool lpib_tracking_valid = false;
 static volatile uint32_t lpib_last = 0;
@@ -937,7 +940,6 @@ static void hda_setup_corb(void)
 static void hda_setup_rirb(void)
 {
     uint32_t addr;
-    int timeout;
 
     hda_write8(HDA_RIRBCTL, 0);
     hda_delay(100);
@@ -948,13 +950,11 @@ static void hda_setup_rirb(void)
 
     hda_write8(HDA_RIRBSIZE, 0x02); /* 256 entries */
 
-    /* Reset write pointer: set bit 15, wait for the controller to
-     * acknowledge. */
+    /* Reset the write pointer. Bit 15 is write-only and reads back as zero,
+     * so there is nothing to wait on; the delay is for the controller to act
+     * on it before the pointer is read. */
     hda_write16(HDA_RIRBWP, 0x8000);
-    timeout = 1000;
-    while ((hda_read16(HDA_RIRBWP) & 0x8000) && timeout-- > 0) {
-        hda_delay(10);
-    }
+    hda_delay(100);
 
     rirb_rp = hda_read16(HDA_RIRBWP) & 0xFF;
 
@@ -1107,7 +1107,8 @@ static void hda_enable_gpio(void)
 /**
  * Report whether a codec vendor/device ID is an HDMI/DisplayPort codec.
  *
- * HDMI codecs carry no analog speaker path, so output enumeration skips them.
+ * An HDMI codec has no analog speaker path, so the enumeration below passes
+ * over one while any other codec answers, and takes it only when none does.
  * Recognizes Intel HDMI device ID ranges and treats all Nvidia and AMD/ATI
  * codecs as HDMI.
  */
@@ -1139,9 +1140,10 @@ static bool is_hdmi_codec(uint32_t vendor_id)
 /**
  * Discover the codec and the widget path to drive for output.
  *
- * Scans codec addresses for a responding analog codec (HDMI codecs are
- * skipped), finds its audio function group, and classifies its output pins by
- * default-device type (speaker, line out, headphone). It selects an output pin
+ * Scans codec addresses for a responding analog codec, and takes a responding
+ * HDMI codec only when no analog one answers. Finds its audio function group
+ * and classifies its output pins by default-device type (speaker, line out,
+ * headphone). It selects an output pin
  * (preferring speaker, then line out, then headphone, then any output-capable
  * pin) and traces the pin's connection list back through any mixer or selector
  * to a DAC. The chosen pin, DAC, optional mixer, and headphone pin/DAC are left
@@ -1486,9 +1488,13 @@ static bool hda_find_output(void)
  * Encode a stream format word from sample rate, format, and channel count.
  *
  * Produces the 16-bit value the HDA stream-format register and the codec
- * SET_CONV_FMT verb expect: channel count in the low nibble, a bits-per-sample
- * code, and a base/multiplier/divisor that yields the closest supported rate at
- * or below the requested one.
+ * SET_CONV_FMT verb expect: the channel count less one in the low nibble, a
+ * bits-per-sample code, and a base with a divisor.
+ *
+ * The rates are the six this driver programs: 8000, 11025, 16000, 22050,
+ * 44100 and 48000. A request between two of them takes the next one up, and
+ * anything above 44100 is played at 48000. The codec is not asked which rates
+ * it supports. dev-log/50-shortcomings/plan.md entry 126 has the rest.
  */
 static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -1502,8 +1508,7 @@ static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int
         fmt |= HDA_FMT_BITS_8;
     }
 
-    /* Sample rate - find closest base/multiplier/divisor */
-    /* Common rates: 8000, 11025, 16000, 22050, 44100, 48000 */
+    /* The next programmed rate at or above the request. */
     if (sample_rate <= 8000) {
         fmt |= HDA_FMT_BASE_48K | (0x05 << 8); /* 48000 / 6 = 8000 */
     } else if (sample_rate <= 11025) {
@@ -1948,9 +1953,13 @@ static bool hda_pcm_rate_supported(uint32_t pcm_caps, uint32_t rate)
  *
  * Intersects the PCM-rate capabilities of the primary and headphone DACs and
  * returns the requested rate if supported. Otherwise it prefers 48000, then
- * 44100, then any supported rate highest first. Many real codecs (including the
- * Conexant part this driver was developed against) do not support 11025Hz even
- * though QEMU does, which is why the write path resamples.
+ * 44100, then the highest of 192000, 96000, 32000, 22050, 16000, 11025 and
+ * 8000 the codec supports; a rate the codec reports but this list omits,
+ * 88200 among them, is not chosen. With nothing supported it returns the
+ * request unchanged, which the format encoder then rounds. Many real codecs
+ * (including the Conexant part this driver was developed against) do not
+ * support 11025Hz even though QEMU does, which is why the write path
+ * resamples.
  */
 static uint32_t hda_select_hw_rate(uint32_t req_rate)
 {
@@ -1977,7 +1986,7 @@ static uint32_t hda_select_hw_rate(uint32_t req_rate)
         return 44100;
     }
 
-    /* Fall back to any supported rate (highest first). */
+    /* The highest of the rates below that the codec supports. */
     if (hda_pcm_rate_supported(pcm_caps, 192000))
         return 192000;
     if (hda_pcm_rate_supported(pcm_caps, 96000))
@@ -2391,7 +2400,9 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
  *
  * Records the requested format and, for the write path, chooses a
  * codec-supported hardware rate and sets up the resampler; the callback path
- * runs the hardware at the requested format. Resets the stream, fills the BDL
+ * asks the hardware for the requested format. Either way the format encoder
+ * has the last word, and it programs one of six rates, so a stream recorded
+ * at 96000 runs at 48000 on the wire. Resets the stream, fills the BDL
  * and buffers, programs the stream descriptor, walks the codec path
  * (AFG, DAC, optional mixer, pin, EAPD/GPIO) to route and unmute output,
  * optionally enables the headphone path, then sets the stream's RUN bit and
@@ -2422,7 +2433,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     /*
      * Decide hardware format.
      *
-     * * Callback mode: honor requested format/rate/channels.
+     * * Callback mode: ask for the requested format, rate and channels.
      * * Write mode (Doom): run hardware at a codec-supported rate (usually 48k)
      *   and convert/resample in the driver. Many real codecs do NOT support
      *   11025Hz even though QEMU does.

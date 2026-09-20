@@ -32,7 +32,8 @@ static audio_callback_t user_callback = NULL;
 
 /*
  * DMA double-buffer: one contiguous region split into two halves. ISA DMA
- * requires the buffer to lie below 16MB and not cross a 64KB boundary.
+ * requires the buffer to lie below 16MB and not cross the page its channel
+ * counts in: 64KB for the 8-bit channel, 128KB for the 16-bit one.
  */
 static uint8_t dma_buffer[SB16_BUFFER_SIZE * 2] __attribute__((aligned(16)));
 static int current_buffer = 0; /* half the DMA is currently playing */
@@ -54,7 +55,7 @@ static volatile uint32_t underrun_count = 0;
 static volatile uint32_t underrun_samples = 0;
 
 /**
- * Return the number of samples queued in the ring buffer.
+ * Return the number of bytes queued in the ring buffer.
  *
  * Safe to call from both IRQ and syscall context: it samples the volatile
  * pointers once and reads no shared state that the other side may tear.
@@ -70,7 +71,7 @@ static uint32_t ring_available(void)
 }
 
 /**
- * Return the number of samples that can be appended to the ring buffer.
+ * Return the number of bytes that can be appended to the ring buffer.
  *
  * One slot is always left empty so a full buffer is distinguishable from an
  * empty one.
@@ -81,13 +82,15 @@ static uint32_t ring_free(void)
 }
 
 /**
- * Append up to `count` samples to the ring buffer, dropping any overflow.
+ * Append up to `count` bytes to the ring buffer, dropping any overflow.
  *
  * Called from syscall context (the sole writer). The write pointer is
- * published only after every byte lands, so the IRQ-side reader never sees a
- * half-written sample.
+ * published only after every byte lands, so the IRQ-side reader never reads a
+ * byte this call has not written. The ring counts bytes and not frames, so a
+ * write the free space cuts short can leave half of a 16-bit sample at the
+ * end; the reader takes what is there and the next write continues it.
  *
- * @return the number of samples actually stored.
+ * @return the number of bytes actually stored.
  */
 static uint32_t ring_write(const uint8_t *data, uint32_t count)
 {
@@ -106,7 +109,7 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 }
 
 /**
- * Drain `count` samples from the ring buffer into `dest`, padding with silence.
+ * Drain `count` bytes from the ring buffer into `dest`, padding with silence.
  *
  * Called from IRQ context (the sole reader). It always fills exactly `count`
  * bytes: a short ring is an underrun, counted in the diagnostics and made up
@@ -327,9 +330,10 @@ static void sb16_start_auto_init(void)
  * Service the SB16 half-buffer interrupt: refill the half that just drained.
  *
  * In auto-init mode the DMA controller cycles the double-buffer on its own and
- * raises this IRQ as each half completes, so the handler only acknowledges the
- * interrupt and refills the finished half from the ring buffer; no DMA restart
- * is needed. ring_read_to_buffer() covers any underrun with silence.
+ * the DSP raises this IRQ as each block completes, so the handler only
+ * acknowledges the interrupt and refills the finished half from the ring
+ * buffer; no DMA restart is needed. ring_read_to_buffer() covers any underrun
+ * with silence.
  */
 static void sb16_irq_handler(isr_params_t *params)
 {
@@ -548,7 +552,7 @@ static void sb16_set_callback(audio_callback_t fn)
  * as DMA halves need refilling, decoupling Doom's frame-paced writes from the
  * fixed DMA rate. Overflow beyond the ring's free space is dropped.
  *
- * @return the number of samples queued, or -1 if not playing or given no data.
+ * @return the number of bytes queued, or -1 if not playing or given no data.
  */
 static int sb16_write(const uint8_t *buffer, size_t size)
 {
@@ -571,8 +575,9 @@ static int sb16_write(const uint8_t *buffer, size_t size)
  * Set output volume from a 0..100 percentage.
  *
  * The percentage is clamped and scaled to the mixer's 0..255 range. The master
- * register packs left in the high nibble and right in the low nibble, so the
- * scaled value is folded into both nibbles for an equal stereo level.
+ * and voice registers each pack left in the high nibble and right in the low
+ * one, so the scaled value is folded into both nibbles, for both registers,
+ * and the two channels come out level.
  */
 static void sb16_set_volume(int volume)
 {
@@ -585,7 +590,8 @@ static void sb16_set_volume(int volume)
 
     val = (uint8_t)((volume * 255) / 100);
 
-    mixer_write(MIXER_MASTER_VOL, (val & 0xF0) | ((val >> 4) & 0x0F));
+    val = (uint8_t)((val & 0xF0) | ((val >> 4) & 0x0F));
+    mixer_write(MIXER_MASTER_VOL, val);
     mixer_write(MIXER_VOICE_VOL, val);
 }
 
