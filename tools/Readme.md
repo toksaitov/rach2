@@ -175,7 +175,7 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 
 ## `tests/run style`
 
-`verify/check.sh` runs a preflight followed by twenty-one numbered checks:
+`verify/check.sh` runs a preflight followed by twenty-two numbered checks:
 
 * Build the kernel with warnings treated as errors.
 * Run scoped cppcheck with `verify/cppcheck.suppress`.
@@ -197,6 +197,7 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 * Check the manual against the machine with `verify/mancheck.c`: a page or an alias for every staged program, applet and registered call, every page lint-clean, the recovery pages staged.
 * Run clang's positive warning list over the kernel, judged by the clang version `setup/judges` records.
 * Run sparse over the kernel with `__CHECKER__` defined, so the `__user` address-space annotations are checked; skipped where sparse is absent.
+* Check every Markdown link in the in-house documents with `verify/linkcheck.sh`: the target is a file that is there, and an anchor names a heading that is in it.
 * Check function sizes with `verify/sizecheck.c` over every in-house C file: at most 100 lines in a body, 6 parameters, nesting 4, and cyclomatic complexity 25 as `pmccabe` counts it, judged against `verify/sizes.reasons`. Without `pmccabe` the three measures the checker takes itself are judged and the complexity waits for the testing host.
 
 The supporting files under `verify/` have narrower jobs:
@@ -214,6 +215,7 @@ The supporting files under `verify/` have narrower jobs:
 * `check_repro.sh` stages the same scratch manifest twice with the real KRFFS tools, requires identical image bytes, and checks that `exec-dir` and `tree` entries were stored in name order with the fixed staged instant, reading the node inventory through `setidcheck --nodes`.
 * `cppcheck.suppress` contains the project-wide and path-scoped cppcheck exceptions read by `check.sh`.
 * `sizecheck.c` measures every function's body lines, parameters and nesting from the source in the house format, reads the complexity from a `pmccabe` table when given one, and judges the four against limits and a reasons file. `--report` prints every function's measures.
+* `linkcheck.sh` reads the `[text](target)` links of the in-house Markdown, skipping URLs, a bare anchor and an anchor of the form `L120`, which names a line. `dev-log/` is excluded: those records are history, and a path inside one is written as the repository sees it rather than as a link from that directory.
 * `sizes.reasons` lists every function kept over a limit, one line each, `FILE:FUNCTION MEASURE VALUE REASON`: the value is the ceiling the function may not grow past, and an entry whose function is back within the limit fails the check as stale, so the file only shrinks.
 
 ## Artifact and configuration checkers
