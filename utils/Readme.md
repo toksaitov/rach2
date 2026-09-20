@@ -1,6 +1,6 @@
 # utils/: hosted user programs
 
-This directory contains 29 programs written for Rach2. The normal build links each one statically against the ported musl libc. Nineteen ordinary programs go under `build/utils/`; ten programs selected explicitly by image manifests go under `build/utils/sbin/`.
+This directory contains the 36 programs `programs.mk` names, written for Rach2. The normal build links each one statically against the ported musl libc. The 25 of `UTILITIES` go under `build/utils/`; the 11 of `SBIN_PROGS`, which image manifests select explicitly, go under `build/utils/sbin/`.
 
 The kernel interfaces used by these programs are described by the [kernel](../rach2/Readme.md), [network](../rach2/sys/network/Readme.md), [block-device](../rach2/sys/block/Readme.md), and [file-system](../rach2/sys/fs/Readme.md) documents. This document describes the user programs and their shared libraries.
 
@@ -20,13 +20,13 @@ make -C utils
 
 The main Makefile prefers `i686-elf-gcc`, falls back to `CROSS_CC`, and links musl's startup objects, `libc.a`, 32-bit `libgcc`, and `crtn.o`. It prunes obsolete files from both output directories before building so an old binary cannot be staged by a later image.
 
-The native Linux build produces only the 12 portable file utilities under `build/utils/linux/`:
+The native Linux build produces only the portable file utilities `Makefile.linux` lists, under `build/utils/linux/`:
 
 ```
 make -C utils -f Makefile.linux
 ```
 
-Self-building images stage this source tree at `/src/utils`. `guest.mk` uses `cc -static` to build all 29 programs from `programs.mk`, the shared map of programs, companion sources, and compile-time variants the host Makefile includes too; each is linked to a name of its own and renamed into place, so a link the machine stops part way does not leave a program the next make calls built. `tools/verify/guestcheck.c` checks that both builds read the map and that every rule links that way.
+Self-building images stage this source tree at `/src/utils`. `guest.mk` uses `cc -static` to build every program from `programs.mk`, the shared map of programs, companion sources, and compile-time variants the host Makefile includes too; each is linked to a name of its own and renamed into place, so a link the machine stops part way does not leave a program the next make calls built. `tools/verify/guestcheck.c` checks that both builds read the map and that every rule links that way.
 
 ## Portable file utilities
 
