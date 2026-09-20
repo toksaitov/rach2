@@ -899,6 +899,40 @@ static void tcp_refused(void)
  * stream that never connected has no connection either, and its read is
  * ENOTCONN. `cs` is a connected client; `sa` is scratch space of a byte.
  */
+/*
+ * A reader already asleep on a stream another process shuts down wakes with
+ * the end of input. The sleeper is inside the socket's wait queue, and the
+ * shutdown detaches the socket from its block both ways, so nothing the peer
+ * sends afterwards can reach that queue: the wake belongs to the shutdown or
+ * it never comes. `cs` is a connected client with nothing to read.
+ */
+static void shutdown_wakes_a_sharer(int cs)
+{
+    uint32_t args[6];
+    uint8_t byte;
+    int pid, status = 0;
+
+    pid = sys_fork();
+    if (pid < 0)
+        fail("fork for the shutdown wake");
+    if (pid == 0) {
+        /* Blocks: the ring is empty and the peer sends nothing. */
+        sys_exit(sys_read(cs, &byte, 1) == 0 ? 0 : 1);
+    }
+    /* The child is scheduled and parked before the shutdown, which is what
+       this row is about; a shutdown that arrives first takes the early path
+       the rows below cover. */
+    sys_nanosleep_ms(200);
+    args[0] = (uint32_t)cs;
+    args[1] = 2; /* SHUT_RDWR */
+    if (socketcall(SC_SHUTDOWN, args) != 0)
+        fail("shutdown under a sleeping reader");
+    if (sys_waitpid(pid, &status) != pid)
+        fail("the reader did not end after the shutdown");
+    if (((status >> 8) & 0xFF) != 0)
+        fail("a reader asleep through a shutdown did not read the end of input");
+}
+
 static void shutdown_rows(int cs, uint8_t *sa)
 {
     uint32_t args[6];
@@ -1110,6 +1144,8 @@ static void tcp_ports(void)
         fail("a repeated local-remote pairing was not refused");
     sys_close(second);
 
+    /* On the accepted end, so the rows below still have a connected client. */
+    shutdown_wakes_a_sharer(as);
     shutdown_rows(cs, sa);
 
     sys_close(as);

@@ -832,14 +832,17 @@ check "and names the product" 1 "$(printf '%s\n' "$out" | grep -c 'voided: build
 
 # With RACH2_STOP_ON_FAIL, the first failure stops the pool: the suite still
 # running is stopped and named, and the run ends well before it would have.
-rm -f "$WORK/slow1.done"
-t0=$(now)
+rm -f "$WORK/slow1.done" "$WORK/events"
 out=$(cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 RACH2_STOP_ON_FAIL=1 sh tests/run failing slow1 slow2 2>&1); rc=$?
 check "a set stopped on its first failure fails" 1 "$rc"
 check "the running suite is stopped and named" 1 "$(printf '%s\n' "$out" | grep -c 'stopped part way: slow1')"
 check "the queued suite is named" 1 "$(printf '%s\n' "$out" | grep -c 'not started: slow2')"
-check "and the run ended early" 1 "$([ $(($(now) - t0)) -lt 4 ] && echo 1 || echo 0)"
+# What the stop did, not how long it took: the running suite's own end marker
+# is absent and the queued suite has no start of its own. A row that required
+# the set to end inside four seconds failed on a loaded host and proved
+# nothing these two do not.
 check "and the running suite did not reach its end" 0 "$(ls "$WORK/slow1.done" 2>/dev/null | wc -l | tr -d ' ')"
+check "and the queued suite never started" 0 "$(grep -c '^slow2-start$' "$WORK/events" 2>/dev/null | tr -d ' ')"
 
 # A pooled suite's result is printed the moment it ends, not when the pool
 # ends: the fast suite's line is seen while the slow one has not written its

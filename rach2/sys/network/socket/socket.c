@@ -766,6 +766,12 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
         }
         return revents;
     }
+    /* A shut-down stream has no block left to read state from, and a read of
+       it answers end of input at once, so it is ready either way a caller
+       asks. */
+    if (sock->shut_down && !sock->tcb) {
+        return (short)(POLLHUP | (events & (POLLIN | POLLOUT)));
+    }
     if (sock->tcb) {
         struct tcb *tcb = sock->tcb;
         if ((tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received) {

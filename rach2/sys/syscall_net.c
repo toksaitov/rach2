@@ -1213,6 +1213,10 @@ static int32_t do_shutdown(int fd, int how)
     if (how == SHUT_WR || how == SHUT_RDWR) {
         entry->sock->shut_down = 1;
         tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
+        /* `tcp_close` detaches the socket from its block both ways, so no
+           later answer from the peer can reach this queue. A sharer already
+           asleep in `recv` is woken here or never. */
+        wq_wake_all(&entry->sock->waiters);
     }
     return 0;
 }
