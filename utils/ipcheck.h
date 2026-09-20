@@ -13,6 +13,8 @@
 
 #include <stddef.h>
 
+unsigned long ipcheck_mask(unsigned long address, unsigned long netmask);
+
 int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long gateway, char *err,
                    size_t errlen);
 

@@ -1,23 +1,13 @@
 /**
  * Write a stream onto a raw device: `reflash DEVICE OFFSET BYTES`.
  *
- * This is how a machine nobody will open again gets a new disk. The image
- * arrives on standard input, which is what makes `ssh` the whole transport and
- * this program the whole receiver:
+ * Read the image from standard input.
  *
- * gzip -c root.img | ssh rach2 'gunzip | reflash /dev/disk0 68157440 524288000'
- *
- * Both numbers come off the machine, not out of a memory: `/proc/disk`
- * reports each partition as `partN TYPE START_LBA SECTORS`, and the two above
- * are the sealed disk's root, 133120 and 1024000, multiplied by 512. Writing a
- * correct image at a wrong offset is a repair that reports success and leaves a
- * machine that still will not boot.
- *
- * The length is an argument and not something to be discovered, because a
- * stream's length is not known until it ends: a tool that read first and
- * checked afterwards would already have written part of a disk it was never
- * allowed to touch. With the count declared, where the write would land is
- * settled before a byte is read.
+ * Obtain the target partition's start and size from the machine's
+ * partition table. OFFSET is its starting sector multiplied by 512.
+ * BYTES is the image's uncompressed length and must fit the partition.
+ * Both values must be multiples of 512. The program checks the device
+ * boundary; it does not check which partition the range occupies.
  *
  * `-p` prints how far the write has got, on standard error, every sixteen
  * mebibytes and once at the end: a person watching an install of a gibibyte
@@ -26,9 +16,8 @@
  *
  * `--verify` writes nothing. It reads the same range back from the device and
  * prints its SHA-256, which is how an installer says what reached the disk
- * rather than what left the host. The digest is taken on the machine that did
- * the writing, through the same window the write went through, so a wrong
- * offset shows up as a wrong digest.
+ * rather than what left the host. A matching digest confirms the bytes in
+ * that range; it does not establish that the chosen offset is correct.
  *
  * Only a kernel built for recovery may write the whole disk; on any other
  * the device refuses, and this reports that refusal, not a partial

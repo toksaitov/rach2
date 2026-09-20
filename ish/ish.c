@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <errno.h>
 #endif
 
 #include "ish_cstring_utilities.h"
@@ -28,6 +29,7 @@ static const unsigned short Standard_Output_File_Mode = 00644;
 
 static const char Fork_Error_Message[] = "fork failure\n";
 static const char Redirection_Error_Message[] = "cannot open a redirection\n";
+static const char Input_Length_Error_Message[] = "ish: command line too long\n";
 
 /* The statuses a shell reports for what it could not run, which are the
  * conventional ones a caller of `sh -c` reads: 127 for a name that resolved to
@@ -38,6 +40,34 @@ static const int Status_Not_Runnable = 126;
 static const int Status_Signalled_Base = 128;
 
 /**
+ * Wait for `pid`, retrying interruptions, and return its shell status.
+ *
+ * The raw i386 wrapper returns -4 for EINTR; libc returns -1 and sets errno.
+ * A failed wait returns 126. A normal exit stores its status in bits 8-15;
+ * a signal death stores the signal number in bits 0-6.
+ */
+static int ish_wait_for_child(int pid)
+{
+    int child_status = 0;
+    int waited;
+
+    do {
+        waited = waitpid(pid, &child_status, 0);
+#ifdef ISH_USE_STDLIB
+    } while (waited == -1 && errno == EINTR);
+#else
+    } while (waited == -4);
+#endif
+    if (waited != pid) {
+        return Status_Not_Runnable;
+    }
+    if ((child_status & 0x7F) != 0) {
+        return Status_Signalled_Base + (child_status & 0x7F);
+    }
+    return (child_status >> 8) & 0xFF;
+}
+
+/**
  * Split one line into arguments and run it. Returns the command's exit status.
  *
  * The line is split into an argument array, and either a builtin (`cd`, `exit`)
@@ -45,19 +75,18 @@ static const int Status_Signalled_Base = 128;
  * child. Resolution tries the name as given, then each `PATH` element joined
  * with the name; a name that `stat` cannot find is skipped. Before the
  * `execve`, `< file` and `> file` redirections recorded in the arguments are
- * applied in the child by `dup2`-ing the opened descriptors over 0 and 1. The
- * parent waits for the child.
+ * applied in the child by `dup2`-ing the opened descriptors over 0 and 1.
+ * The parent retries an interrupted wait and returns the child's status.
+ * If the status cannot be obtained, it returns 126.
  *
  * `input` is split in place, so the caller's buffer comes back tokenized.
  *
- * The status is the command's own, or one of the conventional ones for what the
- * shell could not run at all: 127 for a name that resolved to nothing, 126 for
- * a command that could not be started (a redirection that would not open
- * included, builtins and all), 128 + N for one a signal killed, and 1 for a
- * `cd` to somewhere it could not go.
- * That matters here more than in a shell somebody types at, because `-c` hands
- * this status to `su`, and a caller that read every failure as success would
- * report work done that never ran.
+ * Redirections are opened before a builtin or child runs. An open failure
+ * returns 126. Builtin operands are read after redirection tokens are removed;
+ * `cd` without an operand uses HOME, including `cd > file`.
+ *
+ * An unresolved command returns 127. A fork or exec failure returns 126.
+ * A signal death returns 128 + N. A failed `cd` returns 1.
  */
 static int ish_run_line(char *input, char *home, char *paths, char **envp)
 {
@@ -73,9 +102,6 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         return 0;
     }
 
-    /* The redirections are opened before anything runs, builtins included. A
-     * line whose `< file` could not be opened is not that line, and running it
-     * anyway would read from wherever the shell's own input comes from. */
     char *stdin_file = ish_extract_last_stdin_redirection_file(arguments);
     int stdin_descriptor = !stdin_file ? -1 : open(stdin_file, Standard_Input_File_Flags);
 
@@ -95,10 +121,6 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
     }
 
     if (ish_are_cstrings_equal(command, Builtin_Command_CD)) {
-        /* The operand is read from the array AFTER the redirections were pulled
-         * out of it, since pulling one clears its slots: a bare `cd` and a
-         * `cd > file` both arrive here with nothing at arguments[1], and both
-         * mean the home directory. */
         char *directory = arguments[1] ? arguments[1] : home;
         int moved = directory ? chdir(directory) : -1;
 
@@ -109,9 +131,6 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
             close(stdout_descriptor);
         }
 
-        /* A directory that could not be entered is a failure and says so in the
-         * status, since the next command in a caller's line runs somewhere the
-         * caller did not choose. */
         return moved == 0 ? 0 : 1;
     }
 
@@ -176,18 +195,7 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         execve(executable, arguments, envp);
         exit(Status_Not_Runnable);
     } else if (pid > 0) {
-        int child_status = 0;
-        waitpid(pid, &child_status, 0);
-        /* The wait status is the ABI this kernel and Linux share: a normal exit
-         * puts its code in the second byte and leaves the low seven bits clear,
-         * and a signal death puts the signal number in those bits instead.
-         * Reading only the second byte would report a killed command as a
-         * command that succeeded. */
-        if ((child_status & 0x7F) != 0) {
-            status = Status_Signalled_Base + (child_status & 0x7F);
-        } else {
-            status = (child_status >> 8) & 0xFF;
-        }
+        status = ish_wait_for_child(pid);
     } else {
         write(2, Fork_Error_Message, sizeof(Fork_Error_Message) - 1);
         status = Status_Not_Runnable;
@@ -204,13 +212,16 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
 }
 
 /**
- * Run a command line named with `-c`, or read lines from descriptor 0 forever.
+ * Run the command supplied with `-c`, or read command lines from descriptor 0.
  *
- * The `-c` form is what makes this shell usable by another program: `su` and
- * `login` hand a shell `-c command` when they were asked to run one thing as
- * somebody, and a shell that read only from its input would sit waiting for a
- * line nobody is going to type. It runs exactly one line and exits with that
- * line's status, which is what a caller of `su -c` reads.
+ * `su -c` uses this form to run one command as the target account. It returns
+ * that command's status.
+ *
+ * Input mode discards each command's status and returns 0 at EOF or a read
+ * error. It retains incomplete lines between reads and runs a final line at
+ * EOF without a newline. A read error discards an incomplete line. Lines over
+ * 255 bytes, excluding the newline, are diagnosed and discarded in full.
+ * The `exit` builtin terminates either mode with its operand's status.
  *
  * The crt0 entry hands `main` the initial-stack ABI directly: `argc`, the
  * NULL-terminated `argv`, and the NULL-terminated `envp` that follows it.
@@ -222,19 +233,38 @@ int main(int argc, char **argv, char **envp)
     char *paths = ish_get_first_environment_variable(Environment_Variable_Path,
                                                      sizeof(Environment_Variable_Path) - 1, envp);
 
-    char input[Max_Input_String_Length + 1];
-    input[Max_Input_String_Length] = '\0';
-
     if (argc > 2 && ish_are_cstrings_equal(argv[1], Command_Line_Option)) {
-        /* Split in place, like every other line: argv is this process's own
-         * writable stack. */
         return ish_run_line(argv[2], home, paths, envp);
     }
 
+    char input[Max_Input_String_Length];
+    char line[Max_Input_String_Length + 1];
+    unsigned long length = 0;
+    int discarding = 0;
     int bytes_read;
     while ((bytes_read = read(0, input, Max_Input_String_Length)) > 0) {
-        input[bytes_read] = '\0';
-        ish_run_line(input, home, paths, envp);
+        int i;
+        for (i = 0; i < bytes_read; ++i) {
+            if (input[i] == '\n') {
+                if (!discarding) {
+                    line[length] = '\0';
+                    ish_run_line(line, home, paths, envp);
+                }
+                length = 0;
+                discarding = 0;
+            } else if (!discarding) {
+                if (length < Max_Input_String_Length) {
+                    line[length++] = input[i];
+                } else {
+                    write(2, Input_Length_Error_Message, sizeof(Input_Length_Error_Message) - 1);
+                    discarding = 1;
+                }
+            }
+        }
+    }
+    if (bytes_read == 0 && length != 0 && !discarding) {
+        line[length] = '\0';
+        ish_run_line(line, home, paths, envp);
     }
 
     return 0;

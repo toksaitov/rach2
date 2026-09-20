@@ -112,7 +112,10 @@ static int32_t dev_full_write(fd_entry_t *e, const char __user *buf, uint32_t co
     return -ENOSPC; /* /dev/full: the disk is always full */
 }
 
-/* A character device is always ready for I/O and never blocks. */
+/**
+ * Report the requested read and write readiness bits without registering a
+ * wait queue. Raw disk transfers may still sleep while completing I/O.
+ */
 static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     (void)e;
@@ -469,22 +472,6 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
     return raw_window_read(&bootpart, e, buf, count);
 }
 
-/*
- * The disks: `/dev/diskN` is the whole of disk N as the registry numbers
- * them, and `/dev/diskNpM` the partition its table numbers M: an MBR's
- * primary entries 1 to 4 and its logical partitions from 5, a GPT's entries
- * from 1. A node exists while its window is published: the partitions from
- * the scan at boot, the whole disk on a boot that asked for it
- * (`rach2.diskdiag`) and on every boot of the recovery build. The nodes are
- * made when a disk is registered, one per partition slot with one vtable
- * for all of them, and named again after every scan of the table.
- *
- * Disk 0 keeps the minors it always had, 1 for the disk and 4 to 7 for its
- * first four partitions; its later partitions take minor 64 + M, and disk N
- * takes 64 + 16N for the disk and 64 + 16N + M for partition M. Reads take
- * whole sectors, and a write answers EPERM in every build but recovery,
- * where the whole disk is written by a reflash and a partition by `e2fsck`.
- */
 #define DISK_NODE_WINDOWS (DISK_PARTS + 1)
 #define DISK_MINOR_BASE   64
 
@@ -536,6 +523,12 @@ static struct disk_window *disk_node_window(const struct disk_node *node)
 static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char __user *buf,
                                      uint32_t count);
 
+/**
+ * Read a disk window at its descriptor's byte offset.
+ *
+ * Reads accept arbitrary byte ranges. Writes require whole sectors and are
+ * available only in recovery builds.
+ */
 static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     const struct disk_node *node = disk_node_of_fd(e);
@@ -837,10 +830,8 @@ static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll
  * Copy from the log's ring into a reader's buffer.
  *
  * The descriptor's offset counts from the oldest record the ring still holds,
- * which is what `klog_read` takes. A machine printing hard while a reader
- * walks the log can evict records between two reads, and the reader then sees
- * a later part of the log than it asked for; there is no cursor that survives
- * that, and a reader that cannot accept it asks for the whole ring at once.
+ * which is what `klog_read` takes. Records may be evicted between chunk
+ * copies, including within one read. The returned bytes are not a snapshot.
  */
 static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1144,6 +1135,18 @@ static void disk_node_name(struct disk_node *node, int number, int m)
     }
 }
 
+/**
+ * Create registry nodes for a disk and its partition slots.
+ *
+ * `/dev/diskN` names the whole disk; `/dev/diskNpM` names partition M.
+ * Partition nodes are published after a table scan. USB discovery also
+ * publishes the whole-disk node; disk diagnostics publish whole-disk
+ * windows for registered disks. A table scan updates the partition names.
+ *
+ * Disk 0 uses minor 1 for the whole disk and minors 4 through 7 for its
+ * first four partitions. Other nodes use minor 64 + 16N + M, with M zero
+ * for the whole disk.
+ */
 void devfs_disk_nodes(struct disk *d)
 {
     int k;
@@ -1339,10 +1342,13 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
  *
  * `name` is the leaf under /dev, `flags` the Linux O_* set. Most entries bind
  * an fd to the registry vtable (FD_TYPE_DEVICE); three are special. /dev/ptmx
- * is a clone device that mints a fresh pty pair per open; /dev/console and
- * /dev/tty map to the kernel console (FD_TYPE_CONSOLE), except that /dev/tty
+ * allocates a fresh pty pair per open. /dev/console and /dev/tty map to the
+ * kernel console (FD_TYPE_CONSOLE), except that /dev/tty
  * resolves to the caller's controlling terminal, which may be a pty rather than
  * the console.
+ *
+ * Reject `O_CREAT|O_EXCL` for an existing leaf before allocating a descriptor
+ * or a pty pair.
  *
  * @return the new descriptor, or a negative errno.
  */
@@ -1352,28 +1358,18 @@ int devfs_open(const char *name, int flags)
     fd_entry_t *e;
     int fd;
 
-    /* /dev/ptmx is a clone device: each open mints a NEW pty pair and returns
-     * its master fd (pty_open_master does its own fd allocation and ops
-     * binding). */
-    if (name_eq(name, "ptmx")) {
-        if (flags & DEVFS_O_DIRECTORY) {
-            return -ENOTDIR;
-        }
-        return pty_open_master(flags);
-    }
-
     dev = devfs_find(name);
     if (!dev) {
         return -ENOENT;
     }
-    /* The device exists, so honour the flags that contradict that. An exclusive
-     * create of an existing object is -EEXIST regardless of the other flags, so
-     * that comes first; then it is not a directory. */
     if ((flags & DEVFS_O_CREAT) && (flags & DEVFS_O_EXCL)) {
         return -EEXIST;
     }
     if (flags & DEVFS_O_DIRECTORY) {
         return -ENOTDIR;
+    }
+    if (name_eq(name, "ptmx")) {
+        return pty_open_master(flags);
     }
 
     /* /dev/tty is the CALLER's controlling terminal (POSIX), not
@@ -1474,9 +1470,10 @@ int devfs_open(const char *name, int flags)
 /**
  * Synthesize stat fields for /dev or a device leaf.
  *
- * An empty `name` is /dev itself, a directory; otherwise it names a registry
- * leaf, a character device. Each out pointer is optional. rdev packs the
- * entry's {major,minor} the way the Linux mem devices number themselves.
+ * An empty `name` identifies `/dev`; otherwise it identifies a device leaf.
+ * Disk nodes report block-device mode; other leaves report character-device
+ * mode. Each out pointer is optional. rdev packs the entry's {major,minor}
+ * the way the Linux mem devices number themselves.
  *
  * @return 0 on success, -1 if the named leaf does not exist.
  */
@@ -1606,12 +1603,10 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
 }
 
 /**
- * Withdraw /dev/disk0.
+ * Withdraw every registered disk's whole-disk window.
  *
- * The window has a pointer to the block device it reads through, and a
- * driver that is re-initialised clears the state behind that pointer. Anything
- * that resets a controller takes this node down with the other two raw
- * windows. A no-op when the device was never published.
+ * A controller reset invalidates the device state these windows reference.
+ * Unpublished windows remain unpublished. Partition windows are unchanged.
  */
 void devfs_disk_withdraw(void)
 {
@@ -1628,8 +1623,9 @@ void devfs_disk_withdraw(void)
 }
 
 /**
- * Publish disk `d`: `/dev/diskN` over the whole medium, and `/dev/diskNp1`
- * upward over each partition the table described.
+ * Publish disk `d`'s whole-disk window as `/dev/diskN`.
+ *
+ * `disk_set_table` publishes partition windows separately.
  *
  * The whole node is published whatever the table said, because a medium with
  * no table at all is a volume in its own right and is mounted through that
@@ -1734,7 +1730,10 @@ void devfs_grubcore_publish(struct block_device *backing)
     grubcore.present = 1;
 }
 
-/** Whether the description `e` names one of the raw whole-disk windows. */
+/**
+ * Return whether `e` identifies a boot window, whole-disk window or partition
+ * window, regardless of whether it is currently published.
+ */
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     const struct devfs_entry *dev;

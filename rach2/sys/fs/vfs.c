@@ -794,15 +794,17 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     return mnt->type->ops->write(mnt, handle, buf, count, offset);
 }
 
+/**
+ * Truncate through an open handle unless a loop device holds the file.
+ *
+ * The KRFFS root uses its node as a handle, including for `O_TRUNC`.
+ * Mounted types receive the handle returned by their open operation.
+ */
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
-    /* The length of a file that backs a loop device is that device's sector
-     * count, so nothing changes it here either: `open(O_TRUNC)` reaches this
-     * with the node as its handle, and a descriptor's `ftruncate` reaches it
-     * with the handle its open was given. */
     if (loop_backs(mnt, handle)) {
         return -EBUSY;
     }

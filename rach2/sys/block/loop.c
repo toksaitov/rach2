@@ -172,6 +172,8 @@ block_device_t *loop_device_at(int index)
  *
  * An attachment names its file by its mount and its node, and the VFS owns
  * the sweep over every other holder; this is the loop devices' part of it.
+ * Only the memory root uses node pointers as open handles. Mounted KRFFS
+ * retains its open record when the node moves.
  */
 void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
@@ -184,7 +186,7 @@ void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
         if (loops[i].node == from) {
             loops[i].node = to;
         }
-        if (loops[i].handle == from) {
+        if (mnt->type == &vfs_krffs_type && loops[i].handle == from) {
             loops[i].handle = to;
         }
     }

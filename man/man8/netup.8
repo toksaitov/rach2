@@ -23,6 +23,8 @@ or
 .Ic allow-hotplug
 line.
 An interface named on the command line needs neither declaration.
+The file is read in two passes through one open stream.
+A read or seek error aborts configuration before any interface is changed.
 .Pp
 The supported declarations are:
 .Bl -tag -width Ds
@@ -54,7 +56,7 @@ A static stanza is validated in full before any
 .Xr ioctl 2
 changes the interface.
 Static configuration fails if the DHCP client's PID file identifies a
-running process or contains no valid positive process ID.
+running process, contains no valid positive process ID, or cannot be read.
 .Pp
 On a boot with
 .Ql rach2.ip=none ,

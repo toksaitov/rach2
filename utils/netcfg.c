@@ -100,23 +100,38 @@ void netcfg_set_name(char *dst, const char *src)
     memcpy(dst, src, n);
 }
 
+/** Check a completed pass and seek back for the second pass. */
+static int finish_pass(FILE *f, const char *path, int pass)
+{
+    const char *operation;
+
+    if (ferror(f)) {
+        operation = "read";
+    } else if (pass == 0 && fseek(f, 0, SEEK_SET) != 0) {
+        operation = "seek";
+    } else {
+        return 0;
+    }
+    fprintf(stderr, "netup: cannot %s %s: %s\n", operation, path, strerror(errno));
+    fclose(f);
+    return -1;
+}
+
 /**
- * Read the file into `want`, in two passes over one read.
+ * Read interface configuration in two passes through one open stream.
  *
- * Two passes because the file does not have to be in a helpful order: an
- * `iface` stanza may come before the `auto` line that asks for it, and a
- * machine that only noticed stanzas for interfaces it already knew about would
- * ignore its own configuration depending on how somebody arranged the file.
+ * `want` has room for `max` entries, with 0 <= count <= max. Its first
+ * `count` entries must be zeroed except for valid interface names.
+ * With `add_auto` set, append names from auto and allow-hotplug lines.
+ * The second pass reads the selected inet stanzas, so stanza order
+ * relative to selection lines does not matter.
  *
- * A line longer than the buffer is refused, not split, because a split
- * line becomes two directives and the second one is whatever the first one
- * happened to end in.
+ * Other address families are ignored. Unsupported methods and invalid
+ * address fields set the affected entry's `bad` flag. Callers must
+ * check `found` and `bad` before configuring an interface.
  *
- * `want` has `count` interfaces named on the command line already; the ones
- * an `auto` line names are appended when `add_auto` is set, up to `max`.
- *
- * @return the number of interfaces to bring up, or -1 on a file that cannot be
- *         read or understood.
+ * Return the selected count, or -1 on an open, read, seek, line-length,
+ * name, or capacity error.
  */
 int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max, int add_auto)
 {
@@ -132,10 +147,6 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
     }
 
     for (pass = 0; pass < 2; pass++) {
-        if (pass == 1) {
-            rewind(f);
-            current = NULL;
-        }
         while (fgets(line, sizeof(line), f)) {
             char *rest;
             char *key;
@@ -154,8 +165,6 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
             }
 
             if (pass == 0) {
-                /* The first pass reads only the `auto` lines, so a stanza that
-                   comes before the line asking for it is still seen. */
                 if (strcmp(key, "auto") == 0 || strcmp(key, "allow-hotplug") == 0) {
                     char *name;
 
@@ -206,7 +215,7 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
 
                 current = NULL;
                 if (strcmp(family, "inet") != 0) {
-                    continue; /* inet6 and the rest are not this machine's */
+                    continue;
                 }
                 if (!netcfg_name_ok(name)) {
                     fprintf(stderr,
@@ -230,9 +239,6 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
                 } else if (strcmp(method, "static") == 0) {
                     current->dhcp = 0;
                 } else {
-                    /* `loopback`, `manual`, `ppp` and the rest mean something,
-                       and this does not implement them: taking them for static
-                       would configure a machine in a way nobody asked for. */
                     fprintf(stderr,
                             "netup: %s: %s: method '%s' is not one this "
                             "understands\n",
@@ -263,6 +269,9 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
                     current->gateway = ip;
                 }
             }
+        }
+        if (finish_pass(f, path, pass) != 0) {
+            return -1;
         }
     }
     fclose(f);

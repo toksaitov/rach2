@@ -14,7 +14,7 @@ A name is at most 255 bytes and its field is 256, so every name ends within it; 
 
 A name is one component, not a path, and a file is found by its directory and its name: `parent_id` says which directory holds it, and the root directory's identifier is zero. Two files in different directories may have the same name; two in one directory may not. A directory's own identifier is a hash of its parent's identifier and its name, and its children carry it in their `parent_id`, which is why a directory is never renamed or moved: its children reference the identifier the old name produced. A regular file's identifier is not used to find it, so nothing depends on the name it was hashed from.
 
-The root's mode has one bit the format reserves, `KRFFS_MODE_DIRTY`: the kernel sets it before the first change of a writable mount and clears it at the unmount, after everything the mount wrote has reached the medium. An image found with the bit set says a check is owed, not what is wrong with it.
+The root's mode has one bit the format reserves, `KRFFS_MODE_DIRTY`: the kernel sets it before the first change of a writable mount and clears it at unmount only after writing pending buffers and flushing the device cache. The cleared flag is then written and flushed separately. A mount made read-only by a write failure keeps the flag set; `fsync` and `sync` still attempt pending buffer writes and report writeback errors to the VFS. An image found with the bit set says a check is owed, not what is wrong with it.
 
 A writable mount of a volume whose bit is set repairs it before it publishes the mount: the three faults below, each counted in the line it writes to the log. A read-only mount repairs nothing, since nothing it does reads a backward link, and says that a check is owed. The repair compares every named node with every other to find one name on two nodes, so a volume with more named nodes than the pass will compare is refused rather than half-checked, and `fsck.krffs` on the host, which sorts them, is what such a volume is for.
 
@@ -69,13 +69,13 @@ The block backend (`krffsmount.c`) reads and writes the region through the buffe
 
 A cache is not a medium, so the order below is kept by syncing between a write and the field that publishes it. On a memory backend that costs nothing; on a volume it is what the cache has written when the machine stops. A write that the cache refuses stops the operation before the field that would have published it.
 
-A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. The core keeps nothing else per node; the mounted volume keeps a record per open file, taken from the heap, holding where the node is, where it was before it last moved, how many opens hold it, and whether its name has been taken away.
+A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. An open handle points to a shared record containing the node's current offset, the number of opens and whether its name has been removed. The last close frees the record. Read, write and truncate resolve its offset after taking the mount lock. The same handle remains valid across multiple calls, relocations and reuse of old offsets. Mounted-file `O_TRUNC` opens the node before truncating through its handle; failure releases the handle and descriptor.
 
 ## The allocator
 
 Allocation is first fit with split and coalesce, after the storage allocator in The C Programming Language. It scans for the first free node large enough for a header and the bytes asked for, and splits a larger one when the remainder can hold a header of its own; a remainder shorter than that stays inside the allocated node, where a later shrink or a removal reclaims it.
 
-A file grows into the free node after it when there is one. Otherwise it is moved: a new node is allocated, the old node's fields and data are copied into it, and the old node is freed. The write path then repoints every descriptor in every process from the old node to the new one, since a descriptor holds the node and not a name.
+A file grows into the free node after it when there is one. Otherwise it is moved: a new node is allocated, the old node's fields and data are copied into it, and the old node is freed. Write and truncate repoint references from the offset resolved under the mount lock to the new offset, even when a later step fails after relocation.
 
 Freeing a node marks it free and merges it with whichever neighbours are free, so the ring never holds two free nodes side by side.
 

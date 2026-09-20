@@ -30,9 +30,8 @@ static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
 /**
  * Allocate a fresh open-file description.
  *
- * Returns an OFD with refcount 1, both offsets 0, and cleared status flags,
- * or NULL
- * if the pool is exhausted.
+ * Return a heap-allocated description with one reference, zero offsets and
+ * cleared status flags, or NULL on allocation failure.
  */
 static struct open_file *ofd_alloc(void)
 {
@@ -104,6 +103,12 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/**
+ * Repoint node references after relocation.
+ *
+ * The memory root also uses nodes as open handles. Mounted KRFFS keeps
+ * stable open records, which must not change when node offsets change.
+ */
 void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     struct ofd_rec *rec;
@@ -115,7 +120,7 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
         if (rec->ofd.vnode == from) {
             rec->ofd.vnode = to;
         }
-        if (rec->ofd.fhandle == from) {
+        if (mnt->type == &vfs_krffs_type && rec->ofd.fhandle == from) {
             rec->ofd.fhandle = to;
         }
     }
@@ -124,10 +129,9 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 /**
  * Drop one reference to an open-file description.
  *
- * A refcount of 0 marks the slot reusable by `ofd_alloc`. The last drop of
- * a description on a mounted file system is that file system's release,
- * the node's put, and the mount's reference, all exactly once, run after
- * the slot's fields are cleared so a slot retaken meanwhile is not touched.
+ * On the last reference, clear the mounted-file fields, close the mounted
+ * description, remove the record from the live list and free it. Closing
+ * a mounted description may sleep.
  */
 void fd_ofd_unref(struct open_file *ofd)
 {
@@ -147,7 +151,6 @@ void fd_ofd_unref(struct open_file *ofd)
                 ofd->fhandle = NULL;
                 vfs_desc_close(mnt, node, handle);
             }
-            /* Off the list and back to the heap: nothing points at it now. */
             while (*link && *link != rec) {
                 link = &(*link)->next;
             }
@@ -249,29 +252,39 @@ int fd_table_copy(fd_table_t *dst, const fd_table_t *src)
 }
 
 /**
- * Wire up the three standard descriptors on a fresh table.
+ * Initialize the standard console descriptors on an empty descriptor table.
+ * Each descriptor owns a separate open-file description.
  *
  * fd 0 is stdin (read-only); fd 1 and fd 2 are stdout and stderr (write-only).
- * Each is a console descriptor with its own open-file description.
+ * Return 0 on success, or -1 after releasing partial allocations on failure.
  */
-void fd_init_stdio(fd_table_t *table)
+int fd_init_stdio(fd_table_t *table)
 {
     int i;
 
-    if (!table) {
-        return;
+    if (!table || !table->entries || table->cap <= FD_STDERR) {
+        return -1;
     }
 
     for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        struct open_file *ofd = ofd_alloc();
+
+        if (!ofd) {
+            while (i > FD_STDIN) {
+                fd_free(table, --i);
+            }
+            return -1;
+        }
         table->entries[i].type = FD_TYPE_CONSOLE;
         table->entries[i].node = NULL;
         table->entries[i].sock = NULL;
-        table->entries[i].ofd = ofd_alloc();
+        table->entries[i].ofd = ofd;
         table->entries[i].ops = NULL;
         table->entries[i].priv = NULL;
         table->entries[i].dev = NULL;
         table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;
     }
+    return 0;
 }
 
 /**

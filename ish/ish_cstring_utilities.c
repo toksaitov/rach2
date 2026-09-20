@@ -219,6 +219,10 @@ int ish_are_cstrings_equal_ignoring_case(const char *string, const char *another
  * run of digits. Parsing stops at the first non-digit; trailing text is
  * ignored. There is no overflow or error reporting: an empty or non-numeric
  * field yields `0`.
+ *
+ * Accumulation and negation use unsigned arithmetic, wrapping modulo
+ * `UINT_MAX + 1`. The result is converted to `int`; the exit builtin uses
+ * only its low eight bits.
  */
 int ish_get_integer_from_cstring(const char *string)
 {
@@ -237,10 +241,6 @@ int ish_get_integer_from_cstring(const char *string)
         ++string;
     }
 
-    /* Accumulate the magnitude in unsigned arithmetic so a value beyond INT_MAX
-     * wraps (defined) instead of overflowing a signed int; the sign is applied
-     * in unsigned form too, so no step is undefined. Callers use only the low
-     * bits (an exit status is taken modulo 256). */
     while (ish_is_digit(*string)) {
         magnitude = magnitude * 10u + (unsigned int)(*string++ - '0');
     }

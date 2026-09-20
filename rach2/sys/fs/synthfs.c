@@ -166,24 +166,16 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
 }
 
 /**
- * Classify a path against the synthetic /dev and /proc trees.
+ * Classify a normalized path under `/dev` or `/proc` and fill `vp`.
  *
- * Splits `path` into components and decides which synthetic vnode (if any) it
- * names, filling `vp` with the kind and the coordinates the glue needs: `name`
- * for a /dev node, `pts_index` for a pty slave, and `pid`, `procfd`, `procfile`
- * for the /proc kinds. A path under neither tree, including the root,
- * classifies as VNODE_KRFFS so the caller falls through to the real file
- * system; a well-formed prefix with an unknown leaf classifies as VNODE_ENOENT
- * so the caller reports the miss instead of leaking to KRFFS. `/proc/self`
- * maps to SYNTH_PID_SELF. Returns the kind, also stored in `vp->kind`.
+ * Leading and repeated slashes are accepted. The caller must resolve `.` and
+ * `..` before classification.
  *
- * The path must be lexically normalized: a `.` or `..` component is not
- * collapsed here (only the KRFFS resolver does that), so a dot path
- * transiting a synthetic prefix (for example `proc/../realfile`)
- * deliberately classifies as VNODE_ENOENT. This fails closed, denying a
- * legitimate spelling instead of reaching the wrong object; real programs
- * reach /dev and /proc by absolute paths. The host test locks the dot and
- * the pid-bound cases.
+ * `VNODE_KRFFS` identifies a path outside these namespaces. A two-component
+ * device path other than `/dev/pts` returns `VNODE_DEV`; devfs checks
+ * device existence.
+ * Process and descriptor existence are checked by the caller. `/proc/self`
+ * uses `SYNTH_PID_SELF`. Return the kind stored in `vp->kind`.
  */
 int synth_classify(const char *path, struct vpath *vp)
 {
@@ -199,7 +191,7 @@ int synth_classify(const char *path, struct vpath *vp)
     n = synth_split(path, c, SYNTH_MAXC);
 
     if (n == 0) {
-        vp->kind = VNODE_KRFFS; /* the root itself is the real KRFFS root */
+        vp->kind = VNODE_KRFFS;
         return vp->kind;
     }
 

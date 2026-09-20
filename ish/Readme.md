@@ -6,7 +6,7 @@ ISH runs one command at a time. It is not a POSIX shell and has no script langua
 
 ## Command syntax
 
-Interactive mode reads from standard input until end of file. The shell prints no prompt. The input buffer capacity is 255 bytes, and the argument array can contain 255 tokens.
+Input mode reads command lines from standard input and prints no prompt. It retains incomplete lines between reads and runs every complete line in order. At EOF it runs a final line without a newline. A read error discards an incomplete line. A line can contain at most 255 bytes, excluding its newline; longer lines produce a diagnostic and are discarded in full. The argument array can contain 255 tokens.
 
 The one-line form runs `COMMAND` and exits with its status:
 
@@ -23,14 +23,14 @@ The two builtins are:
 
 An external command is tried as written. If `stat` cannot find it, ISH tries each nonempty element of `PATH`. A constructed path is limited to 1024 bytes. The child inherits the shell's complete environment.
 
-The parent waits for each external command. `-c` reports these statuses:
+The parent waits for each external command and retries an interrupted wait. `-c` reports these statuses:
 
 * the child's exit status after a normal exit;
 * 127 when no executable path resolves;
-* 126 when the command cannot be started, including a redirection that cannot be opened;
+* 126 when the command cannot be started, including a redirection that cannot be opened, or its status cannot be obtained;
 * `128 + SIGNAL` when a signal kills the child.
 
-Interactive mode discards each command's status and reads the next line.
+Input mode discards each command's status and returns 0 at EOF or a read error. The `exit` builtin terminates either mode with its operand's status.
 
 ## Redirection
 
@@ -104,4 +104,4 @@ Run it in a writable copy of `/src/ish`. Root may also build the staged tree in 
 
 ## Verification
 
-`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `tests/run default` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, redirection failure, redirection with closed standard descriptors, and exact environment names. `tests/host/ish_hosttest.c` runs the last two groups against the hosted shell. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.
+`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `tests/run default` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, redirection failure, redirection with closed standard descriptors, exact environment names, and input lines across reads, at EOF and over the length limit. `tests/host/ish_hosttest.c` shares the descriptor, environment and input cases and injects interrupted or failed waits and short or failed reads. `sh tests/host/ish_mutate.sh` compiles that test alone under ASan and UBSan for both libc and raw wait errors. Each fault must fail its named assertion before restored, touched and rebuilt source passes. Logs and checksums remain under `build/tests/ish-proof.*`. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.

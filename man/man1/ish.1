@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 20, 2026
 .Dt ISH 1
 .Os
 .Sh NAME
@@ -16,10 +16,15 @@ wrappers and links no C library.
 It runs one command at a time.
 It is not a POSIX shell and has no script language.
 .Pp
-In interactive mode,
+In input mode,
 .Nm
-reads standard input until end of file and prints no prompt.
-The input buffer holds 255 bytes; the argument array holds 255 tokens.
+reads command lines from standard input and prints no prompt.
+It retains incomplete lines between reads and runs complete lines in order.
+At end of file it runs a final line without a newline.
+A read error discards an incomplete line.
+Lines may contain at most 255 bytes, excluding the newline.
+Longer lines produce a diagnostic and are discarded in full.
+The argument array holds 255 tokens.
 .Pp
 With
 .Fl c ,
@@ -62,6 +67,7 @@ An external command is tried as written, then through each nonempty element of
 .Ev PATH .
 A constructed path is limited to 1024 bytes.
 The child inherits the shell's environment.
+The parent retries an interrupted wait for the child.
 .Pp
 On os-simple, the shell is installed as
 .Pa /bin/ish
@@ -76,10 +82,13 @@ With
 .Fl c ,
 the status is the child's exit status after a normal exit,
 127 when no executable path resolves,
-126 when the command cannot be started, or
+126 when the command cannot be started or its status cannot be obtained, or
 .Ql 128 + SIGNAL
 when a signal kills the child.
-Interactive mode discards each command's status.
+Input mode discards each command's status and returns 0 at end of file or a read error.
+The
+.Cm exit
+builtin terminates either mode with its operand's status.
 .Sh SEE ALSO
 .Xr sh 1 ,
 .Xr rach2 7

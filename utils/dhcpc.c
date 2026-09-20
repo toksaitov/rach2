@@ -41,6 +41,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -51,6 +52,7 @@
 #include <netpacket/packet.h>
 
 #include "dhcpmsg.h"
+#include "ipcheck.h"
 
 #ifndef ETH_P_IP
 #define ETH_P_IP 0x0800
@@ -301,23 +303,35 @@ static void set_ifr_addr(struct ifreq *ifr, unsigned long ip)
 }
 
 /**
- * Write `/etc/resolv.conf` from the lease.
+ * Replace `/etc/resolv.conf` with the lease's resolver settings.
  *
- * Through a temporary beside it, so a reader never sees half of one, and on
- * every lease, not only on one that names a server: leaving the last
- * network's servers behind would point this machine at a network it is no
- * longer on.
+ * Write and close a private temporary file before renaming it, so readers see
+ * a complete version. Replace the file even when the lease supplies no DNS
+ * servers.
  */
 static int write_resolv(const struct dhcp_lease *l)
 {
     char tmp[64];
     char buf[32];
     FILE *f;
+    int fd;
     int i;
 
-    sprintf(tmp, "%s.new", RESOLV_CONF);
-    f = fopen(tmp, "w");
+    snprintf(tmp, sizeof(tmp), "%s.XXXXXX", RESOLV_CONF);
+    fd = mkstemp(tmp);
+    if (fd < 0) {
+        fprintf(stderr, "dhcpc: resolver: cannot create %s: %s\n", tmp, strerror(errno));
+        return -1;
+    }
+    if (fchmod(fd, 0644) != 0) {
+        close(fd);
+        remove(tmp);
+        return -1;
+    }
+    f = fdopen(fd, "w");
     if (!f) {
+        close(fd);
+        remove(tmp);
         fprintf(stderr, "dhcpc: resolver: cannot write %s: %s\n", tmp, strerror(errno));
         return -1;
     }
@@ -394,11 +408,11 @@ static int pid_alive(long pid)
 }
 
 /**
- * The process named in the claim, or 0 when there is none this can read.
+ * Read the claim's pid and optional address.
  *
- * `present` is set when the file is there at all, which is what tells an empty
- * or unreadable claim (somebody is making it right now) from no claim.
- * It may be null.
+ * Return zero if no valid pid can be read. Set `present` unless the claim is
+ * known to be absent; an unreadable claim remains present. Either output
+ * pointer may be null.
  */
 static long claim_read(unsigned long *addr, int *present)
 {
@@ -410,13 +424,10 @@ static long claim_read(unsigned long *addr, int *present)
         *addr = 0;
     }
     if (present) {
-        *present = 0;
+        *present = f != NULL || errno != ENOENT;
     }
     if (!f) {
         return 0;
-    }
-    if (present) {
-        *present = 1;
     }
     if (fscanf(f, "%ld", &pid) != 1 || pid <= 0) {
         pid = 0;
@@ -424,6 +435,12 @@ static long claim_read(unsigned long *addr, int *present)
                q[0] < 256 && q[1] < 256 && q[2] < 256 && q[3] < 256) {
         *addr = ((unsigned long)q[0] << 24) | ((unsigned long)q[1] << 16) |
                 ((unsigned long)q[2] << 8) | (unsigned long)q[3];
+    }
+    if (ferror(f)) {
+        pid = 0;
+        if (addr) {
+            *addr = 0;
+        }
     }
     fclose(f);
     return pid;
@@ -734,10 +751,9 @@ static int claim_is_ours(int strict)
  * Two clients on one interface fight: each renews, either may be refused, and
  * either one's expiry takes an address the other still holds. The claim is the
  * creation of the file, which either happens or does not, so two clients
- * starting at the same moment cannot both believe they won. The pid goes in
- * before the descriptor is let go, so the file is never there and empty, and a
- * file that IS empty is read as a claim being made by somebody else rather than
- * as one to take over.
+ * starting at the same moment cannot both create it. The file is visible
+ * before its pid is written. An empty or unreadable claim is treated as busy;
+ * closing the descriptor does not publish its contents atomically.
  *
  * A claim naming a process that is not there is taken over once. Anything else
  * that goes wrong is a refusal: a client that cannot say it has an interface
@@ -807,10 +823,10 @@ static int claim_interface(void)
     return -1;
 }
 
-/** Give the interface back. */
+/** Release the claim only after its recorded address has been removed. */
 static void release_interface(void)
 {
-    if (holds_interface) {
+    if (holds_interface && holding == 0) {
         remove(pidpath);
         holds_interface = 0;
     }
@@ -834,6 +850,7 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
     struct rtentry rt;
     struct sockaddr_in *sin;
     char a[16], b[16];
+    unsigned long mask = ipcheck_mask(l->address, l->netmask);
 
     /* Recorded before it is applied, not after: a client that dies in between
        leaves a claim naming an address the interface does not hold, and the
@@ -858,14 +875,12 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
         fprintf(stderr, "dhcpc: cannot set the address: %s\n", strerror(errno));
         return -1;
     }
-    if (l->netmask) {
-        memset(&ifr, 0, sizeof(ifr));
-        strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
-        set_ifr_addr(&ifr, l->netmask);
-        if (ioctl(fd, SIOCSIFNETMASK, &ifr) < 0) {
-            fprintf(stderr, "dhcpc: cannot set the netmask: %s\n", strerror(errno));
-            return -1;
-        }
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
+    set_ifr_addr(&ifr, mask);
+    if (ioctl(fd, SIOCSIFNETMASK, &ifr) < 0) {
+        fprintf(stderr, "dhcpc: cannot set the netmask: %s\n", strerror(errno));
+        return -1;
     }
 
     /* The old default route goes whether or not this lease replaces it: a
@@ -900,22 +915,19 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
     }
 
     format_ip(l->address, a);
-    format_ip(l->netmask ? l->netmask : 0, b);
+    format_ip(mask, b);
     printf("dhcpc: %s: lease of %s netmask %s for %lu seconds\n", ifname, a, b, l->seconds);
     fflush(stdout);
     return 0;
 }
 
 /**
- * Take the address off, which is what an expired lease leaves behind.
+ * Remove the interface address through the existing socket.
  *
- * Through the socket this client already has, not a new one: the machine has
- * a fixed number of sockets and this runs at the moment things are going wrong,
- * which is exactly when there may be none left. A removal that fails is said
- * out loud, because an address left behind is one the server will hand to
- * somebody else.
+ * Preserve the recorded address and claim if removal fails so a later client
+ * can retry cleanup. Return zero on removal, or -1 on failure.
  */
-static void unconfigure(int fd)
+static int unconfigure(int fd)
 {
     struct ifreq ifr;
 
@@ -924,9 +936,28 @@ static void unconfigure(int fd)
     set_ifr_addr(&ifr, 0);
     if (ioctl(fd, SIOCSIFADDR, &ifr) < 0) {
         fprintf(stderr, "dhcpc: cannot take the address off: %s\n", strerror(errno));
+        return -1;
     }
     holding = 0;
     (void)record_claim((long)getpid(), 0);
+    return 0;
+}
+
+/**
+ * Apply the first lease or remove any partial configuration.
+ *
+ * Return 1 when configured, zero when discovery may retry, or -1 when the
+ * claim is lost or cleanup fails. Failed cleanup preserves the recovery record.
+ */
+static int apply_initial(int fd, const struct dhcp_lease *l)
+{
+    if (!claim_is_ours(1)) {
+        return -1;
+    }
+    if (apply(fd, l, 1) == 0) {
+        return 1;
+    }
+    return unconfigure(fd) == 0 ? 0 : -1;
 }
 
 /**
@@ -1108,7 +1139,8 @@ static void rest_until(time_t limit)
  * rebinding goes to everyone through the packet socket, because by then the
  * server that granted it has stopped answering and there may be another.
  *
- * @return 0 when the lease was let go and a new one should be asked for.
+ * Return zero on release or a stop request, -1 on failure, or -2 if another
+ * client owns the claim.
  */
 static int hold(int fd, struct dhcp_lease *l, time_t asked)
 {
@@ -1130,8 +1162,7 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
         }
         if (now >= end) {
             fprintf(stderr, "dhcpc: the lease ran out; giving the address up\n");
-            unconfigure(fd);
-            return 0;
+            return unconfigure(fd);
         }
         if (now < t1) {
             if (receive(fd, &got, DHCP_ACK, t1 < end ? t1 : end) < 0) {
@@ -1157,8 +1188,7 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
             limit = end;
             len = build(DHCP_REQUEST, l->address, 0, 0, 0xFFFFFFFFUL);
             if (transmit(fd, bcast, len) != 0) {
-                unconfigure(fd);
-                return 0; /* ask again, not leave the machine with nothing */
+                return unconfigure(fd);
             }
             /* Not the whole way to the expiry: one lost request would then cost
                the last eighth of the lease in silence, which is exactly the
@@ -1225,8 +1255,7 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
                    answer as a lease that ran out: ask for one again. */
                 fprintf(stderr, "dhcpc: the renewal could not be applied; asking for an "
                                 "address again\n");
-                unconfigure(fd);
-                return 0;
+                return unconfigure(fd);
             }
             /* Said in its own words, because a renewal and a fresh lease are
                different things and a reader of the log should not have to
@@ -1239,8 +1268,7 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
         }
         if (type == DHCP_NAK) {
             fprintf(stderr, "dhcpc: the server refused the renewal; giving the address up\n");
-            unconfigure(fd);
-            return 0;
+            return unconfigure(fd);
         }
         /* Nothing answered. Wait a little and ask again, but never past the
            boundary that decides what to ask next. */
@@ -1249,24 +1277,52 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
 }
 
 /**
- * Let the caller go and carry on in a child.
+ * Replace inherited standard descriptors with the console or `/dev/null`.
  *
- * The parent exits reporting success, so a boot script learns the machine is
- * configured (or that it will keep trying) and moves on; the child has the
- * lease for as long as the machine runs.
+ * Close the inherited descriptors before opening the replacement. On failure,
+ * leave all three closed and return -1.
+ */
+static int detach_stdio(void)
+{
+    int fd;
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        close(i);
+    }
+    fd = open("/dev/console", O_RDWR);
+    if (fd < 0) {
+        fd = open("/dev/null", O_RDWR);
+    }
+    if (fd < 0) {
+        return -1;
+    }
+    for (i = 0; i < 3; i++) {
+        if (dup2(fd, i) < 0) {
+            int j;
+
+            for (j = 0; j < 3; j++) {
+                close(j);
+            }
+            if (fd > 2) {
+                close(fd);
+            }
+            return -1;
+        }
+    }
+    if (fd > 2) {
+        close(fd);
+    }
+    return 0;
+}
+
+/**
+ * Continue in a child after the parent publishes its pid in the claim.
  *
- * The child does not begin holding the lease until the parent has published
- * its pid, which is what the pipe between them is for.
- *
- * The child takes a session of its own and gives back the three standard
- * descriptors, replacing them with the console. Keeping them would hold open a
- * pipe whatever started this is reading, so a command substitution around
- * `netup` would wait for a client that never exits; and a reader that went away
- * would leave every later line going nowhere. SIGPIPE itself is ignored from
- * the start, in `main`, since a client can be holding a lease well before it
- * reaches here.
- *
- * @return 0 in the child; the parent does not return.
+ * Detach the inherited standard descriptors before continuing. Return zero
+ * in the child, or -1 if pipe creation or fork fails. After a successful fork,
+ * the parent exits with the handoff status. A child that cannot redirect exits
+ * with its claim retained for cleanup.
  */
 static int go_background(void)
 {
@@ -1274,7 +1330,6 @@ static int go_background(void)
     pid_t pid;
     int handshake[2];
     char answer = 0;
-    int fd;
 
     fflush(stdout);
     fflush(stderr);
@@ -1350,12 +1405,6 @@ static int go_background(void)
            there is nothing to take off at all, which is what keeps a static
            address set by somebody else out of this. */
         if (claim_pid(0) == parent) {
-            /* The claim goes only if the address it names is gone, the same
-               order every other cleanup here follows: a claim removed after a
-               failed cleanup is an address nothing can find, since the claim
-               was the only record of which address it was. Left in place, it
-               names a process that has exited, which the next client or the
-               next `dhcpc -k` will read and finish. */
             if (holding == 0 || drop_recorded_address(holding) == 0) {
                 remove(pidpath);
             } else {
@@ -1370,18 +1419,13 @@ static int go_background(void)
     }
 
     setsid();
-    fd = open("/dev/console", O_RDWR);
-    if (fd >= 0) {
-        dup2(fd, 0);
-        dup2(fd, 1);
-        dup2(fd, 2);
-        if (fd > 2) {
-            close(fd);
-        }
+    if (detach_stdio() != 0) {
+        _exit(1);
     }
     return 0;
 }
 
+/** Run discovery and renewal; stop if a partial lease cannot be removed. */
 int main(int argc, char **argv)
 {
     struct dhcp_lease l;
@@ -1475,21 +1519,10 @@ int main(int argc, char **argv)
         int configured = 0;
 
         if (obtain(fd, &l, &asked) == 0) {
-            if (!claim_is_ours(1)) {
-                /* Another client has the interface, or this one could not
-                   write its claim. Nothing is configured yet, so there is
-                   nothing to undo and nothing to promise. */
+            configured = apply_initial(fd, &l);
+            if (configured < 0) {
                 close(fd);
                 return 1;
-            }
-            if (apply(fd, &l, 1) == 0) {
-                configured = 1;
-            } else {
-                /* Half a configuration is worse than none: an address left on
-                   an interface with no client behind it is one the server will
-                   hand to somebody else. Taken off, and asked for again: the
-                   machine has to end up reachable. */
-                unconfigure(fd);
             }
         } else if (stopping) {
             close(fd);
@@ -1537,12 +1570,11 @@ int main(int argc, char **argv)
             }
         }
         if (stopping) {
-            /* Asked to stop while holding a lease: the address is this
-               machine's only for as long as something is renewing it. */
-            unconfigure(fd);
+            int status = unconfigure(fd);
+
             close(fd);
             release_interface();
-            return 0;
+            return status != 0;
         }
     }
 }

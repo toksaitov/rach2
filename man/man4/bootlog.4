@@ -17,7 +17,9 @@
 .Pa /dev/bootlog
 reads the retained kernel records from the current boot.
 .Pp
-Read the log in one request.
+The offset counts from the oldest retained byte.
+Records may be evicted between chunk copies, including within one read.
+The returned bytes are not a snapshot.
 The
 .Xr dmesg 1
 script reads this device.

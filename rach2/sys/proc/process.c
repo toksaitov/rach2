@@ -132,7 +132,8 @@ void process_count_fork(void)
  * leader of its own session and process group; fork() overrides `sid` and
  * `pgid` to inherit the parent's.
  *
- * @return the slot, or NULL when the table is full.
+ * Return the process, or NULL if its record, descriptor table or standard
+ * descriptions cannot be allocated.
  */
 process_t *alloc_process(void)
 {
@@ -164,7 +165,11 @@ process_t *alloc_process(void)
         kfree(p);
         return NULL;
     }
-    fd_init_stdio(&p->fds);
+    if (fd_init_stdio(&p->fds) != 0) {
+        fd_table_free(&p->fds);
+        kfree(p);
+        return NULL;
+    }
 
     p->cwd[0] = '/';
     p->cwd[1] = '\0';

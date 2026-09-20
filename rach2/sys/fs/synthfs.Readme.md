@@ -4,7 +4,7 @@ Rach2 generates `/dev` and `/proc` from kernel state. Neither tree is stored in 
 
 ## Path routing
 
-`/dev` and `/proc` are the two synthetic entries of the mount table ([vfs.Readme.md](vfs.Readme.md)). The resolver reaches them by name from the root directory, since the root file system has no node for them, and hands each the rest of the path in one call, which `synth_classify` turns into a `vpath`: a device, a proc file, a directory, or `ENOENT` or `ENOTDIR`. A `..` in that rest that would climb above the mount answers `VFS_CLIMB` and the resolver continues at the root directory. A KRFFS directory named `dev` or `proc` cannot shadow either mount and cannot be created (`EEXIST`).
+`/dev` and `/proc` are the two synthetic entries of the mount table ([vfs.Readme.md](vfs.Readme.md)). The resolver reaches them by name from the root directory and passes each the remaining path. `synth_rest` resolves `.` and `..` before `synth_classify` fills a `vpath`. A two-component device path other than `/dev/pts` becomes `VNODE_DEV`; devfs checks whether the device exists. The caller checks process and descriptor existence. A `..` in that rest that would climb above the mount answers `VFS_CLIMB` and the resolver continues at the root directory. A KRFFS directory named `dev` or `proc` cannot shadow either mount and cannot be created (`EEXIST`).
 
 Synthetic directories can be opened and used by `chdir` and the `*at` calls. For example, `openat` can open `null` relative to an fd for `/dev`. Directory descriptors and the current working directory store canonical synthetic paths, with `/proc/self` resolved to the numeric pid when necessary. A synthetic node lives for the length of one syscall, in a record taken from the kernel heap; the open that follows a resolution binds the device's own operations onto the descriptor.
 
@@ -12,7 +12,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 
 ## devfs
 
-`/dev` has mode 0755 and file-system id 5. Its registry gives each fixed device a stable inode, a character-device number, and root ownership. Open permissions use the same owner, group, and other bits as KRFFS.
+`/dev` has mode 0755 and file-system id 5. Opening an existing leaf with `O_CREAT|O_EXCL` returns `EEXIST` before descriptor allocation or special device dispatch, including `/dev/ptmx`. Its registry gives each fixed device a stable inode, a character-device number, and root ownership. Open permissions use the same owner, group, and other bits as KRFFS.
 
 | Path | Device | Mode | Contract |
 |------|--------|------|----------|
@@ -25,7 +25,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 | `/dev/tty` | 5:0 | 0666 | Opens the caller's controlling console or pty slave; a caller without one gets `ENXIO`. |
 | `/dev/ptmx` | 5:2 | 0666 | Allocates a pty pair and returns its master. |
 | `/dev/bootpart` | 240:0 | 0600 | Exposes a validated FAT boot partition as a raw sector window when one exists. |
-| `/dev/disk0` | 240:1 | 0400 | Exposes the diagnostic whole-disk window after a diagnostic probe. |
+| `/dev/disk0` | 240:1 | 0400 | Exposes disk 0 after a diagnostic probe, in recovery, or through USB discovery. |
 | `/dev/bootlog` | 240:2 | 0400 | Reads the kernel log's 16 KiB ring from its oldest retained record. |
 | `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused. |
 | `/dev/disk0p1` to `/dev/disk0p4` | 240:4 to 240:7 | 0400 | One read-only window per nonempty MBR entry, the source `mount(2)` takes. |
@@ -43,11 +43,11 @@ Pty pairs are allocated from the heap without a fixed count. Each pair receives 
 
 A loop device is reached through a mount and nowhere else: its node reads and writes nothing, and is there for `mount(2)` to name. `/dev/loop-control` takes one command per write, `attach N /path`, `attach - /path`, `attach ro N /path` and `detach N`; the node is root's, which is what says who may attach anything, and what the commands mean is in [block/Readme.md](../block/Readme.md). `/proc/loop` has a line per attached device: the device, its size in bytes, whether it takes writes, how many writes it has made and how many it has synced, and the path it was attached by.
 
-The stick nodes are block devices in `stat`, and the disk's windows are character devices. That is what `blkid`, `findfs` and `mount LABEL=` walk `/dev` for, so a volume on a stick is found by its label rather than by the order the sticks were plugged in. The nodes are read-only: a stick is written through a file system mounted on it. Unlike the disk's windows, they read any byte range, because `blkid`'s probers ask for the size of a superblock structure at whatever offset it lives and a block device node on Linux answers that; the covering sectors are read and the bytes asked for copied out.
+Whole-disk and partition nodes report block-device mode in `stat`, on USB and on other transports. Reads accept arbitrary byte ranges: the covering sectors are read and the requested bytes copied out. Writes require whole sectors and are available only in recovery builds. The boot windows remain character devices.
 
 `/dev/screenlog` decides how much of the kernel's own record reaches the screen, and nothing else: the ring, the serial port and netconsole keep every record whatever it says, so `/dev/bootlog` and a capture on the port are unaffected. A read gives the current level as one digit and a newline; a write of one digit sets it, clamped to `KLOG_CRIT` at the low end so a panic can never be hidden and to `KLOG_DEBUG` at the high end. The default is `KLOG_INFO`, which keeps the boot log, since a screen that says nothing while a machine starts cannot be told from a machine that has stopped; what it drops is `KLOG_DEBUG`. `rach2.loglevel=N` on the boot line sets it for a boot being brought up, when the screen is the only instrument there is. It exists because the screen is shared: `rach2-install` talks to a person through it and has no other way to keep the machine's routine notes out of the middle of its questions.
 
-`/dev/bootlog` is always present. It hands out the kernel log's ring, which holds records and not console text: whole records are dropped from the oldest end to make room, so what comes back never begins mid-line. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
+`/dev/bootlog` is always present. It reads the kernel log ring, which contains records but no console text. Whole records are evicted from the oldest end to make room. The offset counts from the oldest retained byte. Records may be evicted between chunk copies, including within one read; the returned bytes are not a snapshot. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
 
 The framebuffer and mouse use the root paths `/fb` and `/mouse`. They are not devfs entries.
 
@@ -63,13 +63,13 @@ Disk discovery reads and validates sector 0 before publishing either boot window
 
 `/dev/grubcore` represents the fixed half-open range `[1, 2048)`. It requires a disk large enough for that range and no nonempty partition overlapping it. Sector 0 is excluded because it contains the partition table. Both devices are considered before root selection, so a RAM-root boot can still repair its disk.
 
-`/dev/disk0` is published when `rach2.diskdiag` runs the disk diagnostic. A recovery build publishes it without that boot option. The window covers the device up to 2^32 sectors, or 2 TiB at 512 bytes per sector; `/proc/disk` reports both the device size and the window size. An ordinary kernel permits reads but its device write handler returns `EPERM`. Only a kernel built with `RACH2_RECOVERY` has the whole-disk write implementation, and that implementation rechecks effective uid 0 for every write.
+`rach2.diskdiag` publishes whole-disk windows for registered disks. Recovery builds publish them without that boot option. USB discovery also publishes each discovered disk's whole-disk window. Partition windows are published separately after a table scan. The window covers the device up to 2^32 sectors, or 2 TiB at 512 bytes per sector; `/proc/disk` reports both the device size and the window size. An ordinary kernel permits reads but its device write handler returns `EPERM`. Only a kernel built with `RACH2_RECOVERY` has the whole-disk write implementation, and that implementation rechecks effective uid 0 for every write.
 
-All three raw devices use a 64-bit offset shared by duplicated and inherited descriptors. `_llseek` can address the whole window. The legacy 32-bit `lseek` returns `EOVERFLOW` when it cannot return the resolved offset. A seek need not be sector-aligned, but each read and write offset and byte count must be a multiple of 512 or the transfer returns `EINVAL`.
+Boot, whole-disk and partition windows use a 64-bit offset shared by duplicated and inherited descriptors. `_llseek` can address the whole window. The legacy 32-bit `lseek` returns `EOVERFLOW` when it cannot return the resolved offset. A seek need not be sector-aligned. Boot-window reads and all raw writes require offsets and lengths that are multiples of 512; otherwise the transfer returns `EINVAL`. Whole-disk and partition reads accept arbitrary byte ranges.
 
-Reads at or past the end return EOF, and a read crossing the end is shortened. A write at or across the end returns `ENOSPC` before writing any part of the request. Transfers pass through a 32 KiB kernel buffer in batches of at most 64 sectors, so a DMA driver never receives a user pointer. ATA and AHCI flush the device cache after every successful write command. A fully successful write is therefore durable when it returns. If a later batch fails, the short count covers only completed earlier batches; the block interface cannot report how much of the failed batch reached the device.
+Reads at or past the end return EOF, and a read crossing the end is shortened. A write at or across the end returns `ENOSPC` before writing any part of the request. Transfers use kernel staging buffers, so a DMA driver never receives a user pointer. Poll reports requested read and write readiness without a wait queue; a transfer may still sleep while acquiring a buffer or completing block I/O. ATA and AHCI flush the device cache after every successful write command. A fully successful write is therefore durable when it returns. If a later batch fails, the short count covers only completed earlier batches; the block interface cannot report how much of the failed batch reached the device.
 
-Only one open-file description may hold write access across the three raw windows. A second writer gets `EBUSY`; readers may coexist with it. `/dev/grubcore` additionally permits only one open-file description at a time because replacement of the embedded loader is a multi-step transaction. A controller reprobe withdraws all three windows. Existing descriptors then receive `ENXIO` until the backing is published again.
+Only one open-file description may hold write access across the raw windows. A second writer gets `EBUSY`; readers may coexist with it. `/dev/grubcore` additionally permits only one open-file description at a time because replacement of the embedded loader is a multi-step transaction. Whole-disk withdrawal clears every registered disk's whole-disk window and leaves partition windows unchanged. Reads through an unpublished whole-disk window return `EIO`. Boot windows are withdrawn separately; their descriptors receive `ENXIO` until the backing is published again.
 
 ## procfs
 

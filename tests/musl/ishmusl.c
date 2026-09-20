@@ -107,6 +107,84 @@ static int file_equals(const char *path, const char *expected)
     return n == (ssize_t)strlen(expected) && memcmp(buf, expected, (size_t)n) == 0;
 }
 
+/** Run input from a regular file and check the shell's output and status. */
+static int check_input_case(const char *input, const char *output, int expected, const char *name)
+{
+    char *argv[] = {(char *)"ish", NULL};
+    char *environment[] = {(char *)"PATH=/bin", NULL};
+    int source = open("ishmusl.input", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    int capture = open("ishmusl.capture", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int child = -1;
+    int status = 0;
+    int result = 1;
+    size_t length = strlen(input);
+
+    if (source >= 0 && capture >= 0 && write(source, input, length) == (ssize_t)length &&
+        lseek(source, 0, SEEK_SET) == 0) {
+        fflush(NULL);
+        child = fork();
+        if (child == 0) {
+            if (dup2(source, 0) < 0 || dup2(capture, 1) < 0) {
+                _exit(125);
+            }
+            close(source);
+            close(capture);
+#ifdef ISH_HOSTTEST
+            _exit(ish_main(1, argv, environment));
+#else
+            execve(SHELL, argv, environment);
+            _exit(125);
+#endif
+        }
+        if (child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+            WEXITSTATUS(status) == expected && file_equals("ishmusl.capture", output)) {
+            result = 0;
+        }
+    }
+    if (source >= 0) {
+        close(source);
+    }
+    if (capture >= 0) {
+        close(capture);
+    }
+    unlink("ishmusl.input");
+    unlink("ishmusl.capture");
+    return result ? fail(name) : 0;
+}
+
+/** Check complete lines, read boundaries, EOF and rejection of long lines. */
+static int check_input(void)
+{
+    char boundary[280];
+    char split[280];
+    char overlong[540];
+    int result = 0;
+
+    result |= check_input_case("", "", 0, "empty input");
+    result |= check_input_case("echo one\necho two\n", "one\ntwo\n", 0, "input lines");
+    result |= check_input_case("echo final", "final\n", 0, "final input line");
+    result |= check_input_case("no-such-command-anywhere\necho next\n", "next\n", 0,
+                               "input command failure");
+    result |=
+        check_input_case("echo before\nexit 7\necho after\n", "before\n", 7, "input exit builtin");
+    memset(split, '\n', 250);
+    strcpy(split + 250, "echo split\n");
+    result |= check_input_case(split, "split\n", 0, "split input line");
+    memset(boundary, ' ', 255);
+    memcpy(boundary, "echo limit", 10);
+    strcpy(boundary + 255, "\necho next\n");
+    result |= check_input_case(boundary, "limit\nnext\n", 0, "input line limit");
+    boundary[255] = '\0';
+    result |= check_input_case(boundary, "limit\n", 0, "input line limit at eof");
+    memset(overlong, ' ', 510);
+    memcpy(overlong, "echo prefix", 11);
+    strcpy(overlong + 510, "echo suffix\necho next\n");
+    result |= check_input_case(overlong, "next\n", 0, "long input line");
+    overlong[256] = '\0';
+    result |= check_input_case(overlong, "", 0, "long input line at eof");
+    return result;
+}
+
 /** Redirection must work when open returns either standard descriptor. */
 static int check_descriptors(void)
 {
@@ -165,7 +243,7 @@ int main(void)
 {
     int rc;
 
-    if (check_descriptors() || check_environment()) {
+    if (check_descriptors() || check_environment() || check_input()) {
         return 1;
     }
     rc = ish_status("/musl/statushelper 0");

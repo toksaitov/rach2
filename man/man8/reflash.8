@@ -18,10 +18,13 @@ The
 and
 .Ar BYTES
 operands give the starting offset and declared length in bytes.
-Use the partition start and sector count reported by the machine in
-.Pa /proc/disk ,
-multiplied by 512.
-The range is checked before any input is read.
+Obtain the target partition's start and size from the machine's partition
+table, reported in
+.Pa /proc/disk .
+The offset is its starting sector multiplied by 512.
+The length is the image's uncompressed length and must fit the partition.
+The range is checked against the device before any input is read;
+this check does not establish which partition the range occupies.
 .Pp
 The length must be nonzero.
 The offset and length must be whole numbers of sectors, and the range
@@ -44,6 +47,8 @@ It reads the specified device range and prints its SHA-256 on standard
 output:
 .Dl reflash: sha256 HEX of N bytes at OFFSET
 Failure to read the complete range is an error.
+A matching digest establishes the contents of the supplied range;
+it does not establish that the offset is correct.
 With
 .Fl p ,
 read progress is reported as:

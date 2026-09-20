@@ -39,7 +39,7 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
 uint32_t devfs_rdev(struct fd_entry *e);
 uint32_t devfs_fd_ino(struct fd_entry *e);
 
-/** The S_IFCHR-typed mode of an open device fd (fstat64); 0 if not a device. */
+/** The block- or character-device mode of an open fd; 0 if not a device. */
 uint32_t devfs_fd_mode(struct fd_entry *e);
 
 /**
@@ -123,12 +123,12 @@ void devfs_grubcore_withdraw(void);
  */
 uint64_t devfs_raw_calls(void);
 
-/** Withdraw /dev/disk0; a no-op when it was never published. */
+/** Withdraw every registered disk's whole-disk window. */
 void devfs_disk_withdraw(void);
 
 /**
  * Whether `e` is one of the raw disk windows (`/dev/bootpart`, `/dev/grubcore`
- * or `/dev/disk0`).
+ * or a whole-disk or partition node).
  *
  * This asks what the descriptor IS, from the operations bound to it at open,
  * and not whether its window is currently published. The two differ while a

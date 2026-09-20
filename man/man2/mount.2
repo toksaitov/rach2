@@ -169,6 +169,9 @@ A loop device attached to a file on the mount also prevents unmounting.
 .Pp
 The file system syncs and prepares to unmount; the kernel writes dirty
 cache buffers, flushes the device, and invalidates its cached buffers.
+For a writable KRFFS volume, preparation flushes earlier writes to the
+medium before clearing and separately flushing the dirty flag.
+A KRFFS volume made read-only by a write failure keeps that flag set.
 Only then does it release the file system, covered directory, and claim.
 Failure before release restores the mount to active state.
 .Pp

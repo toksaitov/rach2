@@ -404,13 +404,15 @@ BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
 FD_HOSTTEST = build/tests/host/fd_hosttest
 FDLOCK_IMAGE = $(IMAGES_DIR)/fdlock-test.disk
-$(FD_HOSTTEST): tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
-               rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+FD_HOSTTEST_SOURCES = tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
+                     rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+$(FD_HOSTTEST): $(FD_HOSTTEST_SOURCES) rach2/sys/proc/process.c
 	@mkdir -p $(dir $@)
 	$(HOSTCC) -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wno-empty-body \
+	    -I rach2/sys -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
 	    -fsanitize=address,undefined -fno-sanitize-recover=all \
-	    -o $@ $(filter %.c,$^)
-	$(HOSTCC) -DRACH2_HOSTTEST -MM -MP -MT $@ $(filter %.c,$^) > $@.d
+	    -o $@ $(FD_HOSTTEST_SOURCES)
+	$(HOSTCC) -DRACH2_HOSTTEST -I rach2/sys -MM -MP -MT $@ $(FD_HOSTTEST_SOURCES) > $@.d
 -include $(FD_HOSTTEST).d
 
 # `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and

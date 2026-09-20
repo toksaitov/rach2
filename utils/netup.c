@@ -86,12 +86,10 @@ static void restore(int fd, const char *name, unsigned long address, unsigned lo
 }
 
 /**
- * Whether a DHCP client is holding this interface.
+ * Return the live DHCP pid, zero for no holder, or -1 for an unreadable claim.
  *
- * A static stanza applied while one is running is undone by that client's next
- * renewal, and its next refusal or expiry takes the static address off. So the
- * static path asks first and refuses, naming the process instead of fighting
- * something the administrator has forgotten about.
+ * Only an absent claim or a pid known to have exited permits static
+ * configuration. An incomplete claim may belong to a client creating it.
  */
 static long dhcp_holder(const char *name)
 {
@@ -104,24 +102,17 @@ static long dhcp_holder(const char *name)
     snprintf(path, sizeof(path), "%s/dhcpc.%s.pid", RUN_DIR, iface);
     f = fopen(path, "r");
     if (!f) {
-        return 0;
+        return errno == ENOENT ? 0 : -1;
     }
-    if (fscanf(f, "%ld", &pid) != 1) {
+    if (fscanf(f, "%ld", &pid) != 1 || ferror(f)) {
         pid = 0;
     }
     fclose(f);
-    /* A signal of zero delivers nothing and reports whether it could have been
-       delivered; `EPERM` is a process that is there and somebody else's, and
-       only `ESRCH` is one that is gone. */
-    if (pid > 0 && (kill((pid_t)pid, 0) == 0 || errno == EPERM)) {
-        return pid;
-    }
     if (pid <= 0) {
-        /* The file is there and says nothing this can read, which is what a
-           claim being made right now looks like: the client creates it and
-           writes into it. Busy is the safe reading; the alternative is
-           configuring an interface a client is about to take. */
         return -1;
+    }
+    if (kill((pid_t)pid, 0) == 0 || errno != ESRCH) {
+        return pid;
     }
     return 0;
 }

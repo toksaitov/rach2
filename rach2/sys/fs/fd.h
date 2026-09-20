@@ -177,7 +177,7 @@ int fd_table_reach(fd_table_t *table, int fd);
 int fd_table_copy(fd_table_t *dst, const fd_table_t *src);
 
 /** Wire fd 0/1/2 as console stdin/stdout/stderr; call after fd_table_init. */
-void fd_init_stdio(fd_table_t *table);
+int fd_init_stdio(fd_table_t *table);
 
 /** Reserve the lowest free descriptor; fd (>= 0) on success, -1 if table
  * full. */

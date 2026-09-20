@@ -175,7 +175,13 @@ and
 do not permit file creation.
 Existing device entries open through their device operations and
 enforce their access permissions.
-Device handling of flags differs from ordinary files.
+An existing device leaf, including
+.Pa /dev/ptmx ,
+returns
+.Er EEXIST
+for
+.Dv O_CREAT Ns | Ns Dv O_EXCL
+before allocating a descriptor or pseudoterminal pair.
 ext2 device inodes cannot be opened as devices and return
 .Er EACCES .
 .Pp

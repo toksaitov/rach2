@@ -31,9 +31,14 @@ pseudoterminal slave.
 A caller without a controlling terminal gets
 .Er ENXIO .
 .Pp
-Each open of
+Opening
 .Pa /dev/ptmx
 allocates a pseudoterminal pair and returns its master.
+An open with
+.Dv O_CREAT Ns | Ns Dv O_EXCL
+returns
+.Er EEXIST
+without allocating a pair.
 The slave is
 .Pa /dev/pts/N ,
 where N is the lowest index not used by a live pair.

@@ -1376,8 +1376,9 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
 /**
  * The checks on an existing node of a mounted type, from its attributes in
  * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the mount's EROFS
- * for a write-side request, then permission, then O_TRUNC. On an error the
- * reference is released.
+ * for a write-side request, then permission and loop attachment. Truncation
+ * uses the open handle in `open_install`. On an error the reference is
+ * released.
  */
 static int open_mounted_node(struct vfs_ref *ref, int flags)
 {
@@ -1420,15 +1421,9 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return rc;
     }
-    if (flags & O_TRUNC) {
-        rc = loop_backs(ref->mnt, node) ? -EBUSY : vfs_truncate(ref->mnt, node, 0);
-        if (rc == 0 && !cred_privileged()) {
-            vfs_kill_setid(ref->mnt, node);
-        }
-        if (rc != 0) {
-            vfs_ref_release(ref);
-            return rc;
-        }
+    if ((flags & O_TRUNC) && loop_backs(ref->mnt, node)) {
+        vfs_ref_release(ref);
+        return -EBUSY;
     }
     return 0;
 }
@@ -1505,7 +1500,9 @@ static int open_root_node(struct vfs_ref *ref, int flags)
  * another type keeps `node` NULL: the description's own fields name it, and
  * the KRFFS-only paths (the holder rule, the set-id clear) have nothing to
  * do with it. Returns the fd or a negative errno, with the reference
- * released.
+ * released. Register the mounted description before truncation so a
+ * relocation while waiting updates its node. A failed truncation frees
+ * the description and its open handle.
  */
 static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
 {
@@ -1565,6 +1562,16 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
     entry->ofd->vnode = node;
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
+    if (!mnt_is_root(ref->mnt) && (flags & O_TRUNC)) {
+        rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);
+        if (rc == 0 && !cred_privileged()) {
+            vfs_kill_setid(ref->mnt, entry->ofd->vnode);
+        }
+        if (rc != 0) {
+            fd_free(&current_proc->fds, fd);
+            return rc;
+        }
+    }
 
     /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
      * trunc and cloexec live higher up, so mask before testing; the legacy

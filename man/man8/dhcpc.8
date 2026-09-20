@@ -17,13 +17,25 @@
 is the DHCP client for images without BusyBox.
 It validates the lease before applying the address, netmask, default route,
 and resolver configuration.
+A missing netmask selects the address's classful mask for both validation
+and application, including renewals of an unchanged address.
 A packet socket receives replies before the interface has an address.
+Each resolver update writes and closes a private temporary file before
+renaming it over
+.Pa /etc/resolv.conf .
+Concurrent writers publish complete versions; the last rename selects
+the current version.
+A lease with no DNS servers still replaces the file.
 .Pp
 The client maintains the lease for as long as it runs.
 It renews at T1, the renewal time, and rebinds at T2, the rebinding time:
 the server's values when it gives valid ones, otherwise one half and seven
 eighths of the lease.
 At expiry or on DHCPNAK, it removes the address and starts discovery again.
+If removal fails, it exits with the recorded address and claim retained
+for a later client or
+.Fl k
+to retry cleanup.
 Leases shorter than 10 seconds are ignored.
 Leases longer than one week, or the limit selected with
 .Fl l ,
@@ -36,6 +48,8 @@ The client creates
 with
 .Dv O_EXCL
 and records its process ID and configured address there.
+The file is visible before the process ID is written.
+An empty or unreadable claim is treated as busy.
 It does not use
 .Xr fcntl 2
 locks.
@@ -53,6 +67,11 @@ The default is
 .It Fl b
 Enter the background after the first discovery round, which makes up to
 four requests, whether or not the interface was configured.
+The child closes inherited standard descriptors and redirects them to the
+console, or to
+.Pa /dev/null
+if the console cannot be opened.
+If redirection fails, the child exits with its claim retained for cleanup.
 .It Fl l Ar SECONDS
 Limit the lease to this many seconds.
 The accepted range is 10 through 604800.

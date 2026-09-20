@@ -354,7 +354,9 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     ap_str(t, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
     ap_str(t, " 0 0");   /* 23 vsize, 24 rss */
     ap_ch(t, '\n');
-    t->buf[t->len] = '\0';
+    if (!t->nomem) {
+        t->buf[t->len] = '\0';
+    }
     return t->len;
 }
 
@@ -1451,12 +1453,12 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
  * -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
  * intent is -EACCES.
  *
- * The text is built once, here, in a buffer that grows with it. A text the
- * heap could not hold is refused with `-ENOMEM` and one line on the serial
- * log naming the file: a table read back with rows missing and nothing
- * saying so is the failure to prevent. `/proc/disk` is rendered from the
- * record taken at boot, so opening it issues no command to the device, and
- * `diskinfo_format` truncates to the cap it is given rather than reporting,
+ * The snapshot grows as text is appended. If allocation fails, discard
+ * the partial text and return -ENOMEM.
+ *
+ * `/proc/disk` is rendered from the record taken at boot, so opening it issues
+ * no command to the device. `diskinfo_format` truncates to the cap it is
+ * given rather than reporting,
  * so a text that reached the cap is refused with `-EOVERFLOW`.
  */
 int procfs_open(const struct vpath *vp, int flags)

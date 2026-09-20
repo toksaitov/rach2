@@ -30,13 +30,15 @@ static int impossible(unsigned long ip)
 }
 
 /**
- * The mask the first octet implies, which is what the kernel derives when it is
- * given an address and no mask.
+ * Return the supplied mask, or the address's classful mask when it is zero.
  */
-static unsigned long classful(unsigned long ip)
+unsigned long ipcheck_mask(unsigned long ip, unsigned long netmask)
 {
     unsigned long first = (ip >> 24) & 0xff;
 
+    if (netmask != 0) {
+        return netmask;
+    }
     if (first < 128) {
         return 0xFF000000UL;
     }
@@ -49,10 +51,9 @@ static unsigned long classful(unsigned long ip)
 /**
  * Judge an address, a netmask and a gateway together.
  *
- * A netmask of zero is not an error here: it means none was given, and the
- * address is then judged under the mask the kernel will derive from it, since
- * that is the mask the machine will be running with. A gateway of zero means
- * none, which is a machine that reaches its own subnet and nothing else.
+ * A zero netmask selects the address's classful mask for validation. The
+ * caller must apply that mask with the address. A zero gateway omits gateway
+ * validation.
  *
  * @param err    where the refusal is written, in the caller's own voice.
  * @return 0 when the configuration can be applied, -1 when it cannot.
@@ -60,7 +61,7 @@ static unsigned long classful(unsigned long ip)
 int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long gateway, char *err,
                    size_t errlen)
 {
-    unsigned long mask = netmask ? netmask : classful(address);
+    unsigned long mask = ipcheck_mask(address, netmask);
     unsigned long inverted;
 
     if (address == 0) {
