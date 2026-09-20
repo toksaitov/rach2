@@ -26,7 +26,8 @@ Command logs and `result.status` stay in the printed work directory on the store
 
 To build and boot Rach2 a machine needs GNU Make, a host C compiler, the
 `i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, e2fsprogs 1.43
-or later, and the POSIX text utilities. The build finds `mke2fs`, `debugfs`
+or later, mandoc, which renders the manual pages the images stage, and the
+POSIX text utilities. The build finds `mke2fs`, `debugfs`
 and `e2fsck` on the path, under the Homebrew keg, which is never linked, or
 under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run
 style` it also needs cppcheck, ShellCheck, and clang-format. The suites that build a GRUB disk or a FAT volume need mtools, which
@@ -49,22 +50,24 @@ installer prints, because it does not put `brew` on the path itself.
         https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     eval "$(/opt/homebrew/bin/brew shellenv)"
 
-    brew install i686-elf-gcc i686-elf-binutils qemu mtools e2fsprogs \
+    brew install i686-elf-gcc i686-elf-binutils qemu mtools e2fsprogs mandoc \
                  cppcheck shellcheck clang-format rsync
 
-`ssh-keygen` ships with macOS. `xorriso` builds the optional ISOs
-(`make isos`), and `pkg-config` with the `fuse-t` cask lets `make -C krffs
-mount` mount an image on the host; neither is needed to build or test.
+`ssh-keygen` ships with macOS. `xorriso` builds the ISOs (`make isos`) and
+the stick images made from them, which `tests/run usbdisk` boots, so a run of
+the whole set needs it. `pkg-config` with the `fuse-t` cask lets `make -C
+krffs mount` mount an image on the host, which no build or suite needs.
 
 ### Debian and Ubuntu
 
 The archive has everything except the cross toolchain.
 
     sudo apt install build-essential curl qemu-system-x86 mtools e2fsprogs \
-                     openssh-client cppcheck shellcheck clang-format
+                     mandoc openssh-client cppcheck shellcheck clang-format
 
-`xorriso` builds the optional ISOs, and `pkg-config` with `libfuse-dev` lets
-`make -C krffs mount` mount an image; neither is needed to build or test.
+`xorriso` builds the ISOs and the stick images made from them, which
+`tests/run usbdisk` boots. `pkg-config` with `libfuse-dev` lets `make -C
+krffs mount` mount an image, which no build or suite needs.
 
 No Debian package provides an `i686-elf` toolchain by that name, but the
 `i686-linux-gnu` cross compiler in the archive builds this tree: the kernel and
@@ -125,8 +128,9 @@ That is the host's setting, like its worker count, not the runner's rule.
 
 The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures
 with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call
-`i686-elf-gcc` by name. A toolchain installed elsewhere under that same
-prefix works; one built for another target does not.
+`i686-elf-gcc` by name. A toolchain under that same command prefix works
+wherever it is installed, and so does the wrapped `i686-linux-gnu` toolchain
+described above.
 
 ### The two checkers
 
@@ -160,14 +164,14 @@ Every root has an SSH host key of its own, generated at boot for the RAM roots, 
     ssh -i krffs/rach2_demo_ed25519 -o UserKnownHostsFile=/tmp/k-NAME \
         -o StrictHostKeyChecking=accept-new root@ADDRESS
 
-Write `-i KEY` before the destination: after it, ssh reads the two words as part of the remote command, offers the default identities instead, and the machine refuses a login that looks correct. Root logs in by key alone, since `init` starts the server with `-g`; `su` from the unprivileged account is the other way in. There is no sftp server, so a file goes over with `ssh ... 'cat > /tmp/f' < f` and comes back with `ssh ... 'cat /tmp/f' > f`.
+Write `-i KEY` before the destination: after it, ssh reads the two words as part of the remote command, offers the default identities instead, and the machine refuses a login that looks correct. Root logs in by key alone on an image built here, since `init` starts the server with `-g` unless `/etc/rach2/sshd.conf` says `root-password-login yes`, which the installer writes on a machine it installs; `su` from the unprivileged account is the other way in. There is no sftp server, so a file goes over with `ssh ... 'cat > /tmp/f' < f` and comes back with `ssh ... 'cat /tmp/f' > f`.
 
 Check the credentials before writing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra`. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
 
     ssh-keygen -y -f krffs/rach2_demo_ed25519 | cut -d' ' -f2
     cut -d' ' -f2 krffs/authorized_keys
 
-A root written with keys whose private halves are on another machine can then be reached only from recovery.
+A root written with keys whose private halves are on another machine is then reached through the console, through an ordinary account and `su`, through a password login where `/etc/rach2/sshd.conf` says `root-password-login yes`, which the installer writes, or from recovery.
 
 The kernel's log leaves on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the boot line. `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` keeps it, which is the only record of a panic on a machine with no serial port: the screen shows one line and the boot log dies with the machine.
 
@@ -245,7 +249,7 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 * `image/mkmbr.c [--lba] [--id HEX] DISK START:SIZE:TYPE[:boot|:logical] ...` writes an MBR with at most four primary and sixteen logical partitions. START and SIZE are whole MiB, or sectors with `--lba`; TYPE is hexadecimal and `:boot` sets the active flag. `--id HEX` writes the four-byte disk identifier at offset 440. A primary entry of type `05` or `0f` must precede any `:logical` arguments, which give each logical partition's own start and size. Their extended boot records are chained in argument order, numbered from 5: the first record is at the extended partition's start, and each later record is in the sector before its partition. `--list DISK` reads the four primary entries and prints each nonempty entry as `INDEX TYPE START SIZE`, with the type in hexadecimal and the extent in bytes.
 * `image/mkgpt.c [--seed N] [--damage-primary] DISK START:SIZE:KIND[@INDEX][=LABEL] ...` writes a GUID partition table, a protective MBR, and the primary and backup headers and arrays with their checksums for the test suites' disks and sticks. It accepts at most fifteen partitions. START and SIZE are 512-byte sectors; KIND is `fat` or `data`; `@INDEX` selects a zero-based array position; and `=LABEL` supplies a name of at most 36 characters. Disk and partition GUIDs derive from the seed and entry index, allowing repeatable identities and cloned-table fixtures. `--damage-primary` writes the primary header with an incorrect checksum while leaving the backup valid. The tool prints `mkgpt: entry N guid TEXT` for each entry written.
 * `image/mkgrubcore.sh {A|B} OUTPUT` verifies and hands out one of the two pinned marked core images the replacement suites install.
-* `image/grub-embed.cfg` is the common embedded configuration. It searches for FAT label `RACH2BOOT` and opens `/boot/grub/grub.cfg` there. If that configuration call returns, it searches for `RACH2RECOV` and opens `/boot/grub/recovery.cfg` there. The disk builder assigns those labels to partitions 1 and 3.
+* `image/grub-embed.cfg` is the common embedded configuration. It searches for FAT label `RACH2BOOT` and opens `/boot/grub/grub.cfg` there. If that configuration call returns, it searches for `RACH2RECOV` and opens `/boot/grub/recovery.cfg` there. The disk builder puts `RACH2BOOT` on partition 1 and `RACH2RECOV` on partition 2; partition 3 is the ext2 root.
 * `image/mkiso.sh` builds `test`, `os-simple`, `os-real`, `rach2-metal`, or `rach2-recovery` as a GRUB ISO with native `xorriso` and the pinned El Torito and hybrid images under [`vendor/grub/`](../vendor/grub/Readme.md). It checks the selected kernel's disk policy before staging it. The top-level `make isos` target builds all five. `rach2-recovery` is the recovery kernel and its RAM image on the same hybrid image, so a stick boots a machine into `reflash` without its disk; its boot line takes an address from DHCP.
 * `image/ubuntu-image.txt` pins the Ubuntu container base by digest for the maintainer regeneration of the pinned GRUB artifacts (`vendor/grub/regen_grub.sh`); no build or suite uses a container.
 
