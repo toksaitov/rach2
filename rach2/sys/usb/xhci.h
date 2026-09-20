@@ -227,10 +227,12 @@ int xhci_port_reset_done(struct xhci_ctrl *hc, int port);
 int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, uint32_t slot);
 
 /**
- * Report the command in flight: 1 finished, 0 still running, -1 given up on.
+ * Report the command: 1 succeeded, 0 pending, -1 failed or no result remains.
  *
- * A command that passes its deadline is aborted, which is the only way to get
- * a command ring back from a controller that stopped answering.
+ * A deadline starts an abort but retains the command until its matching
+ * completion or the Command Ring Stopped event arrives. A success during
+ * abort returns its slot normally, so the caller can close it. The result is
+ * consumed once. An abort that never resolves keeps returning 0.
  */
 int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out);
 
@@ -268,8 +270,8 @@ int xhci_interrupts_enable_line(struct xhci_ctrl *hc);
 void xhci_interrupts_disable(struct xhci_ctrl *hc);
 
 /**
- * Whether a command can be issued now: none is running and no abort is
- * still waiting for the controller to stop the ring. The core takes the
+ * Whether a command can be issued now: none is running and any abort has
+ * both a stop event and a cleared CRR bit. The core takes the
  * enumeration turn only when this says so, so a command it then issues is
  * never refused for a ring another device left busy.
  */

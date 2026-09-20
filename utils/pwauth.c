@@ -508,15 +508,13 @@ int pwauth_verify(const char *user, const char *password)
 /**
  * Save terminal modes and disable echo only for the foreground process group.
  * A background reader keeps the saved modes for its next foreground resume.
+ * ENOTTY permits nonterminal input; any other mode-read error refuses input.
  * Return -1 if reading or setting the modes fails, otherwise 0.
  */
 static int pwauth_prepare_tty(void)
 {
-    if (!isatty(0)) {
-        return 0;
-    }
     if (tcgetattr(0, &Tty_saved) != 0) {
-        return -1;
+        return errno == ENOTTY ? 0 : -1;
     }
     Tty_quiet = Tty_saved;
     Tty_quiet.c_lflag &= ~(tcflag_t)ECHO;

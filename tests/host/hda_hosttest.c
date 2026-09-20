@@ -200,6 +200,54 @@ static void row_rates(void)
     check(hda_rate_step(176400, 192000) == 60211, "high-rate ratio does not overflow");
 }
 
+/**
+ * Empty periods retain fractional phase without consuming later writes.
+ * The 16.16 step for 44100 Hz input and 32000 Hz output is 90316.
+ */
+static void row_underrun(void)
+{
+    int16_t output[8192];
+    uint8_t input[4096];
+    uint32_t phase = 0;
+    unsigned i, pass;
+
+    row = "underrun";
+    reset_model();
+    ring_read_ptr = ring_write_ptr = 0;
+    params[1][0x0A] = 0x20000 | (1u << 4) | (1u << 6);
+    check(hda_find_output(), "enumeration succeeds");
+    check(hda_start(44100, AUDIO_S16LE, 2) == 0 && current_hw_sample_rate == 32000,
+          "44100 input selects 32000 output");
+    for (i = 0; i < sizeof(input) / 4; i++) {
+        unsigned sample = 1000 + i;
+
+        input[4 * i] = input[4 * i + 2] = (uint8_t)sample;
+        input[4 * i + 1] = input[4 * i + 3] = (uint8_t)(sample >> 8);
+    }
+    for (pass = 0; pass < 2; pass++) {
+        ring_render_to_hw_buffer(output, 4096);
+        phase = (phase + 4096u * 90316u) & 65535u;
+        check(ring_available() == 0, "period exhausts input");
+        if (pass == 0) {
+            for (i = 0; i < 8192; i++)
+                check(output[i] == 0, "empty period renders silence");
+        }
+        check(output[8190] == 0 && output[8191] == 0, "empty tail renders silence");
+        check(hda_write(input, sizeof(input)) == (int)sizeof(input), "refill accepted");
+        ring_render_to_hw_buffer(output, 16);
+        for (i = 0; i < 16; i++) {
+            int16_t sample = (int16_t)(1000 + (phase + i * 90316u) / 65536u);
+
+            check(output[2 * i] == sample && output[2 * i + 1] == sample,
+                  "refill samples preserve sample-hold order");
+        }
+        check(ring_available() == sizeof(input) - ((phase + 16u * 90316u) / 65536u) * 4,
+              "silence does not consume refill frames");
+        phase = (phase + 16u * 90316u) & 65535u;
+    }
+    hda_stop();
+}
+
 /** Inherited, overridden, absent and disjoint capabilities govern setup. */
 static void row_caps(void)
 {
@@ -387,6 +435,7 @@ int main(void)
 {
     row_rates();
     row_caps();
+    row_underrun();
     row_connections();
     row_route();
     row_report();

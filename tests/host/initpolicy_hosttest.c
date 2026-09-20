@@ -30,8 +30,65 @@
 #endif
 
 static int Failed, Dup_fail, Dup_calls, Notify_fd = -1;
+static int Network_signal, Early_signal, Fork_fail, Fork_blocked, Network_status;
+static pid_t Network_pid;
 static const char *Policy;
 static size_t Policy_size;
+
+/** Replace reboot with a distinct child exit without stopping the host. */
+static int policy_reboot(int command)
+{
+    (void)command;
+    _exit(90);
+}
+
+/** Inject a signal before the worker returns from fork, or fail the fork. */
+static pid_t policy_fork(void)
+{
+    sigset_t mask;
+    pid_t pid;
+    int worker = Network_signal && Network_pid == 0;
+
+    if (worker) {
+        if (sigprocmask(SIG_BLOCK, NULL, &mask) != 0) {
+            exit(2);
+        }
+        Fork_blocked = sigismember(&mask, SIGUSR1) && sigismember(&mask, SIGUSR2) &&
+                       sigismember(&mask, SIGTERM);
+        if (Fork_fail) {
+            errno = EAGAIN;
+            return -1;
+        }
+    }
+    pid = fork();
+    if (pid < 0) {
+        exit(2);
+    }
+    if (worker) {
+        Network_pid = pid ? pid : -1;
+        if (pid == 0 && Early_signal && kill(getpid(), Network_signal) != 0) {
+            _exit(2);
+        }
+    }
+    return pid;
+}
+
+/** Record whether the worker terminated by signal or called reboot. */
+static pid_t policy_waitpid(pid_t pid, int *status, int options)
+{
+    int result;
+    pid_t reaped = waitpid(pid, &result, options);
+
+    if (reaped > 0) {
+        if (status) {
+            *status = result;
+        }
+        if (Network_signal && reaped == Network_pid) {
+            Network_status = result;
+        }
+    }
+    return reaped;
+}
 
 /** Supply policy bytes without opening the host's system configuration. */
 static FILE *policy_fopen(const char *path, const char *mode)
@@ -74,6 +131,9 @@ static int policy_execv(const char *path, char *const argv[])
     char c = 'x';
     (void)path;
     (void)argv;
+    if (Network_signal && kill(getppid(), Network_signal) != 0) {
+        _exit(2);
+    }
     if (Notify_fd >= 0) {
         (void)write(Notify_fd, &c, 1);
     }
@@ -82,17 +142,23 @@ static int policy_execv(const char *path, char *const argv[])
 
 #define INIT_METAL
 #define INIT_CONSOLE_LOGIN
-#define fopen  policy_fopen
-#define dup2   policy_dup2
-#define unlink policy_unlink
-#define execv  policy_execv
-#define main   init_main
+#define fopen   policy_fopen
+#define dup2    policy_dup2
+#define unlink  policy_unlink
+#define execv   policy_execv
+#define fork    policy_fork
+#define waitpid policy_waitpid
+#define reboot  policy_reboot
+#define main    init_main
 #include "init.c"
 #undef main
 #undef fopen
 #undef dup2
 #undef unlink
 #undef execv
+#undef fork
+#undef waitpid
+#undef reboot
 
 /** Record failed assertions. */
 static void check(int ok, const char *name)
@@ -178,9 +244,75 @@ static void network_case(int nullfd, int logfd, int fail, int want)
     }
 }
 
+/**
+ * Exercise init's handlers with real fork, masks and signal delivery. Signals
+ * arrive before the worker returns from fork or from its running ifup child.
+ * A failed fork must also restore the parent's mask and preserve its handlers.
+ */
+static void network_signal_case(int nullfd, int logfd, int sig, int early, int fail)
+{
+    static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
+    struct sigaction action, saved[3], current;
+    sigset_t mask, original, after;
+    size_t i;
+
+    if (sigprocmask(SIG_BLOCK, NULL, &original) != 0) {
+        exit(2);
+    }
+    mask = original;
+    sigaddset(&mask, SIGALRM);
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = shutdown_handler;
+    sigemptyset(&action.sa_mask);
+    for (i = 0; i < 3; i++) {
+        sigdelset(&mask, signals[i]);
+        if (sigaction(signals[i], &action, &saved[i]) != 0) {
+            exit(2);
+        }
+    }
+    if (sigprocmask(SIG_SETMASK, &mask, NULL) != 0) {
+        exit(2);
+    }
+    Network_signal = sig;
+    Early_signal = early;
+    Fork_fail = fail;
+    Fork_blocked = 0;
+    Network_status = -1;
+    Network_pid = 0;
+    service_null_fd = nullfd;
+    service_log_fd = logfd;
+    Dup_calls = Dup_fail = 0;
+    start_network();
+    check(Fork_blocked, "network fork blocks shutdown signals");
+    if (!fail) {
+        check(Network_status != -1 && WIFSIGNALED(Network_status) &&
+                  WTERMSIG(Network_status) == sig,
+              early ? "early network signal terminates worker" : "ifup signal terminates worker");
+    }
+    if (sigprocmask(SIG_BLOCK, NULL, &after) != 0) {
+        exit(2);
+    }
+    for (i = 1; i < NSIG; i++) {
+        check(sigismember(&mask, (int)i) == sigismember(&after, (int)i),
+              "network restores parent signal mask");
+    }
+    for (i = 0; i < 3; i++) {
+        check(sigaction(signals[i], NULL, &current) == 0 && current.sa_handler == shutdown_handler,
+              "network preserves parent shutdown handlers");
+        if (sigaction(signals[i], &saved[i], NULL) != 0) {
+            exit(2);
+        }
+    }
+    if (sigprocmask(SIG_SETMASK, &original, NULL) != 0) {
+        exit(2);
+    }
+    Network_signal = Fork_fail = 0;
+}
+
 /** Test parser boundaries and every redirection failure. */
 int main(void)
 {
+    static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
     char longline[300];
     int nullfd, logfd, i;
     FILE *log;
@@ -218,6 +350,11 @@ int main(void)
     for (i = 1; i <= 3; i++) {
         network_case(nullfd, logfd, i, 0);
     }
+    for (i = 0; i < 3; i++) {
+        network_signal_case(nullfd, logfd, signals[i], 0, 0);
+        network_signal_case(nullfd, logfd, signals[i], 1, 0);
+    }
+    network_signal_case(nullfd, logfd, SIGTERM, 0, 1);
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");

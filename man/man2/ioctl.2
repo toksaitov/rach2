@@ -206,6 +206,8 @@ Validate the buffer and pass it to the active driver.
 The return value is the byte count queued, which may be less than requested
 or zero when the playback ring is full.
 The caller must retry bytes that were not accepted.
+HDA emits silence on underrun and preserves fractional resampling phase.
+Earlier silence does not discard newly queued frames.
 .It Dv AUDIO_SET_VOLUME No (0x4105)
 Pass the integer argument to the active driver as a percentage from
 0 through 100.

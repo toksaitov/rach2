@@ -415,7 +415,8 @@ const char *hda_get_boot_status(void)
  * (typically Doom: 11025Hz U8 mono) to the hardware format (typically 48kHz
  * S16 stereo) using a fixed-point 16.16 sample-hold resampler. Mono input is
  * duplicated to both output channels; stereo input is mixed down before
- * resampling. A short ring counts as an underrun and emits silence.
+ * resampling. A short ring counts as an underrun and emits silence. Retain
+ * only fractional phase on underrun, so silence cannot consume later input.
  */
 static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
 {
@@ -511,6 +512,7 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
                 rp = (rp + in_bytes_per_frame) % HDA_RING_SIZE;
                 avail_bytes -= in_bytes_per_frame;
             } else {
+                frac &= 0xFFFFu;
                 break;
             }
         }

@@ -58,7 +58,7 @@ rach2/sys/audio/hda.c:hda_find_output nesting 6 a hardware sequence, the registe
 rach2/sys/audio/hda.c:hda_init lines 142 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_start complexity 78 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_start lines 446 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 105 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 106 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/block/ahci.c:ahci_build_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 rach2/sys/block/ahci.c:ahci_run_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
@@ -280,8 +280,8 @@ rach2/sys/usb/msc.c:msc_step complexity 31 a state machine, one arm per state, r
 rach2/sys/usb/msc.c:step_command_done complexity 39 a state machine, one arm per state, read as a table
 rach2/sys/usb/msc.c:step_command_done lines 179 a state machine, one arm per state, read as a table
 
-rach2/sys/usb/xhci.c:event_dispatch complexity 53 a dispatcher, one arm per command, read as a table
-rach2/sys/usb/xhci.c:event_dispatch lines 172 a dispatcher, one arm per command, read as a table
+rach2/sys/usb/xhci.c:event_dispatch complexity 55 a dispatcher, one arm per command, read as a table
+rach2/sys/usb/xhci.c:event_dispatch lines 176 a dispatcher, one arm per command, read as a table
 rach2/sys/usb/xhci.c:ring_put params 9 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 rach2/sys/usb/xhci.c:xhci_own nesting 5 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/usb/xhci.c:xhci_submit complexity 37 a hardware sequence, the registers written in the order the datasheet requires
@@ -497,10 +497,10 @@ tests/host/xhci_hosttest.c:endpoint_doorbell complexity 38 a test's rows, each a
 tests/host/xhci_hosttest.c:endpoint_doorbell lines 101 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell nesting 6 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:main lines 1841 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:model_reset lines 109 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:model_w32 complexity 39 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:model_w32 lines 146 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:main lines 1845 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:model_reset lines 111 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:model_w32 complexity 40 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:model_w32 lines 150 a test's rows, each a case, read as one table
 
 tests/idreport.c:match nesting 5 a probe, one sequence of steps in the order the log records them
 tests/idreport.c:match params 7 a probe, one sequence of steps in the order the log records them

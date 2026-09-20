@@ -558,16 +558,37 @@ static void configure_network(void)
  * Configure networking in a redirected child, then wait for it.
  * A failed fork skips configuration. Redirection failure exits only the child;
  * init keeps the console descriptors used by later login sessions.
+ * Block shutdown signals across fork until the child has default dispositions,
+ * so a signal to the worker terminates it without invoking init's handler.
  */
 static void start_network(void)
 {
-    pid_t network = fork();
+    sigset_t shutdown, saved;
+    struct sigaction action;
+    pid_t network;
+
+    sigemptyset(&shutdown);
+    sigaddset(&shutdown, SIGUSR1);
+    sigaddset(&shutdown, SIGUSR2);
+    sigaddset(&shutdown, SIGTERM);
+    if (sigprocmask(SIG_BLOCK, &shutdown, &saved) != 0) {
+        return;
+    }
+    network = fork();
 
     if (network == 0) {
+        memset(&action, 0, sizeof(action));
+        action.sa_handler = SIG_DFL;
+        sigemptyset(&action.sa_mask);
+        if (sigaction(SIGUSR1, &action, NULL) != 0 || sigaction(SIGUSR2, &action, NULL) != 0 ||
+            sigaction(SIGTERM, &action, NULL) != 0 || sigprocmask(SIG_SETMASK, &saved, NULL) != 0) {
+            _exit(126);
+        }
         service_output();
         configure_network();
         _exit(0);
     }
+    (void)sigprocmask(SIG_SETMASK, &saved, NULL);
     if (network > 0) {
         while (waitpid(network, NULL, 0) < 0 && errno == EINTR) {
         }

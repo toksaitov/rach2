@@ -1895,7 +1895,11 @@ struct ext2_reservation {
     struct ext2_image *bitmap, *descriptor;
 };
 
-/** Select a free block outside this piece's uncommitted reservations. */
+/**
+ * Select a free block within the caller's quota.
+ * The free count excludes committed pieces but includes this piece's pending
+ * reservations, so subtract those before admitting another block.
+ */
 static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *list, int count)
 {
     uint32_t start = em->alloc_hint;
@@ -1903,6 +1907,10 @@ static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *lis
     struct ext2_reservation *r = &list[count];
     int i, rc = 0;
 
+    if (em->free_blocks <= (uint32_t)count ||
+        (!may_use_reserved() && em->free_blocks - (uint32_t)count <= em->r_blocks)) {
+        return -ENOSPC;
+    }
     if (start >= em->blocks) {
         start = em->first_data;
     }
@@ -2842,33 +2850,113 @@ static int ext2_fsync(struct vfs_mount *mnt, void *handle)
     return rc;
 }
 
+/**
+ * Count missing blocks in a subtree over the inclusive data range.
+ *
+ * An absent subtree needs its data blocks and every pointer block covering
+ * the range. Divide both endpoints at each level to count shared parents
+ * once, including when the range crosses a leaf or a higher-level boundary.
+ * Existing pointer images include allocations accepted by the current batch.
+ */
+/* One step of the walk below: the pointer block, the level under it, and the
+ * first and last logical blocks that step covers. */
+struct writeback_step {
+    uint32_t block;
+    int level;
+    uint32_t first;
+    uint32_t last;
+};
+
+static int writeback_missing(struct ext2_mount *em, const struct ext2_node *n,
+                             const struct writeback_step *step, uint64_t *need)
+{
+    uint32_t per = em->block_size / 4;
+    uint32_t block = step->block;
+    uint32_t first = step->first;
+    uint32_t last = step->last;
+    int level = step->level;
+    uint32_t span = 1, i;
+    int depth;
+
+    if (block == 0) {
+        *need += last - first + 1;
+        while (level-- > 0) {
+            first /= per;
+            last /= per;
+            *need += last - first + 1;
+        }
+        return 0;
+    }
+    if (!data_block_ok(em, block)) {
+        klog(KLOG_WARN, "ext2", "inode %d: block %d is out of range", (int)n->ino, (int)block);
+        mark_error(em);
+        return -EIO;
+    }
+    if (level == 0) {
+        return 0;
+    }
+    for (depth = 1; depth < level; depth++) {
+        span *= per;
+    }
+    for (i = first / span; i <= last / span; i++) {
+        uint8_t raw[4];
+        uint32_t begin = i == first / span ? first % span : 0;
+        uint32_t end = i == last / span ? last % span : span - 1;
+        int rc;
+
+        rc = read_bytes(em, (uint64_t)block * em->block_size + (uint64_t)i * 4, raw, 4);
+        if (rc == 0) {
+            struct writeback_step under;
+
+            under.block = le32(raw);
+            under.level = level - 1;
+            under.first = begin;
+            under.last = end;
+            rc = writeback_missing(em, n, &under, need);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
 /** Reject a write whose missing blocks exceed the caller's free-space limit. */
 static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
                            uint32_t count)
 {
     uint32_t first = (uint32_t)(offset >> em->block_shift);
     uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);
+    uint32_t base = 0, span = 1, slot;
     uint64_t need = 0;
-    uint32_t i;
-    int rc;
+    int level = 0;
 
-    for (i = first; i <= last && need <= em->free_blocks + 3; i++) {
-        uint32_t b;
+    for (slot = 0; slot < EXT2_NDIR + 3 && base <= last; slot++) {
+        if (slot >= EXT2_NDIR) {
+            span *= em->block_size / 4;
+            level++;
+        }
+        if (first < base + span) {
+            uint32_t begin = first > base ? first - base : 0;
+            uint32_t end = last < base + span ? last - base : span - 1;
+            struct writeback_step step;
+            int rc;
 
-        rc = block_at(em, n, i, &b);
-        if (rc != 0) {
-            return rc;
+            step.block = n->block[slot];
+            step.level = level;
+            step.first = begin;
+            step.last = end;
+            rc = writeback_missing(em, n, &step, &need);
+
+            if (rc != 0) {
+                return rc;
+            }
+            if (need > em->free_blocks ||
+                (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
+                return -ENOSPC;
+            }
         }
-        if (b == 0) {
-            need++;
-        }
-    }
-    if (need > 0) {
-        need += pointer_levels(em, last) + (last - first) / (em->block_size / 4);
-    }
-    if (need > em->free_blocks ||
-        (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
-        return -ENOSPC;
+        base += span;
     }
     return 0;
 }

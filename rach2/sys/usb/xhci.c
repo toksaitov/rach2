@@ -289,6 +289,7 @@ struct xhci_ctrl {
     int command_running;
     int command_finished;
     int command_aborting;
+    int command_stop_seen;
     struct usb_command_result command_result;
     uint32_t command_deadline;
     uint32_t command_trb;
@@ -1138,6 +1139,7 @@ static int past(struct xhci_ctrl *hc, uint32_t deadline)
 #define TRB_COMPLETION_BABBLE        3
 #define TRB_COMPLETION_SPLIT_ERROR   17
 #define TRB_COMPLETION_CTX_STATE     19
+#define TRB_COMPLETION_RING_STOPPED  24
 #define TRB_COMPLETION_STOPPED       26
 #define TRB_COMPLETION_STOPPED_LEN   27
 #define TRB_COMPLETION_STOPPED_SHORT 28
@@ -1163,7 +1165,7 @@ void xhci_advance(struct xhci_ctrl *hc, uint32_t milliseconds)
      * against every device after it. The notebook lost every USB device on
      * one boot in four that way, to an Address Device its soldered port 7
      * never answered. */
-    if (hc->command_running && past(hc, hc->command_deadline)) {
+    if (hc->command_running && !hc->command_aborting && past(hc, hc->command_deadline)) {
         command_abort(hc);
     }
 }
@@ -1265,6 +1267,13 @@ int xhci_port_reset_done(struct xhci_ctrl *hc, int port)
     return 0;
 }
 
+/**
+ * Issue a command after the previous command or abort has resolved.
+ *
+ * After an abort, require both the stop event and CRR clear before resetting
+ * the ring pointer. The stop event can name the next command's address; it
+ * must be consumed before that address is reused.
+ */
 int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, uint32_t slot)
 {
     uint32_t *trb;
@@ -1273,11 +1282,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
         return -1;
     }
     if (hc->command_aborting) {
-        /* An abort is not finished when it is asked for. The controller stops
-         * the ring and clears the running bit, and only then is there a ring
-         * to put anything on. Where it stopped is not this driver's to know,
-         * so the ring is pointed at the block it would have used next. */
-        if (op_r32(hc, XHCI_CRCR) & CRCR_CRR) {
+        if (!hc->command_stop_seen || (op_r32(hc, XHCI_CRCR) & CRCR_CRR)) {
             return -1;
         }
         hc->command_aborting = 0;
@@ -1349,6 +1354,7 @@ void xhci_state_record(struct xhci_ctrl *hc)
         trb_at(hc->event_ring, hc->event_index == 0 ? XHCI_RING_TRBS - 1 : hc->event_index - 1)[3]);
 }
 
+/** Report a matching completion, retaining the command during an abort. */
 int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
 {
     if (!hc->command_running && !hc->command_finished) {
@@ -1361,24 +1367,24 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
         }
         return hc->command_result.status == USB_XFER_OK ? 1 : -1;
     }
-    if (past(hc, hc->command_deadline)) {
+    if (!hc->command_aborting && past(hc, hc->command_deadline)) {
         command_abort(hc);
-        return -1;
     }
     return 0;
 }
 
 /**
- * Ask for the ring back. The controller stops it and says so by clearing
- * the running bit; until then nothing may be issued, and any completion
- * that arrives belongs to the command being abandoned.
+ * Request an abort without releasing the outstanding command.
+ *
+ * A matching completion may still return a slot. Keep its identity until
+ * that event arrives or the Command Ring Stopped event resolves the abort.
  */
 static void command_abort(struct xhci_ctrl *hc)
 {
+    hc->command_stop_seen = 0;
+    hc->command_aborting = 1;
     op_w32(hc, XHCI_CRCR, CRCR_CA);
     op_w32(hc, XHCI_CRCR + 4, 0);
-    hc->command_running = 0;
-    hc->command_aborting = 1;
     klog(KLOG_ERR, "usb", "command: no answer; the ring was asked back");
 }
 
@@ -1387,8 +1393,8 @@ int xhci_command_free(struct xhci_ctrl *hc)
     if (!hc->running || hc->command_running) {
         return 0;
     }
-    if (hc->command_aborting && (op_r32(hc, XHCI_CRCR) & CRCR_CRR)) {
-        return 0; /* the controller has not stopped the ring yet */
+    if (hc->command_aborting && (!hc->command_stop_seen || (op_r32(hc, XHCI_CRCR) & CRCR_CRR))) {
+        return 0;
     }
     return 1;
 }
@@ -1399,6 +1405,9 @@ int xhci_command_free(struct xhci_ctrl *hc)
  * A command's completion ends the command in flight, port changes are
  * remembered for the port poller, and transfer events belong to the phase
  * that adds endpoints.
+ * A Command Ring Stopped event follows earlier command completions and names
+ * the dequeue pointer, which need not be the outstanding command's address.
+ * It resolves an unanswered abort without replacing a completed result.
  */
 static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
 {
@@ -1406,11 +1415,15 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
     uint32_t code = (trb[2] >> TRB_COMPLETION_SHIFT) & 0xFFu;
 
     if (type == TRB_TYPE_COMMAND_COMPLETE) {
-        /* The event names the block whose command it belongs to. A completion
-         * for anything else is the answer to a command already given up on,
-         * and completing the one in flight with it would be answering the
-         * wrong question. */
-        if (!hc->command_running || trb[0] != hc->command_trb) {
+        if (code == TRB_COMPLETION_RING_STOPPED) {
+            if (!hc->command_aborting) {
+                return;
+            }
+            hc->command_stop_seen = 1;
+        } else if (trb[0] != hc->command_trb) {
+            return;
+        }
+        if (!hc->command_running) {
             return;
         }
         hc->command_running = 0;
@@ -1855,6 +1868,7 @@ int xhci_start(struct xhci_ctrl *hc)
     hc->command_running = 0;
     hc->command_finished = 0;
     hc->command_aborting = 0;
+    hc->command_stop_seen = 0;
     hc->pending_port = -1;
     hc->completion_head = 0;
     hc->completion_tail = 0;

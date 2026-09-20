@@ -19,6 +19,7 @@
 #include <sys/types.h>
 
 static int Failed, Read_calls, Echo_calls, Echo_fail, Resume_read;
+static int Mode_error, Isatty_fail;
 static int Pid_write_fail, Flush_fail, Read_fail, Read_short;
 static const char *Unlink_fail, *Unlink_after_flush;
 static const unsigned char *Input;
@@ -85,11 +86,6 @@ static int fault_fsync(int fd)
 }
 
 /** Model a foreground terminal and count echo-setting attempts. */
-static int fault_isatty(int fd)
-{
-    (void)fd;
-    return 1;
-}
 static pid_t fault_tcgetpgrp(int fd)
 {
     (void)fd;
@@ -98,6 +94,10 @@ static pid_t fault_tcgetpgrp(int fd)
 static int fault_tcgetattr(int fd, struct termios *modes)
 {
     (void)fd;
+    if (Mode_error) {
+        errno = Mode_error;
+        return -1;
+    }
     memset(modes, 0, sizeof(*modes));
     modes->c_lflag = ECHO;
     return 0;
@@ -160,7 +160,7 @@ static ssize_t fault_getrandom(void *buf, size_t n, unsigned flags)
 #define write       fault_write
 #define unlink      fault_unlink
 #define fsync       fault_fsync
-#define isatty      fault_isatty
+#define isatty(fd)  (Isatty_fail ? (errno = ENOTTY, 0) : 1)
 #define tcgetpgrp   fault_tcgetpgrp
 #define tcgetattr   fault_tcgetattr
 #define tcsetattr   fault_tcsetattr
@@ -244,6 +244,36 @@ static void echo_cases(void)
     check(pwauth_read_password("", password, sizeof(password)) == 0 &&
               strcmp(password, "secret") == 0,
           "working echo permits input");
+}
+
+/** Refuse mode errors even when isatty would hide them as ENOTTY. */
+static void mode_cases(void)
+{
+    static const int errors[] = {EIO, EBADF, EINTR, ENOTTY, 0};
+    char password[32];
+    size_t i;
+    int rc;
+
+    Isatty_fail = 1;
+    Input = (const unsigned char *)"secret\n";
+    Input_len = 7;
+    for (i = 0; i < sizeof(errors) / sizeof(errors[0]); i++) {
+        Mode_error = errors[i];
+        Input_pos = 0;
+        Read_calls = Echo_calls = 0;
+        rc = pwauth_read_password("", password, sizeof(password));
+        if (Mode_error && Mode_error != ENOTTY) {
+            check(rc == -1 && password[0] == 0 && Read_calls == 0 && Echo_calls == 0,
+                  "terminal mode error stops input");
+        } else if (Mode_error == ENOTTY) {
+            check(rc == 0 && strcmp(password, "secret") == 0 && Echo_calls == 0,
+                  "nonterminal input needs no echo change");
+        } else {
+            check(rc == 0 && strcmp(password, "secret") == 0 && Echo_calls >= 2,
+                  "mode query protects input despite isatty failure");
+        }
+    }
+    Isatty_fail = 0;
 }
 
 /** Capture a library diagnostic without intercepting stdio internals. */
@@ -353,6 +383,7 @@ int main(void)
     Read_fail = 1;
     parse_case("123", 3, -1, 0, "read error distinguished");
     echo_cases();
+    mode_cases();
     cleanup_cases();
     printf("pwauthfault-hosttest: result: %s\n", Failed ? "fail" : "pass");
     return Failed ? 1 : 0;

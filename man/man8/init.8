@@ -77,6 +77,10 @@ A service child exits before execution if a required descriptor cannot be
 opened or duplicated.
 Network setup runs in a child with the same redirection, leaving init's
 console descriptors available for later login sessions.
+The network worker resets SIGUSR1, SIGUSR2, and SIGTERM to their default
+dispositions while they are blocked across fork, then restores the inherited
+signal mask.
+These signals terminate the worker instead of shutting down the machine.
 The console is reserved for the console session.
 The kernel stops writing to the screen when init starts;
 see

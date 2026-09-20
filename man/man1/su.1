@@ -73,6 +73,9 @@ An unrecognized option or a second user operand is a usage error.
 A non-root caller is prompted with
 .Ql "Password: " ;
 the password is read without echo.
+Password input reads terminal modes directly.
+Only ENOTTY permits nonterminal input; any other mode-read error or a
+failure to disable echo stops input.
 An incorrect password or a locked account produces
 .Ql "su: authentication failure" .
 An unknown user produces

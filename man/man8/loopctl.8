@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 21, 2026
 .Dt LOOPCTL 8
 .Os
 .Sh NAME
@@ -66,6 +66,13 @@ only
 .Xr mount 2
 accesses their contents.
 .Pp
+Attachment resolves and opens the file under its volume's namespace lock,
+syncs it, and rechecks its length and busy state before publishing the device.
+If a writer relocates the file while attachment waits for the lock,
+attachment resolves the relocated file.
+If the path now resolves on another volume, attachment fails with
+.Er EBUSY .
+.Pp
 An attached file cannot be written or truncated; these operations fail with
 .Er EBUSY .
 The volume containing the file cannot be unmounted until the device is
@@ -111,6 +118,8 @@ Errors include:
 The caller is not root.
 .It Er EBUSY
 The file is already attached, even through another hard link;
+a description remains busy when attachment checks it;
+the path resolves on another volume after the lock wait;
 the device has a mount or a held buffer;
 or a detach was attempted while an attachment was in progress.
 .It Er ELOOP

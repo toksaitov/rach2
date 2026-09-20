@@ -28,6 +28,9 @@ account's current password first.
 .Pp
 The new password is entered twice.
 Passwords are limited to 100 bytes.
+Password input reads terminal modes directly.
+Only ENOTTY permits nonterminal input; any other mode-read error or a
+failure to disable echo stops input.
 After the prompts,
 .Nm
 locks and rechecks the account records before replacing

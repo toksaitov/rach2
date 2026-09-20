@@ -110,6 +110,9 @@ static int starts;
 static int port_reset_completes;
 /* Whether the controller stops its command ring when it is asked to. */
 static int abort_completes;
+static int abort_posts_event;
+static unsigned abort_requests;
+static void model_command_stop(void);
 /* How many waits the firmware takes before it gives the controller up, so a
    row can have a driver that asks once and reads once fail where a driver
    that waits passes. */
@@ -337,8 +340,12 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
         uint32_t running = reg[off] & M_CRCR_CRR;
 
         if (v & M_CRCR_CA) {
+            abort_requests++;
             if (abort_completes) {
                 running = 0;
+                if (abort_posts_event) {
+                    model_command_stop();
+                }
             }
             reg[off] = running;
             return;
@@ -906,7 +913,6 @@ static void doorbell_rung(uint32_t target)
                 command_answer_code = 0;
             }
             post_event(TRB_TYPE_COMMAND_COMPLETE, code, answered, (uint32_t)(uintptr_t)t);
-            reg[OP(0x18u)] &= ~M_CRCR_CRR;
         }
         model_cmd_dequeue++;
         if (model_cmd_dequeue == XHCI_RING_TRBS) {
@@ -1094,6 +1100,13 @@ static void ring_moved(void)
     model_cmd_cycle = hc->cmd_cycle;
 }
 
+/** The stop event names the controller's next command, not its last one. */
+static void model_command_stop(void)
+{
+    post_event(TRB_TYPE_COMMAND_COMPLETE, 24, 0,
+               (uint32_t)(uintptr_t)&hc->cmd_ring[model_cmd_dequeue * TRB_WORDS]);
+}
+
 /* ---- the rows ---- */
 
 static int fails;
@@ -1171,6 +1184,8 @@ static void model_reset(void)
     watch_publish = 0;
     watch_result = -1;
     abort_completes = 1;
+    abort_posts_event = 1;
+    abort_requests = 0;
     model_cmd_dequeue = 0;
     model_cmd_cycle = TRB_CYCLE;
     model_next_slot = 1;
@@ -1445,6 +1460,66 @@ static void stop_rows(void)
     }
 }
 
+/** Retain late slot results before, during and after the controller's stop. */
+static void command_deadline_rows(void)
+{
+    struct usb_location where = root_at(0);
+    struct usb_command_result result;
+    unsigned timing;
+    int slot;
+
+    for (timing = 0; timing < 4; timing++) {
+        model_reset();
+        CHECK("deadline controller capabilities", xhci_read_caps(hc) == 0);
+        CHECK("deadline controller reset", xhci_halt_reset(hc) == 0);
+        CHECK("deadline controller started", xhci_start(hc) == 0);
+        command_completes = timing == 0 || timing == 3;
+        abort_completes = timing != 1;
+        abort_posts_event = timing == 3;
+        CHECK("deadline enable slot issued", xhci_device_open(hc, &where, USB_SPEED_HIGH) == 0);
+        xhci_advance(hc, 1000);
+        CHECK("deadline retains command before event drain", xhci_command_done(hc, &result) == 0);
+        CHECK("deadline retains command turn", xhci_command_free(hc) == 0);
+        CHECK("deadline blocks a second command",
+              xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == -1);
+        if (timing == 1 || timing == 2) {
+            post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, 7, 0xDEADBEEFu);
+            xhci_events(hc);
+            CHECK("abort ignores another command's completion",
+                  xhci_command_done(hc, &result) == 0);
+            xhci_advance(hc, 100);
+            CHECK("unresolved abort keeps waiting", xhci_command_done(hc, &result) == 0);
+            post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, 1, hc->command_trb);
+        }
+        CHECK("abort requested once", abort_requests == 1);
+        xhci_events(hc);
+        k_memset(&result, 0, sizeof(result));
+        CHECK("late enable slot completion survives abort", xhci_command_done(hc, &result) == 1);
+        CHECK("late slot is recorded", result.device == 1 && hc->slots[1].used);
+        slot = result.device;
+        if (timing != 3) {
+            CHECK("completion waits for ring stop", xhci_command_free(hc) == 0);
+            CHECK("completion cannot restart before stop event",
+                  xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == -1);
+            reg[OP(0x18u)] &= ~M_CRCR_CRR;
+            CHECK("cleared crr still waits for stop event", xhci_command_free(hc) == 0);
+            model_command_stop();
+            xhci_events(hc);
+        }
+        CHECK("stop event does not duplicate a consumed result",
+              xhci_command_done(hc, &result) == -1);
+        command_completes = 1;
+        CHECK("resolved abort releases command turn", xhci_command_free(hc) == 1);
+        CHECK("late slot disable issued", xhci_device_close(hc, slot) == 0);
+        CHECK("late slot disable names returned slot",
+              last_command_type == TRB_TYPE_DISABLE_SLOT && last_command_slot == 1);
+        xhci_events(hc);
+        CHECK("late slot disable completes", xhci_command_done(hc, &result) == 1);
+        xhci_device_closed(hc, slot);
+        CHECK("late slot released", !hc->slots[1].used);
+    }
+}
+
 /** Check register ranges at the aperture boundary and near 32-bit wrap. */
 static void register_range_rows(void)
 {
@@ -1574,6 +1649,7 @@ int main(void)
     CHECK("interrupters that run off the end are refused", xhci_read_caps(hc) != 0);
 
     register_range_rows();
+    command_deadline_rows();
     endpoint_order_rows();
     stop_rows();
 
@@ -1803,7 +1879,9 @@ int main(void)
     CHECK("a command is issued", xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
     CHECK("one that is never answered is still running", xhci_command_done(hc, &result) == 0);
     xhci_advance(hc, 2000);
-    CHECK("until its deadline passes", xhci_command_done(hc, &result) == -1);
+    CHECK("abort waits for its event", xhci_command_done(hc, &result) == 0);
+    xhci_events(hc);
+    CHECK("stop event resolves the unanswered command", xhci_command_done(hc, &result) == -1);
     /* The abort is a request, and the controller answers it by stopping the
        ring. Once it has, the driver may use the ring again. */
     command_completes = 1;
@@ -1820,7 +1898,7 @@ int main(void)
     CHECK("started", xhci_start(hc) == 0);
     CHECK("a command is issued", xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
     xhci_advance(hc, 2000);
-    CHECK("a command that is never answered is given up on", xhci_command_done(hc, &result) == -1);
+    CHECK("an unresolved abort retains the command", xhci_command_done(hc, &result) == 0);
     CHECK("and while the controller still holds the ring nothing is issued on it",
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) != 0);
 
@@ -1836,8 +1914,9 @@ int main(void)
     CHECK("and the ring is not free while it runs", xhci_command_free(hc) == 0);
     xhci_advance(hc, 1100);
     command_completes = 1;
-    CHECK("past its deadline the clock alone has it aborted and the ring free",
-          xhci_command_free(hc) == 1);
+    CHECK("abort retains the ring until events are drained", xhci_command_free(hc) == 0);
+    xhci_events(hc);
+    CHECK("stop event frees the ring", xhci_command_free(hc) == 1);
     CHECK("and the next command is issued",
           xhci_command_issue(hc, TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
 

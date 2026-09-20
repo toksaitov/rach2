@@ -56,7 +56,7 @@ run_phase()
 
 echo "hda-mutation: logs: $work"
 run_phase fixed 0 'hda-test: result: pass'
-for fault in rate32 rate96 capability inheritance fallback shortoffset longoffset width range route report; do
+for fault in rate32 rate96 capability inheritance fallback shortoffset longoffset width range route report underrun phase; do
     python3 - "$work/sys" "$fault" <<'PY'
 import pathlib
 import sys
@@ -77,6 +77,8 @@ changes = {
     "range": ("first = (uint32_t)previous + 1;", "first = node;"),
     "route": ("HDA_VERB_SET_CONN_SEL | pin_conn_sel);", "HDA_VERB_SET_CONN_SEL | 0);"),
     "report": ('audio_field(t, " programmed ", r->programmed_rate);', 'audio_field(t, " programmed ", 0);'),
+    "underrun": ("                frac &= 0xFFFFu;\n", ""),
+    "phase": ("                frac &= 0xFFFFu;", "                frac = 0;"),
 }
 old, new = changes[fault]
 if source.count(old) != 1:
@@ -92,6 +94,7 @@ PY
         range) row=short-range ;;
         route) row=route ;;
         report) row=proc-audio ;;
+        underrun|phase) row=underrun ;;
     esac
     run_phase "$fault-mutated" 1 "hda-test: fail: $row:"
     cleanup

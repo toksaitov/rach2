@@ -71,8 +71,9 @@ echo "account-mutation: logs: $work"
 for test in pwauthfault accounttools initpolicy ncwrite; do
     run_phase "$test-fixed" "$test" 0 "$test-hosttest: result: pass"
 done
-for fault in pid-nul pid-tail echo lock-cleanup temp-cleanup login-eof login-fds \
-    su-fds sudo-fds sudo-line init-redirect init-network ssh-suffix nc-socket nc-stdout; do
+for fault in pid-nul pid-tail echo tty-detect tty-error lock-cleanup temp-cleanup \
+    login-eof login-fds su-fds sudo-fds sudo-line init-redirect init-network \
+    init-block init-signals ssh-suffix nc-socket nc-stdout; do
     python3 - "$work/utils" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -85,6 +86,11 @@ changes = {
     'pid-tail': ('pwauth.c', '    }\n    if (digits == 0 || value <= 0)',
                 '        break;\n    }\n    if (digits == 0 || value <= 0)'),
     'echo': ('pwauth.c', 'Tty_failed = 1;\n            taken = -1;', 'taken = 1;'),
+    'tty-detect': ('pwauth.c', 'static int pwauth_prepare_tty(void)\n{',
+                   'static int pwauth_prepare_tty(void)\n{\n    if (!isatty(0)) { return 0; }'),
+    'tty-error': ('pwauth.c', 'return errno == ENOTTY ? 0 : -1;', 'return 0;'),
+    'init-block': ('init.c', 'sigprocmask(SIG_BLOCK, &shutdown, &saved)',
+                   'sigprocmask(SIG_BLOCK, NULL, &saved)'),
     'lock-cleanup': ('pwauth.c', 'failed = unlink(lock_path) != 0 && errno != ENOENT;',
                      '(void)unlink(lock_path);\n        failed = 0;'),
     'login-eof': ('login.c', 'if (len == 0 && !over) {\n                return -1;\n            }\n            break;',
@@ -93,7 +99,7 @@ changes = {
     'su-fds': ('su.c', '#define MAX_FD 1024', '#define MAX_FD 64'),
     'sudo-fds': ('sudo.c', '#define MAX_FD 1024', '#define MAX_FD 64'),
     'sudo-line': ('sudo.c', "while ((c = fgetc(f)) != EOF && c != '\\n') {",
-                  "c = 0;\n        while (len < sizeof(line) - 1 && (c = fgetc(f)) != EOF && c != '\\n') {"),
+                  "c = 0;\n        while (len < size - 1 && (c = fgetc(f)) != EOF && c != '\\n') {"),
     'ssh-suffix': ('init.c', "} else if (c != ' ' && c != '\\t' && c != '\\r' && c != '\\v' && c != '\\f') {",
                    '} else if (0) {'),
     'nc-socket': ('nc.c', 'write_all(fd, buf, (size_t)n)', 'write(fd, buf, (size_t)n)'),
@@ -106,6 +112,14 @@ if fault in changes:
     if text.count(old) != 1:
         raise SystemExit('account-mutation: source pattern is not unique: ' + fault)
     path.write_text(text.replace(old, new))
+elif fault == 'init-signals':
+    path = root / 'init.c'
+    text = path.read_text()
+    for signal in ('SIGUSR1', 'SIGUSR2', 'SIGTERM'):
+        old = 'sigaction(' + signal + ', &action, NULL) != 0'
+        assert text.count(old) == 1
+        text = text.replace(old, '0')
+    path.write_text(text)
 elif fault == 'temp-cleanup':
     path = root / 'pwauth.c'
     text = path.read_text()
@@ -145,6 +159,7 @@ PY
         pid-nul) test=pwauthfault; message='embedded NUL rejected' ;;
         pid-tail) test=pwauthfault; message='suffix beyond first buffer rejected' ;;
         echo) test=pwauthfault; message='initial echo failure stops input' ;;
+        tty-detect|tty-error) test=pwauthfault; message='terminal mode error stops input' ;;
         lock-cleanup) test=pwauthfault; message='lock rollback reports unlink failure' ;;
         temp-cleanup) test=pwauthfault; message='temporary cleanup reports unlink failure' ;;
         login-eof) test=accounttools; message='partial EOF terminates name' ;;
@@ -154,6 +169,8 @@ PY
         sudo-line) test=accounttools; message='long comment cannot authorize uid' ;;
         init-redirect) test=initpolicy; message='service cannot return after redirection failure' ;;
         init-network) test=initpolicy; message='network setup requires redirected descriptors' ;;
+        init-block) test=initpolicy; message='early network signal terminates worker' ;;
+        init-signals) test=initpolicy; message='ifup signal terminates worker' ;;
         ssh-suffix) test=initpolicy; message='SSH trailing text rejected' ;;
         nc-socket|nc-stdout) test=ncwrite; message='complete partial writes on both outputs' ;;
     esac
@@ -162,4 +179,4 @@ PY
     run_phase "$fault-restored" "$test" 0 "$test-hosttest: result: pass"
     diff -q "$work/saved" "$work/utils"
 done
-echo 'account-mutation: result: pass: 15 compiled faults failed; restored tests passed'
+echo 'account-mutation: result: pass: 19 compiled faults failed; restored tests passed'

@@ -62,7 +62,7 @@ run_phase()
 echo "usb-mutation: logs: $work"
 run_phase fixed usb 0 'usb_hosttest: OK'
 run_phase fixed xhci 0 'xhci_hosttest: OK'
-for fault in doorbells runtime interrupters timeout interfaces context shutdown; do
+for fault in doorbells runtime interrupters timeout interfaces context shutdown abort stop; do
     python3 - "$work/rach2/sys/usb" "$fault" <<'PY'
 import pathlib
 import sys
@@ -94,6 +94,14 @@ changes = {
         ('klog(KLOG_WARN, "usb", "stop: the controller would not halt");\n        return;',
          'klog(KLOG_WARN, "usb", "stop: the controller would not halt");'),
     ]),
+    "abort": ("xhci.c", [
+        ("    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;",
+         "    hc->command_running = 0;\n    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;"),
+    ]),
+    "stop": ("xhci.c", [
+        ("    hc->command_stop_seen = 0;\n    hc->command_aborting = 1;",
+         "    hc->command_stop_seen = 1;\n    hc->command_aborting = 1;"),
+    ]),
 }
 name, pairs = changes[fault]
 path = root / name
@@ -113,6 +121,8 @@ PY
         interfaces) test_name=usb; message='split storage interfaces are incomplete' ;;
         context) message='context entries retains highest endpoint index' ;;
         shutdown) message='halt timeout does not report success' ;;
+        abort) message='late enable slot completion survives abort' ;;
+        stop) message='cleared crr still waits for stop event' ;;
     esac
     run_phase "$fault-mutated" "$test_name" 1 "$message"
     cleanup

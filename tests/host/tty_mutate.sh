@@ -126,9 +126,11 @@ elif case in ('partial-master', 'partial-slave'):
         raise SystemExit('tty-mutation: copy failure branch does not match once')
     path.write_text(text[:begin] + part.replace(old, '            return (done > 0)') + text[end:])
 elif case == 'latency-lock':
-    replace('tty.c', '            flags = kirq_save();\n            rc = tty_ready_cond(t);\n'
-                    '            kirq_restore(flags);',
+    replace('tty.c', '            flags = kirq_save();\n            rc = tty_ready_cond(t);',
             '            rc = tty_ready_cond(t);')
+    replace('tty.c', '            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);\n'
+                    '            kirq_restore(flags);',
+            '            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);')
 elif case == 'veol-byte':
     replace('n_tty.c', "            echo(t, out, ctx, c);\n"
                        "            if (t->line_len < N_TTY_LINE_MAX) {\n"
