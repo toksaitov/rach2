@@ -1,5 +1,3 @@
-/** Copy a file from SOURCE to DEST. */
-
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -7,6 +5,16 @@
 #define BUFFER_SIZE 4096
 static char buffer[BUFFER_SIZE];
 
+/**
+ * Copy one source path to one destination path.
+ *
+ * Require exactly two operands. The paths must identify different files;
+ * no identity check precedes destination truncation. Create a missing
+ * destination with mode 0666 subject to the process umask.
+ *
+ * Return 1 on usage, open, or write failure. Read errors end the copy
+ * silently, and close errors do not affect the status.
+ */
 int main(int argc, char *argv[])
 {
     int fd_src, fd_dest;

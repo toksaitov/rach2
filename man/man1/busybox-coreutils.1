@@ -927,7 +927,30 @@ They parse no options except
 .Nm rm Fl r .
 That
 .Nm cat
-suppresses errors;
+reports open and write failures with status 1, completes short writes,
+and treats read errors as end of input.
+An open failure skips that operand; a write returning zero or an error
+stops the copy.
+Close errors do not affect the status.
+That
+.Nm cp
+requires exactly two operands identifying different files.
+It truncates the destination without checking file identity, so identical
+paths, hard links, and symlink aliases can erase the source.
+A missing destination is created with mode 0666 subject to the process umask.
+Usage, open, and write failures return status 1; read errors end the copy
+silently, and close errors do not affect the status.
+That
+.Nm rm Fl r
+unlinks symbolic links without following their targets.
+After an unlink failure, it recurses only if
+.Fn lstat
+identifies a directory.
+It skips a child when the parent length plus one plus the name length
+reaches 256, even if the parent ends in a slash.
+Directory read errors end traversal silently, and close errors are ignored.
+A failed removal returns status 1 and may leave some entries removed.
+That
 .Nm ls
 lists one directory without calling
 .Fn stat .

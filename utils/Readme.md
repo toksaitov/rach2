@@ -35,12 +35,12 @@ The native and Rach2 builds both provide:
 * `true` and `false`: return status 0 and 1.
 * `echo`: print its arguments separated by spaces and followed by a newline.
 * `yes`: repeat `y`, or its arguments, one line at a time.
-* `cat`: copy stdin or each named file to stdout. It suppresses open and read errors and returns 0.
+* `cat`: copy stdin or each named file to stdout, completing short writes. Open failures are reported and later operands are still copied; a write returning zero or an error is reported and stops the copy. Either failure returns status 1. Read errors end the current input silently, and close errors do not affect the status.
 * `pwd`: print the current directory using a 256-byte buffer.
 * `touch` and `mkdir`: create or update each named path. New directories use mode 0777 before the process umask.
-* `rm`: remove files, or recurse with its only option, `-r`. Recursive paths are limited to 255 bytes.
+* `rm`: remove files and symbolic links, or recurse with its only option, `-r`. After an unlink failure, recurse only if `lstat` identifies a directory; a failed symlink unlink leaves its target untouched. Skip a child when the parent length plus one plus the name length reaches 256, even if the parent ends in `/`. Directory read errors end traversal silently and close errors are ignored. A failed removal returns status 1 and may leave some entries removed.
 * `mv`: apply one `rename` to two named paths.
-* `cp`: copy one input path to one output path. It reports open and write failures but treats a read error as end of input.
+* `cp`: copy exactly one input path to one output path. The paths must identify different files: no identity check precedes destination truncation, so identical paths, hard links, and symlink aliases can erase the input. A missing destination is created with mode 0666 subject to the process umask. Usage, open, and write failures return status 1. Read errors end the copy silently, and close errors do not affect the status.
 * `ls`: list one directory, omit dot names, and print the dirent type with a fixed `rw-` field. It does not call `stat`.
 
 These are small teaching implementations, not complete POSIX commands. Except for `rm -r`, they do not parse options.

@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <dirent.h>
 
+/**
+ * Print a directory entry's type and name.
+ *
+ * The `rw-` field is a fixed placeholder; no permissions are queried.
+ */
 static void print_entry(const char *name, unsigned char d_type)
 {
     char type;
@@ -24,7 +29,6 @@ static void print_entry(const char *name, unsigned char d_type)
         type = '?';
         break;
     }
-    /* No stat() detail; show the type flag and a fixed rw- placeholder. */
     printf("%crw- %s\n", type, name);
 }
 

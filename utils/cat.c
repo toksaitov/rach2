@@ -1,12 +1,3 @@
-/**
- * Concatenate files (or stdin) to stdout.
- *
- * A write that fails is reported and ends the program with status 1: a
- * redirect into a device that refuses the bytes must say so, or a caller
- * reads silence as success. An operand that cannot be opened is reported the
- * same way and the rest are still copied.
- */
-
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
@@ -20,7 +11,12 @@ static void say(const char *a, const char *b)
     write(STDERR_FILENO, b, strlen(b));
 }
 
-/* Copy fd to stdout; 0 when everything was written, 1 on a write error. */
+/**
+ * Copy bytes from `fd` to standard output.
+ *
+ * Complete short writes. Report a write returning zero or an error and
+ * return 1. Return 0 on EOF or a read error. Leave `fd` open.
+ */
 static int cat_fd(int fd)
 {
     ssize_t n;
@@ -39,6 +35,14 @@ static int cat_fd(int fd)
     return 0;
 }
 
+/**
+ * Copy named files to standard output, or standard input with no operands.
+ *
+ * Report an open failure and continue with later operands. Complete short
+ * writes; report a write returning zero or an error and stop copying.
+ * Return 1 on these failures, otherwise 0. Read errors end the current
+ * input silently, and close errors do not affect the status.
+ */
 int main(int argc, char *argv[])
 {
     int i;

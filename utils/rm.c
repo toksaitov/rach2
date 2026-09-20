@@ -4,17 +4,22 @@
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 #define MAX_PATH 256
 
 static int remove_recursive(const char *path);
 
 /**
- * Removes every entry inside the directory `dir_path` (but not `dir_path`).
+ * Attempt to remove directory entries while retaining `dir_path`.
  *
- * Walks the directory, skips `.` and `..` and any child whose full path would
- * reach `MAX_PATH`, and recurses into each with `remove_recursive`. Returns -1
- * if the directory cannot be opened or any child removal fails.
+ * Skip `.` and `..`. Skip children when the parent length, name length,
+ * and one separator byte total at least MAX_PATH, even when the parent
+ * already ends in a slash.
+ *
+ * Return -1 if opening the directory or an attempted child removal
+ * fails, otherwise 0. Skipped children and directory read or close
+ * errors do not change the result.
  */
 static int remove_dir_contents(const char *dir_path)
 {
@@ -60,15 +65,20 @@ static int remove_dir_contents(const char *dir_path)
 }
 
 /**
- * Remove `path`, recursing into it if it is a non-empty directory.
+ * Remove a file, symbolic link, or directory tree at `path`.
  *
- * Tries `unlink` first, which removes a plain file in one step; on failure it
- * falls back to emptying the directory and then `rmdir`.
+ * Unlink symbolic links without following their targets. Return 0 on
+ * success or -1 on failure. Failure may leave some entries removed.
  */
 static int remove_recursive(const char *path)
 {
+    struct stat st;
+
     if (unlink(path) == 0) {
         return 0;
+    }
+    if (lstat(path, &st) < 0 || !S_ISDIR(st.st_mode)) {
+        return -1;
     }
     if (remove_dir_contents(path) < 0) {
         return -1;
