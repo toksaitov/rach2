@@ -675,23 +675,31 @@ whole diff, and the stick.
 
 ## What is still open
 
-Every other entry above carries its fix and the proof that fix was made to
-fail. These are what remain, and why:
+Nothing. Every entry above carries its fix and the proof that fix was made to
+fail, and the eight that were open when this run began are closed with it:
 
-* Entry 49, the write path's six disk commands for a small write. The design,
-  the contract and the seven obligations a fix must discharge are written into
-  the entry; the work itself is not taken.
-* Entry 51, the probe suite on an installed machine. Each probe must state
-  what it needs of its root, or branch on the file system, before a rerun on
-  the machine says what the kernel did rather than where it ran.
-* Entry 84, an independent persistence witness in the FAT acceptance row, and
-  entry 87, an integration test over the exit helper's callers with a real
-  reaper. Both are coverage the milestone chose to carry, with the shape of
-  the test written down.
-* Entries 126 and 127, the HDA rate and connection list. Both need a machine
-  sitting at the console with `rach2.rescue`, since the metal image stages no
-  audio diagnostic and publishes no audio node.
-* Entries 130 and 131, the install stick's layout: a stick that carries the
-  root image beside the sealed disk, and room on it for the saved sectors.
-  Both need a stick rebuilt and booted on the machine.
+* Entry 49, the write path. ext2 batches a file's dirty blocks between calls
+  and orders its flushes, so sixteen 4 KiB rewrites cost four commands and two
+  flushes where they cost 64 and 32, and two appends cost six and three where
+  they cost sixteen and eight. Entry 157 is the regression that came with it
+  and its fix.
+* Entry 51, the probes on a root that is not the test image's. Ten probes say
+  what they need of a root or branch on the file system they find, and both
+  ext2 suites run them.
+* Entry 84, the FAT acceptance's persistence witness, and entry 87, the exit
+  helper driven through its callers with a real reaper. Both have their rows
+  and their mutations.
+* Entries 126 and 127, the HDA rates and the connection list. The encoder
+  programs a rate the codec advertises, the list reader follows the
+  specification's entry offsets, long entries and ranges, and `/proc/audio`
+  and the staged `audiotest` put both within reach of an SSH session, so
+  neither needs a person at the console to be read.
+* Entries 130 and 131, the install stick. Its volume carries the root image
+  beside the sealed disk and has room for the saved sectors of the two 64 MiB
+  partitions, proved in QEMU by an update from the stick and by a save and
+  restore of both partitions.
 
+What no software proof can stand in for is written into those entries: the
+audio rates and the codec's own connection list belong to the Lenovo's
+hardware, and the stick's boot belongs to the machine that boots it. Each says
+what a sitting still has to confirm.
