@@ -353,7 +353,6 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --append "rach2.rescue rach2.nonet" \
 	    --net hubport,id=net0,hubid=0 \
 	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-icount --qemu-arg=shift=3,sleep=off \
 	    --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
 	    --qemu-arg=-audiodev \
 	    --qemu-arg=wav,id=au0,timer-period=500,path=$(IMAGES_DIR)/audio-scale-sb16.wav \

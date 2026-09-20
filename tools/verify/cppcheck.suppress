@@ -77,3 +77,7 @@ unreadVariable:*tests/musl/budgetmusl.c
 # does not return, and the `_exit` after it is there for a reader; raise() of
 # a blocked signal returns to its caller, which is the case the test covers.
 unreachableCode:*tests/musl/sigmusl.c
+
+# The probes reach the kernel through inline assembly, which cppcheck does not
+# read, so an array a system call fills looks to it like one nothing writes.
+constVariable:*tests/bootprobe.c
