@@ -1408,8 +1408,7 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
 
             if (moved != KRFFS_NO_NODE) {
                 *node_out = moved;
-            } else if (krffs_head(mount, node, &still) == 0 &&
-                       still.type == KRFFS_RESERVED_NODE) {
+            } else if (krffs_head(mount, node, &still) == 0 && still.type == KRFFS_RESERVED_NODE) {
                 *node_out = node;
             } else {
                 *node_out = KRFFS_NO_NODE;
