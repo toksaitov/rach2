@@ -20,7 +20,9 @@
  * closing parenthesis it must also carry, which a truncated line would lack.
  * And two files are two inodes: `/proc/loop` and `/proc/interrupts` once
  * shared a number, and a program that compares files by identity would have
- * called them one.
+ * called them one. Both are asked twice, by path and through an open
+ * descriptor, because the two answers come from different places in the
+ * kernel and only the second saw the number they shared.
  *
  * `procprobe mount` reads the root's line out of /proc/mounts, prints it, and
  * stops there. That line is the one thing here that depends on how the machine
@@ -822,6 +824,7 @@ void probe_main(unsigned int *sp)
 
     {
         static unsigned char st_loop[144], st_intr[144];
+        int loop_fd, intr_fd;
 
         check(syscall3(SYS_STAT64, (int)(size_t)"/proc/loop", (int)(size_t)st_loop, 0) == 0 &&
                   syscall3(SYS_STAT64, (int)(size_t)"/proc/interrupts", (int)(size_t)st_intr, 0) ==
@@ -829,6 +832,16 @@ void probe_main(unsigned int *sp)
               "stat /proc/loop and /proc/interrupts");
         check(*(unsigned int *)(st_loop + ST_INO64) != *(unsigned int *)(st_intr + ST_INO64),
               "/proc/loop and /proc/interrupts have different inodes");
+        loop_fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/loop", O_RDONLY, 0);
+        intr_fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/interrupts", O_RDONLY, 0);
+        check(loop_fd >= 0 && intr_fd >= 0, "open /proc/loop and /proc/interrupts");
+        check(syscall3(SYS_FSTAT64, loop_fd, (int)(size_t)st_loop, 0) == 0 &&
+                  syscall3(SYS_FSTAT64, intr_fd, (int)(size_t)st_intr, 0) == 0,
+              "fstat both open files");
+        check(*(unsigned int *)(st_loop + ST_INO64) != *(unsigned int *)(st_intr + ST_INO64),
+              "and the open files have different inodes too");
+        syscall1(SYS_CLOSE, loop_fd);
+        syscall1(SYS_CLOSE, intr_fd);
     }
     /* The header is two lines and the interface line is there only when the
      * machine has an interface, which a boot with no network device does not.
