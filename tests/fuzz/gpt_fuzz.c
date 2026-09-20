@@ -11,7 +11,10 @@
 #include "../fuzz/fuzz.h"
 
 #define DISK_SECTORS 8192u
-#define ARRAY_MAX    (GPT_PART_COUNT * 128u * 4u)
+/* The largest array the parser accepts, so every table the kernel would
+   read is one this harness can hold: 128 entries of 128 bytes. A smaller
+   buffer here would refuse the seed before a single entry was parsed. */
+#define ARRAY_MAX    GPT_MAX_ARRAY_BYTES
 
 static void wr32(uint8_t *p, uint32_t v)
 {

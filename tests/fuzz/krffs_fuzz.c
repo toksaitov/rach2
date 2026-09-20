@@ -82,7 +82,9 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
         uint64_t node;
         unsigned j;
 
-        if (krffs_readdir_at(&mount, "/", i, name, sizeof(name), &is_dir) != 0) {
+        /* One entry read: the walk answers 1 for an entry and 0 at the end,
+           so the loop runs while it answers 1. */
+        if (krffs_readdir_at(&mount, "/", i, name, sizeof(name), &is_dir) != 1) {
             break;
         }
         path[0] = '/';
