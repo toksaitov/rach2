@@ -419,7 +419,8 @@ if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    "$CFGCHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/verify/suitecheck.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   sh "$REPO/tests/system/recovery_key_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1; then
+   sh "$REPO/tests/system/recovery_key_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   sh "$REPO/tests/system/dryrun_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1
