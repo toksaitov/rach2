@@ -10,7 +10,7 @@ Each test declares separately compiled project sources in one or more `host-deps
 
 Tests that need additional compiler flags declare them on repeatable `host-cflags:` comment lines. The e2fsprogs alignment tests use these for their host configuration and the port's headers. They require the extracted e2fsprogs source and its generated headers; they do not build the port.
 
-The runner stores binaries and logs under `/tmp/rach2_verify`. The project `deadline` tool (built by `make`) runs each binary in the foreground with a 60-second limit and kills the whole process group of one that hangs. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
+The runner stores binaries and logs under `/tmp/rach2_verify`. After the C tests it replays every committed fuzz corpus under [`tests/fuzz/corpus/`](../fuzz/Readme.md) through its harness, built with the same sanitizers and a standalone main. The project `deadline` tool (built by `make`) runs each binary in the foreground with a 60-second limit and kills the whole process group of one that hangs. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
 
 The host suite first runs the eight fixed load-window and inbound-cleanup cases in `tests/system/machine_measure_test.sh`; its `--mutate` mode is run separately. The build prerequisites include `check-libc`. This ensures that musl's installed library and extracted SHA-512 crypt source exist before the password tests compile.
 
@@ -45,7 +45,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 73 native test programs.
+The suite contains 75 native test programs, one per `*_hosttest.c` file.
 
 ### Kernel foundations and memory
 
