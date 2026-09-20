@@ -444,8 +444,9 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     /* A raw socket binds to an address, not to a port: it says which of the
      * machine's addresses it wants datagrams for. `traceroute` binds its
      * receive socket to the address its send socket ended up with, and dies if
-     * it cannot. This machine has one address, so the bind is a statement
-     * about which address it is, and an address the machine does not have is
+     * it cannot. The bind is judged against the addresses the machine has and
+     * filters nothing afterwards, which entry 116 of the shortcomings list
+     * records; an address the machine does not have is
      * refused rather than accepted and quietly ignored. */
     if (entry->sock->type == SOCK_RAW) {
         uint32_t want;
@@ -1113,10 +1114,11 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
     }
-    /* A packet socket's own address is a sockaddr_ll: the interface it is
-     * bound to and the hardware address it sends from. `arping` reads the MAC
+    /* A packet socket's own address is a sockaddr_ll. `arping` reads the MAC
      * back from here and refuses to run without one, so the fields are the
-     * machine's real ones and not a shape with zeroes in it. */
+     * machine's real ones and not a shape with zeroes in it: the first
+     * interface's index and station address, whatever the socket is bound
+     * to, which entry 116 of the shortcomings list records. */
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
         uint32_t caller_len, copy_len;
