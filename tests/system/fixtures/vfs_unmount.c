@@ -147,6 +147,15 @@ static void mount_release(struct vfs_mount *m)
     m->state = 0;
 }
 
+/* The unmount path reports a failed flush to the device layer, which this
+ * fixture has no device to carry out. */
+static void vfs_device_failed(struct block_device *dev, unsigned long long lba, int rc)
+{
+    (void)dev;
+    (void)lba;
+    (void)rc;
+}
+
 #include "unmount.inc"
 
 /** A missing parent, its live child and a spare record for deeper trees. */

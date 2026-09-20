@@ -3987,4 +3987,4 @@ static const struct vfs_ops exfat_ops = {
     ex_unmount, ex_path,    0, /* symlink */
 };
 
-const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops};
+const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops, 0};

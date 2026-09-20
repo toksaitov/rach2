@@ -1435,7 +1435,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
-const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops};
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1};
 
 /* ==== the two synthetic types ==== */
 
@@ -1635,8 +1635,8 @@ static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
     return synth_mount_root(mnt, dev, flags, "proc");
 }
 
-const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops};
-const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops};
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0};
 
 /** The classification a synthetic node carries, or NULL when `mnt` is not
  * one of the two synthetic mounts. The syscall layer's glue reads it. */

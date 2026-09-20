@@ -3089,4 +3089,4 @@ static const struct vfs_ops vfat_ops = {
     fat_unmount, fat_path,    0, /* symlink */
 };
 
-const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops};
+const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0};

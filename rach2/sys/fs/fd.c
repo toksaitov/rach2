@@ -60,11 +60,12 @@ static int ofd_idle(void *arg)
 }
 
 /**
- * Take the mount namespace before the description and its shared offset.
+ * Take the mount namespace before the description and its shared offset,
+ * for a file system that says its uses must be serialised.
  */
 void fd_ofd_lock(struct open_file *ofd)
 {
-    if (ofd->vmnt) {
+    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
         vfs_ns_lock(ofd->vmnt);
     }
     while (ofd->busy) {
@@ -74,13 +75,13 @@ void fd_ofd_lock(struct open_file *ofd)
 }
 
 /**
- * Release the description before its mount namespace lock.
+ * Release the description before the namespace lock it took.
  */
 void fd_ofd_unlock(struct open_file *ofd)
 {
     ofd->busy = 0;
     wq_wake_all(&ofd_rec_of(ofd)->wq);
-    if (ofd->vmnt) {
+    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {
         vfs_ns_unlock(ofd->vmnt);
     }
 }

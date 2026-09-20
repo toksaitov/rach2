@@ -196,6 +196,12 @@ struct vfs_type {
     const char *name;
     int (*mount)(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options);
     const struct vfs_ops *ops;
+    /* Nonzero when a description's use of this file system must be taken
+     * under the mount's namespace lock: KRFFS moves a file's bytes while it
+     * is open, and ext2 holds a batch of dirty blocks between calls, so both
+     * need one caller at a time. A file system with neither property does
+     * not, and taking it there would serialise every reader of one volume. */
+    int ns_serialised;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
