@@ -9,11 +9,15 @@
  * since there is no process to put to sleep there. A stick that has gone
  * stops being served, its nodes are hidden and its cache buffers are dealt
  * with. And a stick that has gone and that nothing holds any more is
- * reclaimed: its number, its nodes and the class driver's slot all go back.
+ * reclaimed: its number goes back, its node slots go back to devfs for the
+ * next stick to take, and the class driver's transport slot goes back when
+ * no other logical unit of the same stick still uses it.
  *
  * Publishing and reclaiming touch what a process inside a syscall may be in
  * the middle of changing, so those run at a syscall entry, before the
- * dispatch, or on a pump pass that did not interrupt a syscall. On this one
+ * dispatch, or on a pump pass that did not interrupt a syscall. Reading a
+ * partition table is not one of those: the scan advances on every pump pass,
+ * since it touches only its own stick. On this one
  * processor a syscall is not preempted, so no count is half updated at
  * either moment; and a process only ever sleeps at a point where each thing
  * it holds has already been recorded in a count `usbdisk_holds` reads, so
@@ -271,8 +275,9 @@ static void scan_advance(void)
     n = scan.n;
     if (sticks[n].state != STICK_SCANNING) {
         /* Pulled while its table was being read: the request in flight is
-         * the device's until it answers, so it is asked after until it
-         * has, and only then is the scan let go of. */
+         * the device's until it answers or until the deadline quarantines it,
+         * so it is asked after until one of those, and only then is the scan
+         * let go of. */
         int status = 0;
 
         if (scan.request &&
@@ -369,7 +374,10 @@ static void close_down(int n)
     sticks[n].marked = 1;
 }
 
-/** Nothing holds the stick any more: its number and its slot go back. */
+/**
+ * Nothing holds the stick any more: its number goes back, and its transport
+ * slot with it when no other logical unit of the same stick still holds it.
+ */
 static void reclaim(int n)
 {
     struct disk *d = sticks[n].disk;
@@ -402,8 +410,9 @@ static void reclaim(int n)
 }
 
 /**
- * Settle what is pending: register what arrived when a process is here to
- * sleep for its table, close what has gone, reclaim what nothing holds.
+ * Settle what is pending: register what arrived, close what has gone, reclaim
+ * what nothing holds. A new stick's partition table is not read here; the
+ * scan reads it over the pump passes that follow.
  */
 static void settle(void)
 {

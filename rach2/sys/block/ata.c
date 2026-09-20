@@ -1,14 +1,16 @@
 /*
  * The legacy ATA driver: the two channels of an IDE controller, each with
- * a master and a slave, driven by PIO.
+ * a master and a slave, driven by the controller's bus master where there is
+ * one and by PIO where there is not.
  *
  * A channel is a pair of port ranges, the command block and the control
  * block, at the legacy addresses or where a controller in native mode says
  * in its PCI base registers. A drive is selected by one bit of the drive
  * register, and every command is issued to the drive selected. Each drive
  * that answers IDENTIFY with the disk signature is published as a block
- * device and registered with the disk registry; the first found is
- * `block0`. Transfers are `READ DMA` and `WRITE DMA` through the
+ * device and registered with the disk registry; the first found becomes
+ * `block0`, unless another driver has already published one. Transfers are
+ * `READ DMA` and `WRITE DMA` through the
  * controller's bus master, one command and one completion per request,
  * where the controller has a bus master and the drive answers IDENTIFY
  * with DMA; `READ SECTORS` and `WRITE SECTORS` through the data port, a
@@ -75,9 +77,10 @@
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
 
-/* The most one request to the disk may move: 32 KiB, moved a sector at a
- * time through the data port with interrupts off, so a request is kept
- * short where the AHCI disk takes the block layer's whole limit. */
+/* The most one request to the disk may move: 32 KiB, which is also the
+ * bounce buffer's size, and which PIO moves a sector at a time through the
+ * data port with interrupts off. A request is kept short here where the AHCI
+ * disk takes the block layer's whole limit. */
 #define ATA_REQ_SECTORS 64u
 
 /* Command-block registers, as offsets from the channel's command base. */
@@ -199,7 +202,7 @@ struct ata_channel {
     wait_queue_t wq;         /* sleepers waiting for the drive's status */
     volatile uint32_t ticks; /* counted by ata_tick, the sleeping wait's clock */
     uint32_t irqs;           /* interrupts taken on this channel */
-    int owner;               /* a sleeping caller holds the channel */
+    int owner;               /* the caller that holds the channel */
     int sleepers;            /* callers asleep for a command, for the tick's count */
     int error_seen; /* a caller without the channel found ERR or DF, which are the owner's */
     uint16_t bm;    /* the bus master's registers, or 0 for none */
@@ -470,7 +473,7 @@ static int ata_wait_not_busy(struct ata_channel *ch)
 }
 
 /**
- * Wait until the drive has no command in any phase; an error is `-EIO`.
+ * Wait until the drive has no command in any phase. A timeout is `-EIO`.
  *
  * This is the wait before a command from a caller that does not own the
  * channel: the owner's command may be in flight, and its data phase, DRQ
@@ -478,6 +481,10 @@ static int ata_wait_not_busy(struct ata_channel *ch)
  * the first one's data. The owner's DMA is issued and started with
  * interrupts off, so a caller here sees it either not yet issued or
  * running, never issued and waiting for its engine.
+ *
+ * An idle drive showing ERR or DF ends this wait with success: those bits
+ * belong to the owner's command, and they are recorded for it rather than
+ * answered here.
  */
 static int ata_wait_idle(struct ata_channel *ch)
 {
@@ -909,7 +916,10 @@ static void ata_native_ports(void)
     }
 }
 
-/** Whether two IDENTIFY answers name one drive: the same serial and model. */
+/**
+ * Whether two IDENTIFY answers name one drive: words 10 through 46 equal,
+ * which covers the serial number, the firmware revision and the model.
+ */
 static int same_drive(const uint16_t *a, const uint16_t *b)
 {
     int w;
@@ -953,9 +963,11 @@ int ata_init(void)
                 continue;
             }
             d->present = 1;
-            /* `rach2.atapio` keeps a drive on the data port, whose transfers
-               run with interrupts off: a suite that needs a writer that
-               never sleeps in the driver boots with it. */
+            /* `rach2.atapio` keeps a drive on the data port, so its
+               transfers move through the port with interrupts off rather
+               than through the bus master. A caller can still sleep here,
+               for the channel and for the cache flush that follows a
+               write. */
             d->dma = ch->bm != 0 && (identify[c * 2 + s][49] & ATA_ID_CAP_DMA) != 0 &&
                      !kcmdline_has("rach2.atapio");
             d->dev.sector_size = BLOCK_SECTOR_SIZE;

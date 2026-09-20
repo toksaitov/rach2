@@ -1,9 +1,12 @@
 /*
  * request.c: the one entry every transfer takes, and the requests behind it.
  *
- * A polled device is called and done. A sleeping device is handed a request
- * allocated for the transfer, with a page of its own from the identity-mapped
- * window, since the device is given the page's physical address: a write is
+ * A device that runs the transfer in its caller, `BLOCK_CALLER_SYNC`, is
+ * called and done and takes no request. A sleeping device is handed a request
+ * allocated for the transfer, with a buffer of its own from the
+ * identity-mapped window, one page for a transfer of a page or less and heap
+ * pages for a larger one, since the device is given a physical address: a
+ * write is
  * copied into the page before submit and a read is copied out after, so a
  * completion that arrives after the caller gave up lands in a page nothing
  * else owns. A request is held by its caller and by its device, and is freed
@@ -13,9 +16,11 @@
  *
  * How many requests may be live at once is a policy, `rach2.blockpool=N`,
  * sixteen unless set, and a caller that finds the limit reached waits.
- * Running out is not a failure of the device, and only a transfer that
- * failed answers `EIO`; the deadline of a request starts when it is taken,
- * which is when the transfer starts, and not when the caller began to wait.
+ * Running out is not a failure of the device: a caller waits. A transfer
+ * that failed answers `EIO`, and so does a request the heap cannot hold even
+ * at one page, which is the memory running out and not the disk. The
+ * deadline of a request starts when it is taken, which is when the transfer
+ * starts, and not when the caller began to wait.
  * A request past its deadline is still waited for: the deadline is a period,
  * and only a request unanswered through a bounded number of periods in a
  * row is given up, since a disk that answers late is not a disk that went
@@ -24,8 +29,10 @@
  * whose `submit` answers, a stick and not each of its partition views: a
  * device whose every request is quarantined past its periods is stalled,
  * and its waiters and its later callers answer `EIO` until it answers
- * something late. And no device may hold more than half of the limit, so a
- * stalled device leaves the other half to the healthy ones; a waiter that
+ * something late. And no device may hold more than half of the limit,
+ * rounded down but never to zero, so a stalled device leaves the other half
+ * to the healthy ones; at `rach2.blockpool=1` the half is the whole pool and
+ * that separation is gone. A waiter that
  * finds every live request quarantined is released with `EIO` too, since
  * nothing but a late answer could free one.
  */
@@ -66,7 +73,7 @@ static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 
 static struct block_request *reqs; /* every live request */
 static uint32_t live;              /* how many are on the list */
-static uint32_t next_generation;   /* no two live requests share one */
+static uint32_t next_generation;   /* rising; see req_new */
 static wait_queue_t pool_wq;       /* woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;
@@ -246,9 +253,13 @@ static int nothing_pending(void)
  * Interrupts off. A fresh request on the list for `count` sectors, held by
  * its caller and its device, or NULL when the heap or the window has no
  * room for one. A transfer of a page or less takes a frame of the window,
- * whose address is physical for every device; a larger one takes heap
- * pages, which a device that describes a buffer page by page, the AHCI
- * controller, is the only one to ask for.
+ * whose address is physical for every device; a larger one takes heap pages,
+ * which the devices that describe a buffer page by page ask for: the AHCI
+ * controller, up to 2048 sectors, and USB mass storage, up to 1024.
+ *
+ * The generation rises with every request and is what a late completion is
+ * matched against. It is 32 bits and wraps, which would need 4 billion
+ * requests and a quarantined request still live from the round before.
  */
 static struct block_request *req_new(uint32_t count)
 {
@@ -410,9 +421,10 @@ static int req_done(void *arg)
 /**
  * One request of at most the device's `max_sectors` on a sleeping device.
  *
- * Sleeps until the completion or the deadline. A signal does not end the
+ * Sleeps until the completion, or until the request has passed its deadline
+ * as many times as the device's periods allow. A signal does not end the
  * wait: the device owns the page until it answers, so the wait is the
- * uninterruptible kind, bounded by the deadline instead. A read's bytes
+ * uninterruptible kind, bounded by those periods instead. A read's bytes
  * are copied out with interrupts on, once the device has answered and let
  * the buffer go: up to a mebibyte, too long to hold the machine's
  * interrupts for. Returns -ENOMEM when the heap had no buffer for the
@@ -787,9 +799,9 @@ void block_request_tick(void)
         if (r->state != BLOCK_REQ_IN_FLIGHT) {
             continue;
         }
-        /* A tick a request spends in flight is a tick its caller waits;
-           the count, per command, is what the suites hold under a bound
-           on every device. */
+        /* A tick a request spends in flight, whether a caller sleeps for it
+           or the pump left it running; the count is what the suites hold
+           under a bound on every device. */
         block_count_wait_tick();
         if ((int32_t)(req_ticks - r->deadline) < 0) {
             continue;

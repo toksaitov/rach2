@@ -214,9 +214,10 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 #define ATA_IDENTIFY      0xECu
 #define ATA_DEV_LBA       0x40u /* device register: LBA mode */
 
-/* One PRDT entry transfers up to 4 MiB, so cap a single command there; every
-   exercised caller (the page cache, 8 sectors) is far under it, and a larger
-   request fails closed, not silently truncating the byte count. */
+/* One PRDT entry transfers up to 4 MiB, so cap a single command there. The
+   block layer asks for at most 2048 sectors, a megabyte, which is under it,
+   and a larger request fails closed rather than silently truncating the byte
+   count. */
 #define AHCI_MAX_SECTORS_PER_CMD 8192u
 
 /* The single polled command slot, its 5-dword H2D FIS, and the PRDT offset
@@ -267,8 +268,10 @@ typedef struct {
     uint32_t dbc; /* byte count minus one [21:0], interrupt bit [31] */
 } __attribute__((packed)) ahci_prdt_t;
 
-/* The mapped ABAR, NULL until ahci_init succeeds. MMIO, so volatile. The
-   first port with a disk, -1 until bring-up. */
+/* The controller's PCI identity, the ABAR as discovery mapped it (zero until
+   then, and left set if bring-up later fails), and the first port with a
+   disk, -1 until bring-up. Every read and write through the ABAR is volatile
+   at the access; see the io table below. */
 static pci_device_t ahci_pci;
 static uintptr_t ahci_base;
 static int ahci_port = -1;
@@ -276,12 +279,12 @@ static int ahci_port = -1;
 /*
  * Everything this driver does to the outside world, in one table.
  *
- * On a machine it is the four lines below: two memory reads and writes through
- * the mapped ABAR, the delay, and the PCI configuration accessors. A test on
- * another architecture cannot map an ABAR or answer a PCI read, so it supplies
- * its own table and the driver runs against a model of the controller. That is
- * the only reason the indirection exists, and it is the same arrangement the
- * e1000 driver has.
+ * On a machine it is the three calls below: the reads and writes through the
+ * mapped ABAR and the delay. PCI configuration is reached directly and is not
+ * in the table. A test on another architecture cannot map an ABAR, so it
+ * supplies its own table and the driver runs against a model of the
+ * controller. That is the only reason the indirection exists, and it is the
+ * same arrangement the e1000 driver has.
  */
 static uint32_t ahci_mmio_r32(uint32_t offset)
 {
@@ -320,9 +323,11 @@ static uint32_t ahci_port_off(int port, uint32_t reg)
     return AHCI_PORT_BASE + (uint32_t)port * AHCI_PORT_STRIDE + reg;
 }
 
-/* Cache/DMA coherency, a real-hardware requirement, mirroring the HDA driver's
-   helper. x86 bus-master DMA snoops the caches, so this is a no-op in practice and a
-   plain no-op on emulators (which report no CLFLUSH). */
+/* Cache/DMA coherency, a real-hardware requirement, mirroring the HDA
+   driver's helper. x86 bus-master DMA snoops the caches, so the eviction
+   below changes nothing a correct machine does; it is kept because a machine
+   that does not snoop would otherwise read a stale descriptor, and it costs
+   one pass over a small buffer. */
 static bool ahci_have_clflush = false;
 static uint32_t ahci_clflush_size = 64;
 
@@ -331,10 +336,9 @@ static uint32_t ahci_clflush_size = 64;
  *
  * The two instructions this needs are x86's, so a test compiled for another
  * architecture cannot run it. There is nothing to model either: what it
- * decides is whether the flush below does anything, and on a machine whose
- * DMA snoops the caches the answer costs nothing. It is left out where the
- * instructions do not exist, and the flush is then the no-op it already is on
- * every emulator this project runs on.
+ * decides is which of the two evictions the flush below uses, a line at a
+ * time with CLFLUSH or the whole cache with WBINVD. Where the instructions do
+ * not exist there is no controller either, and the flush does nothing.
  */
 static void ahci_detect_cache(void)
 {
@@ -613,8 +617,8 @@ static int ahci_hba_own(void)
         ahci_err = "the host reset never completed";
         return -1;
     }
-    /* The reset clears AE, so AHCI mode is set again, and interrupts stay off:
-     * this driver polls. */
+    /* The reset clears AE, so AHCI mode is set again. Interrupts stay off
+     * through bring-up, which polls; ahci_start turns them on afterwards. */
     ahci_write32(AHCI_GHC, (ahci_read32(AHCI_GHC) | AHCI_GHC_AE) & ~AHCI_GHC_IE);
 
     /* Re-enable the port PHYs the reset may have left disabled. On Intel
@@ -715,12 +719,13 @@ static int ahci_port_ready(int port)
 }
 
 /**
- * Select the first implemented port carrying a SATA disk.
+ * Select the implemented ports carrying SATA disks, up to `AHCI_DISKS`.
  *
  * Every implemented port is COMRESET first, because a link that a warm reboot
  * left wedged reports a device that never becomes ready, and the scan would
  * otherwise select it and then fail on the identify. A port that comes back
- * empty is skipped without comment, since most machines have some.
+ * empty is skipped, since most machines have some; the reset itself logs a
+ * debug line for a port whose link never came up.
  *
  * The signature decides what the port has, and only a disk is taken. An
  * optical drive answers the ATAPI signature and would fail every command this
@@ -752,7 +757,8 @@ static int ahci_select_port(void)
             continue;
         }
         if (ahci_port_comreset(p) != 0) {
-            (void)ahci_port_stop(p); /* nothing on this port */
+            (void)ahci_port_stop(p); /* no link: nothing there, or a device
+                                        that did not negotiate one */
             continue;
         }
         ssts = ahci_read32(ahci_port_off(p, AHCI_PxSSTS));
@@ -867,27 +873,17 @@ static int ahci_io_error(struct ahci_disk *d)
     return -EIO;
 }
 
-/** Issue one polled command on `d`'s port and spin to completion.
- *
- * Builds the command-list header, a Register H2D FIS, and a single PRDT entry
- * over the disk's DMA regions, waits for the task file to go idle, sets the
- * slot's `PxCI` bit, and busy-polls it clear, watching the fatal `PxIS` bits
- * and `PxTFD` ERR/DF for failure, then verifies the byte count the HBA reports
- * so a short transfer fails instead of passing. The HBA performs the DMA; the
- * CPU only spins
- * on memory-mapped status, bounded by the iteration watchdog. So it
- * neither sleeps nor allocates and is callable with interrupts off, the
- * contract the page-cache window fault needs. A `buf` below
- * HARD_MEMORY_LIMIT is identity-mapped and physically contiguous, and goes
- * in one PRDT entry; one above it is a heap buffer, whose pages may lie
- * anywhere, and gets an entry per page with the page's physical address,
- * up to the AHCI_PRDT_MAX entries of the table. Returns 0 on success,
- * `-EIO` on error,
- * expiry, or a buffer the table cannot describe. */
 /**
- * Build the command in `d`'s slot: the header, the FIS and the PRDT, and
- * sync them for the HBA. Returns 0, or -1 when the policy refuses the
- * command or the table cannot describe the buffer.
+ * Build the command in `d`'s slot: the command-list header, a Register H2D
+ * FIS, and the PRDT over the disk's DMA regions, synced for the HBA.
+ *
+ * A `buf` below HARD_MEMORY_LIMIT is identity-mapped and physically
+ * contiguous, and goes in one PRDT entry; one above it is a heap buffer,
+ * whose pages may lie anywhere, and gets an entry per page with the page's
+ * physical address, up to the AHCI_PRDT_MAX entries of the table.
+ *
+ * Returns 0, or -1 when the policy refuses the command or the table cannot
+ * describe the buffer.
  */
 static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
                               volatile uint8_t *buf, uint32_t bytes, int write)
@@ -897,8 +893,8 @@ static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba
     volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(d->cmdtable + AHCI_PRDT_OFFSET);
     uint32_t prdtl = 0;
 
-    /* The one place a command leaves this driver. A kernel built read-only
-     * refuses here, whatever the caller believed it was doing. */
+    /* Every command this driver sends is built here, so the read-only
+     * policy is tested here and nowhere else. */
     if (!diskcmd_allowed(command)) {
         klog(KLOG_WARN, "ahci", "refused: command 0x%X: %s", (unsigned)command,
              diskcmd_policy_banner);
@@ -1015,6 +1011,21 @@ static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
 static int ahci_polled_failed(struct ahci_disk *d);
 
+/**
+ * Issue one polled command on `d`'s port and spin to completion.
+ *
+ * Builds the command through ahci_build_command, waits for the task file to
+ * go idle, sets the slot's `PxCI` bit, and busy-polls it clear, watching the
+ * fatal `PxIS` bits and `PxTFD` ERR/DF for failure, then verifies the byte
+ * count the HBA reports so a short transfer fails instead of passing. The HBA
+ * performs the DMA; the CPU only spins on memory-mapped status, bounded by
+ * the iteration watchdog. So it neither sleeps nor allocates and is callable
+ * with interrupts off, the contract the page-cache window fault needs.
+ *
+ * Returns 0 on success, `-EIO` on an error or an expiry, and -1 when the
+ * command could not be built: a command the policy refuses, or a buffer the
+ * table cannot describe.
+ */
 static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
                             volatile uint8_t *buf, uint32_t bytes, int write)
 {
@@ -1358,9 +1369,9 @@ static int ahci_identify(struct ahci_disk *d)
         ahci_err = "the device reported no sectors";
         return -1;
     }
-    /* An all-ones capacity is a device that did not answer, not a 281 TB
-     * disk: the field is 48 bits, so the top 16 must be zero, and a driver
-     * that accepted it would truncate every LBA it later computed. */
+    /* An all-ones capacity is a device that did not answer, not a disk of
+     * 144 petabytes: the field is 48 bits, so the top 16 must be zero, and a
+     * driver that accepted it would truncate every LBA it later computed. */
     if ((d->sectors >> 48) != 0 || d->sectors == 0xFFFFFFFFFFFFull) {
         ahci_err = "the device reported an impossible capacity";
         return -1;
@@ -1423,7 +1434,8 @@ int ahci_init(void)
     int i, published = 0;
 
     /* Leave the published device unset until bring-up succeeds, so a failed
-     * probe fails closed regardless of caller (mirrors ata_init). */
+     * probe fails closed whoever called it. ata_init differs: it keeps a
+     * block0 another driver has already published. */
     block0 = 0;
     ahci_base = 0;
     ahci_port = -1;
