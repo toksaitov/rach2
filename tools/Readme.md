@@ -109,7 +109,7 @@ Check the credentials before writing a root. The image trusts `krffs/authorized_
 
 A root written with keys whose private halves are on another machine is then reached through the console, through an ordinary account and `su`, through a password login where `/etc/rach2/sshd.conf` says `root-password-login yes`, which the installer writes, or from recovery.
 
-The kernel's log leaves on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the boot line. `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` keeps it, which is the only record of a panic on a machine with no serial port: the screen shows one line and the boot log dies with the machine.
+With `rach2.netconsole` on the boot line, the kernel broadcasts its log records in Ethernet frames of type `0x88b5`. `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` keeps it, which is the only record of a panic on a machine with no serial port: the screen shows one line and the boot log is in memory the restart clears.
 
 The recovery stick is `build/images/rach2-recovery-stick.img` written to the whole stick, its second partition then formatted as a save volume; the boot test is `build/images/rach2-stick.img` written the same way. `tests/system/accept/metal_accept.sh HOST [PORT] [STICK-SERIAL]` is the scripted half of acceptance, described in [the system tests' Readme](../tests/system/Readme.md).
 
