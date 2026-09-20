@@ -12,15 +12,16 @@
 # twin, `NAME-e1000`, the plain suite's names with `-e1000` before the
 # extension. The runner refuses a glob two suites declare, and fails a run
 # in which a file was made that no suite of the run owns, or that two own,
-# so this column is the inventory of what the suites touch. The memory is the
-# most guest memory the suite's machines ask for at once, in MiB; left out,
-# it is QEMU's default of 128. The runner admits a suite to the pool only
-# while the running suites' memory plus its own fits the memory budget, so
-# the machines a host can hold are what runs at once and not the worker
-# count alone. The core tier is chosen
-# by two rules: every subsystem of the kernel is exercised at least once, and
-# the tier finishes in under two minutes through the pool, which means no
-# member may take longer than that on its own.
+# unless the build's own recorded products cover it, so this column is the
+# inventory of what the suites touch. The memory is the most guest memory the
+# suite's machines ask for at once, in MiB; left out, it is QEMU's default of
+# 128. The runner admits a suite to the pool only while the running suites'
+# memory plus its own fits the memory budget, so the machines a host can hold
+# are what runs at once and not the worker count alone; a suite larger than
+# the whole budget runs alone rather than never. The core tier is chosen by
+# one rule: every subsystem of the kernel is exercised at least once. Through
+# the pool it finishes with its longest member, which the milestone 52 record
+# puts at about five minutes.
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.

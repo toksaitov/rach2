@@ -6,7 +6,7 @@
 # make would have to rebuild every one of them or silently use a stale one.
 #
 # What belongs here: the `run-NAME` target of every suite in tests/registry,
-# the disks, captures, logs and ports those suites write, the eight test tools
+# the disks, captures, logs and ports those suites write, the nine test tools
 # under build/tests/system/, and `prepare-all`, which is the union the pooled
 # runner builds once before it starts any suite.
 #

@@ -16,8 +16,9 @@
 set -u
 
 # RACH2_KERNEL=NAME boots every suite on build/rach2-NAME/kernel, built by
-# the NAME-kernel target of tests/system/suites.mk (ubsan, o2) after the
-# preparation; unset, the suites boot build/rach2/kernel.
+# the NAME-kernel target of tests/system/suites.mk (ubsan, o2) before the
+# rest of the preparation, since the images the preparation stages hold that
+# kernel; unset, the suites boot build/rach2/kernel.
 KERNEL_VAR=""
 if [ -n "${RACH2_KERNEL:-}" ]; then
     KERNEL_VAR="BOOT_KERNEL=build/rach2-${RACH2_KERNEL}/kernel"
@@ -104,7 +105,9 @@ WORKERS=$(awk -v n="$WORKERS" 'BEGIN {if (n < 1 || n > 1024) exit 1; printf "%.0
 # once: the trap calls it and the EXIT trap finds it done.
 OWN_PGID=$("$RACH2_RUN_UTIL" pgid $$)
 PGID=$OWN_PGID
-[ "$PGID" = "$$" ] || PGID="" # not a group of its own: only the ledgers are stopped
+# Not a group of its own, so nothing is matched by group; what the ledgers
+# and the process table name is still stopped.
+[ "$PGID" = "$$" ] || PGID=""
 STOPPING=""
 owned() {
     # The listing's own processes, the substitution's subshell and what it
@@ -209,9 +212,11 @@ trap 'SIGNALLED=1; finish; echo "run: result: interrupted by int" >&2; exit 130'
 trap 'SIGNALLED=1; finish; echo "run: result: interrupted by term" >&2; exit 143' TERM
 trap 'SIGNALLED=1; finish; echo "run: result: interrupted by hup" >&2; exit 129' HUP
 # One run at a time on a tree: two share `build/` and its images, and each
-# suite kills what runs under its directory at its start. The lock is a
-# directory, made atomically, holding the owner's pid, process group,
-# scratch directory and arguments. A lock with no owner file yet is one
+# suite kills what runs under its directory at its start. Two runners are
+# kept apart by a POSIX record lock on `build/.run.guard`; beside it a
+# directory, made atomically, holds the owner's pid, process group, scratch
+# directory and arguments, which is what a second runner prints and what a
+# takeover reads. A lock with no owner file yet is one
 # being taken this moment, until it is ten seconds old. A lock whose owner
 # is gone is taken over only when nothing of its group and none of its
 # ledgers' machines is left: a runner killed with KILL cannot clean up, and
@@ -339,9 +344,11 @@ suite_memory() { # the guest memory a suite's machines ask for at once, MiB
 # fourth field; a suite that declares nothing owns the files named after
 # it, `NAME-test*`, `NAME.*`, `NAME-*` and `NAME/*`, and a second-card twin,
 # `NAME-e1000`, owns the plain suite's names with `-e1000` before the
-# extension. A file made during a run that no suite of the run owns, or
-# that two own, fails the run by name: pooled suites share nothing, and
-# the declarations are the inventory of what they touch.
+# extension. A file made during a run that no suite of the run owns, or that
+# two own, fails the run by name: pooled suites share nothing, and the
+# declarations are the inventory of what they touch. The build's own products,
+# the ones the preparation records, and their `.d` files are not a suite's and
+# are passed over.
 image_patterns() { # image_patterns NAME: one glob a line
     p=$(suite_images "$1")
     if [ -n "$p" ]; then
@@ -361,7 +368,8 @@ check_declarations() { # a glob two suites declare is refused before anything ru
     [ -z "$dup" ] || { echo "run: result: refused: two suites declare the same images:$(echo "$dup" | tr '\n' ' ')" >&2; return 1; }
 }
 images_stamp() { : > "$WORK/images.stamp"; }
-check_images() { # check_images NAMES: 0 when every file made belongs to one of them
+check_images() { # check_images NAMES: 0 when every file made that is not a
+                 # recorded build product belongs to one of them
     [ -f "$WORK/images.stamp" ] || return 0
     image_table "$1" > "$WORK/images.patterns"
     ( cd "$REPO/build/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
@@ -675,12 +683,14 @@ take_products() { # take_products TARGET
     products_inventory "$1" > "$WORK/inventory.products"
     hash_list "$WORK/inventory.products" "$WORK/hashes.products"
 }
-# The sources are checked as the set runs, not only at its end. A file changed
-# under a run voids it, and learning that ninety minutes later costs the whole
-# run; on 2026-09-13 it cost one. Hashing the scripts is cheap and it is the
-# case that happens: a product changes because a source did, and the products
-# are large, so they are left to the check at the end.
-check_scripts_now() { # 0 when no source has changed since the set began
+# The scripts are checked as the set runs, not only at its end: the runner,
+# the registry, the makefiles and the suite and tool scripts, which is what
+# `scripts_inventory` lists. A file changed under a run voids it, and learning
+# that ninety minutes later costs the whole run; on 2026-09-13 it cost one.
+# Hashing those is cheap and it is the case that happens. The kernel and the
+# application sources are not hashed here; a change to one reaches the run
+# through the products, which are large and are left to the check at the end.
+check_scripts_now() { # 0 when no script of the inventory has changed
     [ -f "$WORK/hashes.scripts" ] || return 0
     hash_list "$WORK/inventory.scripts" "$WORK/hashes.scripts.now"
     cmp -s "$WORK/hashes.scripts" "$WORK/hashes.scripts.now" && return 0
@@ -897,7 +907,7 @@ echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), workers $WORKERS,
 if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
    [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
     make -C "$REPO" --no-print-directory recovery-key || {
-        echo "run: the recovery system's key could not be made" >&2
+        echo "run: result: the recovery system's key could not be made" >&2
         exit 1
     }
 fi

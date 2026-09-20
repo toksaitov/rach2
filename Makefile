@@ -16,7 +16,8 @@
 #   make test       boot the test image and check every probe passes.
 #   tests/run NAME  run one named suite (style, host, ssh, all, ...).
 #   make isos       a bootable ISO per image, for real hardware (needs xorriso).
-#   make clean      remove the in-house build products and the images
+#   make clean      remove the in-house build products under build/ and the
+#                   images
 #   make distclean  + the vendored musl, busybox, dropbear, tcc and pdpmake
 #                   builds (full from-scratch)
 
@@ -28,7 +29,8 @@ BASE_DIRS = krffs rach2 tests ish utils
 FULL_DIRS = ports/doom
 
 # --- vendored third-party: built by their own scripts (which wrap musl's
-#     autotools, busybox/dropbear's kbuild, tcc's hand-written configure and
+#     configure script, busybox's kbuild, dropbear's autoconf, tcc's
+#     hand-written configure and
 #     pdpmake's bare POSIX makefile), tracked with stamp files so a clean
 #     clone "just works" without running the build_*.sh by hand, and each
 #     rebuilds only when its real inputs (tarball, build script, config)
@@ -66,10 +68,11 @@ PDPMAKE_PATCHES  = vendor/pdpmake/patches/0001-platform-macros.patch
 E2FSPROGS_TARBALL = vendor/e2fsprogs/e2fsprogs-1.47.4.tar.gz
 E2FSPROGS_PATCHES = vendor/e2fsprogs/patches/series $(wildcard vendor/e2fsprogs/patches/*.patch)
 
-# The two musl artifacts consumers depend on, both derived from the tarball name
-# so the pinned version is written once: the installed static libc the
-# cross-compiled userland links against, and the extracted source, which the
-# host-compiled mkhash and its host test read the SHA-512 crypt from.
+# The two musl artifacts consumers depend on: the installed static libc the
+# cross-compiled userland links against, at a fixed path under the install
+# directory, and the extracted source of the SHA-512 crypt, whose path comes
+# from the tarball name so the pinned version is written once. The
+# host-compiled mkhash and its host test read that source.
 LIBC_A         = vendor/musl/install/lib/libc.a
 MUSL_CRYPT_SRC = $(LIBC_TARBALL:.tar.gz=)/src/crypt/crypt_sha512.c
 
@@ -108,14 +111,18 @@ MKDISK          = krffs/mkdisk.sh
 # minutes; a later `make` rebuilds only what changed. Each image is its own file
 # under build/images/, so they coexist instead of overwriting one shared image.
 # `make` builds the product: the kernel, the userland, the three bootable
-# images, and the validators that judge them. It builds no test tool. The tools
-# are the means of checking the product, they live in tests/system/suites.mk,
-# and each suite target builds the ones it invokes.
+# images, and the validators that judge them, along with the host tools, which
+# include the programs the suites drive machines with. What it does not build
+# is the per-suite material: the fixtures, the variant kernels and the images
+# only one suite boots live in tests/system/suites.mk, and each suite target
+# builds what it invokes.
 all: images host-tools
 
-# The cached tool check (tools/setup/preflight.sh): a missing or changed build
-# tool fails here, named, before any compilation. It is an order-only
-# prerequisite of the build entry points; clean and distclean never run it.
+# The cached tool check (tools/setup/preflight.sh): a missing build tool fails
+# here, named, and a changed one makes the check run again. It is an
+# order-only prerequisite of the build entry points, so under `make -j` a host
+# tool can compile beside it; what it guards is the compilation that needs the
+# cross toolchain. clean and distclean never run it.
 preflight:
 	@./tools/setup/preflight.sh
 
@@ -197,7 +204,7 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
-# e2fsprogs, of which the recovery image stages e2fsck alone. The patch
+# e2fsprogs, of which the recovery image stages e2fsck and resize2fs. The patch
 # manifest is a prerequisite as Dropbear's is below.
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc \
                     $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
@@ -225,9 +232,10 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 #     the vendor and every transitive dependent in the same run; a recipe-time
 #     sub-make could not, because make's cached timestamps would miss the
 #     stamp's change. The dependency-only rules below make each output a known
-#     target ordered behind its stamp. A truncated output is the validators'
-#     business, not this rule's. musl and TinyCC declare their whole staged
-#     trees in .outputs lists their stamp recipes write. ---
+#     target ordered behind its stamp. A binary that cannot legitimately be
+#     empty is size-tested below as well, so a truncated one rebuilds its
+#     vendor rather than failing a later check. musl and TinyCC declare their
+#     whole staged trees in .outputs lists their stamp recipes write. ---
 MUSL_OUTPUTS = $(shell cat vendor/musl/.outputs 2>/dev/null)
 TCC_OUTPUTS = $(shell cat vendor/tcc/.outputs 2>/dev/null)
 BUSYBOX_OUTPUTS = $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
@@ -291,8 +299,9 @@ $(E2FSCK_BIN) $(RESIZE2FS_BIN): $(E2FSPROGS_STAMP)
 # --- component files the root graph names. Each gets an explicit delegation
 #     rule to its sub-make: without one, a deleted kernel beside its surviving
 #     kernel.o would match make's builtin link rule and be relinked by the
-#     host cc. The rules run only when the file is missing; the ordinary
-#     refresh still happens through the order-only component recursion. ---
+#     host cc. Each rule asks its sub-make on every invocation, through the
+#     phony target below, and the sub-make decides whether anything is
+#     rebuilt. ---
 # The three kernels are built by sub-makes that do their own dependency
 # tracking. These rules have no prerequisites of their own, so they ask the
 # sub-make on every invocation and let it decide: it relinks only when a source
@@ -494,8 +503,6 @@ os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
 os-real-ext2: $(OS_REAL_EXT2)
 
-include mk/images.mk
-
 # The demo credentials, as file targets. Both generators are idempotent and do
 # nothing when their output is there, which was enough while one thing ran at a
 # time: with `make -j` and a pool of suites, two of them mint a key at once and
@@ -548,7 +555,8 @@ no-recovery-key:
 	      $(IMAGES_DIR)/rach2-install-stick-with-key.img \
 	      $(IMAGES_DIR)/rach2-recovery.krffs $(IMAGES_DIR)/rach2-recovery.iso \
 	      $(IMAGES_DIR)/rach2-install-stick.img \
-	      $(IMAGES_DIR)/install-test-stick.img $(SEALED_DISK)
+	      $(IMAGES_DIR)/install-test-stick.img $(SEALED_DISK) \
+	      $(OS_REAL_GRUB_DISK)
 	@echo "no-recovery-key: the recovery system will answer nobody"
 
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
@@ -564,7 +572,9 @@ musl-programs: $(LIBC_STAMP)
 	sh tests/musl/build.sh
 
 # The test image: the freestanding syscall probes plus the musl integration
-# programs. `make test` boots it and asserts every probe's success token.
+# programs. The default suite boots it and judges each probe by its exit
+# status; `make test` runs the style checks, the host tests and the core
+# tier, which includes that suite.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 10
 
@@ -590,8 +600,8 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 18
 
-# The same manifest as an ext2 volume, the sealed disk's third partition and
-# the root `rach2.root=ext2` mounts: 1 GiB, the partition's size, sparse on
+# The same manifest as an ext2 volume, which the root `rach2.root=ext2`
+# mounts: 1 GiB, sparse on
 # the host. tools/image/mkext2.sh stages it through stageimage's tree mode,
 # formats it with the host's mke2fs on the one profile the driver writes,
 # sets the owners with debugfs, and passes it through e2fsck and the set-id
@@ -600,11 +610,11 @@ $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS
 $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
-# The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
-# machine (the kernel has no USB driver, so the module GRUB loads is the whole
-# system), so it carries a shell, dropbear, the account files and the keys, and
-# leaves out the compiler, /src, Doom and bootctl, which a machine with no
-# writable disk cannot use. 4 MB: the binaries come to about 1.4 MB, and the
+# The metal image: what the Lenovo G50-70 boots from a USB stick. The module
+# GRUB loads is the whole system, since nothing is mounted from a disk, so it
+# has a shell, dropbear, the account files and the keys, and leaves out the
+# compiler, /src, Doom and bootctl, which a machine with no writable disk
+# cannot use. 4 MB: the binaries come to about 1.4 MB, and the
 # rest is headroom under the kernel's 32 MB direct map. The metal kernel: the
 # same sources built read-only at the disk, into its own object tree so the two
 # kernels never share one. The switch is a build switch and not a boot flag
@@ -748,6 +758,18 @@ $(FS_DEMO_DIR)/empty.krffs: krffs/mkfs.krffs.c | krffs
 
 fs-demo-images: $(FS_DEMO_IMAGES)
 .PHONY: fs-demo-images
+
+# The host tools the disk and stick scripts run, named here because the rules
+# below list them as prerequisites and make expands a prerequisite list as it
+# reads it. What builds them is in mk/images.mk, which is included at the end
+# of this file, after the names the rules there need.
+MKMBR           = build/tools/image/mkmbr
+FATCHAINS       = build/tools/image/fatchains
+GRUBEMBED       = build/tools/image/grubembed
+STICKCHECK      = build/tools/image/stickcheck
+DISK_TOOLS      = $(MKMBR) $(FATCHAINS) $(GRUBEMBED)
+MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
+
 SEALED_EXT2 = build/images/rach2-metal-disk.ext2
 $(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
@@ -798,10 +820,11 @@ $(OS_REAL_GRUB_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
 
 
 # The public test entry: the source checks, the native tests, and the core
-# tier, in that order. The first two rebuild the kernel with their own flags
-# and share a scratch directory, so they run alone and before the pool; the
-# tier is the system suites that between them exercise every subsystem, chosen
-# to finish in under two minutes. The runner owns the registry, so this holds
+# tier, in that order. The first two share a scratch directory, so the runner
+# runs them alone and before the pool: the style suite builds the kernel that
+# its warning check judges, and the host suite builds the native test programs
+# with its own sanitizer flags. The tier is the system suites that between
+# them exercise every subsystem. The runner owns the registry, so this holds
 # no suite knowledge of its own.
 # The slow analysers (tools/verify/analyze.sh): -fanalyzer, the exhaustive
 # cppcheck, clang-tidy and the linker's dead-code report. Run at a
@@ -895,20 +918,21 @@ check-busybox: $(BUSYBOX_STAMP) $(BUSYBOX_OUTPUTS)
 	done
 
 # Privilege climbs through a declared set of paths and no others. The sweep
-# reads every manifest against a per-image allowlist, so a set-id line anywhere,
-# under any of the five mode-bearing directives, fails the build rather than a
-# boot. Every artifact a check reads becomes a prerequisite here, in the phase
-# that adds the check, because make does not order the siblings of a
-# prerequisite list. The manifest sweep needs no build product, but the
+# reads every manifest against a per-image allowlist, so a set-id line
+# anywhere, under any of the six mode-bearing directives, fails the build
+# rather than a boot. Every artifact a check reads becomes a prerequisite
+# here, in the phase that adds the check, because make does not order the
+# siblings of a prerequisite list. The manifest sweep needs no build product, but the
 # applet-table check reads one, so this target is ordered against the busybox
 # stamp. Unordered it would fail a correct tree on a header that does not exist
 # yet, or, in the case that matters, read the PREVIOUS configuration's table
 # after rach2.config was edited, pass, and let the image stage the busybox whose
 # re-enabled applet the check exists to forbid: build_busybox.sh opens by
 # removing and re-extracting the tree, so for most of a rebuild the header is
-# absent and before that it is stale. The applet half reads a generated header
-# and the init half reads two built binaries, so both are ordered after what
-# produces them, the way phase 3's rule requires: unordered, a parallel build
+# absent and before that it is stale. The applet half reads two generated
+# applet tables and the init half reads the three init binaries the allowlist
+# names, so both are ordered after what produces them, the way phase 3's rule
+# requires: unordered, a parallel build
 # scans a build/utils/sbin/ that holds yesterday's artifacts and passes while
 # today's are staged.
 check-setid: $(BUSYBOX_STAMP) utils $(SETIDCHECK)
@@ -926,15 +950,17 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 	@test -s $(LIBC_A) || { echo "libc: $(LIBC_A) missing or empty; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm vendor/musl/.stamp and rebuild (make)" >&2; exit 1; }
 
-# The test suites: every `run-NAME` target, the fixtures they write, the eight
+# The test suites: every `run-NAME` target, the fixtures they write, the nine
 # test tools, and `prepare-all`. Included rather than kept apart so that one
 # dependency graph covers the product and the variants only a suite needs.
 include mk/host.mk
+include mk/images.mk
 include tests/system/suites.mk
 
-# Every host program the tree compiles, for the compilation database
-# generator, which dry-runs their rules; named after the includes that
-# define them.
+# The host programs the build itself needs, for the compilation database
+# generator, which dry-runs their rules; named after the includes that define
+# them. The KRFFS programs and the native host tests have their own rules and
+# the generator collects them separately.
 HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) $(SIZECHECK) \
              $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
@@ -953,7 +979,10 @@ check-sources:
 
 # clean: the everyday reset. Each sub-make removes its own build/<component>
 # tree (objects, .d, binaries), and the RAM-disk images under build/images go
-# too. The expensive vendored third-party is LEFT in place: vendor/musl/install,
+# too. What no sub-make owns stays: the host tools under build/tools, the
+# manual pages under build/man, and the variant kernel directories a suite
+# builds. The expensive vendored third-party is LEFT in place:
+# vendor/musl/install,
 # the extracted busybox/dropbear trees, and the staged capstones under
 # build/vendor (which no sub-make owns). Use distclean for those.
 clean:
@@ -964,9 +993,10 @@ clean:
 # product: the stamps, vendor/musl/install, the extracted vendored source trees,
 # and the entire out-of-tree build/ (including the staged capstones under
 # build/vendor that a routine clean leaves in place). The next build rebuilds
-# musl/busybox/dropbear/tcc/pdpmake from the tarballs. A stamp left behind while
-# its binary went with build/ is the failure this list exists to prevent: the
-# next build would skip the work and fail at the check instead.
+# musl/busybox/dropbear/tcc/pdpmake from the tarballs. The stamps go with the
+# trees they stand for: a stamp left behind while its binary went with build/
+# would say work was done that was not. The parse-time rules above retire such
+# a stamp when they find its output gone, so the two paths agree.
 distclean: clean
 	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) \
 	      $(PDPMAKE_STAMP) $(E2FSPROGS_STAMP) vendor/musl/.outputs vendor/tcc/.outputs \

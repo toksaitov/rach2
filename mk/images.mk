@@ -6,17 +6,12 @@
 # suite that needs one of these names it as a prerequisite.
 # tools/verify/check.sh refuses a rule under tests/ that makes a product.
 #
-# The three tools the stick scripts run: the MBR writer, which krffs/mkdisk.sh
+# The tools the disk and stick scripts run are named in the root Makefile,
+# which needs them before this point: the MBR writer, which krffs/mkdisk.sh
 # builds on demand as well; the stick image's judge, linked with the kernel's
 # own MBR reader so the rules it applies are the kernel's; and the exFAT
 # builder and reader, which the exfat suite uses too and which the sticks'
-# volume is written with.
-MKMBR           = build/tools/image/mkmbr
-FATCHAINS       = build/tools/image/fatchains
-GRUBEMBED       = build/tools/image/grubembed
-STICKCHECK      = build/tools/image/stickcheck
-DISK_TOOLS      = $(MKMBR) $(FATCHAINS) $(GRUBEMBED)
-MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
+# volume is written with. What builds them is here.
 $(MKMBR): tools/image/mkmbr.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)

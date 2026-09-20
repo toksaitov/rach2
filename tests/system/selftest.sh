@@ -8,9 +8,10 @@
 # against a registry and a makefile of its own, in a temporary directory, so a
 # mistake in the runner is a failure here rather than a puzzling suite result.
 #
-# `tests/run runner` runs this. It boots no machine and reads nothing from the
-# product, so `sh tests/system/selftest.sh` also runs it on a tree that does not
-# build.
+# `tests/run runner` runs this. It boots no machine: every machine it drives is
+# a shell script on the PATH. It does read three built programs, the harness,
+# ptydrive and hostpeer, so `sh tests/system/selftest.sh` needs a tree that has
+# built those.
 #
 set -u
 
@@ -53,7 +54,7 @@ printf '%s\n' "$out"
 check "detached work fails and is stopped before the verdict" 0 "$rc"
 
 # A tree the runner can drive: its own registry, its own suite targets, and a
-# `prepare-all` that does nothing.
+# `prepare-all` that builds the fixture's product and its shared image.
 mkdir -p "$WORK/tests/system/runner" "$WORK/tools/setup"
 cp "$REPO/tests/run" "$WORK/tests/run"
 cp "$REPO/tests/system/runner/runutil.c" "$WORK/tests/system/runner/runutil.c"
@@ -182,9 +183,9 @@ MK
 # Two suites that judge by a deadline the set scales: one whose token comes
 # after four seconds under a bound written as two, so it passes only with a
 # factor of two or more, by the clock and not by a count of sleeps; one
-# whose token never comes, so its bound is what ends it. Each records that
-# it started, so a row can say a suite never ran. `install` is the runner's
-# lone-suite name, and runs the first script.
+# whose token never comes, so its bound is what ends it. Each records that it
+# started, so a row can say a suite never ran. `install` is a name of the
+# fixture's registry, not of the tree's, and runs the first script.
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/slowtoken.sh" <<'SLOW'
 #!/bin/sh
@@ -348,7 +349,7 @@ out=$(run killed); rc=$?
 check "killing the machine PID stops the actual machine" 0 "$rc"
 check "and leaves no machine or console relay behind" 0 "$(printf '%s\n' "$out" | grep -c 'run: killed: left')"
 # A machine on its way out is not a machine left behind. The suite's rows have
-# passed and its machine has been told to stop; asking once, the instant the
+# passed and its machine is in its last seconds; asking once, the instant the
 # suite returns, fails a suite for a race with a process that is already
 # leaving, which is what it cost on 2026-09-13.
 out=$(run parting); rc=$?
@@ -727,8 +728,8 @@ kill "$survivor" 2>/dev/null; wait "$survivor" 2>/dev/null
 rm -rf "$WORK/build/.run.lock"
 
 # A run stopped by a signal takes its work with it: the suite's sleep is a
-# grandchild of the runner, in its process group and in no ledger, and it
-# ignores TERM, so only the KILL that follows the group's TERM ends it.
+# grandchild of the runner and ignores TERM, so only the KILL that follows
+# ends it.
 ( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run stuck > "$WORK/stuck.out" 2>&1 ) &
 stuckrun=$!
 i=0
