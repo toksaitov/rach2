@@ -431,12 +431,12 @@ tests/host/msc_hosttest.c:xhci_submit lines 131 a test's rows, each a case, read
 tests/host/n_tty_hosttest.c:main complexity 62 a test's rows, each a case, read as one table
 tests/host/n_tty_hosttest.c:main lines 369 a test's rows, each a case, read as one table
 
-tests/host/netconf_hosttest.c:main complexity 54 a test's rows, each a case, read as one table
-tests/host/netconf_hosttest.c:main lines 341 a test's rows, each a case, read as one table
+tests/host/netconf_hosttest.c:main complexity 56 a test's rows, each a case, read as one table
+tests/host/netconf_hosttest.c:main lines 346 a test's rows, each a case, read as one table
 
 tests/host/netconsole_hosttest.c:main lines 133 a test's rows, each a case, read as one table
 
-tests/host/netdev_hosttest.c:main lines 145 a test's rows, each a case, read as one table
+tests/host/netdev_hosttest.c:main lines 149 a test's rows, each a case, read as one table
 
 tests/host/packet_hosttest.c:main lines 159 a test's rows, each a case, read as one table
 
