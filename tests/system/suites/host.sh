@@ -196,17 +196,26 @@ done
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
 # their committed corpora: every input a fuzzer found worth keeping, and
 # every minimised crash that became a regression test, passes through its
-# parser under the sanitizers in seconds. The long runs are behind
-# RACH2_FUZZ_SECONDS in tools/verify/analyze.sh.
+# parser under the sanitizers in seconds. A long run is started by hand, as
+# tests/fuzz/Readme.md says; nothing here runs one.
+#
+# The loop is over the harnesses and not over the corpus directories, so a
+# harness whose corpus is gone is a failure and not a silence: a parser with
+# no inputs is a parser this suite stopped covering.
 if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
     sh tests/fuzz/build.sh replay
 else
     any=1
     if sh tests/fuzz/build.sh replay >"$VDIR/fuzz.clog" 2>&1; then
-        for d in tests/fuzz/corpus/*/; do
-            name=$(basename "$d")
+        for src in tests/fuzz/*_fuzz.c; do
+            name=$(basename "$src" _fuzz.c)
+            d=tests/fuzz/corpus/$name/
             if [ ! -x "build/tests/fuzz/$name" ]; then
-                echo "  FAIL (no harness for the corpus): $name"; fail=1
+                echo "  FAIL (the harness did not build): $name"; fail=1
+                continue
+            fi
+            if [ -z "$(find "$d" -type f 2>/dev/null)" ]; then
+                echo "  FAIL (no corpus for the harness): $name"; fail=1
                 continue
             fi
             # shellcheck disable=SC2086

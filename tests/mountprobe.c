@@ -371,9 +371,16 @@ static void rows_reading(void)
     if (fd < 0) {
         fail("open the mount root");
     }
+    /* A buffer too small for one record answers EINVAL and gives the
+       description back: a read that kept it would leave every later read of
+       this file, through this descriptor or a copy of it, waiting for a lock
+       nothing releases. */
+    if (sys3(SYS_GETDENTS64, fd, (int)buf, 1) != -EINVAL) {
+        fail("getdents64 with a buffer too small for one record is EINVAL");
+    }
     n = sys3(SYS_GETDENTS64, fd, (int)buf, sizeof(buf));
     if (n <= 0 || !dirents_contain(buf, n, "hello.txt")) {
-        fail("getdents64 lists the mount");
+        fail("getdents64 lists the mount after the refused read");
     }
     {
         int f2 = sys4(SYS_OPENAT, fd, (int)"hello.txt", O_RDONLY, 0);

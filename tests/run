@@ -906,6 +906,15 @@ take_scripts
 build_components
 rc=0
 if [ "$#" -eq 1 ]; then
+    # The kernel RACH2_KERNEL names is built here too: a suite run alone
+    # builds through its own target, which does not name that kernel, so
+    # without this the suite would boot whatever the last set left, or
+    # nothing at all.
+    if [ -n "$KERNEL_VAR" ]; then
+        run_make "${RACH2_KERNEL}-kernel" || {
+            echo "run: result: refused: the $RACH2_KERNEL kernel did not build" >&2; exit 1
+        }
+    fi
     RUNNING=serial
     run_one "$1" alone || rc=1
     RUNNING=""

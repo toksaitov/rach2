@@ -24,11 +24,15 @@ extern void *malloc(unsigned long n);
 extern void free(void *p);
 extern int printf(const char *format, ...);
 
-#define FUZZ_INPUT_MAX (1u << 20)
+#define FUZZ_INPUT_MAX (4u << 20)
 
 int main(int argc, char **argv)
 {
-    unsigned char *buf = malloc(FUZZ_INPUT_MAX);
+    /* One byte past the largest input a harness takes, so a file that fills
+       the buffer is seen to be too long rather than replayed short: an input
+       the fuzzer found and this shortened is a different input, and a
+       regression test that passes on it proves nothing. */
+    unsigned char *buf = malloc(FUZZ_INPUT_MAX + 1);
     int i;
 
     if (buf == 0) {
@@ -43,10 +47,20 @@ int main(int argc, char **argv)
             free(buf);
             return 2;
         }
-        while ((got = read(fd, buf + n, FUZZ_INPUT_MAX - (unsigned long)n)) > 0) {
+        while ((got = read(fd, buf + n, FUZZ_INPUT_MAX + 1 - (unsigned long)n)) > 0) {
             n += got;
         }
         close(fd);
+        if (got < 0) {
+            printf("fuzz: cannot read %s\n", argv[i]);
+            free(buf);
+            return 2;
+        }
+        if ((unsigned long)n > FUZZ_INPUT_MAX) {
+            printf("fuzz: %s is longer than %u bytes\n", argv[i], FUZZ_INPUT_MAX);
+            free(buf);
+            return 2;
+        }
         LLVMFuzzerTestOneInput(buf, (unsigned long)n);
     }
     printf("fuzz: replayed %d input(s)\n", argc - 1);

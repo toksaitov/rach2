@@ -29,7 +29,7 @@ selfbuild|qemu-system-i386,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,se
 installer-repair|qemu-system-i386,shasum|full
 installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full|installer-test*,installer.*,installer/*|512
 menu|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
-installer-rehearse|qemu-system-i386,qemu-img,shasum|full
+installer-rehearse|qemu-system-i386,qemu-img,shasum|full||512
 selfbuild-ext2|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu-system-i386,ssh,mformat,mmd,mcopy|full
 dhcp-e1000|qemu-system-i386|full|dhcp*-e1000.*,dhcp*-e1000-*,twonet*-e1000.*,static-*-e1000.*
@@ -37,7 +37,7 @@ dhcp|qemu-system-i386|full|dhcp-test*,dhcp.*,dhcp-*,twonet.*,twonet-*,static-*
 netif|qemu-system-i386|full
 netif-e1000|qemu-system-i386|full
 mount|qemu-system-i386,mformat,mcopy,mdir|core
-grow|qemu-system-i386,mke2fs,e2fsck,qemu-img|full
+grow|qemu-system-i386,mke2fs,e2fsck,qemu-img|full||512
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu-system-i386|full
 large|qemu-system-i386,mke2fs,e2fsck,mformat|full
@@ -53,7 +53,7 @@ stress|qemu-system-i386|full|stress-test.*,stress.*,stress/*
 procfiles|qemu-system-i386|full
 memory|qemu-system-i386|core||4096
 parts|qemu-system-i386,mformat,mtype|core
-bootpart|qemu-system-i386|full
+bootpart|qemu-system-i386|full|bootpart-test*,bootpart.*,bootpart-*,bootpart/*,wide-test*
 loopdev|qemu-system-i386,mformat,mcopy,mtype,mke2fs|full
 tcc|qemu-system-i386|full
 make|qemu-system-i386|full
@@ -92,7 +92,7 @@ disk-ahci|qemu-system-i386|core|disk-ahci-test*,disk-ahci.*,disk-ahci/*,disk-tes
 grub|qemu-system-i386,mformat,mmd,mcopy|core
 disk-q35|qemu-system-i386|full|disk-q35-test*,disk-q35.*,disk-q35/*,disk-test-q35.*
 doom|qemu-system-i386|full
-disk|qemu-system-i386|core|disk-test.*,disk.*,disk/*,wide-test.*
+disk|qemu-system-i386|core|disk-test.*,disk.*,disk/*
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core
 fpu|qemu-system-i386|core

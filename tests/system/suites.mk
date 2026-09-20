@@ -689,7 +689,7 @@ raw-card: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) 
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
-	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.rawprobe.log \
+	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test$(NIC_TAG).rawprobe.log \
 	    "expect=Type 'help'" "send=exec /rawprobe" until=60
 	$(PCAPCHECK) rawwire $(RAW_PCAP)
 ifeq ($(NIC),e1000)

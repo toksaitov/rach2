@@ -4786,10 +4786,22 @@ int32_t sys__llseek(isr_params_t *params)
                 new_off = off;
                 break;
             case 1: /* SEEK_CUR */
-                new_off = (long long)entry->ofd->offset + off;
+                /* The sum in unsigned 64-bit arithmetic, which wraps rather
+                 * than overflowing, and then judged: a signed addition of
+                 * two values a caller chooses is undefined, and the kernel
+                 * built with the trap on it stops the machine. */
+                new_off = (long long)((uint64_t)(long long)entry->ofd->offset + (uint64_t)off);
+                if ((off > 0 && new_off < (long long)entry->ofd->offset) ||
+                    (off < 0 && new_off > (long long)entry->ofd->offset)) {
+                    return -EOVERFLOW;
+                }
                 break;
             case 2: /* SEEK_END */
-                new_off = (long long)log_size + off;
+                new_off = (long long)((uint64_t)(long long)log_size + (uint64_t)off);
+                if ((off > 0 && new_off < (long long)log_size) ||
+                    (off < 0 && new_off > (long long)log_size)) {
+                    return -EOVERFLOW;
+                }
                 break;
             default:
                 return -EINVAL;
@@ -6245,6 +6257,7 @@ int32_t sys_getdents64(isr_params_t *params)
             rec_len = (rec_len + 7) & ~7;
             if (bytes_written + rec_len > count) {
                 if (bytes_written == 0) {
+                    fd_ofd_unlock(ofd);
                     return -EINVAL; /* buffer too small for even one entry */
                 }
                 break; /* the uncommitted cursor re-reads this entry next */
