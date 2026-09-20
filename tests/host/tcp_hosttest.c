@@ -190,14 +190,28 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     return (uint16_t)~sum;
 }
 
+static uint32_t irq_enabled = 1;
+static void (*before_net_lock)(void);
+
+/**
+ * Deliver one pending interrupt before masking, then return the saved state.
+ */
 uint32_t net_lock(void)
 {
-    return 0;
+    uint32_t flags = irq_enabled;
+    void (*interrupt)(void) = before_net_lock;
+
+    irq_enabled = 0;
+    if (flags && interrupt) {
+        before_net_lock = 0;
+        interrupt();
+    }
+    return flags;
 }
 
 void net_unlock(uint32_t flags)
 {
-    (void)flags;
+    irq_enabled = flags;
 }
 
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -343,6 +357,75 @@ static void grow_window(struct socket *sock, struct tcb *conn, uint16_t port, ui
     n_segs = 0;
 }
 
+static struct tcb *reset_on_lock;
+
+/** Receive a peer reset at the next interrupt-masking boundary. */
+static void receive_reset(void)
+{
+    rx(reset_on_lock->remote_port, reset_on_lock->local_port, reset_on_lock->rcv_nxt,
+       reset_on_lock->snd_nxt, F_RST, 65535, NULL, 0);
+}
+
+/**
+ * Check send validation, interrupt restoration, and a reset before masking.
+ */
+static void test_send_checks(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 5000;
+    uint16_t lport;
+    uint32_t enabled;
+    const uint8_t byte = 'x';
+
+    reset_all();
+    conn = open_conn(&sock, 80, &peer_seq, &lport);
+    for (enabled = 0; enabled <= 1; enabled++) {
+        struct socket empty;
+
+        irq_enabled = enabled;
+        k_memset(&empty, 0, sizeof(empty));
+        CHECK("send rejects a missing socket", tcp_send(NULL, &byte, 1) == -1);
+        CHECK("missing socket restores interrupt state", irq_enabled == enabled);
+        CHECK("send rejects a missing connection", tcp_send(&empty, &byte, 1) == -1);
+        CHECK("missing connection restores interrupt state", irq_enabled == enabled);
+        CHECK("send rejects a negative length", tcp_send(&sock, &byte, -1) == -1);
+        CHECK("negative length restores interrupt state", irq_enabled == enabled);
+        conn->state = TCP_CLOSED;
+        CHECK("send rejects a closed connection", tcp_send(&sock, &byte, 1) == -1);
+        CHECK("closed connection restores interrupt state", irq_enabled == enabled);
+        conn->state = TCP_ESTABLISHED;
+        CHECK("send accepts zero bytes", tcp_send(&sock, &byte, 0) == 0);
+        CHECK("zero length restores interrupt state", irq_enabled == enabled);
+        conn->send_tail = conn->send_ack + TCP_RING_SIZE;
+        CHECK("send returns zero for a full ring", tcp_send(&sock, &byte, 1) == 0);
+        CHECK("full ring restores interrupt state", irq_enabled == enabled);
+        conn->send_tail = conn->send_ack;
+        CHECK("send accepts established data", tcp_send(&sock, &byte, 1) == 1);
+        CHECK("established send restores interrupt state", irq_enabled == enabled);
+        rx(80, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, NULL, 0);
+        conn->state = TCP_CLOSE_WAIT;
+        CHECK("send accepts close-wait data", tcp_send(&sock, &byte, 1) == 1);
+        CHECK("close-wait send restores interrupt state", irq_enabled == enabled);
+        rx(80, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, NULL, 0);
+        conn->state = TCP_ESTABLISHED;
+    }
+    reset_all();
+    conn = open_conn(&sock, 80, &peer_seq, &lport);
+    reset_on_lock = conn;
+    before_net_lock = receive_reset;
+    CHECK("send rejects a reset before masking", tcp_send(&sock, &byte, 1) == -1);
+    CHECK("the pending reset was delivered", before_net_lock == NULL);
+    CHECK("reset closes the attached connection",
+          sock.tcb == conn && conn->state == TCP_CLOSED && conn->so_error == ECONNRESET);
+    CHECK("reset before send leaves the ring unchanged",
+          conn->send_ack == 0 && conn->send_head == 0 && conn->send_tail == 0);
+    CHECK("reset before send transmits nothing", n_segs == 0);
+    CHECK("reset refusal restores interrupts", irq_enabled == 1);
+    reset_on_lock = NULL;
+    reset_all();
+}
+
 int main(void)
 {
     struct tcb *t;
@@ -351,6 +434,7 @@ int main(void)
     /* The blocks, past the sixteen the pool once held: forty at once, one
        freed from the middle of the list and the rest still there. */
     tcp_init();
+    test_send_checks();
     reset_all();
     t = 0;
     for (i = 0; i < 40; i++) {

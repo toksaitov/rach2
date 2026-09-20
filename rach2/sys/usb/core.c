@@ -10,8 +10,9 @@
  * completions are drained from the timer handler, where a wait would stop the
  * clock. So no step of enumeration waits for the one before it. Each call to
  * `usb_core_step` moves one device forward by one step, and a step that has
- * not finished is looked at again next time. A step that never finishes fails
- * its device at a deadline and gives the slot back.
+ * not finished is looked at again next time. An enumeration timeout starts
+ * cleanup. The device record remains allocated until any outstanding
+ * slot-allocation command is resolved and any returned slot is closed.
  *
  * One device is enumerated at a time, because the controller has one command
  * ring and this driver keeps one command in flight. A second device waits at
@@ -126,10 +127,7 @@ struct usb_device_state {
     int closing_asked;
     /* Said once, so a device waiting for a slot does not say so every pass. */
     int waiting_said;
-    /* Set when the device left with a command of its own in flight: the
-     * answer is taken before the entry closes, because an Enable Slot that
-     * answers after its device has gone would leave the slot the
-     * controller's with no entry to give it back. */
+    /* A command whose result must be consumed before the device closes. */
     int abandoned;
     uint32_t short_by;
     int reporting;
@@ -277,6 +275,11 @@ static uint32_t port_unentered[XHCI_MAX_CONTROLLERS]; /* ports waiting for a tab
 /* This module's own clock, advanced with the driver's. */
 static uint32_t core_ms;
 
+/**
+ * Select the first supported interface on alternate setting zero with all
+ * required endpoints. Collect every selected endpoint from that interface;
+ * discard incomplete candidates before examining the next interface.
+ */
 void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_info *out)
 {
     int offset = 0;
@@ -284,80 +287,50 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
     int in_storage_interface = 0;
     int in_hub_interface = 0;
 
-    out->found = 0;
-    out->kind = USB_KIND_NONE;
-    out->number = 0;
-    out->class_code = 0;
-    out->subclass = 0;
-    out->protocol = 0;
-    out->ep_number = 0;
-    out->ep_max_packet = 0;
-    out->ep_interval = 0;
-    out->ep_out_number = 0;
-    out->ep_out_max_packet = 0;
-    out->config_value = 0;
-
+    k_memset(out, 0, sizeof(*out));
     if (buffer == 0 || length < 9) {
         return;
     }
-    /* The configuration descriptor's own value, which SET_CONFIGURATION
-     * names. Zero is the value that means no configuration, so a device
-     * offering it is offering nothing to select. */
     out->config_value = buffer[5];
     if (out->config_value == 0) {
         return;
     }
 
-    while (offset + 2 <= length) {
+    while (!out->found && offset + 2 <= length) {
         int size = buffer[offset];
         int type = buffer[offset + 1];
-        int in_storage_interface_now;
 
-        /* A descriptor shorter than its header, or longer than what arrived,
-         * ends the walk. Either would otherwise be read past the buffer, and
-         * a length of zero would be walked for ever. */
         if (size < 2 || offset + size > length) {
             break;
         }
 
-        if (type == DESC_INTERFACE && size >= 9) {
-            /* The alternate setting has to be zero: this kernel sends no
-             * SET_INTERFACE, so a device is left on setting zero whatever
-             * else it offers, and taking an endpoint from another setting
-             * would be taking one that is not there. The protocol has to be
-             * one of the two the boot report layouts are defined for, or the
-             * one transport every flash drive carries. */
-            in_boot_interface = (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HID &&
-                                 buffer[offset + 6] == USB_SUBCLASS_BOOT &&
-                                 (buffer[offset + 7] == USB_PROTOCOL_KBD ||
-                                  buffer[offset + 7] == USB_PROTOCOL_MOUSE));
-            in_storage_interface_now =
-                (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_STORAGE &&
-                 buffer[offset + 6] == USB_SUBCLASS_SCSI &&
-                 buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
-            in_storage_interface = in_storage_interface_now;
-            /* A hub: class 9 on its setting zero, with a protocol that says
-             * what translates below it; a SuperSpeed hub's interface says
-             * zero, and its speed is what names it. */
-            in_hub_interface = (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
-                                buffer[offset + 7] <= USB_PROTOCOL_HUB_SUPER);
-            if ((in_boot_interface || in_storage_interface_now || in_hub_interface) &&
-                !out->found && out->kind == USB_KIND_NONE) {
-                out->kind = in_boot_interface  ? USB_KIND_HID
-                            : in_hub_interface ? USB_KIND_HUB
-                                               : USB_KIND_STORAGE;
-                out->number = buffer[offset + 2];
-                out->class_code = buffer[offset + 5];
-                out->subclass = buffer[offset + 6];
-                out->protocol = buffer[offset + 7];
-            } else if (in_storage_interface_now && out->kind != USB_KIND_STORAGE) {
-                /* A storage interface behind an interface of another kind
-                 * this kernel already took: it is not this device's driver's
-                 * to have, and the endpoints below belong to nobody. */
-                in_storage_interface = 0;
+        if (type == DESC_INTERFACE) {
+            k_memset(out, 0, sizeof(*out));
+            out->config_value = buffer[5];
+            in_boot_interface = 0;
+            in_storage_interface = 0;
+            in_hub_interface = 0;
+            if (size >= 9 && buffer[offset + 3] == 0) {
+                in_boot_interface = (buffer[offset + 5] == USB_CLASS_HID &&
+                                     buffer[offset + 6] == USB_SUBCLASS_BOOT &&
+                                     (buffer[offset + 7] == USB_PROTOCOL_KBD ||
+                                      buffer[offset + 7] == USB_PROTOCOL_MOUSE));
+                in_storage_interface = (buffer[offset + 5] == USB_CLASS_STORAGE &&
+                                        buffer[offset + 6] == USB_SUBCLASS_SCSI &&
+                                        buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
+                in_hub_interface = (buffer[offset + 5] == USB_CLASS_HUB &&
+                                    buffer[offset + 7] <= USB_PROTOCOL_HUB_SUPER);
+                if (in_boot_interface || in_storage_interface || in_hub_interface) {
+                    out->kind = in_boot_interface  ? USB_KIND_HID
+                                : in_hub_interface ? USB_KIND_HUB
+                                                   : USB_KIND_STORAGE;
+                    out->number = buffer[offset + 2];
+                    out->class_code = buffer[offset + 5];
+                    out->subclass = buffer[offset + 6];
+                    out->protocol = buffer[offset + 7];
+                }
             }
-        } else if (type == DESC_ENDPOINT && size >= 7 && (in_boot_interface || in_hub_interface) &&
-                   !out->found) {
+        } else if (type == DESC_ENDPOINT && size >= 7 && (in_boot_interface || in_hub_interface)) {
             int address = buffer[offset + 2];
             int attributes = buffer[offset + 3];
 
@@ -368,12 +341,10 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
                 out->ep_interval = buffer[offset + 6];
                 out->found = 1;
             }
-        } else if (type == DESC_ENDPOINT && size >= 7 && in_storage_interface && !out->found) {
+        } else if (type == DESC_ENDPOINT && size >= 7 && in_storage_interface) {
             int address = buffer[offset + 2];
             int attributes = buffer[offset + 3];
 
-            /* A stick answers on one bulk endpoint each way, and this kernel
-             * takes the first of each. The numbers are the device's own. */
             if ((attributes & EP_ATTR_TYPE_MASK) == EP_ATTR_BULK && (address & 0xF) != 0) {
                 if ((address & EP_ADDR_IN) && out->ep_number == 0) {
                     out->ep_number = address & 0xF;
@@ -615,15 +586,11 @@ static int subtree_closing(int hub)
     return 0;
 }
 
-/** Give up on a device, with the reason. */
-/*
- * Give up on a device, saying which port and why, and record the controller's
- * registers once so the first failure after bring-up can be diagnosed.
+/**
+ * Fail a device and close its slot, retaining any outstanding command.
  *
- * `unsupported` below is the other half of this: a device this kernel has no
- * driver for has not failed at anything, and putting it through here told a
- * person at a laptop that its camera and card reader were faults and dumped
- * three lines of xHCI registers after each one.
+ * Cleanup consumes the command's result before releasing its turn or the
+ * device record, so a late Enable Slot result can be closed.
  */
 static void fail(struct usb_device_state *d, const char *why)
 {
@@ -632,7 +599,10 @@ static void fail(struct usb_device_state *d, const char *why)
         xhci_state_record(d->hc); /* once, at the first failure after bring-up */
     }
     if (enumerating[bus_of(d)] == d->index) {
-        enumerating[bus_of(d)] = -1;
+        d->abandoned = !xhci_command_free(d->hc);
+        if (!d->abandoned) {
+            enumerating[bus_of(d)] = -1;
+        }
     }
     if (d->interface.kind == USB_KIND_STORAGE) {
         msc_detach(d->hc, d->slot);
@@ -653,7 +623,7 @@ static void fail(struct usb_device_state *d, const char *why)
             port_refused[bus_of(d)] |= (uint32_t)1u << d->port;
         }
     }
-    if (d->slot > 0) {
+    if (d->slot > 0 || d->abandoned) {
         d->state = ST_CLOSING;
         d->deadline = core_ms + STEP_MS;
         return;
@@ -734,7 +704,7 @@ static void step_closing(struct usb_device_state *d)
             return; /* the controller gives up on it at its own deadline */
         }
         if (done == 1 && d->slot == 0 && result.device > 0) {
-            d->slot = result.device; /* an Enable Slot answered after the pull */
+            d->slot = result.device;
         }
         d->abandoned = 0;
         d->deadline = core_ms + CLOSE_LIMIT_MS;

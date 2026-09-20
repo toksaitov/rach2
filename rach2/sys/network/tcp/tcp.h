@@ -186,7 +186,7 @@ int tcp_port_listening(uint16_t port);
  * Bind a socket to a port in LISTEN for passive opens.
  *
  * 0, `-EADDRINUSE` if a listener already has the port, `-EDESTADDRREQ` if the
- * socket bound none, or `-ENOBUFS` if the connection pool is full. A bare -1
+ * socket bound none, or `-ENOBUFS` if control-block allocation fails. A bare -1
  * would reach userland as `EPERM` through musl's return convention.
  */
 int tcp_listen(struct socket *sock, uint16_t port);
@@ -195,13 +195,20 @@ int tcp_listen(struct socket *sock, uint16_t port);
  * Begin an active open to dst_ip:dst_port, from the socket's bound port when it
  * has one and from a fresh ephemeral otherwise.
  *
- * 0, `-EADDRINUSE` when that local port is already paired with this exact peer,
- * or `-ENOBUFS` if the connection pool is full.
+ * Return 0 when the open has started, `-EADDRINUSE` for a duplicate connection
+ * key, `-EADDRNOTAVAIL` when no ephemeral port is available, or `-ENOBUFS` when
+ * control-block allocation fails.
  */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port);
 
-/** Queue up to len bytes for sending; returns the count accepted, -1 on
- * error. */
+/**
+ * Queue up to `len` bytes and return the count accepted. Return zero when the
+ * send ring is full, or -1 for a missing connection, negative length, or state
+ * other than ESTABLISHED or CLOSE_WAIT.
+ *
+ * Save and mask interrupts across the connection checks, ring update, and
+ * transmit. Retain unacknowledged bytes for retransmission.
+ */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
 /** Detach the socket and begin closing the connection. */
@@ -258,12 +265,12 @@ struct tcp_row {
 };
 
 /**
- * Every live connection as rows in an array from the heap, which the
- * caller frees; how many there are, or -1 when the heap has no room. Taken
- * whole under the lock, so a report is one moment of the list: blocks are
- * made and freed from receive context, and the identity fields come from
- * the block rather than from `sock`, which is cleared while a connection is
- * still closing.
+ * Copy control blocks into a caller-owned array and return the row count.
+ *
+ * Count under `net_lock`, allocate outside it, then copy under the lock up to
+ * the original count. Newly allocated blocks may be included; growth can
+ * exclude older blocks. Return -1 on allocation failure. The caller must free
+ * a non-NULL result even when the returned count is zero.
  */
 int tcp_snapshot(struct tcp_row **rows);
 

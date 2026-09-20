@@ -266,15 +266,14 @@ rach2/sys/usb/core.c:step_device lines 451 a state machine, one arm per state, r
 rach2/sys/usb/core.c:usb_core_step complexity 49 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_core_step lines 151 a state machine, one arm per state, read as a table
 rach2/sys/usb/core.c:usb_parse_config complexity 47 a parser over an external format, one check per field in the format's order
-rach2/sys/usb/core.c:usb_parse_config lines 111 a parser over an external format, one check per field in the format's order
 
 rach2/sys/usb/hub.c:answered complexity 40 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:answered lines 185 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:answered nesting 5 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:hub_attach params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/usb/hub.c:request params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-rach2/sys/usb/hub.c:step_hub complexity 43 a state machine, one arm per state, read as a table
-rach2/sys/usb/hub.c:step_hub lines 152 a state machine, one arm per state, read as a table
+rach2/sys/usb/hub.c:step_hub complexity 47 a state machine, one arm per state, read as a table
+rach2/sys/usb/hub.c:step_hub lines 160 a state machine, one arm per state, read as a table
 rach2/sys/usb/hub.c:step_hub nesting 5 a state machine, one arm per state, read as a table
 
 rach2/sys/usb/msc.c:msc_completion complexity 45 a state machine, one arm per state, read as a table
@@ -376,8 +375,8 @@ tests/host/grubslot_hosttest.c:main lines 240 a test's rows, each a case, read a
 
 tests/host/hid_hosttest.c:main lines 130 a test's rows, each a case, read as one table
 
-tests/host/hub_hosttest.c:main complexity 84 a test's rows, each a case, read as one table
-tests/host/hub_hosttest.c:main lines 630 a test's rows, each a case, read as one table
+tests/host/hub_hosttest.c:main complexity 86 a test's rows, each a case, read as one table
+tests/host/hub_hosttest.c:main lines 636 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit complexity 104 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit lines 305 a test's rows, each a case, read as one table
 
@@ -425,7 +424,7 @@ tests/host/mkfatfixture.c:chk_dir nesting 5 a fixture builder, the volume writte
 tests/host/modlayout_hosttest.c:main lines 154 a test's rows, each a case, read as one table
 
 tests/host/msc_hosttest.c:main complexity 189 a test's rows, each a case, read as one table
-tests/host/msc_hosttest.c:main lines 1172 a test's rows, each a case, read as one table
+tests/host/msc_hosttest.c:main lines 1174 a test's rows, each a case, read as one table
 tests/host/msc_hosttest.c:xhci_submit complexity 37 a test's rows, each a case, read as one table
 tests/host/msc_hosttest.c:xhci_submit lines 131 a test's rows, each a case, read as one table
 
@@ -441,7 +440,7 @@ tests/host/netdev_hosttest.c:main lines 145 a test's rows, each a case, read as 
 
 tests/host/packet_hosttest.c:main lines 159 a test's rows, each a case, read as one table
 
-tests/host/pagecache_hosttest.c:main lines 118 a test's rows, each a case, read as one table
+tests/host/pagecache_hosttest.c:main lines 120 a test's rows, each a case, read as one table
 
 tests/host/partition_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 tests/host/partition_hosttest.c:main lines 132 a test's rows, each a case, read as one table
@@ -479,14 +478,14 @@ tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 140 a test's rows, each a case, read as one table
-tests/host/tcp_hosttest.c:main lines 776 a test's rows, each a case, read as one table
+tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 
 tests/host/uimage_hosttest.c:main lines 132 a test's rows, each a case, read as one table
 
 tests/host/usb_hosttest.c:hub_attach params 8 a test's rows, each a case, read as one table
-tests/host/usb_hosttest.c:main lines 138 a test's rows, each a case, read as one table
+tests/host/usb_hosttest.c:main lines 140 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:quiesce_rows complexity 48 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:quiesce_rows lines 262 a test's rows, each a case, read as one table
 
@@ -499,9 +498,9 @@ tests/host/xhci_hosttest.c:doorbell_rung complexity 26 a test's rows, each a cas
 tests/host/xhci_hosttest.c:endpoint_doorbell complexity 38 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell lines 101 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell nesting 6 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:main complexity 114 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:main lines 1836 a test's rows, each a case, read as one table
-tests/host/xhci_hosttest.c:model_reset lines 105 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:main lines 1841 a test's rows, each a case, read as one table
+tests/host/xhci_hosttest.c:model_reset lines 109 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:model_w32 complexity 39 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:model_w32 lines 146 a test's rows, each a case, read as one table
 
@@ -617,8 +616,8 @@ tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order t
 tests/procprobe.c:probe_main complexity 65 a probe, one sequence of steps in the order the log records them
 tests/procprobe.c:probe_main lines 482 a probe, one sequence of steps in the order the log records them
 
-tests/ptyprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
-tests/ptyprobe.c:_start lines 194 a probe, one sequence of steps in the order the log records them
+tests/ptyprobe.c:_start complexity 47 a probe, one sequence of steps in the order the log records them
+tests/ptyprobe.c:_start lines 198 a probe, one sequence of steps in the order the log records them
 
 tests/rawprobe.c:_start complexity 42 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:_start lines 442 a probe, one sequence of steps in the order the log records them

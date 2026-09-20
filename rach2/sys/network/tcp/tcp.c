@@ -228,20 +228,13 @@ static void ring_get(uint8_t *dst, const uint8_t *ring, uint32_t size, uint32_t 
     }
 }
 
-/*
+/**
  * Send a control segment at snd_nxt. SYN and FIN consume a sequence number and
  * are marked for retransmission until acknowledged.
  *
- * The two are kept differently when the interface will not take the segment.
- * A SYN or a FIN is held by the retransmission below, which keeps its own
- * sequence number and its give-up. A bare acknowledgement is recorded as a
- * debt instead, and the next tick sends a fresh one carrying the receive state
- * as it then stands, so a run of refusals costs one segment rather than a
- * queue of stale ones; any segment that carries an acknowledgement out in the
- * meantime pays the debt. A refusal other than a full ring leaves no debt: it
- * is permanent, and the connection is taken down by the retransmission timer
- * or by its next failure, not by a bare acknowledgement that would fail the
- * same way.
+ * Retry a bare ACK on the next tick only when transmission returns `-ENOBUFS`.
+ * Each retry uses the current receive state. Other errors clear `ack_owed`;
+ * they neither start a retransmission timer nor close the connection.
  */
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
 {
@@ -552,32 +545,30 @@ static void tcp_pump(struct tcb *tcb)
 }
 
 /**
- * Queue up to `len` bytes for transmission and return the count accepted.
+ * Queue up to `len` bytes and return the count accepted. Return zero when the
+ * send ring is full, or -1 for a missing connection, negative length, or state
+ * other than ESTABLISHED or CLOSE_WAIT.
  *
- * Copies into the send ring (bounded by free space measured from the
- * acknowledged position) and kicks tcp_output. Only valid in ESTABLISHED or
- * CLOSE_WAIT; returns -1 on a bad socket, a negative length, or a wrong state.
+ * Save and mask interrupts across the connection checks, ring update, and
+ * transmit. Retain unacknowledged bytes for retransmission.
  */
 int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 {
     struct tcb *tcb;
     uint32_t free_space, copy_len, flags;
 
+    flags = net_lock();
     if (!sock || !sock->tcb || len < 0) {
+        net_unlock(flags);
         return -1;
     }
     tcb = sock->tcb;
 
     if (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) {
+        net_unlock(flags);
         return -1;
     }
 
-    /* Disable interrupts so an IRQ-context send cannot re-enter the stack and
-     * corrupt the shared TX buffers or the ring pointers mid-build. */
-    flags = net_lock();
-
-    /* Free space is measured from the acknowledged position so unacked bytes
-     * stay in the ring for retransmission. */
     free_space = TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack);
     copy_len = (uint32_t)len;
     if (copy_len > free_space)
@@ -607,17 +598,10 @@ static int tcp_local_port_in_use(uint16_t port)
 }
 
 /**
- * Whether a live listener already has `port`. Caller has `net_lock`.
+ * Return whether a LISTEN control block has `port`. Caller holds `net_lock`.
  *
- * The scope is `TCP_LISTEN` and not every in-use TCB, deliberately. An accepted
- * connection and a TIME_WAIT remnant both hold a local port in this table, and
- * `setsockopt` is a no-op here, so `SO_REUSEADDR` buys nothing: a scan that
- * counted them would make restarting dropbear or httpd after a session fail at
- * `bind(22)` or `bind(80)` where today it succeeds. What a connecting, closing
- * or TIME_WAIT connection has is a port against nobody.
- *
- * Answers 0 when the pool was never reserved, since this runs before the
- * allocator that would otherwise catch it.
+ * Connections in other states do not prevent a new listener on the same
+ * local port. This check does not depend on `SO_REUSEADDR`.
  */
 static int tcp_port_has_listener(uint16_t port)
 {
@@ -632,17 +616,12 @@ static int tcp_port_has_listener(uint16_t port)
 }
 
 /**
- * Whether the exact four-tuple this stack keys on is already taken. Caller
- * has `net_lock`.
+ * Return whether a non-listening control block has the same local port,
+ * remote address, and remote port. Caller holds `net_lock`.
  *
- * `tcp_find` keys on the local port, the remote address and the remote port, so
- * two TCBs sharing all three would have one connection's segments delivered to
- * whichever the scan reached first. Only an identical triple is a conflict: a
- * bound port shared with a listener, or with a connection to a different peer,
- * stays legal, since `tcp_find` returns the exact match and falls back to the
- * listener only when there is none.
- *
- * Answers 0 when the pool was never reserved, for the reason above.
+ * These three fields are the key used by `tcp_find`. A listener or a
+ * connection to a different peer may share the local port: `tcp_find` prefers
+ * the exact match and falls back to a listener only when no match exists.
  */
 static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 {
@@ -861,9 +840,11 @@ static void tcp_giveup(struct tcb *tcb)
 static uint32_t tcp_pump_next;
 
 /**
- * Pump a connection's queued bytes from the tick: a refusal that has stood
- * since TCP_REFUSE_GIVEUP_TICKS ago gives the connection up. Returns 1 when
- * the block was freed and the caller must not touch it.
+ * Retry a connection's pending transmissions. Abandon it when repeated
+ * transmit refusals exceed `TCP_REFUSE_GIVEUP_TICKS`.
+ *
+ * Return 1 after abandonment, otherwise 0. Abandonment may free the control
+ * block.
  */
 static int tcp_tick_pump(struct tcb *tcb)
 {
@@ -1069,7 +1050,7 @@ static int backlog_refusal_logged;
  *
  * @return 0, `-EADDRINUSE` if a listener already has the port,
  *         `-EDESTADDRREQ` if the socket never bound one, or `-ENOBUFS` if the
- *         connection pool is full.
+ *         control-block allocation fails.
  */
 int tcp_listen(struct socket *sock, uint16_t port)
 {
@@ -1083,7 +1064,6 @@ int tcp_listen(struct socket *sock, uint16_t port)
         return -EDESTADDRREQ;
     }
 
-    /* Allocating from the shared pool races with the IRQ-context allocator. */
     flags = net_lock();
 
     if (tcp_port_has_listener(port)) {
@@ -1119,8 +1099,9 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * and port, since two such TCBs would have one connection's segments delivered
  * to the other.
  *
- * @return 0, `-EADDRINUSE` for that duplicate, or `-ENOBUFS` if the connection
- *         pool is full.
+ * Return 0 when the open has started, `-EADDRINUSE` for a duplicate connection
+ * key, `-EADDRNOTAVAIL` when no ephemeral port is available, or `-ENOBUFS` when
+ * control-block allocation fails.
  */
 int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 {
@@ -1204,9 +1185,13 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
  * Detach the socket and begin closing the connection.
  *
  * In ESTABLISHED or CLOSE_WAIT, flushes queued data and sends a FIN after the
- * last byte (a graceful teardown that outlives the socket); otherwise frees
- * the TCB. The socket is freed by the caller right after this returns, so the
- * TCB is unlinked from it here.
+ * last byte; otherwise frees the TCB.
+ *
+ * Detach the socket from the control block in both directions. The caller
+ * retains ownership of the socket; shutdown may leave its descriptors open.
+ *
+ * Save and restore the interrupt state, allowing calls from syscall or
+ * interrupt context.
  */
 void tcp_close(struct socket *sock)
 {
@@ -1217,12 +1202,8 @@ void tcp_close(struct socket *sock)
         return;
     tcb = sock->tcb;
 
-    /* Reachable from syscall context (close/exit) and from IRQ context (a reset
-     * or a refused connection); take the lock either way - it is a no-op when
-     * interrupts are already disabled. */
     flags = net_lock();
 
-    /* Detach both ways: the socket is freed right after this returns. */
     sock->tcb = NULL;
     tcb->sock = NULL;
 
@@ -1921,6 +1902,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     }
 }
 
+/**
+ * Copy control blocks into a caller-owned array and return the row count.
+ *
+ * Count under `net_lock`, allocate outside it, then copy under the lock up to
+ * the original count. Newly allocated blocks may be included; growth can
+ * exclude older blocks. Return -1 on allocation failure. The caller must free
+ * a non-NULL result even when the returned count is zero.
+ */
 int tcp_snapshot(struct tcp_row **rows)
 {
     uint32_t flags;
@@ -1929,8 +1918,6 @@ int tcp_snapshot(struct tcp_row **rows)
     int n = 0, room;
 
     *rows = NULL;
-    /* Counted, allocated with the lock dropped, then copied; a block made
-       between the two is left out of this moment's report. */
     flags = net_lock();
     for (t = tcbs; t; t = t->next) {
         n++;

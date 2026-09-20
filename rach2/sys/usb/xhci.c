@@ -202,11 +202,8 @@ struct xhci_slot {
      * goes back in the completion, so a caller that gave up on one can tell
      * the answer to that from the answer to what it is waiting for now. */
     uint32_t generation[XHCI_MAX_DCI];
-    /* The transfers on each endpoint that the controller may still reach:
-     * one record per submission until the caller lets it go, see
-     * `struct xhci_td`. A page's worth, taken when the first endpoint is
-     * opened; a device has endpoints up to index seven. */
-    struct xhci_td *td[XHCI_TD_DCI]; /* each opened endpoint's records */
+    /* Two transfer records per endpoint, allocated on first use. */
+    struct xhci_td *td[XHCI_TD_DCI];
     uint32_t max_packet[XHCI_MAX_DCI];
     uint8_t ep_state[XHCI_MAX_DCI];  /* XHCI_EP_RUNNING, _HALTED or _STOPPED */
     uint8_t quiescing[XHCI_MAX_DCI]; /* the core is stopping it: nothing is submitted */
@@ -220,9 +217,10 @@ struct xhci_slot {
  * interrupt, its own rings and its own completions, and nothing one of them
  * does reaches the other.
  *
- * The rings, contexts and scratchpads are read by the controller at their
- * physical addresses, which in this kernel are the addresses it uses, so they
- * are members here rather than pointers into a heap.
+ * The command ring, event ring, segment table and input context are embedded
+ * in this static record and identity-mapped. The context base array,
+ * scratchpads, device contexts and endpoint rings are allocated from the heap;
+ * their physical addresses are recorded separately from their virtual ones.
  */
 struct xhci_ctrl {
     int used;
@@ -496,6 +494,9 @@ static void take_ports(const pci_device_t *dev)
 /**
  * Bring up one controller found on the bus into the record `hc`.
  *
+ * Map the aperture into the kernel MMIO region and use the returned virtual
+ * address for register access.
+ *
  * @return 0, or -1 with `hc->err` saying what stopped it.
  */
 static int discover_one(struct xhci_ctrl *hc, pci_device_t *dev)
@@ -526,9 +527,6 @@ static int discover_one(struct xhci_ctrl *hc, pci_device_t *dev)
     pci_enable_memory_space(dev);
     pci_enable_bus_master(dev);
 
-    /* `map_mmio` identity-maps and hands back the address to use. Taking what
-     * it returned rather than the physical address again costs nothing and
-     * leaves this driver correct if that ever stops being an identity map. */
     mapped = map_mmio(base, XHCI_MAP_SIZE);
     if (mapped == 0) {
         hc->err = "the controller's aperture could not be mapped";
@@ -843,12 +841,16 @@ static void ctrl_free_tables(struct xhci_ctrl *hc)
     hc->nslots = 0;
 }
 
+/**
+ * Read and validate the controller's register ranges before allocating its
+ * tables. Every accessed register must fit within the mapped aperture.
+ */
 int xhci_read_caps(struct xhci_ctrl *hc)
 {
     uint32_t word;
     uint32_t ports_end;
-    uint32_t doorbells_end;
-    uint32_t runtime_end;
+    uint32_t doorbells_bytes;
+    uint32_t runtime_bytes;
 
     word = r32(hc, XHCI_CAPLENGTH);
     hc->caps.caplength = word & 0xFFu;
@@ -873,23 +875,19 @@ int xhci_read_caps(struct xhci_ctrl *hc)
     hc->caps.dboff = r32(hc, XHCI_DBOFF) & ~0x3u;
     hc->caps.rtsoff = r32(hc, XHCI_RTSOFF) & ~0x1Fu;
 
-    if (hc->caps.caplength < 0x20u || hc->caps.max_ports == 0 || hc->caps.max_slots == 0) {
+    if (hc->caps.caplength < 0x20u || hc->caps.max_ports == 0 || hc->caps.max_slots == 0 ||
+        hc->caps.max_intrs == 0) {
         hc->err = "the controller's capability registers describe no controller";
         return -1;
     }
 
-    /* Everything this driver reaches has to lie inside the window it mapped.
-     * The ports are the far end of the operational registers, sixteen bytes
-     * each; the doorbells and the runtime registers are wherever the
-     * controller put them. */
     ports_end = hc->caps.caplength + XHCI_PORTSC + hc->caps.max_ports * 0x10u;
-    /* Each doorbell is a word, one per slot and one for the commands; each
-     * interrupter is 32 bytes, and the first is 32 bytes into the runtime
-     * registers. What must fit is the end of each set, not its start. */
-    doorbells_end = hc->caps.dboff + (hc->caps.max_slots + 1u) * 4u;
-    runtime_end = hc->caps.rtsoff + 0x20u + hc->caps.max_intrs * 0x20u;
-    if (ports_end > XHCI_MAP_SIZE || doorbells_end > XHCI_MAP_SIZE || runtime_end > XHCI_MAP_SIZE ||
-        hc->caps.dboff == 0 || hc->caps.rtsoff == 0) {
+    doorbells_bytes = (hc->caps.max_slots + 1u) * 4u;
+    runtime_bytes = 0x20u + hc->caps.max_intrs * 0x20u;
+    if (ports_end > XHCI_MAP_SIZE || hc->caps.dboff == 0 || hc->caps.rtsoff == 0 ||
+        hc->caps.dboff > XHCI_MAP_SIZE || hc->caps.rtsoff > XHCI_MAP_SIZE ||
+        doorbells_bytes > XHCI_MAP_SIZE - hc->caps.dboff ||
+        runtime_bytes > XHCI_MAP_SIZE - hc->caps.rtsoff) {
         hc->err = "the controller's registers do not fit the mapped aperture";
         return -1;
     }
@@ -1104,10 +1102,9 @@ static int past(struct xhci_ctrl *hc, uint32_t deadline)
 /*
  * A device's context is an array of entries indexed by the endpoint's device
  * context index: one for the slot, then one per endpoint direction. Endpoint
- * zero is index one, and an endpoint numbered N is index 2N for the direction
- * out and 2N plus one for in. This kernel reaches endpoint numbers one to
- * three, which is index seven at the most, and refuses anything above that
- * rather than growing a table for devices it has no use for.
+ * numbered N is index 2N for the direction out and 2N plus one for in.
+ * Endpoint numbers 1 through 15 use indices 2 through 31. Endpoint zero uses
+ * index 1.
  */
 
 /* Command and transfer block types this phase adds. */
@@ -1941,14 +1938,16 @@ void xhci_release(struct xhci_ctrl *hc)
     klog(KLOG_INFO, "usb", "handoff: the controller was given back to the firmware");
 }
 
+/**
+ * Attempt to halt the controller, polling for at most 16 ms.
+ * Retain operating-system ownership during shutdown to avoid firmware legacy
+ * reinitialization. Report a timeout if the halted bit remains clear.
+ */
 void xhci_stop(struct xhci_ctrl *hc)
 {
     uint32_t polls;
 
     if (!hc->running) {
-        /* Nothing was started, so there is nothing to halt and no register
-         * here may be written: a controller that refused its own reset, or
-         * that was never found, is not this kernel's to touch. */
         xhci_release(hc);
         return;
     }
@@ -1961,23 +1960,9 @@ void xhci_stop(struct xhci_ctrl *hc)
         hc->io->udelay(XHCI_POLL_US);
     }
     if (!(op_r32(hc, XHCI_USBSTS) & USBSTS_HCH)) {
-        /* A controller still running as the machine restarts is what other
-         * operating systems carry a quirk for on this exact part. Saying so is
-         * all this kernel can do about it. */
         klog(KLOG_WARN, "usb", "stop: the controller would not halt");
+        return;
     }
-
-    /*
-     * The controller is halted and it is not given back. Restoring the
-     * firmware's interrupt sources and its claim wakes its system-management
-     * handler, which re-initialises USB legacy support before this kernel's
-     * next instruction runs: on the notebook this milestone was written for
-     * that took twenty seconds, in the middle of a reboot, every time. The
-     * firmware initialises USB again on the next boot whatever this kernel
-     * leaves behind, so the wait gained nothing. A bring-up that fails is the
-     * other case and still gives it back, because a machine with no USB driver
-     * should keep whatever its firmware was doing for it.
-     */
     klog(KLOG_INFO, "usb", "stop: the controller is halted");
 }
 
@@ -2322,9 +2307,16 @@ static uint32_t dci_of(const struct usb_endpoint *ep)
     return dci < XHCI_MAX_DCI ? dci : 0;
 }
 
+/**
+ * Add an endpoint to the device's configuration.
+ *
+ * Context Entries remains the highest device context index among all
+ * configured endpoints, including the endpoint being added.
+ */
 int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *ep)
 {
     uint32_t dci = dci_of(ep);
+    uint32_t last_ctx = dci;
     uint32_t *control;
     uint32_t *slot;
     uint32_t *entry;
@@ -2350,10 +2342,13 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     control = context_entry(hc, hc->input_ctx, 0);
     control[1] = 0x1u | (1u << dci); /* the slot context and this endpoint */
 
-    /* The slot context goes with every configure, and its highest used index
-     * has to name this endpoint or the controller will not schedule it. */
+    for (i = dci + 1u; i < XHCI_MAX_DCI; i++) {
+        if (s->open[i]) {
+            last_ctx = i;
+        }
+    }
     slot = context_entry(hc, hc->input_ctx, 1);
-    slot_words(s, slot, dci);
+    slot_words(s, slot, last_ctx);
 
     type = (ep->type == USB_EP_INTERRUPT) ? (ep->direction == USB_DIR_IN ? 7u : 3u)
                                           : (ep->direction == USB_DIR_IN ? 6u : 2u);

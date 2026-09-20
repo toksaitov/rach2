@@ -15,6 +15,7 @@
 #include "../fs/file.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
+#include "../mm/paging.h"
 #include "../mm/kheap.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
@@ -128,11 +129,6 @@ static int fd_is_nonblock(fd_entry_t *e)
 }
 
 /**
- * Read from the read end. Blocks until at least one byte is available or every
- * writer has closed (EOF -> 0). Returns the byte count read (may be < count),
- * -EAGAIN if O_NONBLOCK and empty, -EINTR if a signal interrupts the wait.
- */
-/**
  * The bytes of `n` from `addr` that lie in `addr`'s own page: a copy into
  * user memory goes a page at a time, so a page that faults leaves the ones
  * before it moved and reported.
@@ -144,14 +140,29 @@ static uint32_t page_piece(uint32_t addr, uint32_t n)
     return n < left ? n : left;
 }
 
+/**
+ * Read one batch of available bytes, waiting only before the first transfer.
+ *
+ * An empty pipe returns EOF when its writers close, -EAGAIN in nonblocking
+ * mode, or -EINTR on an interrupted wait. A later empty ring or user-copy
+ * fault returns the count already copied. A fault leaves its bytes unread.
+ *
+ * Resolve each user page before selecting a ring span. Recheck the ring
+ * after any operation that can sleep; copying a span and advancing its
+ * counter must not be separated by a context switch.
+ *
+ * The checked copy's repeated prefault finds the page present and needs no
+ * allocation. User pages are not evicted or shared between threads, and
+ * interrupt preemption is deferred until the syscall returns.
+ */
 static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     pipe_t *p = (pipe_t *)e->priv;
     uint32_t done = 0;
-    uint32_t to_read;
+    uint32_t to_read = count;
 
     if (!(e->flags & FD_FLAG_READ)) {
-        return -EBADF; /* the write end is not readable */
+        return -EBADF;
     }
     if (count == 0) {
         return 0;
@@ -160,45 +171,47 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
         return -EFAULT;
     }
 
-    /* Block until data arrives or the last writer closes. */
-    while (pipe_available(p) == 0) {
-        if (!p->write_open) {
-            return 0; /* EOF: all write ends closed and the buffer is drained */
-        }
-        if (fd_is_nonblock(e)) {
-            return -EAGAIN;
-        }
-        if (wq_wait_event(&p->read_wq, pipe_readable, p) < 0) {
-            return -EINTR;
-        }
-    }
-
-    /* Return what is available now, up to count (POSIX pipe read semantics:
-     * a single batch, not a fill-to-count loop). The bytes go straight
-     * from the ring's spans to the caller, a user page at a time: a page
-     * that faults leaves its bytes in the ring for the next read, and the
-     * bytes before it are reported. */
-    to_read = pipe_available(p);
-    if (to_read > count) {
-        to_read = count;
-    }
     while (done < to_read) {
         const uint8_t *at;
-        uint32_t chunk = pipe_ring_read_span(p, &at);
+        uint32_t addr = (uint32_t)(__force uintptr_t)(buf + done);
+        uint32_t chunk;
+
+        if (pipe_available(p) == 0) {
+            if (done > 0 || !p->write_open) {
+                break;
+            }
+            if (fd_is_nonblock(e)) {
+                return -EAGAIN;
+            }
+            if (wq_wait_event(&p->read_wq, pipe_readable, p) < 0) {
+                return -EINTR;
+            }
+            continue;
+        }
+
+        if (!vm_prefault_range(addr, page_piece(addr, to_read - done), 1)) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        chunk = pipe_ring_read_span(p, &at);
+        if (chunk == 0) {
+            continue;
+        }
+        if (done == 0 && to_read > pipe_available(p)) {
+            to_read = pipe_available(p);
+        }
 
         if (chunk > to_read - done) {
             chunk = to_read - done;
         }
-        chunk = page_piece((uint32_t)(__force uintptr_t)(buf + done), chunk);
+        chunk = page_piece(addr, chunk);
         if (copy_to_user((void __user *)(buf + done), at, chunk) != 0) {
-            wq_wake_all(&p->write_wq);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         pipe_ring_consume(p, chunk);
         done += chunk;
+        wq_wake_all(&p->write_wq);
     }
 
-    wq_wake_all(&p->write_wq); /* space freed: wake any blocked writer */
     return (int32_t)done;
 }
 
@@ -206,6 +219,16 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
  * Write to the write end. Blocks while the FIFO is full (until space frees or
  * every reader closes). A write with no readers raises SIGPIPE and returns
  * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full.
+ * A user-copy fault returns -EFAULT or the count already written. Readers
+ * are woken whenever a transfer changes an empty ring to a nonempty one.
+ *
+ * Resolve each user page before selecting a ring span. Recheck the ring
+ * after any operation that can sleep; copying a span and advancing its
+ * counter must not be separated by a context switch.
+ *
+ * The checked copy's repeated prefault finds the page present and needs no
+ * allocation. User pages are not evicted or shared between threads, and
+ * interrupt preemption is deferred until the syscall returns.
  */
 static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -213,7 +236,7 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     uint32_t done = 0;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
-        return -EBADF; /* the read end is not writable */
+        return -EBADF;
     }
     if (count == 0) {
         return 0;
@@ -225,9 +248,8 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     while (done < count) {
         uint32_t space;
         uint32_t chunk;
+        uint32_t addr = (uint32_t)(__force uintptr_t)(buf + done);
 
-        /* A vanished reader is fatal to the write regardless of buffer
-         * space. */
         if (!p->read_open) {
             signal_post(current_proc, SIGPIPE);
             return (done > 0) ? (int32_t)done : -EPIPE;
@@ -244,20 +266,24 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             continue;
         }
 
-        /* The bytes go straight into the ring's free span, a user page at
-         * a time, and the reader is woken when the ring goes from empty to
-         * holding bytes: that is the transition a reader sleeps on, and a
-         * writer that fills the ring, waits, and fills it again wakes the
-         * reader at each refill. */
+        if (!vm_prefault_range(addr, page_piece(addr, count - done), 0)) {
+            return (done > 0) ? (int32_t)done : -EFAULT;
+        }
+        if (!p->read_open) {
+            continue;
+        }
         {
             uint8_t *at;
             int was_empty = pipe_available(p) == 0;
 
             chunk = pipe_ring_write_span(p, &at);
+            if (chunk == 0) {
+                continue;
+            }
             if (chunk > count - done) {
                 chunk = count - done;
             }
-            chunk = page_piece((uint32_t)(__force uintptr_t)(buf + done), chunk);
+            chunk = page_piece(addr, chunk);
             if (copy_from_user(at, (const void __user *)(buf + done), chunk) != 0) {
                 return (done > 0) ? (int32_t)done : -EFAULT;
             }

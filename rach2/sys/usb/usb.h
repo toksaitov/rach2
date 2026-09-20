@@ -42,13 +42,10 @@ void usb_poll(void);
 void usb_stop(void);
 
 /**
- * How many times the timer's pump found work a message should have brought.
+ * Count timer drains with work but no observed pending USB interrupt.
  *
- * Zero under the emulator, where a message sent has reached the processor by
- * the time the timer's pump asks. On hardware the event is in memory while
- * the message is still on its way, and a small count beside the vector's own
- * is that race rather than a lost edge. `/proc/interrupts` reports it, and
- * the suite that silences the controller on purpose requires it to rise.
+ * Counting starts when any USB interrupt source is enabled. A message
+ * still in transit can increase this count. `/proc/interrupts` reports it.
  */
 uint32_t usb_fallback_count(void);
 

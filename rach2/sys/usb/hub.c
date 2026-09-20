@@ -188,6 +188,7 @@ struct hub_port {
     uint32_t power_on_ms;   /* until the port is powered on again, or 0 */
     int off;                /* left powered off after over-current recurred */
     int warm;               /* a warm reset asked for after a link error */
+    int warm_pending;       /* waiting for earlier change bits to be cleared */
     int publish;            /* connected at the scan; told to the core when it ends */
 };
 
@@ -356,7 +357,7 @@ int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int p
     struct hub *h = 0;
 
     for (i = 0; i < HUB_MAX; i++) {
-        if (!hub_at(i)->used) {
+        if (!hubs[i]) {
             h = hub_take(i);
             if (!h) {
                 klog(KLOG_WARN, "usb", "hub: device %d refused: no frame for its record", device);
@@ -481,20 +482,7 @@ static void over_current(struct hub *h, int port)
     p->to_clear |= POWER_OFF_BIT;
 }
 
-/**
- * A port's status has just been read: record it, and for a change reported
- * on the change endpoint, act on each change bit and acknowledge it.
- *
- * A connection change is a change of identity whatever the status says
- * now: the core closes what was below the port before a device that is
- * there is looked at. An enable lost is recorded and the device below
- * closed; the core enumerates again if the connection is still there. An
- * over-current, found by the first scan or reported later, is answered by
- * `over_current`.
- */
-/* The change bits a port can report and this driver acknowledges: USB 2's
- * five, or USB 3's, which drop enable and suspend and add the warm reset,
- * the link state and the configuration error. */
+/** Return the port change bits acknowledged for this hub's protocol. */
 static uint16_t change_mask(const struct hub *h)
 {
     if (h->super) {
@@ -503,6 +491,52 @@ static uint16_t change_mask(const struct hub *h)
     }
     return C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
            C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT;
+}
+
+/**
+ * Record port status and process its reported changes.
+ *
+ * A connection change closes the previous device even when the port
+ * remains connected. Process concurrent changes before acknowledging
+ * their bits.
+ *
+ * The first scan publishes connections after all ports have been read.
+ * Later reads close an old connection before power or link recovery.
+ * Power-off prevents enumeration and warm resets. A completed warm reset
+ * is processed before a new link fault. A new warm reset waits until the
+ * old change bits have been cleared, so their acknowledgement cannot clear
+ * its completion. A connection change cancels the previous reset.
+ */
+/**
+ * Act on a port's link and enable changes, and start the device below.
+ *
+ * A link that went inactive on a SuperSpeed hub is warm reset; an enable lost
+ * on a lower-speed hub closes the device below and starts the connect window
+ * again. A connection change, or that lost enable, then starts enumeration
+ * unless a warm reset is already in flight.
+ */
+static void port_link_change(struct hub *h, int port, uint16_t status, uint16_t change, int now)
+{
+    struct hub_port *p = &h->port[port - 1];
+    int enable_lost = !h->super && (change & C_PORT_ENABLE_BIT) && !(status & PORT_STAT_ENABLE) &&
+                      now && p->reset == RESET_NONE;
+
+    if (h->super && (change & (C_PORT_LINK_STATE_BIT | C_PORT_CONFIG_ERROR_BIT)) && now &&
+        PORT_LINK_STATE(status) == LINK_SS_INACTIVE && !p->warm) {
+        klog(KLOG_WARN, "usb", "hub: device %d port %d: link inactive; warm reset", h->device,
+             port);
+        usb_core_hub_port(h->index, port - 1, 0);
+        p->warm = 1;
+        p->warm_pending = 1;
+    }
+    if (enable_lost) {
+        klog(KLOG_WARN, "usb", "hub: device %d port %d: enable lost", h->device, port);
+        usb_core_hub_port(h->index, port - 1, 0);
+        p->connect_ms = hub_ms;
+    }
+    if (now && !p->warm && ((change & C_PORT_CONNECTION_BIT) || enable_lost)) {
+        usb_core_hub_port(h->index, port - 1, 1);
+    }
 }
 
 static void port_read(struct hub *h, int port)
@@ -520,13 +554,6 @@ static void port_read(struct hub *h, int port)
     }
     p->known = 1;
     if (h->state == HUB_SCAN) {
-        /* The change bits found by the first scan are acknowledged before
-         * the change endpoint is read, or the hub would report the same
-         * connections a second time and each device would arrive twice. A
-         * connection is told to the core when the scan ends and not here:
-         * the core gives a connection a fixed time to settle, and a scan
-         * that outlasts it, on a slow machine, would have the port let go
-         * before the hub could report it settled. */
         p->to_clear = change & change_mask(h);
         if (status & PORT_STAT_OVER_CURRENT) {
             over_current(h, port);
@@ -536,49 +563,30 @@ static void port_read(struct hub *h, int port)
         return;
     }
     if (h->change_reading != port) {
-        return; /* a read for a reset, which its own arm judges */
+        return;
     }
     h->change_reading = 0;
     p->recheck = 0;
     p->to_clear = change & change_mask(h);
-    if (change & C_PORT_OVER_CURRENT_BIT) {
-        if (status & PORT_STAT_OVER_CURRENT) {
-            over_current(h, port);
-        }
-    } else if (change & C_PORT_CONNECTION_BIT) {
-        /* A connection change ends a warm reset: a pull reports the link
-         * falling inactive a moment before it reports the disconnection,
-         * and a warm reset on an empty port never reports its end. */
+    if (change & C_PORT_CONNECTION_BIT) {
         p->warm = 0;
+        p->warm_pending = 0;
         p->connect_ms = hub_ms;
-        usb_core_hub_port(h->index, port - 1, now);
-    } else if (h->super && (change & (C_PORT_LINK_STATE_BIT | C_PORT_CONFIG_ERROR_BIT)) && now &&
-               PORT_LINK_STATE(status) == LINK_SS_INACTIVE && !p->warm) {
-        /* USB 3.0 10.3.1.4: a link in SS.Inactive stays there until a warm
-         * reset. The device below cannot transfer, so it is closed and the
-         * reset asked for; the port reports no connection until the reset
-         * has ended, and then the core enumerates what is there. */
-        klog(KLOG_WARN, "usb", "hub: device %d port %d: link inactive; warm reset", h->device,
-             port);
         usb_core_hub_port(h->index, port - 1, 0);
-        p->warm = 1;
-        if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, BH_PORT_RESET, port, 0, REQ_WARM_RESET,
-                    port) != 0) {
-            p->warm = 0;
-        }
-    } else if (h->super && p->warm && (change & C_BH_PORT_RESET_BIT)) {
-        /* The port reports connected again from here, after its debounce,
-         * and the core's pass finds it with no entry and enumerates what is
-         * there; the driver arrives nothing itself. */
-        p->warm = 0;
-        p->connect_ms = hub_ms;
-    } else if ((change & C_PORT_ENABLE_BIT) && !(status & PORT_STAT_ENABLE) && now &&
-               p->reset == RESET_NONE) {
-        klog(KLOG_WARN, "usb", "hub: device %d port %d: enable lost", h->device, port);
-        usb_core_hub_port(h->index, port - 1, 0);
-        p->connect_ms = hub_ms;
-        usb_core_hub_port(h->index, port - 1, 1);
     }
+    if (h->super && p->warm && !p->warm_pending && (change & C_BH_PORT_RESET_BIT)) {
+        p->warm = 0;
+        p->connect_ms = hub_ms;
+    }
+    if ((change & C_PORT_OVER_CURRENT_BIT) && (status & PORT_STAT_OVER_CURRENT)) {
+        p->warm = 0;
+        p->warm_pending = 0;
+        over_current(h, port);
+    }
+    if (p->off || p->power_on_ms != 0) {
+        return;
+    }
+    port_link_change(h, port, status, change, now);
 }
 
 /**
@@ -965,6 +973,14 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 /* The read could not go out: it is owed again. */
                 h->change_reading = 0;
             }
+            if (p->warm_pending && p->to_clear == 0 && !p->recheck) {
+                p->warm_pending = 0;
+                if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, BH_PORT_RESET, i + 1, 0,
+                            REQ_WARM_RESET, i + 1) == 0) {
+                    return;
+                }
+                p->warm = 0;
+            }
             if (p->power_on_ms != 0) {
                 p->power_on_ms = (p->power_on_ms > elapsed_ms) ? p->power_on_ms - elapsed_ms : 0;
                 if (p->power_on_ms == 0) {
@@ -1038,22 +1054,17 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
     }
 }
 
+/**
+ * Advance active hubs and release detached records after slot closure.
+ *
+ * A detached record remains unavailable for reuse while the controller
+ * can access its control or interrupt-transfer buffers.
+ */
 void hub_step(uint32_t elapsed_ms)
 {
     int i;
 
     hub_ms += elapsed_ms;
-    /*
-     * A hub that has gone gives its frame back here, and not where it was
-     * released: the record is the frame, and a caller that gave it back
-     * itself would go on reading what it had just handed away.
-     *
-     * It waits for the core's entry to close as well. The controller may
-     * still have a transfer outstanding on the hub's change endpoint, and it
-     * writes that report into this frame; the entry closes only once the
-     * slot has been given back, which is when the controller is finished
-     * with it.
-     */
     for (i = 0; i < HUB_MAX; i++) {
         struct usb_location where;
 

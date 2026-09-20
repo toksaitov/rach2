@@ -930,6 +930,71 @@ static struct block_request *make_request(int write, uint64_t lba, uint32_t coun
     return &r;
 }
 
+/** Count transfer, retry and recovery time against each unit's deadline. */
+static void initialization_deadline(void)
+{
+    int i;
+    int states[] = {MSC_STATE_MAX_LUN, MSC_STATE_INQUIRY,  MSC_STATE_SERIAL,     MSC_STATE_TEST,
+                    MSC_STATE_SENSE,   MSC_STATE_CAPACITY, MSC_STATE_CAPACITY16, MSC_STATE_MODE};
+    int stages[] = {STAGE_IDLE, STAGE_CBW,   STAGE_DATA,  STAGE_CSW,
+                    STAGE_DONE, STAGE_CLASS, STAGE_FINISH};
+    unsigned int state;
+    unsigned int stage;
+
+    model_reset();
+    dev.lun_ready_after[0] = 100000;
+    CHECK("a slow unit attaches", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    for (i = 0; i < 99; i++) {
+        pump(100);
+    }
+    CHECK("a slow unit retains the last 100 ms", drops == 0);
+    pump(100);
+    CHECK("initialization expires after ten elapsed seconds", drops == 1 && arrivals == 0);
+    pump(0);
+    CHECK("an expired unit is not dropped twice", drops == 1);
+
+    for (state = 0; state < sizeof(states) / sizeof(states[0]); state++) {
+        for (stage = 0; stage < sizeof(stages) / sizeof(stages[0]); stage++) {
+            model_reset();
+            CHECK("a deadline case attaches", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+            sticks[0].state = states[state];
+            sticks[0].stage = stages[stage];
+            sticks[0].owned = 1;
+            sticks[0].ready_left = 10;
+            sticks[0].deadline = MSC_STEP_MS;
+            msc_step(10);
+            CHECK("every initialization state and stage expires before it advances",
+                  drops == 1 && sticks[0].state == MSC_STATE_REFUSED && sticks[0].owned &&
+                      sticks[0].used && arrivals == 0 && pages_reused == 0);
+        }
+    }
+    model_reset();
+    CHECK("a recovering unit attaches", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    sticks[0].recover = RECOVER_CLEAR_IN;
+    sticks[0].ready_left = 10;
+    sticks[0].deadline = MSC_STEP_MS;
+    msc_step(10);
+    CHECK("recovery does not extend initialization", drops == 1);
+
+    model_reset();
+    dev.max_lun = 1;
+    CHECK("two slow units attach", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    for (i = 0; i < 40 && !msc_ready(0); i++) {
+        pump(500);
+    }
+    CHECK("each unit gets a separate elapsed deadline",
+          msc_ready(0) && arrivals == 2 && drops == 0 && i * 500 > MSC_READY_MS);
+    msc_step(MSC_READY_MS);
+    CHECK("a ready device has no initialization deadline", msc_ready(0) && drops == 0);
+
+    model_reset();
+    CHECK("zero elapsed time attaches", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    for (i = 0; i < 50; i++) {
+        pump(0);
+    }
+    CHECK("interrupt pumps do not consume elapsed time", msc_ready(0) && drops == 0);
+}
+
 int main(void)
 {
     static unsigned char page[8 * SECTOR];
@@ -2097,6 +2162,8 @@ int main(void)
               sticks[0].stage == STAGE_DATA && block.completions == 0);
         dev.vanish_at = 0;
     }
+
+    initialization_deadline();
 
     if (fails == 0) {
         printf("msc_hosttest: OK\n");

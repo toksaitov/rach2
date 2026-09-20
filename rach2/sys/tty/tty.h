@@ -117,9 +117,12 @@ int tty_inq(struct tty *t);
  * queued-but-unread byte. */
 void tty_flush_input(struct tty *t);
 
-/* Hang up: mark end-of-file at the current input position and wake all readers,
- * so a blocked reader/poller returns EOF (used when a pty master closes on its
- * slave). Already-queued input is still read first. */
+/**
+ * Set an EOF marker after queued input and wake readers.
+ *
+ * Canonical reads consume this marker once. The endpoint must maintain
+ * persistent hangup state for subsequent reads and other blocked readers.
+ */
 void tty_hangup(struct tty *t);
 
 #endif /* _TTY_H_ */

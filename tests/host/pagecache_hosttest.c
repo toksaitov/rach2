@@ -9,7 +9,8 @@
  * the disk: a fault must fill the right page once, a re-touch within
  * residency must hit (not re-read), an eviction must write back iff dirty,
  * and a dirty page thrashed out and re-read must come back with its bytes
- * intact. Returns the failed-check count (0 == pass).
+ * intact. The writer models a sleep while another cache operation runs.
+ * Return 0 when every check passes, or 1 on failure.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
@@ -20,6 +21,8 @@ void k_panic(const char *s);
 
 #include "mm/pagecache.c"
 
+extern int dprintf(int fd, const char *format, ...);
+
 void k_panic(const char *s)
 {
     (void)s;
@@ -28,11 +31,12 @@ void k_panic(const char *s)
 
 static int fails;
 
-#define CHECK(cond)    \
-    do {               \
-        if (!(cond)) { \
-            fails++;   \
-        }              \
+#define CHECK(cond)                                                \
+    do {                                                           \
+        if (!(cond)) {                                             \
+            dprintf(2, "pagecache-hosttest: failed: %s\n", #cond); \
+            fails++;                                               \
+        }                                                          \
     } while (0)
 
 /* A fake disk of 64 pages, with per-page read/write counters so the test can
@@ -41,6 +45,8 @@ static int fails;
 static uint8_t fake_disk[FAKE_PAGES][PC_PAGE_SIZE];
 static uint32_t fake_reads[FAKE_PAGES];
 static uint32_t fake_writes[FAKE_PAGES];
+static uint32_t fake_attempts[FAKE_PAGES];
+static void (*fake_write_pause)(uint32_t disk_off, const void *page);
 
 /* Fault injection for the writeback paths: fail one page's writes, or all of
    them, so the retain-on-failure machinery can be exercised. */
@@ -62,21 +68,36 @@ static int fake_read(uint32_t disk_off, void *page)
     return 0;
 }
 
+/**
+ * Sample a page, then suspend before returning the write status.
+ *
+ * The callback models another process running during a sleeping write.
+ * Clear it before entry so competing writebacks cannot recurse forever.
+ */
 static int fake_write(uint32_t disk_off, const void *page)
 {
     uint32_t p = disk_off / PC_PAGE_SIZE;
     uint32_t i;
+    int failed;
+    void (*pause)(uint32_t, const void *);
+
     if (p >= FAKE_PAGES) {
         return -1;
     }
-    if (fake_write_fail_all || p == fake_write_fail) {
-        return -1;
+    ++fake_attempts[p];
+    failed = fake_write_fail_all || p == fake_write_fail;
+    if (!failed) {
+        for (i = 0; i < PC_PAGE_SIZE; ++i) {
+            fake_disk[p][i] = ((const uint8_t *)page)[i];
+        }
+        ++fake_writes[p];
     }
-    for (i = 0; i < PC_PAGE_SIZE; ++i) {
-        fake_disk[p][i] = ((const uint8_t *)page)[i];
+    pause = fake_write_pause;
+    fake_write_pause = 0;
+    if (pause) {
+        pause(disk_off, page);
     }
-    ++fake_writes[p];
-    return 0;
+    return failed ? -1 : 0;
 }
 
 /* Stand in for the CPU touching window page `p`: fault it (read or write), and
@@ -91,6 +112,108 @@ static void touch(uint32_t p, int write, uint8_t marker)
         CHECK(page != 0);
         if (page) {
             page[0] = marker;
+        }
+    }
+}
+
+enum write_race {
+    RACE_RECLAIM,
+    RACE_REUSE,
+    RACE_SYNC_CLEAN,
+    RACE_SYNC_DIRTY,
+    RACE_EVICT_DIRTY,
+    RACE_COUNT
+};
+
+static enum write_race race;
+static uint32_t race_calls;
+
+/**
+ * Run a competing cache operation while the backing writer is suspended.
+ *
+ * The writer has sampled the old bytes but has not returned its status.
+ * A store at this point must remain dirty even if that write succeeds.
+ */
+static void race_during_write(uint32_t disk_off, const void *page)
+{
+    uint32_t written = 0;
+
+    ++race_calls;
+    CHECK(disk_off == 0);
+    CHECK(pc_test_page(0) == page);
+    CHECK(!pc_slots[0].dirty);
+    if (race == RACE_RECLAIM) {
+        CHECK(pc_shrink(PC_SLOTS, 0, &written) == PC_SLOTS - 1u);
+        CHECK(written == 0);
+    } else if (race == RACE_REUSE) {
+        CHECK(pc_fault(PCWIN_BASE + PC_PAGE_SIZE, 0) == 0);
+        CHECK(pc_test_page(PC_PAGE_SIZE) == 0);
+    } else {
+        if (race == RACE_SYNC_DIRTY || race == RACE_EVICT_DIRTY) {
+            touch(0, 1, 0xD2u);
+        }
+        if (race == RACE_EVICT_DIRTY) {
+            CHECK(pc_evict(0) == -1);
+        } else {
+            CHECK(pc_sync() == -1);
+        }
+    }
+    CHECK(pc_test_page(0) == page);
+    CHECK(pc_slots[0].page == page);
+    CHECK(pc_slots[0].disk_off == 0);
+    CHECK(fake_attempts[0] == 1);
+}
+
+/**
+ * Check sync and eviction across successful and failed sleeping writes.
+ *
+ * Each case uses one live slot. Reclaim must leave it resident, a miss must
+ * not reuse it, and another writeback must report it busy without writing.
+ * Failed or redirtied pages must retain their bytes for a successful retry.
+ */
+static void test_sleeping_writeback(void)
+{
+    int evict, fail;
+
+    for (evict = 0; evict < 2; ++evict) {
+        for (fail = 0; fail < 2; ++fail) {
+            for (race = RACE_RECLAIM; race < RACE_COUNT; ++race) {
+                int dirty = race == RACE_SYNC_DIRTY || race == RACE_EVICT_DIRTY;
+                int retained = !evict || fail || dirty;
+                int rc;
+                uint8_t *page;
+                uint8_t marker = dirty ? 0xD2u : 0xD1u;
+
+                init_pagecache();
+                pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+                CHECK(pc_set_capacity(1) == 0);
+                fake_disk[0][0] = 0;
+                fake_attempts[0] = 0;
+                touch(0, 1, 0xD1u);
+                fake_write_fail_all = fail;
+                race_calls = 0;
+                fake_write_pause = race_during_write;
+                rc = evict ? pc_evict(0) : pc_sync();
+                CHECK(rc == ((fail || (evict && dirty)) ? -1 : 0));
+                CHECK(race_calls == 1);
+                CHECK(!pc_slots[0].pinned);
+                CHECK(fake_disk[0][0] == (fail ? 0 : 0xD1u));
+                CHECK(pc_stat_writebacks() == (fail ? 0u : 1u));
+                page = pc_test_page(0);
+                CHECK((page != 0) == retained);
+                if (page) {
+                    CHECK(page[0] == marker);
+                    CHECK(pc_slots[0].dirty == (fail || dirty));
+                }
+                fake_write_fail_all = 0;
+                CHECK(pc_sync() == 0);
+                CHECK(fake_disk[0][0] == marker);
+                CHECK(pc_evict(0) == 0);
+                CHECK(pc_test_page(0) == 0);
+                touch(0, 0, 0);
+                page = pc_test_page(0);
+                CHECK(page != 0 && page[0] == marker);
+            }
         }
     }
 }
@@ -214,5 +337,7 @@ int main(void)
         CHECK(fake_disk[p][0] == (uint8_t)(0xC0u + (p - 20u)));
     }
 
-    return (fails > 100) ? 100 : fails;
+    test_sleeping_writeback();
+    dprintf(1, "pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
+    return fails ? 1 : 0;
 }

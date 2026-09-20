@@ -149,9 +149,12 @@ int netconf_address_is_impossible(uint32_t ip)
     return top == 0u || top == 127u || top >= 224u;
 }
 
+static struct netdev second_iface;
+
 int netconf_is_broadcast(uint32_t ip)
 {
-    return ip == 0xFFFFFFFFu || ip == ((net_ip_addr & net_ip_mask) | ~net_ip_mask);
+    return ip == 0xFFFFFFFFu || ip == (the_iface.ip | ~the_iface.mask) ||
+           (second_iface.mask != 0 && ip == (second_iface.ip | ~second_iface.mask));
 }
 
 #include "../../rach2/sys/network/arp/arp.c"
@@ -170,9 +173,9 @@ static int fails;
         }                                   \
     } while (0)
 
-/** Feed one ARP packet: `op`, from `sender_ip` and a MAC ending in
- *  `mac_last`, about `target_ip`. */
-static void feed(int op, uint32_t sender_ip, uint8_t mac_last, uint32_t target_ip)
+/** Feed an Ethernet/IPv4 ARP packet to `nd`. */
+static void feed_on(struct netdev *nd, int op, uint32_t sender_ip, uint8_t mac_last,
+                    uint32_t target_ip)
 {
     uint8_t pkt[28];
     int i;
@@ -199,7 +202,13 @@ static void feed(int op, uint32_t sender_ip, uint8_t mac_last, uint32_t target_i
     pkt[25] = (unsigned char)((target_ip >> 16) & 0xff);
     pkt[26] = (unsigned char)((target_ip >> 8) & 0xff);
     pkt[27] = (unsigned char)(target_ip & 0xff);
-    arp_rx(&the_iface, pkt, 28);
+    arp_rx(nd, pkt, 28);
+}
+
+/** Feed one ARP packet to the primary interface. */
+static void feed(int op, uint32_t sender_ip, uint8_t mac_last, uint32_t target_ip)
+{
+    feed_on(&the_iface, op, sender_ip, mac_last, target_ip);
 }
 
 /** How many entries the cache holds. */
@@ -218,12 +227,108 @@ static int holds(uint32_t ip)
     return arp_lookup(&the_iface, ip, mac);
 }
 
+/** Require a rejected packet to leave both new and existing mappings alone. */
+static void reject_packet(uint8_t *pkt, uint16_t len)
+{
+    uint8_t mac[6];
+
+    arp_flush();
+    frame_count = 0;
+    feed(ARP_OP_REPLY, 0xC0A80009u, 1, the_iface.ip);
+    write32be(pkt + 14, 0xC0A80009u);
+    arp_rx(&the_iface, pkt, len);
+    CHECK(arp_lookup(&the_iface, 0xC0A80009u, mac) && mac[5] == 1,
+          "invalid ARP layout changed a mapping");
+    write32be(pkt + 14, 0xC0A8000Au);
+    arp_rx(&the_iface, pkt, len);
+    CHECK(cached() == 1 && !holds(0xC0A8000Au), "invalid ARP layout added a mapping");
+    CHECK(frame_count == 0, "invalid ARP layout produced a reply");
+}
+
+/** Check address lengths independently for requests and replies. */
+static void test_layout(void)
+{
+    static const uint8_t bad_lengths[2][4] = {{0, 5, 7, 255}, {0, 3, 5, 255}};
+    uint8_t pkt[29];
+    unsigned field, i;
+    int op;
+
+    k_memset(pkt, 0, sizeof(pkt));
+    write16be(pkt, 1);
+    write16be(pkt + 2, ETH_TYPE_IP);
+    pkt[4] = 6;
+    pkt[5] = 4;
+    pkt[13] = 2;
+    write32be(pkt + 24, the_iface.ip);
+    for (op = ARP_OP_REQUEST; op <= ARP_OP_REPLY; op++) {
+        write16be(pkt + 6, (uint16_t)op);
+        for (field = 0; field < 2; field++) {
+            for (i = 0; i < 4; i++) {
+                pkt[4 + field] = bad_lengths[field][i];
+                reject_packet(pkt, 28);
+            }
+            pkt[4 + field] = field == 0 ? 6 : 4;
+        }
+        reject_packet(pkt, 27);
+        pkt[1] = 2;
+        reject_packet(pkt, 28);
+        pkt[1] = 1;
+        pkt[2] = 9;
+        reject_packet(pkt, 28);
+        pkt[2] = 8;
+    }
+    arp_flush();
+    frame_count = 0;
+    write16be(pkt + 6, ARP_OP_REQUEST);
+    arp_rx(&the_iface, pkt, sizeof(pkt));
+    CHECK(cached() == 1 && frame_count == 1, "valid padded ARP request was rejected");
+}
+
+/** Check subnet exclusions against the receiving interface alone. */
+static void test_interfaces(void)
+{
+    uint8_t mac[6];
+
+    second_iface.ip = 0x0A000005u;
+    second_iface.mask = 0xFFFFFF00u;
+    arp_flush();
+    feed_on(&second_iface, ARP_OP_REPLY, 0x0A000000u, 1, second_iface.ip);
+    CHECK(cached() == 0, "second interface network address was cached");
+    arp_flush();
+    feed_on(&second_iface, ARP_OP_REPLY, 0x0A0000FFu, 1, second_iface.ip);
+    CHECK(cached() == 0, "second interface broadcast address was cached");
+    feed_on(&second_iface, ARP_OP_REPLY, 0x0A000001u, 2, second_iface.ip);
+    CHECK(arp_lookup(&second_iface, 0x0A000001u, mac) && mac[5] == 2,
+          "second interface neighbour was rejected");
+    CHECK(!holds(0x0A000001u), "second interface mapping matched the primary interface");
+
+    second_iface.ip = 0xC0A80105u;
+    second_iface.mask = 0xFF000000u;
+    arp_flush();
+    feed_on(&second_iface, ARP_OP_REPLY, 0xC0A80000u, 3, second_iface.ip);
+    CHECK(arp_lookup(&second_iface, 0xC0A80000u, mac) && mac[5] == 3,
+          "another interface network address was rejected");
+    feed_on(&second_iface, ARP_OP_REPLY, 0xC0A800FFu, 4, second_iface.ip);
+    CHECK(arp_lookup(&second_iface, 0xC0A800FFu, mac) && mac[5] == 4,
+          "another interface broadcast address was rejected");
+
+    arp_flush();
+    feed_on(&second_iface, ARP_OP_REQUEST, 0xC0A80109u, 5, second_iface.ip);
+    feed(ARP_OP_REPLY, 0xC0A80109u, 6, the_iface.ip);
+    CHECK(cached() == 2 && arp_lookup(&second_iface, 0xC0A80109u, mac) && mac[5] == 5,
+          "second interface mapping was overwritten");
+    CHECK(arp_lookup(&the_iface, 0xC0A80109u, mac) && mac[5] == 6,
+          "primary interface mapping was overwritten");
+}
+
 int main(void)
 {
     uint8_t mac[6];
     int i;
 
     printf("arp_hosttest: the address cache\n");
+    test_layout();
+    test_interfaces();
 
     /* An address no neighbour can have is not cached. 0.0.0.0 is what a DHCP
        client sends while it is probing, and it was found in the cache of the

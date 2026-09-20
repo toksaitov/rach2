@@ -1,9 +1,8 @@
 /*
  * arp.c - Address Resolution Protocol.
  *
- * We answer ARP requests for our own IP and learn the sender's IP-to-MAC
- * mapping from every ARP packet we see (a request from the gateway hands us
- * its MAC for free, so ip_tx can reach it without a second round trip).
+ * Cache usable sender mappings by interface and answer requests for the
+ * receiving interface's address.
  *
  * All ARP fields are big-endian on the wire; we read and write them with the
  * byte-order helpers.
@@ -79,26 +78,17 @@ static uint32_t arp_stamp(void)
 }
 
 /**
- * Whether an address is one a neighbour can actually have.
+ * Return whether `ip` is usable as an ARP sender address on `nd`.
  *
- * A machine on a real network hears ARP from every neighbour, and some of what
- * it hears names no host: a DHCP client announces itself while probing with a
- * sender address of 0.0.0.0, and caching that spends a slot on a mapping
- * nothing can be sent to. The judgement of an address is netconf's, so this
- * cannot drift from what the boot line and the ioctls accept; a broadcast and
- * the subnet's own network address are refused on top of it, since they name
- * many machines or none rather than the one whose hardware address is in the
- * packet.
+ * Reject addresses excluded by netconf and the network and broadcast
+ * addresses of the receiving interface's subnet.
  */
-static int arp_address_is_a_neighbour(uint32_t ip)
+static int arp_address_is_a_neighbour(struct netdev *nd, uint32_t ip)
 {
     if (netconf_address_is_impossible(ip)) {
         return 0;
     }
-    if (netconf_is_broadcast(ip)) {
-        return 0;
-    }
-    if (net_ip_mask != 0 && ip == (net_ip_addr & net_ip_mask)) {
+    if (nd != 0 && nd->mask != 0 && (ip == (nd->ip & nd->mask) || ip == (nd->ip | ~nd->mask))) {
         return 0;
     }
     return 1;
@@ -146,9 +136,8 @@ void arp_forget_dev(struct netdev *nd)
 /**
  * Store or refresh an IP-to-MAC mapping.
  *
- * We learn from every ARP packet, including unsolicited ones, which is a
- * cache-poisoning surface; on a network where anyone can send, that is the
- * cost of resolving addresses at all.
+ * Unsolicited packets can supply usable mappings, so a peer can poison the
+ * cache.
  *
  * Entries do not age out. What keeps a cache of eight usable on a real
  * network, where this machine hears every neighbour, is the other half:
@@ -164,7 +153,7 @@ static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
     int free_slot = -1;
     int oldest = 0;
 
-    if (!arp_address_is_a_neighbour(ip)) {
+    if (!arp_address_is_a_neighbour(nd, ip)) {
         return;
     }
 
@@ -220,11 +209,12 @@ static void arp_send_reply(struct netdev *nd, const uint8_t *dst_mac, uint32_t d
 }
 
 /**
- * Process a received ARP packet.
+ * Process an Ethernet/IPv4 ARP packet.
  *
- * Learn the sender's IP-to-MAC mapping from any well-formed Ethernet/IPv4
- * ARP packet, then answer a request that targets our own IP. Short or
- * non-Ethernet/IPv4 frames are dropped silently.
+ * Require at least 28 bytes, hardware type Ethernet, protocol type IPv4,
+ * and address lengths of six and four bytes. Cache a usable sender
+ * mapping on `nd`, then answer a request for that interface's address.
+ * Call with interrupts disabled.
  */
 void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
@@ -240,8 +230,7 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     proto_type = read16be(data + 2);
     op = read16be(data + 6);
 
-    /* We only handle Ethernet + IPv4 ARP. */
-    if (hw_type != 0x0001 || proto_type != 0x0800) {
+    if (hw_type != 0x0001 || proto_type != 0x0800 || data[4] != 6 || data[5] != 4) {
         return;
     }
 
@@ -249,7 +238,6 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     sender_ip = read32be(data + 14);
     target_ip = read32be(data + 24);
 
-    /* Learn the sender's mapping from any ARP packet. */
     arp_cache_update(nd, sender_ip, sender_mac);
 
     if (op == ARP_OP_REQUEST && nd != 0 && target_ip == nd->ip) {

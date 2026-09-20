@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 20, 2026
 .Dt PIPE 2
 .Os
 .Sh NAME
@@ -54,8 +54,18 @@ These waits allow other processes to run.
 A signal interrupting a wait produces
 .Er EINTR
 if no bytes have been transferred.
-A read returns the available bytes, up to the requested count.
+A read returns at most the bytes available when its first transfer starts,
+up to the requested count.
 A write that stops after transferring bytes returns that count.
+.Pp
+The kernel resolves user buffers one page at a time before copying bytes.
+Resolution can wait for memory reclaim and allow another reader or writer
+to run; the pipe state is checked again afterwards.
+If another reader drains the pipe after this call has copied some bytes,
+the call returns that partial count without waiting for more data.
+A user-buffer fault returns the count already transferred, or
+.Er EFAULT
+if no bytes have been transferred.
 .Pp
 Once every write descriptor has closed, reads consume the remaining
 buffered bytes and then return 0 for end of file.

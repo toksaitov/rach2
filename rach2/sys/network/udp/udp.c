@@ -1,9 +1,9 @@
 /*
  * udp.c - User Datagram Protocol.
  *
- * Header (8 bytes, big-endian): src_port, dst_port, length, checksum. A static
- * table maps bound destination ports to sockets; udp_rx looks up the port and
- * hands the payload to socket_udp_deliver.
+ * Header (8 bytes, big-endian): src_port, dst_port, length, checksum.
+ * A heap-allocated binding list maps destination ports to sockets.
+ * udp_rx looks up the port and hands the payload to socket_udp_deliver.
  */
 
 #include "../../klog.h"
@@ -49,9 +49,10 @@ static int udp_port_in_use(uint16_t port)
 /**
  * Bind a socket to a UDP port so udp_rx can route inbound datagrams to it.
  *
- * Fails if the port is already bound or the heap has no room for the
- * binding. The list is shared with udp_rx, which runs in IRQ context, so
- * the update is done under net_lock.
+ * An occupied port may be shared only when the new socket and every existing
+ * binding enable `SO_REUSEADDR`, and every binding was created under the
+ * caller's effective uid. The function updates the binding list under
+ * `net_lock`.
  *
  * @return 0 on success, -1 on a conflict, -ENOMEM with no memory.
  */
@@ -60,16 +61,8 @@ int udp_bind(uint16_t port, struct socket *sock)
     udp_binding_t *b;
     uint32_t flags;
 
-    /* The list is read by udp_rx in IRQ context; update it atomically. */
     flags = net_lock();
 
-    /* A port already bound is taken again only when every socket on it asked
-       for that, the new one included. A DHCP client needs exactly this: it
-       keeps a socket bound to port 68 to listen on while it opens a second one
-       bound to 68 to send its renewal from. It does not need, and must not
-       have, a stranger's socket beside it: the connected socket takes the
-       answer, so anyone who could share the port could take the client's
-       replies by asking for them first. */
     if (udp_port_in_use(port)) {
         uint32_t uid = current_proc ? current_proc->euid : 0;
         int shared = sock && sock->reuseaddr;
@@ -228,9 +221,10 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 /**
  * Build a UDP datagram around the payload and hand it to IP for transmission.
  *
- * Refuses payloads larger than 1500 bytes; this stack does not fragment. The
- * checksum field is left zero, which the protocol permits over IPv4 to signal
- * "no checksum". The shared TX buffer is filled and queued under net_lock.
+ * The maximum payload is 1472 bytes, leaving room for the IPv4 and UDP
+ * headers within the 1500-byte MTU. Larger payloads return `-EMSGSIZE`.
+ * The checksum field is left zero, which IPv4 permits to disable checksumming.
+ * The shared TX buffer is filled and queued under net_lock.
  * The return value is the contract in udp.h.
  */
 int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,

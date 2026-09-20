@@ -218,8 +218,11 @@ static uint32_t loop_head, loop_tail;
  * Everything else routes on-subnet destinations directly and through the
  * gateway otherwise, then resolves the next hop's MAC by ARP. On an ARP miss
  * it sends a request and drops this packet; the caller retries once the cache
- * is warm. The header is emitted with DF set and no fragmentation, so payloads
- * over the 1500-byte MTU are refused, not split.
+ * is warm.
+ *
+ * The 1500-byte MTU includes the 20-byte IPv4 header. Payloads above 1480
+ * bytes return `-EMSGSIZE` before routing or queueing. Transmit sets DF and
+ * does not fragment.
  *
  * The return value is contracted in ip.h: the conditions a caller must hear
  * about are errnos, and the ARP miss is not one of them.
@@ -231,7 +234,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     uint32_t route_ip;
     struct netdev *out;
 
-    if (plen > 1500) {
+    if (plen > 1500 - IP_HDR_SIZE) {
         klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused", (int)plen);
         return -EMSGSIZE;
     }

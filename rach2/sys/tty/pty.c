@@ -362,6 +362,7 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     }
 }
 
+/** Mark the master closed, signal the foreground group, wake the readers. */
 static void ptm_close(fd_entry_t *e)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -370,8 +371,6 @@ static void ptm_close(fd_entry_t *e)
         return;
     }
     p->master_open = 0;
-    /* The terminal vanished: SIGHUP the slave's foreground group, then hang the
-     * slave discipline up so its blocked readers/pollers return EOF. */
     if (p->slave.fg_pgid != 0) {
         tty_signal_group(p->slave.fg_pgid, SIGHUP);
     }
@@ -385,6 +384,23 @@ static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl
 
 /* the SLAVE endpoint */
 
+/** Include persistent master closure in every slave read wait. */
+static int pts_read_ready(void *arg)
+{
+    struct pty *p = (struct pty *)arg;
+
+    return !p->master_open || n_tty_readable(&p->slave.ldisc);
+}
+
+/**
+ * Read slave input, draining queued bytes before the master's closing EOF.
+ *
+ * A session leader claims an unowned slave as its sole controlling terminal.
+ * A background reader takes SIGTTIN, or EIO when SIGTTIN is blocked or
+ * ignored.
+ * The endpoint owns the wait so each wake rechecks master closure even after
+ * another reader consumes the discipline's single canonical EOF marker.
+ */
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -402,12 +418,6 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (want > sizeof(kbuf)) {
         want = sizeof(kbuf);
     }
-    /* A session LEADER reading its pts with no controlling terminal claims it
-     * as its SOLE ctty (dropping the console or any other pty it held), so a
-     * job-control shell on the pty receives ^C and /dev/tty resolves to it; a
-     * background process is stopped with SIGTTIN below, the same rules as the
-     * console. An explicit TIOCSCTTY already claimed it, so this is then a
-     * no-op. */
     if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
@@ -419,24 +429,24 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         tty_signal_group((int)current_proc->pgid, SIGTTIN);
         return -EINTR;
     }
-    /* A slave whose master has closed is permanently at end of file: drain any
-     * cooked input still buffered, then read 0 on every call. The discipline's
-     * hangup EOF is one-shot in canonical mode (n_tty_read clears it after the
-     * first zero-length read), so once the master is gone read without blocking
-     * and report an empty result as EOF instead of parking forever (no waker
-     * remains) or returning -EAGAIN. A normal read parks unless the fd is
-     * nonblocking. */
-    {
-        int master_gone = !p->master_open;
-        int nonblock = master_gone || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
-
-        n = tty_read(&p->slave, kbuf, (int)want, nonblock);
-        if (n == -EAGAIN && master_gone) {
-            return 0; /* master closed, nothing buffered: persistent EOF */
+    for (;;) {
+        n = tty_read(&p->slave, kbuf, (int)want, 1);
+        if (n != -EAGAIN) {
+            break;
         }
-        if (n > 0) {
-            wq_wake_all(&p->m_read_wq);
+        if (!p->master_open) {
+            return 0;
         }
+        if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
+            return -EAGAIN;
+        }
+        n = wq_wait_event(&p->slave.input_wq, pts_read_ready, p);
+        if (n != 0) {
+            return n;
+        }
+    }
+    if (n > 0) {
+        wq_wake_all(&p->m_read_wq);
     }
     if (n < 0) {
         return n;

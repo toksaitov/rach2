@@ -26,18 +26,25 @@
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT      1
-#define SYS_FORK      2
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_WAITPID   7
-#define SYS_IOCTL     54
-#define SYS_SETSID    66
-#define SYS_NANOSLEEP 162
+#define SYS_EXIT           1
+#define SYS_FORK           2
+#define SYS_READ           3
+#define SYS_WRITE          4
+#define SYS_OPEN           5
+#define SYS_CLOSE          6
+#define SYS_WAITPID        7
+#define SYS_KILL           37
+#define SYS_IOCTL          54
+#define SYS_SETSID         66
+#define SYS_NANOSLEEP      162
+#define SYS_RT_SIGACTION   174
+#define SYS_RT_SIGPROCMASK 175
 
-#define O_RDWR 2
+#define O_RDONLY 0
+#define O_RDWR   2
+#define SIGHUP   1
+#define SIGKILL  9
+#define EAGAIN   11
 
 #define TIOCSCTTY  0x540E
 #define TIOCGPTN   0x80045430
@@ -74,6 +81,14 @@ static int syscall3(int n, int a, int b, int c)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+/** Pass the signal ABI's fourth argument in ESI. */
+static int syscall4(int n, int a, int b, int c, int d)
+{
+    int r;
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
     return r;
 }
 
@@ -174,6 +189,188 @@ static int contains(const char *hay, int len, const char *needle)
         }
     }
     return 0;
+}
+
+/** Append a decimal number and suffix to a path prefix. */
+static void numbered_path(char *path, const char *prefix, int number, const char *suffix)
+{
+    char digits[12];
+    int n = 0;
+
+    while (*prefix) {
+        *path++ = *prefix++;
+    }
+    do {
+        digits[n++] = (char)('0' + number % 10);
+        number /= 10;
+    } while (number);
+    while (n) {
+        *path++ = digits[--n];
+    }
+    while (*suffix) {
+        *path++ = *suffix++;
+    }
+    *path = 0;
+}
+
+/** Open a fresh canonical pair with both endpoints blocking. */
+static int open_pair(int *master, int *slave)
+{
+    int index = -1, unlock = 0;
+    char path[32];
+
+    *slave = -1;
+    *master = sys_open("/dev/ptmx", O_RDWR);
+    if (*master < 0 || sys_ioctl(*master, TIOCGPTN, &index) < 0 || index < 0 ||
+        sys_ioctl(*master, TIOCSPTLCK, &unlock) < 0) {
+        return 0;
+    }
+    numbered_path(path, "/dev/pts/", index, "");
+    *slave = sys_open(path, O_RDWR);
+    return *slave >= 0;
+}
+
+/**
+ * Require the child to reach its read wait before closing the master.
+ * The child closes its master and reads; it has no other blocking operation.
+ */
+static int reader_blocked(int pid)
+{
+    char path[40], state[256];
+    int tries, fd, n;
+
+    numbered_path(path, "/proc/", pid, "/stat");
+    for (tries = 0; tries < 100; tries++) {
+        fd = sys_open(path, O_RDONLY);
+        if (fd < 0) {
+            return 0;
+        }
+        n = sys_read(fd, state, sizeof(state));
+        sys_close(fd);
+        if (contains(state, n, ") S ")) {
+            return 1;
+        }
+        if (contains(state, n, ") Z ")) {
+            return 0;
+        }
+        nap_ms(20);
+    }
+    return 0;
+}
+
+/** Reap every child, including a reader left blocked by a faulty kernel. */
+static void stop_readers(int *pids)
+{
+    int i, status;
+
+    for (i = 0; i < 2; i++) {
+        if (pids[i] > 0) {
+            syscall3(SYS_KILL, pids[i], SIGKILL, 0);
+            sys_waitpid(pids[i], &status, 0);
+        }
+    }
+}
+
+/**
+ * Close the master with two canonical readers blocked and require EOF in both.
+ * SIGHUP is ignored or blocked by the whole foreground group, including us.
+ * Each child reads again to check that EOF persists after the marker is gone.
+ */
+static int hangup_readers(int block_hup)
+{
+    unsigned int action[5] = {1, 0, 0, 0, 0};
+    static const unsigned int mask[2] = {1, 0};
+    int master = -1, slave = -1, pids[2] = {0, 0};
+    int i, status, ok = 0;
+    char byte;
+
+    if (block_hup) {
+        action[0] = 0;
+        if (syscall4(SYS_RT_SIGPROCMASK, 0, (int)(size_t)mask, 0, 8) < 0) {
+            goto done;
+        }
+    }
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (int)(size_t)action, 0, 8) < 0 ||
+        !open_pair(&master, &slave) || sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
+        goto done;
+    }
+    for (i = 0; i < 2; i++) {
+        pids[i] = sys_fork();
+        if (pids[i] < 0) {
+            goto done;
+        }
+        if (pids[i] == 0) {
+            sys_close(master);
+            if (sys_read(slave, &byte, 1) != 0 || sys_read(slave, &byte, 1) != 0) {
+                sys_exit(30);
+            }
+            sys_exit(0);
+        }
+    }
+    if (!reader_blocked(pids[0]) || !reader_blocked(pids[1])) {
+        puts("PTYPROBE FAIL (both readers must block before hangup)\n");
+        goto done;
+    }
+    puts(block_hup ? "ptyprobe: hangup: two readers blocked, sighup blocked\n"
+                   : "ptyprobe: hangup: two readers blocked, sighup ignored\n");
+    sys_close(master);
+    master = -1;
+    for (i = 0; i < 2; i++) {
+        if (!reap_within(pids[i], &status, 2000)) {
+            puts("PTYPROBE FAIL (hangup releases both blocked readers)\n");
+            goto done;
+        }
+        pids[i] = 0;
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+            goto done;
+        }
+    }
+    ok = 1;
+done:
+    stop_readers(pids);
+    if (master >= 0) {
+        sys_close(master);
+    }
+    if (slave >= 0) {
+        sys_close(slave);
+    }
+    return ok;
+}
+
+/** Drain a queued line in short reads, then require the persistent EOF. */
+static int hangup_queued(void)
+{
+    int master = -1, slave = -1, nb = 1, ok = 0;
+    char buf[8];
+
+    if (!open_pair(&master, &slave)) {
+        goto done;
+    }
+    if (sys_ioctl(slave, FIONBIO, &nb) < 0 || sys_read(slave, buf, 1) != -EAGAIN ||
+        sys_write(master, "kept\n", 5) != 5) {
+        goto done;
+    }
+    nb = 0;
+    if (sys_ioctl(slave, FIONBIO, &nb) < 0) {
+        goto done;
+    }
+    sys_close(master);
+    master = -1;
+    if (sys_read(slave, buf, 2) != 2 || buf[0] != 'k' || buf[1] != 'e' ||
+        sys_read(slave, buf, sizeof(buf)) != 3 || !contains(buf, 3, "pt\n") ||
+        sys_read(slave, buf, 1) != 0 || sys_read(slave, buf, 1) != 0) {
+        goto done;
+    }
+    nb = 1;
+    ok = sys_ioctl(slave, FIONBIO, &nb) == 0 && sys_read(slave, buf, 1) == 0;
+done:
+    if (master >= 0) {
+        sys_close(master);
+    }
+    if (slave >= 0) {
+        sys_close(slave);
+    }
+    return ok;
 }
 
 void _start(void)
@@ -370,6 +567,10 @@ void _start(void)
     }
 
     sys_close(master);
+    if (!hangup_readers(0) || !hangup_queued() || !hangup_readers(1)) {
+        puts("PTYPROBE FAIL (persistent hangup EOF)\n");
+        sys_exit(1);
+    }
     puts("PTYPROBE OK\n");
     sys_exit(0);
 }

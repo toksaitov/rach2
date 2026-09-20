@@ -83,8 +83,11 @@ A raw ICMP send requires an explicit IPv4 destination.
 The caller supplies the ICMP message, including its checksum; the
 kernel adds the IPv4 header and uses the socket's
 .Dv IP_TTL .
-The syscall accepts at most 1500 message bytes, subject to the link
-layer's limit on the resulting IPv4 datagram.
+The ICMP message may contain at most 1480 bytes, leaving room for the
+20-byte IPv4 header within the 1500-byte MTU.
+Larger messages return
+.Er EMSGSIZE
+before routing or queueing, including on loopback.
 An ioctl-only raw socket cannot send.
 .Pp
 An
@@ -144,9 +147,8 @@ A supplied UDP address is shorter than eight bytes, a packet address
 is shorter than 20 bytes, its hardware-address length is not six, or
 its effective protocol is neither IPv4 nor ARP.
 .It Bq Er EMSGSIZE
-A UDP payload exceeds 1472 bytes, a raw ICMP or packet payload exceeds
-1500 bytes, a packet payload is empty, or the resulting IPv4 datagram
-exceeds the link limit.
+A UDP payload exceeds 1472 bytes, a raw ICMP message exceeds 1480 bytes,
+or a packet payload is empty or exceeds 1500 bytes.
 .It Bq Er ENETDOWN
 A packet send has no interface through which to transmit.
 .It Bq Er ENETRESET

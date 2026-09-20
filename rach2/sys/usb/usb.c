@@ -137,26 +137,21 @@ static int usb_up;
 
 static void usb_interrupts_start(void);
 
-/* The vector the controller's messages arrive on, given by `isr_alloc_vector`
- * when they are enabled; -1 before. */
-static int msi_vector = -1;
+/** The configured interrupt source of each controller, or neither. */
+static struct {
+    int msi_vector;
+    int line_irq;
+} interrupt_sources[XHCI_MAX_CONTROLLERS];
+static int interrupt_source_count;
 
-/* How many messages the controller has sent, how many times the timer's pump
- * found work that a message should have brought, and after how many messages
- * `rach2.msidrop` silences the controller. */
+/* Interrupts handled, timer drains without observed pending interrupts,
+ * and the interrupt count at which rach2.msidrop disables delivery. */
 static uint32_t usb_messages;
 static uint32_t usb_fallback;
 static uint32_t msi_drop_after;
 
-/* Whether the controller was ever put on messages. The fallback is counted
- * against this and not against whether messages are arriving now: a
- * controller silenced by `rach2.msidrop` is exactly the machine whose lost
- * edges are being counted. */
-static int msi_started;
-
-/* The IRQ of the controller's PCI line when that is the path taken, or -1
- * on messages: it decides which request register `interrupt_pending` reads. */
-static int line_irq = -1;
+/* Set after any interrupt source is enabled, including one later silenced. */
+static int interrupts_started;
 
 static int interrupt_pending(void);
 
@@ -244,6 +239,12 @@ static void report_ports(void)
  */
 static uint32_t usb_eflags(void)
 {
+#ifdef RACH2_HOSTTEST
+    uint32_t flags = kirq_save();
+
+    kirq_restore(flags);
+    return flags;
+#else
     uint32_t flags;
 
     __asm__ __volatile__("pushf\n\t"
@@ -252,6 +253,7 @@ static uint32_t usb_eflags(void)
                          :
                          : "memory");
     return flags;
+#endif
 }
 
 static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
@@ -319,6 +321,27 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
 }
 
 /**
+ * Return whether any configured USB interrupt source is pending.
+ *
+ * Check each controller's MSI vector or PCI IRQ at the processor.
+ */
+static int interrupt_pending(void)
+{
+    int n;
+
+    for (n = 0; n < interrupt_source_count; n++) {
+        int irq = interrupt_sources[n].line_irq;
+        int vector = interrupt_sources[n].msi_vector;
+
+        if ((irq >= 0 && pic_irq_pending((uint8_t)irq)) ||
+            (vector >= 0 && lapic_pending((uint8_t)vector))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * The controller's message: acknowledge it, pump, and return.
  *
  * The acknowledgement is the pump's first act when the pump was turned by a
@@ -329,21 +352,6 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
  * The router ends the interrupt at the APIC after this returns, and
  * reschedules if a reader was woken.
  */
-/**
- * Whether an interrupt for this stack is raised and not yet taken.
- *
- * The processor's request register on messages; the 8259's on the line.
- * Neither is the controller's own pending bit, which is set whether or not
- * anything was sent.
- */
-static int interrupt_pending(void)
-{
-    if (line_irq >= 0) {
-        return pic_irq_pending((uint8_t)line_irq);
-    }
-    return msi_vector >= 0 && lapic_pending((uint8_t)msi_vector);
-}
-
 static void usb_msi_handler(isr_params_t *params)
 {
     (void)params;
@@ -490,6 +498,11 @@ static void usb_interrupts_start(void)
     int irq;
     int n;
 
+    interrupt_source_count = xhci_controllers();
+    for (n = 0; n < interrupt_source_count; n++) {
+        interrupt_sources[n].msi_vector = -1;
+        interrupt_sources[n].line_irq = -1;
+    }
     usb_stamp_init(kcmdline_has("rach2.usblatency"));
     if (kcmdline_value("rach2.msidrop", value, (unsigned int)sizeof(value))) {
         uint32_t after = 0;
@@ -513,8 +526,8 @@ static void usb_interrupts_start(void)
         if (lapic_ready() && (vector = isr_alloc_vector()) >= 0) {
             register_isr_handler((uint8_t)vector, usb_msi_handler, "xhci");
             if (xhci_interrupts_enable(hc, (uint8_t)vector) == 0) {
-                msi_started = 1;
-                msi_vector = vector;
+                interrupts_started = 1;
+                interrupt_sources[n].msi_vector = vector;
                 klog(KLOG_INFO, "usb", "interrupts: xhci%d: messages on vector %d", n, vector);
                 continue;
             }
@@ -525,8 +538,8 @@ static void usb_interrupts_start(void)
                asserted would otherwise be dispatched to nobody. */
             register_isr_handler((uint8_t)(32 + irq), usb_msi_handler, "xhci");
             if (xhci_interrupts_enable_line(hc) == irq) {
-                msi_started = 1;
-                line_irq = irq;
+                interrupts_started = 1;
+                interrupt_sources[n].line_irq = irq;
                 klog(KLOG_INFO, "usb", "interrupts: xhci%d: the line, irq %d on vector %d", n, irq,
                      32 + irq);
                 continue;
@@ -536,20 +549,19 @@ static void usb_interrupts_start(void)
     }
 }
 
+/**
+ * Advance the USB stack by one 10 ms timer tick.
+ *
+ * Count drains with work but no observed pending USB interrupt.
+ * A message still in transit can also increase this count.
+ */
 void usb_poll(void)
 {
     if (!usb_up) {
         return;
     }
     pump_saw_pending = 0;
-    if (usb_pump(10, 0) > 0 && msi_started && !pump_saw_pending) {
-        /*
-         * The timer found work that no message was coming for. A message
-         * already raised at the controller, or already waiting at the
-         * processor, means the timer merely got there first while this tick
-         * held the interrupt flag down; that is a race and not a lost edge,
-         * and the count is of lost edges.
-         */
+    if (usb_pump(10, 0) > 0 && interrupts_started && !pump_saw_pending) {
         usb_fallback++;
     }
 }

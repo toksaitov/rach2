@@ -18,9 +18,9 @@
  *
  * What this driver refuses, by name and in the record: a block size other
  * than 512, because the block layer's sectors are 512 bytes; a capacity that
- * says the drive is larger than `READ(10)` can address; a drive with no LUN
- * that becomes ready inside ten seconds; and the UAS protocol, which the core
- * refuses before this file sees it.
+ * says the drive is larger than `READ(10)` can address; a device whose unit
+ * does not finish initialization within ten seconds; and the UAS protocol,
+ * which the core refuses before this file sees it.
  */
 
 #include "msc.h"
@@ -138,9 +138,9 @@
 #define RECOVER_CLEAR_OUT_DEV 7
 #define RECOVER_CLEAR_ONE_DEV 8
 
-/* How long any one transfer of a command may take, and how long a stick has
- * to become ready after it is plugged in. */
+/* Maximum time for one command transfer, in ms. */
 #define MSC_STEP_MS     10000u
+/* Maximum elapsed initialization time for each logical unit, in ms. */
 #define MSC_READY_MS    10000u
 #define MSC_TEST_GAP_MS 100u
 
@@ -197,7 +197,7 @@ struct msc_device {
     int after_recover; /* the one endpoint a single clear is for */
     uint32_t tag;
     uint32_t deadline;
-    uint32_t ready_left; /* milliseconds left for the stick to become ready */
+    uint32_t ready_left; /* milliseconds left to initialize the current unit */
     uint32_t test_gap;   /* milliseconds until the next TEST UNIT READY */
 
     /* The command in flight, its wrappers and its data. */
@@ -1462,10 +1462,6 @@ static void step_command_done(struct msc_device *m)
             next_lun(m, "there is no medium in it");
             return;
         }
-        if (m->ready_left == 0) {
-            refuse(m, "it did not become ready");
-            return;
-        }
         m->test_gap = MSC_TEST_GAP_MS;
         m->state = MSC_STATE_TEST;
         return;
@@ -1657,6 +1653,27 @@ static void step_timeout(struct msc_device *m)
     m->deadline = MSC_STEP_MS;
 }
 
+/**
+ * Charge all initialization stages to the current unit's elapsed deadline.
+ *
+ * Unit zero includes Get Max LUN; later units start at INQUIRY. Expiry
+ * closes the device through the core, which retains any DMA buffers until
+ * the controller releases the slot.
+ */
+static int initialization_expired(struct msc_device *m, uint32_t elapsed_ms)
+{
+    if (m->state == MSC_STATE_FREE || m->state == MSC_STATE_READY ||
+        m->state == MSC_STATE_REFUSED || m->state == MSC_STATE_GONE) {
+        return 0;
+    }
+    m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;
+    if (m->ready_left != 0) {
+        return 0;
+    }
+    refuse_to_core(m, "its logical unit did not initialize within ten seconds");
+    return 1;
+}
+
 void msc_step(uint32_t elapsed_ms)
 {
     int i;
@@ -1670,8 +1687,8 @@ void msc_step(uint32_t elapsed_ms)
         if (m->test_gap != 0) {
             m->test_gap = (m->test_gap > elapsed_ms) ? m->test_gap - elapsed_ms : 0;
         }
-        if (m->state == MSC_STATE_TEST && m->stage == STAGE_IDLE) {
-            m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;
+        if (initialization_expired(m, elapsed_ms)) {
+            continue;
         }
         if (m->stage == STAGE_DONE && m->owned) {
             /* The command's data record is retired and released before

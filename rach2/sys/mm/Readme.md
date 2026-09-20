@@ -79,7 +79,7 @@ The cache reserves no data frames at boot. A slot takes a frame from the top of 
 
 On a miss, `pc_fault` reads one page into the slot's frame, allocating the frame first if the slot has none. A read maps it read-only. The first supervisor write faults again, marks the page dirty, and remaps it writable. A write miss performs the read and marks the new resident page dirty immediately. A user-mode access to the window is never served.
 
-Clock eviction writes a dirty victim before reuse. A failed write leaves the page dirty and resident. `pc_sync` writes every dirty page and re-protects it read-only; failed pages remain dirty for a later retry. `fsync` and `fdatasync` call `pc_sync` for the whole cache, while `sync` calls it but returns zero even after a writeback failure.
+Clock eviction writes a dirty victim before reuse. Writeback pins the slot and frame until the backing writer returns; eviction, reclaim and competing writebacks skip it. Before writing, the cache maps the page read-only and clears dirty, so a concurrent store faults and marks it dirty again. A failed write or a store during writeback leaves the page dirty and resident. `pc_sync` attempts each resident page and returns -1 if a slot is busy or a write fails, continuing with other slots. It leaves concurrent stores dirty for a later write. `fsync` and `fdatasync` call `pc_sync` for the whole cache and report `EIO` on either failure, while `sync` ignores that result and returns zero.
 
 ## Files
 

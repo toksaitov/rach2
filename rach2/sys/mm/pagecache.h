@@ -54,7 +54,8 @@ void init_pagecache(void);
 /**
  * Give back up to `want` frames: clean resident pages first, then, with
  * `can_write`, dirty ones written back through the backing, which may
- * sleep. Returns how many came back; `*written` counts the writebacks.
+ * sleep. Skip pinned slots, including writes in flight. Returns how many
+ * came back; `*written` counts the writebacks.
  */
 uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written);
 
@@ -80,10 +81,13 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
  */
 int pc_fault(uint32_t fault_address, int write);
 
-/*
- * Write back every dirty cache frame to the backing store and re-protect each
- * read-only (fsync and sync). Returns 0, or -1 if any writeback failed (those
- * pages stay dirty for a later retry).
+/**
+ * Write dirty cache frames to the backing store (fsync and sync).
+ *
+ * Reserve each slot and frame and re-protect it read-only before writing.
+ * Concurrent stores mark it dirty again for a later write. Return 0, or -1
+ * if a resident slot is busy or a write fails. Busy slots are skipped;
+ * failed pages stay dirty for a later retry.
  */
 int pc_sync(void);
 

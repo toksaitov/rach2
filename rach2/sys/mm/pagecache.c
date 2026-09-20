@@ -253,9 +253,53 @@ static void pc_hash_remove(uint32_t disk_off)
 }
 
 /**
- * Writes back a dirty slot, unmaps it, and frees it for reuse. Returns 0, or -1
- * if the writeback failed (then the slot is left intact and dirty). Writeback
- * precedes the unmap and reuse, so no dirty page is ever dropped.
+ * Write a resident page while reserving its slot and frame.
+ *
+ * Return -1 if the slot is pinned or the write fails. Test pinned before
+ * dirty, since an in-flight write temporarily clears dirty. Kernel system
+ * calls switch processes only when they yield or sleep, and page faults
+ * run with interrupts off, so the pin is acquired before another caller
+ * can enter. The backing writer may sleep with the pin held.
+ *
+ * Re-protect and clear dirty before writing. A concurrent store faults and
+ * marks the page dirty again; a successful write must leave that mark set.
+ */
+static int pc_writeback(struct pc_entry *e)
+{
+    int rc;
+
+    if (e->pinned) {
+        return -1;
+    }
+    if (!e->dirty) {
+        return 0;
+    }
+    e->pinned = 1;
+    pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
+    e->dirty = 0;
+    rc = pc_write(e->disk_off, e->page);
+    if (rc != 0) {
+        klog(KLOG_ERR, "pagecache", "writeback failed at disk offset 0x%X; the page stays dirty",
+             e->disk_off);
+        e->dirty = 1;
+    } else {
+        ++pc_writebacks;
+    }
+    e->pinned = 0;
+    return rc != 0 ? -1 : 0;
+}
+
+/**
+ * Write back a dirty page and invalidate its cache entry.
+ *
+ * Keep the slot and frame reserved until writeback completes. Make the
+ * mapping read-only and clear the dirty flag before the write so a
+ * concurrent store marks the page dirty again.
+ *
+ * Return 0 if the slot is invalidated or was already invalid. Return -1
+ * and retain the page if writeback fails or the page is dirtied again.
+ * Invalidate the slot before removing its hash entry, since removal may
+ * rebuild the hash from valid slots.
  */
 static int pc_evict(uint32_t slot)
 {
@@ -264,32 +308,10 @@ static int pc_evict(uint32_t slot)
     if (!e->valid) {
         return 0;
     }
-    if (e->dirty) {
-        /* Read-only and clean before the write, not after: the device's
-           write may sleep, and a process that writes the page meanwhile
-           faults, which marks it dirty again and maps it writable, so the
-           bytes the disk did not get are written next time. Cleared after
-           the write, they would be marked clean and dropped. */
-        pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
-        e->dirty = 0;
-        if (pc_write(e->disk_off, e->page) != 0) {
-            /* Said here, since every caller goes on: a page kept dirty
-               is right, and a disk that refused a write is news. */
-            klog(KLOG_ERR, "pagecache",
-                 "writeback failed at disk offset 0x%X; the page stays dirty", e->disk_off);
-            e->dirty = 1;
-            return -1;
-        }
-        ++pc_writebacks;
-        if (e->dirty) {
-            /* Written to while the disk took it: it stays, dirty. */
-            return -1;
-        }
+    if (pc_writeback(e) != 0 || e->dirty) {
+        return -1;
     }
     pc_platform_unmap(PCWIN_BASE + e->disk_off);
-    /* Clear valid before removing from the hash: pc_hash_remove may rebuild the
-     * table, which scans the valid slots, and must not re-insert this victim.
-     */
     e->valid = 0;
     pc_hash_remove(e->disk_off);
     ++pc_evicts;
@@ -427,6 +449,13 @@ uint32_t pc_resident(void)
     return pc_resident_frames;
 }
 
+/**
+ * Write dirty resident pages, preserving stores made during each write.
+ *
+ * Return -1 if any resident slot is busy or a write fails, so a competing
+ * sync cannot report success before an in-flight write has completed.
+ * Continue with other slots; busy and failed pages can be retried later.
+ */
 int pc_sync(void)
 {
     uint32_t i;
@@ -434,19 +463,8 @@ int pc_sync(void)
 
     for (i = 0; i < PC_SLOTS; ++i) {
         struct pc_entry *e = &pc_slots[i];
-        if (e->valid && e->dirty) {
-            /* Read-only and clean before the write, as `pc_evict` does: a
-               write to the page while the device sleeps faults and marks
-               it dirty again, so nothing the disk did not get is called
-               clean. */
-            pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
-            e->dirty = 0;
-            if (pc_write(e->disk_off, e->page) == 0) {
-                ++pc_writebacks;
-            } else {
-                e->dirty = 1; /* kept for a later retry */
-                result = -1;
-            }
+        if (e->valid && pc_writeback(e) != 0) {
+            result = -1;
         }
     }
 

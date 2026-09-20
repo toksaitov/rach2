@@ -42,7 +42,12 @@ canonical input waits for a line; raw input follows the
 setting.
 A pseudoterminal master reads output from the slave and returns zero
 after all slaves close and the buffered output is drained.
-A slave drains buffered input after its master closes, then returns zero.
+Closing the master wakes every blocked slave reader.
+The slave drains queued input, then returns zero on every read, including
+nonblocking reads.
+This remains true when
+.Dv SIGHUP
+is ignored or blocked.
 .Pp
 A background process reading its controlling terminal receives
 .Dv SIGTTIN .

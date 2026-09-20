@@ -1,0 +1,104 @@
+#!/bin/sh
+# Compile ARP and IP regressions with separate faults in private source copies.
+set -eu
+
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo"
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/network-proof.XXXXXX")
+child=
+mkdir -p "$work/rach2" "$work/tests/host"
+cp -R rach2/sys "$work/rach2/sys"
+cp tests/host/arp_hosttest.c tests/host/packet_hosttest.c "$work/tests/host/"
+arp="$work/rach2/sys/network/arp/arp.c"
+ip="$work/rach2/sys/network/ip/ip.c"
+cp "$arp" "$work/arp.saved"
+cp "$ip" "$work/ip.saved"
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    cp "$work/arp.saved" "$arp"
+    cp "$work/ip.saved" "$ip"
+    touch "$arp" "$ip"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    phase=$1
+    test=$2
+    expected=$3
+    message=$4
+    binary="$work/$phase"
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
+        -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 \
+        -Wno-empty-body -ffreestanding \
+        -I "$work/rach2/sys" -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
+        -I utils -I krffs -I tests/host/compat \
+        "$work/tests/host/${test}_hosttest.c" "$work/rach2/sys/lib/kstring.c" \
+        "$work/rach2/sys/lib/kctypes.c" -o "$binary" >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$arp" "$ip" "$work/tests/host/${test}_hosttest.c" "$binary" >"$binary.cksum"
+    perl -e 'alarm 10; exec @ARGV or die "network-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    [ "$status" -eq "$expected" ] && grep -Fq "$message" "$binary.log" || exit 1
+    echo "network-mutation: result: $phase status $status"
+}
+
+echo "network-mutation: logs: $work"
+run_phase arp-fixed arp 0 'arp_hosttest: OK'
+run_phase packet-fixed packet 0 'packet_hosttest: PASS'
+for fault in hardware-length protocol-length network-interface broadcast-interface ip-mtu; do
+    python3 - "$arp" "$ip" "$fault" <<'PY'
+import pathlib
+import sys
+
+changes = {
+    "hardware-length": (sys.argv[1], " || data[4] != 6", ""),
+    "protocol-length": (sys.argv[1], " || data[5] != 4", ""),
+    "network-interface": (sys.argv[1], "ip == (nd->ip & nd->mask)",
+                          "ip == (net_ip_addr & net_ip_mask)"),
+    "broadcast-interface": (sys.argv[1], "ip == (nd->ip | ~nd->mask)",
+                            "netconf_is_broadcast(ip)"),
+    "ip-mtu": (sys.argv[2], "if (plen > 1500 - IP_HDR_SIZE)", "if (plen > 1500)"),
+}
+name, old, new = changes[sys.argv[3]]
+path = pathlib.Path(name)
+source = path.read_text()
+if source.count(old) != 1:
+    raise SystemExit("network-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+    test=arp
+    pass='arp_hosttest: OK'
+    case $fault in
+        hardware-length|protocol-length) message='invalid ARP layout changed a mapping' ;;
+        network-interface) message='second interface network address was cached' ;;
+        broadcast-interface) message='another interface broadcast address was rejected' ;;
+        ip-mtu)
+            test=packet
+            pass='packet_hosttest: PASS'
+            message='oversize IP payload returns -EMSGSIZE on every path'
+            ;;
+    esac
+    run_phase "$fault-mutated" "$test" 1 "$message"
+    cleanup
+    run_phase "$fault-restored" "$test" 0 "$pass"
+    cmp "$work/arp.saved" "$arp"
+    cmp "$work/ip.saved" "$ip"
+done

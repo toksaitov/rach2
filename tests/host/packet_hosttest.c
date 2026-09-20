@@ -100,6 +100,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t len)
    `ethernet_tx` is `ethernet.c`'s own and is compiled in below. */
 /* The one address the send rows resolve, when `arp_known` says so. */
 static int arp_known;
+static unsigned arp_queries, arp_requests;
 
 int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 {
@@ -107,6 +108,7 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 
     (void)nd;
     (void)ip;
+    arp_queries++;
     if (!arp_known) {
         return 0;
     }
@@ -120,6 +122,7 @@ void arp_request(struct netdev *nd, uint32_t ip)
 {
     (void)nd;
     (void)ip;
+    arp_requests++;
 }
 
 uint32_t net_ip_gateway = 0x0A000202u;
@@ -198,11 +201,14 @@ static struct netdev the_iface = {0,
                                   0,
                                   1};
 
+static int route_available = 1;
+static unsigned route_queries;
+
 struct netdev *netdev_route(uint32_t dst, uint32_t *via)
 {
-    (void)dst;
+    route_queries++;
     *via = dst;
-    return &the_iface;
+    return route_available ? &the_iface : 0;
 }
 
 /* Which addresses this machine's interfaces hold, as this test presents
@@ -228,12 +234,13 @@ struct netdev *netdev_first(void)
 /* What the driver answers a frame with, and how many it was handed. */
 static int tx_answer;
 static unsigned tx_frames;
+static uint16_t tx_len;
 
 int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
 {
     (void)nd;
     (void)frame;
-    (void)len;
+    tx_len = len;
     tx_frames++;
     return tx_answer;
 }
@@ -338,18 +345,87 @@ static unsigned build_ip(uint8_t *f, uint8_t proto, unsigned payload_len)
     return 20;
 }
 
-int main(void)
+/** Check one accepted datagram at the loopback, ARP or driver boundary. */
+static void check_tx_path(unsigned path, uint16_t len)
 {
-    uint8_t f[256];
-    unsigned n;
+    if (path == 0) {
+        CHECK("loopback queues the complete IP datagram",
+              loop_head == 1 && loop_ring_len[0] == 20 + len &&
+                  read16be(loop_ring[0] + 2) == 20 + len && read16be(loop_ring[0] + 6) == 0x4000 &&
+                  ip_checksum(loop_ring[0], 20) == 0 && tx_frames == 0 && arp_queries == 0);
+    } else if (path == 1) {
+        CHECK("ARP miss requests resolution without a data frame",
+              arp_queries == 1 && arp_requests == 1 && tx_frames == 0);
+    } else {
+        CHECK("wire datagram includes both headers within the MTU",
+              tx_frames == 1 && tx_len == 14 + 20 + len && read16be(ip_tx_buf + 2) == 20 + len &&
+                  read16be(ip_tx_buf + 6) == 0x4000 && ip_checksum(ip_tx_buf, 20) == 0 &&
+                  arp_requests == 0);
+    }
+}
+
+/** Check size rejection before route lookup, ARP, queueing or transmission. */
+static void test_tx_size(unsigned path, uint32_t dst, uint8_t proto, uint16_t len)
+{
+    static const uint8_t payload[65535];
+    int rc, before = fails;
+
+    route_available = path != 4;
+    arp_known = path == 2;
+    route_queries = arp_queries = arp_requests = tx_frames = 0;
+    tx_answer = NETDEV_TX_OK;
+    tx_len = 0;
+    loop_head = loop_tail = loop_dropped = loop_peak = 0;
+    ip_id_counter = 0;
+    the_iface.tx_dropped = 0;
+    rc = ip_tx(dst, proto, payload, len, IP_TTL_DEFAULT);
+    if (len > 1480) {
+        CHECK("oversize IP payload returns -EMSGSIZE on every path", rc == -EMSGSIZE);
+        CHECK("oversize IP payload has no routing or transmit side effects",
+              route_queries == 0 && arp_queries == 0 && arp_requests == 0 && tx_frames == 0 &&
+                  loop_head == 0 && loop_dropped == 0 && loop_peak == 0 && ip_id_counter == 0 &&
+                  the_iface.tx_dropped == 0);
+    } else if (path == 4) {
+        CHECK("in-range IP payload without a route returns -ENETUNREACH",
+              rc == -ENETUNREACH && route_queries == 1 && tx_frames == 0);
+    } else if (path == 3 && proto != IP_PROTO_UDP) {
+        CHECK("in-range ICMP broadcast returns -EOPNOTSUPP", rc == -EOPNOTSUPP && tx_frames == 0);
+    } else {
+        CHECK("in-range IP payload is accepted", rc == 0);
+        check_tx_path(path, len);
+    }
+    if (fails != before) {
+        printf("packet_hosttest: path %u protocol %u payload %u returned %d\n", path,
+               (unsigned)proto, (unsigned)len, rc);
+    }
+}
+
+/** Check empty, maximum and oversize payloads with ICMP and UDP protocols. */
+static void test_tx_mtu(void)
+{
+    static const uint32_t destinations[] = {0x0A00020Fu, 0x0A000202u, 0x0A000202u, 0xFFFFFFFFu,
+                                            0xC0000201u};
+    static const uint16_t lengths[] = {0, 1480, 1481, 1500, 65535};
+    static const uint8_t protocols[] = {IP_PROTO_ICMP, IP_PROTO_UDP};
+    unsigned path, n, p;
+
+    reset();
+    for (p = 0; p < sizeof(protocols); p++) {
+        for (path = 0; path < sizeof(destinations) / sizeof(destinations[0]); path++) {
+            for (n = 0; n < sizeof(lengths) / sizeof(lengths[0]); n++) {
+                test_tx_size(path, destinations[path], protocols[p], lengths[n]);
+            }
+        }
+    }
+    route_available = 1;
+    loop_head = loop_tail = 0;
+}
+
+/** Distinguish driver refusal from oversize rejection. */
+static void test_tx_errors(void)
+{
     static uint8_t big[1500];
 
-    /* A whole frame, so the cases below are read against something that does
-       arrive. */
-    /* What a send is told: a driver that did not take the frame gives the
-       sender -ENOBUFS, which it may keep the bytes for; a payload past the
-       frame's 1500 bytes gives -EMSGSIZE and reaches no driver, since no
-       later attempt could send it. */
     reset();
     arp_known = 1;
     tx_answer = NETDEV_TX_OK;
@@ -365,6 +441,15 @@ int main(void)
           ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT) == -EMSGSIZE);
     CHECK("and reaches no driver", tx_frames == 2);
     arp_known = 0;
+}
+
+int main(void)
+{
+    uint8_t f[256];
+    unsigned n;
+
+    test_tx_mtu();
+    test_tx_errors();
 
     reset();
     n = build_eth(f, 0x0800);
@@ -498,5 +583,5 @@ int main(void)
     if (fails == 0) {
         printf("packet_hosttest: PASS\n");
     }
-    return fails;
+    return fails != 0;
 }

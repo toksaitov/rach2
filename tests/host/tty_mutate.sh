@@ -106,8 +106,8 @@ if case == 'split-queue':
             '    wait_queue_init(&p->m_read_wq);\n    wait_queue_init(&p->m_write_wq);')
     replace('pty.c', 'wq_wait_event(&p->m_read_wq, ptm_has_room, p)',
             'wq_wait_event(&p->m_write_wq, ptm_has_room, p)')
-    replace('pty.c', '        if (n > 0) {\n            wq_wake_all(&p->m_read_wq);',
-            '        if (n > 0) {\n            wq_wake_all(&p->m_write_wq);')
+    replace('pty.c', '    if (n > 0) {\n        wq_wake_all(&p->m_read_wq);',
+            '    if (n > 0) {\n        wq_wake_all(&p->m_write_wq);')
 elif case == 'flush':
     replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);',
             '    n_tty_flush(&t->ldisc);')

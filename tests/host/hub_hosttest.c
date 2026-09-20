@@ -165,11 +165,12 @@ static struct {
     int connect_on_read;   /* a device lands on this port just after its status is read */
     int short_after_clear; /* the status read after a clear on this port is short */
     int short_clear_seen;  /* that clear has arrived; the next read is the short one */
-    int hold_commands;     /* no command answers while set */
-    int slot_cap;          /* the slots the controller has, 0 for fifteen */
-    int long_config;       /* a device whose configuration is 115 bytes */
-    int config_claims;     /* what its header claims, 0 for the truth */
-    int change_stall;      /* the change endpoint answers with a stall */
+    int close_refuse;
+    int hold_commands; /* no command answers while set */
+    int slot_cap;      /* the slots the controller has, 0 for fifteen */
+    int long_config;   /* a device whose configuration is 115 bytes */
+    int config_claims; /* what its header claims, 0 for the truth */
+    int change_stall;  /* the change endpoint answers with a stall */
     /* The transfer outstanding on the change endpoint. */
     int change_device;
     unsigned char *change_buffer;
@@ -496,6 +497,9 @@ int xhci_device_close(struct xhci_ctrl *hc, int device)
     closes++;
     slot_of[device].open = 0;
     command_ok(device);
+    if (model.close_refuse) {
+        command_result_pending.status = USB_XFER_FAILED;
+    }
     return 0;
 }
 
@@ -1048,7 +1052,7 @@ static void model_reset(void)
     }
     usb_core_reset();
     for (i = 0; i < HUB_MAX; i++) {
-        hub_at(i)->used = 0;
+        hub_release(i);
     }
 }
 
@@ -1168,6 +1172,111 @@ static int contains(const char *hay, const char *needle)
         }
     }
     return 0;
+}
+
+/** Keep a detached hub's buffers until Disable Slot succeeds. */
+static void detached_record(int refused)
+{
+    struct hub *old;
+    int index;
+
+    model_reset();
+    pump(2000);
+    old = hubs[0];
+    CHECK("the hub has an interrupt buffer in flight", old && model.change_buffer == old->bitmap);
+    if (!old) {
+        return;
+    }
+    index = old->index;
+    model.root_connected = 0;
+    model.hold_commands = !refused;
+    model.close_refuse = refused;
+    pump(30);
+    CHECK("the detached core entry retains its slot",
+          dev_at(index)->state == (refused ? ST_TOMBSTONE : ST_CLOSING));
+    old->data[0] = 0xA5;
+    old->bitmap[0] = 0x5A;
+    slot_of[2].open = 1;
+    slot_of[2].kind = KIND_HUB;
+    CHECK("another hub attaches while the old slot is retained",
+          hub_attach(the_ctrl, USB_MAX_DEVICES - 1, 2, 0, 0, 3, 0, 0) == 0);
+    CHECK("a detached hub record is not reused",
+          hubs[0] == old && !old->used && old->index == index && old->device == 1 &&
+              old->data[0] == 0xA5 && old->bitmap[0] == 0x5A);
+    hub_detach(USB_MAX_DEVICES - 1);
+    model.hold_commands = 0;
+    pump(30);
+    if (refused) {
+        CHECK("failed Disable Slot keeps the detached hub buffers", hubs[0] == old);
+    } else {
+        CHECK("successful Disable Slot releases the detached hub buffers", hubs[0] == 0);
+    }
+}
+
+/**
+ * Check closure, recovery and acknowledgements for concurrent port changes.
+ */
+static void concurrent_changes(void)
+{
+    int kbd;
+    int bits;
+
+    for (bits = 1; bits <= 2; bits++) {
+        model_reset();
+        model.port_kind[1] = KIND_KBD;
+        pump(2000);
+        kbd = slot_of_kind(KIND_KBD);
+        if (bits == 2) {
+            model.port_enabled[1] = 0;
+        }
+        model.port_change[1] = (unsigned int)bits | 8u;
+        model_change(2);
+        pump(2000);
+        CHECK("cleared over-current does not suppress another change",
+              closes == 1 && close_order[0] == kbd && slots_given == 3 && running_count() == 2);
+        CHECK("both USB 2 change bits are acknowledged", cleared(19, 2) && cleared(15 + bits, 2));
+    }
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.port_kind[1] = KIND_KBD;
+    model.port_speed[1] = USB_SPEED_SUPER;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    model.port_link[1] = 6;
+    model.port_change[1] = 0xE9u;
+    model_change(2);
+    pump(2000);
+    CHECK("a simultaneous connection and link fault starts a warm reset",
+          closes == 1 && close_order[0] == kbd && model.warm_resets == 1 && running_count() == 2);
+    CHECK("all concurrent USB 3 changes are acknowledged",
+          cleared(16, 2) && cleared(19, 2) && cleared(29, 2) && cleared(25, 2) && cleared(26, 2));
+
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.port_kind[1] = KIND_KBD;
+    model.port_speed[1] = USB_SPEED_SUPER;
+    pump(2000);
+    hubs[0]->port[1].warm = 1;
+    model.port_change[1] = 0x28u;
+    model_change(2);
+    pump(500);
+    CHECK("cleared over-current does not suppress warm reset completion", !hubs[0]->port[1].warm);
+
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.port_kind[1] = KIND_KBD;
+    model.port_speed[1] = USB_SPEED_SUPER;
+    pump(2000);
+    model.port_link[1] = 6;
+    model.port_over_current[1] = 1;
+    model.port_change[1] = 0xE9u;
+    model_change(2);
+    pump(500);
+    CHECK("active over-current prevents concurrent enumeration and warm reset",
+          closes == 1 && model.power_offs == 1 && model.warm_resets == 0 && running_count() == 1);
 }
 
 int main(void)
@@ -1392,7 +1501,9 @@ int main(void)
     model.port_link[1] = 6;
     model.port_change[1] |= 0x40u;
     model_change(2);
-    pump(30);
+    for (port = 0; port < 20 && model.warm_resets == 0; port++) {
+        pump(10);
+    }
     CHECK("the link falling inactive asks for a warm reset", model.warm_resets == 1);
     model.port_kind[1] = KIND_NONE;
     model.port_change[1] |= 1u;
@@ -1795,6 +1906,10 @@ int main(void)
         CHECK("and it is enumerated once a slot comes free",
               slots_given == held + 1 && running_count() == 3);
     }
+
+    detached_record(0);
+    detached_record(1);
+    concurrent_changes();
 
     if (fails == 0) {
         printf("hub_hosttest: OK\n");

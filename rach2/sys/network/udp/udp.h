@@ -27,7 +27,9 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen, uint8_t ttl);
 
-/** Bind sock to port; 0 on success, -1 if full or already bound. */
+/** Bind `sock` to `port`; 0 on success, -1 on conflict, -ENOMEM on allocation
+ * failure. Sharing requires SO_REUSEADDR on every socket and the caller's
+ * effective uid on every binding. */
 int udp_bind(uint16_t port, struct socket *sock);
 
 /** Bind sock to a free ephemeral port; returns the port, or 0 on failure. */

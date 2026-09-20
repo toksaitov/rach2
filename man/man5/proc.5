@@ -116,7 +116,10 @@ The final lines are
 .Ql SPU: COUNT spurious
 and
 .Ql FBK: COUNT usb fallback ,
-for APIC spurious interrupts and USB work found by the timer fallback.
+for APIC spurious interrupts and USB timer drains that found work without
+an observed pending USB interrupt after any USB interrupt source was enabled.
+The USB pump checks each configured controller's MSI vector or PCI IRQ.
+A message still in transit can also increase the fallback count.
 .It Pa /proc/loop
 One line per occupied loop device:
 .Dl loopN BYTES rw|ro writes WRITES syncs SYNCS PATH
@@ -214,8 +217,12 @@ for the subnet route and
 for the default gateway.
 Reference count, use, metric, MTU, window, and IRTT are zero.
 .It Pa /proc/net/tcp
-A header followed by one row per TCP connection, including listeners
+A header followed by rows for TCP connections, including listeners
 and connections still closing.
+The kernel counts connections, allocates the snapshot array, then copies
+up to the original count.
+Connections created during allocation may be included and can displace
+older connections from the snapshot.
 Each row gives a decimal index followed by a colon, local and remote
 addresses, state, transmit and receive queue sizes, timers,
 retransmission count, user ID, timeout, and inode.

@@ -352,14 +352,16 @@ void tty_flush_input(struct tty *t)
     kirq_restore(flags);
 }
 
+/**
+ * Set an EOF marker after queued input and wake readers.
+ *
+ * Canonical reads consume this marker once. The endpoint must maintain
+ * persistent hangup state for subsequent reads and other blocked readers.
+ */
 void tty_hangup(struct tty *t)
 {
     uint32_t flags;
 
-    /* Mark end-of-file at the current queue tail (so any already-cooked input
-     * is still read first, then reads return 0) and wake every parked
-     * reader/poller. A pty slave whose master has closed uses this so its
-     * blocked readers return EOF instead of hanging forever. */
     flags = kirq_save();
     t->ldisc.eof = 1;
     t->ldisc.eof_pos = t->ldisc.rq_tail;

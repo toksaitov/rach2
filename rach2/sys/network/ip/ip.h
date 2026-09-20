@@ -34,7 +34,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
  * for want of a hardware address the request for which has just gone out; a
  * datagram send promises no delivery, and the next one goes out resolved.
  * Returns a negative errno for the conditions the caller must hear about:
- * -EMSGSIZE for a payload past the MTU (this stack does not fragment),
+ * -EMSGSIZE for a payload above 1480 bytes (1500 less the IPv4 header),
  * -ENETUNREACH for an address with no route, -ENOBUFS when the loopback ring
  * is full or the driver did not take the frame, and -EOPNOTSUPP for a
  * broadcast of anything but UDP.

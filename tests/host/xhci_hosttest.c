@@ -20,6 +20,7 @@
  */
 
 extern int printf(const char *fmt, ...);
+extern int strcmp(const char *left, const char *right);
 
 #include "../../rach2/sys/usb/xhci.h"
 
@@ -99,6 +100,8 @@ static void (*on_endpoint_doorbell)(uint32_t slot, uint32_t dci);
 
 /* What this run's controller does, set before each row. */
 static int halts;
+static uint32_t delayed_us;
+static uint32_t halt_after_us;
 /* Whether a command the driver issues is answered at all. */
 static int command_completes;
 /* Whether the controller starts when it is told to. */
@@ -362,6 +365,10 @@ static void model_w32(struct xhci_ctrl *hc, uint32_t off, uint32_t v)
 
 static void model_udelay(uint32_t us)
 {
+    delayed_us += us;
+    if (halt_after_us && delayed_us >= halt_after_us) {
+        reg[OP(O_USBSTS)] |= M_USBSTS_HCH;
+    }
     if (awaiting_pause && us >= 1000u) {
         awaiting_pause = 0;
     }
@@ -535,11 +542,20 @@ void k_udelay(uint32_t us)
     (void)us;
 }
 
+static int stop_halted;
+static int stop_timeout;
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
-    (void)subsystem;
-    (void)format;
+    if (strcmp(subsystem, "usb") == 0) {
+        if (strcmp(format, "stop: the controller is halted") == 0) {
+            stop_halted++;
+        }
+        if (strcmp(format, "stop: the controller would not halt") == 0) {
+            stop_timeout++;
+        }
+    }
 }
 
 /*
@@ -1112,6 +1128,10 @@ static void model_reset(void)
     reg[LEGCTL] = 0u;
 
     halts = 1;
+    delayed_us = 0;
+    halt_after_us = 0;
+    stop_halted = 0;
+    stop_timeout = 0;
     starts = 1;
     command_completes = 1;
     port_reset_completes = 1;
@@ -1359,6 +1379,100 @@ static int arrived(const uint8_t *buffer, uint32_t length, uint32_t from)
     return 1;
 }
 
+/** Check descending endpoint indices in both device context sizes. */
+static void endpoint_order_rows(void)
+{
+    struct usb_location where = root_at(0);
+    struct usb_command_result result;
+    struct usb_endpoint ep;
+    unsigned context_size;
+    unsigned n;
+    const int numbers[] = {1, 1, 15, 15};
+    const int directions[] = {USB_DIR_IN, USB_DIR_OUT, USB_DIR_IN, USB_DIR_OUT};
+    const uint32_t highest[] = {3, 3, 31, 31};
+
+    for (context_size = 32; context_size <= 64; context_size += 32) {
+        model_reset();
+        if (context_size == 32) {
+            reg[R_HCCPARAMS1] &= ~4u;
+        }
+        CHECK("endpoint order capabilities", xhci_read_caps(hc) == 0);
+        CHECK("endpoint order reset", xhci_halt_reset(hc) == 0);
+        CHECK("endpoint order start", xhci_start(hc) == 0);
+        CHECK("endpoint order slot", xhci_device_open(hc, &where, USB_SPEED_HIGH) == 0);
+        xhci_events(hc);
+        CHECK("endpoint order enable completed", xhci_command_done(hc, &result) == 1);
+        CHECK("endpoint order address", xhci_device_address(hc, 1) == 0);
+        xhci_events(hc);
+        CHECK("endpoint order address completed", xhci_command_done(hc, &result) == 1);
+        for (n = 0; n < 4; n++) {
+            ep.number = numbers[n];
+            ep.direction = directions[n];
+            ep.type = USB_EP_BULK;
+            ep.max_packet = 512;
+            ep.interval = 0;
+            CHECK("endpoint order configure", xhci_endpoint_open(hc, 1, &ep) == 0);
+            CHECK("context entries retains highest endpoint index",
+                  (context_entry(hc, hc->input_ctx, 1)[0] >> 27) == highest[n]);
+            xhci_events(hc);
+            CHECK("endpoint order configure completed", xhci_command_done(hc, &result) == 1);
+        }
+    }
+}
+
+/** Check the shutdown result against the halted bit and the poll bound. */
+static void stop_rows(void)
+{
+    int delayed;
+
+    for (delayed = 0; delayed < 2; delayed++) {
+        model_reset();
+        CHECK("stop capabilities", xhci_read_caps(hc) == 0);
+        CHECK("stop ownership", xhci_own(hc) == 0);
+        CHECK("stop reset", xhci_halt_reset(hc) == 0);
+        CHECK("stop start", xhci_start(hc) == 0);
+        halts = 0;
+        delayed_us = 0;
+        halt_after_us = delayed ? 16000u : 0u;
+        xhci_stop(hc);
+        CHECK("shutdown polls for at most sixteen milliseconds", delayed_us == 16000u);
+        CHECK("shutdown retains operating-system ownership", (reg[XECP] & LEGSUP_OS_OWNED) != 0);
+        if (delayed) {
+            CHECK("halt at the deadline reports success", stop_halted == 1 && stop_timeout == 0);
+        } else {
+            CHECK("halt timeout does not report success", stop_halted == 0 && stop_timeout == 1);
+        }
+    }
+}
+
+/** Check register ranges at the aperture boundary and near 32-bit wrap. */
+static void register_range_rows(void)
+{
+    const uint32_t slots = 1u | (1u << 8) | (4u << 24);
+
+    model_reset();
+    reg[R_HCSPARAMS1] = slots;
+    reg[R_DBOFF] = 0xFFFFFFFCu;
+    CHECK("wrapping doorbell range is refused", xhci_read_caps(hc) != 0);
+    model_reset();
+    reg[R_HCSPARAMS1] = slots;
+    reg[R_RTSOFF] = 0xFFFFFFE0u;
+    CHECK("wrapping runtime range is refused", xhci_read_caps(hc) != 0);
+    model_reset();
+    reg[R_HCSPARAMS1] = slots;
+    reg[R_DBOFF] = 0xFFF8u;
+    reg[R_RTSOFF] = 0xFFC0u;
+    CHECK("register ranges ending at aperture boundary fit", xhci_read_caps(hc) == 0);
+    reg[R_DBOFF] = 0xFFFCu;
+    CHECK("last doorbell must fit whole", xhci_read_caps(hc) != 0);
+    reg[R_DBOFF] = 0xFFF8u;
+    reg[R_RTSOFF] = 0xFFE0u;
+    CHECK("first interrupter must fit whole", xhci_read_caps(hc) != 0);
+    model_reset();
+    reg[R_HCSPARAMS1] = 1u | (4u << 24);
+    CHECK("controller without an interrupter is refused", xhci_read_caps(hc) != 0);
+}
+
 int main(void)
 {
     struct usb_location root0 = root_at(0);
@@ -1459,6 +1573,10 @@ int main(void)
     reg[R_HCSPARAMS1] = 16u | (8u << 8) | (4u << 24);
     CHECK("interrupters that run off the end are refused", xhci_read_caps(hc) != 0);
 
+    register_range_rows();
+    endpoint_order_rows();
+    stop_rows();
+
     /* Taking the controller from the firmware. */
     model_reset();
     reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
@@ -1517,6 +1635,7 @@ int main(void)
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
     CHECK("started", xhci_start(hc) == 0);
     xhci_stop(hc);
+    CHECK("observed halt reports success", stop_halted == 1 && stop_timeout == 0);
     CHECK("a controller that was started is halted", (reg[OP(O_USBSTS)] & M_USBSTS_HCH) != 0);
     CHECK("and its claim is kept rather than handed back", (reg[XECP] & LEGSUP_OS_OWNED) != 0);
     CHECK("with the firmware's interrupts still off", (reg[LEGCTL] & 0x0000E1FEu) == 0);

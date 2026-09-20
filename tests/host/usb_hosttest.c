@@ -178,10 +178,14 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
 #define CMD_RESET   2
 #define CMD_DEQUEUE 3
 #define CMD_DISABLE 4
+#define CMD_ENABLE  5
 static struct {
-    int pending;      /* a command issued and not yet answered */
-    int answer;       /* 1 to answer it with `status`, 0 to leave it */
-    int status;       /* the answer's status */
+    int pending; /* a command issued and not yet answered */
+    int answer;  /* 1 to answer it with `status`, 0 to leave it */
+    int status;  /* the answer's status */
+    int result_device;
+    int disabled_device;
+    int closed_device;
     int refuse_issue; /* every issue answers -1 */
     int issued[8];
     int endpoint[8]; /* the endpoint each command named */
@@ -231,6 +235,9 @@ static void ring_reset(void)
     ring.pending = 0;
     ring.answer = 0;
     ring.status = USB_XFER_OK;
+    ring.result_device = 0;
+    ring.disabled_device = 0;
+    ring.closed_device = 0;
     ring.refuse_issue = 0;
     ring.count = 0;
     ring.ep_state = XHCI_EP_RUNNING;
@@ -246,13 +253,14 @@ static void ring_reset(void)
 
 int xhci_device_close(struct xhci_ctrl *hc, int device)
 {
-    (void)device;
+    ring.disabled_device = device;
     return ring_issue(CMD_DISABLE, 0);
 }
 
 void xhci_device_closed(struct xhci_ctrl *hc, int device)
 {
-    (void)device;
+    (void)hc;
+    ring.closed_device = device;
 }
 
 int xhci_command_busy(struct xhci_ctrl *hc)
@@ -276,7 +284,7 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
     ring.answer = 0;
     out->status = ring.status;
     out->code = 0;
-    out->device = 0;
+    out->device = ring.result_device;
     if (ring.status == USB_XFER_OK && ring.count > 0 && ring.count <= 8) {
         int what = ring.issued[ring.count - 1];
 
@@ -284,7 +292,7 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
             ring.ep_state = XHCI_EP_STOPPED;
         }
     }
-    return 1;
+    return ring.status == USB_XFER_OK ? 1 : -1;
 }
 
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
@@ -818,6 +826,131 @@ static void quiesce_rows(void)
     usb_core_reset();
 }
 
+/** Check cleanup of an Enable Slot that outlives the enumeration deadline. */
+static void slot_timeout_rows(void)
+{
+    struct usb_device_state *d;
+    int refused;
+
+    for (refused = 0; refused < 2; refused++) {
+        usb_core_reset();
+        ring_reset();
+        port_present = 1;
+        d = stick_at(0, ST_SLOT, 0);
+        d->interface.kind = USB_KIND_NONE;
+        enumerating[0] = 0;
+        CHECK("enable slot is outstanding", ring_issue(CMD_ENABLE, 0) == 0);
+        usb_core_step(STEP_MS - 1u);
+        CHECK("enable slot waits before the deadline", d->state == ST_SLOT);
+        usb_core_step(1);
+        CHECK("slot timeout retains the device and command turn",
+              devices[0] == d && d->state == ST_CLOSING && d->abandoned && enumerating[0] == 0 &&
+                  ring.count == 1);
+        usb_core_step(100);
+        CHECK("slot cleanup waits for the outstanding enable",
+              devices[0] == d && d->state == ST_CLOSING && ring.pending && ring.count == 1);
+        ring.answer = 1;
+        ring.result_device = refused ? 0 : 7;
+        ring.status = refused ? USB_XFER_FAILED : USB_XFER_OK;
+        usb_core_step(100);
+        if (refused) {
+            CHECK("failed enable releases the entry without disable",
+                  d->state == ST_FREE && enumerating[0] == -1 && ring.count == 1 &&
+                      ring.disabled_device == 0);
+        } else {
+            CHECK("late enable closes the returned slot",
+                  d->state == ST_CLOSING && d->slot == 7 && d->closing_asked &&
+                      enumerating[0] == 0 && ring.count == 2 && ring.issued[1] == CMD_DISABLE &&
+                      ring.disabled_device == 7);
+            CHECK("slot record remains until disable completes", ring.closed_device == 0);
+            ring.answer = 1;
+            usb_core_step(1);
+            CHECK("disable completion releases the late slot",
+                  ring.closed_device == 7 && d->state == ST_FREE && enumerating[0] == -1);
+        }
+        usb_core_step(1);
+        CHECK("resolved slot cleanup frees the device frame", devices[0] == 0);
+    }
+    port_present = 0;
+    usb_core_reset();
+}
+
+/** Check that all selected endpoints belong to one complete interface. */
+static void interface_rows(void)
+{
+    unsigned char config[] = {9,    2, 48, 0, 2,    1, 0,   0x80, 50, 9, 4, 0,    0, 1, 8, 6,
+                              0x50, 0, 7,  5, 0x81, 2, 64,  0,    0,  9, 4, 1,    0, 2, 8, 6,
+                              0x50, 0, 7,  5, 0x02, 2, 128, 0,    0,  7, 5, 0x83, 2, 0, 2, 0};
+    unsigned char cross_class[] = {9, 2,    41, 0, 2, 1, 0, 0x80, 50,   9, 4, 0,    0, 1,
+                                   3, 1,    1,  0, 9, 4, 1, 0,    2,    8, 6, 0x50, 0, 7,
+                                   5, 0x82, 2,  0, 2, 0, 7, 5,    0x03, 2, 0, 2,    0};
+    struct usb_interface_info info;
+
+    walk(config, 41, &info);
+    CHECK("split storage interfaces are incomplete", !info.found);
+    walk(config, sizeof(config), &info);
+    CHECK("complete storage interface replaces incomplete candidate",
+          info.found && info.kind == USB_KIND_STORAGE && info.number == 1 && info.ep_number == 3 &&
+              info.ep_max_packet == 512 && info.ep_out_number == 2 &&
+              info.ep_out_max_packet == 128);
+    config[28] = 1;
+    walk(config, sizeof(config), &info);
+    CHECK("alternate setting cannot complete a storage candidate", !info.found);
+    config[28] = 0;
+    config[27] = 0;
+    walk(config, sizeof(config), &info);
+    CHECK("repeated interface descriptor starts a fresh candidate",
+          info.found && info.number == 0 && info.ep_number == 3);
+    config[27] = 1;
+    config[31] = 0xFF;
+    walk(config, sizeof(config), &info);
+    CHECK("unsupported interface cannot complete a storage candidate", !info.found);
+    config[25] = 2;
+    config[27] = 7;
+    config[28] = 5;
+    config[29] = 0x02;
+    config[30] = 2;
+    walk(config, 34, &info);
+    CHECK("short interface descriptor ends endpoint collection", !info.found);
+
+    walk(cross_class, sizeof(cross_class), &info);
+    CHECK("complete storage follows incomplete HID", info.found && info.kind == USB_KIND_STORAGE &&
+                                                         info.number == 1 && info.ep_number == 2 &&
+                                                         info.ep_out_number == 3);
+    cross_class[14] = 8;
+    cross_class[15] = 6;
+    cross_class[16] = 0x50;
+    cross_class[23] = 3;
+    cross_class[24] = 1;
+    cross_class[25] = 2;
+    cross_class[30] = 3;
+    cross_class[33] = 10;
+    walk(cross_class, sizeof(cross_class), &info);
+    CHECK("complete HID follows incomplete storage",
+          info.found && info.kind == USB_KIND_HID && info.number == 1 &&
+              info.protocol == USB_PROTOCOL_MOUSE && info.ep_number == 2 &&
+              info.ep_interval == 10 && info.ep_out_number == 0);
+    cross_class[23] = 9;
+    cross_class[24] = 0;
+    cross_class[25] = 0;
+    walk(cross_class, sizeof(cross_class), &info);
+    CHECK("complete hub follows incomplete storage",
+          info.found && info.kind == USB_KIND_HUB && info.number == 1 && info.ep_number == 2);
+    cross_class[14] = 3;
+    cross_class[15] = 1;
+    cross_class[16] = 1;
+    cross_class[18] = 7;
+    cross_class[19] = 5;
+    cross_class[20] = 0x84;
+    cross_class[21] = 3;
+    cross_class[22] = 8;
+    cross_class[23] = 0;
+    cross_class[24] = 4;
+    walk(cross_class, sizeof(cross_class), &info);
+    CHECK("first complete interface remains selected",
+          info.found && info.kind == USB_KIND_HID && info.number == 0 && info.ep_number == 4);
+}
+
 int main(void)
 {
     struct usb_interface_info info;
@@ -825,6 +958,8 @@ int main(void)
     unsigned i;
 
     quiesce_rows();
+    slot_timeout_rows();
+    interface_rows();
 
     /* A configuration as a device sends it. */
     walk(keyboard_config, (int)sizeof(keyboard_config), &info);
