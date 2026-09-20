@@ -56,7 +56,7 @@ run_phase()
 
 echo "fd-stdio-mutation: logs: $work"
 run_phase fixed 0 'fd_hosttest: pass:'
-for fault in unchecked rollback process repoint; do
+for fault in unchecked rollback process repoint namespace; do
     source="$work/sys/fs/fd.c"
     [ "$fault" != process ] || source="$work/sys/proc/process.c"
     python3 - "$source" "$fault" <<'PY'
@@ -66,6 +66,8 @@ import sys
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 changes = {
+    "namespace": ("if (ofd->vmnt) {",
+                  "if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {"),
     "repoint": ("mnt->type == &vfs_krffs_type && rec->ofd.fhandle == from",
                 "rec->ofd.fhandle == from"),
     "process": ("if (fd_init_stdio(&p->fds) != 0) {",
@@ -75,15 +77,26 @@ changes = {
     "rollback": ("                fd_free(table, --i);", "                --i;"),
 }
 old, new = changes[sys.argv[2]]
-if source.count(old) != 1:
-    raise SystemExit("fd-stdio-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
+if sys.argv[2] == "namespace":
+    for name in ("fd_ofd_lock", "fd_ofd_unlock"):
+        start = source.index("void " + name + "(")
+        end = source.index("\n}", start) + 2
+        body = source[start:end]
+        if body.count(old) != 1:
+            raise SystemExit("fd-stdio-mutation: lock pattern is not unique")
+        source = source[:start] + body.replace(old, new) + source[end:]
+else:
+    if source.count(old) != 1:
+        raise SystemExit("fd-stdio-mutation: source pattern is not unique")
+    source = source.replace(old, new)
+path.write_text(source)
 PY
     case $fault in
         unchecked) message='stdio reports allocation failure' ;;
         process) message='failed process is not published' ;;
         rollback) message='stdio releases partial allocations' ;;
         repoint) message='mounted open handle remains stable during node relocation' ;;
+        namespace) message='other mounted types take the namespace before the description' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

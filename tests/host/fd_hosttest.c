@@ -292,7 +292,7 @@ int main(void)
     check(reader->vnode == &new_node && reader->fhandle == &old_node,
           "mounted open handle remains stable during node relocation");
     fd_ofd_lock(reader);
-    check(depth == 0, "other file types take no root namespace lock");
+    check(depth == 1, "other mounted types take the namespace before the description");
     fd_ofd_unlock(reader);
     reader->vmnt = 0;
     fd_ofd_lock(reader);

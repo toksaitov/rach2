@@ -979,20 +979,14 @@ int bcache_sync(block_device_t *dev)
 void bcache_device_gone(block_device_t *dev)
 {
     struct bbuf *b;
-    int failed = 0;
 
+    vfs_device_failed(dev, 0, -EIO);
     dev->flags |= BLOCK_GONE;
     for (b = bufs; b; b = b->next) {
         if (b->dev != dev) {
             continue;
         }
-        if (b->dirty) {
-            if (!failed) {
-                vfs_device_failed(dev, b->blk * BCACHE_BLOCK_SECTORS, -EIO);
-                failed = 1;
-            }
-            b->dirty = 0;
-        }
+        b->dirty = 0;
         if (b->holder != -1) {
             b->discard = 1;
             continue;

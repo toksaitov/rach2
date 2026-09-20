@@ -50,6 +50,11 @@ pending buffer writes.
 A failed retry is returned to the caller; the device is flushed only
 after writeback succeeds.
 .Pp
+On ext2, fsync drains all pending inodes on the mount in dependency order.
+The first delayed write or flush error remains observable by every later
+fsync until unmount, including after close, reopen and successful retry.
+A retry can finish an unmount, but the volume remains marked invalid.
+.Pp
 .Fn fdatasync
 uses the same handler as
 .Fn fsync

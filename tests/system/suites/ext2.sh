@@ -40,6 +40,15 @@ else
 fi
 grep -aq 'ext2: mounted: ' "$DISK.links.log" || fail "the mount record"
 
+if run --append "rach2.rescue" --timeout 90 --steptmo 60 --ok "EXT2PROBE OK (cost)" \
+    --never "EXT2PROBE FAIL" --log "$DISK.cost.log" "expect=Type 'help'" \
+    "send=exec /ext2probe cost" "expect=EXT2PROBE" > /dev/null 2>&1; then
+    grep -a 'ext2-cost: result:' "$DISK.cost.log" | tr -d '\r'
+    echo "ext2-test: small writes share commands across calls: OK"
+else
+    fail "the cross-call command counts"
+fi
+
 # ---- the root disk ----
 ROOT="$DISK.root"
 VOL="$ROOT.p1"

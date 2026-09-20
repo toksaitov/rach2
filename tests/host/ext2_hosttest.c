@@ -3,9 +3,9 @@
  * host's mke2fs made.
  *
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
- * host-deps: rach2/sys/block/chain.c
+ * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
+ * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the
@@ -58,6 +58,10 @@ extern void free(void *p);
 #define SEEK_SET_ 0
 
 /* ---- stubs for what the driver and the cache reach outside themselves ---- */
+
+static struct vfs_mount mnt;
+static void (*namespace_ready)(void);
+static void (*flush_pause)(void);
 
 process_t proc_a;
 process_t *current_proc = &proc_a;
@@ -114,9 +118,13 @@ int vfs_ns_held_by_caller(void)
 
 void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
 {
-    (void)d;
     (void)lba;
-    (void)rc;
+    if (mnt.priv && mnt.dev == d) {
+        if (!mnt.write_error) {
+            mnt.write_error = rc;
+        }
+        mnt.flags |= VFS_MS_RDONLY;
+    }
 }
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -133,7 +141,13 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
         mnt->ns_depth--;
     }
     if (mnt->ns_depth == 0) {
+        void (*ready)(void) = namespace_ready;
+
         mnt->ns_holder = -1;
+        namespace_ready = 0;
+        if (ready) {
+            ready();
+        }
     }
 }
 
@@ -171,6 +185,35 @@ static uint64_t wlog_lba[WLOG_MAX];
 static uint32_t wlog_count[WLOG_MAX];
 static unsigned char *wlog_data[WLOG_MAX];
 static int wlog_n, wlog_capture, wlog_overflow;
+static int flush_calls, flush_fail_at = -1;
+static int flush_log[WLOG_MAX], flush_n;
+
+/** The fake disk has no partition views and uses the normal request limit. */
+uint32_t block_max_sectors(block_device_t *device)
+{
+    return device->max_sectors ? device->max_sectors : BLOCK_REQ_SECTORS;
+}
+
+/** Record successful durability boundaries, or fail one selected flush. */
+int block_flush(block_device_t *device)
+{
+    (void)device;
+    if (flush_pause) {
+        flush_pause();
+    }
+    flush_calls++;
+    if (flush_calls == flush_fail_at) {
+        return -EIO;
+    }
+    if (wlog_capture) {
+        if (flush_n == WLOG_MAX) {
+            wlog_overflow = 1;
+            return -EIO;
+        }
+        flush_log[flush_n++] = wlog_n;
+    }
+    return 0;
+}
 
 static void wlog_reset(void)
 {
@@ -182,6 +225,7 @@ static void wlog_reset(void)
     }
     wlog_n = 0;
     wlog_overflow = 0;
+    flush_n = 0;
 }
 
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
@@ -273,7 +317,6 @@ static void use_image(const char *path, uint64_t bytes)
     }
 }
 
-static struct vfs_mount mnt;
 #define OPS (vfs_ext2_type.ops)
 
 static int mount_flags(uint32_t flags)
@@ -1916,6 +1959,74 @@ static int shadow_pointers_ok(const unsigned char *shadow, uint64_t blk, uint64_
     return 1;
 }
 
+static uint32_t batch_publication_ino;
+static uint32_t batch_publication_first = 1035;
+static int batch_publication_hole;
+static unsigned batch_publication_blocks = 32;
+static const unsigned char *batch_publication_data;
+
+/** Read a little-endian word from the independent image replay. */
+static uint32_t batch_word(const unsigned char *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/** Check that each appended block covered by a persisted size has its bytes. */
+static int batch_size_ok(const unsigned char *shadow, uint64_t blocks)
+{
+    uint32_t per_group = batch_word(shadow + 1024 + 40);
+    uint32_t group = (batch_publication_ino - 1) / per_group;
+    uint32_t table = batch_word(shadow + 4096 + group * 32 + 8);
+    uint32_t index = (batch_publication_ino - 1) % per_group;
+    const unsigned char *inode = shadow + table * 4096 + index * 128;
+    uint32_t size = batch_word(inode + 4);
+    unsigned i;
+
+    for (i = 0; i < batch_publication_blocks && size > (batch_publication_first + i) * 4096; i++) {
+        uint32_t logical = batch_publication_first + i;
+        uint32_t block;
+
+        if (logical < 12) {
+            block = batch_word(inode + 40 + logical * 4);
+        } else if (logical < 1036) {
+            block = batch_word(inode + 40 + 12 * 4);
+            if (!block && batch_publication_hole) {
+                continue;
+            }
+            if (!block || block >= blocks) {
+                return 0;
+            }
+            block = batch_word(shadow + block * 4096 + (logical - 12) * 4);
+        } else {
+            uint32_t rest = logical - 1036;
+
+            block = batch_word(inode + 40 + 13 * 4);
+            if (!block && batch_publication_hole) {
+                continue;
+            }
+            if (!block || block >= blocks) {
+                return 0;
+            }
+            block = batch_word(shadow + block * 4096 + (rest / 1024) * 4);
+            if (!block && batch_publication_hole) {
+                continue;
+            }
+            if (!block || block >= blocks) {
+                return 0;
+            }
+            block = batch_word(shadow + block * 4096 + (rest % 1024) * 4);
+        }
+        if (!block && batch_publication_hole) {
+            continue;
+        }
+        if (!block || block >= blocks ||
+            memcmp(shadow + block * 4096, batch_publication_data + i * 4096, 4096) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Replay the captured writes on a snapshot of the disk taken before them,
    and at each write that carries a pointer block's pointers require every
    block they name to be allocated in the bitmap as it stands on the disk
@@ -1936,6 +2047,10 @@ static int publication_ok(unsigned char *shadow, uint64_t blocks, const uint64_t
             return 0;
         }
         __builtin_memcpy(shadow + wlog_lba[k] * 512, wlog_data[k], wlog_count[k] * 512);
+        if (batch_publication_ino && !batch_size_ok(shadow, blocks)) {
+            printf("  write %d publishes a size before its appended bytes\n", k);
+            ok = 0;
+        }
         for (i = 0; i < nptr; i++) {
             const unsigned char *p;
             uint64_t bad = 0;
@@ -1984,65 +2099,127 @@ static int publication_ok(unsigned char *shadow, uint64_t blocks, const uint64_t
     return ok;
 }
 
-/* Entry 18 of milestone 50: a pointer block the cache evicts under pressure
-   must not reach the disk before the bitmap whose bit marks the block it
-   names. Thirty-two blocks written from logical block 1035 in one call
-   cross from the single into the double indirection, through a cache cut
-   to sixteen buffers, so the write's pointer blocks are evicted while it
-   runs; the last write of every pointer block, the one that carries its
-   pointers (its first is the zeros that go with the bitmaps), must come
-   after the first write of every block bitmap and descriptor block the
-   write touched. The descriptors are block 1 at this block size. */
-static void order_row_under(uint32_t buffers)
+/** Judge a reordered write against the durable allocation and data images. */
+static int media_write_ok(const unsigned char *media, uint64_t blocks, const uint64_t *ptr,
+                          int nptr, uint64_t bitmap_blk, int write_index)
 {
-    static unsigned char buf[32 * 4096];
-    uint64_t ptr[8], bm[8];
-    int nptr, nbm, i, j, rc, ok = 1;
-    uint32_t freed = 0;
-    void *f;
-    unsigned char *shadow;
+    uint64_t first = wlog_lba[write_index] / 8;
+    uint64_t last = (wlog_lba[write_index] + wlog_count[write_index] - 1) / 8;
+    int i, j, e;
 
-    for (i = 0; i < (int)sizeof(buf); i++) {
-        buf[i] = (unsigned char)(i * 13 + 1);
+    if (batch_publication_ino && !batch_size_ok(media, blocks)) {
+        return 0;
     }
-    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
-    use_image(wimg, wbytes);
-    if (bcache_resident() > buffers) {
-        bcache_shrink(bcache_resident() - buffers, 0, &freed);
-    }
-    bcache_set_limit(buffers);
-    check(bcache_resident() <= buffers, "the cache is cut for the sparse write");
-    stop_after = -1;
-    check(seed_free_blocks(0) > 0, "the free blocks are seeded with stale bytes");
-    rc = mount_rw();
-    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, "the order row's volume mounts for writing");
-    f = rc == 0 ? make_file(mnt.root, "ordered", &rc) : 0;
-    check(f != 0, "a file for the sparse write");
-    if (!f) {
-        printf("  rc %d; last warning '%s'; last check '%s'; last log '%s'\n", rc, last_warn,
-               last_check, last_log);
-    }
-    shadow = malloc(wbytes);
-    check(shadow != 0 && fseek(image, 0, SEEK_SET_) == 0 &&
-              fread(shadow, 1, wbytes, image) == wbytes,
-          "a snapshot of the disk before the write");
-    wlog_reset();
-    wlog_capture = 1;
-    if (f) {
-        rc = write_at(f, buf, sizeof(buf), 1035ull * 4096);
-        check(rc == 0, "thirty-two blocks from logical block 1035, written in one call");
-        if (rc != 0) {
-            printf("  rc %d\n", rc);
+    for (i = 0; i < nptr; i++) {
+        uint64_t bad;
+
+        if (ptr[i] < first || ptr[i] > last) {
+            continue;
         }
-        OPS->put(&mnt, f);
+        if (!shadow_pointers_ok(media, ptr[i], bitmap_blk, blocks, &bad)) {
+            return 0;
+        }
+        for (e = 0; e < 1024; e++) {
+            uint32_t child = batch_word(media + ptr[i] * 4096 + e * 4);
+
+            for (j = 0; child && j < nptr; j++) {
+                if (ptr[j] == child &&
+                    !shadow_pointers_ok(media, child, bitmap_blk, blocks, &bad)) {
+                    return 0;
+                }
+            }
+        }
     }
-    check(unmount_rw() == 0, "the order row's volume unmounts");
-    bcache_set_limit(0);
-    nptr = debugfs_numbers("stat /ordered", "(IND):", ptr, 4);
-    nptr += debugfs_numbers("stat /ordered", "(DIND):", ptr + nptr, 4);
-    nbm = debugfs_numbers("stats", "block bitmap at ", bm, 8);
-    check(nptr >= 2 && nbm >= 1,
-          "debugfs names the file's pointer blocks and the volume's bitmaps");
+    return 1;
+}
+
+/**
+ * Replay volatile writes between explicit flushes over a separate medium.
+ * Each pending command may persist alone before older commands. Each reverse
+ * prefix may also persist. A successful flush then commits the submitted
+ * order before the next interval. Commands are atomic; sector tears and
+ * every subset of three or more pending commands are outside this model.
+ */
+static int media_publication_ok(const unsigned char *before, uint64_t blocks, const uint64_t *ptr,
+                                int nptr, uint64_t bitmap_blk)
+{
+    unsigned long bytes = (unsigned long)(blocks * 4096);
+    unsigned char *durable = malloc(bytes), *trial = malloc(bytes);
+    int interval, begin = 0, end, k, ok = 1, states = 0;
+
+    if (!durable || !trial) {
+        free(durable);
+        free(trial);
+        return 0;
+    }
+    __builtin_memcpy(durable, before, bytes);
+    for (interval = 0; interval <= flush_n && ok; interval++) {
+        end = interval < flush_n ? flush_log[interval] : wlog_n;
+        if (end < begin || end > wlog_n) {
+            ok = 0;
+            break;
+        }
+        for (k = begin; k < end && ok; k++) {
+            if (!wlog_data[k]) {
+                ok = 0;
+                break;
+            }
+            __builtin_memcpy(trial, durable, bytes);
+            __builtin_memcpy(trial + wlog_lba[k] * 512, wlog_data[k], wlog_count[k] * 512);
+            ok = media_write_ok(trial, blocks, ptr, nptr, bitmap_blk, k);
+            states++;
+        }
+        __builtin_memcpy(trial, durable, bytes);
+        for (k = end - 1; k >= begin && ok; k--) {
+            __builtin_memcpy(trial + wlog_lba[k] * 512, wlog_data[k], wlog_count[k] * 512);
+            ok = media_write_ok(trial, blocks, ptr, nptr, bitmap_blk, k);
+            states++;
+        }
+        if (!ok) {
+            printf("ext2-media: interval %d, writes %d through %d violate publication order\n",
+                   interval, begin, end - 1);
+            break;
+        }
+        for (k = begin; k < end; k++) {
+            __builtin_memcpy(durable + wlog_lba[k] * 512, wlog_data[k], wlog_count[k] * 512);
+        }
+        begin = end;
+    }
+    printf("ext2-media: result: %d boundaries, %d durable states checked\n", flush_n, states);
+    free(durable);
+    free(trial);
+    return ok;
+}
+
+/** Collect separate appends and verify their visible bytes before sync. */
+static int order_collect(void *handle, const unsigned char *buf, uint32_t first)
+{
+    int before = writes_made;
+    int i, rc = 0;
+
+    for (i = 0; i < 32; i++) {
+        int32_t got =
+            OPS->write(&mnt, handle, buf + i * 4096, 4096, ((uint64_t)first + (unsigned)i) * 4096);
+
+        check(got == 4096, "a cross-call append returns its full block");
+        if (got != 4096) {
+            rc = -1;
+            break;
+        }
+    }
+    check(writes_made == before, "cross-call publication collection writes no blocks");
+    check(OPS->read(&mnt, handle, abuf, 32 * 4096, (uint64_t)first * 4096) == 32 * 4096 &&
+              memcmp(abuf, buf, 32 * 4096) == 0,
+          "pending appends across indirect levels read their bytes");
+    check(OPS->fsync(&mnt, handle) == 0, "the cross-call publication batch syncs");
+    return rc;
+}
+
+/** Check allocation writes before every changed indirect pointer block. */
+static void order_allocations(const uint64_t *ptr, int nptr, const uint64_t *bm, int nbm)
+{
+    int i, j, ok = 1;
+
     for (i = 0; i < nptr; i++) {
         int at = last_write_of(ptr[i]);
 
@@ -2068,10 +2245,95 @@ static void order_row_under(uint32_t buffers)
     }
     check(ok, "every pointer block's pointers reached the disk after the bitmaps and descriptors "
               "of its write");
+}
+
+/* Entry 18 of milestone 50: a pointer block the cache evicts under pressure
+   must not reach the disk before the bitmap whose bit marks the block it
+   names. Thirty-two blocks written from logical block 1035 in one call
+   cross from the single into the double indirection, through a cache cut
+   to sixteen buffers, so the write's pointer blocks are evicted while it
+   runs; the last write of every pointer block, the one that carries its
+   pointers (its first is the zeros that go with the bitmaps), must come
+   after the first write of every block bitmap and descriptor block the
+   write touched. The descriptors are block 1 at this block size. */
+static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
+{
+    static unsigned char buf[32 * 4096];
+    uint64_t ptr[8], bm[8];
+    int nptr, nbm, i, rc;
+    uint32_t freed = 0;
+    void *f;
+    unsigned char *shadow;
+    void *handle = 0;
+    struct vfs_stat st;
+
+    for (i = 0; i < (int)sizeof(buf); i++) {
+        buf[i] = (unsigned char)(i * 13 + 1);
+    }
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (bcache_resident() > buffers) {
+        bcache_shrink(bcache_resident() - buffers, 0, &freed);
+    }
+    bcache_set_limit(buffers);
+    check(bcache_resident() <= buffers, "the cache is cut for the sparse write");
+    stop_after = -1;
+    check(seed_free_blocks(0) > 0, "the free blocks are seeded with stale bytes");
+    rc = mount_rw();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, "the order row's volume mounts for writing");
+    f = rc == 0 ? make_file(mnt.root, "ordered", &rc) : 0;
+    check(f != 0, "a file for the sparse write");
+    if (!f) {
+        printf("  rc %d; last warning '%s'; last check '%s'; last log '%s'\n", rc, last_warn,
+               last_check, last_log);
+    }
+    if (f && cross_calls) {
+        check(OPS->open(&mnt, f, 2, &handle) == 0, "the batch publication handle opens");
+        check(handle && OPS->truncate(&mnt, handle, (uint64_t)first * 4096) == 0,
+              "a sparse prefix precedes contiguous batch appends");
+        check(OPS->getattr(&mnt, f, &st) == 0, "the publication inode is known");
+        batch_publication_ino = (uint32_t)st.ino;
+        batch_publication_first = first;
+        batch_publication_data = buf;
+    }
+    shadow = malloc(wbytes);
+    check(shadow != 0 && fseek(image, 0, SEEK_SET_) == 0 &&
+              fread(shadow, 1, wbytes, image) == wbytes,
+          "a snapshot of the disk before the write");
+    wlog_reset();
+    wlog_capture = 1;
+    if (f) {
+        if (cross_calls && handle) {
+            rc = order_collect(handle, buf, first);
+            OPS->release(&mnt, handle);
+        } else {
+            rc = write_at(f, buf, sizeof(buf), (uint64_t)first * 4096);
+        }
+        check(rc == 0, "thirty-two blocks from logical block 1035, written in one call");
+        if (rc != 0) {
+            printf("  rc %d\n", rc);
+        }
+        OPS->put(&mnt, f);
+    }
+    check(unmount_rw() == 0, "the order row's volume unmounts");
+    bcache_set_limit(0);
+    nptr = debugfs_numbers("stat /ordered", "(IND):", ptr, 4);
+    nptr += debugfs_numbers("stat /ordered", "(DIND):", ptr + nptr, 4);
+    nbm = debugfs_numbers("stats", "block bitmap at ", bm, 8);
+    check(nptr >= (first < 1000 ? 1 : 2) && nbm >= 1,
+          "debugfs names the file's pointer blocks and the volume's bitmaps");
+    order_allocations(ptr, nptr, bm, nbm);
     check(!wlog_overflow, "the write log held every write of the row");
+    if (cross_calls) {
+        check(shadow != 0 && nbm >= 1 &&
+                  media_publication_ok(shadow, wbytes / 4096, ptr, nptr, bm[0]),
+              "volatile media preserves pointer and size dependencies");
+    }
     check(shadow != 0 && nbm >= 1 && publication_ok(shadow, wbytes / 4096, ptr, nptr, bm[0]),
           "every pointer published names an allocated block whose contents on the disk are "
           "not stale");
+    batch_publication_ino = 0;
+    batch_publication_data = 0;
     wlog_capture = 0;
     wlog_reset();
     free(shadow);
@@ -2085,8 +2347,223 @@ static void order_row_under(uint32_t buffers)
    a machine can produce, and the publication check must hold in both. */
 static void order_row(void)
 {
-    order_row_under(16);
-    order_row_under(64);
+    order_row_under(16, 0, 1035);
+    order_row_under(64, 0, 1035);
+}
+
+/** Keep a handle open across calls and check collection and publication. */
+static void batch_rows_under(uint32_t buffers)
+{
+    static unsigned char want[6 * 4096];
+    void *node, *handle = 0;
+    struct vfs_stat st;
+    int rc, i;
+    uint32_t freed;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (bcache_resident() > buffers) {
+        bcache_shrink(bcache_resident() - buffers, 0, &freed);
+    }
+    bcache_set_limit(buffers);
+    check(mount_rw() == 0, "the cross-call count volume mounts");
+    node = make_file(mnt.root, "batch", &rc);
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the cross-call count handle opens");
+    if (!node || !handle) {
+        return;
+    }
+    memset(want, 0, sizeof(want));
+    check(OPS->write(&mnt, handle, want, 4096, 0) == 4096 && OPS->fsync(&mnt, handle) == 0,
+          "the rewrite fixture reaches the device");
+    writes_made = 0;
+    for (i = 1; i <= 16; i++) {
+        memset(want, i, 4096);
+        check(OPS->write(&mnt, handle, want, 4096, 0) == 4096,
+              "a repeated write returns its whole block");
+    }
+    check(writes_made == 0, "cross-call rewrite collection writes no blocks");
+    check(OPS->read(&mnt, handle, abuf, 4096, 0) == 4096 && memcmp(abuf, want, 4096) == 0,
+          "a pending rewrite reads its latest bytes");
+    check(OPS->fsync(&mnt, handle) == 0 && writes_made == 2,
+          "sixteen rewrites use one data write and one inode write");
+    printf("ext2-batch: result: cache %u rewrites %d writes\n", (unsigned)buffers, writes_made);
+
+    memset(want + 4096, 64, 4096);
+    memset(want + 8192, 65, 4096);
+    writes_made = 0;
+    check(OPS->write(&mnt, handle, want + 4096, 4096, 4096) == 4096 &&
+              OPS->write(&mnt, handle, want + 8192, 4096, 8192) == 4096,
+          "two direct-block appends are accepted");
+    check(writes_made == 0, "cross-call append collection writes no blocks");
+    check(OPS->read(&mnt, handle, abuf, 12288, 0) == 12288 && memcmp(abuf, want, 12288) == 0,
+          "pending appends read their full size and bytes");
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    check(writes_made > 0, "close drains pending inode and data state");
+    check(file_is("/batch", want, 12288), "a reopened file retains the closed batch");
+    node = walk("/batch", &rc);
+    handle = 0;
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the namespace row's handle opens");
+    if (!node || !handle) {
+        return;
+    }
+    memset(want + 12288, 66, 4096);
+    check(OPS->write(&mnt, handle, want + 12288, 4096, 12288) == 4096,
+          "an append precedes setattr");
+    writes_made = 0;
+    memset(&st, 0, sizeof(st));
+    st.mode = 0600;
+    check(OPS->setattr(&mnt, node, VFS_SET_MODE, &st) == 0 && writes_made > 0,
+          "setattr drains pending state before storing an inode");
+    memset(want + 16384, 67, 4096);
+    check(OPS->write(&mnt, handle, want + 16384, 4096, 16384) == 4096, "an append precedes rename");
+    writes_made = 0;
+    check(OPS->rename(&mnt, mnt.root, "batch", mnt.root, "renamed") == 0 && writes_made > 0,
+          "rename drains pending state before publishing a name");
+    check(OPS->read(&mnt, handle, abuf, 20480, 0) == 20480 && memcmp(abuf, want, 20480) == 0,
+          "the renamed handle retains all appended bytes");
+    memset(want + 20480, 68, 4096);
+    check(OPS->write(&mnt, handle, want + 20480, 4096, 20480) == 4096,
+          "an append precedes truncate");
+    writes_made = 0;
+    check(OPS->truncate(&mnt, handle, 4096) == 0 && writes_made > 0,
+          "truncate drains pending state before freeing blocks");
+    check(OPS->fsync(&mnt, handle) == 0, "the truncated batch syncs");
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    check(file_is("/renamed", want, 4096), "truncate retains only the first block");
+    check(unmount_rw() == 0, "the cross-call count volume unmounts");
+    bcache_set_limit(0);
+    check(e2fsck_clean(wimg), "the cross-call count volume is clean");
+}
+
+/** A failed drain remains observable after retry, close and reopen. */
+static void batch_error_row(void)
+{
+    unsigned char bytes[4096];
+    void *node, *handle = 0;
+    int rc, before;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the delayed-error volume mounts");
+    node = make_file(mnt.root, "batch-error", &rc);
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the delayed-error handle opens");
+    if (!node || !handle) {
+        return;
+    }
+    memset(bytes, 0x71, sizeof(bytes));
+    check(OPS->write(&mnt, handle, bytes, sizeof(bytes), 0) == sizeof(bytes),
+          "a write is accepted before its delayed error");
+    before = writes_made;
+    stop_after = before;
+    check(OPS->fsync(&mnt, handle) == -EIO, "fsync reports a delayed device error");
+    stop_after = -1;
+    check(OPS->fsync(&mnt, handle) == -EIO && writes_made > before,
+          "a successful retry preserves the earlier error");
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    node = walk("/batch-error", &rc);
+    handle = 0;
+    check(node && OPS->open(&mnt, node, 0, &handle) == 0, "the failed file reopens for reading");
+    if (node && handle) {
+        check(OPS->fsync(&mnt, handle) == -EIO, "a reopened fsync observes the delayed error");
+        check(OPS->read(&mnt, handle, abuf, sizeof(bytes), 0) == sizeof(bytes) &&
+                  memcmp(abuf, bytes, sizeof(bytes)) == 0,
+              "the successful retry retained the accepted bytes");
+        OPS->release(&mnt, handle);
+        OPS->put(&mnt, node);
+    }
+    check(unmount_rw() == 0, "unmount completes after a successful retry");
+    bcache_device_gone(&dev);
+    dev.flags = BLOCK_FAULT_SAFE;
+}
+
+/** Retry a failed allocation, data, pointer, feature or inode flush. */
+static void batch_flush_error_row(int barrier, int large)
+{
+    unsigned char bytes[8192];
+    uint64_t first = large ? 524287 : 1035;
+    void *node, *handle = 0;
+    int rc, before;
+    int initial_failures = fails;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the failed-flush volume mounts");
+    node = make_file(mnt.root, "flush-error", &rc);
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the failed-flush handle opens");
+    if (!node || !handle) {
+        return;
+    }
+    check(OPS->truncate(&mnt, handle, first * 4096) == 0,
+          "the failed-flush file has a sparse prefix");
+    memset(bytes, 0x42, 4096);
+    memset(bytes + 4096, 0x79, 4096);
+    check(OPS->write(&mnt, handle, bytes, 4096, first * 4096) == 4096 &&
+              OPS->write(&mnt, handle, bytes + 4096, 4096, (first + 1) * 4096) == 4096,
+          "two appends cross an indirect level before the failed flush");
+    before = flush_calls;
+    flush_fail_at = before + barrier;
+    check(OPS->fsync(&mnt, handle) == -EIO && flush_calls == flush_fail_at,
+          "the selected stage flush fails fsync");
+    flush_fail_at = -1;
+    before = flush_calls;
+    check(OPS->fsync(&mnt, handle) == -EIO && flush_calls > before,
+          "retry flushes the retained stage and preserves its error");
+    check(OPS->read(&mnt, handle, abuf, sizeof(bytes), first * 4096) == sizeof(bytes) &&
+              memcmp(abuf, bytes, sizeof(bytes)) == 0,
+          "a flush retry retains both appended blocks");
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    node = walk("/flush-error", &rc);
+    handle = 0;
+    check(node && OPS->open(&mnt, node, 0, &handle) == 0, "the failed-flush file reopens");
+    if (node && handle) {
+        check(OPS->fsync(&mnt, handle) == -EIO, "a reopened fsync retains the flush error");
+        OPS->release(&mnt, handle);
+        OPS->put(&mnt, node);
+    }
+    check(unmount_rw() == 0, "unmount completes after the failed flush is retried");
+    bcache_device_gone(&dev);
+    dev.flags = BLOCK_FAULT_SAFE;
+    printf("ext2-media: result: barrier %d, large %d, failures %d\n", barrier, large,
+           fails - initial_failures);
+}
+
+#include "ext2_batch_cases.h"
+#include "ext2_batch_lifecycle.h"
+
+/** Exercise the public write operations at small and large cache limits. */
+static void batch_rows(void)
+{
+    int barrier;
+
+    batch_lifecycle_rows();
+    batch_partial_row(0);
+    batch_partial_row(1);
+    batch_reuse_row();
+    batch_limit_rows();
+    batch_metadata_row();
+    batch_handoff_row();
+    batch_stage_rows();
+    batch_abort_row();
+    batch_description_row();
+    batch_loss_row();
+    batch_rows_under(16);
+    batch_rows_under(512);
+    order_row_under(16, 1, 11);
+    order_row_under(16, 1, 1035);
+    order_row_under(16, 1, 2059);
+    order_row_under(512, 1, 11);
+    order_row_under(512, 1, 1035);
+    order_row_under(512, 1, 2059);
+    batch_error_row();
+    for (barrier = 1; barrier <= 5; barrier++) {
+        batch_flush_error_row(barrier, 0);
+    }
+    batch_flush_error_row(5, 1);
+    batch_flush_error_row(6, 1);
 }
 
 static void write_rows(void)
@@ -3085,7 +3562,7 @@ static void lock_fixtures(void)
     exit(1);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     uint64_t bytes;
 
@@ -3106,6 +3583,11 @@ int main(void)
     }
     build_tree();
 
+    if (argc == 2 && streq(argv[1], "--batch-only")) {
+        batch_rows();
+        goto finish;
+    }
+
     bytes = build_image(FIXDIR "/a.ext2", 4096, 128, PROFILE, 16, "tree");
     read_rows(FIXDIR "/a.ext2", bytes, "the 4 KiB volume with 128-byte inodes mounts", 1);
     bytes = build_image(FIXDIR "/b.ext2", 4096, 256, PROFILE, 16, "tree");
@@ -3120,7 +3602,9 @@ int main(void)
     refusal_write_rows();
     dirty_rows();
     matrix_rows();
+    batch_rows();
 
+finish:
     if (image) {
         fclose(image);
     }

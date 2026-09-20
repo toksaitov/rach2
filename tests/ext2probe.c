@@ -10,6 +10,10 @@
  * hard-link rows a read-only volume can answer: the count in `stat` and
  * `EPERM` for a directory.
  *
+ * `ext2probe cost` mounts the same fixture for writing and counts commands
+ * and cache flushes for repeated rewrites and appends through `/proc/disk`.
+ * Both counts include fsync, and both files are reopened and checked.
+ *
  * Prints "EXT2PROBE OK (mode)" or "EXT2PROBE FAIL: reason". Freestanding;
  * int 0x80.
  */
@@ -22,6 +26,7 @@ typedef unsigned int size_t;
 #define SYS_OPEN      5
 #define SYS_CLOSE     6
 #define SYS_LINK      9
+#define SYS_LSEEK     19
 #define SYS_MOUNT     21
 #define SYS_MKDIR     39
 #define SYS_UMOUNT2   52
@@ -31,6 +36,7 @@ typedef unsigned int size_t;
 #define SYS_LSTAT64   196
 #define SYS_STAT      106
 #define SYS_LSTAT     107
+#define SYS_FSYNC     118
 #define SYS_FSTATAT64 300
 #define SYS_UTIMENSAT 320
 
@@ -40,6 +46,7 @@ typedef unsigned int size_t;
 
 #define O_RDONLY   0
 #define O_WRONLY   1
+#define O_RDWR     2
 #define O_CREAT    0100
 #define O_EXCL     0200
 #define O_NOFOLLOW 0400000
@@ -357,6 +364,214 @@ static void links_rows(void)
                 "/proc/self/fd/1 under O_CREAT|O_EXCL answers EEXIST");
 }
 
+struct disk_counts {
+    unsigned commands;
+    unsigned flushes;
+};
+
+static unsigned char cost_block[4096];
+
+/** Read one unsigned counter from a complete procfs line. */
+static unsigned disk_counter(const char *text, const char *key)
+{
+    const char *p = text;
+    size_t len = strlen(key);
+
+    while (*p) {
+        size_t i = 0;
+
+        while (i < len && p[i] && p[i] == key[i]) {
+            i++;
+        }
+        if (i == len && p[i] == ' ') {
+            unsigned value = 0;
+
+            p += i + 1;
+            if (*p < '0' || *p > '9') {
+                fail("a disk counter has no value");
+            }
+            while (*p >= '0' && *p <= '9') {
+                unsigned digit = (unsigned)(*p++ - '0');
+
+                if (value > (0xFFFFFFFFu - digit) / 10) {
+                    fail("a disk counter overflows");
+                }
+                value = value * 10 + digit;
+            }
+            if (*p != '\n' && *p != '\0') {
+                fail("a disk counter has trailing text");
+            }
+            return value;
+        }
+        while (*p && *p != '\n') {
+            p++;
+        }
+        if (*p) {
+            p++;
+        }
+    }
+    fail("a disk counter is absent");
+}
+
+/** Opening `/proc/disk` takes a snapshot without issuing a disk command. */
+static struct disk_counts disk_counts(void)
+{
+    static char text[8192];
+    struct disk_counts counts;
+    int n = read_all("/proc/disk", text, sizeof(text) - 1);
+
+    if (n <= 0 || n == (int)sizeof(text) - 1) {
+        fail("reading the disk counters");
+    }
+    text[n] = '\0';
+    counts.commands = disk_counter(text, "disk-commands");
+    counts.flushes = disk_counter(text, "disk-flushes");
+    return counts;
+}
+
+/** Print one counter without a hosted library or a 64-bit division. */
+static void cost_number(unsigned value)
+{
+    char digits[10];
+    int i = sizeof(digits);
+
+    do {
+        digits[--i] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    sys3(SYS_WRITE, 1, (int)(digits + i), (int)sizeof(digits) - i);
+}
+
+/** Record counts before checking them, including a failing mutation's cost. */
+static void cost_report(const char *name, struct disk_counts before, struct disk_counts collected,
+                        struct disk_counts committed)
+{
+    sys3(SYS_WRITE, 1, (int)"ext2-cost: result: ", 19);
+    sys3(SYS_WRITE, 1, (int)name, (int)strlen(name));
+    sys3(SYS_WRITE, 1, (int)" collected commands=", 20);
+    cost_number(collected.commands - before.commands);
+    sys3(SYS_WRITE, 1, (int)" flushes=", 9);
+    cost_number(collected.flushes - before.flushes);
+    sys3(SYS_WRITE, 1, (int)" committed commands=", 20);
+    cost_number(committed.commands - before.commands);
+    sys3(SYS_WRITE, 1, (int)" flushes=", 9);
+    cost_number(committed.flushes - before.flushes);
+    puts("");
+}
+
+/** Write one whole block with a pattern that identifies its last writer. */
+static void cost_write(int fd, unsigned char pattern)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(cost_block); i++) {
+        cost_block[i] = pattern;
+    }
+    if (sys3(SYS_WRITE, fd, (int)cost_block, sizeof(cost_block)) != (int)sizeof(cost_block)) {
+        fail("writing a cost block");
+    }
+}
+
+/** Create and sync one block before either count begins. */
+static int cost_create(const char *path, unsigned char pattern)
+{
+    int fd = sys3(SYS_OPEN, (int)path, O_RDWR | O_CREAT | O_EXCL, 0644);
+
+    if (fd < 0) {
+        fail("creating a cost file");
+    }
+    cost_write(fd, pattern);
+    if (sys1(SYS_FSYNC, fd) != 0) {
+        fail("syncing a cost fixture");
+    }
+    return fd;
+}
+
+/** Reopen and check every byte and the exact file length after the count. */
+static void cost_verify(const char *path, unsigned first, unsigned blocks)
+{
+    int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    unsigned block, i;
+
+    if (fd < 0) {
+        fail("reopening a cost file");
+    }
+    for (block = 0; block < blocks; block++) {
+        if (sys3(SYS_READ, fd, (int)cost_block, sizeof(cost_block)) != (int)sizeof(cost_block)) {
+            fail("reading a cost block");
+        }
+        for (i = 0; i < sizeof(cost_block); i++) {
+            if (cost_block[i] != first + block) {
+                fail("a cost block has the wrong bytes");
+            }
+        }
+    }
+    if (sys3(SYS_READ, fd, (int)cost_block, 1) != 0 || sys1(SYS_CLOSE, fd) != 0) {
+        fail("a cost file has the wrong length or failed close");
+    }
+}
+
+/**
+ * Count sixteen rewrites and two appends, including their final fsync.
+ * The rewrite permits four commands and two flushes, the cost of one data
+ * write and one inode write. Two appends together permit at most the ten
+ * commands and five flushes of one append in the former per-call path.
+ */
+static void cost_rows(int append_only)
+{
+    struct disk_counts before, collected, committed;
+    int fd = cost_create("/e2/cost-rewrite", 0);
+    unsigned i;
+
+    before = disk_counts();
+    for (i = 1; i <= 16; i++) {
+        if (sys3(SYS_LSEEK, fd, 0, 0) != 0) {
+            fail("seeking to rewrite a cost block");
+        }
+        cost_write(fd, (unsigned char)i);
+    }
+    collected = disk_counts();
+    if (sys1(SYS_FSYNC, fd) != 0) {
+        fail("syncing the rewrites");
+    }
+    committed = disk_counts();
+    cost_report("rewrite", before, collected, committed);
+    if (!append_only &&
+        (committed.commands - before.commands != 4 || committed.flushes - before.flushes != 2)) {
+        fail("rewrite command count");
+    }
+    if (!append_only &&
+        (collected.commands != before.commands || collected.flushes != before.flushes)) {
+        fail("rewrite collection issued commands");
+    }
+    if (sys1(SYS_CLOSE, fd) != 0) {
+        fail("closing the rewrite file");
+    }
+    cost_verify("/e2/cost-rewrite", 16, 1);
+
+    fd = cost_create("/e2/cost-append", 64);
+    before = disk_counts();
+    cost_write(fd, 65);
+    cost_write(fd, 66);
+    collected = disk_counts();
+    if (sys1(SYS_FSYNC, fd) != 0) {
+        fail("syncing the appends");
+    }
+    committed = disk_counts();
+    cost_report("append", before, collected, committed);
+    if (committed.commands - before.commands > 10 || committed.flushes - before.flushes > 5 ||
+        committed.commands == before.commands || committed.flushes == before.flushes) {
+        fail("append command count");
+    }
+    if (collected.flushes != before.flushes) {
+        fail("append collection issued flushes");
+    }
+    if (sys1(SYS_CLOSE, fd) != 0) {
+        fail("closing the append file");
+    }
+    cost_verify("/e2/cost-append", 64, 3);
+}
+
 __asm__(".global _start\n"
         "_start:\n"
         "   mov %esp, %eax\n"
@@ -368,13 +583,17 @@ void probe_main(unsigned int *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     const char *mode = argc > 1 ? argv[1] : "links";
+    int writable = streq(mode, "cost") || streq(mode, "cost-append");
 
     sys2(SYS_MKDIR, (int)"/e2", 0755);
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/e2", (int)"ext2", MS_RDONLY, 0) != 0) {
-        fail("mounting the fixture read-only");
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/e2", (int)"ext2", writable ? 0 : MS_RDONLY,
+             0) != 0) {
+        fail("mounting the fixture");
     }
     if (streq(mode, "links")) {
         links_rows();
+    } else if (writable) {
+        cost_rows(streq(mode, "cost-append"));
     } else {
         fail("unknown mode");
     }

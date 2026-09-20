@@ -84,6 +84,39 @@ struct ext2_node {
 #define BATCH_ALLOC 1
 #define BATCH_FREE  2
 
+#define EXT2_WB_BYTES (1024u * 1024u)
+#define EXT2_WB_DATA  256
+#define EXT2_WB_META  32
+#define EXT2_WB_NODES 16
+#define WB_ALLOC      0
+#define WB_DATA       1
+#define WB_LEAF       2
+#define WB_FEATURE    5
+#define WB_INODE      6
+
+struct ext2_image {
+    uint32_t block;
+    int stage;
+    int dirty;
+    uint8_t *data;
+};
+
+struct ext2_pending {
+    struct ext2_node *node;
+    uint64_t committed_size;
+};
+
+struct ext2_writeback {
+    struct ext2_image data[EXT2_WB_DATA];
+    struct ext2_image meta[EXT2_WB_META];
+    struct ext2_pending nodes[EXT2_WB_NODES];
+    uint8_t *storage;
+    int datas, metas, count;
+    uint32_t bytes, generation;
+    int stage, draining, error, error_stage;
+    uint32_t error_block, error_generation;
+};
+
 struct ext2_mount {
     int used;
     block_device_t *dev;
@@ -108,6 +141,7 @@ struct ext2_mount {
      * descriptor blocks noted so far, `metas` how many; a block past the
      * table is written through at once in an allocation, and in a free
      * the table is emptied by a sync first, which keeps the order. */
+    struct ext2_writeback *wb;
     int batch;
     uint64_t meta[16];
     int metas;
@@ -161,6 +195,31 @@ static struct ext2_mount *em_of(struct vfs_mount *mnt)
     return mnt->priv;
 }
 
+static int writeback_drain(struct ext2_mount *em);
+static int writeback_error(struct ext2_mount *em, int rc, uint32_t block);
+
+/** Find a retained image without reading or changing the cache. */
+static struct ext2_image *writeback_find(struct ext2_mount *em, uint32_t block)
+{
+    struct ext2_writeback *wb = em->wb;
+    int i;
+
+    if (!wb) {
+        return 0;
+    }
+    for (i = 0; i < wb->metas; i++) {
+        if (wb->meta[i].block == block) {
+            return &wb->meta[i];
+        }
+    }
+    for (i = 0; i < wb->datas; i++) {
+        if (wb->data[i].block == block) {
+            return &wb->data[i];
+        }
+    }
+    return 0;
+}
+
 /* ---- bytes off the volume, through the cache ---- */
 
 /**
@@ -177,9 +236,18 @@ static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t l
         uint32_t in = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - in;
         struct bbuf *b;
+        struct ext2_image *pending;
 
         if (take > len) {
             take = len;
+        }
+        pending = writeback_find(em, (uint32_t)blk);
+        if (pending) {
+            k_memcpy(out, pending->data + in, take);
+            out += take;
+            off += take;
+            len -= take;
+            continue;
         }
         b = bcache_get(em->dev, blk);
         if (!b) {
@@ -367,6 +435,9 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
     /* Under the mount's lock, so that a mutation holding a pointer into
      * the pool across a sleep finds the entry as it left it. */
     vfs_ns_lock(mnt);
+    if (n->unlinked && em_of(mnt)->wb && em_of(mnt)->wb->count) {
+        (void)writeback_drain(em_of(mnt));
+    }
     if (n->refs > 0) {
         n->refs--;
     }
@@ -375,7 +446,8 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
          * which is what makes an open unlinked file work; a crash before
          * this leaves an orphan for e2fsck, and so does a free that fails,
          * which the error bit then hands to it. */
-        if (n->unlinked && em_of(mnt)->writable && release_inode(em_of(mnt), n) != 0) {
+        if (n->unlinked && em_of(mnt)->writable && !(mnt->flags & VFS_MS_RDONLY) &&
+            release_inode(em_of(mnt), n) != 0) {
             klog(KLOG_WARN, "ext2", "inode %d: not freed at its last put", (int)n->ino);
             mark_error(em_of(mnt));
         }
@@ -600,7 +672,7 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct ext2_node *n = node;
 
-    (void)mnt;
+    vfs_ns_lock(mnt);
     k_memset(st, 0, sizeof(*st));
     st->mode = n->mode;
     st->uid = n->uid;
@@ -627,6 +699,7 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->atime_sec = n->atime;
     st->mtime_sec = n->mtime;
     st->ctime_sec = n->ctime;
+    vfs_ns_unlock(mnt);
     return 0;
 }
 
@@ -645,9 +718,13 @@ static int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle
     return 0;
 }
 
+/** Drain at the last close of an open description, retaining failed state. */
 static void ext2_release(struct vfs_mount *mnt, void *handle)
 {
+    vfs_ns_lock(mnt);
+    (void)writeback_drain(em_of(mnt));
     ext2_put(mnt, handle);
+    vfs_ns_unlock(mnt);
 }
 
 static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
@@ -660,13 +737,16 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
     }
+    vfs_ns_lock(mnt);
     if (offset >= n->size) {
+        vfs_ns_unlock(mnt);
         return 0;
     }
     if (count > n->size - offset) {
         count = (uint32_t)(n->size - offset);
     }
     rc = read_data(em, n, offset, buf, count);
+    vfs_ns_unlock(mnt);
     if (rc != 0) {
         return rc;
     }
@@ -767,38 +847,40 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
-/* The superblock's free counts are summaries the descriptors hold exactly,
- * written at sync and at unmount. */
+/**
+ * Drain files and store summary free counts from the group descriptors.
+ * Return the current drain status; fsync reports historical failures.
+ */
 static int ext2_sync(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
     int rc;
 
-    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
-        return 0;
-    }
     vfs_ns_lock(mnt);
-    rc = bcache_sync(em->dev);
+    rc = writeback_drain(em);
     if (rc == 0) {
+        rc = bcache_sync(em->dev);
+    }
+    if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
         rc = sb_store(em);
+    }
+    if (rc == 0) {
+        rc = block_flush(em->dev);
+    }
+    if (rc != 0) {
+        (void)writeback_error(em, rc, 0);
     }
     vfs_ns_unlock(mnt);
     return rc;
 }
 
-/* The valid bit set again, once everything has reached the disk and only
- * when the error bit is clear; a mount that went read-only after a failed
- * write leaves the volume as it is, for the next mount's check. */
+/** Mark a successfully drained volume valid only if no write has failed. */
 static int ext2_prepare_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
-    int rc;
+    int rc = ext2_sync(mnt);
 
-    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
-        return 0;
-    }
-    rc = bcache_sync(em->dev);
-    if (rc != 0) {
+    if (rc != 0 || !em->writable || (mnt->flags & VFS_MS_RDONLY) || mnt->write_error) {
         return rc;
     }
     if (em->valid_cleared && !(em->state & EXT2_ERROR_FS)) {
@@ -807,20 +889,57 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
     rc = sb_store(em);
     if (rc != 0) {
         em->state &= ~EXT2_VALID_FS;
-        return rc;
+        return writeback_error(em, rc, 0);
     }
     em->valid_cleared = 0;
     return 0;
+}
+
+/** Clear a prepared valid bit if the VFS cannot finish the unmount. */
+static void ext2_abort_unmount(struct vfs_mount *mnt)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct bbuf *b;
+    int rc = -EIO;
+
+    if (!em->writable) {
+        return;
+    }
+    vfs_ns_lock(mnt);
+    em->state &= ~EXT2_VALID_FS;
+    em->valid_cleared = 1;
+    b = bcache_get(em->dev, 0);
+    if (b) {
+        b->data[1024 + 58] = (uint8_t)em->state;
+        b->data[1024 + 59] = (uint8_t)(em->state >> 8);
+        bcache_dirty(b);
+        bcache_release(b);
+        rc = bcache_sync(em->dev);
+        if (rc == 0) {
+            rc = block_flush(em->dev);
+        }
+    }
+    if (rc != 0) {
+        (void)writeback_error(em, rc, 0);
+    }
+    vfs_ns_unlock(mnt);
 }
 
 static void ext2_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
 
+    if ((em->dev->flags & BLOCK_GONE) && em->wb && em->wb->count) {
+        (void)writeback_error(em, -EIO, 0);
+    }
     while (em->nodes) {
         node_drop(em, em->nodes);
     }
     mnt->priv = 0;
+    if (em->wb) {
+        kfree(em->wb->storage);
+        kfree(em->wb);
+    }
     kfree(em->gd);
     kfree(em);
 }
@@ -1000,12 +1119,18 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
     return 0;
 }
 
+/** Finish older file writes before an attribute or namespace mutation. */
 static int assert_writable(struct vfs_mount *mnt, struct ext2_mount *em)
 {
-    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
-        return -EROFS;
+    int rc;
+
+    vfs_ns_lock(mnt);
+    rc = writeback_drain(em);
+    if (rc == 0 && (!em->writable || (mnt->flags & VFS_MS_RDONLY))) {
+        rc = -EROFS;
     }
-    return 0;
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
 static void assert_locked(struct vfs_mount *mnt)
@@ -1045,16 +1170,11 @@ static int large_file_flag(struct ext2_mount *em)
     return write_bytes(em, 1024 + 100, raw, 4, 1);
 }
 
-static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
+/** Encode the fields owned by this driver, preserving the other bytes. */
+static void inode_encode(const struct ext2_node *n, uint8_t *raw)
 {
-    uint8_t raw[128];
-    uint64_t at = inode_offset(em, n->ino);
-    int i, rc;
+    int i;
 
-    rc = read_bytes(em, at, raw, sizeof(raw));
-    if (rc != 0) {
-        return rc;
-    }
     LE16_PUT(raw + 0, n->mode);
     LE16_PUT(raw + 2, n->uid & 0xFFFFu);
     LE32_PUT(raw + 4, (uint32_t)n->size);
@@ -1072,11 +1192,28 @@ static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
     LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
     if ((n->mode & S_IFMT_) == S_IFREG_) {
         LE32_PUT(raw + 108, (uint32_t)(n->size >> 32));
-        if (n->size >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
-            rc = large_file_flag(em);
-            if (rc != 0) {
-                return rc;
-            }
+    }
+}
+
+static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
+{
+    uint8_t raw[128];
+    uint64_t at = inode_offset(em, n->ino);
+    int rc;
+
+    if (em->wb && em->wb->count) {
+        k_panic("ext2: inode store before writeback drain");
+    }
+    rc = read_bytes(em, at, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+    inode_encode(n, raw);
+    if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
+        !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
+        rc = large_file_flag(em);
+        if (rc != 0) {
+            return rc;
         }
     }
     return write_bytes(em, at, raw, sizeof(raw), !em->batch);
@@ -1176,7 +1313,9 @@ static void mark_error(struct ext2_mount *em)
         return;
     }
     em->state |= EXT2_ERROR_FS;
-    if (em->writable) {
+    if (em->wb && em->wb->count) {
+        (void)writeback_error(em, -EIO, 0);
+    } else if (em->writable) {
         (void)sb_store(em);
     }
 }
@@ -1705,6 +1844,472 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
     return 0;
 }
 
+/**
+ * Reserve a private metadata image. An admission may discard newly reserved
+ * images until it commits; existing images are never changed by reservation.
+ */
+static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, int stage,
+                                         int blank, int *rc)
+{
+    struct ext2_writeback *wb = em->wb;
+    struct ext2_image *im;
+    struct bbuf *b;
+    int i;
+
+    for (i = 0; i < wb->metas; i++) {
+        im = &wb->meta[i];
+        if (im->block == block) {
+            if (im->stage != stage) {
+                *rc = -EIO;
+                return 0;
+            }
+            return im;
+        }
+    }
+    if (wb->metas == EXT2_WB_META) {
+        *rc = -ENOMEM;
+        return 0;
+    }
+    im = &wb->meta[wb->metas];
+    im->data = wb->storage + (EXT2_WB_DATA + wb->metas) * BCACHE_BLOCK_BYTES;
+    if (blank) {
+        k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
+    } else {
+        b = bcache_get(em->dev, block);
+        if (!b) {
+            *rc = -EIO;
+            return 0;
+        }
+        k_memcpy(im->data, b->data, BCACHE_BLOCK_BYTES);
+        bcache_release(b);
+    }
+    im->block = block;
+    im->stage = stage;
+    im->dirty = 0;
+    wb->metas++;
+    return im;
+}
+
+struct ext2_reservation {
+    uint32_t block, group, bit;
+    struct ext2_image *bitmap, *descriptor;
+};
+
+/** Select a free block outside this piece's uncommitted reservations. */
+static int writeback_reserve(struct ext2_mount *em, struct ext2_reservation *list, int count)
+{
+    uint32_t start = em->alloc_hint;
+    uint32_t g0, tried, g, from, end, bit, block;
+    struct ext2_reservation *r = &list[count];
+    int i, rc = 0;
+
+    if (start >= em->blocks) {
+        start = em->first_data;
+    }
+    g0 = (start - em->first_data) / em->bpg;
+    for (tried = 0; tried <= em->groups; tried++) {
+        uint8_t *gd;
+
+        g = (g0 + tried) % em->groups;
+        gd = em->gd + g * 32;
+        if (le16(gd + 12) == 0) {
+            continue;
+        }
+        from = tried == 0 ? (start - em->first_data) % em->bpg : 0;
+        end = em->blocks - (em->first_data + g * em->bpg);
+        if (end > em->bpg) {
+            end = em->bpg;
+        }
+        if (tried == em->groups && end > (start - em->first_data) % em->bpg) {
+            end = (start - em->first_data) % em->bpg;
+        }
+        for (bit = from; bit < end; bit++) {
+            int used;
+
+            rc = bit_get(em, le32(gd), bit, &used);
+            if (rc != 0) {
+                return rc;
+            }
+            if (used) {
+                continue;
+            }
+            block = em->first_data + g * em->bpg + bit;
+            for (i = 0; i < count && list[i].block != block; i++) {
+            }
+            if (i != count) {
+                continue;
+            }
+            if (!data_block_ok(em, block)) {
+                return -EIO;
+            }
+            r->bitmap = writeback_meta(em, le32(gd), WB_ALLOC, 0, &rc);
+            if (!r->bitmap) {
+                return rc;
+            }
+            r->descriptor =
+                writeback_meta(em, em->first_data + 1 + (g * 32) / 4096, WB_ALLOC, 0, &rc);
+            if (!r->descriptor) {
+                return rc;
+            }
+            r->block = block;
+            r->group = g;
+            r->bit = bit;
+            return 0;
+        }
+    }
+    return -ENOSPC;
+}
+
+struct ext2_write_plan {
+    struct ext2_reservation reservations[4];
+    struct ext2_image *parents[3], *table, *feature, *data;
+    uint32_t slots[3], children[3];
+    uint32_t root, root_slot, block;
+    int paths, fresh, allocs, node_index;
+};
+
+/** Reserve the pointer path and data block without publishing allocation. */
+static int writeback_plan_map(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
+                              struct ext2_write_plan *plan)
+{
+    uint32_t rest = index, div, block;
+    int depth = (int)pointer_levels(em, index), level, rc = 0;
+
+    plan->root_slot = depth ? EXT2_NDIR + depth - 1 : index;
+    plan->root = n->block[plan->root_slot];
+    if (depth) {
+        rest -= EXT2_NDIR;
+        if (depth >= 2) {
+            rest -= 1024;
+        }
+        if (depth == 3) {
+            rest -= 1024u * 1024u;
+        }
+    }
+    block = plan->root;
+    for (level = depth; level > 0; level--) {
+        struct ext2_image *parent;
+        int blank = block == 0;
+
+        if (blank) {
+            rc = writeback_reserve(em, plan->reservations, plan->allocs);
+            if (rc != 0) {
+                return rc;
+            }
+            block = plan->reservations[plan->allocs++].block;
+            if (plan->paths == 0) {
+                plan->root = block;
+            } else {
+                plan->children[plan->paths - 1] = block;
+            }
+        } else if (!data_block_ok(em, block)) {
+            return -EIO;
+        }
+        parent = writeback_meta(em, block, WB_LEAF + level - 1, blank, &rc);
+        if (!parent) {
+            return rc;
+        }
+        div = level == 3 ? 1024u * 1024u : (level == 2 ? 1024u : 1u);
+        plan->slots[plan->paths] = (rest / div) * 4;
+        plan->parents[plan->paths] = parent;
+        block = le32(parent->data + plan->slots[plan->paths]);
+        plan->children[plan->paths++] = block;
+        rest %= div;
+    }
+    if (block == 0) {
+        rc = writeback_reserve(em, plan->reservations, plan->allocs);
+        if (rc != 0) {
+            return rc;
+        }
+        block = plan->reservations[plan->allocs++].block;
+        plan->fresh = 1;
+        if (plan->paths) {
+            plan->children[plan->paths - 1] = block;
+        } else {
+            plan->root = block;
+        }
+    } else if (!data_block_ok(em, block)) {
+        return -EIO;
+    }
+    plan->block = block;
+    return 0;
+}
+
+/** Reserve inode and feature images before planning a piece's block mapping. */
+static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t offset, uint32_t len,
+                          struct ext2_write_plan *plan)
+{
+    struct ext2_writeback *wb = em->wb;
+    int rc = 0;
+
+    for (plan->node_index = 0; plan->node_index < wb->count; plan->node_index++) {
+        if (wb->nodes[plan->node_index].node == n) {
+            break;
+        }
+    }
+    if (plan->node_index == wb->count && wb->count == EXT2_WB_NODES) {
+        return -ENOMEM;
+    }
+    plan->table = writeback_meta(em, (uint32_t)(inode_offset(em, n->ino) >> 12), WB_INODE, 0, &rc);
+    if (!plan->table) {
+        return rc;
+    }
+    if (offset + len >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
+        plan->feature = writeback_meta(em, 0, WB_FEATURE, 0, &rc);
+        if (!plan->feature) {
+            return rc;
+        }
+    }
+    return writeback_plan_map(em, n, (uint32_t)(offset >> 12), plan);
+}
+
+/** Copy or zero a private data image before changing accepted state. */
+static int writeback_prepare_data(struct ext2_mount *em, uint32_t len, struct ext2_write_plan *plan)
+{
+    struct ext2_writeback *wb = em->wb;
+    struct ext2_image *data;
+    int i;
+
+    for (i = 0; i < wb->datas && wb->data[i].block != plan->block; i++) {
+    }
+    if (i == wb->datas) {
+        struct bbuf *b;
+
+        if (i == EXT2_WB_DATA) {
+            return -ENOMEM;
+        }
+        data = &wb->data[i];
+        data->block = plan->block;
+        data->stage = WB_DATA;
+        data->data = wb->storage + i * BCACHE_BLOCK_BYTES;
+        if (plan->fresh || len == BCACHE_BLOCK_BYTES) {
+            k_memset(data->data, 0, BCACHE_BLOCK_BYTES);
+        } else {
+            b = bcache_get(em->dev, plan->block);
+            if (!b) {
+                return -EIO;
+            }
+            k_memcpy(data->data, b->data, BCACHE_BLOCK_BYTES);
+            bcache_release(b);
+        }
+        wb->datas++;
+    }
+    plan->data = &wb->data[i];
+    return 0;
+}
+
+/** Commit a reserved piece without I/O or further allocation. */
+static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                             const uint8_t *src, uint32_t len, struct ext2_write_plan *plan)
+{
+    struct ext2_writeback *wb = em->wb;
+    int i;
+
+    for (i = 0; i < plan->allocs; i++) {
+        struct ext2_reservation *r = &plan->reservations[i];
+        uint8_t *gd = em->gd + r->group * 32;
+
+        r->bitmap->data[r->bit / 8] |= (uint8_t)(1u << (r->bit % 8));
+        r->bitmap->dirty = 1;
+        LE16_PUT(gd + 12, le16(gd + 12) - 1);
+        k_memcpy(r->descriptor->data + (r->group * 32) % 4096, gd, 32);
+        r->descriptor->dirty = 1;
+        em->free_blocks--;
+        em->alloc_hint = r->block + 1;
+    }
+    for (i = 0; i < plan->paths; i++) {
+        if (le32(plan->parents[i]->data + plan->slots[i]) != plan->children[i]) {
+            LE32_PUT(plan->parents[i]->data + plan->slots[i], plan->children[i]);
+            plan->parents[i]->dirty = 1;
+        }
+    }
+    if (plan->feature) {
+        em->ro_compat |= EXT2_RO_LARGE_FILE;
+        LE32_PUT(plan->feature->data + 1024 + 100, em->ro_compat);
+        plan->feature->dirty = 1;
+    }
+    if (plan->node_index == wb->count) {
+        wb->nodes[plan->node_index].node = n;
+        wb->nodes[plan->node_index].committed_size = n->size;
+        wb->count++;
+        n->refs++;
+    }
+    n->block[plan->root_slot] = plan->root;
+    n->blocks += (uint32_t)plan->allocs * 8;
+    k_memcpy(plan->data->data + ((uint32_t)offset & 4095u), src, len);
+    plan->data->dirty = 1;
+    if (offset + len > n->size) {
+        n->size = offset + len;
+    }
+    n->mtime = n->ctime = now_seconds();
+    plan->table->dirty = 1;
+    wb->bytes += len;
+}
+
+/**
+ * Accept at most one data block after reserving every dependent image.
+ *
+ * No image already visible to readers changes until all reads and reservations
+ * succeed. The commit performs no I/O and cannot run out of storage.
+ */
+static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                           const uint8_t *src, uint32_t len)
+{
+    struct ext2_writeback *wb = em->wb;
+    struct ext2_write_plan plan;
+    int old_metas = wb->metas, old_datas = wb->datas;
+    int rc;
+
+    k_memset(&plan, 0, sizeof(plan));
+    rc = writeback_plan(em, n, offset, len, &plan);
+    if (rc != 0) {
+        goto fail;
+    }
+    rc = writeback_prepare_data(em, len, &plan);
+    if (rc != 0) {
+        goto fail;
+    }
+    if (em->dev->flags & (BLOCK_GONE | BLOCK_WRITE_FAILED) || em->mnt->flags & VFS_MS_RDONLY) {
+        rc = -EIO;
+        goto fail;
+    }
+    writeback_commit(em, n, offset, src, len, &plan);
+    return 0;
+fail:
+    wb->metas = old_metas;
+    wb->datas = old_datas;
+    return rc;
+}
+
+/** Preserve the first error for the mount's lifetime, including after retry. */
+static int writeback_error(struct ext2_mount *em, int rc, uint32_t block)
+{
+    struct ext2_writeback *wb = em->wb;
+
+    if (wb && !wb->error) {
+        wb->error = rc;
+        wb->error_stage = wb->stage;
+        wb->error_block = block;
+        wb->error_generation = wb->generation;
+    }
+    em->state |= EXT2_ERROR_FS;
+    em->mnt->flags |= VFS_MS_RDONLY;
+    if (!em->mnt->write_error) {
+        em->mnt->write_error = rc;
+    }
+    return rc;
+}
+
+/**
+ * Drain one frozen generation in dependency order under the mount lock.
+ *
+ * Only a stage whose dependencies are durable enters the cache. Each stage
+ * is synced and flushed before the next; a failed stage is replayed from its
+ * retained images. Cache eviction can write only those same eligible images.
+ * No buffer or shared traversal scratch is held across a backing-file call.
+ */
+static int writeback_drain(struct ext2_mount *em)
+{
+    struct ext2_writeback *wb = em->wb;
+    int i, count, rc;
+    uint32_t block = 0;
+
+    if (em->dev->flags & BLOCK_GONE) {
+        return writeback_error(em, -EIO, 0);
+    }
+    if (!wb || !wb->count) {
+        return 0;
+    }
+    wb->draining = 1;
+    for (i = 0; i < wb->count; i++) {
+        struct ext2_node *n = wb->nodes[i].node;
+        uint64_t at = inode_offset(em, n->ino);
+        struct ext2_image *im = writeback_find(em, (uint32_t)(at >> 12));
+
+        inode_encode(n, im->data + ((uint32_t)at & 4095u));
+    }
+    for (; wb->stage <= WB_INODE; wb->stage++) {
+        struct ext2_image *images = wb->stage == WB_DATA ? wb->data : wb->meta;
+        int wrote = 0;
+
+        count = wb->stage == WB_DATA ? wb->datas : wb->metas;
+        rc = bcache_sync(em->dev);
+        if (rc != 0) {
+            goto fail;
+        }
+        for (i = 0; i < count; i++) {
+            struct ext2_image *im = &images[i];
+            struct bbuf *b;
+
+            if (!im->dirty || im->stage != wb->stage) {
+                continue;
+            }
+            block = im->block;
+            b = bcache_get_blank(em->dev, block);
+            if (!b) {
+                rc = -EIO;
+                goto fail;
+            }
+            k_memcpy(b->data, im->data, BCACHE_BLOCK_BYTES);
+            bcache_dirty(b);
+            bcache_release(b);
+            wrote = 1;
+        }
+        if (wrote) {
+            rc = bcache_sync(em->dev);
+            if (rc == 0) {
+                rc = block_flush(em->dev);
+            }
+            if (rc != 0) {
+                goto fail;
+            }
+        }
+    }
+    count = wb->count;
+    wb->count = wb->datas = wb->metas = 0;
+    wb->bytes = 0;
+    wb->stage = 0;
+    wb->draining = 0;
+    wb->generation++;
+    for (i = 0; i < count; i++) {
+        struct ext2_node *n = wb->nodes[i].node;
+
+        wb->nodes[i].committed_size = n->size;
+        ext2_put(em->mnt, n);
+    }
+    return 0;
+fail:
+    wb->draining = 0;
+    return writeback_error(em, rc, block);
+}
+
+/** Admit allocated overwrites and contiguous appends; drain other writes. */
+static int writeback_contiguous(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                                uint32_t count)
+{
+    uint32_t first, last, i, block;
+    int rc;
+
+    if (offset > n->size || (offset < n->size && count > n->size - offset)) {
+        return 0;
+    }
+    if (offset == n->size && !(offset & 4095u)) {
+        return 1;
+    }
+    first = (uint32_t)(offset >> 12);
+    last = offset == n->size ? first : (uint32_t)((offset + count - 1) >> 12);
+    for (i = first; i <= last; i++) {
+        rc = block_at(em, n, i, &block);
+        if (rc != 0) {
+            return rc;
+        }
+        if (!block) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* ---- directories, written ---- */
 
 static uint32_t dirent_len(uint32_t name_len)
@@ -2110,11 +2715,12 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     struct ext2_node *n = node;
     int rc;
 
+    vfs_ns_lock(mnt);
     rc = assert_writable(mnt, em);
     if (rc != 0) {
+        vfs_ns_unlock(mnt);
         return rc;
     }
-    vfs_ns_lock(mnt);
     if (what & VFS_SET_MODE) {
         n->mode = (n->mode & S_IFMT_) | (st->mode & 07777u);
     }
@@ -2160,14 +2766,15 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if ((n->mode & S_IFMT_) != S_IFREG_) {
         return -EINVAL;
     }
-    rc = assert_writable(mnt, em);
-    if (rc != 0) {
-        return rc;
-    }
     if (size > em->file_limit) {
         return past_limit(em, "truncate", size);
     }
     vfs_ns_lock(mnt);
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        vfs_ns_unlock(mnt);
+        return rc;
+    }
     assert_locked(mnt);
     if (size < n->size) {
         uint32_t keep = (uint32_t)((size + em->block_size - 1) >> em->block_shift);
@@ -2210,29 +2817,78 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return rc;
 }
 
+/** Drain all pending files and report the mount's first delayed error. */
 static int ext2_fsync(struct vfs_mount *mnt, void *handle)
 {
+    struct ext2_mount *em = em_of(mnt);
+    int rc;
+
     (void)handle;
-    return bcache_sync(em_of(mnt)->dev);
+    vfs_ns_lock(mnt);
+    rc = writeback_drain(em);
+    if (rc == 0) {
+        rc = bcache_sync(em->dev);
+    }
+    if (rc == 0) {
+        rc = block_flush(em->dev);
+    }
+    if (rc != 0) {
+        (void)writeback_error(em, rc, 0);
+    }
+    if (mnt->write_error) {
+        rc = mnt->write_error;
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+/** Reject a write whose missing blocks exceed the caller's free-space limit. */
+static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                           uint32_t count)
+{
+    uint32_t first = (uint32_t)(offset >> em->block_shift);
+    uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);
+    uint64_t need = 0;
+    uint32_t i;
+    int rc;
+
+    for (i = first; i <= last && need <= em->free_blocks + 3; i++) {
+        uint32_t b;
+
+        rc = block_at(em, n, i, &b);
+        if (rc != 0) {
+            return rc;
+        }
+        if (b == 0) {
+            need++;
+        }
+    }
+    if (need > 0) {
+        need += pointer_levels(em, last) + (last - first) / (em->block_size / 4);
+    }
+    if (need > em->free_blocks ||
+        (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
+        return -ENOSPC;
+    }
+    return 0;
 }
 
 /**
- * Write `count` bytes of `buf` at `offset`, growing the file as needed.
+ * Collect allocated overwrites and contiguous appends in a bounded batch.
  *
- * A failure anywhere is the error and not a short count. The batch still ends
- * on that path, so bytes it marked reach the disk past a size that covers
- * them; they are unreachable through the inode, and the next write to that
- * range overwrites them.
+ * Sparse writes and hole fills drain immediately. Admission reserves all
+ * records before accepting each block; a later I/O error returns the accepted
+ * byte count and remains observable at fsync, including after close and retry.
  */
 static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                           uint64_t offset)
 {
     struct ext2_mount *em = em_of(mnt);
+    struct ext2_writeback *wb = em->wb;
     struct ext2_node *n = handle;
     const uint8_t *in = buf;
-    uint64_t end;
     uint32_t done = 0;
-    int rc, fresh;
+    int rc = 0, synchronous;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
@@ -2243,89 +2899,71 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     if (offset > em->file_limit || count > em->file_limit - offset) {
         return past_limit(em, "write", offset);
     }
-    rc = assert_writable(mnt, em);
-    if (rc != 0) {
-        return rc;
-    }
-    end = offset + count;
     vfs_ns_lock(mnt);
     assert_locked(mnt);
-    /* ENOSPC before anything is written: the blocks the range needs that
-     * the file does not have, and at most one pointer block per level. */
-    {
-        uint32_t first = (uint32_t)(offset >> em->block_shift);
-        uint32_t last = (uint32_t)((end - 1) >> em->block_shift);
-        uint64_t need = 0;
-        uint32_t i;
-
-        for (i = first; i <= last && need <= em->free_blocks + 3; i++) {
-            uint32_t b;
-
-            rc = block_at(em, n, i, &b);
-            if (rc != 0) {
-                goto out;
-            }
-            if (b == 0) {
-                need++;
-            }
-        }
-        if (need > 0) {
-            need += pointer_levels(em, last) + (last - first) / (em->block_size / 4);
-        }
-        if (need > em->free_blocks ||
-            (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
-            rc = -ENOSPC;
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        rc = -EROFS;
+        goto out;
+    }
+    rc = writeback_space(em, n, offset, count);
+    if (rc != 0) {
+        goto out;
+    }
+    rc = writeback_contiguous(em, n, offset, count);
+    if (rc < 0) {
+        goto out;
+    }
+    synchronous = !rc;
+    if (synchronous) {
+        rc = writeback_drain(em);
+        if (rc != 0) {
             goto out;
         }
     }
-    /* The bytes: each block allocated as it is reached, its bit and its
-     * pointer marked dirty, the data written back; `batch_end` puts the
-     * bitmaps and descriptors on the disk before the pointers. */
-    em->batch = BATCH_ALLOC;
     while (done < count) {
         uint64_t at = offset + done;
-        uint32_t in_block = (uint32_t)at & (em->block_size - 1);
-        uint32_t take = em->block_size - in_block;
-        uint32_t b;
+        uint32_t take = 4096u - ((uint32_t)at & 4095u);
 
         if (take > count - done) {
             take = count - done;
         }
-        rc = map_alloc(em, n, (uint32_t)(at >> em->block_shift), &b, &fresh);
-        if (rc != 0) {
-            goto out;
-        }
-        /* A block just given out holds whatever was freed there; the part
-         * this write does not cover is zeroed before the bytes land. */
-        if (fresh && take != em->block_size) {
-            rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
+        if (take > EXT2_WB_BYTES - wb->bytes) {
+            rc = writeback_drain(em);
             if (rc != 0) {
                 goto out;
             }
         }
-        rc = write_bytes(em, (uint64_t)b * em->block_size + in_block, in + done, take, 0);
+        rc = writeback_piece(em, n, at, in + done, take);
+        if (rc == -ENOMEM && wb->count) {
+            rc = writeback_drain(em);
+            if (rc == 0) {
+                rc = writeback_piece(em, n, at, in + done, take);
+            }
+        }
         if (rc != 0) {
             goto out;
         }
         done += take;
+        if (synchronous || wb->bytes == EXT2_WB_BYTES) {
+            rc = writeback_drain(em);
+            if (rc != 0) {
+                goto out;
+            }
+        }
+        if (wb->datas == EXT2_WB_DATA || wb->metas == EXT2_WB_META || wb->count == EXT2_WB_NODES) {
+            rc = writeback_drain(em);
+            if (rc != 0) {
+                goto out;
+            }
+        }
     }
-    rc = batch_end(em);
-    if (rc != 0) {
-        goto out;
-    }
-    /* The batch has written the allocations, pointers and data. */
-    if (end > n->size) {
-        n->size = end;
-    }
-    n->mtime = n->ctime = now_seconds();
-    rc = inode_store(em, n);
+    rc = 0;
 out:
-    if (em->batch) {
-        (void)batch_end(em); /* a failure inside the batch: what it marked still goes out */
+    if (rc == -EIO && wb && wb->count) {
+        (void)writeback_error(em, rc, 0);
     }
     vfs_ns_unlock(mnt);
-    /* A failure anywhere is the error, never a count. */
-    return rc != 0 ? rc : (int32_t)count;
+    return done ? (int32_t)done : rc;
 }
 
 static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
@@ -3505,6 +4143,21 @@ static int refuse(const char *field)
     return -EINVAL;
 }
 
+/** Reserve the write batch and invalidate the volume before publication. */
+static int writeback_init(struct ext2_mount *em)
+{
+    em->wb = kzalloc(sizeof(*em->wb));
+    if (!em->wb) {
+        return -ENOMEM;
+    }
+    em->wb->storage = kmalloc((EXT2_WB_DATA + EXT2_WB_META) * BCACHE_BLOCK_BYTES);
+    if (!em->wb->storage) {
+        return -ENOMEM;
+    }
+    em->state &= ~EXT2_VALID_FS;
+    return sb_store(em);
+}
+
 /**
  * The volume check, field by field, before anything is published: the
  * superblock's magic, revision, sizes and counts, the features against the
@@ -3674,10 +4327,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     }
     em->alloc_hint = em->first_data;
     if (em->writable) {
-        /* The valid bit cleared before the mount is published, so that a
-         * volume this mount leaves behind is one the next mount checks. */
-        em->state &= ~EXT2_VALID_FS;
-        rc = sb_store(em);
+        rc = writeback_init(em);
         if (rc != 0) {
             node_drop(em, root);
             return rc;
@@ -3707,6 +4357,10 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
         while (em->nodes) {
             node_drop(em, em->nodes);
         }
+        if (em->wb) {
+            kfree(em->wb->storage);
+            kfree(em->wb);
+        }
         kfree(em->gd);
         kfree(em);
     }
@@ -3714,33 +4368,12 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
 }
 
 static const struct vfs_ops ext2_ops = {
-    ext2_lookup,
-    0, /* lookup_rest */
-    ext2_hold,
-    ext2_put,
-    ext2_getattr,
-    ext2_setattr,
-    ext2_open,
-    ext2_release,
-    ext2_read,
-    ext2_write,
-    ext2_truncate,
-    ext2_fsync,
-    ext2_readdir,
-    ext2_create,
-    ext2_unlink,
-    ext2_mkdir,
-    ext2_rmdir,
-    ext2_rename,
-    ext2_link,
-    ext2_readlink,
-    ext2_statfs,
-    ext2_sync,
-    ext2_prepare_unmount,
-    0, /* abort_unmount */
-    ext2_unmount,
-    ext2_path,
-    ext2_symlink,
+    ext2_lookup,  0, /* lookup_rest */
+    ext2_hold,    ext2_put,   ext2_getattr,         ext2_setattr,       ext2_open,    ext2_release,
+    ext2_read,    ext2_write, ext2_truncate,        ext2_fsync,         ext2_readdir, ext2_create,
+    ext2_unlink,  ext2_mkdir, ext2_rmdir,           ext2_rename,        ext2_link,    ext2_readlink,
+    ext2_statfs,  ext2_sync,  ext2_prepare_unmount, ext2_abort_unmount, /* abort_unmount */
+    ext2_unmount, ext2_path,  ext2_symlink,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops};

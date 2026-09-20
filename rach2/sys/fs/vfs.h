@@ -223,6 +223,7 @@ struct vfs_mount {
     /* What the unmount record reports: every open matched by a release. */
     uint32_t opens;
     uint32_t releases;
+    int write_error;
     int claim;       /* the devfs claim on the source's sectors, or -1 */
     char source[32]; /* the source as mount(2) spelled it, for /proc/mounts */
 };

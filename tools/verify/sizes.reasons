@@ -114,7 +114,7 @@ rach2/sys/fs/ext2.c:ext2_mount_on complexity 62 one file system operation over t
 rach2/sys/fs/ext2.c:ext2_mount_on lines 175 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_rename complexity 62 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_rename lines 216 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2.c:ext2_write complexity 26 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/ext2.c:ext2_write complexity 30 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:map_alloc lines 118 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:map_alloc nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:punch_level params 8 the parameters are one level's cursor in a recursive walk
@@ -319,7 +319,7 @@ tests/ext2probe.c:links_rows lines 138 a probe, one sequence of steps in the ord
 tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
 tests/host/ahci_hosttest.c:model_w32 complexity 29 a test's rows, each a case, read as one table
 
-tests/host/ata_hosttest.c:main lines 150 a test's rows, each a case, read as one table
+tests/host/ata_hosttest.c:main lines 151 a test's rows, each a case, read as one table
 
 tests/host/bcache_hosttest.c:main complexity 114 a test's rows, each a case, read as one table
 tests/host/bcache_hosttest.c:main lines 677 a test's rows, each a case, read as one table

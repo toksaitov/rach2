@@ -828,6 +828,9 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle)
     }
     if (rc == 0 && mnt->dev) {
         rc = block_flush(mnt->dev);
+        if (rc != 0) {
+            vfs_device_failed(mnt->dev, 0, rc);
+        }
     }
     return rc;
 }
@@ -837,9 +840,11 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     int i;
 
     for (i = 0; i < mount_slots; i++) {
-        if (!mounts[i] || mounts[i]->state == VFS_FREE || mounts[i]->dev != dev ||
-            (mounts[i]->flags & VFS_MS_RDONLY)) {
+        if (!mounts[i] || mounts[i]->state == VFS_FREE || mounts[i]->dev != dev) {
             continue;
+        }
+        if (!mounts[i]->write_error) {
+            mounts[i]->write_error = rc;
         }
         mounts[i]->flags |= VFS_MS_RDONLY;
         klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %d failed (%d)",
@@ -879,7 +884,11 @@ int vfs_sync_all(void)
             m->type->ops->sync(m);
         }
         if (bcache_sync(m->dev) == 0) {
-            block_flush(m->dev);
+            int rc = block_flush(m->dev);
+
+            if (rc != 0) {
+                vfs_device_failed(m->dev, 0, rc);
+            }
         }
         vfs_leave(m);
     }
@@ -2067,7 +2076,9 @@ int vfs_do_umount(const char *target)
     }
     /* The buffers are on the wire; a stick keeps a cache of its own, and
      * what is in it is not on the medium until it is told. */
-    if (!gone && block_flush(m->dev) != 0) {
+    rc = gone ? 0 : block_flush(m->dev);
+    if (rc != 0) {
+        vfs_device_failed(m->dev, 0, rc);
         unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;

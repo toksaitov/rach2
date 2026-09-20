@@ -22,6 +22,8 @@ Process allocation initializes three console descriptors, each with a separate o
 
 A description on a mounted file system also holds its mount, its node, and the file system's per-open handle; the file system's `open` runs once per successful `open(2)` and its `release` once at the last close, and the record written at unmount says both counts. `read`, `write`, `lseek` and `ftruncate` hold the description for the length of the operation, so two processes sharing one description cannot both read the same offset while one sleeps in a disk request.
 
+Mounted descriptor operations take the mount namespace lock before the description lock. Append selects EOF under both locks, including across independently opened descriptions.
+
 `dup`, `dup2`, `dup3`, `F_DUPFD`, `F_DUPFD_CLOEXEC`, and `fork` share the open-file description. A seek, append setting, nonblocking setting, or read through one duplicate is visible through the others. `FD_CLOEXEC` is per descriptor. Ordinary duplication clears it on the new descriptor; `dup3(O_CLOEXEC)` and `F_DUPFD_CLOEXEC` set it. A successful `execve` closes marked descriptors.
 
 A descriptor open on a regular file continues to name that file after unlink or replacement by rename. If a name is removed while any descriptor holds its node, KRFFS clears the node's name and keeps the extent as an orphan. Orphans are absent from lookup, directory reads, debug listings, file counts, and directory emptiness checks. The final close frees the extent. Process exit releases every open descriptor and therefore performs the same final-close work.

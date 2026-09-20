@@ -360,6 +360,27 @@ int loop_line(int index, char *buffer, uint32_t cap)
     return (int)at;
 }
 
+/**
+ * Drain backing writes and recheck attachment under the mount lock.
+ * Opening may sleep; size, description use and another attachment may change
+ * before this lock is acquired. Keep the lock through publication on success.
+ */
+static int loop_prepare(struct vfs_ref *ref, void *handle, struct vfs_stat *st)
+{
+    int rc = vfs_fsync(ref->mnt, handle);
+
+    if (rc == 0) {
+        rc = vfs_getattr(ref->mnt, ref->node, st);
+    }
+    if (rc == 0 && (st->size == 0 || st->size % BLOCK_SECTOR_SIZE != 0)) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (fd_node_busy(ref->mnt, ref->node) || loop_backs(ref->mnt, ref->node))) {
+        rc = -EBUSY;
+    }
+    return rc;
+}
+
 int loop_attach(int index, const char *path, int writable)
 {
     struct vfs_ref ref;
@@ -444,25 +465,14 @@ int loop_attach(int index, const char *path, int writable)
         loop_unclaim(loop);
         return rc;
     }
-    /* A write or a truncation already inside the file system holding this
-     * file would finish after the publication below and change an image the
-     * mount above is reading. A description in the middle of one is what
-     * says so, and this attach waits for another moment rather than taking
-     * the file out from under it. */
-    if (fd_node_busy(ref.mnt, ref.node)) {
+    vfs_ns_lock(ref.mnt);
+    rc = loop_prepare(&ref, handle, &st);
+    if (rc != 0) {
         vfs_release(ref.mnt, handle);
+        vfs_ns_unlock(ref.mnt);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
-        return -EBUSY;
-    }
-    /* The open could sleep, and another attach could have taken this file in
-     * the meantime; the publication below is what makes it this device's, and
-     * nothing sleeps between here and it. */
-    if (loop_backs(ref.mnt, ref.node)) {
-        vfs_release(ref.mnt, handle);
-        vfs_ref_release(&ref);
-        loop_unclaim(loop);
-        return -EBUSY;
+        return rc;
     }
 
     /* The description keeps the mount, so unmounting the volume holding the
@@ -492,6 +502,8 @@ int loop_attach(int index, const char *path, int writable)
     loop->dev.flush = loop_flush;
     loop->dev.backing = ref.mnt->dev;
     loop->dev.drvdata = loop;
+
+    vfs_ns_unlock(ref.mnt);
 
     /* The resolver's hold on the node is the attachment's; released at the
      * detach through the description. */

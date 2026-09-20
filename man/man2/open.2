@@ -155,6 +155,10 @@ shared open-file description.
 A pipe or terminal end is released when its last descriptor closes;
 a mounted file's final close releases its per-open handle, node, and
 mount reference.
+On ext2, that release drains the mount's pending write batch.
+A failed drain retains the pending inode state and error on the mount;
+close still releases the descriptor, and fsync after reopening reports
+the error.
 Closing a framebuffer descriptor restores text mode only when the caller
 owns the framebuffer and closes the last reference to that open-file
 description, the references children inherited included.

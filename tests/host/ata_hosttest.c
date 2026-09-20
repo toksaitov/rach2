@@ -233,6 +233,8 @@ static uint32_t sectors_left;
 static int cmd_write;
 static int bm_active, bm_intr;
 static uint8_t disk[SECTORS][SECTOR];
+static uint8_t durable[SECTORS][SECTOR];
+static int flush_fails;
 static uint32_t status_reads, refused, garbage_reads, garbage_writes, commands;
 static uint32_t dma_writes, flushes, pio_write_sectors;
 static int masked_at_dma_cmd, masked_at_start, masked_at_pio_cmd, masked_at_last_data;
@@ -262,7 +264,10 @@ static uint8_t model_status(void)
     }
 }
 
-/** The emulator's completion of whatever phase is pending. */
+/**
+ * Complete the pending command; only a successful flush updates durable media.
+ * Reads and data transfers use the volatile drive image until then.
+ */
 static void model_advance(void)
 {
     uint32_t i;
@@ -275,6 +280,11 @@ static void model_advance(void)
         phase = sectors_left ? PIO_WRITE_DRQ : IDLE;
         break;
     case FLUSH_BUSY:
+        if (flush_fails) {
+            error_pending = 1;
+        } else {
+            k_memcpy(durable, disk, sizeof(durable));
+        }
         phase = IDLE;
         break;
     case DMA_RUN:
@@ -585,6 +595,7 @@ static void model_reset(int answer)
     dma_writes = flushes = pio_write_sectors = 0;
     masked_at_dma_cmd = masked_at_start = masked_at_pio_cmd = masked_at_last_data = -1;
     dma_fails = 0;
+    flush_fails = 0;
     error_pending = 0;
     drive_at_flush = -1;
     scheduler_on = 1;
@@ -602,6 +613,7 @@ static void model_reset(int answer)
             disk[s][i] = (uint8_t)(s * 7 + i);
         }
     }
+    k_memcpy(durable, disk, sizeof(durable));
 }
 
 static int sector_is(const uint8_t *got, uint32_t lba)
@@ -707,6 +719,79 @@ static void write_rate_rows(struct ata_drive *d)
                    sleeps);
         }
     }
+    d->dev.sector_count = SECTORS;
+}
+
+/** Compare every byte of a submitted transfer with its media image. */
+static int bytes_equal(const uint8_t *a, const uint8_t *b, uint32_t count)
+{
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * A successful write survives loss of the volatile drive cache at return.
+ * Exercise sleeping DMA, owned PIO and polled PIO in both address forms.
+ * A failed flush leaves the old durable bytes and must fail the write.
+ */
+static void durability_rows(struct ata_drive *d)
+{
+    static uint8_t data[8 * SECTOR], readback[8 * SECTOR];
+    uint64_t lba;
+    uint32_t high, path, i;
+    int rc;
+
+    for (i = 0; i < sizeof(data); i++) {
+        data[i] = (uint8_t)(i * 11 + i / SECTOR + 17);
+    }
+    for (high = 0; high < 2; high++) {
+        lba = high ? ATA_LBA28_SECTORS + 32 : 32;
+        d->lba48 = (int)high;
+        d->dev.sector_count = lba + SECTORS;
+        for (path = 0; path < 3; path++) {
+            model_reset(32);
+            d->dma = path != 0;
+            channels[0].owner = path == 2;
+            masked = path == 2;
+            in_syscall = path != 2;
+            dma_on_reads = 0;
+            rc = ata_write(&d->dev, lba, 8, data);
+            CHECK(rc == 0, "a write with a completed flush succeeds");
+            CHECK(bytes_equal(durable[32], data, sizeof(data)),
+                  "a returned write is durable before power loss");
+            CHECK(phase == IDLE, "a returned write has no pending flush");
+            CHECK(sector_is(durable[31], 31) && sector_is(durable[40], 40),
+                  "a durable write preserves neighbouring sectors");
+            k_memcpy(disk, durable, sizeof(disk));
+            rc = ata_read(&d->dev, lba, 8, readback);
+            CHECK(rc == 0 && bytes_equal(readback, data, sizeof(data)),
+                  "a returned write survives volatile cache loss");
+
+            model_reset(32);
+            channels[0].owner = path == 2;
+            masked = path == 2;
+            in_syscall = path != 2;
+            dma_on_reads = 0;
+            flush_fails = 1;
+            rc = ata_write(&d->dev, lba, 8, data);
+            CHECK(rc == -EIO, "a failed flush fails the write");
+            CHECK(bytes_equal(disk[32], data, sizeof(data)),
+                  "a failed flush follows the complete data transfer");
+            CHECK(sector_is(durable[32], 32) && sector_is(durable[39], 39),
+                  "a failed flush does not update durable media");
+            printf("ata-test: durability: LBA%u path %u, success and flush failure checked\n",
+                   high ? 48u : 28u, path);
+        }
+    }
+    channels[0].owner = 0;
+    d->dma = 1;
+    d->lba48 = 1;
     d->dev.sector_count = SECTORS;
 }
 
@@ -855,6 +940,7 @@ int main(void)
     CHECK(wait_ticks == 2, "the two ticks the owner slept through are counted");
 
     write_rate_rows(d);
+    durability_rows(d);
 
     if (fails) {
         printf("ata-test: %d failure(s)\n", fails);

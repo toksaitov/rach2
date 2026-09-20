@@ -1,6 +1,6 @@
 # ext2 write batches across calls
 
-This is the design required before implementation by [plan.md:237](plan.md#L237). No batch spanning calls is implemented here. Entry 49 measured six disk commands for a 4 KiB rewrite and twelve for an append. Removing the first of two inode stores reduced these to four and ten, and raised the measured rate from 494 to 911 KB/s. Those are the taken change's results, not a prediction for this design ([plan.md:86](plan.md#L86)).
+This is the design read before the entry 49 implementation. Code references and the current-contract section below describe the starting tree. [ext2-write-batch-result.md](ext2-write-batch-result.md) records the implementation, its changes to this design, proof results and remaining acceptance limits. Entry 49 measured six disk commands for a 4 KiB rewrite and twelve for an append. Removing the first of two inode stores reduced these to four and ten, and raised the measured rate from 494 to 911 KB/s. Those are the taken change's results, not a prediction for this design ([plan.md:86](plan.md#L86)).
 
 The admission rule is fixed: admit only overwrites of allocated blocks and writes contiguous with EOF. Drain before a sparse write, a hole fill, or any namespace or attribute change. Bound the batch by bytes and pending inodes, with a separate metadata bound. Finish it at `fsync`, `sync`, close as defined below, and any bound. These rules apply to the whole mount ([plan.md:237](plan.md#L237)).
 

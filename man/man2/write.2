@@ -39,6 +39,15 @@ the call fails with
 .Er EBUSY .
 A write of one or more bytes by an unprivileged process clears setuid and,
 when group execute is set, setgid.
+.Pp
+On ext2, allocated overwrites and contiguous appends can remain in a
+bounded mount-wide batch after a successful write.
+Reads and stat see accepted bytes and size immediately.
+The batch drains at fsync, sync, a bound, an attribute or namespace change,
+or the last close of an open-file description.
+Sparse writes and hole fills drain before returning.
+An I/O error after some bytes were accepted returns their count;
+fsync reports the delayed error even after close and reopen.
 .Ss Pipes and terminals
 A pipe write waits when the pipe is full.
 With
