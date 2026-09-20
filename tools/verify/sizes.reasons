@@ -58,7 +58,6 @@ rach2/sys/audio/hda.c:hda_find_output nesting 6 a hardware sequence, the registe
 rach2/sys/audio/hda.c:hda_init lines 142 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_start complexity 78 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:hda_start lines 446 a hardware sequence, the registers written in the order the datasheet requires
-rach2/sys/audio/hda.c:hda_start nesting 8 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 105 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/block/ahci.c:ahci_build_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
@@ -150,7 +149,6 @@ rach2/sys/fs/krffsmount.c:krffs_volume_mount lines 101 one file system operation
 
 rach2/sys/fs/procfs.c:procfs_open complexity 61 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 155 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 30 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table

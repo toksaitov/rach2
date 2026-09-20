@@ -8,6 +8,7 @@
 # construction, and tools/inspect/setidcheck.c checks its set-id entries
 # against setid.allow the same way.
 dir 0755 /bin
+file 0755 /bin/audiotest build/utils/audiotest
 # This busybox stays unprivileged. A setuid one would run every one of its
 # BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
 # confined it, and that config path tripped a busybox use-after-free the

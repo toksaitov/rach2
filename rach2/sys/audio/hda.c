@@ -74,6 +74,8 @@ static uint8_t afg_widget_count = 0;
 /* Remember selected connection indices for pins */
 static uint8_t pin_conn_sel_idx = 0;
 static uint8_t hp_conn_sel_idx = 0;
+static uint8_t mixer_conn_sel_idx = 0;
+static hda_report_t hda_report;
 
 /* Stream info */
 static uint16_t output_stream_index = 0; /* Set during init based on GCAP */
@@ -247,6 +249,10 @@ static void hda_cpu_detect_cache(void)
  */
 static void hda_dma_sync_range(const volatile void *addr, uint32_t size)
 {
+#ifdef RACH2_HOSTTEST
+    (void)addr;
+    (void)size;
+#else
     uintptr_t p;
     uintptr_t end;
     uintptr_t line;
@@ -270,6 +276,7 @@ static void hda_dma_sync_range(const volatile void *addr, uint32_t size)
         /* Heavy fallback, but safe on all x86 that support HDA. */
         __asm__ __volatile__("wbinvd" ::: "memory");
     }
+#endif
 }
 
 /**
@@ -525,9 +532,8 @@ static void hda_delay_walclk_us(uint32_t us);
 static uint32_t hda_sd_read32(int stream, uint32_t reg);
 static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb);
 static uint32_t hda_get_param(uint8_t nid, uint8_t param);
-static int hda_get_connections(uint8_t nid, uint8_t *conn_list, int max_conn);
+static int hda_get_connections(uint8_t nid, uint16_t *conn_list, int max_conn);
 static void hda_pci_force_d0(pci_device_t *dev);
-static bool hda_pcm_rate_supported(uint32_t pcm_caps, uint32_t rate);
 static uint32_t hda_select_hw_rate(uint32_t req_rate);
 static uint8_t hda_amp_steps(uint32_t amp_caps);
 static uint8_t hda_get_out_amp_max(uint8_t nid);
@@ -640,34 +646,63 @@ static void hda_enable_eapd_all(void)
     }
 }
 
+#ifdef RACH2_HOSTTEST
+extern uint32_t hda_test_read(uint32_t offset, int bits);
+extern void hda_test_write(uint32_t offset, uint32_t value, int bits);
+#endif
+
 static uint8_t hda_read8(uint32_t offset)
 {
+#ifdef RACH2_HOSTTEST
+    return (uint8_t)hda_test_read(offset, 8);
+#else
     return *(volatile uint8_t *)(hda_base + offset);
+#endif
 }
 
 static uint16_t hda_read16(uint32_t offset)
 {
+#ifdef RACH2_HOSTTEST
+    return (uint16_t)hda_test_read(offset, 16);
+#else
     return *(volatile uint16_t *)(hda_base + offset);
+#endif
 }
 
 static uint32_t hda_read32(uint32_t offset)
 {
+#ifdef RACH2_HOSTTEST
+    return (uint32_t)hda_test_read(offset, 32);
+#else
     return *(volatile uint32_t *)(hda_base + offset);
+#endif
 }
 
 static void hda_write8(uint32_t offset, uint8_t value)
 {
+#ifdef RACH2_HOSTTEST
+    hda_test_write(offset, value, 8);
+#else
     *(volatile uint8_t *)(hda_base + offset) = value;
+#endif
 }
 
 static void hda_write16(uint32_t offset, uint16_t value)
 {
+#ifdef RACH2_HOSTTEST
+    hda_test_write(offset, value, 16);
+#else
     *(volatile uint16_t *)(hda_base + offset) = value;
+#endif
 }
 
 static void hda_write32(uint32_t offset, uint32_t value)
 {
+#ifdef RACH2_HOSTTEST
+    hda_test_write(offset, value, 32);
+#else
     *(volatile uint32_t *)(hda_base + offset) = value;
+#endif
 }
 
 /* Stream descriptor N lives at MMIO 0x80 + N*0x20. */
@@ -1037,40 +1072,125 @@ static uint32_t hda_get_param(uint8_t nid, uint8_t param)
 }
 
 /**
- * Read a widget's connection list into `conn_list`, returning the count.
+ * Read packed entries at entry offsets and expand ranges in selector order.
  *
- * Fills up to `max_conn` entries. Handles both short-form (four 8-bit entries
- * per response word) and long-form (two 16-bit entries) connection lists, as
- * indicated by bit 7 of the connection-list-length parameter.
+ * Long entries retain all fifteen NID bits. A range must follow a smaller
+ * NID. Malformed lists and lists exceeding the caller's capacity return -1;
+ * no caller may route through their partial output. Direct verbs address
+ * only seven-bit NIDs, checked separately before querying a connection.
  */
-static int hda_get_connections(uint8_t nid, uint8_t *conn_list, int max_conn)
+static int hda_read_connections(uint8_t nid, uint16_t *conn_list, int max_conn,
+                                hda_connection_report_t *report)
 {
-    uint32_t conn_param = hda_get_param(nid, HDA_PARAM_CONN_LIST);
-    int conn_len = conn_param & 0x7F;
-    int is_long = (conn_param >> 7) & 0x1;
+    uint32_t param = hda_get_param(nid, HDA_PARAM_CONN_LIST);
+    int length = param & 0x7F;
+    int bits = (param & 0x80) ? 16 : 8;
+    int per_word = 32 / bits;
+    uint32_t range_bit = 1u << (bits - 1);
+    uint32_t word = 0;
+    uint16_t previous = 0;
     int count = 0;
     int i;
 
-    if (conn_len == 0) {
-        return 0;
+    if (report) {
+        report->nid = nid;
+        report->long_form = bits == 16;
+        report->raw_count = 0;
+        report->count = -1;
     }
+    for (i = 0; i < length; i++) {
+        uint16_t entry;
+        uint16_t node;
+        uint32_t first, n;
 
-    for (i = 0; i < conn_len && count < max_conn; i++) {
-        uint32_t entry;
-        int entries_per_word = is_long ? 2 : 4;
-        int word_index = i / entries_per_word;
-        int byte_index = i % entries_per_word;
-
-        entry = hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONN_LIST | word_index);
-
-        if (is_long) {
-            conn_list[count++] = (entry >> (byte_index * 16)) & 0xFF;
-        } else {
-            conn_list[count++] = (entry >> (byte_index * 8)) & 0xFF;
+        if (i % per_word == 0)
+            word = hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONN_LIST | i);
+        entry = (uint16_t)((word >> ((i % per_word) * bits)) & (range_bit * 2 - 1));
+        if (report) {
+            report->raw[i] = entry;
+            report->raw_count = i + 1;
         }
+        node = entry & (range_bit - 1);
+        first = node;
+        if (entry & range_bit) {
+            if (i == 0 || node <= previous)
+                return -1;
+            first = (uint32_t)previous + 1;
+        }
+        if (node == 0 || node - first + 1 > (uint32_t)(max_conn - count))
+            return -1;
+        for (n = first; n <= node; n++)
+            conn_list[count++] = (uint16_t)n;
+        previous = node;
     }
-
+    if (report)
+        report->count = count;
     return count;
+}
+
+/** Read a complete connection list without retaining a diagnostic copy. */
+static int hda_get_connections(uint8_t nid, uint16_t *conn_list, int max_conn)
+{
+    return hda_read_connections(nid, conn_list, max_conn, NULL);
+}
+
+/** Reject indirect or foreign NIDs before constructing a direct verb. */
+static uint32_t hda_connection_caps(uint16_t nid)
+{
+    if (nid > 127 || nid < afg_widget_start || nid >= (unsigned)afg_widget_start + afg_widget_count)
+        return 0xF00000;
+    return hda_get_param((uint8_t)nid, HDA_PARAM_AUDIO_CAPS);
+}
+
+/** Read DAC format parameters from the node selected by Format Override. */
+static void hda_read_caps(uint8_t nid, hda_caps_report_t *caps)
+{
+    uint32_t widgets;
+
+    k_memset(caps, 0, sizeof(*caps));
+    if (!nid)
+        return;
+    widgets = hda_get_param(nid, HDA_PARAM_AUDIO_CAPS);
+    caps->nid = nid;
+    caps->source = (widgets & (1u << 4)) ? nid : audio_fg_nid;
+    caps->pcm = hda_get_param(caps->source, 0x0A);
+    caps->formats = hda_get_param(caps->source, 0x0B);
+}
+
+/** Cache the selected paths and their codec lists for reads through procfs. */
+static void hda_capture_report(void)
+{
+    int i;
+    uint8_t nodes[3];
+
+    hda_report.vendor = codec_vendor_id;
+    hda_report.codec = codec_addr;
+    hda_report.afg = audio_fg_nid;
+    hda_report.pin = pin_nid;
+    hda_report.dac = dac_nid;
+    hda_report.mixer = mixer_nid;
+    hda_report.hp_pin = hp_pin_nid;
+    hda_report.hp_dac = hp_dac_nid;
+    hda_report.pin_index = pin_conn_sel_idx;
+    hda_report.mixer_index = mixer_conn_sel_idx;
+    hda_report.hp_index = hp_conn_sel_idx;
+    hda_read_caps(dac_nid, &hda_report.caps[0]);
+    hda_read_caps(hp_dac_nid, &hda_report.caps[1]);
+    nodes[0] = pin_nid;
+    nodes[1] = mixer_nid;
+    nodes[2] = hp_pin_nid;
+    for (i = 0; i < 3; i++) {
+        hda_connection_report_t *c = &hda_report.connections[i];
+        k_memset(c, 0, sizeof(*c));
+        if (nodes[i])
+            hda_read_connections(nodes[i], c->nodes, HDA_MAX_CONNECTIONS, c);
+    }
+}
+
+/** Return cached state without using the immediate command interface. */
+const hda_report_t *hda_get_report(void)
+{
+    return &hda_report;
 }
 
 /**
@@ -1159,12 +1279,14 @@ static bool hda_find_output(void)
     uint8_t fg_start, fg_count;
     uint8_t speaker_pin = 0, hp_pin = 0, line_out_pin = 0;
     uint8_t fallback_pin = 0; /* Any output-capable pin as fallback */
-    uint8_t first_dac = 0;
-    uint8_t conn_list[16];
+    uint16_t conn_list[HDA_MAX_CONNECTIONS];
     int num_conn;
     uint8_t analog_codec_addr = 0xFF; /* Track preferred analog codec */
     uint32_t analog_vendor = 0;
 
+    audio_fg_nid = dac_nid = pin_nid = mixer_nid = hp_pin_nid = hp_dac_nid = 0;
+    pin_conn_sel_idx = hp_conn_sel_idx = mixer_conn_sel_idx = 0;
+    k_memset(&hda_report, 0, sizeof(hda_report));
     statests = hda_read16(HDA_STATESTS);
     hda_probe_log("HDA: STATESTS=0x%x\n", statests);
     if (statests == 0) {
@@ -1249,6 +1371,8 @@ static bool hda_find_output(void)
     node_count = hda_get_param(0, HDA_PARAM_NODE_COUNT);
     start_nid = (node_count >> 16) & 0xFF;
     num_nodes = node_count & 0xFF;
+    if (start_nid == 0 || (unsigned)start_nid + num_nodes > 128)
+        return false;
     hda_probe_log("HDA: Root has %d subnodes starting at 0x%x\n", num_nodes, start_nid);
 
     for (i = 0; i < num_nodes; i++) {
@@ -1274,6 +1398,8 @@ static bool hda_find_output(void)
     fg_start = (subnode_count >> 16) & 0xFF;
     fg_count = subnode_count & 0xFF;
     hda_probe_log("HDA: AFG has %d widgets starting at 0x%x\n", fg_count, fg_start);
+    if (fg_start == 0 || (unsigned)fg_start + fg_count > 128)
+        return false;
     afg_widget_start = fg_start;
     afg_widget_count = fg_count;
 
@@ -1282,11 +1408,6 @@ static bool hda_find_output(void)
         uint8_t nid = fg_start + j;
         uint32_t caps = hda_get_param(nid, HDA_PARAM_AUDIO_CAPS);
         uint8_t widget_type = (caps >> 20) & 0xF;
-
-        if (widget_type == HDA_WIDGET_AUDIO_OUT && first_dac == 0) {
-            first_dac = nid;
-            hda_probe_log("HDA: Found DAC at 0x%x\n", nid);
-        }
 
         if (widget_type == HDA_WIDGET_PIN) {
             uint32_t pin_caps = hda_get_param(nid, HDA_PARAM_PIN_CAPS);
@@ -1348,7 +1469,7 @@ static bool hda_find_output(void)
     hda_probe_log("HDA: pin=0x%x ", pin_nid);
 
     /* Trace the pin's connection list back to its DAC. */
-    num_conn = hda_get_connections(pin_nid, conn_list, 16);
+    num_conn = hda_get_connections(pin_nid, conn_list, HDA_MAX_CONNECTIONS);
 
     if (num_conn > 0) {
         uint8_t pin_sel;
@@ -1357,7 +1478,7 @@ static bool hda_find_output(void)
         /* Prefer BIOS/default connection selection first (important on real
          * hardware) */
         pin_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-        if (pin_sel >= (uint8_t)num_conn) {
+        if (pin_sel >= num_conn) {
             pin_sel = 0;
         }
 
@@ -1378,58 +1499,56 @@ static bool hda_find_output(void)
             }
 
             {
-                uint8_t conn_nid = conn_list[idx];
-                uint32_t caps = hda_get_param(conn_nid, HDA_PARAM_AUDIO_CAPS);
+                uint16_t conn_nid = conn_list[idx];
+                uint32_t caps = hda_connection_caps(conn_nid);
                 uint8_t wtype = (caps >> 20) & 0xF;
 
                 if (wtype == HDA_WIDGET_AUDIO_OUT) {
-                    dac_nid = conn_nid;
+                    dac_nid = (uint8_t)conn_nid;
+                    mixer_nid = 0;
                     pin_conn_sel_idx = (uint8_t)idx;
                     hda_probe_log("HDA: Pin connects directly to DAC 0x%x\n", dac_nid);
                     break;
                 } else if (wtype == HDA_WIDGET_AUDIO_MIX || wtype == HDA_WIDGET_AUDIO_SEL) {
-                    uint8_t mix_conn[8];
+                    uint16_t mix_conn[HDA_MAX_CONNECTIONS];
                     int mix_num;
                     uint8_t mix_sel;
 
-                    mixer_nid = conn_nid;
+                    mixer_nid = (uint8_t)conn_nid;
                     pin_conn_sel_idx = (uint8_t)idx;
                     hda_probe_log("HDA: Pin connects to mixer/sel 0x%x\n", mixer_nid);
 
-                    mix_num = hda_get_connections(mixer_nid, mix_conn, 8);
+                    mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
 
                     /* Prefer currently selected source on selector widgets */
                     mix_sel =
                         (uint8_t)(hda_send_verb(codec_addr, mixer_nid, HDA_VERB_GET_CONN_SEL) &
                                   0xFF);
-                    if (mix_sel < (uint8_t)mix_num) {
-                        uint32_t mcaps0 = hda_get_param(mix_conn[mix_sel], HDA_PARAM_AUDIO_CAPS);
+                    if (mix_sel < mix_num) {
+                        uint32_t mcaps0 = hda_connection_caps(mix_conn[mix_sel]);
                         if (((mcaps0 >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
-                            dac_nid = mix_conn[mix_sel];
+                            dac_nid = (uint8_t)mix_conn[mix_sel];
+                            mixer_conn_sel_idx = mix_sel;
                             hda_probe_log("HDA: Mixer selected DAC 0x%x\n", dac_nid);
                             break;
                         }
                     }
 
                     for (j = 0; j < mix_num; j++) {
-                        uint32_t mcaps = hda_get_param(mix_conn[j], HDA_PARAM_AUDIO_CAPS);
+                        uint32_t mcaps = hda_connection_caps(mix_conn[j]);
                         if (((mcaps >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
-                            dac_nid = mix_conn[j];
+                            dac_nid = (uint8_t)mix_conn[j];
+                            mixer_conn_sel_idx = (uint8_t)j;
                             hda_probe_log("HDA: Mixer connects to DAC 0x%x\n", dac_nid);
                             break;
                         }
                     }
                     if (dac_nid != 0)
                         break;
+                    mixer_nid = 0;
                 }
             }
         }
-    }
-
-    /* Fallback: if no DAC found through tracing, use first DAC */
-    if (dac_nid == 0 && first_dac != 0) {
-        dac_nid = first_dac;
-        hda_probe_log("HDA: Fallback to first DAC 0x%x\n", dac_nid);
     }
 
     if (dac_nid == 0) {
@@ -1446,32 +1565,29 @@ static bool hda_find_output(void)
     /* If we have a headphone pin, find its DAC too */
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
         uint8_t hp_sel;
-        uint8_t hp_conn[16];
+        uint16_t hp_conn[HDA_MAX_CONNECTIONS];
         int hp_num;
 
-        hp_num = hda_get_connections(hp_pin_nid, hp_conn, 16);
+        hp_num = hda_get_connections(hp_pin_nid, hp_conn, HDA_MAX_CONNECTIONS);
         hp_sel = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-        if (hp_sel >= (uint8_t)hp_num) {
+        if (hp_sel >= hp_num) {
             hp_sel = 0;
         }
 
         /* Prefer selected connection first */
         if (hp_num > 0) {
-            uint32_t caps0 = hda_get_param(hp_conn[hp_sel], HDA_PARAM_AUDIO_CAPS);
+            uint32_t caps0 = hda_connection_caps(hp_conn[hp_sel]);
             uint8_t wtype0 = (caps0 >> 20) & 0xF;
             if (wtype0 == HDA_WIDGET_AUDIO_OUT) {
                 hp_dac_nid = hp_conn[hp_sel];
             }
-            /* A mixer, a selector or anything else keeps the selected
-             * upstream widget; the DAC is chosen below when none was
-             * found here. */
             hp_conn_sel_idx = hp_sel;
         }
 
         /* If we didn't get a DAC, pick the first DAC in the list */
         if (hp_dac_nid == 0) {
             for (i = 0; i < hp_num; i++) {
-                uint32_t caps = hda_get_param(hp_conn[i], HDA_PARAM_AUDIO_CAPS);
+                uint32_t caps = hda_connection_caps(hp_conn[i]);
                 if (((caps >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
                     hp_dac_nid = hp_conn[i];
                     hp_conn_sel_idx = (uint8_t)i;
@@ -1481,49 +1597,59 @@ static bool hda_find_output(void)
         }
     }
 
+    hda_capture_report();
+    hda_report.ready = true;
     return true;
 }
 
+typedef struct {
+    uint32_t rate;
+    uint16_t format;
+} hda_rate_t;
+
+static const hda_rate_t hda_rates[] = {{8000, 0x0500},   {11025, 0x4300},  {16000, 0x0200},
+                                       {22050, 0x4100},  {32000, 0x0A00},  {44100, 0x4000},
+                                       {48000, 0x0000},  {88200, 0x4800},  {96000, 0x0800},
+                                       {176400, 0x5800}, {192000, 0x1800}, {384000, 0x3800}};
+
+/** Intersect the format capabilities of every DAC the driver programs. */
+static uint32_t hda_common_pcm(void)
+{
+    uint32_t pcm = hda_report.caps[0].pcm;
+
+    if (!(hda_report.caps[0].formats & 1))
+        return 0;
+    if (hp_dac_nid && hp_dac_nid != dac_nid) {
+        if (!(hda_report.caps[1].formats & 1))
+            return 0;
+        pcm &= hda_report.caps[1].pcm;
+    }
+    return pcm;
+}
+
 /**
- * Encode a stream format word from sample rate, format, and channel count.
+ * Encode an exact codec-supported PCM format, or return 0xFFFF.
  *
- * Produces the 16-bit value the HDA stream-format register and the codec
- * SET_CONV_FMT verb expect: the channel count less one in the low nibble, a
- * bits-per-sample code, and a base with a divisor.
- *
- * The rates are the six this driver programs: 8000, 11025, 16000, 22050,
- * 44100 and 48000. A request between two of them takes the next one up, and
- * anything above 44100 is played at 48000. The codec is not asked which rates
- * it supports. dev-log/50-shortcomings/plan.md entry 126 has the rest.
+ * The table index is the PCM rate bit. Both the stream descriptor and every
+ * programmed converter receive this word; an unsupported rate is never
+ * rounded here. Callback playback must match exactly because it has no
+ * resampler. Write playback chooses a supported rate before encoding.
  */
 static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int channels)
 {
-    uint16_t fmt = 0;
+    unsigned i;
+    uint32_t pcm = hda_common_pcm();
+    uint32_t size_bit = format == AUDIO_S16LE ? (1u << 17) : (1u << 16);
 
-    fmt |= (channels - 1) & 0xF;
-
-    if (format == AUDIO_S16LE) {
-        fmt |= HDA_FMT_BITS_16;
-    } else {
-        fmt |= HDA_FMT_BITS_8;
+    if ((format != AUDIO_U8 && format != AUDIO_S16LE) || channels < 1 || channels > 2 ||
+        !(pcm & size_bit))
+        return 0xFFFF;
+    for (i = 0; i < sizeof(hda_rates) / sizeof(hda_rates[0]); i++) {
+        if (hda_rates[i].rate == sample_rate && (pcm & (1u << i)))
+            return hda_rates[i].format | (format == AUDIO_S16LE ? HDA_FMT_BITS_16 : 0) |
+                   (uint16_t)(channels - 1);
     }
-
-    /* The next programmed rate at or above the request. */
-    if (sample_rate <= 8000) {
-        fmt |= HDA_FMT_BASE_48K | (0x05 << 8); /* 48000 / 6 = 8000 */
-    } else if (sample_rate <= 11025) {
-        fmt |= HDA_FMT_BASE_44K | (0x03 << 8); /* 44100 / 4 = 11025 */
-    } else if (sample_rate <= 16000) {
-        fmt |= HDA_FMT_BASE_48K | (0x02 << 8); /* 48000 / 3 = 16000 */
-    } else if (sample_rate <= 22050) {
-        fmt |= HDA_FMT_BASE_44K | (0x01 << 8); /* 44100 / 2 = 22050 */
-    } else if (sample_rate <= 44100) {
-        fmt |= HDA_FMT_BASE_44K; /* 44100 */
-    } else {
-        fmt |= HDA_FMT_BASE_48K; /* 48000 */
-    }
-
-    return fmt;
+    return 0xFFFF;
 }
 
 /**
@@ -1895,114 +2021,38 @@ static uint8_t hda_clamp_gain(uint8_t gain, uint8_t max)
     return gain;
 }
 
-/* Test whether a sample rate's bit is set in a node's PCM capabilities. */
-static bool hda_pcm_rate_supported(uint32_t pcm_caps, uint32_t rate)
-{
-    uint32_t bit = 0;
-
-    switch (rate) {
-    case 8000:
-        bit = (1u << 0);
-        break;
-    case 11025:
-        bit = (1u << 1);
-        break;
-    case 16000:
-        bit = (1u << 2);
-        break;
-    case 22050:
-        bit = (1u << 3);
-        break;
-    case 32000:
-        bit = (1u << 4);
-        break;
-    case 44100:
-        bit = (1u << 5);
-        break;
-    case 48000:
-        bit = (1u << 6);
-        break;
-    case 88200:
-        bit = (1u << 7);
-        break;
-    case 96000:
-        bit = (1u << 8);
-        break;
-    case 176400:
-        bit = (1u << 9);
-        break;
-    case 192000:
-        bit = (1u << 10);
-        break;
-    case 384000:
-        bit = (1u << 11);
-        break;
-    default:
-        bit = 0;
-        break;
-    }
-
-    if (bit == 0) {
-        return false;
-    }
-    return (pcm_caps & bit) != 0;
-}
-
-/**
- * Choose a hardware sample rate the active DACs support.
- *
- * Intersects the PCM-rate capabilities of the primary and headphone DACs and
- * returns the requested rate if supported. Otherwise it prefers 48000, then
- * 44100, then the highest of 192000, 96000, 32000, 22050, 16000, 11025 and
- * 8000 the codec supports; a rate the codec reports but this list omits,
- * 88200 among them, is not chosen. With nothing supported it returns the
- * request unchanged, which the format encoder then rounds. Many real codecs
- * (including the Conexant part this driver was developed against) do not
- * support 11025Hz even though QEMU does, which is why the write path
- * resamples.
- */
+/** Choose the closest supported rate at or below the request, or the lowest. */
 static uint32_t hda_select_hw_rate(uint32_t req_rate)
 {
-    uint32_t pcm_caps = 0;
+    uint32_t pcm = hda_common_pcm();
+    uint32_t selected = 0;
+    unsigned i;
 
-    if (!dac_nid) {
-        return req_rate ? req_rate : 48000;
+    for (i = 0; i < sizeof(hda_rates) / sizeof(hda_rates[0]); i++) {
+        if (pcm & (1u << i)) {
+            if (!selected || hda_rates[i].rate <= req_rate)
+                selected = hda_rates[i].rate;
+        }
     }
+    return selected;
+}
 
-    pcm_caps = hda_get_param(dac_nid, 0x0A);
-    if (hp_dac_nid) {
-        pcm_caps &= hda_get_param(hp_dac_nid, 0x0A);
+/** Compute a 16.16 ratio without overflowing a 32-bit shift or using libgcc. */
+static uint32_t hda_rate_step(uint32_t input, uint32_t output)
+{
+    uint32_t result = input / output;
+    uint32_t remainder = input % output;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        remainder *= 2;
+        result *= 2;
+        if (remainder >= output) {
+            result++;
+            remainder -= output;
+        }
     }
-
-    if (req_rate != 0 && hda_pcm_rate_supported(pcm_caps, req_rate)) {
-        return req_rate;
-    }
-
-    /* Prefer 48k when available (common and robust). */
-    if (hda_pcm_rate_supported(pcm_caps, 48000)) {
-        return 48000;
-    }
-    if (hda_pcm_rate_supported(pcm_caps, 44100)) {
-        return 44100;
-    }
-
-    /* The highest of the rates below that the codec supports. */
-    if (hda_pcm_rate_supported(pcm_caps, 192000))
-        return 192000;
-    if (hda_pcm_rate_supported(pcm_caps, 96000))
-        return 96000;
-    if (hda_pcm_rate_supported(pcm_caps, 32000))
-        return 32000;
-    if (hda_pcm_rate_supported(pcm_caps, 22050))
-        return 22050;
-    if (hda_pcm_rate_supported(pcm_caps, 16000))
-        return 16000;
-    if (hda_pcm_rate_supported(pcm_caps, 11025))
-        return 11025;
-    if (hda_pcm_rate_supported(pcm_caps, 8000))
-        return 8000;
-
-    return req_rate ? req_rate : 48000;
+    return result ? result : 1;
 }
 
 /**
@@ -2221,7 +2271,7 @@ void hda_debug_dump_codec(void)
                                         0xFF); /* GET_PIN_WIDGET_CONTROL */
             uint8_t eapd =
                 (uint8_t)(hda_send_verb(codec_addr, nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
-            uint8_t conn_list[16];
+            uint16_t conn_list[HDA_MAX_CONNECTIONS];
             int conn_num;
             int i;
 
@@ -2231,7 +2281,7 @@ void hda_debug_dump_codec(void)
             hda_log("    Conn: len=%d long=%d sel=%d\n", (int)(conn_param & 0x7F),
                     (int)((conn_param >> 7) & 0x1), (int)conn_sel);
 
-            conn_num = hda_get_connections(nid, conn_list, 16);
+            conn_num = hda_get_connections(nid, conn_list, HDA_MAX_CONNECTIONS);
             if (conn_num > 0) {
                 hda_log("    List:");
                 for (i = 0; i < conn_num; i++) {
@@ -2261,7 +2311,7 @@ void hda_debug_dump_pins(void)
     uint8_t hp_eapd = 0;
     uint8_t out_sel = 0;
     uint8_t hp_sel = 0;
-    uint8_t conn_list[16];
+    uint16_t conn_list[HDA_MAX_CONNECTIONS];
     int conn_num;
 
     hda_log("\nHDA: pins\n");
@@ -2282,7 +2332,7 @@ void hda_debug_dump_pins(void)
         out_eapd =
             (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
         out_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-        conn_num = hda_get_connections(pin_nid, conn_list, 16);
+        conn_num = hda_get_connections(pin_nid, conn_list, HDA_MAX_CONNECTIONS);
         hda_log("  out 0x%x: sel=%d ctl=0x%x eapd=0x%x sense=0x%x present=%d\n", pin_nid,
                 (int)out_sel, (uint32_t)out_ctl, (uint32_t)out_eapd, out_sense,
                 (out_sense & 0x80000000u) ? 1 : 0);
@@ -2298,7 +2348,7 @@ void hda_debug_dump_pins(void)
         hp_eapd = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0C00) &
                             0xFF); /* GET_EAPD_BTLENABLE */
         hp_sel = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-        conn_num = hda_get_connections(hp_pin_nid, conn_list, 16);
+        conn_num = hda_get_connections(hp_pin_nid, conn_list, HDA_MAX_CONNECTIONS);
         hda_log("  hp  0x%x: sel=%d ctl=0x%x eapd=0x%x sense=0x%x present=%d\n", hp_pin_nid,
                 (int)hp_sel, (uint32_t)hp_ctl, (uint32_t)hp_eapd, hp_sense,
                 (hp_sense & 0x80000000u) ? 1 : 0);
@@ -2398,16 +2448,12 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed)
 /**
  * Configure the codec and stream and begin playback.
  *
- * Records the requested format and, for the write path, chooses a
- * codec-supported hardware rate and sets up the resampler; the callback path
- * asks the hardware for the requested format. Either way the format encoder
- * has the last word, and it programs one of six rates, so a stream recorded
- * at 96000 runs at 48000 on the wire. Resets the stream, fills the BDL
- * and buffers, programs the stream descriptor, walks the codec path
- * (AFG, DAC, optional mixer, pin, EAPD/GPIO) to route and unmute output,
- * optionally enables the headphone path, then sets the stream's RUN bit and
- * checks that LPIB advances. Returns 0 on success, -1 if the stream reset
- * fails.
+ * Validate the requested PCM format before changing the current stream.
+ * Callbacks require an exact supported rate; queued writes resample to a
+ * supported rate. Reset the stream, fill its DMA buffers, program the
+ * discovered codec path and start DMA. Cache the requested and programmed
+ * rates with controller and converter format readbacks for procfs.
+ * Return -1 for an unsupported format or a failed stream reset, otherwise 0.
  */
 static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 {
@@ -2419,8 +2465,17 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     audio_format_t hw_format;
     uint32_t hw_rate;
     int hw_channels;
-    bool is_conexant = (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1);
     bool hp_present = false;
+
+    if (!hda_report.ready || sample_rate == 0 || sample_rate > 384000 ||
+        (format != AUDIO_U8 && format != AUDIO_S16LE) || channels < 1 || channels > 2)
+        return -1;
+    hw_format = user_callback ? format : AUDIO_S16LE;
+    hw_rate = user_callback ? sample_rate : hda_select_hw_rate(sample_rate);
+    hw_channels = user_callback ? channels : 2;
+    fmt = hda_calc_format(hw_rate, hw_format, hw_channels);
+    if (fmt == 0xFFFF)
+        return -1;
 
     if (playing) {
         hda_driver.stop();
@@ -2430,42 +2485,9 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     current_format = format;
     current_channels = channels;
 
-    /*
-     * Decide hardware format.
-     *
-     * * Callback mode: ask for the requested format, rate and channels.
-     * * Write mode (Doom): run hardware at a codec-supported rate (usually 48k)
-     *   and convert/resample in the driver. Many real codecs do NOT support
-     *   11025Hz even though QEMU does.
-     */
-    if (user_callback) {
-        hw_format = format;
-        hw_rate = sample_rate;
-        hw_channels = channels;
-        resample_enabled = false;
-        resample_step_fp = 1u << 16;
-        resample_frac_fp = 0;
-    } else {
-        hw_format = AUDIO_S16LE;
-        hw_rate = hda_select_hw_rate(sample_rate);
-        /* Upmix to stereo for headphone friendliness. */
-        hw_channels = 2;
-
-        /* Fixed-point step: input_rate / hw_rate (frames). */
-        {
-            uint32_t in_rate = sample_rate ? sample_rate : hw_rate;
-            uint32_t hw = hw_rate ? hw_rate : 48000;
-            uint32_t whole = (in_rate / hw) << 16;
-            uint32_t rem = in_rate % hw;
-            uint32_t frac = (rem << 16) / hw;
-            resample_step_fp = whole + frac;
-            if (resample_step_fp == 0) {
-                resample_step_fp = 1;
-            }
-            resample_frac_fp = 0;
-            resample_enabled = (hw_rate != sample_rate);
-        }
-    }
+    resample_step_fp = hda_rate_step(sample_rate, hw_rate);
+    resample_frac_fp = 0;
+    resample_enabled = !user_callback && hw_rate != sample_rate;
 
     current_hw_sample_rate = hw_rate;
     current_hw_format = hw_format;
@@ -2483,8 +2505,6 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     walclk_end = walclk_start;
     out_min_s16 = 32767;
     out_max_s16 = (int16_t)-32768;
-
-    fmt = hda_calc_format(hw_rate ? hw_rate : sample_rate, hw_format, hw_channels);
 
     if (!hda_stream_reset(stream)) {
         return -1;
@@ -2561,7 +2581,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     if (mixer_nid != 0) {
         uint32_t mix_wcap;
         uint8_t mix_type;
-        uint8_t mix_conn_sel = 0;
+        uint8_t mix_conn_sel = mixer_conn_sel_idx;
 
         hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_POWER | 0x00);
         hda_delay(20);
@@ -2569,31 +2589,21 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         mix_wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
         mix_type = (mix_wcap >> 20) & 0xF;
 
-        /* If this is a selector widget, ensure it selects the DAC we
-         * discovered */
-        if (mix_type == HDA_WIDGET_AUDIO_SEL) {
-            uint8_t mix_conn[16];
-            int mix_num = hda_get_connections(mixer_nid, mix_conn, 16);
-            for (i = 0; i < mix_num; i++) {
-                if (mix_conn[i] == dac_nid) {
-                    mix_conn_sel = (uint8_t)i;
-                    break;
-                }
-            }
+        if (mix_type == HDA_WIDGET_AUDIO_SEL)
             hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_CONN_SEL | mix_conn_sel);
-        }
 
         /* Unmute amps on the widget if present */
         if (mix_wcap & 0x02) { /* AC_WCAP_IN_AMP */
             /* If it's a mixer, unmute all input indices; if it's a
              * selector, unmute selected index */
-            uint8_t mix_conn[16];
-            int mix_num = hda_get_connections(mixer_nid, mix_conn, 16);
+            uint16_t mix_conn[HDA_MAX_CONNECTIONS];
+            int mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
             int start = (mix_type == HDA_WIDGET_AUDIO_MIX) ? 0 : (int)mix_conn_sel;
             int end = (mix_type == HDA_WIDGET_AUDIO_MIX) ? mix_num : (start + 1);
             uint8_t max_gain_in = hda_get_in_amp_max(mixer_nid);
             uint8_t gain_in = (max_gain_in != 0) ? max_gain_in : 0x7F;
-            for (i = start; i < end; i++) {
+            /* Amplifier input indices are four bits. */
+            for (i = start; i < end && i < 16; i++) {
                 hda_send_verb(codec_addr, mixer_nid,
                               HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)i << 8) | gain_in);
             }
@@ -2613,44 +2623,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_POWER | 0x00);
         hda_delay(20);
 
-        /* Read current BIOS-selected connection and keep it for Conexant. */
-        pin_conn_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-
-        /* Select the discovered source (DAC or mixer) in the pin's
-         * connection list */
-        {
-            uint8_t pin_conn[16];
-            int pin_num;
-            uint8_t target;
-
-            pin_num = hda_get_connections(pin_nid, pin_conn, 16);
-            target = (mixer_nid != 0) ? mixer_nid : dac_nid;
-
-            if (pin_num > 0) {
-                if (pin_conn_sel >= (uint8_t)pin_num) {
-                    pin_conn_sel = 0;
-                }
-
-                /* For Conexant, don't fight BIOS routing; just use current
-                 * selection. */
-                if (!is_conexant) {
-                    if (pin_conn[pin_conn_sel] != target) {
-                        pin_conn_sel = 0;
-                        for (i = 0; i < pin_num; i++) {
-                            if (pin_conn[i] == target) {
-                                pin_conn_sel = (uint8_t)i;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else {
-                pin_conn_sel = 0;
-            }
-        }
-        if (!is_conexant) {
-            hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_CONN_SEL | pin_conn_sel);
-        }
+        hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_CONN_SEL | pin_conn_sel);
 
         /* Enable output with proper pin control
          * 0x40 = OUT_EN, 0xC0 = OUT_EN | HP_EN (for headphones) */
@@ -2709,6 +2682,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         }
 
         enable_hp = (mode == HDA_OUTMODE_HP || mode == HDA_OUTMODE_BOTH) && have_hp;
+        hda_report.hp_enabled = enable_hp;
+        hda_report.primary_enabled = mode != HDA_OUTMODE_HP;
 
         if (mode == HDA_OUTMODE_HP && pin_nid != 0) {
             /* Force primary off when routing to headphones. */
@@ -2730,38 +2705,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             }
 
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_POWER | 0x00);
-            /* Read current BIOS-selected connection and keep it for
-             * Conexant. */
-            hp_conn_sel =
-                (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-            {
-                uint8_t hp_conn[16];
-                int hp_num;
-
-                hp_num = hda_get_connections(hp_pin_nid, hp_conn, 16);
-                if (hp_num > 0) {
-                    if (hp_conn_sel >= (uint8_t)hp_num) {
-                        hp_conn_sel = 0;
-                    }
-
-                    if (!is_conexant) {
-                        if (hp_conn[hp_conn_sel] != hp_dac_nid) {
-                            hp_conn_sel = 0;
-                            for (i = 0; i < hp_num; i++) {
-                                if (hp_conn[i] == hp_dac_nid) {
-                                    hp_conn_sel = (uint8_t)i;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    hp_conn_sel = 0;
-                }
-            }
-            if (!is_conexant) {
-                hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_CONN_SEL | hp_conn_sel);
-            }
+            hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_CONN_SEL | hp_conn_sel);
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0xC0); /* OUT+HP */
             hp_wcap = hda_get_param(hp_pin_nid, HDA_PARAM_AUDIO_CAPS);
             if (hp_wcap & 0x02) { /* AC_WCAP_IN_AMP */
@@ -2794,7 +2738,9 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     hda_enable_eapd_all();
 
     /* Flush caches so the controller sees BDL/buffers on real hardware */
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("wbinvd" ::: "memory");
+#endif
 
     playing = true;
     lpib_tracking_valid = false;
@@ -2808,6 +2754,13 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         hda_sd_write32(stream, HDA_SD_CTL, ctl);
     }
     stream_started = true;
+    hda_report.playing = true;
+    hda_report.requested_rate = sample_rate;
+    hda_report.programmed_rate = hw_rate;
+    hda_report.stream_format = hda_read16(hda_sd_offset(stream) + HDA_SD_FORMAT);
+    hda_report.dac_format = (uint16_t)hda_send_verb(codec_addr, dac_nid, 0xA0000);
+    hda_report.hp_format =
+        hp_dac_nid ? (uint16_t)hda_send_verb(codec_addr, hp_dac_nid, 0xA0000) : 0;
 
     /* Quick DMA sanity check: does LPIB advance shortly after RUN? */
     {
@@ -2879,6 +2832,7 @@ static void hda_stop(void)
     hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB080);
 
     playing = false;
+    hda_report.playing = false;
     stream_started = false;
     lpib_tracking_valid = false;
     lpib_last = 0;

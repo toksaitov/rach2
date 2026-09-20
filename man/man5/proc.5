@@ -19,6 +19,47 @@ when it fills; a USB record longer than its 96-byte buffer is cut short,
 its newline possibly with it.
 .Sh FILES
 .Bl -ohang
+.It Pa /proc/audio
+The active audio driver and cached HDA enumeration and stream state.
+The file exists when audio is disabled; then
+.Ql hda ready 0
+indicates no selected HDA path.
+Opening it sends no codec verb.
+.Pp
+The codec line identifies the codec address, vendor and audio function group.
+Primary and headphone lines give pin, DAC and expanded connection indices;
+the primary line also gives its optional mixer or selector.
+.Ql enabled
+is the pin enable decision from the last setup.
+The stream line gives the last successful request and programmed rate,
+then controller, primary DAC and headphone DAC format words read back
+at setup.
+Before any stream these fields are zero.
+Stopping clears
+.Ql playing
+and retains the last setup.
+.Pp
+Each
+.Ql caps dac
+line gives the DAC, the node supplying its effective capabilities, and
+hexadecimal PCM and stream-format masks.
+PCM bits 0 through 11 correspond, in order, to 8000, 11025, 16000, 22050,
+32000, 44100, 48000, 88200, 96000, 176400, 192000 and 384000 Hz.
+PCM bits 16 and 17 indicate 8-bit and 16-bit samples.
+Stream-format bit 0 indicates PCM.
+.Pp
+The selected pins and mixer have
+.Ql connections nid
+lines with the long-form flag and packed hexadecimal entries.
+Each following
+.Ql expanded
+line lists NIDs in selector-index order, starting at index zero.
+.Ql invalid
+marks a rejected list; its raw entries stop where decoding failed.
+These are enumeration and setup records, not a measurement of sound.
+Use
+.Xr audiotest 1
+to submit a tone from SSH.
 .It Pa /proc/cmdline
 The boot command line, followed by a newline.
 .It Pa /proc/console

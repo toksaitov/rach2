@@ -22,6 +22,7 @@ static uint32_t procfs_ino_statsys(void);
 static uint32_t procfs_ino_meminfo(void);
 static uint32_t procfs_ino_mounts(void);
 static uint32_t procfs_ino_usb(void);
+static uint32_t procfs_ino_audio(void);
 static uint32_t procfs_ino_loop(void);
 static uint32_t procfs_ino_interrupts(void);
 static uint32_t procfs_ino_console(void);

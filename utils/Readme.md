@@ -1,6 +1,6 @@
 # utils/: hosted user programs
 
-This directory contains the 36 programs `programs.mk` names, written for Rach2. The normal build links each one statically against the ported musl libc. The 25 of `UTILITIES` go under `build/utils/`; the 11 of `SBIN_PROGS`, which image manifests select explicitly, go under `build/utils/sbin/`.
+This directory contains the 37 programs `programs.mk` names, written for Rach2. The normal build links each one statically against the ported musl libc. The 26 of `UTILITIES` go under `build/utils/`; the 11 of `SBIN_PROGS`, which image manifests select explicitly, go under `build/utils/sbin/`.
 
 The kernel interfaces used by these programs are described by the [kernel](../rach2/Readme.md), [network](../rach2/sys/network/Readme.md), [block-device](../rach2/sys/block/Readme.md), and [file-system](../rach2/sys/fs/Readme.md) documents. This document describes the user programs and their shared libraries.
 
@@ -46,6 +46,10 @@ The native and Rach2 builds both provide:
 These are small teaching implementations, not complete POSIX commands. Except for `rm -r`, they do not parse options.
 
 `loopctl` attaches a file to a loop device, detaches one, or prints what `/proc/loop` says. `loopctl attach FILE` takes the first free device, `loopctl attach N FILE` attaches to that one, `loopctl attach -r [N] FILE` attaches read-only, and `loopctl detach N` detaches the file; the device is then what `mount(2)` takes as its source, so a file system in a file is mounted like any other volume. The kernel is reached through `/dev/loop-control`, which takes one command per write ([block/Readme.md](../rach2/sys/block/Readme.md)).
+
+## Audio diagnostic
+
+`audiotest [RATE [SECONDS [FREQUENCY]]]` plays signed 16-bit stereo PCM through `/dev/console`, including from SSH. Defaults are 48000 Hz input, two seconds and a 440 Hz square wave; accepted ranges are 8000 through 384000 Hz, one through sixty seconds and 20 Hz through half the input rate. It retries short writes, fails after five seconds without queue progress, allows two seconds for queued samples to drain, and stops on completion or a handled INT, TERM or HUP. It requires HDA or SB16 and has no exclusive ownership of the global audio stream. The metal RAM, metal disk and os-real manifests stage it. Read `/proc/audio` after it exits for HDA capabilities, routing and format readbacks; a successful submission does not prove audible output.
 
 ## Network programs
 

@@ -49,6 +49,8 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 The runner discovers one native test program per `*_hosttest.c` file.
 
+`hda_hosttest.c` models codec parameters, packed connections and the controller immediate-command interface. It runs the real enumeration, stream setup and proc formatter for twelve PCM rates, inherited and overridden capabilities, two-DAC intersections, long and short lists, ranges, invalid paths and retained reports. `sh tests/host/hda_mutate.sh` runs this test alone under ASan and UBSan, compiles eleven separate faults and requires named failures, then restores, touches and rebuilds each source. Its trap stops the child before restoring private copies. Logs, sources, binaries and checksums remain in the printed `build/tests/hda-proof.*` directory.
+
 ### Kernel foundations and memory
 
 * `board_hosttest.c` checks power-controller profiles, PCI identities, PM bases, decode bits, SCI routing, sleep words, ACPI enable decisions, and the uninitialized board state.

@@ -1,13 +1,12 @@
 # Built programs not run as suite probes. Each exception needs its caller or use.
-idreport identity and environment fixture for account probes
-suidhelper identity fixture staged at several owners and modes
 calibprobe optional tests/system/calibrate.sh diagnostic
-musl/statushelper child status and signal fixture for musl/ishmusl
+idreport identity and environment fixture for account probes
 musl/budgetmusl manual resource budget diagnostic
 musl/catfile manual file reader
 musl/cowfork manual copy-on-write diagnostic
 musl/ctrlcmusl manual interactive signal test
 musl/devtest manual device test
+musl/hdaprobe manual audio path and rate diagnostic
 musl/hello manual musl startup smoke test
 musl/mallocqsort manual allocation and sort test
 musl/ofdmusl manual open-file description test
@@ -16,5 +15,7 @@ musl/pollmusl manual poll test
 musl/ptymusl manual pseudo-terminal test
 musl/rngmusl manual random device test
 musl/sockfillmusl manual socket capacity test
+musl/statushelper child status and signal fixture for musl/ishmusl
 musl/tcpsendrecv manual tcp peer test
 musl/ttymusl manual terminal test
+suidhelper identity fixture staged at several owners and modes

@@ -14,6 +14,7 @@
 # authorized keys are the same pair the SSH capstone uses.
 
 dir 0755 /bin
+file 0755 /bin/audiotest build/utils/audiotest
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 

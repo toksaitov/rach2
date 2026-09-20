@@ -87,6 +87,9 @@ diskctl: diskctl.c
 update: update.c
 	$(UCC) $(UFLAGS) -o update.new update.c
 	mv update.new update
+audiotest: audiotest.c
+	$(UCC) $(UFLAGS) -o audiotest.new audiotest.c
+	mv audiotest.new audiotest
 sudo: sudo.c
 	$(UCC) $(UFLAGS) -o sudo.new sudo.c
 	mv sudo.new sudo

@@ -1,0 +1,51 @@
+.Dd September 21, 2026
+.Dt AUDIOTEST 1
+.Os
+.Sh NAME
+.Nm audiotest
+.Nd play a PCM test tone
+.Sh SYNOPSIS
+.Nm
+.Op Ar rate Op Ar seconds Op Ar frequency
+.Sh DESCRIPTION
+.Nm
+plays a square wave as signed 16-bit stereo PCM.
+The defaults are 48000 samples per second, two seconds of samples,
+and a 440 Hz tone.
+.Ar rate
+must be 8000 through 384000,
+.Ar seconds
+one through sixty, and
+.Ar frequency
+20 through half the input rate.
+The active driver may reject a rate or resample the input.
+.Pp
+The program opens
+.Pa /dev/console
+explicitly, so it works from an SSH session with a pty.
+It requires HDA or Sound Blaster 16; the PC speaker is refused.
+It retries short writes and fails after five seconds without queue progress.
+After queuing the samples it waits two seconds for the queue and DMA buffers,
+then stops playback.
+Signals INT, TERM and HUP also stop playback.
+The audio stream is global; do not run another audio program concurrently.
+.Pp
+On HDA,
+.Pa /proc/audio
+records codec capabilities, connection lists, the chosen path and the last
+requested and programmed rates with format readbacks.
+Read it after the tone finishes or from another SSH session during playback.
+A successful run means samples were submitted, not that a physical output
+was audible or its clock was measured.
+.Pp
+The metal RAM image, metal disk root and os-real stage this program.
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+.Bd -literal -offset indent
+audiotest 32000 2 440
+cat /proc/audio
+.Ed
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr proc 5

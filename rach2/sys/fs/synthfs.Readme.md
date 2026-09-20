@@ -75,6 +75,7 @@ Only one open-file description may hold write access across the raw windows. A s
 
 `/proc` has mode 0555 and file-system id 6. Directories have mode 0555, ordinary files have mode 0444, `/proc/disk` has mode 0400, and magic links have mode 0777. Its root listing contains these global entries before the live numeric pid directories:
 
+* `/proc/audio` reports the active audio driver and cached HDA codec capabilities, selected paths, packed and expanded connection lists, and the last requested and programmed rate with format readbacks. Reading it sends no codec verb. The report survives stream shutdown and exists when audio is disabled, with `hda ready 0`; [the audio Readme](../audio/Readme.md) defines the fields and playback limits.
 * `/proc/cmdline` is the captured kernel command line followed by a newline.
 * `/proc/disk` is the disk diagnostic record, the live command counters, and the buffer cache's three counters. The path always exists. Before a diagnostic probe it reports `state not-asked`; only `/dev/disk0` is conditional on the probe. Opening this file requires root.
 * `/proc/uptime` reports total and idle delivered 100 Hz ticks as seconds with two decimal places.

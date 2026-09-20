@@ -26,6 +26,7 @@
 #include "devfs.h"
 #include "krffs.h"
 #include "../usb/core.h"
+#include "../audio/hda.h"
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
 #include "../tty/pty.h"
@@ -62,6 +63,7 @@
 #define PROCFS_INO_STATSYS     0x106u
 #define PROCFS_INO_MEMINFO     0x107u
 #define PROCFS_INO_MOUNTS      0x108u
+#define PROCFS_INO_AUDIO       0x111u
 #define PROCFS_INO_USB         0x10Cu
 #define PROCFS_INO_FILESYSTEMS 0x10Du
 #define PROCFS_INO_LOOP        0x10Eu
@@ -117,6 +119,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_MOUNTS) {
         return "/proc/mounts";
+    }
+    if (vp->kind == VNODE_PROC_AUDIO) {
+        return "/proc/audio";
     }
     if (vp->kind == VNODE_PROC_USB) {
         return "/proc/usb";
@@ -384,6 +389,31 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
     return t->len;
 }
 
+/** Return the fixed path for a global snapshot with a named fd link. */
+static const char *procfs_global_fd_path(int origin)
+{
+    switch (origin) {
+    case SYNTH_PROC_BOOTLINE:
+        return "/proc/cmdline";
+    case SYNTH_PROC_DISKINFO:
+        return "/proc/disk";
+    case SYNTH_PROC_NETDEV:
+        return "/proc/net/dev";
+    case SYNTH_PROC_NETROUTE:
+        return "/proc/net/route";
+    case SYNTH_PROC_NETARP:
+        return "/proc/net/arp";
+    case SYNTH_PROC_NETTCP:
+        return "/proc/net/tcp";
+    case SYNTH_PROC_CONSOLE:
+        return "/proc/console";
+    case SYNTH_PROC_AUDIO:
+        return "/proc/audio";
+    default:
+        return NULL;
+    }
+}
+
 /**
  * Render the /proc/<pid>/fd/<fd> symlink target into `buf`, or -ENOENT.
  *
@@ -480,32 +510,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
          * boot command line) */
         struct procfs_file *pf = (struct procfs_file *)e->priv;
         if (pf) {
-            if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
-                ap_str(t, "/proc/cmdline");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_DISKINFO) {
-                ap_str(t, "/proc/disk");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_NETDEV) {
-                ap_str(t, "/proc/net/dev");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_NETROUTE) {
-                ap_str(t, "/proc/net/route");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_NETARP) {
-                ap_str(t, "/proc/net/arp");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_NETTCP) {
-                ap_str(t, "/proc/net/tcp");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_CONSOLE) {
-                ap_str(t, "/proc/console");
+            const char *path = procfs_global_fd_path(pf->origin_file);
+            if (path) {
+                ap_str(t, path);
                 break;
             }
             ap_str(t, "/proc/");
@@ -604,6 +611,12 @@ uint32_t procfs_ino_mounts(void)
     return PROCFS_INO_MOUNTS;
 }
 
+/** Return the stable inode of the audio report. */
+uint32_t procfs_ino_audio(void)
+{
+    return PROCFS_INO_AUDIO;
+}
+
 uint32_t procfs_ino_usb(void)
 {
     return PROCFS_INO_USB;
@@ -686,6 +699,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_MOUNTS) {
         return PROCFS_INO_MOUNTS;
+    }
+    if (pf->origin_file == SYNTH_PROC_AUDIO) {
+        return PROCFS_INO_AUDIO;
     }
     if (pf->origin_file == SYNTH_PROC_USB) {
         return PROCFS_INO_USB;
@@ -1443,6 +1459,88 @@ static void procfs_close(fd_entry_t *e)
 static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procfs_poll,
                                                 procfs_ioctl, procfs_close};
 
+/** Append one decimal audio field. */
+static void audio_field(struct procfs_text *t, const char *name, uint32_t value)
+{
+    ap_str(t, name);
+    ap_u32(t, value);
+}
+
+/** Render cached codec enumeration and the last programmed stream. */
+static int procfs_gen_audio(struct procfs_text *t)
+{
+    const hda_report_t *r = hda_get_report();
+    int i, j;
+
+    ap_str(t, "driver ");
+    ap_str(t, audio_get_driver_name());
+    audio_field(t, "\nhda ready ", r->ready);
+    audio_field(t, " playing ", r->playing);
+    audio_field(t, "\ncodec ", r->codec);
+    ap_str(t, " vendor 0x");
+    ap_hex(t, r->vendor, 8);
+    audio_field(t, " afg ", r->afg);
+    audio_field(t, "\nprimary pin ", r->pin);
+    audio_field(t, " index ", r->pin_index);
+    audio_field(t, " mixer ", r->mixer);
+    audio_field(t, " index ", r->mixer_index);
+    audio_field(t, " dac ", r->dac);
+    audio_field(t, " enabled ", r->primary_enabled);
+    audio_field(t, "\nheadphone pin ", r->hp_pin);
+    audio_field(t, " index ", r->hp_index);
+    audio_field(t, " dac ", r->hp_dac);
+    audio_field(t, " enabled ", r->hp_enabled);
+    audio_field(t, "\nstream requested ", r->requested_rate);
+    audio_field(t, " programmed ", r->programmed_rate);
+    ap_str(t, " format 0x");
+    ap_hex(t, r->stream_format, 4);
+    ap_str(t, " dac-format 0x");
+    ap_hex(t, r->dac_format, 4);
+    ap_str(t, " hp-format 0x");
+    ap_hex(t, r->hp_format, 4);
+    ap_ch(t, '\n');
+    for (i = 0; i < 2; i++) {
+        const hda_caps_report_t *c = &r->caps[i];
+        if (!c->nid)
+            continue;
+        audio_field(t, "caps dac ", c->nid);
+        audio_field(t, " source ", c->source);
+        ap_str(t, " pcm 0x");
+        ap_hex(t, c->pcm, 8);
+        ap_str(t, " formats 0x");
+        ap_hex(t, c->formats, 8);
+        ap_ch(t, '\n');
+    }
+    for (i = 0; i < 3; i++) {
+        const hda_connection_report_t *c = &r->connections[i];
+        if (!c->nid)
+            continue;
+        audio_field(t, "connections nid ", c->nid);
+        audio_field(t, " long ", c->long_form);
+        ap_str(t, c->count < 0 ? " invalid raw" : " raw");
+        for (j = 0; j < c->raw_count; j++) {
+            ap_str(t, " 0x");
+            ap_hex(t, c->raw[j], c->long_form ? 4 : 2);
+        }
+        ap_str(t, "\nexpanded");
+        for (j = 0; j < c->count; j++)
+            audio_field(t, " ", c->nodes[j]);
+        ap_ch(t, '\n');
+    }
+    return t->nomem ? -1 : t->len;
+}
+
+/** Distinguish global snapshots from files whose process must still exist. */
+static int procfs_needs_pid(int kind)
+{
+    return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
+           kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
+           kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
+           kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
+           kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
+           kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP && kind != VNODE_PROC_NET_TCP;
+}
+
 /**
  * Open a /proc/<pid>/{stat,cmdline} file, returning a descriptor or -errno.
  *
@@ -1469,16 +1567,7 @@ int procfs_open(const struct vpath *vp, int flags)
     fd_entry_t *e;
     int fd, len;
 
-    /* /proc/cmdline and /proc/disk are global; every other proc file lives
-     * under a pid. */
-    if (vp->kind != VNODE_PROC_CMDLINE && vp->kind != VNODE_PROC_DISK &&
-        vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
-        vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
-        vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
-        vp->kind != VNODE_PROC_FILESYSTEMS && vp->kind != VNODE_PROC_LOOP &&
-        vp->kind != VNODE_PROC_INTERRUPTS && vp->kind != VNODE_PROC_CONSOLE &&
-        vp->kind != VNODE_PROC_NET_ROUTE && vp->kind != VNODE_PROC_NET_ARP &&
-        vp->kind != VNODE_PROC_NET_TCP) {
+    if (procfs_needs_pid(vp->kind)) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;
@@ -1529,6 +1618,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_meminfo(&text);
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         len = procfs_gen_mounts(&text);
+    } else if (vp->kind == VNODE_PROC_AUDIO) {
+        len = procfs_gen_audio(&text);
     } else if (vp->kind == VNODE_PROC_USB) {
         len = procfs_gen_usb(&text);
     } else if (vp->kind == VNODE_PROC_LOOP) {
@@ -1580,6 +1671,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_MEMINFO;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         f->origin_file = SYNTH_PROC_MOUNTS;
+    } else if (vp->kind == VNODE_PROC_AUDIO) {
+        f->origin_file = SYNTH_PROC_AUDIO;
     } else if (vp->kind == VNODE_PROC_USB) {
         f->origin_file = SYNTH_PROC_USB;
     } else if (vp->kind == VNODE_PROC_INTERRUPTS) {

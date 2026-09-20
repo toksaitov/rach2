@@ -1094,6 +1094,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_MEMINFO:
     case VNODE_PROC_MOUNTS:
     case VNODE_PROC_LOOP:
+    case VNODE_PROC_AUDIO:
     case VNODE_PROC_USB:
     case VNODE_PROC_FILESYSTEMS:
     case VNODE_PROC_INTERRUPTS:
@@ -3027,6 +3028,15 @@ static void stat64_boot_times(struct linux_stat64 *kst)
     kst->st_ctime_nsec = 0;
 }
 
+/** Fill the common identity of a read-only global proc file. */
+static int32_t synth_proc_stat(struct linux_stat64 *kst, uint32_t inode)
+{
+    kst->st_dev = PROCFS_FSID;
+    kst->st_mode = S_IFREG | 0444;
+    kst->st_ino = inode;
+    return 0;
+}
+
 /**
  * The root directory's own three times, into a stat64.
  *
@@ -3171,25 +3181,15 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_ino = procfs_ino_statsys();
         return 0;
     case VNODE_PROC_MEMINFO:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_meminfo();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_meminfo());
     case VNODE_PROC_MOUNTS:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_mounts();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_mounts());
+    case VNODE_PROC_AUDIO:
+        return synth_proc_stat(kst, procfs_ino_audio());
     case VNODE_PROC_USB:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_usb();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_usb());
     case VNODE_PROC_LOOP:
-        kst->st_dev = PROCFS_FSID;
-        kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_loop();
-        return 0;
+        return synth_proc_stat(kst, procfs_ino_loop());
     case VNODE_PROC_FILESYSTEMS:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0444;
@@ -6065,47 +6065,26 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         return 0;
     }
     if (kind == VNODE_PROC_DIR) {
-        /* The machine's own files come first, in a table so that adding one is
-         * a line here and not another index in a chain; the pid directories
-         * follow, numbered from where the table ends. */
-        static const char *const globals[] = {"cmdline", "disk",   "uptime", "stat",
-                                              "meminfo", "mounts", "net",    "self",
-                                              "usb",     "loop",   "console"};
+        static const struct {
+            const char *name;
+            uint32_t (*inode)(void);
+            uint8_t type;
+        } globals[] = {
+            {"cmdline", procfs_ino_cmdline, DT_REG}, {"disk", procfs_ino_disk, DT_REG},
+            {"uptime", procfs_ino_uptime, DT_REG},   {"stat", procfs_ino_statsys, DT_REG},
+            {"meminfo", procfs_ino_meminfo, DT_REG}, {"mounts", procfs_ino_mounts, DT_REG},
+            {"net", procfs_ino_netdir, DT_DIR},      {"self", procfs_ino_dir, DT_LNK},
+            {"usb", procfs_ino_usb, DT_REG},         {"loop", procfs_ino_loop, DT_REG},
+            {"console", procfs_ino_console, DT_REG}, {"audio", procfs_ino_audio, DT_REG}};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {
             int i;
-
-            for (i = 0; globals[n][i] != '\0'; i++) {
-                name[i] = globals[n][i];
-            }
+            for (i = 0; globals[n].name[i] != '\0'; i++)
+                name[i] = globals[n].name[i];
             name[i] = '\0';
-            *dtype = DT_REG;
-            if (n == 0) {
-                *ino = procfs_ino_cmdline();
-            } else if (n == 1) {
-                *ino = procfs_ino_disk();
-            } else if (n == 2) {
-                *ino = procfs_ino_uptime();
-            } else if (n == 3) {
-                *ino = procfs_ino_statsys();
-            } else if (n == 4) {
-                *ino = procfs_ino_meminfo();
-            } else if (n == 5) {
-                *ino = procfs_ino_mounts();
-            } else if (n == 6) {
-                *ino = procfs_ino_netdir();
-                *dtype = DT_DIR;
-            } else if (n == 8) {
-                *ino = procfs_ino_usb();
-            } else if (n == 9) {
-                *ino = procfs_ino_loop();
-            } else if (n == 10) {
-                *ino = procfs_ino_console();
-            } else {
-                *ino = procfs_ino_dir(); /* self: a link to the reader's own */
-                *dtype = DT_LNK;
-            }
+            *dtype = globals[n].type;
+            *ino = globals[n].inode();
             return 1;
         }
         {

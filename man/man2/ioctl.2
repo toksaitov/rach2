@@ -188,6 +188,14 @@ Read three 32-bit unsigned fields through
 sample rate in samples per second, format (0 unsigned 8-bit, 1 signed
 16-bit little-endian), and channels (1 mono, 2 stereo).
 Pass them to the active driver's start operation.
+HDA accepts a nonzero input rate through 384000 Hz and resamples queued
+writes to a codec-supported signed 16-bit stereo format.
+It selects the closest supported rate at or below the request, or the
+lowest supported rate when all are higher.
+A codec with no usable PCM rate or sample width is refused.
+Read
+.Pa /proc/audio
+for the requested and programmed rates and format readbacks.
 .It Dv AUDIO_STOP No (0x4103)
 Stop the active driver.
 .It Dv AUDIO_WRITE No (0x4104)

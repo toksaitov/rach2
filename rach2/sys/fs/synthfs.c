@@ -165,6 +165,30 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
     out[pos] = '\0';
 }
 
+/** Classify system-wide proc files by their literal leaf names. */
+static int synth_global_file(struct comp name)
+{
+    static const struct {
+        const char *name;
+        int kind;
+    } files[] = {{"uptime", VNODE_PROC_UPTIME},
+                 {"stat", VNODE_PROC_STAT_SYS},
+                 {"meminfo", VNODE_PROC_MEMINFO},
+                 {"interrupts", VNODE_PROC_INTERRUPTS},
+                 {"console", VNODE_PROC_CONSOLE},
+                 {"mounts", VNODE_PROC_MOUNTS},
+                 {"audio", VNODE_PROC_AUDIO},
+                 {"usb", VNODE_PROC_USB},
+                 {"filesystems", VNODE_PROC_FILESYSTEMS},
+                 {"loop", VNODE_PROC_LOOP}};
+    unsigned i;
+
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++)
+        if (comp_eq(name, files[i].name))
+            return files[i].kind;
+    return VNODE_ENOENT;
+}
+
 /**
  * Classify a normalized path under `/dev` or `/proc` and fill `vp`.
  *
@@ -244,45 +268,10 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = (n == 2) ? VNODE_PROC_DISK : VNODE_ENOTDIR;
             return vp->kind;
         }
-        /* The machine's own files, beside the pid tree: what `ps` reads for a
-           clock to date processes against, what `top` and `uptime` read for the
-           tick counters, what `free` reads for the frame pool, and what `df`
-           reads to learn what is mounted. Each is checked before the pid parse,
-           since none of these names is a number. */
-        if (comp_eq(c[1], "uptime")) {
-            vp->kind = (n == 2) ? VNODE_PROC_UPTIME : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "stat")) {
-            vp->kind = (n == 2) ? VNODE_PROC_STAT_SYS : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "meminfo")) {
-            vp->kind = (n == 2) ? VNODE_PROC_MEMINFO : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "interrupts")) {
-            vp->kind = (n == 2) ? VNODE_PROC_INTERRUPTS : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "console")) {
-            vp->kind = (n == 2) ? VNODE_PROC_CONSOLE : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "mounts")) {
-            vp->kind = (n == 2) ? VNODE_PROC_MOUNTS : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "usb")) {
-            vp->kind = (n == 2) ? VNODE_PROC_USB : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "filesystems")) {
-            vp->kind = (n == 2) ? VNODE_PROC_FILESYSTEMS : VNODE_ENOTDIR;
-            return vp->kind;
-        }
-        if (comp_eq(c[1], "loop")) {
-            vp->kind = (n == 2) ? VNODE_PROC_LOOP : VNODE_ENOTDIR;
+        vp->kind = synth_global_file(c[1]);
+        if (vp->kind != VNODE_ENOENT) {
+            if (n != 2)
+                vp->kind = VNODE_ENOTDIR;
             return vp->kind;
         }
         /* /proc/net/dev: the one file in the one directory `ifconfig` reads to

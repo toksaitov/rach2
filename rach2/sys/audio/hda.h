@@ -192,6 +192,41 @@ typedef struct {
 /* Physical: the most entries a buffer descriptor list may have. */
 #define HDA_BDL_MAX_ENTRIES 256
 
+/* The connection selector has eight bits; list length has seven. */
+#define HDA_MAX_CONNECTIONS     256
+#define HDA_MAX_RAW_CONNECTIONS 127
+
+typedef struct {
+    uint8_t nid;
+    uint8_t long_form;
+    int raw_count;
+    int count;
+    uint16_t raw[HDA_MAX_RAW_CONNECTIONS];
+    uint16_t nodes[HDA_MAX_CONNECTIONS];
+} hda_connection_report_t;
+
+typedef struct {
+    uint8_t nid;
+    uint8_t source;
+    uint32_t pcm;
+    uint32_t formats;
+} hda_caps_report_t;
+
+typedef struct {
+    uint32_t vendor;
+    uint8_t codec, afg, pin, dac, mixer, hp_pin, hp_dac;
+    uint8_t pin_index, mixer_index, hp_index;
+    bool ready, playing;
+    uint32_t requested_rate, programmed_rate;
+    uint16_t stream_format, dac_format, hp_format;
+    uint8_t primary_enabled, hp_enabled;
+    hda_caps_report_t caps[2];
+    hda_connection_report_t connections[3];
+} hda_report_t;
+
+/** Return cached enumeration and the last stream setup; sends no verbs. */
+const hda_report_t *hda_get_report(void);
+
 /** Periodic service hook; call from the timer tick. */
 void hda_tick(void);
 
