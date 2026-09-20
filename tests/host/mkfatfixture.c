@@ -432,14 +432,22 @@ static void chk_long_name(const unsigned *units, unsigned count, char *out, size
     out[n] = '\0';
 }
 
-/* Read the directory whose chain starts at `first` (`parent` is its
-   parent's first cluster, 0 for the root), walking every entry's chain and
-   descending into subdirectories. */
+/** Accept one long-name start entry with an ordinal that fits the buffer. */
+static int chk_lfn_start(unsigned char ordinal, int pending)
+{
+    int seq = ordinal & 0x1f;
+
+    return pending == 1 && seq >= 1 && seq <= 20 && (ordinal & 0xa0) == 0;
+}
+
+/**
+ * Walk the directory at `first`; `parent` is its parent's cluster, or zero
+ * for the root. A long name has one start entry and at most twenty entries.
+ * Each recursive call keeps its own cluster and name records.
+ */
 static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, const char *path,
                     int depth)
 {
-    /* Per call, since the walk recurses into a child before the parent's
-       later entries are compared. */
     unsigned long *clusters_seen = malloc(sizeof(unsigned long) * CHK_MAX_DIR_CLUSTERS);
     struct chk_name *names = malloc(sizeof(struct chk_name) * CHK_MAX_ENTRIES);
     unsigned long n = first, nclusters = 0, i;
@@ -524,10 +532,10 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
 
                 lfn_pending++;
                 if (raw[0] & 0x40) {
-                    lfn_ok = seq >= 1 && (raw[0] & 0xA0) == 0;
+                    lfn_ok = chk_lfn_start(raw[0], lfn_pending);
                     lfn_expect = seq;
                     lfn_sum = raw[13];
-                } else if (!lfn_ok || seq != lfn_expect || (raw[0] & 0xE0) != 0 ||
+                } else if (!lfn_ok || seq < 1 || seq != lfn_expect || (raw[0] & 0xE0) != 0 ||
                            raw[13] != lfn_sum) {
                     lfn_ok = 0;
                 }

@@ -9,6 +9,7 @@
 # itself typed behind 200 lines nobody was reading, and 40 typed before the
 # probe execs itself. Each line is `L NNNN payload SUM`, SUM the Adler-32 of
 # the line before it; the probe requires every line in order with its sum,
+# and at least one completed writer file in each of stages A, B and C,
 # and some bytes of the first stage moved by the port's interrupt, its time
 # printed and not judged. The lines of a stage are written
 # to the guest as one stream, more than the discipline holds, so the rest
@@ -60,6 +61,14 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     "expect=CONLOAD C" "sendfile=$DISK.a" 'sendraw=\x03' "sendfile=$DISK.c" \
     "expect=CONLOAD D" "sendfile=$DISK.d" \
     "expect=CONLOAD OK" > /dev/null 2>&1; then
+    awk '
+        { sub(/\r$/, "") }
+        /^CONLOAD writer files in stage [ABC]: [0-9]+$/ {
+            if ($7 < 1 || seen[$6]++) bad = 1
+            print "conload-test: " $0
+        }
+        END { exit bad || seen["A:"] != 1 || seen["B:"] != 1 || seen["C:"] != 1 }
+    ' "$DISK.log" || fail "writer progress in each loaded stage"
     grep -a 'CONLOAD A OK' "$DISK.log" | tail -1 | tr -d '\r' | sed 's/^/conload-test: /'
     echo "conload-test: 360 lines typed under load, every one in order with its sum: OK"
 else

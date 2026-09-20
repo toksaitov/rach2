@@ -82,7 +82,7 @@ static const char *const PROBES[] = {
        files, and it restores all three databases before it exits. */
     "musl/passwdmusl", "musl/addusermusl", "musl/loginmusl", "rebootprobe", "musl/readvmusl",
     "musl/timemusl", "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl",
-    "musl/spawnmusl",
+    "musl/spawnmusl", "musl/sigmusl",
     /* How many mappings a process may hold, which the compiler found too
        few. */
     "musl/vmamusl",

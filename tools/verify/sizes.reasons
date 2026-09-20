@@ -412,7 +412,6 @@ tests/host/mkexfatfixture.c:load_objects complexity 38 a fixture builder, the vo
 tests/host/mkexfatfixture.c:load_objects lines 114 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:load_objects nesting 6 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:read_path complexity 33 a fixture builder, the volume written in on-disk order
-tests/host/mkexfatfixture.c:read_path lines 101 a fixture builder, the volume written in on-disk order
 tests/host/mkexfatfixture.c:set_build params 10 a fixture builder, the volume written in on-disk order
 
 tests/host/mkfatfixture.c:build_fat complexity 78 a fixture builder, the volume written in on-disk order

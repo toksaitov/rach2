@@ -45,7 +45,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 76 native test programs, one per `*_hosttest.c` file.
+The runner discovers one native test program per `*_hosttest.c` file.
 
 ### Kernel foundations and memory
 
@@ -99,6 +99,7 @@ The suite contains 76 native test programs, one per `*_hosttest.c` file.
 The exit host test proves the shared helper's intermediate ordering with substituted callers, resources and scheduling. It does not run the three production death paths or a real parent reaper, and cannot detect deleting the helper call from one of those paths.
 
 * `wait_queue_hosttest.c` checks that an insertion and a removal are each idempotent, that a wake moves every waiter's state, and that a queue holds sixty-four waiters.
+* `sched_hosttest.c` compiles the production scheduler and wait queue with substitutes for interrupt masking, floating-point saves and the stack switch. It checks ordinary rotation, a sleeper preceding the next spinner, an ordinary turn after each preferred turn, five spinners served within fourteen dispatches despite two repeatedly woken processes, consumed wake marks, ineligible states, a removed cursor and syscall-exit preemption. `sh tests/host/sched_mutate.sh` builds a private fixed copy, then removes wake preference, removes its bound and advances the ordinary cursor on a preferred turn in separate mutations. Each fails a named assertion; each restored source is touched, rebuilt and passes under ASan and UBSan. The script retains its sources, binaries, checksums and logs under `build/tests/sched-proof.*`. This proves selection order, not disk throughput or real context switching.
 
 ### Network
 

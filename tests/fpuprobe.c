@@ -310,14 +310,18 @@ static void clobber_handler(int sig)
 
 static int damage_pipe[2];
 
-/* The frame the kernel built starts where the handler's stack pointer was
+/**
+ * Damage MXCSR in the saved floating-point image.
+ *
+ * The frame the kernel built starts where the handler's stack pointer was
  * at entry, which is one word above the saved frame pointer. Its layout is
  * the kernel's `struct sig_frame`: four words, the 76-byte trapframe, the
- * 8-byte mask, the magic word at byte 100, two 128-byte blocks, and the
- * floating-point image at byte 360 with MXCSR 24 bytes into it. The magic
- * word is checked where the layout puts it, and a byte goes down the pipe
- * once the field is written, so the parent knows the frame was damaged
- * before the kernel refused it and not that the handler itself faulted. */
+ * 8-byte mask, the magic word at byte 100, 128-byte siginfo, 348-byte
+ * ucontext, and the floating-point image at byte 580 with MXCSR 24 bytes
+ * into it. The magic word is checked at byte 100. A byte goes down the pipe
+ * after the write, so the parent knows the frame was damaged before the
+ * kernel refused it.
+ */
 static void damage_handler(int sig)
 {
     unsigned char *frame = (unsigned char *)((unsigned *)__builtin_frame_address(0) + 1);
@@ -332,11 +336,11 @@ static void damage_handler(int sig)
         sys_exit(1);
     }
     for (k = 0; k < 4; k++) {
-        ((unsigned char *)&mxcsr)[k] = frame[360 + 24 + k];
+        ((unsigned char *)&mxcsr)[k] = frame[580 + 24 + k];
     }
     mxcsr |= 0x80000000u;
     for (k = 0; k < 4; k++) {
-        frame[360 + 24 + k] = ((unsigned char *)&mxcsr)[k];
+        frame[580 + 24 + k] = ((unsigned char *)&mxcsr)[k];
     }
     syscall3(SYS_WRITE, damage_pipe[1], (int)(size_t)"d", 1);
 }

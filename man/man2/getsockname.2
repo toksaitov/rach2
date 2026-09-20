@@ -19,9 +19,10 @@ in
 .Fa addr .
 For an IPv4 stream or datagram socket, the result is a 16-byte
 .Vt sockaddr_in
-containing the kernel's local IPv4 address
-.Pq Va net_ip_addr
-and the socket's bound or ephemeral port.
+containing the TCP control block's local IPv4 address when one exists,
+or the primary interface's address otherwise, and the socket's bound
+or ephemeral port.
+An accepted connection reports the address the peer connected to.
 It reports that address rather than 127.0.0.1 for a local connection.
 .Pp
 For an
@@ -30,8 +31,10 @@ socket,
 .Fn getsockname
 returns a 20-byte
 .Vt sockaddr_ll
-with the socket's protocol, interface index 1, Ethernet hardware type,
-and the six-byte local MAC address.
+with the socket's protocol, bound interface index, Ethernet hardware
+type, and that interface's six-byte MAC address.
+An unbound socket or one bound to every interface reports index zero
+with hardware type and address length zero.
 .Pp
 .Fn getpeername
 returns a connected peer's IPv4 address and port in a

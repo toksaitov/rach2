@@ -97,9 +97,11 @@ The supported families and types are:
 * `AF_INET/SOCK_RAW/IPPROTO_RAW` for the root-only, ioctl-only descriptor used by network configuration programs. Data operations on it return `EOPNOTSUPP`.
 * `AF_PACKET/SOCK_DGRAM` for root-only IPv4 and ARP packet sockets.
 
+`accept` requires a listening stream socket: other streams and datagrams return `EINVAL`, and raw sockets return `EOPNOTSUPP`. `getsockname` reports a TCP control block's local address when one exists, including the address used by an accepted connection; IPv4 sockets without one report the primary address. A packet socket reports its bound interface's index and MAC. An unbound packet socket or one bound to every interface reports index zero with no hardware address.
+
 `recvmsg` supports datagram sockets, including packet sockets, and supplies no ancillary data. `PACKET_AUXDATA` and `IP_HDRINCL` return `ENOPROTOOPT`. `shutdown` applies only to a connected TCP socket. `SHUT_RD` is a no-op; a direction that includes write starts the normal TCP close.
 
-The effective options are `SO_BROADCAST`, `SO_REUSEADDR`, `SO_BINDTODEVICE` for `eth0`, `IP_TTL`, `SO_ERROR`, and `SO_TYPE`. `SO_KEEPALIVE` and `TCP_NODELAY` report off and have no effect. Most other unknown options are accepted and ignored. `SO_ERROR` returns and clears the pending TCP error.
+The effective options are `SO_BROADCAST`, `SO_REUSEADDR`, `IP_TTL`, `SO_ERROR`, and `SO_TYPE`. `SO_KEEPALIVE` and `TCP_NODELAY` report off and have no effect. Most other unknown options are accepted and ignored. `SO_ERROR` returns and clears the pending TCP error. `SO_BINDTODEVICE` stores any registered interface's index and reads back its name; an empty name clears it. The setting does not restrict socket traffic. Packet sockets select an interface through `bind` with a `sockaddr_ll`.
 
 ## Packet and raw sockets
 

@@ -68,10 +68,9 @@ A positive length is required.
 The kernel copies at most 16 bytes into a zero-filled 16-byte buffer and
 sets its byte 15 to zero.
 Larger input buffers are accepted.
-The kernel stores only whether the setting is nonempty.
-Getting it returns
-.Ql eth0
-when set, or an empty string when clear, including the terminating
+The kernel stores the named interface's index.
+Getting it returns that interface's name when set, or an empty string
+when clear, including the terminating
 null byte if space permits.
 The setting does not restrict socket traffic to an interface.
 .It Dv SO_KEEPALIVE

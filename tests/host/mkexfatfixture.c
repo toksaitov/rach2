@@ -919,9 +919,61 @@ static int load_objects(struct vol *v)
     return 0;
 }
 
-/* `--read PATH`: the bytes of the file at PATH, to ValidDataLength, on
-   stdout; through the FAT or contiguous as its stream says. 0, or 1 when
-   the path is not there. */
+/** Check a contiguous extent without rounding its length past UINT64_MAX. */
+static int read_extent(const struct vol *v, uint32_t first, uint64_t length)
+{
+    uint64_t count = length / cluster_bytes(v) + (length % cluster_bytes(v) != 0);
+
+    return count != 0 && in_heap(v, first) && count <= v->clusters - (first - 2);
+}
+
+/** Export DataLength bytes, replacing bytes past ValidDataLength with zeros. */
+static int export_file(struct vol *v, uint32_t first, uint64_t length, uint64_t valid, int nofat)
+{
+    static const unsigned char zeros[4096];
+    uint64_t done = 0;
+    uint32_t c = first, steps = 0;
+
+    if (valid > length || (length && nofat && !read_extent(v, first, length))) {
+        fprintf(stderr, "mkexfatfixture: invalid file extent or valid length\n");
+        return 1;
+    }
+    while (done < length) {
+        size_t take, data;
+
+        if (!in_heap(v, c) || steps++ >= v->clusters) {
+            fprintf(stderr, "mkexfatfixture: file chain does not cover its length\n");
+            return 1;
+        }
+        take = length - done < cluster_bytes(v) ? (size_t)(length - done) : cluster_bytes(v);
+        data = done < valid ? (valid - done < take ? (size_t)(valid - done) : take) : 0;
+        if (data && fwrite(cluster(v, c), 1, data, stdout) != data)
+            break;
+        done += data;
+        take -= data;
+        while (take) {
+            size_t n = take < sizeof(zeros) ? take : sizeof(zeros);
+
+            if (fwrite(zeros, 1, n, stdout) != n)
+                break;
+            done += n;
+            take -= n;
+        }
+        if (take)
+            break;
+        c = nofat ? c + 1 : fat_entry(v, c);
+    }
+    if (done != length || fflush(stdout) != 0) {
+        fprintf(stderr, "mkexfatfixture: cannot write file data\n");
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Export the file at PATH through its FAT chain or contiguous extent.
+ * Compare components in place so their lengths cannot overrun a copy.
+ */
 static int read_path(struct vol *v, const char *path)
 {
     uint32_t first = v->root;
@@ -931,8 +983,7 @@ static int read_path(struct vol *v, const char *path)
 
     while (*p) {
         const char *slash;
-        unsigned long n;
-        char want[600];
+        size_t n;
         uint32_t *cl;
         unsigned ncl = 0, i, found = 0;
         uint32_t c = first;
@@ -943,14 +994,14 @@ static int read_path(struct vol *v, const char *path)
         if (!*p)
             break;
         slash = strchr(p, '/');
-        n = slash ? (unsigned long)(slash - p) : strlen(p);
-        memcpy(want, p, n);
-        want[n] = 0;
-        p += n;
+        n = slash ? (size_t)(slash - p) : strlen(p);
         if (!is_dir)
             return 1;
-        /* The directory's clusters. */
-        nc = nofat ? (long)((length + cluster_bytes(v) - 1) / cluster_bytes(v)) : 0;
+        if (nofat && !read_extent(v, first, length)) {
+            fprintf(stderr, "mkexfatfixture: directory extent outside the heap\n");
+            return 1;
+        }
+        nc = nofat ? (long)(length / cluster_bytes(v) + (length % cluster_bytes(v) != 0)) : 0;
         if (!nofat) {
             uint32_t x = first;
             unsigned long steps = 0;
@@ -993,7 +1044,7 @@ static int read_path(struct vol *v, const char *path)
                     units[got++] = rd16(ne + 2 + m * 2);
             }
             utf8_of(units, got, name, sizeof(name));
-            if (strcmp(name, want) == 0) {
+            if (strlen(name) == n && memcmp(name, p, n) == 0) {
                 const unsigned char *st = dir_entry(v, cl, ncl, i + 1);
 
                 found = 1;
@@ -1006,25 +1057,15 @@ static int read_path(struct vol *v, const char *path)
             i += secondaries;
         }
         free(cl);
-        if (!found)
+        if (!found) {
+            fprintf(stderr, "mkexfatfixture: path not found\n");
             return 1;
+        }
+        p += n;
     }
     if (is_dir)
         return 1;
-    {
-        uint64_t done = 0;
-        uint32_t c = first;
-        unsigned long steps = 0;
-
-        while (done < valid && in_heap(v, c) && steps++ < v->clusters) {
-            uint64_t take = valid - done < cluster_bytes(v) ? valid - done : cluster_bytes(v);
-
-            fwrite(cluster(v, c), 1, (size_t)take, stdout);
-            done += take;
-            c = nofat ? c + 1 : fat_entry(v, c);
-        }
-    }
-    return 0;
+    return export_file(v, first, length, valid, nofat);
 }
 
 static int check_main(int argc, char **argv)

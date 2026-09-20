@@ -1,7 +1,6 @@
 #!/bin/sh
-# diskrate.sh: the rate of the storage paths, each timed in the machine and
-# held under a multiple of a baseline the same boot measures: a file
-# written and read back on exFAT and on FAT32, two hundred small files,
+# diskrate.sh: the storage paths, timed in the machine and checked by counts:
+# a file written and read back on exFAT and on FAT32, two hundred small files,
 # sixteen mebibytes in 4 KiB calls, and a raw read through a pipe into a
 # hash. The boot asks for the whole-disk nodes, which the ordinary kernel
 # publishes only then and lets only the recovery build write, so the raw
@@ -17,8 +16,8 @@
 # hold under bounds set from the counts measured. A driver that spins on
 # the drive or waits out a deadline shows in the status reads it makes and
 # the ticks its requests spend in flight per command, which /proc/disk
-# counts as disk-polls and disk-wait-ticks: this driver reads the status a
-# few dozen times before it sleeps and is woken by the interrupt, so the
+# counts as disk-polls and disk-wait-ticks: this driver reads the status
+# eight times before it sleeps and is woken by the interrupt, so the
 # boot's polls per command stay under a hundred and its ticks in flight
 # per command under two, where a polled driver reads thousands and a
 # waited-out deadline spends three thousand ticks in flight and is
@@ -51,6 +50,8 @@ KERNEL=$1; OSREAL=$2; HARNESS=$3; DIR=$4; PASSWORD=$5; MKEXFAT=$6; MKMBR=$7
 RKERNEL=$8; RIMAGE=$9; TESTIMAGE=${10}
 
 fail() { echo "diskrate-test: FAIL: $1" >&2; exit 1; }
+
+sh "$(dirname "$0")/../../host/ata_rate_test.sh" || fail "the ATA write model"
 
 mkdir -p "$DIR"
 RAW="$DIR/raw.img"; EX="$DIR/exfat.img"; FAT="$DIR/fat.img"; LOG="$DIR/diskrate.log"
@@ -109,6 +110,10 @@ set -- \
     --drive "file=$FAT,format=raw,if=ide,index=2,media=disk" \
     --timeout 900 --steptmo 300 --ok "ALLDONE" --log "$LOG" "$@" > /dev/null 2>&1 \
     || fail "the boot did not reach its end; see $LOG"
+
+for drive in 'primary master' 'primary slave' 'secondary master'; do
+    grep -aq "ata: $drive: .*bus master DMA" "$LOG" || fail "$drive did not select DMA"
+done
 
 # least NAME: the row's time in hundredths, the least of its runs where a
 # row runs more than once; empty when the row's command failed.
@@ -199,6 +204,9 @@ row exsmall 16384 "16 MiB written on exFAT in 4 KiB calls"
 row fatsmall 16384 "16 MiB written on FAT32 in 4 KiB calls"
 row exfiles 6400 "two hundred 32 KiB files written on exFAT"
 sleeps boot0 exfiles1 "the boot's driver waits"
+for r in exwrite fatwrite exsmall fatsmall; do
+    sleeps "${r}0" "${r}1" "$r driver waits"
+done
 # The hits' bounds are three times the counts measured on 2026-09-10 (exFAT
 # write 131 thousand, FAT32 write 427 thousand, exFAT small 37 thousand,
 # FAT32 small 115 thousand, exFAT files 21 thousand) and far under the

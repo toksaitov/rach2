@@ -174,6 +174,8 @@ struct process {
     /* The buffer cache's list of the buffers this process holds, kept by
      * the cache so its hold rules are checked against them alone. */
     struct bbuf *bcache_held;
+    /** One preference after a wait-queue wake; consumed when selected. */
+    uint32_t woken;
 };
 
 typedef struct process process_t;

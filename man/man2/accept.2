@@ -14,7 +14,7 @@ removes a completed connection from the accept queue of
 .Fa fd
 and returns a new descriptor for it.
 .Fa fd
-should refer to a listening TCP socket.
+must refer to a listening TCP socket.
 The new descriptor is blocking and has close-on-exec clear.
 .Pp
 If the queue is empty, the call waits for a connection.
@@ -78,6 +78,8 @@ The socketcall argument array cannot be read, or the peer address or
 length cannot be read or written as required.
 .It Er EINTR
 A signal interrupted the wait.
+.It Er EINVAL
+The socket is a datagram or a stream that is not listening.
 .It Er EMFILE
 No descriptor or open-file description could be allocated for the
 connection.
@@ -96,10 +98,3 @@ refers to a raw socket.
 .Xr socket 2 ,
 .Xr socketcall 2 ,
 .Xr memory 7
-.Sh BUGS
-The handler does not check that the socket is listening or is a stream
-socket, except that it rejects raw sockets.
-An empty queue on another socket can therefore wait indefinitely or
-return
-.Er EAGAIN
-when nonblocking.

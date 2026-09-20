@@ -281,8 +281,10 @@ MANIFEST_DEPS_rach2_metal := $(shell sh krffs/manifest_deps.sh krffs/manifests/r
 MANIFEST_DEPS_rach2_recovery := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest)
 MANIFEST_DEPS_rach2_metal_disk := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest)
 MANIFEST_DEPS_grub_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest)
-STAGED_IN_MANIFESTS = $(sort $(filter vendor/musl/install/% build/vendor/tcc/%, \
-    $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_rach2_metal) $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test)))
+MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
+    $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_rach2_metal) \
+    $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test))
+STAGED_IN_MANIFESTS = $(filter vendor/musl/install/% build/vendor/tcc/%,$(MANIFEST_INPUTS))
 MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter vendor/musl/install/%,$(STAGED_IN_MANIFESTS)))
 TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter build/vendor/tcc/%,$(STAGED_IN_MANIFESTS)))
 ifneq ($(MUSL_KNOWN),)
@@ -325,6 +327,18 @@ build/krffs/mkfs.krffs: ask-the-sub-make | check-libc
 	@$(MAKE) --no-print-directory -C krffs
 build/krffs/stageimage.krffs build/krffs/fsck.krffs: build/krffs/mkfs.krffs
 	@:
+
+# A staged file waits for its component, then make reads its time again.
+# Each component still runs once, even when several images stage its files.
+# The empty recipes run under -n too, without claiming a file has changed.
+$(filter-out build/tests/musl/%,$(filter build/tests/%,$(MANIFEST_INPUTS))): tests
+	+@:
+$(filter build/tests/musl/%,$(MANIFEST_INPUTS)): musl-programs
+	+@:
+$(filter build/utils/%,$(MANIFEST_INPUTS)): utils
+	+@:
+$(filter build/ports/doom/%,$(MANIFEST_INPUTS)): ports/doom
+	+@:
 
 # The binary byte searcher (tools/inspect/binfind.c), replacing strings(1) piped
 # to grep in the TinyCC policy check.
@@ -467,8 +481,9 @@ utils: $(LIBC_STAMP)
 #     build/images/. The stager records every host input it read into an
 #     image-side .d file, included below, so an untouched tree restages
 #     nothing and a changed, added, or removed input restages exactly the
-#     images that carry it. The component sub-makes are order-only: they
-#     refresh their outputs first, and the recorded inputs decide staleness. ---
+#     images that carry it. Staged component files wait for their builders
+#     before make reads their times again. Order-only components also build
+#     the files absent when make first reads a clean tree's manifests. ---
 
 images: test-image os-simple-image os-real-image os-real-ext2
 

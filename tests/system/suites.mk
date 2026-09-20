@@ -171,12 +171,9 @@ run-default: rach2 test-image $(RUNTESTS)
 # their own, built in a Make of their own before the one that builds images
 # and disks: `prepare-all` builds them and then runs a second Make for the
 # rest, and `tests/run` builds them before a lone suite's own target. An
-# image rule names the programs it stages as prerequisites and the component
-# that builds them as an order-only one, and make reads a prerequisite's time
-# when it first meets the name: before the component's sub-make has run, if
-# both are met in one rule. Make then compares the image's time with the old
-# one, leaves the image as it was, and a suite boots a program that is not
-# the one just compiled. Two Makes read the times twice.
+# image rule also orders each staged component file after its builder, so a
+# single make restages a rebuilt program. The runner keeps preparation in two
+# invocations so every component finishes before suite products are built.
 components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests utils
@@ -353,6 +350,7 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --append "rach2.rescue rach2.nonet" \
 	    --net hubport,id=net0,hubid=0 \
 	    --qemu-arg=-cpu --qemu-arg=max \
+	    --qemu-arg=-icount --qemu-arg=shift=3,sleep=off \
 	    --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
 	    --qemu-arg=-audiodev \
 	    --qemu-arg=wav,id=au0,timer-period=500,path=$(IMAGES_DIR)/audio-scale-sb16.wav \
@@ -416,7 +414,8 @@ $(FD_HOSTTEST): tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
 	$(HOSTCC) -DRACH2_HOSTTEST -MM -MP -MT $@ $(filter %.c,$^) > $@.d
 -include $(FD_HOSTTEST).d
 
-# `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and concurrent raw offsets.
+# `tests/run fdlock`: pending KRFFS relocation, orphan truncation, and
+# concurrent raw offsets.
 run-fdlock: rach2 tests krffs $(FD_HOSTTEST) $(MKFIXTURE) $(HARNESS)
 	$(FD_HOSTTEST)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(FDLOCK_IMAGE) 64 48

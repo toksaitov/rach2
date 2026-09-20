@@ -2209,12 +2209,12 @@ int32_t sys_rt_sigprocmask(isr_params_t *params)
     return 0;
 }
 
-/*
- * The frame pushed on the user stack to run a handler, then read back by
- * rt_sigreturn. It is self-consistent (the kernel owns both ends), so it
- * does not need to match musl's ucontext byte layout: a plain handler only
- * reads `sig`, and only rt_sigreturn reads `saved`. info/uc give SA_SIGINFO
- * handlers valid (zeroed) argument pointers.
+/**
+ * The user-stack frame shared by signal delivery and both restorers.
+ *
+ * Only `saved`, `saved_mask` and `fpu` restore the interrupted state. The
+ * SA_SIGINFO arguments are placeholders: `info` has only si_signo, and `uc`
+ * is zeroed over all 348 bytes of musl 1.2.5's i386 ucontext_t.
  */
 struct sig_frame {
     uint32_t pretcode;           /* return address: the restorer (musl __restore_rt) */
@@ -2225,7 +2225,7 @@ struct sig_frame {
     uint64_t saved_mask;         /* the blocked mask to restore */
     uint32_t magic;              /* sanity tag checked by rt_sigreturn */
     uint8_t info[128];           /* siginfo_t storage (zeroed; si_signo set) */
-    uint8_t uc[128];             /* ucontext storage (zeroed) */
+    uint8_t uc[348];             /* musl i386 ucontext_t storage (zeroed) */
     uint8_t fpu[FPU_STATE_SIZE]; /* the x87 and SSE state at delivery */
 };
 

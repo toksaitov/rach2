@@ -85,6 +85,17 @@ static struct packet_queue *queue_of(struct socket *sock)
     return b ? &b->q : NULL;
 }
 
+/** Return the bound interface index, or zero for none or every interface. */
+int packet_ifindex(struct socket *sock)
+{
+    uint32_t flags = net_lock();
+    struct packet_binding *b = binding_of(sock);
+    int index = b ? b->ifindex : 0;
+
+    net_unlock(flags);
+    return index;
+}
+
 int packet_bind(struct socket *sock, int ifindex)
 {
     uint32_t flags;

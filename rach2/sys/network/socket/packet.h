@@ -6,6 +6,9 @@
 struct socket;
 struct netdev;
 
+/** Return the bound interface index, or zero for none or every interface. */
+int packet_ifindex(struct socket *sock);
+
 /*
  * packet: AF_PACKET sockets, the tap a DHCP client cannot work without.
  *

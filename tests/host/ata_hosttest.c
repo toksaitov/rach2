@@ -234,6 +234,7 @@ static int cmd_write;
 static int bm_active, bm_intr;
 static uint8_t disk[SECTORS][SECTOR];
 static uint32_t status_reads, refused, garbage_reads, garbage_writes, commands;
+static uint32_t dma_writes, flushes, pio_write_sectors;
 static int masked_at_dma_cmd, masked_at_start, masked_at_pio_cmd, masked_at_last_data;
 static int dma_fails;      /* the running DMA ends in ERR */
 static int error_pending;  /* ERR shows in the status until the next command */
@@ -271,6 +272,8 @@ static void model_advance(void)
         phase = PIO_READ_DRQ;
         break;
     case PIO_WRITE_BUSY:
+        phase = sectors_left ? PIO_WRITE_DRQ : IDLE;
+        break;
     case FLUSH_BUSY:
         phase = IDLE;
         break;
@@ -334,6 +337,10 @@ static void model_command(uint8_t command)
     error_pending = 0;
     if (command == 0xE7 || command == 0xEA) {
         drive_at_flush = cur[6];
+        flushes++;
+    }
+    if (command == 0xCA || command == 0x35) {
+        dma_writes++;
     }
     switch (command) {
     case 0x20: /* READ SECTORS */
@@ -447,12 +454,13 @@ static void model_outs16(uint16_t port, const void *buffer, uint32_t words)
         return;
     }
     k_memcpy(disk[cmd_lba % SECTORS], buffer, words * 2);
+    pio_write_sectors++;
     cmd_lba++;
     sectors_left--;
     if (sectors_left == 0) {
         masked_at_last_data = masked;
-        phase = PIO_WRITE_BUSY;
     }
+    phase = PIO_WRITE_BUSY;
     reads_in_phase = 0;
 }
 
@@ -574,6 +582,7 @@ static void model_reset(int answer)
     bm_active = 0;
     bm_intr = 0;
     status_reads = refused = garbage_reads = garbage_writes = commands = 0;
+    dma_writes = flushes = pio_write_sectors = 0;
     masked_at_dma_cmd = masked_at_start = masked_at_pio_cmd = masked_at_last_data = -1;
     dma_fails = 0;
     error_pending = 0;
@@ -646,6 +655,59 @@ static void two_ticks_while_asleep(void)
 {
     ata_tick();
     ata_tick();
+}
+
+/**
+ * Check DMA writes at 512 bytes, 4 KiB, 32 KiB and across the bounce-buffer
+ * boundary, in both address forms. DMA completes while the caller sleeps;
+ * a PIO sector or flush also completes after 512 status reads. This models
+ * a delayed completion without judging host time. A DMA drive is supplied;
+ * controller discovery and delivery of real interrupts need a guest boot.
+ */
+static void write_rate_rows(struct ata_drive *d)
+{
+    static const uint32_t sizes[] = {1, 8, 64, 72};
+    static uint8_t data[72 * SECTOR];
+    uint32_t row, high, i, j, count, chunks;
+    uint64_t lba;
+    int rc;
+
+    for (i = 0; i < sizeof(data); i++) {
+        data[i] = (uint8_t)(i * 13 + i / SECTOR + 3);
+    }
+    for (high = 0; high < 2; high++) {
+        lba = high ? ATA_LBA28_SECTORS + 32 : 32;
+        d->dev.sector_count = lba + SECTORS;
+        for (row = 0; row < sizeof(sizes) / sizeof(sizes[0]); row++) {
+            model_reset(512);
+            dma_on_reads = 0;
+            count = sizes[row];
+            chunks = (count + 63) / 64;
+            rc = ata_write(&d->dev, lba, count, data);
+            CHECK(rc == 0, "a delayed write completes");
+            for (i = 0; i < count; i++) {
+                for (j = 0; j < SECTOR && disk[32 + i][j] == data[i * SECTOR + j]; j++) {
+                }
+                CHECK(j == SECTOR, "every written byte reaches its sector");
+            }
+            CHECK(sector_is(disk[31], 31) && sector_is(disk[32 + count], 32 + count),
+                  "a write leaves its neighbouring sectors unchanged");
+            CHECK(dma_writes == chunks && pio_write_sectors == 0,
+                  "a DMA write uses one data command per 32 KiB and no data-port sectors");
+            CHECK(commands == 2 * chunks && flushes == chunks,
+                  "each DMA write command has one cache flush");
+            CHECK(sleeps == (int)(2 * chunks), "a delayed write and its flush each sleep");
+            CHECK(status_reads <= 32 * chunks,
+                  "a delayed write and flush use at most 32 status reads per 32 KiB");
+            CHECK(refused == 0 && garbage_writes == 0 && channels[0].owner == 0,
+                  "the write completes without a conflicting command and releases its channel");
+            printf("ata-test: write: LBA%u, %u sectors, %u DMA, %u flushes, "
+                   "%u PIO sectors, %u status reads, %d sleeps\n",
+                   high ? 48u : 28u, count, dma_writes, flushes, pio_write_sectors, status_reads,
+                   sleeps);
+        }
+    }
+    d->dev.sector_count = SECTORS;
 }
 
 int main(void)
@@ -791,6 +853,8 @@ int main(void)
     rc = ata_read(&d->dev, 100, 8, owner_buf);
     CHECK(rc == 0, "the owner's DMA read returns 0 with two ticks inside its sleep");
     CHECK(wait_ticks == 2, "the two ticks the owner slept through are counted");
+
+    write_rate_rows(d);
 
     if (fails) {
         printf("ata-test: %d failure(s)\n", fails);

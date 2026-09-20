@@ -9,14 +9,20 @@
  * The builder is compiled here on every run.
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
+#ifndef FIXDIR
 #define FIXDIR "/tmp/rach2_verify"
+#endif
+#define TOOL "ASAN_OPTIONS=detect_leaks=0 " FIXDIR "/mkfatfixture"
 
 static int fails;
 
+/** Record an assertion failure. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -25,22 +31,15 @@ static void check(int ok, const char *what)
     }
 }
 
-/* Build the fixture `opt`, run the check on it, and require the exit
-   status `want_rc` and the text `want` somewhere in the output. */
-static void row(const char *opt, int want_rc, const char *want)
+/** Require the checker to exit normally with the expected finding. */
+static void judge(int want_rc, const char *want, const char *label)
 {
     char cmd[512], line[512], out[8192];
     FILE *p;
     int rc;
     size_t n = 0;
 
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fatcheck.img %s", FIXDIR, FIXDIR, opt);
-    if (system(cmd) != 0) {
-        printf("fatcheck_hosttest: the builder failed for '%s'\n", opt);
-        fails++;
-        return;
-    }
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fatcheck.img", FIXDIR, FIXDIR);
+    snprintf(cmd, sizeof(cmd), TOOL " --check " FIXDIR "/fatcheck.img");
     p = popen(cmd, "r");
     if (p == NULL) {
         printf("fatcheck_hosttest: cannot run the check\n");
@@ -53,20 +52,85 @@ static void row(const char *opt, int want_rc, const char *want)
         n += strlen(line);
     }
     rc = pclose(p);
-    rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
-    snprintf(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", opt[0] ? opt : "(default)", want_rc,
-             want);
+    rc = rc != -1 && WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+    snprintf(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", label, want_rc, want);
     check(rc == want_rc && strstr(out, want) != NULL, cmd);
     if (rc != want_rc || strstr(out, want) == NULL) {
         printf("fatcheck_hosttest: got exit %d and:\n%s", rc, out);
     }
 }
 
+/** Build one standard fixture and check its verdict. */
+static void row(const char *opt, int want_rc, const char *want)
+{
+    char cmd[512];
+
+    snprintf(cmd, sizeof(cmd), TOOL " " FIXDIR "/fatcheck.img %s", opt);
+    if (system(cmd) != 0) {
+        check(0, "build fixture");
+        return;
+    }
+    judge(want_rc, want, opt[0] ? opt : "(default)");
+}
+
+/** Write a long-name sequence after the default root's BOOT entry. */
+static void long_name_row(unsigned count, int restart, int want_rc, const char *label)
+{
+    static const unsigned at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+    static const unsigned char alias[] = "BOUND   TXT";
+    unsigned char entries[23 * 32], sum = 0;
+    unsigned i, k;
+    FILE *f;
+    int ok;
+
+    if (system(TOOL " " FIXDIR "/fatcheck.img --cluster8") != 0) {
+        check(0, "build long-name fixture");
+        return;
+    }
+    for (i = 0; i < sizeof(alias) - 1; i++)
+        sum = (unsigned char)(((sum & 1) << 7) + (sum >> 1) + alias[i]);
+    memset(entries, 0, sizeof(entries));
+    for (i = 0; i < count; i++) {
+        unsigned char *e = entries + i * 32;
+        unsigned seq = restart && i == 0 ? 1 : count - i;
+
+        e[0] = (unsigned char)(seq | (i == 0 || (restart && i == 1) ? 0x40 : 0));
+        e[11] = 0x0f;
+        e[13] = sum;
+        for (k = 0; k < 13; k++) {
+            unsigned unit = (seq - 1) * 13 + k;
+            unsigned value = count == 20 && unit >= 255 ? (unit == 255 ? 0 : 0xffff) : 'a';
+
+            e[at[k]] = (unsigned char)value;
+            e[at[k] + 1] = (unsigned char)(value >> 8);
+        }
+    }
+    memcpy(entries + count * 32, alias, sizeof(alias) - 1);
+    entries[count * 32 + 11] = 0x20;
+    f = fopen(FIXDIR "/fatcheck.img", "r+b");
+    if (!f) {
+        check(0, "open long-name fixture");
+        return;
+    }
+    ok = fseek(f, 160 * 512 + 96, SEEK_SET) == 0 &&
+         fwrite(entries, 1, sizeof(entries), f) == sizeof(entries);
+    ok = fclose(f) == 0 && ok;
+    check(ok, "write long-name fixture");
+    if (ok)
+        judge(want_rc,
+              want_rc ? "orphan long-name entries before /BOUND.TXT" : "check: OK: ", label);
+}
+
+/** Run the standard fixtures and the long-name bounds. */
 int main(void)
 {
-    char cmd[256];
+    char cmd[1024];
+    const char *cc = getenv("CC");
 
-    snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
+    snprintf(cmd, sizeof(cmd),
+             "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
+             "-fno-sanitize-recover=all -o " FIXDIR "/mkfatfixture tests/host/mkfatfixture.c",
+             cc ? cc : "cc");
     if (system(cmd) != 0) {
         printf("fatcheck_hosttest: cannot build the fixture builder\n");
         return 1;
@@ -109,6 +173,11 @@ int main(void)
     row("--dirty-mirror", 1, "mirrors differ: 1 entries");
     row("--dirty-cross", 1, "cross-link: ");
     row("--dirty-surplus-cross", 1, "cross-link: ");
+
+    long_name_row(20, 0, 0, "accept twenty-entry name");
+    long_name_row(21, 0, 1, "reject twenty-one-entry name");
+    long_name_row(21, 1, 1, "reject repeated start before twenty entries");
+    long_name_row(2, 1, 1, "reject repeated one-entry start");
 
     if (fails == 0) {
         printf("fatcheck_hosttest: OK\n");

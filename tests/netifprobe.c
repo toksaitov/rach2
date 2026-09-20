@@ -42,16 +42,18 @@ typedef unsigned char uint8_t;
 #define SYS_NANOSLEEP  162
 #define SYS_SETUID32   213
 
-#define SC_SOCKET     1
-#define SC_BIND       2
-#define SC_CONNECT    3
-#define SC_LISTEN     4
-#define SC_ACCEPT     5
-#define SC_RECV       10
-#define SC_SENDTO     11
-#define SC_RECVFROM   12
-#define SC_GETSOCKOPT 15
-#define SC_PING       0x1000
+#define SC_SOCKET      1
+#define SC_BIND        2
+#define SC_CONNECT     3
+#define SC_LISTEN      4
+#define SC_ACCEPT      5
+#define SC_GETSOCKNAME 6
+#define SC_SETSOCKOPT  14
+#define SC_RECV        10
+#define SC_SENDTO      11
+#define SC_RECVFROM    12
+#define SC_GETSOCKOPT  15
+#define SC_PING        0x1000
 
 #define AF_INET     2
 #define AF_PACKET   17
@@ -67,8 +69,9 @@ typedef unsigned char uint8_t;
 #define SECOND_IP 0x0A000305UL /* 10.0.3.5 */
 #define SECOND_GW 0x0A000302UL /* 10.0.3.2 */
 
-#define SOL_SOCKET 1
-#define SO_ERROR   4
+#define SOL_SOCKET      1
+#define SO_ERROR        4
+#define SO_BINDTODEVICE 25
 
 #define SIOCGIFNAME    0x8910
 #define SIOCGIFFLAGS   0x8913
@@ -468,6 +471,170 @@ struct sockaddr_ll_probe {
     uint8_t sll_addr[8];
 };
 
+/** Build the link-layer address for an ARP socket on one interface. */
+static void set_packet_addr(struct sockaddr_ll_probe *addr, int index)
+{
+    int i;
+
+    for (i = 0; i < (int)sizeof(*addr); i++) {
+        ((uint8_t *)addr)[i] = 0;
+    }
+    addr->sll_family = AF_PACKET;
+    addr->sll_protocol = ETH_P_ARP_BE;
+    addr->sll_ifindex = index;
+}
+
+/** Check a packet socket's interface, protocol, MAC and returned length. */
+static void packet_name(int fd, int index, int raw_fd)
+{
+    uint32_t args[3];
+    uint32_t len = sizeof(struct sockaddr_ll_probe);
+    struct sockaddr_ll_probe addr = {0};
+    int i;
+
+    args[0] = (uint32_t)fd;
+    args[1] = (uint32_t)&addr;
+    args[2] = (uint32_t)&len;
+    if (socketcall(SC_GETSOCKNAME, args) != 0 || len != sizeof(addr) ||
+        addr.sll_family != AF_PACKET || addr.sll_protocol != ETH_P_ARP_BE ||
+        addr.sll_ifindex != index) {
+        fail("packet getsockname reported the wrong interface");
+    }
+    if (!index) {
+        if (addr.sll_halen || addr.sll_hatype) {
+            fail("an all-interface packet socket reported a hardware address");
+        }
+        return;
+    }
+    set_name(index == 2 ? "eth1" : "eth0");
+    if (sys_ioctl(raw_fd, SIOCGIFHWADDR, ifr) != 0 || addr.sll_halen != 6 || addr.sll_hatype != 1) {
+        fail("packet getsockname did not report an Ethernet address");
+    }
+    for (i = 0; i < 6; i++) {
+        if (addr.sll_addr[i] != ifr[18 + i]) {
+            fail("packet getsockname reported another interface's MAC");
+        }
+    }
+}
+
+/** Check that SO_BINDTODEVICE preserves a name, a refusal and an unbind. */
+static void device_option(int fd)
+{
+    uint32_t args[5], len;
+    char name[16];
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        args[0] = (uint32_t)fd;
+        args[1] = SOL_SOCKET;
+        args[2] = SO_BINDTODEVICE;
+        args[3] = (uint32_t)(i == 0 ? "eth1" : i == 1 ? "eth9" : "");
+        args[4] = i == 2 ? 1 : 5;
+        if (socketcall(SC_SETSOCKOPT, args) != (i == 1 ? -ENODEV : 0)) {
+            fail("SO_BINDTODEVICE did not validate the interface name");
+        }
+        len = sizeof(name);
+        args[3] = (uint32_t)name;
+        args[4] = (uint32_t)&len;
+        if (socketcall(SC_GETSOCKOPT, args) != 0) {
+            fail("SO_BINDTODEVICE did not read back");
+        }
+        if (i == 2) {
+            if (len != 1 || name[0]) {
+                fail("SO_BINDTODEVICE did not clear");
+            }
+        } else if (len != 5 || name[0] != 'e' || name[1] != 't' || name[2] != 'h' ||
+                   name[3] != '1' || name[4]) {
+            fail("SO_BINDTODEVICE lost the second interface");
+        }
+    }
+}
+
+/** Refuse accept on datagrams and streams that have never listened. */
+static void invalid_accept(void)
+{
+    uint32_t args[3];
+    int type, fd;
+
+    for (type = SOCK_STREAM; type <= SOCK_DGRAM; type++) {
+        args[0] = AF_INET;
+        args[1] = (uint32_t)type | 0x800u;
+        args[2] = 0;
+        fd = socketcall(SC_SOCKET, args);
+        if (fd < 0) {
+            fail("invalid-accept test socket did not open");
+        }
+        args[0] = (uint32_t)fd;
+        args[1] = 0;
+        args[2] = 0;
+        if (socketcall(SC_ACCEPT, args) != -EINVAL) {
+            fail("accept did not refuse a socket that never listened");
+        }
+        sys_close(fd);
+    }
+}
+
+/** Require the second interface's address at both ends of a TCP connection. */
+static void tcp_names(void)
+{
+    uint32_t args[3], len;
+    uint8_t addr[16];
+    int listener, client, conn, i, fd;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    listener = socketcall(SC_SOCKET, args);
+    client = socketcall(SC_SOCKET, args);
+    if (listener < 0 || client < 0) {
+        fail("TCP address test sockets did not open");
+    }
+    set_sockaddr(addr, 0, LOOP_PORT + 1);
+    args[0] = (uint32_t)listener;
+    args[1] = (uint32_t)addr;
+    args[2] = sizeof(addr);
+    if (socketcall(SC_BIND, args) != 0) {
+        fail("TCP address test listener did not bind");
+    }
+    args[1] = 1;
+    if (socketcall(SC_LISTEN, args) != 0) {
+        fail("TCP address test listener did not listen");
+    }
+    set_sockaddr(addr, SECOND_IP, LOOP_PORT + 1);
+    args[0] = (uint32_t)client;
+    args[1] = (uint32_t)addr;
+    args[2] = sizeof(addr);
+    if (socketcall(SC_CONNECT, args) != 0) {
+        fail("TCP connection to the second interface did not open");
+    }
+    args[0] = (uint32_t)listener;
+    args[1] = 0;
+    args[2] = 0;
+    conn = socketcall(SC_ACCEPT, args);
+    if (conn < 0) {
+        fail("TCP connection on the second interface was not accepted");
+    }
+    for (i = 0; i < 2; i++) {
+        fd = i ? conn : client;
+        len = sizeof(addr);
+        args[0] = (uint32_t)fd;
+        args[1] = (uint32_t)addr;
+        args[2] = (uint32_t)&len;
+        if (socketcall(SC_GETSOCKNAME, args) != 0 || len != sizeof(addr) || addr[4] != 10 ||
+            addr[5] != 0 || addr[6] != 3 || addr[7] != 5) {
+            fail("TCP getsockname reported the first interface");
+        }
+        args[1] = 0;
+        args[2] = 0;
+        if (socketcall(SC_ACCEPT, args) != -EINVAL) {
+            fail("accept did not refuse a connected stream");
+        }
+    }
+    sys_close(conn);
+    sys_close(client);
+    sys_close(listener);
+}
+
 /*
  * `netifprobe second`: a packet socket is a socket on one interface.
  *
@@ -509,30 +676,24 @@ static void packet_on_second(int raw_fd)
         fail("a packet socket for the first interface did not open");
     }
 
-    for (i = 0; i < (int)sizeof(to); i++) {
-        ((uint8_t *)&to)[i] = 0;
-    }
-    to.sll_family = AF_PACKET;
-    to.sll_protocol = ETH_P_ARP_BE;
-    to.sll_ifindex = 2;
+    packet_name(on_second, 0, raw_fd);
+    set_packet_addr(&to, 2);
     args[0] = (uint32_t)on_second;
     args[1] = (uint32_t)&to;
     args[2] = sizeof(to);
     if (socketcall(SC_BIND, args) != 0) {
         fail("the socket would not bind to the second interface");
     }
-    for (i = 0; i < (int)sizeof(to); i++) {
-        ((uint8_t *)&to)[i] = 0;
-    }
-    to.sll_family = AF_PACKET;
-    to.sll_protocol = ETH_P_ARP_BE;
-    to.sll_ifindex = 1;
+    set_packet_addr(&to, 1);
     args[0] = (uint32_t)on_first;
     args[1] = (uint32_t)&to;
     args[2] = sizeof(to);
     if (socketcall(SC_BIND, args) != 0) {
         fail("the socket would not bind to the first interface");
     }
+
+    packet_name(on_first, 1, raw_fd);
+    packet_name(on_second, 2, raw_fd);
 
     /* The request is built from the second card's own station address, since
        a reply is addressed to the sender the request names. */
@@ -563,12 +724,7 @@ static void packet_on_second(int raw_fd)
     arp[26] = (uint8_t)(SECOND_GW >> 8);
     arp[27] = (uint8_t)SECOND_GW;
 
-    for (i = 0; i < (int)sizeof(to); i++) {
-        ((uint8_t *)&to)[i] = 0;
-    }
-    to.sll_family = AF_PACKET;
-    to.sll_protocol = ETH_P_ARP_BE;
-    to.sll_ifindex = 2;
+    set_packet_addr(&to, 2);
     to.sll_halen = 6;
     for (i = 0; i < 6; i++) {
         to.sll_addr[i] = 0xff;
@@ -704,6 +860,9 @@ static void second_down(void)
         fail("the second interface could not be brought back up");
     }
     proc_names_both();
+    device_option(fd);
+    invalid_accept();
+    tcp_names();
     packet_on_second(fd);
     say("NETIFPROBE OK\n");
     sys_exit(0);

@@ -953,8 +953,9 @@ static int32_t do_listen(int fd, int backlog)
     }
 }
 
-/* accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
+/** accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
  * non-blocking listener), install a new fd for it, and report the peer address.
+ * Raw sockets return EOPNOTSUPP; other sockets must be listening streams.
  */
 static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
@@ -975,6 +976,9 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         return -EOPNOTSUPP;
     }
     listen_sock = entry->sock;
+    if (listen_sock->type != SOCK_STREAM || !listen_sock->listening) {
+        return -EINVAL;
+    }
 
     /* A non-blocking listener returns immediately when nothing is queued. */
     if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK) &&
@@ -1095,13 +1099,15 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
 }
 
-/* getsockname: the socket's local address: for an IPv4 socket the primary
- * address (net_ip_addr) plus its bound or ephemeral port, for a packet socket
- * a sockaddr_ll of the primary interface, index 1 and its hardware address,
- * whatever interface the socket is bound to. */
+/**
+ * Report the TCP control block's local address, or the primary IPv4 address
+ * without a control block. Packet sockets report their binding's interface;
+ * an unbound socket or an all-interface binding has index zero and no MAC.
+ */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    uint32_t flags, local_ip;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
@@ -1114,15 +1120,11 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
     }
-    /* A packet socket's own address is a sockaddr_ll. `arping` reads the MAC
-     * back from here and refuses to run without one, so the fields are the
-     * machine's real ones and not a shape with zeroes in it: the first
-     * interface's index and station address, whatever the socket is bound
-     * to, which entry 116 of the shortcomings list records. */
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
         uint32_t caller_len, copy_len;
-        int i;
+        int ifindex = packet_ifindex(entry->sock);
+        struct netdev *nd = netdev_at(ifindex - 1);
 
         if (copy_from_user(&caller_len, (const void __user *)salen_ptr, sizeof(caller_len)) != 0) {
             return -EFAULT;
@@ -1132,11 +1134,11 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
         sll[SOCKADDR_LL_PROTOCOL] = (uint8_t)((entry->sock->protocol >> 8) & 0xff);
         sll[SOCKADDR_LL_PROTOCOL + 1] = (uint8_t)(entry->sock->protocol & 0xff);
-        sll[SOCKADDR_LL_IFINDEX] = (uint8_t)NETDEV_IFINDEX;
-        sll[SOCKADDR_LL_HATYPE] = (uint8_t)ARPHRD_ETHER; /* the low byte of 1 */
-        sll[SOCKADDR_LL_HALEN] = 6;
-        for (i = 0; i < 6; i++) {
-            sll[SOCKADDR_LL_ADDR + i] = net_mac[i];
+        SC_WLE32(sll + SOCKADDR_LL_IFINDEX, (uint32_t)ifindex);
+        if (nd) {
+            sll[SOCKADDR_LL_HATYPE] = (uint8_t)ARPHRD_ETHER;
+            sll[SOCKADDR_LL_HALEN] = 6;
+            k_memcpy(sll + SOCKADDR_LL_ADDR, nd->mac, 6);
         }
         copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len : (uint32_t)SOCKADDR_LL_LEN;
         if (copy_len > 0 && copy_to_user((void __user *)sa_ptr, sll, copy_len) != 0) {
@@ -1148,7 +1150,10 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         }
         return 0;
     }
-    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, (uint32_t)net_ip_addr);
+    flags = net_lock();
+    local_ip = entry->sock->tcb ? entry->sock->tcb->local_ip : net_ip_addr;
+    net_unlock(flags);
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, local_ip);
 }
 
 /* getpeername: the connected peer's address (an established stream socket
@@ -1242,7 +1247,7 @@ static int32_t do_shutdown(int fd, int how)
 
 #define TCP_NODELAY 1
 
-/* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
+/** setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
  * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
  * listen ports and sends promptly, so these are honored-by-behavior or
  * documented no-ops; an unknown option is accepted instead of failing a
@@ -1265,10 +1270,9 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
         return -ENOPROTOOPT;
     }
     (void)optname;
-    /* SO_BINDTODEVICE's value is a name, not a number, and it is judged
-     * against the one interface this machine has. */
     if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
         char name[IFNAMSIZ];
+        struct netdev *nd;
         uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
 
         /* The name is at the start of whatever the caller passed, and busybox
@@ -1290,10 +1294,11 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
             entry->sock->bound_device = 0; /* an empty name unbinds */
             return 0;
         }
-        if (!netif_name_is_ours(name)) {
+        nd = netdev_by_name(name);
+        if (!nd) {
             return -ENODEV;
         }
-        entry->sock->bound_device = 1;
+        entry->sock->bound_device = nd->index;
         return 0;
     }
 
@@ -1345,7 +1350,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
     return 0;
 }
 
-/* getsockopt: report the options programs read at setup: SO_ERROR (the
+/** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
  * type), SO_REUSEADDR and SO_BROADCAST as stored, and SO_BINDTODEVICE as the
  * interface name. An int result is truncated to the caller's capacity, and
@@ -1373,13 +1378,13 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
         }
         net_unlock(flags);
     } else if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
-        /* This one answers with a name, not a number. */
         char name[IFNAMSIZ];
         uint32_t give;
+        struct netdev *nd = netdev_at(entry->sock->bound_device - 1);
 
         k_memset(name, 0, sizeof(name));
-        if (entry->sock->bound_device) {
-            k_strncpy(name, NETDEV_IFNAME, sizeof(name) - 1);
+        if (nd) {
+            k_strncpy(name, nd->name, sizeof(name) - 1);
         }
         if (!optval_ptr || !optlen_ptr) {
             return -EFAULT;

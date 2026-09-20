@@ -14,8 +14,8 @@ void sched_disable(void);
 /** Return nonzero while preemptive scheduling is enabled. */
 int sched_is_enabled(void);
 
-/** Round-robin: switch to the next READY process; see sched.c for the
- * contract. */
+/** Switch to a READY process, alternating wake preference and round-robin;
+ * see sched.c for the contract. */
 void schedule(void);
 
 /** From an interrupt handler: switch now, or at the current system call's

@@ -149,4 +149,5 @@ treemake "$TREE/tree.krffs" || bad "the tree's third build failed"
 grep -q "mkimage.sh" "$TREE/make.log" && bad "the image was rebuilt with nothing changed"
 [ "$fails" = 0 ] || exit 1
 say "a changed source reaches the image through exactly its target, and an unchanged one does not rebuild it: OK"
+sh tests/system/imagerace_probe.sh || exit 1
 say "PASS"

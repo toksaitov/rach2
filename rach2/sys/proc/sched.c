@@ -7,10 +7,13 @@
  * until then. */
 static volatile int _sched_enabled = 0;
 
-/** The process scheduled last, from whose successor the next search
- * starts, for round-robin fairness. */
+/** The last ordinary selection; a wake preference does not move it. */
 static process_t *_last_sched;
 
+/** A preferred selection must be followed by an ordinary selection. */
+static int _wake_turn;
+
+/** Remove a departing record from the round-robin cursor. */
 void sched_forget(process_t *p)
 {
     if (_last_sched == p) {
@@ -22,6 +25,7 @@ void init_sched(void)
 {
     _sched_enabled = 0;
     _last_sched = NULL;
+    _wake_turn = 1;
 }
 
 void sched_enable(void)
@@ -40,7 +44,39 @@ int sched_is_enabled(void)
 }
 
 /**
- * Pick the next READY process round-robin and switch to it.
+ * Find a READY process after the ordinary cursor, wrapping once.
+ *
+ * With `woken_only`, consider only wait-queue wakeups. Interrupts are off.
+ */
+static process_t *sched_find(int woken_only)
+{
+    process_t *start;
+    process_t *p;
+
+    start = _last_sched && _last_sched->next ? _last_sched->next : proc_list;
+    p = start;
+    if (!p) {
+        return NULL;
+    }
+    do {
+        if (p->state == PROC_READY && (!woken_only || p->woken)) {
+            return p;
+        }
+        p = p->next ? p->next : proc_list;
+    } while (p != start);
+    return NULL;
+}
+
+/**
+ * Alternate a wake preference with an ordinary round-robin selection.
+ *
+ * A preferred selection consumes its wake mark without moving the ordinary
+ * cursor. At least every second selection advances that cursor, even when
+ * sleepers wake repeatedly. A missing wake candidate takes an ordinary turn.
+ * Selection and publication run with interrupts disabled so a wake cannot
+ * race the mark's consumption or a timer re-enter partially updated state.
+ * A current process that has already resumed after an idle wait loses its
+ * mark before yielding, so that wake cannot prefer it again later.
  *
  * Does nothing if scheduling is disabled, there is no current process, or no
  * other process is READY. The switch runs with interrupts disabled: a timer
@@ -61,8 +97,6 @@ int sched_is_enabled(void)
  */
 void schedule(void)
 {
-    process_t *start;
-    process_t *p;
     process_t *next = NULL;
     process_t *old;
     uint32_t saved_flags;
@@ -75,32 +109,32 @@ void schedule(void)
         return;
     }
 
-    /* From the successor of the process scheduled last to the end of the
-     * list, then from its start back to it. */
-    start = _last_sched && _last_sched->next ? _last_sched->next : proc_list;
-    for (p = start; p; p = p->next) {
-        if (p->state == PROC_READY) {
-            next = p;
-            break;
-        }
+    saved_flags = kirq_save();
+    if (current_proc->state != PROC_READY) {
+        current_proc->woken = 0;
     }
-    if (!next) {
-        for (p = proc_list; p && p != start; p = p->next) {
-            if (p->state == PROC_READY) {
-                next = p;
-                break;
-            }
-        }
+    if (_wake_turn) {
+        next = sched_find(1);
     }
     if (next) {
-        _last_sched = next;
+        _wake_turn = 0;
+    } else {
+        next = sched_find(0);
+        if (next) {
+            _last_sched = next;
+            _wake_turn = 1;
+        }
     }
 
     if (!next) {
+        kirq_restore(saved_flags);
         return;
     }
 
+    next->woken = 0;
     if (next == current_proc) {
+        next->state = PROC_RUNNING;
+        kirq_restore(saved_flags);
         return;
     }
 
@@ -112,21 +146,13 @@ void schedule(void)
 
     next->state = PROC_RUNNING;
 
-    __asm__ __volatile__("pushf\n\t"
-                         "cli\n\t"
-                         "pop %0"
-                         : "=r"(saved_flags)
-                         :
-                         : "memory");
     fpu_save(old->fpu);
     fpu_restore(next->fpu);
     current_proc = next;
 
     switch_context(old, next);
 
-    if (saved_flags & 0x200) {
-        __asm__ __volatile__("sti");
-    }
+    kirq_restore(saved_flags);
 }
 
 /**
@@ -239,7 +265,9 @@ void idle_wait_irq_off(void)
         return;
     }
     _in_idle_wait = 1;
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("sti; hlt; cli");
+#endif
     _in_idle_wait = 0;
 }
 
@@ -258,6 +286,8 @@ void idle_wait_irq_off(void)
 void idle_wait_irq_on(void)
 {
     _in_idle_wait = 1;
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("sti; hlt");
+#endif
     _in_idle_wait = 0;
 }

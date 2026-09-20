@@ -4,13 +4,13 @@
 #include "../lib/kint.h"
 
 /**
- * Probes the primary ATA channel for a master disk and, on success, publishes
- * it as `block0`.
+ * Probe both ATA channels and register each disk that answers IDENTIFY.
  *
- * Issues IDENTIFY, reads the capacity, and wires `block0` to the polled
- * read/write path. Returns 0 when a disk answered and `block0` is set, or -1
- * when none responded (then `block0` is left `NULL`). The whole path is polled
- * with no IRQ, so it is safe to call before the scheduler runs.
+ * The first disk supplies `block0` if it is unset. Transfers use bus-master
+ * DMA when the controller and drive support it, unless `rach2.atapio` selects
+ * PIO. Waits sleep in a syscall with interrupts enabled and the scheduler
+ * running, and poll otherwise, including during boot. Returns 0 when at least
+ * one disk answered, or -1 when none did; an existing `block0` is preserved.
  */
 int ata_init(void);
 

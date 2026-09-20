@@ -129,6 +129,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
      * slept.
      */
     wq_dequeue(wq, &current_proc->waiter);
+    current_proc->woken = 0;
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);
     return rc;
@@ -166,6 +167,7 @@ void wq_wake_all(wait_queue_t *wq)
         next = w->next;
         w->next = NULL;
         if (w->proc && w->proc->state == PROC_BLOCKED) {
+            w->proc->woken = 1;
             w->proc->state = PROC_READY;
         }
     }

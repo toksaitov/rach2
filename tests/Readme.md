@@ -40,7 +40,7 @@ make test-image     # build both sets and stage build/images/test.krffs
 tests/run default
 ```
 
-This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 73 entries in its `PROBES` list in order. It is in the core tier, so `make test` runs it too.
+This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 74 entries in its `PROBES` list in order. It is in the core tier, so `make test` runs it too.
 
 The runner scores the kernel diagnostic that returns control to the debug shell. Exit status 0 passes. A nonzero status, signal, absent return diagnostic, timeout, early QEMU exit, or program skipped after an earlier hang fails. A program's own success text is not the verdict. After `musl/clockmusl`, the runner also compares the guest epoch with the host clock and permits a 30-second difference.
 
@@ -58,13 +58,15 @@ rebootprobe searchprobe
 stickyprobe
 ```
 
-The 16 musl programs in the default suite are:
+The 17 musl programs in the default suite are:
 
 ```text
 authmusl permmusl suidmusl pwauthmusl passwdmusl addusermusl loginmusl
 readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl vmamusl
-ishmusl
+ishmusl sigmusl
 ```
+
+`musl/sigmusl` checks plain and `SA_SIGINFO` handlers through musl's two restorers, masking, default termination, and every byte of the zeroed `ucontext_t` argument. `sh tests/system/sigcontext_mutate.sh` runs this probe alone with FXSR and with `rach2.nofxsr`: the fixed kernel must pass, a kernel rebuilt with the old 128-byte context must fail, and the restored kernel must pass and match the first binary. Its trap stops the test processes before restoring and touching the source, and each phase removes the affected object before rebuilding. Logs, kernel copies and artifact checksums remain in the printed `build/sigcontext-proof.*` directory. The script uses the serial harness with no host network connection.
 
 `tests/run addressed` does not repeat this list. It boots with `rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2`, runs `pingtest` alone, and requires the capture to show that address as the source of the machine's packets and of its ARP requests.
 
@@ -86,7 +88,7 @@ These musl programs are likewise built and staged but absent from the default li
 
 ```text
 budgetmusl catfile cowfork ctrlcmusl devtest hello mallocqsort ofdmusl
-pipemusl pollmusl ptymusl rngmusl sigmusl sockfillmusl tcpsendrecv ttymusl
+pipemusl pollmusl ptymusl rngmusl sockfillmusl tcpsendrecv ttymusl
 ```
 
 `tests/registry` lists every suite and `tests/system/suites.mk` defines their recipes. Several suites use the test image without running a program from these two lists.
