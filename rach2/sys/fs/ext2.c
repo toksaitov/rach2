@@ -3644,14 +3644,14 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         return rc;
     }
     if ((root->mode & S_IFMT_) != S_IFDIR_) {
-        ext2_put(mnt, root);
+        node_drop(em, root); /* not ext2_put: the mount is not on `mnt` yet */
         return refuse("root inode");
     }
     if (!readonly_why && !(flags & VFS_MS_RDONLY) &&
         (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS))) {
         rc = ext2_check_volume(em, &readonly_why);
         if (rc < 0) {
-            ext2_put(mnt, root);
+            node_drop(em, root);
             return rc;
         }
     }
@@ -3667,7 +3667,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         em->state &= ~EXT2_VALID_FS;
         rc = sb_store(em);
         if (rc != 0) {
-            ext2_put(mnt, root);
+            node_drop(em, root);
             return rc;
         }
         em->valid_cleared = 1;
