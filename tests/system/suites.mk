@@ -153,8 +153,10 @@ $(RUNUTIL): tests/system/runner/runutil.c
 # is stated here for one probe: musl/pwauthmusl waits out the credential lock's
 # real ten-second retry budget twice, so tens of seconds is its GREEN path. Only
 # a failing probe ever waits a step window out, so widening it costs a passing
-# run nothing. The default suite's build-and-run target. `make test` and
-# `tests/run default` both land here; the registry in tests/registry names it.
+# run nothing. The default suite's build-and-run target; `make test` lands
+# here too.
+# `tests/run default`: the probe suite, every guest probe booted on the test
+# image in one machine and scored by the runner.
 run-default: rach2 test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log
@@ -1282,7 +1284,8 @@ run-reset: rach2 tests krffs test-image $(HARNESS)
 run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUNUTIL)
 	sh tests/system/suites/diskdiag.sh $(BOOT_KERNEL) $(METAL_KERNEL) $(METAL_IMAGE) \
 	    $(DISKDIAG_PORT)
-# `tests/run subset`: each optional device probe left out, and proved left out
+# `tests/run subset`: each optional device probe left out, and proved left
+# out.
 # `tests/run usb`: the USB stack, in five boots. Three of them take the 8042
 # away, because a key typed or a mouse moved on a machine that still has a PS/2
 # keyboard could have arrived by either road, and a check that passes either
@@ -1422,6 +1425,9 @@ INSTALLER_REPAIR_DIR = $(IMAGES_DIR)/installer-repair
 # its directory at its start and the installer suite runs beside it in
 # the pool.
 INSTALLER_REHEARSE_DIR = $(IMAGES_DIR)/installer-rehearse
+# `tests/run installer-rehearse`: the rehearsal of the machine sitting in its
+# small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the
+# machine's size in most of an hour.
 run-installer-rehearse: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(RUNUTIL)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REHEARSE_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
@@ -1652,6 +1658,8 @@ DISK_TEST_AHCI_IMAGE = $(IMAGES_DIR)/disk-test-ahci.disk
 DISK_TEST_Q35_IMAGE = $(IMAGES_DIR)/disk-test-q35.disk
 PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
 STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
+# `tests/run disk-ahci`: the disk suite's page-cache integrity check with the
+# disk on an AHCI controller.
 run-disk-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
@@ -1722,6 +1730,8 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNE
 QUEUE_DIR = $(IMAGES_DIR)/queue
 run-queue: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/queue.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)
+# `tests/run persist-ahci`: fsync durability across a reboot with the disk on
+# an AHCI controller.
 run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
@@ -1734,6 +1744,8 @@ run-persist-ahci: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
+# `tests/run stress-ahci`: the stress suite's on-disk KRFFS larger than RAM,
+# on an AHCI controller.
 run-stress-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
@@ -1744,14 +1756,17 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 	    --log $(STRESS_AHCI_DISK).log probe=/stressprobe
 # The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.
-# `tests/run style` names this target.
+# `tests/run style`: the source checks over the tree, tools/verify/check.sh,
+# booting nothing.
 run-style:
 	@./tools/verify/check.sh
 # The host suite (see tests/system/suites/host.sh): pure kernel logic compiled
 # and run natively under AddressSanitizer + UndefinedBehaviorSanitizer. It waits
 # on the vendored musl for the same reason krffs does: mkhash_hosttest names the
 # musl crypt in its host-deps, and that source exists only once the tarball is
-# extracted. `tests/run host` names this target.
+# extracted.
+# `tests/run host`: the host tests, kernel code compiled and run natively
+# under the sanitizers, and the fuzz corpora replayed through their harnesses.
 # The e2fsprogs stamp is a dependency because two host tests compile the port's
 # own `unix_io.c` out of the extracted tree: without it they build against
 # whatever that tree last held, or fail to build at all in a fresh checkout.
@@ -1762,12 +1777,17 @@ run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE)
 # The runner suite (see tests/system/selftest.sh): tests/run driven against a
 # registry and a makefile of its own, in a temporary directory. It boots no
 # machine and reads nothing from the product, so it needs no prerequisites.
+# `tests/run runner`: the runner's own self-test, tests/run driven against a
+# registry and a makefile of its own in a temporary directory, booting no
+# machine.
 run-runner: $(HARNESS) $(PTYDRIVE) $(HOSTPEER)
 	@./tests/system/selftest.sh
 
 # The drivers' suite (see tests/system/drivetest.sh): drive.sh and the
 # harness's waits against fake machines that choose when they are ready. It
 # needs the harness and nothing that boots.
+# `tests/run drive`: the drivers' waits, drive.sh and the harness against fake
+# machines that choose when they are ready, booting nothing.
 run-drive: $(HARNESS)
 	@./tests/system/drivetest.sh
 
@@ -1794,27 +1814,35 @@ run-imagerace: $(TEST_IMAGE) $(OS_REAL_IMAGE) $(DEMO_CREDS) krffs rach2 tests ut
 # covers it. The probe suite is not repeated at all, since none of its
 # probes sends a frame.
 
+# `tests/run ping-e1000`: the ping suite on the e1000 card.
 run-ping-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-ping
 
+# `tests/run packet-e1000`: the packet suite on the e1000 card.
 run-packet-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-packet
 
+# `tests/run netif-e1000`: the netif suite's card half on the e1000 card.
 run-netif-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-netif
 
+# `tests/run dgram-e1000`: the dgram suite on the e1000 card.
 run-dgram-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-dgram
 
+# `tests/run netconsole-e1000`: the netconsole suite on the e1000 card.
 run-netconsole-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-netconsole
 
+# `tests/run raw-e1000`: the raw suite's card half on the e1000 card.
 run-raw-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-raw
 
+# `tests/run dhcp-e1000`: the dhcp suite's card half on the e1000 card.
 run-dhcp-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-dhcp
 
+# `tests/run ssh-e1000`: the ssh suite on the e1000 card.
 run-ssh-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-ssh
 

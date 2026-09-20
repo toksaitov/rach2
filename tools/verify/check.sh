@@ -476,6 +476,19 @@ if [ -n "$extra" ]; then
     echo "$extra" | sed 's/^/    /'
     regfail=1
 fi
+# The generated inventory: tests/system/suites.md is `tests/run inventory`,
+# and a sentence naming every suite exists in suites.mk for it to read.
+sh "$REPO/tests/run" inventory > "$VDIR/_inventory.md" 2>"$VDIR/verify_inventory.log"
+if ! cmp -s "$VDIR/_inventory.md" "$REPO/tests/system/suites.md"; then
+    echo "  FAIL: tests/system/suites.md is not \`tests/run inventory\`; regenerate it"
+    diff "$REPO/tests/system/suites.md" "$VDIR/_inventory.md" | head -5 | sed 's/^/    /'
+    regfail=1
+fi
+if grep -q 'no sentence in suites.mk' "$VDIR/_inventory.md"; then
+    echo "  FAIL: a suite has no \`tests/run NAME\` sentence in suites.mk:"
+    grep 'no sentence' "$VDIR/_inventory.md" | sed 's/:.*//; s/^/    /'
+    regfail=1
+fi
 if [ "$regfail" -eq 0 ]; then
     echo "  PASS ($(wc -l < "$VDIR/_reg.txt" | tr -d ' ') suites, each with its target)"
 else
