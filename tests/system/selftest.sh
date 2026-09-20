@@ -97,6 +97,8 @@ style|-|full
 usb|-|full
 reporting|-|full
 killed|-|full
+hungry1|-|full||3000
+hungry2|-|full||3000
 REG
 # A script the runner hashes, so a suite that edits one can be tried.
 mkdir -p "$WORK/tests/system"
@@ -142,6 +144,10 @@ run-slow1:
 	@echo slow1-start >> events; sleep 2; echo slow1-end >> events; touch slow1.done
 run-slow2:
 	@echo slow2-start >> events; sleep 2; echo slow2-end >> events
+run-hungry1:
+	@echo hungry1-start >> events; sleep 2; echo hungry1-end >> events
+run-hungry2:
+	@echo hungry2-start >> events; sleep 2; echo hungry2-end >> events
 run-stuck:
 	@sh -c 'trap "" TERM; sleep 60 & echo $$! > stuck.pid; wait'
 run-editing:
@@ -390,6 +396,22 @@ overlap=$(awk '/-start$/ { active++; if (active > peak) peak = active }
 check "two workers run them together" 2 "$overlap"
 check "both concurrent fixtures complete" 4 "$(wc -l < "$WORK/events" | tr -d ' ')"
 check "and each concurrent suite is announced" 2 "$(printf '%s\n' "$out" | grep -c '^run: slow[12]: starting')"
+
+# The memory budget: two suites that declare 3000 MiB each run one after the
+# other under a 4000 MiB budget with two workers free, and together under
+# 8000; the budget is printed with the workers.
+rm -f "$WORK/events"
+out=$(RACH2_MEMORY_MIB=4000 W=2 run hungry1 hungry2); rc=$?
+check "two suites past the memory budget run one after the other" 'hungry1-start hungry1-end hungry2-start hungry2-end ' \
+    "$(tr '\n' ' ' < "$WORK/events")"
+check "and the budget is announced" 1 "$(printf '%s\n' "$out" | grep -c 'memory 4000 MiB')"
+rm -f "$WORK/events"
+out=$(RACH2_MEMORY_MIB=8000 W=2 run hungry1 hungry2); rc=$?
+overlap=$(awk '/-start$/ { active++; if (active > peak) peak = active }
+              /-end$/ { active-- } END { print peak + 0 }' "$WORK/events")
+check "and together within it" 2 "$overlap"
+out=$(RACH2_MEMORY_MIB=nine run passing); rc=$?
+check "a budget that is not a number is refused" 2 "$rc"
 
 # Host speed does not decide whether a set starts. An explicit factor changes
 # only completion bounds, for one suite and for every part of a set alike.
