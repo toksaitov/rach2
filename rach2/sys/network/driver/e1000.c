@@ -65,10 +65,9 @@ struct e1000_io {
 #define E1000_MAX 4
 
 /*
- * One card. The rings and their buffers are members, so they are in .bss,
- * which this kernel places below the 32 MiB identity-mapped limit: the
- * virtual address is the physical one, so what goes into a descriptor is the
- * address of the array. The manual asks for 16-byte alignment on each ring.
+ * One card. The rings and buffers use frames allocated from the
+ * identity-mapped kernel window. Their virtual addresses are also their DMA
+ * addresses. The manual asks for 16-byte alignment on each ring.
  *
  * The rings are volatile and the buffers are not, which is the distinction
  * between memory the card writes while this driver is reading it and memory
@@ -282,10 +281,8 @@ static int e1000_mac_valid(const uint8_t *mac)
  *
  * `RAL0` and `RAH0` are tried first: a card that loaded its address from its
  * own EEPROM at power-on has it there already, with the valid bit set, and
- * this is the path a QEMU machine takes. The EEPROM is read only when that
- * bit is clear, which is what a card presents when firmware has not touched
- * it. Both paths exist because a driver that has only the first would work on
- * every emulator and fail on a cold real card.
+ * this is the path a QEMU machine takes. Read the EEPROM when `RAH0.AV` is
+ * clear or the register address fails validation.
  *
  * @return 1 with `mac` filled, 0 when neither source gave a usable address.
  */
@@ -398,26 +395,11 @@ static void e1000_tx_setup(struct e1000 *e)
 }
 
 /**
- * Probe the card, reset it, program both rings, and start it.
- *
- * The order is the one the manual asks for and the one the host model
- * asserts: the window is mapped and answering before anything is written to
- * it, interrupts are masked before the reset, the station address and the
- * multicast table are set before the receiver could match a frame, both rings
- * are complete before bus mastering is enabled, and the receiver and
- * transmitter are the last two things switched on. Nothing before the PCI
- * lookup succeeds touches a register, which is what the driver table requires
- * of a card that is not in the machine.
- *
- * @return `NETDEV_UP`, `NETDEV_ABSENT` when there is no such card, or
- *         `NETDEV_FAILED` with `e1000_error()` set to the reason.
- */
-/*
  * Take the pages this card's rings and buffers live in.
  *
- * The two rings are 512 bytes each and share one page. A buffer is 2048
- * bytes, so two of them share a page and sixteen pages hold the ring's
- * thirty-two. Taken once: a card brought up a second time keeps what it has.
+ * The two rings share one page. Each receive page stores two 2048-byte
+ * buffers; each transmit page stores two 1536-byte buffers. Allocated pages
+ * are retained across initialization attempts.
  *
  * @return 0, or -1 when the window has no more frames.
  */
@@ -461,6 +443,21 @@ static int e1000_pages(struct e1000 *e)
     return 0;
 }
 
+/**
+ * Probe the card, reset it, program both rings, and start it.
+ *
+ * The order is the one the manual asks for and the one the host model
+ * asserts: the window is mapped and answering before anything is written to
+ * it, interrupts are masked before the reset, the station address and the
+ * multicast table are set before the receiver could match a frame, both rings
+ * are complete before bus mastering is enabled, and the receiver and
+ * transmitter are the last two things switched on. Nothing before the PCI
+ * lookup succeeds touches a register, which is what the driver table requires
+ * of a card that is not in the machine.
+ *
+ * @return `NETDEV_UP`, `NETDEV_ABSENT` when there is no such card, or
+ *         `NETDEV_FAILED` with `e1000_error()` set to the reason.
+ */
 static int e1000_init(struct netdev *nd, int nth)
 {
     uint32_t addr;

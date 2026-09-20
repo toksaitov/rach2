@@ -45,9 +45,7 @@ static uint8_t *rx_buf;
 static uint32_t rx_ptr = 0;
 static int rx_overflow_logged;
 
-/* Reason the most recent rtl8139_init() returned 0, surfaced via
- * rtl8139_error() for the boot banner. The success path prints nothing (see
- * net_print_info). */
+/* The most recent device discovery or initialization error. */
 static const char *rtl_err = "no card";
 
 static void rtl8139_irq(isr_params_t *params);
@@ -71,8 +69,8 @@ static struct netdev *rtl8139_iface;
  * and transmitter. The receiver and transmitter are enabled last, after the
  * buffers are in place, so no DMA can start against an unconfigured ring.
  *
- * @return 1 on success; 0 if no card is present or bring-up fails, with
- *         rtl8139_error() set to the reason.
+ * @return NETDEV_UP on success, NETDEV_ABSENT when absent, or NETDEV_FAILED
+ *         with rtl8139_error() describing the failure.
  */
 int rtl8139_init(struct netdev *nd, int nth)
 {

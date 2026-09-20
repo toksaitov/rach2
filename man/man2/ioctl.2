@@ -235,6 +235,13 @@ If the address is a network or broadcast address under the provisional
 mask, the interface remains unconfigured until a valid netmask is
 supplied.
 Repeating the existing configured address leaves its mask unchanged.
+Changing any interface's address aborts TCP connections whose local
+address is no longer configured, with
+.Er ENETRESET .
+Connections whose address remains configured and listening sockets are
+preserved.
+The change invalidates ARP mappings and clears a gateway that is no
+longer on the interface's subnet.
 .Pp
 .Dv SIOCADDRT
 and

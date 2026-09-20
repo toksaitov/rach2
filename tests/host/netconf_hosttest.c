@@ -19,12 +19,15 @@
  */
 
 extern int printf(const char *fmt, ...);
+extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 
 #include "../../rach2/sys/network/netconf.h"
 #include "../../rach2/sys/network/net.h"
 #include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/cmdline.h"
 #include "../../rach2/sys/lib/kerrno.h"
+#include "../../rach2/sys/lib/kstring.h"
+#include "../../rach2/sys/klog.h"
 
 /* What an address change is supposed to cost, counted here. The kernel's own
    ARP cache and TCB table are not linked into a host test, so these stand in
@@ -32,6 +35,7 @@ extern int printf(const char *fmt, ...);
 static int arp_flushes;
 static int tcp_told;
 static uint32_t tcp_told_of;
+static int tcp_told_locked;
 
 void arp_flush(void);
 void tcp_local_addr_changed(uint32_t new_ip);
@@ -69,6 +73,7 @@ void tcp_local_addr_changed(uint32_t new_ip)
 {
     tcp_told++;
     tcp_told_of = new_ip;
+    tcp_told_locked = lock_depth > 0;
 }
 
 static int fails;
@@ -180,11 +185,16 @@ static void iface_reset(struct netdev *nd, uint32_t ip, uint32_t mask, uint32_t 
 /** Put the configuration back where a fresh boot starts. */
 static void conf_reset(void)
 {
+    static const uint8_t primary_mac[6] = {0x52, 0x54, 0, 0x12, 0x34, 0x56};
+    static const uint8_t secondary_mac[6] = {0x52, 0x54, 0, 0x12, 0x34, 0x57};
+
     net_ip_addr = NET_IP_ADDR_DEFAULT;
     net_ip_mask = NET_IP_MASK_DEFAULT;
     net_ip_gateway = NET_IP_GATEWAY_DEFAULT;
     iface_reset(&the_iface, NET_IP_ADDR_DEFAULT, NET_IP_MASK_DEFAULT, NET_IP_GATEWAY_DEFAULT);
     iface_reset(&other_iface, 0, 0, 0);
+    k_memcpy(the_iface.mac, primary_mac, 6);
+    k_memcpy(other_iface.mac, secondary_mac, 6);
 }
 
 static int apply(const char *cmdline, const char **why)
@@ -194,11 +204,97 @@ static int apply(const char *cmdline, const char **why)
     return netconf_apply(why);
 }
 
+static int warnings;
+static int oversized_warnings;
+
+/** Count rejected tokens and the diagnostic for an oversized value. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void)level;
     (void)subsystem;
-    (void)format;
+    if (level == KLOG_WARN) {
+        static const char oversized[] = "ifaddr: value too long";
+
+        warnings++;
+        if (k_strlen(format) == sizeof(oversized) - 1 &&
+            memcmp(format, oversized, sizeof(oversized)) == 0) {
+            oversized_warnings++;
+        }
+    }
+}
+
+/** Check MAC-based configuration and recovery after rejected tokens. */
+static void configure_by_mac(void)
+{
+    char line[256];
+    int i;
+
+    conf_reset();
+    netconf_publish();
+    kcmdline_capture("rach2.ifaddr=52:54:00:12:34:56,192.168.8.9/16,192.168.8.1 "
+                     "rach2.ifaddr=52:54:00:12:34:57,10.0.3.7/24,10.0.3.1");
+    netconf_apply_by_mac();
+    CHECK(the_iface.ip == IP4(192, 168, 8, 9) && the_iface.mask == IP4(255, 255, 0, 0) &&
+              the_iface.gateway == IP4(192, 168, 8, 1),
+          "MAC option configures the first interface");
+    CHECK(net_ip_addr == the_iface.ip && net_ip_mask == the_iface.mask &&
+              net_ip_gateway == the_iface.gateway,
+          "MAC configuration updates all primary globals");
+    CHECK(other_iface.ip == IP4(10, 0, 3, 7) && other_iface.gateway == IP4(10, 0, 3, 1),
+          "MAC option configures the secondary interface independently");
+
+    kcmdline_capture("rach2.ifaddr=52:54:00:12:34:56,172.16.5.9/24");
+    netconf_apply_by_mac();
+    CHECK(net_ip_addr == IP4(172, 16, 5, 9) && net_ip_mask == IP4(255, 255, 255, 0) &&
+              net_ip_gateway == 0 && the_iface.gateway == 0,
+          "MAC configuration without a gateway clears the primary gateway");
+
+    for (i = 79; i <= 80; i++) {
+        static const char next[] = " rach2.ifaddr=52:54:00:12:34:57,10.0.3.8/24";
+
+        conf_reset();
+        warnings = oversized_warnings = 0;
+        k_memcpy(line, "rach2.ifaddr=", 13);
+        k_memset(line + 13, 'x', (size_t)i);
+        k_memcpy(line + 13 + i, next, sizeof(next));
+        kcmdline_capture(line);
+        netconf_apply_by_mac();
+        CHECK(warnings == 1, "invalid MAC option is reported once");
+        CHECK(oversized_warnings == (i == 80), "oversized MAC option is diagnosed");
+        CHECK(other_iface.ip == IP4(10, 0, 3, 8),
+              "valid MAC option after invalid value is applied");
+        CHECK(the_iface.ip == NET_IP_ADDR_DEFAULT && net_ip_addr == the_iface.ip,
+              "invalid MAC option leaves the primary address unchanged");
+    }
+
+    conf_reset();
+    warnings = oversized_warnings = 0;
+    kcmdline_capture("rach2.ifaddr=52:54:00:12:34:58,10.0.4.7/24 "
+                     "rach2.ifaddr= rach2.ifaddr=52:54:00:12:34:57,10.0.3.9/24");
+    netconf_apply_by_mac();
+    CHECK(warnings == 2 && oversized_warnings == 0,
+          "unknown hardware address and empty value are reported");
+    CHECK(other_iface.ip == IP4(10, 0, 3, 9), "valid MAC option after rejected tokens is applied");
+}
+
+/** Check secondary address notifications without changing primary state. */
+static void secondary_address_change(void)
+{
+    conf_reset();
+    iface_reset(&other_iface, IP4(10, 0, 3, 7), IP4(255, 255, 255, 0), IP4(10, 0, 3, 1));
+    tcp_told = arp_forgets = arp_flushes = 0;
+    CHECK(netconf_set_address(&other_iface, IP4(10, 0, 4, 7), IP4(255, 255, 255, 0)) == 0,
+          "secondary address changes");
+    CHECK(tcp_told == 1 && tcp_told_of == IP4(10, 0, 4, 7) && tcp_told_locked,
+          "secondary address change notifies TCP under the network lock");
+    CHECK(arp_forgets == 1 && arp_forgot == &other_iface && arp_flushes == 0,
+          "secondary address change invalidates only its ARP mappings");
+    CHECK(other_iface.gateway == 0 && net_ip_addr == NET_IP_ADDR_DEFAULT &&
+              net_ip_gateway == NET_IP_GATEWAY_DEFAULT,
+          "secondary address change clears its gateway and preserves primary state");
+    CHECK(netconf_set_address(&other_iface, other_iface.ip, other_iface.mask) == 0 && tcp_told == 1,
+          "unchanged secondary address does not notify TCP");
+    CHECK(netconf_set_address(&other_iface, 0, 0) == 0 && tcp_told == 2 && tcp_told_of == 0,
+          "removing the secondary address notifies TCP");
 }
 
 int main(void)
@@ -207,6 +303,8 @@ int main(void)
     const char *why;
     char text[16];
 
+    configure_by_mac();
+    secondary_address_change();
     /* ---- addresses that are addresses ---- */
     ip = 0;
     mask = 0;
@@ -492,8 +590,8 @@ int main(void)
           "leaving the first interface where it was");
     CHECK(net_ip_addr == IP4(192, 168, 90, 20) && net_ip_gateway == IP4(192, 168, 90, 1),
           "and the machine's own address, which is the first interface's, with it");
-    CHECK(tcp_told == 0 && arp_flushes == 0,
-          "no connection was opened from the address that changed, so none is aborted");
+    CHECK(tcp_told == 1 && tcp_told_of == other_iface.ip && arp_flushes == 0,
+          "secondary configuration notifies TCP without flushing all ARP mappings");
     CHECK(arp_forgets == 1 && arp_forgot == &other_iface,
           "and only the mappings learned on that interface are forgotten");
 
@@ -543,5 +641,8 @@ int main(void)
           "every configuration change left the network lock as it found it");
 
     conf_reset();
+    if (!fails) {
+        printf("netconf-hosttest: result: pass\n");
+    }
     return fails;
 }

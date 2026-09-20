@@ -1,0 +1,114 @@
+#!/bin/sh
+# Compile the network configuration fixes and each fault in a private tree.
+set -eu
+
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo"
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/network-proof.XXXXXX")
+child=
+mkdir -p "$work/rach2" "$work/tests/host"
+cp -R rach2/sys "$work/rach2/sys"
+cp tests/host/netdev_hosttest.c tests/host/netconf_hosttest.c "$work/tests/host/"
+netdev="$work/rach2/sys/network/driver/netdev.c"
+netconf="$work/rach2/sys/network/netconf.c"
+cp "$netdev" "$work/netdev.saved"
+cp "$netconf" "$work/netconf.saved"
+
+cleanup()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+    cp "$work/netdev.saved" "$netdev"
+    cp "$work/netconf.saved" "$netconf"
+    touch "$netdev" "$netconf"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_phase()
+{
+    test=$1
+    phase=$2
+    expected=$3
+    message=$4
+    binary="$work/$test-$phase"
+    set --
+    if [ "$test" = netconf ]; then
+        set -- "$netconf" "$work/rach2/sys/cmdline.c" \
+            "$work/rach2/sys/lib/kstring.c" "$work/rach2/sys/lib/kctypes.c"
+    fi
+    if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
+        -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding \
+        -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -I "$work/rach2/sys" -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
+        "$work/tests/host/${test}_hosttest.c" "$@" \
+        -o "$binary" >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
+    cksum "$netdev" "$netconf" "$binary" >"$binary.cksum"
+    perl -e 'alarm 10; exec @ARGV or die "netconfig-mutation: exec: $!\n"' \
+        "$binary" >"$binary.log" 2>&1 &
+    child=$!
+    status=0
+    wait "$child" || status=$?
+    child=
+    cat "$binary.log"
+    if [ "$expected" = pass ]; then
+        [ "$status" -eq 0 ] || exit 1
+    else
+        [ "$status" -gt 0 ] && [ "$status" -lt 64 ] || exit 1
+    fi
+    grep -Fq "$message" "$binary.log" || exit 1
+    echo "netconfig-mutation: result: $test-$phase status $status"
+}
+
+echo "netconfig-mutation: logs: $work"
+run_phase netdev fixed pass 'netdev-hosttest: result: pass'
+run_phase netconf fixed pass 'netconf-hosttest: result: pass'
+for fault in refusal tcp primary oversized; do
+    python3 - "$netdev" "$netconf" "$fault" <<'PY'
+import pathlib
+import sys
+
+fault = sys.argv[3]
+changes = {
+    "refusal": ("if (!refused && drivers[i]->error)", "if (drivers[i]->error)"),
+    "tcp": ("        tcp_local_addr_changed(ip);",
+            "        if (is_machine(nd)) {\n"
+            "            tcp_local_addr_changed(ip);\n        }"),
+    "primary": ("""        if (nd == netdev_first()) {
+            net_ip_addr = ip;
+            net_ip_mask = mask;
+            net_ip_gateway = gw;
+        }
+""", ""),
+    "oversized": ("""            klog(KLOG_WARN, "net", "ifaddr: value too long");
+            continue;""", "            break;"),
+}
+path = pathlib.Path(sys.argv[1] if fault == "refusal" else sys.argv[2])
+source = path.read_text()
+old, new = changes[fault]
+if source.count(old) != 1:
+    raise SystemExit("netconfig-mutation: source pattern is not unique")
+path.write_text(source.replace(old, new))
+PY
+    test=netconf
+    case $fault in
+        refusal) test=netdev; message='injected refusal reason is retained' ;;
+        tcp) message='secondary address change notifies TCP under the network lock' ;;
+        primary) message='MAC configuration updates all primary globals' ;;
+        oversized) message='valid MAC option after invalid value is applied' ;;
+    esac
+    run_phase "$test" "$fault-mutated" fail "$message"
+    cleanup
+    run_phase "$test" "$fault-restored" pass "$test-hosttest: result: pass"
+    cmp "$work/netdev.saved" "$netdev"
+    cmp "$work/netconf.saved" "$netconf"
+done

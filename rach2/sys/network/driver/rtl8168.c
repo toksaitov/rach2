@@ -182,10 +182,9 @@ static uint32_t r8168_rx_cur;  /* next descriptor to inspect */
  * two readings are the same.
  *
  * The reference checks the condition BEFORE the first delay and up to `n`
- * times in all; a handshake that is already complete costs nothing. Every
- * caller must treat a 0 return as a failed bring-up, not continue,
- * because the reference's own habit of ignoring the result relies on a later
- * interrupt-driven recovery this driver does not have.
+ * times in all; a handshake that is already complete costs nothing.
+ * Return zero on timeout. Initialization callers must either use a documented
+ * fallback or fail. Shutdown continues to disable bus mastering.
  *
  * @return 1 when the condition held, 0 when the budget ran out.
  */
@@ -961,10 +960,9 @@ static struct netdev *rtl8168_iface;
  *
  * The order is the reference's three stages: identify and quiesce, then the
  * rings and the PHY, then the start sequence. A failure at any point leaves
- * `r8168_err` naming it and the device unbound. A chip that is simply not
- * here reports `NETDEV_ABSENT` and the next driver is tried; a chip that is
- * here and would not start reports `NETDEV_FAILED`, which stops the probe, so
- * no later driver configures a machine whose card already failed.
+ * `r8168_err` naming it and the device unbound. A failed card is stopped and
+ * its error retained. Probing continues with subsequent cards and drivers,
+ * subject to the interface and failure limits.
  *
  * @return `NETDEV_UP`, `NETDEV_ABSENT`, or `NETDEV_FAILED`.
  */
@@ -1094,13 +1092,10 @@ static int rtl8168_init(struct netdev *nd, int nth)
 }
 
 /**
- * Reclaim finished transmit descriptors, and ring the doorbell again if any
- * remain outstanding.
+ * Reclaim finished transmit descriptors.
  *
- * The re-ring is the reference's workaround for a poll request the chip can
- * lose when two arrive close together, and it is gated the way the reference
- * gates it: only after a pass that actually reclaimed something, and only
- * while descriptors are still outstanding.
+ * Issue another transmit poll while descriptors remain outstanding, including
+ * when this pass reclaimed none, to recover a lost poll request.
  */
 static uint32_t r8168_tx_reclaim(void)
 {
@@ -1119,11 +1114,6 @@ static uint32_t r8168_tx_reclaim(void)
         reclaimed++;
     }
     (void)reclaimed;
-    /* Anything still outstanding gets another doorbell. A poll request can be
-     * lost when two arrive close together, which the reference covers by
-     * ringing again; here the tick does it, so a lost one costs 10 ms rather
-     * than the connection. It is one 8-bit write when the ring is not empty
-     * and nothing at all when it is. */
     if (r8168_tx_tail != r8168_tx_head) {
         io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
     }
@@ -1517,11 +1507,11 @@ static int rtl8168_link(void *dev, struct netdev_link *out)
 /**
  * Request the chip's tally counters (rtl8169_do_counters with CounterDump):
  * the block's address goes into the two counter registers with the dump bit
- * set, and the chip clears the bit once it has written the block. The wait
- * is bounded as the reference bounds it; a chip that does not answer in
- * that time leaves the block as it was and this returns 0. The chip is
- * asked only while it is up: the reference notes that some of these chips
- * cannot dump with the receiver stopped.
+ * set, and the chip clears the bit once it has written the block.
+ * Return zero if completion is not observed within the polling limit.
+ * Read the DMA block only after completion is observed. The chip is asked
+ * only while it is up: the reference notes that some of these chips cannot
+ * dump with the receiver stopped.
  */
 static int r8168_counters_dump(void)
 {

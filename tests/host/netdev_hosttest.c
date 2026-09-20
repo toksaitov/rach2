@@ -42,6 +42,7 @@ static int fails;
 /* What each model's `init` will answer, and what it recorded. */
 struct model {
     int verdict;
+    int next_verdict;
     int inits;
     int stops;
     int txs;
@@ -54,6 +55,7 @@ struct model {
 };
 
 static struct model m_first, m_second, m_third;
+static int refused_card = -1;
 
 /* The order in which anything happened, so a check can say that the stop came
    after the init that failed and that no later driver was ever asked. */
@@ -81,13 +83,13 @@ static int first_init(struct netdev *nd, int nth)
 }
 static int second_init(struct netdev *nd, int nth)
 {
-    nd->dev = 0; /* this model has one card */
-    if (nth != 0) {
+    nd->dev = 0;
+    if (nth > 1 || (nth == 1 && m_second.next_verdict == NETDEV_ABSENT)) {
         return NETDEV_ABSENT;
     }
     m_second.inits++;
     note('2');
-    return m_second.verdict;
+    return nth == 0 ? m_second.verdict : m_second.next_verdict;
 }
 static int third_init(struct netdev *nd, int nth)
 {
@@ -211,6 +213,8 @@ static void reset(int a, int b, int c)
     m_first.verdict = a;
     m_second.verdict = b;
     m_third.verdict = c;
+    m_second.next_verdict = NETDEV_ABSENT;
+    refused_card = -1;
     m_first.inits = m_second.inits = m_third.inits = 0;
     m_first.stops = m_second.stops = m_third.stops = 0;
     m_first.txs = m_second.txs = m_third.txs = 0;
@@ -244,12 +248,14 @@ static int same(const char *a, const char *b)
 /* The one address the stack still holds for the machine. */
 uint8_t net_mac[6];
 
-/* The boot line and the log, which the walk reaches and this test does not
- * build. No case here asks for a card to be refused. */
+/** Supply a single-digit `rach2.nicfail` value when a row requests it. */
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
 {
-    (void)key;
-    (void)outlen;
+    if (same(key, "rach2.nicfail") && refused_card >= 0 && outlen >= 2) {
+        out[0] = (char)('0' + refused_card);
+        out[1] = '\0';
+        return 1;
+    }
     if (outlen > 0) {
         out[0] = '\0';
     }
@@ -274,11 +280,39 @@ void *k_memset(void *ptr, int c, size_t n)
     return ptr;
 }
 
+/** Check refusal diagnostics and continued probing after a refused card. */
+static void injected_failure(void)
+{
+    reset(NETDEV_ABSENT, NETDEV_UP, NETDEV_ABSENT);
+    refused_card = 0;
+    m_second.reason = "no e1000 present";
+    CHECK(netdev_probe() == 0, "the only card is refused");
+    CHECK(m_second.stops == 1, "the refused card is stopped");
+    CHECK(same(netdev_error(), "the card was refused on the boot line"),
+          "injected refusal reason is retained");
+
+    reset(NETDEV_ABSENT, NETDEV_UP, NETDEV_UP);
+    m_second.next_verdict = NETDEV_UP;
+    refused_card = 0;
+    CHECK(netdev_probe() == 1 && netdev_count() == 2,
+          "cards after a refusal still become interfaces");
+    CHECK(m_second.inits == 2 && m_second.stops == 1 && same(trace, "12T23"),
+          "probing continues with the same driver and later drivers");
+    CHECK(same(netdev_error(), "the card was refused on the boot line"),
+          "successful cards preserve the refusal reason");
+
+    reset(NETDEV_UP, NETDEV_FAILED, NETDEV_ABSENT);
+    refused_card = 0;
+    CHECK(netdev_probe() == 0, "a refused card and a failed card bind nothing");
+    CHECK(same(netdev_error(), m_second.reason), "a later failure supplies its own reason");
+}
+
 int main(void)
 {
     unsigned char frame[64];
     unsigned i;
 
+    injected_failure();
     for (i = 0; i < sizeof(frame); i++) {
         frame[i] = (unsigned char)i;
     }
@@ -420,5 +454,8 @@ int main(void)
     netdev_poll();
     CHECK(m_second.polls == 1, "a driver that needs polling is polled");
 
+    if (!fails) {
+        printf("netdev-hosttest: result: pass\n");
+    }
     return fails;
 }

@@ -5,9 +5,10 @@
  * The RTL8139 is first because it is what every existing suite boots against
  * and must keep binding. The e1000 is second because it is what QEMU attaches
  * when nobody asks for a card, so it is what an emulated machine has by
- * default. The RTL8168GU is last because it is the one physical target, and a
- * `NETDEV_FAILED` verdict from it stops the probe, which on a machine with no
- * serial port and no network is the only diagnostic there is.
+ * default. The RTL8168GU is last because it is the physical target.
+ *
+ * A failed card is stopped and its error retained. Probing continues with
+ * subsequent cards and drivers, subject to the interface and failure limits.
  *
  * A driver's `init` must have no effect on a machine where its device is
  * absent, since the next driver's probe runs after it.
@@ -147,21 +148,9 @@ static void name_iface(struct netdev *nd, int n)
 }
 
 /**
- * Try every compiled-in driver and take every card each of them finds.
+ * Return the zero-based card number refused by `rach2.nicfail`, or -1.
  *
- * A driver is asked for its cards one after another until it says there are
- * no more. A card that IS in the machine and would not start stops that
- * driver, and its reason is kept; the other drivers still run, so a machine
- * whose second card is broken keeps its first.
- *
- * @return 1 when at least one interface came up, 0 when none did.
- */
-/*
- * Which card the boot line asks to see fail, counting the cards this probe
- * brings up from zero, or -1 for none. `rach2.nicfail=1` makes the second
- * card refuse, which is how a machine with one broken card and one good one
- * is seen to keep the good one; there is no other way to make a card in QEMU
- * fail its bring-up.
+ * Only cards that initialize successfully count toward this number.
  */
 static int nicfail_at(void)
 {
@@ -178,6 +167,21 @@ static int nicfail_at(void)
     return i > 0 && value[i] == '\0' ? n : -1;
 }
 
+/**
+ * Try every compiled-in driver and take every card each of them finds.
+ *
+ * A failed card is stopped and its error retained. Probing continues with
+ * subsequent cards and drivers, subject to the interface and failure limits.
+ * Retain the initialization error, or the boot-line refusal reason, for each
+ * failed card.
+ *
+ * Stop failed cards because initialization may have enabled bus mastering.
+ * They have no bound interface through which shutdown could stop them.
+ * Limit failures per driver to NETDEV_MAX in case a driver never reports
+ * NETDEV_ABSENT. The first interface supplies the primary hardware address.
+ *
+ * @return 1 when at least one interface came up, 0 when none did.
+ */
 int netdev_probe(void)
 {
     int i;
@@ -191,13 +195,10 @@ int netdev_probe(void)
         int nth;
         int failures = 0;
 
-        /* A driver's cards are asked for one at a time until it says it has no
-         * more. The count of failures bounds that walk: a driver that answered
-         * FAILED for every card it was asked about, rather than ABSENT past
-         * the last one, would otherwise be asked forever. */
         for (nth = 0; niface < NETDEV_MAX && failures < NETDEV_MAX; nth++) {
             struct netdev *nd = &ifaces[niface];
             int verdict;
+            int refused;
 
             k_memset(nd, 0, sizeof(*nd));
             nd->ops = drivers[i];
@@ -205,44 +206,29 @@ int netdev_probe(void)
             name_iface(nd, niface);
             verdict = drivers[i]->init(nd, nth);
 
-            if (verdict == NETDEV_UP && found++ == fail_at) {
+            refused = verdict == NETDEV_UP && found++ == fail_at;
+            if (refused) {
                 klog(KLOG_WARN, "net", "%s: refused: rach2.nicfail=%d", nd->name, fail_at);
                 verdict = NETDEV_FAILED;
                 probe_error = "the card was refused on the boot line";
             }
             if (verdict == NETDEV_ABSENT) {
-                break; /* this driver has no more cards */
+                break;
             }
             if (verdict == NETDEV_FAILED) {
-                /* The card is in the machine and would not start. That reason
-                 * is the whole diagnostic.
-                 *
-                 * Silence it on the way past. A bring-up can fail after it has
-                 * enabled bus mastering, and nothing else will ever reach this
-                 * card again: it is not bound, so the shutdown path cannot
-                 * stop it, and a card left able to write into its rings is the
-                 * one case this operation exists for. */
                 if (drivers[i]->stop) {
                     drivers[i]->stop(nd->dev);
                 }
-                if (drivers[i]->error) {
+                if (!refused && drivers[i]->error) {
                     probe_error = drivers[i]->error();
                 }
-                /* The next card of the same driver is still asked for. Two
-                 * cards of one kind are two interfaces, and the second is not
-                 * the first one's to lose: a machine whose first e1000 will
-                 * not start keeps the network on its second. This is the same
-                 * path `rach2.nicfail` takes, so what that boot line proves is
-                 * what a real failure does. */
                 failures++;
                 continue;
             }
-            nd->up = 1; /* an interface that came up is up until it is taken down */
+            nd->up = 1;
             if (niface == 0) {
                 int b;
 
-                /* The stack still holds one address for the machine, which is
-                 * the first interface's until every layer names its own. */
                 for (b = 0; b < 6; b++) {
                     net_mac[b] = nd->mac[b];
                 }

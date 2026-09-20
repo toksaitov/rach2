@@ -21,12 +21,8 @@
 #include "../lib/kstring.h"
 
 /*
- * The SLIRP tuple, which is what QEMU gives and what every test expects.
- *
- * These are the first interface's address, mask and way out. Every interface
- * has its own in its record; these are kept beside them while the layers
- * above are taught to name the interface they mean, and `netconf_publish`
- * is the one place that writes both.
+ * Primary IPv4 configuration, initialized to the SLIRP defaults.
+ * These values match the first interface after configuration.
  */
 uint32_t net_ip_addr = NET_IP_ADDR_DEFAULT;
 uint32_t net_ip_mask = NET_IP_MASK_DEFAULT;
@@ -108,21 +104,26 @@ static int mac_equal(const uint8_t *a, const uint8_t *b)
  * machine whose cards are enumerated the other way round on the next boot
  * still puts each address on the card the operator meant.
  *
- * A token that names no card the machine has, or that will not parse, is
- * reported and skipped; the interfaces it does not name keep what they had.
+ * Report and skip each invalid token, including an oversized value or
+ * an unknown hardware address. Continue with subsequent tokens.
  */
 void netconf_apply_by_mac(void)
 {
     char value[80];
     int n;
+    int count = kcmdline_count("rach2.ifaddr");
 
-    for (n = 0; kcmdline_value_nth("rach2.ifaddr", n, value, (unsigned int)sizeof(value)); n++) {
+    for (n = 0; n < count; n++) {
         const char *p = value;
         uint8_t mac[6];
         uint32_t ip = 0, mask = 0, gw = 0;
         struct netdev *nd = 0;
         int i;
 
+        if (!kcmdline_value_nth("rach2.ifaddr", n, value, (unsigned int)sizeof(value))) {
+            klog(KLOG_WARN, "net", "ifaddr: value too long");
+            continue;
+        }
         if (!parse_mac(&p, mac) || *p != ',') {
             klog(KLOG_WARN, "net", "ifaddr: %s: not a hardware address", value);
             continue;
@@ -169,6 +170,11 @@ void netconf_apply_by_mac(void)
         nd->ip = ip;
         nd->mask = mask;
         nd->gateway = gw;
+        if (nd == netdev_first()) {
+            net_ip_addr = ip;
+            net_ip_mask = mask;
+            net_ip_gateway = gw;
+        }
         klog(KLOG_INFO, "net", "%s: configured by its station address", nd->name);
     }
 }
@@ -501,20 +507,20 @@ static uint32_t classful_mask(uint32_t ip)
     return 0xFFFFFF00u;
 }
 
-/*
- * Whether `nd` is the interface whose configuration is also the machine's.
- *
- * `net_ip_addr` and the two beside it are the address TCP opens a connection
- * from and the one the boot line writes, and they are kept equal to the first
- * interface's. Configuring any other interface writes that interface alone.
- */
+/** Return whether `nd` is the first interface. */
 static int is_machine(const struct netdev *nd)
 {
     return nd != 0 && nd == netdev_first();
 }
 
-/** Publish a new address and mask on `nd`, and tell everything that held the
- * old one. */
+/**
+ * Update an interface's address and mask.
+ *
+ * The caller holds net_lock. Invalidate affected ARP mappings, notify TCP
+ * of address changes, and clear a gateway that is no longer usable.
+ * Connections whose local address remains configured are preserved.
+ * Changes to the first interface also update the primary IPv4 globals.
+ */
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
     uint32_t old = nd->ip;
@@ -527,9 +533,6 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
         net_ip_mask = mask;
     }
 
-    /* A mask set after its address is a change of the record too: an
-       address set alone is published with the classful mask, and the mask
-       that follows it corrects the prefix. */
     if (ip != old || (ip != 0 && mask != old_mask)) {
         char addr[16];
 
@@ -540,19 +543,12 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
             klog(KLOG_INFO, "net", "%s: IPv4 none", nd->name);
         }
         if (is_machine(nd)) {
-            /* Every mapping in the cache was learned by a machine at the old
-               address, and every open connection recorded it. */
             arp_flush();
-            tcp_local_addr_changed(ip);
         } else {
-            /* Only what was learned here. A connection is opened from the
-               machine's address, which is the first interface's, so no
-               connection was opened from the address that just changed. */
             arp_forget_dev(nd);
         }
+        tcp_local_addr_changed(ip);
     }
-    /* A gateway that is no longer a host on this interface's subnet is not a
-       gateway. */
     if (nd->gateway != 0 &&
         (nd->ip == 0 || nd->mask == 0 || !netconf_gateway_ok(nd->gateway, nd->ip, nd->mask))) {
         nd->gateway = 0;
