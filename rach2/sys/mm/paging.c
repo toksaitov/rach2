@@ -703,12 +703,16 @@ static void _page_fault_handler(isr_params_t *params)
  * page tables of the kernel's gigabyte exist at boot and are shared by
  * every directory, so a mapping made here at any time is seen by every
  * process.
+ *
+ * The page count is rounded up by division and not by adding a page less
+ * one: a region reaching the top of the address space would wrap that sum to
+ * a few bytes, ask for no pages, map nothing and still return an address.
  */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {
     uintptr_t start_page = phys_addr & ~(PAGE_SIZE - 1);
     uintptr_t end_addr = phys_addr + size;
-    uintptr_t pages, i, va;
+    uintptr_t pages, span, i, va;
 
     /* Reject an empty or wrapping region: a `phys_addr + size` that overflowed
      * would leave end_addr below start_page, map nothing, and falsely succeed.
@@ -717,7 +721,8 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
         klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x, %d bytes", phys_addr, size);
         return 0;
     }
-    pages = (end_addr - start_page + PAGE_SIZE - 1) / PAGE_SIZE;
+    span = end_addr - start_page;
+    pages = span / PAGE_SIZE + ((span % PAGE_SIZE) ? 1u : 0u);
     if (pages > (KVA_MMIO + KVA_MMIO_SIZE - _mmio_next) / PAGE_SIZE) {
         klog(KLOG_ERR, "vm", "map_mmio: the MMIO region is full at 0x%x", _mmio_next);
         return 0;
@@ -977,15 +982,27 @@ uint32_t frame_free_count(void)
  * directory already shares. `va_start` must be 4 MiB-aligned. Returns 0, or
  * -1 if a page table could not be allocated or the range runs past the
  * address space.
+ *
+ * The tables are counted rather than walked to an end address: `va_start +
+ * size` at the top of the address space wraps below the start, and a loop
+ * bounded by that sum would allocate nothing and report success.
  */
 int premap_kernel_window(uintptr_t va_start, size_t size)
 {
     uintptr_t addr;
-    uintptr_t end = va_start + size;
+    uintptr_t tables, i;
 
-    for (addr = va_start; addr < end; addr += PAGE_SIZE * 1024) {
-        uintptr_t table_index = (addr / PAGE_SIZE) / 1024;
+    if (size > (uintptr_t)0 - va_start) {
+        return -1;
+    }
+    tables = size / (PAGE_SIZE * 1024) + ((size % (PAGE_SIZE * 1024)) ? 1u : 0u);
+
+    for (i = 0; i < tables; i++) {
+        uintptr_t table_index;
         page_table_t *table;
+
+        addr = va_start + i * (PAGE_SIZE * 1024);
+        table_index = (addr / PAGE_SIZE) / 1024;
 
         if (table_index >= 1024) {
             return -1;
