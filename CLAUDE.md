@@ -74,9 +74,13 @@ When a capability is missing, look in BusyBox before writing it. That is the own
 
 ## Hardware
 
-Any operation on real hardware that cannot be undone by rebuilding requires the owner's approval at the time, every time. Present what the host reports about the target, enough that the owner can recognise it, and wait for an approval that names it. A previous approval for the same target does not carry forward to the next run, and neither does one given on another machine, because the name a host gives a device belongs to that host and that moment.
+Two targets are the owner's standing authorization, given on 2026-09-20: the development flash drive on the Mac mini, and any disk of the Lenovo. Both machines hold nothing but this work. Write them without asking and without naming them to the owner first.
 
-For a disk write, what is presented is the node, its size in bytes, its bus, whether it is internal or external, whether it is a whole disk, and the partition table it currently has. Other hardware has other properties; the rule is that the owner is shown enough to recognise the thing, not that these particular fields exist everywhere.
+The flash drive is a SanDisk 3.2Gen1 of 61,524,148,224 bytes, USB serial `00014101091624031318`. Its node changes between connections, so the serial and the size are what identify it.
+
+One target is refused: the Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`. Nothing here writes it.
+
+A machine check stands where the approval stood, and it runs before every write. A Mac target must be external, removable and on USB, and must report the flash drive's serial and size; a target that is internal, that is solid state and internal, or whose serial is the SSD's, is refused and the write does not run. Report afterwards what was written and where. A target that is neither of the two authorized ones, a second flash drive, another machine, or hardware of another kind, is the owner's to authorize.
 
 The Lenovo's disk does not leave its bay. Removing and reinstalling it is an hour of physical work, and no procedure may depend on it. So before any write to that disk that is not a kernel install through `bootctl`, a USB stick carrying the recovery kernel and `reflash` is booted on the machine and shown to work, a copy of every sector about to be overwritten is saved on the host and on that stick, and recovery is the saved boot default until the write has been verified. A procedure that cannot be undone from that stick is not run.
 
