@@ -55,34 +55,20 @@ set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# The byte scanner beside this script, compiled when missing or older than
-# its source: the shell text tools disagree across platforms about NUL and
-# high bytes, and C does not.
+# The checkers this script runs are asked of make rather than compiled here:
+# one recipe builds each, under mk/host.mk's -Werror, and a hand compile
+# would publish a binary at the same path that make then calls current, so
+# the warning build would be skipped until another dependency changed.
 ASCIISCAN="$REPO/build/tools/verify/asciiscan"
-if [ ! -x "$ASCIISCAN" ] || [ "$REPO/tools/verify/asciiscan.c" -nt "$ASCIISCAN" ]; then
-    mkdir -p "${ASCIISCAN%/*}"
-    cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
-fi
-# The probe runner is a test tool, and tests/system/suites.mk owns how the test
-# tools are built. Asked for rather than compiled here, so there is one recipe
-# for it and this check cannot disagree with the one the suites use.
 RUNTESTS="$REPO/build/tests/system/runtests"
-make -C "$REPO" --no-print-directory build/tests/system/runtests >/dev/null || exit 1
 GUESTCHECK="$REPO/build/tools/verify/guestcheck"
-if [ ! -x "$GUESTCHECK" ] || [ "$REPO/tools/verify/guestcheck.c" -nt "$GUESTCHECK" ]; then
-    mkdir -p "${GUESTCHECK%/*}"
-    cc -O2 -o "$GUESTCHECK" "$REPO/tools/verify/guestcheck.c" || exit 1
-fi
 PROSECHECK="$REPO/build/tools/verify/prosecheck"
-if [ ! -x "$PROSECHECK" ] || [ "$REPO/tools/verify/prosecheck.c" -nt "$PROSECHECK" ]; then
-    mkdir -p "${PROSECHECK%/*}"
-    cc -O2 -o "$PROSECHECK" "$REPO/tools/verify/prosecheck.c" || exit 1
-fi
 SIZECHECK="$REPO/build/tools/verify/sizecheck"
-if [ ! -x "$SIZECHECK" ] || [ "$REPO/tools/verify/sizecheck.c" -nt "$SIZECHECK" ]; then
-    mkdir -p "${SIZECHECK%/*}"
-    cc -O2 -o "$SIZECHECK" "$REPO/tools/verify/sizecheck.c" || exit 1
-fi
+SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
+make -C "$REPO" --no-print-directory build/tools/verify/asciiscan \
+    build/tests/system/runtests build/tools/verify/guestcheck \
+    build/tools/verify/prosecheck build/tools/verify/sizecheck \
+    build/tools/inspect/setidcheck >/dev/null || exit 1
 cd "$REPO" || exit 1
 VDIR=/tmp/rach2_verify
 mkdir -p "$VDIR"
@@ -134,6 +120,14 @@ fi
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
 hr "2/22 cppcheck (c89; warning, style, performance, portability)"
+# cppcheck's findings change between majors in both directions: 2.19 reports
+# a modulo of one in a mutation hook and an uninitialised word 2.21 does not,
+# and 2.21 reports a shadowed argument and an unused cast 2.19 does not. So
+# this is judged by the version tools/setup/judges records and nowhere else;
+# another version reports what it found and decides nothing, as step 5 does
+# for clang-format.
+cpp_recorded=$(sed -n 's/^cppcheck: //p' "$REPO/tools/setup/judges")
+cpp_found=$(cppcheck --version 2>/dev/null | head -1)
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
@@ -155,6 +149,8 @@ if cppcheck --std=c89 --platform=unix32 --enable=warning,style,performance,porta
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_srcs.txt" >"$VDIR/verify_cppcheck.log" 2>&1; then
     echo "  PASS (0 findings)"
+elif [ "$cpp_found" != "$cpp_recorded" ]; then
+    echo "  SKIP ($(grep -c 'error:\|warning:\|style:\|performance:\|portability:' "$VDIR/verify_cppcheck.log") finding(s) under $cpp_found; the record says $cpp_recorded, and the testing host judges)"
 else
     echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
 fi
@@ -171,6 +167,8 @@ if cppcheck --std=c99 --platform=unix64 --enable=warning,style,performance,porta
       --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
       --file-list="$VDIR/_hostsrcs.txt" >"$VDIR/verify_cppcheck_host.log" 2>&1; then
     echo "  PASS (host programs: 0 findings)"
+elif [ "$cpp_found" != "$cpp_recorded" ]; then
+    echo "  SKIP (host programs: $(grep -c 'error:\|warning:\|style:\|performance:\|portability:' "$VDIR/verify_cppcheck_host.log") finding(s) under $cpp_found; the testing host judges)"
 else
     echo "  FAIL: see $VDIR/verify_cppcheck_host.log"; fail=1
 fi
@@ -383,11 +381,6 @@ setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
 # decoding would leave every real manifest passing and this check silent.
-SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
-if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
-    mkdir -p "${SETIDCHECK%/*}"
-    cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || setid=1
-fi
 "$SETIDCHECK" --selftest >"$VDIR/verify_setid.log" 2>&1 || setid=1
 "$SETIDCHECK" >>"$VDIR/verify_setid.log" 2>&1 || setid=1
 if [ "$setid" -eq 0 ]; then
@@ -603,12 +596,16 @@ if ! command -v sparse >/dev/null 2>&1; then
 else
     gccinc=$(i686-elf-gcc -print-file-name=include)
     : >"$VDIR/verify_sparse.log"
+    sparse_bad=0
     for f in $(make -s -C "$REPO/rach2" print-c-src); do
         (cd "$REPO/rach2" && sparse -D__CHECKER__ -m32 -ansi -ffreestanding -nostdinc -I"$gccinc" \
-            -Wno-decl -Wno-non-pointer-null "$f") >>"$VDIR/verify_sparse.log" 2>&1
+            -Wno-decl -Wno-non-pointer-null "$f") >>"$VDIR/verify_sparse.log" 2>&1 ||
+            sparse_bad=$((sparse_bad + 1))
     done
     sparse_n=$(grep -c "warning:\|error:" "$VDIR/verify_sparse.log")
-    if [ "$sparse_n" -eq 0 ]; then
+    if [ "$sparse_bad" -ne 0 ]; then
+        echo "  FAIL: sparse did not run over $sparse_bad file(s); see $VDIR/verify_sparse.log"; fail=1
+    elif [ "$sparse_n" -eq 0 ]; then
         echo "  PASS (0 findings)"
     else
         echo "  FAIL: $sparse_n finding(s); see $VDIR/verify_sparse.log"; fail=1

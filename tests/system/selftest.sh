@@ -97,6 +97,8 @@ style|-|full
 usb|-|full
 reporting|-|full
 killed|-|full
+remaker|-|full
+stray|-|full
 hungry1|-|full||3000
 hungry2|-|full||3000
 REG
@@ -106,10 +108,12 @@ echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suite
 cat > "$WORK/Makefile" <<'MK'
 components:
 	@echo components >> order.log; echo $$PPID >> components.count
-prepare-all: product
+prepare-all: product build/images/shared.img
 	@echo prepared >> order.log; echo $$PPID >> prepared.count
 product:
 	@echo built >> product.count; sleep 0.3; touch product
+build/images/shared.img: product
+	@mkdir -p build/images; echo shared > $@; echo dep > $@.d
 run-silent:
 	@echo suite-last-line; sleep 30
 run-outputbusy:
@@ -128,6 +132,10 @@ run-style: run-silent
 run-usb: run-silent
 run-passing:
 	@echo "passing ran"; echo passing >> order.log; echo $$PPID >> ran.pid
+run-remaker: build/images/shared.img
+	@echo "remaker ran"; echo shared > build/images/shared.img; echo dep > build/images/shared.img.d
+run-stray:
+	@mkdir -p build/images; echo stray > build/images/orphan.img; echo "stray ran"
 run-failing:
 	@echo "failing ran"; exit 1
 run-leaky:
@@ -396,6 +404,20 @@ overlap=$(awk '/-start$/ { active++; if (active > peak) peak = active }
 check "two workers run them together" 2 "$overlap"
 check "both concurrent fixtures complete" 4 "$(wc -l < "$WORK/events" | tr -d ' ')"
 check "and each concurrent suite is announced" 2 "$(printf '%s\n' "$out" | grep -c '^run: slow[12]: starting')"
+
+# A product of the run's own target, remade by a suite's make because the
+# build left its prerequisite at the same second, is the build's and not a
+# suite's: the run must not fail for it. A file under build/images that no
+# product covers and no suite declares must still fail the run by name.
+rm -rf "$WORK/build/images"
+out=$(run remaker); rc=$?
+check "a suite that remakes a product of the run's target passes" 0 "$rc"
+check "and the run says nothing about images" 0 "$(printf '%s\n' "$out" | grep -c 'run: images:')"
+rm -rf "$WORK/build/images"
+out=$(run stray); rc=$?
+check "a file no product covers and no suite declares fails the run" 1 "$rc"
+check "and is named" 1 "$(printf '%s\n' "$out" | grep -c 'run: images: undeclared: build/images/orphan.img')"
+rm -rf "$WORK/build/images"
 
 # The memory budget: two suites that declare 3000 MiB each run one after the
 # other under a 4000 MiB budget with two workers free, and together under

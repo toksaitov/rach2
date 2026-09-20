@@ -494,6 +494,8 @@ os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
 os-real-ext2: $(OS_REAL_EXT2)
 
+include mk/images.mk
+
 # The demo credentials, as file targets. Both generators are idempotent and do
 # nothing when their output is there, which was enough while one thing ran at a
 # time: with `make -j` and a pool of suites, two of them mint a key at once and
@@ -928,7 +930,6 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # test tools, and `prepare-all`. Included rather than kept apart so that one
 # dependency graph covers the product and the variants only a suite needs.
 include mk/host.mk
-include mk/images.mk
 include tests/system/suites.mk
 
 # Every host program the tree compiles, for the compilation database

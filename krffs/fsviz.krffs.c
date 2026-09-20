@@ -213,7 +213,7 @@ int main(int argc, char **argv)
      * and root node the node-size fields are garbage, and the chain walk below
      * would follow them out of the mapping. The size check guards the magic
      * read itself. */
-    if (file_system.size < sizeof(struct krffs_node) ||
+    if (file_system.size < (off_t)sizeof(struct krffs_node) ||
         file_system.node->magic != KRFFS_File_System_Magic ||
         file_system.node->type != KRFFS_Root_Node) {
         fprintf(stderr,

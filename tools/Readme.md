@@ -178,7 +178,7 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 `verify/check.sh` runs a preflight followed by twenty-two numbered checks:
 
 * Build the kernel with warnings treated as errors.
-* Run scoped cppcheck with `verify/cppcheck.suppress`.
+* Run scoped cppcheck with `verify/cppcheck.suppress`, over the kernel at c89 and the host programs at c99, judged by the cppcheck version `setup/judges` records; another version reports what it found and decides nothing, since the findings change between majors in both directions.
 * Run ShellCheck on project shell scripts.
 * Check source conventions such as ASCII text, C comment form, header guards, and marked idle waits.
 * Require clang-format on every in-house C file, judged by the clang-format version `setup/judges` records; another version reports how many files it would change and decides nothing. The reformat commits are in `.git-blame-ignore-revs`, and `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes blame look through them.

@@ -33,6 +33,10 @@ trap 'rm -f "$out"' 0
 count=0
 for f in $files; do
     count=$((count + 1))
+    if [ ! -r "$f" ]; then
+        echo "linkcheck: $f: cannot read" >> "$out"
+        continue
+    fi
     dir=$(dirname "$f")
     # A link inside a code span is an example, not a link: `[text](target)`
     # in this file's own description of the form would otherwise be one.

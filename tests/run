@@ -365,6 +365,19 @@ check_images() { # check_images NAMES: 0 when every file made belongs to one of 
     [ -f "$WORK/images.stamp" ] || return 0
     image_table "$1" > "$WORK/images.patterns"
     ( cd "$REPO/build/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
+    # A product of the run's own target is the build's and not a suite's: a
+    # suite's make remakes one whose prerequisite the parallel build left at
+    # the same second, and the file is the same bytes, which `check_hashes`
+    # is what proves. Only what no product covers is asked about below.
+    if [ -f "$WORK/inventory.products" ]; then
+        { sed -n 's|^build/images/||p' "$WORK/inventory.products"
+          # and the dependency file make wrote beside each, which is not a
+          # target of its own and so is in no closure
+          sed -n 's|^build/images/||p' "$WORK/inventory.products" | sed 's/$/.d/'
+        } | sort -u > "$WORK/images.products"
+        comm -23 "$WORK/images.made" "$WORK/images.products" > "$WORK/images.made.new"
+        mv "$WORK/images.made.new" "$WORK/images.made"
+    fi
     bad=""
     while IFS= read -r f; do
         owners=""

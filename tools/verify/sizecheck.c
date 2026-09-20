@@ -37,7 +37,8 @@
 #define PATH_MAX_LEN 512
 #define REASONS_MAX  1024
 #define LINE_MAX_LEN 4096
-#define SIG_LINES    4
+#define SIG_LINES    8
+#define COND_MAX     16 /* nested preprocessor conditionals tracked */
 #define SIG_MAX_LEN  (SIG_LINES * LINE_MAX_LEN + SIG_LINES)
 
 struct reason {
@@ -316,7 +317,45 @@ static long count_params(const char *open)
     }
     for (p = open + 1; *p == ' '; p++) {
     }
-    return (*p == ')' || strncmp(p, "void", 4) == 0) ? 0 : commas + 1;
+    if (*p == ')') {
+        return 0;
+    }
+    /* `(void)` alone is no parameter; `(void *ctx)` is one, so the word has
+       to end the list rather than begin a type. */
+    if (strncmp(p, "void", 4) == 0) {
+        const char *q = p + 4;
+
+        while (*q == ' ') {
+            q++;
+        }
+        if (*q == ')') {
+            return 0;
+        }
+    }
+    return commas + 1;
+}
+
+/* The parenthesis that opens the parameter list of `sig`: the last one at
+   depth zero whose own closing parenthesis ends the signature. An attribute
+   before the name, `static void __attribute__((noreturn)) f(int x)`, opens a
+   parenthesis of its own first, and a reader that took the first would call
+   the function `__attribute__` and count its own argument as the list. */
+static char *declarator_paren(char *sig)
+{
+    char *p, *last = 0;
+    int level = 0;
+
+    for (p = sig; *p != '\0'; p++) {
+        if (*p == '(') {
+            if (level == 0) {
+                last = p;
+            }
+            level++;
+        } else if (*p == ')') {
+            level--;
+        }
+    }
+    return last;
 }
 
 /* The name and the parameter count of the definition whose signature the
@@ -334,7 +373,7 @@ static int parse_signature(char lines[][LINE_MAX_LEN], int nprev, char *name, lo
         strcat(sig, lines[i]);
         strcat(sig, " ");
     }
-    open = strchr(sig, '(');
+    open = declarator_paren(sig);
     if (!open) {
         return 0;
     }
@@ -396,7 +435,8 @@ static void check_file(const char *path)
     FILE *f = fopen(path, "r");
     static char lines[SIG_LINES][LINE_MAX_LEN]; /* the signature may span a few lines */
     char line[LINE_MAX_LEN], code[LINE_MAX_LEN];
-    int inc = 0, nprev = 0, depth = 0, in_body = 0, body_lines = 0, nesting = 0;
+    int inc = 0, nprev = 0, depth = 0, in_body = 0, body_lines = 0, nesting = 0, overlong = 0;
+    int cond_depth = 0, cond_skip[COND_MAX];
     char name[NAME_MAX_LEN] = "";
     long params = 0;
 
@@ -406,6 +446,47 @@ static void check_file(const char *path)
     }
     while (fgets(line, sizeof(line), f)) {
         bare(line, code, sizeof(code), &inc);
+        /* One configuration's text, as a compiler sees it: the first arm of
+           every conditional is taken and the rest dropped. The two arms of
+           a `#ifdef` can each open a brace a shared `#endif` closes, which
+           a reader that took both could not balance. */
+        if (code[0] == '#') {
+            const char *d = code + 1;
+
+            while (*d == ' ' || *d == '\t') {
+                d++;
+            }
+            if (strncmp(d, "if", 2) == 0) {
+                if (cond_depth < COND_MAX) {
+                    cond_skip[cond_depth] = 0;
+                }
+                cond_depth++;
+                continue;
+            }
+            if (strncmp(d, "el", 2) == 0 && cond_depth > 0) {
+                if (cond_depth <= COND_MAX) {
+                    cond_skip[cond_depth - 1] = 1;
+                }
+                continue;
+            }
+            if (strncmp(d, "endif", 5) == 0 && cond_depth > 0) {
+                cond_depth--;
+                continue;
+            }
+            continue;
+        }
+        {
+            int skipping = 0, k;
+
+            for (k = 0; k < cond_depth && k < COND_MAX; k++) {
+                if (cond_skip[k]) {
+                    skipping = 1;
+                }
+            }
+            if (skipping) {
+                continue;
+            }
+        }
         if (in_body) {
             scan_body_line(code, &depth, &nesting);
             if (depth == 0) {
@@ -415,6 +496,10 @@ static void check_file(const char *path)
             } else {
                 body_lines++;
             }
+        } else if (code[0] == '{' && depth == 0 && overlong) {
+            fprintf(stderr, "sizecheck: %s: a definition's signature is longer than %d lines\n",
+                    path, SIG_LINES);
+            exit(2);
         } else if (code[0] == '{' && depth == 0 && parse_signature(lines, nprev, name, &params)) {
             if (code[1] == '}') {
                 finish_function(path, name, params, 0, 0);
@@ -425,15 +510,26 @@ static void check_file(const char *path)
                 depth = 1;
             }
             nprev = 0;
+            overlong = 0;
         } else if (code[0] == '\n' || code[0] == '\0') {
             nprev = 0;
+            overlong = 0;
         } else {
             if (nprev == SIG_LINES) {
+                /* A definition whose signature is longer than the buffer
+                   would be measured from the lines that are left, which is
+                   a different function; it is refused instead. */
+                overlong = 1;
                 memmove(lines[0], lines[1], sizeof(lines[0]) * (SIG_LINES - 1));
                 nprev = SIG_LINES - 1;
             }
             strcpy(lines[nprev++], code);
         }
+    }
+    if (in_body) {
+        fprintf(stderr, "sizecheck: %s: the file ends inside %s; its braces do not close\n", path,
+                name[0] ? name : "a function");
+        exit(2);
     }
     fclose(f);
 }

@@ -6,7 +6,7 @@
 # The limits are 100 lines, 6 parameters, nesting 4, complexity 25.
 
 ish/ish.c:ish_run_line complexity 33 a dispatcher, one arm per command, read as a table
-ish/ish.c:ish_run_line lines 141 a dispatcher, one arm per command, read as a table
+ish/ish.c:ish_run_line lines 136 a dispatcher, one arm per command, read as a table
 
 krffs/defrag.krffs.c:main complexity 30 one procedure over a file format, in the order the format is read
 krffs/defrag.krffs.c:main lines 245 one procedure over a file format, in the order the format is read
@@ -18,7 +18,7 @@ krffs/fsck.krffs.c:main complexity 91 one procedure over a file format, in the o
 krffs/fsck.krffs.c:main lines 525 one procedure over a file format, in the order the format is read
 
 krffs/fsviz.krffs.c:main complexity 87 one procedure over a file format, in the order the format is read
-krffs/fsviz.krffs.c:main lines 421 one procedure over a file format, in the order the format is read
+krffs/fsviz.krffs.c:main lines 420 one procedure over a file format, in the order the format is read
 krffs/fsviz.krffs.c:main nesting 6 one procedure over a file format, in the order the format is read
 
 krffs/krffs.c:main lines 133 one procedure over a file format, in the order the format is read
@@ -41,7 +41,7 @@ rach2/kernel.c:exec_program lines 164 a dispatcher, one arm per command, read as
 rach2/kernel.c:k_main complexity 77 the boot sequence, in the order the hardware requires
 rach2/kernel.c:k_main lines 507 the boot sequence, in the order the hardware requires
 rach2/kernel.c:process_command complexity 122 a dispatcher, one arm per command, read as a table
-rach2/kernel.c:process_command lines 472 a dispatcher, one arm per command, read as a table
+rach2/kernel.c:process_command lines 466 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:process_command nesting 6 a dispatcher, one arm per command, read as a table
 rach2/kernel.c:root_spec_matches complexity 31 a parser over an external format, one check per field in the format's order
 
@@ -64,11 +64,11 @@ rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 105 a hardware sequence, th
 rach2/sys/block/ahci.c:ahci_build_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 rach2/sys/block/ahci.c:ahci_run_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 
-rach2/sys/block/diskinfo.c:diskinfo_format lines 107 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/block/diskinfo.c:diskinfo_format lines 107 a report a program reads, one field per line in the order the reader takes them
 
 rach2/sys/block/gpt.c:gpt_parse_entries params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
-rach2/sys/block/loop.c:loop_attach lines 136 a hardware sequence, the registers written in the order the datasheet requires
+rach2/sys/block/loop.c:loop_attach lines 136 one device operation, its steps in the order the layer requires and each undone on the failure of the next
 
 rach2/sys/block/partition.c:follow_logical params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
@@ -170,8 +170,6 @@ rach2/sys/kio.c:vt_dispatch_csi lines 105 a dispatcher, one arm per command, rea
 
 rach2/sys/lib/kfmt.c:k_vprintf nesting 5 a parser over an external format, one check per field in the format's order
 
-rach2/sys/mm/pagecache.c:pc_probe_window_size nesting 5 a hardware sequence, the registers written in the order the datasheet requires
-
 rach2/sys/mm/paging.c:init_paging complexity 29 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/mm/paging.c:init_paging lines 177 a hardware sequence, the registers written in the order the datasheet requires
 
@@ -199,6 +197,7 @@ rach2/sys/proc/elf.c:elf_load_image lines 187 a parser over an external format, 
 rach2/sys/proc/elf.c:elf_load_image nesting 5 a parser over an external format, one check per field in the format's order
 
 rach2/sys/proc/uimage.c:build_user_stack lines 119 a parser over an external format, one check per field in the format's order
+rach2/sys/proc/uimage.c:build_user_stack params 9 the parameters are the fields of one initial stack; a struct for them would be filled and unpacked once
 
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
@@ -257,7 +256,7 @@ rach2/sys/syscall_proc.c:signal_post nesting 5 a state machine, one arm per stat
 rach2/sys/syscall_proc.c:sys_execve complexity 82 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:sys_execve lines 541 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:sys_execve nesting 5 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:sys_exit lines 118 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_proc.c:sys_exit lines 116 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:sys_fork lines 193 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
@@ -417,7 +416,7 @@ tests/host/mkexfatfixture.c:read_path lines 101 a fixture builder, the volume wr
 tests/host/mkexfatfixture.c:set_build params 10 a fixture builder, the volume written in on-disk order
 
 tests/host/mkfatfixture.c:build_fat complexity 78 a fixture builder, the volume written in on-disk order
-tests/host/mkfatfixture.c:build_fat lines 444 a fixture builder, the volume written in on-disk order
+tests/host/mkfatfixture.c:build_fat lines 443 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:check_image complexity 29 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_bpb complexity 31 a fixture builder, the volume written in on-disk order
 tests/host/mkfatfixture.c:chk_dir complexity 56 a fixture builder, the volume written in on-disk order
@@ -468,7 +467,7 @@ tests/host/pwauth_hosttest.c:check_rewrite lines 175 a test's rows, each a case,
 tests/host/pwauth_hosttest.c:check_teardown complexity 32 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_teardown lines 133 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:main complexity 51 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:main lines 244 a test's rows, each a case, read as one table
+tests/host/pwauth_hosttest.c:main lines 240 a test's rows, each a case, read as one table
 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 
@@ -652,7 +651,7 @@ tests/system/fixtures/vfs_unmount.c:main complexity 26 a fixture builder, the vo
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order
 
 tests/system/runner/harness.c:main complexity 166 a parser over an external format, one check per field in the format's order
-tests/system/runner/harness.c:main lines 642 a parser over an external format, one check per field in the format's order
+tests/system/runner/harness.c:main lines 640 a parser over an external format, one check per field in the format's order
 tests/system/runner/harness.c:regex_compile complexity 29 a parser over an external format, one check per field in the format's order
 
 tests/system/runner/ptydrive.c:main complexity 47 a parser over an external format, one check per field in the format's order
@@ -662,6 +661,11 @@ tests/system/runner/runtests.c:main complexity 61 a parser over an external form
 tests/system/runner/runtests.c:main lines 265 a parser over an external format, one check per field in the format's order
 tests/system/runner/runtests.c:marker_at params 8 a parser over an external format, one check per field in the format's order
 tests/system/runner/runtests.c:selftest lines 155 the checker's own selftest, its cases in one table
+
+tests/system/runner/runutil.c:check_token complexity 29 a parser over an external format, one check per field in the format's order
+tests/system/runner/runutil.c:main complexity 36 a parser over an external format, one check per field in the format's order
+tests/system/runner/runutil.c:supervise complexity 54 a parser over an external format, one check per field in the format's order
+tests/system/runner/runutil.c:supervise lines 172 a parser over an external format, one check per field in the format's order
 
 tests/tlsprobe.c:probe_main lines 126 a probe, one sequence of steps in the order the log records them
 
@@ -720,7 +724,7 @@ tools/inspect/setidcheck.c:read_allow complexity 63 an inspector's check, one wa
 tools/inspect/setidcheck.c:read_allow lines 140 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:run complexity 69 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:run lines 237 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:selftest lines 698 the checker's own selftest, its cases in one table
+tools/inspect/setidcheck.c:selftest lines 695 the checker's own selftest, its cases in one table
 tools/inspect/setidcheck.c:st_ext2_rows complexity 43 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_ext2_rows lines 144 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_image params 8 an inspector's check, one walk over the format it reads
@@ -746,7 +750,7 @@ tools/verify/prosecheck.c:selftest lines 198 the checker's own selftest, its cas
 tools/verify/prosecheck.c:selftest nesting 6 the checker's own selftest, its cases in one table
 
 utils/adduser.c:main complexity 61 one procedure over a file format, in the order the format is read
-utils/adduser.c:main lines 263 one procedure over a file format, in the order the format is read
+utils/adduser.c:main lines 261 one procedure over a file format, in the order the format is read
 
 utils/bootslot.c:bootslot_open complexity 38 one procedure over a file format, in the order the format is read
 utils/bootslot.c:bootslot_open lines 123 one procedure over a file format, in the order the format is read
@@ -770,11 +774,13 @@ utils/growroot.c:main lines 244 one procedure over a file format, in the order t
 utils/growset.c:main complexity 63 one procedure over a file format, in the order the format is read
 utils/growset.c:main lines 222 one procedure over a file format, in the order the format is read
 
+utils/grubslot.c:grubslot_install params 8 one procedure over a file format, in the order the format is read
+
 utils/httpd.c:build_body lines 116 one procedure over a file format, in the order the format is read
 utils/httpd.c:main lines 125 one procedure over a file format, in the order the format is read
 
 utils/init.c:main complexity 34 one procedure over a file format, in the order the format is read
-utils/init.c:main lines 190 one procedure over a file format, in the order the format is read
+utils/init.c:main lines 176 one procedure over a file format, in the order the format is read
 
 utils/netcfg.c:netcfg_read complexity 36 one procedure over a file format, in the order the format is read
 utils/netcfg.c:netcfg_read lines 147 one procedure over a file format, in the order the format is read

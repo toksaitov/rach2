@@ -5,8 +5,14 @@
 # krffs header rebuilds exactly the objects that include it.
 include ../mk/deps.mk
 include ../mk/build.mk
+include ../mk/host.mk
 
-CFLAGS += -g -std=gnu99 $(DEPFLAGS) -D_FILE_OFFSET_BITS=64
+# The host policy's flags with this component's own: gnu99 for the tools'
+# dialect, the large-file offsets the image tools need, and the header
+# dependencies. `HOSTCFLAGS` is where -Wall -Wextra -Werror come from, so a
+# warning added there reaches these tools as it reaches every other host
+# program.
+CFLAGS += $(HOSTCFLAGS) -std=gnu99 $(DEPFLAGS) -D_FILE_OFFSET_BITS=64
 
 # FUSE is needed only by the optional mount tool (`make mount`), so the
 # pkg-config probe is lazy (=): a default build neither runs pkg-config nor
@@ -112,9 +118,14 @@ $(BUILD)/mkhash.krffs : $(BUILD)/mkhash.krffs.o $(BUILD)/crypt_sha512.o
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+# The one object compiled from a vendored source, and the one this
+# component's warning policy does not reach: musl's own code is written for
+# musl's flags, and `-Werror` on it would make a pinned tarball's upgrade a
+# patching job. Everything else here is in-house and takes the host policy's
+# warnings.
 $(BUILD)/crypt_sha512.o : $(MUSL_CRYPT)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(filter-out $(HOSTCFLAGS),$(CFLAGS)) -O2 -c $< -o $@
 
 # Compile rules: the two mount objects get the FUSE cflags, everything else does
 # not. Each makes its $(BUILD) output dir first.
