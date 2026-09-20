@@ -158,7 +158,7 @@ int main(int argc, char **argv)
         } else if (!has_set_name_option && strcmp(argv[i], "--set-name") == 0) {
             has_set_name_option = true;
             if (i + 1 < argc) {
-                strncpy((char *)name, argv[i + 1], KRFFS_FILE_NAME_BUFFER_SIZE);
+                strncpy((char *)name, argv[i + 1], KRFFS_FILE_NAME_BUFFER_SIZE - 1);
                 name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
             } else {
                 failed_to_parse_options = true;

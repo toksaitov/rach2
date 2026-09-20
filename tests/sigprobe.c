@@ -7,7 +7,11 @@
  *   * block SIGUSR1, raise it (stays pending, handler must NOT run), then
  *     unblock and confirm the now-pending signal is delivered;
  *   * fork a child that spins; SIGTERM it and confirm the default action
- *     terminates it (parent reaps WTERMSIG == SIGTERM).
+ *     terminates it (parent reaps WTERMSIG == SIGTERM);
+ *   * a handler that writes a selector naming no descriptor into the saved
+ *     `gs` of its own frame, which the kernel loads at ring 0 on the way
+ *     back: the machine must survive it, since a process may not choose
+ *     what the kernel loads.
  *
  * Prints "SIGPROBE OK" on success. Freestanding; direct int 0x80.
  */
@@ -112,11 +116,31 @@ __asm__(".globl sig_restorer\n"
 
 static volatile int handler_ran;
 static volatile int handler_sig;
+static volatile int forge_ran;
+
+/* The saved trapframe inside the signal frame the kernel built: its first
+ * word is the saved `gs` (struct isr_params in rach2/sys/isr.h), and the
+ * frame begins four words before the handler's own return address, which is
+ * what `&signo` stands one word past. */
+#define SAVED_GS_FROM_ARG(argp) ((volatile unsigned *)((char *)(argp) + 3 * 4))
+
+/* A selector with a ring-3 RPL whose index names no descriptor: the GDT has
+ * seven entries, so index 8191 is past its limit. A kernel that loaded it
+ * with `mov %ax, %gs` at ring 0 would take a general-protection fault in
+ * kernel mode and panic. */
+#define BAD_SELECTOR 0xFFFFu
 
 static void usr1_handler(int sig)
 {
     handler_ran = 1;
     handler_sig = sig;
+}
+
+static void forge_handler(int sig)
+{
+    forge_ran = 1;
+    (void)sig;
+    *SAVED_GS_FROM_ARG(&sig) = BAD_SELECTOR;
 }
 
 static void install(int signo, void (*h)(int))
@@ -167,6 +191,17 @@ void _start(void)
     syscall2(SYS_KILL, pid, SIGTERM);
     check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap killed child");
     check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
+
+    /* 4. A forged selector in the frame the kernel restores. The return path
+       loads gs, fs, es and ds with `mov` while still at ring 0, so a
+       selector past the GDT's limit would fault the kernel and not the
+       process; the kernel must coerce it. Reaching the next statement at
+       all is the proof, since the alternative is a machine that stops. */
+    install(SIGUSR1, forge_handler);
+    forge_ran = 0;
+    syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
+    check(forge_ran == 1, "the forging handler ran");
+    check(syscall1(SYS_GETPID, 0) > 0, "the machine survives a forged selector in the frame");
 
     if (fails == 0) {
         puts("SIGPROBE OK");

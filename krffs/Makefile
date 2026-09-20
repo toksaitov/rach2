@@ -134,7 +134,13 @@ $(MOUNT_OBJS) : $(BUILD)/%.o : %.c
 	$(CC) $(CFLAGS) $(FUSE_CFLAGS) -c $< -o $@
 $(TOOL_OBJS) : $(BUILD)/%.o : %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(CFLAGS_$(notdir $*)) -c $< -o $@
+
+# The visualiser includes the vendored termbox2 whole, which ignores the
+# result of a read and a write the host's headers mark; the warning is about
+# that library's code and not this project's, so it is reported and not made
+# an error for this one object. Every other warning still is.
+CFLAGS_fsviz.krffs = -Wno-error=unused-result
 
 # Pull in the per-object header dependencies GCC wrote (-MMD), now beside the
 # objects.

@@ -35,6 +35,10 @@ typedef struct gdt_ptr gdt_ptr_t;
 #define GDT_TLS_ENTRY    6
 #define GDT_TLS_SELECTOR ((GDT_TLS_ENTRY << 3) | 3) /* index 6, RPL 3 -> 0x33 */
 
+/** The flat user data selector, index 4 at RPL 3, which every user context
+ *  runs with in ds, es, fs and ss. */
+#define GDT_USER_DATA_SELECTOR 0x23u
+
 /** The Global Descriptor Table. */
 extern gdt_descriptor_t gdt_descriptors[GDT_ENTRY_COUNT];
 

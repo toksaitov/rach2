@@ -381,20 +381,30 @@ static void read_syscalls_from(const char *header, const char *source)
    socket operations. */
 static void read_syscalls(const char *header, const char *sources)
 {
-    char one[512];
+    /* The name each call is recorded as coming from outlives this call: a
+       diagnostic prints it when a registered call has no page. So the paths
+       are kept here for the program's life rather than in a buffer this
+       function reuses and then leaves. */
+    static char paths[8][512];
+    static int npaths;
     const char *p = sources;
 
     while (*p != '\0') {
         const char *q = strchr(p, ':');
         size_t n = q ? (size_t)(q - p) : strlen(p);
 
-        if (n >= sizeof(one)) {
+        if (n >= sizeof(paths[0])) {
             fail("%s: a source path is longer than this reads", sources, "");
             return;
         }
-        memcpy(one, p, n);
-        one[n] = '\0';
-        read_syscalls_from(header, one);
+        if (npaths == (int)(sizeof(paths) / sizeof(paths[0]))) {
+            fail("%s: more source paths than this reads", sources, "");
+            return;
+        }
+        memcpy(paths[npaths], p, n);
+        paths[npaths][n] = '\0';
+        read_syscalls_from(header, paths[npaths]);
+        npaths++;
         p = q ? q + 1 : p + n;
     }
 }

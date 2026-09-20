@@ -1788,11 +1788,17 @@ static uint64_t sigact_mask(const struct k_sigaction *sa)
     return (uint64_t)sa->mask[0] | ((uint64_t)sa->mask[1] << 32);
 }
 
-/* Coerce a restored data/TLS selector: keep it only if it is a ring-3 (RPL 3)
- * selector (so %gs == 0x33 TLS survives), else force flat user data 0x23. */
+/* Coerce a restored data/TLS selector to one this kernel has: flat user data
+ * (0x23) or the per-process TLS entry (0x33), and flat user data for anything
+ * else. The return path loads these with `mov` while still at ring 0, so a
+ * selector whose index is past the GDT's limit raises a general-protection
+ * fault in the kernel rather than in the process: a ring-3 RPL is not enough
+ * to make a selector safe to load, and a forged frame could name one. */
 static uint32_t safe_user_seg(uint32_t sel)
 {
-    return ((sel & 3u) == 3u) ? (sel & 0xFFFFu) : 0x23u;
+    uint32_t s = sel & 0xFFFFu;
+
+    return (s == GDT_USER_DATA_SELECTOR || s == GDT_TLS_SELECTOR) ? s : GDT_USER_DATA_SELECTOR;
 }
 
 /* The signal masks are 64-bit, so a read-modify-write is two stores on i386;
