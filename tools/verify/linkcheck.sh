@@ -34,7 +34,10 @@ count=0
 for f in $files; do
     count=$((count + 1))
     dir=$(dirname "$f")
-    grep -o '\[[^][]*\]([^()]*)' "$f" | sed 's/.*(\(.*\))/\1/' |
+    # A link inside a code span is an example, not a link: `[text](target)`
+    # in this file's own description of the form would otherwise be one.
+    # shellcheck disable=SC2016 # the backticks are Markdown, not a command
+    sed 's/`[^`]*`//g' "$f" | grep -o '\[[^][]*\]([^()]*)' | sed 's/.*(\(.*\))/\1/' |
     while read -r target; do
         case "$target" in
             http://*|https://*|mailto:*|'#'*|'') continue ;;

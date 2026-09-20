@@ -643,8 +643,13 @@ fi
 #     moved is worse than one that says nothing: a reader follows it and
 #     learns that the tree cannot be trusted.
 hr "22/22 the documents' links"
-if sh "$REPO/tools/verify/linkcheck.sh" >"$VDIR/verify_links.log" 2>&1; then
-    echo "  PASS ($(sed -n 's/^linkcheck: ok: //p' "$VDIR/verify_links.log"))"
+# The milestone checklists under dev-log/ are lists of links by their nature,
+# so they are checked by name although the records around them are not.
+checklists=$(cd "$REPO" && find dev-log -name checklist.md | sort | tr '\n' ' ')
+# shellcheck disable=SC2086 # one path a word, listed above
+if sh "$REPO/tools/verify/linkcheck.sh" >"$VDIR/verify_links.log" 2>&1 &&
+   sh "$REPO/tools/verify/linkcheck.sh" $checklists >>"$VDIR/verify_links.log" 2>&1; then
+    echo "  PASS ($(sed -n 's/^linkcheck: ok: //p' "$VDIR/verify_links.log" | tr '\n' ';' | sed 's/;$//; s/;/, and /'))"
 else
     echo "  FAIL: $(sed -n 's/^linkcheck: \([0-9]*\) broken.*/\1/p' "$VDIR/verify_links.log") broken link(s); see $VDIR/verify_links.log"
     grep -m3 'no such file\|has no heading' "$VDIR/verify_links.log" | sed 's/^/    /'
