@@ -15,4 +15,4 @@ The three block file systems share `fs_common.h`: the kernel calls the driver ma
 
 ## What proves it
 
-A harness is proved by two things: libFuzzer's coverage line growing from its seed, and a fault planted in the parser found from the corpus as a sanitizer report. The records of both are in the milestone notes that added each harness.
+A harness is proved by two things: libFuzzer's coverage line growing from its seed, and a fault planted in the parser found as a sanitizer report. The records are in the milestone notes that added each harness, including the one case where mutation did not reach the planted fault, the FAT harness, whose fault a crafted input reproduced instead.

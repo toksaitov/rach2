@@ -3,9 +3,10 @@
 Thirty questions a person asks in their first hour with this tree, each with
 the one place the documents answer it. The rule the answers are held to is the
 plan's: a reader who has this list and a working copy finds each answer in
-about a minute, by following the link and reading one section. The times are
-recorded in `notes.md`; the owner reads the list at the sitting and keeps or
-drops the claim.
+about a minute, by following the link and reading one section. `notes.md`
+records what this pass checked, that every named place exists and answers its
+question, and not a newcomer's minute; the owner reads the list at the sitting
+and keeps or drops the claim.
 
 The questions are the ones asked here over the milestones, by a person meeting
 the tree and by this session meeting a part of it again: what a thing is, how
