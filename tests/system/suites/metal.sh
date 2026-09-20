@@ -341,8 +341,50 @@ if ! echo "$UNNAMED" | grep -q '^metal-accept: PASS' ||
 fi
 [ "$stick_before" = "$(shasum -a 256 "$STICK")" ] || fail "the unnamed stick was changed"
 echo "metal-test: acceptance without a serial leaves the stick unchanged: OK"
+# Mutate only a private host script. The production reader has no override.
+# The copy lives under the images directory with this suite's name: a
+# directory made under build/tests changes that directory's time, which the
+# test image depends on, and a pooled suite would restage it.
+ACCEPT_ROOT=$(mktemp -d "$OUT.accept.XXXXXX")
+trap 'cleanup; rm -rf "$ACCEPT_ROOT"' EXIT
+ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
+mkdir -p "$ACCEPT_COPY"
+for directory in build krffs; do
+    ln -s "$REPO/$directory" "$ACCEPT_COPY/../../../$directory"
+done
+cp "$REPO/tests/system/accept/metal_accept.sh" "$ACCEPT_COPY/original.sh"
+cp "$REPO/tests/system/accept/su_command.sh" "$ACCEPT_COPY/su_command.sh"
+python3 - "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh" <<'PYMUTATE'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text()
+old = 'if ! run "umount $STICK_MOUNT"; then'
+new = 'if ! run "exec 9<$STICK_FILE; umount $STICK_MOUNT"; then'
+assert text.count(old) == 1
+Path(sys.argv[2]).write_text(text.replace(old, new))
+PYMUTATE
+fat_before=$(ssh_run 'cat /proc/usb' | sed -n 's/^disk0 .*flushes \([0-9]*\).*/\1/p')
+fat_status=0
+RACH2_ACCEPT_FAT_IMAGE="$STICK@@1048576" \
+    sh "$ACCEPT_COPY/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
+    > "$WORK.busy-fat.log" 2>&1 || fat_status=$?
+fat_after=$(ssh_run 'cat /proc/usb' | sed -n 's/^disk0 .*flushes \([0-9]*\).*/\1/p')
+if [ "$fat_status" -ne 1 ] ||
+    ! grep -q 'stick: cached bytes match' "$WORK.busy-fat.log" ||
+    ! grep -q 'FAIL: stick: first unmount failed' "$WORK.busy-fat.log" ||
+    grep -Eq 'stick: (remount bytes match|host FAT bytes match)|^metal-accept: PASS' "$WORK.busy-fat.log"; then
+    cat "$WORK.busy-fat.log" >&2
+    fail "the FAT row accepted a busy unmount"
+fi
+case "$fat_before:$fat_after" in
+    *[!0-9:]*|:*|*:) fail "the failed-unmount row has no flush counts" ;;
+esac
+[ "$fat_after" -gt "$fat_before" ] || fail "the failed-unmount row did not flush writes"
+echo "metal-test: FAT acceptance rejects a busy unmount despite flushes ($fat_before to $fat_after): OK"
+cp "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh"
 accept_status=0
-RACH2_ACCEPT_SU=1 \
+RACH2_ACCEPT_SU=1 RACH2_ACCEPT_FAT_IMAGE="$STICK@@1048576" \
     RACH2_ACCEPT_USER=test RACH2_ACCEPT_KEY="$TEST_KEY" \
     sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
     > "$ACCEPT_LOG" 2>&1 || accept_status=$?
@@ -366,8 +408,10 @@ else
     cat "$ACCEPT_LOG" >&2
     fail "the acceptance script's image row did not run against the rehearsal machine"
 fi
-if grep -q 'stick: the volume ACCEPT on /dev/disk[0-9]*p[0-9]* mounts' "$ACCEPT_LOG"; then
-    echo "metal-test: and its stick section found the stick, wrote it and flushed it: OK"
+if grep -q 'stick: the volume ACCEPT on /dev/disk[0-9]*p[0-9]* mounts' "$ACCEPT_LOG" &&
+    grep -q 'stick: remount bytes match after successful unmounts' "$ACCEPT_LOG" &&
+    grep -q 'stick: host FAT bytes match while unmounted' "$ACCEPT_LOG"; then
+    echo "metal-test: FAT remount and independent host bytes match: OK"
 else
     fail "the acceptance script's stick section did not run against the stick"
 fi
@@ -407,19 +451,6 @@ mbr_sum=${mbr_sum%% *}
 grep -q "disk: the MBR hashes to $mbr_sum" "$ACCEPT_LOG" \
     || fail "the acceptance did not hash the same sector as the host"
 
-# Mutate only a private host script. The production reader has no override.
-# The copy lives under the images directory with this suite's name: a
-# directory made under build/tests changes that directory's time, which the
-# test image depends on, and a pooled suite would restage it.
-ACCEPT_ROOT=$(mktemp -d "$OUT.accept.XXXXXX")
-trap 'cleanup; rm -rf "$ACCEPT_ROOT"' EXIT
-ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
-mkdir -p "$ACCEPT_COPY"
-for directory in build krffs; do
-    ln -s "$REPO/$directory" "$ACCEPT_COPY/../../../$directory"
-done
-cp "$REPO/tests/system/accept/metal_accept.sh" "$ACCEPT_COPY/original.sh"
-cp "$REPO/tests/system/accept/su_command.sh" "$ACCEPT_COPY/su_command.sh"
 # shellcheck disable=SC2016 # Match the guest variable in the private source.
 sed 's@/bin/busybox dd if=/dev/disk0 of="\$f" bs=512 count=1@/bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=0@' \
     "$ACCEPT_COPY/original.sh" > "$ACCEPT_COPY/metal_accept.sh"

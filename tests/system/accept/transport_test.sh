@@ -45,7 +45,7 @@ case "$command" in
     'cat /proc/disk'*)
         printf '%s\n' 'policy read-only' 'disk 0 usb 0 1000 mbr fixture' \
             'identity 0 512 removable free FIXTURE'
-        if [ "$ACCEPT_CASE" = disk-prefix ]; then
+        if [ "$ACCEPT_CASE" = disk-prefix ] || [ "${ACCEPT_CASE#fat-}" != "$ACCEPT_CASE" ]; then
             printf '%s\n' 'disk 1 usb 0 1000 mbr approved' \
                 'identity 1 512 removable free APPROVED01' \
                 'disk 10 usb 0 1000 mbr unapproved' \
@@ -81,7 +81,7 @@ case "$command" in
             *) echo /tmp/accept.fixture ;;
         esac
         ;;
-    'cat > '*) cat >/dev/null; [ "$ACCEPT_CASE" != put-fail ] ;;
+    'cat > '*) cat > "$ACCEPT_FIXTURE/payload"; [ "$ACCEPT_CASE" != put-fail ] ;;
     'wc -c < '*) echo 1048576 ;;
     'loopctl attach '*) echo 1 ;;
     'mkdir -p /mnt/loop '*) printf 'hello from inside an image' ;;
@@ -92,7 +92,7 @@ case "$command" in
     'mv /tmp/accept-'*|'mv /tmp/accept.'*|'if [ -f /tmp/accept-transfer.'*) : ;;
     'rm -rf '*|'df -k /tmp;'*) : ;;
     'cat /proc/usb'*)
-        if [ "$ACCEPT_CASE" = disk-prefix ]; then
+        if [ "$ACCEPT_CASE" = disk-prefix ] || [ "${ACCEPT_CASE#fat-}" != "$ACCEPT_CASE" ]; then
             for disk in disk1 disk10; do
                 flushes=0
                 cmp -s "$ACCEPT_FIXTURE/$disk.img" "$ACCEPT_FIXTURE/$disk.before" || flushes=1
@@ -105,7 +105,7 @@ case "$command" in
         printf '%s\n' '/dev/disk10p1: LABEL="TESTVOL" TYPE="vfat"' \
             '/dev/disk1p1: LABEL="TESTVOL" TYPE="vfat"'
         ;;
-    'mkdir -p /mnt && mount '*)
+    'mkdir /tmp/accept.fixture/mnt && mount '*|'mount /dev/disk'*' /tmp/accept.fixture/mnt')
         node=${command#*mount }
         node=${node%% *}
         case "$node" in
@@ -113,13 +113,31 @@ case "$command" in
             /dev/disk10p1) disk=disk10 ;;
             *) exit 99 ;;
         esac
-        printf 'accept\n' >> "$ACCEPT_FIXTURE/$disk.img"
-        echo accept
+        echo "$disk" > "$ACCEPT_FIXTURE/selected"
         ;;
+    'mktemp /tmp/accept.fixture/mnt/accept.'*) echo /tmp/accept.fixture/mnt/accept.fixture ;;
+    'cp /tmp/accept.fixture/expected '*)
+        disk=$(cat "$ACCEPT_FIXTURE/selected")
+        printf 'accept\n' >> "$ACCEPT_FIXTURE/$disk.img"
+        ;;
+    'cmp /tmp/accept.fixture/expected '*) [ "$ACCEPT_CASE" != fat-remount ] ;;
+    'umount /tmp/accept.fixture/mnt'*) [ "$ACCEPT_CASE" != fat-busy ] ;;
+    'rm -f /tmp/accept.fixture/mnt/accept.'*) : ;;
+    'rm /tmp/accept.fixture/mnt/accept.'*) : ;;
     'if [ -b /dev/disk1p'*) : ;;
     *) echo "accept-fixture: unexpected command: $command" >&2; exit 99 ;;
 esac
 SSH
+cat > "$work/bin/mcopy" <<'MCOPY'
+#!/bin/sh
+set -eu
+for destination do :; done
+: > "$ACCEPT_FIXTURE/host-read"
+cp "$ACCEPT_FIXTURE/payload" "$destination"
+if [ "$ACCEPT_CASE" = fat-host ]; then
+    printf x | dd of="$destination" bs=1 count=1 conv=notrunc 2>/dev/null
+fi
+MCOPY
 cat > "$copy/su_command.sh" <<'SU'
 #!/bin/sh
 # Model only the transport status. The metal suite runs the real su helper.
@@ -136,14 +154,14 @@ cat > "$work/build/krffs/readfile.krffs" <<'READFILE'
 #!/bin/sh
 echo written-on-the-machine > "$3"
 READFILE
-chmod +x "$work/bin/ssh" "$work/build/krffs/"*.krffs
+chmod +x "$work/bin/ssh" "$work/bin/mcopy" "$work/build/krffs/"*.krffs
 
 PATH="$work/bin:$PATH"
 ACCEPT_FIXTURE=$work
 RACH2_ACCEPT_KEY="$work/key"
 RACH2_ACCEPT_PASSWORD=unused-fixture-value
 export PATH ACCEPT_FIXTURE RACH2_ACCEPT_KEY RACH2_ACCEPT_PASSWORD
-unset RACH2_ACCEPT_DD RACH2_ACCEPT_BOOTLOG
+unset RACH2_ACCEPT_DD RACH2_ACCEPT_BOOTLOG RACH2_ACCEPT_FAT_IMAGE
 
 check()
 {
@@ -152,7 +170,8 @@ check()
     export ACCEPT_CASE
     status=0
     log="$work/$phase.$RACH2_ACCEPT_SU.$ACCEPT_CASE.log"
-    if [ "$ACCEPT_CASE" = disk-prefix ]; then
+    rm -f "$work/host-read"
+    if [ "$ACCEPT_CASE" = disk-prefix ] || [ "${ACCEPT_CASE#fat-}" != "$ACCEPT_CASE" ]; then
         for disk in disk1 disk10; do
             printf '%s original bytes\n' "$disk" > "$work/$disk.img"
             cp "$work/$disk.img" "$work/$disk.before"
@@ -164,7 +183,9 @@ check()
         fi
         printf 'disk1 original bytes\naccept\n' > "$work/disk1.expected"
         cmp -s "$work/disk1.img" "$work/disk1.expected" || return 1
-        grep -q 'stick: the volume TESTVOL on /dev/disk1p1 mounts' "$log" || return 1
+        if [ "$expected" -eq 0 ]; then
+            grep -q 'stick: the volume TESTVOL on /dev/disk1p1 mounts' "$log" || return 1
+        fi
     else
         sh "$copy/metal_accept.sh" fixture > "$log" 2>&1 || status=$?
     fi
@@ -184,6 +205,23 @@ check()
         echo 'accept-transport: a failed reader supplied a digest' >&2
         return 1
     fi
+    case "$ACCEPT_CASE" in
+        fat-busy|fat-remount)
+            grep -q 'stick: cached bytes match' "$log" || return 1
+            [ ! -f "$work/host-read" ] || return 1
+            if grep -q 'stick: remount bytes match' "$log"; then return 1; fi
+            ;;
+        fat-good|fat-host)
+            grep -q 'stick: remount bytes match after successful unmounts' "$log" || return 1
+            [ -f "$work/host-read" ] || return 1
+            ;;
+    esac
+    case "$ACCEPT_CASE" in
+        fat-busy) grep -q 'FAIL: stick: first unmount failed' "$log" || return 1 ;;
+        fat-remount) grep -q 'FAIL: stick: remount bytes differ' "$log" || return 1 ;;
+        fat-host) grep -q 'FAIL: stick: host FAT bytes differ' "$log" || return 1 ;;
+        fat-good) grep -q 'stick: host FAT bytes match while unmounted' "$log" || return 1 ;;
+    esac
 }
 
 cases()
@@ -196,6 +234,13 @@ cases()
         done
         check live-clean 0 || return 1
         check disk-prefix 0 || return 1
+        RACH2_ACCEPT_FAT_IMAGE=fixture
+        export RACH2_ACCEPT_FAT_IMAGE
+        check fat-good 0 || return 1
+        for fault in fat-busy fat-remount fat-host; do
+            check "$fault" 1 || return 1
+        done
+        unset RACH2_ACCEPT_FAT_IMAGE
         RACH2_ACCEPT_DD=/tmp/reader
         export RACH2_ACCEPT_DD
         check reader-override 2 || return 1
@@ -205,7 +250,7 @@ cases()
         check saved-bootlog 2 || return 1
         unset RACH2_ACCEPT_BOOTLOG
     done
-    echo "accept-transport: $phase: 26 checks passed"
+    echo "accept-transport: $phase: 34 checks passed"
 }
 
 printf '%s\n' 'boot: Rach2 Booting' 'ext2: check: clean' > "$work/healthy-bootlog"

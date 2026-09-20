@@ -73,24 +73,26 @@ BASELINE_MBR_SHA256="652ad40fe72061185cf3a69c1a9a45394f68374f409153e082b7c1fa04c
 BASELINE_SECTORS="1953525168"
 BASELINE_MODEL="Samsung SSD 870 EVO 1TB"
 
-# What the rows leave on the machine is removed here as well as in the rows,
-# so an interrupted run leaves nothing but the machine as it was found: the
-# image's mount and its loop device first, then the directory that holds the
-# image, and the known-hosts file last, after the last connection. Each
-# variable is set when its resource exists and cleared when the row let it
-# go, and the function keeps the status the script is exiting with.
+# Release mounts before removing their temporary directories. A failed
+# unmount leaves its directory in place.
 MACHINE_TMP=""
 MACHINE_MOUNTED=""
 MACHINE_LOOP=""
 TRANSFER_TMP=""
+STICK_FILE=""
 cleanup() {
     if [ -n "$MACHINE_MOUNTED" ]; then
-        run "umount $MACHINE_MOUNTED; rmdir $MACHINE_MOUNTED" > /dev/null 2>&1 || true
+        if [ -n "$STICK_FILE" ]; then
+            run "rm -f $STICK_FILE" > /dev/null 2>&1 || true
+        fi
+        if run "umount $MACHINE_MOUNTED && rmdir $MACHINE_MOUNTED" > /dev/null 2>&1; then
+            MACHINE_MOUNTED=""
+        fi
     fi
     if [ -n "$MACHINE_LOOP" ]; then
         run "loopctl detach $MACHINE_LOOP" > /dev/null 2>&1 || true
     fi
-    if [ -n "$MACHINE_TMP" ]; then
+    if [ -n "$MACHINE_TMP" ] && [ -z "$MACHINE_MOUNTED" ]; then
         run "rm -rf $MACHINE_TMP" > /dev/null 2>&1 || true
     fi
     if [ -n "$TRANSFER_TMP" ]; then
@@ -221,6 +223,63 @@ get() {
     account "rm -rf $TRANSFER_TMP" || transfer_status=1
     TRANSFER_TMP=""
     return "$transfer_status"
+}
+
+# Compare a unique file before and after unmount. The rehearsal supplies the
+# FAT image to mtools for a host read while the guest volume is unmounted.
+stick_witness() {
+    printf 'fat acceptance %s\n' "${LOCAL_TMP##*/}" > "$LOCAL_TMP/stick.expected" || return 1
+    MACHINE_TMP=$(run 'mktemp -d /tmp/accept.XXXXXX') || return 1
+    case "$MACHINE_TMP" in
+        /tmp/accept.*) ;;
+        *) return 1 ;;
+    esac
+    case "$MACHINE_TMP" in
+        *[!A-Za-z0-9_./-]*) return 1 ;;
+    esac
+    put "$LOCAL_TMP/stick.expected" "$MACHINE_TMP/expected" || return 1
+    STICK_MOUNT="$MACHINE_TMP/mnt"
+    MACHINE_MOUNTED="$STICK_MOUNT"
+    run "mkdir $STICK_MOUNT && mount $VOLNODE $STICK_MOUNT" || return 1
+    STICK_FILE=$(run "mktemp $STICK_MOUNT/accept.XXXXXX") || return 1
+    case "$STICK_FILE" in
+        "$STICK_MOUNT"/accept.*) ;;
+        *) return 1 ;;
+    esac
+    case "${STICK_FILE#"$STICK_MOUNT"/}" in
+        *[!A-Za-z0-9.]*) return 1 ;;
+    esac
+    run "cp $MACHINE_TMP/expected $STICK_FILE && cmp $MACHINE_TMP/expected $STICK_FILE" || return 1
+    note "stick: cached bytes match"
+    if ! run "umount $STICK_MOUNT"; then
+        bad "stick: first unmount failed"
+        return 1
+    fi
+    run "mount $VOLNODE $STICK_MOUNT" || return 1
+    if ! run "cmp $MACHINE_TMP/expected $STICK_FILE"; then
+        bad "stick: remount bytes differ"
+        return 1
+    fi
+    run "umount $STICK_MOUNT" || return 1
+    MACHINE_MOUNTED=""
+    note "stick: remount bytes match after successful unmounts"
+    if [ -n "${RACH2_ACCEPT_FAT_IMAGE:-}" ]; then
+        if ! mcopy -i "$RACH2_ACCEPT_FAT_IMAGE" "::/${STICK_FILE##*/}" "$LOCAL_TMP/stick.host" ||
+            ! cmp -s "$LOCAL_TMP/stick.expected" "$LOCAL_TMP/stick.host"; then
+            bad "stick: host FAT bytes differ"
+            return 1
+        fi
+        note "stick: host FAT bytes match while unmounted"
+    else
+        note "stick: no host FAT image supplied; no offline byte check"
+    fi
+    MACHINE_MOUNTED="$STICK_MOUNT"
+    run "mount $VOLNODE $STICK_MOUNT" || return 1
+    run "rm $STICK_FILE && umount $STICK_MOUNT" || return 1
+    STICK_FILE=""
+    MACHINE_MOUNTED=""
+    run "rm -rf $MACHINE_TMP" || return 1
+    MACHINE_TMP=""
 }
 
 echo "metal-accept: $HOST:$PORT"
@@ -782,20 +841,17 @@ if [ -n "$STICK" ]; then
         bad "stick: no FAT or exFAT volume with a plain label was found on it"
     else
         before="$(echo "$USBLINE" | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
-        # The unmount runs whether or not the write and the read back did, so
-        # a failure leaves neither a file nor a mount behind on the stick.
-        CMD="mkdir -p /mnt && mount $VOLNODE /mnt && { f=\$(mktemp /mnt/accept.XXXXXX) && echo accept > \"\$f\" && cat \"\$f\"; rm -f \"\$f\"; umount /mnt; }"
-        OUT="$(run "$CMD")"
-        after="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
-        if [ "$OUT" = "accept" ]; then
-            note "stick: the volume $LABEL on $VOLNODE mounts, takes a file and gives it back"
+        if stick_witness; then
+            note "stick: the volume $LABEL on $VOLNODE mounts, writes and reads after remount"
         else
-            bad "stick: the volume $LABEL did not take a write: $OUT"
+            bad "stick: the volume $LABEL failed its persistence check"
+            exit 1
         fi
+        after="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
         if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
-            note "stick: the unmount flushed its cache ($before to $after)"
+            note "stick: flushes during writes and unmounts ($before to $after)"
         else
-            bad "stick: the unmount did not flush its cache (${before:-?} to ${after:-?})"
+            bad "stick: writes and unmounts did not increase flushes (${before:-?} to ${after:-?})"
         fi
     fi
     # A KRFFS volume of the stick, which milestone 44 made mountable: a
