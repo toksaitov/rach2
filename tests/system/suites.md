@@ -59,7 +59,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `exitline` (full tier; needs qemu-system-i386; 128 MiB): the plain process-exit line is printed under the debug shell and nowhere else.
 * `login` (core tier; needs qemu-system-i386; 128 MiB): prove the console cannot fall back to an unauthenticated shell.
 * `man` (core tier; needs qemu-system-i386; 128 MiB): the manual pages on the machine.
-* `metal` (core tier; needs qemu-system-i386, ssh, mformat; 128 MiB): the metal image reached over SSH with nobody at its console.
+* `metal` (core tier; needs qemu-system-i386, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image and acceptance of an installed ext2 root.
 * `bootline` (full tier; needs qemu-system-i386; 128 MiB): the boot line that contradicts itself.
 * `persist` (core tier; needs qemu-system-i386; 128 MiB): fsync durability across a reboot.
 * `style` (full tier; needs cppcheck, shellcheck, clang-format; no machine): the source checks over the tree, tools/verify/check.sh, booting nothing.

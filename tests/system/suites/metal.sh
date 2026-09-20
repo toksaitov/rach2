@@ -456,4 +456,7 @@ done
 echo "metal-test: the live boot log retains the early inventory after acceptance traffic: OK"
 
 cleanup_boot
+sh "$REPO/tests/system/accept/installed_test.sh" \
+    "$REPO/build/rach2/kernel" "$REPO/build/tests/system/harness" \
+    "$REPO/build/images/metal-installed" || fail "the installed acceptance rows"
 echo "metal-test: PASS"
