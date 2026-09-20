@@ -558,7 +558,7 @@ static void invalid_accept(void)
 
     for (type = SOCK_STREAM; type <= SOCK_DGRAM; type++) {
         args[0] = AF_INET;
-        args[1] = (uint32_t)type | 0x800u;
+        args[1] = (uint32_t)type;
         args[2] = 0;
         fd = socketcall(SC_SOCKET, args);
         if (fd < 0) {
