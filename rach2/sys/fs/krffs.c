@@ -1158,14 +1158,14 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
              * after the type that publishes a node. A stop between the two
              * leaves one name on two nodes, which the check resolves, and
              * never leaves the file with neither. */
-            /* The old node must go. A removal that fails may have marked it
-             * free already, so the caller is sent to the new node either way:
-             * the copy is complete and published there, and an old node still
-             * reserved is a duplicate the check resolves at the next mount.
-             * Sending the caller back to the old offset is what must not
-             * happen, since that offset may be inside a free node now. */
-            if (moved != KRFFS_NO_NODE) {
-                (void)krffs_remove_at(mount, offset);
+            /* The old node must go: two nodes with one name is a state the
+             * check resolves at the next mount, but a running kernel would
+             * walk to the old one and read what the file used to be, so the
+             * caller is told this did not work. Where the caller then sends
+             * its holders is its own decision; the old offset may be inside a
+             * free node by now. */
+            if (moved != KRFFS_NO_NODE && krffs_remove_at(mount, offset) != 0) {
+                return KRFFS_NO_NODE;
             }
             return moved;
         }
@@ -1399,11 +1399,21 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_siz
     {
         uint64_t moved = krffs_resize_at(mount, node, new_size);
 
-        /* Where the node is now, whatever the answer: a resize that could
-         * not move it left it where it was, and the caller repoints from
-         * this. */
+        /* Where the node is now, for the caller to repoint its holders
+         * from. A resize that could not move the file left it where it was,
+         * unless it had already freed it to make room, in which case there is
+         * no node to point at and the holders keep what they have. */
         if (node_out) {
-            *node_out = moved != KRFFS_NO_NODE ? moved : node;
+            krffs_node_t still;
+
+            if (moved != KRFFS_NO_NODE) {
+                *node_out = moved;
+            } else if (krffs_head(mount, node, &still) == 0 &&
+                       still.type == KRFFS_RESERVED_NODE) {
+                *node_out = node;
+            } else {
+                *node_out = KRFFS_NO_NODE;
+            }
         }
         if (moved == KRFFS_NO_NODE) {
             return KRFFS_ENOSPACE;
