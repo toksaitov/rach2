@@ -99,6 +99,9 @@ static void make_kernel(void)
     for (i = 128; i < sizeof(kernel); i++) {
         kernel[i] = (uint8_t)(i * 7);
     }
+    /* The banner a real kernel carries: an image without it names no policy
+       and the validator refuses it. */
+    memcpy(kernel + 200, "rach2: disk policy: read-write", 31);
 }
 
 /** Initialize two resolved slots and an environment that permits copying. */
@@ -204,11 +207,36 @@ static void check_bounds(void)
           "load crossing 4 GiB is refused");
 }
 
+/**
+ * Check the disk policy a whole image names.
+ *
+ * The read-only build refuses every write command, so a machine booted from
+ * it cannot mount its disk root and stops with nothing mounted.
+ */
+static void check_policy(void)
+{
+    uint32_t whole = sizeof(kernel);
+
+    make_kernel();
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == 0,
+          "the read-write build is taken");
+    memcpy(kernel + 200, "rach2: disk policy: read-only", 30);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "read-only disk build") != NULL,
+          "the read-only build is refused as a machine's kernel");
+    make_kernel();
+    memset(kernel + 200, 0, 31);
+    check(bootslot_validate_kernel(kernel, whole, whole, err, sizeof(err)) == -1 &&
+              strstr(err, "names no one disk policy") != NULL,
+          "an image with no policy banner is refused");
+}
+
 /** Run the focused boot-slot checks. */
 int main(void)
 {
     check_fallback();
     check_bounds();
+    check_policy();
     printf("bootslot-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return fails != 0;
 }

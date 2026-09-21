@@ -54,7 +54,7 @@ run_phase()
 
 echo "bootslot-mutation: logs: $work"
 run_phase fixed 0 'bootslot-hosttest: result: pass:'
-for fault in order bound; do
+for fault in order bound policy; do
     python3 - "$work/bootslot.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -68,6 +68,13 @@ if sys.argv[2] == "order":
     source = source[:start] + source[end:]
     before = '    for (s = 1; s < nsectors; s++) {\n'
     after = final + before
+elif sys.argv[2] == "policy":
+    before = '''    if (ro && !rw) {
+        return fail(err, errlen,
+                    "the image is the read-only disk build, which cannot mount a disk root");
+    }
+'''
+    after = ''
 else:
     before = '''        if (p_memsz > 0xFFFFFFFFu - p_vaddr) {
             return fail(err, errlen, "a load leaves the 32-bit address space");
@@ -81,6 +88,7 @@ PY
     case $fault in
         order) message='install refuses the unverified fallback' ;;
         bound) message='load crossing 4 GiB is refused' ;;
+        policy) message="the read-only build is refused as a machine's kernel" ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

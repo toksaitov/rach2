@@ -105,6 +105,11 @@ ELF load file ranges must fit the file size.
 Load memory ranges must start at or above 1 MiB and have a representable
 32-bit exclusive end.
 The entry point must lie in a load's file-backed bytes.
+The file must carry the read-write disk-policy banner and not the read-only
+one: a kernel built read-only refuses every write command, so its mount of a
+disk root fails and the machine stops with nothing mounted.
+The fallback's header prefix is judged without that banner, which may lie
+past the bytes read.
 Set
 .Ql saved_entry=fallback ,
 write the candidate slot, read it back byte for byte, and set

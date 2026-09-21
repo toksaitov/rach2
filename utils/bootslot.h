@@ -84,6 +84,14 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
  * headers must fit `present`, the available prefix. The entry point must
  * lie in a load's file-backed bytes. A four-byte-aligned Multiboot header
  * in the first 8192 bytes must have ALIGN|MEMINFO flags and a valid checksum.
+ *
+ * When `present` covers the whole image the disk-policy banner is judged as
+ * well: the image must carry the read-write banner and not the read-only one.
+ * The read-only build refuses every write command, so a machine booted from
+ * it cannot mount its disk root and stops with nothing mounted; that costs a
+ * boot and a trip to the machine, and it is refused here instead. A caller
+ * that passes a prefix is checking a slot it has already installed, and the
+ * banner may lie past what it read, so the policy is not judged there.
  */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen);

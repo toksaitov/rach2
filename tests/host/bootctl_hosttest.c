@@ -163,6 +163,11 @@ static void make_kernel(uint8_t *out, uint32_t size)
     for (i = 128; i < size; i++) {
         out[i] = (uint8_t)(i * 7);
     }
+    /* The banner a real kernel carries: an image without it names no policy
+       and the validator refuses it. */
+    if (size >= 231) {
+        memcpy(out + 200, "rach2: disk policy: read-write", 31);
+    }
 }
 
 /** Whether the on-disk environment block contains `line` (grubenv is at a
@@ -185,6 +190,43 @@ static int env_has(const char *line)
 static struct bootslot bs;
 static uint8_t kernel[64 * 1024];
 static char err[128];
+
+/**
+ * Check the disk policy a whole image names.
+ *
+ * A kernel built read-only refuses every write command, so its mount of a
+ * disk root fails and the machine stops with nothing mounted; installing one
+ * costs a boot and a trip to the machine. An image that names neither policy,
+ * or both, is refused too: the banner is how a built kernel's policy is read,
+ * and an image with no answer to that is not a kernel this tool installs.
+ */
+static void check_policy(void)
+{
+    make_kernel(kernel, 5000);
+    memcpy(kernel + 200, "rach2: disk policy: read-only", 30);
+    CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
+              strstr(err, "read-only disk build") != NULL,
+          "the read-only build is refused as a machine's kernel");
+    make_kernel(kernel, 5000);
+    memset(kernel + 200, 0, 31);
+    CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
+              strstr(err, "names no one disk policy") != NULL,
+          "an image with no policy banner is refused");
+    make_kernel(kernel, 5000);
+    memcpy(kernel + 300, "rach2: disk policy: read-only", 30);
+    CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
+              strstr(err, "names no one disk policy") != NULL,
+          "an image carrying both banners is refused");
+    make_kernel(kernel, 5000);
+    CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == 0,
+          "the read-write build is taken");
+    /* A prefix cannot see a banner past it, so the policy is not judged
+       there: this is the readback a slot's own check makes. */
+    make_kernel(kernel, 5000);
+    memset(kernel + 200, 0, 31);
+    CHECK(bootslot_validate_kernel(kernel, 128, 5000, err, sizeof(err)) == 0,
+          "a header prefix is judged without the policy");
+}
 
 /** Open the loaded image and expect the named diagnostic. */
 static void expect_open_error(const char *opt, const char *needle)
@@ -439,6 +481,8 @@ int main(void)
     CHECK(bootslot_validate_kernel(kernel, 5000, 5000, err, sizeof(err)) == -1 &&
               strstr(err, "flags are not ALIGN") != NULL,
           "multiboot flags away from ALIGN|MEMINFO are refused");
+
+    check_policy();
 
     /* A fallback whose loader surface is broken stops the install before the
        first environment write. */

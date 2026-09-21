@@ -29,6 +29,13 @@
 #define MULTIBOOT_SEARCH 8192
 #define DIR_DEPTH_MAX    4
 
+/* The banners diskcmd.c embeds, one per build, which name the disk policy a
+ * kernel was compiled with. A machine's kernel must be the read-write build:
+ * the read-only build refuses every write command, so the mount of a disk
+ * root fails and the boot stops with nothing mounted. */
+#define POLICY_READ_WRITE "rach2: disk policy: read-write"
+#define POLICY_READ_ONLY  "rach2: disk policy: read-only"
+
 /** Copy `msg` into the caller's error buffer, always NUL-terminated. */
 static int fail(char *err, size_t errlen, const char *msg)
 {
@@ -443,6 +450,46 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
  * be representable in 32 bits. The Multiboot flags must be ALIGN|MEMINFO;
  * other flags change how the loader reads the image.
  */
+/** Whether `needle` appears in the `size` bytes at `image`. */
+static int image_carries(const uint8_t *image, uint32_t size, const char *needle)
+{
+    uint32_t n = (uint32_t)strlen(needle);
+    uint32_t i;
+
+    if (n == 0 || size < n) {
+        return 0;
+    }
+    for (i = 0; i + n <= size; i++) {
+        if (image[i] == (uint8_t)needle[0] && memcmp(image + i, needle, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Judge the disk policy an image names, over the whole image.
+ *
+ * A machine's kernel must be the read-write build. The read-only build
+ * refuses every write command, so its mount of a disk root fails and the
+ * boot stops with nothing mounted; an image naming neither policy, or both,
+ * is not a kernel this tool can answer for.
+ */
+static int policy_judged(const uint8_t *image, uint32_t size, char *err, size_t errlen)
+{
+    int rw = image_carries(image, size, POLICY_READ_WRITE);
+    int ro = image_carries(image, size, POLICY_READ_ONLY);
+
+    if (ro && !rw) {
+        return fail(err, errlen,
+                    "the image is the read-only disk build, which cannot mount a disk root");
+    }
+    if (!rw || ro) {
+        return fail(err, errlen, "the image names no one disk policy");
+    }
+    return 0;
+}
+
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen)
 {
@@ -526,6 +573,12 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     }
     if (!entry_in_load) {
         return fail(err, errlen, "the entry point is outside every load");
+    }
+    /* The policy is judged only where the whole image is in memory: a caller
+       that reads a prefix to check a slot it has already installed cannot see
+       a banner that lies past it. */
+    if (present >= size) {
+        return policy_judged(image, size, err, errlen);
     }
     return 0;
 }
@@ -817,7 +870,7 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     char want[BOOTSLOT_ENTRY_MAX + 16];
     const char *id = "candidate";
     uint32_t nsectors = bs->kernel.size / BOOTSLOT_SECTOR;
-    uint32_t present, s, i, n;
+    uint32_t present, s;
     int committed = 0;
 
     if (bs->kernel.size % BOOTSLOT_SECTOR != 0 || bs->fallback.size % BOOTSLOT_SECTOR != 0) {
