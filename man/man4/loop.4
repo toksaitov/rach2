@@ -45,6 +45,8 @@ writes these commands.
 .Pp
 An attached file must be regular and have a positive length that is a
 whole number of sectors.
+Attachment waits for a concurrent KRFFS relocation before opening
+the backing file.
 A file may have only one attachment; another hard link to it is the
 same file for this purpose.
 A file on a loop-mounted volume cannot be attached to another loop device.

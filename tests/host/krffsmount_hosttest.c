@@ -27,7 +27,8 @@ static struct open_file *descs[3];
 static void (*waiting)(void);
 static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
-static int fail_after_move, syncs_after_free;
+static int fail_after_move, syncs_after_free, fail_flush_at;
+static void (*flush_hook)(void);
 static void *original;
 static char payload[8192];
 process_t *current_proc;
@@ -75,6 +76,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
+#ifndef KRFFS_OPEN_TEST
 /** Complete queued calls before giving the waiting call its lock. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
@@ -96,19 +98,24 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     depth--;
 }
 
+#endif
+
 /** Apply the production descriptor scan to every relocation. */
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
-    check(depth > 0, "relocation holds mount lock");
+    check(depth > 0 || mnt->ns_depth > 0, "relocation holds mount lock");
     fd_ofd_repoint(mnt, from, to);
 }
 
+#ifndef KRFFS_OPEN_TEST
 /** Release the mounted open record at the description's last close. */
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     (void)node;
     kv_release(mnt, handle);
 }
+
+#endif
 
 /** Initialize a queue that these rows never wait on. */
 void wait_queue_init(wait_queue_t *wq)
@@ -122,6 +129,7 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+#ifndef KRFFS_OPEN_TEST
 /** Reject an unexpected description wait. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -131,6 +139,8 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     check(0, "unexpected description wait");
     return 0;
 }
+
+#endif
 
 /** Return one model cache block. */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
@@ -187,7 +197,10 @@ int block_flush(block_device_t *dev)
 {
     (void)dev;
     flush_calls++;
-    if (flush_error) {
+    if (flush_hook) {
+        flush_hook();
+    }
+    if (flush_error || flush_calls == fail_flush_at) {
         return -EIO;
     }
     k_memcpy(medium, device, sizeof(medium));
@@ -207,6 +220,8 @@ static void setup(void)
     k_memset(buffers, 0, sizeof(buffers));
     depth = sync_error = flush_error = check_clean_order = clean_writes = 0;
     waiting = NULL;
+    flush_hook = NULL;
+    fail_flush_at = 0;
     fail_after_move = syncs_after_free = 0;
     root->magic = space->magic = KRFFS_FILE_SYSTEM_MAGIC;
     root->type = KRFFS_ROOT_NODE;
@@ -421,6 +436,48 @@ static void durability(void)
     }
 }
 
+/** Fail the clean-flag flush after data is durable and attempt later writes. */
+static void failed_clean_flush(void)
+{
+    void *node, *handle;
+    char byte;
+    int fd;
+
+    setup();
+    node = create("retained");
+    fd = open_node(node);
+    handle = table.entries[fd].ofd->fhandle;
+    check(kv_write(&mount, handle, "D", 1, 0) == 1, "seed clean-flush fixture");
+    fd_free(&table, fd);
+    cached[IMAGE_BYTES - 1] = 0x5a;
+    buffers[IMAGE_BLOCKS - 1].dirty = 1;
+    check_clean_order = 1;
+    flush_calls = 0;
+    fail_flush_at = 2;
+    check(kv_prepare_unmount(&mount) == -EIO, "unmount returns clean-flag flush error");
+    check(flush_calls == 2 && clean_writes == 1 && medium[IMAGE_BYTES - 1] == 0x5a,
+          "second flush fails after durable data and clean-flag write");
+    check(!(((krffs_node_t *)device)->mode & KRFFS_MODE_DIRTY),
+          "failed clean-flag flush leaves device cache clean");
+    fail_flush_at = 0;
+    check((mount.flags & VFS_MS_RDONLY) != 0, "failed clean-flag flush makes mount read-only");
+    fd = open_node(node);
+    handle = table.entries[fd].ofd->fhandle;
+    check(kv_read(&mount, handle, &byte, 1, 0) == 1 && byte == 'D',
+          "read after failed clean-flag flush succeeds");
+    check(kv_write(&mount, handle, "X", 1, 0) == -EROFS,
+          "write after failed clean-flag flush is refused");
+    check(kv_truncate(&mount, handle, 0) == -EROFS,
+          "truncate after failed clean-flag flush is refused");
+    vfs_ns_lock(&mount);
+    check(kv_create(&mount, mount.root, "later", 0644, &node) == -EROFS,
+          "create after failed clean-flag flush is refused");
+    vfs_ns_unlock(&mount);
+    check(kv_sync(&mount) == 0 && block_flush(&disk) == 0,
+          "read-only mount can finish writeback after failed unmount");
+    teardown();
+}
+
 /** Exercise both relocating operations and the unmount write order. */
 int main(void)
 {
@@ -430,6 +487,7 @@ int main(void)
     failed_relocation(0);
     failed_relocation(1);
     durability();
+    failed_clean_flush();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }

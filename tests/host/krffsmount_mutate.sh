@@ -54,7 +54,11 @@ run_phase()
 
 echo "krffsmount-mutation: logs: $work"
 run_phase fixed 0 'krffsmount-hosttest: result: pass:'
-for fault in read-identity write-identity truncate-identity write-repoint truncate-repoint write-failure truncate-failure flush readonly directory; do
+if [ "$#" -eq 0 ]; then
+    set -- read-identity write-identity truncate-identity write-repoint truncate-repoint \
+        write-failure truncate-failure flush readonly directory clean-flush
+fi
+for fault in "$@"; do
     python3 - "$work/sys/fs/krffsmount.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -90,8 +94,12 @@ else:
                           "vfs_repoint(mnt, handle, handle_of(at));"),
         "truncate-repoint": ("vfs_repoint(mnt, handle_of(was), handle_of(now));",
                              "vfs_repoint(mnt, handle, handle_of(now));"),
-        "flush": ("block_flush(vol->dev) != 0 || krffs_set_dirty(&vol->fs, 0)",
-                  "krffs_set_dirty(&vol->fs, 0)"),
+        "flush": ("    if (block_flush(vol->dev) != 0) {\n        return -EIO;\n    }\n"
+                  "    if (krffs_set_dirty(&vol->fs, 0) != 0)",
+                  "    if (krffs_set_dirty(&vol->fs, 0) != 0)"),
+        "clean-flush": ("    if (krffs_set_dirty(&vol->fs, 0) != 0) {\n"
+                        "        mnt->flags |= VFS_MS_RDONLY;",
+                        "    if (krffs_set_dirty(&vol->fs, 0) != 0) {"),
         "readonly": ("    (void)handle;\n    vfs_ns_lock(mnt);",
                      "    (void)handle;\n    if (begin_write(mnt) != 0) {\n"
                      "        return 0;\n    }"),
@@ -110,6 +118,7 @@ PY
         flush) message='earlier data reaches medium before clean flag' ;;
         readonly) message='read-only sync reports pending write failure' ;;
         directory) message='directory read resolves its open handle' ;;
+        clean-flush) message='write after failed clean-flag flush is refused' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

@@ -1321,7 +1321,8 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
  * write bit, create under the namespace lock, and stamp the new node with
  * the caller's identity and masked mode. Returns 0 with `ref` on the new
  * node, held by its creation; 1 when another creator held the lock first,
- * so the caller opens what it made; or a negative errno.
+ * so the caller opens what it made; or a negative errno. Success retains
+ * the namespace lock through open-handle registration.
  */
 static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref)
 {
@@ -1330,11 +1331,12 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
     void *made;
     int rc;
 
-    rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname, sizeof(leafname));
+    rc = vfs_resolve(0, name, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leafname, sizeof(leafname));
     if (rc != 0) {
         return rc;
     }
     if (vfs_synth_vpath(parent.mnt, parent.node)) {
+        vfs_ns_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return -EROFS; /* nothing is created under /dev or /proc */
     }
@@ -1346,20 +1348,21 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         rc = (int)cred_access_ref(&parent, CRED_W, 0);
     }
     if (rc != 0) {
+        vfs_ns_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return rc;
     }
-    vfs_ns_lock(parent.mnt);
     rc = vfs_create(parent.mnt, parent.node, leafname,
                     mnt_is_root(parent.mnt) ? mode : (mode & 07777u & ~current_proc->umask), &made);
-    vfs_ns_unlock(parent.mnt);
     if (rc == -EEXIST && !(flags & O_EXCL)) {
         /* Another creator held the lock first: the caller opens what it
          * made. */
+        vfs_ns_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return 1;
     }
     if (rc != 0) {
+        vfs_ns_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return rc;
     }
@@ -1610,11 +1613,13 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
  * -errno. Opening "/" opens the root directory for getdents64. A symbolic
  * link at the end is followed, and one whose target is missing is what
  * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
- * O_CREAT|O_EXCL, which answers EEXIST for the link.
+ * O_CREAT|O_EXCL, which answers EEXIST for the link. Resolution through
+ * open-handle registration holds the final mount's namespace lock.
  */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     struct vfs_ref ref;
+    struct vfs_mount *locked;
     char through[VFS_WALK_PATH_MAX]; /* the path a dangling link's target makes */
     int followed = 0;
     int rc;
@@ -1629,10 +1634,12 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return -EMFILE; /* known before anything is created or truncated */
     }
 again:
-    rc = vfs_resolve(
-        0, name,
-        ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL))) ? VFS_WALK_NOFOLLOW : 0,
-        &ref, 0, 0);
+    rc = vfs_resolve(0, name,
+                     VFS_WALK_LOCK |
+                         (((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
+                              ? VFS_WALK_NOFOLLOW
+                              : 0),
+                     &ref, 0, 0);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         rc = open_link_target(name, through, sizeof(through), &followed);
         if (rc < 0) {
@@ -1657,6 +1664,7 @@ again:
         if (vp) {
             struct vpath vpc = *vp;
 
+            vfs_ns_unlock(ref.mnt);
             vfs_ref_release(&ref);
             /* The /proc links, /proc/self and the descriptor links, are
              * links too: the same two answers as on a mounted type. */
@@ -1670,12 +1678,17 @@ again:
             }
             return synth_open(&vpc, flags);
         }
+        locked = ref.mnt;
         rc = mnt_is_root(ref.mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
         if (rc != 0) {
+            vfs_ns_unlock(locked);
             return rc;
         }
     }
-    return open_install(&ref, name, flags);
+    locked = ref.mnt;
+    rc = open_install(&ref, name, flags);
+    vfs_ns_unlock(locked);
+    return rc;
 }
 
 /**

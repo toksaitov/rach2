@@ -205,10 +205,8 @@ int vfs_ns_held_by_caller(void)
  * waits behind everyone who asked meanwhile: a writer that locks for every
  * call cannot take the lock back before a waiter has had it, which starved
  * the waiter until the writer stopped. The order costs no switch of its
- * own; a caller gives way only where it waited before, so no path that
- * releases the lock and goes on with a pointer it took under it, as `open`
- * does until its descriptor is registered, is interrupted by the release.
- * A caller that holds the lock takes it again without a place.
+ * own; releasing the lock does not yield. A caller that holds the lock
+ * takes it again without a place.
  */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
@@ -363,9 +361,7 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     return m;
 }
 
-/* Replace the current place with another, moving the hold and the transient
- * count. Fails only when the new mount refuses entry. */
-/* Put a node a lookup returned, on a type that counts holds. */
+/** Put a node a lookup returned, on a type that counts holds. */
 static void node_put(struct vfs_mount *mnt, void *node)
 {
     if (mnt->type->ops->put) {
@@ -373,7 +369,13 @@ static void node_put(struct vfs_mount *mnt, void *node)
     }
 }
 
-static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
+/**
+ * Move the held node and transient reference to the next mount.
+ *
+ * A locked walk releases the old mount before waiting for the new lock.
+ * Mount crossings use a held covered directory or a mount's root.
+ */
+static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int locked)
 {
     struct vfs_ref next;
 
@@ -392,10 +394,41 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
 
         vfs_ref_put(cur);
         if (mnt != was) {
+            if (locked) {
+                vfs_ns_unlock(was);
+            }
             vfs_leave(was);
+            if (locked) {
+                vfs_ns_lock(mnt);
+            }
         }
     }
     *cur = next;
+    return 0;
+}
+
+/** Copy the unwalked final component and locate it within a parent path. */
+static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char **last)
+{
+    const char *end = path + k_strlen(path);
+    const char *start;
+
+    while (end > path && end[-1] == '/') {
+        end--;
+    }
+    if (end == path) {
+        return -EINVAL;
+    }
+    start = end;
+    while (start > path && start[-1] != '/') {
+        start--;
+    }
+    if ((uint32_t)(end - start) + 1 > leafcap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(leaf, start, (uint32_t)(end - start));
+    leaf[end - start] = '\0';
+    *last = start;
     return 0;
 }
 
@@ -404,7 +437,9 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
  * component at a time and handles four cases: `.`, `..`, a mount whose type
  * takes the rest of the path in one call, and the ordinary lookup of one
  * name, after which a symbolic link is followed and a covering mount is
- * crossed. An unmount may resolve a removed mount at the final component
+ * crossed. VFS_WALK_LOCK holds one namespace lock at a time and returns
+ * with the final mount locked, so an open can register before relocation.
+ * An unmount may resolve a removed mount at the final component
  * only, so it can release that mount without permitting lookup inside it.
  */
 static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
@@ -415,6 +450,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     const char *last_comp = 0;
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
     int links = 0;
+    int locked = (flags & VFS_WALK_LOCK) != 0;
     char linkpath[VFS_WALK_PATH_MAX];
     int rc;
 
@@ -425,26 +461,11 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
         return -ENOENT;
     }
 
-    /* With WALK_PARENT the final component is the caller's, not walked. */
     if (flags & VFS_WALK_PARENT) {
-        const char *end;
-
-        end = path + k_strlen(path);
-        while (end > path && end[-1] == '/') {
-            end--;
+        rc = walk_leaf(path, leaf, leafcap, &last_comp);
+        if (rc != 0) {
+            return rc;
         }
-        if (end == path) {
-            return -EINVAL; /* the root has no parent to hand out */
-        }
-        last_comp = end;
-        while (last_comp > path && last_comp[-1] != '/') {
-            last_comp--;
-        }
-        if ((uint32_t)(end - last_comp) + 1 > leafcap) {
-            return -ENAMETOOLONG;
-        }
-        k_memcpy(leaf, last_comp, (uint32_t)(end - last_comp));
-        leaf[end - last_comp] = '\0';
     }
 
     if (p[0] == '/' || !start) {
@@ -455,6 +476,9 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     }
     if (vfs_enter(cur.mnt) != 0) {
         return -EBUSY;
+    }
+    if (locked) {
+        vfs_ns_lock(cur.mnt);
     }
     vfs_ref_hold(&cur);
 
@@ -512,7 +536,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 } else {
                     p = left;
                 }
-                rc = walk_move(&cur, pm, pnode);
+                rc = walk_move(&cur, pm, pnode, locked);
                 if (rc != 0) {
                     goto out_err;
                 }
@@ -557,7 +581,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                  * re-run this same `..` there. */
                 p -= 2;
                 rc = walk_move(&cur, cur.mnt->parent,
-                               cur.mnt->covered ? cur.mnt->covered : cur.mnt->parent->root);
+                               cur.mnt->covered ? cur.mnt->covered : cur.mnt->parent->root, locked);
                 if (rc != 0) {
                     goto out_err;
                 }
@@ -568,7 +592,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
         /* The nameless mounts, entered by name from the root directory. */
         m = mount_named(cur.mnt, cur.node, comp);
         if (m) {
-            rc = walk_move(&cur, m, m->root);
+            rc = walk_move(&cur, m, m->root, locked);
             if (rc != 0) {
                 goto out_err;
             }
@@ -647,7 +671,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 }
                 p = linkpath;
                 if (target[0] == '/') {
-                    rc = walk_move(&cur, mounts[0], mounts[0]->root);
+                    rc = walk_move(&cur, mounts[0], mounts[0]->root, locked);
                     if (rc != 0) {
                         goto out_err;
                     }
@@ -667,7 +691,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
          * before the walk continues. */
         m = mount_covering(cur.mnt, cur.node);
         if (m) {
-            rc = walk_move(&cur, m, m->root);
+            rc = walk_move(&cur, m, m->root, locked);
             if (rc != 0) {
                 goto out_err;
             }
@@ -687,12 +711,16 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     *out = cur;
     return 0;
 
-out_err: {
-    struct vfs_mount *was = cur.mnt;
+out_err:
+    {
+        struct vfs_mount *was = cur.mnt;
 
-    vfs_ref_put(&cur);
-    vfs_leave(was);
-}
+        vfs_ref_put(&cur);
+        if (locked) {
+            vfs_ns_unlock(was);
+        }
+        vfs_leave(was);
+    }
     return rc;
 }
 

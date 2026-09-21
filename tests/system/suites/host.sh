@@ -193,6 +193,16 @@ for t in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidch
     fi
 done
 
+if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
+    if sh tests/host/krffs_open_mutate.sh --check >"$VDIR/krffs_open.rlog" 2>&1; then
+        echo "hosttest: result: pass: krffs publication open"
+    else
+        cat "$VDIR/krffs_open.rlog"
+        echo "hosttest: result: fail: krffs publication open" >&2
+        fail=1
+    fi
+fi
+
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
 # their committed corpora: every input a fuzzer found worth keeping, and
 # every minimised crash that became a regression test, passes through its

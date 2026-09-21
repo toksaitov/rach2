@@ -138,6 +138,9 @@ including the root, with
 .Er EISDIR .
 .Ss Descriptors and close
 An ordinary open starts at offset zero with a new open-file description.
+On mounted KRFFS, opening a pathname during file relocation waits
+for the move to finish before registering the open handle.
+The handle follows later relocations, including after reuse of an old extent.
 Descriptors are allocated from the lowest available number.
 The process's table starts with 16 entries and grows up to 1024,
 subject to its descriptor resource limit.

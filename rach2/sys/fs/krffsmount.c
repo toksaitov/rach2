@@ -312,7 +312,8 @@ static uint64_t follow_moves(const struct krffs_open *handle)
  * Return a shared open record that remains valid across relocation.
  *
  * The record tracks the node's current offset and remains allocated until
- * its last open reference is released.
+ * its last open reference is released. The caller holds the namespace
+ * lock from lookup through registration, so `node` cannot become stale.
  */
 static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
@@ -820,7 +821,8 @@ static void kv_abort_unmount(struct vfs_mount *mnt)
  * Flush the volume, then clear and flush its dirty flag.
  *
  * Earlier writes must reach the medium before the cleared flag can.
- * A mount made read-only after a write failure keeps its dirty flag.
+ * A mount made read-only before preparation keeps its dirty flag. If the
+ * clear fails, the flag may already be on the device; refuse further writes.
  */
 static int kv_prepare_unmount(struct vfs_mount *mnt)
 {
@@ -830,7 +832,12 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
     if (rc != 0 || !vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return rc;
     }
-    if (block_flush(vol->dev) != 0 || krffs_set_dirty(&vol->fs, 0) != 0) {
+    if (block_flush(vol->dev) != 0) {
+        return -EIO;
+    }
+    if (krffs_set_dirty(&vol->fs, 0) != 0) {
+        mnt->flags |= VFS_MS_RDONLY;
+        klog(KLOG_WARN, "krffs", "unmount: clean flag write failed: read-only");
         return -EIO;
     }
     return 0;

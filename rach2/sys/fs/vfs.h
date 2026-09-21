@@ -251,6 +251,7 @@ struct vfs_ref {
 #define VFS_WALK_PARENT   0x1
 #define VFS_WALK_REAL_IDS 0x2
 #define VFS_WALK_NOFOLLOW 0x4
+#define VFS_WALK_LOCK     0x8
 /* Symbolic links followed along one path before ELOOP. */
 #define VFS_LINK_MAX      40
 /* The buffer a followed link's target and the rest of the path are joined
@@ -275,6 +276,11 @@ void vfs_init(void);
  * `VFS_WALK_PARENT`, `out` is the held parent directory, and the final
  * component, which may not exist yet, is copied into `leaf` (of `leafcap`
  * bytes; ENAMETOOLONG if it does not fit).
+ *
+ * VFS_WALK_LOCK locks each mount before lookup, releases its lock when
+ * crossing to another mount, and returns with the final mount locked.
+ * The caller must unlock it after registration or failure cleanup;
+ * vfs_ref_release does not unlock it. An error returns with no lock held.
  */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap);
