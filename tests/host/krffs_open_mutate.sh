@@ -44,7 +44,8 @@ work = Path(sys.argv[1])
 groups = [
     ("fs/vfs.c", "vfs_open.inc", "vfs_mount_gone vfs_ref_hold vfs_ref_put vfs_enter vfs_leave "
      "ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search mount_covering streq mount_named "
-     "node_put walk_move walk_leaf resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
+     "node_put walk_lock walk_unlock vfs_walk_unlock walk_move walk_leaf resolve_path vfs_resolve "
+     "vfs_ref_release vfs_desc_open vfs_desc_close "
      "vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create"),
     ("syscall_fs.c", "syscall_open.inc", "name_is open_link_target open_create open_mounted_node "
      "open_install do_open"),
@@ -73,13 +74,24 @@ for source, output, names in groups:
             raise SystemExit("krffs-open: unterminated function: " + name)
     (work / output).write_text("\n\n".join(parts) + "\n")
 PY
+    # The thread glue is compiled on its own, with none of the kernel's
+    # include directories: glibc's <pthread.h> asks for <sched.h>, which
+    # `-I $work/sys/proc` would answer with the kernel's, and the kernel's
+    # 32-bit size_t then collides with the host's.
+    if ! "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
+        -fsanitize=address,undefined -fno-sanitize-recover=all -pthread \
+        -c tests/host/fixtures/krffs_open_threads.c -o "$work/threads.o" \
+        >"$binary.compile.log" 2>&1; then
+        cat "$binary.compile.log" >&2
+        exit 1
+    fi
     if ! "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -Wall -Wextra -Werror -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
         -fsanitize=address,undefined -fno-sanitize-recover=all -pthread \
         -I "$work" -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        tests/host/fixtures/krffs_open.c tests/host/fixtures/krffs_open_threads.c \
+        tests/host/fixtures/krffs_open.c "$work/threads.o" \
         "$work/sys/fs/fd.c" "$work/sys/lib/kstring.c" "$work/sys/lib/kctypes.c" \
-        -o "$binary" >"$binary.compile.log" 2>&1; then
+        -o "$binary" >>"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi
@@ -114,9 +126,9 @@ text = text.replace(old, "0 |")
 start = text.index("static int32_t do_open(")
 end = text.index("\n}", start)
 body = text[start:end]
-body = body.replace("            vfs_ns_unlock(ref.mnt);\n", "")
-body = body.replace("            vfs_ns_unlock(locked);\n", "")
-body = body.replace("    vfs_ns_unlock(locked);", "    (void)locked;")
+body = body.replace("            vfs_walk_unlock(ref.mnt);\n", "")
+body = body.replace("            vfs_walk_unlock(locked);\n", "")
+body = body.replace("    vfs_walk_unlock(locked);", "    (void)locked;")
 path.write_text(text[:start] + body + text[end:])
 if sys.argv[2] == "late-lock":
     path = work / "sys/fs/krffsmount.c"

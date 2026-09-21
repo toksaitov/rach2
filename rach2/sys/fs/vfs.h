@@ -278,8 +278,11 @@ void vfs_init(void);
  * bytes; ENAMETOOLONG if it does not fit).
  *
  * VFS_WALK_LOCK locks each mount before lookup, releases its lock when
- * crossing to another mount, and returns with the final mount locked.
- * The caller must unlock it after registration or failure cleanup;
+ * crossing to another mount, and returns with the final mount locked. It
+ * locks only a type that sets `ns_serialised`, since that is what a
+ * description of a moving file needs and a type without it loses the
+ * concurrency its readers are meant to have. The caller releases the lock
+ * with `vfs_walk_unlock` after registration or failure cleanup;
  * vfs_ref_release does not unlock it. An error returns with no lock held.
  */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
@@ -361,6 +364,15 @@ int vfs_ns_held_by_caller(void);
 
 void vfs_ns_lock(struct vfs_mount *mnt);
 void vfs_ns_unlock(struct vfs_mount *mnt);
+
+/**
+ * Release what a `VFS_WALK_LOCK` walk took on `mnt`, if anything.
+ *
+ * The walk locks only a type that sets `ns_serialised`, so a caller that
+ * unlocked unconditionally would release a lock it never held. Every exit
+ * from a walk made with that flag goes through here.
+ */
+void vfs_walk_unlock(struct vfs_mount *mnt);
 
 /**
  * mount(2) and umount2(2), after the syscall layer has copied the strings.

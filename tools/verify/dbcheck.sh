@@ -12,10 +12,10 @@
 # Two kinds of source are compiled without an entry of their own. A fragment
 # that another source includes by name, as `ish/ish_syscalls.c` includes
 # `ish_syscalls.i386.c`, is compiled as part of that source's entry. A
-# fixture under tests/system/fixtures is compiled by the test script that
-# names it, against a work copy of the source it tests and with the flags the
-# script sets, so no fixed command describes it; such a source passes when a
-# script under tests/system names it.
+# fixture under tests/system/fixtures or tests/host/fixtures is compiled by
+# the test script that names it, against a work copy of the source it tests
+# and with the flags the script sets, so no fixed command describes it; such a
+# source passes when a script under that same tree names it.
 #
 # Usage: dbcheck.sh [DBDIR]
 set -u
@@ -49,8 +49,12 @@ included() {
     grep -rqF --include='*.c' "#include \"${1##*/}\"" "$(dirname "$1")"
 }
 fixture() {
-    case $1 in tests/system/fixtures/*) ;; *) return 1 ;; esac
-    grep -rqF --include='*.sh' "fixtures/${1##*/}" tests/system
+    case $1 in
+        tests/system/fixtures/*) tree=tests/system ;;
+        tests/host/fixtures/*) tree=tests/host ;;
+        *) return 1 ;;
+    esac
+    grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree"
 }
 missing=0
 for f in $sources; do

@@ -369,6 +369,36 @@ static void node_put(struct vfs_mount *mnt, void *node)
     }
 }
 
+/*
+ * A locked walk takes a mount's namespace lock only where the type asks for
+ * it. KRFFS moves a file's bytes while they are open and ext2 holds a batch
+ * of dirty blocks between calls, so an open of either must register its
+ * description under the lock or it can land on an offset another file has
+ * taken. A type with neither property needs nothing here, and locking it
+ * would serialise lookups that are meant to run together: two processes
+ * opening one cold file on a FAT volume must both reach the buffer cache,
+ * which is what `tests/run mount` counts.
+ */
+static void walk_lock(struct vfs_mount *mnt, int locked)
+{
+    if (locked && mnt->type->ns_serialised) {
+        vfs_ns_lock(mnt);
+    }
+}
+
+/** The release that matches `walk_lock`. */
+static void walk_unlock(struct vfs_mount *mnt, int locked)
+{
+    if (locked && mnt->type->ns_serialised) {
+        vfs_ns_unlock(mnt);
+    }
+}
+
+void vfs_walk_unlock(struct vfs_mount *mnt)
+{
+    walk_unlock(mnt, 1);
+}
+
 /**
  * Move the held node and transient reference to the next mount.
  *
@@ -394,13 +424,9 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
 
         vfs_ref_put(cur);
         if (mnt != was) {
-            if (locked) {
-                vfs_ns_unlock(was);
-            }
+            walk_unlock(was, locked);
             vfs_leave(was);
-            if (locked) {
-                vfs_ns_lock(mnt);
-            }
+            walk_lock(mnt, locked);
         }
     }
     *cur = next;
@@ -451,6 +477,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
     int links = 0;
     int locked = (flags & VFS_WALK_LOCK) != 0;
+    struct vfs_mount *was;
     char linkpath[VFS_WALK_PATH_MAX];
     int rc;
 
@@ -477,9 +504,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     if (vfs_enter(cur.mnt) != 0) {
         return -EBUSY;
     }
-    if (locked) {
-        vfs_ns_lock(cur.mnt);
-    }
+    walk_lock(cur.mnt, locked);
     vfs_ref_hold(&cur);
 
     for (;;) {
@@ -712,15 +737,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     return 0;
 
 out_err:
-    {
-        struct vfs_mount *was = cur.mnt;
-
-        vfs_ref_put(&cur);
-        if (locked) {
-            vfs_ns_unlock(was);
-        }
-        vfs_leave(was);
-    }
+    was = cur.mnt;
+    vfs_ref_put(&cur);
+    walk_unlock(was, locked);
+    vfs_leave(was);
     return rc;
 }
 

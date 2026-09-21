@@ -468,17 +468,26 @@ static int image_carries(const uint8_t *image, uint32_t size, const char *needle
 }
 
 /**
- * Judge the disk policy an image names, over the whole image.
+ * Judge the disk policy an image names, when the whole image is in memory.
  *
  * A machine's kernel must be the read-write build. The read-only build
  * refuses every write command, so its mount of a disk root fails and the
  * boot stops with nothing mounted; an image naming neither policy, or both,
  * is not a kernel this tool can answer for.
  */
-static int policy_judged(const uint8_t *image, uint32_t size, char *err, size_t errlen)
+static int policy_judged(const uint8_t *image, uint32_t present, uint32_t size, char *err,
+                         size_t errlen)
 {
-    int rw = image_carries(image, size, POLICY_READ_WRITE);
-    int ro = image_carries(image, size, POLICY_READ_ONLY);
+    int rw, ro;
+
+    /* Only where the whole image is in memory: a caller that reads a prefix
+       to check a slot it has already installed cannot see a banner that lies
+       past it. */
+    if (present < size) {
+        return 0;
+    }
+    rw = image_carries(image, size, POLICY_READ_WRITE);
+    ro = image_carries(image, size, POLICY_READ_ONLY);
 
     if (ro && !rw) {
         return fail(err, errlen,
@@ -574,13 +583,7 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     if (!entry_in_load) {
         return fail(err, errlen, "the entry point is outside every load");
     }
-    /* The policy is judged only where the whole image is in memory: a caller
-       that reads a prefix to check a slot it has already installed cannot see
-       a banner that lies past it. */
-    if (present >= size) {
-        return policy_judged(image, size, err, errlen);
-    }
-    return 0;
+    return policy_judged(image, present, size, err, errlen);
 }
 
 /**

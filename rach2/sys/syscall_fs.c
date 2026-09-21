@@ -1329,14 +1329,19 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
     struct vfs_ref parent;
     char leafname[VFS_NAME_MAX + 1];
     void *made;
+    int held;
     int rc;
 
     rc = vfs_resolve(0, name, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leafname, sizeof(leafname));
     if (rc != 0) {
         return rc;
     }
+    /* The walk locked the mount only if its type asks to be serialised. The
+     * create runs under the lock on every type, as it always has, so a type
+     * the walk left alone takes it here and gives it back at once. */
+    held = parent.mnt->type->ns_serialised;
     if (vfs_synth_vpath(parent.mnt, parent.node)) {
-        vfs_ns_unlock(parent.mnt);
+        vfs_walk_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return -EROFS; /* nothing is created under /dev or /proc */
     }
@@ -1348,21 +1353,27 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         rc = (int)cred_access_ref(&parent, CRED_W, 0);
     }
     if (rc != 0) {
-        vfs_ns_unlock(parent.mnt);
+        vfs_walk_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return rc;
     }
+    if (!held) {
+        vfs_ns_lock(parent.mnt);
+    }
     rc = vfs_create(parent.mnt, parent.node, leafname,
                     mnt_is_root(parent.mnt) ? mode : (mode & 07777u & ~current_proc->umask), &made);
+    if (!held) {
+        vfs_ns_unlock(parent.mnt);
+    }
     if (rc == -EEXIST && !(flags & O_EXCL)) {
         /* Another creator held the lock first: the caller opens what it
          * made. */
-        vfs_ns_unlock(parent.mnt);
+        vfs_walk_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return 1;
     }
     if (rc != 0) {
-        vfs_ns_unlock(parent.mnt);
+        vfs_walk_unlock(parent.mnt);
         vfs_ref_release(&parent);
         return rc;
     }
@@ -1664,7 +1675,7 @@ again:
         if (vp) {
             struct vpath vpc = *vp;
 
-            vfs_ns_unlock(ref.mnt);
+            vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
             /* The /proc links, /proc/self and the descriptor links, are
              * links too: the same two answers as on a mounted type. */
@@ -1681,13 +1692,13 @@ again:
         locked = ref.mnt;
         rc = mnt_is_root(ref.mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
         if (rc != 0) {
-            vfs_ns_unlock(locked);
+            vfs_walk_unlock(locked);
             return rc;
         }
     }
     locked = ref.mnt;
     rc = open_install(&ref, name, flags);
-    vfs_ns_unlock(locked);
+    vfs_walk_unlock(locked);
     return rc;
 }
 
