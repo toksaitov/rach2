@@ -78,8 +78,18 @@ Mount the install stick's exFAT partition and use its
 as
 .Ar IMAGE ;
 the RAM root cannot store this 1 GiB file.
-This preserves the accounts and the SSH policy, and the host keys when the
-old root could be read; the recovery archive holds no host keys.
+This preserves the accounts, SSH policy and keys.
+The recovery archive contains the account files, SSH policy,
+.Pa /etc/dropbear ,
+.Pa /root/.ssh ,
+and each home's
+.Pa .ssh
+directory.
+A resumed update, or one whose old root cannot be read, restores these keys
+from the archive, with modes 700 for directories and 600 for files.
+Host keys and root's keys are owned by 0:0; home keys use the uid and gid
+from the archived passwd, and accounts absent from that file receive no keys.
+An older archive without keys cannot restore them.
 Recovery remains the saved default until the trial root has been verified;
 then run
 .Ql bootctl commit .

@@ -16,6 +16,7 @@
 # Usage:
 #   installer.sh <stick-image> <sealed-disk> <harness> <work-dir> <password>
 #       <test-stick> <test-disk> <ssh-port> <ptydrive> <demo-key>
+#       [all|install|repair|resume|rehearse] [root-image]
 #
 # The first stick is the product's, carrying the sealed disk; the second
 # carries a 65 MiB disk instead, so the rows that install do not each write a
@@ -815,8 +816,7 @@ mark "row 11"
 #          superblock zeroed so the root does not mount, then the update
 #          takes the accounts from the archive the last update refreshed and
 #          writes the image into the last ext2 entry of the table. The
-#          home directories were on the root that does not read, so they
-#          are not kept. ----
+#          archive keeps SSH keys but no other home files. ----
 LOG14="$DIR/archive-update.log"
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -851,29 +851,83 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
     "expect=# " "send=grep -c ^tampered: /etc/group | sed s/^/TAMPERED=/; test ! -e /home/$USERNAME/mine && echo HOME\"\"GONE" \
     "expect=TAMPERED=0" "expect=HOMEGONE" \
-    "send=echo ARCHIVE\"\"UP" \
+    "send=stat -c %u:%g:%a /home/test/.ssh /home/test/.ssh/authorized_keys" \
+    "expect=1000:1000:700" "expect=1000:1000:600" \
+    "send=bootctl commit && echo ARCHIVE\"\"UP" \
     "expect=ARCHIVEUP" > /dev/null 2>&1; then
-    note "and it takes the password the archive held, the archive refreshed by the last update and not the tampered one, and none of the home the root lost: OK"
+    note "and it takes the password the archive held, the archive refreshed by the last update and not the tampered one, and loses only the ordinary home files absent from the archive: OK"
 else
     bad "the boot of the machine updated from the archive"
 fi
 
 mark "row 14"
-# ---- 16: an update stopped between the root's write and the accounts'
-#          return. The archive on the recovery partition is what such an
-#          update wrote before the root: the machine's own accounts, marked
-#          as an update in progress. Here the mark is planted on the host
-#          with an account added to the archived passwd, so the retry's
-#          choice shows: it must say the root holds the image's accounts and
-#          take the archive, and the added account must have an empty home
-#          on the new root, since the root's homes were the image's. The
-#          root is written with the image on the host first, which is what
-#          the stopped update left: the image's accounts, homes and keys.
+fi
+
+if [ "$PART" = "all" ] || [ "$PART" = "repair" ] || [ "$PART" = "resume" ]; then
+# The focused proof needs only a bootable disk and the two resumed rows.
+if [ "$PART" = "resume" ]; then
+    cp "$TEST_STICK" "$DIR/test-stick.img"
+    cp "$TEST_DISK" "$DIR/one.img"
+    NEWPASS=$PASSWORD
+fi
+
+# ---- 16: an update stopped after the root write. Distinct authorized_keys
+#          contents distinguish this machine's keys from the image's. The
+#          hashes come from the installed root before the archive is marked.
+PUBKEY=$(ssh-keygen -y -f "$DEMO_KEY")
+LOGKEYS="$DIR/before-resume.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "KEYSSAVED" --log "$LOGKEYS" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=# " "send=mkdir -p /root/.ssh && echo '$PUBKEY' > /root/.ssh/authorized_keys" \
+    "send=(test -s /etc/dropbear/dropbear_ed25519_host_key || dropbearmulti dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key) && echo HOST\"\"READY" \
+    "expect=HOSTREADY" \
+    "send=echo '# machine root' >> /root/.ssh/authorized_keys; echo '# machine test' >> /home/test/.ssh/authorized_keys" \
+    "send=chmod 700 /root/.ssh /home/test/.ssh; chmod 600 /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
+    "send=chown -R 0:0 /root/.ssh; chown -R 1000:1000 /home/test/.ssh" \
+    "send=sha256sum /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
+    "send=sync; echo KEYS\"\"SAVED" "expect=KEYSSAVED" > "$LOGKEYS.harness" 2>&1; then
+    note "the installed machine's keys are recorded before the interrupted update: OK"
+else
+    bad "recording the machine's keys before the interrupted update"
+    exit 1
+fi
+grep -a '^KEYHASH:[0-9a-f]' "$LOGKEYS" | tr -d '\r' > "$DIR/keys.before"
+[ "$(wc -l < "$DIR/keys.before")" -ge 3 ] || { bad "the original key hashes are missing"; exit 1; }
+
+LOGSAVE="$DIR/archive-keys.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "KEYSARCHIVED" --log "$LOGSAVE" \
+    "expect=recovery image" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=copying this machine's accounts" "expect=updated:" \
+    "send=umount /m; echo KEYS\"\"ARCHIVED" "expect=KEYSARCHIVED" > "$LOGSAVE.harness" 2>&1; then
+    note "the machine's configuration is archived by a normal update: OK"
+else
+    bad "archiving the machine's configuration before the interrupted update"
+    exit 1
+fi
+
 REC_START=$(od -An -tu4 -j $((446 + 1 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
 [ -n "$REC_START" ] && [ "$REC_START" -gt 0 ] || bad "the recovery partition's start could not be read"
 mcopy -n -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
     bad "the archived passwd could not be read off the recovery partition"
 echo "extra:x:1001:1001::/home/extra:/bin/sh" >> "$DIR/archived-passwd"
+mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/home 2>/dev/null || true
+mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/home/orphan ::rach2-config/home/orphan/.ssh ||
+    { bad "the unowned archived home could not be made"; exit 1; }
+printf '%s\n' "$PUBKEY" > "$DIR/orphan-key"
+mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/orphan-key" ::rach2-config/home/orphan/.ssh/authorized_keys ||
+    { bad "the unowned archived key could not be written"; exit 1; }
 echo "$(basename "$INSTALLER_EXT2") stopped" > "$DIR/update-in-progress"
 ROOT3_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
 [ -n "$ROOT3_START" ] && [ "$ROOT3_START" -gt 0 ] || bad "the root partition's start could not be read"
@@ -909,19 +963,56 @@ else
 fi
 
 LOG17="$DIR/stopped-updated.log"
-if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+rm -f "$LOG17" "$KNOWN"
+"$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
-    --timeout 300 --steptmo 120 --ok "STOPPEDUP" --log "$LOG17" \
+    --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
+    --timeout 600 --steptmo 120 --ok "STOPPEDUP" --log "$LOG17" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
-    "expect=# " "send=grep -c ^extra: /etc/passwd | sed s/^/EXTRA=/; stat -c %u:%g:%a /home/extra | sed s/^/OWNED=/; test -z \"\$(ls -A /home/extra)\" && test -z \"\$(ls -A /home/test)\" && test ! -e /root/.ssh && echo HOME\"\"MADE" \
-    "expect=EXTRA=1" "expect=OWNED=1001:1001:700" "expect=HOMEMADE" \
+    "expect=# " "send=grep -c ^extra: /etc/passwd | sed s/^/EXTRA=/; stat -c %u:%g:%a /home/extra" \
+    "expect=EXTRA=1" "expect=1001:1001:700" \
+    "send=test -z \"\$(ls -A /home/extra)\" && test ! -e /home/orphan/.ssh && echo HOME\"\"MADE" "expect=HOMEMADE" \
+    "send=stat -c %u:%g:%a /etc/dropbear /root/.ssh /home/test/.ssh" \
+    "expect=0:0:700" "expect=0:0:700" "expect=1000:1000:700" \
+    "send=stat -c %u:%g:%a /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
+    "expect=0:0:600" "expect=0:0:600" "expect=1000:1000:600" \
+    "send=sha256sum /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && test ! -e /r/rach2-config/update-in-progress && echo MARK\"\"GONE; umount /r" \
     "expect=MARKGONE" \
-    "send=echo STOPPED\"\"UP" \
-    "expect=STOPPEDUP" > /dev/null 2>&1; then
-    note "and it has the archive's added account with an empty home, the image's home emptied of its key, none of root's, and the mark taken off: OK"
+    "send=echo RESUME\"\"READY" "expect=RESUMEREADY" "expect=STOPPEDUP" > "$LOG17.harness" 2>&1 &
+QPID=$!
+trap 'kill -TERM "$QPID" 2>/dev/null || true; wait "$QPID" 2>/dev/null || true' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+if "$RUNUTIL" until "$LOG17" RESUMEREADY 180; then
+    if OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
+        -i "$DEMO_KEY" -p "$PORT" root@localhost 'echo RESUMEKEYLOGIN' 2>&1); then
+        case "$OUT" in
+            *RESUMEKEYLOGIN*) note "row 17: root logs in with its restored key: OK" ;;
+            *) bad "row 17: the key login returned no result: $OUT" ;;
+        esac
+    else
+        bad "row 17: restored key login: $OUT"
+    fi
+    ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
+        -i "$DEMO_KEY" -p "$PORT" root@localhost 'echo STOPPEDUP > /dev/console' ||
+        kill -TERM "$QPID" 2>/dev/null || true
+    wait "$QPID" || bad "row 17: the resumed machine did not finish its key checks"
 else
-    bad "the boot of the machine after the retried update"
+    kill -TERM "$QPID" 2>/dev/null || true
+    wait "$QPID" 2>/dev/null || true
+    bad "row 17: the resumed machine did not restore the keys and their permissions"
+fi
+trap - EXIT INT TERM HUP
+grep -a '^KEYHASH:[0-9a-f]' "$LOG17" | tr -d '\r' > "$DIR/keys.after"
+if cmp -s "$DIR/keys.before" "$DIR/keys.after"; then
+    note "row 17: host, root and test keys match the installed machine: OK"
+else
+    bad "row 17: host, root or test keys changed during the resumed update"
 fi
 
 mark "row 16"

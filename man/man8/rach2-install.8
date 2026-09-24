@@ -115,10 +115,15 @@ permitting root to log in over SSH with a password.
 Grow the root into the free space after it, if requested.
 .El
 .Pp
-If the installer finds a recovery partition, the three account files and
-the SSH policy are also archived on it.
+If the installer finds a recovery partition, it archives the three account
+files, the SSH policy, and the key directories
+.Pa /etc/dropbear ,
+.Pa /root/.ssh ,
+and each
+.Pa /home/NAME/.ssh
+that exists.
 Passwords are stored as hashes.
-The archive preserves the accounts for an update when the root cannot
+The archive preserves accounts and keys for an update when the root cannot
 be read.
 The installed root's demonstration accounts and keys are removed.
 The recovery partition keeps its own accounts and keys so that it can
@@ -140,8 +145,8 @@ SSH policy, server host keys, and account keys, including root's keys.
 These are restored after the write, preserving passwords changed since
 installation.
 The absence of account keys is preserved too.
-If the root cannot be read, the account files and policy are taken from
-the recovery partition's archive and the last ext2 partition is replaced.
+If the root cannot be read, the account files, policy and keys are taken
+from the recovery partition's archive and the last ext2 partition is replaced.
 When the root and archive can both be read but differ, each differing
 configuration file is reported and the root's copy is kept.
 .Pp
@@ -154,7 +159,15 @@ After the accounts are restored, the archive is written again without
 the mark.
 An update interrupted after writing the image and before restoring the
 accounts leaves the image's accounts on the root.
-The next update uses the marked archive.
+The next update uses the marked archive, preserving the server's identity
+and the accounts' keys.
+FAT32 stores neither owners nor modes, so restored key directories receive
+mode 700 and key files mode 600.
+The server's host keys and root's keys receive owner 0:0.
+Each home's keys receive the uid and gid of NAME in the archived passwd;
+a home whose account is absent receives no keys.
+Other home files are not archived.
+An older archive without keys cannot restore them.
 The recovery partition is mounted so that only root can read the archive.
 The image's home directories and their keys are removed whether or not
 the old homes were retained.
