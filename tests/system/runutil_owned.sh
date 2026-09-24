@@ -1,5 +1,9 @@
 #!/bin/sh
 # Check the actual runner's verdict and cleanup with unregistered workers.
+# With --mutate every rule is reversed in a compiled copy of the runner and
+# must be caught, and the SSH flood's cleanup proof and the rehearsal's
+# group-size proof run in their mutating forms: together the proofs that
+# entries 90 to 93 of the shortcomings plan name.
 set -eu
 case ${1:-} in
     '') mutate=0 ;;
@@ -235,6 +239,9 @@ if [ "$mutate" -eq 1 ]; then
     prove_mutation short-grace draining FAIL
     sed '/if (!count) {/,/^        }/s/return 0;/return 1;/' "$work/runutil.saved" > "$work/runutil.c"
     prove_mutation unnamed-failure hidden FAIL
+    sed '/recorded group did not stop within 15 s/,/failed = 1;/s/failed = 1;/signal_token(token, SIGKILL);/' \
+        "$work/runutil.saved" > "$work/runutil.c"
+    prove_mutation killed-survivor stubborn PASS
     sed 's/id.start != start/0/' "$work/runutil.saved" > "$work/runutil.c"
     mkdir "$work/machine-reuse"
     machine_rc=0
@@ -249,6 +256,7 @@ fi
 
 if [ "$mutate" -eq 1 ]; then
     sh "$repo/tests/system/ssh_flood_test.sh" --mutate
+    sh "$repo/tests/system/rehearse_group_mutate.sh"
 else
     sh "$repo/tests/system/ssh_flood_test.sh"
 fi

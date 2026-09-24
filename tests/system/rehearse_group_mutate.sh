@@ -1,0 +1,163 @@
+#!/bin/sh
+# Prove the rehearsal's first ext2 group (entry 91 of the shortcomings plan).
+# The installer root the rehearsal saves from is built with 16384-block
+# groups, so its 64 MiB are one whole group, which growset requires. With the
+# group size taken off the recipe, mke2fs's default of 32768 blocks leaves the
+# first group partial, and the rehearsal's setup must fail on growset before
+# it writes the base disk, the overlay or a stick.
+#
+# The root is built three times from the arguments of the recipe in
+# tests/system/suites.mk: as written, where it must equal the artifact the
+# rehearsal ran and growset must take it; with the group size removed, where
+# tests/system/suites/installer.sh must stop at its setup; and restored,
+# which must equal the first byte for byte. Nothing under build/ is written:
+# the mutated root goes into a private copy of the installer disk.
+#
+# Usage: sh tests/system/rehearse_group_mutate.sh [ROOT DISK]
+# ROOT and DISK name the installer root and disk the rehearsal ran, by
+# default build/images/installer-root.ext2 and build/images/installer-test.disk.
+set -eu
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo"
+case $# in
+    0) root=$repo/build/images/installer-root.ext2 disk=$repo/build/images/installer-test.disk ;;
+    2) root=$1 disk=$2 ;;
+    *) echo 'rehearse-group-mutation: usage: rehearse_group_mutate.sh [ROOT DISK]' >&2; exit 2 ;;
+esac
+growset=$repo/build/tools/inspect/growset
+for artifact in "$growset" "$root" "$disk" build/krffs/stageimage.krffs; do
+    if [ ! -f "$artifact" ]; then
+        echo "rehearse-group-mutation: missing $artifact; run tests/run installer-rehearse first" >&2
+        exit 1
+    fi
+done
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-rehearse-group.XXXXXX")
+cp tests/system/suites.mk "$work/suites.mk.saved"
+cp "$work/suites.mk.saved" "$work/suites.mk"
+child=
+
+stop_child()
+{
+    if [ -n "$child" ]; then
+        kill -TERM "$child" 2>/dev/null || :
+        wait "$child" 2>/dev/null || :
+        child=
+    fi
+}
+
+cleanup()
+{
+    stop_child
+    cp "$work/suites.mk.saved" "$work/suites.mk"
+    touch "$work/suites.mk"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The arguments after `$@` in the installer root's recipe.
+recipe_args()
+{
+    python3 - "$work/suites.mk" <<'PY'
+import pathlib
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+start = next(i for i, line in enumerate(lines) if line.startswith('$(INSTALLER_EXT2):'))
+recipe = next(line for line in lines[start:] if line.startswith('\tsh tools/image/mkext2.sh '))
+words = recipe.split()
+print(' '.join(words[words.index('$@') + 1:]))
+PY
+}
+
+# The ext2 superblock's blocks per group, at byte 32 of the superblock.
+blocks_per_group()
+{
+    od -A n -t u4 -j 1056 -N 4 "$1" | tr -d ' '
+}
+
+# The rehearsal's own save-set computation on a root, with the small form's
+# disk of 524288 sectors and the installer disk's root offset.
+save_set()
+{
+    "$growset" --lba "$root_start" "$1" $((524288 - root_start)) >"$2" 2>&1
+}
+
+build_root()
+{
+    phase=$1
+    # shellcheck disable=SC2046
+    sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest "$work/$phase.ext2" \
+        $(recipe_args) >"$work/$phase.build.log" 2>&1 || {
+        cat "$work/$phase.build.log" >&2
+        exit 1
+    }
+    cksum "$work/suites.mk" "$work/$phase.ext2" >"$work/$phase.cksum"
+    echo "rehearse-group-mutation: $phase: recipe arguments $(recipe_args)," \
+        "blocks per group $(blocks_per_group "$work/$phase.ext2")"
+}
+
+root_start=$(od -A n -t u4 -j $((446 + 2 * 16 + 8)) -N 4 "$disk" | tr -d ' ')
+case "$root_start" in
+    '' | 0 | *[!0-9]*) echo 'rehearse-group-mutation: the installer disk has no third entry' >&2; exit 1 ;;
+esac
+echo "rehearse-group-mutation: logs: $work"
+
+build_root fixed
+if ! cmp -s "$work/fixed.ext2" "$root"; then
+    echo "rehearse-group-mutation: the recipe no longer builds $root;" \
+        "run tests/run installer-rehearse to rebuild it" >&2
+    exit 1
+fi
+[ "$(blocks_per_group "$work/fixed.ext2")" = 16384 ]
+save_set "$work/fixed.ext2" "$work/fixed.set"
+echo 'rehearse-group-mutation: result: fixed: growset computed the save set'
+
+python3 - "$work/suites.mk" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384\n'
+if text.count(old) != 1:
+    raise SystemExit('rehearse-group-mutation: the recipe pattern is not unique')
+path.write_text(text.replace(old, 'mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64\n'))
+PY
+build_root mutated
+[ "$(blocks_per_group "$work/mutated.ext2")" = 32768 ]
+if save_set "$work/mutated.ext2" "$work/mutated.set"; then
+    echo 'rehearse-group-mutation: growset took a root whose first group is partial' >&2
+    exit 1
+fi
+cp "$disk" "$work/mutated.disk"
+dd if="$work/mutated.ext2" of="$work/mutated.disk" bs=512 seek="$root_start" conv=notrunc \
+    2>/dev/null
+status=0
+sh tests/system/suites/installer.sh "$work/unused-stick.img" "$work/unused-sealed.disk" \
+    "$work/unused-harness" "$work/installer" unused "$work/unused-test-stick.img" \
+    "$work/mutated.disk" 0 "$work/unused-ptydrive" "$work/unused-key" rehearse \
+    >"$work/mutated.log" 2>&1 &
+child=$!
+wait "$child" || status=$?
+child=
+cat "$work/mutated.log"
+if [ "$status" -eq 0 ] ||
+    ! grep -Fq 'installer-test: FAIL: growset did not compute the save set' "$work/mutated.log"; then
+    echo "rehearse-group-mutation: the rehearsal did not stop at its setup (status $status)" >&2
+    exit 1
+fi
+for written in base.raw disk.qcow2 save-stick.img product-stick.img; do
+    if [ -e "$work/installer/rehearse/$written" ]; then
+        echo "rehearse-group-mutation: the rehearsal wrote $written before its setup failed" >&2
+        exit 1
+    fi
+done
+echo "rehearse-group-mutation: result: mutated: setup failed with status $status before any write"
+
+cleanup
+build_root restored
+cmp "$work/fixed.ext2" "$work/restored.ext2"
+save_set "$work/restored.ext2" "$work/restored.set"
+echo 'rehearse-group-mutation: result: pass: the old group size failed the setup; the restored recipe rebuilt the first root'
