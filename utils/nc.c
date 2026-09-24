@@ -2,11 +2,15 @@
  * Minimal TCP client (netcat-style): `nc <host> <port>`.
  *
  * Alternate one read of up to 1024 bytes from standard input with one read
- * from the connection. Input chunks need not contain complete lines, and a
- * reply may span several reads. Complete partial writes on both outputs.
+ * from the connection. Input chunks need not contain complete lines. A reply
+ * that spans several reads is printed one read per chunk of input, and what
+ * the peer sends after standard input ends is not read. Both outputs complete
+ * partial writes. The loop ends with status 0 when a read from either side
+ * returns 0 or fails, and with status 1 when a write fails.
  *
- * The host argument may be an IPv4 address or a name resolved through `/hosts`
- * and DNS (see `resolv.c`).
+ * The port is decimal digits from 1 through 65535. The host is an IPv4
+ * address or a name looked up in `/etc/hosts`, or `/hosts`, and then through
+ * DNS (see `resolv.c`).
  */
 
 #include <stdio.h>
@@ -17,15 +21,29 @@
 
 #include "netdb.h" /* resolve_host */
 
+/**
+ * Return the TCP port in `s`, or 0 when `s` is not one.
+ *
+ * A port is decimal digits and nothing else, from 1 through 65535; a sign, a
+ * trailing character or a value past the range is refused rather than cut to
+ * 16 bits. The range is checked at each digit, so a long operand cannot
+ * overflow the sum.
+ */
 static int parse_port(const char *s)
 {
-    int p = 0;
+    long p = 0;
 
+    if (*s == '\0') {
+        return 0;
+    }
     while (*s >= '0' && *s <= '9') {
         p = p * 10 + (*s - '0');
+        if (p > 65535) {
+            return 0;
+        }
         s++;
     }
-    return p;
+    return *s == '\0' ? (int)p : 0;
 }
 
 /** Write every byte, retrying interruptions. Return -1 on failure. */
@@ -59,8 +77,8 @@ int main(int argc, char **argv)
     }
 
     port = parse_port(argv[2]);
-    if (port <= 0) {
-        fputs("nc: invalid port\n", stderr);
+    if (port == 0) {
+        fprintf(stderr, "nc: invalid port: %s: not a number from 1 to 65535\n", argv[2]);
         return 1;
     }
     if (resolve_host(argv[1], &ip) != 0) {
@@ -74,8 +92,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* resolve_host yields a host-order address; htonl/htons put it on the
-     * wire. */
+    /* resolve_host yields host order; the socket address is network order. */
     sa.sin_family = AF_INET;
     sa.sin_port = htons((unsigned short)port);
     sa.sin_addr.s_addr = htonl(ip);

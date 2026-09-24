@@ -1,9 +1,10 @@
 /**
  * Minimal HTTP/1.0 server for Rach2.
  *
- * Serves a status page over the from-scratch TCP/IP stack. The page is a
+ * Serves a status page over the kernel's own TCP/IP stack. The page is a
  * diagnostic readout: it reports the parts of the request the stack actually
- * decoded (the client's `IP:port` from `accept()`, the request line and
+ * decoded (the client's `IP:port` from `accept()`, the server's own address
+ * and port from `getsockname()` on the connection, the request line, Host and
  * User-Agent from `recv()`) alongside uptime and per-connection counters.
  * Records are added before transmission. They show accepted requests, not
  * completed connection teardown or reclaimed TCP control blocks. Anything
@@ -11,8 +12,8 @@
  *
  * It binds port 80 by default (reachable at the SLIRP address `10.0.2.15:80`)
  * and uses only the blocking socket calls (`socket`, `bind`, `listen`,
- * `accept`, `recv`, `send`, `close`). A port below 1024 is root's, so an
- * argument names another one: `httpd 8080` is how an ordinary user runs it.
+ * `accept`, `getsockname`, `recv`, `send`, `close`). A port below 1024 needs
+ * root, so an ordinary user gives another port as the operand: `httpd 8080`.
  *
  * Test from the host (with QEMU hostfwd tcp::8080-:80):
  *   curl http://127.0.0.1:8080/
@@ -27,16 +28,13 @@
 
 #define LISTEN_PORT 80
 
-/* The stack's static SLIRP address; shown as the server endpoint. */
-#define SERVER_ADDR "10.0.2.15:80"
-
 #define PEER_RING    6  /* last-N connections shown on the page */
 #define REQLINE_MAX  64 /* stored length of a request line  */
-#define METHPATH_MAX 34 /* stored "METHOD /path" for the log */
+#define METHPATH_MAX 34 /* stored "METHOD /path" per peer   */
 #define AGENT_MAX    76 /* stored User-Agent length         */
 #define HOST_MAX     48 /* stored Host header length        */
 
-/* Thin libc wrappers so the rest of the server reads as it did freestanding. */
+/* Thin libc wrappers under the names the rest of the server calls. */
 static int sys_write(int fd, const void *b, size_t n)
 {
     return (int)write(fd, b, n);
@@ -117,11 +115,13 @@ static void log_addr(uint32_t ip, uint16_t port)
 /* Buffer-append helpers (no libc). */
 
 /**
- * A bounded output cursor over a fixed buffer. Every byte the page is built
- * from is stored through `put_c`, which refuses to write at or past `cap`, so
- * a maximal, attacker-shaped request truncates the page instead of overflowing
- * the buffer. The reflected request fields are individually capped, so a normal
- * page fits with room to spare; the bound only ever clips a crafted worst case.
+ * A bounded output cursor over a fixed buffer.
+ *
+ * Every byte the page is built from is stored through `put_c`, which writes
+ * nothing at or past `cap - 1`, so a maximal request truncates the page
+ * instead of overflowing the buffer. The reflected request fields are capped
+ * one by one, so a normal page fits with room to spare; the bound clips only
+ * a request built to reach it.
  */
 struct out {
     char *buf;
@@ -307,9 +307,13 @@ static struct peer_rec peers[PEER_RING];
 static int peer_head = 0;
 static int peer_count = 0;
 
-/* The request currently being served (filled in main, read by build_body). */
+/* The request being served and the local address and port it reached, filled
+ * in by `main` and read by `build_body`. Addresses and ports are in network
+ * byte order. */
 static uint32_t cur_client_ip = 0;
 static uint16_t cur_client_port = 0;
+static uint32_t cur_server_ip = 0;
+static uint16_t cur_server_port = 0;
 static unsigned int cur_bytes_in = 0;
 static char cur_reqline[REQLINE_MAX];
 static char cur_methpath[METHPATH_MAX];
@@ -384,6 +388,9 @@ static void put_bytes(struct out *o, unsigned int n)
 
 /**
  * Build the live status page into `body[]`; returns its length.
+ *
+ * The newest row of the connections table is the request being served, whose
+ * size is not known until this page has been sent, so it shows `live`.
  */
 static int build_body(uint32_t uptime_s)
 {
@@ -426,7 +433,11 @@ static int build_body(uint32_t uptime_s)
               "td.a{text-align:right;color:var(--faint);padding-left:14px}"
               "</style></head><body><main>");
 
-    put_s(&o, "<div class=top><h1>rach2</h1><div class=stat>" SERVER_ADDR "<br>up ");
+    put_s(&o, "<div class=top><h1>rach2</h1><div class=stat>");
+    put_ip(&o, cur_server_ip);
+    put_c(&o, ':');
+    put_port(&o, cur_server_port);
+    put_s(&o, "<br>up ");
     put_uptime(&o, uptime_s);
     put_s(&o, "</div></div>");
 
@@ -483,8 +494,6 @@ static int build_body(uint32_t uptime_s)
         put_req(&o, peers[idx].methpath, METHPATH_MAX);
         put_s(&o, "</td><td class=a>");
         if (i == peer_count - 1) {
-            /* The newest row is the request being served right now; its size is
-             * not known until the reply finishes (it is this very page). */
             put_s(&o, "<em>live</em>");
         } else {
             put_bytes(&o, peers[idx].bytes);
@@ -526,15 +535,29 @@ static int build_response(uint32_t uptime_s)
 }
 
 /**
- * Bind port 80, then accept and serve one connection at a time: read the
- * request, decode it into the `cur_*` readout, render and send the status
- * page, then close and access-log the connection.
+ * Bind port 80, or the port given as the one argument, then accept and serve
+ * one connection at a time: read the request, decode it into the `cur_*`
+ * readout, render and send the status page, then close and access-log the
+ * connection.
+ *
+ * The port is decimal digits from 1 through 65535; anything else prints the
+ * usage and exits 2. Digits are read only while the value is in range, so a
+ * long operand cannot overflow it.
+ *
+ * The page names the server by the connection's local address and port, as
+ * `getsockname` reports them, so it shows the address a client reached and
+ * the port given; if that call fails it shows 0.0.0.0 and the bound port. The
+ * connection enters the ring before the page is rendered, so it appears in
+ * its own page; its size is recorded as 0 and set once the reply has been
+ * sent. The access-log line is `httpd: <client> "<request line>" 200 <sent>`;
+ * a reply cut short because the client went away is logged at warn level with
+ * the bytes sent over the bytes built.
  */
 int main(int argc, char **argv)
 {
     int fd, conn;
-    struct sockaddr_in addr, peer;
-    socklen_t peerlen;
+    struct sockaddr_in addr, peer, local;
+    socklen_t peerlen, locallen;
     uint16_t listen_port = LISTEN_PORT;
     int i;
 
@@ -542,7 +565,7 @@ int main(int argc, char **argv)
         long v = 0;
         const char *p = argv[1];
 
-        while (*p >= '0' && *p <= '9') {
+        while (*p >= '0' && *p <= '9' && v <= 65535) {
             v = v * 10 + (*p - '0');
             p++;
         }
@@ -602,6 +625,13 @@ int main(int argc, char **argv)
 
         cur_client_ip = peer.sin_addr.s_addr;
         cur_client_port = peer.sin_port;
+        locallen = sizeof local;
+        if (getsockname(conn, (struct sockaddr *)&local, &locallen) != 0) {
+            local.sin_addr.s_addr = 0;
+            local.sin_port = htons(listen_port);
+        }
+        cur_server_ip = local.sin_addr.s_addr;
+        cur_server_port = local.sin_port;
         cur_bytes_in = (unsigned int)rlen;
         copy_request(reqbuf, rlen, cur_reqline, REQLINE_MAX, 0);
         copy_request(reqbuf, rlen, cur_methpath, METHPATH_MAX, 1);
@@ -615,11 +645,6 @@ int main(int argc, char **argv)
         served++;
         uptime_s = (uint32_t)(now_sec() - epoch_sec_start);
 
-        /* Log the connection before rendering so it appears in its own page.
-         * The response size is not known mid-render (it is the size of the very
-         * reply being built), so it is recorded as 0 now and patched in once
-         * the reply has been sent; the in-flight row shows a blank byte
-         * count. */
         record_peer(peer.sin_addr.s_addr, peer.sin_port, served, 0);
 
         total = build_response(uptime_s);
@@ -636,12 +661,6 @@ int main(int argc, char **argv)
         total_bytes += (unsigned int)sent;
         peers[(peer_head + PEER_RING - 1) % PEER_RING].bytes = (unsigned int)sent;
 
-        /*
-         * Access log, Common Log Format style:
-         *   <client> "<request line>" <status> <bytes sent>
-         * A truncated reply (the client went away mid-send) is flagged at warn
-         * level and shows how far it got.
-         */
         print("httpd: ");
         if (sent < total)
             print("warn: ");

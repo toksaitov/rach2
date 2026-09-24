@@ -30,16 +30,23 @@ is the project's HTTP/1.0 status server.
 It listens on all addresses, on port 80 unless
 .Ar PORT
 is given.
+.Ar PORT
+must be decimal digits from 1 through 65535; anything else prints
+.Ql "httpd: usage: httpd [port]"
+and exits with status 2.
 A port below 1024 requires root privilege;
 .Ql httpd 8080
 runs on an unprivileged port.
 .Pp
 The server uses blocking socket calls and serves one connection at a time.
 It reads one request and answers with a generated status page.
-The page contains the client's address and port, the request line,
+The page contains the server's address and port as the connection reached
+them, which
+.Xr getsockname 2
+reports, the client's address and port, the request line, Host,
 User-Agent, uptime, per-connection counters, and the six most recent
 connections.
-The request line and User-Agent are HTML-escaped.
+The request line, Host and User-Agent are HTML-escaped.
 It serves no files.
 .Pp
 On os-real,
@@ -96,7 +103,3 @@ read the status page from the host:
 .Sh HISTORY
 The BusyBox applet options are adapted from BusyBox documentation,
 licensed under GPL-2.0.
-.Sh BUGS
-The os-simple status page labels the server endpoint
-.Ql 10.0.2.15:80
-regardless of the selected port.
