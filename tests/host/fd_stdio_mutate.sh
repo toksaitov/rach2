@@ -1,5 +1,8 @@
 #!/bin/sh
-# Compile descriptor allocation before, during and after each fault.
+# Compile descriptor allocation before, during and after each fault. The
+# two namespace faults change the test that `fd_ofd_lock` and `fd_ofd_unlock`
+# both make: one takes the mount's namespace for KRFFS alone, the other for
+# every mounted file system whether or not its type asks to be serialised.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -56,7 +59,7 @@ run_phase()
 
 echo "fd-stdio-mutation: logs: $work"
 run_phase fixed 0 'fd_hosttest: pass:'
-for fault in unchecked rollback process repoint namespace; do
+for fault in unchecked rollback process repoint namespace unserialised; do
     source="$work/sys/fs/fd.c"
     [ "$fault" != process ] || source="$work/sys/proc/process.c"
     python3 - "$source" "$fault" <<'PY'
@@ -66,8 +69,10 @@ import sys
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 changes = {
-    "namespace": ("if (ofd->vmnt) {",
+    "namespace": ("if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
                   "if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {"),
+    "unserialised": ("if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+                     "if (ofd->vmnt) {"),
     "repoint": ("mnt->type == &vfs_krffs_type && rec->ofd.fhandle == from",
                 "rec->ofd.fhandle == from"),
     "process": ("if (fd_init_stdio(&p->fds) != 0) {",
@@ -77,7 +82,7 @@ changes = {
     "rollback": ("                fd_free(table, --i);", "                --i;"),
 }
 old, new = changes[sys.argv[2]]
-if sys.argv[2] == "namespace":
+if sys.argv[2] in ("namespace", "unserialised"):
     for name in ("fd_ofd_lock", "fd_ofd_unlock"):
         start = source.index("void " + name + "(")
         end = source.index("\n}", start) + 2
@@ -97,6 +102,7 @@ PY
         rollback) message='stdio releases partial allocations' ;;
         repoint) message='mounted open handle remains stable during node relocation' ;;
         namespace) message='other mounted types take the namespace before the description' ;;
+        unserialised) message='a file system that needs no serialising takes no namespace lock' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
