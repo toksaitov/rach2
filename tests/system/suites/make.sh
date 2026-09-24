@@ -175,7 +175,7 @@ step "NOOVER" "sleep 1; touch demo.h; make > /tmp/over.out 2>&1; echo NO\"\"OVER
 step "CLEANDONE" "> clean; make CC=tcc clean > /tmp/clean.out 2>&1; echo CLEAN\"\"DONE=\$? LEFT=\$(ls prog main.o 2>/dev/null | wc -l)"
 step "UTILRC" "mkdir -p /tmp/u && cd /tmp/u && cp /src/utils/cat.c . && printf 'cat: cat.o\\n\\t\$(CC) \$(LDFLAGS) -o cat cat.o\\n' > Makefile && make CC=tcc > /tmp/u.out 2>&1; echo UTIL\"\"RC=\$?"
 step "UTILSAME" "printf 'a line this machine built\\n' > /tmp/u/in.txt; /tmp/u/cat /tmp/u/in.txt > /tmp/u/mine; busybox cat /tmp/u/in.txt > /tmp/u/theirs; cmp /tmp/u/mine /tmp/u/theirs && echo UTIL\"\"SAME"
-step "STAMPED" "cd /tmp/demo && make CC=tcc > /dev/null 2>&1; busybox stat -c %Y lib.o > lib.o.when; echo STAMP\"\"ED=\$(cat lib.o.when)"
+step "STAMPED" "cd /tmp/demo && make CC=tcc > /dev/null 2>&1; busybox stat -c %Y lib.o > lib.o.when; busybox stat -c 'TIMES %Y %n' Makefile demo.h lib.c main.c lib.o main.o prog; echo STAMP\"\"ED=\$(cat lib.o.when)"
 step "FIRSTBOOTDONE" "sync; echo FIRSTBOOT\"\"DONE"
 
 boot_steps
@@ -265,7 +265,7 @@ cleanup_boot
 # from it then, and make would do nothing.
 : > "$STEPS"
 step "KEPT" "cd /tmp/demo; echo KEP\"\"T=\$(busybox stat -c %Y lib.o) WANTED=\$(cat lib.o.when)"
-step "REBOOTIDLE" "make CC=tcc > /tmp/r1.out 2>&1; echo REBOOT\"\"IDLE=\$? TCC=\$(grep -c tcc /tmp/r1.out)"
+step "REBOOTIDLE" "busybox stat -c 'TIMES %Y %n' Makefile demo.h lib.c main.c lib.o main.o prog; make CC=tcc > /tmp/r1.out 2>&1; echo REBOOT\"\"IDLE=\$? TCC=\$(grep -c tcc /tmp/r1.out); sed 's/^/REMADE: /' /tmp/r1.out"
 # interval: the file's time must pass the second, which make compares whole
 step "REBOOTCHANGE" "sleep 1; printf '#include \"demo.h\"\\nint scale(int x){return 4*x;}\\n' > lib.c; echo REBOOT\"\"CHANGE"
 step "REBOOTRC" "make CC=tcc > /tmp/r2.out 2>&1; echo REBOOT\"\"RC=\$? LIB=\$(grep -c 'c lib.c' /tmp/r2.out)"
