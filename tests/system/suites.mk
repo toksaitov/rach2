@@ -1735,10 +1735,18 @@ run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 # partitions, a GPT, a GPT read from its backup, a blank disk), the nodes
 # as the tables number them, the table read again, and the root chosen by
 # identity: found when the disks are swapped, refused when two disks have it.
+# Then the recovery kernel's `disk write` on three GPT disks, the two above
+# and one whose primary header is zeroed, and on an MBR disk whose partition
+# reaches the last sector, each of which must be refused and left as it was,
+# since the sector it writes is a backup header or a partition's; and on an
+# MBR disk whose last sector no partition holds, which must take the
+# round-trip (tests/system/gpt_write_refusal.sh).
 PARTS_DIR = $(IMAGES_DIR)/parts
-run-parts: rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HARNESS)
+run-parts: rach2 rach2-recovery tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HARNESS)
 	sh tests/system/suites/parts.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(MKGPT) \
 	    $(OS_SIMPLE_EXT2) $(PARTS_DIR)
+	sh tests/system/gpt_write_refusal.sh $(RECOVERY_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKGPT) \
+	    $(PARTS_DIR)/gpt-write
 # `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
 # together with the root on each in turn, and a disk past 128 GiB.
 BUS_DIR = $(IMAGES_DIR)/bus

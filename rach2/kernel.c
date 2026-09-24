@@ -2559,23 +2559,68 @@ broken:
 }
 
 #ifdef RACH2_RECOVERY
+/** Whether `sector` begins with the signature of a GPT header. */
+static int holds_gpt_header(const uint8_t *sector)
+{
+    static const char gpt_signature[] = "EFI PART";
+    uint32_t i;
+
+    for (i = 0; i < 8; ++i) {
+        if (sector[i] != (uint8_t)gpt_signature[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * The number, 1 to 4, of the primary MBR entry whose extent holds `lba`,
+ * or 0 when none does or `mbr` has no partition table's signature.
+ *
+ * An extended partition's entry covers its logical partitions, so an entry
+ * is enough to say the sector is in use.
+ */
+static int mbr_entry_covering(const uint8_t *mbr, uint64_t lba)
+{
+    uint32_t i;
+
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) {
+        return 0;
+    }
+    for (i = 0; i < 4; ++i) {
+        const uint8_t *e = mbr + 446 + i * 16;
+        uint32_t start =
+            (uint32_t)e[8] | (uint32_t)e[9] << 8 | (uint32_t)e[10] << 16 | (uint32_t)e[11] << 24;
+        uint32_t count =
+            (uint32_t)e[12] | (uint32_t)e[13] << 8 | (uint32_t)e[14] << 16 | (uint32_t)e[15] << 24;
+
+        if (e[4] != 0 && count != 0 && lba >= start && lba - start < count) {
+            return (int)i + 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * Prove the whole-disk write path: WRITE, FLUSH and READ of one sector.
  *
- * The last sector lies past every MBR partition and past the boot gap, so the
- * round-trip disturbs neither a mounted file system nor a future bootloader.
- * A GPT disk is the exception: its backup header is that same sector, and
- * overwriting it leaves a disk only a repair tool can open. LBA 1 says which
- * kind this is.
+ * The last sector is written only when nothing holds it: past the boot gap,
+ * it disturbs neither a file system nor a future bootloader. A GPT disk keeps
+ * its backup header there, and overwriting it leaves a disk only a repair
+ * tool can open. LBA 1 says which kind this is, and where it does not, the
+ * last sector is read as well: a disk whose primary header is gone keeps its
+ * table in the backup alone, and the write would destroy the one copy left.
+ * On an MBR disk a partition may reach the last sector, as a root grown into
+ * the whole disk does, and a sector one of the four entries holds is
+ * refused.
  */
 static void disk_write_roundtrip(void)
 {
-    static const char gpt_signature[] = "EFI PART";
     static uint8_t disk_sector[BLOCK_SECTOR_SIZE];
     static uint8_t disk_scratch[BLOCK_SECTOR_SIZE];
     uint64_t lba;
     uint32_t i;
-    int is_gpt = 1;
+    int is_gpt;
     int ok = 1;
 
     if (_krffs_on_disk) {
@@ -2586,23 +2631,35 @@ static void disk_write_roundtrip(void)
         console_printf("disk: no boot disk\n");
         return;
     }
+    lba = block0->sector_count - 1;
     if (block0->read(block0, 1, 1, disk_sector) != 0) {
         console_printf("disk: LBA 1 unreadable; the last sector is not written\n");
         return;
     }
-    for (i = 0; i < 8; ++i) {
-        if (disk_sector[i] != (uint8_t)gpt_signature[i]) {
-            is_gpt = 0;
-            break;
+    is_gpt = holds_gpt_header(disk_sector);
+    if (!is_gpt) {
+        if (block0->read(block0, lba, 1, disk_sector) != 0) {
+            console_printf("disk: the last sector is unreadable; it is not written\n");
+            return;
         }
+        is_gpt = holds_gpt_header(disk_sector);
     }
     if (is_gpt) {
         console_printf("disk: GPT disk; the last sector is its backup header, not "
                        "a scratch sector\n");
         return;
     }
+    if (block0->read(block0, 0, 1, disk_sector) != 0) {
+        console_printf("disk: LBA 0 unreadable; the last sector is not written\n");
+        return;
+    }
+    i = (uint32_t)mbr_entry_covering(disk_sector, lba);
+    if (i != 0) {
+        console_printf("disk: the last sector belongs to partition %d, not a scratch sector\n",
+                       (int)i);
+        return;
+    }
 
-    lba = block0->sector_count - 1;
     for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
         disk_scratch[i] = (uint8_t)(i ^ 0x5A);
     }
