@@ -48,6 +48,7 @@ run_phase()
 {
     phase=$1
     expected=$2
+    failure=${3:-}
     rm -f build/images/rach2-recovery*.krffs build/images/rach2-recovery*.iso \
         build/images/installer-root.ext2 build/images/installer-test.disk \
         build/images/install-test-stick.img
@@ -72,12 +73,19 @@ run_phase()
     if [ "$status" -ne "$expected" ]; then
         echo "install-keys-mutation: wrong result: $phase status $status" >&2; exit 1
     fi
-    grep -Fq 'retried from the marked archive: OK' "$work/$phase.log"
     if [ "$expected" -eq 0 ]; then
-        grep -Fq 'row 17: host, root and test keys match the installed machine: OK' "$work/$phase.log"
+        grep -Fq 'row archive-stop: the complete new archive supplies the machine configuration: OK' "$work/$phase.log"
+        grep -Fq 'retried from the marked archive: OK' "$work/$phase.log"
+        grep -Fq 'row 17: host and account keys match the installed machine: OK' "$work/$phase.log"
         grep -Fq 'row 17: root logs in with its restored key: OK' "$work/$phase.log"
     else
-        grep -Fq 'FAIL: row 17:' "$work/$phase.log"
+        grep -Fq "FAIL: $failure" "$work/$phase.log"
+        if [ "$failure" = 'row 17:' ]; then
+            grep -Fq 'retried from the marked archive: OK' "$work/$phase.log"
+        else
+            grep -Fq "copying this machine's accounts, policy and keys off the root" \
+                "build/images/keys-$phase/archive-stop.log"
+        fi
     fi
     echo "install-keys-mutation: result: $phase status $status"
 }
@@ -91,13 +99,37 @@ import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
-start = source.index('    for keys in ', source.index('write_archive()'))
+start = source.index('    if [ -d "$1/etc/dropbear" ]; then', source.index('write_archive()'))
 end = source.index('    if [ -n "${2:-}" ]; then', start)
 assert 'could not be archived' in source[start:end]
 path.write_text(source[:start] + source[end:])
 PY
-run_phase mutated 1
+run_phase mutated 1 "row 17:"
 restore
 run_phase restored 0
 cmp "$work/fixed.installer" "$work/restored.installer"
-echo 'install-keys-mutation: result: pass: row 17 rejected missing keys and passed after restoration'
+# Restore the old replacement protocol, including its lack of recovery.
+# Changing only the rename order would still let the new recovery repair it.
+python3 - "$source" <<'PYOLD'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index('recover_archive() {')
+end = source.index('\n}\n', start) + 3
+source = source[:start] + 'recover_archive() { :; }\n' + source[end:]
+start = source.index('    if [ -d "$RECOVERY_MNT/rach2-config" ]; then', source.index('write_archive()'))
+end = source.index('    mkdir -p "$RECOVERY_MNT/rach2-config.new/etc/rach2"', start)
+source = source[:start] + '    rm -rf "$RECOVERY_MNT/rach2-config.new" || die "the partial archive could not be removed"\n' + source[end:]
+start = source.index('    if [ -d "$RECOVERY_MNT/rach2-config" ]; then', source.index('write_archive()'))
+end = source.index('    mv "$RECOVERY_MNT/rach2-config.new"', start)
+assert 'rach2-config.old' in source[start:end]
+source = source[:start] + '    rm -rf "$RECOVERY_MNT/rach2-config" || die "the old archive could not be removed"\n' + source[end:]
+path.write_text(source)
+PYOLD
+run_phase archive-mutated 1 "row archive-stop: the retry did not recover"
+restore
+run_phase archive-restored 0
+cmp "$work/fixed.installer" "$work/archive-restored.installer"
+echo 'install-keys-mutation: result: pass: missing keys and the old replacement protocol failed their rows; both restorations passed'

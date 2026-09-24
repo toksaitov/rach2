@@ -116,12 +116,20 @@ Grow the root into the free space after it, if requested.
 .El
 .Pp
 If the installer finds a recovery partition, it archives the three account
-files, the SSH policy, and the key directories
-.Pa /etc/dropbear ,
-.Pa /root/.ssh ,
-and each
-.Pa /home/NAME/.ssh
-that exists.
+files and the SSH policy under
+.Pa rach2-config/etc .
+Host keys go in
+.Pa rach2-config/etc/dropbear .
+For each account in passwd, the contents of its home directory's
+.Pa .ssh
+go in
+.Pa rach2-config/keys/UID ,
+including root's keys in
+.Pa keys/0 .
+The home is the passwd home field, which need not match the account name.
+For a shared UID, only the first passwd entry supplies keys.
+Numeric directory names keep accounts whose names differ only in case
+separate on FAT32.
 Passwords are stored as hashes.
 The archive preserves accounts and keys for an update when the root cannot
 be read.
@@ -152,9 +160,16 @@ configuration file is reported and the root's copy is kept.
 .Pp
 Before the root is written, and when a recovery partition is there, the
 archive is refreshed from the retained configuration and marked as an
-update in progress; the old archive is removed before the new one is
-renamed into its place, so an interruption between the two leaves no
-archive.
+update in progress.
+The installer builds and syncs
+.Pa rach2-config.new ,
+renames the current archive to
+.Pa rach2-config.old ,
+then renames the new archive into place and syncs before removing the old one.
+Before reading or writing an archive, it recovers an interrupted replacement:
+if the current archive is absent, a new copy with all three account files
+is promoted, or otherwise the old copy is promoted when present.
+The new copy is never removed unless a current archive exists.
 After the accounts are restored, the archive is written again without
 the mark.
 An update interrupted after writing the image and before restoring the
@@ -163,11 +178,13 @@ The next update uses the marked archive, preserving the server's identity
 and the accounts' keys.
 FAT32 stores neither owners nor modes, so restored key directories receive
 mode 700 and key files mode 600.
-The server's host keys and root's keys receive owner 0:0.
-Each home's keys receive the uid and gid of NAME in the archived passwd;
-a home whose account is absent receives no keys.
+The server's host keys receive owner 0:0.
+Each archived account receives its UID's keys in the home from passwd,
+with that account's uid and gid.
+A missing home is created with mode 700 and the same owner.
+Keys for a UID absent from the archived passwd are ignored.
 Other home files are not archived.
-An older archive without keys cannot restore them.
+An older archive without UID key directories cannot restore account keys.
 The recovery partition is mounted so that only root can read the archive.
 The image's home directories and their keys are removed whether or not
 the old homes were retained.

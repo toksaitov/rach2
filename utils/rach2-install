@@ -222,28 +222,47 @@ find_recovery() { # find_recovery DISKNUMBER
     return 1
 }
 
-# Whether the archive on the recovery partition mounted at $RECOVERY_MNT
-# holds every file an update cannot do without.
+# Whether a directory holds every file an update cannot do without.
 archive_complete() {
     for f in $ARCHIVE_NEEDS; do
-        [ -f "$RECOVERY_MNT/rach2-config/$f" ] || return 1
+        [ -f "${1:-$RECOVERY_MNT/rach2-config}/$f" ] || return 1
     done
     return 0
 }
 
+# Recover a stopped replacement before choosing the machine's configuration.
+# The complete new copy takes precedence; the old copy covers a stop before
+# the new one was complete. Neither is discarded without a current archive.
+recover_archive() {
+    [ ! -d "$RECOVERY_MNT/rach2-config" ] || return 0
+    if archive_complete "$RECOVERY_MNT/rach2-config.new"; then
+        mv "$RECOVERY_MNT/rach2-config.new" "$RECOVERY_MNT/rach2-config" ||
+            die "the new archive could not be recovered"
+        sync
+    elif [ -d "$RECOVERY_MNT/rach2-config.old" ]; then
+        mv "$RECOVERY_MNT/rach2-config.old" "$RECOVERY_MNT/rach2-config" ||
+            die "the old archive could not be recovered"
+        sync
+    fi
+}
+
 # Copies configuration files and key directories under ROOTDIR to recovery.
-# The new archive is built beside the old one before replacing it. A stop
-# between removing the old one and renaming the new one leaves no archive.
+# The old archive survives until the new one has been renamed and synced.
 # A file the root does not have is left out,
 # except the account files, without which the archive is not one. With
 # MARK, the archive records that an update of the root is in progress and
 # the hash of the image being written, so a retry after a stop takes the
 # archive and not the root, which is the image's by then.
 write_archive() { # write_archive ROOTDIR [MARK]
+    recover_archive
     for f in $ARCHIVE_NEEDS; do
         [ -f "$1/$f" ] || die "$f is not among the files to archive"
     done
-    rm -rf "$RECOVERY_MNT/rach2-config.new" || die "an old partial archive could not be removed"
+    if [ -d "$RECOVERY_MNT/rach2-config" ]; then
+        rm -rf "$RECOVERY_MNT/rach2-config.new" || die "an old partial archive could not be removed"
+    elif [ -e "$RECOVERY_MNT/rach2-config.new" ]; then
+        die "an incomplete new archive is the only configuration left on recovery"
+    fi
     mkdir -p "$RECOVERY_MNT/rach2-config.new/etc/rach2" ||
         die "the archive directory could not be made on the recovery partition"
     for f in $CONFIG_FILES; do
@@ -251,29 +270,47 @@ write_archive() { # write_archive ROOTDIR [MARK]
             cp "$1/$f" "$RECOVERY_MNT/rach2-config.new/$f" || die "$f could not be archived"
         fi
     done
-    for keys in "$1/etc/dropbear" "$1/root/.ssh" "$1"/home/*/.ssh; do
-        [ -d "$keys" ] || continue
-        relative=${keys#"$1/"}
-        if ! { mkdir -p "$RECOVERY_MNT/rach2-config.new/$(dirname "$relative")" &&
-            cp -R "$keys" "$RECOVERY_MNT/rach2-config.new/$relative"; }; then
-            die "$relative could not be archived"
-        fi
-    done
+    if [ -d "$1/etc/dropbear" ]; then
+        cp -R "$1/etc/dropbear" "$RECOVERY_MNT/rach2-config.new/etc/dropbear" ||
+            die "the host keys could not be archived"
+    fi
+    archive_account_keys "$1" || die "the account keys could not be archived"
     if [ -n "${2:-}" ]; then
         echo "$2" > "$RECOVERY_MNT/rach2-config.new/update-in-progress" ||
             die "the update's mark could not be written to the archive"
     fi
     sync
-    rm -rf "$RECOVERY_MNT/rach2-config" || die "the old archive could not be removed"
+    if [ -d "$RECOVERY_MNT/rach2-config" ]; then
+        rm -rf "$RECOVERY_MNT/rach2-config.old" || die "the old archive could not be removed"
+        mv "$RECOVERY_MNT/rach2-config" "$RECOVERY_MNT/rach2-config.old" ||
+            die "the current archive could not be saved"
+    fi
     mv "$RECOVERY_MNT/rach2-config.new" "$RECOVERY_MNT/rach2-config" ||
         die "the new archive could not take the old one's place"
     sync
+    rm -rf "$RECOVERY_MNT/rach2-config.old" || die "the old archive could not be removed"
 }
+
+# Numeric UIDs cannot collide by case on FAT32. The first passwd entry owns
+# the archived keys for a shared UID, even when that entry has no keys.
+archive_account_keys() (
+    seen=" "
+    while IFS=: read -r _name _password uid _gid _gecos home _shell; do
+        case "$uid" in "" | *[!0-9]*) continue ;; esac
+        case "$seen" in *" $uid "*) continue ;; esac
+        seen="$seen$uid "
+        case "$home" in /*) ;; *) continue ;; esac
+        [ -d "$1$home/.ssh" ] || continue
+        destination="$RECOVERY_MNT/rach2-config.new/keys/$uid"
+        { mkdir -p "$destination" && cp -R "$1$home/.ssh/." "$destination/"; } ||
+            die "$home/.ssh could not be archived"
+    done < "$1/etc/passwd"
+)
 
 # FAT32 records neither owners nor modes. Reconstruct them before cp -a
 # puts these files on the new root, where SSH checks their permissions.
 restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
-    if ! { mkdir -p "$(dirname "$2")" && cp -R "$1" "$2" &&
+    if ! { mkdir -p "$2" && cp -R "$1/." "$2/" &&
         chown -R "$3" "$2" &&
         find "$2" -type d -exec chmod 700 {} + &&
         find "$2" -type f -exec chmod 600 {} +; }; then
@@ -284,13 +321,14 @@ restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
 # Only archived accounts may regain keys. Empty homes must also be made,
 # since a kept home tree replaces all of the image's homes after the write.
 restore_archive_keys() (
+    recover_archive
     archive="$RECOVERY_MNT/rach2-config"
-    for relative in etc/dropbear root/.ssh; do
-        [ -d "$archive/$relative" ] || continue
-        restore_key_directory "$archive/$relative" "$keep/$relative" 0:0
-    done
-    while IFS=: read -r name _password uid gid _gecos home _shell; do
-        case "$name" in "" | . | .. | */*) continue ;; esac
+    if [ -d "$archive/etc/dropbear" ]; then
+        restore_key_directory "$archive/etc/dropbear" "$keep/etc/dropbear" 0:0
+    fi
+    while IFS=: read -r _name _password uid gid _gecos home _shell; do
+        case "$uid" in "" | *[!0-9]*) continue ;; esac
+        case "$home" in /*) ;; *) continue ;; esac
         case "$home" in
             /home/*)
                 if [ "$uid" -ge 1000 ]; then
@@ -299,11 +337,10 @@ restore_archive_keys() (
                 fi
                 ;;
         esac
-        relative="home/$name"
-        [ -d "$archive/$relative/.ssh" ] || continue
-        mkdir -p "$keep/$relative" && chmod 700 "$keep/$relative" &&
-            chown "$uid:$gid" "$keep/$relative" || exit 1
-        restore_key_directory "$archive/$relative/.ssh" "$keep/$relative/.ssh" "$uid:$gid"
+        [ -d "$archive/keys/$uid" ] || continue
+        mkdir -p "$keep$home" && chmod 700 "$keep$home" &&
+            chown "$uid:$gid" "$keep$home" || exit 1
+        restore_key_directory "$archive/keys/$uid" "$keep$home/.ssh" "$uid:$gid"
     done < "$keep/etc/passwd"
 )
 
@@ -353,9 +390,10 @@ $update_disk was not installed from here"
     done
     keep=/tmp/rach2-update-keep
     rm -rf "$keep" || die "an old copy of the configuration could not be removed"
-    mkdir -p "$keep" && chmod 700 "$keep" || die "there is nowhere to keep the machine's configuration"
+    { mkdir -p "$keep" && chmod 700 "$keep"; } || die "there is nowhere to keep the machine's configuration"
     recovery_entry=$(find_recovery "$target") || recovery_entry=""
     [ -n "$recovery_entry" ] && mounted_recovery=$RECOVERY_MNT
+    [ -z "$recovery_entry" ] || recover_archive
     from_archive=""
     if [ -n "$recovery_entry" ] && [ -f "$RECOVERY_MNT/rach2-config/update-in-progress" ]; then
         # An update stopped after it wrote the root and before it wrote the
@@ -368,7 +406,7 @@ $update_disk was not installed from here"
     if [ -n "$from_archive" ]; then
         # The archive is the configuration, and the root's partition is
         # the last ext2 entry of the table when no mount could say which.
-        [ -n "$recovery_entry" ] && archive_complete ||
+        { [ -n "$recovery_entry" ] && archive_complete; } ||
             die "$update_disk carries no root of this system whose accounts can be taken and no \
 whole configuration archived on its recovery partition; its accounts are not there to be kept"
         if [ -z "$root_entry" ]; then
@@ -534,24 +572,37 @@ whole configuration archived on its recovery partition; its accounts are not the
     # not the machine's were kept: an account that has the image's name must
     # not regain the image's key. Where the machine's homes were not kept,
     # each account of the archive gets a home with its archived keys.
-    rm -rf "$TARGET_MNT/home" || die "the image's home directories could not be removed"
+    rm -rf "${TARGET_MNT:?}/home" || die "the image's home directories could not be removed"
     if [ -d "$keep/home" ]; then
         cp -a "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
     else
         mkdir -p "$TARGET_MNT/home" || die "the home directory could not be made"
         awk -F: '$3 >= 1000 && $6 ~ /^\/home\// { print $3, $4, $6 }' "$TARGET_MNT/etc/passwd" |
         while read -r uid gid home; do
-            mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
-                chown "$uid:$gid" "$TARGET_MNT$home" || die "$home could not be made"
+            { mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
+                chown "$uid:$gid" "$TARGET_MNT$home"; } || die "$home could not be made"
         done
     fi
     # Root's keys are put back as they were, and where there were none the
     # image's are taken off: an update must not open the machine to a key its
     # owner had removed.
     rm -rf "$TARGET_MNT/root/.ssh" || die "the image's keys for root could not be removed"
-    if [ -d "$keep/root/.ssh" ]; then
+    if [ -z "$from_archive" ] && [ -d "$keep/root/.ssh" ]; then
         mkdir -p "$TARGET_MNT/root"
         cp -a "$keep/root/.ssh" "$TARGET_MNT/root/.ssh" || die "root's keys could not be put back"
+    fi
+    if [ -n "$from_archive" ]; then
+        while IFS=: read -r _name _password uid gid _gecos home _shell; do
+            case "$home" in /home/*) continue ;; /*) ;; *) continue ;; esac
+            [ -d "$keep$home/.ssh" ] || continue
+            if [ ! -d "$TARGET_MNT$home" ]; then
+                { mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
+                    chown "$uid:$gid" "$TARGET_MNT$home"; } || die "$home could not be made"
+            fi
+            { rm -rf "$TARGET_MNT$home/.ssh" &&
+                cp -a "$keep$home/.ssh" "$TARGET_MNT$home/.ssh"; } ||
+                die "$home/.ssh could not be put back"
+        done < "$keep/etc/passwd"
     fi
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
@@ -993,7 +1044,7 @@ $user_name:$user_hash:0:0:99999:7:::
 
 # The account's home, and the keys if any were given. The demonstration's home
 # and its keys go, whatever they were called.
-rm -rf "$root_dir/home" 2>/dev/null
+rm -rf "${root_dir:?}/home" 2>/dev/null
 mkdir -p "$root_dir/home/$user_name" || die "the home directory could not be made"
 chmod 700 "$root_dir/home/$user_name"
 chown 1000:1000 "$root_dir/home/$user_name" 2>/dev/null

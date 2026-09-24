@@ -1449,6 +1449,9 @@ $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
 # is what GRUB reads off it.
 INSTALLER_DIR = $(IMAGES_DIR)/installer
 INSTALLER_PORT = 2327
+# The repair half forwards SSH too, for its key login after a resumed update,
+# and the pool runs it beside the install half, so it has a port of its own.
+INSTALLER_REPAIR_PORT = 2329
 run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKEXFATFIXTURE) $(RUNUTIL)
 	sh tests/system/install_stick_test.sh $(INSTALL_STICK) $(SEALED_DISK) $(SEALED_EXT2) \
 	    $(INSTALLER_DIR)/stick-update
@@ -1478,7 +1481,7 @@ run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTY
                       $(HARNESS) $(RUNUTIL)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
-	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \
+	    $(INSTALLER_DISK) $(INSTALLER_REPAIR_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \
 	    $(INSTALLER_EXT2)
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,

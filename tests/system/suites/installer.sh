@@ -864,7 +864,7 @@ mark "row 14"
 fi
 
 if [ "$PART" = "all" ] || [ "$PART" = "repair" ] || [ "$PART" = "resume" ]; then
-# The focused proof needs only a bootable disk and the two resumed rows.
+# The focused proof needs only a bootable disk and the recovery rows.
 if [ "$PART" = "resume" ]; then
     cp "$TEST_STICK" "$DIR/test-stick.img"
     cp "$TEST_DISK" "$DIR/one.img"
@@ -875,6 +875,13 @@ fi
 #          contents distinguish this machine's keys from the image's. The
 #          hashes come from the installed root before the archive is marked.
 PUBKEY=$(ssh-keygen -y -f "$DEMO_KEY")
+for account in worker upper lower; do
+    rm -f "$DIR/$account.key" "$DIR/$account.key.pub"
+    ssh-keygen -q -t ed25519 -N '' -C "$account" -f "$DIR/$account.key"
+done
+WORKKEY=$(cat "$DIR/worker.key.pub")
+UPPERKEY=$(cat "$DIR/upper.key.pub")
+LOWERKEY=$(cat "$DIR/lower.key.pub")
 LOGKEYS="$DIR/before-resume.log"
 if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
@@ -886,7 +893,13 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "send=echo '# machine root' >> /root/.ssh/authorized_keys; echo '# machine test' >> /home/test/.ssh/authorized_keys" \
     "send=chmod 700 /root/.ssh /home/test/.ssh; chmod 600 /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
     "send=chown -R 0:0 /root/.ssh; chown -R 1000:1000 /home/test/.ssh" \
+    "send=echo worker:x:2001:2001::/home/work:/bin/sh >> /etc/passwd; echo Alice:x:2002:2002::/home/Alice:/bin/sh >> /etc/passwd" \
+    "send=echo alice:x:2003:2003::/home/alice:/bin/sh >> /etc/passwd; mkdir -p /home/work/.ssh /home/Alice/.ssh /home/alice/.ssh" \
+    "send=echo '$WORKKEY' > /home/work/.ssh/authorized_keys" \
+    "send=echo '$UPPERKEY' > /home/Alice/.ssh/authorized_keys" \
+    "send=echo '$LOWERKEY' > /home/alice/.ssh/authorized_keys" \
     "send=sha256sum /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
+    "send=sha256sum /home/work/.ssh/authorized_keys /home/Alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=sync; echo KEYS\"\"SAVED" "expect=KEYSSAVED" > "$LOGKEYS.harness" 2>&1; then
     note "the installed machine's keys are recorded before the interrupted update: OK"
 else
@@ -894,7 +907,7 @@ else
     exit 1
 fi
 grep -a '^KEYHASH:[0-9a-f]' "$LOGKEYS" | tr -d '\r' > "$DIR/keys.before"
-[ "$(wc -l < "$DIR/keys.before")" -ge 3 ] || { bad "the original key hashes are missing"; exit 1; }
+[ "$(wc -l < "$DIR/keys.before")" -ge 6 ] || { bad "the original key hashes are missing"; exit 1; }
 
 LOGSAVE="$DIR/archive-keys.log"
 if "$HARNESS" --bios \
@@ -922,11 +935,11 @@ REC_START=$(od -An -tu4 -j $((446 + 1 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' '
 mcopy -n -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
     bad "the archived passwd could not be read off the recovery partition"
 echo "extra:x:1001:1001::/home/extra:/bin/sh" >> "$DIR/archived-passwd"
-mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/home 2>/dev/null || true
-mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/home/orphan ::rach2-config/home/orphan/.ssh ||
-    { bad "the unowned archived home could not be made"; exit 1; }
-printf '%s\n' "$PUBKEY" > "$DIR/orphan-key"
-mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/orphan-key" ::rach2-config/home/orphan/.ssh/authorized_keys ||
+mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys 2>/dev/null || true
+mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys/2999 ||
+    { bad "the unowned archived key directory could not be made"; exit 1; }
+printf '%s\n' "$PUBKEY" "# orphan-uid-2999" > "$DIR/orphan-key"
+mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/orphan-key" ::rach2-config/keys/2999/authorized_keys ||
     { bad "the unowned archived key could not be written"; exit 1; }
 echo "$(basename "$INSTALLER_EXT2") stopped" > "$DIR/update-in-progress"
 ROOT3_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
@@ -937,6 +950,50 @@ mcopy -o -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/archived-passwd" ::rach2-
     bad "the archived passwd could not be written back to the recovery partition"
 mcopy -o -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/update-in-progress" ::rach2-config/update-in-progress ||
     bad "the mark could not be planted on the recovery partition"
+# A complete .new with no current archive is the stop between the old
+# removal and the rename. The root already has the image's credentials.
+mren -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config ::rach2-config.new ||
+    { bad "row archive-stop: the replacement stop could not be planted"; exit 1; }
+LOGSTOP="$DIR/archive-stop.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "ARCHIVESTOPDONE" --log "$LOGSTOP" \
+    "expect=recovery image" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=before the root is written" \
+    "expect=what reached the root is the image" \
+    "expect=the configuration is archived on" \
+    "expect=updated:" "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && echo RECOVERY\"\"MOUNTED" "expect=RECOVERYMOUNTED" \
+    "send=grep -c ^extra: /r/rach2-config/etc/passwd | sed s/^/EXTRA=/" \
+    "send=test ! -e /r/rach2-config.new && test ! -e /r/rach2-config.old && echo ARCHIVE\"\"CURRENT" \
+    "send=umount /r; umount /m; echo ARCHIVESTOP\"\"DONE" \
+    "expect=ARCHIVESTOPDONE" > "$LOGSTOP.harness" 2>&1 &&
+    grep -aq "taking the configuration saved on the recovery partition" "$LOGSTOP" &&
+    grep -aq '^EXTRA=1' "$LOGSTOP" && grep -aq '^ARCHIVECURRENT' "$LOGSTOP"; then
+    note "row archive-stop: the complete new archive supplies the machine configuration: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOGSTOP.harness" >&2
+    bad "row archive-stop: the retry did not recover the complete new archive"
+    exit 1
+fi
+
+# Repeat the root-write stop with the recovered archive at its normal name.
+mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys 2>/dev/null || true
+mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/keys/2999 ||
+    { bad "the orphan directory could not be replanted for row 16"; exit 1; }
+mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/orphan-key" ::rach2-config/keys/2999/authorized_keys ||
+    { bad "the orphan key could not be replanted for row 16"; exit 1; }
+dd if="$INSTALLER_EXT2" of="$DIR/one.img" bs=512 seek="$ROOT3_START" conv=notrunc 2>/dev/null ||
+    { bad "the image could not be written for row 16"; exit 1; }
+mcopy -o -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/update-in-progress" ::rach2-config/update-in-progress ||
+    { bad "the mark could not be planted for row 16"; exit 1; }
 LOG16="$DIR/stopped-update.log"
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -971,12 +1028,20 @@ rm -f "$LOG17" "$KNOWN"
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
     "expect=# " "send=grep -c ^extra: /etc/passwd | sed s/^/EXTRA=/; stat -c %u:%g:%a /home/extra" \
     "expect=EXTRA=1" "expect=1001:1001:700" \
-    "send=test -z \"\$(ls -A /home/extra)\" && test ! -e /home/orphan/.ssh && echo HOME\"\"MADE" "expect=HOMEMADE" \
+    "send=test -z \"\$(ls -A /home/extra)\" && echo HOME\"\"MADE" "expect=HOMEMADE" \
+    "send=test ! -e /home/worker && ! grep -rqs orphan-uid-2999 /root/.ssh /home/*/.ssh && echo ORPHAN\"\"GONE" "expect=ORPHANGONE" \
+    "send=stat -c %u:%g:%a /home/work /home/work/.ssh /home/work/.ssh/authorized_keys" \
+    "expect=2001:2001:700" "expect=2001:2001:700" "expect=2001:2001:600" \
+    "send=stat -c %u:%g:%a /home/Alice /home/Alice/.ssh /home/Alice/.ssh/authorized_keys" \
+    "expect=2002:2002:700" "expect=2002:2002:700" "expect=2002:2002:600" \
+    "send=stat -c %u:%g:%a /home/alice /home/alice/.ssh /home/alice/.ssh/authorized_keys" \
+    "expect=2003:2003:700" "expect=2003:2003:700" "expect=2003:2003:600" \
     "send=stat -c %u:%g:%a /etc/dropbear /root/.ssh /home/test/.ssh" \
     "expect=0:0:700" "expect=0:0:700" "expect=1000:1000:700" \
     "send=stat -c %u:%g:%a /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys" \
     "expect=0:0:600" "expect=0:0:600" "expect=1000:1000:600" \
     "send=sha256sum /etc/dropbear/* /root/.ssh/authorized_keys /home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
+    "send=sha256sum /home/work/.ssh/authorized_keys /home/Alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys | sed s/^/KEYHASH:/" \
     "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && test ! -e /r/rach2-config/update-in-progress && echo MARK\"\"GONE; umount /r" \
     "expect=MARKGONE" \
     "send=echo RESUME\"\"READY" "expect=RESUMEREADY" "expect=STOPPEDUP" > "$LOG17.harness" 2>&1 &
@@ -1010,9 +1075,9 @@ fi
 trap - EXIT INT TERM HUP
 grep -a '^KEYHASH:[0-9a-f]' "$LOG17" | tr -d '\r' > "$DIR/keys.after"
 if cmp -s "$DIR/keys.before" "$DIR/keys.after"; then
-    note "row 17: host, root and test keys match the installed machine: OK"
+    note "row 17: host and account keys match the installed machine: OK"
 else
-    bad "row 17: host, root or test keys changed during the resumed update"
+    bad "row 17: host or account keys changed during the resumed update"
 fi
 
 mark "row 16"
