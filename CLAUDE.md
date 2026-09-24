@@ -74,7 +74,7 @@ When a capability is missing, look in BusyBox before writing it. That is the own
 
 ## Hardware
 
-Two targets are the owner's standing authorization, given on 2026-09-20: the development flash drive on the Mac mini, and any disk of the Lenovo. Both machines hold nothing but this work. Write them without asking and without naming them to the owner first.
+Two targets are the owner's standing authorization, given on 2026-09-20: the development flash drive on the Mac mini, and any disk of the Lenovo. Both hold nothing but this work. Write them without asking and without naming them to the owner first. The owner made them a sandbox on 2026-09-24: they are rewritten however the work needs, with no backup, restore or hash taken for their safety.
 
 The flash drive is a SanDisk 3.2Gen1 of 61,524,148,224 bytes, USB serial `00014101091624031318`. Its node changes between connections, so the serial and the size are what identify it.
 
@@ -82,9 +82,9 @@ One target is refused: the Mac mini's internal SSD, an APPLE SSD AP0512Z with se
 
 A machine check stands where the approval stood, and it runs before every write. A Mac target must be external, removable and on USB, and must report the flash drive's serial and size; a target that is internal, that is solid state and internal, or whose serial is the SSD's, is refused and the write does not run. Report afterwards what was written and where. A target that is neither of the two authorized ones, a second flash drive, another machine, or hardware of another kind, is the owner's to authorize.
 
-The Lenovo's disk does not leave its bay. Removing and reinstalling it is an hour of physical work, and no procedure may depend on it. So before any write to that disk that is not a kernel install through `bootctl`, a USB stick carrying the recovery kernel and `reflash` is booted on the machine and shown to work, a copy of every sector about to be overwritten is saved on the host and on that stick, and recovery is the saved boot default until the write has been verified. A procedure that cannot be undone from that stick is not run.
+The Lenovo's disk does not leave its bay, since removing and reinstalling it is an hour of physical work. A machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
 
-Updating the installed Lenovo is done over SSH and is written down: a kernel through `bootctl` from the running system, a root through the recovery system and `rach2-install --update`, which keeps the machine's accounts, or through `reflash` for a partition the installer does not know about. The manual has the commands: `rach2-install(8)` for an install, `recovery(7)` for the recovery system and the three update paths, `bootctl(8)` and `reflash(8)` for the two writes, and `disk(7)` for the windows they go through. The installed machine's own offsets and the credential check that comes before a root write are in `dev-log/43-machine/hardware.md`. Read both rather than deriving a path; taking that disk out and putting it back is an hour of physical work.
+Updating the installed Lenovo is done over SSH and is written down: a kernel through `bootctl` from the running system, a root through the recovery system and `rach2-install --update`, which keeps the machine's accounts, or through `reflash` for a partition the installer does not know about. The manual has the commands: `rach2-install(8)` for an install, `recovery(7)` for the recovery system and the three update paths, `bootctl(8)` and `reflash(8)` for the two writes, and `disk(7)` for the windows they go through. The installed machine's own offsets and the credential check that comes before a root write are in `dev-log/43-machine/hardware.md`. Read both rather than deriving a path.
 
 The system does not depend on a host device path. The kernel probes its supported ATA or AHCI controller and scans the MBR entries for a KRFFS root. Device identity protects the host's destructive commands; it is not an operating requirement. A person must confirm the physical drive before such a command runs.
 
