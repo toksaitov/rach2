@@ -6,15 +6,16 @@
 # The WAD is operator-supplied: it is game data, not built, and never committed
 # (shareware or commercial content, git-ignored via ports/doom/.gitignore). So a
 # fresh clone has the doom binary but no game data, and doom then starts and
-# exits with "IWAD not found". Put a Doom IWAD at ports/doom/doom1.wad; the
-# os-real manifest stages that file to /doom1.wad in the image.
+# exits with status 255 after "IWAD file '/demo/doom1.wad' not found!". Put a
+# Doom IWAD at ports/doom/doom1.wad; the os-real manifest stages that file to
+# /demo/doom1.wad in the image.
 #
 # Usage: ./fetch_wad.sh   (run it before `make os-real-image` on a fresh clone)
 #
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit 1
 
 # The id Software Doom shareware WAD (v1.9) is freely redistributable; this is
 # its canonical sha256. Any other IWAD the port recognizes (retail doom.wad, the

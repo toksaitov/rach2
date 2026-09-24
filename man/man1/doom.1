@@ -35,6 +35,11 @@ The port provides PCM sound, PC speaker sound, and music synthesized
 with Nuked OPL3.
 .Pp
 A WAD game-data file is required.
+Without one the engine prints
+.Ql IWAD file '/demo/doom1.wad' not found\&!
+on standard error, the devices are closed, and
+.Nm
+exits with status 255.
 The build stages the shareware WAD at
 .Pa /demo/doom1.wad
 as an optional file when it is present at build time.
@@ -78,7 +83,8 @@ Game data, supplied separately.
 .Pp
 In the source tree,
 .Ql tests/run doom
-launches the game from
+first starts the game with the WAD moved away and requires that error
+and status 255, then launches the game from
 .Pa /root ,
 checks that it remains running after ten seconds, checks framebuffer
 initialization and a zone of at least 10 MiB, and counts disk commands.

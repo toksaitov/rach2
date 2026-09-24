@@ -1,10 +1,13 @@
 #!/bin/sh
 # doom.sh: the Doom port's memory zone, on a disk root where the machine has
-# its free memory to give. One boot: the game started in the background,
-# its zone line read after ten seconds with the game still running, and the
-# disk commands it cost recorded. The zone is sized from MemFree less
-# 8 MiB and capped at 16, so a 32 MiB machine reports 12 MiB (0xc00000);
-# the fixed heap this replaced held 6.
+# its free memory to give. One boot. First the game is started with its WAD
+# moved away, as on a machine built without one: the engine must refuse with
+# `IWAD file '/demo/doom1.wad' not found!` and the game exit with status 255,
+# a clean failure and not a fault, and the WAD is put back. Then the game is
+# started in the background, its zone line read after ten seconds with the
+# game still running, and the disk commands it cost recorded. The zone is
+# sized from MemFree less 8 MiB and capped at 16, so a 32 MiB machine reports
+# 12 MiB (0xc00000); the fixed heap this replaced held 6.
 #
 # Usage: doom.sh KERNEL DISK HARNESS PASSWORD
 set -u
@@ -17,7 +20,9 @@ if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
     --timeout 120 --steptmo 60 --ok "DOOMDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=cd /root && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo RAN\"\"DOOM" \
+    "expect=# " "send=mv /demo/doom1.wad /demo/doom1.off && { doom > /tmp/nowad.txt 2>&1; echo DOOMNOWAD=\$?; mv /demo/doom1.off /demo/doom1.wad; }; echo DOOMNOWADMSG=\$(grep -c 'doom1.wad. not found' /tmp/nowad.txt); echo NOWAD\"\"DONE" \
+    "expect=NOWADDONE" \
+    "send=cd /root && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo RAN\"\"DOOM" \
     "expect=RANDOOM" "send=echo DOOMRUNNING=\$(ps | grep -c '[d]oom') && echo DOOMCOMMANDS=\$((B-A)) && grep -a 'zone memory' /tmp/doom.txt | sed 's/^/DOOM/'; echo REPORT\"\"ONE" \
     "expect=REPORTONE" "send=echo DOOMFB=\$(grep -ac 'framebuffer: x_res' /tmp/doom.txt); echo DOOMFBFAIL=\$(grep -ac 'Failed to open framebuffer' /tmp/doom.txt); echo DOOM\"\"DONE" \
     "expect=DOOMDONE" > /dev/null 2>&1; then
@@ -25,6 +30,11 @@ if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
 else
     fail "the boot"
 fi
+NOWAD="$(grep -a '^DOOMNOWAD=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
+NOWADMSG="$(grep -a '^DOOMNOWADMSG=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
+[ "$NOWAD" = 255 ] && [ "${NOWADMSG:-0}" -ge 1 ] ||
+    fail "without its WAD the game exited with status ${NOWAD:-unknown} and ${NOWADMSG:-no} not-found line(s); the engine's error and status 255 were required"
+echo "doom-test: without its WAD the game ends with the engine's error and status 255: OK"
 RUNNING="$(grep -a '^DOOMRUNNING=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
 COMMANDS="$(grep -a '^DOOMCOMMANDS=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
 ZONE="$(grep -a '^DOOMzone memory' "$LOG" | tail -1 | tr -d '\r' | sed -n 's/.*, \([0-9a-f]*\) allocated.*/\1/p')"
