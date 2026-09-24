@@ -733,6 +733,15 @@ run-packet: rach2 tests krffs test-image $(HARNESS)
 run-bootline: rach2 tests krffs $(RUNUTIL) $(HARNESS) $(MKMBR)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
 	sh tests/system/suites/bootline.sh $(BOOT_KERNEL) $(BOOTLINE_TEST_IMAGE) $(HARNESS) $(MKMBR)
+# `tests/run servicelog`: the log init's services write to is bounded within a
+# boot, and a log a boot left full is removed at the next. An ext2 root with
+# init-shell as its init and BusyBox as its shell, booted twice: the first
+# fills the log past its cap and leaves orphans to init until it is emptied,
+# fills it again and powers off; the second finds it removed.
+SERVICELOG_DIR = $(IMAGES_DIR)/servicelog
+run-servicelog: rach2 utils check-busybox $(MKMBR) $(HARNESS)
+	sh tests/system/suites/servicelog.sh $(BOOT_KERNEL) $(HARNESS) $(MKMBR) \
+	    build/utils/sbin/init-shell build/utils/update $(BUSYBOX_BIN) $(SERVICELOG_DIR)
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Three boots, because the three things it must show cannot be shown in
 # one: the probe with the network answering, the same probe with an address and

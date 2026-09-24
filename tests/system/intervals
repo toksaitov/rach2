@@ -15,6 +15,7 @@ tests/system/suites/mount.sh: a sleeper holds the file open across the umount th
 tests/system/suites/procfiles.sh: the guest's table is read every second for the host's connection
 tests/system/suites/sealed.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/selfbuild.sh: the self-built server is asked every second until it answers
+tests/system/suites/servicelog.sh: the guest polls the log's size each second until init bounds it
 tests/system/suites/ssh.sh: a holder keeps a flood writer open until the flood is killed
 tests/system/suites/ssh.sh: the forty connections are counted once the guest has taken them
 tests/system/suites/ssh.sh: the next reading of a count that only the guest advances
