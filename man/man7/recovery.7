@@ -34,11 +34,19 @@ the keys in the file
 that
 .Xr rach2-install 8
 put on that disk's recovery partition.
-Init finds the disk by the identity
+The boot line must have one
+.Ql rach2.boot=
+token, and it must be
 .Ql rach2.boot=MBRID=ID,1
-names and the partition by its label,
-.Ql RACH2RECOV ,
-and adds the file's keys to root's.
+with
+.Ar ID
+eight hexadecimal digits.
+Init takes partition 2 of the one disk with that identity, which must
+have the label
+.Ql RACH2RECOV
+and the recovery kernel at
+.Pa boot/recovery ,
+and adds the key file's keys to root's.
 It refuses a file larger than 16384 bytes, one that is not text, one that
 holds a private key, and one with no line that is a key.
 The install stick's recovery system reads no such file.

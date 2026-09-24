@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 24, 2026
 .Dt DHCPC 8
 .Os
 .Sh NAME
@@ -51,7 +51,11 @@ The client creates
 .Pa /var/run/dhcpc.INTERFACE.pid
 with
 .Dv O_EXCL
-and records its process ID and configured address there.
+and records its process ID there, and the address of each lease before it
+sets it.
+A first lease whose address the interface already has, set by the boot
+line for instance, is recorded as none, since this client did not put it
+there.
 The file is visible before the process ID is written.
 An empty or unreadable claim is treated as busy.
 It does not use
@@ -81,6 +85,9 @@ Limit the lease to this many seconds.
 The accepted range is 10 through 604800.
 .It Fl k
 Stop the client recorded for the interface.
+If that process is gone, the address its claim records is taken off the
+interface when the interface still has it, and the claim is removed; an
+address recorded as none is left in place.
 .El
 .Sh FILES
 .Bl -tag -width Ds

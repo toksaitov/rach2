@@ -204,7 +204,7 @@ The commands are grouped here by purpose:
 * Inspection: `help`, `info`, `modules`, `test`, and `clear`.
 * Mounted KRFFS: `ls`, `cat`, `touch`, `rm`, `mv`, and `write`.
 * Programs: `elf` inspects an executable; `exec <file> [args...]` runs one as a transient init process.
-* Storage: `disk` reads and dumps sector 0; `ahci` re-probes AHCI and reads LBA 0. `disk write` is a destructive last-sector round trip available only in the recovery build.
+* Storage: `disk` reads and dumps sector 0; `ahci` re-probes AHCI and reads LBA 0. `disk write` is a destructive last-sector round trip available only in the recovery build; it refuses when the disk is GPT, found by a header at LBA 1 or in the last sector, and when one of the MBR's four entries covers the last sector.
 * Kernel exercises: `switch`, `preempt`, `isolate`, `usermode`, `netping`, `netbad`, and the `audio` command family.
 * Stops: `halt`, `poweroff`, and `reboot` flush the mounted disk root before stopping. `fault` deliberately panics the kernel. A restart tries three mechanisms in turn, the one that resets most of the machine first: the firmware's own reset command, the chipset reset register, then the keyboard controller's pulse. The first is sent only where the firmware's SMBIOS table names the firmware that command belongs to; on every other machine it is skipped with the name that was read instead.
 
