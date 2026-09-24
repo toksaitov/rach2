@@ -10,8 +10,8 @@
  * INT_MIN is the case that matters: negating it in signed `int` is overflow
  * UB, which UBSan flags here in milliseconds, not as a mystery value
  * in QEMU. The buffer-too-small and out-of-range-radix rejections, the
- * returned character count, and the force_sign slot are covered too. It
- * depends on k_strreverse and k_strtoupper, compiled in. Returns the
+ * returned character count, and the plus force_sign writes are covered too.
+ * It depends on k_strreverse and k_strtoupper, compiled in. Returns the
  * failed-check count (0 == pass).
  */
 
@@ -80,9 +80,14 @@ int main(void)
     CHECK(k_itoa(1, b, sizeof(b), 99, false) == 0);
     CHECK(k_itoa(1, b, sizeof(b), 1, false) == 0);
 
-    /* force_sign reserves a slot for a leading plus on a positive decimal (the
-     * count grows by one even though the plus is not written). */
+    /* force_sign writes a leading plus on a positive decimal and counts it;
+     * zero and a negative value are written as they are without it. */
     CHECK(k_itoa(7, b, sizeof(b), 'd', true) == 3);
+    CHECK(streq(b, "+7"));
+    CHECK(k_itoa(0, b, sizeof(b), 'd', true) == 2);
+    CHECK(streq(b, "0"));
+    CHECK(k_itoa(-7, b, sizeof(b), 'd', true) == 3);
+    CHECK(streq(b, "-7"));
 
     return (fails > 120) ? 120 : fails;
 }

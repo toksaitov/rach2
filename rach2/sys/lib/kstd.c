@@ -6,14 +6,16 @@
  * `radix` is either a numeric base in [2, 36] or one of the format letters
  * 'b', 'o', 'd', 'x', 'X' selecting binary, octal, decimal, lowercase hex,
  * or uppercase hex. Only the 'd' form is signed: a negative value gets a
- * leading minus. The other bases format the raw bit pattern as unsigned.
- * `force_sign` reserves room in the returned count for a leading plus on a
- * positive decimal, but the current code does not write that plus.
+ * leading minus, and its magnitude is taken by unsigned negation, which is
+ * defined even for INT_MIN. The other bases format the raw bit pattern as
+ * unsigned. `force_sign` writes a leading plus on a positive decimal, and the
+ * returned count includes it; zero and the other bases get none.
  *
  * Returns the number of characters the conversion needs, including any sign
  * and the terminating NUL. It returns 0 and writes nothing when `buffer_size`
  * is smaller than that count or the radix is out of range; the two cases are
- * not distinguished.
+ * not distinguished. With a NULL `buffer` and a large enough `buffer_size` it
+ * returns the count and writes nothing.
  */
 size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force_sign)
 {
@@ -52,7 +54,7 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
         return 0;
 
     if (is_signed && input < 0) {
-        uinput = -(unsigned int)input; /* unsigned negation: defined even for INT_MIN */
+        uinput = -(unsigned int)input;
         ++num_of_chars;
     } else if (is_signed) {
         uinput = (unsigned int)input;
@@ -85,6 +87,8 @@ size_t k_itoa(int input, char *buffer, size_t buffer_size, int radix, bool force
 
         if (is_signed && initial_input < 0) {
             *tmp_str++ = '-';
+        } else if (is_signed && initial_input > 0 && force_sign) {
+            *tmp_str++ = '+';
         }
         *tmp_str = 0;
 
