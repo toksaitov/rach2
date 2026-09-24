@@ -2,9 +2,10 @@
  * modlayout.c: the boot-module placement check.
  *
  * Pure arithmetic over ranges the bootloader chose, so the host test can craft
- * placements no bootloader offers. Every comparison subtracts rather than
- * adds, because a crafted or corrupt descriptor can name a range that wraps
- * the 32-bit address space and an addition would wrap with it.
+ * placements no bootloader offers. Every comparison is between two ends and
+ * none adds a length, because a crafted or corrupt descriptor can name a
+ * range that wraps the 32-bit address space and an addition would wrap with
+ * it.
  */
 
 #include "modlayout.h"

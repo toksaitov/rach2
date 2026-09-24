@@ -118,7 +118,7 @@ as in
 .Pa /tmp/.. .
 Other directories report their stored ids.
 A file's inode number combines its directory's id with the file's stored id,
-the 32-bit DJB hash of its name.
+the 64-bit DJB hash of its name.
 Directory listings contain neither
 .Pa .
 nor
@@ -133,9 +133,19 @@ Two open files with distinct numbers retain them after both are unlinked.
 .Fn rename
 rewrites a file's stored id, so renaming it changes its inode number;
 Linux preserves the number across a rename.
-Two names in one directory whose 32-bit hashes collide share an inode
-number, unlike Linux's distinct inode numbers for distinct files in one
+Two names in one directory whose DJB hashes are equal share an inode
+number, as
+.Ql bC
+and
+.Ql cb
+do, unlike Linux's distinct inode numbers for distinct files in one
 file system.
+The old
+.Nm stat
+call's 32-bit
+.Va st_ino
+keeps the low 32 bits of the number, so there two files share one
+whenever those bits are equal.
 .It Mounted KRFFS
 Attributes and times come from the stored node.
 Directories report two links and files one.

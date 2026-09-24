@@ -1,5 +1,5 @@
 /*
- * packet.c: the socket that sees Ethernet, for the one program that must.
+ * packet.c: the socket that sees Ethernet, for a DHCP client and `arping`.
  *
  * The contract and the reasoning are in packet.h. What is here is the table of
  * bound sockets and the two directions.
@@ -101,10 +101,7 @@ int packet_bind(struct socket *sock, int ifindex)
     uint32_t flags;
     struct packet_binding *b;
 
-    /* Zero is every interface, which is what a socket that names none
-     * means; any other number must be one this machine has. It is judged
-     * before it is made a place in the table, since the subtraction of a
-     * number a caller chose would otherwise be done first. */
+    /* 0 is every interface; any other index must be one of this machine's. */
     if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_count())) {
         return -ENODEV;
     }
@@ -112,11 +109,7 @@ int packet_bind(struct socket *sock, int ifindex)
     flags = net_lock();
     b = binding_of(sock);
     if (b) {
-        /* Rebinding moves the socket, which is what a second bind is for.
-           What is queued arrived through the interface it was bound to
-           before, and a reader would be handed it as though it had come in on
-           the new one, so it goes. Cleared here rather than through
-           `packet_flush`, which would take this lock again. */
+        /* A move to another interface drops what the old one queued. */
         if (b->ifindex != ifindex) {
             b->q.count = 0;
             b->q.head = 0;
@@ -230,9 +223,7 @@ void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint
             continue; /* another interface's traffic */
         }
         if (q->count == PACKET_QUEUE_SLOTS) {
-            /* The newest is dropped, so a client that is behind still finds
-               the frames it has not read yet in the order they arrived. Said
-               once per socket: a flood must not become a flood of logging. */
+            /* Drop the newest, keeping the unread ones in order; log once. */
             q->dropped++;
             if (!q->reported) {
                 q->reported = 1;
@@ -338,12 +329,10 @@ int packet_last_addr(struct socket *sock, uint8_t *sll)
     }
     sll[0] = (uint8_t)(AF_PACKET & 0xff);
     sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
-    /* The frame's own EtherType, not the socket's: a socket rebound to another
-       protocol must not relabel a datagram that arrived under the first. */
+    /* The frame's own EtherType, not the socket's, which a bind may change. */
     sll[2] = (uint8_t)((q->last_proto >> 8) & 0xff); /* network order */
     sll[3] = (uint8_t)(q->last_proto & 0xff);
-    /* The interface the datagram arrived on, which on a machine with two
-       cards is not always the first. */
+    /* The interface the datagram arrived on, not always the first. */
     sll[4] = q->last_ifindex;
     sll[8] = (uint8_t)PACKET_HATYPE_ETHER;
     sll[10] = q->last_pkttype;
@@ -371,14 +360,8 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_count())) {
         return -ENODEV;
     }
-    /* The Ethernet transmit buffer is one buffer for the machine, and this call
-       runs in syscall context with interrupts on, so the device check and the
-       whole of the send are held against a receive interrupt that would send
-       through the same buffer. This is the rule in net.h. */
+    /* The Ethernet transmit buffer is shared with the receive interrupt. */
     flags = net_lock();
-    /* Out by the interface the caller's address names, or the one the socket
-       is bound to, or the first when it names neither: there is no address
-       here to route on, since the caller gave a MAC and not an IP. */
     b = binding_of(sock);
     if (ifindex == 0 && b) {
         ifindex = b->ifindex;

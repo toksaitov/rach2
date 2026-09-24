@@ -50,7 +50,8 @@ static unsigned long parse_ip(const char *s)
     return *s == '\0' ? v : 0;
 }
 
-/** The first word of `line`, and where the rest begins. */
+/** The first word of `line`, terminated in place, and in `*rest` where the
+ *  rest of the line begins. */
 static char *word(char *line, char **rest)
 {
     char *p = line;
@@ -100,7 +101,10 @@ void netcfg_set_name(char *dst, const char *src)
     memcpy(dst, src, n);
 }
 
-/** Check a completed pass and seek back for the second pass. */
+/**
+ * Check a completed pass and seek back for the second pass. Returns 0, or -1
+ * after reporting a read or seek failure and closing `f`.
+ */
 static int finish_pass(FILE *f, const char *path, int pass)
 {
     const char *operation;
@@ -290,6 +294,11 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
  * The refusal is written into `err`, not printed, so the caller says it
  * in its own voice and a test can tell one refusal from another.
  *
+ * A stanza without a netmask is refused. The kernel would derive the classful
+ * mask, and an address that looked fine may be that subnet's network or
+ * broadcast address: the configuration would then half-apply and leave the
+ * machine with neither the address it had nor the one it was given.
+ *
  * @return 0 when the stanza can be applied, -1 when it cannot.
  */
 int netcfg_check_static(const struct netcfg_iface *s, char *err, size_t errlen)
@@ -299,11 +308,6 @@ int netcfg_check_static(const struct netcfg_iface *s, char *err, size_t errlen)
         return -1;
     }
     if (s->netmask == 0) {
-        /* Without one the kernel derives the classful mask, and the address
-           that looked fine may be that subnet's network or broadcast address:
-           the configuration then half-applies and the machine is left with
-           neither the address it had nor the one it was given. A static stanza
-           says what its subnet is. */
         say(err, errlen, "a static stanza with no netmask");
         return -1;
     }

@@ -28,8 +28,15 @@ int user_range_ok(uint32_t addr, uint32_t len)
 /**
  * Copy `n` bytes from a user pointer into the kernel buffer `dst`.
  *
+ * The range is pre-faulted before the copy, so a valid page not yet backed
+ * is backed there and not by a fault in the raw copy, and a page outside
+ * every VMA answers -EFAULT instead of a panic. Backing a page may take
+ * frames back from the caches, which from a system call can sleep in a
+ * writeback.
+ *
  * Returns 0 on success and -EFAULT if any byte of the source range is outside
- * user space or backs no VMA. Returns 0 for a zero-length copy.
+ * user space, in no region that may be read, or cannot be backed. Returns 0
+ * for a zero-length copy.
  */
 int copy_from_user(void *dst, const void __user *src, uint32_t n)
 {
@@ -41,10 +48,6 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
     if (!user_range_ok(addr, n)) {
         return -EFAULT;
     }
-    /* Back any demand-paged pages in the range before the kernel reads them, so
-     * a not-yet-present (but valid) user page faults in here, not from
-     * the raw k_memcpy below; a page outside every VMA returns -EFAULT, not a
-     * panic. */
     if (!vm_prefault_range(addr, n, 0)) {
         return -EFAULT;
     }
@@ -55,8 +58,15 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
 /**
  * Copy `n` bytes from the kernel buffer `src` into a user pointer.
  *
+ * The range is pre-faulted for writing before the copy, so a lazy heap or
+ * stack page is made there, a copy-on-write page is made private, and a
+ * read-only or unmapped destination answers -EFAULT instead of a fault in
+ * kernel mode. Backing a page may take frames back from the caches, which
+ * from a system call can sleep in a writeback.
+ *
  * Returns 0 on success and -EFAULT if any byte of the destination range is
- * outside user space, unmapped, or read-only. Returns 0 for a zero-length copy.
+ * outside user space, unmapped, read-only, or cannot be backed. Returns 0
+ * for a zero-length copy.
  */
 int copy_to_user(void __user *dst, const void *src, uint32_t n)
 {
@@ -68,10 +78,6 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
     if (!user_range_ok(addr, n)) {
         return -EFAULT;
     }
-    /* Writing into user space: fault the pages in with write permission, so a
-     * lazily-allocated heap/stack page is created here and a read-only or
-     * unmapped destination yields -EFAULT instead of faulting in kernel mode.
-     */
     if (!vm_prefault_range(addr, n, 1)) {
         return -EFAULT;
     }
@@ -82,9 +88,16 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
 /**
  * Copy a NUL-terminated string from user space into `dst`, at most `n` bytes.
  *
+ * Each byte's address is checked before it is read, so a short string near
+ * the top of user space is valid and an unterminated one cannot walk off the
+ * end. Each page is backed as the copy reaches it, not the whole `n` at once,
+ * since `n` is only a cap: the string may end before a page that is
+ * legitimately unmapped, and backing that page would reject a valid string.
+ *
  * On success returns the string length not counting the NUL, which is also
  * copied. Returns -EINVAL for `n` of 0, -EFAULT if a byte lies outside user
- * space or backs no VMA, and -ENAMETOOLONG if no NUL appears within `n` bytes.
+ * space or backs no VMA, and -ENAMETOOLONG if no NUL appears within `n` bytes;
+ * `dst` then has `n` bytes and no NUL.
  */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
 {
@@ -98,17 +111,9 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     for (i = 0; i < n; i++) {
         uint32_t a = addr + i;
 
-        /* Validate each byte's address before reading it. A short string near
-         * the top of user space stays valid while an unterminated one cannot
-         * walk off the end. */
         if (!user_range_ok(a, 1)) {
             return -EFAULT;
         }
-        /* Back the page before the read, once per page as we cross each
-         * boundary. The range is not prefaulted whole because n is only a cap:
-         * the string may terminate before a later (legitimately unmapped) page,
-         * and faulting that page in would wrongly reject a valid short string.
-         */
         if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_range(a, 1, 0)) {
             return -EFAULT;
         }

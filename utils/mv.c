@@ -1,4 +1,9 @@
-/** Rename a file from its source path to its destination path. */
+/**
+ * Rename a file from its source path to its destination path.
+ *
+ * It is one `rename`: a destination on another mount is refused with
+ * `EXDEV`, and nothing is copied.
+ */
 
 #include <stdio.h>
 

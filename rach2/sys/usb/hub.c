@@ -199,9 +199,9 @@ struct hub {
     int device;           /* the controller's handle */
     int interface;
     int protocol;
-    int ep_dci; /* the change endpoint, read from phase 4 */
+    int ep_dci; /* the change endpoint */
     int state;
-    int ports; /* published, at most 15 */
+    int ports; /* from the descriptor, at most USB_HUB_PORT_MAX */
     int lpsm;
     int think_time;
     int multi_tt;
@@ -232,7 +232,7 @@ struct hub {
 
 /*
  * One record per hub, each its own frame from the identity-mapped window.
- * The record holds the buffers the controller writes a hub's descriptor and
+ * The record has the buffers the controller writes a hub's descriptor and
  * its port-change bitmap into, and a controller is given an address to write
  * to rather than a pointer this kernel reaches it by.
  */
@@ -342,6 +342,10 @@ static int port_status_read(struct hub *h, int port)
     return request(h, TYPE_CLASS_PORT_IN, REQ_GET_STATUS, 0, port, 4, REQ_PORT_STATUS, port);
 }
 
+/**
+ * Stop driving the hub and have the core fail its device, which takes down
+ * the devices below it and closes its slot.
+ */
 static void give_up(struct hub *h, const char *why)
 {
     int index = h->index;
@@ -440,9 +444,7 @@ static int take_descriptor(struct hub *h, int length)
  * Every port gets its own request whether the descriptor says the ports
  * switch together or one by one. On a ganged hub one request energises the
  * gang, but the specification (11.11.1) leaves every other port in its
- * Powered-off state until that port gets a request of its own, and the
- * owner's hub reported exactly that: after one request, port 1 powered and
- * ports 2 to 4 not.
+ * Powered-off state until that port gets a request of its own.
  */
 static int power_next(struct hub *h)
 {
@@ -494,20 +496,6 @@ static uint16_t change_mask(const struct hub *h)
 }
 
 /**
- * Record port status and process its reported changes.
- *
- * A connection change closes the previous device even when the port
- * remains connected. Process concurrent changes before acknowledging
- * their bits.
- *
- * The first scan publishes connections after all ports have been read.
- * Later reads close an old connection before power or link recovery.
- * Power-off prevents enumeration and warm resets. A completed warm reset
- * is processed before a new link fault. A new warm reset waits until the
- * old change bits have been cleared, so their acknowledgement cannot clear
- * its completion. A connection change cancels the previous reset.
- */
-/**
  * Act on a port's link and enable changes, and start the device below.
  *
  * A link that went inactive on a SuperSpeed hub is warm reset; an enable lost
@@ -539,6 +527,23 @@ static void port_link_change(struct hub *h, int port, uint16_t status, uint16_t 
     }
 }
 
+/**
+ * Record port status and process its reported changes.
+ *
+ * During the first scan the status is recorded, an over-current answered,
+ * and a connection marked to be published once every port has been read.
+ * After it, the changes are acted on only for a read that the change
+ * endpoint or an acknowledgement prompted; a read during a reset records the
+ * status and nothing more. The reported change bits are acknowledged after
+ * they have been processed.
+ *
+ * A connection change closes the previous device even when the port remains
+ * connected, and cancels a warm reset owed or in flight. Later reads close
+ * an old connection before power or link recovery. Power-off prevents
+ * enumeration and warm resets. A completed warm reset is processed before a
+ * new link fault. A new warm reset waits until the old change bits have been
+ * cleared, so their acknowledgement cannot clear its completion.
+ */
 static void port_read(struct hub *h, int port)
 {
     struct hub_port *p = &h->port[port - 1];
@@ -654,7 +659,19 @@ static int clear_next(struct hub *h, int port)
     return 1;
 }
 
-/** The answer to the request in flight. */
+/**
+ * The answer to the request in flight.
+ *
+ * After the descriptor, a SuperSpeed hub is told its tier, by which it routes
+ * packets to its ports and which it must have before any port is used (USB
+ * 3.0 10.14.2.8), and a multi-TT hub is asked for alternate setting 1, one
+ * translator per port; a hub that refuses it is driven with one translator. A
+ * failed power-on after an over-current leaves the port off, as a second
+ * over-current would. When the first scan has read every port, the
+ * connections it found are told to the core, now that the hub can take a
+ * reset; the running hub reads its change endpoint once every change bit the
+ * scan found has been acknowledged.
+ */
 static void answered(struct hub *h, const struct usb_completion *c)
 {
     int ok = c->status == USB_XFER_OK || c->status == USB_XFER_SHORT;
@@ -670,8 +687,6 @@ static void answered(struct hub *h, const struct usb_completion *c)
             return;
         }
         if (h->super) {
-            /* USB 3.0 10.14.2.8: a SuperSpeed hub must know its tier, which
-             * is how it routes packets to its ports, before any is used. */
             if (request(h, TYPE_CLASS_HUB_OUT, REQ_SET_HUB_DEPTH, h->depth, 0, 0, REQ_DEPTH, 0) !=
                 0) {
                 give_up(h, "it could not be told its depth");
@@ -681,8 +696,6 @@ static void answered(struct hub *h, const struct usb_completion *c)
             return;
         }
         if (h->multi_tt) {
-            /* One translator per port is the interface's alternate setting
-             * 1; a hub that refuses it is driven with one translator. */
             if (request(h, TYPE_STD_INTERFACE, REQ_SET_INTERFACE, 1, h->interface, 0, REQ_SETTING,
                         0) != 0) {
                 h->multi_tt = 0;
@@ -739,8 +752,6 @@ static void answered(struct hub *h, const struct usb_completion *c)
         return;
     case REQ_POWER_ON:
         if (!ok) {
-            /* The one retry after an over-current could not be made; the
-             * port stays off, as it would after a second over-current. */
             h->port[port - 1].off = 1;
             klog(KLOG_WARN, "usb",
                  "hub: device %d port %d: could not be powered on again; left off", h->device,
@@ -787,10 +798,6 @@ static void answered(struct hub *h, const struct usb_completion *c)
                 h->state = HUB_RUNNING;
                 klog(KLOG_INFO, "usb", "hub: device %d: %d ports, power mode %d, think time %d",
                      h->device, h->ports, h->lpsm, h->think_time);
-                /* The connections the scan found, told now that the hub
-                 * can take a reset; the running arm reads the change
-                 * endpoint once every change bit the scan found has been
-                 * acknowledged. */
                 for (i = 0; i < h->ports; i++) {
                     if (h->port[i].publish) {
                         h->port[i].publish = 0;
@@ -869,8 +876,7 @@ int hub_completion(const struct usb_completion *completion)
                                    ? completion->length - completion->residual
                                    : 0;
 
-                /* Only the bytes the hub sent: a short report leaves the
-                 * rest of the buffer as the last report left it. */
+                /* Bytes past those sent are the last report's. */
                 for (b = 0; b < got && b < sizeof(h->bitmap) && b < sizeof(h->changes); b++) {
                     h->changes |= (uint32_t)h->bitmap[b] << (8 * b);
                 }
@@ -889,7 +895,19 @@ int hub_completion(const struct usb_completion *completion)
     return 0;
 }
 
-/** One pass for one hub. */
+/**
+ * One pass for one hub.
+ *
+ * A request in flight is waited for, up to HUB_REQUEST_MS, and nothing else
+ * is done. A wait set inside a tick, by a completion, does not count that
+ * tick, so the power-good time is a minimum and not a minimum less one tick;
+ * one set by this pass itself starts on the next. A running hub sends at most
+ * one request per pass, the first it owes of: for each port in turn, a change
+ * bit's acknowledgement, the status read after one, a warm reset, and the
+ * port's power after an over-current; then the hub's own status for bit 0 of
+ * the change report and a port's for its bit; then, with the change report
+ * out again, the next step of a reset the core asked for.
+ */
 static void step_hub(struct hub *h, uint32_t elapsed_ms)
 {
     int i;
@@ -915,17 +933,12 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
         h->state = HUB_POWER;
         h->at = 1;
         if (!power_next(h)) {
-            /* No request to wait for: this tick's time has not been
-             * counted yet, so the wait starts on the next one as it is. */
             h->state = HUB_POWER_WAIT;
             h->wait_ms = h->power_good_ms;
         }
         return;
     }
     case HUB_POWER_WAIT:
-        /* A wait set by a completion inside a tick does not count that
-         * tick, so the power-good time is a minimum and not a minimum less
-         * one tick. */
         if (h->wait_fresh) {
             h->wait_fresh = 0;
             return;
@@ -955,8 +968,6 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
         }
         return;
     case HUB_RUNNING:
-        /* A change bit owed an acknowledgement, and a port powered off for
-         * over-current owed its power back. */
         for (i = 0; i < h->ports; i++) {
             struct hub_port *p = &h->port[i];
 
@@ -991,8 +1002,6 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 }
             }
         }
-        /* The changes the bitmap reported: the hub's own status for bit 0,
-         * a port's status for its bit, one read at a time. */
         if (h->changes & 1u) {
             h->changes &= ~1u;
             if (request(h, TYPE_CLASS_HUB_IN, REQ_GET_STATUS, 0, 0, 4, REQ_HUB_STATUS, 0) == 0) {
@@ -1101,9 +1110,7 @@ int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_s
         (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0 && !p->warm;
     out->enabled = (p->status & PORT_STAT_ENABLE) != 0;
     out->changed = p->change != 0;
-    /* A SuperSpeed hub's ports carry SuperSpeed devices and nothing else;
-     * its status word's speed field says which SuperSpeed, which this
-     * kernel does not distinguish. */
+    /* A SuperSpeed hub's ports have SuperSpeed devices and nothing else. */
     out->speed = h->super                             ? USB_SPEED_SUPER
                  : (p->status & PORT_STAT_LOW_SPEED)  ? USB_SPEED_LOW
                  : (p->status & PORT_STAT_HIGH_SPEED) ? USB_SPEED_HIGH
@@ -1122,9 +1129,7 @@ int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
         return 0;
     }
     p = &h->port[port];
-    /* Not before the hub runs: a device that settles while the scan is
-     * still reading later ports would have its reset asked for from a hub
-     * that cannot take one yet, and the core would give the port up. */
+    /* A port settles only once the hub runs: a scanning hub cannot reset. */
     return h->state == HUB_RUNNING && p->known && (p->status & PORT_STAT_CONNECTION) != 0 &&
            hub_ms - p->connect_ms >= HUB_DEBOUNCE_MS;
 }

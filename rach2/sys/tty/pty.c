@@ -2,9 +2,9 @@
  * pty.c: pseudo-terminals. The /dev/ptmx + /dev/pts/N master/slave pairs a
  * network login uses to hand a remote user a real terminal. See pty.h for the
  * data-flow model. The slave is a full struct tty (the N_TTY discipline plus
- * sessions and job control), so it reuses every terminal service; the master is
- * a byte ring (m_buf) carrying the slave's output and the discipline's echo.
- * Each endpoint rides the file_ops layer.
+ * sessions and job control), so it reuses every terminal service; the master
+ * reads a byte ring (m_buf) of the slave's output and the discipline's echo.
+ * Each endpoint is a descriptor with its own file_ops.
  */
 
 #include "pty.h"
@@ -19,8 +19,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kirq.h"
 
-/* Linux ioctls. The pty-number requests are pinned exactly (musl uses
- * these). */
+/* Linux ioctls. The pty-number requests have the exact values musl uses. */
 #define FIONREAD   0x541B
 #define FIONBIO    0x5421
 #define TIOCGWINSZ 0x5413
@@ -76,10 +75,10 @@ static uint32_t pty_m_avail(struct pty *p)
 /**
  * Push one byte from the slave's output into the master ring.
  *
- * Drops the byte if the master is not draining fast enough; a real pty also
- * bounds this. The caller wakes master readers once per write op (ptm_write
- * echo, pts_write output), not per byte. Runs in thread context, since no IRQ
- * feeds a pty.
+ * Drops the byte when the ring is full, which a master that does not drain
+ * fast enough leaves; the slave's write still counts it. The caller wakes
+ * master readers once per write op (ptm_write echo, pts_write output), not
+ * per byte. Runs in thread context, since no IRQ feeds a pty.
  */
 static void pty_slave_sink(void *ctx, unsigned char c)
 {
@@ -94,7 +93,12 @@ static void pty_slave_sink(void *ctx, unsigned char c)
     kirq_restore(flags);
 }
 
-/** Initialize a pair with one queue for master readers, writers and pollers. */
+/**
+ * Allocate a pair at the lowest free index, or return NULL when the heap has
+ * no room. One queue serves the master's readers, writers and pollers; the
+ * slave's `space_wq` points at it, so a flush or termios change wakes a
+ * master writer waiting for room.
+ */
 static struct pty *pty_alloc(void)
 {
     struct pty *p = kzalloc(sizeof(*p));
@@ -134,6 +138,14 @@ static int ptm_readable(void *arg)
     return pty_m_avail(p) != 0 || p->slave_opens == 0;
 }
 
+/**
+ * Read the slave's output from the master ring.
+ *
+ * Blocks until the ring has a byte or every slave description has closed,
+ * which reads as end of file; -EAGAIN when non-blocking, -EINTR on a signal.
+ * The ring is drained into a stack buffer with interrupts off and copied to
+ * user memory, which may fault, after they are restored.
+ */
 static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -170,8 +182,6 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (chunk > sizeof(kbuf)) {
             chunk = sizeof(kbuf);
         }
-        /* Drain the ring under interrupts off (vs a concurrent slave producer),
-         * then copy out to user memory (which may fault) outside the lock. */
         flags = kirq_save();
         for (i = 0; i < chunk; i++) {
             kbuf[i] = p->m_buf[p->m_head & (PTY_BUF_SIZE - 1)];
@@ -216,7 +226,17 @@ static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
 }
 
 /**
- * Feed slave input and wake master readers for echo after partial writes too.
+ * Feed what the remote user typed to the slave's line discipline, which cooks
+ * it, echoes into m_buf through the slave's sink, and wakes a slave reader
+ * once a line is ready (tty_input_char).
+ *
+ * The discipline takes input only while a whole line more fits
+ * (`n_tty_has_room`). A write that fills it returns short; one that has fed
+ * nothing waits for the slave to read, or fails with -EAGAIN when
+ * non-blocking. A signal character among the waiting bytes is fed at once and
+ * the bytes before it are discarded, since the signal would discard them.
+ * Master readers are woken before every return that fed bytes, a failed copy
+ * included, so they see the echo.
  */
 static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -230,9 +250,6 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (!user_range_ok((uint32_t)(__force uintptr_t)buf, count)) {
         return -EFAULT;
     }
-    /* Feed each byte to the slave's line discipline: it cooks the input, echoes
-     * (the echo lands in m_buf via the slave sink), and wakes a blocked slave
-     * reader once a line is ready (tty_input_char). */
     while (done < count) {
         uint32_t chunk = count - done;
         uint32_t i;
@@ -245,11 +262,6 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         for (i = 0; i < chunk; i++) {
-            /* The discipline takes a whole line more or nothing. A write
-             * that would overflow it is short; one that fits nothing waits
-             * for the slave to read, or asks a non-blocking writer to. A
-             * signal character in the held bytes is fed over them, since
-             * what it does is discard what came before it. */
             while (!n_tty_has_room(&p->slave.ldisc)) {
                 int at = signal_char_at(&p->slave.ldisc, kbuf + i, (int)(chunk - i));
 
@@ -362,7 +374,11 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     }
 }
 
-/** Mark the master closed, signal the foreground group, wake the readers. */
+/**
+ * Mark the master closed, send SIGHUP to the slave's foreground group and
+ * hang up the slave, which wakes its readers; free the pair when no slave
+ * description is open.
+ */
 static void ptm_close(fd_entry_t *e)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -399,7 +415,9 @@ static int pts_read_ready(void *arg)
  * A background reader takes SIGTTIN, or EIO when SIGTTIN is blocked or
  * ignored.
  * The endpoint owns the wait so each wake rechecks master closure even after
- * another reader consumes the discipline's single canonical EOF marker.
+ * another reader consumes the discipline's single canonical EOF marker. A
+ * read returns at most N_TTY_READ_CHUNK bytes and wakes a master writer
+ * waiting for room.
  */
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -457,7 +475,15 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return n;
 }
 
-/** Queue slave output and wake master readers even if a later copy fails. */
+/**
+ * Queue slave output and wake master readers even if a later copy fails.
+ *
+ * Output goes through OPOST processing into m_buf by way of the slave's sink,
+ * which drops what does not fit; the write still counts it. Once the master
+ * has closed the write fails with EIO. With TOSTOP set, a background writer
+ * takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
+ * console.
+ */
 static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -473,8 +499,6 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     if (!p->master_open) {
         return -EIO; /* hung up: nobody will ever read the output */
     }
-    /* A background writer is stopped with SIGTTOU only when TOSTOP is set (the
-     * same rule as the console). */
     if ((p->slave.ldisc.tio.c_lflag & TOSTOP) &&
         tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
         if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
@@ -494,8 +518,6 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             wq_wake_all(&p->m_read_wq);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
-        /* Output processing (OPOST/ONLCR) lands the bytes in m_buf via the
-         * sink. */
         tty_write(&p->slave, kbuf, (int)chunk);
         done += chunk;
     }
@@ -503,15 +525,18 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
+/**
+ * Report the slave's readiness, and POLLHUP once the master has closed.
+ *
+ * tty_poll sets the wait queue only for a POLLIN query, but a master close
+ * wakes that same input queue (tty_hangup), so a poller waiting only for the
+ * hangup is parked on it too; otherwise it would sleep through ptm_close.
+ */
 static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct pty *p = (struct pty *)e->priv;
     short revents = tty_poll(&p->slave, events, wq);
 
-    /* tty_poll registers the wait queue only for a POLLIN query, but a master
-     * close wakes that same input queue (tty_hangup). A poller waiting only for
-     * the hangup (events without POLLIN, e.g. a bare POLLHUP wait) must park on
-     * it too, or it would sleep through ptm_close and never see POLLHUP. */
     if (!*wq) {
         *wq = &p->slave.input_wq;
     }
@@ -521,11 +546,12 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return revents;
 }
 
+/**
+ * The slave's own ioctl, FIONBIO. sys_ioctl sends the termios, session and
+ * FIONREAD requests to tty_common_ioctl before this op runs.
+ */
 static int32_t pts_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
-    /* The termios/session ioctls and FIONREAD are handled by tty_common_ioctl
-     * (sys_ioctl routes a pts slave there before this op runs); only FIONBIO
-     * reaches here. */
     switch (request) {
     case FIONBIO: {
         int on;
@@ -546,6 +572,11 @@ static int32_t pts_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     }
 }
 
+/**
+ * Drop one slave description. When the last one closes, master readers are
+ * woken to read end of file, and the pair is freed if the master is closed
+ * too.
+ */
 static void pts_close(fd_entry_t *e)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -629,8 +660,6 @@ int pty_open_slave(int index, int flags)
     e->sock = NULL;
     e->ops = &pts_ops;
     e->priv = p;
-    /* Honour the access mode: a slave (or /dev/tty resolving to it) opened
-     * O_RDONLY/O_WRONLY must not silently gain the other direction. */
     if ((flags & 3) == 1) {
         e->flags = FD_FLAG_WRITE;
     } else if ((flags & 3) == 2) {
@@ -676,14 +705,14 @@ int pty_session_slave(int sid)
  * In one interrupts-off region, publish `keep` as the session's terminal (sid
  * and foreground group pgid) and drop every other terminal the session
  * controls: the console and any other pty. The whole claim-and-release is
- * atomic against the timer-IRQ console drain, which gates on console_tty.sid.
- * That drain must never observe the new terminal claimed while the old console
- * is still owned by the same session; the transient would let it drain serial
- * input or deliver ISIG for a terminal the session no longer uses. Lives here
- * because it must reach both console_tty and the pty pool. The caller has
- * already authorized the claim: TIOCSCTTY checks leadership and ownership, and
- * the implicit read-claims require the terminal to be free and the caller a
- * session leader.
+ * atomic against the console's interrupt-side drain, which gates on
+ * console_tty.sid. That drain must never observe the new terminal claimed
+ * while the old console is still owned by the same session; the transient
+ * would let it drain serial input or deliver ISIG for a terminal the session
+ * no longer uses. Lives here because it must reach both console_tty and the
+ * list of ptys. The caller has already authorized the claim: TIOCSCTTY checks
+ * leadership and ownership, and the implicit read-claims require the terminal
+ * to be free and the caller a session leader.
  */
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
 {
@@ -757,9 +786,9 @@ int pty_slave_index(struct fd_entry *e)
  * leader exits or dies, POSIX requires its controlling terminal be released, so
  * a later session can claim the same /dev/pts/N via TIOCSCTTY instead of seeing
  * a stale, dead owner. Called beside the console release on the leader-death
- * paths (sys_exit, terminate, exec_fail). A pty has no timer-IRQ drain, so this
- * is a correctness and reuse concern, not the byte-stealing hazard the console
- * faced.
+ * paths (sys_exit, terminate_current_process, exec_fail_destroyed). A pty has
+ * no interrupt-side drain, so the release matters here only for correctness
+ * and reuse.
  */
 void pty_release_leader(int sid, int pid)
 {

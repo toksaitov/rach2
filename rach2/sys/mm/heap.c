@@ -28,7 +28,7 @@ void init_mm(void)
  * current break and advances it, never freeing. With `align` set the break
  * is first rounded up to a page boundary.
  *
- * Once the frame bitmap exists this allocator and the page allocator
+ * Once the frame table exists this allocator and the page allocator
  * (`alloc_user_page`) share the same physical range, so the reservation must
  * avoid frames already handed out. Any used frame in the span moves the break
  * past it and the search restarts; on success every covered frame is claimed.

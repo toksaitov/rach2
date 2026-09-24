@@ -1,9 +1,9 @@
 /*
  * vfs.c: the mount table and the resolver. The contract is in vfs.h; what
  * is here is the walk, one component at a time, the reference and transient
- * counts, the per-mount namespace lock, the default-answer wrappers, and
- * the glue that makes KRFFS and the two synthetic namespaces answer the
- * operation interface.
+ * counts, the per-mount namespace lock, the default-answer wrappers, the
+ * glue that makes KRFFS and the two synthetic namespaces answer the
+ * operation interface, and mount(2) and umount2(2).
  */
 
 #include "../mm/kheap.h"
@@ -132,7 +132,7 @@ int vfs_mount_gone(const struct vfs_mount *mnt)
     return mnt->dev && ((mnt->dev->flags | block_flags(mnt->dev)) & BLOCK_GONE);
 }
 
-/* ---- reference and transient counts ---- */
+/* Reference and transient counts. */
 
 void vfs_ref_hold(const struct vfs_ref *r)
 {
@@ -170,7 +170,7 @@ void vfs_leave(struct vfs_mount *mnt)
     }
 }
 
-/* ---- the namespace lock ---- */
+/* The namespace lock. */
 
 struct ns_turn {
     struct vfs_mount *mnt;
@@ -203,10 +203,10 @@ int vfs_ns_held_by_caller(void)
  * A caller takes a place in the line and waits until the lock is free and
  * its place is served, so a process that releases the lock and asks again
  * waits behind everyone who asked meanwhile: a writer that locks for every
- * call cannot take the lock back before a waiter has had it, which starved
- * the waiter until the writer stopped. The order costs no switch of its
- * own; releasing the lock does not yield. A caller that holds the lock
- * takes it again without a place.
+ * call cannot take the lock back before a waiter has had it, and so cannot
+ * starve the waiter. The order costs no switch of its own; releasing the
+ * lock does not yield. A caller that holds the lock takes it again without a
+ * place. The wait sleeps and a signal does not end it.
  */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
@@ -239,7 +239,7 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     wq_wake_all(&mnt->ns_wq);
 }
 
-/* ---- the permission the resolver charges ---- */
+/* The permission the resolver checks. */
 
 static int in_groups(uint32_t gid)
 {
@@ -293,12 +293,12 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
     return (bits & 1u) ? 0 : -EACCES;
 }
 
-/* ---- the resolver ---- */
+/* The resolver. */
 
 /* The mount whose root replaces `node` when the walk arrives at it: a child
  * of `mnt` covering that node. The two synthetic mounts cover no node; they
- * are entered by name from the root directory, which is the second match
- * arm. */
+ * are entered by name from the root directory, which `mount_named`
+ * matches. */
 static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
 {
     int i;
@@ -346,9 +346,7 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     if (!mnt->type->ops->lookup || mnt->type->ops->lookup(mnt, node, name, &found) != 0) {
         return 0;
     }
-    /* Any slot that holds the node covers it for a namespace change: one
-     * still mounting, whose constructor may be asleep, as much as an
-     * active one. The resolver crosses only into active mounts. */
+    /* A mount still being made covers the node as well as an active one. */
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
             mounts[i]->covered == found) {
@@ -460,13 +458,23 @@ static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char 
 
 /**
  * Resolve one path. See vfs.h for the whole contract. The loop takes one
- * component at a time and handles four cases: `.`, `..`, a mount whose type
- * takes the rest of the path in one call, and the ordinary lookup of one
- * name, after which a symbolic link is followed and a covering mount is
- * crossed. VFS_WALK_LOCK holds one namespace lock at a time and returns
- * with the final mount locked, so an open can register before relocation.
- * An unmount may resolve a removed mount at the final component
- * only, so it can release that mount without permitting lookup inside it.
+ * component at a time and handles five cases: `.`, `..`, a mount whose type
+ * takes the rest of the path in one call, a nameless mount entered by name
+ * from the root directory, and the ordinary lookup of one name, after which
+ * a symbolic link is followed and a covering mount is crossed.
+ *
+ * On a type with symbolic links, a component that is one is followed when
+ * more of the path comes after it, and at the last component unless the
+ * caller passed VFS_WALK_NOFOLLOW. Its target replaces the component, an
+ * absolute target restarts at the root, and the walk goes on from the
+ * directory the link was found in. A mount covers a directory, so a link is
+ * never a covered node.
+ *
+ * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
+ * final mount locked when its type asks for the lock, so an open can
+ * register before relocation. An unmount may resolve a removed mount at the
+ * final component only, so it can release that mount without permitting
+ * lookup inside it.
  */
 static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
                         struct vfs_ref *out, char *leaf, uint32_t leafcap, int unmount)
@@ -628,12 +636,6 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
         if (rc != 0) {
             goto out_err;
         }
-        /* On a type with symbolic links, a component that is one is
-         * followed when more of the path comes after it, and at the last
-         * component unless the caller passed VFS_WALK_NOFOLLOW. Its target
-         * replaces the component, an absolute target restarts at the root,
-         * and the walk goes on from the directory the link was found in. A
-         * mount covers a directory, so a link is never a covered node. */
         if (cur.mnt->type->ops->readlink && cur.mnt->type->ops->getattr) {
             struct vfs_stat lst;
             const char *rest = p;
@@ -780,7 +782,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
     mnt->refs--;
 }
 
-/* ---- repointing, for a KRFFS relocation ---- */
+/* Repointing, for a KRFFS relocation. */
 
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
@@ -817,7 +819,7 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
     loop_repoint(mnt, from, to);
 }
 
-/* ---- the default-answer wrappers ---- */
+/* The default-answer wrappers. */
 
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
@@ -1103,11 +1105,11 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return mnt->type->ops->statfs(mnt, st);
 }
 
-/* ==== the KRFFS type: the root, adapted onto the interface ==== */
+/* The KRFFS type: the root, adapted onto the interface. */
 
 /* A node handle is the node's place in the mapped image; the root is
- * `krffs_fs->node`. Hold and put are empty because a place is not a
- * resource, which is the reason the type may leave them NULL. */
+ * `krffs_fs->node`. Hold and put are NULL because a place is not a
+ * resource. */
 
 static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
@@ -1139,7 +1141,7 @@ static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     (void)mnt;
     k_memset(st, 0, sizeof(*st));
     if (n == krffs_fs->node) {
-        /* The root's stored mode carries the dirty flag; it reads as the
+        /* The root's stored mode has the dirty flag in it; it reads as the
          * fixed identity stat reports. */
         st->mode = VFS_S_IFDIR | 0755u;
         st->ino = 1;
@@ -1388,15 +1390,14 @@ static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
 }
 
 /*
- * The data operations under the mount's lock. The namespace operations
- * arrive locked from the common layer; these did not, and did not need to
- * while the disk driver polled, since a process in a system call was not
- * switched away from. The driver sleeps for its commands now, inside a
- * write's sync points, and a second process entering the ring then, to
- * grow a file of its own, moves nodes under the first one's feet: a file
- * whose node had moved went on being written at the old place, over the
- * header of the node after it. The lock is the same one the namespace
- * operations hold, so a create and a write cannot interleave either.
+ * The data operations, under the mount's lock. The namespace operations
+ * arrive locked from the common layer; these take the lock themselves. The
+ * disk driver sleeps for its commands inside a write's sync points, and a
+ * second process that grows a file of its own meanwhile moves nodes under
+ * the first: without the lock, a file whose node moved would be written at
+ * the old place, over the header of the node after it. The lock is the same
+ * one the namespace operations hold, so a create and a write cannot
+ * interleave either.
  */
 static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                         uint64_t offset)
@@ -1455,7 +1456,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_lookup,  0, /* lookup_rest */
     0,              /* hold */
     0,              /* put */
-    kfs_getattr, 0, /* setattr: the migration moves it here family by family */
+    kfs_getattr, 0, /* setattr: the syscall layer sets KRFFS attributes */
     0,              /* open: the node is the handle */
     0,              /* release */
     kfs_read,    kfs_write,   kfs_truncate,
@@ -1485,7 +1486,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
 
 const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1};
 
-/* ==== the two synthetic types ==== */
+/* The two synthetic types. */
 
 /*
  * A synthetic node is a classified path. The classification has a device
@@ -1538,7 +1539,7 @@ static void synth_put(struct vfs_mount *mnt, void *node)
  * tree. A `..` that would climb above the mount root returns `VFS_CLIMB`
  * with `*left` at the remainder, and the resolver continues at the covered
  * node. The full spelling (`prefix` + the canonical rest) goes through
- * `synth_classify`, the same classification the namespaces always had.
+ * `synth_classify`.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, void **node,
                       const char **left)
@@ -1686,8 +1687,8 @@ static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
 const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0};
 const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0};
 
-/** The classification a synthetic node carries, or NULL when `mnt` is not
- * one of the two synthetic mounts. The syscall layer's glue reads it. */
+/** The classification of a synthetic node, or NULL when `mnt` is not one
+ * of the two synthetic mounts. The syscall layer's glue reads it. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
     if (mnt->type != &vfs_devfs_type && mnt->type != &vfs_procfs_type) {
@@ -1696,8 +1697,9 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
     return &((struct synth_node *)node)->vp;
 }
 
-/* ---- the permanent entries ---- */
+/* The permanent entries. */
 
+/** Construct permanent mount `idx` of `type` at `path`; a failure panics. */
 static void install(int idx, const struct vfs_type *type, const char *path,
                     struct vfs_mount *parent)
 {
@@ -1793,10 +1795,10 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     return 0;
 }
 
-/* ==== mount(2) and umount2(2) ==== */
+/* mount(2) and umount2(2). */
 
-/* The types mount(2) accepts, by the name it spells; the permanent three
- * are not here because nothing mounts them by name. */
+/* The types mount(2) accepts, by name; the permanent three are not here
+ * because nothing mounts them by name. */
 static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type,
                                                      &vfs_ext2_type, &vfs_krffs_volume_type, 0};
 
@@ -1825,12 +1827,13 @@ const struct vfs_type *vfs_type_at(int idx)
     return mount_types[idx];
 }
 
-/* The flags mount(2) may carry here: honoured or recorded ones. Anything
+/* The flags mount(2) accepts here: honoured or recorded ones. Anything
  * else is EINVAL, MS_REMOUNT, MS_BIND and MS_MOVE first among them. */
 #define VFS_MS_KNOWN                                                                 \
     (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC | VFS_MS_NOATIME | \
      VFS_MS_NODIRATIME | VFS_MS_SILENT | VFS_MS_RELATIME)
 
+/* Wait predicate: no operation is in progress on the mount. */
 static int drained(void *arg)
 {
     struct vfs_mount *mnt = arg;
@@ -1844,6 +1847,16 @@ static int drained(void *arg)
  * between the covered check and the reservation, run the constructor,
  * publish. Every failure after the first step releases what the steps
  * before it took. A target on the root is recorded by its canonical path.
+ *
+ * The source is a partition window under /dev, claimed as a sector range on
+ * the backing disk; a loop device has no disk under it and claims nothing,
+ * since the device itself is what a second mount of it collides with. A
+ * device that refuses writes, a write-protected stick or a loop device
+ * attached read-only, makes the mount read-only whatever the caller asked
+ * for, and the type learns it from the flags. The slot is taken before the
+ * constructor runs, because the constructor may sleep on the device and
+ * another process could remove or rename the target meanwhile; the covered
+ * node stays held and the parent counted.
  */
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options)
@@ -1908,25 +1921,16 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
             return -EBUSY; /* covered, or reserved by a mount in progress */
         }
     }
-    /* The source: a partition window under /dev, claimed as a sector range
-     * on the backing disk. */
     rc = devfs_window_of(source, &dev, &backing, &first, &count);
     if (rc != 0) {
         vfs_ns_unlock(tref.mnt);
         vfs_ref_release(&tref);
         return rc;
     }
-    /* A medium that refuses writes makes every mount of it read-only,
-     * whatever the caller asked for: a write-protected stick, or a loop
-     * device attached to be read and not written. The types are told through
-     * the flags, which is the one place that has to know. */
     if (dev->flags & BLOCK_READ_ONLY) {
         flags |= VFS_MS_RDONLY;
     }
 
-    /* A source with no disk under it, which is what a loop device is: the
-     * device itself is the identity a second mount collides with, and the
-     * table below refuses that on its own. */
     claim = -1;
     if (backing) {
         claim = devfs_claim(backing, first, first + count - 1);
@@ -1941,7 +1945,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
             devfs_release_claim(claim);
             vfs_ns_unlock(tref.mnt);
             vfs_ref_release(&tref);
-            return -EBUSY; /* the device already carries a mount */
+            return -EBUSY; /* the device already has a mount */
         }
     }
     i = mount_new_slot();
@@ -1952,10 +1956,6 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return -ENOMEM;
     }
-    /* The slot is taken before the constructor runs, because with a
-     * sleeping device the constructor sleeps and another process could
-     * remove or rename the target under it; the covered node is held and
-     * the parent counted. */
     k_memset(m, 0, sizeof(*m));
     m->type = t;
     m->dev = dev;
@@ -2053,10 +2053,15 @@ static struct vfs_mount *unmount_below_gone(const char *target)
 /**
  * umount2(2): the mount goes to `unmounting`, which refuses new work; the
  * in-progress count drains; the reference count is checked; sync and
- * prepare_unmount; the cache's dirty buffers are written, a failure here
- * returning the mount to `active`; the cache drops the device's buffers;
- * unmount; the covered node is released; the claim is released; the entry
- * clears.
+ * prepare_unmount; the cache's dirty buffers are written and the device's
+ * own cache is flushed, a failure here returning the mount to `active`; the
+ * cache drops the device's buffers; unmount; the covered node is released;
+ * the claim is released; the entry clears.
+ *
+ * A device that has gone takes nothing, so the sync, prepare_unmount, the
+ * writeback and the flush are skipped for it: each would fail, and an
+ * unmount that failed on a stick that is no longer there would keep the
+ * mount for good.
  */
 int vfs_do_umount(const char *target)
 {
@@ -2095,10 +2100,6 @@ int vfs_do_umount(const char *target)
         return -EBUSY;
     }
     vfs_ns_lock(m);
-    /* A device that has gone takes nothing, so the three writes below are
-     * not attempted: each would fail, and an unmount that fails on a stick
-     * that is no longer there would leave the mount for good. What it held
-     * is let go of, and that is the whole of the unmount. */
     gone = vfs_mount_gone(m);
     if (!gone && m->type->ops->sync) {
         rc = m->type->ops->sync(m);
@@ -2122,8 +2123,7 @@ int vfs_do_umount(const char *target)
         m->state = VFS_ACTIVE;
         return -EIO; /* nothing irreversible has happened yet */
     }
-    /* The buffers are on the wire; a stick keeps a cache of its own, and
-     * what is in it is not on the medium until it is told. */
+    /* A stick's own cache is not on the medium until the stick is told. */
     rc = gone ? 0 : block_flush(m->dev);
     if (rc != 0) {
         vfs_device_failed(m->dev, 0, rc);
@@ -2154,14 +2154,14 @@ int vfs_do_umount(const char *target)
     return 0;
 }
 
-/* ---- the working directory's hold on its mount ---- */
+/* The working directory's hold on its mount. */
 
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
     vfs_cwd_clear(p);
     if (!mnt || mnt == mounts[1] || mnt == mounts[2] ||
         (mnt == mounts[0] && mnt->type == &vfs_krffs_type)) {
-        return; /* the permanent mounts need no pin, but a root of another type does */
+        return; /* the permanent mounts need no hold, but a root of another type does */
     }
     p->cwd_mnt = mnt;
     p->cwd_node = node;

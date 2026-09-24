@@ -15,7 +15,8 @@
 #define KHEAP_LARGE   0xFFu
 #define KHEAP_HDR     16u
 
-/* The header at the base of every heap page. */
+/* The header at the base of every page a class's blocks are carved from and
+ * of the first page of a large object; pages from `kalloc_pages` have none. */
 struct page_hdr {
     uint32_t magic;
     uint32_t cls;   /* the class index, or KHEAP_LARGE */

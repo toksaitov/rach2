@@ -4,10 +4,11 @@
  *
  * `resolve_host` tries, in order, a numeric literal, the hosts file, then a DNS
  * A query to the nameserver in the resolver config, each looked for under
- * `/etc` first and at the root after, since the test image has no `/etc`. The
- * pure helpers (`rach2_inet_aton`, `hosts_find`, `dns_build_query`,
- * `dns_parse_a`) take buffers and touch no syscalls, so the `dnstest` program
- * can exercise them directly; only `resolve_host` does file and socket I/O.
+ * `/etc` first and at the root after, since the test image stages both files
+ * at the root. The pure helpers (`rach2_inet_aton`, `hosts_find`,
+ * `dns_build_query`, `dns_parse_a`) take buffers and touch no syscalls, so the
+ * `dnstest` program can exercise them directly; only `resolve_host` does file
+ * and socket I/O.
  *
  * Only the functions declared in `netdb.h` are external; every other symbol
  * is static, so this object links cleanly into each program that needs it
@@ -29,16 +30,16 @@ typedef unsigned int u32;
 typedef unsigned short u16;
 typedef unsigned char u8;
 
-/* Two locations, tried in that order: os-real stages a real `/etc` and the flat
- * test image stages neither directory, so a resolver that must work under both
- * looks in both. This is the same rule `adduser` follows for the password
- * program, and it is written the same way. */
+/* Two locations, tried in that order: os-simple and os-real stage both files
+ * under `/etc` and the test image stages them at the root, so a resolver that
+ * must work under every image looks in both. This is the same rule `adduser`
+ * follows for the password program, and it is written the same way. */
 #define RESOLV_CONF     "/etc/resolv.conf"
 #define RESOLV_CONF_ALT "/resolv.conf"
 #define HOSTS_PATH      "/etc/hosts"
 #define HOSTS_PATH_ALT  "/hosts"
 
-/* SLIRP's built-in DNS forwarder, used when /resolv.conf names no server. */
+/* SLIRP's built-in DNS forwarder, used when the resolver config lists none. */
 #define DNS_DEFAULT_NS 0x0A000203U /* 10.0.2.3 */
 #define DNS_PORT       53
 
@@ -74,8 +75,8 @@ static int str_eq(const char *a, const char *b)
 }
 
 /**
- * Read up to `cap` bytes of `path` into `buf`, returning the byte count or -1
- * if the file cannot be opened.
+ * Read up to `cap` bytes of `path` into `buf`, returning the byte count or -1,
+ * with `errno` set by the `open`, if the file cannot be opened.
  */
 static int read_file(const char *path, char *buf, int cap)
 {
@@ -97,16 +98,17 @@ static int read_file(const char *path, char *buf, int cap)
 }
 
 /**
- * Read `path` if it is there, else `alt`, into `buf`. Returns the length, or a
- * negative value when neither could be read.
+ * Read `path` if it is there, else `alt`, into `buf`. Returns the length, or -1
+ * when the file chosen cannot be opened.
+ *
+ * Only absence (`ENOENT` or `ENOTDIR`) falls through to `alt`. A file that is
+ * there and cannot be opened is a deliberate answer, and falling past it to a
+ * stale copy in the root would use the configuration somebody took away.
  */
 static int read_either(const char *path, const char *alt, char *buf, int cap)
 {
     int n = read_file(path, buf, cap);
 
-    /* Absence alone, not any failure: a file that is there and unreadable is a
-     * deliberate answer, and falling past it to a stale copy in the root would
-     * quietly use the configuration somebody took away. */
     if (n < 0 && (errno == ENOENT || errno == ENOTDIR)) {
         n = read_file(alt, buf, cap);
     }
@@ -115,7 +117,7 @@ static int read_either(const char *path, const char *alt, char *buf, int cap)
 }
 
 /**
- * Busy-wait roughly `ms` milliseconds using gettimeofday (the 100 Hz clock).
+ * Busy-wait for `ms` milliseconds, measured by gettimeofday.
  */
 static void delay_ms(int ms)
 {
@@ -170,8 +172,8 @@ int rach2_inet_aton(const char *s, unsigned int *out_ip)
 }
 
 /**
- * Look `name` up in the `/hosts` text held in `buf[0:len]`, returning its
- * address in `out_ip`.
+ * Look `name` up in the hosts-file text in `buf[0:len]`, returning its address
+ * in `out_ip`.
  *
  * Each line is `<address> <name> [name ...]` with `#` starting a comment; the
  * match is case-insensitive on the names. A line whose first token is not a
@@ -210,7 +212,6 @@ int hosts_find(const char *buf, int len, const char *name, unsigned int *out_ip)
             tok[t] = '\0';
 
             if (ntok == 0) {
-                /* first token is the address; a bad one voids the line */
                 if (rach2_inet_aton(tok, &ip) != 0) {
                     break;
                 }
@@ -325,7 +326,8 @@ static int dns_skip_name(const u8 *resp, int len, int pos)
  * The response must match `id`, be a reply (QR set) with RCODE 0 and at least
  * one answer. The question section is skipped, then the answers are walked for
  * an IN A record with a 4-byte RDATA. Returns 0 with `out_ip` set in host
- * order, or -1 on a mismatch, error response, or absence of an A record.
+ * order, or -1 on a mismatch, an error response, a message truncated before
+ * the record, or absence of an A record.
  */
 int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned int *out_ip)
 {
@@ -383,8 +385,9 @@ int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned 
 }
 
 /**
- * Return the first `nameserver <ip>` from `/resolv.conf`, or `DNS_DEFAULT_NS`
- * (SLIRP's built-in forwarder) when the file names none.
+ * Return the first `nameserver <ip>` with a valid address in the first 256
+ * bytes of the resolver config, or `DNS_DEFAULT_NS` (SLIRP's built-in
+ * forwarder) when there is none or the file cannot be read.
  */
 static u32 read_nameserver(void)
 {
@@ -440,10 +443,12 @@ static u32 read_nameserver(void)
  * address in `out_ip`.
  *
  * Sends the query and polls for the reply with `MSG_DONTWAIT`, resending
- * periodically: the first datagram to the on-subnet nameserver is dropped
- * while ARP resolves, so a resend is expected. A reply from that address and
- * port whose id matches is decisive (success, NXDOMAIN, or no A record);
- * other traffic is ignored until the roughly 6s budget expires.
+ * periodically: the kernel drops a datagram whose next hop ARP has not yet
+ * resolved, so the first one is often lost and a resend is expected. The
+ * socket is connected, so only replies from that address and port arrive; one
+ * whose id matches is decisive (success, NXDOMAIN, or no A record), and other
+ * traffic is ignored until the budget of 30 sends, each polled four times at
+ * 50 ms, about 6 s, expires. Returns 0 on success and -1 otherwise.
  */
 static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
 {
@@ -494,9 +499,10 @@ static int dns_query(const char *name, u32 ns, unsigned int *out_ip)
 /**
  * Resolve `host` to a host-order IPv4 address in `out_ip`.
  *
- * Tries, in order, a numeric dotted-quad literal, the `/hosts` file, then a
- * DNS A query to the `/resolv.conf` nameserver. Returns 0 on the first hit,
- * or the DNS query's result if neither earlier source matches.
+ * Tries, in order, a numeric dotted-quad literal, the first 1024 bytes of the
+ * hosts file, then a DNS A query to the resolver config's nameserver. Returns
+ * 0 on the first hit, or the DNS query's result if neither earlier source
+ * matches.
  */
 int resolve_host(const char *host, unsigned int *out_ip)
 {

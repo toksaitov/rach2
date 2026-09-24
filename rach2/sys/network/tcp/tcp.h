@@ -4,9 +4,10 @@
 #include "../../lib/kint.h"
 
 /*
- * Transmission Control Protocol. Each connection is a TCB drawn from a static
- * pool. The state machine is in tcp.c; the socket layer drives passive and
- * active opens, and ip_rx feeds every incoming segment to tcp_rx.
+ * Transmission Control Protocol. Each connection is a TCB allocated from the
+ * kernel heap and kept on a list. The state machine is in tcp.c; the socket
+ * layer drives passive and active opens, and ip_rx feeds every incoming
+ * segment to tcp_rx.
  */
 
 /* TCP flag bits (segment byte 13). */
@@ -164,16 +165,17 @@ struct tcb {
     uint32_t inode;
 };
 
-/* Allocate the TCB pool; called once from init_network. */
+/* Empty the TCB list; called once from init_network. */
 void tcp_init(void);
 
 /** Drive the per-connection timers; called once per kernel tick. */
 void tcp_tick(void);
 
-/** Allocate a TCB from the shared pool, or NULL if none can be had. */
+/** Allocate a TCB from the heap and put it on the list, or NULL if the heap
+ * has no room. */
 struct tcb *tcb_alloc(void);
 
-/* Return a TCB to the pool. */
+/* Take a TCB off the list and free it; its socket must be detached. */
 void tcb_free(struct tcb *tcb);
 
 /** Process an inbound TCP segment; called by ip_rx for IP protocol 6. */

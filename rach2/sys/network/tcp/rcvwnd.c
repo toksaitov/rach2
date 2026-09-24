@@ -1,9 +1,9 @@
 /*
  * rcvwnd.c: the receiver's window-update decision, as a pure function.
  *
- * Split out of tcp.c so the rule can be driven by a host test at ring and
- * segment sizes the running kernel never uses. No state, no transmit, no
- * knowledge of a connection.
+ * It is a file apart from tcp.c so that a host test can drive the rule at
+ * ring and segment sizes the running kernel never uses. It keeps no state,
+ * sends nothing and reads no connection's block.
  */
 
 #include "rcvwnd.h"

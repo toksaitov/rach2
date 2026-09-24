@@ -2,11 +2,11 @@
  * Anonymous pipes.
  *
  * A pipe is a bounded byte FIFO with a read end and a write end. Each end is a
- * descriptor carrying pipe_ops + the struct pipe as priv; read/write block on
- * the pipe's wait queues (so other processes run while a stage waits);
- * dup/dup2/fork share an end through the refcounted open-file description, and
- * pipe_close fires (from fd_release_backing) only when an end's LAST descriptor
- * closes. See pipe.h for the EOF/SIGPIPE contract.
+ * descriptor whose ops are pipe_ops and whose priv is the struct pipe;
+ * read/write block on the pipe's wait queues (so other processes run while a
+ * stage waits); dup/dup2/fork share an end through the refcounted open-file
+ * description, and pipe_close runs (from fd_release_backing) only when an
+ * end's LAST descriptor closes. See pipe.h for the EOF/SIGPIPE contract.
  */
 
 #include "pipe.h"
@@ -25,7 +25,7 @@
 #define FIONREAD 0x541B /* bytes available to read */
 #define FIONBIO  0x5421 /* set/clear non-blocking */
 
-/* O_* and OFD status bits used here (mirrors syscall.c / fd.h). */
+/* The O_* flags pipe2 takes (the values in syscall.c and fd.h). */
 #define O_CLOEXEC_FLAG  02000000
 #define O_NONBLOCK_FLAG 04000
 
@@ -34,8 +34,9 @@
 static pipe_t *pipes;
 
 /* The pure ring helpers (pipe_available/pipe_free_space/pipe_ring_put/
- * pipe_ring_get) live in pipe_ring.c so the host-host test can exercise the
- * wrap arithmetic natively under ASan without pulling in the syscall glue. */
+ * pipe_ring_get and the spans) live in pipe_ring.c so the host test can
+ * exercise the wrap arithmetic natively under ASan without pulling in the
+ * syscall glue. */
 
 void pipe_init_pool(void)
 {
@@ -48,10 +49,10 @@ static uint32_t next_pipe_inode = 1;
  * The next inode to give a pipe: rising, nonzero, and not one a live pipe has.
  *
  * Two pipes must not be one thing to a program reading `/proc/<pid>/fd`, and a
- * reused slot must not read as the pipe that had it, so the number rises
- * rather than being the slot. Rising is not enough by itself: the counter is
- * 32 bits and wraps, so the pool is checked and a number in use is stepped
- * over. Zero is skipped because it is what an unset field reads as.
+ * new pipe must not read as one that has closed, so the number rises. Rising
+ * is not enough by itself: the counter is 32 bits and wraps, so the list of
+ * live pipes is checked and a number in use is stepped over. Zero is skipped
+ * because it is what an unset field reads as.
  */
 static uint32_t pipe_next_inode(void)
 {
@@ -218,9 +219,11 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 /**
  * Write to the write end. Blocks while the FIFO is full (until space frees or
  * every reader closes). A write with no readers raises SIGPIPE and returns
- * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full.
- * A user-copy fault returns -EFAULT or the count already written. Readers
- * are woken whenever a transfer changes an empty ring to a nonempty one.
+ * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full, or
+ * -EINTR if a signal cut a wait short; either returns the count already
+ * written instead when there is one. A user-copy fault returns -EFAULT or the
+ * count already written. Readers are woken whenever a transfer changes an
+ * empty ring to a nonempty one.
  *
  * Resolve each user page before selecting a ring span. Recheck the ring
  * after any operation that can sleep; copying a span and advancing its
@@ -298,34 +301,34 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
-/**
- * Poll readiness for one end. POLLIN if the read end has data or the writers
- * are gone; POLLOUT if the write end has space or the readers are gone;
- * POLLHUP when the peer end is closed.
- */
+/* poll(2) event bits, the Linux values. */
 #define PIPE_POLLIN  0x001
 #define PIPE_POLLOUT 0x004
 #define PIPE_POLLERR 0x008
 #define PIPE_POLLHUP 0x010
 
+/**
+ * Poll readiness for one end, on that end's own wait queue: the read end's
+ * read_wq, which data and a writer's close wake, and the write end's
+ * write_wq, which freed space and a reader's close wake.
+ *
+ * Readiness matches the read and write wait predicates, so a poller wakes for
+ * exactly what unblocks a read or a write: the read end is readable with data
+ * buffered or the writers gone (the read then returns 0), and the write end
+ * is writable with space free or the readers gone (the write then fails with
+ * EPIPE). POLLHUP on the read end once the writers are gone, and POLLERR on
+ * the write end once the readers are gone, are reported whatever `events`
+ * asks.
+ */
 static short pipe_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     pipe_t *p = (pipe_t *)e->priv;
     short revents = 0;
 
-    /* A readiness change for this end is signaled on its own wait queue: the
-     * read end's read_wq (data arrives / writer closes), the write end's
-     * write_wq (space frees / reader closes). The poll core parks on it. */
     if (wq) {
         *wq = (e->flags & FD_FLAG_READ) ? &p->read_wq : &p->write_wq;
     }
 
-    /* Readiness must match the read/write wait predicates so a poller wakes for
-     * exactly what unblocks read/write: a read end is readable when data is
-     * buffered OR the writers are gone (read then returns 0/EOF, not blocks); a
-     * write end is "writable" when space exists OR the readers are gone (the
-     * write would immediately EPIPE). POLLHUP/POLLERR are reported regardless
-     * of the requested events. */
     if (e->flags & FD_FLAG_READ) {
         if (pipe_available(p) != 0 || !p->write_open) {
             revents |= (short)(events & PIPE_POLLIN);
@@ -443,10 +446,6 @@ int32_t sys_pipe2(struct isr_params *params)
         return -ENFILE;
     }
 
-    /* Set up the read end before allocating the write end: fd_alloc leaves a
-     * slot type==FD_TYPE_NONE (the caller assigns the type), so reserving rfd
-     * via pipe_setup_end is what stops the second fd_alloc from handing back
-     * the very same slot. */
     rfd = fd_alloc(&current_proc->fds);
     if (rfd < 0) {
         pipe_free(pipe);
@@ -465,9 +464,7 @@ int32_t sys_pipe2(struct isr_params *params)
     kfds[0] = rfd;
     kfds[1] = wfd;
     if (copy_to_user((void __user *)fds_ptr, kfds, sizeof(kfds)) != 0) {
-        /* The user array is unwritable: tear the just-created pipe down rather
-         * than leaking the descriptors. Both ends are fresh (OFD refcount 1,
-         * nothing blocked), so free the pipe slot and the two fds directly. */
+        /* Both ends are fresh: free the pipe and descriptors directly. */
         pipe_free(pipe);
         fd_free(&current_proc->fds, rfd);
         fd_free(&current_proc->fds, wfd);

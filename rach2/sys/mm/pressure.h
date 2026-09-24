@@ -47,9 +47,10 @@ uint32_t mem_reserve_frames(void);
 int mem_may_take(int user_page);
 
 /**
- * Give the caches' frames back while the free count is below the low mark,
- * up to the high mark; dirty ones are written back, which sleeps, only from
- * a system call with interrupts on. Returns how many frames came back.
+ * Give the caches' frames back while the free count is below the high mark;
+ * dirty ones are written back, which sleeps, only from a system call with
+ * interrupts on. Returns how many frames came back. `mem_balance` is the
+ * caller that waits for the low mark before it asks.
  */
 uint32_t mem_reclaim(void);
 

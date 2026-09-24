@@ -1,13 +1,13 @@
 /*
  * e1000.c: the Intel 82540EM driver.
  *
- * The descriptor-ring design with nothing else on top. Two rings of 16-byte
- * descriptors live in kernel memory; the card owns a head index into each and
- * this driver owns a tail. To hand the card a receive buffer, advance the
- * receive tail; to send, fill a transmit descriptor and advance the transmit
- * tail. The card writes a done bit back into each descriptor it finishes.
- * That is the whole mechanism, and it is the one every gigabit card since has
- * elaborated on, which is why this driver is the one to read before
+ * The card is the descriptor-ring design with nothing else on top. Two rings
+ * of 16-byte descriptors live in kernel memory; the card owns a head index
+ * into each and this driver owns a tail. To hand the card a receive buffer,
+ * advance the receive tail; to send, fill a transmit descriptor and advance
+ * the transmit tail. The card writes a done bit back into each descriptor it
+ * finishes. That is the whole mechanism, and it is the one every gigabit card
+ * since has elaborated on, which is why this driver is the one to read before
  * rtl8168.c.
  *
  * The card interrupts, so `poll` is NULL. It shares its PCI line, so the
@@ -16,9 +16,10 @@
  *
  * All register access goes through an indirection (`io`) so the host test can
  * drive the whole bring-up against a software model of the chip. The default
- * binding is plain MMIO on the mapped window. The card is emulated by QEMU,
- * so unlike the RTL8168GU this driver can also be run; the model exists to
- * reach the failures QEMU does not produce.
+ * binding is plain MMIO on the mapped window, and port I/O for the reset
+ * alone. The card is emulated by QEMU, so unlike the RTL8168GU this driver
+ * can also be run; the model exists to reach the failures QEMU does not
+ * produce.
  */
 
 #include "../../klog.h"
@@ -34,9 +35,9 @@
 #include "../../udelay.h"
 #include "../../mm/paging.h"
 
-/* ------------------------------------------------------------------ */
-/* Register access, behind an indirection the host test can replace.   */
-/* ------------------------------------------------------------------ */
+/* Register access, behind an indirection the host test can replace. */
+
+struct e1000;
 
 /**
  * The chip's registers and the short waits its handshakes need.
@@ -48,8 +49,6 @@
  * timer chip, because a counted loop cannot promise a duration on a processor
  * whose speed the kernel never learns.
  */
-struct e1000;
-
 struct e1000_io {
     uint32_t (*r32)(struct e1000 *e, uint32_t off);
     void (*w32)(struct e1000 *e, uint32_t off, uint32_t value);
@@ -74,14 +73,13 @@ struct e1000_io {
  * only one of them touches at a time. A done bit the compiler kept in a
  * register would be a wait that never ends. The kernel builds this file
  * without optimization, where that cannot happen, but the host model builds
- * the same file at -O1 and -O2, so the type says what is true rather than
- * resting on a flag. A buffer is read only after its descriptor reported
- * done, so making 112 KiB of buffer volatile would slow every copy to no
- * purpose.
+ * the same file at -O1, so the type says what is true rather than resting on
+ * a flag. A buffer is read only after its descriptor reported done, so making
+ * 112 KiB of buffer volatile would slow every copy to no purpose.
  */
 struct e1000 {
     int used;
-    int number; /* its place in the table, and what the log names it by */
+    int number; /* its place in the table */
     /* The interface this card is, so a frame it delivers says where it
      * arrived and its counters are that interface's. */
     struct netdev *nd;
@@ -97,10 +95,10 @@ struct e1000 {
     /* The card's own hardware address, from its EEPROM or its registers. */
     uint8_t mac[6];
 
-    /* What the boot detail line reports. The receive counters separate the
-     * reasons a frame is refused, because on this card they mean different
-     * things: a hardware error, a frame the card split across descriptors,
-     * and a length outside what a buffer can hold. */
+    /* What the boot detail line reports. The receive counters separate a
+     * hardware error (`rx_errors`) from a frame dropped because the card
+     * split it across descriptors, because its length is outside what a
+     * buffer can hold, or because the ring overflowed (`rx_dropped`). */
     uint32_t rx_packets;
     uint32_t rx_errors;
     uint32_t rx_dropped;
@@ -156,13 +154,11 @@ static void mmio_wio(struct e1000 *e, uint32_t off, uint32_t value)
 
 static const struct e1000_io mmio_io = {mmio_r32, mmio_w32, mmio_wio, k_udelay};
 
-/* The binding a card found from now on uses. The host test points this at
- * its model before the probe runs, and a card keeps what it was made with. */
+/* The binding every card uses. The host test points this at its model before
+ * the probe runs. */
 static const struct e1000_io *io = &mmio_io;
 
-/* ------------------------------------------------------------------ */
-/* Driver state.                                                       */
-/* ------------------------------------------------------------------ */
+/* Driver state. */
 
 static struct e1000 e1000s[E1000_MAX];
 static const char *e1000_err = "no e1000 present";
@@ -172,9 +168,7 @@ static void e1000_service(struct e1000 *e);
 static void e1000_rx(struct e1000 *e);
 static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len);
 
-/* ------------------------------------------------------------------ */
-/* Bring-up.                                                           */
-/* ------------------------------------------------------------------ */
+/* Bring-up. */
 
 /**
  * Quiesce the device, reset it, and wait for the handshake to complete.
@@ -193,8 +187,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len);
  * The reset itself is written through the I/O window, not the memory window,
  * for the erratum described where `E1000_IO_ADDR` is defined.
  *
- * `CTRL.RST` is self-clearing: the card raises it and drops it again when the
- * reset is done.
+ * `CTRL.RST` is self-clearing: the card clears it when the reset is done.
  *
  * @return 1 when the card came out of reset, 0 when the budget ran out.
  */
@@ -414,9 +407,7 @@ static int e1000_pages(struct e1000 *e)
             return -1;
         }
         e->rx_ring = (volatile struct e1000_rx_desc *)page;
-        /* The transmit ring is in the page's second half, counted in
-         * receive descriptors so the arithmetic is pointer arithmetic on
-         * any host. */
+        /* The transmit ring is the page's second half, 2048 bytes in. */
         e->tx_ring =
             (volatile struct e1000_tx_desc *)(e->rx_ring + 2048 / sizeof(struct e1000_rx_desc));
     }
@@ -450,10 +441,32 @@ static int e1000_pages(struct e1000 *e)
  * asserts: the window is mapped and answering before anything is written to
  * it, interrupts are masked before the reset, the station address and the
  * multicast table are set before the receiver could match a frame, both rings
- * are complete before bus mastering is enabled, and the receiver and
- * transmitter are the last two things switched on. Nothing before the PCI
- * lookup succeeds touches a register, which is what the driver table requires
- * of a card that is not in the machine.
+ * are complete before bus mastering is enabled, the receiver and transmitter
+ * are switched on after that, and the interrupt sources are unmasked last.
+ * Nothing before the PCI lookup succeeds touches a register, which is what
+ * the driver table requires of a card that is not in the machine.
+ *
+ * A second bring-up of the same card keeps the pages the first one took:
+ * this driver never gives them back, so a record cleared over them would
+ * lose them for the life of the machine. A legacy line reaches the processor
+ * only through the 8259 pair, and the vector is `32 + irq` in a byte, so a
+ * line above 15, which would wrap onto an exception vector, is refused; this
+ * driver has no polled path to fall back to. The memory window is used for
+ * every register and the I/O window for the reset alone, and a card without
+ * the I/O window is refused rather than reset the way the erratum warns
+ * against.
+ *
+ * The link is asked for and the card negotiates its own speed and duplex.
+ * The two force bits are cleared: auto-speed detection is only permitted
+ * while they are clear, their power-on values come from the EEPROM, and a
+ * MAC forced to a gigabit while its PHY negotiated a hundred megabits passes
+ * no frames. VLAN mode is cleared, since nothing above this layer reads a tag
+ * and the card would strip four bytes the stack expects to see.
+ *
+ * `up` is set before the sources are unmasked. The handler passes over a
+ * card whose `up` is clear, and the bring-up runs with interrupts enabled, so
+ * a cause raised in between would be taken, left unserviced, and keep a level
+ * line asserted.
  *
  * @return `NETDEV_UP`, `NETDEV_ABSENT` when there is no such card, or
  *         `NETDEV_FAILED` with `e1000_error()` set to the reason.
@@ -472,9 +485,6 @@ static int e1000_init(struct netdev *nd, int nth)
     }
     e = &e1000s[nth];
     {
-        /* The pages this card already holds survive a second bring-up: they
-         * are the window's, and a record cleared over them would lose them
-         * for the life of the machine. */
         volatile struct e1000_rx_desc *rx = e->rx_ring;
         volatile struct e1000_tx_desc *tx = e->tx_ring;
         uint8_t *rb[E1000_RING_SIZE];
@@ -503,21 +513,12 @@ static int e1000_init(struct netdev *nd, int nth)
         return NETDEV_ABSENT;
     }
 
-    /* This kernel is PIC-only, so the sixteen legacy lines are the whole of
-     * what can be delivered. A larger value from firmware is not merely a
-     * line no interrupt arrives on: the vector is `32 + irq` in a byte, so a
-     * big enough one wraps onto an exception vector and installs this
-     * driver's handler there. Reject anything outside the range rather than
-     * register a vector the card will never raise; this driver has no polled
-     * path to fall back to. */
     if (e->pci.irq > 15) {
         e1000_err = "the e1000 has no usable IRQ line";
         return NETDEV_FAILED;
     }
 
-    /* Both windows, by index. The memory window carries every register; the
-     * I/O window carries the reset alone, and the card is refused without it
-     * rather than reset the way the erratum warns against. */
+    /* Both windows, by index. */
     e->iobase = 0;
     for (i = 0; i < 6; i++) {
         if (pci_bar_is_memory(e->pci.bar[i])) {
@@ -565,14 +566,6 @@ static int e1000_init(struct netdev *nd, int nth)
         return NETDEV_FAILED;
     }
 
-    /* Ask for the link and let the card negotiate its own speed and duplex.
-     * The two force bits are cleared with it: auto-speed detection is only
-     * permitted while they are clear, their power-on values come from the
-     * EEPROM rather than being known, and a MAC forced to a gigabit while its
-     * PHY negotiated a hundred megabits is a link that carries nothing. VLAN
-     * tagging is cleared because nothing above this layer reads a tag, and a
-     * card left in VLAN mode would strip four bytes the stack expects to
-     * see. */
     ctrl = io->r32(e, E1000_CTRL);
     ctrl |= E1000_CTRL_SLU | E1000_CTRL_ASDE;
     ctrl &= ~(E1000_CTRL_VME | E1000_CTRL_PHY_RST | E1000_CTRL_FRCSPD | E1000_CTRL_FRCDPLX);
@@ -599,10 +592,6 @@ static int e1000_init(struct netdev *nd, int nth)
     e1000_rx_setup(e);
     e1000_tx_setup(e);
 
-    /* The rings are complete before the card is given the bus. Whatever state
-     * it arrived in, the reset above turned its receiver and transmitter off
-     * and left them off, so from here it fetches only what this driver has
-     * described. */
     pci_enable_bus_master(&e->pci);
 
     register_isr_handler((uint8_t)(32 + e->pci.irq), e1000_irq, "e1000");
@@ -613,20 +602,12 @@ static int e1000_init(struct netdev *nd, int nth)
                 ((uint32_t)E1000_TCTL_CT_DEFAULT << E1000_TCTL_CT_SHIFT) |
                 ((uint32_t)E1000_TCTL_COLD_FD << E1000_TCTL_COLD_SHIFT));
 
-    /* The card is serviceable before its sources are unmasked, and not the
-     * other way round. The handler passes over a card whose `up` is clear, so
-     * an interrupt raised between the unmask and this assignment would be
-     * taken, do nothing, and leave the line asserted; on a level line that is
-     * a machine that never finishes its own bring-up. The bring-up runs with
-     * interrupts enabled, so that window is real. */
     e->up = 1;
     io->w32(e, E1000_IMS, E1000_INT_MASK);
     return NETDEV_UP;
 }
 
-/* ------------------------------------------------------------------ */
-/* Transmit.                                                           */
-/* ------------------------------------------------------------------ */
+/* Transmit. */
 
 /**
  * Reclaim every transmit descriptor the card has finished with.
@@ -654,13 +635,12 @@ static void e1000_tx_reclaim(struct e1000 *e)
 /**
  * Copy a frame into the next transmit descriptor and hand it to the card.
  *
- * At most `E1000_RING_SIZE - 1` descriptors are ever outstanding, and the one
- * left over is not a rounding error. The card reads head equal to tail as an
- * empty ring: filling all 32 entries would wrap the tail onto a head the card
- * has not moved, and 32 descriptors it had not finished would become
- * invisible to it. Nothing would then ever be sent again. The count of
- * submissions minus the count of reclaims is what this bounds, which is why
- * those two are counts and not indices.
+ * At most `E1000_RING_SIZE - 1` descriptors are ever outstanding. The card
+ * reads head equal to tail as an empty ring: filling all 32 entries would
+ * wrap the tail onto a head the card has not moved, and 32 descriptors it had
+ * not finished would become invisible to it. Nothing would then ever be sent
+ * again. The count of submissions minus the count of reclaims is what this
+ * bounds, which is why those two are counts and not indices.
  *
  * A full ring waits, briefly. Dropping the moment a burst outruns the card
  * would lose frames that a millisecond would have made room for, so this
@@ -711,13 +691,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
     }
     idx = e->tx_head % E1000_RING_SIZE;
 
-    /* One call, which moves words: a byte at a time here cost about
-     * 12000 cycles a frame, which was the whole of this path's time. */
     k_memcpy(e->tx_buf[idx], data, len);
-    /* Pad to the Ethernet minimum with zeroes, so no stale buffer bytes reach
-     * the wire. Written as a loop, as rtl8168.c writes its own: this file is
-     * compiled natively by its host model as well as freestanding by the
-     * kernel, and it reaches for nothing outside itself. */
     if (total < 60) {
         k_memset(e->tx_buf[idx] + total, 0, (size_t)(60 - total));
         total = 60;
@@ -740,9 +714,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
     return NETDEV_TX_OK;
 }
 
-/* ------------------------------------------------------------------ */
-/* Receive.                                                            */
-/* ------------------------------------------------------------------ */
+/* Receive. */
 
 /**
  * Take finished frames off the receive ring and hand them up.
@@ -752,7 +724,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
  * puts the receiver into discard until one arrives, because the rest of that
  * frame is not a frame; without it the tail of a split frame would be handed
  * up as though it were whole. The error byte must be clear, because a
- * descriptor can report done and end-of-packet and still carry a receive
+ * descriptor can report done and end-of-packet and still report a receive
  * error. `EOP` must be set on the same descriptor, because a frame split
  * across two would need a reassembly this driver does not do, and at a
  * 1500-byte transfer unit against a 2048-byte buffer the card has no reason
@@ -787,9 +759,7 @@ static void e1000_rx(struct e1000 *e)
         len = E1000_RXD_LEN(d);
 
         if (e->rx_discarding) {
-            /* The tail of a frame whose head was already refused. It is not a
-             * frame of its own, and delivering it would hand the stack the
-             * second half of something as though it were whole. */
+            /* The rest of a frame whose first part was refused. */
             e->rx_dropped++;
             ethernet_note_rx_drop(e->nd);
             if (status & E1000_RXD_STAT_EOP) {
@@ -826,15 +796,12 @@ static void e1000_rx(struct e1000 *e)
 }
 
 /**
- * Service the card until its cause register reads clear.
+ * Service every card this driver brought up.
  *
- * The card shares a PCI interrupt line, and a frame arriving after the cause
- * was read but before the ring drained would raise it again. Reading in a
- * loop until nothing is pending leaves the line deasserted and the ring
- * drained on return, so no arrival is stranded until the next interrupt. The
- * guard bounds the loop should a cause ever stick. Reading `ICR` is what
- * clears it; the shared interrupt router has already sent the PIC its end of
- * interrupt, so this handler must not touch the PIC.
+ * The PCI line is shared, with other devices and with a second card of this
+ * kind, so every card that is up is asked, and one with nothing pending costs
+ * a register read. The shared interrupt router has already sent the PIC its
+ * end of interrupt, so this handler must not touch the PIC.
  */
 static void e1000_irq(isr_params_t *params)
 {
@@ -842,9 +809,6 @@ static void e1000_irq(isr_params_t *params)
 
     (void)params;
 
-    /* The line is shared, and by more than one of these cards on a machine
-     * that has two. Every card this driver brought up is asked, and one with
-     * nothing pending costs a register read. */
     for (n = 0; n < E1000_MAX; n++) {
         struct e1000 *e = &e1000s[n];
 
@@ -854,7 +818,18 @@ static void e1000_irq(isr_params_t *params)
     }
 }
 
-/** Service one card until its cause register reads clear. */
+/**
+ * Service one card until its cause register reads clear.
+ *
+ * A frame arriving after the cause was read but before the ring drained would
+ * raise it again. Reading in a loop until nothing is pending leaves the line
+ * deasserted and the ring drained on return, so no arrival is stranded until
+ * the next interrupt. The guard bounds the loop should a cause ever stick.
+ * Reading `ICR` is what clears it. An overflow is recovered by draining the
+ * ring: the descriptors the card could not use are returned by the tail write
+ * e1000_rx ends with. A link change needs nothing done, since the card
+ * renegotiates on its own and print_info reads the current state.
+ */
 static void e1000_service(struct e1000 *e)
 {
     uint32_t cause;
@@ -869,21 +844,14 @@ static void e1000_service(struct e1000 *e)
             e1000_rx(e);
         }
         if (cause & E1000_INT_RXO) {
-            /* The ring filled while the machine was elsewhere. Draining it is
-             * the whole recovery: the descriptors the card could not use are
-             * returned by the tail write e1000_rx ends with. */
             e->rx_dropped++;
             ethernet_note_rx_drop(e->nd);
             e1000_rx(e);
         }
-        /* A link change needs nothing done. The card renegotiates on its own
-         * and print_info reads the current state when it is asked. */
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* What the layers above ask for.                                      */
-/* ------------------------------------------------------------------ */
+/* What the layers above ask for. */
 
 static const char *e1000_error(void)
 {
@@ -920,12 +888,12 @@ static int e1000_link(struct e1000 *e, struct netdev_link *out)
  * Silence the card: receiver and transmitter off, interrupts masked, DMA
  * revoked.
  *
- * The order is what makes it safe rather than merely tidy. The enables go
- * first, so the card stops fetching descriptors while it still has a window
- * to be told through; the mask follows, so nothing raises a line whose
- * handler is about to be irrelevant; bus mastering goes last, because it is
- * the one that ends DMA whatever the card believes, and clearing it before
- * the card was told to stop would leave a device still trying.
+ * The order matters. The enables go first, so the card stops fetching
+ * descriptors while it still has a window to be told through; the mask
+ * follows, so nothing raises a line whose handler is about to be irrelevant;
+ * bus mastering goes last, because it is the one that ends DMA whatever state
+ * the card is in, and clearing it before the card was told to stop would
+ * leave the card with transfers in flight.
  *
  * What the card already accepted is given a bounded moment to reach the wire
  * first. The shutdown path submits its last log line and then stops the
@@ -934,12 +902,12 @@ static int e1000_link(struct e1000 *e, struct netdev_link *out)
  * for would be discarded in the ring it was just placed in. A card that never
  * finishes costs the bounded wait and no more.
  *
- * Safe on a card that never finished starting. `e1000_init` enables bus
- * mastering before it enables the receiver, and can still fail after that, so
- * the probe calls this on a driver that reported `NETDEV_FAILED` and the
- * window may hold a half-configured card. The PCI record is written only when
- * a device was found, which `e->up` does not tell us; the window pointer
- * does, because nothing is written to a card whose window never mapped.
+ * Safe on a card that never finished starting: the probe calls this on a
+ * driver that reported `NETDEV_FAILED`, whose window may be mapped with the
+ * card half configured. The register writes are guarded on the window
+ * pointer rather than on `e->up`, which is set only at the end of the
+ * bring-up, so nothing is written to a card whose window never mapped; bus
+ * mastering is cleared whenever the PCI record shows a card was found.
  */
 static void e1000_stop(struct e1000 *e)
 {
@@ -967,16 +935,17 @@ static void e1000_stop(struct e1000 *e)
 /**
  * The card's detail lines under the boot summary.
  *
- * The kernel formatter has no field width, so the station address is printed a
- * nibble at a time, as the other two drivers print theirs.
+ * The window, the vector and the address are a debug record, since the
+ * station address is on the `net: eth0:` line above, where a person looks
+ * for it. The counters are logged once they count something; at bring-up
+ * they are all zero. The kernel formatter has no field width, so the station
+ * address is printed a nibble at a time, as the other two drivers print
+ * theirs.
  */
 static void e1000_print_info(struct e1000 *e)
 {
     struct netdev_link link;
 
-    /* The window and the vector are for whoever is debugging the card; the
-       station address is on the `net: eth0:` line above, where a person looks
-       for it. */
     klog(KLOG_DEBUG, "e1000", "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
          (unsigned)(uintptr_t)e->mmio, (int)e->pci.irq, (unsigned)(e->mac[0] >> 4),
          (unsigned)(e->mac[0] & 0xF), (unsigned)(e->mac[1] >> 4), (unsigned)(e->mac[1] & 0xF),
@@ -989,16 +958,12 @@ static void e1000_print_info(struct e1000 *e)
     } else {
         klog(KLOG_INFO, "e1000", "no link yet");
     }
-    /* Worth a line once they count something; at bring-up they are all zero
-       and the line says nothing. */
     if (e->rx_packets || e->rx_errors || e->rx_dropped || e->tx_packets || e->tx_stalls) {
         klog(KLOG_INFO, "e1000", "rx %d (%d error, %d dropped), tx %d (%d stalled)", e->rx_packets,
              e->rx_errors, e->rx_dropped, e->tx_packets, e->tx_stalls);
     }
 }
 
-/* The card's entry in the driver table. `poll` is NULL: this one
- * interrupts. */
 /*
  * What the interface layer calls. It holds a card as an opaque record, so
  * these take it back to this driver's own type; everything above works in
@@ -1024,6 +989,8 @@ static void e1000_op_print_info(void *dev)
     e1000_print_info((struct e1000 *)dev);
 }
 
+/* The card's entry in the driver table. `poll` is NULL: this one
+ * interrupts. */
 const struct netdev_ops e1000_netdev = {"e1000",     e1000_init,          e1000_op_tx,
                                         0,           e1000_op_stop,       e1000_op_link,
                                         e1000_error, e1000_op_print_info, 0};

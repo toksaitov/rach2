@@ -6,14 +6,16 @@
 static char buffer[BUFFER_SIZE];
 
 /**
- * Copy one source path to one destination path.
+ * Copy one source file to one destination path.
  *
- * Require exactly two operands. The paths must identify different files;
- * no identity check precedes destination truncation. Create a missing
- * destination with mode 0666 subject to the process umask.
+ * Exactly two operands are taken. The destination is opened and truncated
+ * before anything is read, and nothing checks that the two paths name
+ * different files, so copying a file onto itself empties it. A missing
+ * destination is created with mode 0666 less the umask.
  *
- * Return 1 on usage, open, or write failure. Read errors end the copy
- * silently, and close errors do not affect the status.
+ * The status is 1 for a usage error, a file that cannot be opened, or a
+ * failed write. A read error ends the copy with status 0 and no message, and
+ * a failed close does not change the status.
  */
 int main(int argc, char *argv[])
 {

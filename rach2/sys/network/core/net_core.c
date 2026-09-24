@@ -1,10 +1,10 @@
 /*
- * net_core.c - Network stack bring-up and byte order helpers.
+ * net_core.c - Network stack bring-up, byte order helpers and the lock.
  *
- * init_network() brings each layer up from the bottom: the network device,
- * Ethernet, ARP, IP/ICMP, UDP, TCP, sockets. Which device that is belongs to
- * the driver table (driver/netdev.c), not to this layer. Most layers keep
- * their state in zero-initialized statics and need no explicit init.
+ * init_network() empties the TCP and socket lists, probes for network
+ * devices and gives them their addresses. Which device answers belongs to
+ * the driver table (driver/netdev.c), not to this layer. The other layers
+ * keep their state in zero-initialized statics and need no explicit init.
  */
 
 #include "../../lib/kirq.h"
@@ -18,7 +18,7 @@
 #include "../socket/socket.h"
 #include "../../serial.h"
 
-/* Our hardware address; the bound driver fills this in at init. */
+/* The first interface's hardware address; netdev_probe copies it in. */
 uint8_t net_mac[6] = {0, 0, 0, 0, 0, 0};
 
 uint16_t read16be(const uint8_t *p)
@@ -46,15 +46,17 @@ void write32be(uint8_t *p, uint32_t value)
 }
 
 /**
- * Bring the network stack up from the bottom and start the NIC.
+ * Bring the network stack up and start the NICs.
  *
- * The TCB and socket pools are allocated before the device probe so they are
- * ready before the NIC can deliver the first packet. ARP, IP, and ICMP keep
+ * The TCB and socket lists are emptied before the device probe, so they are
+ * ready before a NIC can deliver the first packet. ARP, IP, and ICMP keep
  * their state in zero-initialized statics and need no explicit init. Which
  * card answers is the driver table's business (driver/netdev.c), not this
- * layer's.
+ * layer's. The boot line's address was read before there was an interface
+ * to put it on, so it is published once the probe has brought one up, and
+ * the `rach2.ifaddr=` entries are applied after it.
  *
- * @return 1 on success, 0 when no supported card is present or bring-up fails.
+ * @return 1 when at least one interface came up, 0 when none did.
  */
 int init_network(void)
 {
@@ -64,8 +66,6 @@ int init_network(void)
     if (!netdev_probe()) {
         return 0;
     }
-    /* The address was read from the boot line before there was an interface
-     * to put it on; now there is one. */
     netconf_publish();
     netconf_apply_by_mac();
 
@@ -82,17 +82,19 @@ const char *net_error(void)
     return netdev_error();
 }
 
+/**
+ * Log each interface's driver, station address and IPv4 configuration, then
+ * netconsole's state.
+ *
+ * Each interface gets a report of its own, which starts with its name. The
+ * card's lines come from the driver through netdev_print_info, since only
+ * the driver knows what its own registers are called.
+ */
 void net_print_info(void)
 {
-    /* Indented detail under the "  Network... OK" banner line (serial only; the
-     * console keeps just the one-line summary). The card's half of it comes
-     * from the driver, which is the only layer that knows what its own
-     * registers are called. */
     char addr[16], gw[16];
     int i;
 
-    /* One report per interface: a machine with two cards has two, and which
-     * of them a person is looking at is the first thing they need. */
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);
 
@@ -122,12 +124,12 @@ void net_print_info(void)
 }
 
 /**
- * Hold the network state still, and let it go again.
+ * Disable interrupts around a network critical section, and restore them.
  *
  * The stack is reached from a driver's interrupt and from a syscall, and the
- * two must not be inside the same table at once. These are the shared
- * interrupt bracket under the network's own names, which is what the hundred
- * and fifty call sites read.
+ * two must not be inside the same table at once. These are kirq_save and
+ * kirq_restore under the network's own names; a bracket inside another is
+ * safe, since each restores the flags it saved.
  */
 uint32_t net_lock(void)
 {

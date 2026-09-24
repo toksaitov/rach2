@@ -143,6 +143,7 @@ static int range_subtract(struct frame_map *m, uint64_t start, uint64_t end, uin
     return 0;
 }
 
+/* Set `usable_bytes` and `top_frame` from the ranges. */
 static void recount(struct frame_map *m)
 {
     uint32_t i;

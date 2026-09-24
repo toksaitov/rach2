@@ -114,8 +114,8 @@ int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
  * Add region [start, end) with the given protection and type.
  *
  * The range must be non-empty, page-aligned at both ends, and clear of every
- * existing region; there must be a free slot. Returns 0 on success or -1 if
- * any of those conditions fails.
+ * existing region, and the array must have room or be able to grow below
+ * `VMA_LIMIT`. Returns 0 on success or -1 if any of those conditions fails.
  */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type)
 {
@@ -149,7 +149,8 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
  * A fully covered region is dropped, a region clipped at one end is trimmed,
  * and a region straddling the span is split in two. VMA order is irrelevant,
  * so a dropped region's slot is filled from the end of the array. Returns 0,
- * or -1 if a split needs a free slot and none is available.
+ * or -1 if a split needs room and the array cannot grow; the regions handled
+ * before it are already changed then.
  */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
 {
@@ -202,14 +203,6 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
     return 0;
 }
 
-/**
- * Extend a stack region downward to cover the faulting page.
- *
- * Returns 1 if a stack region was grown to include page, 0 otherwise. The page
- * must lie just below a VM_STACK region and at or above the stack limit, and
- * the growth window must not swallow any other region: a hostile ELF segment
- * or mmap inside that window must not be absorbed into the stack.
- */
 /** Bytes the regions cover together, what RLIMIT_AS is measured against. */
 uint32_t vm_total(const vm_space_t *vm)
 {
@@ -221,6 +214,17 @@ uint32_t vm_total(const vm_space_t *vm)
     return total;
 }
 
+/**
+ * Extend a stack region downward to cover the faulting page.
+ *
+ * Returns 1 if a stack region was grown to include `page`, 0 otherwise. The
+ * page must lie below a VM_STACK region's start and at or above the stack
+ * limit set when the stack was made; the region then starts at `page`, and
+ * the pages between fault in lazily as the stack touches them. The growth
+ * counts against `as_limit` (RLIMIT_AS) as a mapping does, and the new span
+ * must be clear of every other region: a hostile ELF segment or mmap
+ * inside the growth window must not be absorbed into the stack.
+ */
 int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
 {
     uint32_t i, j;
@@ -228,20 +232,12 @@ int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
     for (i = 0; i < vm->count; i++) {
         vma_t *r = &vm->vmas[i];
 
-        /* The faulting page must sit just below the stack region (which grows
-         * down) and stay at or above the limit set when the stack was created.
-         * Extending start covers every page from here up to the old start; the
-         * intervening pages fault in lazily as the stack is actually touched.
-         */
         if (r->type == VM_STACK && page < r->start && page >= vm->stack_limit) {
             /* The growth counts against the address-space limit like a
                mapping would. */
             if (vm_total(vm) + (r->start - page) > as_limit) {
                 return 0;
             }
-            /* The new span [page, r->start) must be clear of every other
-             * region: a (possibly hostile) ELF segment or mmap inside the
-             * growth window must not be swallowed by the stack. */
             for (j = 0; j < vm->count; j++) {
                 if (j != i && page < vm->vmas[j].end && r->start > vm->vmas[j].start) {
                     return 0;

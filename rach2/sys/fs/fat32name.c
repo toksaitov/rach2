@@ -7,7 +7,7 @@
 
 #include "../lib/kerrno.h"
 
-/* The characters a short name may hold besides letters and digits. */
+/* Whether a short name may have `c`: a letter, a digit or one of `set`. */
 static int short_char(uint32_t c)
 {
     static const char set[] = "$%'-_@~`!(){}^#&";

@@ -8,9 +8,9 @@
 #include "../lib/kstring.h"
 #include "../serial.h"
 
-/* The user image window: a PT_LOAD segment must fit between the user/kernel
- * boundary and the bottom of the user stack (matching the kernel's
- * user_access_ok range). Segments outside it are rejected so a hostile ELF
+/* The user image window: a PT_LOAD segment must fit between USER_ADDR_MIN,
+ * the bottom of user space as `user_range_ok` has it, and the user stack's
+ * first page at 0xBFFFF000. Segments outside it are rejected so a hostile ELF
  * cannot request kernel- or stack-range mappings. The floor is below the
  * conventional ELF base (a freestanding -Ttext=0x08048000 binary maps its
  * header page at 0x08047000). */
@@ -20,7 +20,7 @@
 /**
  * Report whether `data` is a valid ELF32 executable for i386.
  *
- * The image must carry the ELF magic `0x7F 'E' 'L' 'F'`, be 32-bit
+ * The image must begin with the ELF magic `0x7F 'E' 'L' 'F'`, be 32-bit
  * little-endian of the current version, type `ET_EXEC` for machine `EM_386`,
  * and have a non-zero entry point and a program header table of entries this
  * kernel's size that lies wholly within the first `size` bytes. The bound is
@@ -93,6 +93,8 @@ uint32_t elf_entry_point(const void *data)
 
 /**
  * Return a pointer to the program header table, or NULL if there is none.
+ *
+ * The table is not bounded here; the caller runs `elf_check` first.
  */
 const Elf32_Phdr *elf_program_headers(const void *data)
 {
@@ -114,10 +116,12 @@ uint16_t elf_program_header_count(const void *data)
 /**
  * Validate just the ELF header of a streamed image.
  *
- * Like `elf_check`, but it sees only the first `len` bytes (the header), so it
- * cannot bound the program header table against the whole file; instead it
- * insists `e_phentsize` equals `sizeof(Elf32_Phdr)`. Used by `elf_load_image`,
- * which reads the rest of the file on demand.
+ * The checks of `elf_check` that the header alone can answer: the program
+ * header table is not bounded against the file, and the entry point is not
+ * checked. `elf_load_image`, which reads the rest of the file on demand,
+ * fails a short read of the table and checks the entry against the user
+ * image window; `sys_execve` uses this to tell an executable from a script
+ * before it destroys the old image.
  */
 bool elf_valid_exec(const void *ehdr, uint32_t len)
 {
@@ -146,9 +150,13 @@ bool elf_valid_exec(const void *ehdr, uint32_t len)
 /**
  * Map the program header table's file offset to its run-time virtual address.
  *
- * The kernel passes `AT_PHDR` to the loader, which is the in-memory address of
- * the program headers. Find the PT_LOAD segment that contains `phoff` and
- * translate. Return 0 when no segment covers it.
+ * The kernel passes `AT_PHDR` to the program, the in-memory address of its
+ * program headers, where a static C library finds its PT_TLS. Find the
+ * PT_LOAD segment whose file bytes contain the whole table, not just its
+ * first byte, so `AT_PHDR` names a complete table, and translate. Return 0
+ * when no segment covers it. The subtractions run only after the bounds that
+ * keep them from underflowing, and `table_bytes` cannot overflow, since
+ * `phnum` has 16 bits.
  */
 uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
 {
@@ -158,11 +166,6 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
     for (i = 0; i < phnum; i++) {
         const Elf32_Phdr *p = &phdrs[i];
 
-        /* The WHOLE program header table, not just its first byte, must lie
-         * within one PT_LOAD, so AT_PHDR names a real, complete table the
-         * loader can read. The subtractions run only after the bounds that keep
-         * them from underflowing; `table_bytes` cannot overflow because `phnum`
-         * is already capped at ELF_MAX_PHNUM. */
         if (p->p_type == PT_LOAD && phoff >= p->p_offset && p->p_filesz >= table_bytes &&
             phoff - p->p_offset <= p->p_filesz - table_bytes) {
             return p->p_vaddr + (phoff - p->p_offset);
@@ -174,24 +177,33 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
 /**
  * Stream an ELF executable into `dir` and describe its layout in `out`.
  *
- * Unlike `elf_load`, the image is never held whole in memory: `readfn` pulls
- * the header, the program headers, and each segment's bytes on demand, so the
- * file size is unbounded. The program headers belong to this call: a read
- * can sleep and let another process load a different executable. Every PT_LOAD
- * is validated before any page is allocated, then recorded in `out` with its
- * page-aligned bounds and flags so exec can build VMAs and protect read-only
- * pages.
+ * The image is never held whole in memory: `readfn` pulls the header, the
+ * program headers, and each segment's bytes on demand, so the file size is
+ * unbounded. The program headers are on this call's stack: a read can sleep
+ * and let another process load a different executable.
  *
- * Segments must be well formed and lie within the user image window: ascending,
- * page-disjoint, non-wrapping, and clear of the kernel and stack ranges. The
- * image needs at least one PT_LOAD, a program header table that lives inside
- * one (so `AT_PHDR` is real), and an entry point inside the window.
+ * Each PT_LOAD is validated before its pages are allocated. Segments must be
+ * well formed and lie within the user image window: non-wrapping, clear of
+ * the kernel and stack ranges, and ascending by page, each starting at or
+ * after the page-aligned end of the one before, since two that shared a page
+ * would allocate it twice, leaking a frame and losing the first segment's
+ * bytes. Each is recorded in `out` with its page-aligned bounds and flags,
+ * from which exec builds the VMAs; a PT_LOAD past `ELF_MAX_SEGS` fails the
+ * load, since a segment without a record would stay writable and have no
+ * VMA. Once every segment's bytes are in place, a page covered only by
+ * segments without PF_W is made read-only, so a user write to it faults and
+ * the process is killed; a page shared with a writable segment stays
+ * writable. The image needs at least one PT_LOAD, a program header table
+ * that lives inside one (so `AT_PHDR` is real), and an entry point inside
+ * the window.
  *
  * @param out filled with the segment table, image end (the heap base), entry
  *            point, and program header geometry on success.
  * @return 0 on success, -1 on any malformed or out-of-policy image, a read
- *         short of the requested length, an allocation failure, or more
- *         PT_LOADs than `ELF_MAX_PHNUM`/`ELF_MAX_SEGS` slots.
+ *         short of the requested length, an allocation failure, more program
+ *         headers than `ELF_MAX_PHNUM` or more PT_LOADs than `ELF_MAX_SEGS`.
+ *         On failure the pages already mapped stay in `dir`, for the caller
+ *         to free with the address space.
  */
 int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
 {
@@ -236,15 +248,6 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         vaddr = ph->p_vaddr;
         vaddr_end = vaddr + ph->p_memsz;
 
-        /* Reject hostile or malformed segment geometry BEFORE allocating any
-         * page: wrapping address/file ranges, anything outside the user image
-         * window (so a hostile ELF cannot map kernel or stack range), and
-         * segments that overlap or precede an earlier one; valid static ELFs
-         * have ascending, disjoint PT_LOADs. The overlap test is page-granular:
-         * two PT_LOADs that merely share a page would have their common page
-         * allocated twice (leaking a frame and losing the first segment's
-         * bytes), so a segment must start on or after the previous one's
-         * page-aligned end. */
         if (vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
             return -1;
         }
@@ -257,12 +260,6 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         nload++;
 
-        /* Record the page-aligned segment so exec can build a VMA for it with
-         * the right protection, and track the top of the image (the heap base).
-         * Every PT_LOAD must get a slot: an untracked segment would be loaded
-         * present+writable with no VMA, so a read-only segment past the cap
-         * would be silently writable. Reject, not under-protect: the
-         * static binaries we target have only a few PT_LOADs. */
         {
             uint32_t seg_start = vaddr & ~(PAGE_SIZE - 1);
             uint32_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
@@ -333,15 +330,6 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         }
     }
 
-    /* Apply real PTE permissions now that every segment's bytes are in place.
-     * alloc_user_page mapped each page writable; a page covered only by
-     * non-writable segments (text: read + execute) is now made read-only, so a
-     * user write to it faults as a protection violation, which the fault
-     * handler turns into a segfault and which copy-on-write keys on to tell a
-     * write fault from a demand fault. A page shared with any writable segment
-     * stays writable (writable wins), so a text/data boundary page is never
-     * wrongly protected. Only the recorded (capped) segments participate; an
-     * image with more PT_LOADs than slots simply leaves the rest writable. */
     {
         int si, sj;
 
@@ -368,9 +356,6 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
         }
     }
 
-    /* A loadable image needs at least one PT_LOAD, its program headers must lie
-     * inside one (so AT_PHDR is real, which TLS setup depends on), and the
-     * entry point must be in the user window. */
     out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phoff);
     if (nload == 0 || out->phdr_vaddr == 0) {
         return -1;

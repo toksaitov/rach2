@@ -1,7 +1,6 @@
 /*
  * fatcommon.c: what the FAT32 and exFAT drivers both need and neither owns,
- * as fatcommon.h says. The bodies came from fat32.c and fat32name.c
- * unchanged; the FAT32 tests are what say nothing moved wrongly.
+ * as fatcommon.h says.
  */
 
 #include "fatcommon.h"
@@ -14,7 +13,7 @@
 #include "../proc/wait_queue.h"
 #include "../rtc.h"
 
-/* ---- names ---- */
+/* Names. */
 
 static int forbidden(uint32_t cp)
 {
@@ -101,10 +100,10 @@ int fat_name_units(const char *name, uint16_t *units, uint32_t *count)
     return 0;
 }
 
-/* ---- names as UTF-8 ---- */
+/* Names as UTF-8. */
 
-/* One UTF-16 code unit sequence into UTF-8; returns bytes written, 0 when
- * `cap` cannot hold it. Surrogate pairs arrive as two units. */
+/* One code point into UTF-8; returns the bytes written, 0 when `cap` cannot
+ * take them. The caller joins a surrogate pair into one code point first. */
 static int put_utf8(uint32_t cp, char *out, uint32_t cap)
 {
     if (cp < 0x80) {
@@ -180,9 +179,9 @@ int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t ca
     return 0;
 }
 
-/* ---- the mount options ---- */
+/* The mount options. */
 
-/* ---- the constructor ---- */
+/* Whether the text from `key` to `end` is exactly `word`. */
 
 static int key_is(const char *key, const char *end, const char *word)
 {
@@ -254,11 +253,12 @@ int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_
     }
     return 0;
 }
-/* ---- timestamps ---- */
+/* Timestamps. */
 
-/* FAT keeps local time with no zone; it is read as UTC. Days count from
- * 1980-01-01 through the Gregorian rule, in 32-bit arithmetic. A field out
- * of its range reads as 1980-01-01, as an unset stamp does. */
+/* A FAT stamp as seconds since 1970. FAT keeps local time with no zone; it
+ * is read as UTC. Its years count from 1980, and the days are counted through
+ * the Gregorian rule in 32-bit arithmetic. A field out of its range reads as
+ * 1980-01-01, as an unset stamp does. */
 int64_t fat_epoch(uint16_t date, uint16_t time)
 {
     uint32_t year = 1980 + (date >> 9);
@@ -290,7 +290,7 @@ int64_t fat_epoch(uint16_t date, uint16_t time)
 }
 
 /* A FAT stamp from an epoch, the inverse of `fat_epoch`, floored at 1980
- * and capped at 2107. */
+ * and capped at the 32-bit limit early in 2106. */
 void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
 {
     uint32_t days, rem, year, month, day;
@@ -332,7 +332,8 @@ void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
 }
 
 /* The clock as a FAT stamp: local time read as UTC, two-second resolution
- * in `time`, hundredths of the odd second in `tenth`. */
+ * in `time`, and in `tenth` the hundredths of a second past `time`'s even
+ * second, 0 to 199. */
 void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
 {
     int64_t sec, nsec;
@@ -344,7 +345,7 @@ void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
         sec = 315532800; /* before 1980: the stamp floors at the epoch FAT has */
     }
     if (sec > 4294967295LL) {
-        sec = 4294967295LL; /* the year 2106, past FAT's own 2107 */
+        sec = 4294967295LL; /* the 32-bit limit, in 2106, short of FAT's 2107 */
     }
     days = (uint32_t)sec / 86400u; /* 32-bit: the kernel has no 64-bit division */
     rem = (uint32_t)sec % 86400u;
@@ -379,7 +380,7 @@ void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
     *tenth = (uint8_t)(((rem % 60) % 2) * 100 + (uint32_t)nsec / 10000000u);
 }
 
-/* ---- identities ---- */
+/* Identities. */
 
 uint64_t fat_inode(int is_dir, uint32_t first, uint32_t dir_cluster, uint32_t index)
 {
@@ -389,7 +390,7 @@ uint64_t fat_inode(int is_dir, uint32_t first, uint32_t dir_cluster, uint32_t in
     return ((uint64_t)(dir_cluster + 1) << 32) | (uint64_t)(index + 1);
 }
 
-/* ---- the allocation hint ---- */
+/* The allocation hint. */
 
 uint32_t fat_hint_start(uint32_t hint, uint32_t cluster_count)
 {
@@ -401,7 +402,7 @@ uint32_t fat_hint_next(uint32_t c, uint32_t cluster_count)
     return c + 1 < cluster_count + 2 ? c + 1 : 2;
 }
 
-/* ---- the dirty-volume walk's bitmap and its lock ---- */
+/* The dirty-volume walk's bitmap and its lock. */
 
 static uint8_t *walk_bits; /* held between acquire and release, else NULL */
 static uint32_t walk_pages;
@@ -431,11 +432,16 @@ uint32_t fat_walk_bytes(uint32_t cluster_count)
 }
 
 /**
- * The bitmap is taken in whole pages after the free frames are counted
- * against them and the reserve, since a walk that took the last frames
- * would starve the cache and the processes the check runs beside; the
- * caller mounts read-only and says so. The heap's own refusal is the
- * same answer.
+ * Take the walk's lock and a zeroed bitmap for `cluster_count` clusters.
+ *
+ * One walk runs at a time; a second waits, and a signal does not end the
+ * wait. The bitmap is taken in whole pages after the free frames are counted
+ * against them and the reserve, since a walk that took the last frames would
+ * starve the cache and the processes the check runs beside; the caller then
+ * mounts read-only and says so. The heap's own refusal is the same answer.
+ *
+ * @return 0 with the lock held until fat_walk_release, or -ENOMEM with it
+ *         released.
  */
 int fat_walk_acquire(uint32_t cluster_count)
 {

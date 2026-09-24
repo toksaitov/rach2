@@ -19,10 +19,12 @@ void usb_report_controllers(void);
 /**
  * Bring up the USB stack.
  *
- * Finds a controller, takes it from the firmware, resets it, gives it its
- * rings and starts it, then lets the ports settle and records what is on them.
- * Returns 0 when a controller came up. A machine with no xHCI, or one whose
- * firmware will not give it up, is not an error: the record says what
+ * Finds every xHCI and, for each, takes it from the firmware, resets it,
+ * gives it its rings and starts it; one whose bring-up fails is given back and
+ * left out. Then lets the ports settle, records what is on them, waits for
+ * what is plugged in to be enumerated, and turns the controllers' interrupts
+ * on. Returns 0 when a controller came up. A machine with no xHCI, or one
+ * whose firmware will not give it up, is not an error: the record says what
  * happened and the kernel goes on without USB.
  *
  * Called once at boot, in thread context. It is the only part of the stack
@@ -42,7 +44,7 @@ void usb_poll(void);
 void usb_stop(void);
 
 /**
- * Count timer drains with work but no observed pending USB interrupt.
+ * The number of timer drains that found work with no USB interrupt pending.
  *
  * Counting starts when any USB interrupt source is enabled. A message
  * still in transit can increase this count. `/proc/interrupts` reports it.
@@ -50,22 +52,24 @@ void usb_stop(void);
 uint32_t usb_fallback_count(void);
 
 /**
- * Note that a keystroke from this stack reached the line discipline.
+ * Note that a keystroke from this stack reached the input layer.
  *
- * Called by the input layer. It is the third of the four stamps the latency
- * record prints; the fourth is taken where a reader takes the byte.
+ * Called by the HID driver after each code it hands on. It is the third of
+ * the four stamps the latency record prints; the fourth is taken where a
+ * reader takes the byte.
  */
 void usb_stamp_wake(void);
 
 /**
  * A reader took a byte: print what path the last keystroke took, once.
  *
- * Called by the terminal's read, which is where a reader's first sight of the
- * byte is. A byte that did not come from this stack prints nothing.
+ * Called by the terminal's read, which is where a reader first has the byte.
+ * A read while no keystroke from this stack is pending prints nothing.
  */
 void usb_stamp_read(void);
 
-/** Reset the single-reader diagnostic record at USB bring-up. */
+/** Turn the single-reader diagnostic record on or off and reset it, at USB
+ * bring-up. */
 void usb_stamp_init(int enabled);
 
 /** Record a pump with interrupts off, before it delivers input. */

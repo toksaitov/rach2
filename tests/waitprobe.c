@@ -10,10 +10,10 @@
  * signals it instead of hanging or dying.
  *
  * The multi-waiter wake (wq_wake_all makes every blocked waiter runnable) and
- * the lost-wakeup safety live in the host unit test (tests/host/
- * wait_queue_hosttest.c) and the live network suite (httpd's accept and recv
- * block on the wait queue and are woken by NIC IRQs), since a datagram cannot
- * be delivered hermetically here.
+ * the lost-wakeup safety are proved by the host test
+ * (tests/host/wait_queue_hosttest.c) and by the ssh suites, where Dropbear's
+ * accept and read block on the wait queue and are woken by the card's
+ * interrupt, since a datagram cannot be delivered hermetically here.
  *
  * Prints "WAITPROBE OK". Freestanding; direct int 0x80.
  */

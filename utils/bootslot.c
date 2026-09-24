@@ -1,4 +1,4 @@
-/*
+/**
  * bootslot.c: the boot-slot core bootctl drives, over caller-supplied sector
  * I/O.
  *
@@ -16,7 +16,7 @@
 
 #include <string.h>
 
-/* FAT32 on-disk constants. */
+/* On-disk constants: FAT32, GRUB's environment block, and Multiboot. */
 #define DIRENT_SIZE      32
 #define ATTR_LFN         0x0F
 #define ATTR_VOLUME      0x08
@@ -36,7 +36,10 @@
 #define POLICY_READ_WRITE "rach2: disk policy: read-write"
 #define POLICY_READ_ONLY  "rach2: disk policy: read-only"
 
-/** Copy `msg` into the caller's error buffer, always NUL-terminated. */
+/**
+ * Copy `msg` into the caller's error buffer, always NUL-terminated, and
+ * return -1.
+ */
 static int fail(char *err, size_t errlen, const char *msg)
 {
     size_t i;
@@ -179,7 +182,7 @@ static int name11_eq(const uint8_t *entry, const char *name11)
     return 1;
 }
 
-/* The recursive scan's per-file result: where the three names were found. */
+/* The recursive scan's result: where the named files were found. */
 struct scan_state {
     struct bootslot_file dir;
     uint32_t kernel_cluster, kernel_size;
@@ -191,18 +194,18 @@ struct scan_state {
 
 /**
  * Scan one directory chain: mark every child chain visited (so disjointness
- * is proved across the whole reachable namespace), remember the three named
- * files when this directory is their parent, and recurse into subdirectories.
+ * is proved across the whole reachable namespace), remember the named files
+ * when this directory is their parent, and recurse into subdirectories.
  * `path` selects which names are expected here: 0 the root (BOOT), 1 /boot
- * (KERNEL, FALLBACK, GRUB), 2 /boot/grub (GRUBENV), 3 anything deeper.
+ * (KERNEL, FALLBACK, BOOT.CFG, GRUB), 2 /boot/grub (GRUBENV), 3 anything
+ * deeper. The sector buffer is on the stack, not static, so the recursion
+ * does not clobber the sector a frame is still reading; the depth bound keeps
+ * that to a few sectors.
  */
 static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int depth,
                     struct scan_state *st, char *err, size_t errlen)
 {
     struct bootslot_file dir;
-    /* On the stack, not static: the recursion below must not clobber the
-       sector this frame is still iterating. Depth is bounded, so the cost is
-       a few sectors of stack. */
     uint8_t sector[BOOTSLOT_SECTOR];
     uint32_t s;
     int i;
@@ -293,9 +296,8 @@ static int scan_dir(struct bootslot *bs, uint32_t first_cluster, int path, int d
 }
 
 /** Resolve one named file after the scan: walk its own chain into `file`
- *  (the scan marked it visited through a directory, so the walk here starts
- *  from a cleared bitmap slice; see bootslot_open) and hold its chain to its
- *  directory size. */
+ *  (the scan marked it visited, so `bootslot_open` clears the bitmap before
+ *  the files are resolved) and hold its chain to its directory size. */
 static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
                         struct bootslot_file *file, const char *what, char *err, size_t errlen)
 {
@@ -313,6 +315,18 @@ static int resolve_file(struct bootslot *bs, uint32_t first, uint32_t size,
     return 0;
 }
 
+/**
+ * Read and validate the volume; the contract is in `bootslot.h`.
+ *
+ * The BPB bounds are those of mformat's FAT32 on the 16 MiB and the 64 MiB
+ * boot partitions `tools/image/mkdisk_grub.sh` builds, stated as bounds and
+ * not as a FAT-type threshold. The scan marks every chain it reaches, so the
+ * bitmap is cleared before each named file's chain is walked again alone;
+ * the scan has already proved them disjoint. A menu slot that is empty or not
+ * a whole number of sectors is a disk built wrong and cannot be rewritten
+ * whole, so it is refused here, where the volume is judged, and not later,
+ * where a write would half-succeed.
+ */
 int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, size_t errlen)
 {
     static uint8_t bpb[BOOTSLOT_SECTOR];
@@ -349,8 +363,6 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     }
     root_cluster = le32(bpb + 44);
 
-    /* The acceptance rule is the observed product (mformat's small FAT32 on
-       the 16 MiB partition), stated as bounds, not a type threshold. */
     if (bytes_per_sector != BOOTSLOT_SECTOR) {
         return fail(err, errlen, "the volume's sector size is not 512");
     }
@@ -412,9 +424,6 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         return fail(err, errlen, "no /boot/grub/grubenv on the volume");
     }
 
-    /* Resolve the four chains for I/O. The scan already visited them, so the
-       bitmap is cleared first and the walk re-proves each chain alone; the
-       cross-link property was proved by the scan above. */
     memset(bs->visited, 0, sizeof(bs->visited));
     if (resolve_file(bs, st.kernel_cluster, st.kernel_size, &bs->kernel, "kernel", err, errlen) !=
             0 ||
@@ -427,10 +436,6 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
         return -1;
     }
     bs->have_menu = st.have_menu;
-    /* A slot whose size is not a whole number of sectors cannot be rewritten
-       whole, and one of no size cannot be rewritten at all. Either is a disk
-       built wrong, not a menu written wrong, so it is refused here where
-       the volume is judged, not later where a write would half-succeed. */
     if (bs->have_menu && (bs->menu.size == 0 || (bs->menu.size % BOOTSLOT_SECTOR) != 0)) {
         return fail(err, errlen, "the menu slot is not a whole number of sectors");
     }
@@ -440,16 +445,6 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     return 0;
 }
 
-/**
- * Validate the in-memory headers of an ELF32 i386 kernel.
- *
- * Load file ranges must fit `size`, and load memory ranges must fit the
- * 32-bit address space at or above 1 MiB. `present` gives the available
- * prefix; the ELF and program headers must fit that prefix. The entry point
- * must lie in a load's file-backed bytes. The exclusive memory end must
- * be representable in 32 bits. The Multiboot flags must be ALIGN|MEMINFO;
- * other flags change how the loader reads the image.
- */
 /** Whether `needle` appears in the `size` bytes at `image`. */
 static int image_carries(const uint8_t *image, uint32_t size, const char *needle)
 {
@@ -473,16 +468,15 @@ static int image_carries(const uint8_t *image, uint32_t size, const char *needle
  * A machine's kernel must be the read-write build. The read-only build
  * refuses every write command, so its mount of a disk root fails and the
  * boot stops with nothing mounted; an image naming neither policy, or both,
- * is not a kernel this tool can answer for.
+ * is not a kernel this tool can answer for. An image of which only a prefix
+ * is present, as when a slot already installed is checked, passes unjudged,
+ * since its banner may lie past the prefix.
  */
 static int policy_judged(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                          size_t errlen)
 {
     int rw, ro;
 
-    /* Only where the whole image is in memory: a caller that reads a prefix
-       to check a slot it has already installed cannot see a banner that lies
-       past it. */
     if (present < size) {
         return 0;
     }
@@ -499,6 +493,19 @@ static int policy_judged(const uint8_t *image, uint32_t present, uint32_t size, 
     return 0;
 }
 
+/**
+ * Validate the in-memory headers of an ELF32 i386 kernel.
+ *
+ * Load file ranges must fit `size`, and load memory ranges must fit the
+ * 32-bit address space at or above 1 MiB. `present` gives the available
+ * prefix; the ELF and program headers must fit that prefix. The entry point
+ * must lie in a load's file-backed bytes. The exclusive memory end must
+ * be representable in 32 bits. A Multiboot header must be in the first 8192
+ * bytes, and its flags must be ALIGN|MEMINFO; other flags change how the
+ * loader reads the image. Each load's physical address must equal its
+ * virtual one, and a whole image must name the read-write disk policy
+ * (`policy_judged`).
+ */
 int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t size, char *err,
                              size_t errlen)
 {
@@ -587,10 +594,18 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
 }
 
 /**
- * Set `key=value` in the environment block: read the 1024 bytes, require
- * GRUB's header line, drop any existing `key=` line, append the new one, pad
- * with '#', and write both sectors back in order. GRUB's own save_env edits
- * the same block the same way; neither writer moves or resizes the file.
+ * Set `key=value` in the environment block, and drop any `drop_key=` line:
+ * read the 1024 bytes, require GRUB's header line, drop any existing `key=`
+ * line, append the new one, pad with '#', write both sectors back in order,
+ * and read them back. GRUB's own save_env edits the same block the same way;
+ * neither writer moves or resizes the file.
+ *
+ * The block is newline-terminated lines, comments and variables, followed by
+ * a '#' pad with no newline in it, so everything up to the last newline is
+ * the line region. A NULL `set_key` writes no line at all, which is how a key
+ * is removed rather than emptied; for `next_entry` the two are different
+ * states, since an empty value is the marker a trial boot leaves and a commit
+ * requires.
  */
 static int env_edit(struct bootslot *bs, const char *set_key, const char *set_val,
                     const char *drop_key, char *err, size_t errlen)
@@ -611,9 +626,6 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         return fail(err, errlen, "the environment block header is not GRUB's");
     }
 
-    /* The block is newline-terminated lines (comments and variables) followed
-       by a '#' pad with no newline in it; everything up to the last newline is
-       the line region. Keep every line but the key's own. */
     for (i = 0; i < ENV_BYTES; i++) {
         if (env[i] == '\n') {
             end = (uint32_t)i + 1;
@@ -649,9 +661,6 @@ static int env_edit(struct bootslot *bs, const char *set_key, const char *set_va
         memcpy(out + n, env + start, len);
         n += len;
     }
-    /* A NULL key writes no line at all, which is how a key is removed rather
-       than emptied. For `next_entry` the two are different states: an empty
-       value is the marker a trial boot leaves and a commit requires. */
     if (key != NULL) {
         if (n + keylen + 1 + strlen(value) + 1 > ENV_BYTES) {
             return fail(err, errlen, "the environment block overflows");
@@ -746,6 +755,20 @@ int bootslot_read_env(struct bootslot *bs, uint8_t *out, char *err, size_t errle
     return 0;
 }
 
+/**
+ * Install `image` into the candidate slot, in the order that keeps the
+ * machine bootable at every step.
+ *
+ * The image is validated whole. The fallback must validate as a bootable
+ * kernel before the saved default is pointed at it, so a machine whose
+ * fallback does not validate gets no install at all; its first 8192 bytes
+ * hold everything that check reads. One environment write then moves the
+ * saved default to the fallback and drops any stale `next_entry` from an
+ * earlier install, so a retry cannot leave a half-written slot armed. The
+ * slot is written, padded with zeros, and read back whole and compared,
+ * since structural validation alone would pass a slot missing a load sector
+ * away from the headers. Only then is `next_entry=candidate` set.
+ */
 int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, char *err,
                      size_t errlen)
 {
@@ -765,9 +788,6 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         return fail(err, errlen, "the kernel does not fit the candidate slot");
     }
 
-    /* The fallback must be a bootable kernel BEFORE the install points the
-       saved default at it; a machine whose fallback does not validate gets no
-       install at all. Its first 8192 bytes carry everything the check reads. */
     want = bs->fallback.size < MULTIBOOT_SEARCH ? bs->fallback.size : MULTIBOOT_SEARCH;
     for (s = 0; s * BOOTSLOT_SECTOR < want; s++) {
         if (file_read_sector(bs, &bs->fallback, s, head + s * BOOTSLOT_SECTOR) != 0) {
@@ -778,9 +798,6 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         return fail(err, errlen, "the fallback file is not a bootable kernel");
     }
 
-    /* One transition: the saved default moves to the fallback AND any stale
-       next_entry from an earlier install is dropped, so a retry cannot leave
-       a half-written slot armed for the next boot. */
     if (env_edit(bs, "saved_entry", "fallback", "next_entry", err, errlen) != 0) {
         return -1;
     }
@@ -796,9 +813,6 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         }
     }
 
-    /* Read the whole padded slot back and compare byte for byte: structural
-       validation alone would pass a slot missing a load sector away from the
-       headers. */
     for (s = 0; s < nsectors; s++) {
         if (file_read_sector(bs, &bs->kernel, s, sector) != 0) {
             return fail(err, errlen, "the candidate slot does not read back");
@@ -816,17 +830,6 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
     return env_edit(bs, "next_entry", "candidate", NULL, err, errlen);
 }
 
-/**
- * Copy the candidate slot into the fallback file and read it back.
- *
- * Require `saved_entry=candidate` and no nonempty `next_entry` before
- * copying the candidate slot.
- *
- * Invalidate the fallback's first sector, copy and verify the remaining
- * sectors, then restore and verify the first sector. A failure before that
- * final write leaves no valid ELF header. A failure during the final write
- * may leave a partial header.
- */
 /**
  * Whether the environment block names `id` as its saved default.
  *
@@ -851,7 +854,10 @@ static int env_names_default(const uint8_t *env, const char *id, char *want, siz
     return 0;
 }
 
-/** Whether the environment block holds a trial that has not been committed. */
+/**
+ * Whether the environment block has a nonempty `next_entry`: a trial armed
+ * and not yet taken by GRUB.
+ */
 static int env_trial_armed(const uint8_t *env)
 {
     uint32_t i;
@@ -864,6 +870,19 @@ static int env_trial_armed(const uint8_t *env)
     return 0;
 }
 
+/**
+ * Copy the candidate slot into the fallback file and read it back.
+ *
+ * Require `saved_entry=candidate` and no nonempty `next_entry` before
+ * copying the candidate slot, both slots a whole number of sectors, a
+ * fallback file at least as long as the slot, and a candidate whose headers
+ * validate.
+ *
+ * Invalidate the fallback's first sector, copy and verify the remaining
+ * sectors, then restore and verify the first sector. A failure before that
+ * final write leaves no valid ELF header. A failure during the final write
+ * may leave a partial header.
+ */
 int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];

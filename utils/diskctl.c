@@ -10,7 +10,7 @@
  * the windows under a file system.
  *
  * `growroot` does this as one of its steps, and an installer that does not
- * grow needs it on its own; this is that step by itself and nothing else.
+ * grow needs it on its own; `reread` is that step by itself.
  *
  * `id` prints the disk's MBR signature, the four bytes at offset 440 of its
  * first sector, as eight lowercase hexadecimal digits. That is how every
@@ -28,7 +28,11 @@
 
 #define BLKRRPART 0x125Fu
 
-/** Print the MBR signature of the disk open on `fd`, or report why not. */
+/**
+ * Print the MBR signature of the disk open on `fd`, or report why not.
+ * Returns 0, or 1 when the first sector does not read or lacks a table's
+ * 0x55AA mark.
+ */
 static int print_id(int fd, const char *path)
 {
     unsigned char sector[512];

@@ -1,5 +1,8 @@
 /**
  * Validate and replace GRUB core images using caller-supplied sector I/O.
+ *
+ * The layout of the post-MBR gap and the contract of each function are in
+ * `grubslot.h`.
  */
 
 #include <string.h>
@@ -43,13 +46,11 @@ int grubslot_active(const uint8_t *entry, uint32_t *out)
     uint64_t lba = le64(entry + GRUBSLOT_BLOCKLIST_LBA_OFF);
     uint16_t len = le16(entry + GRUBSLOT_BLOCKLIST_LEN_OFF);
 
-    /* A count of zero names no image, and one past a slot's end means the
-       running image occupies both tails, so there is nowhere to install. */
+    /* Zero names no image; more than a tail means the image spans both. */
     if (len == 0u || (uint32_t)len > GRUBSLOT_TAIL_SECTORS) {
         return -1;
     }
-    /* And there must be no second record: a loader read through several extents
-       occupies parts of the gap this code does not read. */
+    /* A second record: the loader lies in extents this code does not read. */
     if (le16(entry + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
         return -1;
     }
@@ -105,10 +106,7 @@ int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *er
         }
         return -1;
     }
-    /* The candidate is held to the rule the running image is held to: one
-       record. GRUB reads the list downward until a count of zero ends it, so a
-       second record in the file being installed would send the next boot to an
-       extent nothing here wrote. */
+    /* GRUB reads records to a zero count; a second names unwritten sectors. */
     if (le16(image + GRUBSLOT_BLOCKLIST_NEXT_LEN_OFF) != 0u) {
         if (err && errlen) {
             strncpy(err, "that core image is read through more than one extent", errlen - 1);
@@ -116,10 +114,7 @@ int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *er
         }
         return -1;
     }
-    /* A core image declares its own tail length, and grub-mkimage writes the
-       whole of it. A file whose declaration disagrees with its size arrived
-       truncated or is not the file it claims to be, and installing it would
-       leave a machine that cannot boot and cannot be repaired remotely. */
+    /* A tail length unlike the file's means a truncated or foreign file. */
     if ((uint32_t)le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF) != sectors - 1u) {
         if (err && errlen) {
             strncpy(err,
@@ -136,6 +131,7 @@ int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *er
     return 0;
 }
 
+/** Copy `what` into `err`, cut to fit and terminated, and return -1. */
 static int say(char *err, size_t errlen, const char *what)
 {
     if (err && errlen) {
@@ -153,9 +149,7 @@ int grubslot_prepare(uint8_t *image, uint32_t capacity, uint32_t bytes, uint32_t
     if (bytes == 0u) {
         return say(err, errlen, "that file is empty");
     }
-    /* Judge the byte count before rounding it, not after: rounding up a length
-       near the end of the range wraps, and a wrapped count passes every bound
-       there is. */
+    /* Bound the bytes before rounding: a rounded count near the top wraps. */
     if (bytes > capacity || bytes > GRUBSLOT_MAX_IMAGE_SECTORS * (uint32_t)BOOTSLOT_SECTOR) {
         return say(err, errlen, "the core image does not fit a tail slot");
     }

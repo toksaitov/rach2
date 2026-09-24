@@ -1,9 +1,10 @@
-/*
- * bootctl: manage the boot partition of a machine nobody will open again.
+/**
+ * bootctl: manage the kernels, the menu and the boot loader of a machine's
+ * boot disk from the running system.
  *
  * The name is systemd's, because that tool manages a boot partition's kernels
  * and defaults on most Linux machines and the knowledge transfers. The verbs
- * are this project's own trial and commit vocabulary from milestone 23.
+ * are this project's own trial and commit vocabulary.
  *
  *     bootctl status         what is installed, committed, and booting next
  *     bootctl kernel FILE    stage a kernel into the candidate slot
@@ -12,7 +13,11 @@
  *     bootctl commit         make the booted trial the saved default
  *     bootctl trial ID       boot one entry once, on the next boot only
  *     bootctl cancel         clear an armed trial
+ *     bootctl fallback       copy the committed candidate into the fallback
  *     bootctl env KEY [VAL]  read, or set, one allowlisted grubenv key
+ *
+ * `--target PARTITION` before the verb selects a boot partition other than
+ * `/dev/bootpart`, for every verb but `grub` and `commit`.
  *
  * `kernel` validates the named file and the machine's fallback kernel, writes
  * `saved_entry=fallback`, writes the candidate slot, reads it back byte for
@@ -20,19 +25,19 @@
  * kernel and a power cycle after a crash returns to the fallback. Once it has
  * proved itself, `commit` makes it the saved default.
  *
- * `status` is the only window onto this disk. It prints the four files' sector
- * extents, what the environment block has, whether a trial is armed or
- * consumed, and which slot this boot came from. Its extent lines are a test
- * contract: the install suite reads the candidate's first sector from
- * them to corrupt it, so their field order is fixed.
+ * `status` prints the four files' sector extents, what the environment block
+ * has, whether a trial is armed or consumed, and which slot this boot came
+ * from. Its extent lines are a test contract: the install suite reads the
+ * candidate's first sector from them to corrupt it, so their field order is
+ * fixed.
  *
  * `config` writes the boot menu GRUB reads after its own stub entries. That
  * file is GRUB script and whoever writes it can direct the boot, which is the
  * same authority `kernel` already has. What the immutable stub guarantees is
- * that a menu which is damaged, not written leaves a bootable machine:
- * every entry the machine needs is defined before the staged file is read.
- * `env` and `trial` write the two grubenv keys the trial and commit state
- * machine turns on, through an allowlist, not as a general editor,
+ * that a menu which is damaged, or was never written, leaves a bootable
+ * machine: every entry the machine needs is defined before the staged file is
+ * read. `env` and `trial` write the two grubenv keys the trial and commit
+ * state machine depends on, through an allowlist, not as a general editor,
  * because that block has no checksum and GRUB parses it at boot with no
  * recourse if it is malformed.
  */
@@ -129,13 +134,18 @@ static int cmdline_has(const char *token)
 
 static struct bootslot bs;
 
+/**
+ * Load the boot line, then open the boot partition read-write and validate
+ * its volume into `bs`. Returns 0, or -1 having said why.
+ *
+ * The line is read first and a failure to read it is a refusal: the slot
+ * checks ask it which entry is running, and an install that could not say
+ * that would have nothing to check a commit against.
+ */
 static int open_slot(void)
 {
     struct bootslot_io io;
 
-    /* Before the device is open, while there is still a descriptor to read it
-       with: `booted` reads the line, and an install that could not say which
-       entry is running would have nothing to check a commit against. */
     if (cmdline_load() != 0) {
         fprintf(stderr,
                 "bootctl: cannot read /proc/cmdline, so which menu entries this "
@@ -167,6 +177,7 @@ static int open_slot(void)
     return 0;
 }
 
+/** Print the extent line of file `f`; its field order is a test contract. */
 static void print_extent(const char *name, const struct bootslot_file *f, uint32_t cluster_sectors,
                          uint32_t data_start)
 {
@@ -242,6 +253,7 @@ static void print_booted(void)
     }
 }
 
+/** Print the files' extents, the two environment keys and the booted slot. */
 static int cmd_status(void)
 {
     static uint8_t env[BOOTSLOT_ENV_BYTES];
@@ -268,6 +280,12 @@ static int cmd_status(void)
     return 0;
 }
 
+/**
+ * Make the running candidate the saved default.
+ *
+ * The boot line must have `rach2.slot=candidate`, and `bootslot_commit`
+ * requires the empty `next_entry` a consumed trial leaves.
+ */
 static int cmd_commit(void)
 {
     if (!cmdline_has("rach2.slot=candidate")) {
@@ -287,6 +305,14 @@ static int cmd_commit(void)
     return 0;
 }
 
+/**
+ * Stage the kernel in `path` into the candidate slot for one trial boot.
+ *
+ * The boot line must have `rach2.slot=candidate`, `rach2.slot=fallback` or
+ * `rach2.slot=recovery`. A file larger than any slot is refused before the
+ * disk is opened; `bootslot_install` validates the file and the fallback and
+ * does the writes the file header lists.
+ */
 static int cmd_kernel(const char *path)
 {
     FILE *f;
@@ -339,21 +365,24 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 /* The menu ids `trial` may arm. Every one of these is an entry the stub both
  * defines and consumes a trial for; a value the stub does not consume would
  * stay in the block forever, arming nothing and blocking every later commit.
- * `recovery` is here now that partition 2 has the kernel and the RAM image it
- * names: arming it is how a machine that still boots is sent to the image that
- * can rewrite its root, which is the only way in when the root is damaged but
- * the machine is not yet stopped. A disk built without those files still
- * defines the entry, and arming it there costs a boot that falls back, not a
- * machine that will not start. */
+ * `recovery` is here because partition 2 has the kernel and the RAM image its
+ * entry loads: arming it is how a machine that still boots is sent to the
+ * image that can rewrite its root, which is the only way in when the root is
+ * damaged but the machine is not yet stopped. A disk built without those files
+ * still defines the entry, and arming it there costs a boot that falls back,
+ * not a machine that will not start. */
 static const char *const ENTRY_IDS[] = {"candidate", "fallback", "recovery"};
 
-/* What `saved_entry` may hold, which is the same set. The stub reads the saved
- * default for the two kernel entries and for recovery, because a repair is not
- * one boot: rewriting a root takes minutes, and a machine that lost power in
- * the middle of one has to come back to the image that was doing the
- * rewriting, not to a kernel that cannot mount what is there. The kernel debug
- * shell is not in either list: it is reached by adding `rach2.rescue` to a boot
- * line, and a machine saved into it would have no init and no way in. */
+/* What `saved_entry` may hold. It is the same set, so the check `cmd_env`
+ * makes against it refuses nothing the check against `ENTRY_IDS` allows; the
+ * list stands apart because what the stub accepts as a default and what it
+ * consumes as a trial are separate rules. The stub reads the saved default
+ * for the two kernel entries and for recovery, because a repair is not one
+ * boot: rewriting a root takes minutes, and a machine that lost power in the
+ * middle of one has to come back to the image that was doing the rewriting,
+ * not to a kernel that cannot mount what is there. The kernel debug shell is
+ * not in either list: it is reached by adding `rach2.rescue` to a boot line,
+ * and a machine saved into it would have no init and no way in. */
 static const char *const SAVED_IDS[] = {"candidate", "fallback", "recovery"};
 #define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
 #define SAVED_ID_COUNT ((int)(sizeof(SAVED_IDS) / sizeof(SAVED_IDS[0])))
@@ -373,11 +402,11 @@ static int allowed(const char *const *list, int count, const char *word)
 /**
  * Stage a boot menu into the rewritable slot.
  *
- * The file is refused before anything is written if it does not fit the slot,
- * which is the only thing this can check. It is not a completeness test and
- * does not pretend to be one: a transfer cut after a whole menuentry produces a
- * file that parses, and nothing here can tell it from what the sender meant. A
- * caller who needs that compares a digest.
+ * The file is refused before anything is written if it is empty or does not
+ * fit the slot, or if the disk has no menu slot, which is all this can check.
+ * It is not a completeness test: a transfer cut after a whole menuentry
+ * produces a file that parses, and nothing here can tell it from what the
+ * sender meant. A caller who needs that compares a digest.
  *
  * The stub defines the required entries before sourcing this file. The file
  * is unrestricted GRUB script and can change the variables used to select
@@ -431,7 +460,18 @@ static int cmd_config(const char *path)
     return 0;
 }
 
-/** Read one environment key, or set it. */
+/**
+ * Read one environment key, or set it.
+ *
+ * A value is refused when it has a control character, since the block is
+ * lines of `key=value` and a newline would write a second assignment nobody
+ * asked for. Both keys name a menu entry, so a value must be one `trial` may
+ * arm, or the restriction on `trial` would mean nothing. An empty value is
+ * refused outright: for `next_entry` it is the marker a trial boot leaves and
+ * `commit` requires, so a tool that wrote it would let a kernel that never
+ * ran be committed. `saved_entry` must also be an entry the stub reads the
+ * saved default for, or it would report a default the machine ignores.
+ */
 static int cmd_env(const char *key, const char *value)
 {
     static uint8_t env[BOOTSLOT_ENV_BYTES];
@@ -443,19 +483,12 @@ static int cmd_env(const char *key, const char *value)
     if (value) {
         size_t i;
 
-        /* The block is lines of `key=value`, so a value carrying a newline
-           would write a second assignment nobody asked for. */
         for (i = 0; value[i] != '\0'; i++) {
             if (value[i] < 0x20 || value[i] == 0x7f) {
                 fprintf(stderr, "bootctl: a value may not carry control characters\n");
                 return 1;
             }
         }
-        /* Both keys name a menu entry, and the same restriction `trial` puts on
-           the entry it arms has to hold here or it is not a restriction. An
-           empty value is refused outright: for `next_entry` that is the marker
-           a trial boot leaves behind and `commit` requires, so a tool that let
-           anyone write it would let a kernel that never ran be committed. */
         if (value[0] == '\0') {
             fprintf(stderr, "bootctl: an empty value is the marker a trial boot leaves; "
                             "use `bootctl cancel` to clear a trial\n");
@@ -465,8 +498,6 @@ static int cmd_env(const char *key, const char *value)
             fprintf(stderr, "bootctl: not a menu entry this tool arms: '%s'\n", value);
             return 1;
         }
-        /* The stub reads the saved default for the entries it defines, so
-           saving anything else would report a default the machine ignores. */
         if (strcmp(key, "saved_entry") == 0 && !allowed(SAVED_IDS, SAVED_ID_COUNT, value)) {
             fprintf(stderr,
                     "bootctl: '%s' is a boot and not a default; arm it for one "
@@ -513,10 +544,11 @@ static int cmd_trial(const char *id)
 }
 
 /**
- * Copy the saved candidate into the fallback file.
+ * Copy the committed candidate into the fallback file and verify the copy.
  *
- * Candidate installs leave the fallback unchanged. This command copies the
- * saved candidate into the fallback file and verifies the copy.
+ * Candidate installs leave the fallback unchanged; this is how a committed
+ * kernel becomes the fallback. `bootslot_fallback` refuses while a trial is
+ * armed or while the candidate is not the saved default.
  */
 static int cmd_fallback(void)
 {
@@ -586,16 +618,16 @@ static int grubcore_io(void *ctx, uint32_t lba, uint8_t *buf, int write)
 /**
  * Replace GRUB's core image, writing the tail that is not in use.
  *
- * The order is the whole safety argument. The image goes into the inactive
- * tail, the whole tail is read back and compared, and only then is LBA 1
- * rewritten to point at it. A failure anywhere before that last sector leaves
- * the old entry sector and the old tail selected, and the machine boots as it
- * did. Sector 0 is never written, so the partition table is never at risk.
+ * The order is what makes it safe. The image goes into the inactive tail, the
+ * whole tail is read back and compared, and only then is LBA 1 rewritten to
+ * point at it. A failure anywhere before that last sector leaves the old entry
+ * sector and the old tail selected, and the machine boots as it did. Sector 0
+ * is never written, so the partition table is never at risk.
  *
  * What remains is one sector. A torn or bad write to LBA 1 makes GRUB
- * unreachable, and recovery cannot help because GRUB is what loads it. That is
- * stated, not defended against: the exposure is a single sector written
- * after the replacement has been verified, and removing it would take something
+ * unreachable, and recovery cannot help because GRUB is what loads it. Nothing
+ * here defends against that: the exposure is a single sector written after
+ * the replacement has been verified, and removing it would take something
  * below GRUB that this machine does not have.
  */
 static int cmd_grub(const char *path)
@@ -669,7 +701,11 @@ static void usage(void)
  *
  * The kernel selects the boot disk from `rach2.boot=`, otherwise from an
  * identity-selected root, otherwise from disk 0. `--target` selects another
- * boot partition for this invocation; `grub` and `commit` do not accept it.
+ * boot partition for this invocation; `grub` and `commit` do not accept it,
+ * since both act on the booted disk: `grub` writes through `/dev/grubcore`,
+ * the booted disk's gap, and `commit` accepts the running kernel, which came
+ * from the booted disk. Either would act on one disk while reporting the
+ * other.
  */
 int main(int argc, char **argv)
 {
@@ -681,11 +717,6 @@ int main(int argc, char **argv)
         argv[2] = argv[0];
         argv += 2;
         argc -= 2;
-        /* Two commands mean something about the machine that is running and
-         * not about the partition named: `grub` writes the boot loader through
-         * `/dev/grubcore`, which is the booted disk's gap and not the target's,
-         * and `commit` accepts the running kernel, which came from the booted
-         * disk. Either would act on one disk while reporting the other. */
         if (argc >= 2 && (strcmp(argv[1], "grub") == 0 || strcmp(argv[1], "commit") == 0)) {
             fprintf(stderr,
                     "bootctl: --target does not take '%s': it acts on the disk this "

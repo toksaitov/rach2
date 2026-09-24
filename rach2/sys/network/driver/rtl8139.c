@@ -14,7 +14,7 @@
  *
  * IRQ: registered at vector 32 + IRQ line. The shared IRQ router sends the
  * PIC EOI before calling us, so this driver must not touch the PIC. The card
- * sits on a PCI line that can be shared (e.g. with the HDA device); see the
+ * is on a PCI line that can be shared (e.g. with the HDA device); see the
  * service-loop note in rtl8139_irq for the shared-line handling.
  */
 
@@ -53,11 +53,11 @@ static void rtl8139_rx(void);
 static void rtl8139_rx_reset(void);
 static int rtl8139_link(void *dev, struct netdev_link *out);
 
-/* The interface this driver's one card is. Kept from the bring-up, so a
- * frame it delivers says where it arrived. */
 /* The card's own station address, read from the chip. */
 static uint8_t rtl8139_mac[6];
 
+/* The interface this driver's one card is. Kept from the bring-up, so a
+ * frame it delivers says where it arrived. */
 static struct netdev *rtl8139_iface;
 
 /**
@@ -68,6 +68,14 @@ static struct netdev *rtl8139_iface;
  * transmit configuration, registers the IRQ handler, and enables the receiver
  * and transmitter. The receiver and transmitter are enabled last, after the
  * buffers are in place, so no DMA can start against an unconfigured ring.
+ *
+ * A legacy line reaches the processor only through the 8259 pair, and the
+ * vector is `32 + irq` in a byte, so a line above 15 is refused rather than
+ * registered onto an exception vector. BAR0 must be an assigned I/O window:
+ * an unassigned BAR reads zero and a memory BAR is not a port number, and
+ * either would drive writes at unrelated legacy ports. Both are checked
+ * before bus mastering is enabled, so a card refused for them never had the
+ * bus.
  *
  * @return NETDEV_UP on success, NETDEV_ABSENT when absent, or NETDEV_FAILED
  *         with rtl8139_error() describing the failure.
@@ -89,18 +97,11 @@ int rtl8139_init(struct netdev *nd, int nth)
         return NETDEV_ABSENT;
     }
 
-    /* Reject a line this PIC-only kernel cannot deliver, not register a bogus
-     * vector: the vector is `32 + irq` in a byte, so a large enough line wraps
-     * onto an exception vector. */
     if (rtl_pci.irq > 15) {
         rtl_err = "RTL8139 has no usable IRQ line";
         return NETDEV_FAILED;
     }
 
-    /* BAR0 must be an assigned I/O window. An unassigned BAR reads zero and
-     * a memory BAR is not a port number; using either as one would drive
-     * writes at unrelated legacy ports. Checked before bus mastering is
-     * enabled, so a card refused here was never given the bus. */
     if ((rtl_pci.bar[0] & 1u) == 0 || pci_bar_address(rtl_pci.bar[0]) == 0) {
         rtl_err = "RTL8139 has no I/O window";
         return NETDEV_FAILED;
@@ -175,9 +176,7 @@ int rtl8139_init(struct netdev *nd, int nth)
     {
         int b;
 
-        /* The card's own address goes to the interface it is. The stack's
-         * one address for the machine is the first interface's, set by the
-         * walk, not by whichever driver ran last. */
+        /* The card's address is its interface's; netdev_probe sets net_mac. */
         for (b = 0; b < 6; b++) {
             nd->mac[b] = rtl8139_mac[b];
         }
@@ -191,11 +190,10 @@ const char *rtl8139_error(void)
 }
 
 /**
- * Write this card's detail line under the boot summary.
+ * Log this card's IRQ, I/O port and MAC, then its link.
  *
  * The kernel formatter has no field width, so the MAC is printed a nibble at
  * a time.
- * The console keeps only the one-line summary; this is the serial detail.
  */
 static void rtl8139_print_info(void *dev)
 {
@@ -237,10 +235,8 @@ static void rtl8139_print_info(void *dev)
  * Safe on a card that never finished starting, which is how the probe calls
  * it after a failed bring-up. The register writes are guarded on `iobase`,
  * which is zero until a usable port window was found, so nothing here writes
- * to port zero. Bus mastering is revoked outside that guard, because `init`
- * enables it before it has the window and a card whose window turned out to
- * be unusable is exactly the one still able to write memory with no way to be
- * told to stop.
+ * to port zero. Bus mastering is revoked outside that guard, whenever the
+ * card was found.
  */
 static void rtl8139_stop(void *dev)
 {
@@ -263,8 +259,8 @@ static void rtl8139_stop(void *dev)
  * duplex comes from the basic mode control register, which is where the PHY
  * records what it negotiated.
  *
- * @return 1 with `*out` filled; 0 only when no card was found, since a card
- *         that is present can always answer this.
+ * @return 1 with `*out` filled; 0 only when the driver has no port window,
+ *         since a card that has one can always answer this.
  */
 static int rtl8139_link(void *dev, struct netdev_link *out)
 {
@@ -354,12 +350,20 @@ static void rtl8139_rx_reset(void)
 }
 
 /**
- * Drain completed frames from the RX ring up to the chip's write pointer.
+ * Drain completed frames from the RX ring up to the chip's write pointer as
+ * it was when the call began.
  *
  * Reads each 4-byte ring header, validates its status and length before
  * trusting the length, hands the frame (minus its 4-byte CRC) to ethernet_rx,
  * and advances the read pointer and CAPR. A bad header means an error packet or
  * a desynced ring, so the receiver is resynced, not advanced by garbage.
+ *
+ * The drain stops at the write pointer it read on entry. Space goes back
+ * through CAPR after every frame and the emulated card offers a queued packet
+ * the moment it does, so a drain that ran to an empty ring could go on for as
+ * long as frames keep arriving, with interrupts off, and starve the timer, the
+ * scheduler and every other line. A frame past the mark raises the source
+ * again and is taken by the next entry.
  */
 static void rtl8139_rx(void)
 {
@@ -369,13 +373,6 @@ static void rtl8139_rx(void)
     uint32_t bound;
     uint32_t taken;
 
-    /* What the card had written when this call began, and no further. Space
-     * goes back through CAPR after every frame, and the emulated card offers
-     * a queued packet the moment it does, so a drain that ran to an empty ring
-     * need never end while frames keep arriving: the handler would hold the
-     * processor with interrupts off and starve the timer, the scheduler and
-     * every other line. Whatever arrives past this mark raises the source
-     * again and is taken by the next entry. */
     bound = (uint32_t)inw(iobase + RTL_CBR) % RTL_RX_RING;
     taken = 0;
 
@@ -394,9 +391,6 @@ static void rtl8139_rx(void)
             break;
         }
 
-        /* A non-OK status or an out-of-range length means the header is an
-         * error packet or the ring has desynced. Trusting the length would
-         * advance rx_ptr by garbage, so resync the receiver instead. */
         if (!(status & RTL_ISR_ROK) || pkt_len < RTL_RX_PKT_MIN || pkt_len > RTL_RX_PKT_MAX) {
             klog(KLOG_WARN, "rtl8139", "rx: bad header status 0x%X len %d, resynchronising",
                  (unsigned)status, (int)pkt_len);
@@ -434,6 +428,11 @@ static void rtl8139_rx(void)
  *
  * Overflow is counted on every entry but logged only once per boot, so
  * sustained traffic cannot evict the boot inventory with repeated warnings.
+ * Draining the ring is the whole recovery: the card reports the overflow
+ * instead of writing the packet that would not fit, so the frames already in
+ * the ring are whole, and a reset would throw away frames that arrived since.
+ * A ring that is actually desynced is caught by the header check in the
+ * drain, which does reset.
  */
 static void rtl8139_irq(isr_params_t *params)
 {
@@ -457,14 +456,6 @@ static void rtl8139_irq(isr_params_t *params)
             ethernet_note_rx_error(rtl8139_iface);
         }
         if (isr_val & (RTL_ISR_RXOVW | RTL_ISR_FOVW)) {
-            /* The ring filled while the machine was elsewhere. What it holds
-             * is not gone: the card reports the overflow instead of writing
-             * the packet that would not fit, so the frames already in the ring
-             * are whole. Taking them and giving the space back is the whole
-             * recovery, and a reset here would throw away frames that had
-             * arrived since, including any this entry's drain has not reached.
-             * A ring that is actually desynced is caught by the header check
-             * in the drain, which does reset. */
             if (!rx_overflow_logged) {
                 rx_overflow_logged = 1;
                 klog(KLOG_WARN, "rtl8139",

@@ -1,14 +1,12 @@
 /**
  * su: become another user (root by default) after proving their password.
  *
- * This is Rach2's su, the companion to the reference sudo and the payoff of the
- * setuid milestone: a small setuid-root program that authenticates against
- * `/etc/shadow` and then runs a shell as the target. It is os-simple's way up,
- * a hundred readable lines of it. os-real climbs through busybox's own su
- * instead, from a second build holding three applets, since making the whole
+ * This is Rach2's su, the companion to the reference sudo: a small setuid-root
+ * program that authenticates against `/etc/shadow` and then runs a shell as
+ * the target. It is os-simple's way up. os-real climbs through busybox's own
+ * su instead, from a second build of three applets, since making the whole
  * megabyte setuid would hand every applet in it root. The two images run the
- * same job in this project's code and in the code a real system ships, which is
- * what having two of them is for.
+ * same job in this project's code and in the code a real system ships.
  *
  * Usage: `su [-] [-l|--login] [user] [-c command]`, user defaulting to root.
  * The caller proves the target's password (root is exempt, as always), read
@@ -27,17 +25,22 @@
  * already builds from nothing. A home that cannot be entered is fatal rather
  * than a warning: the directory and the dash are the whole of `-`, so
  * continuing would run a login shell in the caller's directory and call it a
- * login. Everything about non-login mode, the working directory and `argv[0]`
- * included, is unchanged.
+ * login. The home is entered as the target, so one the target cannot reach
+ * refuses the login instead of being opened with root's privilege. Without
+ * login mode the working directory stays the caller's and `argv[0]` is the
+ * shell's path.
+ *
+ * The target gets no supplementary groups: the list is cleared, and the
+ * image's accounts have none to add.
  *
  * The password comparison, the terminal handling, and the signal handling
  * belong to `pwauth.c`, which is also what `passwd`, `adduser` and `login`
  * authenticate through. su holds no credential lock: a reader takes none, so no
- * stuck writer can keep anyone out of the box. The PAM/login.defs policy layer
- * stays a non-goal.
+ * stuck writer can keep anyone out of the box. There is no PAM or login.defs
+ * policy layer.
  */
 
-#define _GNU_SOURCE /* getspnam, setgroups */
+#define _GNU_SOURCE /* setgroups */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,10 +75,14 @@ static const char *base_name(const char *path)
 }
 
 /**
- * Close every open descriptor above standard error before changing identity.
- * The real root user bypasses password verification. Other callers must
- * authenticate the target account. An unknown target is reported before
- * prompting.
+ * Parse the arguments, authenticate the caller as the target, and exec the
+ * target's shell as the target.
+ *
+ * Every argument is accounted for: an unrecognized option is a usage error,
+ * never a discarded one, and a second operand is one too. The real root user
+ * bypasses password verification. Other callers must authenticate the target
+ * account. An unknown target is reported before prompting. Every descriptor
+ * above standard error is closed before the identity changes.
  */
 int main(int argc, char **argv)
 {
@@ -86,8 +93,6 @@ int main(int argc, char **argv)
     int login = 0;
     int i, fd;
 
-    /* Every argument is accounted for: an unrecognized option is a usage error,
-     * never a discarded one, and a second operand is one too. */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-") == 0 || strcmp(argv[i], "-l") == 0 ||
             strcmp(argv[i], "--login") == 0) {
@@ -127,25 +132,16 @@ int main(int argc, char **argv)
         close(fd);
     }
 
-    /* Shed the caller's supplementary groups, then take the target's group and
-     * user. The order is forced: each step needs a privilege the uid drop
-     * removes, and the image's accounts carry no supplementary groups, so
-     * clearing the list is the whole of it. */
     if (setgroups(0, NULL) != 0 || setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
         fprintf(stderr, "su: cannot assume the target identity\n");
         return 1;
     }
 
-    /* The home is entered as the target and not before, so a home the target
-     * cannot reach refuses the login instead of being opened with the
-     * privilege su is in the middle of giving away. */
     if (login && chdir(pw->pw_dir) != 0) {
         fprintf(stderr, "su: cannot enter %s\n", pw->pw_dir);
         return 1;
     }
 
-    /* Only these five reach the target's shell (see the header on why the
-     * caller's environment is discarded, not patched). */
     {
         static char home[128], shell[128], usr[96], logname[96], dashed[128];
         char *const env[] = {(char *)"PATH=/bin:/usr/bin", home, shell, usr, logname, NULL};

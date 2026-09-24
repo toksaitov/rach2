@@ -22,16 +22,17 @@ void schedule(void);
  * exit when the process is inside one; see sched.c. */
 void sched_preempt(void);
 
-/** At a system call's exit, interrupts off: the switch an interrupt asked
- * for during the call, if one did. */
+/** Take the switch an interrupt asked for during the current system call,
+ * if one did. Called with interrupts off, at the call's exit and from
+ * `sched_service_point`. */
 void sched_take_preempt(void);
 
-/** Inside a long system call, between two of its pieces: the switch the
- * tick asked for, taken now rather than at the call's exit. */
+/** Inside a long system call, between two of its pieces, take the switch
+ * the tick asked for without waiting for the call's exit. */
 void sched_service_point(void);
 
-/** A record is about to go: the scheduler must not start its next search
- * from it. */
+/** Move the scheduler's cursor off `p`, which is about to be unlinked and
+ * freed. */
 void sched_forget(process_t *p);
 
 /*
@@ -44,8 +45,8 @@ void sched_forget(process_t *p);
  * says so is a marker set around the halt and sampled by the timer before any
  * wakeup can change state.
  *
- * Every halt in the kernel goes through one of these two, and the style
- * check refuses a bare `sti; hlt` written anywhere else: a site added later
+ * Every idle wait of a user process goes through one of these two, and the
+ * style check refuses a `sti; hlt` written anywhere else: a site added later
  * left unmarked would report its idle time as busy, and nothing would say so.
  * They differ only in the interrupt flag they leave behind, which the callers
  * do not agree on: a wait that must re-check a condition with interrupts off

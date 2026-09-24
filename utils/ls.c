@@ -1,15 +1,18 @@
 /**
- * List a directory, one entry per line as a type flag plus the name.
- * Dotfiles are hidden.
+ * List one directory, the first operand or the working directory, one entry
+ * per line: a type letter, a fixed `rw-`, and the name.
+ *
+ * The type letter is `d`, `-`, `l`, or `?` for any other type. Names that
+ * begin with a dot are not listed. Operands after the first are ignored.
  */
 
 #include <stdio.h>
 #include <dirent.h>
 
 /**
- * Print a directory entry's type and name.
+ * Print one entry's line.
  *
- * The `rw-` field is a fixed placeholder; no permissions are queried.
+ * The `rw-` field is a fixed placeholder; no permissions are read.
  */
 static void print_entry(const char *name, unsigned char d_type)
 {

@@ -4,20 +4,21 @@
  * This is Rach2's reference sudo, the answer key to the coursework exercise:
  * the kernel gives a setuid program everything it needs and nothing more, and
  * a working sudo is about a hundred lines on top of it. It is staged only into
- * the test image, gated by `sudoprobe`; the shipped os-real image ships `su`
- * and leaves this for the student to write.
+ * the test image, where `sudoprobe` tests it; the os-real image ships `su` and
+ * leaves this for the student to write.
  *
  * The program runs setuid root (the exec gave it effective uid 0 while the real
- * uid still names the caller). It reads `/etc/sudoers`, a list of the numeric
+ * uid is still the caller's). It reads `/etc/sudoers`, a list of the numeric
  * uids allowed to use it, one per line, `#` starting a comment. The check is
  * against the REAL uid, the identity the caller cannot forge, not the effective
- * uid the setuid bit just handed over: that is the whole lesson. A permitted
- * caller gets a clean environment (an attacker must not steer a root program
- * through PATH or the like), full root via the saved id, and the requested
- * command; anyone else is refused.
+ * uid the setuid bit just handed over. A permitted caller gets a clean
+ * environment (an attacker must not steer a root program through PATH or the
+ * like), root in all three uids and gids, and the requested command; anyone
+ * else is refused.
  *
- * Usage: `sudo <command> [args...]`. Deliberately omitted, and left for the
- * exercise to add: per-command rules, a password prompt, and TTY handling.
+ * Usage: `sudo <command> [args...]`, where `<command>` is a path: it is not
+ * looked up in `PATH`. Deliberately omitted, and left for the exercise to add:
+ * per-command rules, a password prompt, and TTY handling.
  */
 
 #define _GNU_SOURCE /* setresuid */
@@ -37,8 +38,9 @@
 static char *const clean_env[] = {(char *)"PATH=/bin:/usr/bin", (char *)"HOME=/root", NULL};
 
 /**
- * Read one line into `line`, returning its length, -1 at the end, or -2 for a
- * line this reader refuses: one with a NUL byte or longer than the buffer.
+ * Read one line into `line`, returning its length, -1 at the end or on a read
+ * error, or -2 for a line this reader refuses: one with a NUL byte or longer
+ * than the buffer.
  */
 static int sudoers_line(FILE *f, char *line, size_t size)
 {
@@ -126,7 +128,10 @@ static int permitted(unsigned long uid)
 }
 
 /**
- * Close every open descriptor above standard error before changing identity.
+ * Run `argv[1]` as root with the arguments after it, if the real uid is listed
+ * in `/etc/sudoers`.
+ *
+ * Every descriptor above standard error is closed before the identity changes.
  */
 int main(int argc, char **argv)
 {
@@ -147,8 +152,7 @@ int main(int argc, char **argv)
         close(fd);
     }
 
-    /* Assume root fully; the saved uid is already 0, so the real uid moves
-     * too. */
+    /* Effective uid 0 may set all three ids, the real one included. */
     if (setresuid(0, 0, 0) != 0 || setresgid(0, 0, 0) != 0) {
         fprintf(stderr, "sudo: could not assume root\n");
         return 1;

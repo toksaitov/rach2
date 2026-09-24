@@ -6,8 +6,7 @@
  * unsigned), and the physical slot for a logical position is `pos &
  * (SIZE-1)`. Kept free of any kernel dependency so
  * tests/host/pipe_ring_hosttest.c can link it natively under ASan/UBSan: the
- * wrap arithmetic is exactly the kind of fence-post logic that is murder to
- * debug in-guest.
+ * wrap arithmetic is fence-post logic, which is hard to debug in the guest.
  */
 
 #include "pipe.h"

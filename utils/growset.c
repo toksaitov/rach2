@@ -1,16 +1,16 @@
 /**
  * growset: the block ranges `resize2fs` writes when it grows an ext2 volume.
  *
- * Usage: `growset [--save] [--lba START] [--map JSON] VOLUME SECTORS`,
- * where VOLUME is a file holding the volume (an image, or the partition
- * copied out of a
- * disk) and SECTORS is the size the partition will have after the grow, in
- * sectors of 512 bytes. It reads the superblock and the descriptors of the
- * volume as it is, computes the geometry the grown volume will have the
- * way `resize2fs` does, and prints one `range START COUNT WHAT` line per
- * run of sectors the grow writes, sorted and merged, relative to the
- * volume's start, or to the disk's when `--lba` gives the partition's
- * first sector. The last lines are `total SECTORS` and the geometry.
+ * Usage: `growset [--save] [--ranges] [--lba START] [--map JSON] VOLUME
+ * SECTORS`, where VOLUME is a file holding the volume (an image, or the
+ * partition copied out of a disk) and SECTORS is the size the partition will
+ * have after the grow, in sectors of 512 bytes. It reads the superblock and
+ * the descriptors of the volume as it is, computes the geometry the grown
+ * volume will have the way `resize2fs` does, and prints one `range START
+ * COUNT WHAT` line per run of sectors the grow writes, sorted and merged,
+ * relative to the volume's start, or to the disk's when `--lba` gives the
+ * partition's first sector. The last lines are `total SECTORS` and the
+ * geometry.
  *
  * `--map JSON` checks the set against a grow that ran: JSON is what
  * `qemu-img map --output=json` printed for the overlay the grow wrote
@@ -18,7 +18,9 @@
  * lie inside the set. An extent outside it is printed as `outside START
  * LENGTH`, in sectors, and the status is 1.
  *
- * `--save` includes the complete seed and requires a complete file.
+ * `--save` adds the whole volume to the set, for a procedure that writes
+ * VOLUME, the seed image, over the partition before the grow, and requires
+ * VOLUME to be exactly as long as its block count says.
  *
  * `--ranges` prints only sector pairs, without descriptions or totals.
  *
@@ -37,9 +39,8 @@
  * reserve is refused, because that grow moves blocks and this tool does
  * not compute where to.
  *
- * This is the save set milestone 50 needs before a grow on the installed
- * machine: the sectors to copy out first. `tests/run grow` checks the set
- * against what a grow in QEMU changed.
+ * The set is what a grow on an installed machine copies out first.
+ * `tests/run grow` checks the set against what a grow in QEMU changed.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <sys/types.h>
@@ -88,6 +89,10 @@ static int has_super(int sparse, unsigned long g)
     return is_power(g, 3) || is_power(g, 5) || is_power(g, 7);
 }
 
+/**
+ * Add `count` blocks from `block` to the set, described as `what`. A set
+ * already holding `MAX_RANGES` ranges is fatal.
+ */
 static void add(unsigned long long block, unsigned long long count, const char *what)
 {
     if (nranges == MAX_RANGES) {
@@ -144,6 +149,7 @@ static long long json_number(const char *obj, const char *key)
  * Check `qemu-img map --output=json` output in `path` against the set:
  * every extent at depth 0 must be inside it. The objects are read one at
  * a time between braces; the keys are `start`, `length` and `depth`.
+ * Returns 0, or 1 when an extent lies outside or the file cannot be opened.
  */
 static int check_map(const char *path)
 {

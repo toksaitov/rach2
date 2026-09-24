@@ -1,6 +1,6 @@
 /*
- * C runtime startup for Rach2 user programs: the `_start` entry, with no
- * libc to set up the stack first.
+ * C runtime startup for ish: the `_start` entry, with no libc to set up the
+ * stack first.
  */
 
 #include "ish_syscalls.h"
@@ -18,6 +18,10 @@ int main(int argc, char **argv, char **envp);
  * has already moved ESP, so the words are addressed EBP-relative: `argc` at
  * `EBP+4`, just above the saved EBP, and `argv` at `EBP+8`. `envp` follows
  * `argv` past its NULL terminator, at `argv + argc + 1`.
+ *
+ * This needs the frame pointer. Every build of ish keeps it: the host builds
+ * compile without optimization and TinyCC always sets one up. A build that
+ * omitted it would read the wrong words.
  */
 void _start(void)
 {

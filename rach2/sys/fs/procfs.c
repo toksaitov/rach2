@@ -1,11 +1,12 @@
 /*
  * procfs.c: the synthetic /proc, generated from the process table.
  *
- * A /proc text file is snapshotted into a small pooled buffer when opened and
+ * A /proc text file is snapshotted into a buffer from the heap when opened and
  * served from there (so a read sees a consistent moment, and dup/fork share the
  * snapshot until the last descriptor closes; the per-open-file-description
- * lifetime). The text is built with bounded append helpers and hand-rolled
- * integer formatting (the kernel has no snprintf and avoids 64-bit division).
+ * lifetime). The text is built with append helpers that grow the buffer and
+ * hand-rolled integer formatting (the kernel has no snprintf and avoids 64-bit
+ * division).
  */
 
 #include "../klog.h"
@@ -52,7 +53,7 @@
 
 #define PROCFS_O_CLOEXEC 02000000
 
-/* Inode namespace for /proc: the directory, the boot command line, then a
+/* Inode namespace for /proc: the directory and the global files, then a
  * per-pid base. */
 #define PROCFS_INO_DIR         0x100u
 #define PROCFS_INO_CMDLINE     0x101u
@@ -419,11 +420,14 @@ static const char *procfs_global_fd_path(int origin)
  *
  * The target string matches what each descriptor type reports through the real
  * Linux /proc: a path for files and dirs, /dev/console, /dev/pts/N, /dev/ptmx,
- * and the pipe:[1]/socket:[N]/anon_inode forms. musl ttyname_r relies on the
+ * and the pipe:[N]/socket:[N]/anon_inode forms. musl ttyname_r relies on the
  * /dev/pts/N spelling. A socket names its own inode, the same number
  * `/proc/net/tcp` and `fstat` report, so one socket is one thing to a program
- * reading all three; it was a constant before, which made every socket on the
- * machine look like the same one.
+ * reading all three. A KRFFS path is rebuilt only from a node still live and
+ * reachable, since a stale descriptor's node (unlinked or relocated) may be
+ * free-list bytes by now.
+ *
+ * @return the length written, -ENOENT, or -ENOMEM.
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
@@ -479,10 +483,6 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     case FD_TYPE_DIR:
         if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
             char path[256]; /* the same path capacity the syscall layer uses */
-            /* Reconstruct the path only from a node still live and
-             * reachable; a stale fd (its node unlinked or relocated) would
-             * otherwise parse freed free-list bytes into the link target.
-             */
             if (krffs_node_path(e->node, path, sizeof(path)) == 0 &&
                 krffs_resolve(path) == e->node) {
                 ap_str(t, path); /* the full absolute path */
@@ -506,8 +506,8 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     }
     case FD_TYPE_PROC: {
-        /* a /proc snapshot fd: its origin path (a pid file or the global
-         * boot command line) */
+        /* a /proc snapshot fd: a global path procfs_global_fd_path knows, else
+         * the pid file */
         struct procfs_file *pf = (struct procfs_file *)e->priv;
         if (pf) {
             const char *path = procfs_global_fd_path(pf->origin_file);
@@ -731,22 +731,22 @@ uint32_t procfs_ino_pid(int pid)
  *
  * The two header lines and one line per interface, in the order and with the
  * sixteen counters Linux prints, because `ifconfig` and everything like it
- * parses this file by counting fields. This machine has one interface and
- * lists it only when a device was found: an interface that is not there is not
- * one a program should be told about.
+ * parses this file by counting fields. Only the interfaces the probe brought
+ * up are listed: an interface that is not there is not one a program should
+ * be told about.
  *
  * Seven of the sixteen come from the interface: bytes and packets each way,
  * receive errors, receive drops, and transmit drops. The three refusal
- * columns were zero too until the drivers could report a refusal: a transmit
- * verdict for the last of them, and two receive-note calls for the first
- * two. Every driver here refuses a frame under some condition, so zero was
- * never the truth. Seven more come from the card, through the driver's
- * `counters`, in the columns Linux fills from a card's own tallies: frames
- * the card missed add to the receive drops, alignment errors are the frame
- * column, multicasts their own, and on the transmit side errors, underruns
- * (fifo), collisions and the transmissions the card aborted (carrier). A card
- * that keeps no such counts leaves them zero. The two compressed columns
- * and the receive fifo are zero: nothing here has them.
+ * columns are what the drivers report: a transmit verdict for the transmit
+ * drops, and the two receive-note calls for the receive errors and drops.
+ * Every driver here refuses a frame under some condition. Seven more come
+ * from the card, through the driver's `counters`, in the columns Linux fills
+ * from a card's own tallies: frames the card missed add to the receive drops,
+ * alignment errors are the frame column, multicasts their own, and on the
+ * transmit side errors, underruns (fifo), collisions and the transmissions
+ * the card aborted (carrier). A card that keeps no such counts leaves them
+ * zero. The two compressed columns and the receive fifo are zero: nothing
+ * here has them.
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {
@@ -842,24 +842,24 @@ static int procfs_gen_uptime(struct procfs_text *t)
 }
 
 /**
- * Render /proc/stat: the tick counters, the boot epoch, and the process count.
+ * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
+ * the process counts, and this kernel's own latency and loopback counters.
  *
  * `loopback_dropped` is the datagrams the loopback ring had no room for, which
  * the ring logs once and counts thereafter, and `loopback_peak` is the most it
  * has held at once, which is what says how much room it has over a window's
  * worth.
  *
- * The `cpu` line carries user, nice, system and idle in that order. This
+ * The `cpu` line has user, nice, system and idle in that order. This
  * kernel does not separate user from system time, so what it knows is one
  * busy figure and one idle figure: busy goes in the system column, since that
  * is where a kernel's own time belongs, and user and nice are zero rather than
  * a share invented to look plausible.
  *
  * `processes` is what Linux means by it, the count of processes CREATED since
- * boot and not the count alive now, which is a different number and the one an
- * earlier draft printed. `procs_running` and `procs_blocked` are counted from
- * the table rather than fixed, since a machine with two runnable processes
- * reporting one is wrong the moment anything looks.
+ * boot and not the count alive now. `procs_running` and `procs_blocked` are
+ * counted from the table rather than fixed, since a machine with two runnable
+ * processes reporting one is wrong the moment anything looks.
  */
 static int procfs_gen_statsys(struct procfs_text *t)
 {
@@ -939,7 +939,10 @@ static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
  * The pool is the whole of what this machine manages, so MemTotal and MemFree
  * are the two counts outright. Buffers and Cached are what the buffer cache
  * and the page cache hold, which reclaim gives back under pressure, so
- * MemAvailable is the free count and the two together.
+ * MemAvailable is the free count and the two together. HeapPages and
+ * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
+ * test that makes and frees objects and requires the heap back where it
+ * started.
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
@@ -958,9 +961,6 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, buffers);
     ap_str(t, "Cached:         ");
     ap_frames_as_kb(t, cached);
-    /* The kernel's heap: what it holds and what is in use inside it, for a
-     * test that makes and frees objects and requires the heap back where it
-     * started. */
     {
         uint32_t pages = 0, bytes = 0;
 
@@ -977,15 +977,6 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     return t->len;
 }
 
-/**
- * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse.
- *
- * The root's source and options are what the mount recorded when it succeeded,
- * because the three branches that can mount this file system differ in ways
- * nothing afterwards reports: a fixed line would call a RAM root a disk one on
- * two boots out of three. The two synthetic mounts are named as well, since
- * they are real mounts to every program that walks this file.
- */
 /**
  * Render /proc/usb.
  *
@@ -1020,11 +1011,6 @@ static int procfs_gen_usb(struct procfs_text *t)
             ap_ch(t, line[j]);
         }
     }
-    /* The counting line is written only by a machine that has had a stick,
-     * so a boot with no controller, or one with a controller and nothing
-     * plugged into it, has this file empty as it always had. A reader that
-     * finds no such line has every name free and nothing given up, which is
-     * what a machine that never had a stick has. */
     if (usbdisk_free() != USBDISK_MAX || usbdisk_teardowns() != 0) {
         ap_str(t, "disks ");
         ap_u32(t, (uint32_t)usbdisk_free());
@@ -1035,6 +1021,16 @@ static int procfs_gen_usb(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
+/**
+ * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse.
+ *
+ * A KRFFS root's source and options are what the mount recorded when it
+ * succeeded, because the three branches that can mount that file system
+ * differ in ways nothing afterwards reports: a fixed line would call a RAM
+ * root a disk one on two boots out of three. The two synthetic mounts are
+ * named as well, since they are real mounts to every program that walks this
+ * file, and then every mount mount(2) placed.
+ */
 static int procfs_gen_mounts(struct procfs_text *t)
 {
     int i;
@@ -1055,7 +1051,7 @@ static int procfs_gen_mounts(struct procfs_text *t)
     ap_str(t, "devfs /dev devfs rw,relatime 0 0\n");
     ap_str(t, "proc /proc proc rw,relatime 0 0\n");
     /* Then every mount mount(2) placed, in table order: its source as the
-     * caller spelled it, its target, its type, and the flags as words. */
+     * caller gave it, its target, its type, and the flags as words. */
     for (i = 3; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
@@ -1092,12 +1088,6 @@ static int procfs_gen_mounts(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
-/* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
- * type mount(2) accepts, KRFFS among them. The root is not one of these: it
- * is a mapped image, not a volume placed by mount(2). */
-/* /proc/interrupts: one line per vector that has taken an interrupt, the
- * vector, its count and where it comes from, then the counts the APIC's
- * spurious vector and the timer's fallback pump keep. */
 /* One counter of /proc/console: `name value`. */
 static void ap_counter(struct procfs_text *t, const char *name, uint32_t v)
 {
@@ -1136,6 +1126,14 @@ static int procfs_gen_console(struct procfs_text *t)
     return t->len;
 }
 
+/*
+ * /proc/interrupts: one line per vector that has taken an interrupt, the
+ * vector, its count and where it comes from, then the counts the APIC's
+ * spurious vector and the timer's fallback pump keep. The fallback count is
+ * what the pump found that a message should have brought: zero on a machine
+ * whose messages arrive, so a number there is a count of lost edges and not
+ * of work done.
+ */
 static int procfs_gen_interrupts(struct procfs_text *t)
 {
     int v;
@@ -1171,9 +1169,6 @@ static int procfs_gen_interrupts(struct procfs_text *t)
     ap_str(t, "SPU:\t");
     ap_u32(t, lapic_spurious_count());
     ap_str(t, "\tspurious\n");
-    /* What the timer's pump found that a message should have brought. It is
-     * zero on a machine whose messages arrive, so a number here is a count of
-     * lost edges and not of work done. */
     ap_str(t, "FBK:\t");
     ap_u32(t, usb_fallback_count());
     ap_str(t, "\tusb fallback\n");
@@ -1197,6 +1192,9 @@ static int procfs_gen_loop(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
+/* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
+ * type mount(2) accepts, KRFFS among them. The KRFFS root's own type is not
+ * one of these: it is a mapped image, not a volume placed by mount(2). */
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
     int i;
@@ -1265,11 +1263,11 @@ static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
 }
 
 /**
- * Render /proc/net/route: the on-link subnet, and the default route if there
- * is one.
+ * Render /proc/net/route: for each interface with an address, its default
+ * route if it has a gateway, then its on-link subnet.
  *
- * This stack knows exactly one subnet and at most one gateway, so the table has
- * one or two rows and both come out of `netconf`. The flags are the ones
+ * Each interface has one subnet and at most one gateway, so it has one or two
+ * rows, from its own address, mask and gateway. The flags are the ones
  * `route` prints from: 1 is up, and 2 more says the destination is a gateway.
  */
 static int procfs_gen_netroute(struct procfs_text *t)
@@ -1330,7 +1328,7 @@ static int procfs_gen_netarp(struct procfs_text *t)
 }
 
 /**
- * Render /proc/net/tcp: the connection pool, in the columns netstat parses.
+ * Render /proc/net/tcp: the connections, in the columns netstat parses.
  *
  * The state numbers are Linux's, which this stack's own enumeration does not
  * match, so they are mapped rather than cast: a reader prints the name for the
@@ -1542,7 +1540,8 @@ static int procfs_needs_pid(int kind)
 }
 
 /**
- * Open a /proc/<pid>/{stat,cmdline} file, returning a descriptor or -errno.
+ * Open a /proc text file, global or per process, returning a descriptor or
+ * -errno.
  *
  * The text is generated into a snapshot at open, then served read-only
  * through procfs_file_ops; the snapshot is freed on the last close. These

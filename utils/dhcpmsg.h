@@ -26,9 +26,9 @@
 /* The most this client builds or reads: RFC 2131's smallest legal maximum. */
 #define DHCP_MAX 576
 
-/* The shortest lease this client will act on. Below it the renewal and the
- * rebinding moments are the same second or the same as the expiry, so a client
- * would rebind the instant it was configured and go on doing it; a server
+/* The shortest lease this client will act on. Below it the renewal, the
+ * rebinding and the expiry fall a few seconds apart at most, and at two
+ * seconds or less the renewal and the rebinding are the same moment; a server
  * offering less than this is one to refuse, not to keep up with. */
 #define DHCP_MIN_LEASE 10
 

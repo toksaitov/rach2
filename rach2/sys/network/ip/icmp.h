@@ -19,7 +19,8 @@
 /** Handle one received ICMP datagram (IP header already stripped). */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 
-/** Send an echo request to `dst_ip` and wait; round-trip ticks, or -1. */
+/** Send an echo request to `dst_ip` and wait; the round-trip time in ticks,
+ * or `-ETIMEDOUT`, `-EBUSY` or `-EINTR`. */
 int icmp_ping(uint32_t dst_ip);
 
 #endif /* _ICMP_H_ */

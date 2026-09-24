@@ -10,9 +10,10 @@
 #include "pagecache.h"
 #include "paging.h"
 
-/* The depth outside any process, at boot; inside one it is the record's,
- * since a handler that switches to another process is left by the one it
- * interrupted, when that one runs again. */
+/* The interrupt depth while no process is current, as at boot. While one is,
+ * the depth is kept in its record instead: a handler that switches to another
+ * process is left only when the process it interrupted runs again, so the
+ * count belongs to that process. */
 static volatile uint32_t irq_depth;
 
 void irq_enter(void)
@@ -48,19 +49,37 @@ uint32_t mem_reserve_frames(void)
     return frame_total_count() / 32u;
 }
 
-/* The low mark starts reclaim and the high mark ends it: a sixteenth and an
- * eighth of managed memory, so that reclaim runs in bursts and not on every
- * allocation. */
+/**
+ * The free-frame count below which `mem_balance` starts reclaim: a sixteenth
+ * of managed memory.
+ *
+ * Reclaim stops at `high_mark`, an eighth, so it runs in bursts and not on
+ * every allocation.
+ */
 static uint32_t low_mark(void)
 {
     return frame_total_count() / 16u;
 }
 
+/**
+ * The free-frame count at which `mem_reclaim` stops: an eighth of managed
+ * memory.
+ */
 static uint32_t high_mark(void)
 {
     return frame_total_count() / 8u;
 }
 
+/**
+ * Whether a frame may be taken now.
+ *
+ * When the free count is at or below the reserve, a frame is refused to a
+ * process whose effective uid is not 0. An interrupt handler, the kernel
+ * outside any process, root, and a process that is reclaiming may still take
+ * one: the writeback a reclaim starts needs requests, and the reserve is kept
+ * for them. `user_page` is not consulted, so a user page and a kernel object
+ * are refused alike.
+ */
 int mem_may_take(int user_page)
 {
     (void)user_page;
@@ -70,9 +89,14 @@ int mem_may_take(int user_page)
     return frame_free_count() > mem_reserve_frames();
 }
 
-/* Whether this context may sleep in a write: inside a system call with
- * interrupts on. A page fault enters with them off and outside any call,
- * and a writeback there would stop on the request layer's check. */
+/**
+ * Whether reclaim may write dirty pages back from here: inside a system call
+ * with interrupts on, where a writeback may sleep.
+ *
+ * A page fault enters with interrupts off and outside any call, and
+ * `block_request` panics when a device that sleeps its caller is reached
+ * there.
+ */
 static int may_write_back(void)
 {
     uint32_t eflags;
@@ -81,14 +105,22 @@ static int may_write_back(void)
     return (eflags & 0x200u) != 0 && proc_in_syscall();
 }
 
+/**
+ * Evict cached frames until the free count reaches the high mark, or until
+ * the caches give nothing back. Returns the number of frames freed.
+ *
+ * The buffer cache is asked first and the page cache for the rest. Dirty
+ * frames are written back only where `may_write_back` allows it. The calling
+ * process is marked as reclaiming meanwhile, so the requests a writeback
+ * needs come from the reserve even when the caller itself may not take from
+ * it: the writeback is what the reserve is kept for.
+ */
 uint32_t mem_reclaim(void)
 {
     uint32_t before = frame_free_count();
     uint32_t got = 0, written = 0;
     int can_write = may_write_back();
 
-    /* The requests a writeback needs come from the reserve when the caller
-     * itself may not take from it: the writeback is the reserve's purpose. */
     if (current_proc) {
         current_proc->reclaiming++;
     }

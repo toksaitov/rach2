@@ -25,9 +25,10 @@ static void say(char *err, size_t errlen, const char *what)
  * Read a decimal number that has to fit 64 bits.
  *
  * Nothing here is signed: an offset into a disk and a count of bytes are both
- * quantities, and a minus sign in either is a mistake worth naming rather than
- * a large number to wrap into. Overflow is caught before it happens, so a
- * number longer than the disk is refused, not silently reduced.
+ * quantities, and a minus sign in either is a mistake to report, not a large
+ * number to wrap into. Overflow is caught before it happens, so a number too
+ * large for 64 bits is refused, not silently reduced. An empty text is
+ * refused as well.
  *
  * @return 0 when `out` has the number, -1 when the text is not one.
  */
@@ -62,12 +63,13 @@ int sectorcopy_parse_u64(const char *text, unsigned long long *out)
 /**
  * Judge where the write would land, before a byte of it is read.
  *
- * The whole point of taking the length as an argument is that this can be
- * answered first: a stream's length is not known until it ends, so a tool that
- * read first and checked afterwards would already have written part of a disk
- * it was never allowed to touch. Every comparison is a subtraction rather than
- * an addition, since `offset + count` is exactly the sum that wraps on the disk
- * this is written for.
+ * The length is taken as an argument so that this can be answered first: a
+ * stream's length is not known until it ends, so a tool that read first and
+ * checked afterwards would already have written part of a disk it was never
+ * allowed to touch. The offset and the length must be whole numbers of
+ * sectors, the length nonzero, and the range inside a device that reports a
+ * size. Every comparison is a subtraction rather than an addition, since
+ * `offset + count` can wrap for numbers the parser accepts.
  *
  * @return 0 when the write fits, -1 with the reason in `err`.
  */
@@ -120,12 +122,16 @@ int sectorcopy_step(unsigned long long done, unsigned long long total, unsigned 
  *
  * A read from a pipe returns whatever has arrived, and a raw device takes whole
  * sectors, so the two are joined here, not passed through to each other:
- * bytes accumulate until there is a sector or the count is reached. The stream
- * must end exactly where it said it would. A short one leaves the disk holding
- * part of an image and the rest of what was there before, which is worse than
- * either, so it is a failure and says how far it got; a longer one means the
+ * bytes accumulate until there is a full `CHUNK` or the count is reached, and
+ * only whole sectors are written. The stream must end exactly where it said it
+ * would. A short one leaves the disk holding part of an image and the rest of
+ * what was there before, which is worse than either, so it is a failure and
+ * says how far it got; the whole sectors gathered before it ended are written
+ * first, so the count reported is what the disk holds. A longer one means the
  * length this was told is not the length of the thing being written, and the
- * bytes past the count are not written at all.
+ * bytes past the count are not written at all: after the count one more read
+ * must find the end of the stream, and one that fails is a failure too, since
+ * it proves nothing either way.
  *
  * @param written set to the number of bytes written, on success and failure
  *                alike, so a caller can say how far a broken transfer got.
@@ -151,9 +157,6 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
         }
         n = io->read(io->ctx, buf + held, want);
         if (n <= 0) {
-            /* The whole sectors gathered so far go to the device before the
-             * failure is reported, so that the count written is what the
-             * disk holds. */
             unsigned long chunk = held - (held % SECTORCOPY_SECTOR);
             unsigned long off = 0;
 
@@ -173,8 +176,6 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
         }
         held += (unsigned long)n;
 
-        /* A full batch goes, or the stream's last whole sectors; a partial
-         * batch waits for more of the stream. */
         while (held >= SECTORCOPY_SECTOR && (held == CHUNK || done + held == count)) {
             unsigned long chunk = held - (held % SECTORCOPY_SECTOR);
             unsigned long off = 0;
@@ -198,18 +199,11 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
         }
     }
     if (held != 0) {
-        /* Only reachable for a count that is not a whole number of sectors,
-           which the bounds refuse; kept as a second check of the same fact. */
+        /* Not whole sectors, which sectorcopy_bounds already refuses. */
         say(err, errlen, "the stream ended inside a sector");
         return -1;
     }
 
-    /* One more read, and only an end of stream will do. A stream longer than
-       the length it was given means the two ends disagree about what is being
-       written, and the disk now has the first part of something whose size
-       nobody knows; a read that failed here proves nothing either way, and
-       reporting a whole image written on the strength of a failed check is the
-       one answer that must not be given. */
     {
         unsigned char extra[1];
         long n = io->read(io->ctx, extra, sizeof(extra));

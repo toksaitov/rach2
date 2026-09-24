@@ -131,11 +131,11 @@ static void synth_put_uint(char *out, int cap, int *pos, unsigned int v)
 /**
  * Render the canonical directory path for a synthetic vnode kind into `out`.
  *
- * The inverse of `synth_classify` for the directory kinds: it spells out the
+ * The inverse of `synth_classify` for the directory kinds: it writes the
  * path a directory or symlink target should report (for example
- * `/proc/<pid>/fd`). `pid` is used only for the per-process kinds. The
- * result is always NUL-terminated and never exceeds `cap` bytes; an
- * unrecognized kind yields "/".
+ * `/proc/<pid>/fd`). `pid` is used only for the per-process kinds. When
+ * `cap` is positive the result is NUL-terminated and never exceeds `cap`
+ * bytes; otherwise nothing is written. An unrecognized kind yields "/".
  */
 void synth_dir_path(int kind, int pid, char *out, int cap)
 {
@@ -274,8 +274,7 @@ int synth_classify(const char *path, struct vpath *vp)
                 vp->kind = VNODE_ENOTDIR;
             return vp->kind;
         }
-        /* /proc/net/dev: the one file in the one directory `ifconfig` reads to
-           learn that an interface exists and what it has carried. */
+        /* /proc/net and its four files: dev, route, arp and tcp. */
         if (comp_eq(c[1], "net")) {
             if (n == 2) {
                 vp->kind = VNODE_PROC_NET_DIR;

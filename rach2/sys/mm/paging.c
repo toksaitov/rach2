@@ -10,14 +10,8 @@
 #include "../proc/process.h"
 #include "pressure.h"
 
-/**
- * Defined in kernel.c: tear the current user process down with a signal
- * death (`signo`; SIGSEGV here): free its pages, wake a waiting parent,
- * reparent its children to init, and schedule the parent to collect the
- * zombie. A real init's death panics instead (a rescue/no-init debug shell
- * regains control). Kills a process that faulted illegally without taking
- * the machine down. Mirrors the CTRL+C kill path.
- */
+/* For `terminate_current_process`, with which the fault handler ends a
+ * process that faulted in user mode. */
 #include "../../kernel.h"
 
 page_dir_t *_kernel_dir;
@@ -84,7 +78,7 @@ static uintptr_t _mmio_next = KVA_MMIO;
  * that the boot carves them below the window, where the two are equal. */
 static int _heap_ready;
 
-/* The physical address of a page table or directory the kernel holds by
+/* The physical address of a page table or directory the kernel reaches by
  * its virtual address. */
 static uintptr_t table_phys(const void *table)
 {
@@ -92,13 +86,14 @@ static uintptr_t table_phys(const void *table)
 }
 
 /**
- * Starting frame index for user page allocation. Set once at init time to
- * `mem_reserved_ptr / PAGE_SIZE`, so freed user pages can be reused even after
- * `mem_reserved_ptr` advances due to later kernel allocations.
+ * The first frame above the boot's reservations and the floor of every scan
+ * of the window for a free frame. Set once at init time to
+ * `mem_reserved_ptr / PAGE_SIZE`, so a frame freed below a break that a later
+ * `mem_reserve` raised is still found.
  */
 static uintptr_t _user_frames_start = 0;
 
-/* Frames `alloc_kernel_frame` has taken from the top of the pool, the page
+/* Frames `alloc_kernel_frame` has taken from the top of the window, the page
  * cache's among them, for the record a failed user allocation writes. */
 static uint32_t _kernel_frames_reserved;
 
@@ -120,10 +115,7 @@ static page_table_t *alloc_page_table(void)
 
     table = mem_reserve_ptr(sizeof(page_table_t), true);
     if (table) {
-        /* Mark the frame as used in the frame table. mem_reserve allocates
-         * memory after init_paging without updating the table; without this,
-         * alloc_user_page could hand the same frame to a user page, overwriting
-         * the page table. */
+        /* mem_reserve marks the frame too once the table exists. */
         uintptr_t frame = (uintptr_t)table / PAGE_SIZE;
         if (frame < _frames_number) {
             frame_take(frame);
@@ -134,7 +126,7 @@ static page_table_t *alloc_page_table(void)
 }
 
 /**
- * Add a page table to the free list.
+ * Give a page table back to the heap.
  */
 static void free_page_table(page_table_t *table)
 {
@@ -178,6 +170,30 @@ static void _page_fault_handler(isr_params_t *params);
 
 static void _load_page_dir(page_dir_t *dir);
 
+/**
+ * Build the frame table and the kernel directory, turn paging on, and start
+ * the heap.
+ *
+ * The frame table has one word per frame below the map's top, and lies
+ * below the window with the other boot tables; a map with nothing usable
+ * gets the window, so a machine whose firmware gives no map still boots.
+ * The boot allocator placed the table before the map could be consulted, so
+ * a table that lies over memory the map does not offer would overwrite
+ * firmware's memory, and the machine stops rather than run on it. A frame
+ * the map does not offer is marked `FRAME_ABSENT`.
+ *
+ * The kernel directory identity-maps the window, supervisor-only, so the
+ * kernel reaches any physical address below `HARD_MEMORY_LIMIT` directly,
+ * and has a page table for every 4 MiB of the kernel's gigabyte (256 tables,
+ * a megabyte), shared by every directory cloned later, so a mapping made
+ * there after the first fork is seen by every process. Every frame below
+ * `mem_reserved_ptr` is then marked used: the identity loop marks the frames
+ * below the break as it passes them, and a final pass marks them all once
+ * more, for the tables carved at frames the loop had already passed and for
+ * those carved after it. The map has the same range reserved, and what the
+ * allocator manages and has free is counted from the table and not from the
+ * map's arithmetic, so the boot's report compares the two.
+ */
 void init_paging(struct frame_map *map)
 {
     unsigned int frame;
@@ -192,10 +208,6 @@ void init_paging(struct frame_map *map)
         k_panic("frame.h constants drifted from paging.h");
     }
 
-    /* The table covers every frame below the map's top, one word each, and
-     * lives below the window with the other boot tables; a map with nothing
-     * usable gets the window, so a machine whose firmware says nothing still
-     * boots as it did. */
     _frames_number = map->top_frame ? map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
     _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
                                                                     : HARD_MEMORY_LIMIT / PAGE_SIZE;
@@ -203,10 +215,6 @@ void init_paging(struct frame_map *map)
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
     }
-    /* The table was placed by the boot allocator before the map could be
-     * consulted; a table that lies over a range the map does not offer
-     * would have overwritten firmware's memory, and the machine stops
-     * rather than run on it. */
     if (map->top_frame) {
         uintptr_t first = (uintptr_t)_frames / PAGE_SIZE;
         uintptr_t last = ((uintptr_t)_frames + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
@@ -234,12 +242,6 @@ void init_paging(struct frame_map *map)
     k_memset(_kernel_dir, 0, sizeof(page_dir_t));
     _curr_dir = _kernel_dir;
 
-    /*
-     * Identity map all physical memory up to HARD_MEMORY_LIMIT.
-     * This allows kernel code to access any physical address directly.
-     * Only frames below mem_reserved_ptr are marked as used in the frame table;
-     * frames above remain free for user page allocation.
-     */
     phys_address = frame = 0;
     while (phys_address < HARD_MEMORY_LIMIT) {
         tmp = phys_address / PAGE_SIZE;
@@ -264,11 +266,7 @@ void init_paging(struct frame_map *map)
             _curr_dir->logical_page_tables[table_index] = table;
         }
 
-        /* Mark frames below mem_reserved_ptr as used (kernel, heap, modules).
-         * The `frame < _frames_number` bound matches the final pass and the
-         * other table writes; it only matters when real RAM is smaller than
-         * the direct-mapped window, but the guard keeps every write in range.
-         */
+        /* The frame table ends first when memory is smaller than the window. */
         if (phys_address < mem_reserved_ptr && frame < _frames_number) {
             frame_take(frame);
         }
@@ -283,11 +281,6 @@ void init_paging(struct frame_map *map)
         phys_address += PAGE_SIZE;
     }
 
-    /*
-     * The kernel's own gigabyte: every page table for it exists now and is
-     * shared by every directory cloned later, so a mapping made in it after
-     * the first fork is seen by every process. 256 tables, a megabyte.
-     */
     for (table_index = KVA_BASE / PAGE_SIZE / 1024; table_index < 1024; table_index++) {
         if (_curr_dir->logical_page_tables[table_index]) {
             continue;
@@ -301,14 +294,6 @@ void init_paging(struct frame_map *map)
         _curr_dir->logical_page_tables[table_index] = (page_table_t *)tmp;
     }
 
-    /*
-     * Final pass: mark all frames up to mem_reserved_ptr as used.
-     * This is necessary because page tables allocated during the loop above
-     * may reside at physical addresses that were already scanned before
-     * those allocations occurred. Without this final pass, those frames
-     * would incorrectly appear free and could be allocated for user pages,
-     * overwriting kernel page tables.
-     */
     {
         uintptr_t final_frame = mem_reserved_ptr / PAGE_SIZE;
         uintptr_t f;
@@ -317,18 +302,9 @@ void init_paging(struct frame_map *map)
         }
     }
 
-    /*
-     * Save the initial user frames starting point.
-     * User page allocations will search for free frames starting here.
-     */
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
     _next_free_frame = _user_frames_start;
     _next_free_upper = _window_frames;
-    /* Everything the boot carved below the break is reserved, the tables
-     * above included. What the allocator manages is counted from the table
-     * and not from the map's arithmetic, so the boot's report compares the
-     * two: every whole frame the map offers above the break, reachable or
-     * not yet. */
     if (map->top_frame) {
         frame_map_reserve(map, 0, mem_reserved_ptr);
     }
@@ -359,6 +335,18 @@ void init_paging(struct frame_map *map)
     _heap_ready = 1;
 }
 
+/**
+ * Load `dir` into CR3 and turn on paging and supervisor write protection.
+ *
+ * CR0.WP makes a ring-0 write to a read-only page fault instead of silently
+ * succeeding; the page cache's dirty tracking depends on it, mapping a clean
+ * frame read-only so the next write faults again and marks it dirty. A
+ * kernel write to a user text page goes through a temporary mapping of its
+ * frame, or is refused by the pre-fault, so it never faults. A kernel write
+ * to a present copy-on-write page does fault: `cow_fault` makes the page
+ * private and writable, and the instruction retries. WP affects nothing
+ * else.
+ */
 static void _load_page_dir(page_dir_t *dir)
 {
     uint32_t cr0;
@@ -366,14 +354,7 @@ static void _load_page_dir(page_dir_t *dir)
     __asm__ __volatile__("mov %0, %%cr3" ::"r"(&dir->phys_page_tables));
     __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
 
-    /* Enable paging (PG, bit 31) and supervisor write-protect (WP, bit 16). WP
-     * makes a ring-0 write to a read-only page fault instead of silently
-     * succeeding; the page cache's dirty tracking depends on it, mapping a
-     * clean frame read-only so the next write re-faults and re-marks it dirty.
-     * A kernel write to a user text page uses the physical alias or pre-faults
-     * first, so it never traps. A kernel write to a present copy-on-write page
-     * does trap: the WP fault routes to cow_fault, which makes the page private
-     * and writable, and the instruction retries. WP affects nothing else. */
+    /* PG is bit 31 and WP bit 16. */
     cr0 |= 0x80000000u | 0x00010000u;
 
     __asm__ __volatile__("mov %0, %%cr0" ::"r"(cr0));
@@ -455,13 +436,30 @@ static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
 /**
  * Demand-paging resolver. Decide whether an access at the (not necessarily
  * aligned) `addr` is legal for the current process and, if so, make sure the
- * page is backed. `write` is 1 for a write. Returns 1 if the page is now
- * mapped, 0 if the access is illegal (no VMA covers it and it is not a valid
- * stack growth, or it writes a read-only region); so the caller faults or
- * segfaults.
+ * page is backed. `write` is 1 for a write.
  *
- * The current process always has a user address space here (the handler and
- * the pre-fault path both gate on `current_proc->cr3 != 0`).
+ * Outside every region the one legal access grows the stack down
+ * (`vm_grow_stack`, under RLIMIT_AS). Inside one, the region's protection
+ * must allow the access: a write to a read-only region and any access to a
+ * PROT_NONE region are never backed. A present page is left as it is, except
+ * that a write to one that is not writable goes to `cow_fault`: a page shared
+ * by a fork is present, read-only and copy-on-write in a writable region, and
+ * a pre-fault that answered "backed" would promise the kernel a page it
+ * cannot write. A present page that is neither writable nor copy-on-write
+ * then reports unresolved, since reporting it backed would fault on the same
+ * instruction forever.
+ *
+ * A missing page is heap, stack or an anonymous mapping, since exec loads
+ * code and data whole. It gets a zeroed frame, read-only in the PTE when its
+ * region is, so a later write faults; a grown stack page stays writable. The
+ * caches give frames back first when memory is short (`mem_balance`), which
+ * inside a system call may sleep in a writeback.
+ *
+ * Returns 1 if the page is now mapped, 0 if the access is illegal or no
+ * frame could be had or zeroed; the caller then segfaults the process, or a
+ * pre-fault answers -EFAULT. The current process always has a user address
+ * space here (the handler and the pre-fault path both check
+ * `current_proc->cr3 != 0`).
  */
 static int vm_resolve(uint32_t addr, int write)
 {
@@ -470,17 +468,11 @@ static int vm_resolve(uint32_t addr, int write)
     uintptr_t phys;
 
     if (!vma) {
-        /* The one legal access outside every region is growing the stack
-         * down. */
         if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1), current_proc->rlim[RLIM_AS].cur)) {
             return 0;
         }
         /* A grown stack page is read+write; fall through to back it. */
     } else {
-        /* The access must be permitted by the region's protection. A write to a
-         * read-only region and any access to a PROT_NONE region are protection
-         * violations the caller turns into a segfault (or -EFAULT for a kernel
-         * prefault); never silently backed. */
         if (write) {
             if (!(vma->prot & VM_PROT_WRITE)) {
                 return 0;
@@ -489,18 +481,6 @@ static int vm_resolve(uint32_t addr, int write)
             return 0;
         }
         if (pte_present(_curr_dir, addr)) {
-            /* Present is not enough for a write. A page shared by a fork is
-             * present, read-only and marked copy-on-write, and the region it
-             * lies in is writable, so the protection test above passed: a
-             * pre-fault that answered "backed" here would promise the kernel a
-             * page it cannot write, and the raw store that followed would fault
-             * with the copy already half made. Making it private now is the
-             * same work the fault handler would do, done before the promise.
-             *
-             * A present page that is not writable and not copy-on-write is out
-             * of frames or a mapping this kernel does not make; reporting that
-             * as unresolved segfaults the process, where reporting it as backed
-             * would fault on the same instruction forever. */
             if (write && !pte_writable(_curr_dir, addr)) {
                 return cow_fault(addr);
             }
@@ -508,28 +488,17 @@ static int vm_resolve(uint32_t addr, int write)
         }
     }
 
-    /* Lazily back the page. alloc_user_page maps it present + user + writable;
-     * code/data pages are eager-loaded at exec, so only heap/stack/anon faults
-     * reach here. The caches give frames back first when memory is short. */
     mem_balance();
     phys = alloc_user_page(_curr_dir, addr);
     if (phys == 0) {
         return 0; /* out of frames */
     }
 
-    /* Zero the fresh page: brk/mmap/stack memory must read as zero, and the
-     * frame may have a previous process's data in it. A frame that could not
-     * be zeroed is not backed: the page comes off again and the fault is
-     * unresolved. */
     if (paging_zero_frame(phys) != 0) {
         unmap_user_page_frame(_curr_dir, addr);
         return 0;
     }
 
-    /* Honor a read-only region's protection in the PTE, so a later write faults
-     * as a protection violation, which the handler segfaults, and which
-     * copy-on-write uses to tell a write fault from a demand fault. A grown
-     * stack page (vma == NULL here) is left writable. */
     if (vma && !(vma->prot & VM_PROT_WRITE)) {
         paging_set_writable(_curr_dir, addr, false);
     }
@@ -547,10 +516,7 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
         return 1; /* an empty range touches nothing */
     }
 
-    /* Callers range-check with user_range_ok first, but self-defend anyway: an
-     * addr + len that wraps the 32-bit address space would make `page < end`
-     * terminate early and leave the tail unfaulted (and the caller copying it
-     * would then fault unhandled). A wrap is rejected outright. */
+    /* A wrapping range would end the loop early and leave its tail unbacked. */
     end = addr + len;
     if (end < addr) {
         return 0;
@@ -569,7 +535,8 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
  * 1) the page is just made writable in place; otherwise a private writable
  * copy is allocated, the shared bytes are copied in, and the shared frame's
  * reference is dropped. Returns 1 if it handled a COW page, 0 if the page is
- * not COW (the caller continues to demand paging / segfault).
+ * not COW or no frame could be had or copied for it (the caller continues to
+ * demand paging / segfault).
  */
 static int cow_fault(uint32_t addr)
 {
@@ -602,9 +569,6 @@ static int cow_fault(uint32_t addr)
         return 1;
     }
 
-    /* Shared: alloc_user_page installs a fresh writable frame (present+rw+user,
-     * no COW) at addr; copy the shared page into it, then drop our reference to
-     * the old shared frame. */
     mem_balance(); /* the caches give frames back first when memory is short */
     new_phys = alloc_user_page(_curr_dir, addr);
     if (new_phys == 0) {
@@ -622,6 +586,25 @@ static int cow_fault(uint32_t addr)
     return 1;
 }
 
+/**
+ * Resolve a page fault, or end what caused it.
+ *
+ * Tried in order. A write that faulted on a present page in user space of a
+ * live user process may be a page shared by a fork, and goes to `cow_fault`.
+ * Any fault at a user-space address of a live user process goes to
+ * `vm_resolve`, keyed on the address and not on the processor's mode, so a
+ * kernel touch of a lazy user page resolves too. A supervisor fault inside
+ * the page-cache window is filled by `pc_fault`, whose polled read is safe
+ * with interrupts off; a fault past the backed size, or one the fill cannot
+ * serve, panics. The window is a kernel-only mapping, so a user-mode fault
+ * there, which would fault again on the supervisor-only page the fill maps,
+ * is not filled and falls through to the segfault.
+ *
+ * What is left kills the process with SIGSEGV when the fault came from user
+ * mode, and otherwise panics: the usercopy helpers return -EFAULT before the
+ * kernel touches a bad user pointer, so a kernel-mode fault here, or one
+ * with no user context, is a kernel bug.
+ */
 static void _page_fault_handler(isr_params_t *params)
 {
     uint32_t fault_address;
@@ -634,37 +617,18 @@ static void _page_fault_handler(isr_params_t *params)
     have_user_proc = (current_proc != NULL && current_proc->cr3 != 0);
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
-    /* Copy-on-write: a write that faulted on a *present* page (protection
-     * violation) may be a COW page shared by a fork. Resolve it before demand
-     * paging, since vm_resolve would see the page already present and loop. A
-     * non-COW present-page write falls through (a genuine read-only region then
-     * segfaults below). */
     if (have_user_proc && write && in_user_range && (params->error_code & PF_ERR_PRESENT)) {
         if (cow_fault(fault_address)) {
             return; /* page is now private + writable; retry the instruction */
         }
     }
 
-    /* Demand paging: a fault on a user-space address owned by a live user
-     * process is resolved by lazily backing the page (heap/stack/anon) or
-     * growing the stack. Keyed on the faulting *address* being in user space,
-     * not on the CPU mode, so a kernel touch of a lazy user page would resolve
-     * here too. */
     if (have_user_proc && in_user_range) {
         if (vm_resolve(fault_address, write)) {
             return; /* page mapped; iret retries the faulting instruction */
         }
     }
 
-    /* Page cache: a fault inside the demand-paged disk window is serviced by
-     * polling the backing sectors into a cache frame and mapping it. The window
-     * is a kernel-only mapping the file system touches in supervisor mode, so
-     * this serves supervisor faults only: a user-mode fault at a window address
-     * is a wild ring-3 access that falls through to the segfault below. Without
-     * the `!user_mode` gate a ring-3 touch would loop on the supervisor-only
-     * page the fill maps, or, with no disk backing, panic the kernel. The
-     * poll-only fill is safe with IF=0. A fault past the backed size, or one
-     * the fill cannot serve, is a real bug. */
     if (!user_mode && fault_address >= PCWIN_BASE &&
         fault_address < PCWIN_BASE + pc_window_size()) {
         if (!current_proc) {
@@ -676,19 +640,13 @@ static void _page_fault_handler(isr_params_t *params)
         k_panic("pagecache: unrecoverable disk fault");
     }
 
-    /* Unrecoverable. A fault taken in user mode is the process's own bug: kill
-     * just that process and survive; terminate_current_process schedules the
-     * parent to collect the zombie, or panics if the dier was a real init. */
     if (user_mode && have_user_proc) {
         klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%x (err 0x%x)", current_proc->pid,
              write ? "write" : "read", fault_address, params->error_code);
         terminate_current_process(SIGSEGV);
-        return; /* child case: the parent was scheduled; nothing to retry */
+        return; /* not reached: it does not return for a user process */
     }
 
-    /* A fault in kernel mode (or with no user context) is a kernel bug. The
-     * fault-aware usercopy path returns -EFAULT before the kernel ever touches
-     * a bad user pointer, so reaching here means the kernel itself faulted. */
     klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X", fault_address,
          params->error_code, params->eip);
 
@@ -714,9 +672,6 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     uintptr_t end_addr = phys_addr + size;
     uintptr_t pages, span, i, va;
 
-    /* Reject an empty or wrapping region: a `phys_addr + size` that overflowed
-     * would leave end_addr below start_page, map nothing, and falsely succeed.
-     */
     if (size == 0 || end_addr < phys_addr) {
         klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x, %d bytes", phys_addr, size);
         return 0;
@@ -915,13 +870,13 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
  * Reserve one free physical frame for kernel-internal use and return its
  * physical address, or 0 if none is free.
  *
- * The frame is marked used at reference count 1 and never has the user
- * bit, so `alloc_user_page` and `free_user_pages` skip it; the caller owns
- * it for the life of the kernel. The scan runs from the top of the pool
- * down, away from the bottom-up user-page scan, so a kernel reservation and
- * user pages rarely contend. The returned address is also the frame's
- * identity-mapped virtual address, since the kernel identity-maps the whole
- * pool.
+ * The frame is marked used at reference count 1 and has no user mapping, so
+ * `alloc_user_page` and `free_user_pages` skip it; the caller owns it until
+ * `free_kernel_frame`. The scan runs down from the top of the
+ * identity-mapped window, while user pages come from above the window first
+ * and then from the window's bottom up, so a kernel reservation and user
+ * pages rarely contend. The returned address is also the frame's virtual
+ * address, since the scan stays inside the window.
  */
 void *alloc_kernel_frame(void)
 {
@@ -962,9 +917,10 @@ uint32_t frame_total_count(void)
 /**
  * Return the number of physical frames currently free.
  *
- * A linear scan of the frame table below the window. The caller (sysinfo,
- * the leak probe) wants a point-in-time count, so no locking is needed
- * under the IF discipline.
+ * Every writer of the frame table keeps the count, so this reads one word
+ * and scans nothing. A reader gets a point-in-time count, which is what
+ * sysinfo, the leak probe and reclaim need, so no locking is needed under
+ * the IF discipline.
  */
 uint32_t frame_free_count(void)
 {
@@ -987,7 +943,7 @@ uint32_t frame_free_count(void)
  * size` at the top of the address space wraps below the start, and a loop
  * bounded by that sum would allocate nothing and report success. The refusal
  * is written as a subtraction from zero, which is the space above `va_start`
- * except at `va_start` itself, where the whole space is above it.
+ * except when `va_start` is zero, where the whole space is above it.
  */
 int premap_kernel_window(uintptr_t va_start, size_t size)
 {
@@ -1132,21 +1088,24 @@ void paging_flush_tlb(uintptr_t addr)
     __asm__ __volatile__("invlpg (%0)" ::"r"(addr) : "memory");
 }
 
+/**
+ * A new page directory from the heap with every entry of the kernel
+ * directory copied, or NULL when the heap has no room.
+ *
+ * Only the table pointers are copied, so the kernel's page tables are shared
+ * and kernel memory is reachable from any process. A kernel PDE added after
+ * the copy would not reach the clone, so `map_mmio` must not add one.
+ */
 page_dir_t *clone_page_directory(void)
 {
     page_dir_t *new_dir;
     uint32_t i;
 
-    /* Allocate a new page directory (from free list or fresh) */
     new_dir = alloc_page_dir();
     if (!new_dir) {
         return NULL;
     }
 
-    /* Copy kernel page table references. Kernel page tables are shared across
-     * all processes, so copy only the pointers, not the tables themselves; this
-     * keeps kernel memory reachable from any process. After this snapshot a new
-     * kernel PDE would not reach this clone, so map_mmio must not add one. */
     for (i = 0; i < 1024; i++) {
         new_dir->phys_page_tables[i] = _kernel_dir->phys_page_tables[i];
         new_dir->logical_page_tables[i] = _kernel_dir->logical_page_tables[i];
@@ -1155,12 +1114,14 @@ page_dir_t *clone_page_directory(void)
     return new_dir;
 }
 
+/**
+ * The address CR3 takes for `dir`: the physical address of its entries, the
+ * directory's second page. For the kernel's own directory, carved below the
+ * window, that is the address the kernel has; every other lives in the
+ * heap, where the two differ.
+ */
 uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
-    /* CR3 takes the physical address of the entries, the directory's second
-     * page; the kernel's own directory was carved below the window, where
-     * that is the address the kernel holds, and every other lives in the
-     * heap. */
     return table_phys(&dir->phys_page_tables);
 }
 
@@ -1217,9 +1178,8 @@ uint32_t frame_unref(uintptr_t phys)
  * `table_index` and return it, or NULL on allocation failure. A table
  * inherited from the kernel directory by clone_page_directory is copied so
  * per-process mappings stay isolated; a missing table is allocated; an
- * existing private table is made user-accessible. Factored out of
- * alloc_user_page so map_user_frame (and thus copy-on-write) shares exactly
- * the same table-management logic.
+ * existing private table is made user-accessible. Used by alloc_user_page
+ * and by map_user_frame, through which fork shares a frame copy-on-write.
  */
 static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
 {
@@ -1304,12 +1264,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;
     }
 
-    /*
-     * CRITICAL: ensure the page table FIRST, before finding a free frame.
-     * This advances mem_reserve()'s pointer (if a new table is allocated)
-     * before we scan for free frames, preventing the same physical address
-     * from being used for both the page table and the user page.
-     */
+    /* The table first: one that cannot be had leaves no frame to give back. */
     table = ensure_user_table(dir, table_index);
     if (!table) {
         return 0;
@@ -1369,9 +1324,12 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 }
 
 /**
- * Free all user pages in a page directory. Walks every page directory entry
- * and frees the user-accessible pages above the kernel region
- * (`USER_ADDR_MIN`), clearing the private page table entries as it goes.
+ * Free all user pages in a page directory. Walks every private page table
+ * and drops the frame reference of each present user page above the
+ * identity-mapped window, where user space starts, clearing its entry; a
+ * frame goes back to the pool with its last reference. An entry naming frame
+ * 0 or the page table itself is corrupt and is cleared without touching a
+ * frame. The page tables stay, for `free_page_directory`.
  */
 void free_user_pages(page_dir_t *dir)
 {
@@ -1412,10 +1370,6 @@ void free_user_pages(page_dir_t *dir)
                 continue;
             }
 
-            /* Sanity check: the physical address must be valid. Skip entries
-             * that are clearly garbage:
-             *   * phys_addr == 0 (NULL pointer)
-             *   * phys_addr points to the page table itself (corruption) */
             if (phys_addr == 0 || phys_addr == table_phys(table)) {
                 /* Clear the garbage entry but don't try to free frame */
                 table->pages[page_idx] = 0;
@@ -1485,8 +1439,8 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
  * free_user_pages() to release the directory structures themselves; the
  * directory and its private page tables go back to the heap.
  *
- * Must NOT be called on the kernel directory or the currently active
- * directory.
+ * The kernel directory and the active one are refused and so left in place:
+ * a caller switches to another directory first.
  */
 void free_page_directory(page_dir_t *dir)
 {
@@ -1509,7 +1463,7 @@ void free_page_directory(page_dir_t *dir)
             continue;
         }
 
-        /* A private page table: add to the free list. */
+        /* A private page table: back to the heap. */
         free_page_table(table);
         dir->logical_page_tables[dir_idx] = NULL;
         dir->phys_page_tables[dir_idx] = 0;

@@ -1,11 +1,12 @@
 /*
  * netconsole.c: the kernel log, repeated onto the wire as broadcast frames.
  *
- * The whole of this file runs from inside `klog`'s delivery, which is entered
- * from anywhere in the kernel including interrupt handlers and the panic path,
- * so it does three things and no others: it appends a byte to a fixed ring, it
- * fills a fixed frame buffer, and it calls the Ethernet layer. It allocates
- * nothing and blocks on nothing.
+ * The output path, `netconsole_putc` and the flush it starts, runs from
+ * inside `klog`'s delivery, which is entered from anywhere in the kernel
+ * including interrupt handlers and the panic path, so it does three things
+ * and no others: it appends a byte to a fixed ring, it fills a fixed frame
+ * buffer, and it calls the Ethernet layer. It allocates nothing and blocks on
+ * nothing.
  *
  * The buffer exists because the interesting output comes out before the
  * network device is up: the memory layout, the module ranges, the device
@@ -47,7 +48,7 @@
 #include "../lib/krandom.h"
 
 /* What is held before transmitting starts, and while a frame is in flight.
- * Sized to carry a boot log's worth of output ahead of the device probe. */
+ * Sized for a boot log's worth of output ahead of the device probe. */
 #define NETCONSOLE_RING 8192
 
 static char nc_ring[NETCONSOLE_RING];
@@ -81,8 +82,7 @@ void netconsole_putc(char c)
         next = 0;
     }
     if (next == nc_tail) {
-        /* Full. The oldest characters are the boot log this exists to carry,
-         * so the newest is the one dropped. */
+        /* Full: drop the newest, since the oldest are the boot log. */
         nc_dropped++;
         net_unlock(flags);
         return;
@@ -108,11 +108,7 @@ void netconsole_flush(void)
         return;
     }
     nc_sending = 1;
-    /* Drain what is here NOW and stop. A driver that reports an error on every
-     * transmit adds to the ring from inside this loop, and draining to a moving
-     * end would never finish: the machine would sit inside one record with
-     * interrupts disabled, transmitting the report of its own failure to
-     * transmit. Whatever arrives during the drain goes out on the next one. */
+    /* Drain to the head as it is now; later characters wait for the next. */
     end = nc_head;
     net_unlock(flags);
 
@@ -157,9 +153,7 @@ void netconsole_enable(void)
     if (nc_enabled) {
         return;
     }
-    /* Any per-boot value distinguishes one boot's frames from the next in a
-     * capture that spans a reboot; nothing here needs it to be unpredictable.
-     * Zero is reserved for "not set", so a zero draw becomes one. */
+    /* Tells boots apart in a capture; need not be unpredictable. 0 is unset. */
     nc_boot_id = krandom_u32();
     if (nc_boot_id == 0) {
         nc_boot_id = 1;

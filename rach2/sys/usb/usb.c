@@ -1,18 +1,18 @@
 /*
- * usb.c: what USB hardware this machine has.
+ * usb.c: what USB hardware this machine has, and the stack's entry points.
  *
- * The first piece of the USB stack, and for now the whole of it: an inventory
- * taken from PCI configuration space. It exists before the driver because the
- * two machines this kernel runs on answer differently, and the difference
- * decides what the driver must do. QEMU presents whichever controller the
- * command line asked for. The notebook presents an Intel Lynx Point-LP xHCI
- * and a companion EHCI, and its firmware decides which of the two owns each
- * USB2 pin.
+ * The inventory is taken from PCI configuration space before any driver runs,
+ * because the two machines this kernel runs on answer differently. QEMU
+ * presents whichever controller the command line asked for. The notebook
+ * presents an Intel Lynx Point-LP xHCI and a companion EHCI, and its firmware
+ * decides which of the two owns each USB2 pin. The inventory writes nothing:
+ * reading configuration space cannot disturb a controller the firmware is
+ * still driving, which matters on a machine booted through the compatibility
+ * support module, where system management mode may be emulating a PS/2
+ * keyboard out of a USB one at the time it runs.
  *
- * Nothing here writes. Reading configuration space cannot disturb a controller
- * the firmware is still driving, which matters on a machine booted through the
- * compatibility support module, where system management mode may be emulating
- * a PS/2 keyboard out of a USB one at the time this runs.
+ * The rest is the bring-up of every xHCI, the one pump that drains them from
+ * the timer and from their interrupts, and the stop.
  */
 
 #include "usb.h"
@@ -31,8 +31,7 @@
 #include "xhci.h"
 
 /* The interface byte of a USB controller says which register interface it
- * presents. These are the four the standard defines, plus the value a USB
- * device on the bus reports. */
+ * presents. These are the four the standard defines for a host controller. */
 #define USB_IF_UHCI 0x00
 #define USB_IF_OHCI 0x10
 #define USB_IF_EHCI 0x20
@@ -112,20 +111,20 @@ void usb_report_controllers(void)
     }
 }
 
-/* ---- bringing the stack up ---- */
+/* bringing the stack up */
 
 /*
- * How long the ports are given to settle before they are read, and how often
- * the driver's clock is advanced while that happens. The USB specification
- * asks for a hundred milliseconds between a connect and anything done about
- * it, and a machine that has just started has every device already connected.
+ * How long the ports are given to settle before they are read. The USB
+ * specification asks for a hundred milliseconds between a connect and
+ * anything done about it, and a machine that has just started has every
+ * device already connected.
  */
 #define USB_SETTLE_MS 100u
 
 /* How long the boot waits for what is already plugged in to be enumerated.
- * Each turn is one step of the state machine and one millisecond, and a device
- * takes a dozen steps, so this is generous for the four devices this kernel
- * holds and short enough not to be noticed. */
+ * The timer steps each device once a tick, every 10 ms, and a device takes a
+ * dozen steps, so this is enough for a few devices and short enough not to be
+ * noticed; the timer finishes a device still being enumerated after it. */
 #define USB_ENUMERATE_MS 400u
 
 /*
@@ -188,7 +187,9 @@ static void usb_wait(uint32_t milliseconds)
  * A USB 2 port's speed field is valid only once the port is enabled, which
  * is after its reset; before that a low-speed device is told by its own
  * pull-up and a full- and a high-speed one read alike. The record says so,
- * and the device's own line later carries the speed the reset settled.
+ * and the device's own line later gives the speed the reset settled. The
+ * lines are debug records, one per occupied port, since the lines that
+ * follow name the devices themselves.
  */
 static void report_ports(void)
 {
@@ -206,10 +207,6 @@ static void report_ports(void)
                 continue;
             }
             if (status.connected) {
-                /* One line per occupied port, before anything is known about
-                   what is on it. A laptop has six of these and the lines that
-                   follow name the devices themselves, so this is for whoever
-                   is debugging enumeration. */
                 if (status.speed == USB_SPEED_LOW) {
                     klog(KLOG_DEBUG, "usb", "port: xhci%d.%d: a low-speed device", n, port + 1);
                 } else {
@@ -226,17 +223,8 @@ static void report_ports(void)
     }
 }
 
-/*
- * The one pump, and the two contexts that turn it.
- *
- * The controller's event ring is drained here and nowhere else. Whichever
- * context turns it, the interrupt flag stays as that context found it: the
- * handler already runs with interrupts off through its gate, the timer's
- * handler does too, and this saves and restores rather than enabling on its
- * way out. That is what keeps the two from ever being inside the ring at once
- * on this one processor, and it is the rule the block layer's requests will
- * rely on when they sleep on a completion.
- */
+/* EFLAGS as it is, for the pump's check that it did not enable interrupts;
+ * the host test reads it through the kirq pair. */
 static uint32_t usb_eflags(void)
 {
 #ifdef RACH2_HOSTTEST
@@ -256,14 +244,42 @@ static uint32_t usb_eflags(void)
 #endif
 }
 
+/**
+ * The one pump: advance every controller's clock, drain its event ring and
+ * step the devices, from whichever context turns it.
+ *
+ * The event rings are drained here and nowhere else. The pump saves the
+ * interrupt flag and puts it back rather than enabling interrupts on its way
+ * out: the controller's interrupt handler and the timer's both run with
+ * interrupts off, which keeps the two from ever being inside a ring at once
+ * on this one processor, and the block layer's requests rely on that rule
+ * when they sleep on a completion. A pump that finds interrupts on before it
+ * restores the flag says so once, since one that does it does it every tick.
+ *
+ * Every controller is advanced and drained in each pass, so a machine with
+ * two keeps both moving. The handler's drain acknowledges the interrupt first,
+ * in the same call (xhci_interrupt_take); the timer's has nothing to
+ * acknowledge.
+ *
+ * After a drain that took events, `pump_saw_pending` records whether an
+ * interrupt for this stack is already pending, read at the APIC or the 8259
+ * and not at the xHCI, whose own pending bit is set whether or not a message
+ * was sent; a message sent while the tick held interrupts off waits in the
+ * request register. It is read after the drain, because the controller
+ * answers a doorbell the step writes inside that same write, so an event and
+ * its message can appear mid-pump, and read again at the end: the event and
+ * its message are two transactions, and the message may still be on its way
+ * when the event is in memory. Without that a race would count as a lost
+ * edge.
+ *
+ * Returns the number of events taken.
+ */
 static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
 {
     uint32_t flags;
     int taken;
 
     flags = kirq_save();
-    /* Every controller is advanced and drained in the one pump, so a machine
-     * with two of them keeps both moving from whichever context turns it. */
     taken = 0;
     {
         int n;
@@ -273,8 +289,6 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
             int took;
 
             xhci_advance(hc, elapsed_ms);
-            /* The handler's drain acknowledges the interrupt first and in the
-             * same call; the timer's has nothing to acknowledge. */
             took = from_interrupt ? xhci_interrupt_take(hc) : xhci_events(hc);
             if (took > 0) {
                 taken += took;
@@ -283,35 +297,12 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
     }
     usb_stamp_pump(stamp_entry, taken > 0 ? pit_now_us() : 0, from_interrupt, taken > 0);
     if (taken > 0) {
-        /*
-         * Whether a message for this stack is already waiting at the
-         * processor. Asked here and not before the drain: the controller
-         * answers a doorbell written by the step above inside that same
-         * write, so an event can appear, and a message be sent for it, in the
-         * middle of this pump. The processor is what is asked and not the
-         * controller: the controller's pending bit is set whether or not a
-         * message was sent, and a message that was sent while this tick held
-         * the interrupt flag down is waiting in the processor's own request
-         * register.
-         */
         pump_saw_pending = interrupt_pending();
     }
     usb_core_step(elapsed_ms);
     if (taken > 0 && !pump_saw_pending) {
-        /*
-         * Asked once more at the end of the pump. The controller writes the
-         * event and sends the message as two transactions, and the second
-         * can still be on its way to the processor while the first is
-         * already in memory; the work of the pump is time enough for it to
-         * arrive, and without this the record would count a race as an edge
-         * that was lost.
-         */
         pump_saw_pending = interrupt_pending();
     }
-    /* The flag is read before it is put back: the pump must not have enabled
-     * interrupts, or the timer's context and the handler's would be inside
-     * the controller's ring at once on this one processor. Said once, since a
-     * pump that did this does it every tick. */
     if ((usb_eflags() & 0x200u) != 0 && !pump_enabled_interrupts) {
         pump_enabled_interrupts = 1;
         klog(KLOG_ERR, "usb", "pump: interrupts were enabled inside it");
@@ -323,7 +314,8 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
 /**
  * Return whether any configured USB interrupt source is pending.
  *
- * Check each controller's MSI vector or PCI IRQ at the processor.
+ * A controller's MSI vector is checked at the local APIC, and its PCI line at
+ * the 8259.
  */
 static int interrupt_pending(void)
 {
@@ -342,15 +334,20 @@ static int interrupt_pending(void)
 }
 
 /**
- * The controller's message: acknowledge it, pump, and return.
+ * The controller's interrupt, as a message or on its line: acknowledge it,
+ * pump, and return.
  *
- * The acknowledgement is the pump's first act when the pump was turned by a
- * message, and no part of it when the timer turned it. An event the
- * controller writes between the acknowledgement and the drain is taken by
- * that same drain, which is why the two are one call in the driver.
+ * The acknowledgement is the pump's first act when an interrupt turned it,
+ * and no part of it when the timer did. An event the controller writes
+ * between the acknowledgement and the drain is taken by that same drain,
+ * which is why the two are one call in the driver.
  *
- * The router ends the interrupt at the APIC after this returns, and
- * reschedules if a reader was woken.
+ * With `rach2.msidrop=N` the Nth interrupt silences every controller, and the
+ * timer's pump is all that is left: it is how the fallback is seen to work on
+ * a machine whose interrupts stop.
+ *
+ * The router ends a message at the APIC after this returns, and a line at the
+ * 8259 before this runs; either way it then lets a woken reader run.
  */
 static void usb_msi_handler(isr_params_t *params)
 {
@@ -360,9 +357,6 @@ static void usb_msi_handler(isr_params_t *params)
     usb_messages++;
     (void)usb_pump(0, 1);
     if (msi_drop_after != 0 && usb_messages >= msi_drop_after) {
-        /* rach2.msidrop=N: the machine loses its edges from here, and the
-         * timer's pump is all that is left. It is how the fallback is seen
-         * to work on a machine whose interrupts stop. */
         int n;
 
         for (n = 0; n < xhci_controllers(); n++) {
@@ -396,6 +390,27 @@ static int hcfail_at(void)
     return i > 0 && value[i] == '\0' ? n : -1;
 }
 
+/**
+ * Bring every controller up on its own, then the stack.
+ *
+ * A controller whose bring-up fails is given back to its firmware, since one
+ * this kernel does not drive should keep whatever the firmware was doing for
+ * it.
+ * It is then taken out of the table, so nothing asks it about its ports, and
+ * the ones after it move up, so the walk steps back onto the one that took
+ * its place. The others still come up: a machine whose second controller is
+ * broken keeps the sockets on its first. `rach2.hcfail=N` counts controllers
+ * in the order they are tried, since a controller left out changes the index
+ * of every one after it.
+ *
+ * From the stack's start the timer drains the controllers and steps the
+ * devices, and this only waits: for the ports to settle, then for what is
+ * plugged in to be enumerated, so a machine that boots with a keyboard has one
+ * before the first process runs. The controllers' own interrupts come last,
+ * since a message that arrived while the rings were being built would have
+ * found a stack that was not ready for it; a controller whose interrupts
+ * cannot be enabled stays on the timer.
+ */
 int usb_init(void)
 {
     int up = 0;
@@ -406,17 +421,9 @@ int usb_init(void)
         klog(KLOG_INFO, "usb", "absent: %s", xhci_error(0));
         return -1;
     }
-    /*
-     * Every controller is brought up on its own. One that refuses is released
-     * and left out, and the others still come up: a machine whose second
-     * controller is broken keeps the sockets on its first.
-     */
     for (n = 0; n < xhci_controllers(); n++) {
         struct xhci_ctrl *hc = xhci_controller(n);
         const struct xhci_caps *caps;
-        /* Counted, not indexed: a controller left out shifts the ones after it
-         * down and the walk steps back onto this index, so the index is not
-         * which controller this is. */
         int refuse = (seen++ == hcfail_at());
 
         if (refuse || xhci_read_caps(hc) != 0 || xhci_own(hc) != 0 || xhci_halt_reset(hc) != 0 ||
@@ -426,14 +433,7 @@ int usb_init(void)
             } else {
                 klog(KLOG_WARN, "usb", "refused: xhci%d: %s", n, xhci_error(hc));
             }
-            /* Whatever was taken from the firmware goes back. A controller
-             * this kernel does not drive is one that should still have
-             * whatever its firmware was doing for it. */
             xhci_release(hc);
-            /* Out of the table: nothing above may ask a controller that never
-             * came up about its ports, and its tables were never taken. The
-             * ones after it move up, so the walk steps back onto the one that
-             * took this place. */
             xhci_forget(hc);
             n--;
             continue;
@@ -451,15 +451,8 @@ int usb_init(void)
     usb_core_reset();
     usb_up = 1;
 
-    /* From here the timer drains the controller and steps the devices. This
-     * waits for the ports to settle and then for what is plugged in to be
-     * enumerated, and does none of the work itself. */
     usb_wait(USB_SETTLE_MS);
     report_ports();
-    /* Enumerate what is already plugged in before the first process runs, so
-     * a machine that boots with a keyboard has one. Each turn is a step and a
-     * millisecond; a device that takes longer than this many is finished by
-     * the timer afterwards. */
     {
         uint32_t turn;
 
@@ -469,13 +462,6 @@ int usb_init(void)
     }
     klog(KLOG_INFO, "usb", "devices: %d configured", usb_core_count());
 
-    /*
-     * The controller's own interrupt, last: everything above ran on the
-     * timer's pump, and a message that arrived while the rings were being
-     * built would have found a stack that was not ready for it. A machine
-     * that refuses stays exactly as it was, which is the kernel before this
-     * milestone.
-     */
     usb_interrupts_start();
     return 0;
 }
@@ -491,6 +477,14 @@ int usb_init(void)
  * timer's pump alone for a stick. A controller that names no line is left
  * to the timer. `rach2.msidrop=N` silences the controller after N messages,
  * which is how a machine that loses its edges is staged.
+ *
+ * Each controller gets a vector of its own. The handler is the one pump and
+ * drains them all, so which vector a message arrived on does not matter, but
+ * two controllers sharing a vector could not both be told to stop. On the
+ * line path the handler is registered before the line is enabled, since a
+ * level line the firmware left asserted would otherwise reach no handler.
+ * The latency record is set up here too, on when `rach2.usblatency` is on
+ * the boot line.
  */
 static void usb_interrupts_start(void)
 {
@@ -513,12 +507,6 @@ static void usb_interrupts_start(void)
         }
         msi_drop_after = after;
     }
-    /*
-     * A vector per controller. The handler is the one pump and drains them
-     * all, so which vector a message arrived on does not matter; what matters
-     * is that each controller has one of its own to send, since two
-     * controllers sharing a vector cannot both be told to stop.
-     */
     for (n = 0; n < xhci_controllers(); n++) {
         struct xhci_ctrl *hc = xhci_controller(n);
         int vector;
@@ -534,8 +522,6 @@ static void usb_interrupts_start(void)
         }
         irq = xhci_line_irq(hc);
         if (irq > 0) {
-            /* The handler before the enable: a level line the firmware left
-               asserted would otherwise be dispatched to nobody. */
             register_isr_handler((uint8_t)(32 + irq), usb_msi_handler, "xhci");
             if (xhci_interrupts_enable_line(hc) == irq) {
                 interrupts_started = 1;

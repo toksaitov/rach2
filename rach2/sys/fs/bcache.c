@@ -38,8 +38,8 @@ static uint64_t stat_hits, stat_fills, stat_waits;
  * buffer is a page of the kernel heap, which is KVA_HEAP_SIZE whatever the
  * machine's memory, so the cache also stops at half the heap's pages: on a
  * machine with more than 2 GiB the memory share alone is more than the
- * whole heap, and a cache that took it all left fork with no page for a
- * stack. */
+ * whole heap, and a cache that took it all would leave fork with no page for
+ * a stack. */
 #define BCACHE_HEAP_SHARE ((KVA_HEAP_SIZE / PAGE_SIZE) / 2u)
 
 static uint32_t bcache_limit(void)
@@ -148,7 +148,8 @@ static struct bbuf *index_find(const block_device_t *dev, uint64_t blk)
     return 0;
 }
 
-/* ---- the release order and the empties ----
+/*
+ * The release order and the empties.
  *
  * A keyed buffer is on the release-order list from its keying until it is
  * emptied, moved to the tail at each release, so the least recently
@@ -241,7 +242,8 @@ static int caller_pid(void)
     return current_proc ? (int)current_proc->pid : 0;
 }
 
-/* ---- the holds ----
+/*
+ * The holds.
  *
  * The buffers a process holds are on a list of its own, so the hold rules,
  * checked at every acquisition, read the few it holds and not every buffer
@@ -290,7 +292,8 @@ static void unhold(struct bbuf *b)
  * downward: a device that is under everything the caller holds, which is what
  * a loop device's read does when it reads the file it is made of. Downward is
  * the only direction there is, since the chain of backing devices has no
- * cycle in it, so the same argument holds across devices as within one.
+ * cycle in it, so the same argument holds across devices as within one. And
+ * no caller holds more than `BCACHE_HOLD_MAX` buffers at once.
  */
 static void check_hold_rules(block_device_t *dev, uint64_t blk)
 {
@@ -326,6 +329,16 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
  * it: the backing must be under everything held, the victim included. A
  * victim that fails this is passed over, and another buffer takes the
  * eviction, which is why this answers instead of stopping the machine.
+ *
+ * The caller needs room for two more holds, the victim, held for the write,
+ * and the block the write takes on the device under it; with less, another
+ * victim is chosen rather than the fifth buffer stopping the machine. And
+ * the locks, which this cache cannot see: writing such a buffer goes through
+ * the file system holding its file and takes that mount's lock, so a caller
+ * that already holds a mount's lock could wait for a lock another caller
+ * holds while that one waits for this one. Its own chain is what it may
+ * write: a volume on a loop device evicting the device's own buffers is the
+ * ordinary case, and the ordering rules cover it.
  */
 static int victim_may_be_written(block_device_t *victim, block_device_t *filling)
 {
@@ -344,26 +357,16 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
             return 0;
         }
     }
-    /* Room for two more: the victim, held for the write, and the block the
-     * write takes on the device under it. A caller with less room than that
-     * is given another victim rather than a machine that stops on the fifth
-     * buffer. */
     if (held + 2 > BCACHE_HOLD_MAX) {
         return 0;
     }
-    /* And the locks, which this cache cannot see: writing such a buffer goes
-     * through the file system holding its file and takes that mount's lock.
-     * A caller that already holds a mount's lock could then be waiting for a
-     * lock another caller holds while that one waits for this one. Its own
-     * chain is what it may write: a volume on a loop device evicting the
-     * device's own buffers is the ordinary case, and the ordering rules
-     * above cover it. */
     if (victim == filling) {
         return 1;
     }
     return !vfs_ns_held_by_caller();
 }
 
+/* Wait predicate: nobody holds the buffer. */
 static int busy_gone(void *arg)
 {
     struct bbuf *b = arg;
@@ -392,11 +395,11 @@ static int write_buffer(struct bbuf *b)
     return 0;
 }
 
-/* The staging buffer a run of blocks is written through, the most one
- * request moves; taken from the heap at the first run. One writer at a
- * time holds it, since the request it hands the bytes to sleeps before it
- * copies them, and a second writer would overwrite them in that window; a
- * writer that finds it held writes its blocks one at a time. */
+/* The staging buffer a run of blocks is written or read through, the most
+ * one request moves; taken from the heap at the first run. One run at a time
+ * uses it, since the request it hands the bytes to sleeps, and a second run
+ * would overwrite them in that window; a writer that finds it in use writes
+ * its blocks one at a time, and a read fills its block alone. */
 static uint8_t *run_stage;
 static int run_stage_busy;
 /* The block a run is being filled for: not a victim while the run's later
@@ -407,12 +410,13 @@ static struct bbuf *fill_keep;
 
 /**
  * Write `first` and the dirty, unheld blocks that follow it on its device
- * in one request, as many as the device takes at once, so that a file
- * written back goes to the disk in runs of 32 KiB and not a page at a
- * time. The run's buffers are held across the request's sleep and let go
- * together; a failure is recorded on the first as `write_buffer` does. A
- * run of one, or a device that takes a page, is `write_buffer`. `*last`
- * receives the last block written.
+ * in one request, so that a file written back goes to the disk in runs and
+ * not a page at a time. A run is as long as the device takes at once and at
+ * most half the cache, as a read run is: its buffers are held across the
+ * request's sleep and let go together, and a run that held every buffer
+ * would leave a miss meanwhile with no buffer to take. A failure is recorded
+ * on the first as `write_buffer` does. A run of one, or a device that takes
+ * a page, is `write_buffer`. `*last` receives the last block written.
  */
 static int write_run(struct bbuf *first, uint64_t *last)
 {
@@ -425,9 +429,6 @@ static int write_run(struct bbuf *first, uint64_t *last)
     if (most > RUN_BLOCKS) {
         most = RUN_BLOCKS;
     }
-    /* Half the cache at most, as a read run is bounded: a run that held
-     * every buffer across the request's sleep would leave a miss meanwhile
-     * with no buffer to take. */
     if (most > bcache_limit() / 2u) {
         most = bcache_limit() / 2u;
     }
@@ -504,8 +505,8 @@ static int fill_run(block_device_t *dev, uint64_t blk);
 
 /**
  * Whether one of `dev`'s dirty `first` buffers cannot be written now, held
- * by another process or failed its last write. An `after` buffer of the
- * device is then not a victim, since its write would pass the first.
+ * or failed its last write. An `after` buffer of the device is then not a
+ * victim, since its write would pass the first.
  */
 static int firsts_pending(const block_device_t *dev)
 {
@@ -568,7 +569,17 @@ struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk)
  * filled from the device, or, for the blank get, zeroed without a read: a
  * caller about to write the whole block, or wanting zeros in it, would only
  * throw the device's bytes away, and on a stick the read costs as much as
- * the write that follows it.
+ * the write that follows it. `*fresh`, when asked for, says whether the
+ * buffer was keyed to the block by this call.
+ *
+ * A miss takes an empty buffer, or a new one while the cache is under its
+ * limit, or else the least recently released unheld buffer this caller may
+ * take, a dirty one written first. A dirty buffer whose last write failed, or
+ * whose write would take a block this caller may not take while it holds
+ * what it holds, is not a candidate. The waits and the writes sleep; the
+ * lookup starts over after each, since another caller may have filled the
+ * block meanwhile. NULL for a block past the device's end, a cache with no
+ * buffer to give, or a failed read.
  */
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank, int *fresh)
 {
@@ -605,11 +616,6 @@ again:
         goto again;
     }
 
-    /* An empty buffer, or a new one while the cache is under its limit;
-     * otherwise the least recently released unheld buffer this caller may
-     * take, a dirty one written first. A dirty buffer whose last write
-     * failed, or whose write would take a block this caller may not take
-     * while it holds what it holds, is not a candidate. */
     for (;;) {
         victim = take_empty();
         if (!victim && nbufs < bcache_limit()) {
@@ -646,10 +652,7 @@ again:
         if (write_buffer(victim) == 0) {
             unhold(victim);
             wq_wake_all(&victim->wq);
-            /* The write slept, whether it went through a file system and
-             * back into this cache or waited for a controller, and another
-             * caller could have filled the very block this one is about to
-             * key. Look again rather than key it twice. */
+            /* The write slept: look again rather than key the block twice. */
             goto again;
         }
         unhold(victim);
@@ -787,9 +790,7 @@ void bcache_release(struct bbuf *b)
     unhold(b);
     b->stamp = ++clock_stamp;
     if (b->discard) {
-        /* The device went while this was held. Nothing in it is worth
-         * keeping and the device it names may be freed the moment the last
-         * hold goes, so the buffer is emptied here and not later. */
+        /* The device went while this was held; it may be freed once unheld. */
         make_empty(b);
     } else if (b->dev) {
         lru_del(b);
@@ -817,14 +818,19 @@ void bcache_dirty_ordered(struct bbuf *b, int order)
     }
 }
 
+/**
+ * Write a held buffer through to the device now.
+ *
+ * After a failed write on the device this answers -EROFS without writing, so
+ * an operation in progress when the device failed stops at its next metadata
+ * write and the read-only transition is not written across.
+ */
 int bcache_write(struct bbuf *b)
 {
     if (!b || b->holder != caller_pid()) {
         k_panic("bcache: hold rule: a write by a process that does not hold the buffer");
         return -EIO;
     }
-    /* An operation in progress when the device failed stops at its next
-     * metadata write, so the read-only transition is not written across. */
     if (b->dev->flags & BLOCK_WRITE_FAILED) {
         return -EROFS;
     }
@@ -846,9 +852,9 @@ static struct bbuf *first_dirty(const block_device_t *dev)
 }
 
 /* The most dirty blocks one scan of the cache gathers for a sync: a scan
- * per run written would read every buffer for every 32 KiB. The batch is
- * on the stack, since a write through a loop device syncs the device under
- * it from inside this call. */
+ * per run written would read every buffer for every run. The batch is on
+ * the stack, since a write through a loop device syncs the device under it
+ * from inside this call. */
 #define SYNC_BATCH 128
 
 /**
@@ -892,6 +898,13 @@ static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t aft
  * pass slept is written before the next `after` of the device, whatever
  * their block numbers, so the order the marks promise holds across the
  * writes' sleeps; a `first` another process holds is waited for.
+ *
+ * Any dirty buffer another process holds is waited for, not passed over: a
+ * sync that returned over one would report clean what is still in flight.
+ * The place reached is kept as a block number, since a buffer let go of
+ * during a wait can be given to another block. A sync is called with
+ * nothing held, of this device or of any other that would forbid writing
+ * it; a caller that breaks that panics.
  */
 int bcache_sync(block_device_t *dev)
 {
@@ -905,10 +918,6 @@ int bcache_sync(block_device_t *dev)
         for (;;) {
             int n, i;
 
-            /* The place reached is a block number and not a buffer: a
-             * buffer let go of while this waits can be given to another
-             * block, and a cutoff read from it afterwards would step over
-             * blocks still to write. */
             n = gather_dirty(dev, pass, started, last, batch);
             if (n == 0) {
                 if (!started) {
@@ -945,9 +954,6 @@ int bcache_sync(block_device_t *dev)
                         break; /* the firsts slept: gathered again */
                     }
                 }
-                /* A held dirty buffer is waited for, not passed over: a sync
-                 * that returned over one would report clean what is still in
-                 * flight. */
                 if (next->holder != -1 && next->holder != caller_pid()) {
                     next->waiters++;
                     wq_wait_event_nointr(&next->wq, busy_gone, next);
@@ -955,14 +961,9 @@ int bcache_sync(block_device_t *dev)
                     break; /* the batch is stale after the wait: gathered again */
                 }
                 if (next->holder == caller_pid()) {
-                    /* Waiting below would be waiting for ourselves: a sync is
-                     * called with nothing of the device held. */
                     k_panic("bcache: hold rule: a sync while holding a block of the device");
                 }
                 if (!victim_may_be_written(next->dev, dev)) {
-                    /* A sync is called with nothing else held; one that is
-                     * not would write a block whose device re-enters this
-                     * cache from under a hold that forbids it. */
                     k_panic("bcache: hold rule: a sync while holding a block of another device");
                 }
                 rc = write_run(next, &last);
@@ -1008,16 +1009,18 @@ int bcache_device_holds(block_device_t *dev)
     return held;
 }
 
+/**
+ * Give back up to `want` buffers: empty ones first, then clean ones oldest
+ * first, then, with `can_write`, dirty ones written back where this caller
+ * may write them. A buffer a process waits for is left, woken or not, since
+ * the waiter has its address. Each pass has a budget, so a buffer dirtied
+ * again as fast as it is written cannot keep the shrink here.
+ */
 uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
 {
     uint32_t got = 0;
     int pass;
 
-    /* Empty buffers go first, then clean ones oldest first, then dirty ones
-     * written back where this caller may write them. A buffer a process
-     * waits for is left, woken or not: the waiter holds its address. Each
-     * pass has a budget, so a buffer dirtied again as fast as it is written
-     * cannot keep this here. */
     for (pass = 0; pass < (can_write ? 3 : 2) && got < want; pass++) {
         int budget = (int)nbufs * 2;
 

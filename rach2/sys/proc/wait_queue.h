@@ -6,14 +6,14 @@
 
 /*
  * Wait queue: the set of processes blocked waiting for one condition (data on a
- * pipe, a datagram on a socket, a tty line, a child to stop). It is the same
+ * pipe, a datagram on a socket, a tty line, a disk request). It is the same
  * idea as the Linux kernel wait queue: a sleeper enqueues itself, marks itself
- * BLOCKED, and yields the CPU; a waker (usually an IRQ handler, a NIC packet,
- * or the timer) walks the queue and makes every sleeper READY again.
+ * BLOCKED, and yields the CPU; a waker (an interrupt handler, the timer, or
+ * another process) walks the queue and makes every sleeper READY again.
  *
  * Two properties pipes, poll/select, ttys, and ptys all need:
- *   * multi-waiter: several processes can block on one object at once (poll
- *     parks one process per fd; two readers can share a pipe);
+ *   * multi-waiter: several processes can block on one object at once (two
+ *     readers can share a pipe, and a poll puts a record on each object);
  *   * signal-interruptible: a pending signal breaks the sleep with -EINTR, so a
  *     blocked read/recv unwinds to deliver the signal instead of hanging.
  *
@@ -40,42 +40,47 @@ typedef int (*wq_cond_fn)(void *arg);
 /* Clear a wait queue to empty. Call once before first use. */
 void wait_queue_init(wait_queue_t *wq);
 
-/** Block the current process on wq until cond(arg) has; 0, or -EINTR on
- * signal. */
+/**
+ * Block the current process on `wq` until `cond(arg)` returns nonzero.
+ *
+ * Returns 0, -EINTR when a signal is pending and the condition is still
+ * false, or -EINVAL without a queue, a condition or a current process. May
+ * sleep. On return the process is off the queue and RUNNING, and the
+ * caller's interrupt flag is as it was.
+ */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /**
  * The same wait with a pending signal ignored, for a lock held by another
- * process and for a device that owns the caller's page: an interruptible
- * wait returns at once while a signal is pending, and a waiter that then
- * retries never leaves the CPU to the holder it waits for.
+ * process and for a transfer a device has in flight for the caller: an
+ * interruptible wait returns at once while a signal is pending, and a waiter
+ * that then retries never leaves the CPU to the holder it waits for.
  */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /*
- * Make every process currently blocked on wq runnable and empty the queue. Safe
- * to call from IRQ context (it disables interrupts around the walk); a woken
- * sleeper re-checks its own condition, so a spurious wake is harmless.
+ * Make every process currently blocked on wq runnable, with one preferred
+ * selection by the scheduler, and empty the queue. Safe to call from IRQ
+ * context (it disables interrupts around the walk); a woken sleeper
+ * re-checks its own condition, so a spurious wake is harmless.
  */
 void wq_wake_all(wait_queue_t *wq);
 
 /*
- * poll/select support: park the current process on SEVERAL wait queues at
- * once. wq_wait_event blocks on one queue; a poller instead calls
- * wq_poll_add on every polled object's queue, then sleeps once (with
- * interrupts disciplined by the caller), and any object's wq_wake_all wakes
- * it; on wake it calls wq_poll_remove on each. Both are idempotent (a wake
- * already removed the waiter) and must be called with interrupts off. They
- * do NOT block or change process state; the poll core owns the
- * BLOCKED/schedule()/RUNNING transitions, the same lost-wakeup-safe way
- * wq_wait_event does.
+ * poll/select support: a poller puts a record of its own on every polled
+ * object's queue with wq_poll_add, sleeps once, and on any wake takes each
+ * record off with wq_poll_remove; any object's wq_wake_all wakes it. Both
+ * are idempotent (a wake already removed the waiter) and must be called
+ * with interrupts off. They do NOT block or change process state; the poll
+ * core owns the BLOCKED/schedule()/RUNNING transitions, the same
+ * lost-wakeup-safe way wq_wait_event does.
  */
 void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w);
 void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w);
 
 /*
- * Non-zero if any process is currently blocked on wq. Used to gate work that
- * is only worth doing while someone is waiting; for example, polling an
+ * Non-zero if any process is currently blocked on wq. Used to skip work that
+ * is needed only while someone is waiting; for example, polling an
  * interrupt-less device (the console serial port) for input from the timer
  * tick. Read it with interrupts off if a concurrent waker could change it
  * under you.

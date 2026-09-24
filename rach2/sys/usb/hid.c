@@ -51,14 +51,14 @@ static const uint16_t usage_to_scancode[0x66] = {
     EXT | 0x1C, 0x4F,       0x50,       0x51,       0x4B,       0x4C,       0x4D,       0x47,
     0x48,       0x49,       0x52,       0x53,       0x56,       EXT | 0x5D};
 
-/* The modifier byte's bits, in order, and the scancode each sends. The four
- * right-hand modifiers are the extended form of the left-hand ones, except the
- * right shift, which has a code of its own. */
+/* The modifier byte's bits, in order, and the scancode each sends. Right Ctrl
+ * and right Alt are the extended form of the left-hand codes; right Shift and
+ * each GUI key have codes of their own. */
 static const uint16_t modifier_scancode[8] = {0x1D,       0x2A, 0x38,       EXT | 0x5B,
                                               EXT | 0x1D, 0x36, EXT | 0x38, EXT | 0x5C};
 
-/* What each device was reporting last time. One per slot the controller can
- * give out, which is what the device table above holds. */
+/* What each device was reporting last time, one per entry of the core's
+ * device table, indexed from one. */
 struct hid_state {
     int used;
     uint8_t modifiers;
@@ -67,7 +67,10 @@ struct hid_state {
 
 static struct hid_state states[USB_MAX_DEVICES + 1];
 
-/** Send a scancode, in the two-byte form where the usage asks for one. */
+/**
+ * Send a scancode, in the two-byte form where the usage asks for one, then
+ * take the third of the four stamps the latency record prints.
+ */
 static void send_code(uint16_t code, int released)
 {
     uint8_t byte = (uint8_t)(code & 0xFFu);
@@ -79,9 +82,6 @@ static void send_code(uint16_t code, int released)
         input_key(0xE0);
     }
     input_key((uint8_t)(released ? (byte | 0x80u) : byte));
-    /* The key is in the line discipline now, and whoever waited on it has
-     * been woken. The stamp is the third of the four the latency record
-     * prints. */
     usb_stamp_wake();
 }
 
@@ -98,21 +98,27 @@ static int held(const uint8_t *keys, uint8_t usage)
     return 0;
 }
 
-/** The keyboard half: the difference between two reports. */
+/**
+ * The keyboard half: the difference between two reports.
+ *
+ * A modifier bit or a key usage in the new report and not the old went down;
+ * one in the old and not the new came up; one in both is held and sends
+ * nothing, which is why the previous report is kept. A report of zeros says
+ * nothing is down, and its releases are the difference like any other.
+ *
+ * A key slot with an error usage, 0x01 to 0x03, is the keyboard saying it
+ * cannot tell which keys are down: too many at once, or a fault in its own
+ * scanning. The modifier byte is still read, but the key slots are ignored
+ * and the previous keys kept, since taking them would release every key that
+ * is held and press it again when the keyboard recovers.
+ */
 static void keyboard_report(struct hid_state *state, const uint8_t *report)
 {
     uint8_t modifiers = report[0];
     const uint8_t *keys = &report[2];
     int i;
 
-    /*
-     * A report whose key slots are filled with the rollover code is the
-     * keyboard saying it cannot tell which keys are down, not six keys named
-     * 0x01. Translating it would press six keys that do not exist and never
-     * release them. A report of zeros is a different thing entirely: it says
-     * nothing is down, and the releases it implies are exactly what the diff
-     * below produces.
-     */
+    /* The modifier byte is read even from an error report. */
 
     for (i = 0; i < 8; i++) {
         uint8_t bit = (uint8_t)(1u << i);
@@ -125,22 +131,12 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
     }
     state->modifiers = modifiers;
 
-    /*
-     * A report whose key slots hold an error usage is the keyboard saying it
-     * cannot tell which keys are down: too many at once, or a fault in its own
-     * scanning. The modifier byte above is still good and has been read; the
-     * key array is not, and taking it would release everything that is really
-     * held and then press it again when the keyboard recovers.
-     */
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         if (keys[i] >= 0x01u && keys[i] <= 0x03u) {
             return;
         }
     }
 
-    /* A key in the new report and not the old one went down; one in the old
-     * and not the new came up. A key in both is being held, and a held key
-     * sends nothing, which is why the previous report has to be kept. */
     for (i = 0; i < KEYS_IN_REPORT; i++) {
         uint8_t usage = keys[i];
 
@@ -183,11 +179,7 @@ void hid_report(int device, int kind, const uint8_t *report, int length)
         if (length < MOUSE_REPORT) {
             return;
         }
-        /*
-         * The two disagree about which way is up: a USB mouse's Y grows
-         * downward and a PS/2 mouse's grows upward, and the queue is the PS/2
-         * one. The sign is turned here rather than in whatever reads it.
-         */
+        /* A USB mouse's Y grows downward, the PS/2 queue's upward. */
         input_mouse((int)(int8_t)report[1], -(int)(int8_t)report[2], report[0] & 0x07);
         return;
     }
@@ -206,8 +198,6 @@ void hid_gone(int device)
         return;
     }
 
-    /* Release what it was holding. A key held when the keyboard is unplugged
-     * has no release coming, and the terminal would repeat it for ever. */
     for (i = 0; i < 8; i++) {
         if (state->modifiers & (1u << i)) {
             send_code(modifier_scancode[i], 1);

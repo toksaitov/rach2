@@ -5,6 +5,7 @@
 #define BUFFER_SIZE 4096
 static char buffer[BUFFER_SIZE];
 
+/** Write `a` and then `b` to standard error, ignoring a failed write. */
 static void say(const char *a, const char *b)
 {
     write(STDERR_FILENO, a, strlen(a));

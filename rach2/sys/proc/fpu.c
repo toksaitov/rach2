@@ -43,26 +43,34 @@ static void irq_restore(uint32_t flags)
     }
 }
 
+/**
+ * Save the unit's state into `area`, which is aligned to 16 bytes.
+ *
+ * `fnsave` leaves the unit initialised, so in the x87 format the state is
+ * loaded back: the caller asked for a copy, not a reset.
+ */
 static void save_aligned(void *area)
 {
     if (use_fxsr) {
         __asm__ __volatile__("fxsave (%0)" : : "r"(area) : "memory");
     } else {
-        /* `fnsave` leaves the unit initialised, so the state is loaded
-         * back: the caller asked for a copy, not a reset. */
         __asm__ __volatile__("fnsave (%0); frstor (%0)" : : "r"(area) : "memory");
     }
 }
 
+/**
+ * Load the unit's state from `area`, which is aligned to 16 bytes.
+ *
+ * In the x87 format `frstor` raises the exception the unit has pending, in
+ * the kernel, so `fnclex` clears it first. The image's own pending bits are
+ * loaded with it and are raised by the process's next x87 instruction, where
+ * they belong.
+ */
 static void restore_aligned(const void *area)
 {
     if (use_fxsr) {
         __asm__ __volatile__("fxrstor (%0)" : : "r"(area) : "memory");
     } else {
-        /* `frstor` raises the x87 exception the unit has pending, in the
-         * kernel; `fnclex` clears it first. The image's own pending bits
-         * are loaded with it and are raised by the process's next x87
-         * instruction, where they belong. */
         __asm__ __volatile__("fnclex; frstor (%0)" : : "r"(area) : "memory");
     }
 }

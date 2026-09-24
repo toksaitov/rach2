@@ -4,12 +4,11 @@
 
 /*
  * Save EFLAGS and disable interrupts; restore puts EFLAGS (hence IF) back. On a
- * single CPU this is the whole mutual-exclusion story between a sleeper editing
- * the queue and an IRQ-context waker walking it. Kept local so the wait queue
- * does not depend on the network module's net_lock/net_unlock.
- *
- * Under the dual-target host test there is no interrupt to mask, so these are
- * no-ops; the list logic exercised there is identical either way.
+ * single CPU this is all the mutual exclusion a sleeper editing the queue
+ * needs against an IRQ-context waker walking it. The pair is this file's own
+ * copy of `kirq_save` and `kirq_restore`: under WAIT_QUEUE_HOSTTEST, in the
+ * host tests that include this file, there is no interrupt to mask and they
+ * are no-ops; the list logic exercised there is identical either way.
  */
 #ifdef WAIT_QUEUE_HOSTTEST
 static uint32_t irq_save(void)
@@ -70,6 +69,20 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
     }
 }
 
+/**
+ * The wait behind `wq_wait_event` and `wq_wait_event_nointr`.
+ *
+ * The condition and the signal are tested, and the process queued and
+ * marked BLOCKED, with interrupts off, and interrupts come back on only for
+ * `schedule`. A waker therefore either ran before the test, which then saw
+ * the condition true, or runs after it and finds the process queued.
+ * Interrupts go off again before the state is read after `schedule`: still
+ * BLOCKED means nothing woke the process and nothing else was ready, so it
+ * idles in `idle_wait_irq_off`, whose `sti; hlt; cli` from IF=0 loses no
+ * wake. On the way out, with interrupts still off, the process leaves the
+ * queue, loses its wake mark and is RUNNING, whether a wake had set it
+ * READY or it never slept.
+ */
 static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptible)
 {
     uint32_t flags;
@@ -90,30 +103,12 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
             break;
         }
 
-        /*
-         * Enqueue and mark ourselves BLOCKED with interrupts still off, then
-         * re-enable them only as we yield. A waker IRQ can therefore never run
-         * against a not-yet-queued sleeper: either it ran before this critical
-         * section (and changed the condition, which we saw as true above) or it
-         * runs after, finds us queued, and makes us READY.
-         */
         wq_enqueue(wq, &current_proc->waiter);
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
 
         schedule();
 
-        /*
-         * Re-acquire interrupts-off BEFORE inspecting our state, so the
-         * decision to idle and the halt are not split by a waker IRQ. If
-         * schedule() returned because a waker made us READY (we ran again)
-         * we are no longer BLOCKED and just re-loop. If we are still
-         * BLOCKED, nothing woke us and nothing else was runnable: idle until
-         * an interrupt. `sti; hlt; cli` issued from IF=0 is atomic (a wake
-         * that became pending during the check fires the instant after hlt,
-         * never before, so it is not lost) and leaves interrupts off again
-         * for the next iteration.
-         */
         flags = irq_save();
         if (current_proc->state == PROC_BLOCKED) {
 #ifndef WAIT_QUEUE_HOSTTEST
@@ -122,12 +117,6 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
         }
     }
 
-    /*
-     * Reached from a break with interrupts off: leave the queue and become
-     * runnable again, atomically with any waker. We are executing, so
-     * RUNNING is correct whether a wake/signal had set us READY or we never
-     * slept.
-     */
     wq_dequeue(wq, &current_proc->waiter);
     current_proc->woken = 0;
     current_proc->state = PROC_RUNNING;

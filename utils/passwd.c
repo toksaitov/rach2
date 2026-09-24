@@ -1,13 +1,13 @@
 /**
  * passwd: change an account's password in `/etc/shadow`.
  *
- * The third and last of the programs that climb, beside `su` and `sudo`, and
- * the only one that writes. It is setuid root because `/etc/shadow` is 0600
- * root, and it decides what its caller may do from the real uid: this binary is
- * 04755, so `geteuid()` is 0 for everyone who runs it and a test on the
- * effective uid would authorize the world. The rule is general and this is its
- * second home in the tree: a set-id program takes its authority from the real
- * uid and uses the effective one only to act.
+ * Of the set-id programs here, `su`, `sudo` and this one, it is the only one
+ * that writes. It is setuid root because `/etc/shadow` is 0600 root, and it
+ * decides what its caller may do from the real uid: this binary is 04755, so
+ * `geteuid()` is 0 for everyone who runs it and a test on the effective uid
+ * would authorize the world. The rule is general, and `sudo` follows it too: a
+ * set-id program takes its authority from the real uid and uses the effective
+ * one only to act.
  *
  * Usage: `passwd [user]`, the account defaulting to the caller's own. Naming
  * another account is the administrative exception and needs `getuid() == 0`.
@@ -80,12 +80,13 @@
  * or -1 having said why.
  *
  * The file is read whole because every question here is about the whole of it:
- * how many lines carry a name, and what the other lines are, since they must
+ * how many lines have a name, and what the other lines are, since they must
  * come through byte for byte.
  *
- * Read through `read` and not `fread`, which is not a style choice here: it
- * keeps the credential text out of a second buffer that nothing here would
- * clear.
+ * Read through `read` and not `fread`, to keep the credential text out of a
+ * second buffer that nothing here would clear. A file holding a NUL byte is
+ * refused, not shortened: every parse below stops at the first NUL, so the
+ * rewrite would publish the database with the rest cut off.
  */
 static long slurp(const char *path, char *buffer, size_t size)
 {
@@ -119,10 +120,6 @@ static long slurp(const char *path, char *buffer, size_t size)
     }
     close(fd);
     buffer[held] = '\0';
-    /* Everything below parses with string functions, so a NUL inside the file
-     * would end every one of them early and the rewrite would publish a
-     * database with the remainder cut off. A credential file is text; one that
-     * is not is refused, not silently shortened. */
     if (strlen(buffer) != held) {
         fprintf(stderr, "passwd: %s has a NUL byte and is not a text database\n", path);
         return -1;
@@ -213,7 +210,9 @@ static int record_uid(char *const *field, int n, uid_t *out)
 
 /**
  * Copy the name of the account whose uid is `uid` out of `text` into `out`.
- * Returns 0 when exactly one line carried it.
+ * Returns 0 when exactly one line has it, and -1 when none or several do or
+ * the name does not fit in `out`; a name too long is a refusal, not a match,
+ * so a 0 never leaves `out` unset.
  *
  * The caller's name is taken from the same image the replacement is built from,
  * so a `getpwuid` racing the rewrite cannot name an account this program is
@@ -246,11 +245,6 @@ static int name_of_uid(const char *text, uid_t uid, char *out, size_t size)
                 *walk++ = '\0';
             }
             if (record_uid(field, n, &parsed) && parsed == uid) {
-                /* A name that does not fit is a refusal and not a match.
-                 * Counting it while copying nothing would leave the caller's
-                 * buffer uninitialized and this function reporting success, and
-                 * every use of that buffer below is a C string in a setuid
-                 * program. */
                 if (strlen(field[0]) >= size) {
                     return -1;
                 }
@@ -302,10 +296,10 @@ static int line_of(const char *text, const char *user, char *out, size_t size)
 /**
  * True when `user`'s line in `text` is followed by a newline.
  *
- * A file whose last line has no terminator is the case this catches, and it is
- * not cosmetic: the reader rejects a matching record that does not end in one,
- * so publishing it would leave an account that answers to nothing while this
- * program reported the password changed.
+ * It catches a file whose last line has no terminator: the reader rejects a
+ * matching record that does not end in one, so publishing it would leave an
+ * account that answers to nothing while this program reported the password
+ * changed.
  */
 static int line_terminated(const char *text, const char *user)
 {
@@ -460,6 +454,32 @@ static long replace_hash(const char *text, const char *user, const char *hash, c
     return (long)off;
 }
 
+/**
+ * Change the password of the caller's account, or of the one named:
+ * `passwd [--] [user]`. The end-of-options `--` hands over a name that begins
+ * with a dash, which is otherwise a usage error. Naming one's own account is
+ * the same request as naming none; naming another needs real uid 0.
+ *
+ * The lock is taken once nothing is left to type, and held across a reread, a
+ * recheck and the publish, which is microseconds, not however long a person
+ * takes to choose a password. Under it the caller's claim is checked again,
+ * not only the record: a caller that is not root must still have the target's
+ * uid, since while the password was typed the account may have been removed,
+ * renamed or had its uid given to somebody else. The target must still be
+ * named by exactly one passwd line, since `getpwnam` takes the first of two and
+ * the hash would then authenticate somebody else's uid, and its stored hash
+ * must be the one read before the prompts.
+ *
+ * The record about to be published is measured and parsed as a reader will
+ * meet it: a longer hash can push it past `SHADOW_RECORD_MAX`, and the file
+ * may have been edited meanwhile in a way that leaves the hash alone (an aging
+ * field turned to junk, the last newline removed), which `replace_hash` would
+ * copy through.
+ *
+ * Exits 0 when the password was changed and the transaction ended cleanly, 2
+ * for a usage error, and 1 otherwise, a change that is live but not flushed
+ * included.
+ */
 int main(int argc, char **argv)
 {
     static char passwd_text[TEXT_MAX];
@@ -477,18 +497,11 @@ int main(int argc, char **argv)
     int rc, ended;
     int end_of_options = 0;
 
-    /* `passwd [--] [user]`. The end-of-options `--` is accepted because it is
-     * the conventional way to hand over a name that might begin with a dash,
-     * and because a caller that means a name should be able to say so without
-     * this program guessing. */
     if (argc > 1 && strcmp(argv[1], "--") == 0) {
         argv++;
         argc--;
         end_of_options = 1;
     }
-    /* After `--` a leading dash is part of the name, which is the whole reason
-     * the form exists; stripping it and then refusing the name anyway would
-     * leave no way to say one. */
     if (argc > 2 || (argc == 2 && !end_of_options && argv[1][0] == '-')) {
         fprintf(stderr, "usage: passwd [--] [user]\n");
         return 2;
@@ -505,9 +518,6 @@ int main(int argc, char **argv)
     }
     target = user;
     if (argc == 2) {
-        /* Naming your own account is the same request as naming none, and it is
-         * how the command is conventionally written. What needs the
-         * administrative exception is naming SOMEBODY ELSE'S. */
         if (getuid() != 0 && strcmp(argv[1], user) != 0) {
             fprintf(stderr, "passwd: only root may change another account's password\n");
             return 1;
@@ -554,8 +564,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Minted before the new password is asked for: a machine with no trusted
-     * entropy must refuse without first collecting a secret it cannot use. */
     if (pwauth_mint_salt(salt, sizeof(salt)) != 0) {
         fprintf(stderr, "passwd: password unchanged\n");
         return 1;
@@ -582,9 +590,6 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Only now, with nothing left to type. The lock is held across a re-read, a
-     * comparison and the publish, which is microseconds, not however
-     * long a person takes to choose a password. */
     if (cred_txn_begin("passwd") != 0) {
         return 1;
     }
@@ -593,21 +598,9 @@ int main(int argc, char **argv)
         cred_txn_end();
         return 1;
     }
-    /* The caller's claim on this account is rechecked, not only the record. A
-     * name is not owned forever: while the password was being typed an
-     * administrator may have removed the account, renamed it, or given the uid
-     * to somebody else, and none of that need touch the shadow hash. Rechecking
-     * only the hash would let a caller whose claim had just been revoked
-     * publish a password for an account that is no longer theirs, as root,
-     * which is the whole of what the real-uid rule exists to stop. */
     {
         char now[64];
 
-        /* The name must still be one name, whoever asked. A uid that still
-         * resolves to this target is not enough on its own: a second line
-         * carrying the same login at a different uid would leave the target
-         * ambiguous, and `getpwnam` takes the first, so the caller would be
-         * publishing a hash that authenticates somebody else's uid. */
         if (count_entries(passwd_text, target) != 1) {
             fprintf(stderr, "passwd: %s no longer names %s once; password unchanged\n", PASSWD_FILE,
                     target);
@@ -643,9 +636,6 @@ int main(int argc, char **argv)
         cred_txn_end();
         return 1;
     }
-    /* The line about to be published, measured as the reader will meet it. A
-     * longer hash can push a record that fitted over the limit, so the check is
-     * on the result, not on what was read. */
     {
         char published[512];
 
@@ -656,15 +646,6 @@ int main(int argc, char **argv)
             cred_txn_end();
             return 1;
         }
-        /* And one every reader will parse. The survey checked the record read
-         * before the prompts, but the file may have been edited while they were
-         * open in a way that leaves the hash alone: an aging field turned to
-         * junk, or the trailing newline taken off the last line. `replace_hash`
-         * changes the hash field and copies the rest, so a record that arrived
-         * malformed is published malformed, and `getspnam` skips a bad aging
-         * field and reports ERANGE for an unterminated match. The check is on
-         * what is about to be written, which is the only text whose shape this
-         * program is answerable for. */
         if (!shadow_line_ok(published) || !line_terminated(rebuilt, target)) {
             fprintf(stderr, "passwd: %s: %s's record changed shape; password unchanged\n",
                     SHADOW_FILE, target);

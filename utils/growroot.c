@@ -1,3 +1,15 @@
+/**
+ * growroot: grow a primary ext2 partition and its file system into the free
+ * space after it, from the recovery system.
+ *
+ * `growroot MBRID=ID,N [--measure]` names the disk by its MBR signature and
+ * the partition by its entry, 1 to 4. The entry is rewritten to reach the next
+ * partition, the disk's end or the MBR's reach, whichever comes first, the
+ * kernel reads the table again, and `e2fsck` and `resize2fs` grow the file
+ * system to fill the entry. `--measure` prints the clock and the disk
+ * counters at the edges of each phase. The procedure and its refusals are in
+ * `growroot(8)`.
+ */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
@@ -13,16 +25,17 @@ extern char **environ;
 
 /* The memory a grow of a 1 GiB root to a partition the size of the
  * installed machine's disk was measured to need, as
- * dev-log/47-storage/Readme.md records: `MemTotal` of the smallest QEMU
- * machine, 16 MiB, on which the recovery system boots and resize2fs and
- * e2fsck then finish, 7232 kB. The two keep their bitmaps as runs, so
- * the volume's size hardly moves the need. */
+ * dev-log/47-storage/notes.md records: resize2fs and e2fsck finished on the
+ * smallest QEMU machine the recovery system boots on, 16 MiB, whose
+ * `MemTotal` is 7232 kB. The two keep their bitmaps as runs, so the volume's
+ * size hardly moves the need. */
 #ifndef GROWROOT_MEMORY_MIB
 #define GROWROOT_MEMORY_MIB 7u
 #endif
 #define GROWROOT_MEMORY_KIB (GROWROOT_MEMORY_MIB * 1024u)
 
 #define BLKRRPART   0x125Fu
+/* The byte offset of the four partition entries in the first sector. */
 #define MBR_ENTRIES 446
 /* One past the largest sector an entry can address: a count and an end are
  * both exclusive here, and the last addressable sector is 0xFFFFFFFF. */
@@ -56,7 +69,8 @@ static int fail(const char *what, const char *detail)
  * The counters cover the machine, so recovery must have no other disk work
  * running for their differences to describe this grow alone. Rach2 time
  * counts delivered 10 ms ticks; masked interrupts can lose ticks, so these
- * timestamps do not independently establish wall time.
+ * timestamps do not independently establish wall time. Does nothing without
+ * `--measure`; returns 0, or 1 having said why.
  */
 static int measured(const char *phase, const char *edge)
 {
@@ -171,7 +185,10 @@ static unsigned long memory_kib(void)
     return kib;
 }
 
-/** Run `path` with `arg` and `node`, and answer its exit status or -1. */
+/**
+ * Run `path` with `arg`, when it is not NULL, and `node`. Returns its exit
+ * status, or -1 when it could not be started or did not exit.
+ */
 static int run(const char *path, const char *arg, const char *node)
 {
     pid_t pid = fork();
@@ -235,7 +252,8 @@ static int is_ext2(const char *node)
  * succeeds. A volume requiring repair must be repaired separately before
  * retrying. Repairs can write outside the ranges saved for the grow.
  * Writing the table requires the recovery kernel; rereading the table
- * fails while the disk is in use.
+ * fails while the disk is in use. An entry that already fills its space is
+ * left as it is, and its file system is still checked and grown.
  */
 int main(int argc, char **argv)
 {

@@ -55,7 +55,8 @@ unsigned long ipcheck_mask(unsigned long ip, unsigned long netmask)
  * caller must apply that mask with the address. A zero gateway omits gateway
  * validation.
  *
- * @param err    where the refusal is written, in the caller's own voice.
+ * @param err    where the refusal is written, as a phrase the caller prints
+ *               after its own prefix.
  * @return 0 when the configuration can be applied, -1 when it cannot.
  */
 int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long gateway, char *err,

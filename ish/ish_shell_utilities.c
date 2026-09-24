@@ -89,8 +89,11 @@ char *ish_extract_last_stdout_redirection_file(char **arguments)
  * `argument_lexeme` (compared without case) and clears both it and the
  * following filename slot to NULL. That terminates the argv the command runs
  * with at the redirection, so the lexeme and anything after it are removed
- * (one redirection per stream is the supported case). Returns the filename,
- * or NULL when the lexeme is absent or has no filename.
+ * (one redirection per stream is the supported case). A later scan stops at
+ * that NULL too: `ish_run_line` takes `<` out first, so a `>` written after a
+ * `<` is never found, and a line that redirects both streams must name `>`
+ * first. Returns the filename, or NULL when the lexeme is absent or has no
+ * filename.
  */
 char *_ish_extract_next_parameter_for_argument_lexeme(char **arguments, const char *argument_lexeme)
 {

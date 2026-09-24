@@ -7,8 +7,9 @@
 
 /* The offsets switch.s reads from the process record, as `.set` values
  * there and as numbers here; a field added before one of them stops the
- * GNU build, and TinyCC's, which cannot fold an offset into an array size,
- * checks them at boot in `init_proc`. */
+ * GNU build. TinyCC cannot fold an offset into an array size, so a kernel it
+ * builds finds the change at boot, in `init_proc`, which checks every
+ * build. */
 #define PROC_OFF(field)       ((uint32_t)&((process_t *)0)->field)
 #define PROC_OFF_REGS_ESP     48u
 #define PROC_OFF_CR3          52u
@@ -36,12 +37,9 @@ process_t *current_proc = NULL;
 /**
  * Whether this processor is inside a user process's system call.
  *
- * Asked by the interrupt router, which reschedules after a message vector so
- * that a reader woken by it runs without waiting for the next tick, and must
- * not do so inside a system call: `sys_exit` and `schedule` itself both run
- * with interrupts on while their own bookkeeping is half done, and a switch
- * taken there strands the process they were in the middle of moving. The idle
- * loop and a kernel thread answer no, as they do for the timer.
+ * Asked by the code whose rules depend on it: the ATA driver's wait and
+ * reclaim's writeback sleep only inside a call, and the USB disk settles a
+ * stick only outside one. The idle process and a kernel thread answer no.
  */
 int proc_in_syscall(void)
 {
@@ -79,17 +77,11 @@ void init_proc(void)
 /**
  * Restart pid numbering at 1, for the boot that is about to start init.
  *
- * Every Unix says init is pid 1, and until this call ran, this one did not:
  * `next_pid` starts at 0 and the boot self-tests spawn processes before init
- * exists, so init took whatever number the counter had reached and the kernel
- * carried `init_pid` to remember it. That was not only untidy. `kill(1, ...)`
- * is how the shipped `halt`, `poweroff` and `reboot` ask for a shutdown, and
- * pid 1 was a dead self-test process, so the request went nowhere and the
- * programs failed.
- *
- * Safe by construction, not by timing: `alloc_process` already skips any
- * pid that is still live, so a self-test slot that outlived its test would push
- * init to the next free number, not collide with it.
+ * exists, but init must be pid 1: `kill(1, ...)` is how the shipped `halt`,
+ * `poweroff` and `reboot` ask for a shutdown. `alloc_process` skips any pid
+ * that is still live, so a self-test record that outlived its test would
+ * push init to the next free number, not collide with it.
  */
 void proc_reclaim_boot_pids(void)
 {
@@ -216,9 +208,10 @@ void free_process(process_t *proc)
 /**
  * Wake timed sleepers whose deadline has passed.
  *
- * Moves any nanosleep sleeper whose wakeup tick has arrived from BLOCKED back
- * to READY so the scheduler runs it. Called from the timer tick. The
- * `(int32_t)` difference is tick-wraparound-safe (~248 days at 100 Hz).
+ * Moves any timed sleeper (nanosleep, or poll with a deadline) whose wakeup
+ * tick has arrived from BLOCKED back to READY so the scheduler runs it.
+ * Called from the timer tick. The `(int32_t)` difference is
+ * tick-wraparound-safe (~248 days at 100 Hz).
  */
 void proc_wake_sleepers(uint32_t now)
 {
@@ -248,15 +241,14 @@ process_t *get_process(uint32_t pid)
 /**
  * Reparent every child of `dead_pid` onto init.
  *
- * Called from a process's death path before its slot is reclaimed, so a
- * dying process never strands a child on a parent pid about to be freed
- * (that orphan would otherwise leak its frames, page directory, and zombie
- * slot, since no live process would ever match it in `do_wait`). A child
- * that is already a zombie has no future exit event to wake init, so init is
- * signalled now to reap it; `signal_post` flips a blocked init to ready
+ * Called from a process's death path before its record is reclaimed: a
+ * child left with a dead parent's pid would never be matched in `do_wait`,
+ * and its frames, page directory and record would leak. A child that is
+ * already a zombie has no future exit event to wake init, so init is
+ * signalled now to reap it; `signal_post` makes a blocked init ready
  * itself. A no-op when there is no init yet (`init_pid == 0`, the
- * debug-shell-only boot) or when init itself is the one dying (it has no
- * surviving init to adopt to, and the kernel panics on init's death anyway).
+ * debug-shell-only boot) or when init itself is the one dying, since no
+ * other init is left to adopt the children.
  */
 void reparent_children(uint32_t dead_pid)
 {

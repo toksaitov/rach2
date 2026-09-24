@@ -2,7 +2,7 @@
  * adduser: create an account in `/etc/shadow`, `/etc/group` and `/etc/passwd`.
  *
  * Root's, and deliberately not setuid: it refuses a caller whose `getuid()` is
- * not 0 before it opens anything. Carrying no set-id bit means its real and
+ * not 0 before it opens anything. Having no set-id bit means its real and
  * effective uids are the same and there is nothing here to confuse, but it
  * tests the real uid all the same, because that is the rule every program in
  * this tree that decides an identity question follows.
@@ -34,8 +34,9 @@
  * nothing already published. So: shadow with a locked `!` field, then group,
  * then the home directory, then passwd. The account becomes visible only at the
  * last step, so no interruption leaves a passwd field of `x` with no shadow
- * entry, nor a gid that names no group. What each prefix means and how root
- * clears it is in `utils/Readme.md`.
+ * entry, nor a gid that names no group. A failure says which prefix it
+ * published (`report_partial`), a later run names the files that hold the name
+ * (`refuse_present`), and root removes those lines by hand.
  *
  * It never resumes a partial account and never rolls one back. Resuming would
  * mean deciding that a partial state is a residue instead of something an
@@ -44,12 +45,12 @@
  * first did, on files another writer may since have changed. So a name present
  * in some of the three files is refused, naming exactly the files that hold it.
  *
- * The transaction is dropped before the password program is exec'd, which is
- * required, not tidy: the lock is a file, it outlives `execve`, and a
- * transaction carried across the exec would deadlock `passwd` against its own
- * predecessor. Until that `passwd` succeeds the field stays `!` and the account
- * cannot be entered, which is why shadow is written first and why a failure
- * there needs nothing undone.
+ * The transaction is dropped before the password program is exec'd: the lock
+ * is a file, it outlives `execve`, and a transaction carried across the exec
+ * would leave `passwd` waiting on its own predecessor's lock until it refused.
+ * Until that `passwd` succeeds the field stays `!` and the account cannot be
+ * entered, which is why shadow is written first and why a failure there needs
+ * nothing undone.
  */
 
 #include <stdio.h>
@@ -71,7 +72,8 @@
  * truncated. */
 #define TEXT_MAX 16384
 
-/* Where an automatic number search starts, and where it gives up. */
+/* Where an automatic number search starts, and where it gives up; the second
+ * is also the largest number `-u` may give. */
 #define ADDUSER_FIRST_UID 1000
 #define ADDUSER_LAST_UID  60000
 
@@ -79,9 +81,9 @@
  * `getspnam` line buffer less its terminator and its newline. */
 #define RECORD_MAX 254
 
-/* The password program, and where it is staged. os-simple has a `/bin` and the
- * flat test image does not, so a program that must run under both looks in
- * both, in that order. */
+/* The password program, and where it is staged. os-simple stages it in `/bin`
+ * and the test image at the root, so a program that must run under both looks
+ * in both, in that order. */
 #define PASSWD_PROGRAM      "/bin/passwd"
 #define PASSWD_PROGRAM_FLAT "/passwd"
 
@@ -192,8 +194,8 @@ static int names_line(const char *text, const char *name)
  * `text`.
  *
  * A field that is not a plain decimal number is not a match, and not an error
- * either: it is a record musl's own parser skips, so it claims no number and
- * this program must not act as though it did. The arithmetic wraps the way
+ * either: musl's own parser skips such a record, or reads an empty field as 0,
+ * which this program never hands out. The arithmetic wraps the way
  * musl's `atou` does, and the comparison is on the truncated `uid_t` both sides
  * end up with, so a field of `4294968296` is the same 1000 to this scan that it
  * is to `getpwuid`; a `strtoul` here would saturate instead and hand the number
@@ -247,9 +249,9 @@ static int number_taken(const char *text, int which, unsigned long number)
  * Append `line` to `text`, giving the text a final newline first if it lacks
  * one. Returns the new length, or -1 when it would not fit.
  *
- * The missing-newline repair is not politeness: a database whose last line has
- * no newline is one `getspnam` reports as `ERANGE` for that record, and an
- * append with no separator would join two records into one.
+ * The newline is added because a database whose last line has none is one
+ * `getspnam` reports as `ERANGE` for that record, and an append with no
+ * separator would join two records into one.
  */
 static long append_line(char *text, size_t size, const char *line)
 {
@@ -360,8 +362,8 @@ static int refuse_present(const char *name, int in_shadow, int in_group, int in_
  * password at all. Does not return except on failure.
  *
  * The transaction is already released: the lock is a file and survives an
- * `execve`, so a program that kept it here would deadlock its own successor
- * against it for the ten tries the library makes before refusing.
+ * `execve`, so a program that kept it here would hold its own successor off
+ * for the ten tries the library makes before refusing.
  */
 static int hand_to_passwd(const char *name)
 {
@@ -379,8 +381,8 @@ static int hand_to_passwd(const char *name)
 /* The crash build, staged in the test image alone and never in a shipped
  * image. It takes a leading count and dies the instant that publication has
  * landed, inside the transaction and through `_exit`, so it leaves exactly the
- * residue and exactly the lock a real crash leaves. Everything it adds lives
- * under this one conditional, so the shipped binary has neither the argument
+ * residue and exactly the lock a real crash leaves. Everything it adds is
+ * under `ADDUSER_CRASH_POINT`, so the shipped binary has neither the argument
  * nor the code.
  */
 static int Crash_after = 0;
@@ -400,6 +402,16 @@ static void crash_check(int published)
 
 /**
  * Create an account and hand it to `passwd`.
+ *
+ * The name must be usable in every database and short enough for the console
+ * to read: `login` refuses an over-long line instead of answering for its
+ * prefix, so an account named past `PWAUTH_MAX_NAME` is one nobody could
+ * enter at the keyboard.
+ *
+ * The home directory counts as published the instant it exists, before it has
+ * its owner, so a failure or a kill between the two still reports the
+ * directory it left. The owner is set before the mode, since setting an owner
+ * clears the set-id bits of whatever mode was there.
  */
 int main(int argc, char **argv)
 {
@@ -462,9 +474,6 @@ int main(int argc, char **argv)
 
         return 1;
     }
-    /* The real uid, although this program has no set-id bit and the two are
-     * the same here. The rule is the rule: a program that decides an identity
-     * question decides it from the identity of whoever ran it. */
     if (getuid() != 0) {
         fprintf(stderr, "adduser: only root may create an account\n");
 
@@ -476,9 +485,6 @@ int main(int argc, char **argv)
 
         return 1;
     }
-    /* And short enough for the console to read: `login` refuses an over-long
-     * line instead of answering for its prefix, so an account named past that
-     * limit is one nobody could ever enter at the keyboard. */
     if (strlen(name) > PWAUTH_MAX_NAME) {
         fprintf(stderr, "adduser: %s: longer than the %d characters a login reads\n", name,
                 PWAUTH_MAX_NAME);
@@ -550,9 +556,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Shadow first, with a locked field: the account cannot be entered until
-     * `passwd` replaces it, and this is the one publication that consumes no
-     * number and names no group, so it is the smallest fact to begin with. */
     if ((size_t)snprintf(record, sizeof(record), "%s:!:::::::\n", name) >= sizeof(record)) {
         fprintf(stderr, "adduser: %s: the shadow record would be too long for a reader\n", name);
         cred_txn_end();
@@ -614,12 +617,6 @@ int main(int argc, char **argv)
 
         return report_partial(published, 1);
     }
-    /* Published the instant the directory exists, and not after it has been
-     * given its owner: a failure or a kill between the two leaves the directory
-     * behind, and a recovery that followed a diagnostic which did not name it
-     * would trip over it on the retry. The chown comes before any mode change,
-     * since setting an owner clears the set-id bits of whatever mode was
-     * there. */
     published = PUBLISHED_HOME;
     if (chown(home, (uid_t)number, (gid_t)number) != 0 || chmod(home, 0700) != 0) {
         fprintf(stderr, "adduser: %s: %s\n", home, strerror(errno));

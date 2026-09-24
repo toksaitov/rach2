@@ -1,4 +1,10 @@
-/** Remove files; with `-r`, remove directories and their contents. */
+/**
+ * Remove files; with `-r`, remove directories and their contents.
+ *
+ * `-r` is recognized only as the first operand; every other operand is a
+ * path, even one that begins with `-`. A path that cannot be removed is
+ * reported and the rest are still tried; the status is 1 when any failed.
+ */
 
 #include <stdio.h>
 #include <string.h>
@@ -11,15 +17,16 @@
 static int remove_recursive(const char *path);
 
 /**
- * Attempt to remove directory entries while retaining `dir_path`.
+ * Remove every entry of `dir_path` and leave the directory itself.
  *
- * Skip `.` and `..`. Skip children when the parent length, name length,
- * and one separator byte total at least MAX_PATH, even when the parent
- * already ends in a slash.
+ * `.` and `..` are skipped, and so is an entry whose joined path would not
+ * fit in MAX_PATH bytes; the length counted always has a separator, even when
+ * `dir_path` ends in a slash and none is added. A skipped entry leaves the
+ * directory not empty, so the caller's `rmdir` of it fails.
  *
- * Return -1 if opening the directory or an attempted child removal
- * fails, otherwise 0. Skipped children and directory read or close
- * errors do not change the result.
+ * Returns -1 when the directory cannot be opened or an entry's removal
+ * fails, otherwise 0. Skipped entries and errors while reading or closing
+ * the directory do not change the result.
  */
 static int remove_dir_contents(const char *dir_path)
 {

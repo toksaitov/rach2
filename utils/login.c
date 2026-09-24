@@ -14,26 +14,23 @@
  * an exit, and init brings the prompt back.
  *
  * The identity drop is `setgroups`, `setgid`, `setuid`, in that order, and the
- * order is the whole of it: `setgroups` and `setgid` need the privilege that
- * `setuid` gives away, so either one after it is a call that fails while the
- * process keeps a group it was never entitled to. Each is checked, and a
- * failure is fatal, not a warning, since carrying on would mean running
- * a shell as an identity nobody chose.
+ * order matters: `setgroups` and `setgid` need the privilege that `setuid`
+ * gives away, so either one after it is a call that fails while the process
+ * keeps a group it was never entitled to. Each is checked, and a failure is
+ * fatal, not a warning, since carrying on would mean running a shell as an
+ * identity nobody chose.
  *
  * It does not `setsid` and does not claim the terminal. init's child already
- * did both, and this exec inherits them: an exec by the session leader
- * re-publishes the console across the destructive load, and a second claim
- * after the identity drop would be refused anyway, since the process is no
- * longer root and, having been the leader all along, is not a new one.
+ * did both, and the session and its controlling terminal survive the exec.
  *
  * The environment is built from nothing, not filtered, for the reason su
  * builds one: what arrives here came from init, which got it from the kernel,
  * and a login that passed a variable through would be handing the account
  * whatever the boot happened to carry. `PATH` is part of what it builds, and
- * has to be: a shell handed no `PATH` at all resolves nothing but the names its
- * caller spells out in full, so the first bare `ls` after a login would fail.
- * It is the same `/bin:/usr/bin` su sets, so an account reaches the same
- * programs however it arrived.
+ * has to be: a shell handed no `PATH` at all finds only programs named by a
+ * full path, so the first bare `ls` after a login would fail. It is the same
+ * `/bin:/usr/bin` su sets, so an account reaches the same programs however it
+ * arrived.
  */
 
 #include <stdio.h>
@@ -53,19 +50,20 @@
 #define MOTD_FILE "/etc/motd"
 
 /* How many names may be tried before the program gives up and init starts it
- * again. A bound, not a loop forever, so a wedged reader cannot hold the
- * console: the respawn is the retry. */
+ * again. The tries are bounded so a wedged reader cannot hold the console; the
+ * respawn is the retry. */
 #define LOGIN_TRIES 3
 
-/* The pause after a refusal. It costs a legitimate user one second and costs
- * anyone working through a list of passwords the same second every time. */
+/* The pause after a refusal, in seconds. It costs a legitimate user two
+ * seconds and costs anyone working through a list of passwords the same two
+ * seconds every time. */
 #define LOGIN_PAUSE 2
 
-/* The longest account name that will be read, from the library, so that what
- * this reads and what `adduser` writes are one limit. An over-long line is
- * refused, not truncated, for the reason the password reader refuses
- * one: a prefix is a different name, and answering for it would either fail
- * confusingly or, worse, match somebody else. */
+/* The buffer for the longest account name that will be read, from the
+ * library, so that what this reads and what `adduser` writes are one limit. An
+ * over-long line is refused, not truncated, for the reason the password reader
+ * refuses one: a prefix is a different name, and answering for it would
+ * either fail confusingly or, worse, match somebody else. */
 #define LOGIN_NAME_MAX (PWAUTH_MAX_NAME + 1)
 
 /* Rach2 permits descriptors 0 through 1023. */
@@ -170,8 +168,8 @@ static void close_inherited(void)
  * Print `/etc/motd` to standard output, if it is there and readable.
  *
  * After the drop, deliberately: the file is the account's to read or not, and a
- * login that printed it as root would be answering a question the modes were
- * asked. A file that is not there is not an error.
+ * login that printed it as root would bypass the file's modes. A file that is
+ * not there is not an error.
  */
 static void print_motd(void)
 {
@@ -195,7 +193,8 @@ static void print_motd(void)
 }
 
 /**
- * Become `pw` and exec its shell. Returns only on failure.
+ * Become `pw` and exec its shell. Does not return: a failure to change
+ * identity or to exec is reported and exits with status 1.
  *
  * The environment is the one this builds, the working directory is the
  * account's home, and `argv[0]` has the leading dash that tells a shell it
@@ -246,8 +245,14 @@ static void become(const struct passwd *pw)
 }
 
 /**
- * Ask who is there until somebody proves it, then become them.
- * Perform a dummy SHA-512 comparison when no passwd entry exists.
+ * Ask who is there, up to `LOGIN_TRIES` times, and become the first account
+ * whose password is proved. Returns 1 when the name or the password cannot be
+ * read, at end of input included, or when the tries run out.
+ *
+ * An empty name, which a bare newline or an over-long line both give, costs
+ * no try and is never authenticated. A name with no passwd entry still has a
+ * SHA-512 comparison made, against a dummy hash, so it takes as long as a
+ * wrong password.
  */
 int main(void)
 {
@@ -267,9 +272,6 @@ int main(void)
             return 1;
         }
         if (name[0] == '\0') {
-            /* A bare newline is somebody finding the prompt, and costs
-             * nothing. An over-long line arrives here as an empty name too, and
-             * so costs nothing either; what it must not do is authenticate. */
             attempt--;
             continue;
         }

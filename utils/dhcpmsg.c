@@ -87,9 +87,12 @@ static unsigned int fold(unsigned long sum)
  *
  * `r` names the message type, the transaction id and hardware address that
  * make an answer this machine's, the address it already has (zero unless it
- * is renewing), and the options a request has. The IP and UDP headers are
- * built here too, because a machine with no address cannot ask the IP layer to
- * build them.
+ * is renewing), the options a request has, and where the packet goes. The IP
+ * and UDP headers are built here too, because a machine with no address cannot
+ * ask the IP layer to build them. The UDP checksum covers a pseudo-header of
+ * the two addresses, the protocol and the length, then the datagram. The
+ * BOOTP part is padded to the 300 bytes RFC 1542 asks for: a shorter message
+ * is legal DHCP, and some servers and relays drop it.
  *
  * @param outlen the room in `out`, which must be at least `DHCP_MAX`.
  * @return the length written, or 0 when there is not enough room.
@@ -113,7 +116,7 @@ unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dh
     bp[1] = ARPHRD_ETHER;
     bp[2] = 6;
     put_be32(bp + 4, r->xid);
-    put_be16(bp + 10, 0x8000); /* ask for a broadcast reply: no address yet */
+    put_be16(bp + 10, 0x8000); /* the broadcast flag, for a machine with no address yet */
     put_be32(bp + 12, r->ciaddr);
     memcpy(bp + 28, r->hwaddr, 6);
     put_be32(bp + BOOTP_LEN, 0x63825363UL);
@@ -141,9 +144,6 @@ unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dh
     o[optlen++] = OPT_DOMAIN;
     o[optlen++] = OPT_END;
 
-    /* Padded to the 300 bytes of BOOTP data RFC 1542 asks for. A shorter
-       message is legal DHCP and is dropped by some real servers and relays,
-       which is a machine that works on the bench and not in the building. */
     while (OPTIONS_OFF + optlen < 300) {
         o[optlen++] = 0;
     }
@@ -162,8 +162,6 @@ unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dh
     put_be32(ip + 16, r->dst);
     put_be16(ip + 10, fold(ones_sum(ip, 20, 0)));
 
-    /* The UDP checksum covers a pseudo-header of the two addresses, the
-       protocol and the length, and then the datagram itself. */
     sum = ones_sum(ip + 12, 8, 0);
     sum += 17;
     sum += total - 20;
@@ -182,8 +180,9 @@ unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dh
  * here: the version, the header length, the total length against what arrived,
  * the header checksum, that it is not a fragment (a DHCP message is never one),
  * the protocol, the ports, the UDP length, and the UDP checksum where the
- * sender computed one. A client that believed a frame without this would take
- * its address from anything on the wire that happened to look close enough.
+ * sender computed one; a zero checksum says it did not, which IPv4 allows.
+ * Without these checks a client would take its address from anything on the
+ * wire that happened to look close enough.
  *
  * @param ihl    set to the IP header's length in bytes.
  * @param udplen set to the UDP datagram's length.
@@ -225,8 +224,6 @@ int dhcp_frame_ok(const unsigned char *f, int n, unsigned int *ihl, unsigned int
         return 0;
     }
     if (be16(f + hlen + 6) != 0) {
-        /* A sender that computed a checksum is held to it. Zero means it did
-           not, which IPv4 allows. */
         sum = ones_sum(f + 12, 8, 0);
         sum += 17;
         sum += ulen;
@@ -243,12 +240,20 @@ int dhcp_frame_ok(const unsigned char *f, int n, unsigned int *ihl, unsigned int
  * Judge one BOOTP message and read the lease out of it.
  *
  * `msg` is the message itself, not the packet that carried it, so the two ways
- * a reply can arrive (the packet socket while the machine has no address, an
- * ordinary socket once it has one) are judged by the same code. Every bound is
+ * a reply can arrive (the packet socket while discovering or rebinding, an
+ * ordinary socket for a renewal) are judged by the same code. Every bound is
  * checked against `len`, because most of what the packet socket delivers is
  * somebody else's traffic and some of it may be built to hurt this.
  *
- * @return the DHCP message type, or 0 when this is not a reply for us.
+ * A domain name with anything but letters, digits, dots and hyphens in it is
+ * dropped. It is written into the resolver as a `search` line, and a newline
+ * in it would start a second line: a machine on the wire that answered first
+ * could put its own nameserver in front of the leased ones and read everything
+ * this machine looks up.
+ *
+ * @return the DHCP message type, or 0 when this is not a well-formed reply for
+ *         us. `l` is overwritten once the fixed fields match, even when 0 is
+ *         returned.
  */
 int dhcp_parse(const unsigned char *msg, unsigned int len, unsigned long xid,
                const unsigned char *hwaddr, struct dhcp_lease *l)
@@ -348,11 +353,6 @@ int dhcp_parse(const unsigned char *msg, unsigned int len, unsigned long xid,
             if (take > sizeof(l->domain) - 1) {
                 take = sizeof(l->domain) - 1;
             }
-            /* A domain name is letters, digits, dots and hyphens. This one is
-               about to be written into the resolver as a `search` line, and a
-               newline in it would be a second line: a machine on the wire that
-               answered first could put its own nameserver in front of the
-               leased ones and read everything this machine looks up. */
             for (k = 0; k < take; k++) {
                 unsigned char c = o[i + 2 + k];
 
@@ -406,10 +406,10 @@ int dhcp_lease_usable(const struct dhcp_lease *l, char *err, size_t errlen)
  * reasoned about. `-l` lowers it, which
  * is how the renewal path is exercised on a network that hands out days.
  *
- * A lease too short to hold ordered boundaries inside is no lease this client
- * can act on, and 0 says so: a one-second lease renews before the renewal is
- * out on the wire, and `(seconds / 2)` and `(seconds * 7) / 8` are the same
- * moment for anything under `DHCP_MIN_LEASE`.
+ * A lease shorter than `DHCP_MIN_LEASE` is no lease this client can act on,
+ * and 0 says so: its renewal, rebinding and expiry fall a few seconds apart at
+ * most, and at two seconds or less `(seconds / 2)` and `(seconds * 7) / 8` are
+ * the same moment.
  *
  * @param max the longest lease the caller will act on.
  * @return the lease to hold, or 0 for one this client will not act on.
@@ -429,23 +429,20 @@ unsigned long dhcp_sane_lease(unsigned long seconds, unsigned long max)
  * The moments a lease turns, from the moment it was asked for.
  *
  * A server may name its own renewal and rebinding times, and RFC 2131 makes
- * half and seven eighths the answer only when it does not. A pair that is not
- * in order, or that reaches past the lease, is ignored, not argued
- * with: those are the times this client would have chosen anyway. Seven
- * eighths is computed as `(seconds * 7) / 8` and not the other way around,
- * because dividing first turns every lease under eight seconds into zero. The
- * lease must be at least `DHCP_MIN_LEASE`, which is what `dhcp_sane_lease`
- * guarantees; shorter than that, the two defaults are the same moment.
+ * half and seven eighths the answer only when it does not. Each defaults on
+ * its own, because a server may name one and not the other. The pair is then
+ * judged together, and a pair that is out of order or reaches past the lease
+ * is replaced by the two defaults. Seven eighths is computed as
+ * `(seconds * 7) / 8` and not the other way around, because dividing first
+ * turns every lease under eight seconds into zero. The lease must be at least
+ * `DHCP_MIN_LEASE`, which is what `dhcp_sane_lease` guarantees; at two seconds
+ * or less the two defaults are the same moment.
  */
 void dhcp_boundaries(const struct dhcp_lease *l, time_t from, time_t *t1, time_t *t2, time_t *end)
 {
     unsigned long a = l->t1 ? l->t1 : l->seconds / 2;
     unsigned long b = l->t2 ? l->t2 : (l->seconds * 7) / 8;
 
-    /* Each defaults on its own, because a server may name one and not the
-       other. The pair is then judged together, and a pair that is out of order
-       or reaches past the lease is replaced by the two defaults, which are the
-       times this client would have chosen anyway. */
     if (!(a > 0 && b > a && b < l->seconds)) {
         a = l->seconds / 2;
         b = (l->seconds * 7) / 8;

@@ -40,7 +40,7 @@ void k_strtoupper(char *str)
 }
 
 /*
- * The copies and the fill move a machine word at a time through the string
+ * `k_memcpy` and `k_memset` move a machine word at a time through the string
  * instructions on the kernel's own target. The kernel is built without
  * optimisation, so a byte loop costs a load, a store and a compare per byte,
  * and every disk and network path passes each byte through several of them;
@@ -102,7 +102,18 @@ void *k_memcpy(void *dest, const void *src, size_t n)
  *
  * When the destination starts inside the source, a forward copy would
  * overwrite source bytes before they are read, so the copy runs backward
- * from the last byte. Every other arrangement copies forward.
+ * from the last byte. Every other arrangement copies forward through
+ * `k_memcpy`, which is safe with the destination below the source or apart
+ * from it, in words as in bytes: each word is read before the word at or
+ * below it is written.
+ *
+ * The overlap test compares addresses as integers, not as pointers: a
+ * relational compare of pointers into two different objects is undefined in
+ * C, and a copy between two separate structs is this function's normal case
+ * under tcc. The integer type is `__SIZE_TYPE__` because it is pointer-width
+ * under every compiler that builds this file, the host's included; the
+ * kernel's own `uintptr_t` is 32 bits and would truncate the host test's
+ * addresses.
  */
 void *k_memmove(void *dest, const void *src, size_t n)
 {
@@ -111,13 +122,6 @@ void *k_memmove(void *dest, const void *src, size_t n)
     __SIZE_TYPE__ du = (__SIZE_TYPE__)dest;
     __SIZE_TYPE__ su = (__SIZE_TYPE__)src;
 
-    /* The overlap test compares addresses as integers, not as pointers: a
-     * relational compare of pointers into two different objects is undefined
-     * in C, and a copy between two separate structs is this function's normal
-     * case under tcc. The integer type is `__SIZE_TYPE__` because it is
-     * pointer-width under every compiler that builds this file, the host's
-     * included; the kernel's own `uintptr_t` is 32 bits and would truncate
-     * the host test's addresses. */
     if (du > su && du - su < n) {
         d += n;
         s += n;
@@ -126,27 +130,25 @@ void *k_memmove(void *dest, const void *src, size_t n)
         }
         return dest;
     }
-    /* A forward copy is safe with the destination below the source or apart
-     * from it, in words as in bytes: each word is read before the word at or
-     * below it is written. */
     return k_memcpy(dest, src, n);
 }
 
 /**
- * The standard memory routines, as wrappers over the `k_` bodies above.
+ * The standard memory routines and `strlen`, as wrappers over the `k_`
+ * bodies above.
  *
  * Kernel code calls the `k_` names; these wrappers exist because both
  * compilers that build this kernel emit calls to the standard names on
  * their own: gcc can emit `memcpy` or `memset` for a struct copy or a large
- * initializer, and tcc emits `memmove` for every struct assignment and
- * `memset` for initializer holes. A kernel linked without a libc must
- * define what its compiler emits, or those calls fail at link time. The
- * bodies stay in the `k_` forms because the host test runs this file
- * under AddressSanitizer, which rewrites every call to a standard memory
- * name into its own checked copy; a body under the standard name would be
- * unreachable there. The size parameter is `__SIZE_TYPE__`, the type each
- * compiler's builtin prototype expects, which `-Werror` holds these
- * definitions to.
+ * initializer, and `strlen` at -O2, and tcc emits `memmove` for every struct
+ * assignment and `memset` for initializer holes. A kernel linked without a
+ * libc must define what its compiler emits, or those calls fail at link
+ * time. The bodies stay in the `k_` forms because the host test runs this
+ * file under AddressSanitizer, which rewrites every call to a standard
+ * memory name into its own checked copy; a body under the standard name
+ * would be unreachable there. The size parameter is `__SIZE_TYPE__`, the
+ * type each compiler's builtin prototype expects, which `-Werror` holds
+ * these definitions to.
  */
 void *memset(void *ptr, int c, __SIZE_TYPE__ n)
 {

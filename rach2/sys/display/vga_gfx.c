@@ -128,10 +128,11 @@ static void vga_gc_write(uint8_t index, uint8_t value)
 /**
  * Write an Attribute Controller register.
  *
- * The AC index port is a shared index/data flip-flop. Reading INSTAT_READ
- * resets it to the index phase before the index write. Bit 5 of the index
- * (palette address source) stays clear during register programming, so video
- * is disabled; the mode sequence re-enables it afterward by writing index 0x20.
+ * The AC takes its index and its data at one port, alternately, as an
+ * internal flip-flop selects. Reading INSTAT_READ resets the flip-flop to the
+ * index phase before the index write. Bit 5 of the index (palette address
+ * source) stays clear during register programming, so video is disabled; the
+ * mode sequence re-enables it afterward by writing index 0x20.
  */
 static void vga_ac_write(uint8_t index, uint8_t value)
 {
@@ -278,8 +279,9 @@ static void vga_restore_font(void)
 /**
  * Switch to Mode 13h and return the linear framebuffer at A0000.
  *
- * Saves the text font first so vga_mode13h_exit can restore it. A no-op that
- * returns the framebuffer if already in graphics mode. Publishes gfx_current.
+ * Saves the text font first so vga_mode13h_exit can restore it, clears the
+ * framebuffer to color 0, and publishes gfx_current, all with interrupts off.
+ * A no-op that returns the framebuffer if already in graphics mode.
  *
  * @return Pointer to the 320x200 8bpp framebuffer.
  */
@@ -318,9 +320,9 @@ uint8_t *vga_mode13h_enter(void)
  *
  * The Mode 3 Attribute Controller maps the 16 text attributes to scattered DAC
  * indices, so the DAC entries are written where those AC registers point:
- * AC[0-7] -> DAC 0x00-0x07 (low intensity), AC[6] -> DAC 0x14 (brown is the
- * odd one out), AC[8-15] -> DAC 0x38-0x3F (high intensity). DAC values are
- * 6-bit (0-63).
+ * AC[0-7] -> DAC 0x00-0x07 (low intensity) except AC[6] (brown) -> DAC 0x14,
+ * and AC[8-15] -> DAC 0x38-0x3F (high intensity). DAC values are 6-bit
+ * (0-63).
  */
 static void vga_restore_text_palette(void)
 {
@@ -370,7 +372,8 @@ static void vga_restore_text_palette(void)
  * Leave graphics mode and return the VGA to its 80x25 text state.
  *
  * Reprograms Mode 3, reloads the text palette and font, clears gfx_current, and
- * clears the text screen. A no-op if not currently in graphics mode.
+ * clears the text screen, all with interrupts off. A no-op if not currently
+ * in graphics mode.
  */
 void vga_mode13h_exit(void)
 {

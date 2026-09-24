@@ -9,12 +9,16 @@
  * both exposes unfinished cleanup to waitpid and loses the terminal state.
  * These sleeping releases precede publication. After this helper returns,
  * the caller must neither block nor permit interrupt preemption before its
- * final schedule: the parent may then reap the record and kernel stack.
+ * final schedule: the parent may then reap the record and kernel stack. The
+ * helper sets `in_syscall` first, so an interrupt only asks for a switch
+ * (`sched_preempt`), also on the exception and signal-delivery paths, which
+ * run outside a system call.
  *
- * This helper releases file descriptions and cwd, not the address space or
- * descriptor-table allocation. Normal child exit and failed exec leave their
- * remaining mappings to do_wait. Signal death frees its mappings and clears
- * cr3 before scheduling. A successful reap releases the remaining storage.
+ * This helper releases file descriptions and cwd and reparents the children
+ * onto init; it does not free the address space or the descriptor-table
+ * allocation. Normal child exit and failed exec leave their remaining
+ * mappings to do_wait. Signal death frees its mappings and clears cr3 before
+ * scheduling. A successful reap releases the remaining storage.
  *
  * `status` is the encoded wait status. The caller must not return to user mode.
  */

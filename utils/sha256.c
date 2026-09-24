@@ -30,6 +30,7 @@ static unsigned long ror(unsigned long x, int n)
     return ((x >> n) | (x << (32 - n))) & M32;
 }
 
+/** Run the SHA-256 compression function over the 64-byte block `p`. */
 static void compress(struct sha256 *s, const unsigned char *p)
 {
     unsigned long w[64], a, b, c, d, e, f, g, h;

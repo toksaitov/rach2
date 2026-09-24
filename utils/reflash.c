@@ -1,5 +1,6 @@
 /**
- * Write a stream onto a raw device: `reflash DEVICE OFFSET BYTES`.
+ * Write a stream onto a raw device:
+ * `reflash [-p] [--verify] DEVICE OFFSET BYTES`.
  *
  * Read the image from standard input.
  *
@@ -63,7 +64,8 @@ static long device_write(void *ctx, const unsigned char *buf, unsigned long n)
     }
 }
 
-/** The progress line, on standard error so a piped digest stays a digest. */
+/** Print a progress line on standard error, so standard output has only the
+ *  result line. */
 static void note(void *ctx, unsigned long long done, unsigned long long total, unsigned percent)
 {
     (void)ctx;
@@ -121,6 +123,12 @@ static int verify(const char *path, unsigned long long offset, unsigned long lon
     return 0;
 }
 
+/**
+ * Write BYTES of standard input to DEVICE at OFFSET, or with `--verify` print
+ * the digest of that range. The range is judged against the device's size
+ * before anything is read. Exits 0 on success, 1 on a failure and 2 on a
+ * usage error.
+ */
 int main(int argc, char **argv)
 {
     struct sectorcopy_io io;
@@ -161,8 +169,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "reflash: cannot open %s: %s\n", path, strerror(errno));
         return 1;
     }
-    /* The device's size, from the device: a window that ends where the disk
-       ends answers SEEK_END with its length. */
+    /* A raw window answers SEEK_END with its length. */
     end = lseek(devfd, 0, SEEK_END);
     if (end < 0) {
         fprintf(stderr, "reflash: cannot measure %s: %s\n", path, strerror(errno));

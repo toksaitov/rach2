@@ -20,7 +20,8 @@ struct usb_stamp {
 
 static struct usb_stamp stamp;
 
-/** Enable diagnostic records and discard any earlier reader or keystroke. */
+/** Turn diagnostic records on or off and discard any earlier reader or
+ * keystroke. */
 void usb_stamp_init(int enabled)
 {
     recording = enabled;

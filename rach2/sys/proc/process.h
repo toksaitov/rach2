@@ -24,8 +24,10 @@ typedef enum {
 } proc_state_t;
 
 /*
- * Saved CPU registers for context switching.
- * Layout matches what pushal/popal expect.
+ * The record's register block. Only `esp` is used: the kernel stack pointer
+ * `switch_context` saved when the process last switched away, or the one
+ * built for its first switch. The other fields are read by nothing; they
+ * keep `esp` at the offset switch.s reads.
  */
 struct cpu_regs {
     uint32_t edi;
@@ -38,7 +40,7 @@ struct cpu_regs {
     uint32_t eax;
     uint32_t eip;
     uint32_t eflags;
-    uint32_t esp; /* User stack pointer */
+    uint32_t esp; /* Kernel stack pointer for switch_context */
 };
 
 typedef struct cpu_regs cpu_regs_t;
@@ -62,7 +64,6 @@ struct rlimit32 {
 /* Supplementary group slots per process (the 4.2BSD number). */
 #define NGROUPS_MAX 8
 
-/* Process Control Block (PCB). */
 struct vfs_mount;
 
 /* A sleeper's record on a wait queue: one is in every process record, for
@@ -76,6 +77,7 @@ struct wq_waiter {
 
 struct bbuf; /* the buffer cache's buffer, bcache.h */
 
+/* Process Control Block (PCB). */
 struct process {
     uint32_t pid;          /* Process ID */
     proc_state_t state;    /* Current state */
@@ -87,9 +89,10 @@ struct process {
     fd_table_t fds;        /* File descriptor table */
     char cwd[CWD_MAX];     /* Current working directory (absolute, canonical; "/" at start) */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
-    /* APPEND-ONLY below this line: switch.s hard-codes field offsets, so new
-     * PCB fields go at the end; process.c checks the .set offsets in switch.s
-     * against the compiler's at build time. */
+    /* switch.s reads `regs.esp`, `cr3`, `kernel_stack`, `tls_base` and
+     * `page_dir` at fixed offsets, so a new field goes at the end of the
+     * record. process.c has the same offsets and checks them against the
+     * compiler's, at build time where the compiler can and at boot. */
     uint32_t tls_base;    /* Per-process %gs TLS base (set_thread_area) */
     vm_space_t vm;        /* Address-space map (VMAs + brk + stack limit) */
     uint32_t wakeup_tick; /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
@@ -203,22 +206,25 @@ void proc_reclaim_boot_pids(void);
  * room. */
 process_t *alloc_process(void);
 
-/** Take a record off the list and give it back to the heap; nothing may refer
- * to it afterwards. */
+/** Take a record off the list and give it back to the heap with its
+ * descriptor-table storage, region array and exec workspace; the caller
+ * frees the user pages, the page directory and the kernel stack first.
+ * Nothing may refer to the record afterwards. */
 void free_process(process_t *proc);
 
-/** Get process by PID; returns the slot, or NULL if not found. */
+/** Get process by PID; returns the record, or NULL if not found. */
 process_t *get_process(uint32_t pid);
 
 /**
  * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
  * reap any child that is already a zombie. Called from the death paths so an
- * exiting process never orphans a child onto a slot about to be freed. No-op
- * when there is no init or when init itself is dying.
+ * exiting process never orphans a child onto a record about to be freed.
+ * No-op when there is no init or when init itself is dying.
  */
 void reparent_children(uint32_t dead_pid);
 
-/** Release files, publish the encoded exit status, and wake the parent. */
+/** Release files, reparent the children onto init, publish the encoded exit
+ * status, and wake the parent; see exit.c. */
 void proc_exit_cleanup(int32_t status);
 
 /** Set a process's `comm` name from the final component of `path`. */
@@ -229,20 +235,22 @@ void proc_wake_sleepers(uint32_t now);
 
 /**
  * Post signal `signo` to `target`: set its pending bit and wake it if blocked.
- * Delivered on the target's next return to user mode. Defined in syscall.c.
+ * Delivered on the target's next return to user mode. Defined in
+ * syscall_proc.c.
  */
 void signal_post(process_t *target, int signo);
 
 /**
  * Non-zero if the current process has a deliverable (pending, unblocked)
  * signal. Blocking syscall loops poll it to break out so the signal is acted
- * on. Defined in syscall.c.
+ * on. Defined in syscall_proc.c.
  */
 int signal_pending(void);
 
 /**
  * Deliver a pending signal to the current process on the way back to user mode.
- * Called from the ISR/IRQ return path with the trapframe. Defined in syscall.c.
+ * Called from the ISR/IRQ return path with the trapframe. Defined in
+ * syscall_proc.c.
  */
 struct isr_params;
 void deliver_signals(struct isr_params *tf);
@@ -279,6 +287,7 @@ uint32_t process_sleeps_cut_short(void);
 /** Count one sleep a signal ended before its deadline. */
 void process_count_sleep_cut_short(void);
 
+/** Count one process handed out; `alloc_process` calls it. */
 void process_count_fork(void);
 
 #endif

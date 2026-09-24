@@ -8,16 +8,19 @@
  * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
  * (binary, octal, lower- and upper-case hex), `%s` (a string, with a NULL
  * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
- * percent). A numeric conversion takes an optional `0` flag
- * and an optional single-digit width between the percent and the letter, so
- * `%02x` writes a byte as two hex digits. `ap` is consumed left to right; a
- * character is read as `int`, which is what the call passed.
+ * percent). The numeric conversions and `%s` take an optional `0` flag and
+ * an optional single-digit width between the percent and the letter, and are
+ * padded on the left to that width, so `%02x` writes a byte as two hex
+ * digits. The padding is done here and not in `k_itoa`, so numbers and
+ * strings share one rule. `ap` is consumed left to right; a character is
+ * read as `int`, which is what the call passed.
  *
- * An unknown conversion is emitted verbatim AND CONSUMES NOTHING, so every
- * argument after it in the same call is read one slot early. That is why the
- * style check refuses a format string this cannot do: a message that asked
- * for `%02x` before the flag and width were understood printed the literal
- * text `02x` and then read the wrong value for every field after it.
+ * An unknown conversion writes its letter alone, without the `%`, flag or
+ * width, and consumes nothing, so every argument after it in the same call
+ * is read one slot early. That is why `tools/verify/fmtcheck.sh`, in the
+ * style check, refuses a format string with a conversion this does not
+ * have. A format that ends on its `%`, or on a flag or width after it,
+ * writes the `%` and returns, since reading on would pass the terminator.
  */
 void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
 {
@@ -61,9 +64,6 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                     str = "(null)";
 
             string: {
-                /* The pad is counted here rather than in `k_itoa`, so one
-                   rule covers every conversion and the converter keeps
-                   its own contract. */
                 size_t len = 0;
 
                 while (str[len])
@@ -82,11 +82,7 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, va_list ap)
                 break;
 
             case 0:
-                /* The format ended on its `%`. The sign is written out, as
-                   any other conversion this does not know would be, and then
-                   this returns: leaving the switch instead would put the loop
-                   past the terminator, reading bytes that are not the
-                   string's. */
+                /* The format ended on its `%`. */
                 putc_fn('%');
                 return;
 

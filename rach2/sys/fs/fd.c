@@ -60,8 +60,9 @@ static int ofd_idle(void *arg)
 }
 
 /**
- * Take the mount namespace before the description and its shared offset,
- * for a file system that says its uses must be serialised.
+ * Lock the description and its shared offset, taking the mount's namespace
+ * lock first when the file system says its uses must be serialised. Both
+ * waits sleep and a signal does not end them.
  */
 void fd_ofd_lock(struct open_file *ofd)
 {
@@ -164,11 +165,14 @@ void fd_ofd_unref(struct open_file *ofd)
 }
 
 /**
- * Clear every entry of a descriptor table.
+ * Give a fresh table its first FD_TABLE_FIRST entries, all free, and the
+ * default limit.
  *
- * This does not unref any OFDs; it is for a fresh (zeroed) table only. A live
- * table is torn down descriptor by descriptor through `fd_free`, which releases
- * each OFD reference.
+ * This does not unref any OFDs or free an old array; it is for a fresh table
+ * only. A live table is torn down descriptor by descriptor through `fd_free`,
+ * which releases each OFD reference.
+ *
+ * @return 0, or -1 when `table` is NULL or the heap has no room.
  */
 int fd_table_init(fd_table_t *table)
 {
@@ -339,7 +343,8 @@ int fd_alloc(fd_table_t *table)
  * A slot with no backing and no reserved OFD is already free; freeing it
  * returns -1. The OFD reference is dropped even when the slot is still
  * typeless, so a slot that `fd_alloc_from` reserved but a caller bailed on
- * before assigning a type does not leak its OFD.
+ * before assigning a type does not leak its OFD. Dropping the last reference
+ * closes a mounted description, which may sleep.
  */
 int fd_free(fd_table_t *table, int fd)
 {

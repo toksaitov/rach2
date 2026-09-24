@@ -45,10 +45,10 @@ static void pc_platform_unmap(uint32_t va)
 
 #define PC_PAGE_SIZE  PAGE_SIZE
 
-/* The default cap on the window when no device MMIO BAR sits below it:
-   512 MiB, which is the ceiling on a mounted disk file system, sized for the
-   machine that boots from its own disk, not for a test image, while
-   bounding the pre-mapped page tables to 128 (512 KiB). */
+/* The window's size when no device memory BAR lies inside it: 512 MiB, the
+   window's whole region in the kernel's layout (paging.h), and the ceiling
+   on a mounted disk file system, sized for the machine that boots from its
+   own disk, not for a test image. */
 #define PC_WINDOW_CAP 0x20000000u
 
 static void pc_platform_map(uint32_t va, uintptr_t phys, int writable)
@@ -71,7 +71,7 @@ static void pc_platform_unmap(uint32_t va)
 
 /* One resident page: its backing offset, its frame, and the clock/dirty state.
    `page` is where the backing reads and writes the bytes (the frame's identity
-   address in the kernel, a malloc'd buffer on the host); `phys` is the frame to
+   address in the kernel, a static page on the host); `phys` is the frame to
    map at the window virtual address. */
 struct pc_entry {
     uint32_t disk_off;
@@ -100,12 +100,6 @@ static uint32_t pc_evicts;
 static uint32_t pc_writebacks;
 static uint32_t pc_resident_frames; /* slots holding a frame */
 
-/*
- * A slot's frame comes when the slot is first filled and goes when reclaim
- * takes it, so the cache holds what it uses and no more. The frame is below
- * the identity-mapped window, since the backing reads and writes it by its
- * physical address. On the host every slot has its buffer from the start.
- */
 /* Whether a slot has a frame: on the host every slot has its buffer from
    the start and `phys` is never set. */
 #ifdef PAGECACHE_HOSTTEST
@@ -114,6 +108,15 @@ static uint32_t pc_resident_frames; /* slots holding a frame */
 #define PC_HAS_STORAGE(e) ((e)->phys != 0)
 #endif
 
+/**
+ * Give slot `e` a frame if it has none: 1 when it has one, 0 when none can
+ * be had or the free frames are the reserve's.
+ *
+ * A slot's frame comes when the slot is first filled and goes when reclaim
+ * takes it, so the cache has what it uses and no more. The frame is below
+ * the identity-mapped window, since the backing reads and writes it by its
+ * physical address. On the host every slot has its buffer from the start.
+ */
 static int pc_slot_storage(struct pc_entry *e)
 {
 #ifdef PAGECACHE_HOSTTEST
@@ -228,7 +231,7 @@ static void pc_hash_insert(uint32_t disk_off, uint32_t slot)
 
 /**
  * Removes `disk_off`'s page from the hash, leaving a tombstone. Rebuilds the
- * table once tombstones reach half the slot count, so probe chains stay short
+ * table once tombstones pass half the slot count, so probe chains stay short
  * and an insert always finds a bucket.
  */
 static void pc_hash_remove(uint32_t disk_off)
@@ -297,7 +300,8 @@ static int pc_writeback(struct pc_entry *e)
  * concurrent store marks the page dirty again.
  *
  * Return 0 if the slot is invalidated or was already invalid. Return -1
- * and retain the page if writeback fails or the page is dirtied again.
+ * and retain the page if the slot is pinned, writeback fails, or the page
+ * is dirtied again.
  * Invalidate the slot before removing its hash entry, since removal may
  * rebuild the hash from valid slots.
  */
@@ -497,8 +501,8 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size)
     pc_write = write;
     /* Clamp to the window first (so the round-up cannot overflow), then round
        up to whole pages: the window maps page-grained, so the file system's
-       last partial page is a full mappable page. The window span is page-aligned, so
-       the rounded size never exceeds it. */
+       last partial page is a full mappable page. The window span is
+       page-aligned, so the rounded size never exceeds it. */
     if (fs_size > pc_window_span) {
         fs_size = pc_window_span;
     }
@@ -519,10 +523,7 @@ int pc_set_capacity(uint32_t slots)
     }
     for (i = slots; i < PC_SLOTS; ++i) {
         if (pc_slots[i].valid && pc_evict(i) != 0) {
-            /* The writeback failed, so this slot is still dirty. Note it: the
-             * capacity must keep covering it, or the reclaim scan would never
-             * revisit it and its dirty page would be stranded above capacity.
-             */
+            /* Still dirty: the capacity keeps covering it for reclaim. */
             stuck = i + 1;
             rc = -1;
         }
@@ -586,13 +587,14 @@ void *pc_test_page(uint32_t disk_off)
 #else
 
 /**
- * Sizes the window from PCWIN_BASE to the lowest device memory BAR that lands
- * in it, capped at PC_WINDOW_CAP, so the window never overlaps device MMIO.
+ * Sizes the window from PCWIN_BASE to the lowest device memory BAR whose
+ * physical address lies in it, capped at PC_WINDOW_CAP.
  *
  * Walks every bus the driver discovery walks (`pci_find_device_skip` scans
- * buses 0 to 255), not bus 0 alone: a BAR behind a bridge that landed in the
- * window would otherwise share virtual addresses with the cache, and a later
- * `map_mmio` of it would trade PTEs with the window's fills.
+ * buses 0 to 255), not bus 0 alone, so a BAR behind a bridge counts too. A
+ * BAR's physical address and the window's virtual ones do not meet:
+ * `map_mmio` maps a BAR into the kernel's MMIO region at 0xF0000000,
+ * whatever its physical address.
  */
 static uint32_t pc_probe_window_size(void)
 {
@@ -636,8 +638,8 @@ static uint32_t pc_probe_window_size(void)
     }
 
     /* Floor to a page: a clamping BAR base need only be 16-byte aligned, but
-       the window span must be page-aligned so a page-rounded file-system size never
-       exceeds it. */
+       the window span must be page-aligned so a page-rounded file-system size
+       never exceeds it. */
     limit &= ~(uint32_t)(PC_PAGE_SIZE - 1u);
 
     return limit - PCWIN_BASE;
@@ -649,8 +651,9 @@ void init_pagecache(void)
 
     pc_window_span = pc_probe_window_size();
 
-    /* Install the window's page tables before the first fork copies the kernel
-       PDEs, so every process shares them. */
+    /* The window's page tables must exist before the first fork copies the
+       kernel PDEs; `init_paging` made every table of the kernel's gigabyte,
+       so this finds them present. */
     if (premap_kernel_window(PCWIN_BASE, pc_window_span) != 0) {
         k_panic("pagecache: window pre-map failed");
     }

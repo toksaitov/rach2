@@ -6,7 +6,7 @@
  * that are the host build's authority. A list that drifts builds a kernel
  * missing a file or a program missing its companion source, and the
  * failure would surface inside a booted guest, late and hard to read. This
- * guard runs on the host, inside the verify gate, and has five contracts:
+ * guard runs on the host, inside the style check, and has five contracts:
  *
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no

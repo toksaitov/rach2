@@ -6,14 +6,14 @@
 #include "../proc/wait_queue.h"
 
 /*
- * A terminal: the kernel object a console (or a pty) sits behind. The N_TTY
- * line discipline (see n_tty.h) does the cooked/raw editing, echo, and ISIG
+ * A terminal: the kernel object behind a console or a pty. The N_TTY line
+ * discipline (see n_tty.h) does the cooked/raw editing, echo, and ISIG
  * recognition over an input ring; readers block on input_wq until a line (or
- * a raw byte) is ready; an input source (the keyboard IRQ, the serial poll)
- * feeds bytes in via tty_input_char, and write output and echo leave through
- * `sink`. `pump`, when set, is a polled input source (the console's serial
- * port) drained before each read-sleep, so a headless host with no input IRQ
- * still makes progress on each timer wake.
+ * a raw byte) is ready; an input source (the keyboard IRQ, the serial pump, a
+ * pty master's write) feeds bytes in via tty_input_char, and write output and
+ * echo leave through `sink`. `pump`, when set, is a polled input source (the
+ * console's serial ring) drained before each read-sleep, poll and FIONREAD,
+ * so a port whose interrupt is off still makes progress on each timer wake.
  */
 
 /* The TIOCGWINSZ/TIOCSWINSZ window size (Linux `struct winsize`). */
@@ -30,7 +30,7 @@ struct tty {
     wait_queue_t *space_wq;
     uint32_t ready_us;           /* when a line became readable, until a reader has it */
     struct tty_winsize winsize;  /* TIOCGWINSZ window size */
-    n_tty_out_fn sink;           /* echo/output byte sink (NULL discards) */
+    n_tty_out_fn sink;           /* echo/output byte sink; a NULL at tty_init discards */
     void *sink_ctx;              /* opaque context handed to sink */
     void (*pump)(struct tty *t); /* optional polled input drain (NULL = none) */
     int sid;                     /* controlling session id (0 = none) */
@@ -47,7 +47,7 @@ struct console_counters {
     uint32_t irq_drains;    /* services run from the port's interrupt */
     uint32_t irq_bytes;     /* bytes those services took */
     uint32_t tick_drains;   /* drains into the discipline from the tick or the interrupt */
-    uint32_t reader_drains; /* drains by a reader, with echo */
+    uint32_t reader_drains; /* drains by a reader, a poller or FIONREAD */
     uint32_t ring_full;     /* services stopped at a full ring, the sender held */
     uint32_t ring_max;      /* the most the ring held */
     uint32_t shell_bytes;   /* taken by the kernel's own polls */
@@ -61,8 +61,8 @@ void tty_console_counters(struct console_counters *out);
  * sink. */
 void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);
 
-/* Bring up console_tty (sink = VGA + serial, pump = serial drain).
- * Boot-time. */
+/* Bring up console_tty (sink = VGA + serial, pump = serial drain) and
+ * register its receive notify with the serial driver. Boot-time. */
 void tty_console_init(void);
 
 /** Post `signo` to every live member of process group `pgid`. */
@@ -78,16 +78,17 @@ int tty_console_owned_by_leader(int sid, int pid);
  * SIGTTIN/SIGTTOU). */
 int tty_is_background(struct tty *t, int sid, int pgid);
 
-/* Timer-tick hook: drain the console's (interrupt-less) serial port into the
- * discipline when a reader/poller is waiting, so serial input wakes them even
- * while another process runs. A no-op when nobody is waiting. */
+/* Service the console's serial port, from the timer tick and from the port's
+ * interrupt, with interrupts off: move the UART's bytes to the ring, then
+ * wake a parked reader or poller, or, with none parked and a session owning
+ * the console, drain the ring into the discipline without echo. */
 void tty_console_poll(void);
 
 /*
  * Feed one input byte from an IRQ or poll source: run it through the discipline
  * (cook + echo via sink), wake a blocked reader once a line/byte is ready, and
- * for an ISIG control char post its signal to the foreground process. Safe to
- * call with interrupts off / from interrupt context.
+ * for an ISIG control char post its signal to the foreground process group.
+ * Safe to call with interrupts off / from interrupt context.
  */
 void tty_input_char(struct tty *t, unsigned char c);
 
@@ -96,7 +97,9 @@ void tty_input_char(struct tty *t, unsigned char c);
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock);
 
 /* Write count kernel bytes through output processing (OPOST/ONLCR) to the sink.
- * Returns count (a console write never blocks or fails). */
+ * Returns count (a console write never blocks or fails). On the console the
+ * write is bracketed by console_write_begin/end, so a kernel log record raised
+ * during it waits and is not printed inside the program's output. */
 int tty_write(struct tty *t, const unsigned char *kbuf, int count);
 
 /* Install a new termios (TCSETS family). Done with interrupts off so an input
@@ -104,17 +107,20 @@ int tty_write(struct tty *t, const unsigned char *kbuf, int count);
  */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input);
 
-/* poll(2) readiness: POLLIN when a read would not block, plus the writable bit;
- * *wq is set to input_wq for the poll core to re-check on. */
+/* poll(2) readiness: POLLIN when a read would not block, and POLLOUT, which
+ * is always true. Only a query with POLLIN drains the polled source and sets
+ * *wq to input_wq for the poll core to re-check on. Called by the poll core
+ * with interrupts off. */
 short tty_poll(struct tty *t, short events, wait_queue_t **wq);
 
-/* FIONREAD: bytes a read would return now. Drains the polled source (serial)
- * first, interrupts off, so input already arrived is counted (matching
- * tty_poll). */
+/* FIONREAD: the bytes ready to read, every completed line in canonical mode.
+ * Drains the polled source (serial) first, interrupts off, so input already
+ * arrived is counted (matching tty_poll). */
 int tty_inq(struct tty *t);
 
-/* TCFLSH / TCSETSF input flush: discard the cooked line under edit and every
- * queued-but-unread byte. */
+/* TCFLSH input flush: discard the line under edit, every queued-but-unread
+ * byte and a pending EOF, and on the console the serial ring as well; wakes
+ * space_wq. */
 void tty_flush_input(struct tty *t);
 
 /**

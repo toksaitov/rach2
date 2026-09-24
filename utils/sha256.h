@@ -9,8 +9,8 @@
  *
  * This is the same algorithm as `tools/verify/sha256.c`, which the build's own
  * scripts use, written again here because that one is a host program with a
- * `main` and this is a unit two guest programs link. Neither is derived from
- * the other, so a mistake in one is caught by the vectors both are held to.
+ * `main` and this is a unit that `reflash` links. Neither is derived from the
+ * other, so a mistake in one is caught by the vectors both are held to.
  */
 #ifndef SHA256_H
 #define SHA256_H

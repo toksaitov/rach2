@@ -1,5 +1,6 @@
 /**
- * Prepare a recovery environment from an immutable boot-partition backup.
+ * growboot: write, from a backup of the boot partition, a GRUB environment
+ * block whose saved entry is `recovery` and which has no `next_entry`.
  *
  * Usage: `growboot BOOT.IMG ENV.IMG`. The input must be the complete 64 MiB
  * partition. ENV.IMG must not exist. The boot-slot editor runs against a

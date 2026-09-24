@@ -4,17 +4,19 @@
 #include "../usb/usb.h"
 #include "../network/ip/ip.h"
 
-/** Nonzero once preemptive scheduling is enabled; schedule() is a no-op
- * until then. */
+/** Nonzero while preemptive scheduling is enabled; schedule() is a no-op
+ * while it is zero. */
 static volatile int _sched_enabled = 0;
 
 /** The last ordinary selection; a wake preference does not move it. */
 static process_t *_last_sched;
 
-/** A preferred selection must be followed by an ordinary selection. */
+/** Nonzero when the next selection may prefer a woken process; a preferred
+ * selection clears it, so the one after it is ordinary. */
 static int _wake_turn;
 
-/** Remove a departing record from the round-robin cursor. */
+/** Move the round-robin cursor off `p`, which is about to be unlinked, to
+ * the record before it. */
 void sched_forget(process_t *p)
 {
     if (_last_sched == p) {
@@ -79,16 +81,17 @@ static process_t *sched_find(int woken_only)
  * A current process that has already resumed after an idle wait loses its
  * mark before yielding, so that wake cannot prefer it again later.
  *
- * Does nothing if scheduling is disabled, there is no current process, or no
- * other process is READY. The switch runs with interrupts disabled: a timer
- * IRQ landing between publishing current_proc and the stack and CR3 swap
- * inside switch_context would see current_proc == next with next->in_syscall
- * == 0, pass the timer handler's reschedule test, and re-enter schedule() on
- * the old stack with the TLS descriptor already rewritten, corrupting
- * next->regs.esp. So schedule() saves the caller's IF, clears it across the
- * switch, and restores it afterward. Each process does this symmetrically
- * and resumes with its own IF; a process entered for the first time skips
- * the restore and takes its IF from iret instead.
+ * Returns without a switch when scheduling is disabled, there is no current
+ * process, or no process but the current one is READY. The switch runs with
+ * interrupts disabled: a timer IRQ landing between publishing current_proc
+ * and the stack and CR3 swap inside switch_context would see current_proc ==
+ * next with next->in_syscall == 0, pass `sched_preempt`'s test, and re-enter
+ * schedule() on the old stack with the TLS descriptor already rewritten,
+ * corrupting next->regs.esp. So schedule() saves the caller's IF, clears it
+ * across the switch, and restores it afterward. Each process does this
+ * symmetrically and resumes with its own IF; a process entered for the first
+ * time skips the restore: a forked child takes its IF from iret, and a
+ * kernel thread's entry enables interrupts itself.
  *
  * The floating-point registers are the one part of the processor
  * `switch_context` does not touch. They are saved into the outgoing record
@@ -160,12 +163,12 @@ void schedule(void)
 /**
  * Preempt from an interrupt handler.
  *
- * A process interrupted in user mode, the idle loop and a kernel thread are
- * switched at once. A process inside a system call is not: the call's exit
- * path and the scheduler itself run with interrupts on while their own
- * bookkeeping is half done, and a switch taken there strands the process
- * whose state they were in the middle of changing. The request is kept on
- * the process, and `sched_take_preempt` takes it at the call's exit, so a
+ * A process interrupted in user mode, the idle process and a kernel thread
+ * are switched at once. A process inside a system call is not: the call's
+ * code runs with interrupts on while its own state is half changed, and
+ * `sys_exit`, for one, publishes the zombie its parent may reap, kernel
+ * stack and all, before it calls `schedule`. The request is kept on the
+ * process, and `sched_take_preempt` takes it at the call's exit, so a
  * process that is always inside a call still gives way once per call.
  */
 void sched_preempt(void)
@@ -178,10 +181,10 @@ void sched_preempt(void)
 }
 
 /**
- * Take the switch an interrupt asked for during the system call that is
- * ending. Called at the call's exit with interrupts off and the trapframe
- * whole; the request is cleared before the switch, so a request that
- * arrives during the switch is the next call's.
+ * Take the switch an interrupt asked for during the current system call.
+ * Called with interrupts off, at the call's exit with the trapframe complete
+ * and from `sched_service_point`; the request is cleared before the switch,
+ * so a request that arrives during the switch is the next call's.
  */
 void sched_take_preempt(void)
 {
@@ -213,7 +216,7 @@ void sched_service_point(void)
  * handler reads the marker from an interrupt that arrives in the middle of the
  * halt it describes. The counters are 32-bit, which is one aligned store on
  * this machine, so a reader never sees half of one; at 100 Hz they wrap after
- * about 497 days, the bound `kernel_ticks` already carries. */
+ * about 497 days, the bound `kernel_ticks` already has. */
 static volatile int _in_idle_wait = 0;
 static volatile uint32_t _idle_ticks = 0;
 static volatile uint32_t _busy_ticks = 0;
@@ -251,7 +254,7 @@ void sched_account_tick(void)
  * and this returns without halting so the caller checks its condition again.
  * Those datagrams are this machine's own, a delivery can be what makes a
  * process runnable, and nothing else is going to run to deliver them. A
- * system call's exit delivers only once the ring holds three or more, since
+ * system call's exit delivers only once the ring has three or more, since
  * one or two may be the crossing SYNs of a simultaneous open; a single
  * datagram, which is what a window update or a bare acknowledgement is, would
  * otherwise wait for the timer, and a local connection would turn over one
@@ -280,10 +283,9 @@ void idle_wait_irq_off(void)
  * arrive at any instruction and the `sti` changes nothing; a wake that lands
  * between the marker and the `hlt` costs one more tick of waiting, which is why
  * every such caller re-checks its condition in a loop rather than assuming the
- * halt ended for its own reason. That was true of the bare `sti; hlt` these
- * replaced and is not something the marker introduced. The tick the marker
- * catches in that window is counted idle, which is what the processor is about
- * to be; the error is at most one tick per wait.
+ * halt ended for its own reason. The tick the marker catches in that window
+ * is counted idle, which is what the processor is about to be; the error is
+ * at most one tick per wait.
  */
 void idle_wait_irq_on(void)
 {

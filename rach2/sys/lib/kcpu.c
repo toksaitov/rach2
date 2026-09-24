@@ -1,11 +1,14 @@
 /*
- * kcpu.c: the two instructions that ask the processor about itself, as
- * kcpu.h describes them.
+ * kcpu.c: `cpuid` and the model-specific register instructions, as kcpu.h
+ * describes them.
  */
 
 #include "kcpu.h"
 
-/** The four registers `cpuid` leaf `leaf`, subleaf zero, returns. */
+/**
+ * The four registers `cpuid` leaf `leaf`, subleaf zero, returns, each stored
+ * through its pointer unless the pointer is null.
+ */
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     uint32_t ra = leaf, rb = 0, rc = 0, rd = 0;

@@ -41,7 +41,8 @@ static uint32_t arp_clock;
  *
  * A wrap would make an old entry look like the newest one and the newest like
  * the oldest, so at the top the entries are sorted by the stamp they hold and
- * renumbered 1..N, which keeps their order and costs a walk of eight.
+ * renumbered 1..N, which keeps their order and costs a sort of at most
+ * ARP_CACHE_SIZE entries.
  */
 static uint32_t arp_stamp(void)
 {
@@ -101,8 +102,8 @@ static uint8_t arp_req_buf[28];
 /**
  * Drop every cached IP-to-MAC mapping, so later traffic re-resolves.
  *
- * Called when this machine's own address changes, since a mapping learned at
- * the old address may no longer hold.
+ * Called under `net_lock` when this machine's own address changes, since a
+ * mapping learned at the old address may no longer hold.
  */
 void arp_flush(void)
 {
@@ -117,9 +118,9 @@ void arp_flush(void)
 /**
  * Drop the mappings learned on one interface, leaving the others.
  *
- * Called when that interface's address changes. A machine with two cards is
- * on two networks, and the neighbours of the network whose address did not
- * change are still where they were.
+ * Called under `net_lock` when that interface's address changes. A machine
+ * with two cards is on two networks, and the neighbours of the network whose
+ * address did not change are still where they were.
  */
 void arp_forget_dev(struct netdev *nd)
 {
@@ -139,13 +140,12 @@ void arp_forget_dev(struct netdev *nd)
  * Unsolicited packets can supply usable mappings, so a peer can poison the
  * cache.
  *
- * Entries do not age out. What keeps a cache of eight usable on a real
- * network, where this machine hears every neighbour, is the other half:
- * addresses no neighbour can have are refused, and when the cache is full the
- * entry gone longest without being learned or looked up is the one replaced.
- * Dropping the new mapping instead, which is what this did, means a machine
- * whose cache filled with strangers before it learned its gateway can reach
- * nothing off its own subnet, and never recovers.
+ * Entries do not age out. A cache of eight stays usable on a real network,
+ * where this machine hears every neighbour, because addresses no neighbour
+ * can have are refused and, when the cache is full, the entry gone longest
+ * without being learned or looked up is replaced. Dropping the new mapping
+ * instead would leave a machine whose cache filled with strangers before it
+ * learned its gateway unable to reach anything off its own subnet.
  */
 static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
 {
@@ -246,7 +246,8 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 }
 
 /**
- * Look up the cached MAC for an IP.
+ * Look up the MAC cached for `ip` on interface `nd`. A hit refreshes the
+ * entry's stamp, so the cache is written; call with interrupts off.
  *
  * @return 1 and copies six bytes into `mac_out` on a hit, 0 on a miss.
  */
@@ -267,8 +268,9 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
 /**
  * Broadcast an ARP request asking who owns `target_ip`.
  *
- * The sender fields carry our own MAC and IP; the target MAC is left zero,
- * as the resolver does not yet know it.
+ * The sender fields are `nd`'s MAC and IP; the target MAC is left zero, as
+ * the resolver does not yet know it. The request is built in a shared buffer,
+ * so call with interrupts off.
  */
 void arp_request(struct netdev *nd, uint32_t target_ip)
 {

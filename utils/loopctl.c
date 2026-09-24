@@ -5,7 +5,8 @@
  * takes that one, `loopctl attach -r [N] FILE` takes one that will not write,
  * and `loopctl detach N` gives it back. With no arguments it prints what
  * /proc/loop says: the device, its size in bytes, whether it takes writes,
- * and the file it was attached by.
+ * how many writes and syncs have reached the file, and the file it was
+ * attached by, or `(gone)`.
  *
  * The kernel is spoken to through /dev/loop-control, one command per write,
  * which is what a shell can send and what a program of this size can afford.
@@ -19,6 +20,7 @@
 #include <string.h>
 #include <unistd.h>
 
+/** Copy /proc/loop to standard output. Returns 0, or 1 on a failure. */
 static int list(void)
 {
     char buffer[512];
@@ -39,6 +41,10 @@ static int list(void)
     return n < 0 ? 1 : 0;
 }
 
+/**
+ * Send `line` to /dev/loop-control as one write. Returns 0, or 1 when the node
+ * cannot be opened or the kernel refuses the command.
+ */
 static int command(const char *line)
 {
     int fd = open("/dev/loop-control", O_WRONLY);

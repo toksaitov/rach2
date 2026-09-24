@@ -10,7 +10,9 @@
  * NUL-terminated, then the auxiliary vector) is written just below them with
  * ESP aligned down to a 16-byte boundary. `page` maps at `base_vaddr`, so a
  * stored pointer is the virtual address `base_vaddr + (mem offset)` while the
- * copy itself targets `mem + (vaddr - base_vaddr)`.
+ * copy itself targets `mem + (vaddr - base_vaddr)`. Each piece is checked
+ * against `cur - base_vaddr`, the room still free below `cur`, which cannot
+ * underflow.
  *
  * @param page mapped backing store for the topmost stack page.
  * @param base_vaddr virtual address at which `page` is mapped in the new image.
@@ -53,9 +55,6 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
         }
     }
 
-    /* `cur - base_vaddr` is the room still free below `cur`; comparing the
-     * needed length against it bounds the copy and avoids unsigned underflow.
-     */
     for (i = 0; i < argc; i++) {
         uint32_t len = (uint32_t)k_strlen(argv[i]) + 1;
 

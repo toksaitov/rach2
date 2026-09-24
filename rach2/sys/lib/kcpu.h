@@ -4,10 +4,9 @@
 #include "kint.h"
 
 /*
- * kcpu: the two instructions that ask the processor about itself, in one
- * place. Three files wrote `cpuid` out for themselves before this header
- * existed; the model-specific registers arrived with the local APIC, which
- * is enabled through one of them.
+ * kcpu: `cpuid` and the model-specific register instructions, `rdmsr` and
+ * `wrmsr`, in one place. The local APIC is enabled through one of those
+ * registers.
  *
  * `kcpu_msr_present` is asked before `kcpu_rdmsr`: a processor without the
  * instruction faults on it, and this kernel has no handler that would make

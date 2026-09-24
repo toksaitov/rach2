@@ -1,10 +1,11 @@
 /*
- * netif.c: the interface ioctls, and what changing an address costs.
+ * netif.c: the interface and route ioctls.
  *
- * The contract is in netif.h. What is here is the `struct ifreq` layout as
- * offsets, because a struct would have to match an ABI this kernel does not
- * otherwise depend on, and the rule that an address change is not just a
- * number: everything that recorded the old one has to be told.
+ * The contract is in netif.h. What is here is the `struct ifreq` and
+ * `struct rtentry` layouts as offsets, because a struct would have to match
+ * an ABI this kernel does not otherwise depend on. What an address change
+ * costs, everything that recorded the old address being told, is in
+ * netconf.c.
  */
 
 #include "netif.h"
@@ -43,9 +44,11 @@
 
 #define ARPHRD_ETHER 1
 
-/* The interface is up until somebody says otherwise. A machine whose network
- * came up at boot and was never configured is up, which is what every existing
- * test expects. */
+/**
+ * Whether the first interface is up. An interface is up from the probe until
+ * an administrator takes it down, which is what every existing test expects of
+ * a machine whose network came up at boot and was never configured.
+ */
 
 int netif_is_up(void)
 {
@@ -109,9 +112,19 @@ static void set_sa(uint8_t *ifr, uint32_t ip)
 /**
  * Handle the requests that read or write an interface.
  *
- * The name is checked first for every one of them, because a program that asks
- * about an interface this machine does not have must be told so rather than
- * told about the one it does have.
+ * The name is checked first for every one of them but SIOCGIFNAME, which
+ * takes an index in the union and answers with a name, because a program that
+ * asks about an interface this machine does not have must be told so rather
+ * than told about the one it does have. The setters are root's.
+ *
+ * The setters return without copying the request back, since they only read
+ * it and a failed copy would report a refusal for a change already made.
+ * SIOCSIFFLAGS sets only whether the interface is up. SIOCSIFADDR always
+ * passes no mask: the mask that goes with the address is the classful one
+ * until SIOCSIFNETMASK arrives, never the one left from the address before,
+ * and `ifconfig` issues the two in that order. A subnet's broadcast address
+ * follows from the subnet, so SIOCSIFBRDADDR accepts the one the interface
+ * already derives and refuses any other.
  */
 static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 {
@@ -123,8 +136,6 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         return -EFAULT;
     }
 
-    /* SIOCGIFNAME is the one that runs the other way: it takes an index in the
-       union and answers with a name, so there is no name to check yet. */
     if (request == SIOCGIFNAME) {
         int32_t index =
             (int32_t)((uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
@@ -134,7 +145,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         struct netdev *at;
 
         if (index < 1 || index > netdev_count()) {
-            return -ENODEV; /* judged before it is made a place in the table */
+            return -ENODEV; /* no interface has that index */
         }
         at = netdev_at(index - 1);
         if (!at || at->index != index) {
@@ -189,11 +200,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         if (nd->up) {
             flags |= (uint16_t)IFF_UP;
         }
-        /* RUNNING is the link, not the card. `ifconfig` prints it, and a
-         * bound card with nothing plugged into it reported the same as a
-         * working one until the driver interface could be asked. The rule for
-         * a card that cannot report a link belongs to that interface, so it
-         * is asked rather than repeated here. */
+        /* IFF_RUNNING reports the link, as netdev_running judges it. */
         if (netdev_running(nd)) {
             flags |= (uint16_t)IFF_RUNNING;
         }
@@ -206,24 +213,14 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         uint16_t flags =
             (uint16_t)((uint16_t)ifr[IFREQ_UNION] | ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
 
-        /* Returns here instead of falling through to the writeback: this
-           request only reads its argument, and a copy back that failed would
-           report a refusal for a change already made. */
         nd->up = (flags & IFF_UP) ? 1 : 0;
         return 0;
     }
     case SIOCSIFADDR:
-        /* No mask, always: this ioctl sets an address, and the mask that goes
-           with it is either the classful one until `SIOCSIFNETMASK` arrives or
-           the wrong one carried over from the address before it. `ifconfig`
-           issues the two in that order for exactly this reason. */
         return netconf_set_address(nd, be32(ifr + IFREQ_SA_ADDR), 0);
     case SIOCSIFNETMASK:
         return netconf_set_netmask(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFBRDADDR:
-        /* The broadcast address of a subnet is the subnet's, not a choice, so
-         * this accepts the one this interface already derives and refuses any
-         * other instead of storing a second answer to the same question. */
         if (be32(ifr + IFREQ_SA_ADDR) !=
             (nd->ip != 0 && nd->mask != 0 ? (nd->ip | ~nd->mask) : 0xFFFFFFFFu)) {
             return -EINVAL;
@@ -240,13 +237,23 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 }
 
 /**
- * Add or remove a route.
+ * Add or remove a route; root only.
  *
- * This stack has one route it can hold, the default gateway, and it reaches
- * everything else by being on its subnet. So a default route sets or clears
- * the gateway; a route to the subnet this machine is already on is accepted
- * and does nothing, because it is already true; anything else is refused,
- * not accepted and forgotten.
+ * Each interface has one route it can keep, its default gateway, and reaches
+ * everything else by being on its subnet. The route is for the interface the
+ * request's `rt_dev` names, or for the first interface, the one whose
+ * address is the machine's, when that pointer is null; so a route for one
+ * interface cannot change another's. The name is read as a string, since a
+ * fixed sixteen bytes could run off the end of the caller's page.
+ *
+ * A default route sets the gateway, and one with no gateway is refused
+ * without touching anything, so `route add default dev eth0` cannot quietly
+ * remove the gateway. Removing a default route clears the gateway, and
+ * removing one that is not there is `ESRCH`: a DHCP client's script removes
+ * default routes in a loop that ends when a removal fails. A route to the
+ * interface's own subnet is accepted and does nothing, because it is already
+ * true; it cannot be removed while the address that implies it is in force.
+ * Anything else is refused, not accepted and forgotten.
  */
 static int32_t route_ioctl(uint32_t request, uint32_t arg)
 {
@@ -265,18 +272,10 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     gw = be32(rt + RTENTRY_GATEWAY + 4);
     mask = be32(rt + RTENTRY_GENMASK + 4);
 
-    /* The interface the route is for. A null pointer means "wherever it goes",
-       which is the first interface, the one whose address is the machine's; a
-       name is checked and the route is that interface's, so that a route for
-       one interface cannot change the route of another. */
     dev = (uint32_t)rt[RTENTRY_DEV] | ((uint32_t)rt[RTENTRY_DEV + 1] << 8) |
           ((uint32_t)rt[RTENTRY_DEV + 2] << 16) | ((uint32_t)rt[RTENTRY_DEV + 3] << 24);
     nd = netdev_first();
     if (dev != 0) {
-        /* A name is a string, and it is read as one: a fixed sixteen bytes from
-           a caller whose name is five bytes long can run off the end of the
-           page it sits in, and refusing that call would be refusing a correct
-           program. */
         int got =
             strncpy_from_user((char *)name, (const char __user *)dev, (uint32_t)IFREQ_NAMESIZE);
 
@@ -291,21 +290,12 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
 
     if (dst == 0 && mask == 0) {
         if (request == SIOCADDRT) {
-            /* A default route with no gateway is one this stack cannot hold:
-               everything off the subnet goes through a router, and there is
-               nowhere else to send it. Refused without touching anything, so
-               that `route add default dev eth0` cannot quietly remove the
-               gateway a machine across the room is reached through. */
             if (gw == 0) {
                 return -EINVAL;
             }
             return netconf_set_gateway(nd, gw);
         }
         if (request == SIOCDELRT) {
-            /* Removing a route that is not there is an error, and saying so
-               matters: a DHCP client's script removes old default routes in a
-               loop that ends when the removal fails, and a removal that always
-               succeeds is a machine that never gets past it. */
             if (nd->gateway == 0) {
                 return -ESRCH;
             }
@@ -318,11 +308,6 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     }
     if (request == SIOCADDRT && nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask &&
         gw == 0) {
-        /* The subnet is reachable already, by being on it, so adding that route
-           asks for what is already true. Removing it is another matter: it
-           cannot be removed while the address that implies it is in force, and
-           saying otherwise would be telling an administrator that traffic was
-           isolated when it was not. */
         return 0;
     }
     return -EOPNOTSUPP;

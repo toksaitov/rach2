@@ -2,13 +2,13 @@
  * Send ICMP echo requests through the Rach2 network stack.
  *
  * `ping [host]`, where `host` is an IPv4 address or name (default 10.0.2.2,
- * the SLIRP gateway). Names are resolved through `/hosts` and DNS (see
- * `resolv.c`).
+ * the SLIRP gateway). Names are resolved through `/etc/hosts`, or `/hosts`
+ * where there is no `/etc/hosts`, and then DNS (see `resolv.c`).
  *
- * Sends a few echo requests via the `SC_PING` socketcall and reports the
- * round-trip time in kernel ticks (10 ms each) or a timeout. `SC_PING` is a
- * Rach2-specific operation with no libc wrapper, so it is issued through a
- * direct `socketcall(2)`.
+ * Sends a few echo requests via the `SC_PING` socketcall and reports each
+ * round-trip time in milliseconds, counted in kernel ticks of 10 ms, or a
+ * timeout. `SC_PING` is a Rach2-specific operation with no libc wrapper, so it
+ * is issued through a direct `socketcall(2)`.
  */
 
 #include <stdio.h>
@@ -18,7 +18,7 @@
 
 #include "netdb.h" /* resolve_host */
 
-/* Rach2 socketcall extension: ICMP echo (renumbered off getsockopt=15). */
+/* Rach2's socketcall for an ICMP echo, numbered clear of the BSD sub-calls. */
 #define SC_PING    0x1000
 #define DEFAULT_IP 0x0A000202UL /* 10.0.2.2 */
 #define PING_COUNT 4

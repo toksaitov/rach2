@@ -35,7 +35,7 @@ int udp_bind(uint16_t port, struct socket *sock);
 /** Bind sock to a free ephemeral port; returns the port, or 0 on failure. */
 uint16_t udp_bind_ephemeral(struct socket *sock);
 
-/* Remove the binding for port, called when a socket closes. */
+/* Remove every binding `sock` has, called when a socket closes. */
 void udp_unbind(struct socket *sock);
 
 #endif /* _UDP_H_ */

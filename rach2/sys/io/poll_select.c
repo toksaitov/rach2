@@ -11,10 +11,10 @@
  * Translate three select() fd_sets into a packed pollfd array.
  *
  * Scans fds 0..nfds-1; an fd selected in the read, write, or except set
- * contributes one pollfd carrying POLLIN, POLLOUT, and POLLPRI for the
+ * contributes one pollfd whose events are POLLIN, POLLOUT, and POLLPRI for the
  * direction(s) it was selected in. Fds in no set are skipped, so the array is
- * dense. The .events field records the requested set membership and is the
- * channel pollfds_to_fdsets() reads back to project results onto the right
+ * dense. The .events field records the requested set membership, and
+ * pollfds_to_fdsets() reads it back to project results onto the right
  * direction.
  *
  * @return the number of pollfds written, or -1 if the selected fds exceed
@@ -44,7 +44,7 @@ int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w, const
             continue;
         }
         if (n >= max_pollfds) {
-            return -1; /* more selected fds than the kernel can have */
+            return -1; /* more selected fds than max_pollfds */
         }
         fds[n].fd = (int)fd;
         fds[n].events = ev;

@@ -170,10 +170,10 @@ static int nicfail_at(void)
 /**
  * Try every compiled-in driver and take every card each of them finds.
  *
- * A failed card is stopped and its error retained. Probing continues with
- * subsequent cards and drivers, subject to the interface and failure limits.
- * Retain the initialization error, or the boot-line refusal reason, for each
- * failed card.
+ * A failed card is stopped, and its reason, the driver's error or the
+ * boot-line refusal, replaces `probe_error`, so the last failure is the one
+ * reported. Probing continues with subsequent cards and drivers, subject to
+ * the interface and failure limits.
  *
  * Stop failed cards because initialization may have enabled bus mastering.
  * They have no bound interface through which shutdown could stop them.

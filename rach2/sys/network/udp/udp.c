@@ -98,8 +98,10 @@ int udp_bind(uint16_t port, struct socket *sock)
  * Bind a socket to a free ephemeral port in the 49152-65535 range.
  *
  * Scans forward from udp_next_ephemeral, wrapping at the top of the range, and
- * binds the first free port. do_sendto calls this to auto-bind an unbound
- * socket before its first send.
+ * binds the first free port. A send from a socket without a port
+ * (`dgram_send`), a `bind` to port 0 and a `connect` call this. The port is
+ * recorded in `sock->local_port`, so the socket's later sends do not bind a
+ * fresh port each time and its close unbinds it.
  *
  * @return the bound port, or 0 if none could be allocated.
  */
@@ -120,9 +122,6 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
                 return 0; /* no port would help */
             }
             if (rc == 0) {
-                /* Record the port on the socket so the caller's later sends do
-                 * not re-bind a fresh port each time and so close() unbinds it.
-                 * (do_sendto auto-binds an unbound socket via this path.) */
                 sock->local_port = port;
                 return port;
             }
@@ -131,14 +130,18 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
     return 0;
 }
 
+/**
+ * Remove every binding `sock` has, under `net_lock`.
+ *
+ * Bindings are matched by socket and not by port: two sockets may share a
+ * port, and releasing the first entry with that port would take the other
+ * one's binding away and leave this one's behind.
+ */
 void udp_unbind(struct socket *sock)
 {
     udp_binding_t **link;
     uint32_t flags;
 
-    /* By socket and not by port: two sockets may share a port, and releasing
-       the first entry that names it would take the other one's binding away
-       and leave this one's behind. */
     flags = net_lock();
     link = &bindings;
     while (*link) {
@@ -157,9 +160,17 @@ void udp_unbind(struct socket *sock)
 /**
  * Demultiplex one received UDP datagram to its bound socket.
  *
- * Called from IP receive in IRQ context. Drops the datagram if it is shorter
- * than the header or no socket is bound to the destination port. The payload is
- * handed to socket_udp_deliver along with the sender's address and port.
+ * Called with interrupts off from `ip_rx`. Drops the datagram if it is
+ * shorter than the header, if its length field is below the header's size or
+ * above the bytes received (a short length would underflow the payload
+ * length and hand adjacent receive memory to user space), or if no socket
+ * takes it. The checksum is not verified. The payload is handed to
+ * socket_udp_deliver along with the sender's address and port.
+ *
+ * A port may have more than one socket on it. The one connected to the
+ * sender takes the datagram, because it asked for that sender by name, and a
+ * renewal's answer must not go to a socket that is merely listening; the
+ * first unconnected one takes it otherwise.
  *
  * @param data the UDP header followed by its payload.
  * @param len  bytes actually received, the upper bound on the wire length.
@@ -175,21 +186,11 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     dst_port = read16be(data + 2);
     udp_len = read16be(data + 4);
 
-    /*
-     * Validate the on-wire length before trusting it: it must cover at least
-     * the header and must not exceed the bytes we actually received. Without
-     * this check a malicious short length underflows and leaks adjacent RX
-     * memory to userspace.
-     */
     if (udp_len < UDP_HDR_SIZE || udp_len > len) {
         return;
     }
     payload_len = (uint16_t)(udp_len - UDP_HDR_SIZE);
 
-    /* A port may have more than one socket on it. The one connected to the
-       sender takes the datagram, because it asked for that sender by name; the
-       first unconnected one takes it otherwise. Anything else would hand a
-       renewal's answer to the socket that is merely listening. */
     {
         struct socket *listener = NULL;
         uint16_t src_port = read16be(data + 0);
@@ -222,10 +223,12 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
  * Build a UDP datagram around the payload and hand it to IP for transmission.
  *
  * The maximum payload is 1472 bytes, leaving room for the IPv4 and UDP
- * headers within the 1500-byte MTU. Larger payloads return `-EMSGSIZE`.
+ * headers within the 1500-byte MTU. Larger payloads return `-EMSGSIZE`: from
+ * here above 1500 bytes, the transmit buffer's size, and from `ip_tx` below.
  * The checksum field is left zero, which IPv4 permits to disable checksumming.
- * The shared TX buffer is filled and queued under net_lock.
- * The return value is the contract in udp.h.
+ * The shared TX buffer is filled and queued under net_lock, since an
+ * IRQ-context sender must not reenter it (net.h). The return value is the
+ * contract in udp.h.
  */
 int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen, uint8_t ttl)
@@ -241,9 +244,6 @@ int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t 
 
     udp_len = (uint16_t)(UDP_HDR_SIZE + plen);
 
-    /* Build and transmit atomically: the shared TX buffers must not be
-     * re-entered by an IRQ-context sender (see the concurrency note in net.h).
-     */
     flags = net_lock();
 
     write16be(udp_tx_buf + 0, src_port);

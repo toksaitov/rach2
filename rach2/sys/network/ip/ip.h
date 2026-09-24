@@ -52,10 +52,10 @@ void ip_loop_drain(void);
 void ip_loop_drain_from(int from);
 uint32_t ip_loop_delivered(int from);
 
-/** Datagrams the loopback ring had no room for since boot. */
 /** Nonzero while the loopback ring holds anything at all. */
 int ip_loop_pending(void);
 
+/** Datagrams the loopback ring had no room for since boot. */
 uint32_t ip_loop_dropped(void);
 
 /** The most datagrams the loopback ring has held at once, which says how much

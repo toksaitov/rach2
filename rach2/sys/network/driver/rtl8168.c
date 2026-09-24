@@ -1,26 +1,26 @@
 /*
  * rtl8168.c: the RTL8168GU driver, ported from a pinned reference.
  *
- * The chip cannot be emulated by anything on this desk, so this file was
- * written against Linux v6.16 (commit
- * 038d61fd642278bab63ee8ef722c50d10ab01e8f),
+ * QEMU does not emulate the chip, so this file was written against Linux
+ * v6.16 (commit 038d61fd642278bab63ee8ef722c50d10ab01e8f),
  * drivers/net/ethernet/realtek/r8169_main.c and r8169_phy_config.c, for the
  * version that file calls RTL_GIGA_MAC_VER_42, and every sequence below names
  * the reference function it was taken from. What the reference does through
- * phylib, a firmware blob and an interrupt handler, this does directly, without
- * firmware, and polled.
+ * phylib and a firmware blob, this does directly and without firmware. The
+ * card is served from the timer tick, and through its messages where the
+ * machine can route them.
  *
  * Two deliberate departures from the reference, both stated here because
  * neither can be discovered by reading the sequences alone:
  *
  * - Link state is read from PHYstatus (0x6c). The reference declares that
- * register and its bits and then never reads it, because phylib reaches the PHY
- * over MDIO instead. A kernel with no phylib has no such path, so this driver
- * reads the MAC's own summary of the link. That is a documented register used
- * in a way the reference does not exercise. - The PHY is powered up here. The
- * reference suspends the PHY at the end of probe and lets phy_resume wake it at
- * open; with no phylib nothing would ever clear BMCR power-down, and the MAC
- * would be configured and silent.
+ *   register and its bits and then never reads it, because phylib reaches the
+ *   PHY over MDIO instead. A kernel with no phylib has no such path, so this
+ *   driver reads the MAC's own summary of the link. That is a documented
+ *   register used in a way the reference does not exercise.
+ * - The PHY is powered up here. The reference suspends the PHY at the end of
+ *   probe and lets phy_resume wake it at open; with no phylib nothing would
+ *   ever clear BMCR power-down, and the MAC would be configured and silent.
  *
  * All register access goes through an indirection (`io`) so the host test
  * can drive the whole bring-up against a software model of the chip; the
@@ -39,9 +39,7 @@
 #include "../../isr.h"
 #include "../../lapic.h"
 
-/* ------------------------------------------------------------------ */
-/* Register access, behind an indirection the host test can replace.   */
-/* ------------------------------------------------------------------ */
+/* Register access, behind an indirection the host test can replace. */
 
 /**
  * The chip's register window and the short waits its handshakes need.
@@ -102,9 +100,7 @@ static const struct r8168_io mmio_io = {mmio_r8,  mmio_r16, mmio_r32, mmio_w8,
 /* The binding in force. The host test points this at its model. */
 static const struct r8168_io *io = &mmio_io;
 
-/* ------------------------------------------------------------------ */
-/* Driver state.                                                       */
-/* ------------------------------------------------------------------ */
+/* Driver state. */
 
 static pci_device_t r8168_pci;
 static uint32_t r8168_xid;
@@ -128,16 +124,17 @@ static uint32_t r8168_tx_packets;
 static uint32_t r8168_tx_stalls;
 
 /* The card's messages: the vector they arrive on, or -1 while the driver is
- * polled; how many arrived; how many found nothing to do; and how many times
- * the handler's bound was reached with the status still set, after which the
- * sources are masked and the timer's pump alone drives the card. */
+ * polled; how many arrived; how many found nothing to do; and how many storms
+ * there were, runs of R8168_STORM_ENTRIES entries that found a source the
+ * acknowledgement does not clear, after which the sources stay masked and
+ * the timer's pump alone drives the card. */
 static int r8168_msi_vector = -1;
 static void r8168_interrupts_enable(void);
 static uint32_t r8168_msi_entries;
 static uint32_t r8168_msi_idle;
 static uint32_t r8168_msi_deferred;  /* entries that left work to the tick */
-static uint32_t r8168_txerr_reports; /* messages with the transmit error source set */
-static uint32_t r8168_rxerr_reports; /* messages with the receive error source set */
+static uint32_t r8168_txerr_reports; /* status words with the transmit error source set */
+static uint32_t r8168_rxerr_reports; /* status words with the receive error source set */
 static uint32_t r8168_msi_storms;
 static uint32_t r8168_msi_stuck; /* entries in a row: status left set, no work */
 static uint32_t r8168_tick_work; /* frames the tick handled with messages on */
@@ -168,9 +165,7 @@ static uint32_t r8168_tx_head; /* next descriptor to fill */
 static uint32_t r8168_tx_tail; /* oldest descriptor not yet reclaimed */
 static uint32_t r8168_rx_cur;  /* next descriptor to inspect */
 
-/* ------------------------------------------------------------------ */
-/* Bounded polling, the reference's rtl_loop_wait.                     */
-/* ------------------------------------------------------------------ */
+/* Bounded polling, the reference's rtl_loop_wait. */
 
 /**
  * Poll `mask` at `reg` until every bit of it reaches `high`, or give up.
@@ -221,9 +216,7 @@ static int r8168_wait8(uint32_t reg, uint8_t mask, int high, uint32_t usec, uint
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* The four indirect-access windows.                                   */
-/* ------------------------------------------------------------------ */
+/* The indirect-access windows. */
 
 /**
  * Read the ERI dword at `addr` (reference: rtl_eri_read).
@@ -252,7 +245,7 @@ static int r8168_eri_write(uint32_t addr, uint32_t mask, uint32_t value)
     return r8168_wait32(R8168_ERIAR, R8168_ERIAR_FLAG, 0, 100, 100);
 }
 
-/** Clear `mask` and set `set` in the ERI dword at `addr` (rtl_w0w1_eri). */
+/** Clear `clear` and set `set` in the ERI dword at `addr` (rtl_w0w1_eri). */
 static int r8168_eri_rmw(uint32_t addr, uint32_t clear, uint32_t set)
 {
     int ok = 0;
@@ -399,9 +392,7 @@ static int r8168_csi_write(uint32_t addr, uint32_t value)
     return r8168_wait32(R8168_CSIAR, R8168_CSIAR_FLAG, 0, 10, 100);
 }
 
-/* ------------------------------------------------------------------ */
-/* Bring-up.                                                           */
-/* ------------------------------------------------------------------ */
+/* Bring-up. */
 
 /** Unlock and lock the configuration registers (rtl_un/lock_config_regs). */
 static void r8168_unlock_config(void)
@@ -558,7 +549,7 @@ static int r8168_read_mac(uint8_t *mac)
 }
 
 /**
- * Turn PCIe L1 off at both ends of the link this card sits on.
+ * Turn PCIe ASPM, L0s and L1, off at both ends of the link this card is on.
  *
  * The reference asks the PCI layer to disable L1 and says why: on these parts
  * the link state can stop the device and hang the bus. A link has two ends,
@@ -650,7 +641,7 @@ static int r8168_ephy_init(void)
  * Twelve steps in the reference's order, and the order is the contract: the
  * packet filter is a clear THEN a set of one ERI bit, the two read-modify
  * writes of ERI 0x1b0 are separate because the reference writes the value
- * between them, and the receive gate is opened here, not later because
+ * between them, and the receive gate is opened here, not later, because
  * the receiver is enabled after this returns.
  */
 static int r8168_hw_start_8168g(void)
@@ -724,7 +715,10 @@ static void r8168_set_rx_mode(void)
  * own power management is turned off before the EPHY window is touched, the
  * chip-specific table runs, the ring addresses go in high half first, the
  * window closes, posted writes are flushed, and only then are the receiver
- * and transmitter enabled and the filters set.
+ * and transmitter enabled and the filters set. The interrupt mask is left
+ * zero: `r8168_interrupts_enable` unmasks the sources once the card is up
+ * and a handler serves its messages, and a card that sends none stays
+ * polled.
  */
 static int r8168_hw_start(void)
 {
@@ -771,16 +765,11 @@ static int r8168_hw_start(void)
     io->w32(R8168_RXCONFIG, io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_ERR_MASK);
     r8168_set_rx_mode();
 
-    /* The mask stays zero through the start: the sources are unmasked by
-     * `r8168_interrupts_enable` once the card is up and a handler serves
-     * its messages, and a card that sends none stays polled. */
     io->w16(R8168_INTRMASK, 0x0000);
     return 1;
 }
 
-/* ------------------------------------------------------------------ */
-/* Rings.                                                              */
-/* ------------------------------------------------------------------ */
+/* Rings. */
 
 /** Hand every receive descriptor to the chip, the last one marked
  * end-of-ring. */
@@ -816,9 +805,7 @@ static void r8168_tx_clear(void)
     r8168_tx_tail = 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* The PHY.                                                            */
-/* ------------------------------------------------------------------ */
+/* The PHY. */
 
 /* MII registers this driver touches. */
 #define R8168_MII_BMCR      0x00
@@ -835,8 +822,7 @@ static void r8168_tx_clear(void)
  * 802.3 selector and pause in both directions (bits 10 and 11, which the
  * reference advertises through phylib), and 1000 full duplex. Pause is what
  * lets a switch hold this port instead of dropping a run of frames when the
- * far port is slower, which the Lenovo's switch did at 100 Mbit against
- * this port's 1000. */
+ * far port is slower, as it is at 100 Mbit against this port's 1000. */
 #define R8168_ADVERTISE_VALUE 0x0de1
 #define R8168_CTRL1000_VALUE  0x0200
 
@@ -844,11 +830,14 @@ static void r8168_tx_clear(void)
  * Bring the PHY up and start autonegotiation.
  *
  * The reference reaches the PHY through phylib, which powers it up, applies a
- * firmware patch and configures EEE. This port does the two things that
- * cannot be skipped: it clears the power-down bit the reference's probe path
- * leaves set, and it negotiates. The firmware patch is deliberately absent;
- * the reference proceeds without it too, and if this board turns out to need
- * it the plan names porting the interpreter as the contingency.
+ * firmware patch and configures EEE. This port clears the power-down bit the
+ * reference's probe path leaves set, resets the PHY, sets the PHY-side EEE
+ * bit (page 0x0a43, register 0x11, bit 4), and negotiates. That bit is the
+ * whole of the reference's per-version PHY configuration apart from the
+ * firmware patch, and it is applied because the MAC side is configured too:
+ * the previous operating system leaves EEE enabled, and a PHY and a MAC that
+ * disagree about it make a first link flap. The firmware patch is
+ * deliberately absent; the reference proceeds without it too.
  */
 static int r8168_phy_init(void)
 {
@@ -887,13 +876,7 @@ static int r8168_phy_init(void)
         }
     }
 
-    /* The PHY-side energy-efficiency bit the reference applies for this chip
-     * version, and the whole of its per-version PHY configuration apart from
-     * the firmware patch: page 0x0a43, register 0x11, bit 4. It is applied,
-     * not skipped because the MAC side is configured too, and the
-     * machine this runs on leaves EEE enabled under its previous operating
-     * system: a PHY and a MAC that disagree about it is what makes a first
-     * link flap. */
+    /* The PHY-side EEE bit: page 0x0a43, register 0x11, bit 4. */
     r8168_mdio_page(0x0a43);
     {
         int page_ok = 0;
@@ -925,8 +908,7 @@ static int r8168_phy_init(void)
 #define R8168_PHY_10M     0x04
 #define R8168_PHY_FULLDUP 0x01
 
-/** The negotiated speed in megabits, or 0 with no link. */
-/* The link's speed as one PHYstatus sample `st` says it, 0 for no link. */
+/** The link's speed in megabits as the PHYstatus sample `st` says it, or 0. */
 static uint32_t r8168_speed_of(uint8_t st)
 {
     if (!(st & R8168_PHY_LINK)) {
@@ -944,15 +926,13 @@ static uint32_t r8168_speed_of(uint8_t st)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* The driver's entry points.                                          */
-/* ------------------------------------------------------------------ */
+/* The driver's entry points. */
 
-/* The interface this driver's one card is. Kept from the bring-up, so a
- * frame it delivers says where it arrived. */
 /* The card's own station address, read from the chip. */
 static uint8_t rtl8168_mac[6];
 
+/* The interface this driver's one card is. Kept from the bring-up, so a
+ * frame it delivers says where it arrived. */
 static struct netdev *rtl8168_iface;
 
 /**
@@ -960,9 +940,10 @@ static struct netdev *rtl8168_iface;
  *
  * The order is the reference's three stages: identify and quiesce, then the
  * rings and the PHY, then the start sequence. A failure at any point leaves
- * `r8168_err` naming it and the device unbound. A failed card is stopped and
- * its error retained. Probing continues with subsequent cards and drivers,
- * subject to the interface and failure limits.
+ * `r8168_err` naming it and the device unbound, and the probe then stops the
+ * card. Link power management is turned off before anything else is
+ * configured and before the rings exist, since it is the state the reference
+ * warns can stop the device outright.
  *
  * @return `NETDEV_UP`, `NETDEV_ABSENT`, or `NETDEV_FAILED`.
  */
@@ -1026,9 +1007,6 @@ static int rtl8168_init(struct netdev *nd, int nth)
         return NETDEV_FAILED;
     }
 
-    /* Before anything else is configured and before the rings exist: this is
-     * the link state the reference warns can stop the device outright, and
-     * the target machine's previous operating system leaves it enabled. */
     r8168_disable_link_state();
 
     r8168_cp_cmd = (uint16_t)(io->r16(R8168_CPLUSCMD) & R8168_CPCMD_MASK);
@@ -1081,9 +1059,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
     {
         int b;
 
-        /* The card's own address goes to the interface it is. The stack's
-         * one address for the machine is the first interface's, set by the
-         * walk, not by whichever driver ran last. */
+        /* The card's address is its interface's; netdev_probe sets net_mac. */
         for (b = 0; b < 6; b++) {
             nd->mac[b] = rtl8168_mac[b];
         }
@@ -1124,25 +1100,24 @@ static uint32_t r8168_tx_reclaim(void)
  * Send one Ethernet frame.
  *
  * Fill, hand over, ring, and return: the chip finishes on its own time and the
- * timer tick reclaims. Waiting here for completion, which is what this did
- * before the tick drove the driver, put a bounded busy-wait inside every
- * transmit, and every netconsole frame runs that wait with interrupts
- * disabled.
+ * service routine reclaims. Waiting here for completion would put a bounded
+ * busy-wait inside every transmit, and every netconsole frame would run that
+ * wait with interrupts disabled.
  *
- * A full ring is the one case that still waits, briefly. Dropping the moment a
+ * A full ring is the one case that waits, briefly. Dropping the moment a
  * burst outruns the chip would lose frames a 10 ms tick would have freed room
  * for, so this rings the doorbell and reclaims for a bounded interval first,
  * and counts a stall only if the oldest descriptor is still the chip's after
  * that. A wedged chip therefore costs one bounded wait per frame, not a
  * kernel that stops.
  *
- * The whole of it runs with interrupts disabled, as the RTL8139's transmit
- * does, because the timer tick reclaims from the same two ring indices this
- * advances. `net.h` already asks every syscall-context sender to hold
- * `net_lock`, and every one of them does; guarding here as well means the
- * interface's contract does not rest on each caller remembering, and the two
- * drivers behind that interface follow the same rule. The bracket nests, so a
- * caller that already has it pays nothing.
+ * The ring work runs with interrupts disabled, as the RTL8139's transmit
+ * does, because the service routine, from the tick or from the card's
+ * message, reclaims from the same two ring indices this advances. `net.h`
+ * already asks every syscall-context sender to hold `net_lock`; guarding
+ * here as well means the interface's contract does not rest on each caller
+ * remembering, and every driver behind that interface follows the same rule.
+ * The bracket nests, so a caller that already has it pays nothing.
  */
 static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
 {
@@ -1177,8 +1152,6 @@ static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
         }
     }
 
-    /* One call, which moves words: a byte at a time here cost about
-     * 12000 cycles a frame, which was the whole of this path's time. */
     k_memcpy(r8168_tx_buf[idx], data, len);
     /* The chip does not pad, and a short frame on the wire is a runt: pad to
      * the 60-byte minimum with zeroes so no stale buffer bytes are sent. */
@@ -1215,6 +1188,11 @@ static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
  * driver does not do, and at a 1500-byte transfer unit against a 16 KB
  * buffer the chip has no reason to split one. The reported length includes
  * the frame check sequence, which is stripped before delivery.
+ *
+ * @return the receive descriptors handled. Reclaimed transmits are not
+ *         counted: a frame this driver sent, the log's own netconsole line
+ *         among them, is no evidence that a source left set is one that
+ *         clears.
  */
 static uint32_t r8168_service(void)
 {
@@ -1224,9 +1202,6 @@ static uint32_t r8168_service(void)
     if (!r8168_up) {
         return 0;
     }
-    /* Only frames received count as work: a frame this driver sent and
-     * reclaims, the log's own netconsole line among them, is not evidence
-     * that a source left set is one that clears. */
     (void)r8168_tx_reclaim();
     work = 0;
     for (budget = 0; budget < R8168_RING_SIZE; budget++) {
@@ -1269,7 +1244,9 @@ static uint32_t r8168_service(void)
  * The timer's pump: the service routine, every tick. With the card's
  * messages on this is the fallback, and what it finds is counted, since a
  * tick that does the work is the sign of a message that did not come or of
- * a handler that left work behind.
+ * a handler that left work behind. While no handler acknowledges the status,
+ * with no messages or after a storm, the tick notes and acknowledges it, so
+ * a link change on a polled card is logged too.
  */
 static void rtl8168_poll(void *dev)
 {
@@ -1277,8 +1254,6 @@ static void rtl8168_poll(void *dev)
 
     (void)dev; /* this driver has one card */
     if (r8168_mmio != 0 && r8168_up && (r8168_msi_vector < 0 || r8168_msi_storms != 0)) {
-        /* No handler acknowledges the status here, so the tick does, and
-         * notes what it says: a link change on a polled card is logged too. */
         uint16_t status = io->r16(R8168_INTRSTATUS);
 
         if (status != 0) {
@@ -1296,9 +1271,9 @@ static void rtl8168_poll(void *dev)
  * Note what a status word says besides the rings, before the acknowledgement
  * clears it: the error sources are counted, since a frame the chip failed to
  * send has no other record, a descriptor coming back the same either way,
- * and a link change is logged. Every acknowledgement passes through here,
- * the handler's rounds, its last one for what arrived meanwhile, and the
- * tick's on a machine whose messages are off or masked.
+ * and a link change is logged. Every acknowledgement in service passes
+ * through here: the handler's rounds, its last one for what arrived
+ * meanwhile, and the tick's on a machine whose messages are off or masked.
  */
 static void r8168_note_sources(uint16_t status)
 {
@@ -1334,15 +1309,13 @@ static void r8168_note_sources(uint16_t status)
  * read cannot be relied on to bring that condition down, because a frame
  * that arrives between the read and the write leaves a source set, and
  * because the chip reports states as well as events: transmit-descriptor
- * unavailable is true whenever the transmit ring is empty. A handler that
- * returned with a source set would be the last one the card ever ran, and
- * the machine would take frames at the tick's pace from then on, which is
- * one receive window every ten milliseconds. Masking first makes the
+ * unavailable is true whenever the transmit ring is empty. After a handler
+ * that returned with a source set the card would send no further message,
+ * and the machine would take frames at the tick's pace from then on, which
+ * is one receive window every ten milliseconds. Masking first makes the
  * condition false whatever the status holds, and the unmask makes it true
  * again for whatever arrived meanwhile, so no event is lost and none is
- * needed twice. Measured on the Lenovo: without the mask the card stopped
- * sending messages partway through the first large transfer, leaving the
- * status at 0x0081, and inbound SSH ran at 2.4 MB/s against 22.9 with it.
+ * needed twice.
  *
  * The status is acknowledged before the rings are drained, as the xHCI
  * driver orders it: a frame that arrives while the rings are being drained
@@ -1403,12 +1376,11 @@ static void rtl8168_isr(isr_params_t *params)
 /**
  * Take the card's messages, when the machine can route them.
  *
- * The handler is registered before the device is enabled, so no message can
- * arrive on a vector nothing serves, and the sources are unmasked last, once
- * the device is known to send to this vector. A machine with no usable
- * APIC, no vector to give, or a capability that does not enable stays
- * polled, which is what the driver was before this and what the diagnostic
- * line reports.
+ * The handler is registered before the device's messages are enabled, so no
+ * message can arrive on a vector nothing serves, and the sources are
+ * unmasked last, once the device is known to send to this vector. A machine
+ * with no usable APIC, no vector to give, or a capability that does not
+ * enable stays polled, which the diagnostic line reports.
  */
 static void r8168_interrupts_enable(void)
 {
@@ -1440,14 +1412,6 @@ static const char *rtl8168_error(void)
     return r8168_err;
 }
 
-/**
- * Report the link, from the MAC's own summary of it.
- *
- * The speed comes from `r8168_link_speed`, which reads PHYstatus; a speed of
- * zero from that function is what this chip says for no link.
- *
- * @return 1 with `*out` filled; 0 only when no window is mapped.
- */
 /**
  * The pause the link resolved, as PHYstatus reports it: whether this port
  * sends pause frames when its ring is full and whether it holds when the
@@ -1486,6 +1450,14 @@ static void r8168_log_link(void)
          (st & R8168_PHY_FULLDUP) ? "full" : "half", r8168_pause_words(st));
 }
 
+/**
+ * Report the link, from the MAC's own summary of it.
+ *
+ * The speed comes from `r8168_speed_of` on one PHYstatus sample; a speed of
+ * zero is what this chip says for no link.
+ *
+ * @return 1 with `*out` filled; 0 only when no window is mapped.
+ */
 static int rtl8168_link(void *dev, struct netdev_link *out)
 {
     uint32_t speed;
@@ -1512,6 +1484,11 @@ static int rtl8168_link(void *dev, struct netdev_link *out)
  * Read the DMA block only after completion is observed. The chip is asked
  * only while it is up: the reference notes that some of these chips cannot
  * dump with the receiver stopped.
+ *
+ * The writes are in the reference's order: the high word, read back so the
+ * write has landed, the low word as the address alone, then the address with
+ * the command. In the reference's experience a chip given the command with
+ * the address in the same write has dumped to the old address.
  */
 static int r8168_counters_dump(void)
 {
@@ -1520,10 +1497,6 @@ static int r8168_counters_dump(void)
     if (r8168_mmio == 0 || !r8168_up) {
         return 0;
     }
-    /* The reference's order: the high word, read back so the write has
-     * landed, the low word as the address alone, then the address with the
-     * command; a chip given the command with the address in the same write
-     * has, in the reference's experience, dumped to the old address. */
     io->w32(R8168_COUNTERADDRHIGH, 0);
     (void)io->r32(R8168_COUNTERADDRHIGH);
     io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters);
@@ -1563,15 +1536,20 @@ static int rtl8168_counters(void *dev, struct netdev_counters *out)
     return 1;
 }
 
-/** The card's detail line under the boot summary. */
+/**
+ * The card's detail lines under the boot summary.
+ *
+ * The chip revision, the window and the address are a debug record, since
+ * the station address is on the `net: eth0:` line above. The link follows,
+ * then the counters once they count something, then how the card is served:
+ * its messages and what the tick took, or the tick alone.
+ */
 static void rtl8168_print_info(void *dev)
 {
     struct netdev_link link;
 
     (void)dev; /* this driver has one card */
 
-    /* The chip revision and the window are for whoever is debugging the card.
-       The station address is on the `net: eth0:` line above. */
     klog(KLOG_DEBUG, "rtl8168",
          "RTL8168GU: xid 0x%X, MMIO 0x%X, "
          "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
@@ -1587,10 +1565,6 @@ static void rtl8168_print_info(void *dev)
     } else {
         klog(KLOG_INFO, "rtl8168", "no link yet");
     }
-    /* The counters are worth a line once they count something. This report is
-       printed at bring-up as well as on demand, and at bring-up every one of
-       them is zero, which told a person reading a boot nothing and took two
-       lines to do it. */
     if (r8168_rx_packets || r8168_rx_errors || r8168_rx_dropped || r8168_rxerr_reports ||
         r8168_tx_packets || r8168_tx_stalls || r8168_txerr_reports) {
         klog(KLOG_INFO, "rtl8168",
@@ -1615,14 +1589,17 @@ static void rtl8168_print_info(void *dev)
 
 /**
  * Silence the chip: receive and transmit configuration cleared, the receive
- * gate closed, interrupts masked, DMA revoked.
+ * gate closed, interrupts masked and messages off, DMA revoked.
  *
- * The gate is closed as well as the enables cleared because that is the
- * mechanism this chip has for stopping data at the receiver, and the
+ * What the chip already accepted is first given a bounded moment to leave:
+ * the shutdown path submits its last log line and then stops the device, and
+ * a transmit returns once the descriptor is handed over, not once the frame
+ * has gone. The gate is closed as well as the enables cleared because that is
+ * the mechanism this chip has for stopping data at the receiver, and the
  * bring-up already uses it for the same purpose. Bus mastering goes last, for
  * the reason it goes last everywhere: it is the one that ends DMA whatever
- * the chip believes it is doing, and the descriptor rings it holds addresses
- * for are kernel memory.
+ * state the chip is in, and the descriptor rings it has addresses for are
+ * kernel memory.
  *
  * Safe on a chip that never finished starting, which is how the probe calls
  * it after a failed bring-up. `rtl8168_init` enables bus mastering and can
@@ -1643,10 +1620,6 @@ static void rtl8168_stop(void *dev)
     (void)dev; /* this driver has one card */
 
     if (r8168_mmio != 0) {
-        /* What the chip already accepted, given a bounded moment to leave.
-         * The shutdown path submits its last log line and then stops the
-         * device; a transmit returns once the descriptor is handed over, not
-         * once the frame has gone. */
         for (i = 0; i < R8168_DRAIN_STEPS; i++) {
             r8168_tx_reclaim();
             if (r8168_tx_tail == r8168_tx_head) {

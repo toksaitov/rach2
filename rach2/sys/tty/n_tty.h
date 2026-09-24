@@ -5,11 +5,11 @@
 
 /*
  * The N_TTY line discipline: the cooked/raw input editor and output
- * processor a terminal sits behind. It is pure logic over a fixed-size
- * state, with echo and output emitted through a caller-supplied byte sink,
- * so it compiles freestanding and hosted. The kernel wires the sink to the
- * console (VGA + serial) and acts on the recognized signals; the host test
- * captures the sink into a buffer.
+ * processor of a terminal. It is pure logic over a fixed-size state, with
+ * echo and output emitted through a caller-supplied byte sink, so it
+ * compiles freestanding and hosted. The kernel wires the sink to the console
+ * (VGA + serial) or to a pty's master ring and acts on the recognized
+ * signals; the host test captures the sink into a buffer.
  */
 
 /*
@@ -96,8 +96,8 @@ struct n_tty {
     unsigned char rq_end[N_TTY_READ_MAX];
     unsigned int rq_head; /* monotonic; slot = head & (SIZE-1) */
     unsigned int rq_tail;
-    int eof;              /* a VEOF on an empty line -> a pending end-of-file */
-    unsigned int eof_pos; /* the rq stream position the pending EOF sits at */
+    int eof;              /* a pending end-of-file: a VEOF on an empty line, or a hangup */
+    unsigned int eof_pos; /* the rq stream position of the pending EOF */
     struct n_tty_counters counters;
 };
 
@@ -107,14 +107,14 @@ void n_tty_init(struct n_tty *t);
 /** Process one received input byte; sets `*signo` to a NTTY_SIG* code or 0. */
 void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx, int *signo);
 
-/** Bytes a read could return now, or 0 if it would block. */
+/** Nonzero when a read would not block, 0 when it would. */
 int n_tty_readable(const struct n_tty *t);
 
 /** Whether the discipline can take a whole line more without dropping. */
 int n_tty_has_room(const struct n_tty *t);
 
-/** Install `tio`. Returns what a read could return now, since a partial
- * canonical line is readable once ICANON is off. */
+/** Install `tio`. Returns nonzero when a read would not block, since a
+ * partial canonical line is readable once ICANON is off. */
 int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio);
 
 /** Discard every unread byte, the partial line and a pending EOF. */
@@ -124,7 +124,8 @@ void n_tty_flush(struct n_tty *t);
  * end-of-file. */
 int n_tty_read(struct n_tty *t, unsigned char *buf, int count);
 
-/** Count of bytes the next read can return (the TIOCINQ value). */
+/** Count of bytes queued for reading (the TIOCINQ value); a canonical read
+ * returns only the first line of them. */
 int n_tty_inq(const struct n_tty *t);
 
 /** Emit one output byte through OPOST processing. */

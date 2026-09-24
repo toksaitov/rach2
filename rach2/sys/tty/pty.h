@@ -24,12 +24,13 @@
  * Both the slave's echo and its output leave through the slave's SINK, which
  * pushes into m_buf; the master reads m_buf. The slave has no polled input
  * source (pump == NULL); it is fed by master writes, not a serial port, so the
- * timer-IRQ console drain never touches a pty.
+ * console's interrupt-side drain never touches a pty.
  *
- * Each endpoint is an fd riding the file_ops layer (ops + priv = the struct
- * pty); read/write block on wait queues, and an endpoint is torn down only
- * when its last descriptor closes. The slave reuses every tty service
- * (termios, winsize, ISIG, sessions/job-control) on its struct tty.
+ * Each endpoint is a descriptor whose ops are its file_ops and whose priv is
+ * the struct pty; read/write block on wait queues, and the pair is freed only
+ * when the master and every slave description have closed. The slave reuses
+ * every tty service (termios, winsize, ISIG, sessions/job-control) on its
+ * struct tty.
  */
 
 #define PTY_BUF_SIZE 4096 /* slave->master ring; power of two for the mask */
@@ -37,7 +38,7 @@
 struct pty {
     struct pty *next; /* the list of live ptys */
     int in_use;
-    int index;        /* N in /dev/pts/N (the pool slot) */
+    int index;        /* N in /dev/pts/N */
     struct tty slave; /* the slave end: a full tty + N_TTY discipline */
 
     unsigned char m_buf[PTY_BUF_SIZE]; /* slave output + echo, read by the master */
@@ -49,7 +50,7 @@ struct pty {
     int slave_opens; /* count of open slave descriptions (distinct OFDs) */
     int locked;      /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
 
-    /* Ownership of the slave (/dev/pts/N), the state a login server moves
+    /* Ownership of the slave (/dev/pts/N), the state a login server sets
      * with chown/chmod before handing the terminal to the user. Stamped from
      * the opener's effective ids at allocation; stat reports it. */
     uint32_t uid;
@@ -57,13 +58,14 @@ struct pty {
     uint16_t mode; /* permission bits only; the type is S_IFCHR */
 };
 
-/* Allocate the pty pool from kernel memory; called once from init. */
+/* Empty the list of live ptys; called once at boot. Each pair is allocated
+ * from the heap when its master opens. */
 void pty_init_pool(void);
 
 /*
- * open("/dev/ptmx"): allocate a free pty pair and install the MASTER
- * endpoint on a fresh descriptor (locked until unlockpt). Returns the master
- * fd (>= 0), or -errno (-ENFILE if the pool is full, -EMFILE if the fd table
+ * open("/dev/ptmx"): allocate a pty pair and install the MASTER endpoint on a
+ * fresh descriptor (locked until unlockpt). Returns the master fd (>= 0), or
+ * -errno (-ENFILE if the heap has no room for a pair, -EMFILE if the fd table
  * is full).
  */
 int pty_open_master(int flags);
@@ -72,7 +74,8 @@ int pty_open_master(int flags);
  * open("/dev/pts/N"): install the SLAVE endpoint of pty N on a fresh
  * descriptor. Returns the slave fd (>= 0), or -errno (-ENXIO if N is
  * unallocated, -EIO if the pair is still locked, -EMFILE if the fd table is
- * full).
+ * full). The descriptor has only the access the open mode asks for, also
+ * when /dev/tty resolves to the slave.
  */
 int pty_open_slave(int index, int flags);
 
@@ -92,7 +95,7 @@ struct tty *pty_slave_tty(struct fd_entry *e);
  * name. */
 int pty_slave_index(struct fd_entry *e);
 
-/* Whether slot `index` is an allocated pty pair (for /dev/pts
+/* Whether pty `index` exists and its master is open (for /dev/pts
  * stat/getdents). */
 int pty_is_allocated(int index);
 

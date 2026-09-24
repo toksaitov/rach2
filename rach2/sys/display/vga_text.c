@@ -21,11 +21,11 @@
  * copied to the front of that memory once every 180 scrolls, when the
  * window would pass its end. `_hw_top` is the cell the display starts at.
  * Only a viewport that moves, a scroll back through history or a clear, is
- * blitted whole by vga_text_sync(). The cursor's position is two port
- * writes per register, and a write of many bytes holds it and places it
- * once at the end. While the adapter is in a graphics mode the start
- * address is left alone, since it is the picture's then; the text mode's
- * restore redraws the screen and sets it again.
+ * blitted whole by vga_text_sync(). Placing the cursor takes four port
+ * writes, so a write of many bytes holds it and places it once at the end.
+ * While the adapter is in a graphics mode the start address is left alone,
+ * since it is the picture's then; leaving graphics mode clears the screen,
+ * which sets it again.
  *
  * The caller keeps interrupts off around a byte's work here: k_putc does,
  * and a keyboard's echo comes through k_putc from its interrupt.
@@ -204,11 +204,13 @@ static void vga_text_reset_history(void)
 /**
  * Move the hardware cursor to follow (x, y) within the live area.
  *
- * The cursor sits at (x, y) of the live area while following live output.
+ * The cursor is at (x, y) of the live area while following live output.
  * When scrolled back it is placed at the corresponding cell only if that cell
- * is on screen; otherwise it is parked at the bottom-right corner. The
- * registers count cells from the start of the adapter's memory, not from the
- * display's start address, so `_hw_top` is added.
+ * is on screen; otherwise it is parked at the bottom-right corner. The cursor
+ * location is CRTC registers 0x0E (high byte) and 0x0F (low byte), selected
+ * at port 0x3D4 and written at 0x3D5. They count cells from the start of the
+ * adapter's memory, not from the display's start address, so `_hw_top` is
+ * added.
  */
 static void vga_text_update_cursor(void)
 {
@@ -224,8 +226,6 @@ static void vga_text_update_cursor(void)
         cursor_pos = (uint16_t)(_hw_top + VGA_TEXT_SCREEN_CELLS - 1);
     }
 
-    /* CRTC port 0x3D4 selects a register, 0x3D5 reads/writes it; cursor
-     * location is registers 0xE (high byte) and 0xF (low byte). */
     outb(0x3D4, 0xE);
     outb(0x3D5, cursor_pos >> 8);
     outb(0x3D4, 0xF);
@@ -251,11 +251,11 @@ void vga_text_place_cursor(void)
  *
  * Each byte of output moves the cursor, and placing it is four port writes;
  * a line placed once at the end costs the same as one byte placed on its own.
- * Holds nest, so a record an interrupt raises inside a program's write takes
- * its own hold and the cursor is placed when the outermost writer releases.
- * An interrupt's hold and release are balanced, so a count it interrupts
- * between the load and the store is stored as it would have been, and a
- * cursor the interrupt moved is placed by the writer it interrupted.
+ * Holds nest, so a message an interrupt handler prints during a program's
+ * write takes its own hold and the cursor is placed when the outermost writer
+ * releases. An interrupt's hold and release are balanced, so a count it
+ * interrupts between the load and the store is stored as it would have been,
+ * and a cursor the interrupt moved is placed by the writer it interrupted.
  */
 void vga_text_hold(void)
 {
@@ -357,10 +357,9 @@ void k_cls(void)
  * Scroll the live area down by one line.
  *
  * Appends a fresh blank line and advances the live top. A viewport following
- * live output scrolls with the display's start address; a user scrolled back
- * into history stays put, except that it is pulled forward, and redrawn, if
- * its line has just been evicted, which the append does to the viewport
- * itself.
+ * live output scrolls with the display's start address. A viewport scrolled
+ * back into history stays where it is, unless the append evicted its top
+ * line: the append then moves it to the new oldest line, and it is redrawn.
  */
 void k_scroll_down(void)
 {

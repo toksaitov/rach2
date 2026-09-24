@@ -1,4 +1,9 @@
-/** Create each named directory. */
+/**
+ * Create each named directory, with mode 0777 less the umask.
+ *
+ * Parents are not made. A directory that cannot be made is reported and the
+ * rest are still tried; the status is 1 when any failed.
+ */
 
 #include <stdio.h>
 #include <sys/stat.h>

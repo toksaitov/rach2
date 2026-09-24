@@ -174,7 +174,7 @@ int krandom_is_trusted(void)
 
 #if defined(__i386__)
 
-/* Hardware entropy sources, kernel-side only (see kio.c / kernel.c). */
+/* The port I/O and the tick counter the jitter seed reads (kio.c, kernel.c). */
 extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_ticks;
@@ -240,10 +240,11 @@ static int collect_key(int (*draw)(uint32_t *), uint32_t key[8])
  * Gather an eight-word key from hardware entropy.
  *
  * RDSEED (CPUID leaf 7, EBX bit 18) is preferred, then RDRAND (leaf 1, ECX bit
- * 30). Each is gated by BOTH its feature bit and a CPUID max-leaf check:
- * probing an unsupported leaf returns junk that could falsely advertise the
- * bit, then #UD when the instruction runs. If RDSEED is present but does not
- * deliver, the code falls through to RDRAND.
+ * 30). Each is used only when the highest CPUID leaf covers its leaf and its
+ * feature bit is set: an unsupported leaf returns another leaf's data, which
+ * could falsely advertise the bit, and the instruction would then raise #UD.
+ * If RDSEED is present but does not deliver, the code falls through to
+ * RDRAND.
  *
  * @return The KRANDOM_SRC_* of the source that filled the key, or
  *         KRANDOM_SRC_JITTER if neither delivered.
@@ -276,8 +277,9 @@ static int hw_key(uint32_t key[8])
  * marks the generator trusted. Otherwise the seed comes from boot-time jitter
  * (CPU timestamp counter, CMOS RTC seconds, and the PIT tick). Jitter varies
  * across boots but is not defensible entropy, so the source stays untrusted:
- * getrandom and /dev/[u]random fail closed, and only the best-effort AT_RANDOM
- * and stack-canary uses draw from it.
+ * getrandom without GRND_INSECURE and /dev/[u]random fail closed, and only
+ * best-effort uses draw from it, such as AT_RANDOM, from which the C library
+ * takes its stack canary.
  */
 void krandom_seed(void)
 {
