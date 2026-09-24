@@ -1,5 +1,6 @@
 /**
- * Check ISH waits, input lines, descriptors and environment names.
+ * Check ISH waits, input lines, descriptors, environment names and the
+ * search path.
  *
  * host-deps: ish/ish_shell_utilities.c ish/ish_cstring_utilities.c
  * host-cflags: -DISH_USE_STDLIB
@@ -11,6 +12,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -22,6 +24,8 @@ static int wait_calls;
 static int wait_status;
 static size_t read_limit;
 static int read_failure_after = -1;
+static const char *stat_present;
+static int stat_present_calls;
 
 /** Supply scripted wait results, or wait for an actual test child. */
 static int test_waitpid(int pid, int *status, int options)
@@ -69,18 +73,29 @@ static ssize_t test_read(int fd, void *buffer, size_t count)
     return read(fd, buffer, count);
 }
 
-#ifdef ISH_RAW_HOSTTEST
-/** Keep the host stat layout out of the freestanding shell's scratch buffer. */
+/**
+ * Stat through the host, or report `stat_present` as a file without looking.
+ *
+ * The host result goes to a buffer of its own in both builds, since the raw
+ * build's scratch buffer is not the host's `struct stat`.
+ */
 static int test_stat(const char *path, void *unused)
 {
     struct stat result;
 
     (void)unused;
+    if (stat_present != NULL && strcmp(path, stat_present) == 0) {
+        ++stat_present_calls;
+        return 0;
+    }
     return stat(path, &result);
 }
+
+#ifdef ISH_RAW_HOSTTEST
 #undef ISH_USE_STDLIB
-#define stat test_stat
 #endif
+#define stat(path, result) test_stat(path, result)
+
 #define waitpid test_waitpid
 #define read    test_read
 #define main    ish_main
@@ -88,8 +103,8 @@ static int test_stat(const char *path, void *unused)
 #undef main
 #undef read
 #undef waitpid
-#ifdef ISH_RAW_HOSTTEST
 #undef stat
+#ifdef ISH_RAW_HOSTTEST
 #define ISH_USE_STDLIB
 #endif
 #define ISH_HOSTTEST
@@ -147,6 +162,51 @@ static int check_reads(void)
     return result;
 }
 
+/** The joiner keeps a path that fits exactly and reports one cut short. */
+static int check_join(void)
+{
+    char out[9];
+
+    if (ish_combine_path_elements("/bin:/usr/bin", "cat", out, 8) != 0 ||
+        strcmp(out, "/bin/cat") != 0) {
+        return fail("path joined to its limit");
+    }
+    if (ish_combine_path_elements("/bin", "echo", out, 8) != -1 ||
+        ish_combine_path_elements("/usr/bin", "ls", out, 8) != -1 ||
+        ish_combine_path_elements("/usr/sbin", "ls", out, 8) != -1) {
+        return fail("path joined past its limit");
+    }
+    return 0;
+}
+
+/**
+ * A PATH entry too long to join with the command name must be skipped.
+ *
+ * The entry is 1019 bytes, so the joined path is cut at 1024 bytes to the
+ * entry followed by `/prog`, a file this test reports present. The shell must
+ * skip the entry and answer 127; running the cut path would run a program
+ * other than the one named.
+ */
+static int check_long_path(void)
+{
+    char element[1100];
+    char present[1100];
+    char line[] = "prog-long-name";
+    char *environment[] = {NULL};
+    int status;
+
+    memset(element, 'd', 1019);
+    element[0] = '/';
+    element[1019] = '\0';
+    snprintf(present, sizeof(present), "%s/prog", element);
+    stat_present = present;
+    stat_present_calls = 0;
+    fflush(NULL);
+    status = ish_run_line(line, NULL, element, environment);
+    stat_present = NULL;
+    return status == 127 && stat_present_calls == 0 ? 0 : fail("long path entry");
+}
+
 /** Keep probe output files inside a private directory in this worktree. */
 int main(void)
 {
@@ -159,6 +219,7 @@ int main(void)
     }
     result =
         check_descriptors() | check_environment() | check_input() | check_waits() | check_reads();
+    result |= check_join() | check_long_path();
     unlink("ishmusl.output");
     unlink("ishmusl.capture");
     unlink("ishmusl.environment");

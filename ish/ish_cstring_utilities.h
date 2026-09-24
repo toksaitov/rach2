@@ -44,8 +44,8 @@ int ish_are_cstrings_equal_ignoring_case(const char *string, const char *another
 /** Parse a leading signed decimal integer from `string`. */
 int ish_get_integer_from_cstring(const char *string);
 
-/** Join two path elements into `combined_path` separated by a `/`. */
-void ish_combine_path_elements(const char *path_element, const char *another_path_element,
-                               char *combined_path, unsigned long maximum_combined_path_length);
+/** Join two path elements with a `/`; -1 when the joined path did not fit. */
+int ish_combine_path_elements(const char *path_element, const char *another_path_element,
+                              char *combined_path, unsigned long maximum_combined_path_length);
 
 #endif

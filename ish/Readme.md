@@ -21,7 +21,7 @@ The two builtins are:
 * `cd [DIRECTORY]` changes the shell's working directory. With no operand it uses `HOME`. Success returns 0; failure returns 1.
 * `exit [STATUS]` exits the shell. The operand is read as a signed decimal prefix; a missing or nonnumeric operand means 0.
 
-An external command is tried as written. If `stat` cannot find it, ISH tries each nonempty element of `PATH`. A constructed path is limited to 1024 bytes. The child inherits the shell's complete environment.
+An external command is tried as written. If `stat` cannot find it, ISH tries each nonempty element of `PATH`. A `PATH` element whose joined path would be longer than 1024 bytes is skipped, since the path cut short could name another program. The child inherits the shell's complete environment.
 
 The parent waits for each external command and retries an interrupted wait. `-c` reports these statuses:
 
@@ -104,4 +104,4 @@ Run it in a writable copy of `/src/ish`. Root may also build the staged tree in 
 
 ## Verification
 
-`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `tests/run default` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, redirection failure, redirection with closed standard descriptors, exact environment names, and input lines across reads, at EOF and over the length limit. `tests/host/ish_hosttest.c` shares the descriptor, environment and input cases and injects interrupted or failed waits and short or failed reads. `sh tests/host/ish_mutate.sh` compiles that test alone under ASan and UBSan for both libc and raw wait errors. Each fault must fail its named assertion before restored, touched and rebuilt source passes. Logs and checksums remain under `build/tests/ish-proof.*`. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.
+`tests/run style` builds the normal component and checks that `guest.mk` names the same five objects. `tests/run default` runs `musl/ishmusl`, which checks `-c`, child and builtin statuses, a signal death, redirection failure, redirection with closed standard descriptors, exact environment names, and input lines across reads, at EOF and over the length limit. `tests/host/ish_hosttest.c` shares the descriptor, environment and input cases, injects interrupted or failed waits and short or failed reads, and checks the path joiner at its limit and a `PATH` element too long to join, which must be skipped. `sh tests/host/ish_mutate.sh` compiles that test alone under ASan and UBSan for both libc and raw wait errors. Each fault must fail its named assertion before restored, touched and rebuilt source passes. Logs and checksums remain under `build/tests/ish-proof.*`. `tests/run selfbuild` builds ISH with TinyCC as an ordinary guest account, runs the result with `-c`, and rebuilds `/src/ish` in place as root.

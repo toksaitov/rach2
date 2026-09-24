@@ -73,11 +73,13 @@ static int ish_wait_for_child(int pid)
  * The line is split into an argument array, and either a builtin (`cd`, `exit`)
  * runs in this process or the command is resolved to an executable and run in a
  * child. Resolution tries the name as given, then each `PATH` element joined
- * with the name; a name that `stat` cannot find is skipped. Before the
- * `execve`, `< file` and `> file` redirections recorded in the arguments are
- * applied in the child by `dup2`-ing the opened descriptors over 0 and 1.
- * The parent retries an interrupted wait and returns the child's status.
- * If the status cannot be obtained, it returns 126.
+ * with the name; a name that `stat` cannot find is skipped, and so is a joined
+ * path longer than `Max_Executable_Path_Length`, since cut short it could be
+ * the path of another program. Before the `execve`, `< file` and `> file`
+ * redirections recorded in the arguments are applied in the child by
+ * `dup2`-ing the opened descriptors over 0 and 1. The parent retries an
+ * interrupted wait and returns the child's status. If the status cannot be
+ * obtained, it returns 126.
  *
  * `input` is split in place, so the caller's buffer comes back tokenized.
  *
@@ -157,9 +159,10 @@ static int ish_run_line(char *input, char *home, char *paths, char **envp)
         for (char *cursor = paths; cursor && !executable;) {
             char *path = ish_get_token_in_cstring(cursor, ish_is_path_separator, &cursor);
             if (path) {
-                ish_combine_path_elements(path, arguments[0], candidate,
-                                          Max_Executable_Path_Length);
-                if (stat(candidate, stat_result) == 0) {
+                int cut = ish_combine_path_elements(path, arguments[0], candidate,
+                                                    Max_Executable_Path_Length);
+
+                if (!cut && stat(candidate, stat_result) == 0) {
                     executable = candidate;
                 }
             }

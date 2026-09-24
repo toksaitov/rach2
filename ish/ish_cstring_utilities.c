@@ -237,6 +237,7 @@ int ish_get_integer_from_cstring(const char *string)
     switch (*string) {
     case '-':
         negative = 1;
+        /* fall through */
     case '+':
         ++string;
     }
@@ -255,28 +256,40 @@ int ish_get_integer_from_cstring(const char *string)
  * Only the first path element up to (not including) an `ISH_Path_Separator` is
  * used, so a search-path entry can be passed straight in. The result is always
  * NUL-terminated. `maximum_combined_path_length` bounds the bytes written
- * before the terminator; the output is silently truncated if the inputs do not
- * fit.
+ * before the terminator, so `combined_path` needs one byte more than that.
+ *
+ * Returns 0 when the whole path fits, or -1 when it was cut short. A path cut
+ * short can be the path of another file, so a caller must not use it.
  */
-void ish_combine_path_elements(const char *path_element, const char *another_path_element,
-                               char *combined_path, unsigned long maximum_combined_path_length)
+int ish_combine_path_elements(const char *path_element, const char *another_path_element,
+                              char *combined_path, unsigned long maximum_combined_path_length)
 {
     ish_check(path_element && another_path_element && combined_path);
 
     unsigned long i = 0;
+    int result = 0;
 
     while (i < maximum_combined_path_length && *path_element &&
            !ish_is_path_separator(*path_element)) {
         combined_path[i++] = *path_element++;
     }
+    if (*path_element && !ish_is_path_separator(*path_element)) {
+        result = -1;
+    }
 
     if (i < maximum_combined_path_length) {
         combined_path[i++] = ISH_Directory_Separator;
+    } else {
+        result = -1;
     }
 
     while (i < maximum_combined_path_length && *another_path_element) {
         combined_path[i++] = *another_path_element++;
     }
+    if (*another_path_element) {
+        result = -1;
+    }
 
     combined_path[i] = '\0';
+    return result;
 }

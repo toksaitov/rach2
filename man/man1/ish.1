@@ -65,7 +65,10 @@ Exit the shell with the given status.
 .Pp
 An external command is tried as written, then through each nonempty element of
 .Ev PATH .
-A constructed path is limited to 1024 bytes.
+A
+.Ev PATH
+element whose joined path would be longer than 1024 bytes is skipped,
+since the path cut short could name another program.
 The child inherits the shell's environment.
 The parent retries an interrupted wait for the child.
 .Pp
