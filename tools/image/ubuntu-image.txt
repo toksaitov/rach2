@@ -1,6 +1,6 @@
 # The Ubuntu image the GRUB steps run in, pinned by digest.
 #
-# tools/mkgrubcore.sh, tools/mkdisk_grub.sh and tools/mkiso.sh read this file.
+# vendor/grub/regen_grub.sh reads this file.
 # A tag moves: ubuntu:24.04 in six months is not the image this project was
 # proved against, and a GRUB built from a different grub-pc would be a change
 # nobody chose. Repin deliberately, and say why in the commit.

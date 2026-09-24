@@ -1,4 +1,5 @@
 # deadline.sh: a suite's completion bounds under the factor the run was given.
+# shellcheck shell=sh
 #
 # Nothing is measured. The runner measured the emulator's rate and refused a
 # set past an envelope until 2026-09-15; a host busy with something else was

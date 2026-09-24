@@ -13,8 +13,8 @@
 # binary; --build-id=none keeps its note out of a fixed-address link.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PREFIX="$SCRIPT_DIR/../musl/install"
-GCC=i686-elf-gcc
-MODE=link
+GCC='i686-elf-gcc'
+MODE='link'
 for a in "$@"; do
   case "$a" in
     -c|-S|-E|-M|-MM) MODE=compile ;;

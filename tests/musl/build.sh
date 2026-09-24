@@ -91,6 +91,7 @@ for src in *.c; do
         echo "error: link-deps: prefix on the next line instead" >&2
         exit 1
     fi
+    # shellcheck disable=SC2013 # a link-deps: line lists its sources as words
     for dep in $(grep -oE 'link-deps:[^*]*' "$src" | sed 's/link-deps://'); do
         if [ ! -f "$REPO/$dep" ]; then
             echo "error: $src names a link-deps: source that is not there: $dep" >&2

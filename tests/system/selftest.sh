@@ -459,6 +459,7 @@ out=$(RACH2_TIMEOUT_FACTOR=0 run passing); rc=$?
 check "a zero explicit factor is refused" 2 "$rc"
 out=$(RACH2_TIMEOUT_FACTOR=65 run passing); rc=$?
 check "a factor beyond the consumers' range is refused" 2 "$rc"
+# shellcheck disable=SC2030 # the export ends with the row's subshell
 out=$( (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=9.0; run slowtoken) ); rc=$?
 check "an inherited internal factor is ignored" 1 "$rc"
 check "and the written bound is used by default" 1 "$(printf '%s\n' "$out" | grep -c 'no token within 2 s')"
@@ -482,7 +483,6 @@ out=$(RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=2 RACH2_RUN_UTIL="$SELFTEST_U
 check "a driver bound supplied by scaled is applied once" 1 "$(printf '%s\n' "$out" | grep -c "no 'missing' within 2 s")"
 check "the driver's bound ends the wait" 1 "$rc"
 (
-    REPO=$REPO
     . "$REPO/tests/system/drive.sh"
     DRIVE_LOG=$WORK/driver.log
     printf '~ # Running in background\r\nother daemon output\r\n' > "$DRIVE_LOG"
@@ -537,6 +537,7 @@ check "a reply and prompt that arrive before the wait are preserved" 0 "$rc"
 HARNESS_BIN="$REPO/build/tests/system/harness"
 PTYDRIVE_BIN="$REPO/build/tests/system/ptydrive"
 HOSTPEER_BIN="$REPO/build/tests/system/hostpeer"
+# shellcheck disable=SC2030,SC2031 # a row's variables end with its subshell
 if [ -x "$HARNESS_BIN" ] && [ -x "$PTYDRIVE_BIN" ] && [ -x "$HOSTPEER_BIN" ]; then
     mkdir -p "$WORK/late"
     cat > "$WORK/late/qemu-system-i386" <<'LATE'
@@ -687,6 +688,7 @@ check "and not at its limit" 1 "$([ "$held" -lt 15 ] && echo 1 || echo 0)"
 
 # The native lock excludes another owner even before the owner record exists.
 rm -f "$WORK/lock-entered"
+# shellcheck disable=SC2016 # $1 is the inner shell's argument
 "$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo ready > "$1"; sleep 2' sh "$WORK/lock-entered" &
 lockrun=$!
 i=0
@@ -710,7 +712,7 @@ out=$(run passing); rc=$?
 check "a second run on a tree with one in flight is refused" 1 "$rc"
 check "and the first is named" 1 "$(printf '%s\n' "$out" | grep -c 'another run holds this tree: [0-9]*, slow1')"
 wait "$first"
-check "and the lock goes with the first run" 0 "$(ls -d "$WORK/build/.run.lock" 2>/dev/null | wc -l | tr -d ' ')"
+check "and the lock goes with the first run" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
 mkdir -p "$WORK/build/.run.lock"
 printf 'pid 999999\npgid 999999\nsince long ago\nargs old\n' > "$WORK/build/.run.lock/owner"
 out=$(run passing); rc=$?
@@ -740,7 +742,7 @@ wait "$stuckrun"; rc=$?
 sleep 0.5
 check "a run stopped with TERM exits as the signal says" 143 "$rc"
 check "and its suite's work is stopped with it" 0 "$(kill -0 "$(cat "$WORK/stuck.pid" 2>/dev/null)" 2>/dev/null && echo 1 || echo 0)"
-check "and the lock goes" 0 "$(ls -d "$WORK/build/.run.lock" 2>/dev/null | wc -l | tr -d ' ')"
+check "and the lock goes" 0 "$([ -e "$WORK/build/.run.lock" ] && echo 1 || echo 0)"
 kill "$(cat "$WORK/stuck.pid" 2>/dev/null)" 2>/dev/null
 
 # The same, with HUP, which has a status of its own.

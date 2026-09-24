@@ -1,11 +1,11 @@
-# Rach2 cppcheck suppressions.
+# Rach2 cppcheck suppressions, read by the style check, tools/verify/check.sh.
 #
-# Each entry is a deliberate, justified exception; this file is NOT a place to
-# silence real bugs. Bare ids suppress globally (they are systematically wrong
-# for our conventions); id:*path entries are scoped to specific legacy files so
-# the check stays live for new musl-port code. See tools/check.sh.
+# Each entry is a deliberate exception with its reason; a real fault is fixed,
+# not listed here. A bare id suppresses a rule everywhere, where the tree's
+# conventions contradict it. An id:*path entry suppresses a rule in one file
+# and leaves it live in every other.
 
-# --- House conventions (these checks contradict our deliberate style) ---
+# The tree's conventions.
 
 # C89 requires declarations at the top of a block; we never narrow scope.
 variableScope
@@ -14,32 +14,32 @@ variableScope
 # signature is fixed; cppcheck itself flags the const-cast caveat here.
 constParameterCallback
 
-# We do not retrofit const-correctness onto the existing C89 kernel API surface.
+# The kernel's C89 interfaces take their pointers without `const`, and are not
+# changed to add it.
 constParameterPointer
 constVariablePointer
 
-# --- Legacy audio drivers (pre-existing; untouched by the musl port) ---
+# The HDA driver and the audio self-test.
 
 # Intentional `field | 0` idiom documenting an all-fields register composition.
 badBitmaskCheck:*sys/audio/hda.c
+# A variable is initialised where it is declared and assigned again before it
+# is read, and a debug switch such as `hda_probe_log_enabled` is fixed when
+# the kernel is built: cppcheck reports the first value as unused or as
+# initialised twice, and the switch's test as constant.
 unreadVariable:*sys/audio/hda.c
 unreadVariable:*sys/audio/audio_debug.c
 redundantInitialization:*sys/audio/hda.c
 knownConditionTrueFalse:*sys/audio/hda.c
 knownConditionTrueFalse:*sys/audio/audio_debug.c
 
-# --- New musl-port code: inline-asm the analyzer can't model ---
+# Inline assembly cppcheck does not model.
 
 # krandom_seed's `rdtsc` writes lo (eax) and hi (edx) via inline asm; cppcheck
 # cannot see that and treats them as the identical zero-initialized value.
 duplicateExpression:*sys/lib/krandom.c
 
-# --- Legacy boot / self-test (kernel.c) ---
-
-# test_syscall() returns a structural constant; the self-test condition is intentional.
-knownConditionTrueFalse:*kernel.c
-
-# --- ABI layout structs in the timestamp probes ---
+# The ABI layout structs in the timestamp probes.
 
 # `struct old_stat` in these two mirrors the kernel's `struct linux_stat` field
 # for field, because musl never issues that call on i386 and the probes ask for
@@ -47,27 +47,11 @@ knownConditionTrueFalse:*kernel.c
 unusedStructMember:*tests/musl/statmusl.c
 unusedStructMember:*tests/musl/stampmusl.c
 
+# The guest programs.
+
 # main's argv is the ABI's, not ours: cppcheck asks for `const char *argv[]`,
 # which is not the signature a hosted C program's main has.
 constParameter:*tests/musl/execargmusl.c
-
-# --- The host programs: tools/, tests/system/ and krffs/ ---
-
-# The vendored terminal library fsviz includes is not this project's code.
-*:*krffs/vendor/*
-
-# The on-disk node and file system layouts, and the fixture's copy of the
-# kernel's VFS structures for the source it compiles: members the tools read
-# in other translation units, or that the layout requires, are the format,
-# not dead code.
-unusedStructMember:*krffs/krffs_node.h
-unusedStructMember:*krffs/krffs_file_system.h
-unusedStructMember:*tests/system/fixtures/vfs_unmount.c
-
-# The index entries are a `char [][128]` array; C does not convert a pointer
-# to such an array to one with `const` inside, so the parameter cppcheck asks
-# for would need a cast at every call.
-constParameter:*tools/verify/prosecheck.c
 
 # The budget test holds descriptors rather than reading them: the value of the
 # second socket is what keeps it drawn from the pool the test measures.
@@ -93,3 +77,21 @@ unassignedVariable:*tests/devprobe.c
 # freestanding and has no libc, so it clears a structure with a byte loop.
 knownConditionTrueFalse:*tests/netifprobe.c
 useStandardLibrary:*tests/netifprobe.c
+
+# The host programs: tools/, tests/system/ and krffs/.
+
+# The vendored terminal library fsviz includes is not this project's code.
+*:*krffs/vendor/*
+
+# The on-disk node and file system layouts, and the fixture's copy of the
+# kernel's VFS structures for the source it compiles: members the tools read
+# in other translation units, or that the layout requires, are the format,
+# not dead code.
+unusedStructMember:*krffs/krffs_node.h
+unusedStructMember:*krffs/krffs_file_system.h
+unusedStructMember:*tests/system/fixtures/vfs_unmount.c
+
+# The index entries are a `char [][128]` array; C does not convert a pointer
+# to such an array to one with `const` inside, so the parameter cppcheck asks
+# for would need a cast at every call.
+constParameter:*tools/verify/prosecheck.c

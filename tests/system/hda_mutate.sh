@@ -89,14 +89,16 @@ run_phase()
 }
 
 echo "hda-guest: logs: $work"
-make -s check-libc build/tests/system/harness build/tests/system/runutil >"$work/build.log" 2>&1
-make -s -C utils ../build/utils/audiotest >>"$work/build.log" 2>&1
-make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
-    ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs >>"$work/build.log" 2>&1
 # The probe is one of the musl programs, built by `make musl-programs` with
 # the others, so this script neither compiles it nor keeps a copy of that
 # compile line.
-make -s musl-programs >>"$work/build.log" 2>&1
+{
+    make -s check-libc build/tests/system/harness build/tests/system/runutil
+    make -s -C utils ../build/utils/audiotest
+    make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
+        ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs
+    make -s musl-programs
+} >"$work/build.log" 2>&1
 cp build/tests/musl/hdaprobe "$work/hdaprobe"
 for profile in rach2-metal rach2-metal-disk os-real; do
     grep -Fx 'file 0755 /bin/audiotest build/utils/audiotest' \

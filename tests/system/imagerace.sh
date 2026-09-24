@@ -24,7 +24,7 @@
 set -u
 MANIFEST=$1; OUT=$2; SIZE=$3; TESTIMG=$4; REALIMG=$5
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-cd "$REPO"
+cd "$REPO" || exit 1
 fails=0
 say() { echo "imagerace-test: $1"; }
 bad() { echo "imagerace-test: FAIL: $1" >&2; fails=$((fails + 1)); }
@@ -41,7 +41,10 @@ wait $b; rcb=$?
 [ -s "$OUT" ] || bad "no image was left behind"
 [ -s "$OUT.d" ] || bad "no dependency file was left behind"
 # Nothing of either build is left in the way of the next one.
-left=$(ls "$OUT".*.new* "$OUT".d.list* 2>/dev/null | tr '\n' ' ')
+left=
+for t in "$OUT".*.new* "$OUT".d.list*; do
+    [ ! -e "$t" ] || left="$left $t"
+done
 [ -z "$left" ] || bad "temporaries left behind: $left"
 if [ "$fails" = 0 ]; then
     say "two builds of one image at once both finish and leave it whole: OK"
@@ -67,7 +70,7 @@ done
 # anything out of date; the order-only components print their own lines every
 # time, so what is looked for is a recipe that writes one of these.
 for t in "$TESTIMG" "$REALIMG"; do
-    stale=$(MAKEFLAGS= make --no-print-directory -n "$t" 2>&1 |
+    stale=$(MAKEFLAGS='' make --no-print-directory -n "$t" 2>&1 |
             grep -E "mkimage\.sh|mkext2\.sh|mkdisk_grub\.sh|mkinstallstick\.sh" |
             grep -c "$t")
     [ "$stale" = 0 ] || bad "$t is out of date the moment after it was built"
@@ -83,7 +86,7 @@ say "an image just built is not out of date: OK"
 # marker goes one level down and not beside the programs.
 mkdir -p build/tests/system/imagerace.d
 : > build/tests/system/imagerace.d/marker
-stale=$(MAKEFLAGS= make --no-print-directory -n "$TESTIMG" 2>&1 |
+stale=$(MAKEFLAGS='' make --no-print-directory -n "$TESTIMG" 2>&1 |
         grep -E "mkimage\.sh" | grep -c "$TESTIMG")
 rm -rf build/tests/system/imagerace.d
 [ "$stale" = 0 ] || bad "$TESTIMG went out of date for a file written below a staged directory"
@@ -101,7 +104,7 @@ say "a file written below a staged directory does not put the image out of date:
 # that builds it. The behaviour itself, an edited probe reaching the image in
 # one `make`, is proved with a real build against a copy of these makefiles
 # by imagerace_probe.sh at the end of this suite.
-db=$(MAKEFLAGS= make --no-print-directory -p -n "$TESTIMG" 2>/dev/null)
+db=$(MAKEFLAGS='' make --no-print-directory -p -n "$TESTIMG" 2>/dev/null)
 printf '%s\n' "$db" | grep -q "^build/tests/vmprobe: tests\$" ||
     bad "a staged program does not wait for the component that builds it"
 printf '%s\n' "$db" | grep -q "^$TESTIMG:.* build/tests/vmprobe " ||
@@ -144,7 +147,7 @@ cat > "$TREE/prog.mk" <<'EOP'
 $(TREE)/prog: $(TREE)/prog.c
 	cc -o $@ $(TREE)/prog.c
 EOP
-treemake() { MAKEFLAGS= make --no-print-directory -f "$TREE/Makefile" TREE="$TREE" MANIFEST="$MANIFEST" "$@" > "$TREE/make.log" 2>&1; }
+treemake() { MAKEFLAGS='' make --no-print-directory -f "$TREE/Makefile" TREE="$TREE" MANIFEST="$MANIFEST" "$@" > "$TREE/make.log" 2>&1; }
 treemake "$TREE/tree.krffs" || bad "the tree's first build failed: $(tail -2 "$TREE/make.log" | tr '\n' ' ')"
 grep -aq "IMAGERACE FIRST WORDS" "$TREE/tree.krffs" || bad "the first image does not carry the program's words"
 sleep 1 # make judges by time, and the file systems here keep seconds

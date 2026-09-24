@@ -13,6 +13,7 @@
 # answer, because a renewal may carry a different router or resolver than the
 # lease before it.
 
+# shellcheck disable=SC2154 # udhcpc passes the lease in the environment
 RESOLV=/etc/resolv.conf
 
 fail=0

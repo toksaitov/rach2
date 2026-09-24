@@ -13,8 +13,8 @@
 # fails with its name and an installation hint before any compilation starts.
 #
 # `--report` runs the full probes, prints one line per tool, and writes no
-# cache. `tools/doctor.sh` remains the wider machine-setup report covering
-# QEMU, style, and optional tools.
+# cache. `tools/setup/doctor.sh` remains the wider machine-setup report
+# covering QEMU, style, and optional tools.
 #
 set -u
 

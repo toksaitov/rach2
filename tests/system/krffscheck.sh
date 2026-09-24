@@ -13,7 +13,7 @@
 set -u
 MKFS=$1; FSCK=$2; DIR=$3
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-cd "$REPO"
+cd "$REPO" || exit 1
 fails=0
 say() { echo "krffscheck-test: $1"; }
 bad() { echo "krffscheck-test: FAIL: $1" >&2; fails=$((fails + 1)); }
@@ -70,7 +70,7 @@ PY
     echo "$out"
 }
 
-status() { "$FSCK" "$1" $2 > "$1.log" 2>&1; echo $?; }
+status() { "$FSCK" "$1" ${2:+"$2"} > "$1.log" 2>&1; echo $?; }
 
 # A fresh image is clean, and says so under both modes.
 [ "$(status "$CLEAN" --strict)" = 0 ] || bad "a fresh image is not clean under --strict"

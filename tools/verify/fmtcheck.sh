@@ -3,11 +3,11 @@
 # fmtcheck.sh: refuse a kernel message the kernel's formatter cannot print.
 #
 # `k_vprintf` (rach2/sys/lib/kfmt.c) walks its arguments off the stack one word
-# per conversion. A conversion it does not know is written out verbatim and
-# consumes no argument, so every field after it in the same message is read one
-# slot early: the fault is wrong values, not only wrong letters. The machine on
-# the desk printed `audio: not driven: 8086:a0c at 02x:02x.0` from a format of
-# `%x:%x at %02x:%02x.%d`, before the `0` flag and the width were understood.
+# per conversion. A conversion it does not know is written as its letter alone
+# and consumes no argument, so every field after it in the same message is read
+# one slot early: the fault is wrong values, not only wrong letters. The machine
+# on the desk printed `audio: not driven: 8086:a0c at 02x:02x.0` from a format
+# of `%x:%x at %02x:%02x.%d`, before the `0` flag and the width were understood.
 #
 # What the formatter takes: `%d %b %o %x %X %s %c %%`, each with an optional
 # `0` flag and one decimal digit of width before the letter. Anything else,

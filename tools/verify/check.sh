@@ -14,7 +14,7 @@
 #      tests/system/, krffs/) at c99
 #      (--error-exitcode; a differing cppcheck version reports its findings and
 #      decides nothing, but a cppcheck that fails to run fails the step)
-#   3. shellcheck on the in-house shell scripts
+#   3. shellcheck on every in-house shell script (tools/verify/scripts.sh)
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format on every in-house file and any named as arguments, judged
 #      by the version tools/setup/judges records
@@ -161,21 +161,31 @@ else
     echo "  FAIL: see $VDIR/verify_cppcheck_host.log"; fail=1
 fi
 
-# 3. shellcheck. New in-house scripts (tools/, vendor/*/build_*.sh) are STRICT;
-#    SC2086 stays active so an accidental unquoted expansion is caught. The
-#    legacy QEMU run/build scripts waive SC2086 (option word-splitting is
-#    intentional) and SC2034 (vars shared across sourced fragments); SC1091
-#    covers the dynamic source path in both.
+# 3. shellcheck over every in-house shell script, the list
+#    tools/verify/scripts.sh prints, so a script added anywhere in the tree is
+#    checked without being named here. SC1091 is off throughout, since a file
+#    sourced through a variable cannot be followed. The QEMU run scripts under
+#    rach2/ and the build scripts at krffs/*.sh also waive SC2086, since they
+#    split option strings into words on purpose, and SC2034, since their
+#    variables are read by the files that source them. An empty list fails
+#    the step, since it means the list was not made.
 hr "3/22 shellcheck"
 sc=0
-# shellcheck disable=SC2046
-shellcheck -x -e SC1091 $(ls tests/run tests/system/suites/*.sh tests/system/accept/*.sh tests/system/grow_machine.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
+sh "$REPO/tools/verify/scripts.sh" >"$VDIR/_scripts.txt" || sc=1
+legacy='^(rach2|krffs)/[^/]*\.sh$'
+grep -vE "$legacy" "$VDIR/_scripts.txt" >"$VDIR/_scripts_strict.txt"
+grep -E "$legacy" "$VDIR/_scripts.txt" >"$VDIR/_scripts_legacy.txt"
+xargs shellcheck -x -e SC1091 <"$VDIR/_scripts_strict.txt" \
     >"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
-# shellcheck disable=SC2046
-shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
-    $(ls rach2/*.sh krffs/*.sh 2>/dev/null) \
+xargs shellcheck -x -e SC1091 -e SC2034 -e SC2086 <"$VDIR/_scripts_legacy.txt" \
     >>"$VDIR/verify_shellcheck.log" 2>&1 || sc=1
-if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
+nscripts=$(grep -c . "$VDIR/_scripts.txt")
+[ "$nscripts" -gt 0 ] || sc=1
+if [ "$sc" -eq 0 ]; then
+    echo "  PASS ($nscripts scripts)"
+else
+    echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1
+fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
 hr "4/22 conventions (no //, ASCII, header guards, marked idle wait, group kills)"
@@ -211,8 +221,9 @@ fi
 # "Illegal number: -", so `kill -TERM -- "-$child"` signals nothing, and a
 # trap that stops a test's process group that way waits for the group to end
 # by itself. After a signal option a negative pid is already a pid, so the
-# form is `kill -TERM "-$child"`.
-kill_bad=$({ find tests tools rach2 krffs mk -name '*.sh' 2>/dev/null; echo tests/run; } \
+# form is `kill -TERM "-$child"`. The scripts read are the ones step 3 checks,
+# every in-house shell script tools/verify/scripts.sh lists.
+kill_bad=$(sh "$REPO/tools/verify/scripts.sh" \
     | xargs grep -nE 'kill[^|;&#]*[[:space:]]--[[:space:]]+"?-' 2>/dev/null \
     | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
 if [ -n "$kill_bad" ]; then
@@ -349,7 +360,7 @@ else
 fi
 
 # Message formats. The kernel's own formatter takes a fixed set of
-# conversions, and one it does not know is written out verbatim while
+# conversions, and one it does not know is written as its letter alone while
 # consuming no argument, so every field after it in that message is read one
 # slot early. That printed `at 02x:02x.0` on the machine and, worse, the wrong
 # numbers beside it.
@@ -421,8 +432,17 @@ fi
 #     sealed-network one must refuse every way the menu and the recovery script
 #     can come to describe two different machines, the compilation-database
 #     generator must join wrapped recipes, select only compile commands, and
-#     refuse to publish an invalid database, and the suite checker must refuse
-#     each form of a guessed duration and accept each marked interval.
+#     refuse to publish an invalid database, the suite checker must refuse
+#     each form of a guessed duration and accept each marked interval, the
+#     build rules that tests/system/build_rules_test.sh checks must hold in a
+#     private tree: the source-list guard names a source missing from its list
+#     and one missing from the disk, a clean needs no cross compiler, the GRUB
+#     disk has a rule, the disk and stick rules have their tools and names, a
+#     keyed tree names its disks for the key, and a release is refused in one,
+#     and the script
+#     list of step 3 and the text check of step 8 must read each kind of
+#     file they claim and find a fault planted in each
+#     (tests/system/style_scope_test.sh).
 hr "13/22 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
@@ -433,7 +453,9 @@ if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/verify/suitecheck.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tests/system/recovery_key_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   sh "$REPO/tests/system/dryrun_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1; then
+   sh "$REPO/tests/system/dryrun_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   sh "$REPO/tests/system/build_rules_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   sh "$REPO/tests/system/style_scope_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1

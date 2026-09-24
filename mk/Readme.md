@@ -32,9 +32,9 @@ Run the generator from the repository root:
 sh tools/dev/gen_compile_commands.sh
 ```
 
-`tools/dev/gen_compile_commands.sh` runs `make -Bn` in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines back into whole commands, and keeps each command whose first word is the i686 cross GCC, one entry per C source operand. Strings are escaped for JSON, the finished database is validated line by line, and an entry is required for every kernel source in `C_SRC`; the file replaces `compile_commands.json` only after both checks pass. The generated file is ignored by Git. `tests/run style` runs the generator's `--selftest`, which covers the wrapped-recipe and validation cases on fixtures.
+`tools/dev/gen_compile_commands.sh` builds one database per unit under `build/compile_commands/` from the build's own commands, by a dry run (`make -Bn`, or a build script's print mode) that joins wrapped recipe lines back into whole commands and keeps each command whose first word is the unit's compiler, one entry per C source operand. The twelve units are the four kernel variants (`rach2`, `rach2-recovery`, `rach2-metal`, `rach2-harness`), the guest programs (`tests`, `ish`, `utils`, `musl-programs`, `doom`) and the host programs (`krffs`, `tools`, `host-tests`). Strings are escaped for JSON, each database is validated line by line before it is published, and `tools/verify/dbcheck.sh` requires every in-house C source to be in one of them. Their union replaces `compile_commands.json` at the root. The generated files are ignored by Git. `tests/run style` runs the generator's `--selftest`, which covers the wrapped-recipe and validation cases on fixtures.
 
-The database excludes the host KRFFS tools, vendored projects, and Doom. The checked-in `.clangd` selects `i686-elf-gcc` for the four covered trees. Allow clangd to query that cross compiler:
+The database excludes the vendored projects. The checked-in `.clangd` selects `i686-elf-gcc` for the cross-compiled trees, `rach2/`, `tests/`, `ish/` and `utils/`; the host KRFFS tools keep the host compiler their entries name. Allow clangd to query that cross compiler:
 
 ```text
 --query-driver=**/i686-elf-*gcc

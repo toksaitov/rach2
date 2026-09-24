@@ -1,4 +1,5 @@
 # drive.sh: type at a machine's console when it is ready, not by the clock.
+# shellcheck shell=sh
 #
 # A suite that boots QEMU itself, `-serial stdio < FIFO > LOG`, sources this
 # file and drives the machine with `drive_expect` and `drive_type`: a line is
