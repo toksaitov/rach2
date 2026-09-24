@@ -1307,7 +1307,8 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
  * Detach the socket and begin closing the connection.
  *
  * In ESTABLISHED or CLOSE_WAIT, flushes queued data and sends a FIN after the
- * last byte; otherwise frees the TCB.
+ * last byte; otherwise frees the TCB. Closing a listener first frees the
+ * passive blocks still in their handshake on its port, with their sockets.
  *
  * Detach the socket from the control block in both directions. The caller
  * retains ownership of the socket; shutdown may leave its descriptors open.
@@ -1727,11 +1728,11 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
  * That arm is why SYN_RCVD dispatches on `passive`. A passive block was made by
  * a listener and no descriptor owns its socket until `accept` hands one over,
  * so its completion goes on the listener's queue and a reset frees both. A
- * completion that finds the listener closed is answered with a reset and
- * frees both too, since nothing else would ever own them. An active opener's
- * socket belongs to a descriptor already, so its completion wakes that
- * `connect` (there is no listener to queue it on) and a reset is a refused
- * connect, leaving the socket for its descriptor to close.
+ * listener's close frees the passive blocks still in their handshake, with
+ * their sockets (`tcp_free_half_opens`), so no completion finds its listener
+ * gone. An active opener's socket belongs to a descriptor already, so its
+ * completion wakes that `connect` (there is no listener to queue it on) and a
+ * reset is a refused connect, leaving the socket for its descriptor to close.
  *
  * In ESTABLISHED, an acknowledgement of new data goes to `tcp_take_ack`. A
  * duplicate (RFC 5681, section 2) acknowledges `snd_una` again, with no data,
