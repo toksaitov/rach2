@@ -65,6 +65,10 @@ recorder=
 source="$work/rach2/sys/fs/vfs.c"
 if [ "$resume" -eq 0 ]; then
     cp -R rach2 mk "$work/"
+    # The kernel's link asks the directory above rach2/ for the ELF checker;
+    # the private tree's has a rule with nothing to do, and ELFCHECK names the
+    # built one.
+    printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
     cp "$source" "$work/vfs.saved"
     cp tests/usbdiskprobe.c "$work/usbdiskprobe.c"
     printf '%s\n' "$fault" > "$work/fault"
