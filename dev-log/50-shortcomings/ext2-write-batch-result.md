@@ -59,10 +59,14 @@ hostcheck: refused: a Unix socket bound in the work directory
 run: result: refused: this host cannot run the set
 ```
 
-No other checkout was used. The unchanged `tests/system/suites/queue.sh` also passes when called directly with its required probes and a harness wrapper selecting an isolated network. Its six rows cover slow and fast AHCI readers, root faults beside queued I/O, late answers, deadline boundaries, quarantine release and pool exhaustion. This does not count as a successful `tests/run queue` invocation. Full named-suite acceptance and physical-machine command traces and rates remain unproved. Entry 49 has its implementation and focused proofs; its full acceptance is pending those runs. No commit was made.
+No other checkout was used. The unchanged `tests/system/suites/queue.sh` also passes when called directly with its required probes and a harness wrapper selecting an isolated network. Its six rows cover slow and fast AHCI readers, root faults beside queued I/O, late answers, deadline boundaries, quarantine release and pool exhaustion. This does not count as a successful `tests/run queue` invocation. Full named-suite acceptance and physical-machine command traces and rates remain unproved. Entry 49 has its implementation and focused proofs; its full acceptance is pending those runs. No commit was made. Both came after this record: the batch was committed as `aecb6f1b` on 2026-09-21, `tests/run ext2 queue diskrate default selfbuild-ext2 host` passed on the testing host, and every full set since has passed `queue`, as entry 49 of the plan records. The machine's own counts are in the last section.
 
 ## Artifacts
 
 The starting revision is `5fe360c18d4862e720e1fbbaa7fdf038f2dcca3e`. The QEMU proof artifacts are under `build/ext2-batch-proof.4ofobb`; the fixed and restored kernels have cksum `3513161467`, length `2087848`. The ext2 native mutation artifacts are under `build/tests/ext2-batch-proof.d3sLkK`, and the ATA artifacts under `build/tests/ata-durable-proof.wMcx6u`. Queue serial logs are under `build/tests/ext2-queue/disks`; the loop backing row is under `build/tests/ext2-loop`.
 
 The coordinated write-path changes were implemented locally because admission, cache ordering and mount lifetime share one contract. A second Codex agent supplied bounded refactoring and test work and reviewed the six production files. That review found no concrete correctness defect. It is not a substitute for the blocked acceptance runs.
+
+## On the Lenovo
+
+The machine's command and flush counts for 2000 calls of 4 KiB, appended and rewritten, are what `sh tests/system/manual_probes.sh KEY ADDRESS writes DIR` reads from `/proc/disk`. They were not taken: the owner stopped the close's runs on 2026-09-24.

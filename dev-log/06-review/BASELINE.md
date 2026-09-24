@@ -4,16 +4,11 @@ Phase 0's artifact: the state every later phase compares against.
 
 ## What it is taken from
 
-The baseline is milestone 53's closing run on the testing host on 2026-09-20 at
-source `9f7893d5`, not a fresh run. Every commit since that one changes only
-`CLAUDE.md` and files under `dev-log/`, so the code, the build and the images
-the baseline describes are the ones in the tree today. A second clean build and
-set would take twenty minutes and tell us what is written below.
+The baseline is milestone 53's closing run on the testing host on 2026-09-20 at source `9f7893d5`, not a fresh run. Every commit since that one changes only `CLAUDE.md` and files under `dev-log/`, so the code, the build and the images the baseline describes are the ones in the tree today. A second clean build and set would take twenty minutes and tell us what is written below.
 
 ## The commands the plan names, and what they are today
 
-The plan was written before the test runner existed and names targets the tree
-no longer has. The equivalents:
+The plan was written before the test runner existed and names targets the tree no longer has. The equivalents:
 
 | The plan says | Today |
 | ------------- | ----- |
@@ -46,16 +41,19 @@ ce19bdce2120407a4c596c3981c57530f3e3409fd653a02c2492c52b4270a3b8  build/images/r
 db98585ffca4587415611e8d459083f0eebf048ad543ace07607470b9d4e0ad1  build/images/rach2-sealed.disk
 ```
 
+## The independent re-run, 2026-09-24
+
+The plan asks a second run to reproduce the baseline and the record to hold the image and kernel sizes, the probe count and the SSH result, which the first record did not. The re-run was made at the review's close on the testing host: the tree at `9f7893d5`, taken with `git archive` into a directory of its own, `make -j32`, status 0, with no warning from the kernel's build under `-ansi -Werror`.
+
+* The kernel, `build/rach2/kernel`: 2067228 bytes.
+* The images: `test.krffs` 3760278 of 10485760 bytes used, 6725482 free; `os-simple.krffs` 1363486 of 10485760 used, 9122274 free; `os-real.krffs` 15191537 of 18874368 used, 3682831 free.
+* The test image's SHA-256 is the baseline's, `b1311d0e`. The kernel's differs, since it is compiled with `-g` and its debug information records the directory it was built in, `/home/testing/rach2-baseline/rach2` here; `os-simple` and `os-real` stage the demonstration keys and passwords a fresh tree generates, so theirs differ too.
+* The re-run's suites were not run: the owner stopped the close's runs on 2026-09-24. The built tree is at `/home/testing/rach2-baseline`, and `tests/run all` there is what remains of the re-run.
+
 ## The machine
 
-The notebook runs this build from its own disk, deployed on 2026-09-20:
-`dev-log/53-audit/deployment.md` has the four regions written and their hashes,
-and `dev-log/53-audit/notes.md` the four boots that proved them. The end-to-end
-SSH check the plan asks for is met there rather than under QEMU: the machine is
-reached over SSH by key on every step of that record.
+The notebook runs this build from its own disk, deployed on 2026-09-20: `dev-log/53-audit/deployment.md` has the four regions written and their hashes, and `dev-log/53-audit/notes.md` the four boots that proved them. The end-to-end SSH check the plan asks for is met there rather than under QEMU: the machine is reached over SSH by key on every step of that record.
 
 ## The judges
 
-gcc 15.2.0 as `cc` and behind the `i686-elf-gcc` wrapper; clang and
-clang-format 21.1.8; cppcheck 2.19.0; ShellCheck 0.11.0; sparse 0.6.4; pmccabe
-2.8; QEMU 10.2.1. `tools/setup/judges` records them.
+gcc 15.2.0 as `cc` and behind the `i686-elf-gcc` wrapper; clang and clang-format 21.1.8; cppcheck 2.19.0; ShellCheck 0.11.0; sparse 0.6.4; pmccabe 2.8; QEMU 10.2.1. `tools/setup/judges` records them.

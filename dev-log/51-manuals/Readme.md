@@ -77,4 +77,4 @@ The manual suite took 36 s under KVM and 123 s under TCG. Self-build took 228 s 
 
 A BusyBox family page has an entry per applet from its source directory; system-call family members share a page through aliases. Coverage establishes that a name has a page. `mancheck` cannot establish that a page's claims remain true after a code change; the rule requires that change to update the page in the same commit. The fact sheets tie examples to suite rows. The manual suite reads pages and does not execute their examples.
 
-A KRFFS lookup still walks every node in the ring. The larger page cache accommodates the manual and the compiler's working files; it does not change that lookup. Entry 110 leaves an index for the audit.
+A KRFFS lookup still walks every node in the ring. The larger page cache accommodates the manual and the compiler's working files; it does not change that lookup. An index over the ring, which would make the cache size indifferent to the walk, was not built: entry 110 of the shortcomings list records that decision.

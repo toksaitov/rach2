@@ -348,13 +348,15 @@ after milestone 50's install. The general procedures are the manual's
 |-----------|------|------------|-------|--------|
 | 1 | `/dev/disk0p1` | boot: GRUB, the two kernel slots, the menu | sector 2048, byte 1048576 | 131072 sectors, 64 MiB |
 | 2 | `/dev/disk0p2` | recovery: the recovery kernel and its RAM root | sector 133120, byte 68157440 | 131072 sectors, 64 MiB |
-| 3 | `/dev/disk0p3` | the ext2 root, grown into the disk | sector 266240, byte 136314880 | 487106928 sectors |
+| 3 | `/dev/disk0p3` | the ext2 root, grown into the disk | sector 266240, byte 136314880 | 488130928 sectors |
 
 The MBR identifier is `1acef00d`, the boot partition's FAT serial the same
 and the recovery partition's `1acef003`. Both kernel entries boot partition
 3 as `rach2.root=MBRID=1acef00d,3 rach2.rootfstype=ext2`, so the fallback
 entry is the previous kernel and not another system; recovery boots a RAM
-root and mounts nothing from the disk. A layout before 2026-09-14 had a
+root and mounts nothing from the disk but its own
+partition, read-only and only on a boot from that partition's entry, to read
+the recovery key an install placed there (`recovery(7)`). A layout before 2026-09-14 had a
 KRFFS root between the boot and recovery partitions and the ext2 root at
 byte 660602880; a command with those numbers writes into the middle of a
 partition this disk has.
@@ -380,6 +382,8 @@ twenty SSH sessions with separate 3600-second guest-tick windows, 361
 successful build completions, including final builds completed after their
 deadlines. This is not a common wall-clock hour. During those runs, the
 longest timer gap 30 ms, the longest wait for the request limit 27 ms,
-the console never waiting, memory steady. The disk's longest delay is
-entry 47's wrapped figure until that entry is fixed.
+the console never waiting, memory steady. The disk's longest delay read
+as entry 47's wrapped figure; with that entry fixed it read as a delay,
+33580 us after the second sitting's install and 14.3 ms under five
+sessions (`dev-log/50-shortcomings/notes.md:230`, `:240`).
 

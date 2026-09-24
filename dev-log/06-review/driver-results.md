@@ -1,6 +1,6 @@
 # Driver findings, second review
 
-Findings 1 and 2 were already fixed in the working source at the start; the committed source still contained both faults. Those edits were retained and their tests completed. Findings 3 through 6 were confirmed in the current source before editing. No finding was refuted against the reviewed baseline. No commit was made.
+Findings 1 and 2 were already fixed in the working source at the start; the committed source still contained both faults. Those edits were retained and their tests completed. Findings 3 through 6 were confirmed in the current source before editing. No finding was refuted against the reviewed baseline. The six fixes and their proofs were committed in `c52d6aa3`.
 
 | Finding | Change | Regression proof |
 |---------|--------|------------------|
@@ -22,6 +22,6 @@ Findings 1 and 2 were already fixed in the working source at the start; the comm
 
 The scripts use private copies under `build/review-proof/`, keep complete logs, restore source in a shell trap, and touch or explicitly recompile restored source. The SB16 recording uses `-icount shift=3,sleep=off` and `timer-period=500`; the ordinary host-timed recording did not pass the frequency check. The audio suite now includes the tested SB16 configuration as well as its existing HDA row.
 
-`tests/run audio` and `tests/run default` were attempted. Both stopped before execution because the sandbox refused the runner's TCP, UDP, and Unix socket preflight. The individual QEMU proofs use an isolated virtual network hub and need no host sockets. Neither full suite is reported as passed. No other worktree or testing host was used.
+`tests/run audio` and `tests/run default` could not run in the sandbox that wrote these fixes, which refused the runner's socket preflight; the individual QEMU proofs use an isolated virtual network hub and need no host sockets. Both suites passed later on the testing host, in the full sets this run's record lists, after entry 153 gave the SB16 row an instruction clock of its own, since its notes had depended on the host's accelerator (`fda1ddd1`).
 
 The VGA tests model register access and interrupt delivery. They do not test a physical adapter. The CPUID row tests enumeration, not hardware entropy retries. Intel's [CPUID enumeration reference](https://www.intel.com/content/www/us/en/developer/articles/technical/software-security-guidance/technical-documentation/cpuid-enumeration-and-architectural-msrs.html) specifies ECX as the leaf-7 subleaf input and zero results for an invalid subleaf.
