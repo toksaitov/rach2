@@ -83,7 +83,6 @@ rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-di
 rach2/sys/fs/bcache.c:get lines 119 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/devfs.c:devfs_open complexity 34 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/devfs.c:devfs_open lines 121 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/exfat.c:chain_at params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:check_dir complexity 44 one file system operation over the on-disk format, each step a rule of the format
@@ -145,7 +144,6 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/krffsmount.c:krffs_volume_mount lines 101 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/procfs.c:procfs_open complexity 61 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 155 a dispatcher, one arm per command, read as a table
@@ -173,16 +171,13 @@ rach2/sys/mm/paging.c:init_paging lines 177 a hardware sequence, the registers w
 
 rach2/sys/network/driver/e1000.c:e1000_init lines 162 a hardware sequence, the registers written in the order the datasheet requires
 
-rach2/sys/network/driver/rtl8139.c:rtl8139_init lines 109 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 121 a hardware sequence, the registers written in the order the datasheet requires
-
-rach2/sys/network/ip/ip.c:ip_tx lines 107 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/network/netif.c:ifreq_ioctl lines 122 a dispatcher, one arm per command, read as a table
 
 rach2/sys/network/tcp/tcp.c:tcp_rx complexity 90 a state machine, one arm per state, read as a table
-rach2/sys/network/tcp/tcp.c:tcp_rx lines 444 a state machine, one arm per state, read as a table
+rach2/sys/network/tcp/tcp.c:tcp_rx lines 341 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
@@ -319,29 +314,29 @@ tests/ext2probe.c:links_rows lines 138 a probe, one sequence of steps in the ord
 tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
 tests/host/ahci_hosttest.c:model_w32 complexity 29 a test's rows, each a case, read as one table
 
-tests/host/ata_hosttest.c:main lines 151 a test's rows, each a case, read as one table
+tests/host/ata_hosttest.c:main lines 155 a test's rows, each a case, read as one table
 
-tests/host/bcache_hosttest.c:main complexity 114 a test's rows, each a case, read as one table
+tests/host/bcache_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
 tests/host/bcache_hosttest.c:main lines 677 a test's rows, each a case, read as one table
 
 tests/host/board_hosttest.c:main lines 104 a test's rows, each a case, read as one table
 
-tests/host/bootctl_hosttest.c:main complexity 42 a test's rows, each a case, read as one table
+tests/host/bootctl_hosttest.c:main complexity 43 a test's rows, each a case, read as one table
 tests/host/bootctl_hosttest.c:main lines 558 a test's rows, each a case, read as one table
 
 tests/host/dhcpmsg_hosttest.c:check_build lines 101 a test's rows, each a case, read as one table
 tests/host/dhcpmsg_hosttest.c:reply params 7 a test's rows, each a case, read as one table
 
-tests/host/diskinfo_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
+tests/host/diskinfo_hosttest.c:main complexity 33 a test's rows, each a case, read as one table
 tests/host/diskinfo_hosttest.c:main lines 299 a test's rows, each a case, read as one table
 
-tests/host/e1000_hosttest.c:main complexity 62 a test's rows, each a case, read as one table
+tests/host/e1000_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
 tests/host/e1000_hosttest.c:main lines 450 a test's rows, each a case, read as one table
 
 tests/host/exfat_hosttest.c:dirty_rows lines 170 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:dirty_rows nesting 5 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:matrix_pass lines 108 a test's rows, each a case, read as one table
-tests/host/exfat_hosttest.c:oracle_ok complexity 40 a test's rows, each a case, read as one table
+tests/host/exfat_hosttest.c:oracle_ok complexity 42 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:well_formed_rows complexity 41 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:write_rows complexity 49 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:write_rows lines 201 a test's rows, each a case, read as one table
@@ -364,7 +359,7 @@ tests/host/fat32_hosttest.c:well_formed_rows lines 214 a test's rows, each a cas
 tests/host/fat32_hosttest.c:write_rows complexity 70 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:write_rows lines 205 a test's rows, each a case, read as one table
 
-tests/host/fatname_hosttest.c:main complexity 58 a test's rows, each a case, read as one table
+tests/host/fatname_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
 tests/host/fatname_hosttest.c:main lines 126 a test's rows, each a case, read as one table
 
 tests/host/gpt_hosttest.c:main lines 186 a test's rows, each a case, read as one table
@@ -386,8 +381,8 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole nesting 6 a test's rows, ea
 tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main complexity 58 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 541 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main lines 543 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 171 a test's rows, each a case, read as one table
@@ -426,17 +421,17 @@ tests/host/msc_hosttest.c:main lines 1174 a test's rows, each a case, read as on
 tests/host/msc_hosttest.c:xhci_submit complexity 37 a test's rows, each a case, read as one table
 tests/host/msc_hosttest.c:xhci_submit lines 131 a test's rows, each a case, read as one table
 
-tests/host/n_tty_hosttest.c:main complexity 62 a test's rows, each a case, read as one table
+tests/host/n_tty_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
 tests/host/n_tty_hosttest.c:main lines 369 a test's rows, each a case, read as one table
 
-tests/host/netconf_hosttest.c:main complexity 56 a test's rows, each a case, read as one table
+tests/host/netconf_hosttest.c:main complexity 57 a test's rows, each a case, read as one table
 tests/host/netconf_hosttest.c:main lines 346 a test's rows, each a case, read as one table
 
 tests/host/netconsole_hosttest.c:main lines 133 a test's rows, each a case, read as one table
 
 tests/host/netdev_hosttest.c:main lines 149 a test's rows, each a case, read as one table
 
-tests/host/packet_hosttest.c:main lines 159 a test's rows, each a case, read as one table
+tests/host/packet_hosttest.c:main lines 141 a test's rows, each a case, read as one table
 
 tests/host/pagecache_hosttest.c:main lines 121 a test's rows, each a case, read as one table
 
@@ -470,12 +465,12 @@ tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, rea
 tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read as one table
 tests/host/rtc_hosttest.c:main lines 240 a test's rows, each a case, read as one table
 
-tests/host/rtl8168_hosttest.c:main complexity 96 a test's rows, each a case, read as one table
+tests/host/rtl8168_hosttest.c:main complexity 97 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as one table
 
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
-tests/host/tcp_hosttest.c:main complexity 140 a test's rows, each a case, read as one table
+tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
@@ -645,7 +640,7 @@ tests/system/fixtures/runutil_owned.c:main complexity 35 a fixture builder, the 
 tests/system/fixtures/vfs_unmount.c:main complexity 26 a fixture builder, the volume written in on-disk order
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order
 
-tests/system/runner/harness.c:main complexity 166 a parser over an external format, one check per field in the format's order
+tests/system/runner/harness.c:main complexity 168 a parser over an external format, one check per field in the format's order
 tests/system/runner/harness.c:main lines 640 a parser over an external format, one check per field in the format's order
 tests/system/runner/harness.c:regex_compile complexity 29 a parser over an external format, one check per field in the format's order
 
@@ -754,7 +749,6 @@ utils/bootslot.c:resolve_file params 7 one procedure over a file format, in the 
 utils/bootslot.c:scan_dir complexity 39 one procedure over a file format, in the order the format is read
 utils/bootslot.c:scan_dir params 7 one procedure over a file format, in the order the format is read
 
-utils/dhcpc.c:hold lines 134 one procedure over a file format, in the order the format is read
 utils/dhcpc.c:main complexity 34 one procedure over a file format, in the order the format is read
 utils/dhcpc.c:main lines 161 one procedure over a file format, in the order the format is read
 
@@ -773,8 +767,6 @@ utils/grubslot.c:grubslot_install params 8 one procedure over a file format, in 
 utils/httpd.c:build_body lines 116 one procedure over a file format, in the order the format is read
 utils/httpd.c:main lines 125 one procedure over a file format, in the order the format is read
 
-utils/init.c:main complexity 34 one procedure over a file format, in the order the format is read
-utils/init.c:main lines 176 one procedure over a file format, in the order the format is read
 
 utils/netcfg.c:netcfg_read complexity 36 one procedure over a file format, in the order the format is read
 utils/netcfg.c:netcfg_read lines 147 one procedure over a file format, in the order the format is read
@@ -785,6 +777,5 @@ utils/netup.c:apply_static lines 135 one procedure over a file format, in the or
 utils/passwd.c:main complexity 47 one procedure over a file format, in the order the format is read
 utils/passwd.c:main lines 247 one procedure over a file format, in the order the format is read
 
-utils/pwauth.c:cred_txn_begin_at lines 127 one procedure over a file format, in the order the format is read
 utils/pwauth.c:pwauth_read_password complexity 28 one procedure over a file format, in the order the format is read
 utils/pwauth.c:pwauth_read_password lines 154 one procedure over a file format, in the order the format is read
