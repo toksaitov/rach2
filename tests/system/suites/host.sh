@@ -208,6 +208,23 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: krffs root data operations under the mount's lock" >&2
         fail=1
     fi
+    # Two rows over functions extracted from sources no host test can
+    # compile whole: a new kernel stack cleared (syscall_proc.c) and the
+    # set-id rules of a mounted chown (syscall_fs.c).
+    if sh tests/host/kstack_mutate.sh --check >"$VDIR/kstack.rlog" 2>&1; then
+        echo "hosttest: result: pass: a new kernel stack is cleared"
+    else
+        cat "$VDIR/kstack.rlog"
+        echo "hosttest: result: fail: a new kernel stack is cleared" >&2
+        fail=1
+    fi
+    if sh tests/host/chown_mutate.sh --check >"$VDIR/chown.rlog" 2>&1; then
+        echo "hosttest: result: pass: the set-id rules of a mounted chown"
+    else
+        cat "$VDIR/chown.rlog"
+        echo "hosttest: result: fail: the set-id rules of a mounted chown" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
