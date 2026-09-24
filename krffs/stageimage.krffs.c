@@ -169,6 +169,86 @@ static struct krffs_node *find_child(struct krffs_file_system *file_system, uint
 }
 
 /**
+ * Find a staged directory whose id is `id`, or NULL.
+ *
+ * Mirrors the kernel's `krffs_id_taken`: a reserved node with a directory's
+ * mode and a name, since a node with no name is an orphan and no path reaches
+ * it.
+ */
+static struct krffs_node *find_dir_by_id(struct krffs_file_system *file_system, uint64_t id)
+{
+    struct krffs_node *node = file_system->node;
+
+    do {
+        if (node->type == KRFFS_Reserved_Node && is_dir_node(node) && node->name[0] != '\0' &&
+            node->id == id) {
+            return node;
+        }
+    } while ((node = krffs_get_next_node(file_system, node)) != file_system->node);
+
+    return NULL;
+}
+
+/**
+ * Write the guest path of the staged directory `node` into `buf`, for a
+ * message.
+ *
+ * The path is found by the parents' ids, up to the root, whose id is 0. A
+ * chain deeper than the walk keeps, or a parent that is not there, ends the
+ * path at what was found, and a path longer than `size` is cut.
+ */
+static void dir_path(struct krffs_file_system *file_system, const struct krffs_node *node,
+                     char *buf, size_t size)
+{
+    const struct krffs_node *chain[64];
+    size_t depth = 0;
+    size_t used = 0;
+
+    while (node != NULL && depth < sizeof(chain) / sizeof(chain[0])) {
+        chain[depth++] = node;
+        node = node->parent_id == 0 ? NULL : find_dir_by_id(file_system, node->parent_id);
+    }
+    buf[0] = '\0';
+    while (depth > 0 && used < size) {
+        int n = snprintf(buf + used, size - used, "/%s", (const char *)chain[--depth]->name);
+
+        if (n < 0) {
+            break;
+        }
+        used += (size_t)n;
+    }
+}
+
+/**
+ * Refuse to stage the directory `path`, named `name` in `parent_id`, when a
+ * staged directory already has the id the two mix to. Returns true when the
+ * id is free.
+ *
+ * Two names can mix to one id: `bC` and `cb` have one DJB hash. A child
+ * records its parent by id alone, so a second directory with a taken id would
+ * share its children with the first. The kernel refuses to make one
+ * (`krffs_id_taken` in rach2/sys/fs/krffs.c), and an image with one would give
+ * it a hierarchy the kernel never builds, so the stager refuses too.
+ */
+static bool dir_id_free(struct krffs_file_system *file_system, uint64_t parent_id, const char *name,
+                        const char *path)
+{
+    const struct krffs_node *other = find_dir_by_id(file_system, krffs_mix_id(parent_id, name));
+    char other_path[512];
+
+    if (other == NULL) {
+        return true;
+    }
+    dir_path(file_system, other, other_path, sizeof(other_path));
+    fprintf(stderr,
+            "stageimage: directory '%s' has the id of directory '%s'; the two would "
+            "share their children.\n",
+            path, other_path);
+
+    return false;
+}
+
+/**
  * Total free space, in bytes (the sum of every free block including headers).
  *
  * Reported at the end so a manifest author sees how much slack an image has.
@@ -294,6 +374,12 @@ static uint64_t resolve_dir(struct krffs_file_system *file_system, const char *p
             }
             id = existing->id;
         } else {
+            char here[256];
+
+            snprintf(here, sizeof(here), "%.*s", (int)(1 + (p - buf) + strlen(p)), path);
+            if (!dir_id_free(file_system, parent, p, here)) {
+                return (uint64_t)-1;
+            }
             id = stage_node(file_system, parent, p, (uint16_t)(KRFFS_MODE_IFDIR | 0755), 0, 0, NULL,
                             0);
             if (id == 0) {
@@ -569,6 +655,9 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path, u
         krffs_sync_mapping(node, sizeof(*node));
 
         return true;
+    }
+    if (!dir_id_free(file_system, parent_id, name, path)) {
+        return false;
     }
 
     return stage_node(file_system, parent_id, name, (uint16_t)(KRFFS_MODE_IFDIR | mode), uid, gid,

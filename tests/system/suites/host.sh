@@ -225,6 +225,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: the set-id rules of a mounted chown" >&2
         fail=1
     fi
+    if sh tests/host/krffs_tools_mutate.sh --check >"$VDIR/krffs_tools.rlog" 2>&1; then
+        echo "hosttest: result: pass: krffs host tools' refusals, replace and edits"
+    else
+        cat "$VDIR/krffs_tools.rlog"
+        echo "hosttest: result: fail: krffs host tools' refusals, replace and edits" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
