@@ -8,7 +8,7 @@ Rach2 is a small educational operating system for 32-bit x86. It boots into a Un
 
 The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
 
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system and the root of every RAM image. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
@@ -69,13 +69,13 @@ Programs are static, a root is KRFFS or ext2, and the network stack implements I
 
 ## Hardware status
 
-QEMU is the development and test environment. Rach2 also runs on a Lenovo G50-70 from an SSD in the laptop's SATA bay, where it boots the complete `os-real` system from an ext2 root through the AHCI controller, answers SSH over RTL8168GU networking, drives a USB keyboard, mouse, hub and flash drive, and runs Doom. The machine was installed from the stick by `rach2-install` on 2026-09-12 and its root grown to the whole disk.
+QEMU is the development and test environment. Rach2 also runs on a Lenovo G50-70 from an SSD in the laptop's SATA bay, where it boots the complete `os-real` system from an ext2 root through the AHCI controller, answers SSH over RTL8168GU networking, drives a USB keyboard, mouse, hub and flash drive, and runs Doom. Its disk was written on 2026-09-20 from the stick's sealed image, three partitions with the root grown to the rest of the disk; the root was updated with `rach2-install --update` on 2026-09-24, and the kernel is installed through `bootctl`.
 
 What the hardware showed that the emulator had not is in the milestone records and is not repeated here: [milestone 43](dev-log/43-machine/hardware.md) for the machine's own readings, its identity, geometry and offsets, [milestone 50](dev-log/50-shortcomings/Readme.md) for the install, the devices and the load measurements, and [milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) for the earlier results. `dev-log/50-shortcomings/plan.md` is the open list of what is still wrong.
 
 ## What a fresh disk holds
 
-`make rach2-sealed-disk` builds a disk image of three partitions, each with a `/hello.txt` in it reading `hello, world`, so that every partition has something to read after a mount. What each partition is:
+`make rach2-sealed-disk` builds a disk image of three partitions, each with a file reading `hello, world`, `/hello.txt` on the two FAT partitions and `/demo/hello.txt` on the root, so that every partition has something to read after a mount. What each partition is:
 
 | Device | What it is | Type |
 | --- | --- | --- |
@@ -83,7 +83,9 @@ What the hardware showed that the emulator had not is in the milestone records a
 | `/dev/disk0p2` | the recovery system | FAT32 |
 | `/dev/disk0p3` | the root | ext2 |
 
-Everything below is done as root. `cat /proc/mounts` says which root is running; both kernel entries boot the same one, so the fallback entry is the previous kernel and not another system. Partition 3 is that root and is already mounted, so read its copy with `cat /hello.txt`; the other two are FAT volumes and are mounted read-only to read theirs:
+The recovery system starts a root shell on the console without a password, so physical access to a machine is control of it. It answers SSH only where root has a key: one built into its image, or one the installer placed on the recovery partition ([`recovery(7)`](man/man7/recovery.7)).
+
+Everything below is done as root. `cat /proc/mounts` says which root is running; both kernel entries boot the same one, so the fallback entry is the previous kernel and not another system. Partition 3 is that root and is already mounted, so read its copy with `cat /demo/hello.txt`; the other two are FAT volumes and are mounted read-only to read theirs:
 
 ```sh
 mkdir -p /mnt/x
@@ -127,7 +129,7 @@ The procedures are the manual's, written once and read on the machine as well as
 
 The measured facts of the one installed machine, its address, its disk's geometry and the offsets a raw write depends on, are in [`dev-log/43-machine/hardware.md`](dev-log/43-machine/hardware.md). Read them from there rather than from memory: a command with an offset from an older layout writes into the middle of a partition this one has.
 
-What the host does around those procedures, the SSH form, the credential check before a root write, and the netconsole capture, is in the [tools Readme](tools/Readme.md#working-an-installed-machine-from-the-host). Every write to that disk that is not a kernel install through `bootctl` is under the hardware rule in [`CLAUDE.md`](CLAUDE.md): the recovery stick booted and shown to work, the sectors saved on the host and on the stick, recovery the saved default until the write is verified, and the owner's approval naming the device at the time.
+What the host does around those procedures, the SSH form, the credential check before a root write, and the netconsole capture, is in the [tools Readme](tools/Readme.md#working-an-installed-machine-from-the-host). Writes to that disk follow the hardware rule in [`CLAUDE.md`](CLAUDE.md): the Lenovo's disks and the development flash drive are a sandbox the owner has authorized, written as the work needs without a backup taken for their safety, and a machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
 
 ## Repository map
 
