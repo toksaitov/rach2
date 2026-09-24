@@ -110,7 +110,12 @@ struct ext2_writeback {
     struct ext2_image data[EXT2_WB_DATA];
     struct ext2_image meta[EXT2_WB_META];
     struct ext2_pending nodes[EXT2_WB_NODES];
-    uint8_t *storage;
+    /* One heap page per buffer. A single run of 288 pages is more than a
+     * reserve run of the heap can give, so it has to come from the ordinary
+     * region in one piece, and after a boot has moved a gigabyte through the
+     * cache that region may have no such gap although memory is free: the
+     * read-write mount of a root was then refused with ENOMEM. */
+    uint8_t *slot[EXT2_WB_DATA + EXT2_WB_META];
     int datas, metas, count;
     uint32_t bytes, generation;
     int stage, draining, error, error_stage;
@@ -196,6 +201,23 @@ static struct ext2_mount *em_of(struct vfs_mount *mnt)
 }
 
 static int writeback_drain(struct ext2_mount *em);
+
+/** Give back a write batch and every buffer page it holds; NULL is nothing. */
+static void writeback_free(struct ext2_writeback *wb)
+{
+    int i;
+
+    if (!wb) {
+        return;
+    }
+    for (i = 0; i < EXT2_WB_DATA + EXT2_WB_META; i++) {
+        if (wb->slot[i]) {
+            kfree_pages(wb->slot[i], 1);
+        }
+    }
+    kfree(wb);
+}
+
 static int writeback_error(struct ext2_mount *em, int rc, uint32_t block);
 
 /** Find a retained image without reading or changing the cache. */
@@ -936,10 +958,7 @@ static void ext2_unmount(struct vfs_mount *mnt)
         node_drop(em, em->nodes);
     }
     mnt->priv = 0;
-    if (em->wb) {
-        kfree(em->wb->storage);
-        kfree(em->wb);
-    }
+    writeback_free(em->wb);
     kfree(em->gd);
     kfree(em);
 }
@@ -1871,7 +1890,7 @@ static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, 
         return 0;
     }
     im = &wb->meta[wb->metas];
-    im->data = wb->storage + (EXT2_WB_DATA + wb->metas) * BCACHE_BLOCK_BYTES;
+    im->data = wb->slot[EXT2_WB_DATA + wb->metas];
     if (blank) {
         k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
     } else {
@@ -2089,7 +2108,7 @@ static int writeback_prepare_data(struct ext2_mount *em, uint32_t len, struct ex
         data = &wb->data[i];
         data->block = plan->block;
         data->stage = WB_DATA;
-        data->data = wb->storage + i * BCACHE_BLOCK_BYTES;
+        data->data = wb->slot[i];
         if (plan->fresh || len == BCACHE_BLOCK_BYTES) {
             k_memset(data->data, 0, BCACHE_BLOCK_BYTES);
         } else {
@@ -4231,16 +4250,26 @@ static int refuse(const char *field)
     return -EINVAL;
 }
 
-/** Reserve the write batch and invalidate the volume before publication. */
+/**
+ * Reserve the write batch and invalidate the volume before publication.
+ *
+ * Each buffer is one page of the heap, which is one cache block, so no
+ * buffer needs pages next to another's. A mount that cannot have them all
+ * is refused with ENOMEM and leaves what it took to `writeback_free`.
+ */
 static int writeback_init(struct ext2_mount *em)
 {
+    int i;
+
     em->wb = kzalloc(sizeof(*em->wb));
     if (!em->wb) {
         return -ENOMEM;
     }
-    em->wb->storage = kmalloc((EXT2_WB_DATA + EXT2_WB_META) * BCACHE_BLOCK_BYTES);
-    if (!em->wb->storage) {
-        return -ENOMEM;
+    for (i = 0; i < EXT2_WB_DATA + EXT2_WB_META; i++) {
+        em->wb->slot[i] = kalloc_pages(1, 0);
+        if (!em->wb->slot[i]) {
+            return -ENOMEM;
+        }
     }
     em->state &= ~EXT2_VALID_FS;
     return sb_store(em);
@@ -4445,10 +4474,7 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
         while (em->nodes) {
             node_drop(em, em->nodes);
         }
-        if (em->wb) {
-            kfree(em->wb->storage);
-            kfree(em->wb);
-        }
+        writeback_free(em->wb);
         kfree(em->gd);
         kfree(em);
     }

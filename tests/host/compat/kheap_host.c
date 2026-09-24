@@ -11,14 +11,25 @@ void *malloc(unsigned long n);
 void *calloc(unsigned long count, unsigned long size);
 void free(void *p);
 
+/* The largest allocation granted, in bytes, or 0 for no limit. A test that
+ * sets it stands in for a kernel heap whose free pages lie in runs no longer
+ * than that, which is how a heap looks after a boot has moved a gigabyte
+ * through the cache: memory is free, but not in one long run. */
+unsigned long kheap_host_largest;
+
+static int too_large(unsigned long n)
+{
+    return kheap_host_largest != 0 && n > kheap_host_largest;
+}
+
 void *kmalloc(size_t size)
 {
-    return size ? malloc(size) : NULL;
+    return size && !too_large(size) ? malloc(size) : NULL;
 }
 
 void *kzalloc(size_t size)
 {
-    return size ? calloc(1, size) : NULL;
+    return size && !too_large(size) ? calloc(1, size) : NULL;
 }
 
 void kfree(void *p)
@@ -31,7 +42,7 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     if (phys) {
         *phys = 0;
     }
-    return count ? malloc(4096ul * count) : NULL;
+    return count && !too_large(4096ul * count) ? malloc(4096ul * count) : NULL;
 }
 
 void *kalloc_pages_try(uint32_t count, uintptr_t *phys)

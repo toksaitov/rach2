@@ -2535,10 +2535,33 @@ static void batch_flush_error_row(int barrier, int large)
 #include "ext2_batch_lifecycle.h"
 
 /** Exercise the public write operations at small and large cache limits. */
+/* The host heap's limit on one allocation; see tests/host/compat. */
+extern unsigned long kheap_host_largest;
+
+/**
+ * Mount read-write under a heap that grants no run longer than a reserve run.
+ *
+ * The kernel heap keeps runs of 256 pages for large requests; anything longer
+ * has to come from the ordinary region in one piece. On the Lenovo, after an
+ * update had streamed a gigabyte through the cache, that region had no gap of
+ * 289 pages, and the write batch asked for exactly that at mount, so the
+ * grown root would not mount read-write although memory was free.
+ */
+static void reserve_run_row(void)
+{
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    kheap_host_largest = 256ul * 4096;
+    check(mount_rw() == 0, "a read-write mount needs no run longer than a reserve run");
+    kheap_host_largest = 0;
+    check(unmount_rw() == 0, "and that mount unmounts cleanly");
+}
+
 static void batch_rows(void)
 {
     int barrier;
 
+    reserve_run_row();
     batch_lifecycle_rows();
     batch_partial_row(0);
     batch_partial_row(1);

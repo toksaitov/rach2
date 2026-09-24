@@ -126,7 +126,7 @@ run_phase no-stage-flush media
 cmp "$source" "$work/source.saved"
 run_phase flush-restored pass
 cmp "$source" "$work/source.saved"
-for fault in bytes data metadata inodes release sticky handoff abort zero stage-lock; do
+for fault in bytes data metadata inodes release sticky handoff abort zero stage-lock reserve-run; do
     python3 - "$source" "$fault" <<'PYFAULT'
 from pathlib import Path
 import sys
@@ -141,6 +141,7 @@ function = {
     'abort': 'static void ext2_abort_unmount(',
     'zero': 'static int writeback_prepare_data(',
     'stage-lock': 'static int ext2_fsync(',
+    'reserve-run': 'static int writeback_init(',
 }.get(fault, 'static int32_t ext2_write(')
 start = source.index(function)
 end = source.index('\n}', start) + 2
@@ -155,6 +156,7 @@ changes = {
     'abort': ('em->state &= ~EXT2_VALID_FS;', 'em->state |= EXT2_VALID_FS;'),
     'zero': ('k_memset(data->data, 0, BCACHE_BLOCK_BYTES);',
              'k_memset(data->data, 0xAB, BCACHE_BLOCK_BYTES);'),
+    'reserve-run': ('kalloc_pages(1, 0)', 'kalloc_pages(EXT2_WB_DATA + EXT2_WB_META + 1, 0)'),
 }
 if fault == 'stage-lock':
     body = body.replace('    vfs_ns_lock(mnt);\n', '', 1)
@@ -182,6 +184,7 @@ PYFAULT
         abort) message='FAIL: an abandoned unmount clears the valid bit on disk' ;;
         zero) message='FAIL: partial bytes and zeroing precede durable size or hole publication' ;;
         stage-lock) message='FAIL: a draining generation retains mount ownership across I/O' ;;
+        reserve-run) message='FAIL: a read-write mount needs no run longer than a reserve run' ;;
     esac
     run_phase "$fault-mutated" fault "$message" "$status"
     cmp "$source" "$work/source.saved"

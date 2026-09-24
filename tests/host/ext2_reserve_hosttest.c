@@ -82,6 +82,22 @@ void *kzalloc(size_t size)
     return calloc(1, size);
 }
 
+/** Supply the batch's buffer pages; these rows build their batch by hand. */
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    if (phys) {
+        *phys = 0;
+    }
+    return malloc(4096ul * count);
+}
+
+/** Give back a page `kalloc_pages` supplied. */
+void kfree_pages(void *p, uint32_t count)
+{
+    (void)count;
+    free(p);
+}
+
 /** Mount checking is outside these writer rows. */
 int fat_walk_acquire(uint32_t count)
 {
@@ -228,7 +244,9 @@ static void reset(uint32_t available)
     volume.writable = 1;
     volume.ro_compat = EXT2_RO_LARGE_FILE;
     volume.wb = &batch;
-    batch.storage = storage;
+    for (i = 0; i < EXT2_WB_DATA + EXT2_WB_META; i++) {
+        batch.slot[i] = storage + i * 4096;
+    }
     mount.priv = &volume;
     file.ino = 12;
     file.mode = S_IFREG_ | 0600;
