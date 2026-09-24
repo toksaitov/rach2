@@ -88,7 +88,7 @@ ishmusl sigmusl
 
 Programs that need another boot, a disk, a host peer, a deliberate fault or a result contract of their own have a suite of their own, whose Make target names the program it runs. What each suite proves is one line in [`tests/system/suites.md`](system/suites.md), which `tests/run inventory` generates from the registry and `suites.mk`; the rows a reader needs to judge a failure are in [the system tests' Readme](system/Readme.md). Neither is repeated here.
 
-Those suites give a program conditions the shared boot cannot: `blockprobe` against a disk-backed root on three controllers, `persistprobe` twice against one image, `stressprobe` over a file system larger than memory, `bootprobe` in its boot and authority modes, and `vmfault` where the exit line is what is being read. One of the six, `musl/passwdmusl`, the default boot also runs; the `noentropy` suite runs it again on a processor with no entropy instruction.
+Those suites give a program conditions the shared boot cannot: `blockprobe` against a disk-backed root on three controllers, `persistprobe` twice against one image, `stressprobe` over a file system larger than memory, `bootprobe` in its boot and authority modes, and `vmfault` where the exit line is what is being read. One of the six, `musl/passwdmusl`, the default boot also runs; the `noentropy` suite runs it again on a processor with no entropy instruction, and runs `rngprobe` there as well, where the probe takes its fail-closed branch.
 
 Every root program is run by a suite or invoked by another test, except `calibprobe`, which the optional `tests/system/calibrate.sh` diagnostic drives and no suite runs; `idreport` and `suidhelper` are the two that only another test invokes.
 

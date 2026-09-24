@@ -37,7 +37,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `tcc` (full tier; needs qemu-system-i386; 128 MiB): the machine compiling a program on itself.
 * `make` (full tier; needs qemu-system-i386; 128 MiB): the machine building a program on itself, and the claim a compiler alone cannot make: that a second build does nothing, that touching one source rebuilds one object, and that the answer survives a reboot.
 * `host` (full tier; needs nothing beyond the build; no machine): the host tests, kernel code compiled and run natively under the sanitizers, and the fuzz corpora replayed through their harnesses.
-* `noentropy` (full tier; needs qemu-system-i386; 128 MiB): the salt policy's negative half, which no other target can reach.
+* `noentropy` (full tier; needs qemu-system-i386; 128 MiB): the entropy policy's fail-closed half, which no other target can reach.
 * `shutdown` (full tier; needs qemu-system-i386; 128 MiB): userland stopping the machine, on a disk fixture, with every claim of a stop asserted on the QEMU process ending rather than on a token, and every image checked by offline fsck afterwards.
 * `fatwrite` (core tier; needs qemu-system-i386, mformat, mcopy, mdir, python3; 128 MiB): FAT32 written from a program, read back after a reboot, judged by the host's walk and mtools, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
 * `ssh` (core tier; needs qemu-system-i386, ssh, nc; 128 MiB): the SSH capstone with nobody at the keyboard.

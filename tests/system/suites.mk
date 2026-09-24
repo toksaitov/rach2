@@ -208,17 +208,22 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" until=60
 	$(PCAPCHECK) bcast $(ADDRESSED_PCAP) --source 10.0.2.77 --arp-from 10.0.2.77
-# `tests/run noentropy`: the salt policy's negative half, which no other target
-# can reach. `make test` always boots -cpu max, so the CPU has RDSEED and RDRAND
-# and the kernel's pool is trusted; a minter that quietly fell back to the
-# untrusted stream would pass every proof in the suite. This boots the same test
-# image on a CPU that exposes neither instruction, and /musl/saltnoent (staged
-# by the image sweep, deliberately absent from the probe runner's list because
-# it must fail where entropy is trusted) asserts that the mint refuses, says so
-# once, and leaves /etc/shadow, its temporary file and the lock exactly as they
-# were. The harness passes no -cpu of its own, so the passthrough is the only
-# one on the command line.
-run-noentropy: rach2 test-image $(HARNESS)
+# `tests/run noentropy`: the entropy policy's fail-closed half, which no other
+# target can reach. `make test` always boots -cpu max, so the CPU has RDSEED
+# and RDRAND and the kernel's pool is trusted; a minter that quietly fell back
+# to the untrusted stream would pass every proof in the suite. This boots on a
+# CPU that exposes neither instruction. On the test image /musl/saltnoent
+# (staged by the image sweep, deliberately absent from the probe runner's list
+# because it must fail where entropy is trusted) asserts that the mint refuses,
+# says so once, and leaves /etc/shadow, its temporary file and the lock exactly
+# as they were; /musl/passwdmusl takes its fail-closed side; and /rngprobe
+# takes its fail-closed branch, in which getrandom, /dev/urandom and
+# /dev/random answer EIO while GRND_INSECURE still returns bytes. On os-real,
+# Dropbear's key generator must stop with its error that it could not read
+# the random device and write no key, which is why rach2/run.sh and its
+# siblings boot -cpu max. The harness passes no -cpu of its own, so the
+# passthrough is the only one on the command line.
+run-noentropy: $(DEMO_CREDS) rach2 test-image os-real-image $(HARNESS)
 	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
@@ -227,6 +232,18 @@ run-noentropy: rach2 test-image $(HARNESS)
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
 	    "expect=Type 'help'" "send=exec /musl/passwdmusl" until=60
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=qemu64 --log $(IMAGES_DIR)/noentropy-rng.log \
+	    --timeout 90 --ok "RNGPROBE OK (fail-closed)" --never "RNGPROBE FAIL" \
+	    "expect=Type 'help'" "send=exec /rngprobe" until=20
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(OS_REAL_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=qemu64 --log $(IMAGES_DIR)/noentropy-keygen.log \
+	    --timeout 300 --steptmo 90 --ok "KEYGEN:REFUSED" \
+	    --never "KEYGEN:MADE" --never "KEYGEN:OTHER" \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" "expect=# " \
+	    "send=if dropbearmulti dropbearkey -t ed25519 -f /tmp/k > /tmp/kg 2>&1; then echo KEY\"\"GEN:MADE; elif grep -q 'reading random device' /tmp/kg && [ ! -e /tmp/k ]; then echo KEY\"\"GEN:REFUSED; else echo KEY\"\"GEN:OTHER; fi" \
+	    "expect=KEYGEN:"
 # `tests/run fpu`: the floating-point state of a process is its own. Two
 # boots of `fpuprobe`: with FXSR, where the x87 and XMM registers, the control
 # word and MXCSR are saved by `fxsave`, and with `rach2.nofxsr`, where the x87

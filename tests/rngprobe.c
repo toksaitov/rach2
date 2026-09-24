@@ -7,8 +7,10 @@
  * returns bytes that vary across reads and pass a loose monobit sanity (a
  * stuck/zero stream fails). If getrandom() returns -EIO the source is
  * untrusted, and the probe verifies the fail-closed policy is consistent:
- * /dev/urandom also returns -EIO, while getrandom(GRND_INSECURE) still returns
- * bytes (the best-effort escape hatch).
+ * /dev/urandom and /dev/random each open and answer a read with -EIO, while
+ * getrandom(GRND_INSECURE) still returns bytes (the best-effort escape hatch).
+ * The default suite boots `-cpu max` and takes the first branch; `tests/run
+ * noentropy` boots a CPU with neither instruction and takes the second.
  *
  * Prints "RNGPROBE OK (trusted)" / "RNGPROBE OK (fail-closed)" /
  * "RNGPROBE FAIL". Freestanding; direct int 0x80.
@@ -94,6 +96,25 @@ static int bufs_equal(const unsigned char *a, const unsigned char *b, int n)
     return 1;
 }
 
+/**
+ * True when `path` opens and answers a read with -EIO, as both random devices
+ * must while the generator is untrusted. A device that cannot be opened is not
+ * the refusal the policy promises, so it counts as a failure.
+ */
+static int refuses_read(const char *path)
+{
+    unsigned char buf[32];
+    int fd, r;
+
+    fd = sys_open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    r = sys_read(fd, buf, (int)sizeof(buf));
+    sys_close(fd);
+    return r == -EIO;
+}
+
 /** Compare the production helper with a direct leaf-7, subleaf-zero query. */
 static int cpuid_subleaf_zero(void)
 {
@@ -154,16 +175,15 @@ void _start(void)
     }
 
     if (g == -EIO) {
-        /* Fail-closed: /dev/urandom must ALSO refuse, and GRND_INSECURE must
-         * still deliver bytes (the best-effort escape hatch). */
-        fd = sys_open("/dev/urandom", O_RDONLY);
-        if (fd >= 0) {
-            int r = sys_read(fd, a, (int)sizeof(a));
-            sys_close(fd);
-            if (r != -EIO) {
-                puts("RNGPROBE FAIL (urandom not fail-closed)\n");
-                sys_exit(1);
-            }
+        /* Fail-closed: both devices must refuse as well, and GRND_INSECURE
+         * must still deliver bytes (the best-effort escape hatch). */
+        if (!refuses_read("/dev/urandom")) {
+            puts("RNGPROBE FAIL (urandom not fail-closed)\n");
+            sys_exit(1);
+        }
+        if (!refuses_read("/dev/random")) {
+            puts("RNGPROBE FAIL (random not fail-closed)\n");
+            sys_exit(1);
         }
         if (getrandom(a, (int)sizeof(a), GRND_INSECURE) != (int)sizeof(a)) {
             puts("RNGPROBE FAIL (GRND_INSECURE refused)\n");

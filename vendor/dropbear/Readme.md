@@ -86,7 +86,7 @@ dropbearmulti dropbear -F -R -g -p 22
 
 ## Entropy and host keys
 
-`-R` generates missing host keys on the first connection. Dropbear tries `getrandom` and then `/dev/urandom`; both return `EIO` when the Rach2 CSPRNG lacks trusted hardware entropy. `rach2/run.sh` and `rach2/run_from_disk.sh` therefore use `-cpu max` by default, which exposes RDSEED or RDRAND. A CPU without either source cannot generate the delayed key.
+`-R` generates missing host keys on the first connection. Dropbear tries `getrandom` and then `/dev/urandom`; both return `EIO` when the Rach2 CSPRNG lacks trusted hardware entropy. `rach2/run.sh` and `rach2/run_from_disk.sh` therefore use `-cpu max` by default, which exposes RDSEED or RDRAND. A CPU without either source cannot generate the delayed key. `tests/run noentropy` runs `dropbearmulti dropbearkey` on such a CPU and requires it to stop with `Failure reading random device /dev/urandom` and to write no key.
 
 Generated keys are written under `/etc/dropbear`. A RAM root loses them at shutdown. A writable disk root preserves them after the file-system data is flushed. Clients must expect a new host key for each new RAM-root boot.
 
