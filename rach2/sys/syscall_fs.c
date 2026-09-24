@@ -1321,8 +1321,9 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
  * write bit, create under the namespace lock, and stamp the new node with
  * the caller's identity and masked mode. Returns 0 with `ref` on the new
  * node, held by its creation; 1 when another creator held the lock first,
- * so the caller opens what it made; or a negative errno. Success retains
- * the namespace lock through open-handle registration.
+ * so the caller opens what it made; or a negative errno. On a type that
+ * sets `ns_serialised`, success retains the namespace lock through
+ * open-handle registration; another type's lock is not taken.
  */
 static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref)
 {
@@ -1624,8 +1625,10 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
  * -errno. Opening "/" opens the root directory for getdents64. A symbolic
  * link at the end is followed, and one whose target is missing is what
  * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
- * O_CREAT|O_EXCL, which answers EEXIST for the link. Resolution through
- * open-handle registration holds the final mount's namespace lock.
+ * O_CREAT|O_EXCL, which answers EEXIST for the link. On a type that sets
+ * `ns_serialised`, resolution through open-handle registration holds the
+ * final mount's namespace lock, which is what keeps a writer from moving the
+ * file between the lookup and the registration.
  */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {

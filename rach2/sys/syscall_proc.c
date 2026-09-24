@@ -972,16 +972,18 @@ int32_t sys_execve(isr_params_t *params)
         krffs_node_t *prog;
         int32_t rc;
 
-        rc = vfs_resolve(0, name, 0, &xref, 0, 0);
+        rc = vfs_resolve(0, name, VFS_WALK_LOCK, &xref, 0, 0);
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
         }
         if (vfs_synth_vpath(xref.mnt, xref.node)) {
+            vfs_walk_unlock(xref.mnt);
             vfs_ref_release(&xref);
             return -EACCES;
         }
         /* MS_NOEXEC is enforced here. */
         if (xref.mnt->flags & VFS_MS_NOEXEC) {
+            vfs_walk_unlock(xref.mnt);
             vfs_ref_release(&xref);
             return -EACCES;
         }
@@ -996,6 +998,7 @@ int32_t sys_execve(isr_params_t *params)
                 rc = vfs_getattr(xref.mnt, xref.node, &vst);
             }
             if (rc != 0) {
+                vfs_walk_unlock(xref.mnt);
                 vfs_ref_release(&xref);
                 return rc;
             }
@@ -1012,6 +1015,7 @@ int32_t sys_execve(isr_params_t *params)
             s->vfs.ref = xref; /* held until the image is loaded or refused */
             s->vfs.err = 0;
             rc = vfs_open_node(xref.mnt, xref.node, 0, &s->vfs.handle);
+            vfs_walk_unlock(xref.mnt);
             if (rc != 0) {
                 vfs_ref_release(&s->vfs.ref);
                 s->vfs.ref.mnt = NULL;
@@ -1022,6 +1026,7 @@ int32_t sys_execve(isr_params_t *params)
         prog = xref.node;
         rc = cred_access_node(prog, CRED_X, 0);
         if (rc != 0) {
+            vfs_walk_unlock(xref.mnt);
             vfs_ref_release(&xref);
             return rc; /* the execute bit, for root too */
         }
@@ -1049,6 +1054,7 @@ int32_t sys_execve(isr_params_t *params)
         }
         file_uid = prog->uid;
         file_gid = prog->gid;
+        vfs_walk_unlock(xref.mnt);
         vfs_ref_release(&xref);
     }
 checked:
@@ -1121,11 +1127,12 @@ checked:
                 struct vfs_ref iref;
                 int32_t rc;
 
-                rc = vfs_resolve(0, name, 0, &iref, 0, 0);
+                rc = vfs_resolve(0, name, VFS_WALK_LOCK, &iref, 0, 0);
                 if (rc != 0) {
                     return rc;
                 }
                 if (vfs_synth_vpath(iref.mnt, iref.node) || (iref.mnt->flags & VFS_MS_NOEXEC)) {
+                    vfs_walk_unlock(iref.mnt);
                     vfs_ref_release(&iref);
                     return -EACCES;
                 }
@@ -1134,12 +1141,14 @@ checked:
                      * mount, as a program there does. */
                     rc = cred_access_ref(&iref, CRED_X, 0);
                     if (rc != 0) {
+                        vfs_walk_unlock(iref.mnt);
                         vfs_ref_release(&iref);
                         return rc;
                     }
                     s->vfs.ref = iref;
                     s->vfs.err = 0;
                     rc = vfs_open_node(iref.mnt, iref.node, 0, &s->vfs.handle);
+                    vfs_walk_unlock(iref.mnt);
                     if (rc != 0) {
                         vfs_ref_release(&s->vfs.ref);
                         s->vfs.ref.mnt = NULL;
@@ -1155,6 +1164,7 @@ checked:
                     goto interpreter_checked;
                 }
                 rc = cred_access_node((krffs_node_t *)iref.node, CRED_X, 0);
+                vfs_walk_unlock(iref.mnt);
                 vfs_ref_release(&iref);
                 if (rc != 0) {
                     return rc;
