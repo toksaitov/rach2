@@ -201,6 +201,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: krffs publication open" >&2
         fail=1
     fi
+    if sh tests/host/krffs_root_lock_mutate.sh --check >"$VDIR/krffs_root_lock.rlog" 2>&1; then
+        echo "hosttest: result: pass: krffs root data operations under the mount's lock"
+    else
+        cat "$VDIR/krffs_root_lock.rlog"
+        echo "hosttest: result: fail: krffs root data operations under the mount's lock" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
