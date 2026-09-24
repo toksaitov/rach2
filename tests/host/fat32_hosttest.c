@@ -17,6 +17,10 @@
  * bytes of every file. The malformed volumes are refused at mount or fail
  * at the file they damage, under AddressSanitizer. No hosted headers: the
  * kernel headers define the fixed-width types.
+ *
+ * With `--barriers` the program runs only the interruption matrix and the
+ * durability rows, the rows that judge the driver's barriers, and ends at
+ * the first failure: the mode tests/host/fat_barriers_mutate.sh runs.
  */
 
 #include "../../rach2/sys/fs/fat32.h"
@@ -35,7 +39,11 @@ extern unsigned long fread(void *buf, unsigned long size, unsigned long n, void 
 extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
 extern int fclose(void *f);
 
+/* The fixtures' directory: the host suite's, unless a mutation proof names
+ * its own, so that two proofs can run this test at once. */
+#ifndef FIXDIR
 #define FIXDIR    "/tmp/rach2_verify"
+#endif
 #define IMG_BYTES (8192u * 512u)
 
 /* ---- stubs for what the driver and the cache reach outside themselves ---- */
@@ -144,12 +152,18 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 /* ---- the rows ---- */
 
 static int fails;
+/* Set by the mode a mutation proof runs: the first failure ends the run,
+   since the proof asks only whether a row fails. */
+static int first_failure_ends;
 
 static void check(int ok, const char *what)
 {
     if (!ok) {
         fails++;
         printf("FAIL: %s\n", what);
+        if (first_failure_ends) {
+            exit(1);
+        }
     }
 }
 
@@ -893,6 +907,7 @@ static const char *nm(const char *shortname)
         {"W6.TXT", "Grow In Place.txt"},
         {"W4.TXT", "truncate me.txt"},
         {"W5.TXT", "unlink me.txt"},
+        {"W7.TXT", "unlink me after a sync.txt"},
         {"D1", "Dir One"},
         {"D2", "Dir Two"},
         {"R1.TXT", "rename one.txt"},
@@ -1070,6 +1085,32 @@ static int seq_unlink(void)
     return rc;
 }
 
+/* A file already on the medium, unlinked. Its name and its chain were
+   durable before the unlink, so the flush `free_chain` begins with is all
+   that keeps a crash from leaving the name over a freed chain. The unlink
+   above follows its file's own creation, whose size and first cluster are
+   still pending in the block the unlink rewrites, and there no order of
+   the two can show a name over a freed chain; rmdir flushes before it
+   frees. */
+static int seq_unlink_synced(void)
+{
+    void *n = make_file(mnt.root, nm("W7.TXT"));
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 1000, 0);
+    if (rc == 0) {
+        rc = OPS->fsync(&mnt, n);
+    }
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, nm("W7.TXT"));
+    }
+    return rc;
+}
+
 static int seq_mkdir_rmdir(void)
 {
     void *d;
@@ -1159,6 +1200,7 @@ static const struct sequence sequences[] = {
     {"rename", seq_rename},
     {"rename over", seq_rename_over},
     {"many files", seq_many_files},
+    {"unlink after a sync", seq_unlink_synced},
 };
 
 /* Read the crash state back from the dump: the cache's dirty buffers go
@@ -2140,10 +2182,24 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return wq_wait_event(wq, cond, arg);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    if (argc > 1) {
+        /* The mode tests/host/fat_barriers_mutate.sh runs: the rows that
+           judge the driver's barriers and no other, the first failure
+           ending the run. */
+        if (!streq(argv[1], "--barriers")) {
+            printf("fat32_hosttest: usage: fat32_hosttest [--barriers]\n");
+            return 2;
+        }
+        first_failure_ends = 1;
+        matrix_rows();
+        durability_rows();
+        printf("fat32_hosttest: OK\n");
+        return 0;
+    }
     well_formed_rows();
     small_and_active_rows();
     malformed_rows();
@@ -2156,6 +2212,10 @@ int main(void)
     durability_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
+        return 0;
     }
-    return fails;
+    /* Not the count: an exit status keeps its low eight bits, and 256
+       failures would read as a pass. */
+    printf("fat32_hosttest: %d failure(s)\n", fails);
+    return 1;
 }

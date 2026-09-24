@@ -6,7 +6,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c
- * host-seconds: 150
+ * host-seconds: 450
  *
  * The volumes are mkexfatfixture's, built here on every run. The
  * well-formed volume must read back what the builder wrote, through every
@@ -20,7 +20,13 @@
  * read-only with the reason named, has its set skipped, or fails at the
  * file it damages. The last row: a volume the host's own tools formatted
  * and filled mounts and lists every file in its manifest with the right bytes
- * and times.
+ * and times. The write rows, the costs of a create, the durability rows and
+ * the interruption matrix follow, each described where it is defined.
+ *
+ * With `--scan-cost` or `--barriers` the program runs only the cost rows, or
+ * only the rows that judge the driver's barriers, and ends at the first
+ * failure: the modes tests/host/exfat_scan_mutate.sh and
+ * tests/host/fat_barriers_mutate.sh run.
  */
 
 #include "../../rach2/sys/fs/exfat.h"
@@ -51,7 +57,11 @@ extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n
 extern void *popen(const char *cmd, const char *mode);
 extern int pclose(void *f);
 
+/* The fixtures' directory: the host suite's, unless a mutation proof names
+ * its own, so that two proofs can run this test at once. */
+#ifndef FIXDIR
 #define FIXDIR    "/tmp/rach2_verify"
+#endif
 #define IMG_BYTES (65536u * 512u) /* 32 MiB: the fixture is 16, the external volume 16 */
 
 /* ---- what the driver needs of the kernel ---- */
@@ -195,12 +205,18 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 /* ---- the rows ---- */
 
 static int fails;
+/* Set by a mode a mutation proof runs: the first failure ends the run,
+   since the proof asks only whether a row fails. */
+static int first_failure_ends;
 
 static void check(int ok, const char *what)
 {
     if (!ok) {
         fails++;
         printf("exfat_hosttest: FAIL: %s\n", what);
+        if (first_failure_ends) {
+            exit(1);
+        }
     }
 }
 
@@ -1079,6 +1095,32 @@ static int seq_nofat(void)
     return rc;
 }
 
+/* A file already on the medium, unlinked. Its name and its chain were
+   durable before the unlink, so the flush between the retirement and the
+   frees is all that keeps a crash from leaving the name over free
+   clusters. In the other unlinks here that flush has help: a file unlinked
+   right after its creation still has its publication pending in the block
+   the retirement rewrites, and a held file's clusters go at its last put,
+   after later barriers. */
+static int seq_unlink_synced(void)
+{
+    void *n = make_file(mnt.root, "w seven.txt");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 5000, 0);
+    if (rc == 0) {
+        rc = OPS->fsync(&mnt, n);
+    }
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, "w seven.txt");
+    }
+    return rc;
+}
+
 /* The fixture's straddle.txt, whose file and stream entries lie in two
    sectors: a change is two writes, the file entry's last. */
 static int seq_straddle(void)
@@ -1099,14 +1141,45 @@ static int seq_straddle(void)
     return rc;
 }
 
+/* The fixture's crossing.txt, whose set crosses the root's first cluster
+   into its second: unlinked, then made again with the same name, so the new
+   set takes the freed slots and crosses the same boundary. The retire and
+   the store each write two cache blocks, and each needs a barrier between
+   them: without it a crash can leave a set in use with a secondary never
+   written or already retired. */
+static int seq_crossing(void)
+{
+    void *n;
+    int rc = OPS->unlink(&mnt, mnt.root, "crossing.txt");
+
+    if (rc != 0) {
+        return rc;
+    }
+    n = make_file(mnt.root, "crossing.txt");
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, (const unsigned char *)"crossing\n", 9, 0);
+    OPS->put(&mnt, n);
+    return rc;
+}
+
 static const struct {
     const char *name;
     int (*run)(void);
 } sequences[] = {
-    {"create", seq_create},     {"extend", seq_extend}, {"gap", seq_gap},
-    {"truncate", seq_truncate}, {"unlink", seq_unlink}, {"mkdir", seq_mkdir},
-    {"rename", seq_rename},     {"nofat", seq_nofat},   {"straddle", seq_straddle},
+    {"create", seq_create},
+    {"extend", seq_extend},
+    {"gap", seq_gap},
+    {"truncate", seq_truncate},
+    {"unlink", seq_unlink},
+    {"mkdir", seq_mkdir},
+    {"rename", seq_rename},
+    {"nofat", seq_nofat},
+    {"straddle", seq_straddle},
     {"vdl", seq_vdl},
+    {"unlink-synced", seq_unlink_synced},
+    {"crossing", seq_crossing},
 };
 
 /* Files made and remade: what a program rewriting a set of files does, the
@@ -1150,6 +1223,11 @@ static int rewrite_rows_run(void)
     }
     return 0;
 }
+
+/* The sequence a stop is judged for; the crossing sequence takes the
+   fixture's crossing.txt away and makes it again, so the oracle does not
+   require that file of it. */
+static int judging_crossing;
 
 /* The content oracle: after a stop, every file a sequence wrote reads,
    within its published length, the bytes written to it or zeros, and the
@@ -1236,6 +1314,9 @@ static int oracle_ok(void)
         char path[64];
         void *n;
 
+        if (judging_crossing && strncmp(fixed[f], "crossing.txt", 13) == 0) {
+            continue;
+        }
         snprintf(path, sizeof(path), "/%s", fixed[f]);
         n = walk(path, &err);
         if (!n || read_all(n, back, sizeof(back)) < 0) {
@@ -1297,7 +1378,9 @@ static void judge_stop(unsigned i, const char *stage)
             snprintf(what, sizeof(what),
                      "'%s' %s, %s of the pending writes kept, reads only what was written",
                      sequences[i].name, stage, name);
+            judging_crossing = strncmp(sequences[i].name, "crossing", 9) == 0;
             check(oracle_ok(), what);
+            judging_crossing = 0;
             unmount_image();
         } else {
             snprintf(what, sizeof(what), "'%s' %s, %s of the pending writes kept, mounts",
@@ -1376,6 +1459,153 @@ static void durability_rows(void)
     durability_row(0, "a file is written and fsynced");
     durability_row(1, "a file is written and the volume synced");
     durability_row(2, "a file is written and the volume unmounted");
+}
+
+/* The clusters the bitmap in `img` says are in use; on the fixture's
+   volumes the bitmap is cluster 2, the first of the heap. */
+static uint32_t used_clusters(const unsigned char *img)
+{
+    uint32_t heap = img[88] | (img[89] << 8) | (img[90] << 16) | ((uint32_t)img[91] << 24);
+    uint32_t clusters = img[92] | (img[93] << 8) | (img[94] << 16) | ((uint32_t)img[95] << 24);
+    const unsigned char *bitmap = img + (uint64_t)heap * 512;
+    uint32_t c, used = 0;
+
+    for (c = 0; c < clusters; c++) {
+        used += (bitmap[c / 8] >> (c % 8)) & 1u;
+    }
+    return used;
+}
+
+/**
+ * What an unlink promises of the clusters it frees. exfat.Readme.md has a
+ * freed chain's bitmap bits and FAT entries reach the disk at the sync that
+ * precedes the return, followed by the device's own flush, so the medium
+ * has them free when the unlink returns. Without that sync, the one at the
+ * end of `free_chain`, the frees wait in the cache for the next one; every
+ * state a crash can leave is still one the walk allows, a lost cluster
+ * among them, so the matrix cannot see it and this row can.
+ */
+static void free_durability_row(void)
+{
+    void *n;
+    uint32_t before, after;
+    int rc = -1;
+
+    fill_pattern();
+    load("--junk");
+    if (mount_rw() != 0) {
+        check(0, "the free-durability row's volume mounts");
+        return;
+    }
+    n = make_file(mnt.root, "freed.bin");
+    if (n && write_at(n, pattern, 8192, 0) == 0) {
+        rc = OPS->fsync(&mnt, n);
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(rc == 0, "a file of two clusters is written and fsynced");
+    devmodel_snapshot(&model, DEVMODEL_KEEP_NONE, snap);
+    before = used_clusters(snap);
+    check(OPS->unlink(&mnt, mnt.root, "freed.bin") == 0, "and unlinked");
+    devmodel_snapshot(&model, DEVMODEL_KEEP_NONE, snap);
+    after = used_clusters(snap);
+    check(before == after + 2,
+          "the two clusters an unlink frees are free on the medium when it returns");
+    check(OPS->prepare_unmount(&mnt) == 0, "the free-durability row's clean unmount");
+    unmount_image();
+}
+
+/* The cache's gets so far: each one finds its block or fills it. */
+static uint64_t cache_gets(void)
+{
+    return bcache_stat_hits() + bcache_stat_fills();
+}
+
+/**
+ * What a create and a lookup cost in a directory of two hundred files,
+ * counted in the device's writes and barriers and the cache's gets.
+ *
+ * A create scans its directory twice, once for the name and once for room,
+ * and entry 27 of milestone 50 found three costs of that scan that grew
+ * with the directory, each fixed in exfat.c and each a count here. The
+ * filler entry at the last slot of a sector was written again at every scan
+ * that passed it: a device write for each full sector, forty and more for
+ * each of the creates measured, where the fixed driver writes a filler
+ * once, when the run of free slots first reaches it. Every 32-byte entry
+ * was a cache get of its own: six hundred and more gets a scan here, where
+ * one get per cache block is about a dozen. And every set a scan passed
+ * had its name hashed through a walk of the up-case table from its start
+ * for each character. This volume's table is larger than the 16 KiB a
+ * mount keeps, so it is read through the cache and each walk costs a get;
+ * the fixed driver reads the mappings of the first 2048 code points once,
+ * at mount. With a table the mount keeps, which the recommended one is,
+ * the walk costs processor time alone and no count sees it.
+ *
+ * The bounds are several times what the fixed driver takes and far under
+ * what each old path takes: the twenty creates after the first two
+ * hundred, one of which grows the directory, take at most 60 writes, 4
+ * barriers and 4000 gets, and a lookup of the last name at most 200 gets.
+ * tests/host/exfat_scan_mutate.sh puts each old path back in turn and
+ * requires its row to fail.
+ */
+static void scan_cost_rows(void)
+{
+    void *d = 0, *n;
+    uint64_t gets = 0;
+    int writes = 0, barriers = 0, i, made = 0;
+    char name[16];
+
+    load("--big-upcase");
+    if (mount_rw() != 0) {
+        check(0, "a writable mount for the scan-cost rows");
+        return;
+    }
+    if (OPS->mkdir(&mnt, mnt.root, "many", 0755) != 0 ||
+        OPS->lookup(&mnt, mnt.root, "many", &d) != 0) {
+        check(0, "the scan-cost rows' directory is made");
+        unmount_image();
+        return;
+    }
+    for (i = 0; i < 220; i++) {
+        if (i == 200) {
+            writes = writes_made;
+            barriers = model.barriers;
+            gets = cache_gets();
+        }
+        snprintf(name, sizeof(name), "file %03d", i);
+        n = make_file(d, name);
+        if (n) {
+            made++;
+            OPS->put(&mnt, n);
+        }
+    }
+    writes = writes_made - writes;
+    barriers = model.barriers - barriers;
+    gets = cache_gets() - gets;
+    printf("exfat_hosttest: twenty creates after two hundred: %d writes, %d barriers, %llu cache "
+           "gets\n",
+           writes, barriers, (unsigned long long)gets);
+    check(made == 220, "two hundred and twenty files are made in one directory");
+    check(writes > 0 && writes <= 60,
+          "the twenty creates after the first two hundred write at most 60 times");
+    check(barriers <= 4, "and flush the device at most 4 times");
+    check(gets > 0 && gets <= 4000, "and take at most 4000 cache gets");
+    n = 0;
+    gets = cache_gets();
+    check(OPS->lookup(&mnt, d, "file 219", &n) == 0, "the last of the names is found");
+    gets = cache_gets() - gets;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    printf("exfat_hosttest: a lookup of the last of 220 names: %llu cache gets\n",
+           (unsigned long long)gets);
+    check(gets > 0 && gets <= 200,
+          "a lookup of the last of 220 names takes at most 200 cache gets");
+    OPS->put(&mnt, d);
+    check(OPS->prepare_unmount(&mnt) == 0, "the scan-cost rows' clean unmount");
+    unmount_image();
+    check_consistent("the volume is consistent after two hundred and twenty creates", 0);
 }
 
 static void write_rows(void)
@@ -1885,17 +2115,36 @@ static void dirty_rows(void)
     }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
+    if (argc > 1) {
+        /* The modes the mutation proofs run: the rows a proof judges and
+           no other, the first failure ending the run. */
+        first_failure_ends = 1;
+        if (strncmp(argv[1], "--scan-cost", 12) == 0) {
+            scan_cost_rows();
+        } else if (strncmp(argv[1], "--barriers", 11) == 0) {
+            durability_rows();
+            free_durability_row();
+            matrix_pass();
+        } else {
+            printf("exfat_hosttest: usage: exfat_hosttest [--scan-cost | --barriers]\n");
+            return 2;
+        }
+        printf("exfat_hosttest: OK\n");
+        return 0;
+    }
     well_formed_rows("", "the held up-case table");
     well_formed_rows("--big-upcase", "the streamed up-case table");
     well_formed_rows("--uncompressed-upcase", "the indexed up-case table");
     damaged_rows();
     external_rows();
     write_rows();
+    scan_cost_rows();
     durability_rows();
+    free_durability_row();
     matrix_pass();
     dirty_rows();
     if (fails == 0) {

@@ -92,7 +92,9 @@ struct ex_mount {
     uint32_t frozen[EXFAT_FROZEN];
     int nfrozen;
     uint8_t setbuf[256 * 32]; /* one set, other writers' up to 255 secondaries */
-    struct ex_node *nodes;    /* the nodes in memory, from the heap */
+    /* The caller's set while a growth publishes the directory, `dir_grow`. */
+    uint8_t setsave[256 * 32];
+    struct ex_node *nodes; /* the nodes in memory, from the heap */
     /* The last cache block a directory entry was read from, kept so a scan
      * of a directory costs a cache get per block and not per 32 bytes; a
      * write of any byte of the block empties it. */
@@ -2022,13 +2024,18 @@ static int set_load(struct ex_mount *em, struct ex_node *d, uint32_t index, uint
  * carries the checksum and, when `publish`, the in-use bit. The file and
  * stream entries share a sector in every set this driver makes; on one
  * that straddles, the stream's sector goes first and the file entry's
- * last, the state between being a checksum the check repairs. */
+ * last, the state between being a checksum the check repairs. When the set
+ * reaches past the file entry's sector, a barrier comes before that sector:
+ * a drive that holds writes may put sectors on the medium in any order, so
+ * without it the file entry could land first, a published set whose
+ * secondaries were never written. */
 static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t count,
                      int publish)
 {
     uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
     uint32_t file_sector = index / per_sector;
     uint32_t k;
+    int spilled = 0;
     int rc;
 
     /* The checksum is over the published set, so an inactive file entry
@@ -2050,6 +2057,13 @@ static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
             if (rc != 0) {
                 return rc;
             }
+            spilled = 1;
+        }
+    }
+    if (spilled) {
+        rc = block_flush(em->dev);
+        if (rc != 0) {
+            return rc;
         }
     }
     /* The file entry's sector: everything of the set in it, in one write. */
@@ -2190,7 +2204,7 @@ static int dir_frozen(struct ex_mount *em, struct ex_node *d)
  * flag cleared first, so that the chain can be followed. */
 #define DIR_MAX_BYTES 0x10000000u /* 256 MiB, the format's limit on a directory */
 
-static int dir_grow(struct ex_mount *em, struct ex_node *d)
+static int dir_grow_publish(struct ex_mount *em, struct ex_node *d)
 {
     uint32_t tail, newc, unused;
     uint64_t have = clusters_of(em, d->length);
@@ -2265,6 +2279,22 @@ static int dir_grow(struct ex_mount *em, struct ex_node *d)
         }
     }
     return 0;
+}
+
+/* The directory grown by `dir_grow_publish`, the set in `em->setbuf` kept.
+ * A create or a rename builds its set there before it asks for the slots,
+ * and the growth publishes the directory's new length through the same
+ * buffer; without the copy the caller would store the directory's own set
+ * in the slots meant for the new one, losing the file and naming the
+ * directory inside itself. */
+static int dir_grow(struct ex_mount *em, struct ex_node *d)
+{
+    int rc;
+
+    k_memcpy(em->setsave, em->setbuf, sizeof(em->setbuf));
+    rc = dir_grow_publish(em, d);
+    k_memcpy(em->setbuf, em->setsave, sizeof(em->setbuf));
+    return rc;
 }
 
 /* `count` free slots in a row in `d`, growing it; a run that would put the
@@ -2424,10 +2454,14 @@ static int find_set(struct ex_mount *em, struct ex_node *d, const char *name, st
     }
 }
 
-/* A set unpublished: the file entry inactive first, the barrier, then
- * the secondaries inactive. */
+/* A set unpublished: the file entry inactive first, then the secondaries
+ * inactive. When a secondary lies in another sector than the file entry, a
+ * barrier comes between them: a drive that holds writes may put sectors on
+ * the medium in any order, so without it a secondary's change could land
+ * first, under a file entry still in use. */
 static int set_retire(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t count)
 {
+    uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
     uint32_t k;
     uint8_t raw[32];
     int rc = dir_entry(em, d, index, raw);
@@ -2439,6 +2473,12 @@ static int set_retire(struct ex_mount *em, struct ex_node *d, uint32_t index, ui
     rc = dir_write(em, d, index, raw, 1);
     if (rc != 0) {
         return rc;
+    }
+    if ((index + count - 1) / per_sector != index / per_sector) {
+        rc = block_flush(em->dev);
+        if (rc != 0) {
+            return rc;
+        }
     }
     for (k = 1; k < count; k++) {
         rc = dir_entry(em, d, index + k, raw);
