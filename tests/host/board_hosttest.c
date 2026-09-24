@@ -117,7 +117,7 @@ int main(void)
     CHECK(board_lookup("piix44") == 0, "a name with something appended is not that name");
     CHECK(board_lookup(0) == 0, "no name at all is not a profile");
     if (!piix4 || !ich9 || !lynx) {
-        return fails;
+        return fails > 255 ? 255 : fails;
     }
 
     /* ---- identity: the chipset must be the one the row describes ---- */
@@ -210,7 +210,7 @@ int main(void)
     CHECK(board_current() == 0, "and no profile in force");
     CHECK(board_sci_line() == -1, "and no line masked");
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }
 
 #include "../../rach2/sys/board.c"

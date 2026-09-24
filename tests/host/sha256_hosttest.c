@@ -116,5 +116,5 @@ int main(void)
         return 0;
     }
     printf("sha256_hosttest: %d failure(s)\n", fails);
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

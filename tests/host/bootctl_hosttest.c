@@ -796,5 +796,5 @@ int main(void)
     if (fails) {
         fprintf(stderr, "bootctl_hosttest: %d failure(s)\n", fails);
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

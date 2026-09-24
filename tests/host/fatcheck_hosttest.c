@@ -182,5 +182,5 @@ int main(void)
     if (fails == 0) {
         printf("fatcheck_hosttest: OK\n");
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

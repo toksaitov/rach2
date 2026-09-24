@@ -365,5 +365,5 @@ int main(void)
         CHECK(frame_count == 0, "an explicit flush on a disabled console sends nothing");
     }
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

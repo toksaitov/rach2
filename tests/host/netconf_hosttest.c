@@ -644,5 +644,5 @@ int main(void)
     if (!fails) {
         printf("netconf-hosttest: result: pass\n");
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

@@ -228,5 +228,5 @@ int main(void)
         CHECK(taken[0].start_lba == 3000 && taken[1].start_lba == 8000 && refused == 1);
     }
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

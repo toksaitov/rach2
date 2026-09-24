@@ -351,5 +351,5 @@ int main(void)
           "an entry sector naming neither tail is refused");
     CHECK(writes == 0, "with nothing written");
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

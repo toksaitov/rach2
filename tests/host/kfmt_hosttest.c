@@ -102,5 +102,5 @@ int main(void)
     if (fails == 0) {
         printf("kfmt_hosttest: 22 rows passed\n");
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

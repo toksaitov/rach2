@@ -56,5 +56,5 @@ int main(void)
         }
     }
 
-    return failed;
+    return failed > 255 ? 255 : failed;
 }

@@ -793,5 +793,5 @@ int main(void)
     if (fails == 0) {
         printf("ahci_hosttest: PASS\n");
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

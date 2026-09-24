@@ -140,5 +140,5 @@ int main(void)
         }
         CHECK(total_queued(&wq) == 0);
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

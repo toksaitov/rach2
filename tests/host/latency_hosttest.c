@@ -65,5 +65,5 @@ int main(void)
     latency_note(-1, 77);
     CHECK(latency_max(LAT_DISK) == 900 && latency_max(LAT_TIMER) == 1500,
           "and a note out of range changes nothing");
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

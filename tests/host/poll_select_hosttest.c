@@ -248,5 +248,5 @@ int main(void)
     fds[0].revents = POLLHUP;
     CHECK((pollfds_to_fdsets(fds, 1, r, w, e) > 0) == (pollfd_select_ready(POLLOUT, POLLHUP) != 0));
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

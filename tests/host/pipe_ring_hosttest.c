@@ -136,5 +136,5 @@ int main(void)
         CHECK(n == 1904 && rp == p.buf && rp[0] == src[96]);
     }
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

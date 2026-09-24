@@ -1115,5 +1115,5 @@ int main(void)
     CHECK(lock_depth == 0 && !lock_ever_negative,
           "every interrupt bracket the driver took, it released");
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

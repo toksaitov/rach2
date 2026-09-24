@@ -111,5 +111,5 @@ int main(void)
         }
     }
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

@@ -99,5 +99,5 @@ int main(void)
     CHECK(rcvwnd_update(0, 0, 1u, 0) == 1u,
           "a zero segment size still makes progress instead of dividing by nothing");
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

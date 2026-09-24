@@ -74,5 +74,5 @@ int main(void)
     CHECK(tls_resolve_base(0, &base) == -1);
     CHECK(tls_resolve_base(&u, 0) == -1);
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

@@ -1020,5 +1020,5 @@ int main(void)
           "and are written in two runs of twenty");
     bcache_invalidate(&vast);
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

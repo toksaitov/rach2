@@ -1702,5 +1702,5 @@ int main(void)
               "a stopped card is not asked");
     }
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

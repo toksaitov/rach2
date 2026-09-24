@@ -110,5 +110,5 @@ int main(void)
     CHECK(synth_classify("proc/-1", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/-1/stat", &vp) == VNODE_ENOENT);
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

@@ -196,5 +196,5 @@ int main(void)
     CHECK(modlayout_reason(MODLAYOUT_OVERLAP) != 0, "OVERLAP has a reason");
     CHECK(modlayout_reason(99) != 0, "an unknown code has a reason");
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }
