@@ -1986,13 +1986,26 @@ int32_t sys_fsync(isr_params_t *params)
  * goes back via `pc_sync` (a no-op when KRFFS is the RAM module). Like
  * Linux's sync(2), it returns 0 even if a writeback failed; what failed
  * stays dirty for a later call, and a mount whose device failed a write is
- * read-only from then on.
+ * read-only from then on. Busy slots are retried after yielding and an
+ * interrupt-enabled wait, so an in-flight write can finish and a page
+ * dirtied during that write can be flushed. Stop after 3000 ticks (30
+ * seconds) if slots remain busy, so a stuck writer cannot hold this call
+ * forever. A write failure alone does not cause a wait.
  */
 int32_t sys_sync(isr_params_t *params)
 {
+    uint32_t start;
+
     (void)params;
     vfs_sync_all();
-    pc_sync();
+    start = kernel_ticks;
+    while (pc_sync() & PC_SYNC_BUSY) {
+        if ((uint32_t)(kernel_ticks - start) >= 3000u) {
+            break;
+        }
+        schedule();
+        idle_wait_irq_on();
+    }
     return 0;
 }
 

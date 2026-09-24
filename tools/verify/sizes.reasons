@@ -438,7 +438,7 @@ tests/host/netdev_hosttest.c:main lines 149 a test's rows, each a case, read as 
 
 tests/host/packet_hosttest.c:main lines 159 a test's rows, each a case, read as one table
 
-tests/host/pagecache_hosttest.c:main lines 120 a test's rows, each a case, read as one table
+tests/host/pagecache_hosttest.c:main lines 121 a test's rows, each a case, read as one table
 
 tests/host/partition_hosttest.c:main complexity 32 a test's rows, each a case, read as one table
 tests/host/partition_hosttest.c:main lines 132 a test's rows, each a case, read as one table

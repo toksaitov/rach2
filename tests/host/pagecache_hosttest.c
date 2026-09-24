@@ -10,7 +10,9 @@
  * residency must hit (not re-read), an eviction must write back iff dirty,
  * and a dirty page thrashed out and re-read must come back with its bytes
  * intact. The writer models a sleep while another cache operation runs.
- * Return 0 when every check passes, or 1 on failure.
+ * pagecache_mutate.sh also extracts and compiles the production sys_sync
+ * for the bounded busy wait and failure rows, with controlled tick and
+ * scheduling stubs. Return 0 when every check passes, or 1 on failure.
  */
 #define PAGECACHE_HOSTTEST
 #define PC_SLOTS 4u
@@ -155,7 +157,7 @@ static void race_during_write(uint32_t disk_off, const void *page)
         if (race == RACE_EVICT_DIRTY) {
             CHECK(pc_evict(0) == -1);
         } else {
-            CHECK(pc_sync() == -1);
+            CHECK(pc_sync() == PC_SYNC_BUSY);
         }
     }
     CHECK(pc_test_page(0) == page);
@@ -194,7 +196,7 @@ static void test_sleeping_writeback(void)
                 race_calls = 0;
                 fake_write_pause = race_during_write;
                 rc = evict ? pc_evict(0) : pc_sync();
-                CHECK(rc == ((fail || (evict && dirty)) ? -1 : 0));
+                CHECK(rc == (evict ? ((fail || dirty) ? -1 : 0) : (fail ? PC_SYNC_FAILED : 0)));
                 CHECK(race_calls == 1);
                 CHECK(!pc_slots[0].pinned);
                 CHECK(fake_disk[0][0] == (fail ? 0 : 0xD1u));
@@ -217,6 +219,98 @@ static void test_sleeping_writeback(void)
         }
     }
 }
+
+#ifdef PAGECACHE_SYNC_HOSTTEST
+#include "isr.h"
+
+static volatile uint32_t kernel_ticks;
+static uint32_t sync_waits;
+static uint32_t sync_yields;
+static uint32_t sync_mounts;
+static uint32_t sync_release;
+
+static void vfs_sync_all(void)
+{
+    ++sync_mounts;
+}
+
+void schedule(void)
+{
+    ++sync_yields;
+}
+
+/** Complete the competing write only after the caller has waited. */
+void idle_wait_irq_on(void)
+{
+    ++kernel_ticks;
+    ++sync_waits;
+    if (sync_waits == sync_release) {
+        touch(0, 1, 0xE2u);
+        pc_slots[0].pinned = 0;
+    }
+}
+
+#include "syscall_sync.inc"
+
+/**
+ * Run the actual syscall with a busy page, a failed write, or both.
+ *
+ * A busy page starts clean, as it does during writeback, then becomes dirty
+ * before the writer releases it. A stuck slot must stop at the tick bound,
+ * including across counter wrap. Failure alone must return without waiting.
+ */
+static void test_sync_wait(void)
+{
+    int row;
+
+    for (row = 0; row < 4; ++row) {
+        int busy = row != 1;
+        int failed = row == 1 || row == 2;
+
+        init_pagecache();
+        pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
+        fake_disk[0][0] = 0;
+        fake_attempts[0] = 0;
+        fake_attempts[1] = 0;
+        fake_writes[0] = 0;
+        sync_waits = sync_yields = sync_mounts = 0;
+        sync_release = row == 3 ? 0u : 3u;
+        kernel_ticks = 0xFFFFFFFEu;
+        touch(0, 0, 0);
+        pc_slots[0].pinned = (uint8_t)busy;
+        if (failed) {
+            touch(1, 1, 0xE1u);
+            fake_write_fail = 1;
+        }
+        CHECK(pc_sync() == ((busy ? PC_SYNC_BUSY : 0) | (failed ? PC_SYNC_FAILED : 0)));
+        fake_attempts[1] = 0;
+        CHECK(sys_sync(0) == 0);
+        CHECK(sync_mounts == 1);
+        CHECK(sync_yields == sync_waits);
+        if (busy && row != 3) {
+            CHECK(sync_waits == 3);
+            CHECK(fake_disk[0][0] == 0xE2u);
+            CHECK(fake_writes[0] == 1);
+            CHECK(!pc_slots[0].dirty && !pc_slots[0].pinned);
+        } else if (row == 3) {
+            CHECK(sync_waits == 3000);
+            CHECK(pc_slots[0].pinned);
+            CHECK(fake_attempts[0] == 0);
+        } else {
+            CHECK(sync_waits == 0);
+            CHECK(fake_attempts[1] == 1);
+        }
+        if (failed) {
+            CHECK(pc_slots[1].dirty);
+            fake_write_fail = FAKE_NO_FAIL;
+            CHECK(sys_sync(0) == 0);
+            CHECK(!pc_slots[1].dirty);
+            CHECK(fake_disk[1][0] == 0xE1u);
+        }
+        pc_slots[0].pinned = 0;
+    }
+}
+#endif
 
 int main(void)
 {
@@ -303,7 +397,7 @@ int main(void)
     pc_set_backing(fake_read, fake_write, FAKE_PAGES * PC_PAGE_SIZE);
     touch(20, 1, 0xC0u);
     fake_write_fail = 20;
-    CHECK(pc_sync() == -1);
+    CHECK(pc_sync() == PC_SYNC_FAILED);
     CHECK(fake_disk[20][0] != 0xC0u);
     fake_write_fail = FAKE_NO_FAIL;
     CHECK(pc_sync() == 0);
@@ -338,6 +432,9 @@ int main(void)
     }
 
     test_sleeping_writeback();
+#ifdef PAGECACHE_SYNC_HOSTTEST
+    test_sync_wait();
+#endif
     dprintf(1, "pagecache-hosttest: result: %s: %d failures\n", fails ? "fail" : "pass", fails);
     return fails ? 1 : 0;
 }

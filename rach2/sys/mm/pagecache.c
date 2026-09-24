@@ -452,9 +452,9 @@ uint32_t pc_resident(void)
 /**
  * Write dirty resident pages, preserving stores made during each write.
  *
- * Return -1 if any resident slot is busy or a write fails, so a competing
- * sync cannot report success before an in-flight write has completed.
- * Continue with other slots; busy and failed pages can be retried later.
+ * Report busy slots and failed writes separately, so a competing sync
+ * can wait for in-flight writes without retrying a write failure forever.
+ * Continue with other slots and preserve both result bits.
  */
 int pc_sync(void)
 {
@@ -463,8 +463,13 @@ int pc_sync(void)
 
     for (i = 0; i < PC_SLOTS; ++i) {
         struct pc_entry *e = &pc_slots[i];
-        if (e->valid && pc_writeback(e) != 0) {
-            result = -1;
+        if (!e->valid) {
+            continue;
+        }
+        if (e->pinned) {
+            result |= PC_SYNC_BUSY;
+        } else if (pc_writeback(e) != 0) {
+            result |= PC_SYNC_FAILED;
         }
     }
 

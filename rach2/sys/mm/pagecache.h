@@ -81,13 +81,17 @@ void pc_set_backing(pc_read_fn read, pc_write_fn write, uint32_t fs_size);
  */
 int pc_fault(uint32_t fault_address, int write);
 
+#define PC_SYNC_BUSY   1
+#define PC_SYNC_FAILED 2
+
 /**
  * Write dirty cache frames to the backing store (fsync and sync).
  *
  * Reserve each slot and frame and re-protect it read-only before writing.
- * Concurrent stores mark it dirty again for a later write. Return 0, or -1
- * if a resident slot is busy or a write fails. Busy slots are skipped;
- * failed pages stay dirty for a later retry.
+ * Concurrent stores mark it dirty again for a later write. Return 0, or
+ * the OR of PC_SYNC_BUSY for skipped busy slots and PC_SYNC_FAILED for
+ * failed writes. Both bits can be set, so a failure cannot hide a busy
+ * slot from a caller waiting for writeback. Failed pages stay dirty.
  */
 int pc_sync(void);
 
