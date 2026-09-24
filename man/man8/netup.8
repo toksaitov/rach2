@@ -77,6 +77,11 @@ suite exercises DHCP and static stanzas.
 .Sh DIAGNOSTICS
 An unknown option produces
 .Ql "usage: netup [-a] [interface ...]" .
+A DHCP client that stops before it reaches the background produces
+.Ql "netup: INTERFACE: dhcpc exited with status N before reaching the background"
+or
+.Ql "netup: INTERFACE: dhcpc was killed by signal N before reaching the background" ;
+such a client may have left its address on the interface.
 .Sh SEE ALSO
 .Xr busybox-networking 1 ,
 .Xr recovery 7 ,

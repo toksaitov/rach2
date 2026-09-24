@@ -1,17 +1,23 @@
 /**
- * Check that an unverified DHCP claim blocks static configuration.
+ * Check that an unverified DHCP claim blocks static configuration, and what a
+ * DHCP client's status is reported as.
  *
  * host-deps: utils/netcfg.c utils/ipcheck.c
  * host-cflags: -I tests/host/compat/netutil
+ *
+ * The client is never started: the fork reports a child and the wait returns
+ * the status a row chooses.
  */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-static int open_error, read_error, live, sockets, failures;
+static int open_error, read_error, live, sockets, failures, child_status;
 static const char *claim = "123\n10.0.0.2\n";
 
 #define CHECK(condition, detail)                               \
@@ -68,23 +74,70 @@ static int model_socket(int domain, int type, int protocol)
     return -1;
 }
 
-#define fopen  model_fopen
-#define ferror model_ferror
-#define kill   model_kill
-#define socket model_socket
-#define main   netup_main
+/** Report a child without starting one. */
+static pid_t model_fork(void)
+{
+    return 4242;
+}
+
+/** Return the status the row chose for the child. */
+static pid_t model_waitpid(pid_t pid, int *status, int options)
+{
+    (void)options;
+    *status = child_status;
+    return pid;
+}
+
+#define fopen   model_fopen
+#define ferror  model_ferror
+#define kill    model_kill
+#define socket  model_socket
+#define fork    model_fork
+#define waitpid model_waitpid
+#define main    netup_main
 #include "netup.c"
 #undef main
 #undef fopen
 #undef ferror
 #undef kill
 #undef socket
+#undef fork
+#undef waitpid
+
+/** Run the DHCP step on a chosen client status and keep what it printed. */
+static int run_dhcp_status(int status, char *text, size_t size)
+{
+    struct netcfg_iface iface;
+    FILE *capture = tmpfile();
+    int saved = dup(2);
+    int rc;
+    size_t n;
+
+    if (!capture || saved < 0) {
+        exit(2);
+    }
+    memset(&iface, 0, sizeof(iface));
+    netcfg_set_name(iface.name, "eth0");
+    child_status = status;
+    fflush(stderr);
+    dup2(fileno(capture), 2);
+    rc = run_dhcp(&iface);
+    fflush(stderr);
+    dup2(saved, 2);
+    close(saved);
+    rewind(capture);
+    n = fread(text, 1, size - 1, capture);
+    text[n] = '\0';
+    fclose(capture);
+    return rc;
+}
 
 /** Check both the claim reader and the static configuration caller. */
 int main(void)
 {
     struct netcfg_iface iface;
     int errors[] = {EIO, EMFILE, EACCES};
+    char text[256];
     unsigned int i;
 
     memset(&iface, 0, sizeof(iface));
@@ -109,6 +162,14 @@ int main(void)
     CHECK(dhcp_holder("eth0") == 123, "live claim is busy");
     live = 0;
     CHECK(dhcp_holder("eth0") == 0, "dead holder permits static configuration");
+    CHECK(run_dhcp_status(0, text, sizeof(text)) == 0 && text[0] == '\0',
+          "a client that went to the background is success");
+    CHECK(run_dhcp_status(1 << 8, text, sizeof(text)) == -1 &&
+              strstr(text, "exited with status 1 before reaching the background") != NULL,
+          "a client that exited is reported as never reaching the background");
+    CHECK(run_dhcp_status(SIGKILL, text, sizeof(text)) == -1 &&
+              strstr(text, "killed by signal 9 before reaching the background") != NULL,
+          "a killed client is reported as never reaching the background");
     if (failures) {
         return 1;
     }

@@ -14,12 +14,14 @@
  *         gateway 192.168.0.1
  *
  * `netup [-a] [INTERFACE ...]`. With `-a`, or with no arguments, it brings up
- * every interface an `auto` line names. A named interface is brought up whether
- * or not `auto` names it, which is how one is brought up by hand.
+ * every interface an `auto` or `allow-hotplug` line names. A named interface
+ * is brought up whether or not such a line names it, which is how one is
+ * brought up by hand.
  *
- * A `dhcp` stanza runs `dhcpc`, which stays in the foreground until the first
- * answer and then has the lease from the background. A `static` stanza is
- * applied here, through the same ioctls.
+ * A `dhcp` stanza runs `dhcpc -b`, which stays in the foreground through its
+ * first round of discovery and then holds the lease, or goes on asking for
+ * one, from the background. A `static` stanza is applied here, through the
+ * same ioctls.
  */
 
 #include <stdio.h>
@@ -65,7 +67,9 @@ static void set_ifr_addr(struct ifreq *ifr, unsigned long ip)
  * A configuration that failed part way leaves the machine on something nobody
  * chose. What it had before is not necessarily right either, but it is what the
  * administrator last saw, and on a machine across the room that is the
- * difference between a change that failed and a machine that is gone.
+ * difference between a change that failed and a machine nobody can reach.
+ * The netmask is put back only when both values are set, and a failure here
+ * is not reported.
  */
 static void restore(int fd, const char *name, unsigned long address, unsigned long netmask)
 {
@@ -117,7 +121,27 @@ static long dhcp_holder(const char *name)
     return 0;
 }
 
-/** Apply a static stanza: the address, then the mask, then the route. */
+/**
+ * Apply a static stanza: the address, then the mask, then the route.
+ *
+ * An interface a DHCP client holds is refused, and the stanza is judged whole
+ * before anything changes. The address and mask in force are read first, so
+ * that a failure part way can put them back; an unset interface reads as
+ * 0.0.0.0, so a failure to read them is a real one and ends the change. A
+ * stanza with no gateway removes the default route, since a gateway that
+ * belonged to another network would send everything bound off the subnet to
+ * a machine that is not there. A stanza with one sets it over the old route
+ * without removing that first, so a failure to set it leaves whatever the
+ * machine had.
+ *
+ * The route itself is never put back. The kernel drops a gateway that the new
+ * address puts on another subnet, and the route in force is not read before
+ * the change, so a failure to set the route puts back the address and mask
+ * and says so: a machine on its own subnet is still reachable, and the route
+ * can be set by hand.
+ *
+ * @return 0 when the stanza is in force, -1 after a message.
+ */
 static int apply_static(const struct netcfg_iface *s)
 {
     struct ifreq ifr;
@@ -158,10 +182,6 @@ static int apply_static(const struct netcfg_iface *s)
         fprintf(stderr, "netup: %s: no socket: %s\n", s->name, strerror(errno));
         return -1;
     }
-    /* What is there now, so a failure part way can put it back. An unset
-       interface answers 0.0.0.0 instead of failing, so a failure here is a
-       real one, and going on from it would mean restoring a machine to an
-       address it never had. */
     memset(&ifr, 0, sizeof(ifr));
     set_ifr_name(&ifr, s->name);
     if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
@@ -203,12 +223,6 @@ static int apply_static(const struct netcfg_iface *s)
         }
     }
     if (!s->gateway) {
-        /* A default route from before goes when this stanza names none: a
-           gateway that belonged to another network is not a gateway here, and
-           leaving it would send everything off-subnet to a machine that is not
-           there. Where the stanza does name one, the route is not removed
-           first: setting it replaces what is there, so a failure to set it
-           leaves whatever the machine had instead of nothing. */
         memset(&rt, 0, sizeof(rt));
         sin = (struct sockaddr_in *)&rt.rt_dst;
         sin->sin_family = AF_INET;
@@ -238,11 +252,6 @@ static int apply_static(const struct netcfg_iface *s)
             fprintf(stderr, "netup: %s: cannot set the default route: %s\n", s->name,
                     strerror(errno));
             restore(fd, s->name, had_address, had_netmask);
-            /* The address is back; the route may not be. The kernel drops a
-               gateway that the new address put on another subnet, and there is
-               no call that reads the one in force, so there is nothing to put
-               back from. Say so: a machine on its own subnet is still reachable
-               and an administrator can set the route by hand. */
             fprintf(stderr,
                     "netup: %s: the address in force is back; set the default "
                     "route by hand if the machine needs one\n",
@@ -257,7 +266,16 @@ static int apply_static(const struct netcfg_iface *s)
     return 0;
 }
 
-/** Run the DHCP client and wait for its first answer. */
+/**
+ * Run `dhcpc -b` for the interface and wait for its first round of discovery.
+ *
+ * The client exits 0 once it has gone to the background, with a lease or still
+ * asking for one; any other status means it did not get that far. The message
+ * for that case gives the status or the signal and nothing more, since a
+ * client that stopped early may have left its address on the interface.
+ *
+ * @return 0 when the client reached the background, -1 after a message.
+ */
 static int run_dhcp(const struct netcfg_iface *s)
 {
     pid_t pid = fork();
@@ -285,13 +303,28 @@ static int run_dhcp(const struct netcfg_iface *s)
             return -1;
         }
     }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "netup: %s: dhcpc did not configure the interface\n", s->name);
-        return -1;
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return 0;
     }
-    return 0;
+    if (WIFEXITED(status)) {
+        fprintf(stderr, "netup: %s: dhcpc exited with status %d before reaching the background\n",
+                s->name, WEXITSTATUS(status));
+    } else {
+        fprintf(stderr, "netup: %s: dhcpc was killed by signal %d before reaching the background\n",
+                s->name, WTERMSIG(status));
+    }
+    return -1;
 }
 
+/**
+ * Bring up each interface named on the command line and, with `-a` or with no
+ * operand, each one an `auto` or `allow-hotplug` line declares.
+ *
+ * Every interface is tried even after one fails. The status is 0 when all of
+ * them came up, 1 when any failed or the file could not be used, and 2 for a
+ * usage error or a bad list of names: one given twice, one no interface can
+ * have, or more than eight.
+ */
 int main(int argc, char **argv)
 {
     struct netcfg_iface want[MAX_IFACES];
