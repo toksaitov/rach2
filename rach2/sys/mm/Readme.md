@@ -22,7 +22,7 @@ Before reserving module memory, `modlayout.c` rejects an empty or backwards rang
 
 A process page directory initially copies the kernel directory's PDEs. The referenced kernel page tables remain shared, while a user mapping first copies or allocates the page table for that process. A context switch loads the process's directory into CR3. Kernel page tables needed by every process, including the page-cache window, must exist before the first directory is cloned.
 
-User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not including, `USER_ADDR_MAX` (`0xC0000000`). `map_mmio` maps device registers uncached into the dedicated kernel MMIO region at `0xF0000000` and returns the virtual address the driver must use. Creation of a shared kernel PDE fails after the first process directory has been cloned.
+User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not including, `USER_ADDR_MAX` (`0xC0000000`). `map_mmio` maps device registers uncached into the dedicated kernel MMIO region at `0xF0000000` and returns the virtual address the driver must use. A region reaching the top of the address space is refused, its pages counted by division rather than by adding a page less one, and `premap_kernel_window` refuses a window past the top and counts its tables rather than walking to an end address that would wrap; `paging_hosttest` holds both, compiling `paging.c` with `RACH2_HOSTTEST`, which leaves out its control-register, flags and TLB instructions. Creation of a shared kernel PDE fails after the first process directory has been cloned.
 
 ## Virtual memory areas
 

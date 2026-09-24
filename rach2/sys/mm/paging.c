@@ -14,6 +14,17 @@
  * process that faulted in user mode. */
 #include "../../kernel.h"
 
+/*
+ * tests/host/paging_hosttest.c compiles this file natively with
+ * RACH2_HOSTTEST defined. That build leaves out every instruction that
+ * reaches the control registers, the flags or the TLB, which a host cannot
+ * execute, and takes a fault's address from the test; the rest of the file
+ * compiles as it is.
+ */
+#ifdef RACH2_HOSTTEST
+uint32_t paging_hosttest_cr2(void);
+#endif
+
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
 
@@ -349,6 +360,7 @@ void init_paging(struct frame_map *map)
  */
 static void _load_page_dir(page_dir_t *dir)
 {
+#ifndef RACH2_HOSTTEST
     uint32_t cr0;
 
     __asm__ __volatile__("mov %0, %%cr3" ::"r"(&dir->phys_page_tables));
@@ -358,6 +370,9 @@ static void _load_page_dir(page_dir_t *dir)
     cr0 |= 0x80000000u | 0x00010000u;
 
     __asm__ __volatile__("mov %0, %%cr0" ::"r"(cr0));
+#else
+    (void)dir;
+#endif
 }
 
 /* Page-fault error-code bits (Intel SDM Vol. 3A, 4.7). */
@@ -610,7 +625,11 @@ static void _page_fault_handler(isr_params_t *params)
     uint32_t fault_address;
     int write, user_mode, have_user_proc, in_user_range;
 
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(fault_address));
+#else
+    fault_address = paging_hosttest_cr2();
+#endif
 
     write = (params->error_code & PF_ERR_WRITE) != 0;
     user_mode = (params->error_code & PF_ERR_USER) != 0;
@@ -693,9 +712,11 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     _mmio_next += pages * PAGE_SIZE;
 
     /* Flush TLB */
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("movl %%cr3, %%eax\n\t"
                          "movl %%eax, %%cr3" ::
                              : "eax", "memory");
+#endif
 
     return va + (phys_addr - start_page);
 }
@@ -703,15 +724,23 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 static uint32_t paging_irq_save(void)
 {
     uint32_t flags;
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
+#else
+    flags = 0;
+#endif
     return flags;
 }
 
 static void paging_irq_restore(uint32_t flags)
 {
+#ifndef RACH2_HOSTTEST
     if (flags & 0x200) {
         __asm__ __volatile__("sti");
     }
+#else
+    (void)flags;
+#endif
 }
 
 void *kmap_temp(uintptr_t phys)
@@ -1085,7 +1114,11 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
 
 void paging_flush_tlb(uintptr_t addr)
 {
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("invlpg (%0)" ::"r"(addr) : "memory");
+#else
+    (void)addr;
+#endif
 }
 
 /**
@@ -1132,7 +1165,9 @@ void switch_page_directory(page_dir_t *dir)
     }
 
     _curr_dir = dir;
+#ifndef RACH2_HOSTTEST
     __asm__ __volatile__("mov %0, %%cr3" ::"r"(get_page_dir_phys(dir)) : "memory");
+#endif
 }
 
 void frame_ref(uintptr_t phys)
