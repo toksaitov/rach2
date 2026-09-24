@@ -178,7 +178,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/22 conventions (no //, ASCII, header guards, marked idle wait)"
+hr "4/22 conventions (no //, ASCII, header guards, marked idle wait, group kills)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -205,6 +205,19 @@ idle_bad=$(inhouse_ch | grep -vE 'sys/proc/sched\.c$' \
 if [ -n "$idle_bad" ]; then
     echo "  bare sti;hlt outside idle_wait_irq_off/on:"
     echo "$idle_bad" | head -3 | sed 's/^/    /'
+    cv=1
+fi
+# dash, the testing host's /bin/sh, refuses `--` in its kill builtin with
+# "Illegal number: -", so `kill -TERM -- "-$child"` signals nothing, and a
+# trap that stops a test's process group that way waits for the group to end
+# by itself. After a signal option a negative pid is already a pid, so the
+# form is `kill -TERM "-$child"`.
+kill_bad=$({ find tests tools rach2 krffs mk -name '*.sh' 2>/dev/null; echo tests/run; } \
+    | xargs grep -nE 'kill[^|;&#]*[[:space:]]--[[:space:]]+"?-' 2>/dev/null \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
+if [ -n "$kill_bad" ]; then
+    echo "  kill with an end-of-options marker before a process group, which dash refuses:"
+    echo "$kill_bad" | head -3 | sed 's/^/    /'
     cv=1
 fi
 if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi

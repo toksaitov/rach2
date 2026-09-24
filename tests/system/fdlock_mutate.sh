@@ -35,7 +35,7 @@ stop_child()
     if [ -n "$child" ]; then
         "$work/runutil" killgroup "$child" 15 2>/dev/null || :
         wait "$child" 2>/dev/null || :
-        while kill -0 -- "-$child" 2>/dev/null; do
+        while kill -0 "-$child" 2>/dev/null; do
             sleep 1
         done
         child=
