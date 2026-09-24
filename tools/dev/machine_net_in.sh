@@ -1,5 +1,8 @@
 #!/bin/sh
-# Measure one inbound transfer after the receiver has announced its port.
+# Measure one inbound transfer after the receiver has announced its port,
+# once the machine has shown that it runs the slot and the kernel the caller
+# names in RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL (machine_identity.sh),
+# asked as RACH2_MEASURE_USER, root by default.
 set -eu
 [ "$#" -eq 8 ] || {
     echo 'usage: machine_net_in.sh KEY ADDRESS REMOTE-PROGRAM SENDER MIB WRITE-BYTES TIMEOUT DIR' >&2
@@ -14,11 +17,14 @@ chunk=$6
 timeout=$7
 directory=$8
 account=${RACH2_NET_USER:-root}
+measure_user=${RACH2_MEASURE_USER:-root}
 port=27158
 
-case "$account" in
-    ''|-*|*[!A-Za-z0-9_.-]*) echo 'machine-net-in: invalid account' >&2; exit 2 ;;
-esac
+for name in "$account" "$measure_user"; do
+    case "$name" in
+        ''|-*|*[!A-Za-z0-9_.-]*) echo 'machine-net-in: invalid account' >&2; exit 2 ;;
+    esac
+done
 case "$address" in
     ''|*[!0-9.]*) echo 'machine-net-in: expected an IPv4 address' >&2; exit 2 ;;
 esac
@@ -42,6 +48,11 @@ if ! { [ "$mib" -ge 1 ] && [ "$mib" -le 4096 ] &&
 fi
 [ -r "$key" ] && [ -x "$sender" ] && [ -d "$directory" ] || {
     echo 'machine-net-in: need a readable key, executable sender and log directory' >&2
+    exit 2
+}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+[ -r "$here/machine_identity.sh" ] || {
+    echo 'machine-net-in: machine_identity.sh is not beside this script' >&2
     exit 2
 }
 work=$(mktemp -d "$directory/net-in.XXXXXX")
@@ -85,6 +96,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 echo "machine-net-in: logs: $work"
+sh "$here/machine_identity.sh" "$work/identity.log" ssh -i "$key" -o BatchMode=yes \
+    -o ConnectTimeout=10 -o UserKnownHostsFile="$known" -o StrictHostKeyChecking=accept-new \
+    "$measure_user@$address" || exit
 printf 'machine-net-in: transfer: %s MiB, write %s, select-timeout %s\n' \
     "$mib" "$chunk" "$timeout"
 shasum -a 256 "$sender" > "$work/sender.sha256"

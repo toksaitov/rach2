@@ -1,5 +1,8 @@
 #!/bin/sh
 # Build the two poll orders from one private source tree for measurement.
+# Each kernel's path is printed as RACH2_MEASURE_KERNEL, the name
+# machine_identity.sh takes, so that a measurement driver checks that the
+# machine runs that artifact before it times anything.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -58,10 +61,7 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
-before = '''        /* Stay on every queue across the halt: a waker that runs while this
-         * process is halted must be able to find it and make it READY. The
-         * removes come after, and are no-ops for a record already taken off. */
-        if (current_proc->state == PROC_BLOCKED) {
+before = '''        if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
         }
         for (i = 0; i < nfds; i++) {
@@ -93,4 +93,7 @@ build poll-restored
 cmp "$work/poll-after-halt.kernel" "$work/poll-restored.kernel"
 cmp "$work/poll-after-halt.config" "$work/poll-before-halt.config"
 cmp "$work/poll-after-halt.config" "$work/poll-restored.config"
+for order in poll-after-halt poll-before-halt; do
+    echo "poll-kernels: measure: RACH2_MEASURE_KERNEL=$work/$order.kernel"
+done
 echo 'poll-kernels: result: both orders built; restored kernel matches'

@@ -18,6 +18,12 @@
 # failure can be read afterwards; the copies are left in a private directory on
 # the machine. The exit status is nonzero if any session failed to run, if
 # fewer reported than were asked for, or if any build failed.
+#
+# Before any session starts, machine_identity.sh must find the machine running
+# the slot and the kernel named in RACH2_MEASURE_SLOT and RACH2_MEASURE_KERNEL.
+# It asks as RACH2_MEASURE_USER, root by default, since the boot partition it
+# reads is root's; the load account can be another. What it found is kept in
+# DIR/load-PID-identity.log beside the sessions' logs.
 set -u
 [ $# -ge 4 ] && [ $# -le 5 ] || {
     echo "usage: machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]" >&2; exit 2; }
@@ -27,10 +33,13 @@ SESSIONS=$3
 SECONDS_EACH=$4
 DIR=${5:-.}
 LOAD_USER=${RACH2_LOAD_USER:-root}
-case "$LOAD_USER" in
-    ''|-*|*[!A-Za-z0-9_.-]*)
-        echo "machine_load: invalid account name: $LOAD_USER" >&2; exit 2 ;;
-esac
+MEASURE_USER=${RACH2_MEASURE_USER:-root}
+for NAME in "$LOAD_USER" "$MEASURE_USER"; do
+    case "$NAME" in
+        ''|-*|*[!A-Za-z0-9_.-]*)
+            echo "machine_load: invalid account name: $NAME" >&2; exit 2 ;;
+    esac
+done
 
 # Both numbers reach the machine inside a shell command, so each is required to
 # be a bounded decimal before anything is sent: an argument that is not one
@@ -50,8 +59,13 @@ done
 # One run's trees and logs are its own, so two runs cannot delete each other's
 # work or read each other's results.
 RUN=$$
-SESSION_SCRIPT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/machine_load_session.sh
+HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+SESSION_SCRIPT=$HERE/machine_load_session.sh
 [ -r "$SESSION_SCRIPT" ] || exit 1
+[ -r "$HERE/machine_identity.sh" ] || exit 1
+sh "$HERE/machine_identity.sh" "$DIR/load-$RUN-identity.log" ssh -i "$KEY" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+    -o ConnectTimeout=10 -o BatchMode=yes "$MEASURE_USER@$ADDR" || exit
 REMOTE="$(ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes "$LOAD_USER@$ADDR" \
     'mktemp -d /tmp/rach2-load.XXXXXX')" || exit 1
