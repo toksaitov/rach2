@@ -80,17 +80,24 @@ as
 the RAM root cannot store this 1 GiB file.
 This preserves the accounts, SSH policy and keys.
 The recovery archive stores account files and SSH policy under
-.Pa rach2-config/etc ,
+.Pa rach2-config-a/etc ,
 host keys under
-.Pa rach2-config/etc/dropbear ,
+.Pa rach2-config-a/etc/dropbear ,
 and each account's home
 .Pa .ssh
 contents under
-.Pa rach2-config/keys/UID .
+.Pa rach2-config-a/keys/UID .
 Root's keys use UID 0.
 The home comes from passwd, and only the first entry for a shared UID
 supplies keys.
 Numeric directory names cannot collide by case on FAT32.
+Within each account's .ssh, names that differ only in case are refused
+before the root is written, with both paths in the diagnostic.
+Normal updates preserve .ssh in every passwd home, including homes outside
+.Pa /home ,
+with their owners and modes.
+Before restoring retained keys, the image's .ssh is removed from every
+account home outside /home, including accounts with no archived keys.
 A resumed update, or one whose old root cannot be read, restores these keys
 from the archive, with modes 700 for directories and 600 for files.
 Host keys are owned by 0:0; account keys return to the home from the
@@ -98,15 +105,33 @@ archived passwd with its uid and gid.
 Missing homes are created with mode 700 and that owner.
 Keys for UIDs absent from that file are ignored.
 An older archive without UID key directories cannot restore account keys.
-The installer builds and syncs
+The archive has two slots,
+.Pa rach2-config-a
+and
+.Pa rach2-config-b .
+A slot is complete only when it contains all three account files and its
+.Pa generation
+file contains a decimal integer from 1 to 2147483647.
+A slot with a missing or invalid generation is ignored.
+Complete legacy archives count as generation 0; any generation file in
+one is ignored.
+Readers choose the highest generation, breaking ties in this order:
+.Pa rach2-config ,
 .Pa rach2-config.new ,
-renames the current archive to
 .Pa rach2-config.old ,
-then promotes the new copy and syncs before removing the old one.
-Before any archive read or write, a missing current archive is recovered
-from a new copy containing all three account files, or otherwise from the
-old copy when present.
-The new copy is never removed unless a current archive exists.
+.Pa rach2-config-a ,
+then
+.Pa rach2-config-b .
+The writer rebuilds B when A was chosen, and A otherwise.
+It removes the destination's generation file, syncs, removes the destination,
+writes its contents, syncs, writes the next generation, and syncs again.
+Only then does it remove all three legacy names, which it never writes.
+An install leaves A at generation 1.
+Before writing an updated root, the installer writes B with the update mark,
+first writing A with the mark if needed.
+After restoring the accounts it writes A without the mark, so A is the
+resting slot after a complete run.
+A counter at 2147483647 stops further archive writes.
 Recovery remains the saved default until the trial root has been verified;
 then run
 .Ql bootctl commit .

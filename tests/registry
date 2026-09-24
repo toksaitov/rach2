@@ -27,7 +27,7 @@
 # when its longest member does, so the long suites are listed first.
 install|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*
-installer-repair|qemu-system-i386,shasum|full
+installer-repair|qemu-system-i386,qemu-img,shasum,ssh,ssh-keygen,mcopy,mmd,mdeltree,debugfs|full
 installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full|installer-test*,installer.*,installer/*|512
 menu|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 installer-rehearse|qemu-system-i386,qemu-img,shasum|full||512

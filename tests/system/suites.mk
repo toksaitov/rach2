@@ -1478,7 +1478,7 @@ run-installer-rehearse: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(P
 	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 rehearse
 
 run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \
-                      $(HARNESS) $(RUNUTIL)
+                      $(HARNESS) $(MKEXFATFIXTURE) $(RUNUTIL)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
 	    $(INSTALLER_DISK) $(INSTALLER_REPAIR_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \

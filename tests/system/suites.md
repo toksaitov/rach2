@@ -4,7 +4,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 
 * `install` (full tier; needs qemu-system-i386, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine installs its own kernel.
 * `selfbuild` (full tier; needs qemu-system-i386, mformat, mmd, mcopy; 128 MiB): the machine builds its own kernel.
-* `installer-repair` (full tier; needs qemu-system-i386, shasum; 128 MiB): the other half, the machine that will not boot.
+* `installer-repair` (full tier; needs qemu-system-i386, qemu-img, shasum, ssh, ssh-keygen, mcopy, mmd, mdeltree, debugfs; 128 MiB): the other half, the machine that will not boot.
 * `installer` (full tier; needs qemu-system-i386, shasum, ssh, mformat, mcopy, mtype; 512 MiB): the install stick and the program on it.
 * `menu` (full tier; needs qemu-system-i386, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the boot menu that can be rewritten, and the stub that cannot.
 * `installer-rehearse` (full tier; needs qemu-system-i386, qemu-img, shasum; 512 MiB): the rehearsal of the machine sitting in its small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the machine's size in most of an hour.
