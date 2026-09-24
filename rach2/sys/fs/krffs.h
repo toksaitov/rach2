@@ -205,6 +205,19 @@ typedef struct krffs_brief {
  * with the conversion done for it.
  */
 int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out);
+
+/**
+ * The inode number `stat` and `readdir` report for `node`.
+ *
+ * A directory's id is already `krffs_mix_id(parent, name)`, unique among
+ * directories, so it serves. A regular file's id is the hash of its name
+ * alone, kept for the on-disk format, so every file of one name shares it;
+ * reported as the inode number, it made `cp -a` take same-named files in
+ * different directories for hard links and copy them as one. The file is
+ * given the directories' rule, the parent's id mixed with the name, which
+ * does not move when KRFFS moves the file's bytes.
+ */
+uint64_t krffs_node_ino(const krffs_node_t *node);
 int krffs_chain_is_valid(krffs_mount_t *mount);
 int krffs_chain_is_walkable(krffs_mount_t *mount);
 

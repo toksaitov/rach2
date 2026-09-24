@@ -431,6 +431,14 @@ static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
     return h ? h : 1;
 }
 
+uint64_t krffs_node_ino(const krffs_node_t *node)
+{
+    if (KRFFS_IS_DIR(node->mode)) {
+        return node->id;
+    }
+    return krffs_mix_id(node->parent_id, (const char *)node->name);
+}
+
 /**
  * Find the reserved node with logical id `id`, for ".." and directory descent.
  *

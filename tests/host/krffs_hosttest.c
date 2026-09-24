@@ -843,6 +843,36 @@ static void hash_rows(void)
 #undef HASH_VECTOR
 }
 
+/**
+ * Check the inode numbers the root reports.
+ *
+ * Two regular files of one name in different directories must not share a
+ * number: `cp -a` takes a shared number for a hard link and copies the pair
+ * as one file, which merged every account's `authorized_keys` when an update
+ * copied the kept homes on the recovery system. A directory keeps its id.
+ */
+static void ino_rows(void)
+{
+    krffs_node_t a, b, dir;
+
+    memset(&a, 0, sizeof(a));
+    memset(&b, 0, sizeof(b));
+    memset(&dir, 0, sizeof(dir));
+    memcpy(a.name, "authorized_keys", 16);
+    memcpy(b.name, "authorized_keys", 16);
+    a.id = b.id = krffs_calculate_djb_hash(a.name);
+    a.parent_id = 11;
+    b.parent_id = 12;
+    check(krffs_node_ino(&a) != krffs_node_ino(&b),
+          "files of one name in two directories have different inode numbers");
+    check(krffs_node_ino(&a) == krffs_node_ino(&a) && krffs_node_ino(&a) != a.id,
+          "a file's inode number is its parent's id mixed with its name");
+    memcpy(dir.name, ".ssh", 5);
+    dir.mode = KRFFS_S_IFDIR | 0700;
+    dir.id = 424242;
+    check(krffs_node_ino(&dir) == 424242, "a directory's inode number is its id");
+}
+
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -856,6 +886,7 @@ int main(void)
     int i;
 
     hash_rows();
+    ino_rows();
 
     /* ---- the mount check ---- */
 

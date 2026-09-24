@@ -1150,7 +1150,7 @@ static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->uid = n->uid;
     st->gid = n->gid;
     st->nlink = 1;
-    st->ino = n->id;
+    st->ino = krffs_node_ino(n);
     st->size = n->data_size;
     st->atime_sec = n->access_time.seconds;
     st->atime_nsec = n->access_time.nanoseconds;
@@ -1269,7 +1269,7 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
             }
             k_memcpy(ent->name, node->name, nlen);
             ent->name[nlen] = '\0';
-            ent->ino = node->id;
+            ent->ino = krffs_node_ino(node);
             ent->is_dir = KRFFS_IS_DIR(node->mode) ? 1 : 0;
             *cursor = node_off + 1;
             return 1;

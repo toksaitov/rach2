@@ -3130,8 +3130,8 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
     kst->st_size = (long long)node->data_size;
     kst->st_blksize = 4096;
     kst->st_blocks = (node->data_size + 511) / 512;
-    kst->st_ino = node->id;
-    kst->__st_ino = (unsigned long)node->id;
+    kst->st_ino = krffs_node_ino(node);
+    kst->__st_ino = (unsigned long)kst->st_ino;
     stat64_node_times(kst, node);
 }
 
@@ -5254,7 +5254,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     kst.st_size = (unsigned long)node->data_size;
     kst.st_blksize = 4096;
     kst.st_blocks = (node->data_size + 511) / 512;
-    kst.st_ino = (unsigned long)node->id; /* the node's DJB hash is the inode */
+    kst.st_ino = (unsigned long)krffs_node_ino(node);
     stat_node_times(&kst, node);
 
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
