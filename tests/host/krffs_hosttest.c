@@ -920,6 +920,108 @@ static void ino_lifetime_rows(void)
           "open unlinked siblings keep distinct unchanged inode numbers");
 }
 
+/**
+ * Make a node whose id falls across a unit of the medium, with the
+ * whole-unit rule on.
+ *
+ * A node being made is reached by no path until its name is written, last
+ * and after a sync point, so a torn id or parent in it is read by nobody,
+ * and the rule is not asked of them: a create whose free node put the id
+ * astride a unit was refused before (entry 15 of milestone 50). The spacer
+ * puts the next node's id at 4092, four of its bytes on each side of the
+ * line, and the new name's hash changes bytes on both sides.
+ */
+static void straddle_create_rows(void)
+{
+    krffs_mount_t mount;
+    krffs_node_t head;
+    uint64_t across;
+    uint64_t id = krffs_calculate_djb_hash((const uint8_t *)"across");
+    const uint8_t *bytes = (const uint8_t *)&id;
+    int below = 0, above = 0, i;
+
+    make_image(image, IMAGE_SIZE);
+    mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/spacer") == 0 &&
+              krffs_truncate_at(&mount, "/spacer", 3375, (uint64_t *)0) == 0,
+          "a file grown so the next node's id falls across a block");
+    for (i = 0; i < 8; i++) {
+        if (image[4092 + i] != bytes[i]) {
+            if (i < 4) {
+                below = 1;
+            } else {
+                above = 1;
+            }
+        }
+    }
+    check(below && above, "the new id changes bytes on both sides of the line");
+    mount.grain = 4096;
+    check(krffs_create_at(&mount, "/across") == 0,
+          "a node whose id falls across a block is made with the whole-unit rule on");
+    mount.grain = 0;
+    across = krffs_walk(&mount, "/across");
+    check(across != KRFFS_NO_NODE && across + KRFFS_FIELD_ID == 4092,
+          "and it is the node whose id straddles the block's end");
+    check(krffs_head(&mount, across, &head) == 0 && head.id == id &&
+              head.parent_id == KRFFS_ROOT_ID,
+          "with its whole id and its parent");
+    check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the create");
+
+    /* A directory is a node being made in the same way, and its id is the
+       mix of its parent's and its name, which children name it by. */
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/spacer") == 0 &&
+              krffs_truncate_at(&mount, "/spacer", 3375, (uint64_t *)0) == 0,
+          "a file grown so the next directory's id falls across a block");
+    mount.grain = 4096;
+    check(krffs_mkdir_at(&mount, "/across") == 0,
+          "a directory whose id falls across a block is made with the whole-unit rule on");
+    mount.grain = 0;
+    across = krffs_walk(&mount, "/across");
+    check(across != KRFFS_NO_NODE && across + KRFFS_FIELD_ID == 4092 &&
+              krffs_head(&mount, across, &head) == 0 &&
+              head.id == krffs_mix_id(KRFFS_ROOT_ID, "across"),
+          "and it has its whole id");
+    check(krffs_create_at(&mount, "/across/inner") == 0 &&
+              krffs_walk(&mount, "/across/inner") != KRFFS_NO_NODE,
+          "and a child made in it is reached through it");
+}
+
+/**
+ * Refuse a directory whose identifier another directory already has.
+ *
+ * A directory's identifier is its parent's identifier mixed with the DJB
+ * hash of its name, and a child names its parent by that identifier alone.
+ * `bC` and `cb` hash alike, so a second directory of the two in one parent
+ * would share the first one's children (entry 125 of milestone 50). The
+ * first is made and given a child; the second must be refused, the first
+ * must keep its child, and the refused name must reach nothing.
+ */
+static void id_collision_rows(void)
+{
+    krffs_mount_t mount;
+    char name[64];
+    int is_dir = 0;
+
+    make_image(image, IMAGE_SIZE);
+    mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+    check(krffs_mix_id(KRFFS_ROOT_ID, "bC") == krffs_mix_id(KRFFS_ROOT_ID, "cb"),
+          "bC and cb mix to one identifier in one directory");
+    check(krffs_mkdir_at(&mount, "/bC") == 0, "the first of two colliding directories is made");
+    check(krffs_create_at(&mount, "/bC/kept") == 0, "and given a child");
+    check(krffs_mkdir_at(&mount, "/cb") == -1,
+          "a second directory with the first one's identifier is refused");
+    check(krffs_walk(&mount, "/cb") == KRFFS_NO_NODE, "the refused directory is not made");
+    check(krffs_walk(&mount, "/cb/kept") == KRFFS_NO_NODE,
+          "the refused name does not reach the first directory's child");
+    check(krffs_walk(&mount, "/bC/kept") != KRFFS_NO_NODE, "the first directory keeps its child");
+    check(krffs_readdir_at(&mount, "/", 0, name, sizeof(name), &is_dir) == 1 &&
+              k_strcmp_name((const uint8_t *)name, "bC") && is_dir == 1 &&
+              krffs_readdir_at(&mount, "/", 1, name, sizeof(name), &is_dir) == 0,
+          "the root lists the first directory alone");
+    check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the refusal");
+}
+
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -935,6 +1037,8 @@ int main(void)
     hash_rows();
     ino_rows();
     ino_lifetime_rows();
+    straddle_create_rows();
+    id_collision_rows();
 
     /* ---- the mount check ---- */
 
@@ -1462,5 +1566,5 @@ int main(void)
     if (fails == 0) {
         printf("krffs_hosttest: OK\n");
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

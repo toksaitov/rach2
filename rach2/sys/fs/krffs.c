@@ -406,21 +406,23 @@ uint64_t krffs_max_steps(krffs_mount_t *mount)
  * A node's parent_id is its directory's logical id (KRFFS_ROOT_ID == 0 for
  * the root, whose own node is the first one and has no parent reference). A
  * directory node's id is mix(parent_id, name), so children reference it.
- * Two different names can mix to one id, since the mix goes through a 32-bit
- * hash of the name, and two directories with one id would share their
- * children; mkdir looks for the id before it makes the directory and refuses
- * the second name. Resolution matches each path component by (name,
- * parent_id), descending only into directories. Regular files' ids are never
- * referenced, so they keep the legacy DJB(name) value for compatibility.
+ * Two different names can mix to one id, since the mix goes through the
+ * name's DJB hash, which two names can share, and two directories with one id
+ * would share their children; mkdir looks for the id before it makes the
+ * directory and refuses the second name. Resolution matches each path
+ * component by (name, parent_id), descending only into directories. Regular
+ * files' ids are never referenced, so they keep the legacy DJB(name) value
+ * for compatibility.
  */
 
 /**
  * Combine a parent directory id and a stored name hash into a node id.
  *
  * FNV-1a style mixing over the name's DJB hash. Never returns 0, which is
- * reserved for the root's logical id (KRFFS_ROOT_ID). The name goes in as a
- * 32-bit hash, so two names can give one id; `krffs_id_taken` is what keeps
- * two directories from holding it at once.
+ * reserved for the root's logical id (KRFFS_ROOT_ID). The name goes in as its
+ * 64-bit DJB hash, and two names can share that hash (`bC` and `cb` do), so
+ * two names can give one id; `krffs_id_taken` is what keeps two directories
+ * from holding it at once.
  */
 static uint64_t krffs_mix_hash(uint64_t parent_id, uint64_t hash)
 {
@@ -1690,8 +1692,8 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
      * reference as their parent_id. */
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
-    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
-    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, krffs_mix_id(parent_id, base));
+    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
+    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, krffs_mix_id(parent_id, base));
     rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, (uint16_t)(KRFFS_S_IFDIR | 0755));
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_GID, 0);
