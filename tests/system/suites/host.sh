@@ -232,6 +232,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: krffs host tools' refusals, replace and edits" >&2
         fail=1
     fi
+    if sh tests/system/run_scripts_test.sh >"$VDIR/run_scripts.rlog" 2>&1; then
+        echo "hosttest: result: pass: run scripts' command lines"
+    else
+        cat "$VDIR/run_scripts.rlog"
+        echo "hosttest: result: fail: run scripts' command lines" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
