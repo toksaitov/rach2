@@ -80,11 +80,12 @@ run_phase()
         grep -Fq 'row 17: root logs in with its restored key: OK' "$work/$phase.log"
     else
         grep -Fq "FAIL: $failure" "$work/$phase.log"
-        if [ "$failure" = 'row 17:' ]; then
-            grep -Fq 'retried from the marked archive: OK' "$work/$phase.log"
-        else
-            grep -Fq 'STOP_STATUS=99' "build/images/keys-$phase/archive-stop.log"
-        fi
+        case $failure in
+            'row 17:')
+                grep -Fq 'retried from the marked archive: OK' "$work/$phase.log" ;;
+            'row archive-stop:'*)
+                grep -Fq 'STOP_STATUS=99' "build/images/keys-$phase/archive-stop.log" ;;
+        esac
     fi
     echo "install-keys-mutation: result: $phase status $status"
 }
@@ -123,4 +124,20 @@ run_phase archive-mutated 1 "row archive-stop: the retry did not recover"
 restore
 run_phase archive-restored 0
 cmp "$work/fixed.installer" "$work/archive-restored.installer"
-echo 'install-keys-mutation: result: pass: missing keys and rebuilding the chosen slot failed their rows; both restorations passed'
+# Without the check, two key names that differ only in case reach FAT32,
+# which folds them into one file, and the update writes the root.
+python3 - "$source" <<'PYCASE'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+needle = '                die "ssh key names collide on FAT32: $entry and $other"'
+assert source.count(needle) == 1
+path.write_text(source.replace(needle, '                :'))
+PYCASE
+run_phase case-mutated 1 "row archive-keys: two key names that differ only in case were not refused"
+restore
+run_phase case-restored 0
+cmp "$work/fixed.installer" "$work/case-restored.installer"
+echo 'install-keys-mutation: result: pass: missing keys, rebuilding the chosen slot and names that differ in case failed their rows; each restoration passed'
