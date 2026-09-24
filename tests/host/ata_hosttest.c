@@ -22,6 +22,9 @@
  * commands it refused, and the data port reads that landed in another
  * command's transfer. Every row names what the driver must do, and the
  * check is on what it returned, what the model counted, and the sectors.
+ * The model also answers IDENTIFY with words a row sets, for the refusal
+ * of a drive whose logical sector is not 512 bytes, which QEMU cannot
+ * present.
  */
 
 extern int printf(const char *fmt, ...);
@@ -243,8 +246,10 @@ static int error_pending;  /* ERR shows in the status until the next command */
 static int drive_at_flush; /* the drive register's value at the last flush */
 static void (*on_sleep)(void);
 static int sleeps;
-static uint32_t reads_at_sleep; /* the status reads when the owner came to sleep */
-static uint32_t reads_at_start; /* the status reads when the engine was started */
+static uint32_t reads_at_sleep;      /* the status reads when the owner came to sleep */
+static uint32_t reads_at_start;      /* the status reads when the engine was started */
+static uint16_t identify_words[256]; /* what the drive answers IDENTIFY with */
+static int identifying;              /* the data phase is IDENTIFY's, not a sector's */
 
 /* The channel's bounce buffer, which the driver's DMA descriptor names by
    a physical address the host cannot follow; defined below the driver. */
@@ -372,6 +377,9 @@ static void model_command(uint8_t command)
     case 0xE7:
     case 0xEA:
         break;
+    case 0xEC: /* IDENTIFY DEVICE: one block of words, read as a sector is */
+        sectors_left = 1;
+        break;
     default:
         printf("ata-test: the driver wrote command 0x%02X\n", command);
         CHECK(0, "the driver wrote a command the model does not know");
@@ -384,6 +392,11 @@ static void model_command(uint8_t command)
         cmd_write = 0;
         phase = PIO_READ_BUSY;
         masked_at_pio_cmd = masked;
+        break;
+    case 0xEC:
+        cmd_write = 0;
+        phase = PIO_READ_BUSY;
+        identifying = 1;
         break;
     case 0x30:
     case 0x34:
@@ -448,6 +461,14 @@ static void model_ins16(uint16_t port, void *buffer, uint32_t words)
         for (i = 0; i < words * 2; i++) {
             out[i] = 0xEE;
         }
+        return;
+    }
+    if (identifying) {
+        k_memcpy(out, identify_words, words * 2);
+        identifying = 0;
+        sectors_left = 0;
+        phase = IDLE;
+        reads_in_phase = 0;
         return;
     }
     k_memcpy(out, disk[cmd_lba % SECTORS], words * 2);
@@ -604,6 +625,7 @@ static void model_reset(int answer)
     unmasked_between = 0;
     on_sleep = 0;
     sleeps = 0;
+    identifying = 0;
     records = 0;
     last_record[0] = '\0';
     masked = 0;
@@ -795,6 +817,55 @@ static void durability_rows(struct ata_drive *d)
     d->dev.sector_count = SECTORS;
 }
 
+/**
+ * IDENTIFY and the logical sector size (entry 11 of milestone 50). Word 106
+ * with its valid bit, bit 14, and bit 12 set, and words 117 and 118 giving
+ * 2048 words a sector, is a drive whose logical sector is 4096 bytes, which
+ * the block layer, counting in 512-byte sectors, cannot serve: it is refused
+ * by name. The same words with bit 12 clear are a 512-byte drive, taken with
+ * the 48-bit count of words 100 to 103, and bit 12 without the valid bit
+ * says nothing of the sector. The AHCI driver's refusal of the same word is
+ * ahci_hosttest's; tests/host/ata_identify_mutate.sh drops this driver's.
+ */
+static void identify_rows(void)
+{
+    static uint16_t words[256];
+    struct ata_drive probe;
+    int rc;
+
+    k_memset(&probe, 0, sizeof(probe));
+    probe.channel = &channels[0];
+    k_memset(identify_words, 0, sizeof(identify_words));
+    identify_words[83] = 0x0400u;  /* the 48-bit commands */
+    identify_words[100] = 0x1000u; /* 4096 sectors */
+    identify_words[117] = 0x0800u; /* 2048 words a logical sector */
+    identify_words[118] = 0;
+
+    model_reset(2);
+    in_syscall = 0;
+    identify_words[106] = 0x5000u;
+    rc = ata_identify(&probe, words);
+    CHECK(rc == -1, "IDENTIFY with a 4096-byte logical sector is refused");
+    CHECK(records == 1 && contains(last_record, "the logical sector is not 512 bytes"),
+          "the refusal of a 4096-byte logical sector is recorded with its reason");
+    CHECK(refused == 0 && garbage_reads == 0 && phase == IDLE,
+          "the IDENTIFY data was read whole, as the drive gave it");
+
+    model_reset(2);
+    in_syscall = 0;
+    identify_words[106] = 0x4000u;
+    rc = ata_identify(&probe, words);
+    CHECK(rc == 0 && probe.lba48 && probe.sectors == 0x1000u,
+          "the same drive with 512-byte sectors is taken, with the count of words 100 to 103");
+
+    model_reset(2);
+    in_syscall = 0;
+    identify_words[106] = 0x1000u;
+    rc = ata_identify(&probe, words);
+    CHECK(rc == 0 && probe.sectors == 0x1000u,
+          "bit 12 of word 106 without its valid bit says nothing of the sector");
+}
+
 int main(void)
 {
     struct ata_drive *d = &drives[0];
@@ -938,6 +1009,10 @@ int main(void)
     rc = ata_read(&d->dev, 100, 8, owner_buf);
     CHECK(rc == 0, "the owner's DMA read returns 0 with two ticks inside its sleep");
     CHECK(wait_ticks == 2, "the two ticks the owner slept through are counted");
+
+    /* 10. IDENTIFY: a drive whose logical sector is not 512 bytes is
+           refused by name. */
+    identify_rows();
 
     write_rate_rows(d);
     durability_rows(d);
