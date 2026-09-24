@@ -704,6 +704,12 @@ static void stamp(const char *what)
     }
 }
 
+/**
+ * Wait until `pattern` appears in the guest's output or `stop` passes.
+ *
+ * A child that has exited can still have output in the pipe, since reaping it
+ * reads nothing; that output is drained before the last search.
+ */
 static int expect_pattern(const char *pattern, double stop)
 {
     struct regex re;
@@ -720,6 +726,8 @@ static int expect_pattern(const char *pattern, double stop)
         }
         pump(now() + 0.3);
     }
+    if (child_poll() >= 0)
+        drain_ready();
     /* One last look at what arrived while the child was stopping. */
     {
         long end = regex_search(&re, buf, buf_len, consumed);
@@ -932,8 +940,9 @@ static int expand_probe(const char *arg, const char **steps, char *execq, size_t
 /**
  * Use a pipe as the serial source because the harness has no fake clock.
  * The prompt arrives after the step cap; a short run must still reject it.
+ * The exited case reaps before reading, so buffered output cannot be missed.
  */
-static int prompt_wait_selftest(const char *step, double timeout, int want)
+static int prompt_wait_selftest(const char *step, double timeout, int want, int exited)
 {
     int serial[2], got;
 
@@ -950,8 +959,9 @@ static int prompt_wait_selftest(const char *step, double timeout, int want)
     }
     if (child_pid == 0) {
         const char prompt[] = "Type 'help'";
-        struct timespec delay = {1, 0};
+        struct timespec delay = {0, 0};
 
+        delay.tv_sec = exited ? 0 : 1;
         close(serial[0]);
         while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
             ;
@@ -967,6 +977,12 @@ static int prompt_wait_selftest(const char *step, double timeout, int want)
         buf_len = consumed = 0;
         steptmo = 0.05;
         deadline = now() + timeout;
+        if (exited) {
+            while (waitpid(child_pid, &child_status, 0) < 0 && errno == EINTR)
+                ;
+            child_reaped = 1;
+            child_status = WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 1;
+        }
         got = expect_step(step);
     }
     if (!child_reaped) {
@@ -995,9 +1011,10 @@ static int probe_wait_selftest(void)
 
     if (!expand_probe("probe=/selftest", steps, execq, sizeof(execq)))
         return 1;
-    bad = prompt_wait_selftest(steps[0], 10.0, 1);
-    bad += prompt_wait_selftest("expect=Type 'help'", 10.0, 0);
-    bad += prompt_wait_selftest(steps[0], 0.05, 0);
+    bad = prompt_wait_selftest(steps[0], 10.0, 1, 0);
+    bad += prompt_wait_selftest("expect=Type 'help'", 10.0, 0, 0);
+    bad += prompt_wait_selftest(steps[0], 0.05, 0, 0);
+    bad += prompt_wait_selftest(steps[0], 10.0, 1, 1);
     if (strcmp(steps[1], "execq=/selftest") != 0) {
         fprintf(stderr, "harness: selftest: probe command was misread\n");
         bad++;
