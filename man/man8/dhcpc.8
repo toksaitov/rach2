@@ -31,6 +31,10 @@ The client maintains the lease for as long as it runs.
 It renews at T1, the renewal time, and rebinds at T2, the rebinding time:
 the server's values when it gives valid ones, otherwise one half and seven
 eighths of the lease.
+A renewal waits ten seconds for its answer and is sent again two seconds
+later.
+A rebinding request waits for half of what is left of the lease, and at
+least one second, before it is sent again.
 At expiry or on DHCPNAK, it removes the address and starts discovery again.
 If removal fails, it exits with the recorded address and claim retained
 for a later client or

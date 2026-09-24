@@ -1,23 +1,29 @@
 /**
- * Check DHCP cleanup, masks, resolver updates, claims and descriptor release.
+ * Check DHCP cleanup, masks, resolver updates, claims, descriptor release and
+ * the waits of a lease.
  *
  * host-deps: utils/dhcpmsg.c utils/ipcheck.c
  * host-cflags: -I tests/host/compat/netutil
  *
  * Files use a private host directory. Ioctls and standard descriptors use
  * models; no host interface or device is opened. Resolver writes overlap at
- * stream creation, before either writer can publish the other's bytes.
+ * stream creation, before either writer can publish the other's bytes. The
+ * wait rows run on a modeled clock that each poll and sleep advances by its
+ * whole timeout, so a wait of minutes costs nothing.
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <signal.h>
 #include <setjmp.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
@@ -25,10 +31,15 @@
 #include <net/route.h>
 
 static char directory[] = "/tmp/dhcpc-test.XXXXXX";
-static int failures, remove_error, claim_error, claim_read_error, resolver_error;
+static int failures, remove_error, claim_error, claim_read_error, resolver_error, record_error;
 static int overlap, nested, stdio_model, console_error, null_error, dup_error;
 static int descriptors[3], extra_open, mask_calls, sleep_calls;
+static int clock_model, polls, sends;
+static time_t clock_now, send_times[16];
 static unsigned long address, mask, gateway;
+/* Whether the model answers SIOCGIFADDR; the rows written before it was
+ * modelled read an interface whose address cannot be read. */
+static int getaddr_works;
 static jmp_buf child_exit;
 static int exit_status;
 static void overlap_writer(void);
@@ -123,13 +134,21 @@ static int model_fclose(FILE *f)
     return rc;
 }
 
-/** Map regular files and model console or null opens without host devices. */
+/**
+ * Map regular files and model console or null opens without host devices.
+ *
+ * `/dev/urandom` is refused, so a transaction id comes from the clock.
+ */
 static int model_open(const char *path, int flags, ...)
 {
     char local[256];
     mode_t mode = 0;
     va_list args;
 
+    if (strcmp(path, "/dev/urandom") == 0) {
+        errno = ENOENT;
+        return -1;
+    }
     if (strncmp(path, "/dev/", 5) == 0) {
         int error = strcmp(path, "/dev/console") == 0 ? console_error : null_error;
 
@@ -145,6 +164,10 @@ static int model_open(const char *path, int flags, ...)
         va_start(args, flags);
         mode = (mode_t)va_arg(args, int);
         va_end(args);
+    }
+    if (record_error && (flags & O_CREAT) && strstr(path, "dhcpc.")) {
+        errno = record_error;
+        return -1;
     }
     return open(local_path(path, local, sizeof(local)), flags, mode);
 }
@@ -219,6 +242,11 @@ static int model_ioctl(int fd, unsigned long request, ...)
         address = value;
         return 0;
     }
+    if (request == SIOCGIFADDR && getaddr_works) {
+        sin->sin_family = AF_INET;
+        sin->sin_addr.s_addr = htonl(address);
+        return 0;
+    }
     if (request == SIOCSIFNETMASK) {
         mask_calls++;
         mask = ntohl(sin->sin_addr.s_addr);
@@ -253,13 +281,57 @@ static int model_kill(pid_t pid, int sig)
     return 0;
 }
 
-/** Make the claim unreadable after the stop signal, without waiting. */
+/**
+ * Advance the modeled clock, or make the claim unreadable after the stop
+ * signal; neither waits.
+ */
 static unsigned int model_sleep(unsigned int seconds)
 {
-    (void)seconds;
+    if (clock_model) {
+        clock_now += (time_t)seconds;
+        return 0;
+    }
     sleep_calls++;
     claim_error = EIO;
     return 0;
+}
+
+/** Read the modeled clock while the wait rows run, the host's otherwise. */
+static time_t model_time(time_t *out)
+{
+    time_t now = clock_model ? clock_now : time(NULL);
+
+    if (out) {
+        *out = now;
+    }
+    return now;
+}
+
+/** Let a poll on the modeled clock run out: nothing arrives in its time. */
+static int model_poll(struct pollfd *fds, nfds_t count, int timeout)
+{
+    if (!clock_model) {
+        return poll(fds, count, timeout);
+    }
+    polls++;
+    clock_now += timeout / 1000;
+    return 0;
+}
+
+/** Record when each request goes out, and send nothing. */
+static ssize_t model_sendto(int fd, const void *buffer, size_t length, int flags,
+                            const struct sockaddr *to, socklen_t size)
+{
+    (void)fd;
+    (void)buffer;
+    (void)flags;
+    (void)to;
+    (void)size;
+    if (sends < (int)(sizeof(send_times) / sizeof(send_times[0]))) {
+        send_times[sends] = clock_now;
+    }
+    sends++;
+    return (ssize_t)length;
 }
 
 /** Supply the child side of a successful handoff without forking a process. */
@@ -315,6 +387,9 @@ static void model_exit(int status)
 #define ioctl   model_ioctl
 #define kill    model_kill
 #define sleep   model_sleep
+#define time    model_time
+#define poll    model_poll
+#define sendto  model_sendto
 #define main    dhcpc_main
 #include "dhcpc.c"
 #undef pipe
@@ -336,6 +411,9 @@ static void model_exit(int status)
 #undef ioctl
 #undef kill
 #undef sleep
+#undef time
+#undef poll
+#undef sendto
 
 /** Publish the second lease while the first writer still has its file open. */
 static void overlap_writer(void)
@@ -410,6 +488,25 @@ static void check_initial(void)
           "successful initial cleanup permits discovery");
     resolver_error = 0;
     release_interface();
+
+    address = 0x0a000009UL;
+    seed_claim(0);
+    record_error = EACCES;
+    CHECK(apply_initial(7, &lease) == 0 && holding == 0 && address == 0x0a000009UL,
+          "a first lease that cannot be recorded leaves the interface's address");
+    record_error = 0;
+    release_interface();
+
+    /* A fixed address the offer repeats was not this client's to take off. */
+    address = lease.address;
+    getaddr_works = 1;
+    seed_claim(0);
+    CHECK(apply_initial(7, &lease) == 1 && claim_read(&recorded, &present) == (long)getpid() &&
+              present && recorded == 0 && address == lease.address,
+          "a first lease the interface already had is recorded as nothing to take off");
+    getaddr_works = 0;
+    release_interface();
+    address = 0;
 }
 
 /** Apply maskless leases to an unchanged address with a pre-existing mask. */
@@ -503,6 +600,49 @@ static void check_claim(void)
     holds_interface = 0;
 }
 
+/** Require one wait for a reply to last to its deadline, in several polls. */
+static void check_receive_wait(void)
+{
+    struct dhcp_lease lease;
+    time_t deadline;
+
+    clock_model = 1;
+    clock_now = 1000000;
+    polls = 0;
+    deadline = clock_now + 2 * POLL_CHUNK + 30;
+    CHECK(receive(7, &lease, DHCP_ACK, deadline) == 0 && clock_now == deadline && polls == 3,
+          "receive waits until its deadline");
+    clock_model = 0;
+}
+
+/**
+ * Require a rebinding request to wait for half of what is left of the lease.
+ *
+ * The lease is an hour long and asked for 3200 seconds ago, so rebinding has
+ * begun and 400 seconds are left: the second request goes 200 seconds after
+ * the first. Nothing answers, and the lease runs out at the end.
+ */
+static void check_rebinding(void)
+{
+    struct dhcp_lease lease;
+    time_t asked = 1000000;
+
+    memset(&lease, 0, sizeof(lease));
+    lease.address = 0x0a000002UL;
+    lease.seconds = 3600;
+    address = lease.address;
+    holding = lease.address;
+    holds_interface = 0;
+    clock_model = 1;
+    clock_now = asked + 3200;
+    sends = 0;
+    CHECK(hold(7, &lease, asked) == 0 && address == 0 && clock_now == asked + 3600,
+          "rebinding gives the address up when the lease runs out");
+    CHECK(sends > 1 && send_times[0] == asked + 3200 && send_times[1] == asked + 3400,
+          "rebinding waits for half of what is left of the lease");
+    clock_model = 0;
+}
+
 /** Check console success, fallback, open failure and each dup2 failure. */
 static void check_stdio(void)
 {
@@ -544,6 +684,8 @@ int main(void)
     check_mask();
     check_resolver();
     check_claim();
+    check_receive_wait();
+    check_rebinding();
     check_stdio();
     CHECK(rmdir(directory) == 0, "temporary files are removed");
     if (failures) {
