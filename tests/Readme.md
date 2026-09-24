@@ -134,6 +134,8 @@ An installed root needs the probes' fixtures as well as their executables. Run t
 
 `sh tests/system/probe_roots_mutate.sh` requires all ten probes to pass on both roots. It separately rebuilds kernels that refuse ext2 hard links or report KRFFS's magic for ext2; `vfsprobe` must fail the corresponding assertion with exit status 1. After each mutation the script restores and touches the source, rebuilds, requires the original kernel bytes and reruns both roots. Its exit trap stops the test processes before restoring source. Logs, staged-byte comparisons, checksums and kernels remain under the printed `build/probe-roots-proof.*` directory.
 
+On an installed machine, `sh tests/system/manual_probes.sh KEY ADDRESS probes DIR` supplies these prerequisites over SSH and runs nine of the ten. It leaves `orphanprobe` at `/orphanprobe` and prints the console steps for it, since only a rescue boot gives it the init role.
+
 ## Adding a guest test
 
 A root program needs its source name in `tests/Makefile`'s `PROGS`. A musl program needs only a `.c` file in `tests/musl/`; `build.sh` discovers it. The manifest's two `exec-dir` directives stage ordinary outputs automatically.
