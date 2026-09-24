@@ -10,10 +10,10 @@
  * icmp_ping sends a request and waits for the reply. A process waits by
  * sleeping on a wait queue that icmp_rx wakes, because the timer skips
  * schedule() while in_syscall is set: a poll with sti/hlt from inside a syscall
- * gives no other process any CPU at all for as long as the wait lasts, which on
- * a machine several people can log into is a freeze anybody could fire. The
- * boot shell keeps the poll, and correctly: it runs with the scheduler stopped
- * and no process to block, so there is nothing to yield to.
+ * gives no other process any CPU at all for as long as the wait lasts, so on a
+ * machine several people can log into, any one of them could stop the rest.
+ * The boot shell polls: it runs with the scheduler stopped and no process to
+ * block, so there is nothing to yield to.
  *
  * The wait is bounded twice over, and both halves are necessary. The
  * process arms wakeup_tick so the timer makes it runnable, since a BLOCKED
@@ -23,11 +23,12 @@
  * forever. Both read the one deadline word, so a timer that has fired implies a
  * predicate that is true.
  *
- * There is one in-flight request for the whole machine, which is the raw-socket
- * non-goal made visible: with a real SOCK_RAW each caller would own its own
- * socket. The slot is claimed under net_lock and released on every exit path,
- * and a second caller is refused with -EBUSY, not queued, since a queue
- * needs a fairness rule to give a shell command a wait it cannot see.
+ * There is one in-flight request for the whole machine; a program that needs
+ * echo exchanges of its own opens a raw socket (socket/raw.c). The slot is
+ * claimed under net_lock and released on every exit path, and a second caller
+ * is refused with -EBUSY rather than queued, since a queue would need a
+ * fairness rule and would leave a shell command waiting with nothing to show
+ * why.
  *
  * The first request on a cold ARP cache is dropped, so we retry a few times:
  * the early attempt warms the cache and a later one gets through.
@@ -56,14 +57,12 @@ static uint8_t icmp_echo_buf[8];
 #define ICMP_PING_WAIT     100 /* 1 s at 100 Hz */
 #define ICMP_PING_ATTEMPTS 4
 
-/* The one in-flight ping, matched against incoming replies. `ping_owner` is the
- * process that claimed the slot, or NULL for the boot shell, which has none. */
+/* The one in-flight ping, matched against incoming replies. */
 static volatile int ping_active = 0;
 static volatile int ping_replied = 0;
 static volatile uint16_t ping_seq_wait = 0;
 static volatile uint32_t ping_peer_ip = 0;
 static volatile uint32_t ping_deadline = 0;
-static process_t *ping_owner = 0;
 static uint16_t ping_seq = 0;
 
 /* Where a sleeping pinger waits, and what icmp_rx wakes. */
@@ -140,7 +139,6 @@ static void ping_release(void)
     uint32_t flags = net_lock();
 
     ping_active = 0;
-    ping_owner = 0;
     net_unlock(flags);
     if (current_proc) {
         current_proc->wakeup_tick = 0;
@@ -159,7 +157,11 @@ static void ping_release(void)
  * A process sleeps for the reply; the boot shell, which has no process and no
  * scheduler, polls with sti/hlt. The first request on a cold ARP cache is
  * dropped, so up to `ICMP_PING_ATTEMPTS` are sent; an early attempt warms the
- * cache.
+ * cache. Each request is built and sent under `net_lock`, and its deadline is
+ * moved off 0, `wakeup_tick`'s "not sleeping" value, as `sys_nanosleep` moves
+ * its own: a deadline of 0 would arm nothing, and the sleeper would never be
+ * made runnable again. Whether a reply came is read from `ping_replied`, since
+ * a wait that returns does not say whether the reply or the deadline ended it.
  *
  * @return round-trip time in ticks, `-ETIMEDOUT` if every attempt expired,
  *         `-EBUSY` if another ping has the slot, or `-EINTR` on a signal.
@@ -183,15 +185,12 @@ int icmp_ping(uint32_t dst_ip)
         return -EBUSY;
     }
     ping_active = 1;
-    ping_owner = current_proc;
     ping_replied = 0;
     net_unlock(flags);
 
     for (attempt = 0; attempt < ICMP_PING_ATTEMPTS; attempt++) {
         seq = ping_seq++;
 
-        /* Build and send the request atomically; the wait below re-enables
-         * interrupts so the reply can arrive. */
         flags = net_lock();
 
         icmp_echo_buf[0] = ICMP_ECHO_REQUEST;
@@ -207,9 +206,7 @@ int icmp_ping(uint32_t dst_ip)
         start = kernel_ticks;
         ping_deadline = start + ICMP_PING_WAIT;
         if (ping_deadline == 0) {
-            /* 0 is `wakeup_tick`'s "not sleeping" sentinel, so a deadline that
-             * lands there arms nothing and the sleeper is never made runnable
-             * again. `sys_nanosleep` steps around the same tick. */
+            /* 0 is `wakeup_tick`'s "not sleeping" sentinel. */
             ping_deadline = 1;
         }
 
@@ -220,9 +217,6 @@ int icmp_ping(uint32_t dst_ip)
         if (current_proc && current_proc->in_syscall) {
             int waited;
 
-            /* The scheduling half: the timer makes this process runnable at the
-             * deadline. Without it nothing wakes a sleeper whose reply never
-             * comes, and `schedule()` never picks it again. */
             current_proc->wakeup_tick = ping_deadline;
             waited = wq_wait_event(&ping_wq, ping_done, 0);
             current_proc->wakeup_tick = 0;
@@ -237,8 +231,6 @@ int icmp_ping(uint32_t dst_ip)
             }
         }
 
-        /* A wait that returned says nothing about which half ended it, so the
-         * answer is read from the state and not from the return. */
         if (ping_replied) {
             rc = (int)(kernel_ticks - start);
             ping_release();

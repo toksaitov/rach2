@@ -21,6 +21,10 @@
  * past the length is a read past the allocation and the sanitizer says so.
  * That is the point of the test: the checks below say what was delivered, and
  * the sanitizer says what was touched.
+ *
+ * The send rows run `ip_tx` against the same recorders: the MTU on every
+ * path, a driver's refusal, the loopback ring filled past its last slot, and
+ * the interface a broadcast leaves by on a machine with two cards.
  */
 
 extern int printf(const char *fmt, ...);
@@ -96,9 +100,9 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t len)
     to_raw++;
 }
 
-/* The rest of what the two files reach for. None of it is exercised here;
-   `ethernet_tx` is `ethernet.c`'s own and is compiled in below. */
-/* The one address the send rows resolve, when `arp_known` says so. */
+/* ARP as the send rows see it: every address resolves while `arp_known` is
+   set, and each lookup and request is counted. `ethernet_tx` is `ethernet.c`'s
+   own and is compiled in below. */
 static int arp_known;
 static unsigned arp_queries, arp_requests;
 
@@ -127,14 +131,9 @@ void arp_request(struct netdev *nd, uint32_t ip)
 
 uint32_t net_ip_gateway = 0x0A000202u;
 
-uint32_t netconf_broadcast(void)
-{
-    return (net_ip_addr & net_ip_mask) | ~net_ip_mask;
-}
-
-/* The four byte-order helpers and the counters, which live in net_core.c with
-   the boot report and its whole dependency chain; they are three lines each
-   and are written out here rather than dragging that in. */
+/* The four byte-order helpers, which live in net_core.c with the boot report
+   and its whole dependency chain; they are three lines each and are written
+   out here rather than dragging that in. */
 uint16_t read16be(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
@@ -175,15 +174,9 @@ void kirq_restore(unsigned int flags)
     irq_depth--;
 }
 
-int netconf_is_broadcast(uint32_t ip)
-{
-    return ip == netconf_broadcast() || ip == 0xFFFFFFFFu;
-}
-
-/* The interface the stack sends through. This test never looks inside one,
- * so a record of its own is all that is needed. */
-/* The interface these cases run on, carrying the machine's own address so
- * that a datagram addressed to it is taken. */
+/* The interface the cases run on, with the machine's own address so that a
+ * datagram addressed to it is taken, and a second card on another network,
+ * present only while `ifaces` is 2; `test_broadcast_iface` fills it in. */
 static struct netdev the_iface = {0,
                                   0,
                                   {'e', 't', 'h', '0', 0, 0, 0, 0},
@@ -199,7 +192,11 @@ static struct netdev the_iface = {0,
                                   0,
                                   0,
                                   0,
+                                  0,
+                                  0,
                                   1};
+static struct netdev second_iface;
+static int ifaces = 1;
 
 static int route_available = 1;
 static unsigned route_queries;
@@ -211,19 +208,54 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     return route_available ? &the_iface : 0;
 }
 
+int netdev_count(void)
+{
+    return ifaces;
+}
+
+struct netdev *netdev_at(int n)
+{
+    if (n == 0) {
+        return &the_iface;
+    }
+    return n == 1 && ifaces == 2 ? &second_iface : 0;
+}
+
 /* Which addresses this machine's interfaces hold, as this test presents
- * them: the one interface it configures. */
+ * them. */
 int netdev_owns(uint32_t ip)
 {
-    return ip != 0 && ip == the_iface.ip;
+    int i;
+
+    for (i = 0; i < ifaces; i++) {
+        if (ip != 0 && ip == netdev_at(i)->ip) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int netdev_is_broadcast(uint32_t ip)
 {
+    int i;
+
     if (ip == 0xFFFFFFFFu) {
         return 1;
     }
-    return the_iface.ip != 0 && the_iface.mask != 0 && ip == (the_iface.ip | ~the_iface.mask);
+    for (i = 0; i < ifaces; i++) {
+        const struct netdev *nd = netdev_at(i);
+
+        if (nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The interfaces' answer, as `netconf.c` gives it. */
+int netconf_is_broadcast(uint32_t ip)
+{
+    return netdev_is_broadcast(ip);
 }
 
 struct netdev *netdev_first(void)
@@ -231,26 +263,43 @@ struct netdev *netdev_first(void)
     return &the_iface;
 }
 
-/* What the driver answers a frame with, and how many it was handed. */
+/* What the driver answers a frame with, how many it was handed, and the card
+ * and the first bytes of the last one. */
 static int tx_answer;
 static unsigned tx_frames;
 static uint16_t tx_len;
+static struct netdev *tx_card;
+static uint8_t tx_frame[64];
 
 int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
 {
-    (void)nd;
-    (void)frame;
+    unsigned i;
+
+    tx_card = nd;
+    for (i = 0; i < len && i < sizeof(tx_frame); i++) {
+        tx_frame[i] = frame[i];
+    }
     tx_len = len;
     tx_frames++;
     return tx_answer;
 }
 
-/* The records these two files raise are not what is under test here. */
+/* The lines the loopback ring's refusal writes, which the ring row counts.
+ * The two files' other records are not what is under test. */
+static unsigned loop_lines;
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    static const char prefix[] = "loopback:";
+    unsigned i = 0;
+
     (void)level;
-    (void)subsystem;
-    (void)format;
+    while (prefix[i] != 0 && format[i] == prefix[i]) {
+        i++;
+    }
+    if (subsystem[0] == 'i' && subsystem[1] == 'p' && subsystem[2] == 0 && prefix[i] == 0) {
+        loop_lines++;
+    }
 }
 
 #include "../../rach2/sys/network/ethernet/ethernet.c"
@@ -443,6 +492,109 @@ static void test_tx_errors(void)
     arp_known = 0;
 }
 
+/**
+ * Fill the loopback ring and go on sending to this machine's own address.
+ *
+ * Every datagram past the last slot is refused with `-ENOBUFS`, which is what
+ * lets TCP keep a refused segment and send it again, and is counted; the ring
+ * keeps what it held. One line records the first refusal and no later one: a
+ * line per refusal is what wrapped the kernel log and took the boot record
+ * with it. A ring drained and filled past its end again writes no second line.
+ */
+static void test_loop_full(void)
+{
+    static const uint8_t payload[64];
+    unsigned i, taken = 0, refused = 0, again = 0;
+
+    reset();
+    tx_frames = arp_queries = 0;
+    loop_head = loop_tail = loop_dropped = loop_peak = 0;
+    loop_drop_logged = 0;
+    loop_lines = 0;
+    for (i = 0; i < LOOP_RING_SLOTS; i++) {
+        taken += ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0;
+    }
+    CHECK("the loopback ring takes as many datagrams as it has slots",
+          taken == LOOP_RING_SLOTS && loop_head - loop_tail == LOOP_RING_SLOTS);
+    for (i = 0; i < 3 * LOOP_RING_SLOTS; i++) {
+        refused +=
+            ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == -ENOBUFS;
+    }
+    CHECK("a datagram past a full loopback ring is refused with -ENOBUFS",
+          refused == 3 * LOOP_RING_SLOTS);
+    CHECK("each refused datagram is counted", ip_loop_dropped() == 3 * LOOP_RING_SLOTS);
+    CHECK("a full ring keeps the datagrams it held",
+          loop_head - loop_tail == LOOP_RING_SLOTS && ip_loop_peak() == LOOP_RING_SLOTS);
+    CHECK("one line records the refusals, not one a datagram", loop_lines == 1);
+    CHECK("a datagram to this machine reaches no driver and asks no ARP",
+          tx_frames == 0 && arp_queries == 0);
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    CHECK("the drained ring delivers what it held",
+          to_udp == LOOP_RING_SLOTS && !ip_loop_pending());
+    for (i = 0; i < LOOP_RING_SLOTS + 1; i++) {
+        again +=
+            ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == -ENOBUFS;
+    }
+    CHECK("the drained ring takes datagrams again and refuses past its end",
+          again == 1 && ip_loop_dropped() == 3 * LOOP_RING_SLOTS + 1);
+    CHECK("and the later refusal writes no second line", loop_lines == 1);
+    loop_head = loop_tail = 0;
+}
+
+/**
+ * Send broadcasts on a machine with two cards.
+ *
+ * A subnet's broadcast leaves by the card on that subnet, with that card's
+ * address as its source, since that is the only address its answers can come
+ * back to; the limited broadcast, which names no card, leaves by the first.
+ * Both go to the all-ones hardware address without asking ARP.
+ */
+static void test_broadcast_iface(void)
+{
+    static const uint8_t payload[8];
+    static const struct {
+        uint32_t dst;
+        struct netdev *card;
+        const char *what;
+    } rows[] = {
+        {0xC0A807FFu, &second_iface, "the second card's subnet broadcast leaves by that card"},
+        {0x0A0002FFu, &the_iface, "the first card's subnet broadcast leaves by that card"},
+        {0xFFFFFFFFu, &the_iface, "the limited broadcast leaves by the first card"},
+    };
+    unsigned r;
+
+    reset();
+    second_iface = the_iface;
+    second_iface.name[3] = '1';
+    second_iface.index = 2;
+    second_iface.mac[5] = 0x57;
+    second_iface.ip = 0xC0A8070Au;
+    second_iface.gateway = 0;
+    ifaces = 2;
+    tx_answer = NETDEV_TX_OK;
+    for (r = 0; r < sizeof(rows) / sizeof(rows[0]); r++) {
+        int rc;
+
+        tx_frames = arp_queries = 0;
+        tx_card = 0;
+        rc = ip_tx(rows[r].dst, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+        CHECK(rows[r].what, rc == 0 && tx_frames == 1 && tx_card == rows[r].card);
+        CHECK("with the source address of the card it leaves by",
+              read32be(tx_frame + 14 + 12) == rows[r].card->ip);
+        CHECK("to the all-ones hardware address, without ARP",
+              tx_frame[0] == 0xFF && tx_frame[5] == 0xFF && arp_queries == 0);
+    }
+    /* A second card masked /1 has 255.255.255.255 as its subnet's broadcast
+       address, and the limited broadcast still leaves by the first card. */
+    second_iface.mask = 0x80000000u;
+    tx_frames = arp_queries = 0;
+    tx_card = 0;
+    CHECK("the limited broadcast leaves by the first card beside a card masked /1",
+          ip_tx(0xFFFFFFFFu, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0 &&
+              tx_frames == 1 && tx_card == &the_iface);
+    ifaces = 1;
+}
+
 int main(void)
 {
     uint8_t f[256];
@@ -450,6 +602,8 @@ int main(void)
 
     test_tx_mtu();
     test_tx_errors();
+    test_loop_full();
+    test_broadcast_iface();
 
     reset();
     n = build_eth(f, 0x0800);
