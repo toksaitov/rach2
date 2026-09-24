@@ -1,5 +1,8 @@
 #!/bin/sh
 # Compile fixed, faulty and restored network utilities in a private directory.
+#
+# Usage: sh tests/host/netutil_mutate.sh [FAULT ...]
+# With no operand every fault is proved; an operand proves only the ones named.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -61,11 +64,15 @@ run_phase()
 }
 
 echo "netutil-mutation: logs: $work"
-for test in netcfg_io dhcpc netup; do
+for test in netcfg_io dhcpc netup ncport httpd; do
     run_phase "$test-fixed" "$test" 0 'result: pass'
 done
-for fault in read-first read-second seek cleanup release expiry mask resolver \
-    claim-open claim-read holder-open holder-read detach dup; do
+if [ "$#" -eq 0 ]; then
+    set -- read-first read-second seek cleanup release expiry mask resolver \
+        claim-open claim-read holder-open holder-read detach dup receive rebinding \
+        dhcp-status nc-port httpd-page httpd-port initial-record adopted
+fi
+for fault do
     python3 - "$work/utils" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -92,7 +99,68 @@ changes = {
     "detach": ("dhcpc.c", 'for (i = 0; i < 3; i++) {\n        close(i);\n    }\n    fd = open',
                'fd = open'),
     "dup": ("dhcpc.c", "if (dup2(fd, i) < 0) {", "if ((dup2(fd, i), 0)) {"),
+    "receive": ("dhcpc.c",
+                "        if (n == 0) {\n            continue;\n        }\n"
+                "        if (!(p.revents & POLLIN)) {",
+                "        if (n == 0 || !(p.revents & POLLIN)) {"),
+    "dhcp-status": ("netup.c",
+                    "    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {\n"
+                    "        return 0;\n"
+                    "    }\n"
+                    "    if (WIFEXITED(status)) {\n"
+                    "        fprintf(stderr, \"netup: %s: dhcpc exited with status %d before "
+                    "reaching the background\\n\",\n"
+                    "                s->name, WEXITSTATUS(status));\n"
+                    "    } else {\n"
+                    "        fprintf(stderr, \"netup: %s: dhcpc was killed by signal %d before "
+                    "reaching the background\\n\",\n"
+                    "                s->name, WTERMSIG(status));\n"
+                    "    }\n"
+                    "    return -1;\n",
+                    "    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {\n"
+                    "        fprintf(stderr, \"netup: %s: dhcpc did not configure the "
+                    "interface\\n\", s->name);\n"
+                    "        return -1;\n"
+                    "    }\n"
+                    "    return 0;\n"),
+    "nc-port": ("nc.c",
+                "    long p = 0;\n"
+                "\n"
+                "    if (*s == '\\0') {\n"
+                "        return 0;\n"
+                "    }\n"
+                "    while (*s >= '0' && *s <= '9') {\n"
+                "        p = p * 10 + (*s - '0');\n"
+                "        if (p > 65535) {\n"
+                "            return 0;\n"
+                "        }\n"
+                "        s++;\n"
+                "    }\n"
+                "    return *s == '\\0' ? (int)p : 0;\n",
+                "    int p = 0;\n"
+                "\n"
+                "    while (*s >= '0' && *s <= '9') {\n"
+                "        p = p * 10 + (*s - '0');\n"
+                "        s++;\n"
+                "    }\n"
+                "    return p;\n"),
+    "httpd-page": ("httpd.c",
+                   "    put_s(&o, \"<div class=top><h1>rach2</h1><div class=stat>\");\n"
+                   "    put_ip(&o, cur_server_ip);\n"
+                   "    put_c(&o, ':');\n"
+                   "    put_port(&o, cur_server_port);\n"
+                   "    put_s(&o, \"<br>up \");\n",
+                   "    put_s(&o, \"<div class=top><h1>rach2</h1><div class=stat>10.0.2.15:80<br>up \");\n"),
+    "httpd-port": ("httpd.c", "while (*p >= '0' && *p <= '9' && v <= 65535) {",
+                   "while (*p >= '0' && *p <= '9') {"),
+    "initial-record": ("dhcpc.c", "    if (holding == 0) {\n        return 0;\n    }\n    return unconfigure(fd) == 0 ? 0 : -1;",
+                       "    return unconfigure(fd) == 0 ? 0 : -1;"),
+    "adopted": ("dhcpc.c", "record_claim((long)getpid(), adopted ? 0 : l->address)",
+                "record_claim((long)getpid(), l->address)"),
 }
+changes["rebinding"] = changes["receive"]
+if fault not in changes:
+    raise SystemExit("netutil-mutation: unknown fault: " + fault)
 name, old, new = changes[fault]
 path = root / name
 source = path.read_text()
@@ -115,11 +183,24 @@ PY
         holder-open) test=netup; message='unreadable claim blocks static ioctls' ;;
         holder-read) test=netup; message='claim read error is busy' ;;
         detach | dup) message='inherited standard descriptor is detached' ;;
+        receive) message='receive waits until its deadline' ;;
+        rebinding) message='rebinding waits for half of what is left of the lease' ;;
+        dhcp-status) test=netup
+            message='a client that exited is reported as never reaching the background' ;;
+        nc-port) test=ncport; message='a port past 65535 is refused' ;;
+        httpd-page) test=httpd
+            message='the page names the address and port the connection reached' ;;
+        # Without the bound the twenty-digit operand overflows the sum, and the
+        # sanitizer ends the run with this report and status 1 on the testing
+        # host, which is Linux; on macOS it aborts instead.
+        httpd-port) test=httpd; message='runtime error: signed integer overflow' ;;
+        initial-record) message="a first lease that cannot be recorded leaves the interface's address" ;;
+        adopted) message='a first lease the interface already had is recorded as nothing to take off' ;;
     esac
     run_phase "$fault-mutated" "$test" 1 "$message"
     cleanup
     run_phase "$fault-restored" "$test" 0 'result: pass'
-    cmp "$work/saved/dhcpc.c" "$work/utils/dhcpc.c"
-    cmp "$work/saved/netcfg.c" "$work/utils/netcfg.c"
-    cmp "$work/saved/netup.c" "$work/utils/netup.c"
+    for file in dhcpc.c netcfg.c netup.c nc.c httpd.c; do
+        cmp "$work/saved/$file" "$work/utils/$file"
+    done
 done
