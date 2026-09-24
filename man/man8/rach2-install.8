@@ -1,4 +1,4 @@
-.Dd September 21, 2026
+.Dd September 24, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -28,8 +28,8 @@ option reads the image and manifest from an already mounted directory.
 .Pp
 All questions precede the first write.
 The final question confirms the disk to overwrite.
-Invalid disk, password, account name, and key-file answers are explained
-and requested again.
+Invalid disk, password, account name, key-file and recovery-key answers
+are explained and requested again.
 The questions are:
 .Bl -tag -width Ds
 .It Which disk
@@ -57,6 +57,15 @@ Enter a listed number, another file's path, or an empty answer for no keys.
 A path that is not a file is requested again.
 The selected file is copied to the account's
 .Pa ~/.ssh/authorized_keys .
+.It Recovery key
+A public key for the recovery system on the disk, offered as the account
+keys are, or an empty answer for none.
+The recovery system starts an SSH server only where it has a key, and a
+root update runs from it, so this key lets a machine installed from a
+stick with no key be updated over the network.
+A file larger than 16384 bytes, one that is not text, one that holds a
+private key, and one with no line that is a key are refused and the
+question is asked again.
 .It Root size
 Choose whether to grow the root into the whole disk.
 An empty answer,
@@ -65,7 +74,8 @@ or
 .Ql yes
 grows it; any other answer leaves the root at the image's size.
 .It Confirmation
-The disk's identity, account, keys, and choice of root size are displayed.
+The disk's identity, account, keys, recovery key, and choice of root size
+are displayed.
 Type the disk's node name to proceed.
 The words
 .Ql stop ,
@@ -140,6 +150,17 @@ account home outside /home, including accounts with no archived keys.
 Passwords are stored as hashes.
 The archive preserves accounts and keys for an update when the root cannot
 be read.
+.Pp
+The recovery key, when one was given, is copied to
+.Pa boot/recovery_authorized_keys
+on the recovery partition; with none, a file the image carried there is
+removed.
+The recovery system's init reads that file when it boots from the
+partition, which the disk's recovery entries mark with
+.Ql rach2.slot=recovery ,
+and adds its keys to root's; the install stick's recovery system does not
+read it.
+An update leaves the file as it is.
 The installed root's demonstration accounts and keys are removed.
 The recovery partition keeps its own accounts and keys so that it can
 be used when the installed root will not boot.
@@ -234,7 +255,9 @@ for an update, when the new root is on disk and armed for a trial boot.
 Other statuses indicate failure, with the reason on standard error.
 A failure before the image write stops the run without starting that write.
 .Sh EXAMPLES
-Boot the install stick, log in at the console as root, and run:
+Boot the install stick.
+Its recovery system starts a root shell on the console with no login;
+there, run:
 .Dl rach2-install
 .Pp
 From recovery, identify the target disk and the stick in

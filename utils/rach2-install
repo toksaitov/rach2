@@ -42,6 +42,8 @@ TARGET_MNT=/mnt/install-root
 RECOVERY_MNT=/mnt/install-recovery
 CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
+# The recovery system's key, on the recovery partition, where its init reads it.
+RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
 
 say() { echo "$ME: $1"; }
 # Text addressed to the person, with no `rach2-install: ` in front of it. The
@@ -903,6 +905,68 @@ while :; do
     [ -f "$user_keys" ] && break
     tell "$user_keys is not a file. Try again, or type nothing for no keys."
 done
+# The recovery system on the disk starts an SSH server only where it has a
+# key, and a root update runs from recovery, so a machine that is to be
+# updated over the network needs a key there. The image's recovery system has
+# one only when it was built with one; this puts a file beside it on the
+# recovery partition, which init reads when that partition boots. The key is
+# offered as the account's keys are, and it must be one init will take: a
+# private key, a file of nothing but comments and one larger than init reads
+# are said and asked again. What is judged is a copy of the file, and the
+# copy's text is what is written, so the file cannot change between the two.
+recovery_key_fault() { # recovery_key_fault FILE: why FILE will not do, or nothing
+    if [ "$(wc -c < "$1")" -gt 16384 ]; then
+        echo "is larger than 16384 bytes"
+    elif od -An -tx1 "$1" | grep -q ' 00'; then
+        echo "is not text"
+    elif grep -q 'PRIVATE KEY' "$1"; then
+        echo "holds a private key; give the public half, the file ending .pub"
+    elif ! grep -q '^[[:space:]]*[^#[:space:]]' "$1"; then
+        echo "has no line that is a key"
+    fi
+}
+recovery_keys=""
+while :; do
+    tell "A key for the recovery system on this disk, so that it can be updated over"
+    tell "the network. With none, it starts an SSH server only if its image has a key."
+    if [ "$key_count" -gt 0 ]; then
+        printf 'A number above, a path, or nothing: '
+    else
+        printf 'A path, or nothing: '
+    fi
+    read -r recovery_keys
+    [ -z "$recovery_keys" ] && break
+    case "$recovery_keys" in
+        *[!0-9]*) ;;
+        *)
+            if [ "$recovery_keys" -ge 1 ] && [ "$recovery_keys" -le "$key_count" ]; then
+                i=0
+                for f in $key_choices; do
+                    i=$((i + 1))
+                    [ "$i" = "$recovery_keys" ] && recovery_keys=$f && break
+                done
+            fi
+            ;;
+    esac
+    if [ ! -f "$recovery_keys" ]; then
+        tell "$recovery_keys is not a file. Try again, or type nothing for no key."
+        continue
+    fi
+    key_copy=/tmp/rach2-install-key.$$
+    if ! head -c 16385 "$recovery_keys" > "$key_copy"; then
+        rm -f "$key_copy"
+        tell "$recovery_keys cannot be read. Try again, or type nothing for no key."
+        continue
+    fi
+    fault=$(recovery_key_fault "$key_copy")
+    if [ -z "$fault" ]; then
+        recovery_key_text=$(cat "$key_copy")
+        rm -f "$key_copy"
+        break
+    fi
+    rm -f "$key_copy"
+    tell "$recovery_keys $fault. Try again, or type nothing for no key."
+done
 printf 'Grow the root into the whole disk? [yes] '
 read -r grow_answer
 case "$grow_answer" in
@@ -934,6 +998,12 @@ if [ -n "$user_keys" ]; then
 else
     tell "Keys for $user_name: none"
     tell "  Both accounts use their passwords."
+fi
+if [ -n "$recovery_keys" ]; then
+    tell "Key for the recovery system:"
+    tell "  $recovery_keys"
+else
+    tell "Key for the recovery system: none"
 fi
 if [ "$grow" = "yes" ]; then
     tell "Root partition: grown to fill the disk. This takes some minutes."
@@ -1099,17 +1169,32 @@ put_file "$root_dir/etc/rach2/sshd.conf" 644 "root-password-login yes
 "
 
 sync
-# Accounts, policy and keys are archived for a root that no longer reads.
+# Accounts, policy and keys are archived for a root that no longer reads, and
+# the recovery system's key goes beside its kernel. With no key given, a key
+# the image carried there is removed, so a disk installed without one has none.
 recovery_entry=$(find_recovery "$target") || recovery_entry=""
 if [ -n "$recovery_entry" ]; then
     mounted_recovery=$RECOVERY_MNT
     write_archive "$root_dir"
+    if [ -n "$recovery_keys" ]; then
+        printf '%s\n' "$recovery_key_text" > "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||
+            die "the key for the recovery system could not be written"
+    else
+        rm -f "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||
+            die "the key the image carried for the recovery system could not be removed"
+    fi
     sync
     umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
     mounted_recovery=""
     say "the configuration is archived on /dev/disk${target}p${recovery_entry}"
+    if [ -n "$recovery_keys" ]; then
+        say "the recovery system on /dev/disk${target}p${recovery_entry} takes the key in $recovery_keys"
+    fi
 else
     say "the disk has no recovery partition, so the configuration is not archived"
+    if [ -n "$recovery_keys" ]; then
+        say "and the key for the recovery system has nowhere to go, so it was not placed"
+    fi
 fi
 umount "$root_dir" || die "the root would not unmount"
 mounted_root=""

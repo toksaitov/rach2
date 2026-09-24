@@ -1,4 +1,4 @@
-.Dd September 21, 2026
+.Dd September 24, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -15,7 +15,9 @@ and reboot.
 The recovery kernel permits root to write
 .Pa /dev/diskN
 and uses the read-write driver policy.
-The recovery system mounts nothing from the disk it repairs.
+The recovery system mounts nothing from the disk it repairs, except that
+its init reads the recovery key file described below with the recovery
+partition mounted read-only, and unmounts it before anything else starts.
 .Ss Startup
 The recovery system runs
 .Pa /sbin/init
@@ -23,10 +25,30 @@ built as
 .Ql init-recovery .
 It starts a shell on the console without a login: the image has no
 accounts of the machine's to check against.
-It starts the SSH server only when a key was built into the image, and
-reports which on the console:
+It starts the SSH server only where root has an authorized key: one built
+into the image, or, on a recovery system booted from an installed disk's
+own recovery entry, whose boot line has
+.Ql rach2.slot=recovery ,
+the keys in the file
+.Pa boot/recovery_authorized_keys
+that
+.Xr rach2-install 8
+put on that disk's recovery partition.
+Init finds the disk by the identity
+.Ql rach2.boot=MBRID=ID,1
+names and the partition by its label,
+.Ql RACH2RECOV ,
+and adds the file's keys to root's.
+It refuses a file larger than 16384 bytes, one that is not text, one that
+holds a private key, and one with no line that is a key.
+The install stick's recovery system reads no such file.
+Init reports on the console what it found:
+.Dl init: recovery key: taken from /dev/disk0p2
 .Dl init: a key was built into this recovery image, so SSH is on
+.Dl init: no key was built into this recovery image, and its recovery partition's key turns SSH on
 .Dl init: no key was built into this recovery image, so SSH is off
+A restore of the whole disk from the stick's image leaves no recovery key
+file, since the image has none.
 With
 .Ql rach2.fsck
 on the boot line, init first runs
@@ -43,6 +65,17 @@ The network is configured by the kernel from the
 .Ql rach2.ip=
 boot setting, or by DHCP when that setting is
 .Ql none .
+.Pp
+The console shell is root's, so physical access to a machine is control of
+it.
+Anyone at its keyboard who boots the install stick, or chooses the disk's
+recovery entry from the boot menu, has a root shell that can write the
+machine's disks.
+The boot menus ask for no password, so a boot line can also be edited to
+add
+.Ql rach2.rescue ,
+which starts the kernel debug shell described below; that shell
+authenticates nobody.
 .Ss Programs
 The recovery image includes
 .Nm rach2-install ,

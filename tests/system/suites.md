@@ -5,7 +5,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `install` (full tier; needs qemu-system-i386, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine installs its own kernel.
 * `selfbuild` (full tier; needs qemu-system-i386, mformat, mmd, mcopy; 128 MiB): the machine builds its own kernel.
 * `installer-repair` (full tier; needs qemu-system-i386, qemu-img, shasum, ssh, ssh-keygen, mcopy, mmd, mdeltree, debugfs; 128 MiB): the other half, the machine that will not boot.
-* `installer` (full tier; needs qemu-system-i386, shasum, ssh, mformat, mcopy, mtype; 512 MiB): the install stick and the program on it.
+* `installer` (full tier; needs qemu-system-i386, shasum, ssh, ssh-keygen, mformat, mcopy, mtype, mdel; 512 MiB): the install stick and the program on it.
 * `menu` (full tier; needs qemu-system-i386, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the boot menu that can be rewritten, and the stub that cannot.
 * `installer-rehearse` (full tier; needs qemu-system-i386, qemu-img, shasum; 512 MiB): the rehearsal of the machine sitting in its small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the machine's size in most of an hour.
 * `selfbuild-ext2` (full tier; needs qemu-system-i386, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the self-build on an ext2 root, the os-real system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted with rach2.root=ext2; the suite reads the volume back with debugfs and e2fsck must find it consistent after the synced stop.
