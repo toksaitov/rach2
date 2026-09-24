@@ -858,6 +858,7 @@ static void ino_rows(void)
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
     memset(&dir, 0, sizeof(dir));
+    a.type = b.type = dir.type = KRFFS_RESERVED_NODE;
     memcpy(a.name, "authorized_keys", 16);
     memcpy(b.name, "authorized_keys", 16);
     a.id = b.id = krffs_calculate_djb_hash(a.name);
@@ -865,12 +866,58 @@ static void ino_rows(void)
     b.parent_id = 12;
     check(krffs_node_ino(&a) != krffs_node_ino(&b),
           "files of one name in two directories have different inode numbers");
-    check(krffs_node_ino(&a) == krffs_node_ino(&a) && krffs_node_ino(&a) != a.id,
+    check(krffs_node_ino(&a) == krffs_mix_id(a.parent_id, (const char *)a.name),
           "a file's inode number is its parent's id mixed with its name");
     memcpy(dir.name, ".ssh", 5);
     dir.mode = KRFFS_S_IFDIR | 0700;
     dir.id = 424242;
     check(krffs_node_ino(&dir) == 424242, "a directory's inode number is its id");
+}
+
+/**
+ * Open files retain their nodes after unlink, so test the orphan operation
+ * that leaves them allocated. Root walks must ignore its missing type bits.
+ */
+static void ino_lifetime_rows(void)
+{
+    krffs_mount_t mount;
+    krffs_node_t a, b, root;
+    uint64_t one, two, ino_one, ino_two;
+    const char *paths[] = {"/", "/..", "/tmp/..", "/tmp/../.."};
+    unsigned i;
+
+    make_image(image, IMAGE_SIZE);
+    ((krffs_node_t *)image)->mode = 0755;
+    mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+    check(init_krffs(image, IMAGE_SIZE) == 0, "inode fixture mounts");
+    check(krffs_mkdir_at(&mount, "/tmp") == 0, "inode fixture directory");
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        uint64_t at = krffs_walk(&mount, paths[i]);
+        krffs_node_t *node = krffs_resolve(paths[i]);
+
+        check(at == 0 && krffs_head(&mount, at, &root) == 0 && krffs_node_ino(&root) == 1,
+              "root inode is 1 through offset paths");
+        check(node == krffs_fs->node && krffs_node_ino(node) == 1,
+              "root inode is 1 through pointer paths");
+    }
+    check(krffs_create_at(&mount, "/tmp/one") == 0 && krffs_create_at(&mount, "/tmp/two") == 0,
+          "inode fixture siblings");
+    one = krffs_walk(&mount, "/tmp/one");
+    two = krffs_walk(&mount, "/tmp/two");
+    check(krffs_head(&mount, one, &a) == 0 && krffs_head(&mount, two, &b) == 0,
+          "inode fixture headers");
+    ino_one = krffs_node_ino(&a);
+    ino_two = krffs_node_ino(&b);
+    check(ino_one != ino_two, "live siblings have distinct inode numbers");
+    krffs_orphan_at(&mount, one);
+    krffs_orphan_at(&mount, two);
+    check(krffs_walk(&mount, "/tmp/one") == KRFFS_NO_NODE &&
+              krffs_walk(&mount, "/tmp/two") == KRFFS_NO_NODE,
+          "unlinked siblings have no names");
+    check(krffs_head(&mount, one, &a) == 0 && krffs_head(&mount, two, &b) == 0 &&
+              krffs_node_ino(&a) == ino_one && krffs_node_ino(&b) == ino_two &&
+              krffs_node_ino(&a) != krffs_node_ino(&b),
+          "open unlinked siblings keep distinct unchanged inode numbers");
 }
 
 int main(void)
@@ -887,6 +934,7 @@ int main(void)
 
     hash_rows();
     ino_rows();
+    ino_lifetime_rows();
 
     /* ---- the mount check ---- */
 

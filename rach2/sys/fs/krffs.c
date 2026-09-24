@@ -415,28 +415,47 @@ uint64_t krffs_max_steps(krffs_mount_t *mount)
  */
 
 /**
- * Combine a parent directory id and a child name into a node id.
+ * Combine a parent directory id and a stored name hash into a node id.
  *
  * FNV-1a style mixing over the name's DJB hash. Never returns 0, which is
  * reserved for the root's logical id (KRFFS_ROOT_ID). The name goes in as a
  * 32-bit hash, so two names can give one id; `krffs_id_taken` is what keeps
  * two directories from holding it at once.
  */
-static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
+static uint64_t krffs_mix_hash(uint64_t parent_id, uint64_t hash)
 {
     uint64_t h = (parent_id + 1) * 1099511628211ULL;
 
-    h ^= krffs_calculate_djb_hash((const uint8_t *)name);
+    h ^= hash;
     h *= 1099511628211ULL;
     return h ? h : 1;
 }
 
+/** Mix a live name by the same rule as its stored hash. */
+static uint64_t krffs_mix_id(uint64_t parent_id, const char *name)
+{
+    return krffs_mix_hash(parent_id, krffs_calculate_djb_hash((const uint8_t *)name));
+}
+
+/**
+ * Return the inode number that `stat` and `getdents` report for a node.
+ *
+ * The root is 1, as the VFS reports it; it is recognised by its node type,
+ * since its stored mode need not have the directory bits. A directory reports
+ * its id. A file reports its parent's id mixed with its stored id, which is
+ * the hash of its name, and not with the name itself: unlink clears the name
+ * of a file that is still open and leaves the id, and the file's number must
+ * not change while it is open.
+ */
 uint64_t krffs_node_ino(const krffs_node_t *node)
 {
+    if (node->type == KRFFS_ROOT_NODE) {
+        return 1;
+    }
     if (KRFFS_IS_DIR(node->mode)) {
         return node->id;
     }
-    return krffs_mix_id(node->parent_id, (const char *)node->name);
+    return krffs_mix_hash(node->parent_id, node->id);
 }
 
 /**

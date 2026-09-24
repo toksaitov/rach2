@@ -22,10 +22,13 @@ typedef unsigned long long ino64_t;
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT   1
-#define SYS_WRITE  4
-#define SYS_STAT   106
-#define SYS_STAT64 195
+#define SYS_EXIT      1
+#define SYS_WRITE     4
+#define SYS_STAT      106
+#define SYS_STAT64    195
+#define SYS_FSTAT64   197
+#define SYS_FSTATAT64 300
+#define AT_FDCWD      (-100)
 
 /* File type bits from mode */
 #define S_IFMT  0170000
@@ -107,6 +110,18 @@ static int sys_call3(int nr, int a, int b, int c)
 {
     int result;
     __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(nr), "b"(a), "c"(b), "d"(c) : "memory");
+    return result;
+}
+
+/** Make a four-argument system call, for utimensat and fstatat64. */
+static int sys_call4(int nr, int a, int b, int c, int d)
+{
+    int result;
+
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(nr), "b"(a), "c"(b), "d"(c), "S"(d)
+                         : "memory");
     return result;
 }
 
@@ -194,10 +209,6 @@ static void print_octal(unsigned int m)
     }
 }
 
-/**
- * Entry point: runs the stat64 (195) probes in part A, then the stat (106)
- * probes in part B, and exits 0 only if every probe passed.
- */
 /*
  * Two files of one name in two directories are two files, and a tool that
  * finds them sharing an inode number, as `cp -a` does, copies them as hard
@@ -227,23 +238,63 @@ static void same_name_rows(int *passed, int *failed)
     }
 }
 
+/**
+ * A physical parent walk must report the same root identity as slash.
+ *
+ * The test image has no /tmp, so the row makes the directory it walks out of.
+ */
+static void root_ino_rows(int *passed, int *failed)
+{
+    const char *paths[] = {"/", "/statroot/.."};
+    unsigned int i;
+
+    if (sys_call3(39, (int)"/statroot", 0755, 0) < 0) { /* mkdir */
+        puts("Root inode through stat and stat64: FAILED (/statroot could not be made)");
+        (*failed)++;
+        return;
+    }
+    for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        struct stat old;
+        struct stat64 wide;
+
+        print("Root inode through stat and stat64: ");
+        print(paths[i]);
+        if (sys_stat(paths[i], &old) == 0 && sys_stat64(paths[i], &wide) == 0 && old.st_ino == 1 &&
+            wide.st_ino == 1 && wide.__st_ino == 1 && (old.st_mode & S_IFMT) == S_IFDIR &&
+            (wide.st_mode & S_IFMT) == S_IFDIR) {
+            puts(" OK");
+            (*passed)++;
+        } else {
+            puts(" FAILED");
+            (*failed)++;
+        }
+    }
+    {
+        struct stat64 byfd, byat;
+        int fd = sys_call3(5, (int)"/", 0, 0); /* open O_RDONLY */
+
+        print("Root inode through fstat64 and fstatat64: ");
+        if (fd >= 0 && sys_call3(SYS_FSTAT64, fd, (int)&byfd, 0) == 0 &&
+            sys_call4(SYS_FSTATAT64, AT_FDCWD, (int)"/", (int)&byat, 0) == 0 && byfd.st_ino == 1 &&
+            byfd.__st_ino == 1 && byat.st_ino == 1 && byat.__st_ino == 1 &&
+            (byfd.st_mode & S_IFMT) == S_IFDIR && (byat.st_mode & S_IFMT) == S_IFDIR) {
+            puts("OK");
+            (*passed)++;
+        } else {
+            puts("FAILED");
+            (*failed)++;
+        }
+        if (fd >= 0) {
+            sys_call3(6, fd, 0, 0);
+        }
+    }
+}
+
 /** Compare whole modification times; seconds alone would miss this fault. */
 static int time_later(const struct stat64 *a, const struct stat64 *b)
 {
     return a->st_mtime > b->st_mtime ||
            (a->st_mtime == b->st_mtime && a->st_mtime_nsec > b->st_mtime_nsec);
-}
-
-/** Supply the fourth argument used by utimensat. */
-static int sys_call4(int nr, int a, int b, int c, int d)
-{
-    int result;
-
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(nr), "b"(a), "c"(b), "d"(c), "S"(d)
-                         : "memory");
-    return result;
 }
 
 /**
@@ -294,6 +345,11 @@ static int time_rows(void)
     return ok;
 }
 
+/**
+ * Entry point: runs the stat64 (195) probes in part A, the stat (106) probes
+ * in part B, then the inode and time rows, and exits 0 only if every row
+ * passed.
+ */
 void _start(void)
 {
     struct stat st;
@@ -456,6 +512,7 @@ void _start(void)
     puts("");
 
     same_name_rows(&passed, &failed);
+    root_ino_rows(&passed, &failed);
     if (time_rows()) {
         passed++;
     } else {

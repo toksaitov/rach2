@@ -208,8 +208,8 @@ rach2/sys/syscall.c:tty_common_ioctl complexity 27 a dispatcher, one arm per com
 rach2/sys/syscall.c:tty_common_ioctl lines 135 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_fs.c:copy_path_at complexity 27 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:do_old_stat lines 106 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:fstat_fill lines 106 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:do_old_stat lines 108 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:fstat_fill lines 107 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 43 a dispatcher, one arm per command, read as a table
@@ -387,7 +387,7 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, eac
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:main complexity 58 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 540 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main lines 541 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 171 a test's rows, each a case, read as one table
@@ -625,7 +625,7 @@ tests/rmtest.c:_start lines 152 a probe, one sequence of steps in the order the 
 
 tests/sockettest.c:_start lines 131 a probe, one sequence of steps in the order the log records them
 
-tests/stattest.c:_start lines 180 a probe, one sequence of steps in the order the log records them
+tests/stattest.c:_start lines 181 a probe, one sequence of steps in the order the log records them
 
 tests/stdintest.c:_start lines 119 a probe, one sequence of steps in the order the log records them
 

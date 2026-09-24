@@ -3535,12 +3535,12 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
                 return rc;
             }
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
-            /* The root's identity is fixed: ino 0, 0755, and real times: an
+            /* The root's identity is fixed: ino 1, 0755, and real times: an
              * entry created in it stamps them, which is how a program
              * watching a directory sees it. */
             kst.st_mode = S_IFDIR | 0755;
             kst.st_nlink = 1;
-            kst.st_ino = 0;
+            kst.st_ino = kst.__st_ino = 1;
             kst.st_blksize = 4096;
             stat64_root_times(&kst);
             vfs_ref_release(&ref);
@@ -3797,6 +3797,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
     }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755; /* the root directory */
+        kst->st_ino = kst->__st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         /* The root has times of its own, so a descriptor on it reports what a
@@ -3950,6 +3951,7 @@ int32_t sys_fstatat64(isr_params_t *params)
     k_memset(&kst, 0, sizeof(kst));
     if (pathbuf[0] == '/' && pathbuf[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
         kst.st_mode = S_IFDIR | 0755; /* the KRFFS root directory */
+        kst.st_ino = kst.__st_ino = 1;
         kst.st_nlink = 1;
         kst.st_blksize = 4096;
         stat64_root_times(&kst);
@@ -5189,7 +5191,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
         kst.st_mode = S_IFDIR | 0755; /* drwxr-xr-x */
         kst.st_nlink = 1;
-        kst.st_ino = 0; /* Root inode is 0 */
+        kst.st_ino = 1;
         kst.st_blksize = 4096;
         /* The root is a real directory with real times: an entry created in it
          * stamps them, which is how a program watching a directory sees it. */
@@ -5258,9 +5260,11 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         vfs_ref_release(&ref);
     }
 
-    /* The type comes from the node, as it does in the stat64 path. */
-    kst.st_mode =
-        (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) | (node->mode & 07777));
+    /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
+    kst.st_mode = node == krffs_fs->node
+                      ? S_IFDIR | 0755
+                      : (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
+                                         (node->mode & 07777));
     kst.st_nlink = 1; /* Always 1 for KRFFS */
     kst.st_uid = (unsigned short)node->uid;
     kst.st_gid = (unsigned short)node->gid;

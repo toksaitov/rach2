@@ -105,9 +105,37 @@ It does not measure the blocks actually allocated to a sparse file.
 Nodes other than the root directory report stored owner, group, size,
 and access, modification, and attribute-change times, including nanoseconds.
 The link count is 1.
-The root directory has inode 0, mode 0755, and its own stored times;
+The root directory has inode 1, mode 0755, and its own stored times;
 without a mounted KRFFS image, the time helper uses boot time.
 The file-system device number is 0.
+.Pp
+The root reports inode 1 through path and descriptor calls, the old
+.Nm stat
+call (106), and the VFS attribute call, including when a path reaches it
+through
+.Pa .. ,
+as in
+.Pa /tmp/.. .
+Other directories report their stored ids.
+A file's inode number combines its directory's id with the file's stored id,
+the 32-bit DJB hash of its name.
+Directory listings contain neither
+.Pa .
+nor
+.Pa .. ;
+.Nm getdents
+reports each entry's inode number by these same rules.
+.Pp
+.Fn unlink
+clears an open file's name but retains its stored id and directory,
+so its inode number stays unchanged while it is open.
+Two open files with distinct numbers retain them after both are unlinked.
+.Fn rename
+rewrites a file's stored id, so renaming it changes its inode number;
+Linux preserves the number across a rename.
+Two names in one directory whose 32-bit hashes collide share an inode
+number, unlike Linux's distinct inode numbers for distinct files in one
+file system.
 .It Mounted KRFFS
 Attributes and times come from the stored node.
 Directories report two links and files one.
