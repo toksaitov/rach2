@@ -25,6 +25,7 @@
  *
  *   STEP forms:
  *     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
+ *     boot=REGEX     internal prompt wait bounded by the run's --timeout
  *     seen=REGEX     wait until REGEX has appeared since the last send,
  *                    wherever it lies: two seen= steps are satisfied in
  *                    either order, two expect= steps only in theirs
@@ -58,9 +59,10 @@
  *                    for.
  *     exec=NAME|MARK run "exec NAME", re-sending if the shell drops it,
  *                    until MARK
- *     probe=NAME     boot, run "exec NAME", and let the kernel's
- *                    harness_exit stop QEMU, under the step's limit; the
- *                    process exit code is then decoded from QEMU's. The
+ *     probe=NAME     wait for boot under the run's timeout, run "exec NAME",
+ *                    and let the kernel's harness_exit stop QEMU under
+ *                    the step's limit. The process exit code is decoded
+ *                    from QEMU's. The
  *                    line is typed again only while the shell answers it
  *                    with nothing, which is the shell dropping it, or
  *                    with "Unknown command", which is a line typed before
@@ -77,7 +79,7 @@
  * is the supervisor. That is every image this harness boots; an image
  * running /sbin/init prints no such line, so drive one of those with --ok.
  *
- * `harness --selftest` checks the escape decoder without QEMU.
+ * `harness --selftest` checks parsing and probe wait bounds without QEMU.
  *
  * `RACH2_TRACE=FILE` records each step's outcome and the final decision,
  * which is how this was proved equal to the Python harness it replaces.
@@ -702,13 +704,11 @@ static void stamp(const char *what)
     }
 }
 
-static int expect_pattern(const char *pattern)
+static int expect_pattern(const char *pattern, double stop)
 {
     struct regex re;
-    double stop;
 
     regex_compile(&re, pattern);
-    stop = now() + steptmo;
     if (stop > deadline)
         stop = deadline;
     while (now() < stop && child_poll() < 0) {
@@ -730,6 +730,14 @@ static int expect_pattern(const char *pattern)
         }
     }
     return 0;
+}
+
+/** Boot may take longer than a command when many emulators run at once. */
+static int expect_step(const char *step)
+{
+    if (strncmp(step, "boot=", 5) == 0)
+        return expect_pattern(step + 5, deadline);
+    return expect_pattern(step + 7, now() + steptmo);
 }
 
 /**
@@ -897,6 +905,103 @@ static long token_end(const unsigned char *hay, size_t len, const char *needle, 
 static int contains(const unsigned char *hay, size_t len, const char *needle)
 {
     return token_end(hay, len, needle, 0) >= 0;
+}
+
+/** Separate the boot wait from the command so only boot uses the run timeout. */
+static int expand_probe(const char *arg, const char **steps, char *execq, size_t size)
+{
+    if ((size_t)snprintf(execq, size, "execq=%s", arg + 6) >= size) {
+        fprintf(stderr,
+                "harness: the probe name in %s is "
+                "longer than %lu bytes; a shortened name runs "
+                "a different program\n",
+                arg, (unsigned long)size - 7);
+        return 0;
+    }
+    steps[0] = "boot=Type 'help'";
+    steps[1] = execq;
+    return 1;
+}
+
+/**
+ * Use a pipe as the serial source because the harness has no fake clock.
+ * The prompt arrives after the step cap; a short run must still reject it.
+ */
+static int prompt_wait_selftest(const char *step, double timeout, int want)
+{
+    int serial[2], got;
+
+    if (pipe(serial) != 0) {
+        perror("harness: selftest pipe");
+        return 1;
+    }
+    child_pid = fork();
+    if (child_pid < 0) {
+        perror("harness: selftest fork");
+        close(serial[0]);
+        close(serial[1]);
+        return 1;
+    }
+    if (child_pid == 0) {
+        const char prompt[] = "Type 'help'";
+        struct timespec delay = {1, 0};
+
+        close(serial[0]);
+        while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
+            ;
+        _exit(write(serial[1], prompt, sizeof(prompt) - 1) == (ssize_t)sizeof(prompt) - 1 ? 0 : 1);
+    }
+    close(serial[1]);
+    child_out = serial[0];
+    if (fcntl(child_out, F_SETFL, O_NONBLOCK) < 0) {
+        perror("harness: selftest nonblocking pipe");
+        got = -1;
+    } else {
+        child_reaped = 0;
+        buf_len = consumed = 0;
+        steptmo = 0.05;
+        deadline = now() + timeout;
+        got = expect_step(step);
+    }
+    if (!child_reaped) {
+        kill(child_pid, SIGKILL);
+        while (waitpid(child_pid, NULL, 0) < 0 && errno == EINTR)
+            ;
+    }
+    close(child_out);
+    child_out = -1;
+    child_pid = -1;
+    child_reaped = 0;
+    if (got != want) {
+        fprintf(stderr, "harness: selftest: %s with timeout %.2f returned %d, wanted %d\n", step,
+                timeout, got, want);
+        return 1;
+    }
+    return 0;
+}
+
+/** Test the actual probe expansion so restoring its old expect step fails. */
+static int probe_wait_selftest(void)
+{
+    const char *steps[2];
+    char execq[256];
+    int bad;
+
+    if (!expand_probe("probe=/selftest", steps, execq, sizeof(execq)))
+        return 1;
+    bad = prompt_wait_selftest(steps[0], 10.0, 1);
+    bad += prompt_wait_selftest("expect=Type 'help'", 10.0, 0);
+    bad += prompt_wait_selftest(steps[0], 0.05, 0);
+    if (strcmp(steps[1], "execq=/selftest") != 0) {
+        fprintf(stderr, "harness: selftest: probe command was misread\n");
+        bad++;
+    }
+    free(buf);
+    buf = NULL;
+    buf_len = buf_cap = consumed = 0;
+    if (!bad)
+        printf("harness: selftest: probe wait bounds pass\n");
+    return bad != 0;
 }
 
 /* The escape decoder, against the cases the suites depend on and the ones
@@ -1167,7 +1272,7 @@ int main(int argc, char **argv)
     const char *trace_path;
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
-        return unescape_selftest();
+        return unescape_selftest() | probe_wait_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
@@ -1232,25 +1337,16 @@ int main(int argc, char **argv)
             fprintf(stderr, "harness: unknown option %s\n", arg);
             return 2;
         } else {
-            /* A probe=NAME step expands to a wait for the shell prompt and
-               a repeated exec, the way the Python harness expanded it. */
             if (strncmp(arg, "probe=", 6) == 0) {
                 static char execq[MAX_STEPS][256];
                 static int n_execq;
 
                 if (n_steps + 2 > MAX_STEPS)
                     return too_many("step", MAX_STEPS);
-                if ((size_t)snprintf(execq[n_execq], sizeof(execq[0]), "execq=%s", arg + 6) >=
-                    sizeof(execq[0])) {
-                    fprintf(stderr,
-                            "harness: the probe name in %s is "
-                            "longer than %lu bytes; a shortened name runs "
-                            "a different program\n",
-                            arg, (unsigned long)sizeof(execq[0]) - 7);
+                if (!expand_probe(arg, steps + n_steps, execq[n_execq], sizeof(execq[0])))
                     return 2;
-                }
-                steps[n_steps++] = "expect=Type 'help'";
-                steps[n_steps++] = execq[n_execq++];
+                n_steps += 2;
+                n_execq++;
             } else {
                 if (n_steps >= MAX_STEPS)
                     return too_many("step", MAX_STEPS);
@@ -1373,7 +1469,8 @@ int main(int argc, char **argv)
         if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
             continue;
         if (child_poll() >= 0 &&
-            (strncmp(step, "expect=", 7) == 0 || strncmp(step, "seen=", 5) == 0)) {
+            (strncmp(step, "expect=", 7) == 0 || strncmp(step, "boot=", 5) == 0 ||
+             strncmp(step, "seen=", 5) == 0)) {
             /* A token the machine printed on its way out satisfies the
                step that waited for it: a probe's last lines and the exit
                its kernel makes for it arrive together, and the output is
@@ -1384,7 +1481,7 @@ int main(int argc, char **argv)
             int seen = step[0] == 's';
 
             pump(now() + 0.05);
-            regex_compile(&re, step + (seen ? 5 : 7));
+            regex_compile(&re, step + (step[0] == 'e' ? 7 : 5));
             end = regex_search(&re, buf, buf_len, seen ? exchange : consumed);
             if (end >= 0) {
                 if (!seen || (size_t)end > consumed)
@@ -1404,8 +1501,8 @@ int main(int argc, char **argv)
             }
             break;
         }
-        if (strncmp(step, "expect=", 7) == 0) {
-            int got = expect_pattern(step + 7);
+        if (strncmp(step, "expect=", 7) == 0 || strncmp(step, "boot=", 5) == 0) {
+            int got = expect_step(step);
 
             if (!got)
                 step_failures++;
@@ -1593,7 +1690,7 @@ int main(int argc, char **argv)
 
                 snprintf(line, sizeof(line), "exec %s", name);
                 send_line(line);
-                if (expect_pattern(marker)) {
+                if (expect_pattern(marker, now() + steptmo)) {
                     seen = 1;
                     break;
                 }
