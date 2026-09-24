@@ -122,6 +122,14 @@ static void put_hex(char *buf, int *n, int cap, uint32_t v, int width)
     }
 }
 
+/*
+ * The counters come before the disk's own record and are printed whatever
+ * its state: a mount can be on any device the drivers and the buffer cache
+ * serve, and a row that counts what a write owed the medium has no disk of
+ * its own to ask. The drivers' totals come first, then the cache's: reads
+ * served from a buffer, reads that filled one, waits for a buffer another
+ * process held, and the buffers its walks of its own lists read.
+ */
 int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
 {
     int n = 0;
@@ -142,13 +150,6 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put(buf, &n, cap, d->driver ? d->driver : "none");
     put(buf, &n, cap, "\npolicy ");
     put(buf, &n, cap, diskcmd_policy() == DISKCMD_READ_ONLY ? "read-only\n" : "read-write\n");
-    /* The buffer cache under the mounted file systems: reads served from a
-     * buffer, reads that filled one, and waits for a buffer another process
-     * held. Printed whatever the disk's state, since a mount can be on any
-     * device the cache reads. */
-    /* The drivers' own totals, printed whatever this disk's state: a mount can
-     * be on any device they serve, and a row that counts what a write owed
-     * the medium has no disk of its own to ask. */
     put(buf, &n, cap, "disk-commands ");
     put_dec(buf, &n, cap, block_commands());
     put(buf, &n, cap, "\ndisk-flushes ");
@@ -175,6 +176,8 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put_dec(buf, &n, cap, bcache_stat_fills());
     put(buf, &n, cap, "\ncache-waits ");
     put_dec(buf, &n, cap, bcache_stat_waits());
+    put(buf, &n, cap, "\ncache-visits ");
+    put_dec(buf, &n, cap, bcache_stat_visits());
     put(buf, &n, cap, "\n");
 
     if (d->state != DISKINFO_PRESENT) {

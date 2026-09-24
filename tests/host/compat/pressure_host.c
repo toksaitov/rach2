@@ -6,9 +6,14 @@
 
 #include "mm/pressure.h"
 
+/* The caches' target in frames. A test raises it to stand for a machine
+ * whose memory share is more than the kernel heap holds, where the cache's
+ * own cap is what stops it. */
+uint32_t host_cache_target = 128;
+
 uint32_t mem_cache_target(void)
 {
-    return 128;
+    return host_cache_target;
 }
 
 int in_interrupt(void)

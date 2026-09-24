@@ -153,6 +153,10 @@ uint64_t bcache_stat_waits(void)
 {
     return 0;
 }
+uint64_t bcache_stat_visits(void)
+{
+    return 0;
+}
 
 /* The build policy diskinfo_format prints; both values are exercised. */
 static int policy_now = DISKCMD_READ_WRITE;
@@ -288,7 +292,7 @@ int main(void)
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
                  "0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
-                 "0\n") == 0,
+                 "0\ncache-visits 0\n") == 0,
           "a kernel that was never asked says so and stops there");
 
     d.state = DISKINFO_NO_DEVICE;
@@ -298,7 +302,7 @@ int main(void)
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
                  "0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
-                 "0\n") == 0,
+                 "0\ncache-visits 0\n") == 0,
           "a kernel that asked and got nothing says a different thing");
 
     policy_now = DISKCMD_READ_ONLY;
@@ -308,7 +312,7 @@ int main(void)
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
                  "0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
-                 "0\n") == 0,
+                 "0\ncache-visits 0\n") == 0,
           "the file names the build policy the kernel is running");
     policy_now = DISKCMD_READ_WRITE;
 
@@ -353,7 +357,7 @@ int main(void)
         static const char *want[] = {"state present\n",
                                      "driver ahci\n",
                                      "policy read-write\ndisk-commands 0\ndisk-flushes 0\n",
-                                     "cache-hits 0\ncache-fills 0\ncache-waits 0\n",
+                                     "cache-hits 0\ncache-fills 0\ncache-waits 0\ncache-visits 0\n",
                                      "port 0\n",
                                      "mounted 0\n",
                                      "sector-size 512\n",
@@ -488,5 +492,5 @@ int main(void)
         fake_count = 0;
     }
 
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

@@ -110,7 +110,9 @@ while a partition is mounted or another descriptor is open on the disk.
 .Ss Disk information
 .Pa /proc/disk
 reports the probe state, driver policy and counters for commands, flushes,
-polls, wait ticks, requests in flight, overlaps, quarantines and releases.
+polls, wait ticks, requests in flight, overlaps, quarantines and releases,
+answers the lag device delivered late, and the buffer cache's hits, fills,
+waits and the buffers its walks of its own lists read.
 The detailed record describes disk 0, including its model, serial and
 firmware, with
 .Ql part1

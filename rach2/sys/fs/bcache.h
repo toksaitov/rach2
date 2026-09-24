@@ -154,9 +154,11 @@ uint32_t bcache_resident(void);
 void bcache_set_limit(uint32_t n);
 
 /* Counters for /proc/disk: reads served from the cache, reads from the
- * device, and waits for a busy buffer. */
+ * device, waits for a busy buffer, and the buffers the cache's walks of its
+ * lists have read, which is what its bookkeeping costs. */
 uint64_t bcache_stat_hits(void);
 uint64_t bcache_stat_fills(void);
 uint64_t bcache_stat_waits(void);
+uint64_t bcache_stat_visits(void);
 
 #endif

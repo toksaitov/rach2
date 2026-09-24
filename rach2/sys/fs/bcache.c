@@ -31,6 +31,11 @@ static uint32_t write_gen;        /* counts the writes that reached a device */
 static uint32_t limit_set;        /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
 static uint64_t stat_hits, stat_fills, stat_waits;
+/* Every buffer a walk of the cache's lists reads: the whole list, the release
+ * order, the empties, a bucket of the index and a process's holds. It is what
+ * a get, a victim's choice and a sync cost in bookkeeping, and a host test
+ * holds it under a bound. */
+static uint64_t stat_visits;
 
 /* The most buffers the cache makes: half of what the caches together may
  * hold under pressure, and never fewer than the floor, since a file system
@@ -73,6 +78,10 @@ uint64_t bcache_stat_fills(void)
 uint64_t bcache_stat_waits(void)
 {
     return stat_waits;
+}
+uint64_t bcache_stat_visits(void)
+{
+    return stat_visits;
 }
 
 /* A buffer from the heap, empty and unheld, on the list; NULL when the
@@ -127,6 +136,7 @@ static void index_del(struct bbuf *b)
         return;
     }
     for (link = &bhash[bucket_of(b->dev, b->blk)]; *link; link = &(*link)->hnext) {
+        stat_visits++;
         if (*link == b) {
             *link = b->hnext;
             b->hnext = 0;
@@ -141,6 +151,7 @@ static struct bbuf *index_find(const block_device_t *dev, uint64_t blk)
     struct bbuf *b;
 
     for (b = bhash[bucket_of(dev, blk)]; b; b = b->hnext) {
+        stat_visits++;
         if (b->dev == dev && b->blk == blk) {
             return b;
         }
@@ -222,9 +233,12 @@ static void buffer_free(struct bbuf *b)
     struct bbuf **link;
 
     for (link = &bufs; *link != b; link = &(*link)->next) {
+        stat_visits++;
     }
+    stat_visits++;
     *link = b->next;
     for (link = &empties; *link; link = &(*link)->empty_next) {
+        stat_visits++;
         if (*link == b) {
             *link = b->empty_next;
             break;
@@ -275,6 +289,7 @@ static void unhold(struct bbuf *b)
     struct bbuf **link;
 
     for (link = held_list(); *link; link = &(*link)->hold_next) {
+        stat_visits++;
         if (*link == b) {
             *link = b->hold_next;
             break;
@@ -301,6 +316,7 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
     const struct bbuf *b;
 
     for (b = *held_list(); b; b = b->hold_next) {
+        stat_visits++;
         if (!b->dev) {
             continue;
         }
@@ -349,6 +365,7 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
         return 1; /* its write does not come back through here */
     }
     for (b = *held_list(); b; b = b->hold_next) {
+        stat_visits++;
         if (!b->dev) {
             continue;
         }
@@ -513,6 +530,7 @@ static int firsts_pending(const block_device_t *dev)
     const struct bbuf *b;
 
     for (b = bufs; b; b = b->next) {
+        stat_visits++;
         if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST &&
             (b->holder != -1 || b->write_failed)) {
             return 1;
@@ -537,6 +555,7 @@ again:
     for (b = bufs; b; b = b->next) {
         int rc;
 
+        stat_visits++;
         if (b->dev != dev || !b->dirty || b->order != BCACHE_ORDER_FIRST || b->holder != -1 ||
             b->write_failed) {
             continue;
@@ -623,6 +642,7 @@ again:
         }
         if (!victim) {
             for (b = lru_head; b; b = b->lru_next) {
+                stat_visits++;
                 if (b->holder != -1 || b == fill_keep) {
                     continue;
                 }
@@ -844,6 +864,7 @@ static struct bbuf *first_dirty(const block_device_t *dev)
     struct bbuf *b;
 
     for (b = bufs; b; b = b->next) {
+        stat_visits++;
         if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST) {
             return b;
         }
@@ -872,6 +893,7 @@ static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t aft
     for (b = bufs; b; b = b->next) {
         int i;
 
+        stat_visits++;
         if (b->dev != dev || !b->dirty || (pass == 0 && b->order != BCACHE_ORDER_FIRST) ||
             (started && b->blk <= after)) {
             continue;
@@ -984,6 +1006,7 @@ void bcache_device_gone(block_device_t *dev)
     vfs_device_failed(dev, 0, -EIO);
     dev->flags |= BLOCK_GONE;
     for (b = bufs; b; b = b->next) {
+        stat_visits++;
         if (b->dev != dev) {
             continue;
         }
@@ -1002,6 +1025,7 @@ int bcache_device_holds(block_device_t *dev)
     int held = 0;
 
     for (b = bufs; b; b = b->next) {
+        stat_visits++;
         if (b->dev == dev && b->holder != -1) {
             held++;
         }
@@ -1028,6 +1052,7 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
             struct bbuf *b, *victim = 0;
 
             for (b = bufs; b; b = b->next) {
+                stat_visits++;
                 if (b->holder != -1 || b->waiters > 0) {
                     continue;
                 }
@@ -1074,11 +1099,13 @@ int bcache_invalidate(block_device_t *dev)
     struct bbuf *b;
 
     for (b = bufs; b; b = b->next) {
+        stat_visits++;
         if (b->dev == dev && (b->holder != -1 || b->dirty)) {
             return -EBUSY;
         }
     }
     for (b = bufs; b; b = b->next) {
+        stat_visits++;
         if (b->dev == dev) {
             make_empty(b);
         }
