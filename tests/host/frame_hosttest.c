@@ -5,12 +5,16 @@
  *
  * The map is built from Multiboot memory maps crafted here, under ASan and
  * UBSan: QEMU's maps as this kernel recorded them at boot for 64 MiB,
- * 512 MiB, 2 GiB, 3 GiB and 4 GiB, since no record of the Lenovo's exists
- * yet, and synthetic maps with holes, an overlap between an available range
- * and a reserved one, a range crossing 4 GiB, an entry whose length wraps,
- * a truncated last entry, an empty map, and more ranges than the map keeps.
- * The reservations the boot makes are replayed against them and the four
- * numbers checked. Returns the failed-check count (0 == pass).
+ * 512 MiB, 2 GiB, 3 GiB and 4 GiB; the Lenovo G50-70's map as its boot of
+ * 2026-09-12 printed it (dev-log/50-shortcomings/lenovo-boot.log), with NVS
+ * and ACPI ranges, a range that ends inside a page, and most of its memory
+ * above 4 GiB; and synthetic maps with holes, an overlap between an
+ * available range and a reserved one, a range crossing 4 GiB, an entry whose
+ * length wraps, a truncated last entry, an empty map, and more ranges than
+ * the map keeps. The reservations the boot makes are replayed against them
+ * and the four numbers checked. Returns the failed-check count (0 == pass).
+ * tests/host/frame_mutate.sh counts the NVS and ACPI types as memory and
+ * requires the Lenovo's row, and no other, to fail.
  */
 
 #include "mm/frame.h"
@@ -113,6 +117,99 @@ static void qemu_sizes(void)
         CHECK(!frame_map_usable(&m, m.top_frame));
         CHECK(frame_map_usable(&m, m.top_frame - 1));
     }
+}
+
+/* The two types the vendored header does not name; the boot prints them as
+ * `acpi` and `nvs`. */
+#define MAP_ACPI 3
+#define MAP_NVS  4
+
+/* One firmware range as the boot prints it: its start, its end and its type. */
+struct printed_range {
+    uint64_t start;
+    uint64_t end;
+    uint32_t type;
+};
+
+/* The Lenovo's map, line for line and in the firmware's order. */
+static const struct printed_range lenovo_ranges[] = {
+    {0x0000000000000000ULL, 0x000000000009D400ULL, MULTIBOOT_MEMORY_AVAILABLE},
+    {0x000000000009D400ULL, 0x00000000000A0000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000000E0000ULL, 0x0000000000100000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x0000000000100000ULL, 0x00000000A56B0000ULL, MULTIBOOT_MEMORY_AVAILABLE},
+    {0x00000000A56B0000ULL, 0x00000000A5EB0000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000A5EB0000ULL, 0x00000000AAABF000ULL, MULTIBOOT_MEMORY_AVAILABLE},
+    {0x00000000AAABF000ULL, 0x00000000AAEBF000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000AAEBF000ULL, 0x00000000AAFBF000ULL, MAP_NVS},
+    {0x00000000AAFBF000ULL, 0x00000000AAFFF000ULL, MAP_ACPI},
+    {0x00000000AAFFF000ULL, 0x00000000AB000000ULL, MULTIBOOT_MEMORY_AVAILABLE},
+    {0x00000000AB000000ULL, 0x00000000AFA00000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000E0000000ULL, 0x00000000F0000000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000FE101000ULL, 0x00000000FE113000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000FEB00000ULL, 0x00000000FEB10000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000FEC00000ULL, 0x00000000FEC01000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000FED00000ULL, 0x00000000FEE01000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x00000000FFC00000ULL, 0x0000000100000000ULL, MULTIBOOT_MEMORY_RESERVED},
+    {0x0000000100000000ULL, 0x000000044F600000ULL, MULTIBOOT_MEMORY_AVAILABLE},
+};
+
+#define LENOVO_RANGES (sizeof(lenovo_ranges) / sizeof(lenovo_ranges[0]))
+/* The allocator's break at that boot; see `lenovo`. */
+#define LENOVO_BREAK  0x736000u
+
+/**
+ * The Lenovo's map, checked against the four numbers its boot printed:
+ * usable 2787701 KiB, unreachable 13883392 KiB, reserved 6989 KiB and
+ * managed 2780712 KiB.
+ *
+ * That boot loaded no module, so its reservations come to everything below
+ * the allocator's break, which covers the kernel image. The printed reserved
+ * figure puts the break in the kilobyte from 0x736000, and the break is a
+ * page boundary, since the last thing the boot carves is a page table; so
+ * the break was 0x736000. The boot took its managed figure from the frame
+ * table and not from this arithmetic, so the two must agree.
+ *
+ * The pages probed are the edges of the available ranges below 4 GiB, the
+ * page the first range ends inside, which is not whole, the first pages of
+ * the NVS and ACPI ranges, types QEMU's maps do not have, and the one
+ * available page after them, which is the last usable page of the map.
+ */
+static void lenovo(void)
+{
+    uint8_t map[LENOVO_RANGES * sizeof(multiboot_memory_map_t)];
+    struct frame_map m;
+    uint32_t n = 0;
+    uint32_t i;
+
+    for (i = 0; i < LENOVO_RANGES; i++) {
+        n += put_entry(map, n, lenovo_ranges[i].start,
+                       lenovo_ranges[i].end - lenovo_ranges[i].start, lenovo_ranges[i].type);
+    }
+    CHECK(frame_map_build(&m, map, n, 0) == 0);
+    CHECK(m.usable_bytes == KIB(2787701));
+    CHECK(m.unreachable_bytes == KIB(13883392));
+    CHECK(!m.from_mem_upper);
+    CHECK(m.count == 4);
+    CHECK(m.top_frame == 0xAB000u);
+    CHECK(frame_map_usable(&m, 0x9Cu));
+    CHECK(!frame_map_usable(&m, 0x9Du));
+    CHECK(frame_map_usable(&m, 0x100u));
+    CHECK(frame_map_usable(&m, 0xA56AFu));
+    CHECK(!frame_map_usable(&m, 0xA56B0u));
+    CHECK(frame_map_usable(&m, 0xA5EB0u));
+    CHECK(frame_map_usable(&m, 0xAAABEu));
+    CHECK(!frame_map_usable(&m, 0xAAABFu));
+    CHECK(!frame_map_usable(&m, 0xAAEBFu));
+    CHECK(!frame_map_usable(&m, 0xAAFBFu));
+    CHECK(frame_map_usable(&m, 0xAAFFFu));
+    CHECK(!frame_map_usable(&m, m.top_frame));
+    CHECK(frame_map_reserve(&m, 0, LENOVO_BREAK) == 0);
+    CHECK(m.reserved_bytes == KIB(6989));
+    CHECK(frame_map_managed(&m) == KIB(2780712));
+    CHECK(!frame_map_usable(&m, 0));
+    CHECK(!frame_map_usable(&m, LENOVO_BREAK / FRAME_PAGE_SIZE - 1));
+    CHECK(frame_map_usable(&m, LENOVO_BREAK / FRAME_PAGE_SIZE));
+    CHECK(frame_map_usable(&m, m.top_frame - 1));
 }
 
 static void synthetic(void)
@@ -221,6 +318,7 @@ static void synthetic(void)
 int main(void)
 {
     qemu_sizes();
+    lenovo();
     synthetic();
     return (fails > 50) ? 50 : fails;
 }
