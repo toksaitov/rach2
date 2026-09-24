@@ -106,10 +106,7 @@ static int sys_stat(const char *path, struct stat *buf)
 static int sys_call3(int nr, int a, int b, int c)
 {
     int result;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(result)
-                         : "0"(nr), "b"(a), "c"(b), "d"(c)
-                         : "memory");
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(nr), "b"(a), "c"(b), "d"(c) : "memory");
     return result;
 }
 
@@ -201,6 +198,35 @@ static void print_octal(unsigned int m)
  * Entry point: runs the stat64 (195) probes in part A, then the stat (106)
  * probes in part B, and exits 0 only if every probe passed.
  */
+/*
+ * Two files of one name in two directories are two files, and a tool that
+ * finds them sharing an inode number, as `cp -a` does, copies them as hard
+ * links of one file. KRFFS keeps a file's on-disk id as the hash of its
+ * name alone, so the number reported must be made from more.
+ */
+static void same_name_rows(int *passed, int *failed)
+{
+    puts("=== Part C: same-named files ===");
+    print("Test C1: /statc1/k and /statc2/k have different inode numbers... ");
+    if (make_in("/statc1", "/statc1/k") == 0 && make_in("/statc2", "/statc2/k") == 0) {
+        struct stat64 one, two;
+        struct stat oneb, twob;
+
+        if (sys_stat64("/statc1/k", &one) == 0 && sys_stat64("/statc2/k", &two) == 0 &&
+            sys_stat("/statc1/k", &oneb) == 0 && sys_stat("/statc2/k", &twob) == 0 &&
+            one.st_ino != two.st_ino && oneb.st_ino != twob.st_ino) {
+            puts("OK");
+            (*passed)++;
+        } else {
+            puts("FAILED (one inode number for two files)");
+            (*failed)++;
+        }
+    } else {
+        puts("FAILED (the files could not be made)");
+        (*failed)++;
+    }
+}
+
 void _start(void)
 {
     struct stat st;
@@ -362,30 +388,7 @@ void _start(void)
 
     puts("");
 
-    /* ===== Part C: inode numbers of files that share a name =====
-     * Two files of one name in two directories are two files, and a tool
-     * that finds them sharing an inode number, as `cp -a` does, copies them
-     * as hard links of one file. KRFFS keeps a file's on-disk id as the hash
-     * of its name alone, so the number reported must be made from more. */
-    puts("=== Part C: same-named files ===");
-    print("Test C1: /statc1/k and /statc2/k have different inode numbers... ");
-    if (make_in("/statc1", "/statc1/k") == 0 && make_in("/statc2", "/statc2/k") == 0) {
-        struct stat64 one, two;
-        struct stat oneb, twob;
-
-        if (sys_stat64("/statc1/k", &one) == 0 && sys_stat64("/statc2/k", &two) == 0 &&
-            sys_stat("/statc1/k", &oneb) == 0 && sys_stat("/statc2/k", &twob) == 0 &&
-            one.st_ino != two.st_ino && oneb.st_ino != twob.st_ino) {
-            puts("OK");
-            passed++;
-        } else {
-            puts("FAILED (one inode number for two files)");
-            failed++;
-        }
-    } else {
-        puts("FAILED (the files could not be made)");
-        failed++;
-    }
+    same_name_rows(&passed, &failed);
 
     puts("");
     print("Results: ");

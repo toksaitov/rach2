@@ -732,6 +732,12 @@ static int expect_pattern(const char *pattern, double stop)
     return 0;
 }
 
+/** Whether `step` waits for output: an `expect=` or the probe's `boot=`. */
+static int is_expect_step(const char *step)
+{
+    return strncmp(step, "expect=", 7) == 0 || strncmp(step, "boot=", 5) == 0;
+}
+
 /** Boot may take longer than a command when many emulators run at once. */
 static int expect_step(const char *step)
 {
@@ -907,7 +913,7 @@ static int contains(const unsigned char *hay, size_t len, const char *needle)
     return token_end(hay, len, needle, 0) >= 0;
 }
 
-/** Separate the boot wait from the command so only boot uses the run timeout. */
+/** Split a probe into its boot wait, under the run's timeout, and its exec. */
 static int expand_probe(const char *arg, const char **steps, char *execq, size_t size)
 {
     if ((size_t)snprintf(execq, size, "execq=%s", arg + 6) >= size) {
@@ -1468,9 +1474,7 @@ int main(int argc, char **argv)
            machine to leave, so one that left already satisfies it. */
         if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
             continue;
-        if (child_poll() >= 0 &&
-            (strncmp(step, "expect=", 7) == 0 || strncmp(step, "boot=", 5) == 0 ||
-             strncmp(step, "seen=", 5) == 0)) {
+        if (child_poll() >= 0 && (is_expect_step(step) || strncmp(step, "seen=", 5) == 0)) {
             /* A token the machine printed on its way out satisfies the
                step that waited for it: a probe's last lines and the exit
                its kernel makes for it arrive together, and the output is
@@ -1501,7 +1505,7 @@ int main(int argc, char **argv)
             }
             break;
         }
-        if (strncmp(step, "expect=", 7) == 0 || strncmp(step, "boot=", 5) == 0) {
+        if (is_expect_step(step)) {
             int got = expect_step(step);
 
             if (!got)
