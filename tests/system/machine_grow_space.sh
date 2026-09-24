@@ -11,10 +11,10 @@ if [ "$#" -le 1 ]; then
         || { echo 'grow-space: usage: machine_grow_space.sh [--mutate]' >&2; exit 1; }
     # Image targets are deliberately not built here. tests/run grow supplies
     # them; a direct proof runs against the same prepared artifacts.
-    if [ -f krffs/recovery_authorized_keys ]; then image=rach2-recovery-with-key; else image=rach2-recovery; fi
+    if [ -f krffs/recovery_authorized_keys ]; then tag=-with-key; else tag=; fi
     exec sh tests/system/grow_machine.sh build/tests/system/harness \
-        "build/images/$image.iso" build/images/installer-test.disk \
-        build/images/rach2-sealed.disk build/images/grow "$mode"
+        "build/images/rach2-recovery$tag.iso" build/images/installer-test.disk \
+        "build/images/rach2-sealed$tag.disk" build/images/grow "$mode"
 fi
 [ "$#" = 3 ] || exit 2
 harness=$1

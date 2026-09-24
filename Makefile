@@ -83,7 +83,7 @@ OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
 OS_REAL_EXT2    = $(IMAGES_DIR)/os-real.ext2
 METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
-OS_REAL_GRUB_DISK = $(IMAGES_DIR)/os-real-grub.disk
+OS_REAL_GRUB_DISK = $(IMAGES_DIR)/os-real-grub$(RECOVERY_KEY_TAG).disk
 MKIMAGE         = krffs/mkimage.sh
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
@@ -572,11 +572,34 @@ no-recovery-key:
 	rm -f $(IMAGES_DIR)/rach2-recovery-with-key.krffs \
 	      $(IMAGES_DIR)/rach2-recovery-with-key.iso \
 	      $(IMAGES_DIR)/rach2-install-stick-with-key.img \
+	      $(IMAGES_DIR)/rach2-sealed-with-key.disk \
+	      $(IMAGES_DIR)/os-real-grub-with-key.disk \
 	      $(IMAGES_DIR)/rach2-recovery.krffs $(IMAGES_DIR)/rach2-recovery.iso \
 	      $(IMAGES_DIR)/rach2-install-stick.img \
-	      $(IMAGES_DIR)/install-test-stick.img $(SEALED_DISK) \
-	      $(OS_REAL_GRUB_DISK)
+	      $(IMAGES_DIR)/install-test-stick.img \
+	      $(IMAGES_DIR)/rach2-sealed.disk $(IMAGES_DIR)/os-real-grub.disk
 	@echo "no-recovery-key: the recovery system will answer nobody"
+
+# `make release`: the artifacts a person hands to somebody else, the install
+# stick and the recovery ISO, built from a tree with no recovery key. A key
+# built into them lets whoever holds its private half into their recovery
+# system, and a release and a development build look the same from outside,
+# so a release is refused while this tree has a key, when make reads this
+# file and before anything is built. A key minted later in the same command
+# is refused by tools/image/keyname.sh, since the names were chosen without
+# it. RELEASE=1 asks the same of every goal but the three that remove things,
+# and `make no-recovery-key` makes a tree that can build a release.
+RELEASE_GOALS = rach2-install-stick rach2-recovery-iso
+ifneq ($(filter release,$(MAKECMDGOALS))$(filter 1,$(RELEASE)),)
+ifneq ($(filter-out clean distclean no-recovery-key,$(or $(MAKECMDGOALS),all)),)
+ifneq ($(wildcard krffs/recovery_authorized_keys),)
+$(error release: refused: krffs/recovery_authorized_keys is present, so every recovery artifact would let its key in; run make no-recovery-key first)
+endif
+endif
+endif
+.PHONY: release
+release: $(RELEASE_GOALS)
+	@echo "release: built: $(INSTALL_STICK) $(RECOVERY_ISO)"
 
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
 
@@ -685,8 +708,9 @@ rach2-metal-image: $(METAL_IMAGE)
 # A recovery image that carries a key and one that carries none are identical
 # from outside a booted machine, so the difference is in the name of every
 # artifact that carries it: with a key the image is `rach2-recovery-with-key`,
-# and so are the ISO and the install stick built from it. A person about to
-# write a stick reads the name of the file being written.
+# and so are the ISO, the install stick, the sealed disk and the GRUB disk
+# built from it. A person about to write a stick reads the name of the file
+# being written.
 RECOVERY_NAME = rach2-recovery
 RECOVERY_KEY_TAG =
 ifneq ($(wildcard krffs/recovery_authorized_keys),)
@@ -715,7 +739,9 @@ os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-seti
 # 64 MiB recovery partition after it whose kernel and RAM image GRUB reaches
 # when partition 1 cannot be read at all, and the ext2 root, 1 GiB at 130 MiB,
 # the same manifest as an ext2 volume, which the candidate and the fallback
-# entries both boot. The image is 1155 MiB.
+# entries both boot. The image is 1155 MiB. Its recovery partition carries the
+# recovery image, so a tree with a recovery key names it
+# `rach2-sealed-with-key.disk`.
 #
 # The address is `rach2.ip=none`: this machine is carried between buildings and
 # takes whatever the network there gives it, through `ifup -a` and udhcpc, which
@@ -731,7 +757,7 @@ SEALED_ADDRESS ?= 192.168.0.105
 SEALED_MASK ?= 255.255.255.0
 SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
-SEALED_DISK = build/images/rach2-sealed.disk
+SEALED_DISK = build/images/rach2-sealed$(RECOVERY_KEY_TAG).disk
 
 # The file systems in files a fresh disk carries in /demo, one of each kind
 # this kernel mounts, each with a hello.txt in it, and an empty KRFFS volume
@@ -801,7 +827,8 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 
 $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
                 krffs/manifests/rach2-metal-disk.manifest krffs/rescue-static.script \
-                tools/image/mkdisk_grub.sh $(DISK_TOOLS) $(CFGCHECK)
+                tools/image/mkdisk_grub.sh tools/image/keyname.sh $(DISK_TOOLS) $(CFGCHECK)
+	@sh tools/image/keyname.sh $@
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_BOOT_MB=64 \
@@ -821,13 +848,18 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 # The GRUB disk `rach2/run_from_disk.sh` boots: the os-real system as an ext2
 # root on the third partition, reached through the boot loader with no kernel
 # given to the emulator, which is the path a machine takes. The suites build
-# their own disks in tests/system/suites.mk; this one exists for a person.
+# their own disks in tests/system/suites.mk; this one exists for a person, and
+# no suite boots it, so tests/system/build_rules_test.sh reads its rule from
+# the make database instead. Its recovery partition carries the recovery
+# image, so a tree with a recovery key names it `os-real-grub-with-key.disk`.
 .PHONY: os-real-grub-disk
 os-real-grub-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@$(MAKE) --no-print-directory $(OS_REAL_GRUB_DISK)
 
 $(OS_REAL_GRUB_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_EXT2) \
-                      krffs/manifests/os-real.manifest tools/image/mkdisk_grub.sh $(DISK_TOOLS)
+                      krffs/manifests/os-real.manifest tools/image/mkdisk_grub.sh \
+                      tools/image/keyname.sh $(DISK_TOOLS)
+	@sh tools/image/keyname.sh $@
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
 	RACH2_DISK_RECOVERY_MB=64 \

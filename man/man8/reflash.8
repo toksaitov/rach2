@@ -69,7 +69,12 @@ a 1 GiB ext2 root image at byte 136314880.
 Use the offsets reported by the machine for the disk being written.
 .Pp
 To rewrite the recovery partition while running the disk's recovery
-entry, first extract its image on the host:
+entry, first extract its image on the host.
+The sealed disk is
+.Pa build/images/rach2-sealed.disk ,
+or
+.Pa build/images/rach2-sealed-with-key.disk
+in a tree with a recovery key:
 .Dl dd if=build/images/rach2-sealed.disk of=recovery.img bs=512 skip=133120 count=131072
 Send it over SSH:
 .Dl gzip -c recovery.img | ssh -i $KEY root@ADDRESS 'gunzip | reflash -p /dev/disk0 68157440 67108864'

@@ -50,8 +50,12 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # The kernel and output default to the host build's, and both can be named:
 # the self-build proof hands the guest-built kernel here and boots the result.
+# The output's default is the name the root Makefile gives the GRUB disk, with
+# `-with-key` in it when this tree has a recovery key.
 KERNEL="${1:-$REPO/build/rach2/kernel}"
-OUT="${2:-$REPO/build/images/os-real-grub.disk}"
+KEY_TAG=""
+[ ! -f "$REPO/krffs/recovery_authorized_keys" ] || KEY_TAG=-with-key
+OUT="${2:-$REPO/build/images/os-real-grub$KEY_TAG.disk}"
 
 # Knobs for a disk aimed at a particular machine, each defaulting to exactly
 # what this script always built so no existing caller changes: extra kernel

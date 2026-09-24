@@ -106,7 +106,7 @@ make os-real-grub-disk
 (cd rach2 && ./run_from_disk.sh)
 ```
 
-The ISO path boots GRUB from a CD image. `run_from_disk.sh` boots BIOS, the disk MBR, and GRUB without QEMU's `-kernel` or `-initrd` options, on the disk `make os-real-grub-disk` builds: the os-real system as an ext2 root on the third partition, with the boot and recovery partitions before it, which is the layout a machine has. To stop at the first instruction and attach GDB, build the kernel and run `./debug.sh` from `rach2/`.
+The ISO path boots GRUB from a CD image. `run_from_disk.sh` boots BIOS, the disk MBR, and GRUB without QEMU's `-kernel` or `-initrd` options, on the disk `make os-real-grub-disk` builds, `build/images/os-real-grub.disk`, or `os-real-grub-with-key.disk` in a tree with a recovery key: the os-real system as an ext2 root on the third partition, with the boot and recovery partitions before it, which is the layout a machine has. To stop at the first instruction and attach GDB, build the kernel and run `./debug.sh` from `rach2/`.
 
 ## Kernel command line
 

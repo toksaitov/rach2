@@ -3,7 +3,9 @@
 # Boot the bootable Rach2 disk image in QEMU, BIOS -> MBR -> GRUB -> kernel,
 # with no -kernel or -initrd: the kernel and GRUB come off the disk's boot
 # partition and KRFFS off its second partition (rach2.root=disk). Build the
-# disk first with `make os-real-grub-disk`.
+# disk first with `make os-real-grub-disk`, which names it
+# os-real-grub-with-key.disk in a tree with a recovery key; the script boots
+# whichever of the two names exists, the plain one first.
 #
 # -serial stdio puts the kernel's COM1 on the terminal; audio and networking
 # come from qemu_devices.sh. SSH is forwarded to host port 2222 so the capstone
@@ -22,9 +24,10 @@ NET_HOSTFWD="${NET_HOSTFWD:-hostfwd=tcp::2222-:22}"
 . "$SCRIPT_DIR/qemu_devices.sh"
 
 DISK="$SCRIPT_DIR/../build/images/os-real-grub.disk"
+[ -f "$DISK" ] || DISK="$SCRIPT_DIR/../build/images/os-real-grub-with-key.disk"
 
 if [ ! -f "$DISK" ]; then
-    echo "run: disk image '$DISK' not found; build it with 'make os-real-grub-disk'" >&2
+    echo "run: no disk image os-real-grub.disk or os-real-grub-with-key.disk in build/images; build one with 'make os-real-grub-disk'" >&2
     exit 1
 fi
 

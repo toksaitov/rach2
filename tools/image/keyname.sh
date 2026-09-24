@@ -4,12 +4,14 @@
 # it carries.
 #
 # Make reads `krffs/recovery_authorized_keys` when it starts, and that decides
-# whether the recovery image, its ISO and the install stick are built under
-# their plain names or under `-with-key` ones. A key that appears after that
-# decision, which is what `make recovery-key rach2-install-stick` does in one
-# command, would be staged into an artifact whose name says it answers nobody.
-# The name is the guard a person reads before writing a stick, so the build
-# stops here instead.
+# whether the recovery image, its ISO, the install stick, the sealed disk and
+# the GRUB disk are built under their plain names or under `-with-key` ones;
+# the two disks carry the recovery image on their recovery partitions. A key
+# that appears after that decision, which is what `make recovery-key
+# rach2-install-stick` does in one command, would be staged into an artifact
+# whose name says it answers nobody. The name is the guard a person reads
+# before writing a stick, so the build stops here instead. It is also what
+# makes `make release` safe against a key minted in the same command.
 #
 # Usage: keyname.sh PATH
 set -u
