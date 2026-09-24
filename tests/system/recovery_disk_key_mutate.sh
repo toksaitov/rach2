@@ -136,8 +136,8 @@ cmp "$work/fixed.init" "$work/init-restored.init"
 # The installer no longer copies the key it was given. The dollars are the
 # installer's own text.
 # shellcheck disable=SC2016
-mutate "$installer_source" '        cp "$recovery_keys" "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||' \
-    '        : "$recovery_keys" ||'
+mutate "$installer_source" "        printf '%s\\n' \"\$recovery_key_text\" > \"\$RECOVERY_MNT/\$RECOVERY_KEYS_FILE\" ||" \
+    '        : "$recovery_key_text" ||'
 run_phase installer-mutated 1 "FAIL: row 6b: the recovery partition's key file holds"
 restore
 run_phase installer-restored 0 "$passed"

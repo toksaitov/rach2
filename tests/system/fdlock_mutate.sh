@@ -138,7 +138,7 @@ path = Path(name)
 text = path.read_text()
 if fault == 'namespace':
     for verb in ('lock', 'unlock'):
-        old = ('    if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {\n'
+        old = ('    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {\n'
                f'        vfs_ns_{verb}(ofd->vmnt);\n    }}\n')
         assert text.count(old) == 1
         text = text.replace(old, '')

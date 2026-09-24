@@ -127,10 +127,11 @@ elif kind in ('gap-growth', 'gap-slack'):
     start = s.index('int krffs_write(')
     end = s.index('int krffs_fsync(', start)
     part = s[start:end]
-    token = 'if ((uint64_t)offset > old_data_size)'
+    token = 'krffs_write_into_node(node, buffer, size, offset, old_data_size);'
     first = part.index(token)
     position = first if kind == 'gap-slack' else part.index(token, first + 1)
-    part = part[:position] + part[position:].replace(token, 'if (0)', 1)
+    part = part[:position] + part[position:].replace(
+        token, 'krffs_write_into_node(node, buffer, size, offset, (uint64_t)offset);', 1)
     s = s[:start] + part + s[end:]
 elif kind == 'utility-links':
     replace('$(TARGETS) $(SBIN_TARGETS): $(CONFIG) $(CRT1) $(CRTI) \\\n    $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN)',
