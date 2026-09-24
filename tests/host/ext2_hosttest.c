@@ -2534,7 +2534,6 @@ static void batch_flush_error_row(int barrier, int large)
 #include "ext2_batch_cases.h"
 #include "ext2_batch_lifecycle.h"
 
-/** Exercise the public write operations at small and large cache limits. */
 /* The host heap's limit on one allocation; see tests/host/compat. */
 extern unsigned long kheap_host_largest;
 
@@ -2557,6 +2556,7 @@ static void reserve_run_row(void)
     check(unmount_rw() == 0, "and that mount unmounts cleanly");
 }
 
+/** Exercise the public write operations at small and large cache limits. */
 static void batch_rows(void)
 {
     int barrier;
