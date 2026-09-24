@@ -40,6 +40,9 @@ static unsigned long address, mask, gateway;
 /* Whether the model answers SIOCGIFADDR; the rows written before it was
  * modelled read an interface whose address cannot be read. */
 static int getaddr_works;
+/* What the parent's end of the handoff pipe answers: 'y', or 0 for an end of
+ * file, a parent that died before it published the child. */
+static char handshake_answer = 'y';
 static jmp_buf child_exit;
 static int exit_status;
 static void overlap_writer(void);
@@ -356,7 +359,10 @@ static pid_t model_setsid(void)
 static ssize_t model_read(int fd, void *buf, size_t count)
 {
     if (fd == 50 && count == 1) {
-        *(char *)buf = 'y';
+        if (!handshake_answer) {
+            return 0;
+        }
+        *(char *)buf = handshake_answer;
         return 1;
     }
     return read(fd, buf, count);
@@ -673,6 +679,39 @@ static void check_stdio(void)
     stdio_model = 0;
 }
 
+/**
+ * Require a child that was never handed the claim to leave an address the
+ * interface had before the first lease, and to remove the claim.
+ */
+static void check_handoff_adopted(void)
+{
+    unsigned long recorded;
+    int present;
+
+    stdio_model = 1;
+    handshake_answer = 0;
+    getaddr_works = 1;
+    remove_error = 0;
+    address = 0x0a000002UL;
+    seed_claim(address);
+    adopted = 1;
+    exit_status = 0;
+    if (setjmp(child_exit) == 0) {
+        (void)go_background();
+    }
+    CHECK(exit_status == 1 && address == 0x0a000002UL,
+          "a child never handed the claim leaves an address it did not put on");
+    CHECK(claim_read(&recorded, &present) <= 0 && !present,
+          "a child never handed the claim removes it");
+    adopted = 0;
+    getaddr_works = 0;
+    handshake_answer = 'y';
+    stdio_model = 0;
+    holds_interface = 0;
+    holding = 0;
+    address = 0;
+}
+
 int main(void)
 {
     if (!mkdtemp(directory)) {
@@ -687,6 +726,7 @@ int main(void)
     check_receive_wait();
     check_rebinding();
     check_stdio();
+    check_handoff_adopted();
     CHECK(rmdir(directory) == 0, "temporary files are removed");
     if (failures) {
         return 1;

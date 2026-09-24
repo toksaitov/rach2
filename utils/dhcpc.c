@@ -1357,8 +1357,8 @@ static int detach_stdio(void)
  * names the parent, since by then another client may have taken the interface
  * over and been given the same address. When the claim does name the parent,
  * the child takes off the address in `holding`, if the interface still has
- * it, and removes the claim, which it keeps when that address cannot be taken
- * off.
+ * it and the first lease did not find it there, and removes the claim, which
+ * it keeps when that address cannot be taken off.
  *
  * A published child starts its own session and detaches the inherited
  * standard descriptors; one that cannot redirect exits with its claim retained
@@ -1423,7 +1423,7 @@ static int go_background(void)
                 "address up\n",
                 ifname);
         if (claim_pid(0) == parent) {
-            if (holding == 0 || drop_recorded_address(holding) == 0) {
+            if (holding == 0 || adopted || drop_recorded_address(holding) == 0) {
                 remove(pidpath);
             } else {
                 fprintf(stderr,

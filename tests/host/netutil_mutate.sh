@@ -70,7 +70,7 @@ done
 if [ "$#" -eq 0 ]; then
     set -- read-first read-second seek cleanup release expiry mask resolver \
         claim-open claim-read holder-open holder-read detach dup receive rebinding \
-        dhcp-status nc-port httpd-page httpd-port initial-record adopted
+        dhcp-status nc-port httpd-page httpd-port initial-record adopted handoff-adopted
 fi
 for fault do
     python3 - "$work/utils" "$fault" <<'PY'
@@ -157,6 +157,8 @@ changes = {
                        "    return unconfigure(fd) == 0 ? 0 : -1;"),
     "adopted": ("dhcpc.c", "record_claim((long)getpid(), adopted ? 0 : l->address)",
                 "record_claim((long)getpid(), l->address)"),
+    "handoff-adopted": ("dhcpc.c", "if (holding == 0 || adopted || drop_recorded_address(holding) == 0)",
+                        "if (holding == 0 || drop_recorded_address(holding) == 0)"),
 }
 changes["rebinding"] = changes["receive"]
 if fault not in changes:
@@ -196,6 +198,7 @@ PY
         httpd-port) test=httpd; message='runtime error: signed integer overflow' ;;
         initial-record) message="a first lease that cannot be recorded leaves the interface's address" ;;
         adopted) message='a first lease the interface already had is recorded as nothing to take off' ;;
+        handoff-adopted) message='a child never handed the claim leaves an address it did not put on' ;;
     esac
     run_phase "$fault-mutated" "$test" 1 "$message"
     cleanup
