@@ -100,11 +100,19 @@ int block_request(block_device_t *dev, int write, uint64_t lba, uint32_t count, 
     return unexpected();
 }
 
+/**
+ * Fail a copy no row expects. The destination is cleared first: GCC 15
+ * reads a caller through this stub, and a byte the stub leaves unwritten is
+ * a byte it reports as read uninitialized, as in the screen log's write.
+ */
 int copy_from_user(void *dst, const void *src, uint32_t size)
 {
-    (void)dst;
+    uint32_t i;
+
     (void)src;
-    (void)size;
+    for (i = 0; i < size; ++i) {
+        ((char *)dst)[i] = 0;
+    }
     return unexpected();
 }
 
