@@ -227,6 +227,73 @@ static void same_name_rows(int *passed, int *failed)
     }
 }
 
+/** Compare whole modification times; seconds alone would miss this fault. */
+static int time_later(const struct stat64 *a, const struct stat64 *b)
+{
+    return a->st_mtime > b->st_mtime ||
+           (a->st_mtime == b->st_mtime && a->st_mtime_nsec > b->st_mtime_nsec);
+}
+
+/** Supply the fourth argument used by utimensat. */
+static int sys_call4(int nr, int a, int b, int c, int d)
+{
+    int result;
+
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(nr), "b"(a), "c"(b), "d"(c), "S"(d)
+                         : "memory");
+    return result;
+}
+
+/**
+ * KRFFS retains nanoseconds, so successive writes and requests for now must
+ * not collapse into one 10 ms tick. No delay separates the first two writes
+ * or the fifty stamps. Explicit fractions, including zero, must survive.
+ */
+static int time_rows(void)
+{
+    const char *paths[2] = {"/stattime-a", "/stattime-b"};
+    struct stat64 previous, next;
+    long times[4] = {1234567890, 0, 1234567890, 123456789};
+    int fd[2];
+    int i;
+    int ok = 1;
+
+    fd[0] = sys_call3(5, (int)paths[0], 0101, 0644);
+    fd[1] = sys_call3(5, (int)paths[1], 0101, 0644);
+    if (fd[0] < 0 || fd[1] < 0) {
+        ok = 0;
+    } else {
+        ok = sys_write(fd[0], "a", 1) == 1 && sys_write(fd[1], "b", 1) == 1 &&
+             sys_stat64(paths[0], &previous) == 0 && sys_stat64(paths[1], &next) == 0 &&
+             time_later(&next, &previous);
+        if (ok) {
+            previous = next;
+        }
+        for (i = 0; ok && i < 50; i++) {
+            ok = sys_call4(320, -100, (int)paths[i % 2], 0, 0) == 0 &&
+                 sys_stat64(paths[i % 2], &next) == 0 && time_later(&next, &previous);
+            previous = next;
+        }
+        if (ok) {
+            ok = sys_call4(320, -100, (int)paths[0], (int)times, 0) == 0 &&
+                 sys_stat64(paths[0], &next) == 0 && next.st_atime == 1234567890u &&
+                 next.st_atime_nsec == 0 && next.st_mtime == 1234567890u &&
+                 next.st_mtime_nsec == 123456789u;
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        if (fd[i] >= 0) {
+            sys_call3(6, fd[i], 0, 0);
+        }
+        sys_call3(10, (int)paths[i], 0, 0);
+    }
+    puts(ok ? "STATTIME OK: two writes, fifty stamps, explicit fractions"
+            : "STATTIME FAIL: two writes, fifty stamps, explicit fractions");
+    return ok;
+}
+
 void _start(void)
 {
     struct stat st;
@@ -389,6 +456,11 @@ void _start(void)
     puts("");
 
     same_name_rows(&passed, &failed);
+    if (time_rows()) {
+        passed++;
+    } else {
+        failed++;
+    }
 
     puts("");
     print("Results: ");

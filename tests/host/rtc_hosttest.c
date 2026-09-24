@@ -1,7 +1,8 @@
 /**
- * Dual-target host test for the CMOS clock's arithmetic.
+ * Host test for the CMOS clock arithmetic and PIT interpolation.
  *
- * host-deps: rach2/sys/rtc.c
+ * host-deps: rach2/sys/rtc.c rach2/sys/pit.c
+ * host-cflags: -DRTC_HOST_TEST
  *
  * `rtc_decode`, `rtc_snapshots_agree` and `rtc_time_from_anchor` are the whole
  * of the clock's arithmetic and they touch no hardware, so they run natively
@@ -12,11 +13,15 @@
  * test, because a case that derives its answer the way the implementation does
  * proves only that the implementation is self-consistent.
  *
+ * Port stubs also drive the real-time reader across pending interrupts and
+ * counter wraps, including one during its latch, without executing I/O.
+ *
  * Returns the failed-check count (0 == all passed), capped so it cannot wrap
  * to a false 0.
  */
 
 #include "rtc.h"
+#include "pit.h"
 
 static int fails;
 
@@ -26,6 +31,133 @@ static int fails;
             fails++;   \
         }              \
     } while (0)
+
+volatile uint32_t kernel_ticks;
+volatile uint32_t kernel_uptime_seconds;
+volatile uint32_t kernel_second_ticks;
+static uint32_t count;
+static uint8_t status;
+static int port_byte;
+static int pending;
+static int wrap_on_pending;
+static int irq_disabled;
+
+/** Model one atomic status/count latch, not two unrelated hardware reads. */
+void outb(uint16_t port, uint8_t value)
+{
+    CHECK(irq_disabled);
+    CHECK(port == 0x43 && value == 0xC2);
+    port_byte = 0;
+}
+
+uint8_t inb(uint16_t port)
+{
+    CHECK(irq_disabled && port == 0x40);
+    if (port_byte++ == 0) {
+        return status;
+    }
+    return port_byte == 2 ? (uint8_t)count : (uint8_t)(count >> 8);
+}
+
+uint32_t kirq_save(void)
+{
+    uint32_t old = (uint32_t)irq_disabled;
+
+    irq_disabled = 1;
+    return old;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    irq_disabled = (int)flags;
+}
+
+/** Force the counter wrap between the latch and the second PIC read. */
+int pic_irq_pending(uint8_t irq)
+{
+    CHECK(irq == 0 && irq_disabled);
+    if (wrap_on_pending && --wrap_on_pending == 0) {
+        pending = 1;
+        count = pit_reload - 100u;
+        status = 0x80;
+    }
+    return pending;
+}
+
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
+/**
+ * Literal answers exercise the same latch and real-time path as file writes.
+ * A pending wrap must count once, including at the end of a second; dropping
+ * the PIT fraction must fail even when the delivered tick has not changed.
+ */
+static void subtick_rows(void)
+{
+    int64_t sec, ns;
+
+    kernel_uptime_seconds = 10;
+    kernel_second_ticks = 0;
+    count = pit_reload - 100u;
+    status = 0x80;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 10 && ns == 41000);
+    count -= 100u;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 10 && ns == 83000);
+    status = 0;
+    count = 2;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 10 && ns == 9997000);
+    pending = 1;
+    status = 0x80;
+    count = pit_reload - 100u;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 10 && ns == 10041000);
+    pending = 0;
+    kernel_second_ticks = 1;
+    count -= 100u;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 10 && ns == 10083000);
+    kernel_second_ticks = 99;
+    status = 0;
+    count = 2;
+    wrap_on_pending = 2;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 11 && ns == 41000);
+    pending = 0;
+    kernel_uptime_seconds = 11;
+    kernel_second_ticks = 0;
+    count -= 100u;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 11 && ns == 83000);
+    count = pit_reload + 5u;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 11 && ns == 83000);
+    pending = 1;
+    count = 2;
+    status = 0;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 11 && ns == 19997000);
+    count = pit_reload - 100u;
+    status = 0x80;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 11 && ns == 19997000);
+    pending = 0;
+    kernel_second_ticks = 2;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 11 && ns == 20041000);
+    CHECK(!irq_disabled);
+    kernel_second_ticks = 0;
+    kernel_uptime_seconds = 42949672u;
+    count = pit_reload - 100u;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 42949672LL && ns == 41000);
+}
 
 /** A BCD byte from a two-digit value, the way the CMOS has one. */
 static unsigned char bcd(int value)
@@ -288,5 +420,6 @@ int main(void)
         CHECK(rtc_pair_disposition(&b, &b) == RTC_PAIR_STOP);
     }
 
+    subtick_rows();
     return fails > 100 ? 100 : fails;
 }

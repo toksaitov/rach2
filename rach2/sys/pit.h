@@ -31,6 +31,9 @@ extern uint32_t pit_reload;
  */
 uint32_t pit_now_us(void);
 
+/** Nanoseconds within this tick. The caller must disable interrupts. */
+uint32_t pit_subtick_ns(void);
+
 /**
  * Count one period of the counter, from the timer handler and nowhere else.
  *

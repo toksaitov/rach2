@@ -167,7 +167,7 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
     int32_t month;
     int32_t year;
     int32_t days;
-    int32_t y;
+    int32_t each;
     int32_t m;
     int binary;
     int pm = 0;
@@ -244,8 +244,8 @@ int rtc_decode(const rtc_snapshot_t *raw, int64_t *seconds, rtc_time_t *out)
     }
 
     days = 0;
-    for (y = RTC_EPOCH_YEAR; y < year; y++) {
-        days += rtc_is_leap(y) ? 366 : 365;
+    for (each = RTC_EPOCH_YEAR; each < year; each++) {
+        days += rtc_is_leap(each) ? 366 : 365;
     }
     for (m = 1; m < month; m++) {
         days += rtc_days_in_month(year, m);
@@ -294,11 +294,13 @@ void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32
     *nanoseconds = (int64_t)(subsecond_ticks % RTC_TICKS_PER_SECOND) * RTC_NANOSECONDS_PER_TICK;
 }
 
-#if defined(__i386__)
+#if defined(__i386__) || defined(RTC_HOST_TEST)
+
+#include "lib/kirq.h"
+#include "pic.h"
+#include "pit.h"
 
 /* Kernel-side only, like krandom.c's hardware half (see kio.c / kernel.c). */
-extern void outb(uint16_t port, uint8_t val);
-extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_uptime_seconds;
 extern volatile uint32_t kernel_second_ticks;
 
@@ -326,9 +328,6 @@ extern volatile uint32_t kernel_second_ticks;
 
 /* How many times to re-read a sample that changed under us before giving up. */
 #define RTC_SAMPLE_TRIES 4
-
-/* The same, for the two-counter read of the running clock. */
-#define RTC_SNAPSHOT_TRIES 3
 
 /*
  * The anchor: the second the clock reported, and the uptime second at which it
@@ -503,45 +502,45 @@ int64_t rtc_boot_epoch(void)
 }
 
 /**
- * The current real time, in seconds and nanoseconds since the Unix epoch.
+ * The current real time, with the PIT position added to the delivered ticks.
  *
- * With an anchor this is the second the clock reported plus the ticks elapsed
- * since that read; without one it is time since boot, which is what this system
- * reported before it had a clock. Either way the resolution is the 10 ms tick,
- * and there is no NTP: the machine reads the clock once and then keeps its own
- * time, so a long uptime drifts by whatever the PIT drifts by.
+ * IRQ0 can be pending after the counter wraps. Read its pending bit on both
+ * sides of the latch with interrupts disabled; if it changed, latch again.
+ * A pending tick belongs to the new period even before the handler counts it.
+ * The saved result prevents backward steps if interrupts stay masked across
+ * several periods, which the PIC cannot count, or a faulty latch reads zero.
+ * This only supplies now; callers that set an explicit file time keep it.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t uptime;
-    uint32_t ticks;
-    int try;
+    static int64_t last_seconds;
+    static int64_t last_nanoseconds;
+    uint32_t flags = kirq_save();
+    uint32_t uptime = kernel_uptime_seconds;
+    uint32_t ticks = kernel_second_ticks;
+    uint32_t phase_ns;
+    int pending = pic_irq_pending(0);
 
-    /* The two counters are read until they agree, and that is not caution for
-     * its own sake. A syscall body runs with interrupts ON, so the timer can
-     * roll the second over between the two reads: taken as (old second, new
-     * ticks) the answer is a second ahead, and as (new second, old ticks) it is
-     * a second BEHIND, which is the one that matters. A file written later
-     * would carry an earlier time than one written before it, and a make would
-     * read that as nothing to do.
-     *
-     * Two reads of the second around one read of the ticks settle it: if the
-     * second did not move, the ticks belong to it. The loop is bounded because
-     * a bound that is never reached is still cheaper than a hang. */
-    for (try = 0; try < RTC_SNAPSHOT_TRIES; try++) {
-        uptime = kernel_uptime_seconds;
-        ticks = kernel_second_ticks;
-        if (uptime == kernel_uptime_seconds) {
-            rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
-                                 nanoseconds);
-            return;
-        }
+    phase_ns = pit_subtick_ns();
+    if (pending != pic_irq_pending(0)) {
+        pending = 1;
+        phase_ns = pit_subtick_ns();
     }
-
-    /* Three rollovers inside this loop is not a clock this code can read, so
-     * report the second without its fraction, not an invented one. */
-    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, kernel_uptime_seconds, 0, seconds,
+    ticks += (uint32_t)pending;
+    if (ticks >= RTC_TICKS_PER_SECOND) {
+        ticks -= RTC_TICKS_PER_SECOND;
+        uptime++;
+    }
+    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
                          nanoseconds);
+    *nanoseconds += phase_ns;
+    if (*seconds < last_seconds || (*seconds == last_seconds && *nanoseconds < last_nanoseconds)) {
+        *seconds = last_seconds;
+        *nanoseconds = last_nanoseconds;
+    }
+    last_seconds = *seconds;
+    last_nanoseconds = *nanoseconds;
+    kirq_restore(flags);
 }
 
-#endif /* __i386__ */
+#endif /* __i386__ || RTC_HOST_TEST */

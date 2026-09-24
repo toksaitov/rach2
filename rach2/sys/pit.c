@@ -156,9 +156,8 @@ static uint32_t clock_phase(void)
 {
     uint8_t status, lo, hi;
 
-    outb(0x43, 0xE2); /* read back channel 0's status, leaving the count */
+    outb(0x43, 0xC2); /* latch channel 0 status and count together */
     status = inb(0x40);
-    outb(0x43, 0x00); /* latch the count */
     lo = inb(0x40);
     hi = inb(0x40);
     return pit_phase_from(((uint32_t)hi << 8) | (uint32_t)lo, status);
@@ -202,4 +201,16 @@ uint32_t pit_now_us(void)
 
     kirq_restore(flags);
     return now;
+}
+
+/**
+ * Nanoseconds within the current tick, with interrupts already disabled.
+ *
+ * The status and count must describe the same instant or a half-period wrap
+ * can combine the old OUT bit with the new count. Use the same latched phase
+ * as the diagnostic clock; its microsecond resolution fits in 32 bits.
+ */
+uint32_t pit_subtick_ns(void)
+{
+    return clock_phase() * 1000u;
 }
