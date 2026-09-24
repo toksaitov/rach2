@@ -1236,6 +1236,51 @@ static int input_deadline_selftest(void)
 }
 
 /**
+ * Require output the machine wrote before a timeout to be read after it.
+ *
+ * The pipe holds a line and its writer is gone, and the run's deadline has
+ * passed. `pump` reads nothing then, since it checks the deadline before it
+ * reads; `drain_rest` must read the line all the same, as the judgement of a
+ * run that timed out needs the `--never` texts written just before the end.
+ */
+static int late_output_selftest(void)
+{
+    static const char line[] = "late output before the deadline\n";
+    int out[2];
+    int saved_out = child_out;
+    double saved_deadline = deadline;
+    size_t start = buf_len;
+    int found;
+
+    if (pipe(out) != 0) {
+        perror("harness: selftest pipe");
+        return 1;
+    }
+    if (write(out[1], line, sizeof(line) - 1) != (ssize_t)(sizeof(line) - 1)) {
+        perror("harness: selftest write");
+        close(out[0]);
+        close(out[1]);
+        return 1;
+    }
+    close(out[1]);
+    child_out = out[0];
+    deadline = now() - 1.0;
+    pump(now() + 1.0);
+    drain_rest();
+    found = buf != NULL && strstr((const char *)buf + start, "late output before the deadline") != NULL;
+    close(out[0]);
+    child_out = saved_out;
+    deadline = saved_deadline;
+    if (!found) {
+        fprintf(stderr, "harness: selftest: output written before a timeout was not "
+                        "read after it\n");
+        return 1;
+    }
+    printf("harness: selftest: output written before a timeout is read after it\n");
+    return 0;
+}
+
+/**
  * Check the escape decoder and the mouse step's parsing.
  *
  * The escapes are the cases the suites depend on and the ones they do not: a
@@ -1556,7 +1601,8 @@ int main(int argc, char **argv)
     const char *trace_path;
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
-        return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest();
+        return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest() |
+               late_output_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 

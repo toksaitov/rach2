@@ -2,9 +2,11 @@
 # Compile the harness fixed, faulty and restored in a private directory, and
 # run its selftest on each.
 #
-# The fault is an input pipe left blocking. The selftest's write to a machine
-# that has stopped reading must then wait for a reader, and the selftest kills
-# it after five seconds and fails; the fixed and restored builds pass.
+# The first fault is an input pipe left blocking. The selftest's write to a
+# machine that has stopped reading must then wait for a reader, and the
+# selftest kills it after five seconds and fails. The second is `drain_rest`
+# reading nothing, which the selftest of output written before a timeout must
+# fail. The fixed and restored builds pass.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -71,4 +73,21 @@ PY
 run_phase blocking-mutated 1 'a write the machine does not read was not ended by the deadline'
 cleanup
 run_phase blocking-restored 0 'a write the machine does not read ends at the deadline'
+cmp "$work/harness.saved" "$work/harness.c"
+python3 - "$work/harness.c" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+start = source.index("static void drain_rest(void)\n{")
+old = "        n = read(child_out, chunk, sizeof(chunk));\n"
+at = source.index(old, start)
+if at > source.index("\n}\n", start):
+    raise SystemExit("harness-input-mutation: source pattern is not in drain_rest")
+path.write_text(source[:at] + "        n = 0;\n" + source[at + len(old):])
+PY
+run_phase late-mutated 1 'output written before a timeout was not read after it'
+cleanup
+run_phase late-restored 0 'output written before a timeout is read after it'
 cmp "$work/harness.saved" "$work/harness.c"
