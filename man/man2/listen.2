@@ -41,6 +41,12 @@ The first such refusal is recorded in the kernel log; later refusals at
 this check are not recorded.
 If the queue fills while a handshake is completing, that connection is
 closed and the queue refusal is logged.
+Closing a listener frees the connections still in their handshake on its
+port, with their sockets.
+The peer's final acknowledgement then finds no connection: with no listener
+on the port it is answered with a reset, and a listener opened on the port
+since ignores it, so a connection begun under one listener is never
+accepted by another.
 .Pp
 TCP control blocks are allocated from the kernel heap, with no fixed
 pool size.

@@ -72,6 +72,9 @@ An unbound socket is first assigned an ephemeral source port.
 A datagram may contain at most 1472 bytes; an empty datagram is valid.
 The limited broadcast and subnet broadcast addresses require
 .Dv SO_BROADCAST .
+A subnet broadcast leaves by the interface on that subnet, with that
+interface's address as its source; the limited broadcast,
+255.255.255.255, leaves by the first interface.
 Flags do not affect datagram sends.
 .Pp
 The stack does not fragment outgoing datagrams.

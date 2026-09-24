@@ -238,6 +238,15 @@ int netdev_owns(uint32_t ip)
     return ip != 0 && ip == net_ip_addr;
 }
 
+/* A stand-in for the kernel's random words, from which `tcp.c` draws the key
+ * of its initial sequence numbers. Every case reads a connection's number from
+ * the segment that carries it, so any key serves; tcp_reset_hosttest.c checks
+ * the numbers themselves. */
+uint32_t krandom_u32(void)
+{
+    return 0x52414348u;
+}
+
 #include "../../rach2/sys/network/tcp/tcp.c"
 
 /* ---- the cases ---- */
@@ -1204,5 +1213,5 @@ int main(void)
     if (fails == 0) {
         printf("tcp_hosttest: PASS\n");
     }
-    return fails;
+    return fails > 255 ? 255 : fails;
 }

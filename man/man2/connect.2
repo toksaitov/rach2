@@ -74,12 +74,29 @@ The pending socket error distinguishes a timeout
 .Pq Er ETIMEDOUT
 from a reset during active open
 .Pq Er ECONNREFUSED .
-A reset after establishment records
+During the active open a reset counts only when it acknowledges the SYN,
+its acknowledgement number being the SYN's sequence number plus one;
+any other reset is ignored.
+After establishment a reset at the next expected sequence number records
 .Er ECONNRESET .
+A reset elsewhere in the receive window is answered with an
+acknowledgement and leaves the connection open, since the true peer
+answers that acknowledgement with a reset at the expected number;
+a reset outside the window is ignored.
+This is RFC 5961, section 3.2.
 These pending errors are reported by
 .Dv SO_ERROR
 and cause
 .Dv POLLERR .
+.Pp
+The initial sequence number is the tick count times 2500, the
+4-microsecond clock of RFC 6528, plus the low 32 bits of SipHash-2-4 of
+the local address, remote address, local port and remote port, under a
+key drawn from the kernel's random generator at the first
+.Fn listen
+or
+.Fn connect
+after boot.
 .Ss Datagram sockets
 On an IPv4
 .Dv SOCK_DGRAM
