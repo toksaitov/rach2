@@ -726,11 +726,13 @@ run-packet: rach2 tests krffs test-image $(HARNESS)
 # skips the disk an image rooted on it needs, and the machine would fall to a
 # shell that authenticates nobody, so the kernel refuses that combination; with
 # `rach2.rescue` it is allowed, since asking for that shell is what the token is
-# for. Four boots, and each refusal is asserted twice: the diagnostic, and that
-# no shell was reached after it.
-run-bootline: rach2 tests krffs $(RUNUTIL)
+# for. A root that mounted and whose /sbin/init cannot be read, a symbolic link
+# to itself on an ext2 volume, is refused the same way
+# (tests/system/init_refusal.sh). Five boots, and each refusal is asserted
+# twice: the diagnostic, and that no shell was reached after it.
+run-bootline: rach2 tests krffs $(RUNUTIL) $(HARNESS) $(MKMBR)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
-	sh tests/system/suites/bootline.sh $(BOOT_KERNEL) $(BOOTLINE_TEST_IMAGE)
+	sh tests/system/suites/bootline.sh $(BOOT_KERNEL) $(BOOTLINE_TEST_IMAGE) $(HARNESS) $(MKMBR)
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Three boots, because the three things it must show cannot be shown in
 # one: the probe with the network answering, the same probe with an address and

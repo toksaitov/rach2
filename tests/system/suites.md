@@ -60,7 +60,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `login` (core tier; needs qemu-system-i386; 128 MiB): prove the console cannot fall back to an unauthenticated shell.
 * `man` (core tier; needs qemu-system-i386; 128 MiB): the manual pages on the machine.
 * `metal` (core tier; needs qemu-system-i386, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image and acceptance of an installed ext2 root.
-* `bootline` (full tier; needs qemu-system-i386; 128 MiB): the boot line that contradicts itself.
+* `bootline` (full tier; needs qemu-system-i386, mke2fs; 128 MiB): the boot line that contradicts itself.
 * `persist` (core tier; needs qemu-system-i386; 128 MiB): fsync durability across a reboot.
 * `style` (full tier; needs cppcheck, shellcheck, clang-format; no machine): the source checks over the tree, tools/verify/check.sh, booting nothing.
 * `dgram-e1000` (full tier; needs qemu-system-i386; 128 MiB): the dgram suite on the e1000 card.

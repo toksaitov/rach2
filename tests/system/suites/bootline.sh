@@ -1,19 +1,22 @@
 #!/usr/bin/env sh
 
 #
-# bootline_test.sh: the boot line that contradicts itself, in four boots.
+# bootline_test.sh: the boot line that contradicts itself, and the other boots
+# that must halt rather than open the debug shell.
 #
 # `rach2.nodisk` skips the disk probe. On an image whose root is the disk that
 # leaves nothing to mount, and the kernel would fall to the debug shell, which
 # authenticates nobody. The kernel refuses that combination and says why; the
 # same combination with `rach2.rescue` is allowed, because asking for the debug
-# shell is what that token is for.
+# shell is what that token is for. A root that mounted and whose /sbin/init
+# cannot be read is refused the same way; tests/system/init_refusal.sh is that
+# row, run here on the kernel under test.
 #
 # Each refusal is asserted twice: the diagnostic is there, AND the machine
 # never reached a shell. A test that looked only for the message would pass on
 # a kernel that printed it and carried on.
 #
-# Usage: bootline_test.sh <kernel> <disk>
+# Usage: bootline_test.sh <kernel> <disk> <harness> <mkmbr>
 #
 
 # shellcheck source=tests/system/deadline.sh
@@ -24,9 +27,11 @@ set -e
 
 KERNEL="$1"
 DISK="$2"
+HARNESS="$3"
+MKMBR="$4"
 
-if [ -z "$KERNEL" ] || [ -z "$DISK" ]; then
-    echo "usage: bootline_test.sh <kernel> <disk>" >&2
+if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$HARNESS" ] || [ -z "$MKMBR" ]; then
+    echo "usage: bootline_test.sh <kernel> <disk> <harness> <mkmbr>" >&2
     exit 2
 fi
 
@@ -125,6 +130,16 @@ if grep -qE "Kernel debug shell active|rach2 login" "$LOG"; then
 fi
 rm -f "$WORK.blank"
 echo "bootline-test: refused, and stopped: a disk root with nothing to mount"
+
+# And a root that mounted and holds an init the kernel cannot read: an ext2
+# root whose /sbin/init is a symbolic link to itself, so the lookup answers
+# ELOOP and not the ENOENT of an image with no init. The row asserts the
+# refusal and that no shell followed it.
+if ! sh "$(dirname "$0")/../init_refusal.sh" "$KERNEL" "$HARNESS" "$MKMBR" "$WORK.init"; then
+    echo "bootline-test: FAIL: a root whose /sbin/init cannot be read was not refused" >&2
+    exit 1
+fi
+echo "bootline-test: refused, and stopped: a root whose /sbin/init cannot be read"
 
 # And the same combination with rescue asked for, which must reach the shell:
 # that is what the token is for, and the refusal must not stand in its way.
