@@ -232,10 +232,19 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 }
 
 /**
+ * The tick at which a wait of `ticks` whole ticks ends. The tick under way
+ * counts for nothing, so a nonzero wait is never shorter than asked. The
+ * callers clamp `ticks` at 0x7FFFFFFE, so the signed difference
+ * `deadline - kernel_ticks` stays valid with that tick added.
+ */
+static uint32_t tick_deadline(uint32_t ticks)
+{
+    return kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+}
+
+/**
  * Convert a poll(2) millisecond timeout to a deadline in 10 ms ticks, rounded
- * up. `*has_deadline` is 0 for an infinite wait (timeout_ms < 0). The tick
- * count is clamped so the signed difference `deadline - kernel_ticks` stays
- * valid.
+ * up. `*has_deadline` is 0 for an infinite wait (timeout_ms < 0).
  */
 static uint32_t ms_deadline(int timeout_ms, int *has_deadline)
 {
@@ -247,10 +256,10 @@ static uint32_t ms_deadline(int timeout_ms, int *has_deadline)
     }
     *has_deadline = 1;
     ticks = ((uint32_t)timeout_ms + 9u) / 10u;
-    if (ticks > 0x7FFFFFFFu) {
-        ticks = 0x7FFFFFFFu;
+    if (ticks > 0x7FFFFFFEu) {
+        ticks = 0x7FFFFFFEu;
     }
-    return kernel_ticks + ticks;
+    return tick_deadline(ticks);
 }
 
 /**
@@ -307,10 +316,10 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
         sec = 21474836u;
     }
     ticks = sec * 100u + nsec_ticks;
-    if (ticks > 0x7FFFFFFFu) {
-        ticks = 0x7FFFFFFFu;
+    if (ticks > 0x7FFFFFFEu) {
+        ticks = 0x7FFFFFFEu;
     }
-    return kernel_ticks + ticks;
+    return tick_deadline(ticks);
 }
 
 /** Shared poll(2) implementation: ufds/nfds plus an already-computed

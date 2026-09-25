@@ -63,7 +63,9 @@ run_phase()
 
 echo "syscall-mutation: logs: $work"
 run_phase fixed 0 'syscall-test: pass:'
-for mutation in connect-wait connect-result connect-nonblock framebuffer-owner framebuffer-reentry clock sleep-mask; do
+for mutation in connect-wait connect-result connect-nonblock framebuffer-owner framebuffer-reentry \
+    clock sleep-mask sleep-deadline sleep-remainder sleep-last-tick sleep-wrap timer-first timer-left \
+    timer-clamp; do
     python3 - "$work" "$mutation" <<'PY'
 from pathlib import Path
 import sys
@@ -88,7 +90,8 @@ changes = {
         'uint32_t flags = kirq_save();\n'
         '\n'
         '        if (!signal_pending()) {\n'
-        '            current_proc->wakeup_tick = target;\n'
+        '            /* 0 means not sleeping, so a deadline of 0 is stored as 1. */\n'
+        '            current_proc->wakeup_tick = target != 0 ? target : 1u;\n'
         '            current_proc->state = PROC_BLOCKED;\n'
         '            kirq_restore(flags);\n'
         '            schedule(); /* yield to any other READY process; the timer wakes us */\n'
@@ -96,10 +99,37 @@ changes = {
         '            kirq_restore(flags);\n'
         '        }',
         'if (!signal_pending()) {\n'
-        '            current_proc->wakeup_tick = target;\n'
+        '            /* 0 means not sleeping, so a deadline of 0 is stored as 1. */\n'
+        '            current_proc->wakeup_tick = target != 0 ? target : 1u;\n'
         '            current_proc->state = PROC_BLOCKED;\n'
         '            schedule(); /* yield to any other READY process; the timer wakes us */\n'
         '        }'),
+    'sleep-deadline': ('syscall',
+        'target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);',
+        'target = kernel_ticks + ticks;'),
+    'sleep-remainder': ('syscall',
+        'uint32_t unslept = left > 1u ? left - 1u : left;',
+        'uint32_t unslept = left;'),
+    'sleep-last-tick': ('syscall',
+        'uint32_t unslept = left > 1u ? left - 1u : left;',
+        'uint32_t unslept = left > 1u ? left - 1u : 0u;'),
+    'sleep-wrap': ('syscall',
+        'target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);\n'
+        '    while',
+        'target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);\n'
+        '    if (target == 0) {\n'
+        '        target = 1;\n'
+        '    }\n'
+        '    while'),
+    'timer-first': ('syscall',
+        'current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);',
+        'current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value);'),
+    'timer-left': ('syscall',
+        'return (int32_t)left > 1 ? left - 1u : 1u;',
+        'return (int32_t)left > 0 ? left : 1u;'),
+    'timer-clamp': ('syscall',
+        'return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;',
+        'return ticks > 0x7FFFFFFEu ? 0x7FFFFFFEu : ticks;'),
     'clock': ('syscall',
         'kts.tv_sec = (int32_t)kernel_uptime_seconds;\n'
         '        kts.tv_nsec = (int32_t)(kernel_second_ticks * 10000000);',
@@ -121,6 +151,13 @@ PY
         framebuffer-reentry) detail='graphics reentered' ;;
         clock) detail='monotonic survives tick wrap' ;;
         sleep-mask) detail='pending check runs with interrupts masked' ;;
+        sleep-deadline) detail='a sleep of three ticks from tick 1000 blocks until 1004' ;;
+        sleep-remainder) detail='and the whole request is left' ;;
+        sleep-last-tick) detail='a signal in the last tick leaves one tick as the remainder' ;;
+        sleep-wrap) detail='the longest sleep from tick 0x80000001 blocks' ;;
+        timer-first) detail='a timer of three ticks armed at tick 1000 is due at 1004' ;;
+        timer-left) detail='and it reads back as the three ticks set' ;;
+        timer-clamp) detail='the longest timer armed at tick 0x80000001 reads back as the longest' ;;
     esac
     run_phase "$mutation" 1 "$detail"
     restore

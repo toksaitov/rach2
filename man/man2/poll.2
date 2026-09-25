@@ -94,7 +94,8 @@ For
 .Fa timeout
 is a number of milliseconds.
 A negative value waits indefinitely; zero performs one scan without waiting.
-A positive timeout is rounded up to a 10 ms timer tick.
+A positive timeout is rounded up to a 10 ms timer tick, and the tick under
+way counts for nothing, so the wait is never shorter than asked.
 With no entries, a finite timeout acts as a sleep.
 .Pp
 .Fn ppoll
@@ -102,9 +103,11 @@ takes a relative timeout in seconds and nanoseconds.
 A null timeout waits indefinitely; a zero timeout performs one scan.
 Seconds must be nonnegative and nanoseconds must be in the range
 0 through 999999999.
-The timeout is rounded up to a 10 ms tick and is not written back.
+The timeout is rounded up to a 10 ms tick, as for
+.Fn poll ,
+and is not written back.
 The kernel caps the seconds used in its deadline calculation at 21474836
-and the total at 2147483647 ticks.
+and the total at 2147483646 ticks.
 .Pp
 The
 .Fa sigmask

@@ -1,5 +1,6 @@
 /**
- * Exercise completed connects, framebuffer ownership and clock rollover.
+ * Exercise completed connects, framebuffer ownership, clock rollover, the
+ * sleep's deadline and the timer's first expiry.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -20,6 +21,8 @@ static int user_access_ok(uint32_t addr, uint32_t len);
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 static int32_t sys_socketcall(isr_params_t *params);
 static int32_t sys_nanosleep(isr_params_t *params);
+static int32_t sys_setitimer(isr_params_t *params);
+static int32_t sys_getitimer(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
 #include "syscall.c"
@@ -43,6 +46,8 @@ static uint8_t user[1024];
 static int failures, enters, exits, palettes, masked, saves;
 static int completion, immediate, waits;
 static int pending, pending_masked, blocked_masked, sleeps, cut_short, idles;
+static uint32_t blocked_until;
+static int post_at_block;
 
 #define CHECK(c, detail)                                    \
     do {                                                    \
@@ -249,13 +254,21 @@ int signal_pending(void)
     return pending;
 }
 
-/** A yield: the sleeper is BLOCKED already, and the mask lifted already. */
+/**
+ * A yield: the sleeper is BLOCKED already, and the mask lifted already. The
+ * model's clock moves to the tick before the deadline, and with
+ * `post_at_block` a signal arrives there.
+ */
 void schedule(void)
 {
     blocked_masked = masked;
     sleeps++;
     if (current_proc->state == PROC_BLOCKED) {
+        blocked_until = current_proc->wakeup_tick;
         kernel_ticks = current_proc->wakeup_tick - 1;
+        if (post_at_block) {
+            pending = 1;
+        }
     }
 }
 
@@ -264,6 +277,14 @@ void idle_wait_irq_on(void)
 {
     idles++;
     kernel_ticks++;
+}
+
+/** The tick an alarm is due at, as the kernel's `proc_alarm_at` gives it. */
+uint32_t proc_alarm_at(uint32_t now, uint32_t ticks)
+{
+    uint32_t at = now + ticks;
+
+    return at != 0 ? at : 1u;
 }
 
 /** Count a sleep a signal ended early, as the kernel's own counter does. */
@@ -282,6 +303,10 @@ void process_count_sleep_cut_short(void)
  * BLOCKED when the mask is lifted. The third row is the count the kernel
  * keeps of the sleeps a signal cut short, which rises only for a sleep that
  * ended before its deadline.
+ *
+ * The tick under way has partly passed when the sleep starts, so a sleep of
+ * three ticks from tick 1000 blocks until 1004, and a signal already there
+ * leaves the whole request as the remainder, not the tick added to it.
  */
 static void sleeps_masked(void)
 {
@@ -298,9 +323,11 @@ static void sleeps_masked(void)
     pending = 0;
     pending_masked = blocked_masked = -1;
     sleeps = cut_short = idles = 0;
+    blocked_until = 0;
     current_proc->state = PROC_RUNNING;
     kernel_ticks = 1000;
     CHECK(sys_nanosleep(&p) == 0, "a sleep with no signal runs to its deadline");
+    CHECK(blocked_until == 1004, "a sleep of three ticks from tick 1000 blocks until 1004");
     CHECK(pending_masked == 1, "the pending check runs with interrupts masked");
     CHECK(blocked_masked == 0, "and the mask is lifted with the sleeper already blocked");
     CHECK(sleeps > 0, "the sleep yields");
@@ -317,6 +344,114 @@ static void sleeps_masked(void)
     CHECK(cut_short == 1, "and the count of sleeps a signal cut short rises");
     k_memcpy(&rem, user + 64, sizeof(rem));
     CHECK(rem.tv_nsec == 30000000 && rem.tv_sec == 0, "and the whole request is left");
+}
+
+/**
+ * The sleep's edges: a signal in its last tick, and deadlines at the wrap.
+ *
+ * A signal that arrives in the tick before the deadline leaves one tick as
+ * the remainder, since up to a tick of the request may be left, and a caller
+ * that sleeps again for a remainder of zero would end early. The deadline is
+ * compared as it is computed, and only its store is moved off zero, the "not
+ * sleeping" value: the longest sleep begun at tick 0x80000001 has a deadline
+ * of 0 and must block, and a sleep of zero at tick 0 must not.
+ */
+static void sleep_edges(void)
+{
+    isr_params_t p;
+    struct kernel_timespec req, rem;
+    int rc;
+
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 32;
+    p.ecx = 64;
+    req.tv_sec = 0;
+    req.tv_nsec = 30000000;
+    k_memcpy(user + 32, &req, sizeof(req));
+    pending = 0;
+    post_at_block = 1;
+    current_proc->state = PROC_RUNNING;
+    kernel_ticks = 3000;
+    rc = sys_nanosleep(&p);
+    post_at_block = 0;
+    pending = 0;
+    k_memcpy(&rem, user + 64, sizeof(rem));
+    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 10000000,
+          "a signal in the last tick leaves one tick as the remainder");
+
+    req.tv_sec = 0x7FFFFFFF;
+    req.tv_nsec = 999999999;
+    k_memcpy(user + 32, &req, sizeof(req));
+    sleeps = 0;
+    current_proc->state = PROC_RUNNING;
+    kernel_ticks = 0x80000001u;
+    rc = sys_nanosleep(&p);
+    CHECK(rc == 0 && sleeps > 0, "the longest sleep from tick 0x80000001 blocks");
+
+    req.tv_sec = 0;
+    req.tv_nsec = 0;
+    k_memcpy(user + 32, &req, sizeof(req));
+    sleeps = 0;
+    current_proc->state = PROC_RUNNING;
+    kernel_ticks = 0;
+    rc = sys_nanosleep(&p);
+    CHECK(rc == 0 && sleeps == 0, "a sleep of zero at tick 0 does not block");
+}
+
+/**
+ * The timer's first SIGALRM is never early.
+ *
+ * The tick under way has partly passed when the timer is armed, so a value
+ * of three ticks armed at tick 1000 is due at 1004, and getitimer reads it
+ * back as the three ticks set. A tick before it is due, the time left is
+ * between none and a tick, and it reads as one tick, since zero means
+ * disarmed. The ticks are clamped low enough that the longest timer, armed
+ * where its tick wraps past zero, still reads back as the longest.
+ */
+static void timer_first_expiry(void)
+{
+    isr_params_t p;
+    struct kernel_itimerval set, cur;
+
+    k_memset(&p, 0, sizeof(p));
+    k_memset(&set, 0, sizeof(set));
+    set.value_usec = 30000; /* three ticks */
+    k_memcpy(user + 32, &set, sizeof(set));
+    p.ebx = ITIMER_REAL;
+    p.ecx = 32;
+    kernel_ticks = 1000;
+    CHECK(sys_setitimer(&p) == 0 && proc.alarm_tick == 1004,
+          "a timer of three ticks armed at tick 1000 is due at 1004");
+    p.ecx = 64;
+    CHECK(sys_getitimer(&p) == 0, "read the timer");
+    k_memcpy(&cur, user + 64, sizeof(cur));
+    CHECK(cur.value_sec == 0 && cur.value_usec == 30000,
+          "and it reads back as the three ticks set");
+    kernel_ticks = 1003;
+    CHECK(sys_getitimer(&p) == 0, "read the timer a tick before it is due");
+    k_memcpy(&cur, user + 64, sizeof(cur));
+    CHECK(cur.value_sec == 0 && cur.value_usec == 10000,
+          "a timer due at the next tick reads as one tick");
+    set.value_usec = 0;
+    k_memcpy(user + 32, &set, sizeof(set));
+    p.ecx = 32;
+    CHECK(sys_setitimer(&p) == 0 && proc.alarm_tick == 0, "a value of zero disarms it");
+
+    set.value_sec = 0x7FFFFFFF;
+    set.value_usec = 999999;
+    k_memcpy(user + 32, &set, sizeof(set));
+    kernel_ticks = 0x80000001u;
+    CHECK(sys_setitimer(&p) == 0, "arm the longest timer at tick 0x80000001");
+    p.ecx = 64;
+    CHECK(sys_getitimer(&p) == 0, "read the longest timer");
+    k_memcpy(&cur, user + 64, sizeof(cur));
+    CHECK(cur.value_sec == 21474836,
+          "the longest timer armed at tick 0x80000001 reads back as the longest");
+    set.value_sec = 0;
+    set.value_usec = 0;
+    k_memcpy(user + 32, &set, sizeof(set));
+    p.ecx = 32;
+    CHECK(sys_setitimer(&p) == 0 && proc.alarm_tick == 0, "and a value of zero disarms it");
 }
 
 /** Read across the tick wrap and the following whole-second boundary. */
@@ -357,8 +492,10 @@ int main(void)
     framebuffer();
     clocks();
     sleeps_masked();
+    sleep_edges();
+    timer_first_expiry();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, framebuffer, clock and sleep\n");
+    printf("syscall-test: pass: connect, framebuffer, clock, sleep and timer\n");
     return 0;
 }

@@ -382,9 +382,13 @@ static int32_t sys_clock_gettime(isr_params_t *params)
  * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
  * Rounds up to whole 10 ms ticks, then parks the process BLOCKED on its
  * wakeup_tick and yields; the timer wakes it at the deadline while OTHER
- * processes keep running. The pending check and the block run with interrupts
- * off, so a signal cannot arrive between them and lose its wakeup. rem is
- * written as zero on normal completion, or the time left on -EINTR.
+ * processes keep running. The tick under way counts for nothing, so a sleep
+ * is never shorter than asked. The pending check and the block run with
+ * interrupts off, so a signal cannot arrive between them and lose its wakeup.
+ * rem is written as zero on normal completion. On -EINTR it is the ticks left
+ * to the deadline less the tick added to it, or one tick when the signal came
+ * in the deadline's last tick, so a caller that sleeps again for the remainder
+ * neither gains a tick at each signal nor wakes before the time first asked.
  */
 static int32_t sys_nanosleep(isr_params_t *params)
 {
@@ -406,7 +410,8 @@ static int32_t sys_nanosleep(isr_params_t *params)
     /* Convert to whole 10 ms ticks without 64-bit division (the freestanding
      * kernel has no libgcc __udivdi3): 1 s == 100 ticks, plus the ceil of the
      * sub-second nanoseconds. Absurd durations are clamped so sec*100 cannot
-     * overflow and the signed tick comparison below stays valid. */
+     * overflow and the signed tick comparison below stays valid with the tick
+     * under way added. */
     {
         uint32_t sec = (uint32_t)req.tv_sec;
         uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999999u) / 10000000u;
@@ -414,18 +419,15 @@ static int32_t sys_nanosleep(isr_params_t *params)
             sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */
         }
         ticks = sec * 100u + nsec_ticks;
-        if (ticks > 0x7FFFFFFFu) {
-            ticks = 0x7FFFFFFFu; /* keep the signed (target-now) delta valid */
+        if (ticks > 0x7FFFFFFEu) {
+            ticks = 0x7FFFFFFEu; /* keep the signed (target-now) delta valid */
         }
     }
     if (ticks == 0 && (req.tv_sec != 0 || req.tv_nsec != 0)) {
         ticks = 1; /* any nonzero request waits at least one tick */
     }
 
-    target = kernel_ticks + ticks;
-    if (target == 0) {
-        target = 1; /* 0 is the "not sleeping" sentinel; never store it as a deadline */
-    }
+    target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
     while ((int32_t)(target - kernel_ticks) > 0) {
         /* Interrupts off across the check and the block: `signal_post` only
            wakes a process already BLOCKED, so a signal that arrived between
@@ -433,7 +435,8 @@ static int32_t sys_nanosleep(isr_params_t *params)
         uint32_t flags = kirq_save();
 
         if (!signal_pending()) {
-            current_proc->wakeup_tick = target;
+            /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
+            current_proc->wakeup_tick = target != 0 ? target : 1u;
             current_proc->state = PROC_BLOCKED;
             kirq_restore(flags);
             schedule(); /* yield to any other READY process; the timer wakes us */
@@ -452,8 +455,10 @@ static int32_t sys_nanosleep(isr_params_t *params)
             }
             if (urem) {
                 struct kernel_timespec rem;
-                rem.tv_sec = (int32_t)(left / 100u);
-                rem.tv_nsec = (int32_t)((left % 100u) * 10000000u);
+                uint32_t unslept = left > 1u ? left - 1u : left;
+
+                rem.tv_sec = (int32_t)(unslept / 100u);
+                rem.tv_nsec = (int32_t)((unslept % 100u) * 10000000u);
                 (void)copy_to_user(urem, &rem, sizeof(rem));
             }
             return -EINTR;
@@ -494,9 +499,11 @@ struct kernel_itimerval {
 };
 
 /*
- * A time in seconds and microseconds as whole 10 ms ticks, rounded up, and
- * clamped where nanosleep clamps so that the signed tick difference stays
- * valid. Zero only for a time of zero.
+ * A time in seconds and microseconds as whole 10 ms ticks, rounded up. The
+ * seconds are clamped where nanosleep clamps them and the ticks at 0x7FFFFFFD,
+ * so the signed difference between the timer's tick and the count stays
+ * positive with the tick under way added and with the tick `proc_alarm_at`
+ * adds when the sum wraps to zero. Zero only for a time of zero.
  */
 static uint32_t itimer_ticks(int32_t sec, int32_t usec)
 {
@@ -507,12 +514,14 @@ static uint32_t itimer_ticks(int32_t sec, int32_t usec)
         whole = 21474836u;
     }
     ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;
-    return ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks;
+    return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;
 }
 
 /* The ticks left before the current process's timer is due, 0 when it is
- * disarmed; a timer due at this very tick has one left, since the tick
- * posts it. Interrupts are off: the tick rearms the timer. */
+ * disarmed. Part of the tick under way has passed, so the time left lies
+ * between one tick less than the count and the count; the lower end is what
+ * is reported, and a timer due within a tick reads as one tick left, since
+ * zero means disarmed. Interrupts are off: the tick rearms the timer. */
 static uint32_t itimer_left(void)
 {
     uint32_t left;
@@ -521,7 +530,7 @@ static uint32_t itimer_left(void)
         return 0;
     }
     left = current_proc->alarm_tick - kernel_ticks;
-    return (int32_t)left > 0 ? left : 1u;
+    return (int32_t)left > 1 ? left - 1u : 1u;
 }
 
 /* What the current process's timer holds, as setitimer and getitimer report
@@ -539,7 +548,9 @@ static void itimer_read(struct kernel_itimerval *out)
 /*
  * Arm or disarm the current process's timer: the first SIGALRM `value`
  * ticks from now and then every `interval`, or disarmed for a value of 0.
- * Interrupts are off.
+ * The tick under way counts for nothing, so the first SIGALRM never comes
+ * before the time asked for; the later ones are rearmed at a tick and come
+ * every `interval`. Interrupts are off.
  */
 static void itimer_set(uint32_t value, uint32_t interval)
 {
@@ -548,7 +559,7 @@ static void itimer_set(uint32_t value, uint32_t interval)
         current_proc->alarm_interval = 0;
         return;
     }
-    current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value);
+    current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);
     current_proc->alarm_interval = interval;
 }
 

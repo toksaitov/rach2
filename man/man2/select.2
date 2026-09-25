@@ -93,7 +93,9 @@ it is in seconds and nanoseconds.
 A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
-Timeouts are rounded up to 10 ms timer ticks and are not written back.
+Timeouts are rounded up to 10 ms timer ticks, and the tick under way
+counts for nothing, so a wait is never shorter than asked.
+Timeouts are not written back.
 .Pp
 The raw
 .Nm select
@@ -109,7 +111,7 @@ The raw
 .Nm pselect6
 call requires nonnegative seconds and nanoseconds from 0 through 999999999.
 Its deadline calculation caps seconds at 21474836 and the total interval
-at 2147483647 ticks.
+at 2147483646 ticks.
 .Pp
 The
 .Fa sigmask

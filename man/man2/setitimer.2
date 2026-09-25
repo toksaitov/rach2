@@ -33,7 +33,10 @@ the time between each later one, or zero for a single one.
 A zero
 .Va it_value
 disarms the timer.
-Times are rounded up to whole 10 ms ticks.
+Times are rounded up to whole 10 ms ticks, and the tick under way counts
+for nothing, so the first
+.Dv SIGALRM
+never comes before the time asked for.
 Unless
 .Fa old
 is null, it receives what the timer held before the call: the time
@@ -53,21 +56,30 @@ says
 reports the time left before the next
 .Dv SIGALRM ,
 zero when the timer is disarmed, and the interval.
+The time left is rounded down to a tick; a timer due within a tick
+reports one tick, since zero means disarmed.
 .Pp
 .Fn alarm
 arms a single
 .Dv SIGALRM
 .Fa seconds
 from now, or disarms the timer for 0.
-It returns the seconds that were left before the alarm it replaces,
-rounded to the nearest second, and one when less than a second was
-left; zero when none was armed.
+It returns the seconds that were left before the alarm it replaces, zero
+when none was armed.
+musl's
+.Fn alarm
+calls
+.Fn setitimer
+and rounds any fraction of a second up; the raw call rounds to the
+nearest second, and returns one when less than a second was left.
 .Pp
 A child of
 .Xr fork 2
 starts with the timer disarmed.
 .Xr execve 2
-keeps it.
+keeps it, but clears the pending signals, so a
+.Dv SIGALRM
+posted and not yet delivered is lost.
 .Ss Differences from Linux
 .Dv ITIMER_VIRTUAL
 and
@@ -77,6 +89,17 @@ are refused with
 they count a process's own processor time, which this kernel does not
 keep.
 The resolution is the 10 ms tick.
+A null
+.Fa new
+is refused with
+.Er EFAULT ,
+where Linux disarms the timer, and
+.Fa which
+is checked before
+.Fa new
+is read.
+Linux keeps the pending signals across
+.Xr execve 2 .
 .Ss System call interface
 The i386 system call numbers are 104 for
 .Fn setitimer ,

@@ -21,12 +21,17 @@ Seconds must be nonnegative; nanoseconds must be from 0 through 999999999.
 .Pp
 The kernel rounds the interval up to whole 10 ms ticks and blocks the
 process until its tick deadline.
+The tick under way counts for nothing, so the sleep is never shorter than
+asked.
 Other runnable processes continue to execute.
 If a signal interrupts the sleep, the call fails with
 .Er EINTR
-and the raw call stores the time left to the rounded deadline in
+and the raw call stores in
 .Fa rem ,
-unless that pointer is null.
+unless that pointer is null, the rounded interval less the whole ticks
+that have passed, or one tick when the signal came in the sleep's last
+tick, so a sleep begun again with the remainder never ends before the time
+first asked.
 The remainder has 10 ms resolution.
 .Ss System call interface
 The i386 system call number is 162.
@@ -34,7 +39,7 @@ EBX points to the request and ECX to the optional remainder.
 The kernel timespec consists of two signed 32-bit fields: seconds,
 then nanoseconds.
 The kernel limits the seconds used in the tick calculation to 21474836
-and the resulting interval to 2147483647 ticks.
+and the resulting interval to 2147483646 ticks.
 .Pp
 The raw call writes a zero remainder on normal completion.
 If interrupted, it attempts to write the remainder but returns
