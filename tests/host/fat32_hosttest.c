@@ -1676,6 +1676,24 @@ static void dirty_rows(void)
     }
 }
 
+/* What the two sequences on a file its `fsync` put on the medium left: the
+   unlinked file is gone, and the truncated one reads its first 700 bytes. */
+static void synced_rows_left(void)
+{
+    struct vfs_stat st;
+    void *n;
+    int err;
+
+    check(walk("/W7.TXT", &err) == 0 && err == -ENOENT, "the file unlinked after a sync is gone");
+    n = walk("/W8.TXT", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && st.size == 700 &&
+              read_all(n, back, sizeof(back)) == 700 && __builtin_memcmp(back, pattern, 700) == 0,
+          "the file truncated after a sync reads back its first 700 bytes");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+}
+
 static void write_rows(void)
 {
     struct vfs_stat st;
@@ -1748,6 +1766,7 @@ static void write_rows(void)
         OPS->put(&mnt, n);
     }
     check(walk("/D1", &err) == 0 && err == -ENOENT, "the removed directory is gone");
+    synced_rows_left();
     {
         int seen, count;
 

@@ -357,7 +357,7 @@ tests/host/fat32_hosttest.c:long_rows lines 171 a test's rows, each a case, read
 tests/host/fat32_hosttest.c:well_formed_rows complexity 72 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:well_formed_rows lines 214 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:write_rows complexity 70 a test's rows, each a case, read as one table
-tests/host/fat32_hosttest.c:write_rows lines 205 a test's rows, each a case, read as one table
+tests/host/fat32_hosttest.c:write_rows lines 206 a test's rows, each a case, read as one table
 
 tests/host/fatname_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
 tests/host/fatname_hosttest.c:main lines 126 a test's rows, each a case, read as one table
