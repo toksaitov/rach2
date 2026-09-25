@@ -12,11 +12,7 @@
  */
 #include "fs/vfs.h"
 #include "mm/kheap.h"
-
-/* The native process layout cannot satisfy the i386 compile-time offsets. */
-#define __TINYC__ 1
 #include "proc/process.c"
-#undef __TINYC__
 
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);

@@ -9,14 +9,15 @@
  * there and as numbers here; a field added before one of them stops the
  * GNU build. TinyCC cannot fold an offset into an array size, so a kernel it
  * builds finds the change at boot, in `init_proc`, which checks every
- * build. */
+ * build. A host test compiles this file with 64-bit pointers, where the
+ * offsets differ, and skips the compile-time check. */
 #define PROC_OFF(field)       ((uint32_t)&((process_t *)0)->field)
 #define PROC_OFF_REGS_ESP     48u
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
 #define PROC_OFF_TLS_BASE     148u
 #define PROC_OFF_PAGE_DIR     2128u
-#ifndef __TINYC__
+#if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
 typedef char process_offsets_fit
     [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
           PROC_OFF_REGS_ESP &&
@@ -208,13 +209,16 @@ void free_process(process_t *proc)
 /**
  * Wake timed sleepers whose deadline has passed, and post the alarms due.
  *
- * Moves any timed sleeper (nanosleep, or poll with a deadline) whose wakeup
- * tick has arrived from BLOCKED back to READY so the scheduler runs it, and
- * posts SIGALRM to each process whose real-time timer is due, arming the
- * timer again for its interval or leaving it disarmed. `signal_post` wakes a
- * blocked process, so a sleep the alarm lands in ends at this tick. Called
- * from the timer tick. The `(int32_t)` difference is tick-wraparound-safe
- * (~248 days at 100 Hz).
+ * Moves any timed sleeper (nanosleep, poll with a deadline, or a wait-queue
+ * wait with one, such as the kernel's ping) whose wakeup tick has arrived
+ * from BLOCKED back to READY so the scheduler runs it, and posts SIGALRM to
+ * each process whose real-time timer is due, arming the timer again for its
+ * interval or leaving it disarmed. `signal_post` makes a blocked process
+ * runnable. A nanosleep it wakes then ends with -EINTR if it runs again
+ * before its deadline tick and the process acts on SIGALRM, and returns 0 if
+ * it first runs at that tick or later; a wait that goes on arms its deadline
+ * again. Called from the timer tick. The `(int32_t)` difference is
+ * tick-wraparound-safe (~248 days at 100 Hz).
  */
 void proc_wake_sleepers(uint32_t now)
 {

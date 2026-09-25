@@ -1,17 +1,29 @@
 #!/bin/sh
-# Prove the host rows on wait deadlines with faults in a private kernel tree.
+# Prove the host rows on wait deadlines and the timer's tick with faults in a
+# private kernel tree.
 #
 # Usage: sh tests/host/deadline_mutate.sh
 #
 # wait_queue_hosttest requires a wait that a wake does not end to arm the
-# caller's deadline again before it blocks again, and poll_deadline_hosttest
-# requires a poll or ppoll timeout of three ticks from tick 1000 to end at
-# 1004 and the longest ppoll timeout to end ahead of the tick at the wrap
-# (entries 216 and 217). Each test is compiled against a private copy of
-# rach2/sys as it is, where it must pass; with the deadline not armed again,
-# the tick under way not added, or the ppoll clamp a tick higher, where it
-# must fail its row; and restored, touched and compiled again, where it must
-# pass. The trap stops the test before it restores the source.
+# caller's deadline again before it blocks again (entry 217);
+# poll_deadline_hosttest requires the poll, ppoll and select timeouts to end a
+# whole timeout after the tick in progress, seconds to count a hundred ticks
+# and any part of a tick to round up, a zero timeout to end at once, the longest
+# ppoll timeout to end 0x7FFFFFFF ticks ahead across the wrap and not be
+# reached where it began, and a deadline to be reached at its tick and not
+# before (entry 216); process_timer_hosttest requires a due timer to post
+# SIGALRM to its process, running or asleep, and be armed again for its
+# interval, an interval of one tick included, a single alarm to be left
+# disarmed, a sleeper to wake at its deadline and not before, a blocked
+# process with no deadline and a running process to be left alone, a tick
+# that wakes a sleeper to post the sleeper's alarm and a later process's still,
+# a timer armed again onto tick 0 across the wrap to be due at 1, a timer and a
+# sleeper due past the wrap to wait for it and be served after it, and an
+# alarm tick that wraps to 0 to be moved to 1 (entries 212 and 215). Each test
+# is compiled against a private copy of rach2/sys as it is, where it must
+# pass; with each fault below, where it must fail every row the fault names;
+# and restored, touched and compiled again, where it must pass. The trap stops
+# the test before it restores the source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -19,15 +31,18 @@ mkdir -p build
 work=$(mktemp -d "$repo/build/deadline-proof.XXXXXX")
 mkdir "$work/sys"
 cp -R rach2/sys/. "$work/sys/"
-cp "$work/sys/proc/wait_queue.c" "$work/wait_queue.saved"
-cp "$work/sys/io/poll.c" "$work/poll.saved"
+sources='proc/wait_queue.c io/poll.c proc/process.c'
+for source in $sources; do
+    cp "$work/sys/$source" "$work/$(basename "$source").saved"
+done
 child=
 
 restore()
 {
-    cp "$work/wait_queue.saved" "$work/sys/proc/wait_queue.c"
-    cp "$work/poll.saved" "$work/sys/io/poll.c"
-    touch "$work/sys/proc/wait_queue.c" "$work/sys/io/poll.c"
+    for source in $sources; do
+        cp "$work/$(basename "$source").saved" "$work/sys/$source"
+        touch "$work/sys/$source"
+    done
 }
 
 cleanup()
@@ -44,15 +59,15 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# run_phase PHASE TEST EXPECTED DETAIL: compile tests/host/TEST.c against the
+# run_phase PHASE TEST EXPECTED DETAILS: compile tests/host/TEST.c against the
 # private tree and run it; a pass must exit 0, a fail must exit nonzero and
-# print DETAIL.
+# print each of DETAILS, which are separated by `|`.
 run_phase()
 {
     phase=$1
     test=$2
     expected=$3
-    detail=$4
+    details=$4
     binary="$work/$phase"
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
         -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body \
@@ -62,7 +77,9 @@ run_phase()
         cat "$binary.compile.log" >&2
         exit 1
     fi
-    cksum "$work/sys/proc/wait_queue.c" "$work/sys/io/poll.c" "$binary" >"$binary.artifacts"
+    # shellcheck disable=SC2086
+    (cd "$work/sys" && cksum $sources) >"$binary.artifacts"
+    cksum "$binary" >>"$binary.artifacts"
     perl -e 'alarm 10; exec @ARGV or die "deadline-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &
     child=$!
@@ -76,12 +93,23 @@ run_phase()
         [ "$status" -ne 0 ] || {
             echo "deadline-mutation: the test passed with its fault: $phase" >&2; exit 1;
         }
-        grep -F "$detail" "$binary.log" >/dev/null || exit 1
+        rest=$details
+        while [ -n "$rest" ]; do
+            detail=${rest%%|*}
+            grep -F "$detail" "$binary.log" >/dev/null || {
+                echo "deadline-mutation: the row did not fail: $phase: $detail" >&2; exit 1;
+            }
+            case $rest in
+                *'|'*) rest=${rest#*|} ;;
+                *) rest= ;;
+            esac
+        done
     fi
     echo "deadline-mutation: result: $phase status $status"
 }
 
-# fault FILE OLD NEW: replace the one line OLD of the private FILE with NEW.
+# fault FILE OLD NEW: replace the lines OLD of the private FILE, which must
+# occur once, with NEW.
 fault()
 {
     python3 - "$work/sys/$1" "$2" "$3" <<'PYTHON'
@@ -92,37 +120,179 @@ path = Path(sys.argv[1])
 text = path.read_text()
 old, new = sys.argv[2] + '\n', sys.argv[3] + '\n'
 if text.count(old) != 1:
-    raise SystemExit('deadline-mutation: the line to change is not unique: ' + sys.argv[2])
+    raise SystemExit('deadline-mutation: the lines to change are not unique: ' + sys.argv[2])
 path.write_text(text.replace(old, new))
 PYTHON
+}
+
+# prove PHASE TEST FILE OLD NEW DETAILS: the fault, its failing run, and the
+# restored source's passing run.
+prove()
+{
+    fault "$3" "$4" "$5"
+    run_phase "$1" "$2" fail "$6"
+    restore
+    run_phase "$1-restored" "$2" pass ''
 }
 
 echo "deadline-mutation: logs: $work"
 run_phase wait-fixed wait_queue_hosttest pass ''
 run_phase poll-fixed poll_deadline_hosttest pass ''
+run_phase tick-fixed process_timer_hosttest pass ''
 
-fault proc/wait_queue.c '        current_proc->wakeup_tick = deadline;' ''
-run_phase wait-unarmed wait_queue_hosttest fail 'deadline_at_block[1] == 77'
-restore
-run_phase wait-restored wait_queue_hosttest pass ''
+prove wait-unarmed wait_queue_hosttest proc/wait_queue.c \
+    '        current_proc->wakeup_tick = deadline;' '' \
+    'deadline_at_block[1] == 77'
 
-fault io/poll.c '    return kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);' \
-    '    return kernel_ticks + ticks;'
-run_phase poll-early poll_deadline_hosttest fail 'a poll of 30 ms from tick 1000 ends at 1004'
-restore
-run_phase poll-restored poll_deadline_hosttest pass ''
-
-fault io/poll.c '    ticks = sec * 100u + nsec_ticks;
+prove poll-early poll_deadline_hosttest io/poll.c \
+    '    return kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);' \
+    '    return kernel_ticks + ticks;' \
+    'a poll of 30 ms from tick 1000 ends at 1004|a ppoll of 30 ms from tick 1000 ends at 1004|a ppoll of 1 s and 11 ms from tick 1000 ends at 1103|a select of 1 us from tick 1000 ends at 1002|a select of 1 s and 11 ms from tick 1000 ends at 1103'
+prove poll-clamp poll_deadline_hosttest io/poll.c \
+    '    ticks = sec * 100u + nsec_ticks;
     if (ticks > 0x7FFFFFFEu) {
         ticks = 0x7FFFFFFEu;
-    }' '    ticks = sec * 100u + nsec_ticks;
+    }' \
+    '    ticks = sec * 100u + nsec_ticks;
     if (ticks > 0x7FFFFFFFu) {
         ticks = 0x7FFFFFFFu;
-    }'
-run_phase poll-clamp poll_deadline_hosttest fail 'the longest ppoll timeout ends ahead of the tick across the wrap'
-restore
-run_phase poll-clamp-restored poll_deadline_hosttest pass ''
+    }' \
+    'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap'
+prove ppoll-nsec poll_deadline_hosttest io/poll.c \
+    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;' \
+    '    nsec_ticks = (uint32_t)ts->tv_nsec / 10000000u;' \
+    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1103'
+prove ppoll-sec poll_deadline_hosttest io/poll.c \
+    '    ticks = sec * 100u + nsec_ticks;
+    if (ticks > 0x7FFFFFFEu) {' \
+    '    ticks = sec * 10u + nsec_ticks;
+    if (ticks > 0x7FFFFFFEu) {' \
+    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1103'
+prove select-usec poll_deadline_hosttest io/poll.c \
+    '    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;' \
+    '    return tv->tv_sec * 1000 + tv->tv_usec / 1000;' \
+    'a select of 1 us from tick 1000 ends at 1002'
+prove poll-reached poll_deadline_hosttest io/poll.c \
+    '    return (int32_t)(deadline - kernel_ticks) <= 0;' \
+    '    return (int32_t)(deadline - kernel_ticks) <= 1;' \
+    'a deadline one tick ahead is not reached'
+prove poll-late poll_deadline_hosttest io/poll.c \
+    '    return (int32_t)(deadline - kernel_ticks) <= 0;' \
+    '    return (int32_t)(deadline - kernel_ticks) < 0;' \
+    'a deadline at the tick or behind it is'
+prove poll-wrap poll_deadline_hosttest io/poll.c \
+    '    return (int32_t)(deadline - kernel_ticks) <= 0;' \
+    '    return deadline <= kernel_ticks;' \
+    'and its deadline is not reached at the tick it began'
+prove ppoll-nearest poll_deadline_hosttest io/poll.c \
+    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;' \
+    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 5000000u) / 10000000u;' \
+    'a ppoll of 1 s and 11 ms from tick 1000 ends at 1103'
+prove ppoll-sec-clamp poll_deadline_hosttest io/poll.c \
+    '    if (sec > 21474836u) {
+        sec = 21474836u;
+    }' \
+    '    if (sec > 42949672u) {
+        sec = 42949672u;
+    }' \
+    'the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap'
+prove poll-ms-one poll_deadline_hosttest io/poll.c \
+    '    ticks = ((uint32_t)timeout_ms + 9u) / 10u;' \
+    '    ticks = ((uint32_t)timeout_ms + 8u) / 10u;' \
+    'a poll of 1 ms from tick 1000 ends at 1002'
+prove ppoll-nsec-one poll_deadline_hosttest io/poll.c \
+    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;' \
+    '    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999998u) / 10000000u;' \
+    'a ppoll of 1 ns from tick 1000 ends at 1002'
+prove select-zero poll_deadline_hosttest io/poll.c \
+    '    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;' \
+    '    return tv->tv_sec * 1000 + (tv->tv_usec + 1000) / 1000;' \
+    'a zero select timeout ends at once'
+prove select-sec poll_deadline_hosttest io/poll.c \
+    '    return tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000;' \
+    '    return tv->tv_sec * 100 + (tv->tv_usec + 999) / 1000;' \
+    'a select of 1 s and 11 ms from tick 1000 ends at 1103'
 
-cmp "$work/wait_queue.saved" "$work/sys/proc/wait_queue.c"
-cmp "$work/poll.saved" "$work/sys/io/poll.c"
-echo 'deadline-mutation: result: pass: each fault failed its row; the restored sources passed'
+prove tick-running process_timer_hosttest proc/process.c \
+    '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    '        if (p->state == PROC_BLOCKED && p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    'a due timer posts SIGALRM to a process that is running'
+prove tick-blocked process_timer_hosttest proc/process.c \
+    '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    '        if (p->state != PROC_BLOCKED && p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    'and to one that is asleep'
+prove tick-alarm-early process_timer_hosttest proc/process.c \
+    '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= -1) {' \
+    'a timer not yet due posts nothing'
+prove tick-first-only process_timer_hosttest proc/process.c \
+    '    for (p = proc_list; p; p = p->next) {
+        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&' \
+    '    for (p = proc_list; p; p = NULL) {
+        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&' \
+    'a due timer posts SIGALRM to a process that is running'
+prove tick-rearm process_timer_hosttest proc/process.c \
+    '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
+    '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, 1u) : 0;' \
+    'and each is armed again for its interval from that tick'
+prove tick-single process_timer_hosttest proc/process.c \
+    '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
+    '            p->alarm_tick = proc_alarm_at(now, p->alarm_interval);' \
+    'a single alarm posts once and leaves the timer disarmed'
+prove tick-early process_timer_hosttest proc/process.c \
+    '            (int32_t)(now - p->wakeup_tick) >= 0) {' \
+    '            (int32_t)(now - p->wakeup_tick) >= -1) {' \
+    'a sleeper is not woken before its deadline'
+prove tick-late process_timer_hosttest proc/process.c \
+    '            (int32_t)(now - p->wakeup_tick) >= 0) {' \
+    '            (int32_t)(now - p->wakeup_tick) > 0) {' \
+    'and is made runnable at its deadline tick'
+prove tick-zero process_timer_hosttest proc/process.c \
+    '        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&' \
+    '        if (p->state == PROC_BLOCKED &&' \
+    'a blocked process with no deadline is not made runnable'
+prove tick-state process_timer_hosttest proc/process.c \
+    '        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&' \
+    '        if (p->wakeup_tick != 0 &&' \
+    'a running process is left as it is whatever its wakeup tick says'
+prove tick-sentinel process_timer_hosttest proc/process.c \
+    '    return at != 0 ? at : 1u;' \
+    '    return at;' \
+    'an alarm that wraps to 0 is due at 1'
+prove tick-stop process_timer_hosttest proc/process.c \
+    '            p->state = PROC_READY;
+        }
+        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    '            p->state = PROC_READY;
+            break;
+        }
+        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    'a tick that wakes a sleeper still posts its alarm and a later process'
+prove tick-else process_timer_hosttest proc/process.c \
+    '            p->state = PROC_READY;
+        }
+        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    '            p->state = PROC_READY;
+        } else if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    'a tick that wakes a sleeper still posts its alarm and a later process'
+prove tick-one process_timer_hosttest proc/process.c \
+    '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
+    '            p->alarm_tick = p->alarm_interval > 1 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
+    'an interval of one tick is armed again'
+prove tick-rearm-wrap process_timer_hosttest proc/process.c \
+    '            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;' \
+    '            p->alarm_tick = p->alarm_interval != 0 ? now + p->alarm_interval : 0;' \
+    'a timer armed again onto tick 0 across the wrap is due at 1'
+prove tick-wake-wrap process_timer_hosttest proc/process.c \
+    '            (int32_t)(now - p->wakeup_tick) >= 0) {' \
+    '            now >= p->wakeup_tick) {' \
+    'a timer and a sleeper due past the wrap wait for it'
+prove tick-alarm-wrap process_timer_hosttest proc/process.c \
+    '        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {' \
+    '        if (p->alarm_tick != 0 && now >= p->alarm_tick) {' \
+    'a timer and a sleeper due past the wrap wait for it'
+
+for source in $sources; do
+    cmp "$work/$(basename "$source").saved" "$work/sys/$source"
+done
+echo 'deadline-mutation: result: pass: each fault failed its rows; the restored sources passed'

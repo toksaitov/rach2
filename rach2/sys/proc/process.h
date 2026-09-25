@@ -238,7 +238,8 @@ void proc_set_comm(process_t *p, const char *path);
 
 /**
  * Wake timed sleepers whose deadline has reached `now`, and post SIGALRM to
- * each process whose real-time timer is due, arming it again for its interval.
+ * each process whose real-time timer is due, arming it again for its
+ * interval or leaving a single alarm disarmed.
  */
 void proc_wake_sleepers(uint32_t now);
 
@@ -256,9 +257,10 @@ void signal_post(process_t *target, int signo);
 uint32_t proc_alarm_at(uint32_t now, uint32_t ticks);
 
 /**
- * Non-zero if the current process has a deliverable (pending, unblocked)
- * signal. Blocking syscall loops poll it to break out so the signal is acted
- * on. Defined in syscall_proc.c.
+ * Non-zero if the current process has a pending signal that is neither
+ * blocked nor ignored: one that is caught, or whose default action
+ * terminates or stops the process. Blocking syscall loops poll it to break
+ * out so the signal is acted on. Defined in syscall_proc.c.
  */
 int signal_pending(void);
 

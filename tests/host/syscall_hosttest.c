@@ -1,6 +1,7 @@
 /**
- * Exercise completed connects, framebuffer ownership, clock rollover, the
- * sleep's deadline and the timer's first expiry.
+ * Exercise completed connects, framebuffer ownership, clock rollover, and the
+ * sleep and the interval timer: their deadlines, masks, remainders, clamps
+ * and argument checks.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -45,9 +46,13 @@ static struct open_file description;
 static uint8_t user[1024];
 static int failures, enters, exits, palettes, masked, saves;
 static int completion, immediate, waits;
-static int pending, pending_masked, blocked_masked, sleeps, cut_short, idles;
+static int pending, pending_masked, blocked_masked, sleeps, cut_short;
 static uint32_t blocked_until;
-static int post_at_block;
+static int post_at_block, wake_at_deadline, tick_signals, wake_unacted;
+static int state_at_unmask = -1, unblocked_unmasks;
+static int halts, unmasked_halts, blocks;
+static uint32_t first_blocked_until, wakeup_at_unmask;
+static int unarmed_unmasks, switch_back, tick_at_save, tick_after_yield, halt_without_tick;
 
 #define CHECK(c, detail)                                    \
     do {                                                    \
@@ -90,20 +95,38 @@ int copy_from_user(void *dst, const void *src, uint32_t len)
     return 0;
 }
 
-/** Record interrupt masking around a coherent clock snapshot. */
+static void tick(void);
+
+/**
+ * Take the interrupt mask, as the clock read, the sleep and the timer do. With
+ * `tick_at_save` armed, a tick comes in the moment before the mask, as the
+ * timer's interrupt can.
+ */
 uint32_t kirq_save(void)
 {
     uint32_t prior = (uint32_t)masked;
+
+    if (tick_at_save && !masked) {
+        tick_at_save = 0;
+        tick();
+    }
     masked = 1;
     saves++;
     return prior;
 }
 
-/** Restore the caller's interrupt state. */
+/**
+ * Restore the interrupt state, noting the process's state and deadline when
+ * it unmasks.
+ */
 void kirq_restore(uint32_t flags)
 {
-    CHECK(masked, "clock snapshot masks interrupts");
+    CHECK(masked, "interrupts are masked before they are restored");
     masked = (int)flags;
+    if (!masked && current_proc) {
+        state_at_unmask = (int)current_proc->state;
+        wakeup_at_unmask = current_proc->wakeup_tick;
+    }
 }
 
 /** Supply a distinct real-time value to check clock selection. */
@@ -240,11 +263,9 @@ static void framebuffer(void)
 }
 
 /**
- * The pending state the sleep asks about, and the mask of its first question.
- *
- * The sleep asks twice: once to decide whether to block, which is the one
- * that must be masked, and once after the yield to decide whether a signal
- * ended it, which is not. Only the first is recorded.
+ * The pending state the sleep asks about, and the mask of its first question,
+ * which must be on: the sleep asks at the top of each turn, masked, whether a
+ * signal it acts on is pending.
  */
 int signal_pending(void)
 {
@@ -255,35 +276,123 @@ int signal_pending(void)
 }
 
 /**
+ * Wake a blocked sleeper as the kernel does: the timer at its deadline, or
+ * `signal_post` with a signal, both clearing its timed wake.
+ */
+static void wake(int with_signal)
+{
+    current_proc->wakeup_tick = 0;
+    current_proc->state = PROC_READY;
+    if (with_signal) {
+        pending = 1;
+    }
+}
+
+/** One tick of the model's clock, and the timer's wake of a due sleeper. */
+static void tick(void)
+{
+    kernel_ticks++;
+    if (current_proc->state == PROC_BLOCKED && current_proc->wakeup_tick != 0 &&
+        (int32_t)(kernel_ticks - current_proc->wakeup_tick) >= 0) {
+        wake(0);
+    }
+}
+
+/** Move the model's clock forward to `tick`, never back. */
+static void clock_to(uint32_t tick)
+{
+    if ((int32_t)(tick - kernel_ticks) > 0) {
+        kernel_ticks = tick;
+    }
+}
+
+/**
  * A yield: the sleeper is BLOCKED already, and the mask lifted already. The
- * model's clock moves to the tick before the deadline, and with
- * `post_at_block` a signal arrives there.
+ * model's clock moves forward: to the tick before the deadline, with the
+ * deadline's tick coming just before the sleep masks again, once for
+ * `tick_after_yield`; one tick with a signal for `tick_signals`; to the
+ * deadline for `wake_at_deadline`, the timer waking the sleeper there, with a
+ * signal for `post_at_block`; to the tick before the deadline with a signal
+ * for `post_at_block` alone; one tick, waking the sleeper with nothing
+ * pending as a blocked or ignored signal does, once for `wake_unacted`; and
+ * otherwise to two ticks short of the deadline, leaving the sleeper blocked
+ * for the halts to carry to it. A woken sleeper is READY, or RUNNING for
+ * `switch_back`, as the real `schedule` leaves it when it switches back.
  */
 void schedule(void)
 {
     blocked_masked = masked;
+    if (state_at_unmask != PROC_BLOCKED) {
+        unblocked_unmasks++;
+    }
+    if (wakeup_at_unmask == 0) {
+        unarmed_unmasks++;
+    }
     sleeps++;
-    if (current_proc->state == PROC_BLOCKED) {
-        blocked_until = current_proc->wakeup_tick;
-        kernel_ticks = current_proc->wakeup_tick - 1;
-        if (post_at_block) {
-            pending = 1;
-        }
+    if (current_proc->state != PROC_BLOCKED) {
+        return;
+    }
+    blocked_until = current_proc->wakeup_tick;
+    if (blocks++ == 0) {
+        first_blocked_until = blocked_until;
+    }
+    if (tick_after_yield) {
+        tick_after_yield = 0;
+        clock_to(current_proc->wakeup_tick - 1);
+        tick_at_save = 1;
+        return;
+    }
+    if (tick_signals) {
+        kernel_ticks++;
+        wake(1);
+    } else if (wake_at_deadline) {
+        clock_to(current_proc->wakeup_tick);
+        wake(post_at_block);
+    } else if (post_at_block) {
+        clock_to(current_proc->wakeup_tick - 1);
+        wake(1);
+    } else if (wake_unacted) {
+        wake_unacted = 0;
+        kernel_ticks++;
+        wake(0);
+    } else {
+        clock_to(current_proc->wakeup_tick - 2);
+        return;
+    }
+    if (switch_back) {
+        current_proc->state = PROC_RUNNING;
     }
 }
 
-/** The halt the sleep falls back to: one tick of the model's clock. */
-void idle_wait_irq_on(void)
+/**
+ * The masked halt: one tick of the model's clock, and the timer's wake of a
+ * sleeper whose deadline that tick reaches. With `halt_without_tick` armed
+ * and the deadline a tick away, the halt ends once on another interrupt, and
+ * the deadline's tick comes just before the sleep masks again.
+ */
+void idle_wait_irq_off(void)
 {
-    idles++;
-    kernel_ticks++;
+    halts++;
+    if (!masked) {
+        unmasked_halts++;
+    }
+    if (halt_without_tick && current_proc->wakeup_tick == kernel_ticks + 1) {
+        halt_without_tick = 0;
+        tick_at_save = 1;
+        return;
+    }
+    tick();
 }
 
-/** The tick an alarm is due at, as the kernel's `proc_alarm_at` gives it. */
+/**
+ * The tick an alarm is due at, as the kernel's `proc_alarm_at` gives it; the
+ * timer is armed with interrupts masked, since the tick rearms it.
+ */
 uint32_t proc_alarm_at(uint32_t now, uint32_t ticks)
 {
     uint32_t at = now + ticks;
 
+    CHECK(masked, "the timer is armed with interrupts masked");
     return at != 0 ? at : 1u;
 }
 
@@ -293,6 +402,57 @@ void process_count_sleep_cut_short(void)
     cut_short++;
 }
 
+/** Put a sleep of `sec` s and `nsec` ns where the call reads it. */
+static void ask_sleep(isr_params_t *p, int32_t sec, int32_t nsec)
+{
+    struct kernel_timespec req;
+
+    req.tv_sec = sec;
+    req.tv_nsec = nsec;
+    k_memcpy(user + 32, &req, sizeof(req));
+    k_memset(user + 64, 0xA5, sizeof(req));
+    k_memset(p, 0, sizeof(*p));
+    p->ebx = 32;
+    p->ecx = 64;
+}
+
+/**
+ * Call the sleep, and require it to return with the mask lifted and the
+ * process running with no deadline, whatever the call returned.
+ */
+static int32_t sleep_call(isr_params_t *p)
+{
+    int32_t rc = sys_nanosleep(p);
+
+    CHECK(!masked, "the sleep returns with the mask lifted");
+    CHECK(current_proc->state == PROC_RUNNING && current_proc->wakeup_tick == 0,
+          "the sleep returns running with no deadline");
+    return rc;
+}
+
+/** Start the model at tick `tick`, nothing pending. */
+static void model_at(uint32_t tick)
+{
+    kernel_ticks = tick;
+    pending = 0;
+    post_at_block = wake_at_deadline = tick_signals = wake_unacted = 0;
+    switch_back = tick_at_save = tick_after_yield = halt_without_tick = 0;
+    sleeps = cut_short = halts = unmasked_halts = blocks = unblocked_unmasks = 0;
+    unarmed_unmasks = 0;
+    blocked_until = first_blocked_until = 0;
+    current_proc->state = PROC_RUNNING;
+    current_proc->wakeup_tick = 0;
+}
+
+/** The remainder the last call wrote. */
+static struct kernel_timespec remainder(void)
+{
+    struct kernel_timespec rem;
+
+    k_memcpy(&rem, user + 64, sizeof(rem));
+    return rem;
+}
+
 /**
  * The sleep's pending check and its block are one masked step.
  *
@@ -300,158 +460,331 @@ void process_count_sleep_cut_short(void)
  * `signal_post` wakes only a process already blocked, so the sleeper would
  * wait out its whole deadline with the signal already there. What says the
  * two are one step is that the check runs masked and the process is already
- * BLOCKED when the mask is lifted. The third row is the count the kernel
- * keeps of the sleeps a signal cut short, which rises only for a sleep that
- * ended before its deadline.
+ * BLOCKED when the mask is lifted before the yield. The halt after a yield
+ * that ran nothing is masked too, so the tick that ends it is not lost. The
+ * count the kernel keeps of the sleeps a signal cut short rises only for one
+ * that ended early.
  *
- * The tick under way has partly passed when the sleep starts, so a sleep of
- * three ticks from tick 1000 blocks until 1004, and a signal already there
- * leaves the whole request as the remainder, not the tick added to it.
+ * The tick in progress is not counted, so a sleep of three ticks from tick
+ * 1000 blocks until 1004 and returns there, not before. A signal already
+ * there leaves the whole request as the remainder.
  */
 static void sleeps_masked(void)
 {
     isr_params_t p;
-    struct kernel_timespec req, rem;
+    struct kernel_timespec rem;
 
-    k_memset(&p, 0, sizeof(p));
-    req.tv_sec = 0;
-    req.tv_nsec = 30000000; /* three ticks */
-    k_memcpy(user + 32, &req, sizeof(req));
-    p.ebx = 32;
-    p.ecx = 64;
-
-    pending = 0;
+    ask_sleep(&p, 0, 30000000);
+    model_at(1000);
     pending_masked = blocked_masked = -1;
-    sleeps = cut_short = idles = 0;
-    blocked_until = 0;
-    current_proc->state = PROC_RUNNING;
-    kernel_ticks = 1000;
-    CHECK(sys_nanosleep(&p) == 0, "a sleep with no signal runs to its deadline");
+    state_at_unmask = -1;
+    CHECK(sleep_call(&p) == 0 && kernel_ticks == 1004,
+          "a sleep with no signal runs to its deadline");
     CHECK(blocked_until == 1004, "a sleep of three ticks from tick 1000 blocks until 1004");
     CHECK(pending_masked == 1, "the pending check runs with interrupts masked");
-    CHECK(blocked_masked == 0, "and the mask is lifted with the sleeper already blocked");
+    CHECK(blocked_masked == 0, "the yield runs with the mask lifted");
+    CHECK(sleeps > 0 && unblocked_unmasks == 0,
+          "and the mask is lifted with the sleeper already blocked");
+    CHECK(unarmed_unmasks == 0, "and with its deadline stored");
+    CHECK(halts > 0 && unmasked_halts == 0, "the sleep halts with interrupts masked");
     CHECK(sleeps > 0, "the sleep yields");
     CHECK(cut_short == 0, "a sleep that ran its length is not counted as cut short");
 
-    pending_masked = -1;
-    sleeps = cut_short = 0;
-    current_proc->state = PROC_RUNNING;
-    kernel_ticks = 2000;
-    k_memcpy(user + 32, &req, sizeof(req));
+    ask_sleep(&p, 0, 30000000);
+    model_at(2000);
     pending = 1;
-    CHECK(sys_nanosleep(&p) == -EINTR, "a signal already there ends the sleep at once");
+    CHECK(sleep_call(&p) == -EINTR, "a signal already there ends the sleep at once");
     CHECK(sleeps == 0, "with no yield");
     CHECK(cut_short == 1, "and the count of sleeps a signal cut short rises");
-    k_memcpy(&rem, user + 64, sizeof(rem));
-    CHECK(rem.tv_nsec == 30000000 && rem.tv_sec == 0, "and the whole request is left");
+    rem = remainder();
+    CHECK(rem.tv_sec == 0 && rem.tv_nsec == 30000000, "and the whole request is left");
 }
 
 /**
- * The sleep's edges: a signal in its last tick, and deadlines at the wrap.
+ * The sleep's edges: its last tick, its deadline, the wakes that do not end
+ * it, and deadlines at the wrap.
  *
- * A signal that arrives in the tick before the deadline leaves one tick as
- * the remainder, since up to a tick of the request may be left, and a caller
- * that sleeps again for a remainder of zero would end early. The deadline is
- * compared as it is computed, and only its store is moved off zero, the "not
- * sleeping" value: the longest sleep begun at tick 0x80000001 has a deadline
- * of 0 and must block, and a sleep of zero at tick 0 must not.
+ * A sleep of three ticks from 3000 blocks until 3004. A signal in its last tick
+ * leaves no remainder, since the kernel counts whole ticks and does not record
+ * where in its tick the sleep began; a signal at 3004 ends nothing, and the
+ * call returns 0. A wake by a signal the sleep does not act on, blocked or
+ * ignored, which `signal_post` makes with the deadline cleared, sends it back
+ * to sleep with its deadline armed again. A remainder of 199 ticks is 1 s and
+ * 990 ms. A sleep resumed for its remainder after a signal at every tick ends
+ * within four calls, no earlier than the tick before the first sleep's
+ * deadline. The count is clamped so that the longest sleep begun at 0x80000000
+ * still lies ahead of it, seconds past the clamp are shortened to it rather
+ * than wrapped, and a deadline that wraps to 0, the "not sleeping" value, is
+ * stored as 1. A sleep of zero does not block.
  */
 static void sleep_edges(void)
 {
     isr_params_t p;
-    struct kernel_timespec req, rem;
-    int rc;
+    struct kernel_timespec rem;
+    int rc, calls;
 
-    k_memset(&p, 0, sizeof(p));
-    p.ebx = 32;
-    p.ecx = 64;
-    req.tv_sec = 0;
-    req.tv_nsec = 30000000;
-    k_memcpy(user + 32, &req, sizeof(req));
-    pending = 0;
+    ask_sleep(&p, 0, 30000000);
+    model_at(3000);
     post_at_block = 1;
-    current_proc->state = PROC_RUNNING;
-    kernel_ticks = 3000;
-    rc = sys_nanosleep(&p);
-    post_at_block = 0;
-    pending = 0;
-    k_memcpy(&rem, user + 64, sizeof(rem));
-    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 10000000,
-          "a signal in the last tick leaves one tick as the remainder");
+    rc = sleep_call(&p);
+    rem = remainder();
+    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 0,
+          "a signal in the last tick leaves no remainder");
+    CHECK(cut_short == 1, "and the sleep is counted as one a signal cut short");
 
-    req.tv_sec = 0x7FFFFFFF;
-    req.tv_nsec = 999999999;
-    k_memcpy(user + 32, &req, sizeof(req));
-    sleeps = 0;
-    current_proc->state = PROC_RUNNING;
-    kernel_ticks = 0x80000001u;
-    rc = sys_nanosleep(&p);
-    CHECK(rc == 0 && sleeps > 0, "the longest sleep from tick 0x80000001 blocks");
+    ask_sleep(&p, 0, 30000000);
+    model_at(3000);
+    post_at_block = wake_at_deadline = 1;
+    rc = sleep_call(&p);
+    rem = remainder();
+    CHECK(rc == 0 && cut_short == 0 && rem.tv_sec == 0 && rem.tv_nsec == 0,
+          "a signal at the deadline ends nothing");
 
-    req.tv_sec = 0;
-    req.tv_nsec = 0;
-    k_memcpy(user + 32, &req, sizeof(req));
-    sleeps = 0;
-    current_proc->state = PROC_RUNNING;
-    kernel_ticks = 0;
-    rc = sys_nanosleep(&p);
-    CHECK(rc == 0 && sleeps == 0, "a sleep of zero at tick 0 does not block");
+    ask_sleep(&p, 0, 30000000);
+    model_at(7000);
+    wake_unacted = 1;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocks >= 2 && blocked_until == 7004 && kernel_ticks == 7004,
+          "a sleep woken by a signal it does not act on blocks again with its deadline armed");
+
+    ask_sleep(&p, 2, 0);
+    model_at(6000);
+    tick_signals = 1;
+    rc = sleep_call(&p);
+    rem = remainder();
+    CHECK(rc == -EINTR && rem.tv_sec == 1 && rem.tv_nsec == 990000000,
+          "a remainder of 1.99 s is 1 s and 990 ms");
+
+    ask_sleep(&p, 0, 30000000);
+    model_at(5000);
+    tick_signals = 1;
+    for (calls = 1; calls <= 20; calls++) {
+        pending = 0;
+        current_proc->state = PROC_RUNNING;
+        if (sleep_call(&p) == 0) {
+            break;
+        }
+        k_memcpy(user + 32, user + 64, sizeof(struct kernel_timespec));
+    }
+    CHECK(calls <= 4 && kernel_ticks >= 5003,
+          "a sleep resumed after a signal at every tick ends within four calls");
+
+    ask_sleep(&p, 21474836, 469999999);
+    model_at(0x80000000u);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && sleeps > 0, "the longest sleep begun at tick 0x80000000 blocks");
+
+    ask_sleep(&p, 42949673, 0);
+    model_at(1400);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && (int32_t)(first_blocked_until - 1400u) > 2000000000,
+          "a sleep of 42949673 s is shortened to the limit, not wrapped to four ticks");
+
+    ask_sleep(&p, 21474836, 469999999);
+    model_at(0x80000001u);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocked_until == 1, "a sleep whose deadline wraps to 0 blocks until 1");
+
+    ask_sleep(&p, 0, 0);
+    model_at(0);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && sleeps == 0, "a sleep of zero does not block");
 }
 
 /**
- * The timer's first SIGALRM is never early.
+ * The sleep's rounding, its checks of the request, and the ticks that come
+ * as it masks.
  *
- * The tick under way has partly passed when the timer is armed, so a value
- * of three ticks armed at tick 1000 is due at 1004, and getitimer reads it
- * back as the three ticks set. A tick before it is due, the time left is
- * between none and a tick, and it reads as one tick, since zero means
- * disarmed. The ticks are clamped low enough that the longest timer, armed
- * where its tick wraps past zero, still reads back as the longest.
+ * A sleep of 15 ms from tick 1100 blocks until 1103, and one of 1 ns from
+ * tick 1150 until 1152, since any part of a tick rounds up. A negative
+ * second, a negative nanosecond count and one of a whole second are refused.
+ * A sleeper that a signal wakes, and that the scheduler switches back to,
+ * runs again at once rather than halting, so a sleep begun at 8000 with a
+ * signal at 8001 leaves 20 ms. The deadline's tick may come just before the
+ * sleep masks, after a yield or after a halt that another interrupt ended;
+ * the sleep sees it at once, from 8100 and 8200 alike.
  */
-static void timer_first_expiry(void)
+static void sleep_races(void)
 {
     isr_params_t p;
-    struct kernel_itimerval set, cur;
+    struct kernel_timespec rem;
+    int rc;
+
+    ask_sleep(&p, 0, 15000000);
+    model_at(1100);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocked_until == 1103, "a sleep of 15 ms from tick 1100 blocks until 1103");
+    ask_sleep(&p, 0, 1);
+    model_at(1150);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocked_until == 1152, "a sleep of 1 ns from tick 1150 blocks until 1152");
+
+    ask_sleep(&p, -1, 0);
+    model_at(1200);
+    CHECK(sleep_call(&p) == -EINVAL, "a sleep of a negative second is refused");
+    ask_sleep(&p, 0, 1000000000);
+    CHECK(sleep_call(&p) == -EINVAL, "a sleep of 1000000000 ns is refused");
+    ask_sleep(&p, 0, -1);
+    CHECK(sleep_call(&p) == -EINVAL, "a sleep of -1 ns is refused");
+
+    ask_sleep(&p, 0, 30000000);
+    model_at(8000);
+    switch_back = tick_signals = 1;
+    rc = sleep_call(&p);
+    rem = remainder();
+    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 20000000,
+          "a sleeper switched back to after a signal runs again at once");
+
+    ask_sleep(&p, 0, 30000000);
+    model_at(8100);
+    tick_after_yield = 1;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && kernel_ticks == 8104,
+          "a deadline tick that comes as the sleep masks after a yield is seen");
+
+    ask_sleep(&p, 0, 30000000);
+    model_at(8200);
+    halt_without_tick = 1;
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && kernel_ticks == 8204,
+          "a deadline tick that comes as the sleep masks after a halt is seen");
+}
+
+/** Set the timer to `sec` s and `usec` us, then every `isec` s `iusec` us. */
+static int set_timer(int32_t sec, int32_t usec, int32_t isec, int32_t iusec)
+{
+    isr_params_t p;
+    struct kernel_itimerval set;
 
     k_memset(&p, 0, sizeof(p));
     k_memset(&set, 0, sizeof(set));
-    set.value_usec = 30000; /* three ticks */
+    set.value_sec = sec;
+    set.value_usec = usec;
+    set.interval_sec = isec;
+    set.interval_usec = iusec;
     k_memcpy(user + 32, &set, sizeof(set));
     p.ebx = ITIMER_REAL;
     p.ecx = 32;
-    kernel_ticks = 1000;
-    CHECK(sys_setitimer(&p) == 0 && proc.alarm_tick == 1004,
-          "a timer of three ticks armed at tick 1000 is due at 1004");
+    return sys_setitimer(&p);
+}
+
+/** Read the timer through getitimer, as a process would. */
+static struct kernel_itimerval read_timer(void)
+{
+    isr_params_t p;
+    struct kernel_itimerval cur;
+
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = ITIMER_REAL;
     p.ecx = 64;
+    k_memset(user + 64, 0xFF, sizeof(cur));
     CHECK(sys_getitimer(&p) == 0, "read the timer");
     k_memcpy(&cur, user + 64, sizeof(cur));
+    return cur;
+}
+
+/** Ask getitimer for timer `which`, and return what it returned. */
+static int32_t get_timer(int32_t which)
+{
+    isr_params_t p;
+
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = (uint32_t)which;
+    p.ecx = 64;
+    return sys_getitimer(&p);
+}
+
+/** Call alarm for `seconds` and return what it returned. */
+static int32_t call_alarm(uint32_t seconds)
+{
+    isr_params_t p;
+
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = seconds;
+    return sys_alarm(&p);
+}
+
+/**
+ * The timer's first SIGALRM is never early, and getitimer reads back what
+ * was set.
+ *
+ * The tick in progress is not counted, so a timer of three ticks set at tick
+ * 1000 is due at 1004, and getitimer reads it back as the three ticks set and
+ * its interval. A tick before it is due, the time left is between none and a
+ * tick, and it reads as one tick, since zero means disarmed. A timer of 5 ms,
+ * and one of 1 us, is armed, due at the tick after next, and an interval of
+ * 5 ms is a tick. A timer of 1 s reads back as 1 s. The count is clamped so
+ * that the longest timer set at 0x80000001 still lies ahead of it, and
+ * seconds past the clamp are shortened to it rather than wrapped. An interval
+ * of a second and more reads back whole. An interval of a whole second in
+ * microseconds is refused, and so is a getitimer of a timer other than
+ * ITIMER_REAL. `alarm` rounds the seconds left to the nearest, a half second
+ * up, and to 1 when under a second is left, and leaves no interval.
+ */
+static void timer_first_expiry(void)
+{
+    struct kernel_itimerval cur;
+
+    model_at(1000);
+    CHECK(set_timer(0, 30000, 0, 250000) == 0 && proc.alarm_tick == 1004,
+          "a timer of three ticks set at tick 1000 is due at 1004");
+    cur = read_timer();
     CHECK(cur.value_sec == 0 && cur.value_usec == 30000,
           "and it reads back as the three ticks set");
-    kernel_ticks = 1003;
-    CHECK(sys_getitimer(&p) == 0, "read the timer a tick before it is due");
-    k_memcpy(&cur, user + 64, sizeof(cur));
+    CHECK(cur.interval_sec == 0 && cur.interval_usec == 250000, "and its interval");
+    model_at(1003);
+    cur = read_timer();
     CHECK(cur.value_sec == 0 && cur.value_usec == 10000,
           "a timer due at the next tick reads as one tick");
-    set.value_usec = 0;
-    k_memcpy(user + 32, &set, sizeof(set));
-    p.ecx = 32;
-    CHECK(sys_setitimer(&p) == 0 && proc.alarm_tick == 0, "a value of zero disarms it");
+    CHECK(set_timer(0, 0, 0, 0) == 0 && proc.alarm_tick == 0, "a value of zero disarms the timer");
 
-    set.value_sec = 0x7FFFFFFF;
-    set.value_usec = 999999;
-    k_memcpy(user + 32, &set, sizeof(set));
-    kernel_ticks = 0x80000001u;
-    CHECK(sys_setitimer(&p) == 0, "arm the longest timer at tick 0x80000001");
-    p.ecx = 64;
-    CHECK(sys_getitimer(&p) == 0, "read the longest timer");
-    k_memcpy(&cur, user + 64, sizeof(cur));
-    CHECK(cur.value_sec == 21474836,
-          "the longest timer armed at tick 0x80000001 reads back as the longest");
-    set.value_sec = 0;
-    set.value_usec = 0;
-    k_memcpy(user + 32, &set, sizeof(set));
-    p.ecx = 32;
-    CHECK(sys_setitimer(&p) == 0 && proc.alarm_tick == 0, "and a value of zero disarms it");
+    model_at(1200);
+    CHECK(set_timer(0, 5000, 0, 0) == 0 && proc.alarm_tick == 1202,
+          "a timer of 5 ms is armed, due at 1202");
+    CHECK(set_timer(0, 1, 0, 0) == 0 && proc.alarm_tick == 1202,
+          "a timer of 1 us is armed, due at 1202");
+    CHECK(set_timer(0, 30000, 0, 5000) == 0 && read_timer().interval_usec == 10000,
+          "an interval of 5 ms rounds up to a tick");
+    model_at(1300);
+    CHECK(set_timer(1, 0, 0, 0) == 0, "set a timer of 1 s");
+    cur = read_timer();
+    CHECK(cur.value_sec == 1 && cur.value_usec == 0, "a timer of 1 s reads back as 1 s");
+    model_at(1400);
+    CHECK(set_timer(42949673, 0, 0, 0) == 0 && (int32_t)(proc.alarm_tick - 1400u) > 2000000000,
+          "a timer of 42949673 s is shortened to the limit, not wrapped to four ticks");
+
+    model_at(0x80000001u);
+    CHECK(set_timer(0x7FFFFFFF, 999999, 0, 0) == 0, "set the longest timer at tick 0x80000001");
+    cur = read_timer();
+    CHECK(cur.value_sec == 21474836 && cur.value_usec == 450000,
+          "the longest timer set at tick 0x80000001 reads back as the longest");
+    CHECK(set_timer(0, 0, 0, 0) == 0 && proc.alarm_tick == 0, "and a value of zero disarms it");
+
+    model_at(900);
+    CHECK(set_timer(1, 0, 1, 500000) == 0, "set a timer of 1 s, then every 1.5 s");
+    cur = read_timer();
+    CHECK(cur.interval_sec == 1 && cur.interval_usec == 500000,
+          "an interval of 1.5 s reads back as 1.5 s");
+    CHECK(set_timer(0, 30000, 0, 1000000) == -EINVAL, "an interval of 1000000 us is refused");
+    CHECK(get_timer(1) == -EINVAL, "getitimer refuses a timer other than ITIMER_REAL");
+    CHECK(call_alarm(5) == 1, "alarm replaces the timer and reports its 1 s");
+    cur = read_timer();
+    CHECK(cur.interval_sec == 0 && cur.interval_usec == 0, "and leaves no interval");
+    CHECK(call_alarm(0) == 5 && proc.alarm_tick == 0, "and alarm(0) disarms it");
+
+    model_at(1000);
+    CHECK(call_alarm(5) == 0, "alarm returns 0 when none was armed");
+    model_at(1030);
+    CHECK(call_alarm(5) == 5, "alarm reports 4.7 s left as 5");
+    model_at(1528);
+    CHECK(call_alarm(5) == 1, "alarm reports 20 ms left as 1, since 0 means none was armed");
+    model_at(1585);
+    CHECK(call_alarm(0) == 4, "alarm reports 4.43 s left as 4");
+    CHECK(proc.alarm_tick == 0, "and alarm(0) leaves none");
+    model_at(2000);
+    CHECK(call_alarm(5) == 0, "arm an alarm of 5 s at tick 2000");
+    model_at(2050);
+    CHECK(call_alarm(0) == 5, "alarm reports 4.5 s left as 5");
 }
 
 /** Read across the tick wrap and the following whole-second boundary. */
@@ -493,6 +826,7 @@ int main(void)
     clocks();
     sleeps_masked();
     sleep_edges();
+    sleep_races();
     timer_first_expiry();
     if (failures)
         return 1;

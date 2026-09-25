@@ -142,6 +142,15 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
 }
 
 /**
+ * Whether the tick `deadline` has come: it is the count's tick or an earlier
+ * one, compared by the signed difference so the count's wrap does not matter.
+ */
+static int deadline_reached(uint32_t deadline)
+{
+    return (int32_t)(deadline - kernel_ticks) <= 0;
+}
+
+/**
  * The poll core: block until at least one of `fds` is ready, a signal arrives,
  * or the deadline passes.
  *
@@ -192,7 +201,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
             rc = -EINTR;
             break;
         }
-        if (has_deadline && (int32_t)(deadline - kernel_ticks) <= 0) {
+        if (has_deadline && deadline_reached(deadline)) {
             rc = 0; /* timed out */
             break;
         }
@@ -232,8 +241,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 }
 
 /**
- * The tick at which a wait of `ticks` whole ticks ends. The tick under way
- * counts for nothing, so a nonzero wait is never shorter than asked. The
+ * The tick at which a wait of `ticks` whole ticks ends. The tick in progress
+ * is not counted, so a nonzero wait is never shorter than asked. The
  * callers clamp `ticks` at 0x7FFFFFFE, so the signed difference
  * `deadline - kernel_ticks` stays valid with that tick added.
  */

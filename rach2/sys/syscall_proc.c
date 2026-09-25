@@ -1821,11 +1821,12 @@ static void sig_irq_restore(uint32_t flags)
 
 /*
  * Post signal `signo` to `target`: set its pending bit. If the target is
- * blocked in the scheduler (sleeping/waiting), make it runnable so it
- * reaches a return-to-user delivery point. SIGKILL/SIGSTOP cannot be caught,
- * so a pending SIGKILL is honored even before delivery by leaving it pending
- * for the default path. (Interrupting a blocked syscall with -EINTR is
- * deferred; targets here are running or self.)
+ * blocked in the scheduler (sleeping/waiting), make it runnable and clear its
+ * timed wake, whatever the signal's disposition and mask: an interruptible
+ * wait then asks `signal_pending` whether to end with -EINTR, and any wait
+ * that goes on arms its own deadline again. SIGKILL/SIGSTOP cannot be
+ * caught, so a pending SIGKILL is honored even before delivery by leaving it
+ * pending for the default path.
  */
 void signal_post(process_t *target, int signo)
 {
@@ -1870,9 +1871,11 @@ void signal_post(process_t *target, int signo)
     }
 }
 
-/* Non-zero if the current process has a deliverable (pending, unblocked)
- * signal. Blocking syscall loops poll this so a signal interrupts the wait (the
- * signal is then delivered/acts on the syscall's return to user). */
+/* Non-zero if the current process has a pending signal that is neither
+ * blocked nor ignored: one that is caught, or whose default action terminates
+ * or stops the process. Blocking syscall loops poll this so a signal
+ * interrupts the wait (the signal is then delivered/acts on the syscall's
+ * return to user). */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -1888,9 +1891,9 @@ int signal_pending(void)
     flags = sig_irq_save();
     deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
     sig_irq_restore(flags);
-    /* Only a signal that would ACT interrupts a wait: a caught handler or a
-     * default-terminate. A pending signal that is ignored (SIG_IGN or a
-     * default-ignore like SIGCHLD) must NOT cause -EINTR. */
+    /* Only a signal that would ACT interrupts a wait: a caught handler, a
+     * default terminate or a default stop. A pending signal that is ignored
+     * (SIG_IGN or a default-ignore like SIGCHLD) must NOT cause -EINTR. */
     for (signo = 1; signo <= KSIG_MAX; signo++) {
         struct k_sigaction *sa;
 
