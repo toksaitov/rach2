@@ -369,6 +369,19 @@ The machine's hardware clock holds UTC, set so in the BIOS setup on
 2026-09-04. The kernel reads the clock as UTC and has no notion of a zone,
 so a clock left on local time puts every file's time hours out.
 
+## Milestone 06's close: the machine as it was left
+
+On 2026-09-25 the machine was brought to the source of milestone 06's
+close: its kernel, `273bd0bf...`, 1049360 bytes, through `bootctl`, and
+its recovery partition, its root and the flash drive from the Mac's build
+of the same source, each read back with its image's hash
+(`dev-log/06-review/results-2026-09-20.md` has the hashes). The root was
+replaced with `rach2-install --update`, which kept the accounts `root`
+and `test` and their keys, the testing host's demonstration key, which
+the owner chose to keep. The recovery system trusts the Mac's
+demonstration key, which the recovery image has built in; the recovery
+partition holds no key file of its own.
+
 ## Milestone 50: the sitting
 
 The disk installed again from the stick's image of the tree at

@@ -69,4 +69,4 @@ The coordinated write-path changes were implemented locally because admission, c
 
 ## On the Lenovo
 
-The machine's command and flush counts for 2000 calls of 4 KiB, appended and rewritten, are what `sh tests/system/manual_probes.sh KEY ADDRESS writes DIR` reads from `/proc/disk`. They were taken on 2026-09-25 on the final kernel, three runs through one open file on the installed ext2 root, each ended by one `fsync`: 2000 appended calls cost 124, 120 and 120 disk commands and 62, 60 and 60 flushes, and 2000 rewrites in place 54 commands and 27 flushes in each run. The machine's clock gave each run 11 to 15 centiseconds.
+The machine's command and flush counts for 2000 calls of 4 KiB, appended and rewritten, are what `sh tests/system/manual_probes.sh KEY ADDRESS writes DIR` reads from `/proc/disk`. They were taken on 2026-09-25 on the final kernel and root, three runs through one open file on the installed ext2 root, each ended by one `fsync`: 2000 appended calls cost 124, 124 and 120 disk commands and 62, 62 and 60 flushes, and 2000 rewrites in place 54 commands and 27 flushes in each run. The machine's clock gave each run 11 to 16 centiseconds.
