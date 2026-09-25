@@ -179,6 +179,12 @@ struct process {
     struct bbuf *bcache_held;
     /** One preference after a wait-queue wake; consumed when selected. */
     uint32_t woken;
+    /* The real-time interval timer, `setitimer(ITIMER_REAL)`: the tick its
+     * SIGALRM is due at, 0 when it is disarmed, and the ticks between one
+     * SIGALRM and the next, 0 for a single one. A fork starts with both
+     * zero, since the child inherits no timer; an exec keeps them. */
+    uint32_t alarm_tick;
+    uint32_t alarm_interval;
 };
 
 typedef struct process process_t;
@@ -239,6 +245,12 @@ void proc_wake_sleepers(uint32_t now);
  * syscall_proc.c.
  */
 void signal_post(process_t *target, int signo);
+
+/**
+ * The tick `ticks` after `now` at which a real-time timer is due, never 0,
+ * which `alarm_tick` keeps for a disarmed timer.
+ */
+uint32_t proc_alarm_at(uint32_t now, uint32_t ticks);
 
 /**
  * Non-zero if the current process has a deliverable (pending, unblocked)

@@ -478,6 +478,167 @@ static int32_t sys_nanosleep(isr_params_t *params)
     }
     return 0;
 }
+/* ITIMER_REAL, the one interval timer this kernel keeps. */
+#define ITIMER_REAL 0
+
+/*
+ * The itimerval of i386 setitimer and getitimer: the interval, then the
+ * value, each in seconds and microseconds of 32 bits. musl passes this form
+ * for its 64-bit time_t.
+ */
+struct kernel_itimerval {
+    int32_t interval_sec;
+    int32_t interval_usec;
+    int32_t value_sec;
+    int32_t value_usec;
+};
+
+/*
+ * A time in seconds and microseconds as whole 10 ms ticks, rounded up, and
+ * clamped where nanosleep clamps so that the signed tick difference stays
+ * valid. Zero only for a time of zero.
+ */
+static uint32_t itimer_ticks(int32_t sec, int32_t usec)
+{
+    uint32_t whole = (uint32_t)sec;
+    uint32_t ticks;
+
+    if (whole > 21474836u) {
+        whole = 21474836u;
+    }
+    ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;
+    return ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks;
+}
+
+/* The ticks left before the current process's timer is due, 0 when it is
+ * disarmed; a timer due at this very tick has one left, since the tick
+ * posts it. Interrupts are off: the tick rearms the timer. */
+static uint32_t itimer_left(void)
+{
+    uint32_t left;
+
+    if (current_proc->alarm_tick == 0) {
+        return 0;
+    }
+    left = current_proc->alarm_tick - kernel_ticks;
+    return (int32_t)left > 0 ? left : 1u;
+}
+
+/* What the current process's timer holds, as setitimer and getitimer report
+ * it. Interrupts are off. */
+static void itimer_read(struct kernel_itimerval *out)
+{
+    uint32_t left = itimer_left();
+
+    out->value_sec = (int32_t)(left / 100u);
+    out->value_usec = (int32_t)((left % 100u) * 10000u);
+    out->interval_sec = (int32_t)(current_proc->alarm_interval / 100u);
+    out->interval_usec = (int32_t)((current_proc->alarm_interval % 100u) * 10000u);
+}
+
+/*
+ * Arm or disarm the current process's timer: the first SIGALRM `value`
+ * ticks from now and then every `interval`, or disarmed for a value of 0.
+ * Interrupts are off.
+ */
+static void itimer_set(uint32_t value, uint32_t interval)
+{
+    if (value == 0) {
+        current_proc->alarm_tick = 0;
+        current_proc->alarm_interval = 0;
+        return;
+    }
+    current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value);
+    current_proc->alarm_interval = interval;
+}
+
+/**
+ * setitimer(2), syscall 104: the real-time timer.
+ *
+ * EBX = which, ECX = const struct itimerval *new, EDX = struct itimerval
+ * *old, which may be null. ITIMER_REAL is the only timer: the virtual and
+ * profiling timers count a process's own processor time, which this kernel
+ * does not keep, and are refused with EINVAL, as is a negative time or
+ * microseconds past a second. A value of zero disarms the timer; otherwise
+ * the first SIGALRM is due that long from now, rounded up to whole 10 ms
+ * ticks, then every interval, or only once for an interval of zero. `old`
+ * receives what the timer held before.
+ */
+static int32_t sys_setitimer(isr_params_t *params)
+{
+    const struct kernel_itimerval __user *unew =
+        (const struct kernel_itimerval __user *)params->ecx;
+    struct kernel_itimerval __user *uold = (struct kernel_itimerval __user *)params->edx;
+    struct kernel_itimerval set, was;
+    uint32_t flags;
+
+    if ((int32_t)params->ebx != ITIMER_REAL) {
+        return -EINVAL;
+    }
+    if (!unew || copy_from_user(&set, unew, sizeof(set)) != 0) {
+        return -EFAULT;
+    }
+    if (set.value_sec < 0 || set.value_usec < 0 || set.value_usec >= 1000000 ||
+        set.interval_sec < 0 || set.interval_usec < 0 || set.interval_usec >= 1000000) {
+        return -EINVAL;
+    }
+    flags = kirq_save();
+    itimer_read(&was);
+    itimer_set(itimer_ticks(set.value_sec, set.value_usec),
+               itimer_ticks(set.interval_sec, set.interval_usec));
+    kirq_restore(flags);
+    if (uold && copy_to_user(uold, &was, sizeof(was)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * getitimer(2), syscall 105: what the real-time timer holds.
+ *
+ * EBX = which, ECX = struct itimerval *cur: the time left before the next
+ * SIGALRM, zero when the timer is disarmed, and the interval.
+ */
+static int32_t sys_getitimer(isr_params_t *params)
+{
+    struct kernel_itimerval __user *ucur = (struct kernel_itimerval __user *)params->ecx;
+    struct kernel_itimerval cur;
+    uint32_t flags;
+
+    if ((int32_t)params->ebx != ITIMER_REAL) {
+        return -EINVAL;
+    }
+    flags = kirq_save();
+    itimer_read(&cur);
+    kirq_restore(flags);
+    if (!ucur || copy_to_user(ucur, &cur, sizeof(cur)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * alarm(2), syscall 27: one SIGALRM `seconds` from now, or none for 0.
+ *
+ * EBX = seconds. The same timer as setitimer's, with no interval. Returns
+ * the seconds that were left before the earlier alarm, rounded as Linux
+ * rounds them: to the nearest second, and up to one when any time was left.
+ * musl's `alarm` calls setitimer; this is the call older programs make.
+ */
+static int32_t sys_alarm(isr_params_t *params)
+{
+    uint32_t flags = kirq_save();
+    uint32_t left = itimer_left();
+    uint32_t seconds = left / 100u;
+    uint32_t usec = (left % 100u) * 10000u;
+
+    itimer_set(itimer_ticks((int32_t)(params->ebx > 21474836u ? 21474836u : params->ebx), 0), 0);
+    kirq_restore(flags);
+    if ((seconds == 0 && usec != 0) || usec >= 500000u) {
+        seconds++;
+    }
+    return (int32_t)seconds;
+}
 
 /* getrandom flag bits (Linux). Nothing here blocks and there is one source,
  * so `GRND_NONBLOCK` and `GRND_RANDOM` only have their values checked;
@@ -1172,12 +1333,13 @@ static int32_t sys_sethostname(isr_params_t *params)
 
 /* Name each missing syscall behind `rach2.trace=enosys`, once per number for
  * the process that last asked for it, not once per boot. Per boot hides
- * exactly what such a trace is for: `login` asks for setitimer early, so a
- * later program asking for the same number would say nothing, and a reader
- * comparing before and after would conclude the later program asked for
- * nothing. Recording which process last reported a number costs one word per
- * number and makes each program's own gaps visible; two programs asking for
- * the same number in turn each say so, since the word holds one of them.
+ * exactly what such a trace is for: a program that asks for a missing number
+ * early would leave a later program asking for the same number saying
+ * nothing, and a reader comparing before and after would conclude the later
+ * program asked for nothing. Recording which process last reported a number
+ * costs one word per number and makes each program's own gaps visible; two
+ * programs asking for the same number in turn each say so, since the word
+ * holds one of them.
  *
  * A number past the table is remembered as one number and one process, so a
  * program asking for the same one twice says it once and two numbers in turn
@@ -1350,6 +1512,9 @@ void init_syscall(void)
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
     _syscall_table[SYS_NANOSLEEP] = sys_nanosleep;
+    _syscall_table[SYS_SETITIMER] = sys_setitimer;
+    _syscall_table[SYS_GETITIMER] = sys_getitimer;
+    _syscall_table[SYS_ALARM] = sys_alarm;
     _syscall_table[SYS_GETRANDOM] = sys_getrandom;
     _syscall_table[SYS_KILL] = sys_kill;
     _syscall_table[SYS_TKILL] = sys_tkill;

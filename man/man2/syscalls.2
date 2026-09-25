@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt SYSCALLS 2
 .Os
 .Sh NAME
@@ -42,6 +42,7 @@ The kernel registers the following 120 calls.
 .It 19 Ta Xr lseek 2
 .It 20 Ta Xr getpid 2
 .It 21 Ta Xr mount 2
+.It 27 Ta Xr alarm 2
 .It 29 Ta Xr pause 2
 .It 33 Ta Xr access 2
 .It 36 Ta Xr sync 2
@@ -74,6 +75,8 @@ The kernel registers the following 120 calls.
 .It 94 Ta Xr fchmod 2
 .It 95 Ta Xr fchown 2
 .It 102 Ta Xr socketcall 2
+.It 104 Ta Xr setitimer 2
+.It 105 Ta Xr getitimer 2
 .It 106 Ta Xr stat 2
 .It 107 Ta Xr lstat 2
 .It 114 Ta Xr wait4 2

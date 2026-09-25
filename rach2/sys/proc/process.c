@@ -206,12 +206,15 @@ void free_process(process_t *proc)
 }
 
 /**
- * Wake timed sleepers whose deadline has passed.
+ * Wake timed sleepers whose deadline has passed, and post the alarms due.
  *
  * Moves any timed sleeper (nanosleep, or poll with a deadline) whose wakeup
- * tick has arrived from BLOCKED back to READY so the scheduler runs it.
- * Called from the timer tick. The `(int32_t)` difference is
- * tick-wraparound-safe (~248 days at 100 Hz).
+ * tick has arrived from BLOCKED back to READY so the scheduler runs it, and
+ * posts SIGALRM to each process whose real-time timer is due, arming the
+ * timer again for its interval or leaving it disarmed. `signal_post` wakes a
+ * blocked process, so a sleep the alarm lands in ends at this tick. Called
+ * from the timer tick. The `(int32_t)` difference is tick-wraparound-safe
+ * (~248 days at 100 Hz).
  */
 void proc_wake_sleepers(uint32_t now)
 {
@@ -223,7 +226,22 @@ void proc_wake_sleepers(uint32_t now)
             p->wakeup_tick = 0;
             p->state = PROC_READY;
         }
+        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {
+            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;
+            signal_post(p, SIGALRM);
+        }
     }
+}
+
+/**
+ * The tick `ticks` after `now` at which an alarm is due: never 0, which
+ * `alarm_tick` keeps for a disarmed timer.
+ */
+uint32_t proc_alarm_at(uint32_t now, uint32_t ticks)
+{
+    uint32_t at = now + ticks;
+
+    return at != 0 ? at : 1u;
 }
 
 process_t *get_process(uint32_t pid)

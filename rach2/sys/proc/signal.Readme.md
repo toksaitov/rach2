@@ -6,7 +6,7 @@ CPU exceptions take a separate path. A user page fault terminates the process wi
 
 ## Process state
 
-`process_t` contains `sigacts[1..64]`, `sig_pending`, and `sig_blocked`. A new process starts with default dispositions and empty masks. `fork` copies the dispositions and blocked mask but gives the child an empty pending set. `execve` preserves ignored dispositions and the blocked mask, resets caught dispositions to default, and clears the pending set.
+`process_t` contains `sigacts[1..64]`, `sig_pending`, and `sig_blocked`. A new process starts with default dispositions and empty masks. `fork` copies the dispositions and blocked mask but gives the child an empty pending set. `execve` preserves ignored dispositions and the blocked mask, resets caught dispositions to default, and clears the pending set. The real-time interval timer is two more fields, `alarm_tick`, the tick its next `SIGALRM` is due at or zero when it is disarmed, and `alarm_interval`; `fork` gives the child none and `execve` keeps it.
 
 `SIGKILL` and `SIGSTOP` cannot be caught or ignored, and every mask update removes their bits. Installing `SIG_IGN` for another signal also removes an instance already pending.
 
@@ -55,7 +55,7 @@ When the handler returns, musl's plain restorer invokes `sigreturn(119)` after p
 
 ## Kernel signal sources
 
-Process exit, stop, and continue post `SIGCHLD` to the parent. A write to a pipe with no reader posts `SIGPIPE`. A pseudo-terminal resize posts `SIGWINCH`, and closing its master posts `SIGHUP` to the slave's foreground group.
+Process exit, stop, and continue post `SIGCHLD` to the parent. A write to a pipe with no reader posts `SIGPIPE`. A pseudo-terminal resize posts `SIGWINCH`, and closing its master posts `SIGHUP` to the slave's foreground group. The real-time interval timer posts `SIGALRM`: `setitimer(ITIMER_REAL)`, `getitimer` and `alarm` set and read the two fields above, and the timer tick posts the signal to each process whose timer is due and arms the timer again for its interval (`proc_wake_sleepers` in `sys/proc/process.c`), so a sleep the signal reaches ends with `-EINTR`. The virtual and profiling timers are refused with `-EINVAL`; `setitimer(2)` has the rest.
 
 With terminal `ISIG` enabled, the line discipline maps `VINTR`, `VQUIT`, and `VSUSP` to `SIGINT`, `SIGQUIT`, and `SIGTSTP`. The defaults are Ctrl-C, Ctrl-Backslash, and Ctrl-Z. It discards the current edit line, committed unread input, and a pending EOF before signaling the foreground group. PS/2 keyboard and COM1 input both use this discipline while a user session owns the console.
 

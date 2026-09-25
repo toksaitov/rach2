@@ -5,6 +5,7 @@
 add-shell 8 busybox-loginutils
 addgroup 8 busybox-loginutils
 adjtimex 1 busybox-miscutils
+alarm 2 setitimer
 arch 1 busybox-coreutils
 arp 1 busybox-networking
 arping 1 busybox-networking
@@ -115,6 +116,7 @@ getegid32 2 getuid
 geteuid32 2 getuid
 getgid32 2 getuid
 getgroups32 2 getuid
+getitimer 2 setitimer
 getopt 1 busybox-util-linux
 getpeername 2 getsockname
 getpgid 2 getpid
