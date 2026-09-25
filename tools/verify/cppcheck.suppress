@@ -69,7 +69,9 @@ unreachableCode:*tests/musl/sigmusl.c
 constVariable:*tests/bootprobe.c
 constVariable:*tests/devprobe.c
 constVariable:*tests/exitprobe.c
+constVariable:*tests/sigprobe.c
 unassignedVariable:*tests/devprobe.c
+unassignedVariable:*tests/sigprobe.c
 
 # The interface probe reads a length the kernel writes through a pointer it
 # passes as an integer in the socketcall argument block, so cppcheck sees only

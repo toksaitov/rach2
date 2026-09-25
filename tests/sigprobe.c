@@ -16,7 +16,11 @@
  *     where it lands and not at its deadline. What says which happened is
  *     `sleeps_interrupted` in `/proc/stat`, the kernel's count of the sleeps
  *     a signal cut short: a sleep that ran its whole length does not raise
- *     it. The count is the assertion, not the seconds the sleep took.
+ *     it. The count is the assertion, not the seconds the sleep took;
+ *   * the real-time interval timer of `setitimer`, `getitimer` and `alarm`,
+ *     judged by what the kernel reports and counts: an alarm that ends a
+ *     sleep, an interval timer that ends three, a child with no timer, and
+ *     the timers the kernel does not keep refused.
  *
  * Prints "SIGPROBE OK" on success. Freestanding; direct int 0x80.
  */
@@ -37,11 +41,21 @@ typedef unsigned int size_t;
 #define SYS_OPEN           5
 #define SYS_CLOSE          6
 #define SYS_NANOSLEEP      162
+#define SYS_ALARM          27
+#define SYS_SETITIMER      104
+#define SYS_GETITIMER      105
 
 #define O_RDONLY 0
 
 #define SIGUSR1 10
+#define SIGALRM 14
 #define SIGTERM 15
+
+#define EINTR  4
+#define EINVAL 22
+
+#define ITIMER_REAL    0
+#define ITIMER_VIRTUAL 1
 
 #define SA_RESTORER  0x04000000u
 #define SA_RESETHAND 0x80000000u
@@ -225,6 +239,95 @@ static void install(int signo, void (*h)(int))
     install_with(signo, h, 0);
 }
 
+static volatile int alarms;
+
+static void alarm_handler(int sig)
+{
+    (void)sig;
+    alarms++;
+}
+
+/* Arm the real-time timer for `value_ms` and then every `interval_ms`;
+   `old`, when it is not null, receives what the timer held. */
+static int itimer(int value_ms, int interval_ms, int *old)
+{
+    int set[4];
+
+    set[0] = interval_ms / 1000;
+    set[1] = (interval_ms % 1000) * 1000;
+    set[2] = value_ms / 1000;
+    set[3] = (value_ms % 1000) * 1000;
+    return syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)set, (int)(size_t)old);
+}
+
+/* Whether the real-time timer reads as disarmed, all four fields zero. */
+static int itimer_disarmed(void)
+{
+    static int cur[4];
+
+    return syscall2(SYS_GETITIMER, ITIMER_REAL, (int)(size_t)cur) == 0 && cur[0] == 0 &&
+           cur[1] == 0 && cur[2] == 0 && cur[3] == 0;
+}
+
+/**
+ * The real-time timer: setitimer, getitimer and alarm.
+ *
+ * What is judged is what the kernel reports and counts, never how long a
+ * wait took. A single alarm ends a sleep of five seconds, which returns
+ * EINTR after its handler has run once; an interval timer ends three such
+ * sleeps in turn; getitimer reports the interval as set and a value no
+ * longer than the one set; a fork's child has no timer; alarm returns the
+ * seconds left before the alarm it replaces; and the virtual timer, which
+ * the kernel does not keep, is refused. Every row leaves the timer
+ * disarmed.
+ */
+static void timer_rows(void)
+{
+    static int cur[4], old[4];
+    static const int bad[4] = {0, 0, 0, 1000000};
+    int i, ended = 0, pid, status, before;
+
+    install(SIGALRM, alarm_handler);
+    check(syscall3(SYS_SETITIMER, ITIMER_VIRTUAL, (int)(size_t)bad, 0) == -EINVAL,
+          "the virtual timer is refused");
+    check(syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)bad, 0) == -EINVAL,
+          "a million microseconds is refused");
+
+    before = sleeps_cut_short();
+    alarms = 0;
+    check(itimer(20, 0, 0) == 0, "arm a single alarm");
+    check(sleep_ms(5000) == -EINTR && alarms == 1,
+          "the alarm ends a sleep and runs its handler once");
+    check(sleeps_cut_short() > before, "the kernel counted the sleep the alarm cut short");
+
+    alarms = 0;
+    check(itimer(20, 20, 0) == 0, "arm an interval timer");
+    for (i = 0; i < 3; i++) {
+        ended += sleep_ms(5000) == -EINTR;
+    }
+    check(itimer(0, 0, old) == 0 && ended == 3 && alarms >= 3,
+          "the interval timer ends three sleeps in turn");
+    check(old[0] == 0 && old[1] == 20000, "and reports its interval as it is disarmed");
+
+    check(itimer(5000, 250, 0) == 0 &&
+              syscall2(SYS_GETITIMER, ITIMER_REAL, (int)(size_t)cur) == 0 && cur[0] == 0 &&
+              cur[1] == 250000 && (cur[2] > 0 || cur[3] > 0) &&
+              (cur[2] < 5 || (cur[2] == 5 && cur[3] == 0)),
+          "getitimer reports the interval set and no more than the value set");
+    pid = syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        sys_exit(itimer_disarmed() ? 0 : 1);
+    }
+    check(pid > 0 && syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid && status == 0,
+          "a fork's child has no timer");
+    check(itimer(0, 0, 0) == 0 && itimer_disarmed(), "a value of zero disarms the timer");
+
+    check(syscall1(SYS_ALARM, 5) == 0, "alarm returns 0 when none was armed");
+    i = syscall1(SYS_ALARM, 0);
+    check(i >= 1 && i <= 5, "alarm returns the seconds left before the alarm it replaces");
+    check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "and alarm(0) leaves none");
+}
+
 void _start(void)
 {
     int pid, status;
@@ -303,6 +406,9 @@ void _start(void)
               "the sleeper's own sleep returned EINTR");
         check(sleeps_cut_short() > before, "the kernel counted a sleep the signal cut short");
     }
+
+    /* 7. The real-time interval timer. */
+    timer_rows();
 
     if (fails == 0) {
         puts("SIGPROBE OK");

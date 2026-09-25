@@ -950,15 +950,19 @@ dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image
 	    "expect=LEASEOK" \
 	    "send=arping -f -w 5 192.168.90.2 > /tmp/ap 2>&1; echo ARPING\"\"-STATUS:\$$?; cat /tmp/ap" \
 	    "expect=ARPING-STATUS:0" "expect=Received 1 response" \
+	    "send=arping -w 2 192.168.90.9 > /tmp/as 2>&1; echo SILENT\"\"-STATUS:\$$?; cat /tmp/as" \
+	    "expect=SILENT-STATUS:1" "expect=Received 0 response" \
 	    "send=arp -n | grep -q '(192.168.90.2)' && echo ARP\"\"CACHED" \
 	    "expect=ARPCACHED" \
 	    "send=ping 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
 	    "expect=ROUTETRIED" "send=echo DHCP\"\"OK" \
 	    "expect=DHCPOK"
-	# The address, the netmask and the broadcast are asserted above, and the route
-	# below: a packet for an address on no subnet of this machine's must leave
-	# addressed to the gateway's hardware address, which is what a default route
-	# means. Nothing answers 10.9.9.9, and nothing needs to.
+	# An arping at an address nothing answers must end at its deadline with status
+	# 1: the run ends in the SIGALRM handler, so it needs the interval timer
+	# (setitimer(2)). The address, the netmask and the broadcast are asserted
+	# above, and the route below: a packet for an address on no subnet of this
+	# machine's must leave addressed to the gateway's hardware address, which is
+	# what a default route means. Nothing answers 10.9.9.9, and nothing needs to.
 	$(PCAPCHECK) bcast $(DHCP_PCAP) \
 	    --routed-via 192.168.90.2 --routed-dst 10.9.9.9
 ifeq ($(NIC),e1000)
