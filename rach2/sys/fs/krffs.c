@@ -239,12 +239,12 @@ static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field, 
 }
 
 /**
- * A 64-bit field of a node no path reaches yet: a node being made, or a
- * copy being filled before it is linked. Nothing reads it until its name
- * is written, which comes last and after a sync point, so a field torn
- * across two units of the medium is seen by nobody, and the whole-unit
- * rule that guards a live node does not apply. Without this a name whose
- * hash happened to land astride a unit could not be created.
+ * A 64-bit field of a node no path reaches yet: a node being made, which
+ * nothing reads until its name is written last, after a sync point, or a
+ * copy being filled for a move, a free node until its type is written last.
+ * A field torn across two units of the medium is seen by nobody, so the
+ * whole-unit rule that guards a live node does not apply. Without this a
+ * name whose hash happened to land astride a unit could not be created.
  */
 static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint64_t value)
 {

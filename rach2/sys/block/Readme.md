@@ -131,7 +131,7 @@ The debug-shell `ahci` command reports an error and performs no re-probe while K
 
 Two independent build switches limit writes.
 
-`RACH2_DISK_READONLY` selects the metal kernel's driver policy. The ATA and AHCI issue paths permit only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA EXT`, and `IDENTIFY`; every other command byte returns failure. This also prevents writes through `/dev/bootpart` and `/dev/grubcore`. `tools/inspect/check_diskpolicy.sh` requires exactly one policy banner in the built kernel.
+`RACH2_DISK_READONLY` selects the metal kernel's driver policy. The ATA and AHCI issue paths permit only `READ SECTORS`, `READ SECTORS EXT`, `READ DMA`, `READ DMA EXT`, and `IDENTIFY`; every other command byte returns failure. This also prevents writes through `/dev/bootpart` and `/dev/grubcore`. `tools/inspect/check_diskpolicy.sh` requires exactly one policy banner in the built kernel.
 
 The policy is the two disk drivers' allowlist and covers the disk they drive. A flash drive is written through the USB class driver, which the policy does not reach, so a machine booted from the read-only stick can still write a stick; the disk the policy exists to protect is the one in the machine.
 

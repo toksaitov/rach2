@@ -332,12 +332,14 @@ The kernel does not answer
 .Dv SIOCGIFCONF ,
 the request that lists the interfaces, so
 .Nm ifconfig
-fails with no interface named, with
+fails with no interface named, with or without
 .Fl a ,
 and with a name
 .Pa /proc/net/dev
 does not list; name the interface, as in
-.Ic ifconfig eth0 .
+.Ic ifconfig eth0
+or
+.Ic ifconfig -a eth0 .
 .It Nm ifdown
 Deconfigure network interfaces.
 .It Nm ifup
@@ -415,12 +417,16 @@ The BusyBox usage lists these additional interface settings.
 The kernel answers the requests that set the address, the netmask and
 the flags; of the flags only up and down change anything.
 The applet makes its requests in the order of its arguments.
-A new address set alone takes the netmask of its class until a netmask is
-set.
+A new address set alone takes the netmask of its class, 255.0.0.0 when its
+first byte is below 128, 255.255.0.0 when it is below 192 and 255.255.255.0
+otherwise, until a netmask is set.
 When it is its class's network or broadcast address, the interface has no
 address until a netmask is set under which it is a host.
-In either case a netmask the kernel refuses leaves the interface with no
-address, and the address must be set again.
+In either case a netmask request that fails with
+.Er EINVAL ,
+because the mask is not contiguous, is all ones, or makes the address a
+network or broadcast address, clears the interface's address, and the
+address must be set again.
 The address already in force, set again alone, keeps its netmask if it
 has one.
 So a netmask belongs after the address and before a broadcast that

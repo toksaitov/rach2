@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -95,7 +95,8 @@ For
 is a number of milliseconds.
 A negative value waits indefinitely; zero performs one scan without waiting.
 A positive timeout is rounded up to a 10 ms timer tick, and the tick in
-progress is not counted, so the wait is never shorter than asked.
+progress is not counted, so the timeout never expires before the time
+asked.
 With no entries, a finite timeout acts as a sleep.
 .Pp
 .Fn ppoll
@@ -106,9 +107,9 @@ Seconds must be nonnegative and nanoseconds must be in the range
 The timeout is rounded up to a 10 ms tick, as for
 .Fn poll ,
 and is not written back.
-The kernel caps the seconds used in its deadline calculation at 21474836
-and the total at 2147483646 ticks, about 248.55 days; a longer timeout is
-shortened to that.
+The kernel limits the seconds field to 21474836, keeps the nanoseconds,
+rounds the timeout up to whole ticks, and limits the result to
+2147483646 ticks, about 248.55 days.
 .Pp
 The
 .Fa sigmask

@@ -211,7 +211,7 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
     int i;
 
     if (dst == 0xFFFFFFFFu) {
-        return netdev_first(); /* a card masked /1 or /0 would claim it */
+        return netdev_first(); /* a card in 128.0.0.0/1 would claim it */
     }
     for (i = 0; i < netdev_count(); i++) {
         struct netdev *nd = netdev_at(i);

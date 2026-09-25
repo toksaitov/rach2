@@ -20,8 +20,8 @@ specifies nanoseconds.
 Seconds must be nonnegative; nanoseconds must be from 0 through 999999999.
 .Pp
 The kernel rounds a nonzero interval up to whole 10 ms ticks and adds one
-for the tick in progress, which is not counted, so the sleep is never
-shorter than asked, up to the limit below.
+for the tick in progress, which is not counted, so a sleep that no signal
+ends is never shorter than asked, up to the limit below.
 The process blocks until that deadline tick; other runnable processes
 continue to execute.
 A zero interval returns at once.
@@ -36,9 +36,9 @@ Unless
 .Fa rem
 is null, the raw call stores there the whole ticks left to the deadline,
 less the one added for the tick in progress.
-A sleep begun again with the remainder ends at the first sleep's deadline
-if it begins in the tick in which the remainder was stored, and one tick
-later for each tick that passes before it begins.
+A sleep begun again with a nonzero remainder has the first sleep's
+deadline if it begins in the tick in which the remainder was stored, and a
+deadline one tick later for each tick that passes before it begins.
 A signal in the last tick before the deadline leaves a remainder of zero,
 since the kernel counts whole ticks and does not record where in its tick
 the sleep began; a sleep begun again with it returns at once, up to a
@@ -58,9 +58,9 @@ The i386 system call number is 162.
 EBX points to the request and ECX to the optional remainder.
 The kernel timespec consists of two signed 32-bit fields: seconds,
 then nanoseconds.
-The kernel limits the seconds used in the tick calculation to 21474836
-and the resulting interval to 2147483646 ticks, about 248.55 days; a
-longer sleep is shortened to that.
+The kernel limits the seconds field to 21474836, keeps the nanoseconds,
+rounds the interval up to whole ticks, and limits the result to
+2147483646 ticks, about 248.55 days.
 .Pp
 The raw call writes a zero remainder on normal completion.
 If interrupted, it attempts to write the remainder but returns

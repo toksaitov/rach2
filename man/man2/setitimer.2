@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt SETITIMER 2
 .Os
 .Sh NAME
@@ -137,16 +137,18 @@ or the seconds for
 ECX points to the new or current value and EDX to the old one.
 The kernel's itimerval is four signed 32-bit fields: the interval's
 seconds and microseconds, then the value's.
-The kernel limits the seconds it counts to 21474836, as
+The kernel limits each seconds field to 21474836, as
 .Xr nanosleep 2
-does, and a time to 2147483645 ticks, about 248.55 days; a longer time
-is shortened to that.
+does, keeps its microseconds, rounds each time up to whole ticks, and
+limits the result to 2147483645 ticks, about 248.55 days.
 .Pp
 musl passes that form for its 64-bit
-.Vt time_t ,
-and refuses with
-.Er ENOTSUP ,
-before the call, seconds that do not fit in 32 bits, so its
+.Vt time_t ;
+before the call, its
+.Fn setitimer
+fails with
+.Er ENOTSUP
+when a seconds field does not fit in 32 bits, so its
 .Fn alarm
 of more than 2147483647 seconds arms nothing, leaves an alarm already
 armed as it was, and returns 0.

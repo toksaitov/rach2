@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -94,7 +94,8 @@ A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
 Timeouts are rounded up to 10 ms timer ticks, and the tick in progress is
-not counted, so a wait is never shorter than asked, up to the limits below.
+not counted, so a timeout never expires before the time asked, up to the
+limits below.
 Timeouts are not written back.
 .Pp
 The raw

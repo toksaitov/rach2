@@ -246,9 +246,11 @@ the separate netmask request.
 If the address is a network or broadcast address under the provisional
 mask, the interface remains unconfigured until a valid netmask is
 supplied.
-A netmask refused while the mask is provisional, or while an address
-waits for one, unconfigures the interface, and the address must be set
-again.
+A netmask request that fails with
+.Er EINVAL ,
+for a mask that is not contiguous, is all ones, or makes the address a
+network or broadcast address, unconfigures the interface when the mask is
+provisional or an address is pending, and the address must be set again.
 Repeating the existing configured address leaves its mask unchanged.
 Changing any interface's address aborts TCP connections whose local
 address is no longer configured, with
