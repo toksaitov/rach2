@@ -182,9 +182,7 @@ controller's transaction translator, which QEMU does not model.
 | Left side, black | 3 | the same tree on port 3 | work, Doom played | mounts, takes a file, raw read 8.2 MB/s |
 | Left side, blue | 2 and 10 | hub high on port 2 with the keyboard and mouse; the SuperSpeed half on port 10 refused | work, Doom played | absent: the stick attaches to the SuperSpeed half, which this kernel does not drive |
 
-On 2026-09-25 the mouse and then the keyboard went into the blue socket
-without the hub: each enumerated on port 2 as a low-speed device, and
-the owner played Doom with each, the other device on the hub.
+On 2026-09-25 the mouse and then the keyboard went into the blue socket without the hub: each enumerated on port 2 as a low-speed device, and the owner played Doom with each, the other device on the hub.
 
 In port 1: the stick pulled from the hub under a mount answered `EIO`,
 unmounted with rc 0 and was reclaimed while the keyboard and mouse
@@ -371,16 +369,9 @@ so a clock left on local time puts every file's time hours out.
 
 ## Milestone 06's close: the machine as it was left
 
-On 2026-09-25 the machine was brought to the source of milestone 06's
-close: its kernel, `273bd0bf...`, 1049360 bytes, through `bootctl`, and
-its recovery partition, its root and the flash drive from the Mac's build
-of the same source, each read back with its image's hash
-(`dev-log/06-review/results-2026-09-20.md` has the hashes). The root was
-replaced with `rach2-install --update`, which kept the accounts `root`
-and `test` and their keys, the testing host's demonstration key, which
-the owner chose to keep. The recovery system trusts the Mac's
-demonstration key, which the recovery image has built in; the recovery
-partition holds no key file of its own.
+On 2026-09-25 the machine was brought to the source of milestone 06's close, `8c3451e8`: its kernel, `98e7d211...`, 1049388 bytes, the testing host's build, through `bootctl`; and its recovery partition, its root and the flash drive from the Mac's build of the same source, each read back with its image's hash, the recovery partition before the update wrote its configuration archive there (`dev-log/06-review/results-2026-09-20.md` has the hashes). The root was replaced with `rach2-install --update`, which kept the accounts `root` and `test` and their keys, the testing host's demonstration key, which the owner chose to keep. The recovery system trusts the Mac's demonstration key, which the recovery image has built in; the recovery partition has no key file of its own, and its archive's two slots each have root's and `test`'s keys.
+
+The whole flash drive, 61524148224 bytes, read as root with `dd if=/dev/disk1 of=/dev/null bs=1M` and nothing pulled, went at 27.1 MB a second on the morning's kernel and at 24.6 on the timer's, status 0 both times.
 
 ## Milestone 50: the sitting
 

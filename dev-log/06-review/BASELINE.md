@@ -41,7 +41,7 @@ ce19bdce2120407a4c596c3981c57530f3e3409fd653a02c2492c52b4270a3b8  build/images/r
 db98585ffca4587415611e8d459083f0eebf048ad543ace07607470b9d4e0ad1  build/images/rach2-sealed.disk
 ```
 
-## The independent re-run, 2026-09-24
+## The independent re-run, 2026-09-24 and 2026-09-25
 
 The plan asks a second run to reproduce the baseline and the record to hold the image and kernel sizes, the probe count and the SSH result, which the first record did not. The re-run was made at the review's close on the testing host: the tree at `9f7893d5`, taken with `git archive` into a directory of its own, `make -j32`, status 0, with no warning from the kernel's build under `-ansi -Werror`.
 
@@ -52,7 +52,7 @@ The plan asks a second run to reproduce the baseline and the record to hold the 
 
 ## The machine
 
-The notebook runs this build from its own disk, deployed on 2026-09-20: `dev-log/53-audit/deployment.md` has the four regions written and their hashes, and `dev-log/53-audit/notes.md` the four boots that proved them. The end-to-end SSH check the plan asks for is met there rather than under QEMU: the machine is reached over SSH by key on every step of that record.
+The notebook ran this build from its own disk, deployed on 2026-09-20: `dev-log/53-audit/deployment.md` has the four regions written and their hashes, and `dev-log/53-audit/notes.md` the four boots that proved them. The end-to-end SSH check the plan asks for is met there rather than under QEMU: the machine is reached over SSH by key on every step of that record.
 
 ## The judges
 
