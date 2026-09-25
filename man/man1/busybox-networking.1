@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -294,6 +294,17 @@ Rach2 answers the display; the requests that add or delete an entry are not
 implemented, so those changes fail.
 .It Nm arping
 Send ARP requests or replies.
+Rach2 has no interval timer, so the
+.Dv SIGALRM
+that paces the requests and ends a run never arrives:
+.Nm arping
+sends one request and, unless
+.Fl f
+ends the run at the first reply, waits until it is interrupted, whatever
+.Fl c
+and
+.Fl w
+say.
 .It Nm dnsd
 Run a small static DNS server.
 .It Nm dnsdomainname
@@ -320,6 +331,16 @@ Listen for incoming HTTP requests.
 .It Nm ifconfig
 Configure a network interface through the interface ioctls supported by
 the kernel.
+The kernel does not answer
+.Dv SIOCGIFCONF ,
+the request that lists the interfaces, so
+.Nm ifconfig
+fails with no interface named, with
+.Fl a ,
+and with a name
+.Pa /proc/net/dev
+does not list; name the interface, as in
+.Ic ifconfig eth0 .
 .It Nm ifdown
 Deconfigure network interfaces.
 .It Nm ifup
