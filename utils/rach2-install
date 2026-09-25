@@ -63,6 +63,7 @@ die() {
 mounted_source=""
 mounted_root=""
 mounted_recovery=""
+key_dir=""
 echo_off=""
 screen_level=""
 # The screen is shared with the kernel's own record, and a routine note from a
@@ -88,6 +89,7 @@ cleanup() {
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
     [ -n "$mounted_recovery" ] && umount "$mounted_recovery" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
+    [ -n "$key_dir" ] && rm -rf "$key_dir"
     return 0
 }
 # A signal ends the run. A handler that tidied up and returned would let the
@@ -210,13 +212,33 @@ find_source() {
 # when the disk has none. A volume that was mounted to look and will not
 # unmount stops the command, since the raw writer refuses a disk with a
 # mount on it and nothing here would know to unmount it later.
+# Where DEVICE is mounted other than at this run's own mount points, printed,
+# or a failure when it is mounted nowhere else.
+mounted_elsewhere() { # mounted_elsewhere DEVICE
+    awk -v d="$1" -v a="$TARGET_MNT" -v b="$RECOVERY_MNT" '
+        $1 == d && $2 != a && $2 != b { print $2; found = 1; exit }
+        END { exit !found }' /proc/mounts
+}
+
+# The recovery partition's number goes in recovery_found, empty when the disk
+# has none; it is left mounted at RECOVERY_MNT. It runs in this shell and not
+# in a command substitution, so that `die` ends the run: a partition mounted
+# elsewhere, which a mount here cannot open, may be the recovery partition,
+# and a run that went on without it would write a root with no archive of the
+# machine's configuration behind it.
 find_recovery() { # find_recovery DISKNUMBER
+    recovery_found=""
     for p in 1 2 3 4; do
         [ -e "/dev/disk${1}p${p}" ] || continue
         mkdir -p "$RECOVERY_MNT" 2>/dev/null
-        mount -t vfat -o umask=077 "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null || continue
+        if ! mount -t vfat -o umask=077 "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null; then
+            if where=$(mounted_elsewhere "/dev/disk${1}p${p}"); then
+                die "/dev/disk${1}p${p} is mounted at $where, so it cannot be looked at for the recovery partition; unmount it and run this again"
+            fi
+            continue
+        fi
         if [ -f "$RECOVERY_MNT/boot/recovery" ]; then
-            echo "$p"
+            recovery_found=$p
             return 0
         fi
         umount "$RECOVERY_MNT" || die "/dev/disk${1}p${p} was mounted to look for the recovery partition and would not unmount"
@@ -427,7 +449,8 @@ $update_disk was not installed from here"
     keep=/tmp/rach2-update-keep
     rm -rf "$keep" || die "an old copy of the configuration could not be removed"
     { mkdir -p "$keep" && chmod 700 "$keep"; } || die "there is nowhere to keep the machine's configuration"
-    recovery_entry=$(find_recovery "$target") || recovery_entry=""
+    find_recovery "$target"
+    recovery_entry=$recovery_found
     [ -n "$recovery_entry" ] && mounted_recovery=$RECOVERY_MNT
     [ -z "$recovery_entry" ] || recover_archive
     from_archive=""
@@ -646,7 +669,8 @@ whole configuration archived on its recovery partition; its accounts are not the
     # update here, with the root written and no trial armed, rather than
     # leave a stale archive that says an update is in progress.
     if [ -n "$recovery_entry" ]; then
-        again=$(find_recovery "$target") || again=""
+        find_recovery "$target"
+        again=$recovery_found
         [ -n "$again" ] && mounted_recovery=$RECOVERY_MNT
         [ "$again" = "$recovery_entry" ] ||
             die "the recovery partition ${update_disk}p${recovery_entry} was not found again; the \
@@ -912,11 +936,14 @@ done
 # recovery partition, which init reads when that partition boots. The key is
 # offered as the account's keys are, and it must be one init will take: a
 # private key, a file of nothing but comments and one larger than init reads
-# are said and asked again. What is judged is a copy of the file, and the
-# copy's text is what is written, so the file cannot change between the two.
+# are said and asked again. What is judged is a copy of the file, made in a
+# directory of this run's own so that nothing another process put in /tmp is
+# followed, with a newline added to a last line that has none; that copy is
+# what is written, so the file cannot change between the two and the size
+# judged is the size init reads.
 recovery_key_fault() { # recovery_key_fault FILE: why FILE will not do, or nothing
     if [ "$(wc -c < "$1")" -gt 16384 ]; then
-        echo "is larger than 16384 bytes"
+        echo "is larger than 16384 bytes with its last line ended"
     elif od -An -tx1 "$1" | grep -q ' 00'; then
         echo "is not text"
     elif grep -q 'PRIVATE KEY' "$1"; then
@@ -952,18 +979,21 @@ while :; do
         tell "$recovery_keys is not a file. Try again, or type nothing for no key."
         continue
     fi
-    key_copy=/tmp/rach2-install-key.$$
+    if [ -z "$key_dir" ]; then
+        key_dir=$(mktemp -d /tmp/rach2-install.XXXXXX) ||
+            die "no private directory could be made for the key's copy"
+    fi
+    key_copy=$key_dir/key
     if ! head -c 16385 "$recovery_keys" > "$key_copy"; then
         rm -f "$key_copy"
         tell "$recovery_keys cannot be read. Try again, or type nothing for no key."
         continue
     fi
-    fault=$(recovery_key_fault "$key_copy")
-    if [ -z "$fault" ]; then
-        recovery_key_text=$(cat "$key_copy")
-        rm -f "$key_copy"
-        break
+    if [ -n "$(tail -c 1 "$key_copy")" ]; then
+        echo >> "$key_copy"
     fi
+    fault=$(recovery_key_fault "$key_copy")
+    [ -z "$fault" ] && break
     rm -f "$key_copy"
     tell "$recovery_keys $fault. Try again, or type nothing for no key."
 done
@@ -1172,12 +1202,13 @@ sync
 # Accounts, policy and keys are archived for a root that no longer reads, and
 # the recovery system's key goes beside its kernel. With no key given, a key
 # the image carried there is removed, so a disk installed without one has none.
-recovery_entry=$(find_recovery "$target") || recovery_entry=""
+find_recovery "$target"
+recovery_entry=$recovery_found
 if [ -n "$recovery_entry" ]; then
     mounted_recovery=$RECOVERY_MNT
     write_archive "$root_dir"
     if [ -n "$recovery_keys" ]; then
-        printf '%s\n' "$recovery_key_text" > "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||
+        cp "$key_copy" "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||
             die "the key for the recovery system could not be written"
     else
         rm -f "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||
