@@ -5,7 +5,7 @@
 # catches it must fail with its own words:
 #
 #   entry 113  the runner's product check, by the runner's self-test
-#   entry 120  a disk ioctl on another device, by devprobe
+#   entry 120  a table entry taken for a disk node, by devprobe
 #   entry 121  a one-shot handler entered at zero, by sigprobe
 #   entry 138  two proc files with one inode, by procprobe
 #   entry 109  the sealed root without update, by the sealed suite

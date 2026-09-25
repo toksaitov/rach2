@@ -3,9 +3,11 @@
  *
  * From user space, proves that /dev/zero reads back all-zero bytes; /dev/null
  * reads as immediate EOF and sinks writes; /dev/full fails a write with
- * -ENOSPC; and /dev/urandom yields a varying stream. It then reads
- * /proc/self/stat for our pid and comm and resolves /proc/self/fd/0 to the
- * console. Prints "DEVPROBE OK" when every check passes.
+ * -ENOSPC; and /dev/urandom yields a varying stream. A disk's `BLKRRPART`
+ * asked of /dev/null answers ENOTTY, and fstat gives /dev/null the inode the
+ * /dev listing does. It then reads /proc/self/stat for our pid and comm and
+ * resolves /proc/self/fd/0 to the console. Prints "DEVPROBE OK" when every
+ * check passes.
  *
  * Freestanding; direct int 0x80.
  *
@@ -16,20 +18,30 @@
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT     1
-#define SYS_READ     3
-#define SYS_WRITE    4
-#define SYS_OPEN     5
-#define SYS_CLOSE    6
-#define SYS_GETPID   20
-#define SYS_READLINK 85
-#define SYS_IOCTL    54
-#define SYS_FORK     2
-#define SYS_WAITPID  7
-#define SYS_PIPE     42
+#define SYS_EXIT       1
+#define SYS_READ       3
+#define SYS_WRITE      4
+#define SYS_OPEN       5
+#define SYS_CLOSE      6
+#define SYS_GETPID     20
+#define SYS_READLINK   85
+#define SYS_IOCTL      54
+#define SYS_FORK       2
+#define SYS_WAITPID    7
+#define SYS_PIPE       42
+#define SYS_FSTAT64    197
+#define SYS_GETDENTS64 220
 
-#define O_RDONLY 0
-#define O_WRONLY 1
+#define O_RDONLY    0
+#define O_WRONLY    1
+#define O_DIRECTORY 0200000
+
+/* i386 struct stat64: st_ino is the 64-bit field at offset 88. A
+   linux_dirent64 record has its 64-bit d_ino first, its length at 16 and its
+   name at 19. */
+#define ST_INO64 88
+#define D_RECLEN 16
+#define D_NAME   19
 
 #define ENOSPC        28
 #define EBUSY         16
@@ -134,6 +146,37 @@ static int streq_n(const char *a, const char *b, int n)
     return 1;
 }
 
+/**
+ * The low word of the inode the /dev listing gives `name`, or 0 when the
+ * listing has no such leaf or gives it a number wider than 32 bits.
+ */
+static unsigned int listed_ino(const char *name)
+{
+    static char dbuf[2048];
+    unsigned int ino = 0;
+    int fd, n, pos, reclen;
+    size_t len = strlen(name) + 1;
+
+    fd = do_open("/dev", O_RDONLY | O_DIRECTORY);
+    if (fd < 0) {
+        return 0;
+    }
+    while ((n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof(dbuf))) > 0) {
+        for (pos = 0; pos < n; pos += reclen) {
+            reclen = *(unsigned short *)(dbuf + pos + D_RECLEN);
+            if (reclen <= 0) {
+                break;
+            }
+            if (streq_n(dbuf + pos + D_NAME, name, (int)len) &&
+                *(unsigned int *)(dbuf + pos + 4) == 0u) {
+                ino = *(unsigned int *)(dbuf + pos);
+            }
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    return ino;
+}
+
 /** Check mode reentry and a descriptor retained across two display owners. */
 static void framebuffer(void)
 {
@@ -199,9 +242,11 @@ static void framebuffer(void)
 
 void _start(void)
 {
+    static char st[96];
     char buf[64];
     char buf2[64];
     int fd, n, i, allzero, differ;
+    unsigned int ino;
 
     /* (a) /dev/zero: a read returns the requested count, all zero. */
     fd = do_open("/dev/zero", O_RDONLY);
@@ -232,6 +277,20 @@ void _start(void)
     fd = do_open("/dev/null", O_RDONLY);
     check(fd >= 0, "open /dev/null for the ioctl row");
     check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25, "a disk's BLKRRPART on /dev/null is ENOTTY");
+    syscall1(SYS_CLOSE, fd);
+
+    /* The row above cannot see a table entry taken for a disk node: the
+       misread node's partition number is the major and minor of the entry
+       two further on, never zero, so the request is refused either way. The
+       inode can. The listing numbers a leaf by its place in the table, and
+       fstat by what the descriptor's record is. */
+    fd = do_open("/dev/null", O_RDONLY);
+    check(fd >= 0, "open /dev/null for its inode");
+    check(syscall3(SYS_FSTAT64, fd, (int)(size_t)st, 0) == 0, "fstat /dev/null");
+    ino = listed_ino("null");
+    check(ino != 0 && *(unsigned int *)(st + ST_INO64) == ino &&
+              *(unsigned int *)(st + ST_INO64 + 4) == 0u,
+          "fstat and the /dev listing give /dev/null one inode");
     syscall1(SYS_CLOSE, fd);
 
     fd = do_open("/dev/null", O_WRONLY);

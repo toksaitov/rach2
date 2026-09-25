@@ -110,7 +110,7 @@ Every synthetic directory includes `.` and `..`. `/proc` enumerates live process
 
 The default `make test` boot runs these relevant probes:
 
-* [devprobe.c](../../../tests/devprobe.c) checks the memory devices, trusted `urandom`, `/proc/self/stat`, and the console fd link.
+* [devprobe.c](../../../tests/devprobe.c) checks the memory devices, trusted `urandom`, a disk ioctl refused on `/dev/null`, the inode `fstat` and the `/dev` listing give `/dev/null`, `/proc/self/stat`, and the console fd link.
 * [ptyprobe.c](../../../tests/ptyprobe.c) checks master allocation, slave unlocking, terminal ioctls, cooked input, echo, and output.
 * [procprobe.c](../../../tests/procprobe.c) checks snapshot lifetime, process names, system files, delivered tick accounting, mount records, network formats, socket identity, and complete output for sixteen TCP listeners.
 * [statmusl.c](../../../tests/musl/statmusl.c) checks stable synthetic timestamps through path and descriptor stat calls.
