@@ -19,6 +19,7 @@ finish()
 {
     result=$?
     trap - EXIT
+    [ -n "$finished" ] || [ "$result" -ne 0 ] || result=1
     if [ -n "${work:-}" ]; then
         if ! printf '%s\n' "$result" > "$work/result.status"; then
             alert "writing $work/result.status"
@@ -30,6 +31,11 @@ finish()
     fi
     exit "$result"
 }
+# BusyBox's ash, which runs this in recovery, reports a failing status when
+# `set -u` stops the script; bash 3.2, the Mac's sh, gives the trap 0, and the
+# style check asks every script under tools/ for the flag, so `finish` fails a
+# run that reached no success exit.
+finished=
 trap finish EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -414,3 +420,4 @@ case "$action" in
         echo 'machine-grow: next: recovery remains saved; inspect the record before a candidate trial'
         ;;
 esac
+finished=1

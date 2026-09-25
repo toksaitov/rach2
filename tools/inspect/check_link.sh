@@ -46,7 +46,13 @@ command -v "$NM" >/dev/null 2>&1 || {
 }
 
 TMPD="$(mktemp -d)"
-trap 'rm -rf "$TMPD"' EXIT INT TERM
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; rm -rf "$TMPD"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'rm -rf "$TMPD"' INT TERM
 
 for path in "$@"; do
     if ! "$NM" "$path" > "$TMPD/nm.out" 2> "$TMPD/nm.err"; then
@@ -105,3 +111,4 @@ if [ -s "$TMPD/missing" ]; then
 fi
 
 echo "check-link: OK ($(wc -l < "$TMPD/defined.s" | tr -d ' ') symbols defined, nothing left undefined)"
+finished=1

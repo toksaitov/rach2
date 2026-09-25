@@ -47,7 +47,13 @@ if [ ! -x "$PROSECHECK" ] || [ "$REPO/tools/verify/prosecheck.c" -nt "$PROSECHEC
 fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rach2_prose.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT INT TERM
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; rm -rf "$WORK"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'rm -rf "$WORK"' INT TERM
 
 cd "$REPO"
 
@@ -133,6 +139,7 @@ case "${1:-}" in
         if [ "${2:-}" = --write ]; then
             cp "$WORK/fixture.txt" "$FIXTURE"
             echo "prose_report: wrote tools/verify/prose_upstream.txt"
+            finished=1
             exit 0
         fi
         [ -f "$FIXTURE" ] || {
@@ -143,6 +150,7 @@ case "${1:-}" in
             exit 1
         fi
         echo "prose_report: fixture OK ($(grep -c '^[a-z]' "$FIXTURE") projects)"
+        finished=1
         exit 0
         ;;
     --baseline)
@@ -150,9 +158,10 @@ case "${1:-}" in
         if [ "${2:-}" = --write ]; then
             cp "$WORK/baseline.txt" "$BASELINE"
             echo "prose_report: wrote tools/verify/prose_baseline.txt"
+            finished=1
             exit 0
         fi
-        [ -f "$BASELINE" ] || { cat "$WORK/baseline.txt"; exit 0; }
+        [ -f "$BASELINE" ] || { cat "$WORK/baseline.txt"; finished=1; exit 0; }
         # What moved since the record was written, phrase by phrase. This
         # is a record and not a limit: only the banned terms fail a build.
         printf '%-10s %-14s %8s %8s %8s\n' population phrase 'then' now change
@@ -171,6 +180,7 @@ case "${1:-}" in
                             name[i - 1], then[$1, i], $i, $i - then[$1, i]
             }' "$BASELINE" "$WORK/baseline.txt"
         echo "prose_report: compared against tools/verify/prose_baseline.txt"
+        finished=1
         exit 0
         ;;
     "")
@@ -237,3 +247,4 @@ report_population() {
 report_population c "C and header comments"
 report_population hash "shell, make and Python comments"
 report_population md "Markdown prose"
+finished=1

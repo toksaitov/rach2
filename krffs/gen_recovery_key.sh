@@ -17,7 +17,12 @@ if [ -n "$EXTRA" ] && [ ! -f "$EXTRA" ]; then
 fi
 umask 077
 TMP=$(mktemp "$OUT.XXXXXX")
-trap 'rm -f "$TMP" "$TMP.line"' 0
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; rm -f "$TMP" "$TMP.line"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 cat "$BASE" > "$TMP"
@@ -55,3 +60,4 @@ fi
 if [ ! -f "$OUT" ] || ! cmp -s "$TMP" "$OUT"; then
     mv "$TMP" "$OUT"
 fi
+finished=1

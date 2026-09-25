@@ -25,7 +25,11 @@ cleanup()
     fi
     rm -rf "$work"
 }
-trap cleanup EXIT
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -77,4 +81,5 @@ awk -v begin="$token-begin" -v end="$token-end" '
     inside { if (have) print pending; pending = $0; have = 1 }
     END { exit starts != 1 || ends != 1 || inside }
 ' "$work/text" || exit 1
+finished=1
 exit "$status"

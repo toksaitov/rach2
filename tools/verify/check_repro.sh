@@ -45,7 +45,13 @@ if [ ! -x "$SETID" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETID" ]; the
 fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rach2_repro.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT INT TERM
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; rm -rf "$WORK"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
+trap 'rm -rf "$WORK"' INT TERM
 
 fail() {
     echo "check-repro: FAIL: $1"
@@ -174,6 +180,8 @@ if [ "$SCRAMBLED" = no ]; then
     # host, so the assertion above held without the stager having to sort
     # anything. Said out loud, not reported as a pass.
     echo "check-repro: OK (one tree, one image; the clock and the tree directive excluded). This host reports directory entries in name order, so the ordering half was not exercised"
+    finished=1
     exit 0
 fi
 echo "check-repro: OK (one tree, one image; the clock and the host's directory order both excluded)"
+finished=1

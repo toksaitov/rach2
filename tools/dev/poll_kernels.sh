@@ -28,7 +28,12 @@ cleanup()
     touch "$poll"
 }
 
-trap cleanup EXIT
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -97,3 +102,4 @@ for order in poll-after-halt poll-before-halt; do
     echo "poll-kernels: measure: RACH2_MEASURE_KERNEL=$work/$order.kernel"
 done
 echo 'poll-kernels: result: both orders built; restored kernel matches'
+finished=1

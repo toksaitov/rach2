@@ -133,7 +133,7 @@ The recovery stick is `build/images/rach2-recovery-stick.img` written to the who
 * Build the kernel with warnings treated as errors.
 * Run scoped cppcheck with `verify/cppcheck.suppress`, over the kernel at c89 and the host programs at c99, judged by the cppcheck version `setup/judges` records; another version reports what it found and decides nothing, since the findings change between majors in both directions.
 * Run ShellCheck on every in-house shell script, the list `verify/scripts.sh` prints. SC1091 is off for all of them; the run scripts under `rach2/` and the build scripts at `krffs/*.sh` also waive SC2086 and SC2034.
-* Check source conventions such as ASCII text, C comment form, header guards, marked idle waits, and group kills that dash accepts.
+* Check source conventions such as ASCII text, C comment form, header guards, marked idle waits, group kills that dash accepts, and the `finished` flag that a script under `tools/` or `krffs/`, `tests/system/manual_probes.sh` or `tests/system/accept/su_command.sh` keeps when it combines `set -e`, `set -u` and an EXIT trap, since bash 3.2 lets such a script exit 0 when an unset name stops it.
 * Require clang-format on every in-house C file, judged by the clang-format version `setup/judges` records; another version reports how many files it would change and decides nothing. The reformat commits are in `.git-blame-ignore-revs`, and `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes blame look through them.
 * Link a fresh musl program and inspect its ELF ABI.
 * Check the shared source manifests and the guest build descriptions.

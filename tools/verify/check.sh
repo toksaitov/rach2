@@ -188,7 +188,7 @@ else
 fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/22 conventions (no //, ASCII, header guards, marked idle wait, group kills)"
+hr "4/22 conventions (no //, ASCII, header guards, marked idle wait, group kills, exit flags)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -229,6 +229,31 @@ kill_bad=$(sh "$REPO/tools/verify/scripts.sh" \
 if [ -n "$kill_bad" ]; then
     echo "  kill with an end-of-options marker before a process group, which dash refuses:"
     echo "$kill_bad" | head -3 | sed 's/^/    /'
+    cv=1
+fi
+# bash 3.2, the Mac's /bin/sh and /bin/bash, gives an EXIT trap a status of
+# 0 when `set -u` stops a script that also has `set -e`, and a trap that ends
+# in success lets the script exit 0; dash, bash 5 and BusyBox's ash report
+# the failure. So a script in the scope below that sets both, in any
+# spelling, and traps EXIT keeps a `finished` flag, set where it succeeds, and
+# its trap fails a run that never set it (entry 222 of milestone 50's list).
+# The scope is the scripts under tools/ and krffs/, which the Mac runs but for
+# tools/dev/machine_grow.sh, and the machine probes and the acceptance's su
+# command. A trap may span lines, its last then ending in a quote and EXIT or 0.
+# shellcheck disable=SC2016
+guard_bad=$(sh "$REPO/tools/verify/scripts.sh" \
+    | grep -E '^(tools|krffs)/|^tests/system/(manual_probes|accept/su_command)\.sh$' \
+    | while IFS= read -r f; do
+        if grep -qE '^[[:space:]]*set[[:space:]]+([^#;]*[[:space:]])?(-[a-z]*e[a-z]*|-o[[:space:]]+errexit)([[:space:];]|$)' "$f" &&
+            grep -qE '^[[:space:]]*set[[:space:]]+([^#;]*[[:space:]])?(-[a-z]*u[a-z]*|-o[[:space:]]+nounset)([[:space:];]|$)' "$f" &&
+            grep -qE "^[[:space:]]*trap .*[[:space:]](EXIT|0)([[:space:];]|\$)|^[^#]*['\"][[:space:]]+(EXIT|0)[[:space:]]*\$" "$f" &&
+            ! grep -qF '[ -n "$finished" ]' "$f"; then
+            echo "$f"
+        fi
+    done)
+if [ -n "$guard_bad" ]; then
+    echo "  set -eu and an EXIT trap with no finished flag, which bash 3.2 lets exit 0:"
+    echo "$guard_bad" | head -3 | sed 's/^/    /'
     cv=1
 fi
 if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi

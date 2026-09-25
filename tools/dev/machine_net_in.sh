@@ -90,7 +90,12 @@ cleanup()
         rm -f "$known"
     fi
 }
-trap cleanup EXIT
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -144,3 +149,4 @@ grep -q '^machine-net: result:' "$work/receive.log" || {
     exit 1
 }
 echo 'machine-net-in: result: both ends completed'
+finished=1

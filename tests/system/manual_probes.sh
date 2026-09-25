@@ -132,7 +132,8 @@ rm -rf$remove" >"$work/cleanup.log" 2>&1 ||
         echo "manual-probes: cleanup failed; see $work/cleanup.log" >&2
 }
 # The Mac's sh, bash 3.2, gives an EXIT trap a status of 0 when `set -u`
-# stops the script, so a run that reached no success exit fails here.
+# stops a script that also has `set -e`, as this one does, so a run that
+# reached no success exit fails here.
 finished=
 trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
 trap 'exit 129' HUP

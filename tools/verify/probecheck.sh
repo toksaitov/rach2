@@ -3,7 +3,12 @@
 set -eu
 REPO=${PROBECHECK_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/probecheck.XXXXXX")
-trap 'rm -rf "$WORK"' 0
+# bash 3.2, the Mac's sh, gives an EXIT trap a status of 0 when `set -u`
+# stops a script that also has `set -e`, so a run that reached no success
+# exit fails here.
+finished=
+status=0
+trap 'status=$?; rm -rf "$WORK"; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 make -s --no-print-directory -C "$REPO/tests" -f Makefile -f - probecheck-list > "$WORK/built" <<'MK'
@@ -45,3 +50,4 @@ awk '
     }
 ' "$WORK/built" "$REPO/tests/registry" "$WORK/default" \
     "$REPO/tests/probe-suites" "$REPO/tests/probe-helpers"
+finished=1
