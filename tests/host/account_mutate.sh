@@ -73,7 +73,8 @@ for test in pwauthfault accounttools initpolicy ncwrite; do
 done
 for fault in pid-nul pid-tail echo tty-detect tty-error lock-cleanup temp-cleanup \
     login-eof login-fds su-fds sudo-fds sudo-line init-redirect init-network \
-    init-block init-signals init-login-timeout ssh-suffix nc-socket nc-stdout; do
+    init-block init-signals init-login-timeout init-login-keep init-login-parent \
+    ssh-suffix nc-socket nc-stdout; do
     python3 - "$work/utils" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -101,6 +102,7 @@ changes = {
     'sudo-line': ('sudo.c', "while ((c = fgetc(f)) != EOF && c != '\\n') {",
                   "c = 0;\n        while (len < size - 1 && (c = fgetc(f)) != EOF && c != '\\n') {"),
     'init-login-timeout': ('init.c', '        (void)setenv("LOGIN_TIMEOUT", "0", 1);\n', ''),
+    'init-login-keep': ('init.c', 'setenv("LOGIN_TIMEOUT", "0", 1)', 'setenv("LOGIN_TIMEOUT", "0", 0)'),
     'ssh-suffix': ('init.c', "} else if (c != ' ' && c != '\\t' && c != '\\r' && c != '\\v' && c != '\\f') {",
                    '} else if (0) {'),
     'nc-socket': ('nc.c', 'write_all(fd, buf, (size_t)n)', 'write(fd, buf, (size_t)n)'),
@@ -120,6 +122,15 @@ elif fault == 'init-signals':
         old = 'sigaction(' + signal + ', &action, NULL) != 0'
         assert text.count(old) == 1
         text = text.replace(old, '0')
+    path.write_text(text)
+elif fault == 'init-login-parent':
+    path = root / 'init.c'
+    text = path.read_text()
+    child = '        (void)setenv("LOGIN_TIMEOUT", "0", 1);\n'
+    start = 'static pid_t spawn_shell(void)\n{\n    pid_t pid = fork();'
+    assert text.count(child) == 1 and text.count(start) == 1
+    text = text.replace(child, '').replace(start,
+        'static pid_t spawn_shell(void)\n{\n    pid_t pid = (setenv("LOGIN_TIMEOUT", "0", 1), fork());')
     path.write_text(text)
 elif fault == 'temp-cleanup':
     path = root / 'pwauth.c'
@@ -172,7 +183,8 @@ PY
         init-network) test=initpolicy; message='network setup requires redirected descriptors' ;;
         init-block) test=initpolicy; message='early network signal terminates worker' ;;
         init-signals) test=initpolicy; message='ifup signal terminates worker' ;;
-        init-login-timeout) test=initpolicy; message='the console login waits without a timeout' ;;
+        init-login-timeout|init-login-keep) test=initpolicy; message='the console login waits without a timeout' ;;
+        init-login-parent) test=initpolicy; message="init's own environment keeps its LOGIN_TIMEOUT" ;;
         ssh-suffix) test=initpolicy; message='SSH trailing text rejected' ;;
         nc-socket|nc-stdout) test=ncwrite; message='complete partial writes on both outputs' ;;
     esac
@@ -181,4 +193,4 @@ PY
     run_phase "$fault-restored" "$test" 0 "$test-hosttest: result: pass"
     diff -q "$work/saved" "$work/utils"
 done
-echo 'account-mutation: result: pass: 20 compiled faults failed; restored tests passed'
+echo 'account-mutation: result: pass: 22 compiled faults failed; restored tests passed'

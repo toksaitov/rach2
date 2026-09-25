@@ -142,9 +142,10 @@ static int policy_execv(const char *path, char *const argv[])
 }
 
 /**
- * Stand in for the console login's exec: the child exits 0 when the
- * environment it passes holds `LOGIN_TIMEOUT=0`, 3 when it does not. Any
- * other program is executed as before.
+ * Stand in for the console login's exec: the child exits 0 when the first
+ * `LOGIN_TIMEOUT` in the environment it passes is `LOGIN_TIMEOUT=0`, the one
+ * getenv(3) gives login, and 3 otherwise. Any other program is executed as
+ * before.
  */
 static int policy_execve(const char *path, char *const argv[], char *const envp[])
 {
@@ -154,8 +155,8 @@ static int policy_execve(const char *path, char *const argv[], char *const envp[
         return execve(path, argv, envp);
     }
     for (i = 0; envp[i]; i++) {
-        if (strcmp(envp[i], "LOGIN_TIMEOUT=0") == 0) {
-            _exit(0);
+        if (strncmp(envp[i], "LOGIN_TIMEOUT=", 14) == 0) {
+            _exit(strcmp(envp[i], "LOGIN_TIMEOUT=0") == 0 ? 0 : 3);
         }
     }
     _exit(3);
@@ -332,15 +333,19 @@ static void network_signal_case(int nullfd, int logfd, int sig, int early, int f
 }
 
 /**
- * Require init to start the console's login with its prompt timeout off,
- * whatever the environment init itself was given.
+ * Require init to start the console's login with its prompt timeout off
+ * when init's own environment has `inherited` as `LOGIN_TIMEOUT`, or no
+ * `LOGIN_TIMEOUT` when it is null, and to set it in the console's child
+ * only, leaving init's own environment, which its other children inherit,
+ * as it was.
  */
-static void login_case(void)
+static void login_case(const char *inherited)
 {
+    const char *kept;
     int status;
     pid_t pid;
 
-    if (unsetenv("LOGIN_TIMEOUT") != 0) {
+    if (inherited ? setenv("LOGIN_TIMEOUT", inherited, 1) != 0 : unsetenv("LOGIN_TIMEOUT") != 0) {
         exit(2);
     }
     pid = spawn_shell();
@@ -349,6 +354,9 @@ static void login_case(void)
     }
     check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
           "the console login waits without a timeout");
+    kept = getenv("LOGIN_TIMEOUT");
+    check(inherited ? kept && strcmp(kept, inherited) == 0 : kept == NULL,
+          "init's own environment keeps its LOGIN_TIMEOUT");
 }
 
 /** Test parser boundaries and every redirection failure. */
@@ -397,7 +405,8 @@ int main(void)
         network_signal_case(nullfd, logfd, signals[i], 1, 0);
     }
     network_signal_case(nullfd, logfd, SIGTERM, 0, 1);
-    login_case();
+    login_case(NULL);
+    login_case("60");
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");
