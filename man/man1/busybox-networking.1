@@ -299,7 +299,7 @@ Rach2 does not restart a call a signal interrupts
 so while
 .Nm arping
 waits it prints
-.Ql recvfrom: Interrupted system call
+.Ql arping: recvfrom: Interrupted system call
 on standard error each time its once-a-second alarm interrupts the wait,
 except for an alarm that ends the run.
 .It Nm dnsd
@@ -412,13 +412,56 @@ Query WHOIS information about
 .El
 .Ss ifconfig arguments
 The BusyBox usage lists these additional interface settings.
-The kernel answers the address, the netmask and the up and down flags;
-setting the MTU or the hardware address fails, and of the flags only up
-and down change anything.
+The kernel answers the requests that set the address, the netmask and
+the flags; of the flags only up and down change anything.
+The applet makes its requests in the order of its arguments.
+A new address set alone takes the netmask of its class until a netmask is
+set.
+When it is its class's network or broadcast address, the interface has no
+address until a netmask is set under which it is a host.
+The address already in force, set again alone, keeps its netmask if it
+has one.
+So a netmask belongs after the address and before a broadcast that
+depends on it.
+.Cm broadcast
+with an address succeeds only when the address is the broadcast the
+interface's address and netmask imply, and fails with
+.Er EINVAL
+otherwise.
+On an interface with no address or no netmask, the only broadcast
+accepted is 255.255.255.255, though the interface reports its broadcast
+as 0.0.0.0.
+.Cm broadcast +
+computes the broadcast from the address and the netmask given earlier on
+the same command line, in either order, as in
+.Dl ifconfig eth0 10.0.2.15 netmask 255.255.255.0 broadcast +
+It fails with
+.Ql bad address '+'
+when either is missing, and the kernel accepts the result when the
+interface has that address and netmask, which a netmask given after the
+address ensures.
+These settings fail, since the kernel does not answer their requests:
+the MTU, the hardware address, the metric, the queue length, and
+.Cm dstaddr
+or
+.Cm pointopoint
+with an address.
 .Bl -tag -width "[[-]pointopoint [ADDRESS]]" -compact
 .It Cm add Ar ADDRESS Ns Op / Ns Ar PREFIXLEN
 .It Cm del Ar ADDRESS Ns Op / Ns Ar PREFIXLEN
-IPv6 address settings; Rach2 supports IPv4 only.
+With an IPv4 address and no prefix length,
+.Cm add
+sets the address by the same request as a plain
+.Ar ADDRESS ,
+but does not bring the interface up and does not count as the address
+for
+.Cm broadcast + ;
+.Cm del
+fails, since the kernel does not answer the request that removes an
+address.
+An IPv4 address with a prefix length fails with
+.Ql bad address .
+Rach2 has no IPv6.
 .It Oo Fl Oc Ns Cm broadcast Op Ar ADDRESS
 .It Oo Fl Oc Ns Cm pointopoint Op Ar ADDRESS
 .It Cm netmask Ar ADDRESS
