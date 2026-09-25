@@ -51,11 +51,13 @@ stop_child()
     fi
 }
 
+# The loop variable is its own: a shell function shares its caller's
+# variables, and the site loop below keeps its driver in `driver`.
 restore()
 {
-    for driver in exfat fat32; do
-        cp "$work/$driver.saved" "$work/rach2/sys/fs/$driver.c"
-        touch "$work/rach2/sys/fs/$driver.c"
+    for each in exfat fat32; do
+        cp "$work/$each.saved" "$work/rach2/sys/fs/$each.c"
+        touch "$work/rach2/sys/fs/$each.c"
     done
 }
 
