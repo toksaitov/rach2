@@ -1076,7 +1076,12 @@ static int expand_probe(const char *arg, const char **steps, char *execq, size_t
 /**
  * Use a pipe as the serial source because the harness has no fake clock.
  * The prompt arrives after the step cap; a short run must still reject it.
- * The exited case reaps before reading, so buffered output cannot be missed.
+ * Where the step must not see it, the child writes it five seconds after the
+ * start, well past the 0.05 s caps and the 0.3 s read slice that ends such a
+ * wait, so a loaded host that runs the harness late does not turn a
+ * rejection into a match; where the step must see it, a second after, or at
+ * once when the child has exited. The exited case reaps before reading, so
+ * buffered output cannot be missed.
  */
 static int prompt_wait_selftest(const char *step, double timeout, int want, int exited)
 {
@@ -1097,7 +1102,7 @@ static int prompt_wait_selftest(const char *step, double timeout, int want, int 
         const char prompt[] = "Type 'help'";
         struct timespec delay = {0, 0};
 
-        delay.tv_sec = exited ? 0 : 1;
+        delay.tv_sec = exited ? 0 : (want ? 1 : 5);
         close(serial[0]);
         while (nanosleep(&delay, &delay) < 0 && errno == EINTR)
             ;
