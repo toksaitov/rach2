@@ -349,6 +349,11 @@ static int anyone_to_let_in(void)
  * finds itself the foreground. That is why init must never own the console:
  * it hands the console to each session it spawns, as a real init delegates a
  * terminal through getty.
+ *
+ * On the login builds the child sets `LOGIN_TIMEOUT=0` before the exec.
+ * BusyBox's login otherwise gives up after 60 seconds at its prompt and exits,
+ * and the login init starts next would draw a new prompt on an idle console
+ * every minute.
  */
 static pid_t spawn_shell(void)
 {
@@ -368,6 +373,7 @@ static pid_t spawn_shell(void)
         char *argv[2];
         argv[0] = (char *)"login";
         argv[1] = 0;
+        (void)setenv("LOGIN_TIMEOUT", "0", 1);
         execve(LOGIN_PROGRAM, argv, environ); /* returns only on failure */
     }
     report_no_login();

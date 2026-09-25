@@ -1,5 +1,6 @@
 /**
- * Check service redirection and exact SSH policy lines in the real init source.
+ * Check service redirection and exact SSH policy lines in the real init source,
+ * and the environment init starts the console's login with.
  */
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -140,12 +141,33 @@ static int policy_execv(const char *path, char *const argv[])
     _exit(0);
 }
 
+/**
+ * Stand in for the console login's exec: the child exits 0 when the
+ * environment it passes holds `LOGIN_TIMEOUT=0`, 3 when it does not. Any
+ * other program is executed as before.
+ */
+static int policy_execve(const char *path, char *const argv[], char *const envp[])
+{
+    int i;
+
+    if (strcmp(path, "/bin/login") != 0) {
+        return execve(path, argv, envp);
+    }
+    for (i = 0; envp[i]; i++) {
+        if (strcmp(envp[i], "LOGIN_TIMEOUT=0") == 0) {
+            _exit(0);
+        }
+    }
+    _exit(3);
+}
+
 #define INIT_METAL
 #define INIT_CONSOLE_LOGIN
 #define fopen   policy_fopen
 #define dup2    policy_dup2
 #define unlink  policy_unlink
 #define execv   policy_execv
+#define execve  policy_execve
 #define fork    policy_fork
 #define waitpid policy_waitpid
 #define reboot  policy_reboot
@@ -309,6 +331,26 @@ static void network_signal_case(int nullfd, int logfd, int sig, int early, int f
     Network_signal = Fork_fail = 0;
 }
 
+/**
+ * Require init to start the console's login with its prompt timeout off,
+ * whatever the environment init itself was given.
+ */
+static void login_case(void)
+{
+    int status;
+    pid_t pid;
+
+    if (unsetenv("LOGIN_TIMEOUT") != 0) {
+        exit(2);
+    }
+    pid = spawn_shell();
+    if (pid < 0 || waitpid(pid, &status, 0) != pid) {
+        exit(2);
+    }
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "the console login waits without a timeout");
+}
+
 /** Test parser boundaries and every redirection failure. */
 int main(void)
 {
@@ -355,6 +397,7 @@ int main(void)
         network_signal_case(nullfd, logfd, signals[i], 1, 0);
     }
     network_signal_case(nullfd, logfd, SIGTERM, 0, 1);
+    login_case();
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");

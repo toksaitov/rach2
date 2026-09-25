@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -50,6 +50,13 @@ Its console session is a shell without a login, since the image has no
 accounts of the machine's; see
 .Xr recovery 7 .
 .El
+.Pp
+The builds that start
+.Pa /bin/login
+on the console give it
+.Ev LOGIN_TIMEOUT
+set to 0, so the console's prompt waits without a limit; see
+.Xr login 1 .
 .Pp
 Every build clears one level of
 .Pa /var/run
