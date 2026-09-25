@@ -908,6 +908,7 @@ static const char *nm(const char *shortname)
         {"W4.TXT", "truncate me.txt"},
         {"W5.TXT", "unlink me.txt"},
         {"W7.TXT", "unlink me after a sync.txt"},
+        {"W8.TXT", "truncate me after a sync.txt"},
         {"D1", "Dir One"},
         {"D2", "Dir Two"},
         {"R1.TXT", "rename one.txt"},
@@ -1111,6 +1112,33 @@ static int seq_unlink_synced(void)
     return rc;
 }
 
+/* A file already on the medium, cut to part of its chain. Its size and its
+   chain were durable before the truncate, so the flush between the shorter
+   size and the cut is all that keeps a crash from leaving the old size over
+   a chain that ends early. The truncate above follows its file's own write,
+   whose size is still pending in the block the truncate rewrites, and there
+   no order of the two can show the old size over the cut chain. */
+static int seq_truncate_synced(void)
+{
+    void *n = make_file(mnt.root, nm("W8.TXT"));
+    void *h;
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 2010, 0);
+    if (rc == 0) {
+        rc = OPS->fsync(&mnt, n);
+    }
+    if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
+        rc = OPS->truncate(&mnt, h, 700);
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
 static int seq_mkdir_rmdir(void)
 {
     void *d;
@@ -1201,6 +1229,7 @@ static const struct sequence sequences[] = {
     {"rename over", seq_rename_over},
     {"many files", seq_many_files},
     {"unlink after a sync", seq_unlink_synced},
+    {"truncate after a sync", seq_truncate_synced},
 };
 
 /* Read the crash state back from the dump: the cache's dirty buffers go
