@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd September 25, 2026
 .Dt CONNECT 2
 .Os
 .Sh NAME
@@ -36,7 +36,8 @@ The call succeeds even if the peer's FIN arrives before the caller resumes.
 The connection is then in
 .Dv CLOSE_WAIT ;
 a read returns any queued data followed by EOF.
-A pending signal interrupts the wait with
+A pending signal that is neither blocked nor ignored interrupts the wait
+with
 .Er EINTR .
 With
 .Dv O_NONBLOCK ,

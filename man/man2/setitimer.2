@@ -33,21 +33,31 @@ the time between each later one, or zero for a single one.
 A zero
 .Va it_value
 disarms the timer.
-Times are rounded up to whole 10 ms ticks, and the tick under way counts
-for nothing, so the first
+Times are rounded up to whole 10 ms ticks, and the tick in progress is
+not counted, so the first
 .Dv SIGALRM
-never comes before the time asked for.
+never comes before the time asked for, up to the limit below.
+At the tick that posts a
+.Dv SIGALRM ,
+the timer is armed again for the interval.
 Unless
 .Fa old
-is null, it receives what the timer held before the call: the time
-left before its next
-.Dv SIGALRM
-and its interval.
+is null, it receives the timer's setting before the call, as
+.Fn getitimer
+reports it.
 .Pp
-The timer tick posts the signal.
-A sleep or a wait the signal reaches ends at that tick and fails with
-.Er EINTR ;
-this kernel does not restart an interrupted call, whatever the handler's
+The timer tick posts the signal, which wakes the process if it is asleep
+in a call;
+.Xr nanosleep 2 ,
+.Xr poll 2
+and
+.Xr select 2
+say when that ends their call with
+.Er EINTR ,
+and
+.Xr sigaction 2
+says it for other waits.
+This kernel does not restart an interrupted call, whatever the handler's
 .Dv SA_RESTART
 says
 .Pq Xr sigaction 2 .
@@ -56,8 +66,12 @@ says
 reports the time left before the next
 .Dv SIGALRM ,
 zero when the timer is disarmed, and the interval.
-The time left is rounded down to a tick; a timer due within a tick
-reports one tick, since zero means disarmed.
+The time left is the whole ticks to the due tick less the tick in
+progress, and one tick at least while the timer is armed, since zero
+means disarmed.
+So a value read in the timer's last tick and passed straight back to
+.Fn setitimer
+moves the timer a tick later.
 .Pp
 .Fn alarm
 arms a single
@@ -88,16 +102,25 @@ are refused with
 .Er EINVAL :
 they count a process's own processor time, which this kernel does not
 keep.
-The resolution is the 10 ms tick.
-A null
+The timer counts 10 ms ticks, so the signal is posted at a tick, and
+.Fn getitimer
+reports whole ticks where Linux reports microseconds.
+The raw call refuses a null
 .Fa new
-is refused with
+with
 .Er EFAULT ,
-where Linux disarms the timer, and
+where Linux disarms the timer, and the kernel checks
 .Fa which
-is checked before
-.Fa new
-is read.
+before it reads
+.Fa new .
+Linux arms a periodic timer again when its
+.Dv SIGALRM
+is delivered, so while the signal is blocked its timer stays expired and
+.Fn getitimer
+reports an
+.Va it_value
+of zero with the interval; this kernel arms it again at the tick that
+posts the signal, whatever the mask, and reports the time to the next.
 Linux keeps the pending signals across
 .Xr execve 2 .
 .Ss System call interface
@@ -116,16 +139,37 @@ The kernel's itimerval is four signed 32-bit fields: the interval's
 seconds and microseconds, then the value's.
 The kernel limits the seconds it counts to 21474836, as
 .Xr nanosleep 2
-does.
+does, and a time to 2147483645 ticks, about 248.55 days; a longer time
+is shortened to that.
 .Pp
 musl passes that form for its 64-bit
 .Vt time_t ,
-refusing with
-.Er ENOTSUP
-seconds that do not fit in 32 bits, and its
+and refuses with
+.Er ENOTSUP ,
+before the call, seconds that do not fit in 32 bits, so its
 .Fn alarm
-calls
-.Fn setitimer .
+of more than 2147483647 seconds arms nothing, leaves an alarm already
+armed as it was, and returns 0.
+Its
+.Fn setitimer
+reads
+.Fa new
+itself before the call, so a null or unreadable
+.Fa new
+faults in the caller, whatever
+.Fa which
+is.
+It writes
+.Fa old ,
+when that is not null, only after the call succeeds, and its
+.Fn getitimer
+writes
+.Fa cur
+only after the call succeeds, so an unwritable
+.Fa old
+or
+.Fa cur
+faults in the caller with the call done.
 .Sh RETURN VALUES
 .Fn setitimer
 and
@@ -168,4 +212,6 @@ or a time is negative or has microseconds of a second or more.
 .El
 .Sh SEE ALSO
 .Xr nanosleep 2 ,
+.Xr poll 2 ,
+.Xr select 2 ,
 .Xr sigaction 2

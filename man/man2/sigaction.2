@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt SIGACTION 2
 .Os
 .Sh NAME
@@ -87,8 +87,12 @@ The booted init process cannot be stopped.
 Signals act on return to user mode from a system call or interrupt.
 The lowest-numbered pending, unblocked signal is selected first.
 An ignored signal does not interrupt a blocking wait.
-A caught, stopping, or terminating signal can interrupt a wait;
+A caught, stopping, or terminating signal that is not blocked can
+interrupt a wait;
 an operation that has transferred data may return a partial count.
+A stop signal that takes its default action ends such a wait as any other
+signal does, and the call returns when the process is continued, where
+Linux restarts most such calls.
 .Pp
 Unhandled user-mode CPU exceptions are different: they terminate the
 process directly

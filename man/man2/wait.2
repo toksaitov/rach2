@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt WAIT 2
 .Os
 .Sh NAME
@@ -121,7 +121,8 @@ No child matches
 A nonnull status or resource usage pointer does not refer to writable
 user memory.
 .It Bq Er EINTR
-A deliverable signal is pending while the call would otherwise block.
+A signal that is neither blocked nor ignored is pending while the call
+would otherwise block.
 .It Bq Er ESRCH
 There is no current process.
 .El

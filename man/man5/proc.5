@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -316,7 +316,9 @@ Boot time as seconds since the epoch.
 .It Li processes
 Processes created since boot.
 .It Li sleeps_interrupted
-Sleeps a signal ended before their deadline, since boot.
+Sleeps in
+.Xr nanosleep 2
+that a signal ended before their deadline, since boot.
 A sleep that ran its whole length is not counted.
 .It Li latency_timer_us
 Longest gap between timer ticks, in microseconds.

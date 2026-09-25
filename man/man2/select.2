@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -93,8 +93,8 @@ it is in seconds and nanoseconds.
 A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
-Timeouts are rounded up to 10 ms timer ticks, and the tick under way
-counts for nothing, so a wait is never shorter than asked.
+Timeouts are rounded up to 10 ms timer ticks, and the tick in progress is
+not counted, so a wait is never shorter than asked, up to the limits below.
 Timeouts are not written back.
 .Pp
 The raw
@@ -119,8 +119,8 @@ argument is ignored.
 Unlike Linux,
 .Fn pselect
 does not replace the signal mask atomically around the wait.
-A pending deliverable signal interrupts the call if no selected
-descriptor is ready.
+A pending signal that is neither blocked nor ignored interrupts the call
+if no selected descriptor is ready.
 .Ss System call numbers
 The old i386
 .Nm select
@@ -173,7 +173,8 @@ is not open, including one beyond the allocated descriptor table.
 A complete descriptor set cannot be read or written, the timeout cannot
 be read, or the old call's argument array cannot be read.
 .It Bq Er EINTR
-No selected descriptor was ready and a deliverable signal was pending.
+No selected descriptor was ready and a signal that is neither blocked nor
+ignored was pending.
 .It Bq Er EINVAL
 The descriptor count or timeout is outside the accepted range.
 .It Bq Er ENOMEM

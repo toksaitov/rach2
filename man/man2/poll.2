@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 25, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -94,8 +94,8 @@ For
 .Fa timeout
 is a number of milliseconds.
 A negative value waits indefinitely; zero performs one scan without waiting.
-A positive timeout is rounded up to a 10 ms timer tick, and the tick under
-way counts for nothing, so the wait is never shorter than asked.
+A positive timeout is rounded up to a 10 ms timer tick, and the tick in
+progress is not counted, so the wait is never shorter than asked.
 With no entries, a finite timeout acts as a sleep.
 .Pp
 .Fn ppoll
@@ -107,7 +107,8 @@ The timeout is rounded up to a 10 ms tick, as for
 .Fn poll ,
 and is not written back.
 The kernel caps the seconds used in its deadline calculation at 21474836
-and the total at 2147483646 ticks.
+and the total at 2147483646 ticks, about 248.55 days; a longer timeout is
+shortened to that.
 .Pp
 The
 .Fa sigmask
@@ -115,7 +116,8 @@ argument is ignored.
 Unlike Linux,
 .Fn ppoll
 does not replace the signal mask atomically around the wait.
-If no entry is ready, a pending deliverable signal gives
+If no entry is ready, a pending signal that is neither blocked nor
+ignored gives
 .Er EINTR ;
 .Dv SA_RESTART
 does not restart the call.
@@ -155,7 +157,8 @@ The descriptor array cannot be read or written, or the
 .Fn ppoll
 timeout cannot be read.
 .It Er EINTR
-No entry was ready and a deliverable signal was pending.
+No entry was ready and a signal that is neither blocked nor ignored was
+pending.
 .It Er EINVAL
 .Fa nfds
 exceeds 1024, or the
