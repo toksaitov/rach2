@@ -6,6 +6,8 @@
 # machine that has stopped reading must then wait for a reader, and the
 # selftest kills it after five seconds and fails. The second is `drain_rest`
 # reading nothing, which the selftest of output written before a timeout must
+# fail. The third is `send_file` taking a read error for the end of its file,
+# which the selftest of a `sendfile=` step whose file cannot be read must
 # fail. The fixed and restored builds pass.
 set -eu
 
@@ -90,4 +92,19 @@ PY
 run_phase late-mutated 1 'output written before a timeout was not read after it'
 cleanup
 run_phase late-restored 0 'output written before a timeout is read after it'
+cmp "$work/harness.saved" "$work/harness.c"
+python3 - "$work/harness.c" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+old = "    if (sf && ferror(sf))\n        sent = 0;\n"
+if source.count(old) != 1:
+    raise SystemExit("harness-input-mutation: source pattern is not unique: unread")
+path.write_text(source.replace(old, ""))
+PY
+run_phase unread-mutated 1 'a sendfile= step whose file cannot be read passed'
+cleanup
+run_phase unread-restored 0 'a sendfile= step whose file cannot be read fails'
 cmp "$work/harness.saved" "$work/harness.c"

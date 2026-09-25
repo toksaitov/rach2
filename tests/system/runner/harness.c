@@ -1171,6 +1171,32 @@ static int probe_wait_selftest(void)
 }
 
 /**
+ * Send the bytes of the file at `path` to the guest's input, as a
+ * `sendfile=` step does. The step has sent its file only when every byte was
+ * read and written: a file that cannot be opened, or whose reading stops
+ * with an error, fails it, as a write the guest does not take does.
+ *
+ * @return 1 when the whole file reached the guest, 0 otherwise.
+ */
+static int send_file(const char *path)
+{
+    FILE *sf = fopen(path, "rb");
+    char chunk[4096];
+    size_t got;
+    int sent = sf != NULL;
+
+    while (sent && (got = fread(chunk, 1, sizeof(chunk), sf)) > 0) {
+        if (child_in < 0 || !send_bytes(chunk, got))
+            sent = 0;
+    }
+    if (sf && ferror(sf))
+        sent = 0;
+    if (sf)
+        fclose(sf);
+    return sent;
+}
+
+/**
  * Require a write to a machine that has stopped reading to end at the run's
  * deadline.
  *
@@ -1239,6 +1265,22 @@ static int input_deadline_selftest(void)
         return 1;
     }
     printf("harness: selftest: a write the machine does not read ends at the deadline\n");
+    return 0;
+}
+
+/**
+ * Require a `sendfile=` step to fail when its file opens but cannot be read.
+ * A directory is such a file: its reads end in an error, not at the end of
+ * the file, and a step that stopped there sent nothing of it.
+ */
+static int sendfile_selftest(void)
+{
+    if (send_file(".")) {
+        fprintf(stderr, "harness: selftest: a sendfile= step whose file "
+                        "cannot be read passed\n");
+        return 1;
+    }
+    printf("harness: selftest: a sendfile= step whose file cannot be read fails\n");
     return 0;
 }
 
@@ -1610,7 +1652,7 @@ int main(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
         return unescape_selftest() | probe_wait_selftest() | input_deadline_selftest() |
-               late_output_selftest();
+               late_output_selftest() | sendfile_selftest();
     if (argc == 3 && strcmp(argv[1], "--match") == 0)
         return match_mode(argv[2]);
 
@@ -1848,19 +1890,8 @@ int main(int argc, char **argv)
                 step_failures++;
             }
         } else if (strncmp(step, "sendfile=", 9) == 0) {
-            FILE *sf = fopen(step + 9, "rb");
-            char chunk[4096];
-            size_t got;
-            int sent = sf != NULL;
-
             begin_input();
-            while (sent && (got = fread(chunk, 1, sizeof(chunk), sf)) > 0) {
-                if (child_in < 0 || !send_bytes(chunk, got))
-                    sent = 0;
-            }
-            if (sf)
-                fclose(sf);
-            if (!sent) {
+            if (!send_file(step + 9)) {
                 fprintf(stderr, "HARNESS: step '%s' did not reach the guest\n", step);
                 step_failures++;
             }
