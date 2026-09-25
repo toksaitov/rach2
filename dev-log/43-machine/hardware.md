@@ -182,6 +182,10 @@ controller's transaction translator, which QEMU does not model.
 | Left side, black | 3 | the same tree on port 3 | work, Doom played | mounts, takes a file, raw read 8.2 MB/s |
 | Left side, blue | 2 and 10 | hub high on port 2 with the keyboard and mouse; the SuperSpeed half on port 10 refused | work, Doom played | absent: the stick attaches to the SuperSpeed half, which this kernel does not drive |
 
+On 2026-09-25 the mouse and then the keyboard went into the blue socket
+without the hub: each enumerated on port 2 as a low-speed device, and
+the owner played Doom with each, the other device on the hub.
+
 In port 1: the stick pulled from the hub under a mount answered `EIO`,
 unmounted with rc 0 and was reclaimed while the keyboard and mouse
 stayed up; plugged back it was a new device with its volume found; the
