@@ -226,6 +226,45 @@ static int sleeps_cut_short(void)
     return number_after(text, n, "sleeps_interrupted ");
 }
 
+/**
+ * Whether process `pid` is asleep: `S` in the state field of its
+ * `/proc/<pid>/stat`, the field after the parenthesised name.
+ */
+static int asleep(int pid)
+{
+    static char path[32], text[256];
+    static const char head[] = "/proc/", tail[] = "/stat";
+    char digits[12];
+    int n = 0, i = 0, j, fd, len;
+
+    do {
+        digits[n++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0 && n < 11);
+    for (j = 0; head[j]; j++) {
+        path[i++] = head[j];
+    }
+    while (n > 0) {
+        path[i++] = digits[--n];
+    }
+    for (j = 0; tail[j]; j++) {
+        path[i++] = tail[j];
+    }
+    path[i] = '\0';
+    fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    len = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text));
+    syscall1(SYS_CLOSE, fd);
+    for (i = 0; i + 2 < len; i++) {
+        if (text[i] == ')' && text[i + 1] == ' ') {
+            return text[i + 2] == 'S';
+        }
+    }
+    return 0;
+}
+
 /** Sleep `ms` milliseconds; returns what the call returned. */
 static int sleep_ms(int ms)
 {
@@ -406,11 +445,15 @@ void _start(void)
     check(handler_ran == 1 && handler_sig == SIGUSR1, "a one-shot handler runs on its signal");
 
     /* 6. A signal ends a sleep where it lands. The child sleeps far longer
-       than this probe waits; the parent signals it and requires the kernel's
-       count of the sleeps a signal cut short to rise, which a sleep that ran
-       to its deadline would not do. */
+       than this probe waits; the parent waits until /proc shows it asleep,
+       so the signal lands in the sleep however late the child runs, then
+       signals it and requires the kernel's count of the sleeps a signal cut
+       short to rise, which a sleep that ran to its deadline would not do.
+       The wait is at most 500 sleeps of 10 ms, each one or two ticks, and a
+       child not seen asleep by then fails its own row. */
     {
         int before = sleeps_cut_short();
+        int i;
 
         check(before >= 0, "/proc/stat reports sleeps_interrupted");
         install(SIGUSR1, usr1_handler);
@@ -419,7 +462,10 @@ void _start(void)
         if (pid == 0) {
             sys_exit(sleep_ms(30000) == -4 ? 0 : 1); /* -EINTR is -4 */
         }
-        sleep_ms(100);
+        for (i = 0; i < 500 && !asleep(pid); i++) {
+            sleep_ms(10);
+        }
+        check(i < 500, "the sleeper is seen asleep before it is signalled");
         syscall2(SYS_KILL, pid, SIGUSR1);
         check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid, "reap the sleeper");
         check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
