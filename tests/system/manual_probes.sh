@@ -101,9 +101,10 @@ for name in @RESERVED@; do
 done
 for tty in /dev/pts/*; do
     [ -e "$tty" ] || continue
-    case "$(stat -c %u "$tty")" in
-        1000 | 1001) echo "session $tty" ;;
-    esac
+    owner=$(stat -c %u "$tty")
+    if [ "$owner" = 1000 ] || [ "$owner" = 1001 ]; then
+        echo "session $tty"
+    fi
 done
 EOF
 )"
@@ -130,7 +131,10 @@ if [ -f /rach2-probes/hosts.absent ]; then rm -f /etc/hosts; fi
 rm -rf$remove" >"$work/cleanup.log" 2>&1 ||
         echo "manual-probes: cleanup failed; see $work/cleanup.log" >&2
 }
-trap cleanup EXIT
+# The Mac's sh, bash 3.2, gives an EXIT trap a status of 0 when `set -u`
+# stops the script, so a run that reached no success exit fails here.
+finished=
+trap 'status=$?; cleanup; [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1; exit "$status"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -155,6 +159,7 @@ if [ "$mode" = clean ]; then
         echo "manual-probes: refused: /orphanprobe is not $tests/orphanprobe; left in place" >&2
         exit 1
     fi
+    finished=1
     exit 0
 fi
 
@@ -194,6 +199,7 @@ EOF
     cat "$work/writes.log"
     [ "$rc" -eq 0 ] || { echo 'manual-probes: result: fail: a write run did not complete' >&2; exit 1; }
     echo 'manual-probes: result: writes measured three times'
+    finished=1
     exit 0
 fi
 
@@ -230,6 +236,7 @@ EOF
     done
     [ "$rc" -eq 0 ] || { echo 'manual-probes: result: fail: a pipe run did not read 128 MiB' >&2; exit 1; }
     echo 'manual-probes: result: pipe measured three times'
+    finished=1
     exit 0
 fi
 
@@ -363,3 +370,4 @@ if [ -n "$failed" ]; then
     exit 1
 fi
 echo 'manual-probes: result: pass: nine of nine passed over SSH; orphanprobe waits at /orphanprobe for the console'
+finished=1
