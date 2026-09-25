@@ -177,6 +177,34 @@ static unsigned int listed_ino(const char *name)
     return ino;
 }
 
+/**
+ * A disk's ioctl and a disk node's inode, asked of /dev/null.
+ *
+ * `BLKRRPART` (0x125F) reaches every device, and a record that is not a disk
+ * node read as one reads past the table it is in; the request must answer
+ * ENOTTY (25). That row cannot see the misreading itself: the misread node's
+ * partition number is the major and minor of the entry two further on, never
+ * zero, so the request is refused either way. The inode can. The listing
+ * numbers a leaf by its place in the table, and fstat by what the
+ * descriptor's record is.
+ */
+static void null_is_not_a_disk(void)
+{
+    static char st[96];
+    unsigned int ino;
+    int fd;
+
+    fd = do_open("/dev/null", O_RDONLY);
+    check(fd >= 0, "open /dev/null for the disk rows");
+    check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25, "a disk's BLKRRPART on /dev/null is ENOTTY");
+    check(syscall3(SYS_FSTAT64, fd, (int)(size_t)st, 0) == 0, "fstat /dev/null");
+    ino = listed_ino("null");
+    check(ino != 0 && *(unsigned int *)(st + ST_INO64) == ino &&
+              *(unsigned int *)(st + ST_INO64 + 4) == 0u,
+          "fstat and the /dev listing give /dev/null one inode");
+    syscall1(SYS_CLOSE, fd);
+}
+
 /** Check mode reentry and a descriptor retained across two display owners. */
 static void framebuffer(void)
 {
@@ -242,11 +270,9 @@ static void framebuffer(void)
 
 void _start(void)
 {
-    static char st[96];
     char buf[64];
     char buf2[64];
     int fd, n, i, allzero, differ;
-    unsigned int ino;
 
     /* (a) /dev/zero: a read returns the requested count, all zero. */
     fd = do_open("/dev/zero", O_RDONLY);
@@ -271,27 +297,7 @@ void _start(void)
     check(do_read(fd, buf, 64) == 0, "/dev/null read is EOF (0)");
     syscall1(SYS_CLOSE, fd);
 
-    /* A disk's own ioctl asked of a device that is not a disk: the request
-       reaches every device, and a record that is not a disk node read as one
-       reads past the table it is in. `BLKRRPART` is 0x125F and ENOTTY 25. */
-    fd = do_open("/dev/null", O_RDONLY);
-    check(fd >= 0, "open /dev/null for the ioctl row");
-    check(syscall3(SYS_IOCTL, fd, 0x125F, 0) == -25, "a disk's BLKRRPART on /dev/null is ENOTTY");
-    syscall1(SYS_CLOSE, fd);
-
-    /* The row above cannot see a table entry taken for a disk node: the
-       misread node's partition number is the major and minor of the entry
-       two further on, never zero, so the request is refused either way. The
-       inode can. The listing numbers a leaf by its place in the table, and
-       fstat by what the descriptor's record is. */
-    fd = do_open("/dev/null", O_RDONLY);
-    check(fd >= 0, "open /dev/null for its inode");
-    check(syscall3(SYS_FSTAT64, fd, (int)(size_t)st, 0) == 0, "fstat /dev/null");
-    ino = listed_ino("null");
-    check(ino != 0 && *(unsigned int *)(st + ST_INO64) == ino &&
-              *(unsigned int *)(st + ST_INO64 + 4) == 0u,
-          "fstat and the /dev listing give /dev/null one inode");
-    syscall1(SYS_CLOSE, fd);
+    null_is_not_a_disk();
 
     fd = do_open("/dev/null", O_WRONLY);
     check(fd >= 0, "open /dev/null O_WRONLY");
