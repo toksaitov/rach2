@@ -4,17 +4,21 @@
 # Usage: sh tests/system/gpt_write_mutate.sh
 #
 # tests/system/gpt_write_refusal.sh types the recovery shell's `disk write`
-# at three GPT disks and requires the refusal and an unchanged disk. The
-# recovery kernel is built five times from a private copy of rach2/ and mk/,
+# at its GPT and MBR disks and requires the refusal and an unchanged disk, or
+# on the one disk whose last sector nothing holds the round-trip. The
+# recovery kernel is built seven times from a private copy of rach2/ and mk/,
 # never from the main tree's sources or into its build/: as it is, where the
 # row must pass; with the refusal taken out, so that the command writes the
-# backup header's sector, where the row must fail on the first disk and that
-# disk must differ from its copy; restored, where it must pass; with the read
-# of the last sector taken out, so that a disk whose LBA 1 says nothing is
-# taken for one without a table, where the row must fail on the third disk,
-# whose primary header is zeroed (entry 172); restored again; with the check
-# of the MBR's entries taken out, where the row must fail on the fourth disk,
-# whose partition reaches the last sector (entry 195); and restored once more.
+# backup header's sector, where the row must fail on the GPT disk with no
+# protective MBR and that disk must differ from its copy; restored, where it
+# must pass; with the read of the last sector taken out, so that a disk whose
+# LBA 1 says nothing is taken for one without a table, where the row must fail
+# on the GPT disk with neither a protective MBR nor a primary header (entry
+# 172); restored again; with the check of the MBR's entries taken out, where
+# the row must fail on the MBR disk whose partition reaches the last sector
+# (entry 195); and restored once more. The GPT faults are judged on the disks
+# with no protective MBR because the MBR check refuses any disk with one
+# (entry 206).
 # Each restored kernel must be identical to the first. The trap stops the
 # row's process group before it restores the private source.
 set -eu
@@ -128,7 +132,7 @@ if "return;" not in text[start:end]:
 path.write_text(text[:start] + "    (void)is_gpt;\n" + text[end:])
 PY
 touch "$source"
-run_phase refusal-removed fail
+run_phase refusal-removed fail g
 if cmp -s "$work/fixed.kernel" "$work/refusal-removed.kernel"; then
     echo 'gpt-write-mutation: the mutation did not change the kernel' >&2; exit 1
 fi
@@ -152,7 +156,7 @@ if text.count(read) != 1:
 path.write_text(text.replace(read, ""))
 PY
 touch "$source"
-run_phase backup-unread fail d
+run_phase backup-unread fail h
 if cmp -s "$work/fixed.kernel" "$work/backup-unread.kernel"; then
     echo 'gpt-write-mutation: the second mutation did not change the kernel' >&2; exit 1
 fi

@@ -28,8 +28,14 @@
 # and one whose partition ends before it, which must take the round-trip and
 # change in that sector alone.
 #
-# OUT is a path prefix: OUT.b.disk to OUT.f.disk are the disks, and OUT.b.log
-# to OUT.f.log the consoles, which are kept.
+# The last two are GPT disks with no protective MBR, sector 0 zeroed, the
+# second with its primary header zeroed as well. A protective MBR's entry
+# covers the whole disk, so on the first three the MBR check refuses too; on
+# these two the GPT checks alone keep the disk, which is where the mutation
+# test sees each of them fail without its check (entry 206).
+#
+# OUT is a path prefix: OUT.b.disk to OUT.h.disk are the disks, and OUT.b.log
+# to OUT.h.log the consoles, which are kept.
 # `tests/run parts` runs this on the recovery kernel, and gpt_write_mutate.sh
 # on kernels built from a private copy.
 #
@@ -132,4 +138,13 @@ refused e "an MBR disk whose partition reaches the last sector" \
     "disk: the last sector belongs to partition 1, not a scratch sector"
 mbr_disk "$OUT.f.disk" '\000\360\000\000'
 written f "an MBR disk whose partition ends before the last sector"
-rm -f "$OUT.b.disk" "$OUT.c.disk" "$OUT.d.disk" "$OUT.e.disk" "$OUT.f.disk"
+gpt_disk "$OUT.g.disk"
+dd if=/dev/zero of="$OUT.g.disk" bs=512 count=1 conv=notrunc 2>/dev/null ||
+    fail "the protective MBR of the sixth disk"
+refused g "a GPT disk with no protective MBR" "disk: GPT disk; the last sector is its backup header" gpt
+gpt_disk "$OUT.h.disk"
+dd if=/dev/zero of="$OUT.h.disk" bs=512 count=2 conv=notrunc 2>/dev/null ||
+    fail "the protective MBR and the primary header of the seventh disk"
+refused h "a GPT disk with no protective MBR whose primary header is gone" \
+    "disk: GPT disk; the last sector is its backup header" gpt
+rm -f "$OUT.b.disk" "$OUT.c.disk" "$OUT.d.disk" "$OUT.e.disk" "$OUT.f.disk" "$OUT.g.disk" "$OUT.h.disk"
