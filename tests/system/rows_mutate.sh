@@ -137,14 +137,16 @@ failed_with()
 }
 
 # One boot of the default suite on the rebuilt kernel; the named probe must
-# fail. A fault can take later probes with it, which proves nothing more.
+# fail, with a status of its own or killed by a signal, as a handler entered
+# at zero is. A fault can take later probes with it, which proves nothing
+# more.
 probe_phase()
 {
     name=$1
     mutate "$name"
     run_row "$name" make run-default
     [ ! -f build/images/default-test.log ] || cp build/images/default-test.log "$work/$name.guest.log"
-    failed_with "^ *$name +status=.*FAIL" "$work/$name.log" ||
+    failed_with "^ *$name +(status=[0-9]+|killed by signal [0-9]+) +FAIL" "$work/$name.log" ||
         { echo "rows-mutation: $name did not fail with its fault compiled in" >&2; exit 1; }
     echo "rows-mutation: result: $name failed with its fault, status $status"
     restore
