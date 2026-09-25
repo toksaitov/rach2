@@ -234,19 +234,28 @@ fi
 # bash 3.2, the Mac's /bin/sh and /bin/bash, gives an EXIT trap a status of
 # 0 when `set -u` stops a script that also has `set -e`, and a trap that ends
 # in success lets the script exit 0; dash, bash 5 and BusyBox's ash report
-# the failure. So a script in the scope below that sets both, in any
-# spelling, and traps EXIT keeps a `finished` flag, set where it succeeds, and
-# its trap fails a run that never set it (entry 222 of milestone 50's list).
-# The scope is the scripts under tools/ and krffs/, which the Mac runs but for
-# tools/dev/machine_grow.sh, and the machine probes and the acceptance's su
-# command. A trap may span lines, its last then ending in a quote and EXIT or 0.
+# the failure. So a script in the scope below that sets both and traps EXIT
+# keeps a `finished` flag, set where it succeeds, and its trap fails a run
+# that never set it (entry 222 of milestone 50's list). The scope is the
+# scripts under tools/ and krffs/, most of which the Mac runs, and the machine
+# probes and the acceptance's su command. The flags are read from a `set` at
+# the start of a line, after any other options: `-eu`, `-Ceu`, `-e -u`, the
+# two on separate lines, or `-o errexit` and `-o nounset`. A flag on the `#!`
+# line or in a second `set` after a `;` is not read. The trap is read from a
+# `trap` at the start of a line, and may span lines, its first leaving its
+# quote open and its last ending in the quote and its signals, EXIT or 0 among
+# them.
+opts='^[[:space:]]*set([[:space:]]+([-+][A-Za-z]+|[-+]o[[:space:]]+[a-z]+))*[[:space:]]+'
+sigs='([[:space:]]+[A-Z0-9]+)*[[:space:]]+(EXIT|0)([[:space:]]+[A-Z0-9]+)*[[:space:]]*$'
 # shellcheck disable=SC2016
 guard_bad=$(sh "$REPO/tools/verify/scripts.sh" \
     | grep -E '^(tools|krffs)/|^tests/system/(manual_probes|accept/su_command)\.sh$' \
     | while IFS= read -r f; do
-        if grep -qE '^[[:space:]]*set[[:space:]]+([^#;]*[[:space:]])?(-[a-z]*e[a-z]*|-o[[:space:]]+errexit)([[:space:];]|$)' "$f" &&
-            grep -qE '^[[:space:]]*set[[:space:]]+([^#;]*[[:space:]])?(-[a-z]*u[a-z]*|-o[[:space:]]+nounset)([[:space:];]|$)' "$f" &&
-            grep -qE "^[[:space:]]*trap .*[[:space:]](EXIT|0)([[:space:];]|\$)|^[^#]*['\"][[:space:]]+(EXIT|0)[[:space:]]*\$" "$f" &&
+        if grep -qE "${opts}(-[A-Za-z]*e[A-Za-z]*|-o[[:space:]]+errexit)([[:space:];]|\$)" "$f" &&
+            grep -qE "${opts}(-[A-Za-z]*u[A-Za-z]*|-o[[:space:]]+nounset)([[:space:];]|\$)" "$f" &&
+            { grep -qE "^[[:space:]]*trap .*[[:space:]](EXIT|0)([[:space:];]|\$)" "$f" ||
+                { grep -qE "^[[:space:]]*trap[[:space:]]+(--[[:space:]]+)?('[^']*|\"[^\"]*)\$" "$f" &&
+                    grep -qE "['\"]${sigs}" "$f"; }; } &&
             ! grep -qF '[ -n "$finished" ]' "$f"; then
             echo "$f"
         fi

@@ -33,8 +33,8 @@ finish()
 }
 # BusyBox's ash, which runs this in recovery, reports a failing status when
 # `set -u` stops the script; bash 3.2, the Mac's sh, gives the trap 0, and the
-# style check asks every script under tools/ for the flag, so `finish` fails a
-# run that reached no success exit.
+# style check asks for the flag in a script under tools/ that sets both flags
+# and traps EXIT, so `finish` fails a run that reached no success exit.
 finished=
 trap finish EXIT
 trap 'exit 129' HUP
