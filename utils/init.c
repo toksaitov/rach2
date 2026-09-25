@@ -351,9 +351,10 @@ static int anyone_to_let_in(void)
  * terminal through getty.
  *
  * On the login builds the child sets `LOGIN_TIMEOUT=0` before the exec.
- * BusyBox's login otherwise gives up after 60 seconds at its prompt and exits,
- * and the login init starts next would draw a new prompt on an idle console
- * every minute.
+ * BusyBox's login, the `/bin/login` of the images that stage BusyBox,
+ * otherwise gives up after 60 seconds at its prompt and exits, and the login
+ * init starts next would draw a new prompt on an idle console every minute.
+ * The os-simple image's own login has no timeout and does not read it.
  */
 static pid_t spawn_shell(void)
 {

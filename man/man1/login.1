@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt LOGIN 1
 .Os
 .Sh NAME
@@ -54,7 +54,9 @@ environment variable gives the timeout in seconds.
 The default is 60; 0 disables the timeout.
 .Xr init 8
 starts the console's login with 0, so the console prompt waits without a
-limit; a login started any other way keeps the default.
+limit.
+A login started any other way reads the variable from the environment it
+is given.
 .Pp
 This build uses shadow passwords and BusyBox's SHA crypt support.
 The securetty check, login scripts, and nologin feature are disabled.

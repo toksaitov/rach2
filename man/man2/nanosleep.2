@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt NANOSLEEP 2
 .Os
 .Sh NAME
@@ -37,7 +37,7 @@ Unless
 is null, the raw call stores there the whole ticks left to the deadline,
 less the one added for the tick in progress.
 A sleep begun again with the remainder ends at the first sleep's deadline
-if it begins in the tick in which the first call returned, and one tick
+if it begins in the tick in which the remainder was stored, and one tick
 later for each tick that passes before it begins.
 A signal in the last tick before the deadline leaves a remainder of zero,
 since the kernel counts whole ticks and does not record where in its tick
@@ -45,9 +45,11 @@ the sleep began; a sleep begun again with it returns at once, up to a
 tick before the time first asked.
 .Ss Differences from Linux
 A stop signal that takes its default action, such as the terminal's
-Ctrl-Z, ends the sleep as any other signal does, and the call returns when
-the process is continued; Linux resumes the sleep, which still ends at its
-first deadline.
+Ctrl-Z, ends the sleep as any other signal does.
+The remainder is stored when the signal ends the sleep and the call
+returns when the process is continued, so a sleep begun again with it
+ends later than the first deadline by the time the process was stopped.
+Linux resumes the sleep, which still ends at its first deadline.
 Linux's remainder is exact, so a sleep begun again with it does not end
 early; here the remainder counts whole 10 ms ticks, and a sleep begun
 again with it can end up to a tick early.

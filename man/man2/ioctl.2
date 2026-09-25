@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 26, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -246,6 +246,9 @@ the separate netmask request.
 If the address is a network or broadcast address under the provisional
 mask, the interface remains unconfigured until a valid netmask is
 supplied.
+A netmask refused while the mask is provisional, or while an address
+waits for one, unconfigures the interface, and the address must be set
+again.
 Repeating the existing configured address leaves its mask unchanged.
 Changing any interface's address aborts TCP connections whose local
 address is no longer configured, with

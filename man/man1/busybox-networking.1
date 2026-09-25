@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -419,6 +419,8 @@ A new address set alone takes the netmask of its class until a netmask is
 set.
 When it is its class's network or broadcast address, the interface has no
 address until a netmask is set under which it is a host.
+In either case a netmask the kernel refuses leaves the interface with no
+address, and the address must be set again.
 The address already in force, set again alone, keeps its netmask if it
 has one.
 So a netmask belongs after the address and before a broadcast that
