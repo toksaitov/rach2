@@ -5,7 +5,7 @@
 # catches it must fail with its own words:
 #
 #   entry 113  the runner's product check, by the runner's self-test
-#   entry 120  a table entry taken for a disk node, by devprobe
+#   entry 120  a table entry numbered as a disk node, by devprobe
 #   entry 121  a one-shot handler entered at zero, by sigprobe
 #   entry 138  two proc files with one inode, by procprobe
 #   entry 109  the sealed root without update, by the sealed suite
@@ -90,8 +90,8 @@ changes = {
     '    if [ -f "$WORK/inventory.products" ]; then\n',
     '    if false; then\n'),
 'devprobe': ('rach2/sys/fs/devfs.c',
-    '    if (dev->ops != &diskwin_ops) {\n        return 0;\n    }\n    return (const struct disk_node *)dev;\n',
-    '    return (const struct disk_node *)dev;\n'),
+    '    const struct disk_node *node = disk_node_of(dev);\n\n    if (node) {\n        return DEVFS_NDEV',
+    '    const struct disk_node *node = (const struct disk_node *)dev;\n\n    if (node) {\n        return DEVFS_NDEV'),
 'sigprobe': ('rach2/sys/syscall_proc.c',
     '    handler = sa->handler;\n    if (sa->flags & SA_RESETHAND) {\n'
     '        sa->handler = KSIG_DFL; /* one-shot */\n    }\n',
@@ -136,19 +136,25 @@ failed_with()
     [ "$status" -ne 0 ] && grep -Eq -- "$1" "$2"
 }
 
-# One boot of the default suite on the rebuilt kernel; the named probe must
-# fail, with a status of its own or killed by a signal, as a handler entered
-# at zero is. A fault can take later probes with it, which proves nothing
-# more.
+# One boot of the default suite on the rebuilt kernel. The runner's line for
+# the named probe must end as the second argument says, and this boot's guest
+# log must hold the third: the words the probe prints only when its row
+# fails, or, for a probe the fault kills before the row can report, the
+# kernel's record of the kill. A fault can take later probes with it, which
+# proves nothing more.
 probe_phase()
 {
     name=$1
     mutate "$name"
+    rm -f build/images/default-test.log
     run_row "$name" make run-default
     [ ! -f build/images/default-test.log ] || cp build/images/default-test.log "$work/$name.guest.log"
-    failed_with "^ *$name +(status=[0-9]+|killed by signal [0-9]+) +FAIL" "$work/$name.log" ||
-        { echo "rows-mutation: $name did not fail with its fault compiled in" >&2; exit 1; }
-    echo "rows-mutation: result: $name failed with its fault, status $status"
+    if ! failed_with "^ *$name +$2 +FAIL" "$work/$name.log" ||
+        ! grep -Fqs -- "$3" "$work/$name.guest.log"; then
+        echo "rows-mutation: $name did not fail its row with its fault compiled in" >&2
+        exit 1
+    fi
+    echo "rows-mutation: result: $name failed its row with its fault, status $status"
     restore
 }
 
@@ -163,9 +169,15 @@ failed_with "FAIL: a suite that remakes a product of the run's target passes" "$
 echo "rows-mutation: result: runner failed with its fault, status $status"
 restore
 
-probe_phase devprobe
-probe_phase sigprobe
-probe_phase procprobe
+# The devprobe fault numbers a table entry as a disk node, in entry_index
+# alone. Without the check in disk_node_of itself, each open of a table
+# device would also add one to a word of kernel memory through the misread
+# node's disk field (entry 207), and the probe could fail on that and not on
+# its row. The sigprobe fault makes the first one-shot delivery jump to
+# address zero, so the probe dies before its row reports.
+probe_phase devprobe 'status=[0-9]+' 'fstat and the /dev listing give /dev/null one inode'
+probe_phase sigprobe 'killed by signal 11' 'bad read at 0x0 (err'
+probe_phase procprobe 'status=[0-9]+' 'and the open files have different inodes too'
 
 mutate sealed
 run_row sealed make run-sealed
@@ -175,12 +187,15 @@ echo "rows-mutation: result: sealed failed without update, status $status"
 restore
 
 # The guest has no eth9, so arping exits 2 at once; the guest must print that
-# status and the step that wants 0 must fail. An address nothing answers
-# would fail it too, but only at arping's deadline, which the dhcp suite
-# judges in a step of its own.
+# status and the step that checks for 0 must fail. The step that checks for
+# the reply fails with it, so the harness's trace is what shows the status
+# step among the failed ones. An address nothing answers would fail the
+# status step too, but only at arping's deadline, which the dhcp suite judges
+# in a step of its own.
 mutate arping
-run_row arping make dhcp-card
+run_row arping env RACH2_TRACE="$work/arping.trace" make dhcp-card
 if ! failed_with 'HARNESS: [0-9]+ step\(s\) failed' "$work/arping.log" ||
+    ! grep -qs '^step expect=ARPING-STATUS:0 fail ' "$work/arping.trace" ||
     ! grep -q 'ARPING-STATUS:2' build/images/dhcp.log; then
     echo 'rows-mutation: the dhcp status step did not fail on a failed arping' >&2
     exit 1
