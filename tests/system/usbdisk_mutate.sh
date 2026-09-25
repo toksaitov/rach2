@@ -164,7 +164,7 @@ run_phase()
             --timeout 90 --steptmo 40 --log /dev/stdout \
             --ok 'USBDISKPROBE OK' --never 'USBDISKPROBE FAIL' \
             "expect=Type 'help'" "send=exec /usbdiskprobe $mode" \
-            'expect=USBDISKPROBE HOLDING' wait=1 'usb=del:st0' \
+            'expect=USBDISKPROBE HOLDING' 'usb=del:st0' \
             'expect=USBDISKPROBE ' || status=$?
         if [ "$phase" = mutated ]; then
             [ "$status" -eq 1 ] && grep -aEq \

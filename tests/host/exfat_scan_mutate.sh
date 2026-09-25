@@ -49,9 +49,8 @@ cleanup()
     fi
     cp "$work/source.saved" "$source"
     touch "$source"
-    rm -rf "$fixtures"
 }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "$fixtures"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
