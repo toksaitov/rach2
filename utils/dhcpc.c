@@ -729,7 +729,7 @@ static int claim_is_ours(int strict)
     }
     fd = open(pidpath, O_WRONLY | O_CREAT | O_EXCL, 0644);
     if (fd >= 0) {
-        int ok = write_claim(fd, (long)getpid(), holding) == 0;
+        int ok = write_claim(fd, (long)getpid(), adopted ? 0 : holding) == 0;
 
         close(fd);
         if (ok) {

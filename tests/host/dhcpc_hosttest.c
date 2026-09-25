@@ -712,6 +712,33 @@ static void check_handoff_adopted(void)
     address = 0;
 }
 
+/**
+ * Require a claim that has gone to be written again with the address this
+ * client put on the interface, and with none for an address it adopted, so
+ * that a later `dhcpc -k` takes off only what this client added.
+ */
+static void check_claim_rewritten(void)
+{
+    unsigned long recorded;
+    int present;
+
+    holds_interface = 1;
+    holding = 0x0a000002UL;
+    adopted = 1;
+    (void)model_remove(pidpath);
+    CHECK(claim_is_ours(0) == 1 && claim_read(&recorded, &present) == (long)getpid() && present &&
+              recorded == 0,
+          "a claim written again for an adopted address records nothing to take off");
+    adopted = 0;
+    (void)model_remove(pidpath);
+    CHECK(claim_is_ours(0) == 1 && claim_read(&recorded, &present) == (long)getpid() && present &&
+              recorded == 0x0a000002UL,
+          "a claim written again records the address this client put on");
+    (void)model_remove(pidpath);
+    holds_interface = 0;
+    holding = 0;
+}
+
 int main(void)
 {
     if (!mkdtemp(directory)) {
@@ -727,6 +754,7 @@ int main(void)
     check_rebinding();
     check_stdio();
     check_handoff_adopted();
+    check_claim_rewritten();
     CHECK(rmdir(directory) == 0, "temporary files are removed");
     if (failures) {
         return 1;

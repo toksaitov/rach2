@@ -70,7 +70,8 @@ done
 if [ "$#" -eq 0 ]; then
     set -- read-first read-second seek cleanup release expiry mask resolver \
         claim-open claim-read holder-open holder-read detach dup receive rebinding \
-        dhcp-status nc-port httpd-page httpd-port initial-record adopted handoff-adopted
+        dhcp-status nc-port httpd-page httpd-port initial-record adopted handoff-adopted \
+        claim-rewrite
 fi
 for fault do
     python3 - "$work/utils" "$fault" <<'PY'
@@ -159,6 +160,8 @@ changes = {
                 "record_claim((long)getpid(), l->address)"),
     "handoff-adopted": ("dhcpc.c", "if (holding == 0 || adopted || drop_recorded_address(holding) == 0)",
                         "if (holding == 0 || drop_recorded_address(holding) == 0)"),
+    "claim-rewrite": ("dhcpc.c", "write_claim(fd, (long)getpid(), adopted ? 0 : holding) == 0;",
+                      "write_claim(fd, (long)getpid(), holding) == 0;"),
 }
 changes["rebinding"] = changes["receive"]
 if fault not in changes:
@@ -199,6 +202,7 @@ PY
         initial-record) message="a first lease that cannot be recorded leaves the interface's address" ;;
         adopted) message='a first lease the interface already had is recorded as nothing to take off' ;;
         handoff-adopted) message='a child never handed the claim leaves an address it did not put on' ;;
+        claim-rewrite) message='a claim written again for an adopted address records nothing to take off' ;;
     esac
     run_phase "$fault-mutated" "$test" 1 "$message"
     cleanup
