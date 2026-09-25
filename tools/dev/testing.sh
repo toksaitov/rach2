@@ -26,6 +26,11 @@
 # openrsync under the same name, and it deletes on the host what the filter
 # excludes, the whole build and every vendor tree, on every sync.
 #
+# The copy is compared by content, and a file that differs arrives with the
+# time it lands, not the time it was edited here. A file edited while the
+# host was building from its older text would otherwise arrive older than the
+# objects built from that text, and make would take them for up to date.
+#
 # `run` asks the runner for the emulator. The host's KVM is nested under
 # Hyper-V, and the ATA driver polls a port after every sector it writes, so
 # each poll exits through two hypervisors: a 64 MiB write measured 236 s
@@ -49,7 +54,7 @@ sync_tree()
             exit 2
             ;;
     esac
-    rsync -a --delete \
+    rsync -a --no-times --checksum --delete \
         --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
         "$REPO/" "$HOST:$DEST/"
