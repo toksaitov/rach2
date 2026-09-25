@@ -16,20 +16,26 @@
  * memory, that walking was most of what a write cost (entry 25 of milestone
  * 50). The rules now read the caller's own holds, the victim is the head of
  * the release order, and a sync gathers the lowest 128 dirty blocks a walk.
+ * Each row that measures the count also requires it to be at least the reads
+ * the row names, since a counter that counted nothing would pass every upper
+ * bound.
  *
  * The rows run on a cache of 1024 buffers keyed to consecutive blocks of one
  * device, which the index keeps in buckets of their own, so a lookup reads
  * its own buffer and no other. A hit with three buffers held reads the three
  * and its own; a miss reads the head of the release order and the bucket its
- * victim leaves; a release reads the caller's holds. The bound is eight
- * buffers for a get and its release, where one walk of the cache is 1024.
+ * victim leaves; a release reads the caller's holds as far as the buffer it
+ * lets go of. So a hit and its release read at least five buffers, and a miss
+ * and its release at least three. The bound is eight buffers for a get and
+ * its release, where one walk of the cache is 1024.
  *
  * A sync of 1024 dirty blocks, on a device that takes eight blocks a
  * request, walks the cache once for its pass over the firsts, once for each
  * batch of 128, and twice more to find nothing left; each block it reads a
  * few times more, for its lookup in the batch, its place in a run and its
  * hold across the request. The bound allows twelve walks and eight reads a
- * block, where a walk for every run written is 128 walks.
+ * block, where a walk for every run written is 128 walks, and the count must
+ * be at least the eleven walks.
  *
  * The last row is entry 40's. A buffer is a page of the kernel heap, which
  * is KVA_HEAP_SIZE whatever the machine's memory, and on a machine of more
@@ -56,9 +62,16 @@ extern uint32_t host_cache_target;
 /* The cache the cost rows fill, and the most a get and its release may read. */
 #define CACHE_BUFFERS 1024u
 #define GET_MOST      8u
+/* The least a hit with three buffers held and its release read, and the least
+ * a miss and its release read. */
+#define HIT_LEAST     5u
+#define MISS_LEAST    3u
 /* The most a sync of CACHE_BUFFERS dirty blocks may read: twelve walks of
  * the cache and eight reads a block. */
 #define SYNC_MOST     (CACHE_BUFFERS * (CACHE_BUFFERS / 128u + 4u) + 8u * CACHE_BUFFERS)
+/* The least such a sync reads: eleven walks of the cache, one for the
+ * firsts, one for each batch of 128 and two to find nothing left. */
+#define SYNC_LEAST    (CACHE_BUFFERS * (CACHE_BUFFERS / 128u + 3u))
 /* What the ATA disk takes in one request: a run of eight blocks. */
 #define RUN_SECTORS   64u
 /* The cap: half the kernel heap's pages. The cap row writes PAST_SHARE
@@ -210,6 +223,7 @@ static void hit_row(void)
     hit_visits = bcache_stat_visits() - before;
     check(b != 0 && hit_visits <= GET_MOST,
           "a hit with three buffers held reads its holds and its own buffer, not the cache");
+    check(hit_visits >= HIT_LEAST, "the counter counts the buffers a hit and its release read");
     for (i = 2; i >= 0; i--) {
         if (held[i]) {
             bcache_release(held[i]);
@@ -228,6 +242,8 @@ static void miss_row(void)
     check(bcache_resident() == CACHE_BUFFERS, "the misses reuse the cache's buffers");
     check(miss_visits <= (uint64_t)GET_MOST * CACHE_BUFFERS,
           "a miss on a full cache reads the head of the release order, not the cache");
+    check(miss_visits >= (uint64_t)MISS_LEAST * CACHE_BUFFERS,
+          "the counter counts the buffers each miss and its release read");
 }
 
 /* Every buffer of the cache dirty, blocks 0 to 1023, and a sync. */
@@ -244,6 +260,7 @@ static void sync_row(void)
     check(writes_made == CACHE_BUFFERS / 8u, "in runs of eight blocks");
     check(sync_visits <= SYNC_MOST,
           "a sync reads the cache once for each 128 dirty blocks, not once for each run");
+    check(sync_visits >= SYNC_LEAST, "the counter counts the sync's eleven walks of the cache");
 }
 
 /* Every block of the device written through the cache, on a machine whose

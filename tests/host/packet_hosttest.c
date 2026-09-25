@@ -75,11 +75,21 @@ void icmp_rx(uint32_t src, const uint8_t *data, uint16_t len)
     to_icmp++;
 }
 
+/* The first two bytes and the length of each UDP payload, in the order they
+ * were delivered; the loopback row writes a datagram's number in those
+ * bytes. */
+#define UDP_SEEN_MAX 256u
+static struct {
+    uint16_t number, len;
+} udp_seen[UDP_SEEN_MAX];
+
 void udp_rx(uint32_t src, const uint8_t *data, uint16_t len)
 {
     (void)src;
-    (void)data;
-    (void)len;
+    if (to_udp < UDP_SEEN_MAX) {
+        udp_seen[to_udp].number = len >= 2 ? (uint16_t)((data[0] << 8) | data[1]) : 0;
+        udp_seen[to_udp].len = len;
+    }
     to_udp++;
 }
 
@@ -500,11 +510,14 @@ static void test_tx_errors(void)
  * keeps what it held. One line records the first refusal and no later one: a
  * line per refusal is what wrapped the kernel log and took the boot record
  * with it. A ring drained and filled past its end again writes no second line.
+ * Every datagram has its own number in its first two bytes, so the drain
+ * shows that the ring delivers the datagrams it took, in the order they were
+ * sent, and none of those it refused.
  */
 static void test_loop_full(void)
 {
-    static const uint8_t payload[64];
-    unsigned i, taken = 0, refused = 0, again = 0;
+    uint8_t payload[64] = {0};
+    unsigned i, taken = 0, refused = 0, again = 0, in_order = 0;
 
     reset();
     tx_frames = arp_queries = 0;
@@ -512,11 +525,13 @@ static void test_loop_full(void)
     loop_drop_logged = 0;
     loop_lines = 0;
     for (i = 0; i < LOOP_RING_SLOTS; i++) {
+        write16be(payload, (uint16_t)i);
         taken += ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0;
     }
     CHECK("the loopback ring takes as many datagrams as it has slots",
           taken == LOOP_RING_SLOTS && loop_head - loop_tail == LOOP_RING_SLOTS);
     for (i = 0; i < 3 * LOOP_RING_SLOTS; i++) {
+        write16be(payload, (uint16_t)(LOOP_RING_SLOTS + i));
         refused +=
             ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == -ENOBUFS;
     }
@@ -531,6 +546,11 @@ static void test_loop_full(void)
     ip_loop_drain_from(IP_LOOP_FROM_TICK);
     CHECK("the drained ring delivers what it held",
           to_udp == LOOP_RING_SLOTS && !ip_loop_pending());
+    for (i = 0; i < LOOP_RING_SLOTS && i < UDP_SEEN_MAX; i++) {
+        in_order += udp_seen[i].number == i && udp_seen[i].len == sizeof(payload);
+    }
+    CHECK("the drain delivers the datagrams the ring took, in the order sent, and none it refused",
+          to_udp == LOOP_RING_SLOTS && in_order == LOOP_RING_SLOTS);
     for (i = 0; i < LOOP_RING_SLOTS + 1; i++) {
         again +=
             ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == -ENOBUFS;

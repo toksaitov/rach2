@@ -1,7 +1,8 @@
 #!/bin/sh
 # Compile tcp_reset_hosttest.c against faults in a private copy of tcp.c: a
 # reset inside the window taken as if at the next sequence number, a reset
-# outside the window answered, any reset taken while opening, a handshake
+# outside the window answered, a reset taken while opening without the ACK
+# flag, one taken while opening that acknowledges another number, a handshake
 # completed after its listener closed left open, an initial sequence number
 # without the keyed hash, and a key drawn at every open. Each fault must fail
 # its row with exit status 1, and the restored source must pass again.
@@ -69,17 +70,18 @@ run_phase()
 
 echo "tcp-reset-mutation: logs: $work"
 run_phase fixed 0 'tcp_reset_hosttest: PASS'
-for fault in in-window out-of-window opening listener-gone unkeyed rekeyed; do
+for fault in in-window out-of-window opening-flag opening-number listener-gone unkeyed rekeyed; do
     python3 - "$source" "$fault" <<'PY'
 import pathlib
 import sys
 
+opening = ("return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT "
+           ": TCP_RST_IGNORE;")
 changes = {
     "in-window": ("        return TCP_RST_CHALLENGE;\n", "        return TCP_RST_ACCEPT;\n"),
     "out-of-window": ("    return TCP_RST_IGNORE;\n}\n", "    return TCP_RST_CHALLENGE;\n}\n"),
-    "opening": ("return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT "
-                ": TCP_RST_IGNORE;",
-                "return TCP_RST_ACCEPT;"),
+    "opening-flag": (opening, "return ack_num == tcb->snd_nxt ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"),
+    "opening-number": (opening, "return (flags & TCP_ACK) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"),
     "listener-gone": ("            tcp_free_half_open(t);\n", "            (void)t;\n"),
     "unkeyed": ("return kernel_ticks * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);",
                 "return kernel_ticks * TCP_ISN_PER_TICK + tcb->local_port;"),
@@ -96,7 +98,8 @@ PY
         in-window)
             message='a reset inside the window but not at the next sequence number closes nothing' ;;
         out-of-window) message='a reset outside the window is dropped without an answer' ;;
-        opening) message='a reset that does not acknowledge the SYN leaves the open' ;;
+        opening-flag) message='a reset with the acknowledgement of the SYN but no ACK flag leaves the open' ;;
+        opening-number) message='a reset that acknowledges another number leaves the open' ;;
         listener-gone)
             message='closing the listener frees the handshake in progress and its socket' ;;
         unkeyed)

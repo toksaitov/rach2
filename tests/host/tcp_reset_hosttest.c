@@ -318,8 +318,9 @@ static void test_established(void)
 
 /**
  * While the connection is opening, a reset counts only when it acknowledges
- * the SYN: without an acknowledgement, or acknowledging another number, it
- * leaves the open as it was.
+ * the SYN. One without the ACK flag leaves the open as it was, even when its
+ * acknowledgement field has the number that acknowledges the SYN, and so
+ * does one that acknowledges another number.
  */
 static void test_syn_sent(void)
 {
@@ -336,9 +337,11 @@ static void test_syn_sent(void)
     iss = segs[0].seq;
     n_segs = 0;
 
-    rx(SELF_PORT, 777, 0, F_RST);
+    rx(SELF_PORT, 777, iss + 1, F_RST);
+    CHECK("a reset with the acknowledgement of the SYN but no ACK flag leaves the open",
+          conn->state == TCP_SYN_SENT && conn->so_error == 0 && n_segs == 0);
     rx(SELF_PORT, 777, iss, (uint8_t)(F_RST | F_ACK));
-    CHECK("a reset that does not acknowledge the SYN leaves the open",
+    CHECK("a reset that acknowledges another number leaves the open",
           conn->state == TCP_SYN_SENT && conn->so_error == 0 && n_segs == 0);
 
     rx(SELF_PORT, 0, iss + 1, (uint8_t)(F_RST | F_ACK));

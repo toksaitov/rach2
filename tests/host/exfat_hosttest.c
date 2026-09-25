@@ -1101,7 +1101,9 @@ static int seq_nofat(void)
    clusters. In the other unlinks here that flush has help: a file unlinked
    right after its creation still has its publication pending in the block
    the retirement rewrites, and a held file's clusters go at its last put,
-   after later barriers. */
+   after later barriers. The write rows require the name gone afterwards,
+   since neither the content oracle nor the walk sees an unlink that
+   answered 0 and left the file in place. */
 static int seq_unlink_synced(void)
 {
     void *n = make_file(mnt.root, "w seven.txt");
@@ -1608,6 +1610,37 @@ static void scan_cost_rows(void)
     check_consistent("the volume is consistent after two hundred and twenty creates", 0);
 }
 
+/**
+ * Require `path` to name no file after a sequence that unlinked it: neither
+ * the content oracle nor the walk sees an unlink that answered 0 and left the
+ * file in place.
+ */
+static void require_gone(const char *path, const char *what)
+{
+    int err = 0;
+    void *n = walk(path, &err);
+
+    check(n == 0 && err == -ENOENT, what);
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+}
+
+/**
+ * Require the file the named sequence unlinks to be gone after it: the
+ * `unlink` sequence's, unlinked while held, and the `unlink-synced`
+ * sequence's, unlinked after a sync.
+ */
+static void require_unlinked_gone(const char *sequence)
+{
+    if (strncmp(sequence, "unlink", 7) == 0) {
+        require_gone("/w five.txt", "the file unlinked while held is gone");
+    }
+    if (strncmp(sequence, "unlink-synced", 14) == 0) {
+        require_gone("/w seven.txt", "the file unlinked after a sync is gone");
+    }
+}
+
 static void write_rows(void)
 {
     unsigned i;
@@ -1625,6 +1658,7 @@ static void write_rows(void)
         snprintf(what, sizeof(what), "the '%s' sequence runs", sequences[i].name);
         check(sequences[i].run() == 0, what);
         check(oracle_ok(), "and its files read what was written");
+        require_unlinked_gone(sequences[i].name);
         check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
         unmount_image();
         check(!(image[106] & 2), "and the dirty bit is off after");

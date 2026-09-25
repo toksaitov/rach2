@@ -6,8 +6,19 @@
 # turn from a private copy of its driver, the call replaced by the success
 # it would have returned, and the driver's host test is run over the copy
 # in its `--barriers` mode: the interruption matrix and the durability
-# rows, with the free-durability row for exFAT. A site whose drop fails a
-# row is proved; one whose drop fails none is unproved.
+# rows, with the free-durability row for exFAT. A site is proved when its
+# run stops at a failed row that judges the medium, a state a crash leaves
+# or the medium after a sync, with the test's failure status 1, and
+# unproved when its run passes. A run that ends any other way, killed by a
+# signal or by its alarm, stopped by a sanitizer report or by a fixture
+# that did not build, or failed at a row of the rows' own setup, proves
+# nothing about the site, and the proof stops.
+#
+# After each drop both sources are restored and compared with the copies
+# the unmodified run passed on. The restored driver is compiled and run
+# after its last site, and must pass. Every restore writes the same bytes
+# and every compile starts from the sources, so a run after each site
+# would compile the same program fifteen times for each driver.
 #
 # One site is unproved by construction: fat_rmdir's flush in fat32.c comes
 # right before `free_chain`, whose first step is a flush of its own, with
@@ -156,16 +167,56 @@ run()
     stop_child
 }
 
-echo "fat-barriers-proof: logs: $work"
-for driver in exfat fat32; do
-    compile "$driver"
-    run "$driver" "$work/$driver.fixed.log"
-    if [ "$status" -ne 0 ] || ! grep -q "^${driver}_hosttest: OK" "$work/$driver.fixed.log"; then
-        cat "$work/$driver.fixed.log"
-        echo "fat-barriers-proof: fail: the unmodified $driver driver fails its barrier rows" >&2
+# judge DRIVER LOG: how the run that wrote LOG ended, in `outcome`: `pass`
+# when the rows passed, `fail` when it stopped with status 1 at a failed
+# row that judges the medium, and empty for any other end. With
+# `--barriers` a failed row ends the run, so it is the log's last line,
+# which is left in `last`. The patterns are the names those rows have in
+# the two tests: a crash state mounted, read and walked, the medium a
+# failed barrier leaves, and the medium after a sync or an unlink.
+judge()
+{
+    outcome=
+    last=$(tail -n 1 "$2")
+    if [ "$status" -eq 0 ] && grep -q "^$1_hosttest: OK" "$2"; then
+        outcome=pass
+    elif [ "$status" -eq 1 ]; then
+        if [ "$1" = exfat ]; then
+            fail='exfat_hosttest: FAIL: '
+        else
+            fail='FAIL: '
+        fi
+        case $last in
+            "$fail"*' of the pending writes kept, '* | \
+                "$fail"*' failed leaves a consistent volume' | \
+                "$fail"'the medium after the sync mounts' | \
+                "$fail"'and the file is on the medium with its bytes, nothing pending kept' | \
+                "$fail"'the two clusters an unlink frees are free on the medium when it returns')
+                outcome=fail
+                ;;
+        esac
+    fi
+}
+
+# must_pass DRIVER STATE: compile the driver's test over the private tree,
+# its source STATE, `unmodified` or `restored`, and require its barrier
+# rows to pass.
+must_pass()
+{
+    compile "$1"
+    run "$1" "$work/$1.$2.log"
+    judge "$1" "$work/$1.$2.log"
+    if [ "$outcome" != pass ]; then
+        cat "$work/$1.$2.log"
+        echo "fat-barriers-proof: fail: the $2 $1 driver fails its barrier rows" >&2
         exit 1
     fi
-    echo "fat-barriers-proof: result: the unmodified $driver driver passes its barrier rows"
+    echo "fat-barriers-proof: result: the $2 $1 driver passes its barrier rows"
+}
+
+echo "fat-barriers-proof: logs: $work"
+for driver in exfat fat32; do
+    must_pass "$driver" unmodified
 done
 [ "$#" -eq 0 ] || exit 0
 
@@ -194,19 +245,25 @@ for driver in exfat fat32; do
         compile "$driver"
         run "$driver" "$work/$driver.site$index.log"
         restore
-        if [ "$status" -ne 0 ]; then
-            first=$(grep -m 1 'FAIL' "$work/$driver.site$index.log" || echo "status $status")
-            echo "fat-barriers-proof: proved: $site: $first"
-        else
-            echo "fat-barriers-proof: unproved: $site"
-            unproved="$unproved$driver:$function:$call;"
-        fi
+        cmp "$work/exfat.saved" "$work/rach2/sys/fs/exfat.c"
+        cmp "$work/fat32.saved" "$work/rach2/sys/fs/fat32.c"
+        judge "$driver" "$work/$driver.site$index.log"
+        case $outcome in
+            fail) echo "fat-barriers-proof: proved: $site: $last" ;;
+            pass)
+                echo "fat-barriers-proof: unproved: $site"
+                unproved="$unproved$driver:$function:$call;"
+                ;;
+            *)
+                echo "fat-barriers-proof: fail: $site: status $status, not a failed row that judges the medium: $last" >&2
+                exit 1
+                ;;
+        esac
     done <"$work/$driver.sites"
+    must_pass "$driver" restored
 done
-cmp "$work/exfat.saved" "$work/rach2/sys/fs/exfat.c"
-cmp "$work/fat32.saved" "$work/rach2/sys/fs/fat32.c"
 if [ "$unproved" != 'fat32:fat_rmdir:block_flush(fm->dev);' ]; then
     echo "fat-barriers-proof: fail: unproved sites: ${unproved:-none}; expected fat32.c's fat_rmdir flush alone" >&2
     exit 1
 fi
-echo 'fat-barriers-proof: result: pass: every barrier site but the flush in fat_rmdir, which free_chain repeats, fails a row when dropped'
+echo 'fat-barriers-proof: result: pass: every barrier site but the flush in fat_rmdir, which free_chain repeats, fails a row that judges the medium when dropped, and each restored driver passes'

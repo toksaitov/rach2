@@ -339,7 +339,7 @@ tests/host/exfat_hosttest.c:matrix_pass lines 108 a test's rows, each a case, re
 tests/host/exfat_hosttest.c:oracle_ok complexity 42 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:well_formed_rows complexity 41 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:write_rows complexity 49 a test's rows, each a case, read as one table
-tests/host/exfat_hosttest.c:write_rows lines 201 a test's rows, each a case, read as one table
+tests/host/exfat_hosttest.c:write_rows lines 202 a test's rows, each a case, read as one table
 
 tests/host/ext2_hosttest.c:dirty_rows complexity 37 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:dirty_rows lines 143 a test's rows, each a case, read as one table

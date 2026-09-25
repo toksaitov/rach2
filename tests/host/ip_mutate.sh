@@ -1,9 +1,11 @@
 #!/bin/sh
 # Compile the IP transmit rows of packet_hosttest.c against faults in a
 # private copy of ip.c: a log line for every datagram the full loopback ring
-# refuses, a refusal reported as sent, a refusal left uncounted, and a subnet
-# broadcast sent by the first card whatever its subnet. Each fault must fail
-# its row with exit status 1, and the restored source must pass again.
+# refuses, a refusal reported as sent, a refusal left uncounted, a refused
+# datagram copied over the oldest one queued, a subnet broadcast sent by the
+# first card whatever its subnet, and the limited broadcast given to a card
+# whose subnet's broadcast it equals. Each fault must fail its row with exit
+# status 1, and the restored source must pass again.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -65,7 +67,7 @@ run_phase()
 
 echo "ip-mutation: logs: $work"
 run_phase fixed 0 'packet_hosttest: PASS'
-for fault in log-per-drop silent-drop uncounted first-card limited-scan; do
+for fault in log-per-drop silent-drop uncounted overwrite first-card limited-scan; do
     python3 - "$ip" "$fault" <<'PY'
 import pathlib
 import sys
@@ -78,10 +80,12 @@ changes = {
     "silent-drop": ("further drops are counted\");\n            }\n            return -ENOBUFS;",
                     "further drops are counted\");\n            }\n            return 0;"),
     "uncounted": ("            loop_dropped++;\n", ""),
+    "overwrite": ("            loop_dropped++;\n",
+                  "            k_memcpy(loop_ring[loop_tail % LOOP_RING_SLOTS], ip_tx_buf, total_len);\n"
+                  "            loop_dropped++;\n"),
     "first-card": ("out = ip_broadcast_iface(dst_ip);", "out = netdev_first();"),
-    "limited-scan": ("    if (dst == 0xFFFFFFFFu) {\n"
-                     "        return netdev_first(); /* a card masked /1 or /0 would claim it */\n"
-                     "    }\n", ""),
+    "limited-scan": ("    if (dst == 0xFFFFFFFFu) {\n        return netdev_first();",
+                     "    if (0) {\n        return netdev_first();"),
 }
 old, new = changes[sys.argv[2]]
 path = pathlib.Path(sys.argv[1])
@@ -94,6 +98,8 @@ PY
         log-per-drop) message='one line records the refusals, not one a datagram' ;;
         silent-drop) message='a datagram past a full loopback ring is refused with -ENOBUFS' ;;
         uncounted) message='each refused datagram is counted' ;;
+        overwrite)
+            message='the drain delivers the datagrams the ring took, in the order sent, and none it refused' ;;
         first-card) message="the second card's subnet broadcast leaves by that card" ;;
         limited-scan) message='the limited broadcast leaves by the first card beside a card masked /1' ;;
     esac
