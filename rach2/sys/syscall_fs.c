@@ -5803,7 +5803,8 @@ out:
  *
  * Answered by the clock (sys/rtc.c): the second the CMOS reported at boot plus
  * the ticks since that read, or time since boot on a machine whose clock could
- * not be read. Resolution is the 10 ms tick either way.
+ * not be read, either way with the PIT's place within the tick added and
+ * never earlier than the reading before it (`rtc_realtime`).
  */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {

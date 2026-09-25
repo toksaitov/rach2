@@ -236,7 +236,10 @@ void proc_exit_cleanup(int32_t status);
 /** Set a process's `comm` name from the final component of `path`. */
 void proc_set_comm(process_t *p, const char *path);
 
-/** Wake timed sleepers whose deadline has reached `now`. */
+/**
+ * Wake timed sleepers whose deadline has reached `now`, and post SIGALRM to
+ * each process whose real-time timer is due, arming it again for its interval.
+ */
 void proc_wake_sleepers(uint32_t now);
 
 /**

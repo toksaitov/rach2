@@ -1267,12 +1267,12 @@ static void apply_limits(void)
  *
  * The wait is a poll, `waitpid` with `WNOHANG` and a second's sleep when no
  * child has changed, because init must also bound the service log while its
- * children live, and this kernel has no `setitimer`, so an `alarm` would
- * never fire. A death is noticed within that second. The log is looked at
- * every `SERVICE_LOG_CHECK_TURNS` turns, busy or idle, since a machine whose
- * children keep dying never takes the idle path. `WUNTRACED` reports a stopped
- * child, and init continues it at once: `^Z` at the console prompt stops the
- * session, and there is no shell above it to type `fg`.
+ * children live, which a poll does without a timer. A death is noticed within
+ * that second. The log is looked at every `SERVICE_LOG_CHECK_TURNS` turns,
+ * busy or idle, since a machine whose children keep dying never takes the idle
+ * path. `WUNTRACED` reports a stopped child, and init continues it at once:
+ * `^Z` at the console prompt stops the session, and there is no shell above it
+ * to type `fg`.
  *
  * A console session or SSH server that dies within two seconds of its start
  * has a permanent reason (a missing or crashing binary, no entropy for the

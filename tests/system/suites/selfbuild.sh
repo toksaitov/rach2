@@ -272,8 +272,8 @@ if ! wait_token "SIZEEND" 240; then
     fail "the first build's kernel was never hashed"
 fi
 # A sanity floor, not a structure check (the kernel checker is that): the
-# tcc-linked kernel is smaller than the host's, carrying no debug data, and
-# lands near 300 KB.
+# tcc-linked kernel lands near 300 KB, against about a megabyte for the
+# host's.
 SIZEONE="$(grep -a -o 'SIZEONE=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)"
 if [ -z "$SIZEONE" ] || [ "$SIZEONE" -lt 200000 ]; then
     fail "the built kernel is $SIZEONE bytes, which is no kernel"

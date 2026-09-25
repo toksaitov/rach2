@@ -263,8 +263,8 @@ fi
 # into a line, once per number.
 #
 # The question is what the COMPILER asked for, and not what anything on the
-# machine asked for: busybox's `login` wants setitimer (104), which this kernel
-# does not have and does not need. The trace names the process, and names each
+# machine asked for: another program may ask for a number this kernel does not
+# have and does not need. The trace names the process, and names each
 # number once PER PROCESS, so the question is asked by name. An earlier version
 # subtracted the numbers seen before the compile from the numbers seen after,
 # which reads well and is wrong: a number `login` had already reported would
