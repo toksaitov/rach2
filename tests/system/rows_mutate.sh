@@ -9,7 +9,7 @@
 #   entry 121  a one-shot handler entered at zero, by sigprobe
 #   entry 138  two proc files with one inode, by procprobe
 #   entry 109  the sealed root without update, by the sealed suite
-#   entry 175  an arping that gets no answer, by the dhcp suite's status step
+#   entry 175  an arping that fails, by the dhcp suite's status step
 #
 # The changed source is restored and touched after each fault, and the trap
 # restores it and rebuilds the kernel if the run is stopped, after the row's
@@ -104,7 +104,7 @@ changes = {
     'file 0755 /bin/update build/utils/update\n', ''),
 'arping': ('tests/system/suites.mk',
     'send=arping -f -w 5 192.168.90.2 > /tmp/ap',
-    'send=arping -f -w 5 192.168.90.9 > /tmp/ap'),
+    'send=arping -f -w 5 -I eth9 192.168.90.2 > /tmp/ap'),
 }
 path, old, new = changes[sys.argv[1]]
 p = Path(path)
@@ -174,16 +174,18 @@ failed_with 'the installed root runs no update process' "$work/sealed.log" ||
 echo "rows-mutation: result: sealed failed without update, status $status"
 restore
 
-# Nothing answers 192.168.90.9, so arping exits 1; the guest must print that
-# status and the step that wants 0 must fail.
+# The guest has no eth9, so arping exits 2 at once; the guest must print that
+# status and the step that wants 0 must fail. An address nothing answers
+# would not do: arping ends a run with no reply by SIGALRM, which never
+# comes, since the kernel has no interval timer (entry 212).
 mutate arping
 run_row arping make dhcp-card
 if ! failed_with 'HARNESS: [0-9]+ step\(s\) failed' "$work/arping.log" ||
-    ! grep -q 'ARPING-STATUS:1' build/images/dhcp.log; then
-    echo 'rows-mutation: the dhcp status step did not fail on an unanswered arping' >&2
+    ! grep -q 'ARPING-STATUS:2' build/images/dhcp.log; then
+    echo 'rows-mutation: the dhcp status step did not fail on a failed arping' >&2
     exit 1
 fi
-echo "rows-mutation: result: arping failed without an answer, status $status"
+echo "rows-mutation: result: arping failed without its interface, status $status"
 restore
 
 make -s rach2 test-image >"$work/restored.build.log" 2>&1 ||
