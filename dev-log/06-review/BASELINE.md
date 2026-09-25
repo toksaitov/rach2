@@ -48,7 +48,7 @@ The plan asks a second run to reproduce the baseline and the record to hold the 
 * The kernel, `build/rach2/kernel`: 2067228 bytes.
 * The images: `test.krffs` 3760278 of 10485760 bytes used, 6725482 free; `os-simple.krffs` 1363486 of 10485760 used, 9122274 free; `os-real.krffs` 15191537 of 18874368 used, 3682831 free.
 * The test image's SHA-256 is the baseline's, `b1311d0e`. The kernel's differs, since it is compiled with `-g` and its debug information records the directory it was built in, `/home/testing/rach2-baseline/rach2` here; `os-simple` and `os-real` stage the demonstration keys and passwords a fresh tree generates, so theirs differ too.
-* The re-run's suites were not run: the owner stopped the close's runs on 2026-09-24. The built tree is at `/home/testing/rach2-baseline`, and `tests/run all` there is what remains of the re-run.
+* The re-run's suites ran in that tree on 2026-09-25 with eight workers: `tests/run style host default ssh`, today's forms of the plan's `verify-style`, `verify-host`, probe count and end-to-end SSH, and `run: result: all 4 suites passed`. The style suite passed in 96 s and the host tier in 298 s; `default` ran 73 of 73 probes with no failure; and `ssh` logged root in by key and the test account by password over a dropbear pty, and root on the console under a flood of forty connections. That reproduces the baseline's passing result, as the plan's verification asks.
 
 ## The machine
 
