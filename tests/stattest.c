@@ -290,17 +290,27 @@ static void root_ino_rows(int *passed, int *failed)
     }
 }
 
-/** Compare whole modification times; seconds alone would miss this fault. */
-static int time_later(const struct stat64 *a, const struct stat64 *b)
+/** Whole modification times: `a` at or after `b`. */
+static int time_not_before(const struct stat64 *a, const struct stat64 *b)
 {
     return a->st_mtime > b->st_mtime ||
-           (a->st_mtime == b->st_mtime && a->st_mtime_nsec > b->st_mtime_nsec);
+           (a->st_mtime == b->st_mtime && a->st_mtime_nsec >= b->st_mtime_nsec);
+}
+
+/** A part below the 10 ms tick of at least a microsecond. */
+static int below_tick(const struct stat64 *s)
+{
+    return s->st_mtime_nsec % 10000000u >= 1000u;
 }
 
 /**
- * KRFFS retains nanoseconds, so successive writes and requests for now must
- * not collapse into one 10 ms tick. No delay separates the first two writes
- * or the fifty stamps. Explicit fractions, including zero, must survive.
+ * KRFFS keeps nanoseconds and the clock adds the PIT's place within the
+ * tick, so stamps taken back to back never go back and carry a part below
+ * the 10 ms tick, which a clock of whole ticks never gives. They may repeat:
+ * under an emulator the tick's interrupt can arrive after the counter has
+ * wrapped, and `rtc_realtime` then gives its last reading again rather than
+ * an earlier one. No delay separates the first two writes or the fifty
+ * stamps. Explicit fractions, including zero, must survive.
  */
 static int time_rows(void)
 {
@@ -310,6 +320,7 @@ static int time_rows(void)
     int fd[2];
     int i;
     int ok = 1;
+    int fine = 0;
 
     fd[0] = sys_call3(5, (int)paths[0], 0101, 0644);
     fd[1] = sys_call3(5, (int)paths[1], 0101, 0644);
@@ -318,15 +329,18 @@ static int time_rows(void)
     } else {
         ok = sys_write(fd[0], "a", 1) == 1 && sys_write(fd[1], "b", 1) == 1 &&
              sys_stat64(paths[0], &previous) == 0 && sys_stat64(paths[1], &next) == 0 &&
-             time_later(&next, &previous);
+             time_not_before(&next, &previous);
+        fine = ok && (below_tick(&previous) || below_tick(&next));
         if (ok) {
             previous = next;
         }
         for (i = 0; ok && i < 50; i++) {
             ok = sys_call4(320, -100, (int)paths[i % 2], 0, 0) == 0 &&
-                 sys_stat64(paths[i % 2], &next) == 0 && time_later(&next, &previous);
+                 sys_stat64(paths[i % 2], &next) == 0 && time_not_before(&next, &previous);
+            fine = fine || below_tick(&next);
             previous = next;
         }
+        ok = ok && fine;
         if (ok) {
             ok = sys_call4(320, -100, (int)paths[0], (int)times, 0) == 0 &&
                  sys_stat64(paths[0], &next) == 0 && next.st_atime == 1234567890u &&
