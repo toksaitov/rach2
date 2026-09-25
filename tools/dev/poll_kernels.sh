@@ -14,6 +14,11 @@ if [ ! -x "$runner" ] || [ ! -x "$checker" ]; then
 fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-poll-kernels.XXXXXX")
 cp -R rach2 mk "$work/"
+# rach2/Makefile's kernel rule runs `make build/tools/inspect/elfcheck` in the
+# directory above rach2/ before it links the kernel and checks it with
+# $(ELFCHECK). The private tree's top Makefile has an empty rule for that
+# target, and ELFCHECK is set to the checker built in the main tree.
+printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
 poll="$work/rach2/sys/io/poll.c"
 cp "$poll" "$work/poll.saved"
 child=
