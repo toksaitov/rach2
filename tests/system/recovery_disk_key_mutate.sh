@@ -13,8 +13,13 @@
 # recovery init's disk key read off (it asks the boot line for a slot no boot
 # names), where row 6b must fail; restored, where they must pass again with
 # the init the first phase had; with the installer's copy of the key taken
-# out, where row 6b must fail on the key file; and restored again. The trap
-# stops the row's process group and restores both sources.
+# out, where row 6b must fail on the key file; restored again; with the
+# recovery init starting its SSH server with no key to let in, and then with
+# it starting the server one turn of its loop late, where row 6c must find
+# init's line that it started the server, the second only because the row
+# reads the log at a console session init forks after its second test for a
+# key; and restored a last time. The trap stops the row's
+# process group and restores both sources.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -136,11 +141,24 @@ cmp "$work/fixed.init" "$work/init-restored.init"
 # The installer no longer copies the key it was given. The dollars are the
 # installer's own text.
 # shellcheck disable=SC2016
-mutate "$installer_source" "        printf '%s\\n' \"\$recovery_key_text\" > \"\$RECOVERY_MNT/\$RECOVERY_KEYS_FILE\" ||" \
-    '        : "$recovery_key_text" ||'
+mutate "$installer_source" '        cp "$key_copy" "$RECOVERY_MNT/$RECOVERY_KEYS_FILE" ||' \
+    '        : "$key_copy" ||'
 run_phase installer-mutated 1 "FAIL: row 6b: the recovery partition's key file holds"
 restore
 run_phase installer-restored 0 "$passed"
 cmp "$work/fixed.installer" "$work/installer-restored.installer"
 cmp "$work/fixed.init" "$work/installer-restored.init"
-echo 'recovery-disk-key-mutation: result: pass: the init and the installer faults each failed row 6b; both restorations passed'
+
+# The recovery init starts the server with no key to let in, and then one turn
+# of its loop late, after its first test for a key.
+mutate "$init_source" 'if (sshd < 0 && anyone_to_let_in()) {' 'if (sshd < 0) {'
+run_phase server-always 1 'FAIL: row 6c: init started an SSH server on a recovery system with no key'
+restore
+mutate "$init_source" 'if (sshd < 0 && anyone_to_let_in()) {' \
+    'if (sshd < 0 && (anyone_to_let_in() || turns > 0)) {'
+run_phase server-late 1 'FAIL: row 6c: init started an SSH server on a recovery system with no key'
+restore
+run_phase server-restored 0 "$passed"
+grep -Fq 'row 6c: and nothing answers SSH: OK' "$work/server-restored.log"
+cmp "$work/fixed.init" "$work/server-restored.init"
+echo 'recovery-disk-key-mutation: result: pass: the init and the installer faults each failed row 6b, the two server faults row 6c; every restoration passed'

@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 26, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -96,7 +96,8 @@ The SSH server is started with
 .Fl g
 unless
 .Xr sshd.conf 5
-permits its omission.
+permits its omission, and each start is reported on the console as
+.Ql init: sshd: started as pid N .
 .Pp
 .Nm
 handles the signals sent by the BusyBox shutdown applets:

@@ -1343,6 +1343,8 @@ int main(void)
             sshd = spawn_sshd();
             if (sshd >= 0) {
                 sshd_spawned = time(0);
+                printf("init: sshd: started as pid %ld\n", (long)sshd);
+                fflush(stdout);
             }
         }
 #endif

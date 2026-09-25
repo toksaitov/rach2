@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd September 26, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -41,12 +41,13 @@ token, and it must be
 with
 .Ar ID
 eight hexadecimal digits.
-Init takes partition 2 of the one disk with that identity, which must
-have the label
+Init reads the key file from partition 2 of the one disk with that
+identity only when that partition's FAT32 boot sector has the label
 .Ql RACH2RECOV
-and the recovery kernel at
+and the partition has the file
 .Pa boot/recovery ,
-and adds the key file's keys to root's.
+the recovery kernel.
+It adds the key file's keys to root's.
 It refuses a file larger than 16384 bytes, one that is not text, one that
 holds a private key, and one with no line that is a key.
 The install stick's recovery system reads no such file.
@@ -55,6 +56,8 @@ Init reports on the console what it found:
 .Dl init: a key was built into this recovery image, so SSH is on
 .Dl init: no key was built into this recovery image, and its recovery partition's key turns SSH on
 .Dl init: no key was built into this recovery image, so SSH is off
+and, each time it starts the SSH server,
+.Dl init: sshd: started as pid N
 A restore of the whole disk from the stick's image leaves no recovery key
 file, since the image has none.
 With

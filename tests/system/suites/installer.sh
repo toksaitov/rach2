@@ -188,12 +188,17 @@ recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
     recovery_boot_disk "$RKEY_ON" || { bad "row 6b: the recovery entry could not be armed"; return 0; }
     LOG6B="$DIR/rkey-on.log"
     rm -f "$KNOWN" "$LOG6B" "$LOG6B.harness"
+    # init forks the console session before it starts the server, so the
+    # prompt says nothing about the port. The harness's `tcp=` step connects
+    # until the server's banner arrives, within its bound, and the token the
+    # attempts wait for is typed after it; the harness goes on past a knock
+    # that failed, and the first attempt then fails with what ssh printed.
     "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-drive --qemu-arg="file=$RKEY_ON,format=raw,if=ide,index=0,media=disk" \
         --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
         --timeout 600 --steptmo 480 --ok "RKEYDONE" --log "$LOG6B" \
         "expect=recovery image" \
-        "expect=# " "send=echo RKEY\"\"READY" "expect=RKEYREADY" "expect=RKEYDONE" \
+        "expect=# " "tcp=$PORT" "send=echo RKEY\"\"READY" "expect=RKEYREADY" "expect=RKEYDONE" \
         > "$LOG6B.harness" 2>&1 &
     QPID=$!
     if ! "$RUNUTIL" until "$LOG6B" "RKEYREADY" 300; then
@@ -244,12 +249,22 @@ recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
     recovery_boot_disk "$RKEY_OFF" || { bad "row 6c: the recovery entry could not be armed"; return 0; }
     LOG6C="$DIR/rkey-off.log"
     rm -f "$KNOWN" "$LOG6C" "$LOG6C.harness" "$DIR/rkey-off.barrier"
+    # Each turn of init's loop forks a console session if none is running,
+    # starts the server if root has an authorized key, and then reaps a
+    # child. A session forked in a turn comes before that turn's test for a
+    # key, so two are ended, and the token is typed at the third, which init
+    # forks only after the turn that forked the second has made its test.
+    # init prints `init: sshd: started` in the turn it forks the server,
+    # before it forks another session, so the log up to the token says
+    # whether either turn started one, however late the server's own exec or
+    # listen comes; the port is probed after it.
     "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-drive --qemu-arg="file=$RKEY_OFF,format=raw,if=ide,index=0,media=disk" \
         --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
         --timeout 600 --steptmo 480 --ok "NOSERVERDONE" --log "$LOG6C" \
         "expect=recovery image" \
-        "expect=# " "send=echo NOSERVER\"\"READY" "expect=NOSERVERREADY" \
+        "expect=# " "send=exit" "expect=# " "send=exit" "expect=# " \
+        "send=echo NOSERVER\"\"READY" "expect=NOSERVERREADY" \
         "barrier=$DIR/rkey-off.barrier" \
         "send=echo NOSERVER\"\"DONE" "expect=NOSERVERDONE" > "$LOG6C.harness" 2>&1 &
     QPID=$!
@@ -265,12 +280,31 @@ recovery_key_rows() { # recovery_key_rows KEYED UNKEYED
     else
         bad "row 6c: the recovery system of a disk with no key did not say SSH is off"
     fi
-    # What answers the port: a server refuses a key or takes it; with none
-    # there, the connection closes before any banner.
-    OUT=$(key_ssh "$RKEY_FILE" 'echo NO""DOOR' || true)
+    started=0
+    grep -aq 'init: sshd: started' "$LOG6C" || started=$?
+    case $started in
+        0) bad "row 6c: init started an SSH server on a recovery system with no key: $(grep -a 'init: sshd: started' "$LOG6C" | head -1)" ;;
+        1) note "row 6c: init started no SSH server by its second test for a key: OK" ;;
+        *) bad "row 6c: the log could not be read for init's record of the server, status $started" ;;
+    esac
+    # What answers the port. With -v, ssh reports a server's identification
+    # line as `Remote protocol version`, whatever follows it, and any server
+    # fails the row. With none there, QEMU closes the forwarded connection
+    # when the guest refuses it, and ssh says it was closed or reset before
+    # a banner; that, or a connection refused, is the pass. Anything else, a
+    # timeout or an ssh that did not run, proves nothing.
+    OUT=$(ssh -v -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
+        -i "$RKEY_FILE" -p "$PORT" root@localhost 'echo NO""DOOR' 2>&1 || true)
     case "$OUT" in
-        *NODOOR* | *"Permission denied"*) bad "row 6c: an SSH server answered on a recovery system with no key: $OUT" ;;
-        *) note "row 6c: and nothing answers SSH: OK" ;;
+        *"Remote protocol version"* | *NODOOR* | *"Permission denied"*)
+            bad "row 6c: an SSH server answered on a recovery system with no key: $OUT"
+            ;;
+        *"Connection closed by"* | *"Connection reset by"* | *"connect to host localhost port $PORT: Connection refused"*)
+            note "row 6c: and nothing answers SSH: OK"
+            ;;
+        *) bad "row 6c: the probe ended in neither a banner nor a closed connection, so it proves nothing: $OUT" ;;
     esac
     touch "$DIR/rkey-off.barrier"
     wait "$QPID" || bad "row 6c: the recovery system did not finish its boot"
@@ -686,13 +720,19 @@ rm -f "$LOG6" "$LOG6.harness"
     --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
     --timeout 600 --steptmo 480 --ok "SSHDONE" --log "$LOG6" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
-    "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" "expect=SSHDONE" \
+    "expect=# " "tcp=$PORT" "send=echo SSH\"\"READY" "expect=SSHREADY" "expect=SSHDONE" \
     > "$LOG6.harness" 2>&1 &
 QPID=$!
 
-# The three attempts, once the machine has said it is up. Each says what
-# it proves.
-"$RUNUTIL" until "$LOG6" "SSHREADY" 120 || fail "the machine never said it was up for the SSH attempts"
+# The three attempts, once the machine has said it is up, which it does after
+# the harness's `tcp=` step has read the server's banner: init forks the login
+# before it starts the server. Each attempt says what it proves; with no
+# machine up they fail with what ssh printed.
+if ! "$RUNUTIL" until "$LOG6" "SSHREADY" 120; then
+    kill -TERM "$QPID" 2>/dev/null || true
+    wait "$QPID" 2>/dev/null || true
+    bad "the machine never said it was up for the SSH attempts"
+fi
 OUT=$(RACH2_PASSWORD="$NEWPASS" "$PTYDRIVE" --rows 40 --cols 100 --timeout 60 -- \
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
     -o "ConnectTimeout=$(scaled 20)" -o PubkeyAuthentication=no \
