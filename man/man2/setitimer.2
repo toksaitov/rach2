@@ -138,8 +138,11 @@ The raw kernel calls return a negative error number on failure.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/sigprobe.c
-arms a single alarm and requires it to end a sleep, arms an interval timer
-and requires it to end three, and requires a child of
+arms a single alarm with
+.Dv SIGALRM
+blocked and requires it not to end a sleep and its handler to run once
+when the signal is unblocked, arms an interval timer and requires it to
+end three sleeps, and requires a child of
 .Xr fork 2
 to have no timer.
 The dhcp suite runs

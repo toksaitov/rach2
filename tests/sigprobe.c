@@ -1,7 +1,7 @@
 /**
  * Exercises signal delivery from user space via direct int 0x80 syscalls.
  *
- * Three checks:
+ * Its checks:
  *   * install a SIGUSR1 handler (with a tiny rt_sigreturn restorer), raise it
  *     to ourselves, and confirm the handler runs and resumes after it;
  *   * block SIGUSR1, raise it (stays pending, handler must NOT run), then
@@ -12,15 +12,17 @@
  *     `gs` of its own frame, which the kernel loads at ring 0 on the way
  *     back: the machine must survive it, since a process may not choose
  *     what the kernel loads;
+ *   * a one-shot handler of `SA_RESETHAND`, which must run once on its signal;
  *   * a signal sent to a sleeping child, which must end that child's sleep
  *     where it lands and not at its deadline. What says which happened is
  *     `sleeps_interrupted` in `/proc/stat`, the kernel's count of the sleeps
  *     a signal cut short: a sleep that ran its whole length does not raise
  *     it. The count is the assertion, not the seconds the sleep took;
  *   * the real-time interval timer of `setitimer`, `getitimer` and `alarm`,
- *     judged by what the kernel reports and counts: an alarm that ends a
- *     sleep, an interval timer that ends three, a child with no timer, and
- *     the timers the kernel does not keep refused.
+ *     judged by what the kernel reports and counts: a blocked alarm that does
+ *     not end a sleep and runs its handler once unblocked, an interval timer
+ *     that ends three sleeps, a child with no timer, and the timers the
+ *     kernel does not keep refused.
  *
  * Prints "SIGPROBE OK" on success. Freestanding; direct int 0x80.
  */
@@ -247,8 +249,10 @@ static void alarm_handler(int sig)
     alarms++;
 }
 
-/* Arm the real-time timer for `value_ms` and then every `interval_ms`;
-   `old`, when it is not null, receives what the timer held. */
+/**
+ * Arm the real-time timer for `value_ms` and then every `interval_ms`; `old`,
+ * when it is not null, receives what the timer held.
+ */
 static int itimer(int value_ms, int interval_ms, int *old)
 {
     int set[4];
@@ -260,7 +264,7 @@ static int itimer(int value_ms, int interval_ms, int *old)
     return syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)set, (int)(size_t)old);
 }
 
-/* Whether the real-time timer reads as disarmed, all four fields zero. */
+/** Whether the real-time timer reads as disarmed, all four fields zero. */
 static int itimer_disarmed(void)
 {
     static int cur[4];
@@ -273,33 +277,45 @@ static int itimer_disarmed(void)
  * The real-time timer: setitimer, getitimer and alarm.
  *
  * What is judged is what the kernel reports and counts, never how long a
- * wait took. A single alarm ends a sleep of five seconds, which returns
- * EINTR after its handler has run once; an interval timer ends three such
- * sleeps in turn; getitimer reports the interval as set and a value no
+ * wait took. A single alarm armed with SIGALRM blocked must not end a sleep
+ * of a second, must leave the timer disarmed once it fires, and its handler
+ * must run once when SIGALRM is unblocked; the alarm is due at the third
+ * tick and the sleep ends at the hundred and first, so no scheduling can put
+ * the one after the other. An interval
+ * timer ends three sleeps of five seconds in turn, which the kernel counts
+ * as sleeps cut short. getitimer reports the interval as set and a value no
  * longer than the one set; a fork's child has no timer; alarm returns the
  * seconds left before the alarm it replaces; and the virtual timer, which
- * the kernel does not keep, is refused. Every row leaves the timer
- * disarmed.
+ * the kernel does not keep, is refused though its time is valid, and arms
+ * nothing. Every row leaves the timer disarmed.
  */
 static void timer_rows(void)
 {
     static int cur[4], old[4];
     static const int bad[4] = {0, 0, 0, 1000000};
+    static const int second[4] = {0, 0, 1, 0};
+    unsigned alrm[2];
     int i, ended = 0, pid, status, before;
 
     install(SIGALRM, alarm_handler);
-    check(syscall3(SYS_SETITIMER, ITIMER_VIRTUAL, (int)(size_t)bad, 0) == -EINVAL,
-          "the virtual timer is refused");
+    check(syscall3(SYS_SETITIMER, ITIMER_VIRTUAL, (int)(size_t)second, 0) == -EINVAL &&
+              itimer_disarmed(),
+          "the virtual timer is refused and arms nothing");
     check(syscall3(SYS_SETITIMER, ITIMER_REAL, (int)(size_t)bad, 0) == -EINVAL,
           "a million microseconds is refused");
 
-    before = sleeps_cut_short();
+    alrm[0] = 1u << (SIGALRM - 1);
+    alrm[1] = 0;
     alarms = 0;
-    check(itimer(20, 0, 0) == 0, "arm a single alarm");
-    check(sleep_ms(5000) == -EINTR && alarms == 1,
-          "the alarm ends a sleep and runs its handler once");
-    check(sleeps_cut_short() > before, "the kernel counted the sleep the alarm cut short");
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (int)(size_t)alrm, 0, 8) == 0 &&
+              itimer(20, 0, 0) == 0,
+          "arm a single alarm with SIGALRM blocked");
+    check(sleep_ms(1000) == 0 && itimer_disarmed(),
+          "a blocked alarm does not end a sleep and leaves the timer disarmed");
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (int)(size_t)alrm, 0, 8) == 0 && alarms == 1,
+          "and its handler runs once SIGALRM is unblocked");
 
+    before = sleeps_cut_short();
     alarms = 0;
     check(itimer(20, 20, 0) == 0, "arm an interval timer");
     for (i = 0; i < 3; i++) {
@@ -308,23 +324,27 @@ static void timer_rows(void)
     check(itimer(0, 0, old) == 0 && ended == 3 && alarms >= 3,
           "the interval timer ends three sleeps in turn");
     check(old[0] == 0 && old[1] == 20000, "and reports its interval as it is disarmed");
+    check(sleeps_cut_short() >= before + 3, "the kernel counted the sleeps the timer cut short");
 
     check(itimer(5000, 250, 0) == 0 &&
               syscall2(SYS_GETITIMER, ITIMER_REAL, (int)(size_t)cur) == 0 && cur[0] == 0 &&
               cur[1] == 250000 && (cur[2] > 0 || cur[3] > 0) &&
               (cur[2] < 5 || (cur[2] == 5 && cur[3] == 0)),
           "getitimer reports the interval set and no more than the value set");
+    check(itimer(0, 0, 0) == 0 && itimer_disarmed(), "a value of zero disarms the timer");
+
+    check(itimer(3600000, 0, 0) == 0, "arm an alarm an hour away");
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         sys_exit(itimer_disarmed() ? 0 : 1);
     }
     check(pid > 0 && syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid && status == 0,
           "a fork's child has no timer");
-    check(itimer(0, 0, 0) == 0 && itimer_disarmed(), "a value of zero disarms the timer");
+    check(itimer(0, 0, 0) == 0, "and the alarm is disarmed again");
 
-    check(syscall1(SYS_ALARM, 5) == 0, "alarm returns 0 when none was armed");
+    check(syscall1(SYS_ALARM, 3600) == 0, "alarm returns 0 when none was armed");
     i = syscall1(SYS_ALARM, 0);
-    check(i >= 1 && i <= 5, "alarm returns the seconds left before the alarm it replaces");
+    check(i >= 1 && i <= 3600, "alarm returns the seconds left before the alarm it replaces");
     check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "and alarm(0) leaves none");
 }
 

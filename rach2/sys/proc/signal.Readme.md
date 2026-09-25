@@ -6,7 +6,7 @@ CPU exceptions take a separate path. A user page fault terminates the process wi
 
 ## Process state
 
-`process_t` contains `sigacts[1..64]`, `sig_pending`, and `sig_blocked`. A new process starts with default dispositions and empty masks. `fork` copies the dispositions and blocked mask but gives the child an empty pending set. `execve` preserves ignored dispositions and the blocked mask, resets caught dispositions to default, and clears the pending set. The real-time interval timer is two more fields, `alarm_tick`, the tick its next `SIGALRM` is due at or zero when it is disarmed, and `alarm_interval`; `fork` gives the child none and `execve` keeps it.
+`process_t` contains `sigacts[1..64]`, `sig_pending`, and `sig_blocked`. A new process starts with default dispositions and empty masks. `fork` copies the dispositions and blocked mask but gives the child an empty pending set. `execve` preserves ignored dispositions and the blocked mask, resets caught dispositions to default, and clears the pending set. The real-time interval timer is two more fields, `alarm_tick`, the tick its next `SIGALRM` is due at or zero when it is disarmed, and `alarm_interval`; `fork` gives the child none and `execve` keeps it, though a `SIGALRM` already pending is cleared with the rest of the pending set.
 
 `SIGKILL` and `SIGSTOP` cannot be caught or ignored, and every mask update removes their bits. Installing `SIG_IGN` for another signal also removes an instance already pending.
 
@@ -65,7 +65,7 @@ A foreground read interrupted by a caught signal returns `-EINTR`; a default `SI
 
 The default `make test` run includes these signal checks:
 
-* `sigprobe` covers a caught signal, blocking and unblocking, `rt_sigreturn`, and default termination.
+* `sigprobe` covers a caught signal, blocking and unblocking, `rt_sigreturn`, default termination, a one-shot handler, a sleep a signal ends, and the real-time interval timer.
 * `ownprobe` covers uid permission, saved uid permission, the same-session `SIGCONT` exception, and the stricter signal-zero probe.
 * `waitprobe` interrupts a blocked socket receive, `pipeprobe` catches `SIGPIPE`, and `jobprobe` covers group signals, stop, continue, kill, and background `SIGTTIN`.
 * `musl/sigmusl` covers musl's plain and `SA_SIGINFO` handlers, both restorers, the mask, `raise`, and `abort`, and requires every byte of the `ucontext_t` argument to be zero.
