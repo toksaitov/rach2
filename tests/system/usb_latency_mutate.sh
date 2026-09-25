@@ -29,7 +29,8 @@ done
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usb-latency.XXXXXX")
 cp -R rach2 mk "$work/"
 # The kernel's link asks the directory above rach2/ for the ELF checker; the
-# private tree's has a rule with nothing to do, and ELFCHECK names the built one.
+# private tree's has a rule with nothing to do, and ELFCHECK names the built
+# one.
 printf 'build/tools/inspect/elfcheck: ;\n' >"$work/Makefile"
 isr=$work/rach2/sys/isr.c
 syscall=$work/rach2/sys/syscall.c

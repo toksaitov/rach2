@@ -60,7 +60,7 @@ extern int pclose(void *f);
 /* The fixtures' directory: the host suite's, unless a mutation proof names
  * its own, so that two proofs can run this test at once. */
 #ifndef FIXDIR
-#define FIXDIR    "/tmp/rach2_verify"
+#define FIXDIR "/tmp/rach2_verify"
 #endif
 #define IMG_BYTES (65536u * 512u) /* 32 MiB: the fixture is 16, the external volume 16 */
 

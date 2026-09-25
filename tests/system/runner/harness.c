@@ -1267,7 +1267,8 @@ static int late_output_selftest(void)
     deadline = now() - 1.0;
     pump(now() + 1.0);
     drain_rest();
-    found = buf != NULL && strstr((const char *)buf + start, "late output before the deadline") != NULL;
+    found =
+        buf != NULL && strstr((const char *)buf + start, "late output before the deadline") != NULL;
     close(out[0]);
     child_out = saved_out;
     deadline = saved_deadline;

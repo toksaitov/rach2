@@ -42,7 +42,7 @@ extern int fclose(void *f);
 /* The fixtures' directory: the host suite's, unless a mutation proof names
  * its own, so that two proofs can run this test at once. */
 #ifndef FIXDIR
-#define FIXDIR    "/tmp/rach2_verify"
+#define FIXDIR "/tmp/rach2_verify"
 #endif
 #define IMG_BYTES (8192u * 512u)
 
