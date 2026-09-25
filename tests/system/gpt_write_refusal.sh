@@ -11,28 +11,32 @@
 # LBA 1 has none it reads the last sector and refuses a disk that has it
 # there (entry 172).
 #
-# The three disks are made as the parts suite's two GPT disks are: 32 MiB,
-# seed 1, six labelled entries. The first has both headers whole. The second
-# has its primary header's checksum broken, so a reader takes its table from
-# the backup. The third has its primary header's sector zeroed, so LBA 1 says
-# nothing and the table is in the backup alone. Each is checked to end in its
-# backup header, booted as the recovery kernel's only disk, and sent the
-# command; the row requires the refusal on the console, no round-trip, and
-# every byte of the disk as it was.
+# The GPT disks are made as the parts suite's two GPT disks are: 32 MiB,
+# seed 1, six labelled entries. Each is checked to end in its backup header,
+# booted as the recovery kernel's only disk and sent the command, and the
+# row requires the refusal on the console, no round-trip, and every byte of
+# the disk as it was. The disks run in this order, and the row stops at its
+# first failure:
+#
+#   g  a GPT disk with no protective MBR, its sector 0 zeroed;
+#   h  the same with its primary header zeroed as well;
+#   b  a GPT disk with both headers whole;
+#   c  one whose primary header's checksum is broken, so a reader takes its
+#      table from the backup;
+#   d  one whose primary header's sector is zeroed, so LBA 1 says nothing
+#      and the table is in the backup alone;
+#   e  an MBR disk whose partition reaches the last sector, as a root grown
+#      into the whole disk does, which must be refused and left as it was
+#      (entry 195);
+#   f  an MBR disk whose partition ends before the last sector, which must
+#      take the round-trip and change in that sector alone.
+#
+# A protective MBR's entry covers the whole disk, so on b, c and d the MBR
+# check refuses too; on g and h the GPT checks alone keep the disk. They go
+# first so that a GPT check taken out stops the row on a disk it wrote,
+# which is where the mutation test judges it (entry 206).
 #
 # Usage: gpt_write_refusal.sh RECOVERY_KERNEL IMAGE HARNESS MKGPT OUT
-#
-# Two MBR disks follow, since the sector is scratch only where no partition
-# holds it: one whose partition reaches the last sector, as a root grown into
-# the whole disk does, which must be refused and left as it was (entry 195),
-# and one whose partition ends before it, which must take the round-trip and
-# change in that sector alone.
-#
-# The last two are GPT disks with no protective MBR, sector 0 zeroed, the
-# second with its primary header zeroed as well. A protective MBR's entry
-# covers the whole disk, so on the first three the MBR check refuses too; on
-# these two the GPT checks alone keep the disk, which is where the mutation
-# test sees each of them fail without its check (entry 206).
 #
 # OUT is a path prefix: OUT.b.disk to OUT.h.disk are the disks, and OUT.b.log
 # to OUT.h.log the consoles, which are kept.
@@ -125,26 +129,26 @@ written() {
     echo "gpt-write: $2: the disk write takes the round-trip and changes the last sector alone: OK"
 }
 
+gpt_disk "$OUT.g.disk"
+dd if=/dev/zero of="$OUT.g.disk" bs=512 count=1 conv=notrunc 2>/dev/null ||
+    fail "the protective MBR of disk g"
+refused g "a GPT disk with no protective MBR" "disk: GPT disk; the last sector is its backup header" gpt
+gpt_disk "$OUT.h.disk"
+dd if=/dev/zero of="$OUT.h.disk" bs=512 count=2 conv=notrunc 2>/dev/null ||
+    fail "the protective MBR and the primary header of disk h"
+refused h "a GPT disk with no protective MBR whose primary header is gone" \
+    "disk: GPT disk; the last sector is its backup header" gpt
 gpt_disk "$OUT.b.disk"
 refused b "a GPT disk" "disk: GPT disk; the last sector is its backup header" gpt
 gpt_disk "$OUT.c.disk" --damage-primary
 refused c "a GPT disk read from its backup" "disk: GPT disk; the last sector is its backup header" gpt
 gpt_disk "$OUT.d.disk"
 dd if=/dev/zero of="$OUT.d.disk" bs=512 seek=1 count=1 conv=notrunc 2>/dev/null ||
-    fail "the primary header of the third disk"
+    fail "the primary header of disk d"
 refused d "a GPT disk whose primary header is gone" "disk: GPT disk; the last sector is its backup header" gpt
 mbr_disk "$OUT.e.disk" '\000\370\000\000'
 refused e "an MBR disk whose partition reaches the last sector" \
     "disk: the last sector belongs to partition 1, not a scratch sector"
 mbr_disk "$OUT.f.disk" '\000\360\000\000'
 written f "an MBR disk whose partition ends before the last sector"
-gpt_disk "$OUT.g.disk"
-dd if=/dev/zero of="$OUT.g.disk" bs=512 count=1 conv=notrunc 2>/dev/null ||
-    fail "the protective MBR of the sixth disk"
-refused g "a GPT disk with no protective MBR" "disk: GPT disk; the last sector is its backup header" gpt
-gpt_disk "$OUT.h.disk"
-dd if=/dev/zero of="$OUT.h.disk" bs=512 count=2 conv=notrunc 2>/dev/null ||
-    fail "the protective MBR and the primary header of the seventh disk"
-refused h "a GPT disk with no protective MBR whose primary header is gone" \
-    "disk: GPT disk; the last sector is its backup header" gpt
 rm -f "$OUT.b.disk" "$OUT.c.disk" "$OUT.d.disk" "$OUT.e.disk" "$OUT.f.disk" "$OUT.g.disk" "$OUT.h.disk"

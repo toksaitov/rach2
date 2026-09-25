@@ -17,8 +17,9 @@
 # 172); restored again; with the check of the MBR's entries taken out, where
 # the row must fail on the MBR disk whose partition reaches the last sector
 # (entry 195); and restored once more. The GPT faults are judged on the disks
-# with no protective MBR because the MBR check refuses any disk with one
-# (entry 206).
+# with no protective MBR because the MBR check refuses any disk with one, and
+# the row runs those two first because it stops at its first failure (entry
+# 206).
 # Each restored kernel must be identical to the first. The trap stops the
 # row's process group before it restores the private source.
 set -eu
@@ -183,4 +184,4 @@ fi
 restore
 run_phase mbr-restored pass
 cmp "$work/fixed.kernel" "$work/mbr-restored.kernel"
-echo 'gpt-write-mutation: result: pass: without the refusal the first disk was written, without the read of the last sector the third, without the MBR check the fourth; the fixed and restored kernels passed and matched'
+echo 'gpt-write-mutation: result: pass: without the refusal the GPT disk with no protective MBR was written, without the read of the last sector the one with no primary header either, without the MBR check the MBR disk whose partition reaches the last sector; the fixed and restored kernels passed and matched'
