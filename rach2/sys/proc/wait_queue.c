@@ -82,10 +82,17 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
  * wake. On the way out, with interrupts still off, the process leaves the
  * queue, loses its wake mark and is RUNNING, whether a wake had set it
  * READY or it never slept.
+ *
+ * A deadline the caller armed in `wakeup_tick` before the wait is armed again
+ * before each block. `signal_post` clears it when it wakes the process, and a
+ * signal the wait does not end on, one blocked or ignored, would otherwise
+ * send the wait back to sleep with no timer to end it. The caller's condition
+ * must be true once its deadline has passed.
  */
 static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptible)
 {
     uint32_t flags;
+    uint32_t deadline;
     int rc;
 
     if (!wq || !cond || !current_proc) {
@@ -93,6 +100,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
     }
 
     flags = irq_save();
+    deadline = current_proc->wakeup_tick;
     for (;;) {
         if (cond(arg)) {
             rc = 0;
@@ -104,6 +112,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
         }
 
         wq_enqueue(wq, &current_proc->waiter);
+        current_proc->wakeup_tick = deadline;
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
 

@@ -18,9 +18,11 @@
  * The wait is bounded twice over, and both halves are necessary. The
  * process arms wakeup_tick so the timer makes it runnable, since a BLOCKED
  * process nothing wakes is one schedule() never picks again; and the deadline
- * is also in the wait predicate, since a woken sleeper whose condition is still
- * false re-enqueues with its timer already disarmed and would then sleep
- * forever. Both read the one deadline word, so a timer that has fired implies a
+ * is also in the wait predicate, since the wait ends only on a true condition
+ * or a signal it acts on: a sleeper whose condition is still false waits
+ * again, its deadline armed again by `wq_wait`, and once the deadline has
+ * passed the timer would wake it at every tick and the wait would never end.
+ * Both read the one deadline word, so a timer that has fired implies a
  * predicate that is true.
  *
  * There is one in-flight request for the whole machine; a program that needs
@@ -115,9 +117,9 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
  * Whether the ping in flight is done: answered, or past its deadline.
  *
  * Both halves are here on purpose. `wq_wait_event` re-tests this after every
- * wake and re-enqueues while it is false, and the timer that made the sleeper
- * runnable has already cleared its own arming, so a predicate that read only
- * `ping_replied` would block again with nothing left to wake it.
+ * wake and waits again while it is false, with the deadline armed again, so a
+ * predicate that read only `ping_replied` would be woken at every tick once
+ * the deadline had passed and would never return.
  */
 static int ping_done(void *arg)
 {

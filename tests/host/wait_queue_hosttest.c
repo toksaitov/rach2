@@ -10,6 +10,12 @@
  * covered in-guest by waitprobe and by the live httpd accept/recv wake; here we
  * exercise exactly the array bookkeeping wq_wake_all relies on.
  *
+ * One row does run the wait: a model `schedule` records the deadline the
+ * waiter blocked with and wakes it as `signal_post` does, clearing that
+ * deadline. A wait whose condition is still false must arm the caller's
+ * deadline again before it blocks again, or a blocked or ignored signal would
+ * leave it asleep with no timer to end it.
+ *
  * Built with WAIT_QUEUE_HOSTTEST, which drops the asm irq_save/restore and the
  * idle hlt and includes wait_queue.c directly so the static enqueue/dequeue are
  * reachable. Returns the failed-check count (0 == pass).
@@ -18,23 +24,45 @@
 
 #include "proc/wait_queue.c"
 
-/* Kernel symbols wait_queue.c references; never called by the array-logic
- * tests below (no test path sleeps), but needed to satisfy the link. */
+extern int dprintf(int fd, const char *format, ...);
+
 process_t *current_proc = 0;
+static int blocks, conds;
+static uint32_t deadline_at_block[4];
+
+/**
+ * The model scheduler: record the deadline the waiter blocked with, then wake
+ * it as `signal_post` does, clearing the deadline.
+ */
 void schedule(void)
-{}
+{
+    if (current_proc && current_proc->state == PROC_BLOCKED && blocks < 4) {
+        deadline_at_block[blocks++] = current_proc->wakeup_tick;
+        current_proc->wakeup_tick = 0;
+        current_proc->state = PROC_READY;
+    }
+}
+
 int signal_pending(void)
 {
     return 0;
 }
 
+/** A condition false twice and then true, so the wait blocks twice. */
+static int true_third(void *arg)
+{
+    (void)arg;
+    return ++conds >= 3;
+}
+
 static int fails;
 
-#define CHECK(cond)    \
-    do {               \
-        if (!(cond)) { \
-            fails++;   \
-        }              \
+#define CHECK(cond)                                           \
+    do {                                                      \
+        if (!(cond)) {                                        \
+            dprintf(2, "wait-queue-test: fail: %s\n", #cond); \
+            fails++;                                          \
+        }                                                     \
     } while (0)
 
 /* How many records on wq are p's. */
@@ -139,6 +167,23 @@ int main(void)
             CHECK(pool[i].state == PROC_READY);
         }
         CHECK(total_queued(&wq) == 0);
+    }
+
+    /* A wake that does not end the wait clears the deadline; the wait arms
+     * it again before it blocks again. */
+    {
+        static process_t sleeper;
+
+        wait_queue_init(&wq);
+        sleeper.waiter.proc = &sleeper;
+        sleeper.state = PROC_RUNNING;
+        sleeper.wakeup_tick = 77;
+        current_proc = &sleeper;
+        CHECK(wq_wait_event(&wq, true_third, 0) == 0);
+        CHECK(blocks == 2);
+        CHECK(deadline_at_block[0] == 77 && deadline_at_block[1] == 77);
+        CHECK(sleeper.state == PROC_RUNNING && total_queued(&wq) == 0);
+        current_proc = 0;
     }
     return fails > 255 ? 255 : fails;
 }

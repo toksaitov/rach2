@@ -47,6 +47,12 @@ void wait_queue_init(wait_queue_t *wq);
  * false, or -EINVAL without a queue, a condition or a current process. May
  * sleep. On return the process is off the queue and RUNNING, and the
  * caller's interrupt flag is as it was.
+ *
+ * A deadline the caller armed in `wakeup_tick` before the call is armed again
+ * before each block, since `signal_post` clears it when it wakes the process.
+ * The condition must be true once that deadline has passed, and the caller
+ * clears `wakeup_tick` after the wait; a caller with no deadline enters with
+ * it zero.
  */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
