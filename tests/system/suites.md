@@ -85,7 +85,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `netconsole` (core tier; needs qemu-system-i386; 128 MiB): the kernel log on the wire.
 * `crash` (core tier; needs qemu-system-i386; 128 MiB): prove the dirty-mount flag detects an unclean shutdown.
 * `pools` (core tier; needs qemu-system-i386; 128 MiB): the objects that were pools, past the count each pool had, and the heap where it started after a thousand of each (see tests/poolprobe.c).
-* `runner` (core tier; needs nothing beyond the build; no machine): the runner's own self-test, tests/run driven against a registry and a makefile of its own in a temporary directory, booting no machine.
+* `runner` (core tier; needs nothing beyond the build; no machine): the harness's selftest, then the runner's own, tests/run driven against a registry and a makefile of its own in a temporary directory (tests/system/selftest.sh).
 * `diskfull` (core tier; needs qemu-system-i386; 128 MiB): a file system with no room left.
 * `fault` (core tier; needs qemu-system-i386; 128 MiB): the three probes whose whole claim is that the kernel killed them.
 * `imagerace` (full tier; needs nothing beyond the build; no machine): two builds of one image at the same moment, which a parallel run of the suites produces and which used to take both of them down.

@@ -1852,10 +1852,10 @@ run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE)
 	@sh tests/system/machine_measure_test.sh
 	@./tests/system/suites/host.sh
 
-# `tests/run runner` (see tests/system/selftest.sh): the harness's selftest,
-# then the runner's own, tests/run driven against a registry and a makefile of
-# its own in a temporary directory. It boots no machine and reads nothing from
-# the product, so it needs only the harness and the two helpers.
+# `tests/run runner`: the harness's selftest, then the runner's own, tests/run
+# driven against a registry and a makefile of its own in a temporary
+# directory (tests/system/selftest.sh). It boots no machine and reads nothing
+# from the product, so it needs only the harness and the two helpers.
 run-runner: $(HARNESS) $(PTYDRIVE) $(HOSTPEER)
 	@$(HARNESS) --selftest
 	@./tests/system/selftest.sh
