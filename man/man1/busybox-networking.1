@@ -300,7 +300,8 @@ so while
 .Nm arping
 waits it prints
 .Ql recvfrom: Interrupted system call
-on standard error each time its once-a-second alarm interrupts the wait.
+on standard error each time its once-a-second alarm interrupts the wait,
+except for an alarm that ends the run.
 .It Nm dnsd
 Run a small static DNS server.
 .It Nm dnsdomainname
@@ -311,11 +312,11 @@ Provide a fake ident authentication service.
 Serve FTP requests as an inetd service.
 Rach2 has no
 .Fn chroot
-system call, so
+system call, so the applet's change of root to
 .Ar DIR
-becomes only the current directory and clients are not confined to it;
-the applet falls back to that change whatever its privilege, and it
-to it instead.
+fails whatever its privilege, and it changes the current directory to
+.Ar DIR
+instead; clients are not confined to it.
 .It Nm ftpget
 Download a file through FTP using TCP.
 .It Nm ftpput
