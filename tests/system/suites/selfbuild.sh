@@ -264,16 +264,15 @@ if ! grep -q "BUILDONE=0" "$LOG"; then
     wait_token "TAILONE" 60 || true
     fail "the first kernel build failed; its last lines are in the kept log"
 fi
-# The size is the last field of the hash line, so waiting for `HASHONE=` and
-# reading the size at once reads a number the machine is still typing: under a
-# loaded pool this returned 3979 for a kernel of 397980 bytes and called it no
-# kernel. The wait is for the marker that follows the value.
+# The size follows the hash on one line, so reading it as soon as `HASHONE=`
+# appears can read a number the machine is still typing, a prefix of the real
+# size. The wait is for the marker that follows the value.
 if ! wait_token "SIZEEND" 240; then
     fail "the first build's kernel was never hashed"
 fi
 # A sanity floor, not a structure check (the kernel checker is that): the
-# tcc-linked kernel lands near 300 KB, against about a megabyte for the
-# host's.
+# tcc-linked kernel is about 1.1 MB, a little larger than the host's, and a
+# size under 200000 bytes means the build left a truncated or empty file.
 SIZEONE="$(grep -a -o 'SIZEONE=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)"
 if [ -z "$SIZEONE" ] || [ "$SIZEONE" -lt 200000 ]; then
     fail "the built kernel is $SIZEONE bytes, which is no kernel"

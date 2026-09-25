@@ -1077,11 +1077,13 @@ static int expand_probe(const char *arg, const char **steps, char *execq, size_t
  * Use a pipe as the serial source because the harness has no fake clock.
  * The prompt arrives after the step cap; a short run must still reject it.
  * Where the step must not see it, the child writes it five seconds after the
- * start, well past the 0.05 s caps and the 0.3 s read slice that ends such a
- * wait, so a loaded host that runs the harness late does not turn a
- * rejection into a match; where the step must see it, a second after, or at
- * once when the child has exited. The exited case reaps before reading, so
- * buffered output cannot be missed.
+ * start: a step that waits on the run's timeout of ten seconds rather than its
+ * cap sees it and fails the row, while a loaded host that runs the harness a
+ * few seconds late does not turn a rejection into a match. A cap or read slice
+ * under five seconds passes these rows. Where the step must see the prompt,
+ * the child writes it a second after the start, or at once when it has
+ * exited. The exited case reaps before reading, so buffered output cannot be
+ * missed.
  */
 static int prompt_wait_selftest(const char *step, double timeout, int want, int exited)
 {
