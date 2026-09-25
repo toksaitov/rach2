@@ -24,9 +24,11 @@
 #         4 KiB through one open file, appended to a new file and then
 #         rewritten in place, each run ended by one fsync, read from
 #         /proc/disk around each; three runs.
-# pipe    Entry 26: `dd if=/dev/disk0 bs=1M count=128 | sha256sum`, three
-#         runs, each timed by the machine's clock and by this host's around
-#         its SSH command.
+# pipe    Entry 26: `dd` of 128 MiB in 1 MiB reads from the root's own
+#         partition, the device /proc/mounts names for /, into `sha256sum`,
+#         three runs, each timed by the machine's clock and by this host's
+#         around its SSH command. An installed boot publishes the partitions
+#         and not the whole disk, so the partition is what the pipe reads.
 #
 # The exit status is 0 when every probe or run passed.
 set -eu
@@ -200,8 +202,15 @@ if [ "$mode" = pipe ]; then
 : manual-probes pipe
 now() { read -r u _ </proc/uptime; echo $(( ${u%.*} * 100 + 1${u#*.} - 100 )); }
 err=$(mktemp /tmp/manual-probes.XXXXXX) || exit 1
+dev=$(awk '$2 == "/" { d = $1 } END { print d }' /proc/mounts)
+if [ "${dev#/dev/}" = "$dev" ]; then
+    echo "manual-probes: pipe: the root has no device"
+    rm -f "$err"
+    exit 1
+fi
+echo "manual-probes: pipe: device $dev"
 start=$(now)
-dd if=/dev/disk0 bs=1M count=128 2>"$err" | sha256sum | sed "s/ .*//; s/^/manual-probes: pipe: sha256 /"
+dd if="$dev" bs=1M count=128 2>"$err" | sha256sum | sed "s/ .*//; s/^/manual-probes: pipe: sha256 /"
 end=$(now)
 cat "$err"
 grep -q "^134217728 bytes" "$err"
