@@ -176,8 +176,8 @@ restore
 
 # The guest has no eth9, so arping exits 2 at once; the guest must print that
 # status and the step that wants 0 must fail. An address nothing answers
-# would not do: arping ends a run with no reply by SIGALRM, which never
-# comes, since the kernel has no interval timer (entry 212).
+# would fail it too, but only at arping's deadline, which the dhcp suite
+# judges in a step of its own.
 mutate arping
 run_row arping make dhcp-card
 if ! failed_with 'HARNESS: [0-9]+ step\(s\) failed' "$work/arping.log" ||

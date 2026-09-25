@@ -294,17 +294,13 @@ Rach2 answers the display; the requests that add or delete an entry are not
 implemented, so those changes fail.
 .It Nm arping
 Send ARP requests or replies.
-Rach2 has no interval timer, so the
-.Dv SIGALRM
-that paces the requests and ends a run never arrives:
+Rach2 does not restart a call a signal interrupts
+.Pq Xr sigaction 2 ,
+so while
 .Nm arping
-sends one request and, unless
-.Fl f
-ends the run at the first reply, waits until it is interrupted, whatever
-.Fl c
-and
-.Fl w
-say.
+waits it prints
+.Ql recvfrom: Interrupted system call
+on standard error each time its once-a-second alarm interrupts the wait.
 .It Nm dnsd
 Run a small static DNS server.
 .It Nm dnsdomainname
