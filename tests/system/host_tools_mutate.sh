@@ -8,12 +8,29 @@ WORK=$(mktemp -d "$REPO/build/host-tools-proof.XXXXXX")
 source_file=
 created=
 active=
-restore() {
+# Stop the job's process group and wait until none of its processes is left,
+# so that no compiler or test is still running when restore puts a source
+# back. CONT follows TERM, since a stopped process does not act on TERM, and a
+# killer sends KILL to whatever is left after five seconds, so the wait ends
+# even for a process that ignores TERM. The killer is one process, so that
+# stopping it leaves no timer behind holding the script's output.
+stop_job() {
     if [ -n "$active" ]; then
-        kill -TERM "$active" 2>/dev/null || :
+        kill -TERM "-$active" 2>/dev/null || :
+        kill -CONT "-$active" 2>/dev/null || :
+        perl -e 'sleep 5; kill "KILL", -$ARGV[0]' "$active" &
+        killer=$!
         wait "$active" 2>/dev/null || :
+        while kill -0 "-$active" 2>/dev/null; do
+            sleep 1
+        done
+        kill "$killer" 2>/dev/null || :
+        wait "$killer" 2>/dev/null || :
         active=
     fi
+}
+restore() {
+    stop_job
     if [ -n "$source_file" ]; then
         if [ "$created" = musl ]; then
             rm -f "$source_file" build/tests/musl/review_unassigned
@@ -32,12 +49,20 @@ trap restore 0
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 fail() { echo "host-tools-proof: $*; logs: $WORK" >&2; exit 1; }
+# Run a command as the leader of a new process group, made by `runutil
+# group`, and end it with perl's alarm after 120 seconds. The group's id is
+# the command's pid, so stop_job can stop every process the command started:
+# job calls it when the command ends, and restore when a signal stops the
+# script.
 job() {
-    "$REPO/build/tests/system/deadline" 120 "$@" &
+    # shellcheck disable=SC2016
+    "$REPO/build/tests/system/runutil" group \
+        perl -e 'alarm 120; exec { $ARGV[0] } @ARGV
+                 or die "host-tools-proof: exec: $!\n"' "$@" &
     active=$!
     status=0
     wait "$active" || status=$?
-    active=
+    stop_job
     return "$status"
 }
 run_test() {
@@ -59,7 +84,7 @@ run_test() {
         *) job sh "$test_name" $test_arg > "$log.run" 2>&1 ;;
     esac
 }
-[ -x build/tests/system/deadline ] || fail 'build the deadline tool first'
+[ -x build/tests/system/runutil ] || fail 'build build/tests/system/runutil first'
 cases='ring temporary gap-growth gap-slack utility-links dns-links kernel-link kernel-strip ownership truncate timestamps host-djb host-mix kernel-djb kernel-mix probe-root probe-musl'
 if [ "$#" -eq 0 ]; then
     # shellcheck disable=SC2086
