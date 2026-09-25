@@ -92,4 +92,12 @@ if [ "${1:-all}" != libraries ]; then
     i686-elf-nm "$WORK/kernel/kernel" | grep -q '00001234 A review_link_marker' ||
         fail "linker script edit did not reach the kernel"
     echo "build-inputs-test: passed: linker script edit reaches the validated kernel"
+    # The loaders read a kernel without debug sections, which is what keeps it
+    # inside a boot slot's 2 MiB; GDB reads kernel.debug, which has them.
+    if i686-elf-readelf -S "$WORK/kernel/kernel" | grep -q '\.debug_'; then
+        fail "the kernel a loader reads carries debug sections"
+    fi
+    i686-elf-readelf -S "$WORK/kernel/kernel.debug" | grep -q '\.debug_info' ||
+        fail "kernel.debug lacks the debug sections"
+    echo "build-inputs-test: passed: the kernel has no debug sections and kernel.debug keeps them"
 fi

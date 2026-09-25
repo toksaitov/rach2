@@ -60,7 +60,7 @@ run_test() {
     esac
 }
 [ -x build/tests/system/deadline ] || fail 'build the deadline tool first'
-cases='ring temporary gap-growth gap-slack utility-links dns-links kernel-link ownership truncate timestamps host-djb host-mix kernel-djb kernel-mix probe-root probe-musl'
+cases='ring temporary gap-growth gap-slack utility-links dns-links kernel-link kernel-strip ownership truncate timestamps host-djb host-mix kernel-djb kernel-mix probe-root probe-musl'
 if [ "$#" -eq 0 ]; then
     # shellcheck disable=SC2086
     set -- $cases
@@ -75,6 +75,7 @@ for case_name in "$@"; do
         utility-links) file=utils/Makefile; expected='libc.a did not relink'; test_arg=libraries ;;
         dns-links) file=tests/Makefile; expected='libc.a did not relink'; test_arg=libraries ;;
         kernel-link) file=rach2/Makefile; expected='linker script edit did not reach'; test_arg=kernel ;;
+        kernel-strip) file=rach2/Makefile; expected='the kernel a loader reads carries debug sections'; test_arg=kernel ;;
         ownership) file=krffs/krffs_fuse_operations.c; expected='group-only chown preserves uid' ;;
         truncate) file=krffs/krffs_allocator.c; expected='capacity growth updates eof' ;;
         timestamps) file=krffs/krffs_fuse_operations.c; expected='explicit timestamps retained' ;;
@@ -87,7 +88,7 @@ for case_name in "$@"; do
     esac
     case "$case_name" in
         temporary) test_name=tests/system/verify_temp_test.sh ;;
-        *-links|kernel-link) test_name=tests/system/build_inputs_test.sh ;;
+        *-links|kernel-link|kernel-strip) test_name=tests/system/build_inputs_test.sh ;;
         host-djb|host-mix) test_name=tests/host/krffs_hash_hosttest.c ;;
         kernel-djb|kernel-mix) test_name=tests/host/krffs_hosttest.c ;;
         probe-*) test_name=tools/verify/probecheck.sh ;;
@@ -142,6 +143,9 @@ elif kind == 'dns-links':
 elif kind == 'kernel-link':
     replace('$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld',
             '$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)')
+elif kind == 'kernel-strip':
+    replace('$(CROSS_OBJCOPY) --strip-debug "$$tmp.debug" "$$tmp"',
+            'cp "$$tmp.debug" "$$tmp"')
 elif kind == 'ownership':
     replace('if (uid != (uid_t)-1)', 'if (1)')
     replace('if (gid != (gid_t)-1)', 'if (1)')

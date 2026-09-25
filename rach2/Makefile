@@ -71,15 +71,25 @@ all : $(KERNEL_BIN)
 # the check passes, so a failed check cannot leave a newer kernel behind for the
 # next make to treat as current. The checker is the project ELF validator, built
 # with the host compiler; a checker newer than the binary rebuilds it first.
+#
+# The kernel every loader reads has no debug sections. They are half of the
+# linked file, and a boot partition's kernel slot holds 2 MiB
+# (tools/image/mkdisk_grub.sh), which the kernel with them had reached. The
+# linked file with them is kept beside it as `kernel.debug`, which GDB reads
+# (.gdbinit). Both keep the symbol table, which the checker's `_end` test and
+# `nm` read. The rule names this file among its inputs, so a change to how
+# the kernel is made makes it again.
 ELFCHECK = ../build/tools/inspect/elfcheck
 
-$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld
+$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld Makefile
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C .. build/tools/inspect/elfcheck
-	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp"' EXIT; \
-	echo '$(LD) $(LDFLAGS) -o $@ ...'; \
-	$(LD) $(LDFLAGS) -o "$$tmp" $(ASM_OBJECTS) $(C_OBJECTS) && \
+	@tmp="$@.tmp.$$$$"; trap 'rm -f "$$tmp" "$$tmp.debug"' EXIT; \
+	echo '$(LD) $(LDFLAGS) -o $@.debug ...'; \
+	$(LD) $(LDFLAGS) -o "$$tmp.debug" $(ASM_OBJECTS) $(C_OBJECTS) && \
+	$(CROSS_OBJCOPY) --strip-debug "$$tmp.debug" "$$tmp" && \
 	$(ELFCHECK) --kernel "$$tmp" && \
+	mv "$$tmp.debug" $@.debug && \
 	mv "$$tmp" $@
 
 # The configuration fingerprint (mk/fingerprint.mk): make decides what to
