@@ -1,6 +1,7 @@
 # The commits that reformatted the tree with clang-format, text-only, one per
-# component. `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes
-# blame look through them to the change that wrote each line.
+# component. `git config blame.ignoreRevsFile tools/verify/blame-ignore-revs`
+# makes blame look through them to the change that wrote each line;
+# .claude/settings.json runs it when a Claude Code session starts.
 05eeeefee14de2dedb2d506880ea257699e740ba
 9bf74c86842155f459f3896f53c5fb955921b90c
 be6fe9d75832f0bb32d32ca95b0c7977a3c6ced0

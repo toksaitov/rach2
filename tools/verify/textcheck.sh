@@ -84,9 +84,9 @@ py_files() {
 # series, and the tree's other text files. The lists with no suffix are named
 # one by one.
 config_files() {
-    ls ./.clang-format ./.clangd ./.gitignore ./.git-blame-ignore-revs 2>/dev/null
+    ls ./.clang-format ./.clangd ./.gitignore 2>/dev/null
     ls tests/registry tests/probe-suites tests/probe-helpers tests/system/intervals \
-        tools/setup/judges man/aliases man/recovery 2>/dev/null
+        tools/setup/judges tools/verify/blame-ignore-revs man/aliases man/recovery 2>/dev/null
     prune_find '(' -name '.gitignore' -o -name '.gitattributes' -o -name '.gdbinit' \
         -o -name '*.manifest' -o -name '*.suppress' -o -name '*.reasons' \
         -o -name '*.allow' -o -name '*.cfg' -o -name '*.template' \

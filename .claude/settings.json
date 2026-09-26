@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git -C \"$CLAUDE_PROJECT_DIR\" config --local core.hooksPath tools/git-hooks"
+            "command": "git -C \"$CLAUDE_PROJECT_DIR\" config --local core.hooksPath tools/git-hooks && git -C \"$CLAUDE_PROJECT_DIR\" config --local blame.ignoreRevsFile tools/verify/blame-ignore-revs"
           }
         ]
       }
