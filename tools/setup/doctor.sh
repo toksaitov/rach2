@@ -82,8 +82,8 @@ reqx() {
 # opt NAME WHAT HINTKEY: a tool only some tasks need; absence is a note, not
 # a failure, and a plain presence check is enough for one. The three style
 # tools are not among them. `tests/run style` refuses to start without all
-# three, and CLAUDE.md requires that suite on every change, so calling them
-# optional would tell a reader on a fresh machine that the one check the
+# three, and every milestone's closing run includes that suite, so calling
+# them optional would tell a reader on a fresh machine that a check the
 # project insists on can be skipped.
 opt() {
     if command -v "$1" >/dev/null 2>&1; then

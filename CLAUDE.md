@@ -1,136 +1,160 @@
 # CLAUDE.md
 
-This file is the project policy for Rach2. When a new rule replaces or tightens an old rule, remove the old text. Codex reads this policy through `AGENTS.md`.
+This file is the project policy for Rach2, and Codex reads it through `AGENTS.md`. It states the rules in force, not the history behind them; that history is in commit messages and `dev-log/`. When a new rule replaces or tightens an old one, remove the old text.
 
 ## Project
 
-Rach2 is an educational 32-bit x86 operating system. The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`; the same sources also build on Rach2 itself with the staged TinyCC and pdpmake, so kernel code must stay inside both compilers' shared dialect. The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and the TinyCC compiler with pdpmake to drive it. The readers are students and developers; the code and its prose are meant to teach.
-
-## Build
-
-Use GNU Make on the host. The build checks its own tools before compiling; `sh tools/setup/doctor.sh` is the wider machine-setup report. `make` builds everything: the kernel, the host tools, the guest programs, the vendored userland (musl, BusyBox, Dropbear, TinyCC, pdpmake), Doom, and the test, os-simple, and os-real RAM images. The first build compiles the five vendor projects and takes minutes; a later `make` rebuilds only what changed. `make test` runs the style checks, the host tests and the core tier, `tests/run NAME` runs a named suite, and `make clean` and `make distclean` clean up.
-
-The guest build uses three POSIX `guest.mk` files for the kernel, utilities, and ISH. pdpmake reads them on Rach2. Each component's source lists live in one shared manifest (`rach2/sources.mk`, `utils/programs.mk`, `ish/sources.mk`) included by both its host Makefile and its `guest.mk`, so the two builds cannot drift apart; `tools/verify/guestcheck.c` checks the derivations and the guest limits, and `tests/run selfbuild` builds all three on the machine. Shared host Make rules are under `mk/`. Every in-house component puts its objects, `.d` files, and binaries in the repo-root `build/` directory. Vendored projects use their upstream build systems as described under Ports. `make check-sources` compares the kernel source list with the source tree. Do not run a `build_*.sh` script by hand or use `make clean` as a routine build step. Header dependencies rebuild the affected objects.
-
-Image build targets do not run QEMU. The run scripts under `rach2/` boot an image directly, while test targets invoke QEMU through their test scripts.
-
-## Hosts
-
-Two hosts, two jobs. Code is written, reviewed and committed on the Mac mini, in this tree. Every test suite, every set and every analysis runs on the testing host, reached as `ssh testing`: a Windows machine with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory, whose WSL2 distribution, Ubuntu 26.04, holds a copy of this tree at `/home/testing/rach2`. The copy is never edited there; it is replaced by rsync before every run:
-
-    rsync -a --no-times --checksum --delete \
-        --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
-        --rsync-path='MSYS_NO_PATHCONV=1 wsl.exe -- rsync' \
-        /Users/toksaitov/Desktop/rach2/ testing:/home/testing/rach2/
-
-What `.gitignore` names is not sent and is left alone there, so the host keeps its own build and its own vendor trees; the shareware WAD is the one ignored file sent, since the Doom suite stages it. The rsync is Homebrew's: macOS's openrsync deletes on the host what the filter excludes.
-
-The ssh server on that host answers in an MSYS shell, so `--rsync-path` starts the receiving rsync inside WSL and the variable stops MSYS rewriting the destination path. A command runs there through the same door:
-
-    ssh testing "wsl.exe -- bash -lc 'cd /home/testing/rach2 && tests/run style'"
-
-`tools/dev/testing.sh` wraps the sync and the run and is the form to use: `testing.sh run tests/run all`. The Mac builds only what editing needs, a compile or one host test; a run a person waits for, a suite, the host tier, the full set, `make analyze`, is not started on the Mac. Every rule in Verification applies on the testing host unchanged: the whole log is written to a file there and read whole, the run is watched, a rebuild there while a set runs voids the set. The versions of the judges on the testing host, compilers, analysers, formatter and QEMU, are the ones a milestone's Readme records. The Lenovo is on the Mac's network, not the testing host's, so hardware sittings and stick writes stay on the Mac. Setting the host up is in `tools/Readme.md`.
-
-## Writing
-
-All written language reads as if one careful author wrote it. The model for voice is the prose of Kernighan and Ritchie, Kernighan and Pike, W. Richard Stevens, and Knuth, the Unix manual pages for reference docs, and Lions' Commentary for explaining kernel code. Terse, exact, concrete. Explain the part that is not obvious and stop. No slogans, no marketing words, no development diary, no notes to oneself.
-
-* ASCII only in prose and comments. No Unicode dashes, smart quotes, or ellipsis.
-* No em-dash, written as U+2014 or as a spaced `--`. Recast with a period, colon, semicolon, or parentheses. The `--flag` and end-of-options `--` forms stay legal in code and command examples.
-* Markdown: do not wrap prose to a column, bullets are `*` and not `-`, do not lean on bold, and avoid tables unless the data is genuinely tabular and stays aligned. Code comments do wrap, at 80 columns.
-
-### Register rule for Claude Opus 5 and Fable 5
-
-These models tend to use figurative phrases as private shorthand. Do not use that register in chat replies, code comments, documentation, Readmes, commit messages, or reviewer prompts. `tools/verify/prosecheck.c` enforces terms that have no valid use here. Review handles choices that depend on context.
-
-Decided by `tools/verify/prosecheck.c`. These terms are wrong at any frequency: "load-bearing", "worth stating plainly", "worth noting", "full stop", "blast radius", "tripwire", "timebox", and "seam". Write the ordinary word: a test, a stage, a time limit. There are no sanctioned exceptions: the tests under `tests/host` are the host tests, and the check suites are named by their targets, `tests/run style` and `tests/run host`. This rule's own text, the checker's word lists, and its test fixtures are the only places these terms may appear.
-
-Do not add "trap", "bench", "gate", "era", "surface", or "sight" to the mechanical list. Each has a valid use in this tree: a shell trap, a test bench, hardware gates, an attack surface, controller generations, and ordinary phrases such as "anywhere in sight". Review must still reject any of them when used as invented shorthand. A mechanical ban is reserved for a term with no valid use in this domain.
-
-Review decides the contextual cases. Reject "honest" or "fiction" when applied to code or data. Reject a "not X, it's Y" reversal and fragments written for effect, such as "Not a detail. A design decision." Do not give hardware or code intentions: a clock does not believe, refuse, or get asked. "The register says X" is ordinary datasheet language and remains valid.
-
-Prefer a concrete subject and verb. Write "the header has a magic number", not "the header carries one". Review "holds", "names", "spells", "sits", and "pins" for the same fault. Keep established technical metaphors, such as a listening socket, a held lock, or a warm cache. Define a term of art at first use. Put a qualification beside the claim it limits. Do not use "trap" for a difficulty, "bench" for a work session, "gate" for a set of checks, "era" for a stage, "surface" for an area of code, or "sight" for a view.
-
-Repeating an ordinary phrase can produce the same private register. `tools/verify/prose_report.sh` compares each watched phrase with human comments from the pinned upstream tarballs and Doom sources, then prints the rate and ratio. A person reads that report. A phrase fails the build only after the reason is recorded. Do not change the baseline in the same commit as the prose that changes it.
-
-Do not build a sentence toward a turn of phrase; state the claim first in plain words: the component, what it does, why. In scratch files and internal reasoning any register is fine; none of it may be committed or shown to the user. Chat replies are held to the same standard as committed prose: short sentences, ordinary words, and no em-dashes there either.
-
-## Comments
-
-Put an explanation in a block comment before the function. Use names and structure to make the body clear; do not narrate it with comments.
-
-The header is a Doxygen-compatible `/**` block: the first sentence is the summary, then prose paragraphs for the contract and the non-obvious why, with `@param` and `@return` only where the meaning is not obvious. Light Markdown, mostly backticks around identifiers. No tag soup.
-
-An in-body comment is allowed only for a deliberate hack or a hardware or ABI fact that cannot be named away. One line, written as documentation, never as a reasoning trace.
-
-## Messages
-
-Output from tools and code uses one shape. Diagnostics go to stderr as `component: detail`, lowercase, with no banners. Progress is `component: action`; an outcome is `component: result: detail`. Kernel and user code use `subsystem: event: detail`. Probe success tokens such as `VMPROBE OK` are test contracts and do not change.
-
-## Ports
-
-musl, BusyBox, Dropbear, TinyCC, and pdpmake are vendored as pinned tarballs, verified by SHA-256, extracted and built by their `build_*.sh` behind stamp files. BusyBox, Dropbear, TinyCC, and pdpmake link against the ported musl through the `muslgcc` wrapper. Do not commit vendored build output or churn the vendored trees. The one exception is `vendor/grub/`: six reviewed, pinned GRUB boot artifacts with their provenance manifest, committed because the generating toolchain does not build on every supported host. They change only through `vendor/grub/regen_grub.sh` and its review procedure.
-
-When a capability is missing, look in BusyBox before writing it. That is the owner's standing decision, and it is why the account tools (`adduser`, `addgroup`, `chpasswd`, `deluser`, `delgroup`) are BusyBox's rather than this project's.
-
-## Hardware
-
-Two targets are the owner's standing authorization, given on 2026-09-20: the development flash drive on the Mac mini, and any disk of the Lenovo. Both hold nothing but this work. Write them without asking and without naming them to the owner first. The owner made them a sandbox on 2026-09-24: they are rewritten however the work needs, with no backup, restore or hash taken for their safety.
-
-The flash drive is a SanDisk 3.2Gen1 of 61,524,148,224 bytes, USB serial `00014101091624031318`. Its node changes between connections, so the serial and the size are what identify it.
-
-One target is refused: the Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`. Nothing here writes it.
-
-A machine check stands where the approval stood, and it runs before every write. A Mac target must be external, removable and on USB, and must report the flash drive's serial and size; a target that is internal, that is solid state and internal, or whose serial is the SSD's, is refused and the write does not run. Report afterwards what was written and where. A target that is neither of the two authorized ones, a second flash drive, another machine, or hardware of another kind, is the owner's to authorize.
-
-The Lenovo's disk does not leave its bay, since removing and reinstalling it is an hour of physical work. A machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
-
-Updating the installed Lenovo is done over SSH and is written down: a kernel through `bootctl` from the running system, a root through the recovery system and `rach2-install --update`, which keeps the machine's accounts, or through `reflash` for a partition the installer does not know about. The manual has the commands: `rach2-install(8)` for an install, `recovery(7)` for the recovery system and the three update paths, `bootctl(8)` and `reflash(8)` for the two writes, and `disk(7)` for the windows they go through. The installed machine's own offsets and the credential check that comes before a root write are in `dev-log/43-machine/hardware.md`. Read both rather than deriving a path.
-
-The system does not depend on a host device path. The kernel probes its supported ATA or AHCI controller and scans the MBR entries for a KRFFS root. Device identity protects the host's destructive commands; it is not an operating requirement. A person must confirm the physical drive before such a command runs.
+Rach2 is an educational 32-bit x86 operating system. Its readers are students and developers, and the code and its prose are meant to teach. The kernel is freestanding C89 (`-ansi`, no libgcc), cross-built with `i686-elf-gcc`. The same sources also build on Rach2 itself with the staged TinyCC and pdpmake, so kernel code must stay inside the dialect both compilers share. The userland is the ported musl libc, the BusyBox shell, the Dropbear SSH server, and the TinyCC compiler with pdpmake to drive it.
 
 ## Agents
 
-Codex does the work and this session orchestrates it. The owner decided this on 2026-09-20, after three weeks in which this session did the work itself and did not finish. Give Codex the phase, the files, the claim inventory and what would prove it done; read what comes back; check every claim against the code; apply it; report progress. Write code here only where a unit comes back wrong or where handing it over costs more than doing it, and say in the report which it was. On the Claude side up to ten Opus 5.5 instances at the xhigh effort may work for a task, in fan-out, counting every subagent; they may do the work, prose included, that the Codex allowance does not cover. A subagent that judges or writes code runs on Opus 5 or stronger, and a weaker model needs a written reason in the plan. On the Codex side at most three Astra units at xhigh run at the same time, since the owner's Codex allowance is limited; it is a limit on width, not a total, and the allowance is spent only when Codex answers with its usage-limit message. The owner set both limits on 2026-09-24. The width does not change what a plan costs in total, only how fast it is spent. The owner's Codex allowance is separate from the Claude one. The per-unit limits are what make a unit return at all and do not move: six files at most and ten minutes at most. Codex runs as `gpt-6-astra` at the `xhigh` reasoning effort, which `~/.codex/config.toml` already sets, so a unit that wants the owner's usual choice passes no `--model` and no `--effort`. The owner names another model or effort when they want one, and it is passed then, spelled as the configuration or a milestone's record spells it: `--model astra` is refused with `the 'astra' model is not supported when using Codex with a ChatGPT account`, and that message blames the account for what is a wrong name. Read a refusal as a refusal, not as a fact about the account; this session read that one as the account's limit, wrote it here as fact, and cancelled six units that were already running on the right model. A unit that must change files is given `--write`, and without it the sandbox is read-only and the unit reports instead of working. A unit that changes files is given `--cwd` into a git worktree of its own, since units that share a checkout overwrite each other's objects mid-build; `status`, `result` and `cancel` for such a unit need the same `--cwd`. The owner set these limits on 2026-09-05, short of money and of both allowances, after an earlier limit of one Claude subagent and before that a run of five reviewers that consumed a session.
+Codex does the work, in units of one task each, and this session directs it. Give Codex the phase, the files, the claims the work must make true, and what would prove it done; read what comes back, check every claim against the code, apply it, and report progress. Write code here only when a unit comes back wrong or when handing the work over would cost more than doing it, and say in the report which it was.
 
-Codex is the writer of prose and the checker of it. Documents, manual pages, Readmes, the proofreading of anything written here, the register rule's contextual half, and, in the milestones on documents and structure, the comments in source and support files: give these to Codex, with the facts and the claim inventory prepared here, and apply what comes back after checking every claim against the code. Codex also reviews code, once per milestone at the end, as the Verification section says. Assign one reviewer to a diff; a delegated review covers at most six files and runs for at most ten minutes. Reviews of two and five files returned findings in eight and ten minutes; a review of twenty-six files and a procedure failed three times without a result. State a fixed total of agents before starting any.
+Codex also writes and checks the prose: documents, manual pages, Readmes, the proofreading of anything written here, the contextual half of the register rule, and, in milestones about documents and structure, the comments in source and support files. Prepare the facts and the claims here, and check every claim in what comes back against the code before applying it. Codex reviews code once per milestone, at its end, as Milestones describes.
 
-Never report that a delegated job is running without reading its state in the same turn. Ask the reviewer to state the most serious findings first. Do not ask it to write or tee a file because its sandbox refuses that operation. Do not launch it where a tool timeout can kill its process group. Do not let an earlier result determine how many agents a later stage starts; one such run started two hundred agents, exhausted the session, and still required a manual review.
+The limits on agents:
+
+* Claude: up to ten Opus 5.5 instances at xhigh effort may work on a task at once, counting every subagent. They may do work the Codex allowance does not cover, prose included. A subagent that writes or judges code runs on Opus 5 or stronger; a weaker model needs a written reason in the plan.
+* Codex: at most three units run at the same time. The limit is on how many run at once, not on how many run in total. The allowance is used up only when Codex answers with its usage-limit message, and it is separate from the Claude one.
+* A Codex unit, like any delegated review, covers at most six files and runs at most ten minutes. These limits are fixed. One reviewer is assigned to a diff.
+* State a fixed total of agents before starting any. An earlier result does not decide how many agents a later stage starts.
+
+Running a Codex unit:
+
+* `~/.codex/config.toml` sets the model, `gpt-6-astra`, and the reasoning effort, `xhigh`. Pass no `--model` and no `--effort` unless the owner names others, and spell them as the configuration or a milestone's record does. A refusal is a refusal of that request, not a fact about the account: `--model astra` is refused with `the 'astra' model is not supported when using Codex with a ChatGPT account`, though only the name is wrong.
+* A unit that changes files needs `--write`; without it the sandbox is read-only and the unit only reports.
+* A unit that changes files runs with `--cwd` in a git worktree of its own, because units that share a checkout overwrite each other's objects in the middle of a build. `status`, `result` and `cancel` for that unit need the same `--cwd`.
+* Ask a reviewer to state the most serious findings first. Do not ask it to write or tee a file; its sandbox refuses. Do not launch it where a tool timeout can kill its process group.
+* Never report that a delegated job is running without reading its state in the same turn.
+
+## Hosts
+
+Code is written, reviewed and committed on the Mac mini, in this tree. Every suite, every full set (`tests/run all`) and every analysis runs on the testing host, reached as `ssh testing`: a Windows machine with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory, whose Windows Subsystem for Linux (WSL2) distribution, Ubuntu 26.04, is given about half of that memory and has a copy of this tree at `/home/testing/rach2`.
+
+Reach that copy through `tools/dev/testing.sh`. `testing.sh sync` replaces the copy with this tree, `testing.sh run COMMAND` syncs and then runs the command there, as in `testing.sh run tests/run all`, and `testing.sh sh` opens a shell there. The copy is never edited on the host, and it is synced before every run: `testing.sh run` does that itself, and a run started from `testing.sh sh` needs a `testing.sh sync` first. What `.gitignore` names is not sent, except the Doom WAD, so the host keeps its own `build/` and vendor trees. `tools/Readme.md` and the script's header say how the script reaches WSL and which rsync it needs.
+
+The Mac builds only what editing needs: a compile or one host test. A run a person waits for, such as a suite, the host tests (`tests/run host`), a full set or `make analyze`, is never started on the Mac. The rules under Verification apply on the testing host unchanged, and the tool versions a milestone's Readme records (compilers, analysers, formatter and QEMU) are the testing host's. The Lenovo is on the Mac's network, not the testing host's, so hardware sittings (sessions with the owner at the machine) and stick writes run from the Mac. `tools/Readme.md` describes how to set up a host.
+
+## Hardware
+
+The owner has authorized writes to two targets: the development flash drive on the Mac mini, and any disk of the Lenovo. Both have nothing on them but this work, and both are a sandbox: write them as the work needs, without asking and without naming them to the owner first, and take no backup, restore or hash for their safety. Report afterwards what was written and where. Any other target, such as a second flash drive, another machine or hardware of another kind, needs the owner's authorization.
+
+The Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`, is never written.
+
+A check of the target runs before every write, in place of asking. A target on the Mac must be external, removable and on USB, and must report the flash drive's serial and size: a SanDisk 3.2Gen1 of 61,524,148,224 bytes with USB serial `00014101091624031318`. Its device node changes between connections, so the serial and the size identify it. A target that is internal, or that reports the SSD's serial, is refused and the write does not run. The system itself needs no host device path: the kernel probes its own disk controller and chooses its root from its boot options, as `rach2/sys/block/Readme.md` describes.
+
+The Lenovo's disk stays in its bay, since removing and refitting it is an hour of physical work. A machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
+
+The installed Lenovo is updated over SSH: a kernel through `bootctl` on the running system; a root through the recovery system with `rach2-install --update`, which keeps the machine's accounts; a partition the installer does not know about through `reflash`. The manual has the commands: `rach2-install(8)` for an install, `recovery(7)` for the recovery system and the three update paths, `bootctl(8)` and `reflash(8)` for the two writes, and `disk(7)` for the device nodes they write through, each limited to one region of the disk. The machine's own offsets are in `dev-log/43-machine/hardware.md`, and the credential check before a root write is in `tools/Readme.md`, under Working an installed machine from the host. Take a path from these; do not derive one.
+
+## Build
+
+Use GNU Make on the host. `make` builds the kernel, the host tools, the guest programs, five of the vendored projects (musl, BusyBox, Dropbear, TinyCC and pdpmake), Doom, and the test, os-simple and os-real RAM images. The first build compiles the vendored projects and takes minutes; a later `make` rebuilds only what changed, and header dependencies rebuild the objects they affect. The build checks its tools before it compiles anything with the cross toolchain, and `sh tools/setup/doctor.sh` reports on the wider machine setup.
+
+* `make test` runs the style checks, the host tests and the core tier of suites.
+* `tests/run NAME` runs a named suite.
+* `make check-sources` compares the kernel's source list with the source tree.
+* `make clean` and `make distclean` clean up. Do not use `make clean` as a routine build step, and do not run a `build_*.sh` script by hand.
+
+Every in-house component writes its objects, `.d` files and binaries under the top-level `build/`. Shared host Make rules are in `mk/`. Image targets do not run QEMU: the run scripts under `rach2/` boot an image, and the test scripts start QEMU for the suites.
+
+The guest build uses three POSIX `guest.mk` files, for the kernel, the utilities and ISH, which pdpmake reads on Rach2. Each component's host Makefile and its `guest.mk` include the same source manifest, `rach2/sources.mk`, `utils/programs.mk` or `ish/sources.mk`, so the two builds cannot drift apart. `tools/verify/guestcheck.c` checks the derived lists and the guest limits, and `tests/run selfbuild` builds all three components on Rach2 under QEMU.
+
+### Ports
+
+Six projects are vendored as pinned tarballs, checked by SHA-256 and built by their `build_*.sh` scripts, with stamp files that record a finished build: musl, BusyBox, Dropbear, TinyCC, pdpmake, and e2fsprogs, whose `e2fsck` and `resize2fs` the recovery image stages. The five besides musl link against the ported musl through the `muslgcc` wrapper. Vendored projects use their upstream build systems. Do not commit vendored build output or churn the vendored trees. The one committed exception is `vendor/grub/`: six reviewed, pinned GRUB boot images with their provenance manifest, committed because the toolchain that makes them does not build on every supported host. They change only through `vendor/grub/regen_grub.sh` and its review procedure.
+
+When a capability is missing, look in BusyBox before writing it. That is the owner's standing decision, and it is why the account tools (`adduser`, `addgroup`, `chpasswd`, `deluser` and `delgroup`) are BusyBox's.
 
 ## Verification
 
-A test is proved by making it fail, in three steps: the unmodified test passes; the mutation, compiled into the artifact the test runs, makes it fail; the source restored and rebuilt passes again. Drive the mutation from a script that restores the source in a trap, because a mutation can hang the suite and outlive the command that applied it, leaving the tree mutated, and stop the test processes before restoring a source they share. Restoring the source is not enough on its own: a `cp` back does not make `make` rebuild, so several runs here re-tested a stale binary and reported PASS for a mutation that had never been compiled. Touch the file, or rebuild explicitly, before believing the result. One mutation proves that one fault is caught, not the whole test.
+A test is trusted only after it has been made to fail, in three steps: the unmodified test passes; a mutation, a deliberate fault compiled into the artifact the test runs, makes it fail; with the source restored and the artifact rebuilt, the test passes again. Drive the mutation from a script that restores the source in a trap, since a mutation can hang the suite and outlive the command that applied it. Stop the test processes before restoring a source they share. Copying the source back does not make `make` rebuild it, so touch the file or rebuild explicitly before believing the result. One mutation shows that one fault is caught, not that the whole test is sound.
 
-A step that costs the owner time, allowance or a device is checked before it is started. That covers a build from clean, a full set, a Codex round, a hardware sitting, and any run a person waits for. The check is to read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes, and the code the step depends on. Where a form is known to work, use that form. A minute of reading is worth an hour of running, and a step whose conditions were not checked is not started.
+A suite judges what the kernel counts, never the clock. Seconds in a suite are completion bounds, which `RACH2_TIMEOUT_FACTOR` scales for a slow host, and a time is printed for the record, not judged. What would make a row, one check in a suite, slow (a spin, a wait, a walk over a list, a call per page) is counted by the kernel, and the row checks each count against a bound that is the same on every machine. Where the kernel has no counter for it yet, a multiple of a baseline measured in the same boot is the last resort, and each such row is listed with its reason.
 
-A build while a run is in flight voids that run. The suites read the kernel and the images from `build/`, so a rebuild part way through replaces what the remaining suites boot and the finished ones were judged on. Before `make`, check for a running set with `ps` and either wait or stop it deliberately. On 2026-09-07 two full sets of about thirty-five minutes each were lost to this, both times by rebuilding the moment a fix was written.
+A step that costs the owner time, allowance or a device is checked before it starts: a build from clean, a full set, a Codex round, a hardware sitting, or any run a person waits for. Read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes and the code the step depends on. Where a form is known to work, use it. A step whose conditions were not checked is not started.
 
-A new row, suite or tool is proved small before it is run at size. A row that will take hours at the machine's size is run first on the smallest inputs that exercise every step, a 64 MiB disk where the real one is 232 GiB, and only a row that has passed there is started at size; the first run at size is never the first run of the code. A run that is killed is not restarted until every process of it is gone, since a killed run's shell goes on to its cleanup and removes what the next run made. A killed run gets the ordinary signal, so what it holds is released, and what it may have left, a lock file or a mounted image, is looked for before the next run. A commit that changes a kernel header or a host test source is made after the end's `tests/run style host`, not before it. The owner set this on 2026-09-09, after three days of complaints and a day in which a rehearsal row was started at size three times and failed each time on a fault of its own that a small run would have shown in two minutes.
+Running tests:
 
-A run's rate is read at its first stage and a slow one is stopped and explained, not paid for. A copy, a hash or a boot that goes at a small fraction of the rate a similar step had before is a symptom: the emulator's USB storage moves data at tens of kilobytes a second where its IDE moves megabytes, a wrong block size makes a call per sector, a deadline waits out its whole period. The run is stopped, the cause found and removed, and only then started again; a run left to crawl for hours because the number was written down as the emulator's rate is the waste this rule is for. The owner set this on 2026-09-09, after a rehearsal was left to copy an image at 75 KB a second for three hours.
+* Try a new row, suite or tool small first, on the smallest inputs that exercise every step: a 64 MiB disk where the real one is 232 GiB. Start it at full size only after it passes there.
+* Never build while a run is in flight. The suites read the kernel and the images from `build/`, so a build part way through changes what the remaining suites boot and what the finished ones were judged on, and the run is void. Check with `ps` for a run in progress before `make`, and wait for it or stop it deliberately.
+* Watch a run in flight. Stream its log and act on the first failing line, since most failures come in the first seconds. Do not sleep until the run ends to find out how it ended.
+* Read a run's rate at its first stage. A copy, a hash or a boot running at a small fraction of a similar step's earlier rate is a symptom: the emulator's USB storage moves tens of kilobytes a second where its IDE moves megabytes, a wrong block size makes a call per sector, a wait runs until its timeout expires. Stop the run, find and remove the cause, and only then start it again.
+* Keep the whole output of a long run in a file on the host that runs it, and read all of it. Never pipe it through `tail` or `head`, which throws the failure away.
+* Stop a run with SIGTERM, so its cleanup releases what it has taken. Before starting it again, wait until every process of the old run has exited, since the old run's cleanup would otherwise remove files of the new one, and look for anything it left, such as a lock file or a mounted image.
+* Resume a failed run at the failing step: rebuild what changed, run the suite that failed, and run the others again only when the change could have touched them. Start work that does not depend on a running job beside it.
+* Believe a number only with the binary that produced it. `make` does not rebuild the recovery kernel or the install stick, so a measurement on a stick, an ISO or a recovery boot first checks that the artifact has the change: its timestamp against the source's, or a string the change added.
 
-A suite asserts on what the kernel counts, never on the clock. Seconds in a suite are completion bounds, which `RACH2_TIMEOUT_FACTOR` scales for a slow host, and a time is printed for the record and not judged; what a slow row would mean, a spin, a wait, a walk, a call per page, is a count the kernel keeps and the row holds under a bound that is the same on every machine. A multiple of a baseline the same boot measures is the last resort for a proxy that has no counter yet, and each such row is listed with its reason. The owner set this on 2026-09-18, when the testing host's emulator failed diskrate rows whose bounds the Mac had set, then KVM failed the multiples that replaced them, and said the suites must run on any machine to come.
+When a failure repeats in a new form, write the general rule here and record the incident in `dev-log/`.
 
-A run in flight is watched, not waited on. Stream its log and react to the first failing line, since most failures arrive in the first seconds and the rest of the run is then wasted. Do not sleep until a run ends to find out how it ended.
+## Milestones
 
-The whole output of a long run is kept. Write it to a file and read the file; never pipe it through `tail` or `head`, which throws away the failure and forces the run again. On 2026-09-07 a full set was piped through `tail -22`, its five failures were lost, and the suites were started a second time to see what the first run had already said.
+A milestone is run for speed: all of its work is done first, and it is checked once, by the closing sequence below. Nothing runs along the way but a compile: no suite, full set, host tests, Codex review or mutation test after a change or a phase. Run `tests/run style host` at the end before committing a change to a kernel header or a host test source. A Readme whose contract a commit changes gets its facts in that commit and its prose from Codex, without a review of the phase.
 
-A number is believed only with the binary that produced it. `make` does not rebuild the recovery kernel or the install stick, so a measurement of a fix on a stick, an ISO or a recovery boot first checks that the artifact carries the change: its timestamp against the source's, or a string the change added. On 2026-09-09 a fix was measured three times on a stick whose kernel was the old one, and each run reported the old rate as the fix's.
+A problem found along the way that the milestone did not set out to fix goes into `dev-log/50-shortcomings/plan.md` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. The milestone that found it fixes it, and the entry says so. Nothing is reported at the end as found and unfixed.
 
-A run that fails part way is resumed at the failing step. Rebuild what changed, run the suite that failed, and run the others again only when the change could have touched them. Work that does not depend on a running job is started beside it. When a failure repeats in a new form, write down the general rule and keep the instance as its example.
+At the end of the milestone, once, in this order:
 
-On 2026-09-07 this was ignored three times in one hour. A clean build was started twice in the two forms entry 5 of the shortcomings list says fail, and then a whole set was restarted from its first suite rather than resumed at the failure.
+1. Build from clean: empty `build/` of everything but `build/vendor/`, and remove the vendor outputs as well only when a port or its toolchain changed.
+2. Run `tests/run all` and the mutation tests of the milestone's new checks, and fix everything they find. The style suite runs `prosecheck`, so the mechanical half of the register rule is checked before the review.
+3. Give the whole milestone's diff to Codex for a harsh review, in units grouped by contract, each of at most six files and sized to finish in ten minutes. Each unit gets the shared interface changes, may read what its diff depends on, and states its most serious findings first. The review covers the contextual half of the register rule. An expired review is incomplete, not clean.
+4. Fix every finding, or reject it in the milestone's `notes.md` with the source that shows it wrong.
+5. Run `tests/run all` again.
+6. Only in a milestone whose plan has a machine phase, work on the machine. A destructive write on the machine comes only after the review of the code that performs it.
 
-A milestone is run for speed, and it is checked once. Do every item of the work first, with nothing run on the way but a compile: no suite, no set, no gate, no review and no mutation proof after a change. The checks, the new checks' mutations among them, run at the end. The owner set this on 2026-09-24, after a month in which suites, sets and reviews were run again after each small change, cost weeks, and wore the disks of the Mac, the testing host and the Lenovo. Before a milestone or a plan is called done, or nearly done, its whole scope is audited: every phase of its plan, every entry of the shortcomings list, and every record read for what is still owed. The list of open items that audit gives is what is reported; nothing is called done that it has not shown done. A Readme whose contract a commit changes gets its facts in that commit and its prose from Codex without a review of the phase. Do not run the full set, the host tier or a Codex review after a phase. At the end of the milestone, once, in this order: build from clean, which is `build/` removed and the vendor projects rebuilt only when a port or its toolchain changed; `tests/run all`; everything that comes up fixed; the whole milestone's diff to Codex for a harsh review, in units grouped by contract and sized so a unit finishes in ten minutes, six files at most, each unit given the shared interface changes and free to read what its diff depends on, most serious findings first; every finding fixed, or rejected in `notes.md` with the source that shows it wrong; `tests/run all` again; then the machine, only in a milestone whose plan has a machine phase, and a destructive write on the machine only after the review of the code that performs it. The machine phases are gathered so that the owner is needed for one sitting in such a milestone: every step is prepared before the owner is called, the steps run one after another, and the sitting ends with the owner free. A milestone with a machine phase runs that sequence once before the sitting, since the write comes after the review, and reviews the fixes the machine produced once more at its close. The other milestones prove their work in QEMU and do not touch the machine. A kernel installed through `bootctl` over SSH when the machine happens to be on is permitted, never required. An expired review is incomplete, not clean. `tools/verify/prosecheck.c` runs before the review; the register rule's contextual half is part of it. The milestone's Readme records what was accepted: the commit, the build options, the image hashes, the test command and its result, and the hardware arrangement.
+The machine phases are gathered so that the owner is needed for one sitting. Every step is prepared before the owner is called, the steps run one after another, and the sitting ends with the owner free. Such a milestone runs the sequence above once before the sitting, since the write comes after the review, and has the fixes the machine produced reviewed once more at its close. Other milestones test their work in QEMU and do not touch the machine. A kernel installed through `bootctl` over SSH when the machine happens to be on is permitted, never required.
 
-A problem found on the way that the milestone did not set out to fix is written into `dev-log/50-shortcomings/plan.md` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. Then it is fixed in the milestone that found it, with its entry saying so, when the milestone cannot close without it or when leaving it would slow every later run, review or sitting: a disk path that turns a suite into hours is fixed now, not carried to 50. Only a problem that costs nothing to carry is left for milestone 50. The owner set this on 2026-09-07 after a slow disk path was deferred by the letter of the earlier rule and cost a day. That milestone fixes every entry before the documents are written, and the list stays open through the final acceptance: an entry made during the manuals or the audit reopens the technical work before the document that describes it is accepted. Nothing is left to be reported at the end as found and unfixed.
+Before a milestone or a plan is called done, or nearly done, audit its whole scope: every phase of its plan, every entry of the shortcomings list, and every record, read for what is still owed. Report the list of open items the audit gives; nothing is called done that the audit has not shown done. The milestone's Readme records what was accepted: the commit, the build options, the image hashes, the test command and its result, and the hardware arrangement.
 
-## Git
+## Writing
 
-Commit in scoped units, one logical change each, directly on the branch, with no attribution of any kind. Never push. The remote is the owner's to update, and a push cannot be taken back once anyone has fetched it; ask, and let the owner do it. The house style is one line, no trailing period, beginning with a capitalised verb in the imperative, saying what the commit does and not how it was arrived at; `git log --oneline -20` is the reference. A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.
+All written language reads as if one careful author wrote it: code comments, documents, commit messages, reviewer prompts and chat replies. Write in the voice of Kernighan and Ritchie, Kernighan and Pike, W. Richard Stevens and Knuth; of the Unix manual pages for reference documents; and of Lions' Commentary for explaining kernel code. Be terse, exact and concrete. State the claim first in plain words (the component, what it does, why), explain the part that is not obvious, and stop. No slogans, no marketing words, no development diary, no notes to oneself.
+
+Chat replies are held to the same standard as committed prose: short sentences, ordinary words, and no em-dashes. Scratch files and internal reasoning may use any register, and none of it is committed or shown to the user.
+
+* ASCII only in prose and comments: no Unicode dashes, smart quotes or ellipsis.
+* No em-dash, whether written as U+2014 or as a spaced `--`. Recast the sentence with a period, colon, semicolon or parentheses. The `--flag` and end-of-options `--` forms stay legal in code and command examples.
+* Markdown: do not wrap prose to a column, write bullets as `*` and not `-`, do not lean on bold, and avoid tables unless the data is tabular and stays aligned. Code comments wrap at 80 columns.
+
+### Register rule
+
+The Claude models used here tend to write figurative phrases as private shorthand. Do not use that register in chat replies, code comments, documentation, Readmes, commit messages or reviewer prompts. `tools/verify/prosecheck.c` rejects the terms that have no valid use here; review decides the cases that depend on context.
+
+These terms are wrong at any frequency, and `prosecheck` rejects them: "load-bearing", "worth stating plainly", "worth noting", "full stop", "blast radius", "tripwire", "timebox" and "seam". Write the ordinary word: a test, a stage, a time limit. There are no sanctioned exceptions: the tests under `tests/host` are the host tests, and the check suites are named by their targets, `tests/run style` and `tests/run host`. This section, the checker's word lists and its test fixtures are the only places these terms may appear.
+
+A term goes on that list only when it has no valid use in this domain. "Trap", "bench", "gate", "era", "surface" and "sight" stay off it, since each has one here: a shell trap, a test bench, hardware gates, controller generations, an attack surface, and phrases such as "anywhere in sight". Review still rejects each of them as invented shorthand: "trap" for a difficulty, "bench" for a work session, "gate" for a set of checks, "era" for a stage, "surface" for an area of code, "sight" for a view.
+
+Review decides the cases that depend on context:
+
+* Reject "honest" or "fiction" applied to code or data.
+* Reject a "not X, it's Y" reversal, and fragments written for effect, such as "Not a detail. A design decision."
+* Do not give hardware or code intentions: a clock does not believe, refuse or get asked. "The register says X" is ordinary datasheet language and stays.
+* Prefer a concrete subject and verb: "the header has a magic number", not "the header carries one". Review "holds", "names", "spells", "sits" and "pins" for the same fault. Established technical metaphors stay: a listening socket, a held lock, a warm cache.
+* Do not build a sentence toward a turn of phrase.
+* Define a term of art at first use, and put a qualification beside the claim it limits.
+
+Repeating an ordinary phrase can produce the same private register. `tools/verify/prose_report.sh` compares each watched phrase with the human comments of the pinned upstream tarballs and the Doom sources, and prints the rate and the ratio for a person to read. A phrase fails the build only after the reason is recorded. Do not change the baseline in the same commit as the prose that changes it.
+
+## Comments
+
+Explain a function in a block comment before it, and let names and structure make the body clear; do not narrate the body in comments.
+
+The block is a Doxygen-compatible `/**` comment. Its first sentence is the summary, and prose paragraphs follow for the contract and the part of the reason that is not obvious. Use `@param` and `@return` only where the meaning is not obvious, keep Markdown light (mostly backticks around identifiers), and do not pile up tags.
+
+A comment inside a body is allowed only for a deliberate hack, or for a hardware or application binary interface (ABI) fact that cannot be named away. It is one line, written as documentation, never as a reasoning trace.
+
+## Messages
+
+Messages from tools and code have one format. Diagnostics go to stderr as `component: detail`, in lowercase, with no banners; progress is `component: action`, and an outcome is `component: result: detail`. Kernel and user code use `subsystem: event: detail`. A probe's success token, such as `VMPROBE OK`, is a test contract and does not change.
 
 ## Documentation
 
-One Readme per component. A change that alters a contract rewrites the owning Readme in the same commit; it does not append. Docs state the current contract; history lives in commit messages. The records of how each milestone was planned and built live in `dev-log/`. The facts of a document are gathered here; the prose is Codex's, as the Agents section says.
+Each component has one Readme. A change that alters a contract rewrites the owning Readme in the same commit, and does not append to it. Documents state the current contract; history is in commit messages, and the records of how each milestone was planned and built are in `dev-log/`. The facts of a document are gathered here and its prose is Codex's, as Agents says.
 
-The manual under `man/` covers the machine: every program an image stages, every BusyBox applet and every system call the kernel registers has a page or an alias in its section, and `tools/verify/mancheck.c`, run by `tests/run style`, refuses a tree without one, a page `mandoc -T lint` warns about, an alias that names no page, or a recovery page the recovery manifest does not stage. A commit that adds a program, an applet or a call adds its page or its alias line in the same commit, and a commit that changes what one does changes its page. A page states what the code does on this kernel, from a fact sheet gathered from the source, and says where that differs from Linux or from the program's upstream documentation.
+The manual under `man/` covers the machine. Every program a system image stages or `utils/programs.mk` builds, every BusyBox applet and every system call the kernel registers has a page or an alias in its section; a program that only test images stage needs none. `tools/verify/mancheck.c`, run by `tests/run style`, refuses a tree that lacks one, a page `mandoc -T lint` warns about, an alias that names no page, or a recovery page the recovery manifest does not stage. A commit that adds a program, an applet or a call adds its page or its alias line in the same commit, and a commit that changes what one does changes its page. A page states what the code does on this kernel, from a fact sheet gathered from the source, and says where that differs from Linux or from the program's upstream documentation.
+
+## Git
+
+Never push. The remote is the owner's to update, and a push cannot be taken back once anyone has fetched it; ask, and let the owner do it.
+
+Commit in scoped units, one logical change each, directly on the branch, with no attribution of any kind. The message is one line with no trailing period, begins with a capitalised verb in the imperative, and says what the commit does, not how it was arrived at; `git log --oneline -20` shows the style. A text-only cleanup changes no behavior and no built artifact. Keep the vendored trees out of the diff.

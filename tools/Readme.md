@@ -89,7 +89,7 @@ The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures with
 ### The two checkers
 
 * `setup/preflight.sh` is the build's own cached tool check. `make` and
-`tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before compilation. `--report` prints one line per tool without caching.
+`tests/run` run it at each entry; it stats the recorded tool paths on a cache hit and repeats its compile probes only when the environment changed. A missing tool fails the build, named, before anything is compiled with the cross toolchain; a host tool may compile beside the check. `--report` prints one line per tool without caching.
 * `setup/e2fsprogs_path.sh` is the one place the three e2fsprogs programs are
 looked for off the path, sourced by `preflight.sh`, `doctor.sh` and `image/mkext2.sh`; it puts the first directory that has all three at the front, so that the three come from one installation.
 * `setup/doctor.sh` is the wider machine report, in five tiers: what a build
@@ -188,7 +188,14 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 
 ## The testing host and the clangd database
 
-`dev/testing.sh sync | run COMMAND... | sh` puts this tree on the testing host and runs a command in the copy there. `sync` replaces `/home/testing/rach2` with the tree here, `build/` and the compilation database excluded, through an rsync whose receiving side starts inside WSL; `run` syncs and then runs COMMAND in the copy, passing it to the remote shell as one string; `sh` opens a shell there. The suites and the analyses are run through it, as `CLAUDE.md` says: `tools/dev/testing.sh run tests/run all`.
+`dev/testing.sh sync | run COMMAND... | sh` puts this tree on the testing host and runs a command in the copy there. `sync` replaces `/home/testing/rach2` with the tree here; `run` syncs and then runs COMMAND in the copy, passing it to the remote shell as one string; `sh` opens a shell there. The suites and the analyses are run through it, as `CLAUDE.md` says: `tools/dev/testing.sh run tests/run all`.
+
+Of what `.gitignore` names, the sync sends one file: the shareware Doom data file, `ports/doom/doom1.wad`, which `ports/doom/fetch_wad.sh` downloads and the Doom suite stages. The rest, `build/`, the extracted vendor trees and their stamps, and the compilation database among it, stays as the host built it, so a run after a small edit rebuilds only what the edit touched. Files are compared by content, and rsync gives a file it transfers the time it arrives on the host, so make finds the file newer than the objects the host built from its older text. The receiving rsync starts inside WSL through `wsl.exe`, with `MSYS_NO_PATHCONV=1` so that the MSYS shell that answers ssh does not rewrite the destination path. The rsync on the Mac must be rsync 3 from Homebrew: macOS's openrsync deletes on the host what the filter excludes, the whole build and every vendor tree, and the script refuses to sync with it. The command, for a sync by hand from the top of the tree:
+
+    rsync -a --no-times --checksum --delete \
+        --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
+        --rsync-path='MSYS_NO_PATHCONV=1 wsl.exe -- rsync' \
+        ./ testing:/home/testing/rach2/
 
 `dev/gen_compile_commands.sh` builds the clangd database. Run it directly. It writes twelve databases under `build/compile_commands/`, one per unit, and joins them into `compile_commands.json` at the root: the four kernel variants, the tests, the shell, the utilities, Doom, the musl programs, the KRFFS tools with the mount tool, the host tools from a dry run of `print-host-tools`, and the host tests. It dry-runs each build, joins wrapped recipe lines, selects the compile commands by their first word, and publishes only after a line-by-line JSON validation. `verify/dbcheck.sh`, which step 7 of the style checks runs, then requires every in-house source to be in one database, or to be a fragment another source includes, or a fixture a test script compiles. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
 

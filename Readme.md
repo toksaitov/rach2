@@ -24,7 +24,7 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 ## Build and run
 
-A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, QEMU, mtools, e2fsprogs, mandoc, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its own tools before compiling and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
+A machine needs GNU Make, a host C compiler, the `i686-elf` cross toolchain, QEMU, mtools, e2fsprogs, mandoc, and `ssh-keygen`; the style suite adds cppcheck, ShellCheck, and clang-format. The [tools Readme](tools/Readme.md) gives the exact commands for macOS and for Debian and Ubuntu, including how to build the cross toolchain the Debian archive does not carry. The build checks its tools before it compiles anything with the cross toolchain, and names anything missing; `sh tools/setup/doctor.sh` is the wider report and prints the install command for whatever is absent.
 
 ```sh
 git clone https://github.com/toksaitov/rach2.git
@@ -161,7 +161,7 @@ Build, history, and tests:
 
 [`CLAUDE.md`](CLAUDE.md) defines the project rules for builds, writing, verification, hardware, and Git. [`AGENTS.md`](AGENTS.md) directs coding agents to those rules. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
 
-Every change must pass `tests/run style` and `tests/run host` before commit. The rest of the development procedure is in `CLAUDE.md`.
+The development procedure, including when `tests/run style` and `tests/run host` run, is in `CLAUDE.md`.
 
 ## Third-party sources and license
 
