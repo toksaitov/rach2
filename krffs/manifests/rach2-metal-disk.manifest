@@ -114,8 +114,8 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 # passwd keeps world-readable x fields, which is what the split shadow exists
 # for.
 # What a person who sits down at this machine can look at and change: a
-# a hello.txt in /demo, and one file system of each kind this kernel mounts,
-# in a file, for a loop device to stand on. `empty.krffs` is formatted and
+# hello.txt in /demo, and one file system of each kind this kernel mounts,
+# in a file, to be attached to a loop device. `empty.krffs` is formatted and
 # holds nothing, which is what a person copies to make an image of their own,
 # since the machine has no formatter. `demo/Readme.txt` has the commands.
 

@@ -1,24 +1,22 @@
 What this machine has, and how to look at it.
 
-Four partitions on the disk:
+Three partitions on the disk:
 
-  /dev/disk0p1   the boot files and the kernel slots   FAT32
-  /dev/disk0p2   the fallback root                     KRFFS
-  /dev/disk0p3   the recovery system                   FAT32
-  /dev/disk0p4   the root you are running              ext2
+  /dev/disk0p1   the boot files and the two kernel slots   FAT32
+  /dev/disk0p2   the recovery system                       FAT32
+  /dev/disk0p3   the root you are running                  ext2
 
-Each of them has a /hello.txt in it, all reading the same line. Run what
-follows as root. The running root's copy is read without mounting
-anything:
+The two FAT partitions each have a /hello.txt, and the root has
+/demo/hello.txt, all reading the same line. Run what follows as root. The
+running root's copy is read without mounting anything:
 
-  cat /hello.txt
+  cat /demo/hello.txt
 
-The other three are mounted read-only, read, and unmounted:
+The other two are mounted read-only, read, and unmounted:
 
   mkdir -p /mnt/x
   mount -t vfat -o ro /dev/disk0p1 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
-  mount -t krffs -o ro /dev/disk0p2 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
-  mount -t vfat -o ro /dev/disk0p3 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
+  mount -t vfat -o ro /dev/disk0p2 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
 
 Four file systems in files, in /demo, for writing to:
 
@@ -28,13 +26,14 @@ Four file systems in files, in /demo, for writing to:
   krffs.img    a KRFFS volume
   empty.krffs  a formatted KRFFS volume with nothing in it
 
-A file is not a device until a loop device stands on it:
+An image file is mounted by attaching it to a loop device and mounting the
+device:
 
   mkdir -p /mnt/k
   loopctl attach 0 /demo/krffs.img
   mount -t krffs /dev/loop0 /mnt/k
   cat /mnt/k/hello.txt
-  echo mine >> /mnt/k/hello.txt
+  echo 'written on the machine' >> /mnt/k/hello.txt
   sync
   umount /mnt/k
   loopctl detach 0
@@ -43,8 +42,8 @@ The others go the same way, each with its own file and type: fat32.img as
 vfat, exfat.img as exfat, ext2.img as ext2. Changing only the -t leaves the
 KRFFS image attached and the wrong driver reading it. `loopctl` with no
 arguments says which devices are taken, which is what /proc/loop says; use
-a free number in both commands. There are four loop devices and two KRFFS
-volumes may be mounted at once.
+a free number in both commands. There are four loop devices, and only
+memory limits how many volumes are mounted at once.
 
 An image of your own is a copy of the empty one:
 
