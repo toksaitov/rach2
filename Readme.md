@@ -159,7 +159,7 @@ Build, history, and tests:
 
 ## Development
 
-[`AGENTS.md`](AGENTS.md) defines the project rules for builds, writing, verification, hardware, and Git, for every coding agent. [`CLAUDE.md`](CLAUDE.md) imports it for Claude Code and adds the rules for directing the work. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
+[`AGENTS.md`](AGENTS.md) defines the project rules for builds, writing, verification, hardware, and Git, for every coding agent. [`CLAUDE.md`](CLAUDE.md) imports it for Claude Code and adds the rules Claude Code alone needs. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
 
 The development procedure, including when `tests/run style` and `tests/run host` run, is in `AGENTS.md`.
 

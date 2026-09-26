@@ -1,6 +1,6 @@
 # AGENTS.md
 
-The project policy for Rach2, for every coding agent. Codex reads this file directly; Claude Code reads it through the `@AGENTS.md` import in `CLAUDE.md`, which adds the rules for directing the work. Procedures needed only for some tasks are skills in `.agents/skills/`, which Codex runs as `$name` and Claude Code as `/name` through `.claude/skills/`:
+The project policy for Rach2, for every coding agent. Codex reads this file directly; Claude Code reads it through the `@AGENTS.md` import in `CLAUDE.md`, which adds the rules Claude Code alone needs. Procedures needed only for some tasks are skills in `.agents/skills/`, which Codex runs as `$name` and Claude Code as `/name` through `.claude/skills/`:
 
 * `milestone`: working through a milestone of `dev-log/` and closing it.
 * `testing`: running suites on the testing host, and writing suites and mutation tests.
@@ -18,9 +18,8 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Roles
 
-* Codex does the work, in units of one task each. Claude Code directs it and checks what comes back; `CLAUDE.md` has the rules for that.
-* Codex writes and checks the prose: documents, manual pages, Readmes, the proofreading of anything Claude Code writes, the contextual half of the register rule, and, in milestones about documents and structure, the comments in source and support files.
-* Codex reviews code once per milestone, at its end, as the `milestone` skill describes.
+* Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
+* Codex reviews: once per milestone, at its end, as the `milestone` skill describes, and otherwise when the owner asks.
 
 ## Build
 
@@ -75,7 +74,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Documentation
 
-* Each component has one Readme. A change that alters a contract rewrites the owning Readme in the same commit, and does not append to it. Documents state the current contract; history is in commit messages and `dev-log/`. The facts of a document are gathered by Claude Code and its prose is Codex's, as Roles says.
+* Each component has one Readme. A change that alters a contract rewrites the owning Readme in the same commit, and does not append to it. Documents state the current contract; history is in commit messages and `dev-log/`.
 * The manual under `man/` covers the machine. Every program a system image stages or `utils/programs.mk` builds, every BusyBox applet and every system call the kernel registers has a page or an alias in its section; a program that only test images stage needs none. `tools/verify/mancheck.c`, run by `tests/run style`, refuses a tree that lacks one, a page `mandoc -T lint` warns about, an alias that names no page, or a recovery page the recovery manifest does not stage.
 * A commit that adds a program, an applet or a call adds its page or its alias line in the same commit, and a commit that changes what one does changes its page. A page states what the code does on this kernel, from a fact sheet gathered from the source, and says where that differs from Linux or from the program's upstream documentation.
 

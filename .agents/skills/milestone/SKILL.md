@@ -11,7 +11,7 @@ A milestone runs from its `plan.md` under `dev-log/`.
 
 * A milestone is run for speed: all of its work is done first, and it is checked once, by the closing sequence below. Nothing runs along the way but a compile: no suite, full set, host tests, Codex review or mutation test after a change or a phase.
 * Run `tests/run style host` at the end before committing a change to a kernel header or a host test source.
-* A Readme whose contract a commit changes gets its facts in that commit and its prose from Codex, without a review of the phase.
+* A Readme whose contract a commit changes is rewritten in that commit, without a review of the phase.
 * A problem found along the way that the milestone did not set out to fix goes into `dev-log/50-shortcomings/plan.md` the same day, with its severity, how to reproduce it, the contract it breaks, what it depends on, and the test that will show it fixed. The milestone that found it fixes it, and the entry says so. Nothing is reported at the end as found and unfixed.
 * A step that costs the owner time or a device is checked before it starts: a build from clean, a full set, a Codex round, a hardware sitting, or any run a person waits for. Read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes and the code the step depends on. Where a form is known to work, use it. A step whose conditions were not checked is not started.
 
