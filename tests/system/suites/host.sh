@@ -239,6 +239,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: run scripts' command lines" >&2
         fail=1
     fi
+    if sh tests/system/commit_msg_test.sh >"$VDIR/commit_msg.rlog" 2>&1; then
+        echo "hosttest: result: pass: commit-msg hook's refusals"
+    else
+        cat "$VDIR/commit_msg.rlog"
+        echo "hosttest: result: fail: commit-msg hook's refusals" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over

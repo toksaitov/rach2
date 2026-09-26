@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# commit-msg: refuse a commit message with an attribution line.
+#
+# CLAUDE.md allows no attribution of any kind in a commit message, and a
+# tool's default can add one anyway: Claude Code ends a message with a
+# Co-Authored-By trailer and, in a web session, a Claude-Session link. The
+# hook refuses a message with a line that starts with Co-Authored-By,
+# Claude-Session or Signed-off-by and a colon, in any letter case, a line that
+# starts with "Generated with Claude Code", after at most one run of bytes
+# outside printable ASCII such as an emoji, or a trailer whose value ends with
+# <noreply@anthropic.com>. It prints the first such line and its number.
+#
+# Every line is read, and every pattern starts in the first column with a
+# letter, digit or byte outside printable ASCII. A sentence that only
+# mentions a trailer therefore passes, and so do comment lines and the diff
+# `git commit -v` adds, whose added, removed and context lines start with
+# +, - or a space.
+#
+# `git config core.hooksPath tools/git-hooks` turns the hook on in a clone,
+# and .claude/settings.json runs that command when a Claude Code session
+# starts.
+#
+# Usage: commit-msg FILE
+#
+set -u
+
+if [ "$#" -ne 1 ] || [ ! -f "$1" ] || [ ! -r "$1" ]; then
+    echo 'commit-msg: usage: commit-msg FILE' >&2
+    exit 2
+fi
+found=$(LC_ALL=C grep -n -i -E \
+    -e '^(co-authored-by|claude-session|signed-off-by)[[:space:]]*:' \
+    -e '^([^ -~]+[[:space:]]+)?generated with \[?claude code([[:space:]]|]|$)' \
+    -e '^[[:alnum:]][[:alnum:]-]*:[[:space:]]*[^<>]*<noreply@anthropic\.com>[[:space:]]*$' \
+    "$1")
+case $? in
+    0) ;;
+    1) exit 0 ;;
+    *) echo 'commit-msg: cannot check the message' >&2; exit 2 ;;
+esac
+first=$(printf '%s\n' "$found" | head -n 1)
+printf 'commit-msg: refused: attribution on line %s: %s\n' "${first%%:*}" "${first#*:}" >&2
+exit 1
