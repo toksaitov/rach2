@@ -19,7 +19,20 @@ This file states the rules in force; their history is in commit messages and `de
 ## Roles
 
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
-* Codex reviews: once per milestone, at its end, as the `milestone` skill describes, and otherwise when the owner asks.
+* Codex reviews at the end of each batch, as Batches says, and otherwise when the owner asks.
+
+## Batches
+
+* Work comes in batches: one phase of a plan, or several phases the owner names as one batch.
+* Build the whole batch first. Write every item, compile as you go, and check a detail by hand only when reading and reasoning cannot settle it. Start no suite, full set, review or other long run while the batch is being built.
+* Work on the real machine comes last in the building, after every item is written and before any check.
+* Then check the batch once, ordering the steps by cause and effect, so that nothing is checked before a later step changes it:
+  1. The compile and `tests/run style`, which are fast and catch mechanical faults.
+  2. The Codex review of the whole batch, and its fixes.
+  3. The build from clean and `tests/run all`, with the mutation tests of new checks, and their fixes.
+  4. For every fix after that, only the checks it could affect and a review of its diff, repeated until a round finds nothing.
+  5. If the checks changed what the machine runs, the machine gets the final build.
+  6. A last `tests/run all` on the final tree closes the batch.
 
 ## Build
 
@@ -34,7 +47,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 ## Testing
 
-* Check a change with the tests that cover what it changed. The full set, the Codex review and the mutation tests of a milestone run once, at its close (`milestone` skill); outside that, a Codex review runs only when the owner asks for one.
+* Outside a plan's batches, check a change with the tests that cover what it changed, and run a Codex review only when the owner asks for one.
 * Code is written, reviewed and committed on the Mac mini, which runs a compile or one host test. Every suite, full set (`tests/run all`) and analysis runs on the testing host, as the `testing` skill describes.
 * A test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. The `testing` skill has the mechanics.
 * A suite judges what the kernel counts, never the clock; seconds in a suite are completion bounds.
