@@ -7,14 +7,14 @@
  * reports word and phrase totals for the report and baseline drivers, and
  * `devlog` checks the milestone index against the directories beside it.
  *
- * `columns [PATH ...]` holds comment lines to 80 columns. CLAUDE.md wraps
+ * `columns [PATH ...]` holds comment lines to 80 columns. AGENTS.md wraps
  * comments at 80 and .clang-format sets 100 for code, so only WHOLE
  * comment lines are measured: a comment trailing a code line is part of a
  * code line and answers to the second rule. A string literal holding a
  * comment delimiter is not a comment either, which is why the scan tracks
  * literals.
  *
- * `banned [PATH ...]` fails on the terms CLAUDE.md's register rule names.
+ * `banned [PATH ...]` fails on the terms AGENTS.md's register rule names.
  * It reads comments AND string literals, in every language here, because a
  * person reads a test failure message and it does not matter whether that
  * message came from C or from shell.
@@ -43,7 +43,7 @@
  * `--selftest` runs every rule over fixtures.
  *
  * This file states the register rule's terms, so it is exempt from
- * `banned`, as is that rule's own section in CLAUDE.md.
+ * `banned`, as is that rule's own section in AGENTS.md.
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -87,10 +87,10 @@ static const char *const WATCH[] = {"carries", "holds",     "rather than", "whic
                                     "worth",   "note that", ", not",       "instead of"};
 #define N_WATCH (int)(sizeof(WATCH) / sizeof(WATCH[0]))
 
-/* This file names what it bans; CLAUDE.md states the rule in one section
+/* This file names what it bans; AGENTS.md states the rule in one section
    and the rest of that file is checked normally. */
 static const char *const EXEMPT_FILES[] = {"tools/verify/prosecheck.c"};
-#define EXEMPT_MD      "CLAUDE.md"
+#define EXEMPT_MD      "AGENTS.md"
 #define EXEMPT_HEADING "### Register rule"
 
 static char repo[1024];
@@ -1406,13 +1406,13 @@ static int selftest(void)
 
     /* The register rule may name what it bans; nothing else may. */
     {
-        char claude[1024];
+        char policy[1024];
         struct spans body = {NULL, 0, 0};
 
-        join_path(claude, sizeof(claude), repo, "CLAUDE.md", "");
-        text = read_text(claude, &n);
+        join_path(policy, sizeof(policy), repo, "AGENTS.md", "");
+        text = read_text(policy, &n);
         if (text != NULL) {
-            prose_of(claude, text, n, 0, &body);
+            prose_of(policy, text, n, 0, &body);
             st_check(!any_span_has(&body, "load-bearing"),
                      "the register rule's own text was not exempted");
             spans_free(&body);
@@ -1428,7 +1428,7 @@ static int selftest(void)
                     char doctored[1024];
                     size_t head = (size_t)(at - text) + 1;
 
-                    snprintf(doctored, sizeof(doctored), "%s/CLAUDE.md", st_dir);
+                    snprintf(doctored, sizeof(doctored), "%s/AGENTS.md", st_dir);
                     f = fopen(doctored, "wb");
                     if (f != NULL) {
                         fwrite(text, 1, head, f);

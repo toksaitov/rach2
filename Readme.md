@@ -129,7 +129,7 @@ The procedures are the manual's, written once and read on the machine as well as
 
 The measured facts of the one installed machine, its address, its disk's geometry and the offsets a raw write depends on, are in [`dev-log/43-machine/hardware.md`](dev-log/43-machine/hardware.md). Read them from there rather than from memory: a command with an offset from an older layout writes into the middle of a partition this one has.
 
-What the host does around those procedures, the SSH form, the credential check before a root write, and the netconsole capture, is in the [tools Readme](tools/Readme.md#working-an-installed-machine-from-the-host). Writes to that disk follow the hardware rule in [`CLAUDE.md`](CLAUDE.md): the Lenovo's disks and the development flash drive are a sandbox the owner has authorized, written as the work needs without a backup taken for their safety, and a machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
+What the host does around those procedures, the SSH form, the credential check before a root write, and the netconsole capture, is in the [tools Readme](tools/Readme.md#working-an-installed-machine-from-the-host). Writes to that disk follow the hardware rule in [`AGENTS.md`](AGENTS.md): the Lenovo's disks and the development flash drive are a sandbox the owner has authorized, written as the work needs without a backup taken for their safety, and a machine left unbootable is reinstalled from the flash drive, which stays plugged into it.
 
 ## Repository map
 
@@ -159,9 +159,9 @@ Build, history, and tests:
 
 ## Development
 
-[`CLAUDE.md`](CLAUDE.md) defines the project rules for builds, writing, verification, hardware, and Git. [`AGENTS.md`](AGENTS.md) directs coding agents to those rules. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
+[`AGENTS.md`](AGENTS.md) defines the project rules for builds, writing, verification, hardware, and Git, for every coding agent. [`CLAUDE.md`](CLAUDE.md) imports it for Claude Code and adds the rules for directing the work. Read a component's Readme before changing it. The component Readme defines the current contract; [`dev-log/`](dev-log/Readme.md) records how earlier milestones were planned and built.
 
-The development procedure, including when `tests/run style` and `tests/run host` run, is in `CLAUDE.md`.
+The development procedure, including when `tests/run style` and `tests/run host` run, is in `AGENTS.md`.
 
 ## Third-party sources and license
 

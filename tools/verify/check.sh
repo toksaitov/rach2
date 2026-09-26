@@ -383,7 +383,7 @@ fi
 
 # Vocabulary. Only the half of the register rule a script can decide: terms with
 # no legitimate use in this tree, in comments AND in the strings a person reads.
-# The other half, and the repetition report, are for review; see CLAUDE.md.
+# The other half, and the repetition report, are for review; see AGENTS.md.
 if "$PROSECHECK" --selftest >"$VDIR/verify_prose.log" 2>&1 &&
    "$PROSECHECK" banned >>"$VDIR/verify_prose.log" 2>&1; then
     echo "  PASS (banned vocabulary)"

@@ -27,4 +27,4 @@ the reason false removes the exception and fixes what the check then finds.
   each with its reason in the comment above it.
 * The prose checks: the register rule's own text, the checker's word lists
   and its fixtures are the only places the banned terms may appear, as
-  `CLAUDE.md` says.
+  `AGENTS.md` says.
