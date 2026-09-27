@@ -90,6 +90,10 @@ void fb_release_if_owner(uint32_t pid)
 /* Kernel stack size (16KB) */
 #define KERNEL_STACK_SIZE 0x4000
 
+/* The boot stack, from loader.s, which process 0, the first program and the
+ * programs the debug shell starts run on. */
+extern char stack[];
+
 /*
  * A process's kernel stack comes from the heap at fork, KERNEL_STACK_SIZE
  * of pages with an unmapped guard page below them, and goes back when the
@@ -121,10 +125,17 @@ static uintptr_t kstack_alloc(void)
     return (uintptr_t)base;
 }
 
-/** Give back the stack whose top is `top`, with its guard page. */
+/**
+ * Give back the stack whose top is `top`, with its guard page.
+ *
+ * The boot stack is part of the kernel image and not the heap's, and is left
+ * as it is. A record whose stack it is can still come here: a thread of a
+ * program on the boot stack that calls execve takes its leader's place, and
+ * the leader's record goes (`exec_take_leader`).
+ */
 static void kstack_free(uintptr_t top)
 {
-    if (top != 0) {
+    if (top != 0 && top != (uintptr_t)stack + KERNEL_STACK_SIZE) {
         kfree_guarded((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);
     }
 }
@@ -251,9 +262,6 @@ extern void shell_reset_input(void);
 extern bool debug_shell_is_home;
 
 extern void panic_init_died(uint32_t pid);
-
-/* Kernel stack from loader.s */
-extern char stack[];
 
 #define KERNEL_STACK_SIZE_LOCAL 0x4000
 

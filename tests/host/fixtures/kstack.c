@@ -15,7 +15,11 @@
  * without (`kalloc_pages`), and records which a stack came from and went
  * back to: a stack must be a guarded run, since the guard is what turns an
  * overrun into a fault. `kstack_overrun_pid` must name the running thread
- * for an address in the page below its stack and for no other.
+ * for an address in the page below its stack and for no other. The boot
+ * stack is the kernel image's, and `kstack_free` must give nothing back for
+ * its top, which a record reaches when a thread of a program on the boot
+ * stack calls execve and the leader's record goes; the heap here frees only
+ * what it gave.
  *
  * The fixture is hosted C: `uintptr_t` is the host's, wide enough for the
  * host pointer `kstack_alloc` returns as an integer. The addresses the
@@ -34,6 +38,10 @@ typedef struct process {
 
 process_t *current_proc;
 
+/* The boot stack, as loader.s reserves it; defined below, once the size is
+ * known. */
+extern char stack[];
+
 /* External, so that a fault which removes the clearing leaves an unused
  * function the compiler does not refuse. */
 void *kalloc_pages(uint32_t count, uintptr_t *phys);
@@ -45,9 +53,11 @@ int kstack_overrun_pid(uint32_t addr);
 
 #include "kstack.inc"
 
+char stack[KERNEL_STACK_SIZE];
+
 static int fails, heap_empty;
 static uint32_t plain_asked, guarded_asked, guarded_freed;
-static void *guarded_freed_at;
+static void *guarded_freed_at, *last_given;
 
 static void check(int ok, const char *what)
 {
@@ -70,6 +80,7 @@ static void *code_pages(uint32_t count)
     if (pages) {
         memset(pages, 0xC3, (size_t)count * PAGE_SIZE);
     }
+    last_given = pages;
     return pages;
 }
 
@@ -94,11 +105,16 @@ void *kalloc_guarded(uint32_t count)
     return code_pages(count);
 }
 
+/* A free is recorded whatever it names, and done only for the pages the
+ * heap gave last, as the kernel's refuses pages it did not give. */
 void kfree_guarded(void *pages, uint32_t count)
 {
     guarded_freed_at = pages;
     guarded_freed = count;
-    free(pages);
+    if (pages == last_given) {
+        free(pages);
+        last_given = NULL;
+    }
 }
 
 /* The kernel's fill, for the extracted code: every byte of `n` set. */
@@ -157,6 +173,11 @@ int main(void)
         check(guarded_freed_at == (void *)base && guarded_freed == KERNEL_STACK_SIZE / PAGE_SIZE,
               "the stack's top gives the same four pages and their guard back");
     }
+    guarded_freed_at = NULL;
+    guarded_freed = 0;
+    kstack_free((uintptr_t)stack + KERNEL_STACK_SIZE);
+    check(guarded_freed_at == NULL && guarded_freed == 0,
+          "the boot stack's top gives nothing back");
     heap_empty = 1;
     check(kstack_alloc() == 0, "a heap with no pages gives no stack");
     overrun_rows();
