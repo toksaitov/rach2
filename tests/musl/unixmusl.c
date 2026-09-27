@@ -27,7 +27,8 @@
  * before, closes from its head. A datagram send waiting for room fails with
  * EPIPE when the receiver shuts down reading. A stream whose peer's queue is
  * full polls writable once it is shut down for writing, and the write then
- * fails with EPIPE.
+ * fails with EPIPE. A recvfrom given an address and no length pointer fails
+ * with EFAULT and leaves the message for the next receive.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -840,12 +841,35 @@ static int shut_writable(void)
     return 0;
 }
 
+/* A recvfrom given an address and no length pointer fails with EFAULT
+ * before it takes the message, which the next receive gets. */
+static int recvfrom_no_length(void)
+{
+    struct sockaddr_un got;
+    char buf[8];
+    int sv[2];
+
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0 || send(sv[0], "nl", 2, 0) != 2) {
+        return fail("a datagram pair for a recvfrom with no length");
+    }
+    if (recvfrom(sv[1], buf, sizeof(buf), 0, (struct sockaddr *)&got, NULL) != -1 ||
+        errno != EFAULT) {
+        return fail("a recvfrom with an address and no length was not EFAULT");
+    }
+    if (recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT) != 2 || memcmp(buf, "nl", 2) != 0) {
+        return fail("a recvfrom refused with EFAULT took the message");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
-        chain_close() || datagram_names() || waiting() || shut_writable()) {
+        chain_close() || datagram_names() || waiting() || shut_writable() || recvfrom_no_length()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");

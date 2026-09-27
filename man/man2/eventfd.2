@@ -63,9 +63,10 @@ has another bit; or a read or write was shorter than eight bytes, a read
 of zero bytes among them, or a
 write gave 0xffffffffffffffff.
 .It Er EMFILE
-The process has no free descriptor.
+The process has no free descriptor below its limit.
 .It Er ENOMEM
-The kernel had no memory for the counter.
+The kernel had no memory for the counter, a larger descriptor table or
+an open-file description.
 .El
 .Sh SEE ALSO
 .Xr epoll 2 ,

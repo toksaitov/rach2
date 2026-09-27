@@ -567,7 +567,7 @@ int32_t sys_pipe2(struct isr_params *params)
     }
 
     kfds[0] = fd_alloc(current_proc->fds);
-    kfds[1] = kfds[0] >= 0 ? fd_alloc(current_proc->fds) : -1;
+    kfds[1] = kfds[0] >= 0 ? fd_alloc(current_proc->fds) : kfds[0];
     if (kfds[1] < 0 || copy_to_user((void __user *)fds_ptr, kfds, sizeof(kfds)) != 0) {
         if (kfds[1] >= 0) {
             fd_free(current_proc->fds, kfds[1]);
@@ -576,7 +576,7 @@ int32_t sys_pipe2(struct isr_params *params)
             fd_free(current_proc->fds, kfds[0]);
         }
         pipe_free(pipe);
-        return kfds[1] < 0 ? -EMFILE : -EFAULT;
+        return kfds[1] < 0 ? kfds[1] : -EFAULT;
     }
     pipe_setup_end(kfds[0], pipe, FD_FLAG_READ, flags);
     pipe_setup_end(kfds[1], pipe, FD_FLAG_WRITE, flags);

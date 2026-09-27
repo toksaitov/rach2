@@ -482,7 +482,7 @@ static int32_t make_epoll(uint32_t flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(ep);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;

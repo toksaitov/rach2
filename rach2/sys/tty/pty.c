@@ -574,7 +574,7 @@ int pty_open_master(int flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         pty_free(p);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PTM;
@@ -611,7 +611,7 @@ int pty_open_slave(int index, int flags)
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PTS;

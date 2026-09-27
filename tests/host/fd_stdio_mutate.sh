@@ -3,6 +3,8 @@
 # two namespace faults change the test that `fd_ofd_lock` and `fd_ofd_unlock`
 # both make: one takes the mount's namespace for KRFFS alone, the other for
 # every mounted file system whether or not its type asks to be serialised.
+# The six allocation faults answer -1 where a refusal of a descriptor
+# answers EMFILE, ENOMEM or EBADF.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -59,7 +61,8 @@ run_phase()
 
 echo "fd-stdio-mutation: logs: $work"
 run_phase fixed 0 'fd_hosttest: pass:'
-for fault in unchecked rollback process repoint namespace unserialised; do
+for fault in unchecked rollback process repoint namespace unserialised alloc-description \
+    alloc-growth alloc-minimum alloc-limit reach-growth reach-range; do
     source="$work/sys/fs/fd.c"
     [ "$fault" != process ] || source="$work/sys/proc/process.c"
     python3 - "$source" "$fault" <<'PY'
@@ -80,6 +83,18 @@ changes = {
     "unchecked": ("        if (!ofd) {\n            while (i > FD_STDIN)",
                   "        if (0) {\n            while (i > FD_STDIN)"),
     "rollback": ("                fd_free(table, --i);", "                --i;"),
+    "alloc-description": ("        if (!ofd) {\n            return -ENOMEM;",
+                          "        if (!ofd) {\n            return -1;"),
+    "alloc-growth": ("        if (rc != 0) {\n            return rc;",
+                     "        if (rc != 0) {\n            return -1;"),
+    "alloc-minimum": ("    if (!table || minfd < 0 || minfd >= limit) {\n        return -EMFILE;",
+                      "    if (!table || minfd < 0 || minfd >= limit) {\n        return -1;"),
+    "alloc-limit": ("    if (i >= limit) {\n        return -EMFILE;",
+                    "    if (i >= limit) {\n        return -1;"),
+    "reach-growth": ("    return fd_table_grow(table, fd + 1);",
+                     "    return fd_table_grow(table, fd + 1) ? -1 : 0;"),
+    "reach-range": ("    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -EBADF;",
+                    "    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -1;"),
 }
 old, new = changes[sys.argv[2]]
 if sys.argv[2] in ("namespace", "unserialised"):
@@ -103,6 +118,12 @@ PY
         repoint) message='mounted open handle remains stable during node relocation' ;;
         namespace) message='other mounted types take the namespace before the description' ;;
         unserialised) message='a file system that needs no serialising takes no namespace lock' ;;
+        alloc-description) message='a description the heap has no room for is ENOMEM' ;;
+        alloc-growth) message='a table the heap has no room to grow is ENOMEM' ;;
+        alloc-minimum) message='a minimum at the limit is EMFILE' ;;
+        alloc-limit) message='the process with a limit of 4 is held to it in the shared table' ;;
+        reach-growth) message='a dup2 past the end of a table the heap cannot grow is ENOMEM' ;;
+        reach-range) message='a dup2 destination outside the limit is EBADF' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

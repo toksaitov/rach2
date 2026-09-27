@@ -154,7 +154,7 @@ static void delay_ms(int ms)
 
 void _start(void)
 {
-    uint32_t args[6];
+    uint32_t args[6], rcv_len = 16;
     uint8_t local_sa[16], dst_sa[16], rcv_sa[16];
     char msg[] = "rach2-udp-echo";
     uint8_t buf[64];
@@ -234,7 +234,7 @@ void _start(void)
         args[2] = sizeof(buf);
         args[3] = MSG_DONTWAIT;
         args[4] = (uint32_t)rcv_sa;
-        args[5] = 0;
+        args[5] = (uint32_t)&rcv_len;
         n = socketcall(SC_RECVFROM, args);
     }
 

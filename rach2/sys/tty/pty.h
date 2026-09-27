@@ -66,7 +66,7 @@ void pty_init_pool(void);
  * open("/dev/ptmx"): allocate a pty pair and install the MASTER endpoint on a
  * fresh descriptor (locked until unlockpt). Returns the master fd (>= 0), or
  * -errno (-ENFILE if the heap has no room for a pair, -EMFILE if the fd table
- * is full).
+ * is full, -ENOMEM if the heap has no room for the descriptor).
  */
 int pty_open_master(int flags);
 
@@ -74,8 +74,9 @@ int pty_open_master(int flags);
  * open("/dev/pts/N"): install the SLAVE endpoint of pty N on a fresh
  * descriptor. Returns the slave fd (>= 0), or -errno (-ENXIO if N is
  * unallocated, -EIO if the pair is still locked, -EMFILE if the fd table is
- * full). The descriptor has only the access the open mode asks for, also
- * when /dev/tty resolves to the slave.
+ * full, -ENOMEM if the heap has no room for the descriptor). The descriptor
+ * has only the access the open mode asks for, also when /dev/tty resolves
+ * to the slave.
  */
 int pty_open_slave(int index, int flags);
 

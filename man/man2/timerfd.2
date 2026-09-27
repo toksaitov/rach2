@@ -97,7 +97,10 @@ is not a timer; a nanosecond field is outside 0 to 999999999, or a time
 is negative; or a read was shorter than eight bytes, a read of zero bytes
 among them.
 .It Er EMFILE
-The process has no free descriptor.
+The process has no free descriptor below its limit.
+.It Er ENOMEM
+The kernel had no memory for the timer, a larger descriptor table or an
+open-file description.
 .It Er EPERM
 The clock is
 .Dv CLOCK_REALTIME_ALARM

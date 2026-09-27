@@ -673,7 +673,8 @@ static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint32_t time
 
 /**
  * Reserve the lowest free descriptor for a socket a call is making: 0 or
- * more, or -EMFILE.
+ * more, or `fd_alloc`'s -EMFILE for a full table or -ENOMEM for a heap with
+ * no room.
  *
  * A reserved slot has no type yet, so no other thread sharing the table can
  * look it up, close it or duplicate over it. The call copies the number to
@@ -683,9 +684,7 @@ static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint32_t time
  */
 static int reserve(void)
 {
-    int fd = fd_alloc(table());
-
-    return fd < 0 ? -EMFILE : fd;
+    return fd_alloc(table());
 }
 
 /* Give the reserved descriptor `fd` the socket `s`, which takes the
@@ -784,7 +783,7 @@ int32_t unix_socketpair(int type, int protocol, int flags, uint32_t sv)
     a->has_peercred = 1;
     b->has_peercred = 1;
     fds[0] = reserve();
-    fds[1] = fds[0] >= 0 ? reserve() : -EMFILE;
+    fds[1] = fds[0] >= 0 ? reserve() : fds[0];
     rc = fds[1] < 0 ? fds[1] : 0;
     if (rc == 0 && copy_to_user((void __user *)sv, fds, sizeof(fds)) != 0) {
         rc = -EFAULT;
@@ -2198,8 +2197,9 @@ static void release_in(struct unix_in *in)
  * Each descriptor is reserved, its number copied out, and only then given
  * its open file, as Linux's receive_fd_user does: the copy can sleep, and a
  * thread sharing the table must find nothing there it could use or close.
- * Those that do not fit, or whose number cannot be written, are closed and
- * MSG_CTRUNC set, as in Linux.
+ * The descriptors that do not fit are closed and MSG_CTRUNC set, and so are
+ * the rest once the table or the heap has no room for one or its number
+ * cannot be written; the receive succeeds, as in Linux.
  */
 static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int flags)
 {
@@ -2298,6 +2298,11 @@ int32_t unix_sendto(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32
     return send_core(e, &iov, 1, len, addr ? &to : NULL, &out, flags);
 }
 
+/**
+ * recvfrom(2), and recv(2) and read(2) with no address. An address with no
+ * length pointer is EFAULT before anything is taken, so the message stays
+ * queued; Linux fails the call only after it has taken the message.
+ */
 int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint32_t addr,
                       uint32_t addrlen_ptr)
 {
@@ -2308,6 +2313,9 @@ int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint
     if (len > 0x7FFFFFFFu) {
         return -EINVAL;
     }
+    if (addr && !addrlen_ptr) {
+        return -EFAULT;
+    }
     iov.iov_base = buf;
     iov.iov_len = len;
     k_memset(&in, 0, sizeof(in));
@@ -2315,7 +2323,7 @@ int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint
     rc = recv_core(e, &iov, 1, len, flags, &in);
     release_in(&in);
     transit_leave(&in);
-    if (rc >= 0 && addr && addrlen_ptr) {
+    if (rc >= 0 && addr) {
         int32_t err = put_name(addr, addrlen_ptr, &in.from, 1);
 
         if (err != 0) {

@@ -3,6 +3,7 @@
 
 #include "vfs.h"
 #include "lock.h"
+#include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 
@@ -291,14 +292,14 @@ void fd_table_delete(fd_table_t *table)
     kfree(table);
 }
 
-/* The entries moved to an array of `cap`, the new ones free; -1 when the
- * heap has no room. */
+/* The entries moved to an array of `cap`, the new ones free; -ENOMEM when
+ * the heap has no room. */
 static int fd_table_resize(fd_table_t *table, int cap)
 {
     fd_entry_t *grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
 
     if (!grown) {
-        return -1;
+        return -ENOMEM;
     }
     if (table->cap) {
         k_memcpy(grown, table->entries, sizeof(fd_entry_t) * (size_t)table->cap);
@@ -309,15 +310,15 @@ static int fd_table_resize(fd_table_t *table, int cap)
     return 0;
 }
 
-/* The table grown to at least `want` entries by doubling; -1 when `want` is
- * past the limit or the heap has no room. A shared table has every entry
- * already. */
+/* The table grown to at least `want` entries by doubling; -EMFILE when
+ * `want` is past the limit, -ENOMEM when the heap has no room. A shared
+ * table has every entry already. */
 static int fd_table_grow(fd_table_t *table, int want)
 {
     int cap = table->cap ? table->cap : FD_TABLE_FIRST;
 
     if (want > fd_limit(table)) {
-        return -1;
+        return -EMFILE;
     }
     while (cap < want) {
         cap *= 2;
@@ -339,11 +340,8 @@ int fd_table_share(fd_table_t *table)
 
 int fd_table_reach(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0) {
-        return -1;
-    }
-    if (fd >= fd_limit(table)) {
-        return -1;
+    if (!table || fd < 0 || fd >= fd_limit(table)) {
+        return -EBADF;
     }
     if (fd < table->cap) {
         return 0;
@@ -392,8 +390,11 @@ int fd_init_stdio(fd_table_t *table)
  *
  * The chosen slot gets a fresh OFD but stays FD_TYPE_NONE; the caller fills in
  * type, node or sock, and flags. A table with no free slot at or above
- * `minfd` grows, up to the limit. Returns the descriptor number, or -1 when
- * the limit is reached or the heap has no room.
+ * `minfd` grows, up to the limit. Returns the descriptor number; -EMFILE
+ * when no slot at or above `minfd` is below the limit; or -ENOMEM when the
+ * heap has no room for the growth or the OFD, which leaves the slot free.
+ * The calls that make a descriptor return what they get, so that EMFILE
+ * means the limit and ENOMEM the heap, as on Linux.
  */
 int fd_alloc_from(fd_table_t *table, int minfd)
 {
@@ -401,7 +402,7 @@ int fd_alloc_from(fd_table_t *table, int minfd)
     int i;
 
     if (!table || minfd < 0 || minfd >= limit) {
-        return -1;
+        return -EMFILE;
     }
     for (i = minfd; i < table->cap && i < limit; i++) {
         if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
@@ -409,16 +410,20 @@ int fd_alloc_from(fd_table_t *table, int minfd)
         }
     }
     if (i >= limit) {
-        return -1;
+        return -EMFILE;
     }
-    if (i >= table->cap && fd_table_grow(table, i + 1) != 0) {
-        return -1;
+    if (i >= table->cap) {
+        int rc = fd_table_grow(table, i + 1);
+
+        if (rc != 0) {
+            return rc;
+        }
     }
     {
         struct open_file *ofd = ofd_alloc();
 
         if (!ofd) {
-            return -1;
+            return -ENOMEM;
         }
         table->entries[i].ofd = ofd;
         table->entries[i].ops = NULL;

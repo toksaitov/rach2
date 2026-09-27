@@ -1411,7 +1411,7 @@ int devfs_open(const char *name, int flags)
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        return -EMFILE;
+        return fd;
     }
 
     e = &current_proc->fds->entries[fd];

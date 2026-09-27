@@ -1,6 +1,7 @@
 /**
- * Check standard description allocation, locking across relocation, and the
- * descriptor limit of each process that shares a table.
+ * Check standard description allocation, locking across relocation, the
+ * descriptor limit of each process that shares a table, and the errors of
+ * an allocation the limit or the heap refuses.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -12,6 +13,7 @@
  * node even though fd_ofd_repoint updated the description.
  */
 #include "fs/vfs.h"
+#include "lib/kerrno.h"
 #include "mm/kheap.h"
 #include "proc/process.c"
 
@@ -315,7 +317,7 @@ static void shared_limits(void)
     current_proc = second;
     check(fd_limit(second->fds) == 4 && fd_alloc(second->fds) == 3,
           "the process with a limit of 4 takes descriptor 3");
-    check(fd_alloc(second->fds) == -1 && !fd_can_alloc(second->fds),
+    check(fd_alloc(second->fds) == -EMFILE && !fd_can_alloc(second->fds),
           "the process with a limit of 4 is held to it in the shared table");
     current_proc = first;
     check(fd_limit(first->fds) == FD_TABLE_LIMIT && fd_alloc(first->fds) == 4,
@@ -369,6 +371,53 @@ static void table_copies(void)
 }
 
 /**
+ * A descriptor the heap has no room for is ENOMEM, whether its description
+ * or the table's growth is refused, and leaves its slot free; a minimum at
+ * the limit is EMFILE. The growth dup2 asks for is ENOMEM when the heap has
+ * no room, and a destination outside the limit is EBADF.
+ */
+static void allocation_errors(void)
+{
+    fd_table_t table;
+    int i, fd;
+
+    check(fd_table_init(&table) == 0, "a table for the allocation errors");
+    fail_after = 0;
+    fd = fd_alloc(&table);
+    fail_after = -1;
+    check(fd == -ENOMEM && allocations == 1 && table.entries[0].type == FD_TYPE_NONE &&
+              !table.entries[0].ofd,
+          "a description the heap has no room for is ENOMEM and leaves the slot free");
+    for (i = 0; i < FD_TABLE_FIRST; i++) {
+        check(fd_alloc(&table) == i, "the first entries are taken in order");
+    }
+    fail_after = 0;
+    fd = fd_alloc(&table);
+    fail_after = -1;
+    check(fd == -ENOMEM && fd_table_cap(&table) == FD_TABLE_FIRST,
+          "a table the heap has no room to grow is ENOMEM");
+    fail_after = 1;
+    fd = fd_alloc(&table);
+    fail_after = -1;
+    check(fd == -ENOMEM && fd_table_cap(&table) == 2 * FD_TABLE_FIRST &&
+              !table.entries[FD_TABLE_FIRST].ofd && fd_alloc(&table) == FD_TABLE_FIRST,
+          "a description the heap has no room for in a grown table is ENOMEM");
+    check(fd_alloc_from(&table, FD_TABLE_LIMIT) == -EMFILE, "a minimum at the limit is EMFILE");
+    fail_after = 0;
+    fd = fd_table_reach(&table, FD_TABLE_LIMIT - 1);
+    fail_after = -1;
+    check(fd == -ENOMEM && fd_table_cap(&table) == 2 * FD_TABLE_FIRST,
+          "a dup2 past the end of a table the heap cannot grow is ENOMEM");
+    check(fd_table_reach(&table, FD_TABLE_LIMIT) == -EBADF && fd_table_reach(&table, -1) == -EBADF,
+          "a dup2 destination outside the limit is EBADF");
+    for (i = 0; i <= FD_TABLE_FIRST; i++) {
+        fd_free(&table, i);
+    }
+    fd_table_free(&table);
+    check(allocations == 0, "the allocation errors leave nothing allocated");
+}
+
+/**
  * Every description of a node holds it, one whose release is under way only
  * while another reference keeps it, and a description of another node or
  * one released holds nothing.
@@ -411,6 +460,7 @@ int main(void)
     process_allocations();
     shared_limits();
     table_copies();
+    allocation_errors();
     description_holders();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
@@ -451,7 +501,8 @@ int main(void)
     fd_free(&table, fd);
     fd_table_free(&table);
     if (!fails) {
-        printf("fd_hosttest: pass: stdio allocation, description ordering and shared limits\n");
+        printf("fd_hosttest: pass: stdio allocation, description ordering, shared limits and "
+               "allocation errors\n");
     }
     return fails != 0;
 }

@@ -174,11 +174,21 @@ has negative seconds, or nanoseconds outside 0 to 999999999.
 .Dv EPOLL_CTL_ADD
 of a set would make a cycle of sets, or sets nested more than four
 deep.
+.It Er EMFILE
+.Fn epoll_create
+or
+.Fn epoll_create1
+found no free descriptor below the process's limit.
 .It Er ENOENT
 .Dv EPOLL_CTL_MOD
 or
 .Dv EPOLL_CTL_DEL
 of a descriptor not in the set.
+.It Er ENOMEM
+The kernel heap has no room for a set, a larger descriptor table or an
+open-file description, for a descriptor
+.Dv EPOLL_CTL_ADD
+registers, or for the events a wait collects.
 .It Er EPERM
 .Fa fd
 is a regular file or a directory, which is always ready.

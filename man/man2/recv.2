@@ -70,20 +70,31 @@ number 371, and
 number 372, take their arguments in registers.
 .Ss Source addresses
 .Fn recvfrom
-reports a datagram's sender when both
+reports a datagram's sender when
 .Fa addr
-and
-.Fa addrlen
-are non-null.
+is non-null.
 Before the call,
 .Pf * Fa addrlen
 is the buffer capacity in bytes.
 The address is truncated to that capacity and the full address length
 is written to
 .Pf * Fa addrlen .
-If either pointer is null, no address is returned.
-On a stream, supplied address buffers are checked but no source address
-or length is written.
+A null
+.Fa addr
+asks for no address, and
+.Fa addrlen
+is not read.
+A non-null
+.Fa addr
+with a null
+.Fa addrlen
+fails with
+.Er EFAULT
+before any data is taken, so the message stays queued for the next
+receive; Linux fails the same call only after it has taken the message,
+which is then lost.
+On a TCP stream, supplied address buffers are checked but no source
+address or length is written.
 If receiving the data fails, no source address or length is written.
 .Pp
 An IPv4 socket returns a 16-byte
@@ -211,6 +222,15 @@ to a UDP socket through
 and receives it with
 .Fn recvfrom .
 It checks the payload and the reported source address and port.
+It then gives a
+.Fn recvfrom
+an address and no length pointer, requires
+.Er EFAULT ,
+and receives the datagram that call left queued;
+.Pa tests/musl/unixmusl.c
+does the same on an
+.Dv AF_UNIX
+datagram pair.
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN
@@ -222,7 +242,9 @@ A stream connection was reset, or a closed stream with no buffered data,
 no received FIN and no recorded error was read.
 .It Er EFAULT
 The socketcall arguments, data buffers, message header, vector list,
-or address buffers cannot be accessed as required.
+or address buffers cannot be accessed as required, or
+.Fn recvfrom
+was given an address and a null length pointer.
 For recv and recvfrom, a length exceeding 2147483647 also gives this error;
 recvmsg gives it for an individual buffer exceeding that size.
 .It Er EINTR

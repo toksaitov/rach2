@@ -166,7 +166,7 @@ Path resolution would follow more than 40 symbolic links.
 .It Er EMFILE
 Musl's
 .Dv AT_SYMLINK_NOFOLLOW
-sequence cannot allocate a descriptor for the target.
+sequence finds no free descriptor below the limit for the target.
 .It Er ENAMETOOLONG
 The supplied path or its joined absolute form exceeds 4095 bytes, a
 directory descriptor's path cannot be reconstructed within its buffer,
@@ -176,7 +176,10 @@ a component exceeds 255 bytes, or symbolic-link expansion exceeds
 The path is empty, a component or pseudoterminal is missing, or a
 symbolic link has an empty target.
 .It Er ENOMEM
-Path lookup cannot allocate a file-system node.
+Path lookup cannot allocate a file-system node, or the kernel heap has no
+room for the descriptor musl's
+.Dv AT_SYMLINK_NOFOLLOW
+sequence opens for the target.
 .It Er ENOTDIR
 A path component used as a directory is not a directory, or a relative
 path uses a nondirectory

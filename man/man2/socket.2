@@ -156,11 +156,12 @@ An
 .Dv AF_PACKET , SOCK_RAW
 request also returns this error.
 .It Bq Er EMFILE
-The process cannot allocate another descriptor or open-file description.
+The process has no free descriptor below its limit.
 .It Bq Er ENOBUFS
 The raw ICMP registration and receive queue cannot be allocated.
 .It Bq Er ENOMEM
-The socket object cannot be allocated.
+The socket object, a larger descriptor table or an open-file description
+cannot be allocated.
 .It Bq Er EOPNOTSUPP
 .Fn socketpair
 was asked for a domain other than

@@ -147,7 +147,9 @@ carried them, and a read that takes them ends after that send's bytes.
 Descriptors for which the receiver's control buffer has no room are
 closed, and
 .Dv MSG_CTRUNC
-is set.
+is set; so are the rest once the receiver has no free descriptor below
+its limit or the kernel heap has no room for one, and the receive still
+succeeds, as on Linux.
 A socket that is itself sent over itself and never received is not
 reclaimed; Linux collects such cycles.
 .Pp

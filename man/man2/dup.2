@@ -81,6 +81,22 @@ and
 .Fn dup3 ,
 a negative destination or one at or above this limit gives
 .Er EBADF .
+.Fn dup
+gives
+.Er EMFILE
+when no descriptor below the limit is free.
+A new descriptor past the end of the table grows it, and a kernel heap
+with no room for the larger table gives
+.Er ENOMEM ,
+as on Linux.
+.Fn dup
+also makes an open-file description for its new descriptor, which it
+drops at once to share the old one's, and a heap with no room for that
+gives
+.Er ENOMEM
+too; Linux's
+.Fn dup
+makes no description.
 .Pp
 The kernel releases a pipe, terminal or pseudo-terminal when the last
 descriptor referring to its open-file description is closed.
@@ -127,8 +143,12 @@ was given equal descriptors or flags other than 0 or
 .Dv O_CLOEXEC .
 .It Bq Er EMFILE
 .Fn dup
-cannot allocate a free descriptor below the limit, or storage for a
-descriptor or an enlarged table could not be allocated.
+has no free descriptor below the limit.
+.It Bq Er ENOMEM
+The kernel heap has no room for a larger descriptor table, or for the
+open-file description
+.Fn dup
+makes.
 .It Bq Er ESRCH
 There is no current process.
 .El
