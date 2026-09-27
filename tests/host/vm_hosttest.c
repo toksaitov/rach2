@@ -112,11 +112,11 @@ static void nowrite_rows(void)
     vm_free(&p);
 }
 
-/* A region that maps a file: a split gives the upper part the file's
- * later pages and a reference of its own; the pieces join again only
- * where the pages continue, and regions that meet in the address space
- * with pages that do not continue stay apart; a copy for fork takes references of its own,
- * and the file waits for vm_file_reap after its last reference goes. */
+/* A region that maps a file: a split gives the upper part the file's later
+ * pages and a reference of its own; the pieces join again only where the pages
+ * continue, and regions that meet in the address space with pages that do not
+ * continue stay apart; a copy for fork takes references of its own, and the
+ * file waits for vm_file_reap after its last reference goes. */
 static void file_rows(void)
 {
     vm_space_t m = {0};
