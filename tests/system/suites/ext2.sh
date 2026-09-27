@@ -61,7 +61,7 @@ sh "$REPO/tools/image/mkext2.sh" "$REPO/krffs/manifests/os-real.manifest" "$VOL"
 # here rather than into the manifest, each at the root under its own name.
 # `write` stores a file with the mode of the host's copy, which is not what
 # these need, so each mode is set after it.
-for prog in modeprobe suidhelper zombieprobe musl/lchownmusl; do
+for prog in modeprobe suidhelper zombieprobe musl/lchownmusl musl/direntmusl; do
     name=$(basename "$prog")
     debugfs -w -R "write $REPO/build/tests/$prog $name" "$VOL" > /dev/null 2>&1 \
         || fail "staging $name in the ext2 volume"
@@ -172,6 +172,14 @@ echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
 boot_root "$ROOT.lchown.log" --ok "LCHOWNMUSL OK (links)" \
     "send=/lchownmusl /tmp" "expect=LCHOWNMUSL OK (links)" || fail "lchown on the ext2 root"
 echo "ext2-test: lchown and AT_SYMLINK_NOFOLLOW change a link and chown its target: OK"
+
+# ---- 2d'': the entry types getdents64 reports from ext2's file-type bytes. The
+#       probe runs in the default suite too; here a symbolic link must be
+#       DT_LNK, and every entry of / and /bin of this root must have the type
+#       lstat gives it.
+boot_root "$ROOT.dirent.log" --ok "DIRENTMUSL OK (links)" \
+    "send=/direntmusl /tmp" "expect=DIRENTMUSL OK (links)" || fail "d_type on the ext2 root"
+echo "ext2-test: getdents64 reports each entry's type, a link as DT_LNK: OK"
 
 # ---- 2e: signal teardown beside a writer on an ext2 root. This stress row
 # does not force lock contention; exit_hosttest proves the cleanup ordering.

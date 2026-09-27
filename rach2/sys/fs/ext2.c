@@ -778,6 +778,25 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     return (int32_t)count;
 }
 
+/**
+ * The getdents64 type of the file-type byte a directory entry stores under
+ * the filetype feature: regular file, directory, character and block
+ * device, FIFO, socket and symbolic link are 1 through 7 on disk, and 0 or a
+ * value past EXT2_FT_MAX is VFS_DT_UNKNOWN.
+ */
+static int ext2_dtype(uint32_t ft)
+{
+    static const unsigned char dt[EXT2_FT_MAX + 1] = {0, 8, 4, 2, 6, 1, 12, 10};
+
+    return ft <= EXT2_FT_MAX ? dt[ft] : VFS_DT_UNKNOWN;
+}
+
+/**
+ * The next entry of directory `handle` at `*cursor`. Its type comes from the
+ * entry's file-type byte when the volume has the filetype feature, and from
+ * the inode's mode otherwise, which is read anyway to tell a directory from
+ * the rest.
+ */
 static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                         struct vfs_dirent *ent)
 {
@@ -802,6 +821,7 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         ent->ino = sc.ino;
         if (em->incompat & EXT2_INCOMPAT_FILETYPE) {
             ent->is_dir = sc.type == EXT2_FT_DIR;
+            ent->type = ext2_dtype(sc.type);
         } else {
             struct ext2_node probe;
             int rc = inode_load(em, sc.ino, &probe);
@@ -810,6 +830,7 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                 return rc;
             }
             ent->is_dir = (probe.mode & S_IFMT_) == S_IFDIR_;
+            ent->type = (int)VFS_DT_OF(probe.mode);
         }
         return 1;
     }

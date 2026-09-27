@@ -6940,6 +6940,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
     if (kind == VNODE_DEV_DIR) {
         const char *dn = NULL;
         uint32_t dino = 0;
+        uint32_t dmode = 0;
         int i;
 
         /* Through devfs_dirent, which skips absent entries and reports the
@@ -6953,7 +6954,8 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
         name[i] = '\0';
         *ino = dino;
-        *dtype = DT_CHR;
+        (void)devfs_stat(dn, &dmode, NULL, NULL);
+        *dtype = (uint8_t)VFS_DT_OF(dmode);
         return 1;
     }
     if (kind == VNODE_PTS_DIR) {
@@ -7125,7 +7127,9 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
  * Read directory entries (getdents64(2)).
  *
  * EBX = fd, ECX = dirp buffer, EDX = count. Packs linux_dirent64 records
- * into the buffer, one per child, and advances the fd's offset cursor.
+ * into the buffer, one per child, and advances the fd's offset cursor. A
+ * record's `d_type` is the type the file system gives the child, DT_UNKNOWN
+ * where it gives none, and never DT_REG for anything but a regular file.
  * Returns the bytes written, 0 at end of directory, or -errno.
  */
 int32_t sys_getdents64(isr_params_t *params)
@@ -7217,8 +7221,10 @@ int32_t sys_getdents64(isr_params_t *params)
                 struct linux_dirent64 rec;
                 uint8_t bytes[VFS_NAME_MAX + 1 + 32];
             } recbuf;
-            int got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
+            int got;
 
+            de.type = VFS_DT_UNKNOWN;
+            got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
             if (got == 0) {
                 break;
             }
@@ -7246,7 +7252,7 @@ int32_t sys_getdents64(isr_params_t *params)
             dirent->d_ino = de.ino;
             dirent->d_off = (int64_t)cursor; /* next position */
             dirent->d_reclen = (uint16_t)rec_len;
-            dirent->d_type = de.is_dir ? DT_DIR : DT_REG;
+            dirent->d_type = (uint8_t)de.type;
             k_memcpy(dirent->d_name, de.name, name_len + 1);
             if (copy_to_user((void __user *)(buf + bytes_written), recbuf.bytes, rec_len) != 0) {
                 fd_ofd_unlock(ofd);

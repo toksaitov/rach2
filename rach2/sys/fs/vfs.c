@@ -1293,6 +1293,7 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
             ent->name[nlen] = '\0';
             ent->ino = krffs_node_ino(node);
             ent->is_dir = KRFFS_IS_DIR(node->mode) ? 1 : 0;
+            ent->type = ent->is_dir ? VFS_DT_DIR : VFS_DT_REG;
             *cursor = node_off + 1;
             return 1;
         }

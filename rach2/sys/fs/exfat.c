@@ -1117,6 +1117,7 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
         ent->name[sizeof(ent->name) - 1] = '\0';
     }
     ent->is_dir = (le16(set.file + 4) & ATTR_DIRECTORY) != 0;
+    ent->type = ent->is_dir ? VFS_DT_DIR : VFS_DT_REG;
     {
         struct ex_node probe;
 
