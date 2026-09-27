@@ -14,8 +14,9 @@
  * removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a regular
  * file is refused with EPERM and a second add with EEXIST. A child's write
  * wakes a parent the child has seen asleep in an epoll_wait with no timeout.
- * The child stays alive until the parent answers, so that only the write can
- * end the wait, and an alarm bounds it. A registration of no events is told of
+ * The child keeps running until the parent answers, so that the kernel does not
+ * idle, which would scan the set again at every interrupt, and only the write
+ * can end the wait; an alarm bounds it. A registration of no events is told of
  * a hangup. A pipe added to a set while a wait on it sleeps, then written,
  * wakes the wait. A set whose edge-triggered event was reported does not poll
  * readable, and a poll of a set is woken by a child's write to a pipe it
@@ -82,11 +83,17 @@ static int sleeping(pid_t pid)
     return state && state[1] == ' ' && state[2] == 'S';
 }
 
-/** Wait up to 3 s to see `parent` asleep, write a byte to `out`, and exit
- * only once `ack` has one: 0 when all of that happened, 2 when the parent
- * was never seen asleep. */
+/**
+ * Wait up to 3 s to see `parent` asleep, write a byte to `out`, and keep
+ * running, reading the nonblocking `ack` in a loop, until it has a byte or
+ * 15 s have passed. A process that runs keeps the kernel from idling, and an
+ * idle kernel scans the parent's descriptors again at every interrupt, which
+ * would end the wait without the write's wake. Exits 0 when all of that
+ * happened, 2 when the parent was never seen asleep, and 3 when no byte came.
+ */
 static void writer(pid_t parent, int out, int ack)
 {
+    struct timespec start, now;
     char byte;
     int tries;
 
@@ -96,7 +103,16 @@ static void writer(pid_t parent, int out, int ack)
     if (tries == 300) {
         _exit(2);
     }
-    _exit(write(out, "w", 1) == 1 && read(ack, &byte, 1) == 1 ? 0 : 1);
+    if (write(out, "w", 1) != 1 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        _exit(1);
+    }
+    do {
+        if (read(ack, &byte, 1) == 1) {
+            _exit(0);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &now);
+    } while (now.tv_sec - start.tv_sec < 15);
+    _exit(3);
 }
 
 static int counters(void)
@@ -233,7 +249,8 @@ static int sets(void)
 
         memset(&sa, 0, sizeof(sa));
         sa.sa_handler = on_alarm;
-        if (pipe(ack) != 0 || sigaction(SIGALRM, &sa, NULL) != 0) {
+        if (pipe(ack) != 0 || fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0 ||
+            sigaction(SIGALRM, &sa, NULL) != 0) {
             return fail("setup for the child's wake");
         }
         pid = fork();
