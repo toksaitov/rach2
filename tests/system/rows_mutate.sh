@@ -93,10 +93,10 @@ changes = {
     '    const struct disk_node *node = disk_node_of(dev);\n\n    if (node) {\n        return DEVFS_NDEV',
     '    const struct disk_node *node = (const struct disk_node *)dev;\n\n    if (node) {\n        return DEVFS_NDEV'),
 'sigprobe': ('rach2/sys/syscall_proc.c',
-    '    handler = sa->handler;\n    if (sa->flags & SA_RESETHAND) {\n'
-    '        sa->handler = KSIG_DFL; /* one-shot */\n    }\n',
-    '    if (sa->flags & SA_RESETHAND) {\n'
-    '        sa->handler = KSIG_DFL; /* one-shot */\n    }\n    handler = sa->handler;\n'),
+    '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n',
+    '        if (handler_flags & SA_RESETHAND) {\n'
+    '            sa->handler = KSIG_DFL;\n        }\n'
+    '        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {\n'),
 'procprobe': ('rach2/sys/fs/synthfs.h',
     '#define SYNTH_PROC_INTERRUPTS  16\n',
     '#define SYNTH_PROC_INTERRUPTS  15\n'),

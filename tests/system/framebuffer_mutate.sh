@@ -122,8 +122,8 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 old, new = {
-    'owner': ('if (fb_owner_pid != current_proc->pid &&',
-              'if (0 && fb_owner_pid != current_proc->pid &&'),
+    'owner': ('if (fb_owner_pid != current_proc->tgid &&',
+              'if (0 && fb_owner_pid != current_proc->tgid &&'),
     'reentry': ('if (!vga_graphics_mode) {', 'if (0) {'),
 }[sys.argv[2]]
 text = path.read_text()
