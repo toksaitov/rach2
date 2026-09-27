@@ -466,7 +466,7 @@ uint32_t procfs_task_links(int pid)
  * ID that is `p`'s, as Linux's ptrace check asks at its simplest. */
 static int procfs_may_read_mem(const process_t *p)
 {
-    return current_proc && (current_proc->euid == 0 || current_proc->ruid == p->ruid);
+    return current_proc && (proc_privileged(current_proc) || current_proc->ruid == p->ruid);
 }
 
 int procfs_readlink_exe(int pid, char *buf, int cap)
@@ -866,7 +866,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_set(t, "SigBlk", p->sig_blocked);
     ap_set(t, "SigIgn", ignored);
     ap_set(t, "SigCgt", caught);
-    caps = p->euid == 0 ? 0x000001FFFFFFFFFFULL : 0;
+    caps = proc_privileged(p) ? 0x000001FFFFFFFFFFULL : 0;
     ap_set(t, "CapInh", 0);
     ap_set(t, "CapPrm", caps);
     ap_set(t, "CapEff", caps);
@@ -2163,7 +2163,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (current_proc->euid != 0 && (current_proc->ruid != p->ruid || !p->mm->dumpable)) {
+    if (!proc_privileged(current_proc) && (current_proc->ruid != p->ruid || !p->mm->dumpable)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));

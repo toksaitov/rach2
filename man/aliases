@@ -23,6 +23,7 @@ bunzip2 1 busybox-archival
 bzcat 1 busybox-archival
 bzip2 1 busybox-archival
 cal 1 busybox-util-linux
+capset 2 capget
 cat 1 busybox-coreutils
 chat 1 busybox-miscutils
 chattr 8 busybox-e2fsprogs

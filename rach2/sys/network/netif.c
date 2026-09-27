@@ -166,7 +166,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 
     setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK || request == SIOCSIFBRDADDR ||
               request == SIOCSIFFLAGS);
-    if (setter && (!current_proc || current_proc->euid != 0)) {
+    if (setter && (!current_proc || !proc_privileged(current_proc))) {
         return -EPERM;
     }
 
@@ -262,7 +262,7 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     uint32_t dst, gw, mask, dev;
     struct netdev *nd;
 
-    if (!current_proc || current_proc->euid != 0) {
+    if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
     }
     if (copy_from_user(rt, (const void __user *)arg, RTENTRY_LEN) != 0) {

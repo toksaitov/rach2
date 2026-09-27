@@ -86,6 +86,8 @@
 #define SYS_NEWSELECT       142 /* _newselect: the normal 5-arg form */
 #define SYS_POLL            168
 #define SYS_PRCTL           172
+#define SYS_CAPGET          184
+#define SYS_CAPSET          185
 #define SYS_PSELECT6        308
 #define SYS_PPOLL           309
 #define SYS_GETRUSAGE       77

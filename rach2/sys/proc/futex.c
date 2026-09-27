@@ -418,7 +418,7 @@ int32_t sys_get_robust_list(isr_params_t *params)
         if (t == NULL || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
             return -ESRCH;
         }
-        if (current_proc->euid != 0 && current_proc->euid != t->ruid &&
+        if (!proc_privileged(current_proc) && current_proc->euid != t->ruid &&
             current_proc->euid != t->euid) {
             return -EPERM;
         }

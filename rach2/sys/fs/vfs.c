@@ -259,9 +259,10 @@ static int in_groups(uint32_t gid)
 
 /*
  * The classic nine-bit rule over the attributes the file system reports:
- * one identity class is chosen and judged alone. `use_real` judges by the
- * real ids, for access(2), the one call that asks who the process really
- * is. The search bit is what walking a directory costs.
+ * one identity class is chosen and judged alone, and a uid of 0 passes
+ * unless the thread gave up its capabilities (`nocaps`). `use_real` judges
+ * by the real ids, for access(2), the one call that asks who the process
+ * really is. The search bit is what walking a directory costs.
  */
 static int may_search(struct vfs_mount *mnt, void *node, int use_real)
 {
@@ -283,7 +284,7 @@ static int may_search(struct vfs_mount *mnt, void *node, int use_real)
         return 0;
     }
     uid = use_real ? current_proc->ruid : current_proc->euid;
-    if (uid == 0) {
+    if (uid == 0 && !current_proc->nocaps) {
         return 0;
     }
     if (uid == st.uid) {

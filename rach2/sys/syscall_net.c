@@ -362,7 +362,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         if (protocol != IPPROTO_RAW && protocol != IPPROTO_ICMP) {
             return -EPROTONOSUPPORT;
         }
-        if (!current_proc || current_proc->euid != 0) {
+        if (!current_proc || !proc_privileged(current_proc)) {
             return -EPERM;
         }
     } else if (type != SOCK_DGRAM && type != SOCK_STREAM) {
@@ -373,7 +373,7 @@ static int32_t do_socket(int domain, int type, int protocol)
          * frames the IP layer never saw, so it is root's. The protocol is in
          * network byte order, as Linux takes it, and the two this stack has
          * frames for are IPv4 and ARP. */
-        if (!current_proc || current_proc->euid != 0) {
+        if (!current_proc || !proc_privileged(current_proc)) {
             return -EPERM;
         }
         if (type != SOCK_DGRAM) {
@@ -536,7 +536,7 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     /* A port below 1024 is a service's, and a service is root's. Without this
      * any user could take the port a DHCP client or an SSH server answers on
      * and be the one machines on the wire talk to. */
-    if (port != 0 && port < 1024 && (!current_proc || current_proc->euid != 0)) {
+    if (port != 0 && port < 1024 && (!current_proc || !proc_privileged(current_proc))) {
         return -EACCES;
     }
 

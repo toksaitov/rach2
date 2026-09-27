@@ -1654,7 +1654,7 @@ static int32_t get_cred(uint32_t data, struct unix_out *out)
     if (c.uid == 0xFFFFFFFFu || c.gid == 0xFFFFFFFFu) {
         return -EINVAL;
     }
-    if (p->euid != 0 &&
+    if (!proc_privileged(p) &&
         (c.pid != p->tgid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
          (c.gid != p->rgid && c.gid != p->egid && c.gid != p->sgid))) {
         return -EPERM;

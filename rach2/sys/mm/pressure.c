@@ -83,7 +83,8 @@ static uint32_t high_mark(void)
 int mem_may_take(int user_page)
 {
     (void)user_page;
-    if (in_interrupt() || !current_proc || current_proc->euid == 0 || current_proc->reclaiming) {
+    if (in_interrupt() || !current_proc || proc_privileged(current_proc) ||
+        current_proc->reclaiming) {
         return 1;
     }
     return frame_free_count() > mem_reserve_frames();

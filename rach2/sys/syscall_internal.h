@@ -432,4 +432,8 @@ int32_t sys_sched_setaffinity(isr_params_t *params);
 
 int32_t sys_prctl(isr_params_t *params);
 
+int32_t sys_capget(isr_params_t *params);
+
+int32_t sys_capset(isr_params_t *params);
+
 #endif

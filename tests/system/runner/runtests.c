@@ -104,6 +104,9 @@ static const char *const PROBES[] = {
        flags a socket is made with. */
     "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl", "musl/prctlmusl",
     "musl/stackmusl", "musl/sockflagmusl",
+    /* Capabilities, which Chromium's zygote gives up in each process it
+       forks. */
+    "musl/capmusl",
     /* eventfd, and epoll's level-triggered, edge-triggered and one-shot
        reports; timerfd's expirations, alone and through epoll. */
     "musl/epollmusl", "musl/timerfdmusl",

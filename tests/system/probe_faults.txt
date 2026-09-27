@@ -79,7 +79,7 @@ static int exec_traced(void)
         return 0;
     }
     tracer = get_process(current_proc->tracer);
-    return tracer == NULL || tracer->euid != 0;
+    return tracer == NULL || !proc_privileged(tracer);
 }
 new
 static int exec_traced(void)
@@ -93,7 +93,7 @@ probe suidmusl
 file rach2/sys/syscall_proc.c
 expect SUIDMUSL FAIL (the exec traced by uid 1000)
 old
-    return tracer == NULL || tracer->euid != 0;
+    return tracer == NULL || !proc_privileged(tracer);
 new
     return tracer == NULL;
 end
@@ -2110,7 +2110,7 @@ probe suidmusl
 file rach2/sys/proc/ptrace.c
 expect SUIDMUSL FAIL (a uid 1000 tracer read the execute-only copy)
 old
-    if (!mm || (current_proc->euid != 0 && !mm->dumpable)) {
+    if (!mm || (!proc_privileged(current_proc) && !mm->dumpable)) {
 new
     if (!mm) {
 end
@@ -2309,4 +2309,79 @@ old
     return 2u + (p ? p->tg->live : 0u);
 new
     return 1u + (p != 0);
+end
+
+fault capset-keeps-caps
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (a thread that gave up its capabilities still has them)
+old
+    if (any == 0) {
+        current_proc->nocaps = 1;
+    }
+new
+    if (any == 0) {
+        current_proc->nocaps = 0;
+    }
+end
+
+fault access-ignores-nocaps
+probe capmusl
+file rach2/sys/syscall_fs.c
+expect CAPMUSL FAIL (a thread without capabilities read a file only another user may)
+old
+    if (uid == 0 && !p->nocaps) {
+new
+    if (uid == 0) {
+end
+
+fault low-port-ignores-nocaps
+probe capmusl
+file rach2/sys/syscall_net.c
+expect CAPMUSL FAIL (a thread without capabilities bound a port below 1024)
+old
+    if (port != 0 && port < 1024 && (!current_proc || !proc_privileged(current_proc))) {
+new
+    if (port != 0 && port < 1024 && (!current_proc || current_proc->euid != 0)) {
+end
+
+fault status-ignores-nocaps
+probe capmusl
+file rach2/sys/fs/procfs.c
+expect CAPMUSL FAIL (/proc/self/status did not show the capabilities given up)
+old
+    caps = proc_privileged(p) ? 0x000001FFFFFFFFFFULL : 0;
+new
+    caps = p->euid == 0 ? 0x000001FFFFFFFFFFULL : 0;
+end
+
+fault fork-drops-nocaps
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (a fork of a thread without capabilities has them)
+old
+    child->nocaps = parent->nocaps;
+new
+end
+
+fault exec-keeps-nocaps
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (an exec as root did not give the capabilities back)
+old
+    s->nocaps =
+        current_proc->nocaps && (current_proc->no_new_privs || exec_traced() || exec_fs_shared());
+new
+    s->nocaps = current_proc->nocaps;
+end
+
+fault exec-nnp-gives-caps
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (an exec under no_new_privs gave the capabilities back)
+old
+    s->nocaps =
+        current_proc->nocaps && (current_proc->no_new_privs || exec_traced() || exec_fs_shared());
+new
+    s->nocaps = current_proc->nocaps && (exec_traced() || exec_fs_shared());
 end

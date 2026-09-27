@@ -1,0 +1,107 @@
+.Dd September 28, 2026
+.Dt CAPGET 2
+.Os
+.Sh NAME
+.Nm capget ,
+.Nm capset
+.Nd read or give up the calling thread's capabilities
+.Sh SYNOPSIS
+.In linux/capability.h
+.Ft int
+.Fn capget "cap_user_header_t hdrp" "cap_user_data_t datap"
+.Ft int
+.Fn capset "cap_user_header_t hdrp" "const cap_user_data_t datap"
+.Sh DESCRIPTION
+Capabilities are the privileges Linux divides the power of user ID 0
+into.
+This kernel keeps them whole: a thread has every capability or none.
+A thread whose effective user ID is 0 has every one, and any other
+thread none.
+A thread that gives them up with
+.Fn capset
+has none, whatever its user IDs, and is refused what only a privileged
+thread may do, as a thread without the capability is on Linux.
+.Pp
+The header gives the version of the structures and a thread:
+.Bd -literal -offset indent
+struct __user_cap_header_struct {
+	uint32_t version;
+	int pid;
+};
+
+struct __user_cap_data_struct {
+	uint32_t effective;
+	uint32_t permitted;
+	uint32_t inheritable;
+};
+.Ed
+.Pp
+.Dv _LINUX_CAPABILITY_VERSION_1 ,
+0x19980330, has one data structure, for capabilities 0 to 31.
+.Dv _LINUX_CAPABILITY_VERSION_2
+and
+.Dv _LINUX_CAPABILITY_VERSION_3 ,
+0x20071026 and 0x20080522, have two, the second for capabilities 32 to 40.
+.Pp
+.Fn capget
+stores the sets of the thread whose ID the header gives, or of the
+caller for 0: every capability in the effective and permitted sets of a
+thread that has them, none in those of one that does not, and none in
+the inheritable set.
+With a null
+.Fa datap
+it checks the version alone.
+.Pp
+.Fn capset
+changes the caller's sets.
+With every set empty, the thread gives up its capabilities.
+With the effective and permitted sets whole and the inheritable set
+empty, it keeps what it has.
+Chromium's zygote gives up the capabilities of each process it forks.
+.Pp
+A fork passes the state on.
+An exec gives a thread that gave up its capabilities every one of them
+again when its user IDs make it root, as on Linux, unless no_new_privs
+is set
+.Pq see Xr prctl 2 ,
+or a tracer or another process that shares the thread's directories is
+not privileged; the thread then has none.
+.Sh RETURN VALUES
+.Rv -std capget capset
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EFAULT
+The header or the data cannot be read or written.
+.It Bq Er EINVAL
+The version is not one of the three.
+The kernel writes
+.Dv _LINUX_CAPABILITY_VERSION_3
+into the header, and
+.Fn capget
+with a null
+.Fa datap
+returns 0.
+The pid given to
+.Fn capget
+is negative.
+.Fn capset
+was given a set that is neither empty nor whole, or an inheritable
+capability.
+.It Bq Er EPERM
+.Fn capset
+was given a pid other than 0 and the caller's, a permitted capability the
+thread does not have, or an effective one outside the permitted set.
+.It Bq Er ESRCH
+The pid given to
+.Fn capget
+names no thread.
+.El
+.Sh SEE ALSO
+.Xr execve 2 ,
+.Xr prctl 2 ,
+.Xr proc 5
+.Sh STANDARDS
+Linux keeps each capability on its own: a partial set and inheritable
+capabilities, which it keeps, are refused here.
+.Dv PR_SET_KEEPCAPS
+and the securebits are not supported.

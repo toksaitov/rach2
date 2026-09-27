@@ -417,7 +417,7 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     if (!w->present) {
         return -ENXIO;
     }
-    if (!current_proc || current_proc->euid != 0) {
+    if (!current_proc || !proc_privileged(current_proc)) {
         return -EPERM;
     }
     if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {

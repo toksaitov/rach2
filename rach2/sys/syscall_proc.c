@@ -723,9 +723,10 @@ struct exec_state {
     uint32_t envc;
     uint32_t euid; /* the ids the new image runs with */
     uint32_t egid;
-    int secure;     /* AT_SECURE */
-    int unreadable; /* an image loaded is one the caller may not read */
-    uint32_t entry; /* where the new image starts */
+    uint32_t nocaps; /* whether it has no capabilities (`exec_ids`) */
+    int secure;      /* AT_SECURE */
+    int unreadable;  /* an image loaded is one the caller may not read */
+    uint32_t entry;  /* where the new image starts */
     elf_layout_t layout;
     elf_layout_t ilayout; /* the interpreter's */
     elf_image_t img;
@@ -1167,9 +1168,9 @@ static int32_t exec_script(struct exec_state *s)
 }
 
 /**
- * Whether the calling thread has a tracer whose effective user ID is not 0,
- * which could write the new image's memory and registers at the exec's stop
- * and so act with any ids the image would be given. Linux's
+ * Whether the calling thread has a tracer that is not privileged, which
+ * could write the new image's memory and registers at the exec's stop and so
+ * act with any ids or capabilities the image would be given. Linux's
  * `ptracer_capable` asks the same of the credentials the tracer had when it
  * attached.
  */
@@ -1181,7 +1182,7 @@ static int exec_traced(void)
         return 0;
     }
     tracer = get_process(current_proc->tracer);
-    return tracer == NULL || tracer->euid != 0;
+    return tracer == NULL || !proc_privileged(tracer);
 }
 
 /**
@@ -1213,8 +1214,8 @@ static int exec_fs_shared(void)
  * caller gave it.
  *
  * A process that set no_new_privs gains nothing: its bits are read and
- * ignored, as a nosuid mount's are. Neither does a caller without effective
- * uid 0 whose thread has a tracer that is not root (`exec_traced`), or
+ * ignored, as a nosuid mount's are. Neither does a caller that is not
+ * privileged whose thread has a tracer that is not (`exec_traced`), or
  * whose directories and umask another process shares (`exec_fs_shared`),
  * since either could change the image once it had the ids; Linux's
  * `cap_bprm_creds_from_file` ignores the bits in the same cases for a
@@ -1223,12 +1224,18 @@ static int exec_fs_shared(void)
  * such a caller holds off CLONE_FS in the threads that share its directories
  * (`fork_fs`) until its workspace goes, so the choice made here holds until
  * the image is the process's.
+ *
+ * A thread that gave up its capabilities has them again after the exec, as
+ * Linux gives a root image every capability, except in those three cases,
+ * where Linux keeps the new permitted set to the old one.
  */
 static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
 
-    if (mode != 0 && current_proc->euid != 0) {
+    s->nocaps =
+        current_proc->nocaps && (current_proc->no_new_privs || exec_traced() || exec_fs_shared());
+    if (mode != 0 && !proc_privileged(current_proc)) {
         if (exec_traced() || exec_fs_shared()) {
             mode = 0;
         } else {
@@ -1515,6 +1522,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->egid = s->egid;
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
+    current_proc->nocaps = s->nocaps;
     exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid);
     proc_set_comm(current_proc, s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
@@ -1838,6 +1846,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->nice = parent->nice;
     child->persona = parent->persona;
     child->no_new_privs = parent->no_new_privs;
+    child->nocaps = parent->nocaps;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->ruid = parent->ruid;
     child->euid = parent->euid;
@@ -3216,7 +3225,7 @@ int signal_pending(void)
  */
 static int cred_may_signal(const process_t *target, int signo)
 {
-    if (current_proc->euid == 0) {
+    if (proc_privileged(current_proc)) {
         return 1;
     }
     if (signo == SIGCONT && current_proc->sid == target->sid) {
@@ -4582,7 +4591,7 @@ static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t ma
     if (cur > max) {
         return -EINVAL;
     }
-    if (max > p->rlim[slot].max && current_proc->euid != 0) {
+    if (max > p->rlim[slot].max && !proc_privileged(current_proc)) {
         return -EPERM;
     }
     if (slot == RLIM_NOFILE && max > FD_TABLE_LIMIT) {
@@ -4612,7 +4621,7 @@ static process_t *rlimit_target(uint32_t pid)
     if (!p || p->state == PROC_UNUSED || p->tg->live == 0) {
         return NULL;
     }
-    if (current_proc->euid != 0 && p->ruid != current_proc->ruid) {
+    if (!proc_privileged(current_proc) && p->ruid != current_proc->ruid) {
         return NULL;
     }
     return p;
@@ -6032,4 +6041,146 @@ int32_t sys_prctl(isr_params_t *params)
     default:
         return -EINVAL;
     }
+}
+
+/* The versions of capget's and capset's header: the first has one word of
+ * each set, the other two two words. */
+#define CAP_VERSION_1 0x19980330u
+
+#define CAP_VERSION_2 0x20071026u
+
+#define CAP_VERSION_3 0x20080522u
+
+/* The capabilities Linux names, 0 to 40; the second word of a set has the
+ * nine above 31. */
+#define CAP_HIGH_WORD 0x1FFu
+
+struct cap_header {
+    uint32_t version;
+    int32_t pid;
+};
+
+struct cap_data {
+    uint32_t effective;
+    uint32_t permitted;
+    uint32_t inheritable;
+};
+
+/**
+ * Read the header at `uhdr` into `h`, and the number of words its version
+ * gives each set into `*words`. An unknown version is -EINVAL, with the
+ * version this kernel prefers written back into the header, as Linux
+ * answers a program that asks which version to use.
+ */
+static int32_t cap_header_in(uint32_t uhdr, struct cap_header *h, uint32_t *words)
+{
+    uint32_t preferred = CAP_VERSION_3;
+
+    if (!uhdr || copy_from_user(h, (const void __user *)uhdr, sizeof(*h)) != 0) {
+        return -EFAULT;
+    }
+    if (h->version == CAP_VERSION_1) {
+        *words = 1;
+        return 0;
+    }
+    if (h->version == CAP_VERSION_2 || h->version == CAP_VERSION_3) {
+        *words = 2;
+        return 0;
+    }
+    if (copy_to_user((void __user *)uhdr, &preferred, sizeof(preferred)) != 0) {
+        return -EFAULT;
+    }
+    return -EINVAL;
+}
+
+/**
+ * capget (syscall 184): EBX = header, ECX = the sets' words.
+ *
+ * The sets of the thread the header's pid names, the caller for 0: every
+ * capability, effective and permitted, for a thread that is privileged
+ * (`proc_privileged`), and none for any other; the inheritable set is
+ * always empty. A null ECX asks only for the version, and is 0 with an
+ * unknown version written back. -ESRCH for a pid that names no thread,
+ * -EINVAL for a negative one or an unknown version, -EFAULT for memory that
+ * cannot be read or written.
+ */
+int32_t sys_capget(isr_params_t *params)
+{
+    struct cap_header h;
+    struct cap_data d[2];
+    const process_t *p = current_proc;
+    uint32_t words;
+    int32_t rc = cap_header_in(params->ebx, &h, &words);
+
+    if (rc != 0 || params->ecx == 0) {
+        return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
+    }
+    if (h.pid < 0) {
+        return -EINVAL;
+    }
+    if (h.pid != 0) {
+        p = get_process((uint32_t)h.pid);
+        if (!p || p->state == PROC_UNUSED) {
+            return -ESRCH;
+        }
+    }
+    k_memset(d, 0, sizeof(d));
+    if (proc_privileged(p)) {
+        d[0].effective = d[0].permitted = 0xFFFFFFFFu;
+        d[1].effective = d[1].permitted = CAP_HIGH_WORD;
+    }
+    if (copy_to_user((void __user *)params->ecx, d, words * sizeof(d[0])) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * capset (syscall 185): EBX = header, ECX = the sets' words.
+ *
+ * The kernel keeps every capability or none, so the calling thread may give
+ * up all its capabilities, with every set empty, after which it is not
+ * privileged until an exec gives them back (`exec_ids`), and may ask for all
+ * it has, which changes nothing. Chromium's zygote gives them up in each
+ * process it forks. A pid other than 0 and the caller's is -EPERM, as is a
+ * permitted set wider than the thread's or an effective set wider than the
+ * permitted one; a set between none and all, or any inheritable capability,
+ * is -EINVAL, where Linux keeps it; an unknown version is -EINVAL, and
+ * memory that cannot be read -EFAULT.
+ */
+int32_t sys_capset(isr_params_t *params)
+{
+    struct cap_header h;
+    struct cap_data d[2];
+    uint32_t words, i, any = 0, whole = 1;
+    int32_t rc = cap_header_in(params->ebx, &h, &words);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (h.pid != 0 && h.pid != (int32_t)current_proc->pid) {
+        return -EPERM;
+    }
+    k_memset(d, 0, sizeof(d));
+    if (!params->ecx ||
+        copy_from_user(d, (const void __user *)params->ecx, words * sizeof(d[0])) != 0) {
+        return -EFAULT;
+    }
+    for (i = 0; i < 2; i++) {
+        uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
+        uint32_t have = proc_privileged(current_proc) ? full : 0u;
+
+        if ((d[i].permitted & ~have) != 0 || (d[i].effective & ~d[i].permitted) != 0) {
+            return -EPERM;
+        }
+        any |= d[i].effective | d[i].permitted | d[i].inheritable;
+        whole &= d[i].effective == full && d[i].permitted == full && d[i].inheritable == 0;
+    }
+    if (any != 0 && !whole) {
+        return -EINVAL;
+    }
+    if (any == 0) {
+        current_proc->nocaps = 1;
+    }
+    return 0;
 }

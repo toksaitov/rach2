@@ -732,10 +732,10 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
     if (t->tg == current_proc->tg || t->mm == NULL || t->tgid == 1 || (t->ptrace & PT_TRACED)) {
         return -EPERM;
     }
-    if (current_proc->euid != 0 && t->exec_ws != NULL) {
+    if (!proc_privileged(current_proc) && t->exec_ws != NULL) {
         return -EPERM;
     }
-    if (current_proc->euid != 0 &&
+    if (!proc_privileged(current_proc) &&
         (current_proc->ruid != t->ruid || current_proc->ruid != t->euid ||
          current_proc->ruid != t->suid || current_proc->rgid != t->rgid ||
          current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable)) {
@@ -810,7 +810,7 @@ static int32_t tracee_memory(process_t *t, uint32_t addr, uint32_t *word, int wr
     struct mm *mm = t->mm;
     int32_t rc;
 
-    if (!mm || (current_proc->euid != 0 && !mm->dumpable)) {
+    if (!mm || (!proc_privileged(current_proc) && !mm->dumpable)) {
         return -EIO;
     }
     mm_get(mm);

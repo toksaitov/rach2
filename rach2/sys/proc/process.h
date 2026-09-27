@@ -279,6 +279,12 @@ struct process {
      * is dumpable is its address space's (`mm.h`). */
     uint32_t pdeath_signal;
     uint32_t no_new_privs;
+    /* Set when the thread gave up its capabilities with capset. The kernel
+     * keeps every capability or none, so the thread is then not privileged,
+     * whatever its user IDs (`proc_privileged`). A fork passes it on, and an
+     * exec clears it where Linux gives a root image its capabilities again
+     * (`exec_ids`). */
+    uint32_t nocaps;
     /* Set while a parent that made this process with CLONE_VFORK waits for
      * it to call execve or end; cleared, and the parent woken, at the one or
      * the other (`proc_vfork_release`). */
@@ -359,6 +365,12 @@ void free_process(process_t *proc);
 
 /** Get process by PID; returns the record, or NULL if not found. */
 process_t *get_process(uint32_t pid);
+
+/* Whether thread `p` has privilege, which Linux divides into capabilities
+ * and this kernel keeps whole: an effective user ID of 0, with the
+ * capabilities not given up (`nocaps`). A macro, so that the host tests that
+ * compile the callers without this file's functions need no stub of it. */
+#define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps)
 
 /** The CPU time in ticks of the whole process `p` is a thread of: every
  * thread's, those that have ended included, user and system. */

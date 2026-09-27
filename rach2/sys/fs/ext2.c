@@ -1434,7 +1434,7 @@ static uint32_t pointer_levels(const struct ext2_mount *em, uint32_t index)
 /* Whether the caller may take from the reserved blocks. */
 static int may_use_reserved(void)
 {
-    return current_proc && current_proc->euid == 0;
+    return current_proc && proc_privileged(current_proc);
 }
 
 /**

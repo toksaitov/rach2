@@ -1208,10 +1208,10 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags);
 
 static int32_t open_path(const char *name, int flags);
 
-/** Non-zero when the caller has appropriate privilege (effective uid 0). */
+/** Non-zero when the caller has appropriate privilege (`proc_privileged`). */
 int cred_privileged(void)
 {
-    return current_proc->euid == 0;
+    return proc_privileged(current_proc);
 }
 
 /**
@@ -1289,9 +1289,10 @@ static int cred_in_group(uint32_t gid)
  * The nine-bit permission check over explicit metadata: one identity class is
  * chosen and judged alone, the classic rule. The owner is judged by the owner
  * bits, else a group match (primary or supplementary) by the group bits, else
- * the other bits; an effective uid of 0 passes everything. `use_real` judges
- * by the real ids instead, for access(2), the one call that asks who the
- * process really is, not who it is acting as.
+ * the other bits; an effective uid of 0 passes everything, unless the thread
+ * gave up its capabilities (`nocaps`). `use_real` judges by the real ids
+ * instead, for access(2), the one call that asks who the process really is,
+ * not who it is acting as.
  */
 static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, int want,
                                 int use_real)
@@ -1300,7 +1301,7 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, i
     uint32_t uid = use_real ? p->ruid : p->euid;
     uint32_t bits;
 
-    if (uid == 0) {
+    if (uid == 0 && !p->nocaps) {
         return 0;
     }
     if (uid == owner) {
