@@ -377,7 +377,10 @@ void reparent_children(uint32_t dead_pid)
 /**
  * Set a process's `comm` name from a path's final component.
  *
- * Stores the basename of `path`, truncated to fit `comm` and NUL-terminated.
+ * Stores the basename of `path`, truncated to fit `comm`, with null bytes
+ * to the end of `comm`, since prctl's PR_GET_NAME and a core file's
+ * prpsinfo copy all of it: a shorter name must leave nothing of a longer one
+ * behind it.
  */
 void proc_set_comm(process_t *p, const char *path)
 {
@@ -394,10 +397,10 @@ void proc_set_comm(process_t *p, const char *path)
             base = q + 1; /* keep only the final component */
         }
     }
+    k_memset(p->comm, 0, sizeof(p->comm));
     for (i = 0; i < (int)sizeof(p->comm) - 1 && base[i]; i++) {
         p->comm[i] = base[i];
     }
-    p->comm[i] = '\0';
 }
 
 /**

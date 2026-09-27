@@ -142,8 +142,9 @@ struct process {
     struct k_sigaction *sigacts;
     uint64_t sig_pending;
     uint64_t sig_blocked;
-    /* Program name (basename of the execve'd path, NUL-terminated, truncated):
-     * the "comm" /proc/<pid>/stat reports and ps shows. Set at execve. */
+    /* Program name (basename of the execve'd path, truncated, padded with
+     * NULs to the end): the "comm" /proc/<pid>/stat reports and ps shows.
+     * Set at execve and by prctl's PR_SET_NAME. */
     char comm[16];
     /* Session + process-group identity. A process belongs to process group
      * `pgid` within session `sid`; fork inherits both, setsid/setpgid change

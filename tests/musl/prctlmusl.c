@@ -2,7 +2,8 @@
  * prctl(2)'s attributes of a process, read through musl.
  *
  * The program name starts as the exec's basename, is set cut to 15 bytes
- * and read back as 16 NUL-padded bytes, and shows in /proc/self/stat. The
+ * and read back as 16 NUL-padded bytes, and shows in /proc/self/stat; an
+ * exec after a longer name gives a shorter one padded with NULs. The
  * dumpable flag starts at 1 and takes 0 and 1 and nothing else, and a thread
  * that was already running sees the value another thread set. The
  * parent-death signal is kept and read back, a signal past 64 is refused, a
@@ -58,6 +59,28 @@ static int in_child(int (*test)(void))
     return WEXITSTATUS(status);
 }
 
+/** The image `exec_name` runs: its name is its basename padded with NULs,
+ * with nothing of the longer name its caller had left behind it. */
+static int padded_name(void)
+{
+    static const char want[16] = "prctlmusl";
+    char name[16];
+
+    memset(name, 0x55, sizeof(name));
+    return prctl(PR_GET_NAME, name, 0, 0, 0) == 0 && memcmp(name, want, sizeof(name)) == 0 ? 0 : 1;
+}
+
+/** A child that takes a longer name and execs the probe again to check the
+ * name it then has (`padded_name`). */
+static int exec_name(void)
+{
+    if (prctl(PR_SET_NAME, "renamed-probe-too-long", 0, 0, 0) != 0) {
+        return 2;
+    }
+    execl("/proc/self/exe", "prctlmusl", "name", (char *)0);
+    return 3;
+}
+
 /** The name, set and read back, and as /proc/self/stat shows it. */
 static int names(void)
 {
@@ -91,6 +114,9 @@ static int names(void)
     }
     if (prctl(PR_SET_NAME, "prctlmusl", 0, 0, 0) != 0) {
         return fail("the name could not be set back");
+    }
+    if (in_child(exec_name) != 0) {
+        return fail("an exec left the end of a longer name after the program name");
     }
     return 0;
 }
@@ -300,8 +326,11 @@ static int no_new_privs(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc > 1 && strcmp(argv[1], "name") == 0) {
+        return padded_name();
+    }
     if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0) {
         return 1;
     }
