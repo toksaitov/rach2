@@ -60,9 +60,9 @@ replacing the hash.
 The project credential library reads the hash for authentication;
 it does not enforce the aging fields.
 The GNU system's OpenSSH server does, through GNU libc: a last change of
-0 means root forced a new password at the next login, and an empty field
-turns aging off.
-The demonstration accounts' lines have the aging fields empty.
+0 means root forced a new password at the next login, and an empty
+maximum age turns expiry off.
+The demonstration accounts' lines have all seven aging fields empty.
 .Ss Group records
 .Pa /etc/group
 has records of the form:

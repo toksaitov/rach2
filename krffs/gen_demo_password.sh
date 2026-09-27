@@ -59,6 +59,7 @@ trap 'rmdir .gen_demo_password.lock' EXIT
 if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
     if day_zero; then
         umask 077
+        rm -f shadow.tmp
         awk -F: -v OFS=: '$3 == "0" { $3 = $4 = $5 = $6 = $7 = $8 = $9 = "" } { print }' \
             shadow > shadow.tmp
         mv shadow.tmp shadow
