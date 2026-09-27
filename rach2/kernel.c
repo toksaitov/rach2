@@ -319,13 +319,13 @@ static void terminate_release_session(uint32_t pid)
  * leaves a core file first (`terminate_core`), unless another thread has
  * begun to end it, after the other threads are sent SIGKILL and have ended
  * (`core_write` waits for them) and before this thread releases anything,
- * as Linux's `do_coredump` does. The teardown
- * runs as a system call does, with `in_syscall` set and interrupts on, also
- * when the signal is acted on at an interrupt's return, which comes here with
- * them off: what it releases and writes may sleep in a disk that answers
- * only by interrupt, and the timer must not switch away in the middle.
- * Interrupts go off again once the process's end is published, before its
- * record can be freed or the processor given up. The whole process dies:
+ * as Linux's `do_coredump` does. The teardown runs as a system call does,
+ * with `in_syscall` set and interrupts on, also when the signal is acted on
+ * at an interrupt's return, which comes here with them off: what it
+ * releases and writes may sleep in a disk that answers only by interrupt,
+ * and the timer must not switch away in the middle. Interrupts go off again
+ * once the process's end is published, before its record can be freed or
+ * the processor given up. The whole process dies:
  * its other threads are sent SIGKILL, and the last thread to end publishes
  * the death. This thread releases the descriptor table and its reference to
  * the address space, switching off it before its page directory can be

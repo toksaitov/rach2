@@ -116,8 +116,8 @@ The entry the thread was taking or giving back is handled last, the same
 way, except that a word of it with no owner, as an unlock the thread
 stored and did not yet wake leaves it, has one waiter woken and is left
 as it is.
-An entry with the low bit set, a priority-inheritance futex, is not woken
-so.
+A priority-inheritance entry, one with the low bit set, gets no such
+wake.
 An
 .Xr execve 2
 by a thread other than the first of its process walks the list before
