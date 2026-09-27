@@ -1,7 +1,8 @@
 /**
- * Check proc stat generation when every text allocation fails, the
- * descriptor links of a process, which a closed descriptor has none of, and
- * the ids a path under a process's task directory needs.
+ * Check proc stat generation when every text allocation fails, the CPU time
+ * of a process's stat and of a thread's, the descriptor links of a process,
+ * which a closed descriptor has none of, and the ids a path under a
+ * process's task directory needs.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -39,6 +40,7 @@ static uint32_t procfs_ino_pid(int pid);
 #include "fs/procfs.c"
 
 extern int printf(const char *format, ...);
+extern int sscanf(const char *str, const char *format, ...);
 extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 
@@ -71,11 +73,12 @@ process_t *get_process(uint32_t pid)
     return pid == 7 ? &process : NULL;
 }
 
-/** The one thread's time is its process's. */
+/** The whole process's time, its two threads' together. */
 void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
 {
-    *user = p->utime;
-    *sys = p->stime;
+    (void)p;
+    *user = process.utime + thread.utime;
+    *sys = process.stime + thread.stime;
 }
 
 /** Fail every text allocation when requested. */
@@ -149,6 +152,47 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     }
 }
 
+/** Whether the stat line `line` has the user and system times `user` and
+ * `sys`, its fields 14 and 15, the twelfth and thirteenth after the
+ * command's closing parenthesis. */
+static int stat_times(const char *line, unsigned user, unsigned sys)
+{
+    const char *close = __builtin_strrchr(line, ')');
+    unsigned u, s;
+
+    return close &&
+           sscanf(close + 1, " %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %u %u", &u, &s) == 2 &&
+           u == user && s == sys;
+}
+
+/** A process's stat has the time of all its threads, and a thread's under
+ * the process's task directory has its own. */
+static void thread_times(void)
+{
+    struct procfs_text text;
+
+    thread.state = PROC_READY;
+    thread.tg = &group;
+    k_memcpy(thread.comm, "test", 5);
+    process.utime = 5;
+    process.stime = 6;
+    thread.utime = 30;
+    thread.stime = 40;
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 7, 1) > 0 && stat_times(text.buf, 35, 46),
+          "a process's stat has every thread's time");
+    kfree(text.buf);
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 9, 0) > 0 && stat_times(text.buf, 30, 40),
+          "a thread's stat has its own time");
+    kfree(text.buf);
+    procfs_text_init(&text);
+    check(procfs_gen_stat(&text, 7, 0) > 0 && stat_times(text.buf, 5, 6),
+          "the leader's stat under task has the leader's own time");
+    kfree(text.buf);
+    process.utime = process.stime = thread.utime = thread.stime = 0;
+}
+
 /** A path under a task directory needs its process and a thread of it,
  * which is what the path shows. */
 static void task_ids(void)
@@ -210,7 +254,7 @@ int main(void)
     k_memcpy(process.comm, "test", 5);
     procfs_text_init(&text);
     refuse = 1;
-    len = procfs_gen_stat(&text, 7);
+    len = procfs_gen_stat(&text, 7, 1);
     check(len == 0 && text.nomem && !text.buf && allocations > 0,
           "stat allocation failure retains empty text for ENOMEM");
     refuse = 0;
@@ -218,22 +262,23 @@ int main(void)
     text.cap = 2;
     text.nomem = 0;
     refuse = 1;
-    len = procfs_gen_stat(&text, 7);
+    len = procfs_gen_stat(&text, 7, 1);
     check(len == 1 && text.nomem && text.buf[0] == '7',
           "stat growth failure retains partial text for disposal");
     kfree(text.buf);
     procfs_text_init(&text);
     refuse = 0;
-    len = procfs_gen_stat(&text, 7);
+    len = procfs_gen_stat(&text, 7, 1);
     check(len > 0 && !text.nomem && text.buf[len] == '\0' && text.buf[len - 1] == '\n',
           "stat success terminates the complete snapshot");
     check(__builtin_memcmp(text.buf, "7 (test) R ", 11) == 0, "stat fields retain their order");
     kfree(text.buf);
+    thread_times();
     descriptor_links();
     task_ids();
     if (!failures) {
-        printf("procfs-hosttest: result: pass: stat allocation failure, descriptor links and task "
-               "ids\n");
+        printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor links "
+               "and task ids\n");
     }
     return failures != 0;
 }

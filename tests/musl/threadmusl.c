@@ -13,20 +13,21 @@
  * leaves the process running; /proc/self/task lists each live thread, a
  * thread's directory there has no task directory and keeps its path in a
  * descriptor, down to the thread's descriptor links, a task path names only a
- * thread of its process, and /proc/self/exe names the program. The threads
- * share the descriptors, the working directory and the umask: what one opens,
- * closes or changes the others see, and an execve that fails leaves its thread
- * in the shared table. A descriptor one thread closes while another reads it
- * stays with the read, which returns what is written after the close, and its
- * number is free once the read is over. A wait whose status page another thread
- * unmaps while it sleeps fails with EFAULT and leaves the zombie to a later
- * wait. A child forked by a thread has one thread. A thread that calls execve
- * replaces the whole process, whose other threads end. Of two threads in execve
- * at once, the one whose call first waits for the other threads to end replaces
- * the process, and the other ends: the probe traces the second and holds it at
- * the entry of its call until the first waits for it. A robust mutex a thread
- * other than the first holds when it calls execve is released, and its next
- * locker gets EOWNERDEAD. A thread that calls exit ends them all.
+ * thread of its process, a thread's stat there has its own time, and
+ * /proc/self/exe names the program. The threads share the descriptors, the
+ * working directory and the umask: what one opens, closes or changes the others
+ * see, and an execve that fails leaves its thread in the shared table. A
+ * descriptor one thread closes while another reads it stays with the read,
+ * which returns what is written after the close, and its number is free once
+ * the read is over. A wait whose status page another thread unmaps while it
+ * sleeps fails with EFAULT and leaves the zombie to a later wait. A child
+ * forked by a thread has one thread. A thread that calls execve replaces the
+ * whole process, whose other threads end. Of two threads in execve at once, the
+ * one whose call first waits for the other threads to end replaces the process,
+ * and the other ends: the probe traces the second and holds it at the entry of
+ * its call until the first waits for it. A robust mutex a thread other than the
+ * first holds when it calls execve is released, and its next locker gets
+ * EOWNERDEAD. A thread that calls exit ends them all.
  *
  * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
  * otherwise.
@@ -45,6 +46,7 @@
 #include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/times.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -255,6 +257,69 @@ static int task_paths(pid_t t)
     snprintf(path, sizeof(path), "/proc/999999/task/%d/status", (int)t);
     if (open(path, O_RDONLY) != -1 || errno != ENOENT) {
         return fail("a task path under no process");
+    }
+    return 0;
+}
+
+/** The user and system ticks, fields 14 and 15, of the stat file `path`;
+ * -1 when it cannot be read. */
+static long stat_ticks(const char *path)
+{
+    char line[256], *paren;
+    unsigned long u, s;
+    int fd = open(path, O_RDONLY);
+    long n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return -1;
+    }
+    line[n] = '\0';
+    paren = strrchr(line, ')');
+    if (!paren ||
+        sscanf(paren + 1, " %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu %lu", &u, &s) != 2) {
+        return -1;
+    }
+    return (long)(u + s);
+}
+
+/**
+ * A thread's stat under the task directory has the thread's own time: this
+ * thread spins until its own counts five ticks more, bounded by the ticks
+ * since boot, while thread `t` sleeps and gains none of them, and the
+ * process's stat has at least as many as this thread's.
+ */
+static int thread_times(pid_t t)
+{
+    char mine[64], other[64];
+    struct tms tms;
+    long start, now, rested, deadline;
+    volatile unsigned long spin = 0;
+    int i;
+
+    snprintf(mine, sizeof(mine), "/proc/self/task/%d/stat", (int)tid());
+    snprintf(other, sizeof(other), "/proc/self/task/%d/stat", (int)t);
+    start = stat_ticks(mine);
+    rested = stat_ticks(other);
+    deadline = (long)times(&tms) + 1000;
+    do {
+        for (i = 0; i < 1000000; i++) {
+            spin++;
+        }
+        now = stat_ticks(mine);
+    } while (start >= 0 && now >= 0 && now < start + 5 && (long)times(&tms) < deadline);
+    if (start < 0 || now < start + 5) {
+        return fail("a busy thread's own time");
+    }
+    if (rested < 0 || stat_ticks(other) - rested >= now - start) {
+        return fail("a sleeping thread's time in its task stat");
+    }
+    if (stat_ticks("/proc/self/stat") < now) {
+        return fail("the process's time in its stat");
     }
     return 0;
 }
@@ -767,7 +832,8 @@ int main(void)
     if (count_tasks() != 2) {
         return fail("/proc/self/task did not list two threads");
     }
-    if (task_paths((pid_t)handled_by) != 0 || later_rows() != 0) {
+    if (task_paths((pid_t)handled_by) != 0 || thread_times((pid_t)handled_by) != 0 ||
+        later_rows() != 0) {
         return 1;
     }
 

@@ -353,12 +353,15 @@ static char proc_state_char(proc_state_t s)
  *
  * Emits the space-separated fields ps and friends parse. comm (field 2) is
  * wrapped in parentheses, with any stray parens scrubbed so a naive parser that
- * scans for the closing ')' is not fooled. The CPU times are the process's
- * ticks, which are the 100 Hz clock ticks the fields count, and the nice value
- * is the one setpriority keeps; the accounting fields the kernel does not keep
- * (faults, sizes) are zero, but every field is present and in order.
+ * scans for the closing ')' is not fooled. The CPU times are ticks, which are
+ * the 100 Hz clock ticks the fields count: the whole process's, every
+ * thread's, for a process's file (`whole`), and the thread's own for a
+ * thread's under /proc/<pid>/task, as Linux keeps them apart; the children's
+ * are the process's in both. The nice value is the one setpriority keeps;
+ * the accounting fields the kernel does not keep (faults, sizes) are zero,
+ * but every field is present and in order.
  */
-static int procfs_gen_stat(struct procfs_text *t, int pid)
+static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 {
     process_t *p;
     uint32_t user;
@@ -392,7 +395,12 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
     ap_str(t, " 0 0 0 0 0 ");
-    proc_cpu_time(p, &user, &sys);
+    if (whole) {
+        proc_cpu_time(p, &user, &sys);
+    } else {
+        user = p->utime;
+        sys = p->stime;
+    }
     ap_u32(t, user);
     ap_ch(t, ' ');
     ap_u32(t, sys);
@@ -2284,7 +2292,7 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_NET_TCP) {
         len = procfs_gen_nettcp(&text);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
-        len = procfs_gen_stat(&text, pid);
+        len = procfs_gen_stat(&text, pid, vp->tid == 0);
     } else if (vp->procfile == SYNTH_PROC_MAPS) {
         len = procfs_gen_maps(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_STATUS) {
