@@ -6171,9 +6171,10 @@ int32_t sys_capset(isr_params_t *params)
     int32_t pid;
     int32_t rc = cap_version_in(params->ebx, &words);
 
-    if (rc == 0) {
-        rc = cap_pid_in(params->ebx, &pid);
+    if (rc != 0) {
+        return rc;
     }
+    rc = cap_pid_in(params->ebx, &pid);
     if (rc != 0) {
         return rc;
     }
