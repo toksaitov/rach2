@@ -56,7 +56,7 @@ run_phase()
 echo "netif-mutation: logs: $work"
 run_phase fixed 0 'netif-test: pass:'
 for mutation in device-index device-name packet-index packet-mac tcp-address accept \
-    socket-check socket-flags accept-check accept-flags; do
+    socket-check socket-flags accept-check accept-flags accept-reserve; do
     python3 - "$work/syscall_net.c" "$mutation" <<'PY'
 import pathlib
 import sys
@@ -83,6 +83,9 @@ changes = {
                      "        return -EINVAL;\n    }\n    entry = fd_get(",
                      "    entry = fd_get("),
     "accept-flags": ("    sock_fd_flags(new_entry, flags);\n", ""),
+    "accept-reserve": ("    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];\n",
+                       "    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];\n"
+                       "    current_proc->fds->entries[new_fd].type = FD_TYPE_SOCKET;\n"),
 }
 old, new = changes[sys.argv[2]]
 source = path.read_text()
@@ -102,6 +105,7 @@ PY
         socket-flags) detail='SOCK_CLOEXEC and SOCK_NONBLOCK reach the descriptor' ;;
         accept-check) detail='accept4 refuses a flag other than SOCK_CLOEXEC and SOCK_NONBLOCK' ;;
         accept-flags) detail='a connection accepted with both flags has both' ;;
+        accept-reserve) detail="another thread's close of the number accept reserved finds nothing" ;;
     esac
     run_phase "$mutation" 1 "netif-test: fail: $detail"
     cleanup
