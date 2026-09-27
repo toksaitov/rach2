@@ -1,6 +1,7 @@
 #include "fd.h"
 
 #include "vfs.h"
+#include "lock.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 
@@ -143,6 +144,9 @@ void fd_ofd_unref(struct open_file *ofd)
             struct ofd_rec **link = &ofds;
             struct ofd_rec *rec = ofd_rec_of(ofd);
 
+            if (lock_any()) {
+                lock_ofd_gone(ofd);
+            }
             if (ofd->vmnt) {
                 struct vfs_mount *mnt = ofd->vmnt;
                 void *node = ofd->vnode;
