@@ -1,4 +1,4 @@
-.Dd September 20, 2026
+.Dd September 27, 2026
 .Dt PIPE 2
 .Os
 .Sh NAME
@@ -71,7 +71,7 @@ Once every write descriptor has closed, reads consume the remaining
 buffered bytes and then return 0 for end of file.
 A nonempty write after every read descriptor has closed posts
 .Dv SIGPIPE
-and returns
+to the writing thread and returns
 .Er EPIPE
 if no bytes have been written.
 If the reader disappears after some bytes have been written, the

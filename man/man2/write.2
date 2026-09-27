@@ -59,7 +59,7 @@ With
 it returns the bytes already written, or
 .Er EAGAIN
 if none fit.
-When no reader remains, the caller receives
+When no reader remains, the calling thread receives
 .Dv SIGPIPE ;
 the call returns the bytes already written, or
 .Er EPIPE

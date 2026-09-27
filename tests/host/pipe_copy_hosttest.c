@@ -27,7 +27,8 @@ static void (*resolve_action)(void);
 static void (*wait_action)(void);
 static uint32_t peer_count;
 static int peer_closes;
-process_t *current_proc;
+static process_t writing_thread;
+process_t *current_proc = &writing_thread;
 
 #define CHECK(condition, detail)                                \
     do {                                                        \
@@ -140,10 +141,12 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
-/** Record SIGPIPE from a writer whose last reader closed. */
-void signal_post(process_t *proc, int signo)
+/** Record SIGPIPE from a writer whose last reader closed, which goes to the
+ * writing thread. */
+void signal_post_thread(process_t *proc, int signo, const struct k_siginfo *info)
 {
-    CHECK(proc == current_proc && signo == SIGPIPE, "writer posts sigpipe");
+    CHECK(proc == current_proc && signo == SIGPIPE && info->code == SI_USER,
+          "writer posts sigpipe");
     signals++;
 }
 

@@ -1438,7 +1438,7 @@ static void broken_pipe(int flags)
     info.code = SI_USER;
     info.pid = current_proc->tgid;
     info.uid = current_proc->ruid;
-    signal_post_info(current_proc, SIGPIPE, &info);
+    signal_post_thread(current_proc, SIGPIPE, &info);
 }
 
 static int peer_has_room(void *arg)
