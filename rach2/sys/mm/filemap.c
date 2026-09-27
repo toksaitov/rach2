@@ -51,6 +51,16 @@ static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)
     return shmem_map_page(((struct filemap *)f)->sh, pgoff);
 }
 
+/* The KRFFS root node the mapping's file is now, or NULL for a file of
+ * another type, whose copy of the descriptor names no node. The copy keeps
+ * the node the file was opened on, which a relocation leaves behind; the
+ * description's is the one `vfs_repoint` moves. */
+static void *filemap_node(const struct filemap *m)
+{
+    return m->entry.type == FD_TYPE_FILE && m->entry.node && m->entry.ofd ? m->entry.ofd->vnode
+                                                                          : NULL;
+}
+
 static void filemap_release(struct vm_file *f)
 {
     struct filemap *m = (struct filemap *)f;
@@ -63,6 +73,7 @@ static void filemap_release(struct vm_file *f)
         *link = m->next;
     }
     if (m->entry.ofd) {
+        m->entry.node = filemap_node(m);
         fd_release_backing(&m->entry);
         fd_ofd_unref(m->entry.ofd);
     }
@@ -124,7 +135,7 @@ int filemap_holds(const void *node)
     const struct filemap *m;
 
     for (m = maps; m; m = m->next) {
-        if (m->entry.type == FD_TYPE_FILE && m->entry.node == node) {
+        if (node && filemap_node(m) == node) {
             return 1;
         }
     }

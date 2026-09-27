@@ -38,7 +38,8 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh);
 struct vm_file *filemap_anon_shared(void);
 
 /** Whether a mapping holds a KRFFS file with the node `node`, as a
- * descriptor in a table does. */
+ * descriptor in a table does: the node the file is at now, which a
+ * relocation moves in the mapping's open file description. */
 int filemap_holds(const void *node);
 
 /*
