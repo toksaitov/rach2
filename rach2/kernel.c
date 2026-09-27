@@ -1090,15 +1090,17 @@ static void boot_exec_done(void)
 }
 
 /**
- * Build the initial stack of the program `exec_program` starts, in `dir`:
+ * Build the initial stack of the program `exec_program` starts, in `mm`:
  * its path, the environment `envp` and the `argc` strings of `argv`, laid
- * down as execve lays them (`proc/uimage.c`) under the default stack limit.
+ * down as execve lays them (`proc/uimage.c`) under the default stack limit,
+ * and keep in `mm` where the strings are and the auxiliary vector, for
+ * /proc.
  *
  * @return the entry stack pointer, with the lowest page the stack took in
  *         `*bottom`; 0 when the strings do not fit or the pages or their
  *         mappings could not be had.
  */
-static uint32_t boot_stack(page_dir_t *dir, int argc, char *argv[], char *envp[],
+static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
                            const elf_image_t *img, uint32_t *bottom)
 {
     struct uimage u;
@@ -1127,9 +1129,14 @@ static uint32_t boot_stack(page_dir_t *dir, int argc, char *argv[], char *envp[]
     }
     krandom_bytes(random16, 16);
     if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, &root) == 0 &&
-        uimage_map(&u, dir) == 0) {
+        uimage_map(&u, mm->dir) == 0) {
         esp = u.esp;
         *bottom = uimage_bottom(&u);
+        mm->arg_start = u.arg_start;
+        mm->arg_end = u.env_start;
+        mm->env_start = u.env_start;
+        mm->env_end = u.env_end;
+        k_memcpy(mm->auxv, u.auxv, sizeof(u.auxv));
     }
     uimage_release(&u);
     return esp;
@@ -1224,7 +1231,7 @@ static void exec_program(int argc, char *argv[])
     boot_exec_done();
     entry_point = img.entry;
 
-    user_esp = boot_stack(mm->dir, argc, argv, default_envp, &img, &stack_bottom);
+    user_esp = boot_stack(mm, argc, argv, default_envp, &img, &stack_bottom);
     if (user_esp == 0) {
         mm_put(mm);
         console_puts("exec: the initial stack could not be built");
@@ -1239,6 +1246,7 @@ static void exec_program(int argc, char *argv[])
     }
 
     user_proc->state = PROC_RUNNING;
+    mm_set_exe(mm, path);
     user_proc->mm = mm;
     user_proc->cr3 = mm->cr3;
     user_proc->page_dir = mm->dir;

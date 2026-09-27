@@ -1150,6 +1150,12 @@ static int32_t exec_build(struct exec_state *s)
         uimage_map(&s->args, s->mm->dir) != 0) {
         return -ENOMEM;
     }
+    s->mm->arg_start = s->args.arg_start;
+    s->mm->arg_end = s->args.env_start;
+    s->mm->env_start = s->args.env_start;
+    s->mm->env_end = s->args.env_end;
+    k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
+    mm_set_exe(s->mm, s->path);
     return 0;
 }
 
@@ -1447,6 +1453,9 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
     if (copy && mm && (copy_user_pages(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
         mm_put(copy);
         return NULL;
+    }
+    if (copy && mm) {
+        mm_copy_info(copy, mm);
     }
     return copy;
 }
@@ -4209,6 +4218,30 @@ static uint32_t vm_prot_of(uint32_t prot)
  * it is read-only, which reads the same bytes, and refused with ENODEV when
  * it may be written, since its stores would not reach the file.
  */
+/** A copy in the heap of the path /proc/PID/fd would give the current
+ * process's descriptor `fd`, for /proc/PID/maps to name the file a region
+ * maps; NULL when there is no room or no path. */
+static char *fd_path_copy(int fd)
+{
+    char *buf = kmalloc(VFS_PATH_MAX);
+    char *copy = NULL;
+    int n;
+
+    if (!buf) {
+        return NULL;
+    }
+    n = procfs_readlink_fd((int)current_proc->tgid, fd, buf, VFS_PATH_MAX - 1);
+    if (n > 0) {
+        copy = kmalloc((uint32_t)n + 1u);
+        if (copy) {
+            k_memcpy(copy, buf, (uint32_t)n);
+            copy[n] = '\0';
+        }
+    }
+    kfree(buf);
+    return copy;
+}
+
 static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_file **file,
                             vm_type_t *type)
 {
@@ -4240,6 +4273,9 @@ static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_fil
             }
             *file = sh ? filemap_shared(e, sh) : filemap_new(e);
             *type = sh ? VM_SHARED : VM_FILE;
+            if (*file) {
+                (*file)->path = fd_path_copy(fd);
+            }
             return *file ? 0 : -ENOMEM;
         }
     }

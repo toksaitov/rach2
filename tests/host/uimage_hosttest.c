@@ -383,6 +383,9 @@ static void row_one_page(void)
           "one page: envp points at its strings");
     CHECK(word(esp + 24u) == 0, "one page: envp ends in NULL");
     check_auxv(esp + 28u, &img, rnd, &aux, "/bin/prog");
+    CHECK(str_is(u.arg_start, "prog") && str_is(u.env_start, "PATH=/bin") &&
+              u.env_end == u.execfn && u.auxv[0] == AT_PHDR && u.auxv[27] == u.execfn,
+          "one page: the strings' ranges and the auxiliary vector are kept for /proc");
     CHECK(str_is(TOP - 10u, "/bin/prog"), "one page: the path is at the top");
     for (va = TOP - PAGE_SIZE; va < esp; va++) {
         uint8_t *p = at(va);

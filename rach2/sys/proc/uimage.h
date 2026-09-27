@@ -7,6 +7,9 @@
 
 struct page_dir;
 
+/* The auxiliary vector's entries, AT_NULL included. */
+#define UIMAGE_AUXV 15u
+
 /* Linux's limits on what execve carries (fs/exec.c): one string, its NUL
  * included, is at most 32 pages; the strings with their pointers take a
  * quarter of RLIMIT_STACK, at most three quarters of 8 MiB and at least 32
@@ -35,6 +38,12 @@ struct uimage {
     uint32_t top;     /* the address just past the stack */
     uint32_t used;    /* bytes of strings below `top` */
     uint32_t execfn;  /* the first string, the program's path: AT_EXECFN */
+    /* Where `uimage_write` found argv's strings to begin and the
+     * environment's to begin and end, and the auxiliary vector it wrote. */
+    uint32_t arg_start;
+    uint32_t env_start;
+    uint32_t env_end;
+    uint32_t auxv[2 * UIMAGE_AUXV];
     uint32_t room;    /* bytes the strings may take */
     uint32_t esp;     /* the entry stack pointer, once placed */
 };

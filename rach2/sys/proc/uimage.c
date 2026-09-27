@@ -7,9 +7,6 @@
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
 
-/* The auxiliary vector's entries, AT_NULL included. */
-#define UIMAGE_AUXV 15u
-
 /* A temporary mapping of one page of the new stack, kept while the
  * accesses made through it stay in that page. */
 struct uwin {
@@ -387,12 +384,15 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
         rc = uimage_put(&out, &at, word);
     }
     at = u->esp;
+    u->arg_start = str;
+    u->env_start = str;
     if (rc == 0) {
         rc = uimage_put(&out, &at, argc);
     }
     for (i = 0; i < argc + envc && rc == 0; i++) {
         if (i == argc) {
             rc = uimage_put(&out, &at, 0);
+            u->env_start = str;
         }
         if (rc == 0) {
             rc = uimage_put(&out, &at, str);
@@ -401,6 +401,10 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
             rc = uimage_next(&in, &str);
         }
     }
+    if (envc == 0) {
+        u->env_start = str;
+    }
+    u->env_end = str;
     if (rc == 0 && envc == 0) {
         rc = uimage_put(&out, &at, 0);
     }
@@ -410,6 +414,7 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     for (i = 0; i < 2u * UIMAGE_AUXV && rc == 0; i++) {
         rc = uimage_put(&out, &at, aux[i]);
     }
+    k_memcpy(u->auxv, aux, sizeof(u->auxv));
     uwin_close(&out);
     uwin_close(&in);
     return rc;
