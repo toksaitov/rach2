@@ -300,8 +300,26 @@ static void flight_hold(fd_entry_t *e)
     }
 }
 
+/**
+ * Bring a KRFFS file or directory in flight to the node its description
+ * names now.
+ *
+ * A write that grows a KRFFS file can move its node, and `vfs_repoint`
+ * then repoints the descriptors in tables and the descriptions, but not the
+ * copies of descriptors in flight. The description is what a copy shares
+ * with every other descriptor of the open, so its node is the one to use
+ * before a copy is released or installed.
+ */
+static void flight_sync(fd_entry_t *e)
+{
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && e->node && e->ofd && e->ofd->vnode) {
+        e->node = (struct krffs_node *)e->ofd->vnode;
+    }
+}
+
 static void flight_drop(fd_entry_t *e)
 {
+    flight_sync(e);
     fd_release_backing(e);
     fd_ofd_unref(e->ofd);
 }
@@ -379,14 +397,16 @@ static void msg_free(struct unix_msg *m)
 }
 
 /* Whether a message of the chain from `m` carries a descriptor of the KRFFS
- * file `node`. */
+ * file `node`, which its description names (`flight_sync`). */
 static int chain_holds(const struct unix_msg *m, const void *node)
 {
     uint32_t i;
 
     for (; m; m = m->next) {
         for (i = 0; i < m->nfds; i++) {
-            if (m->fds[i].type == FD_TYPE_FILE && m->fds[i].node == node) {
+            const fd_entry_t *e = &m->fds[i];
+
+            if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {
                 return 1;
             }
         }
@@ -2115,6 +2135,7 @@ static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int f
         slot = &table()->entries[fd];
         fd_ofd_unref(slot->ofd);
         *slot = in->fds[given++];
+        flight_sync(slot);
         if (flags & MSG_CMSG_CLOEXEC) {
             slot->flags |= FD_FLAG_CLOEXEC;
         }
