@@ -93,6 +93,8 @@
 #define SYS_GETEUID32       201
 #define SYS_GETEGID32       202
 #define SYS_CLOCK_GETTIME   265
+#define SYS_CLOCK_GETRES    266
+#define SYS_CLOCK_NANOSLEEP 267
 #define SYS_GETRANDOM       355
 #define SYS_KILL            37
 #define SYS_SIGRETURN       119

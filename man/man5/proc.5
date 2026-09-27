@@ -320,6 +320,8 @@ Processes created since boot.
 .It Li sleeps_interrupted
 Sleeps in
 .Xr nanosleep 2
+and
+.Xr clock_nanosleep 2
 that a signal ended before their deadline, since boot.
 A sleep that ran its whole length is not counted.
 .It Li latency_timer_us

@@ -329,48 +329,206 @@ static int32_t sys_gettimeofday(isr_params_t *params)
     return 0;
 }
 
+/* The clock ids of clock_gettime(2), clock_getres(2) and clock_nanosleep(2),
+ * and the flag that makes a sleep's time absolute. */
+#define CLOCK_REALTIME           0
+#define CLOCK_MONOTONIC          1
+#define CLOCK_PROCESS_CPUTIME_ID 2
+#define CLOCK_THREAD_CPUTIME_ID  3
+#define CLOCK_MONOTONIC_RAW      4
+#define CLOCK_REALTIME_COARSE    5
+#define CLOCK_MONOTONIC_COARSE   6
+#define CLOCK_BOOTTIME           7
+#define TIMER_ABSTIME            1u
+
+/* A CPU clock named by a process or thread id, which Linux encodes in a
+ * negative clock id: the complement of the id shifted left three places, a
+ * thread bit, and which time the clock reads in the low two bits. Value 1
+ * reads user time alone; 0 and 2 read user and system time together, the
+ * second being Linux's scheduler count, which this kernel counts in ticks as
+ * it counts the rest. Value 3 is a clock of a descriptor, which this kernel
+ * has none of. */
+#define CPUCLOCK_PERTHREAD 4u
+#define CPUCLOCK_WHICH     3u
+#define CPUCLOCK_VIRT      1u
+
+/* The kinds of clock the ids name: real time read to the microsecond, real
+ * time at the last tick, time since boot, and a process's CPU time. The last
+ * three count ticks. */
+enum kclock_kind { KCLOCK_REAL, KCLOCK_REAL_COARSE, KCLOCK_MONO, KCLOCK_CPU };
+
+/* What a clock id names: its kind, and for a CPU clock the process whose time
+ * it reads and whether that is user time alone. */
+struct kclock {
+    enum kclock_kind kind;
+    process_t *proc;
+    int user_only;
+};
+
+/**
+ * Resolve clock id `clk` for the current process.
+ *
+ * Clocks 0 to 7 are the fixed ones; a negative id is a CPU clock by process or
+ * thread id, as `clock_getcpuclockid` makes one. Id 0 in one names the
+ * caller, a process id names any process that has not been reaped, and a
+ * thread id must be the caller's own, since each process is one thread.
+ *
+ * @return 0, or -EINVAL for an id this kernel does not have: 8 and above, a
+ *         descriptor's clock, and a CPU clock of no such process or of
+ *         another process's thread.
+ */
+static int32_t clock_resolve(int32_t clk, struct kclock *out)
+{
+    uint32_t id;
+
+    out->proc = current_proc;
+    out->user_only = 0;
+    switch (clk) {
+    case CLOCK_REALTIME:
+        out->kind = KCLOCK_REAL;
+        return 0;
+    case CLOCK_REALTIME_COARSE:
+        out->kind = KCLOCK_REAL_COARSE;
+        return 0;
+    case CLOCK_MONOTONIC:
+    case CLOCK_MONOTONIC_RAW:
+    case CLOCK_MONOTONIC_COARSE:
+    case CLOCK_BOOTTIME:
+        out->kind = KCLOCK_MONO;
+        return 0;
+    case CLOCK_PROCESS_CPUTIME_ID:
+    case CLOCK_THREAD_CPUTIME_ID:
+        out->kind = KCLOCK_CPU;
+        return 0;
+    default:
+        break;
+    }
+    if (clk >= 0 || ((uint32_t)clk & CPUCLOCK_WHICH) == 3u) {
+        return -EINVAL;
+    }
+    out->kind = KCLOCK_CPU;
+    out->user_only = ((uint32_t)clk & CPUCLOCK_WHICH) == CPUCLOCK_VIRT;
+    id = ~((uint32_t)clk >> 3) & 0x1FFFFFFFu;
+    if (id == 0 || id == current_proc->pid) {
+        return 0;
+    }
+    if ((uint32_t)clk & CPUCLOCK_PERTHREAD) {
+        return -EINVAL;
+    }
+    out->proc = get_process(id);
+    return out->proc ? 0 : -EINVAL;
+}
+
+/** A CPU clock's reading in ticks, taken with interrupts masked, since the
+ * tick adds to it. */
+static uint32_t clock_cpu_ticks(const struct kclock *c)
+{
+    uint32_t flags = kirq_save();
+    uint32_t ticks = c->proc->utime;
+
+    if (!c->user_only) {
+        ticks += c->proc->stime;
+    }
+    kirq_restore(flags);
+    return ticks;
+}
+
+/**
+ * Read clock `c` into `out`.
+ *
+ * Real time is the clock read at boot (sys/rtc.c) with the PIT's place
+ * within the tick added; its coarse form stops at the last tick. Time since
+ * boot is the uptime seconds and the ticks within the second, read with
+ * interrupts masked, so neither a torn second nor the tick counter's wrap at
+ * about 497 days can make it step back. No clock is disciplined by anything:
+ * the machine reads the CMOS once and then keeps its own time, and it is never
+ * suspended, which is why the four clocks of time since boot read the same.
+ * A CPU clock is the ticks the timer charged. The signed seconds field ends in
+ * 2038 for real time and after about 68 years for the rest.
+ */
+static void clock_read(const struct kclock *c, struct kernel_timespec *out)
+{
+    int64_t seconds;
+    int64_t nanoseconds;
+    uint32_t flags;
+    uint32_t ticks;
+
+    switch (c->kind) {
+    case KCLOCK_REAL:
+        get_current_time(&seconds, &nanoseconds);
+        out->tv_sec = (int32_t)seconds;
+        out->tv_nsec = (int32_t)nanoseconds;
+        break;
+    case KCLOCK_REAL_COARSE:
+        flags = kirq_save();
+        seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;
+        ticks = kernel_second_ticks;
+        kirq_restore(flags);
+        out->tv_sec = (int32_t)seconds;
+        out->tv_nsec = (int32_t)(ticks * 10000000u);
+        break;
+    case KCLOCK_MONO:
+        flags = kirq_save();
+        out->tv_sec = (int32_t)kernel_uptime_seconds;
+        out->tv_nsec = (int32_t)(kernel_second_ticks * 10000000);
+        kirq_restore(flags);
+        break;
+    case KCLOCK_CPU:
+    default:
+        ticks = clock_cpu_ticks(c);
+        out->tv_sec = (int32_t)(ticks / 100u);
+        out->tv_nsec = (int32_t)((ticks % 100u) * 10000000u);
+        break;
+    }
+}
+
 /**
  * Read a POSIX clock (clock_gettime, syscall 265, 32-bit timespec).
  *
- * EBX = clockid, ECX = struct timespec*. CLOCK_REALTIME(0) reports real time
- * from the clock read at boot (sys/rtc.c); CLOCK_MONOTONIC(1) reports time
- * since boot, which is what the scheduler, the sleep path and the audio timing
- * loops mean by a clock. Both run at the 10 ms tick resolution, and neither is
- * disciplined by anything: the machine reads the CMOS once and then keeps its
- * own time. musl falls back here from clock_gettime64 (403), which this kernel
- * does not provide. The signed seconds field ends in 2038 for real time
- * and after about 68 years since boot for monotonic time. Reading the uptime
- * pair with interrupts masked avoids both a torn second and tick-count wrap.
+ * EBX = clockid, ECX = struct timespec*. The clocks are `clock_resolve`'s and
+ * the readings `clock_read`'s. musl and glibc fall back here from
+ * clock_gettime64 (403), which this kernel does not provide. An unknown clock
+ * is refused before the timespec is written, as Linux refuses it.
  */
 static int32_t sys_clock_gettime(isr_params_t *params)
 {
-    int clk = (int)params->ebx;
     struct kernel_timespec __user *ts = (struct kernel_timespec __user *)params->ecx;
     struct kernel_timespec kts;
-    uint32_t flags;
+    struct kclock c;
+    int32_t rc = clock_resolve((int32_t)params->ebx, &c);
 
-    if (!ts) {
+    if (rc != 0) {
+        return rc;
+    }
+    clock_read(&c, &kts);
+    if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
         return -EFAULT;
     }
-    if (clk != 0 && clk != 1) { /* CLOCK_REALTIME / CLOCK_MONOTONIC only */
-        return -EINVAL;
+    return 0;
+}
+
+/**
+ * A clock's resolution (clock_getres, syscall 266, 32-bit timespec).
+ *
+ * EBX = clockid, ECX = struct timespec*, which may be NULL. Each clock's
+ * true granularity: a microsecond for real time, which the PIT's place is
+ * read in, and the 10 ms tick for every other clock, coarse real time and
+ * the CPU clocks included. Returns 0, -EINVAL for a clock `clock_resolve`
+ * refuses, or -EFAULT.
+ */
+static int32_t sys_clock_getres(isr_params_t *params)
+{
+    struct kernel_timespec __user *ures = (struct kernel_timespec __user *)params->ecx;
+    struct kernel_timespec res;
+    struct kclock c;
+    int32_t rc = clock_resolve((int32_t)params->ebx, &c);
+
+    if (rc != 0) {
+        return rc;
     }
-
-    if (clk == 0) {
-        int64_t seconds;
-        int64_t nanoseconds;
-
-        get_current_time(&seconds, &nanoseconds);
-        kts.tv_sec = (int32_t)seconds;
-        kts.tv_nsec = (int32_t)nanoseconds;
-    } else {
-        flags = kirq_save();
-        kts.tv_sec = (int32_t)kernel_uptime_seconds;
-        kts.tv_nsec = (int32_t)(kernel_second_ticks * 10000000);
-        kirq_restore(flags);
-    }
-
-    if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
+    res.tv_sec = 0;
+    res.tv_nsec = c.kind == KCLOCK_REAL ? 1000 : 10000000;
+    if (ures && copy_to_user(ures, &res, sizeof(res)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -398,13 +556,10 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint32
 }
 
 /**
- * Block-and-schedule sleep (nanosleep, syscall 162, 32-bit timespec).
+ * Block until the tick `target`, or until a signal the process acts on.
  *
- * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
- * Rounds up to whole 10 ms ticks, then parks the process BLOCKED on its
- * wakeup_tick and yields; the timer wakes it at the deadline while OTHER
- * processes keep running. The tick in progress is not counted, so a sleep is
- * never shorter than asked, up to the clamp below. The deadline and the
+ * Parks the process BLOCKED on its wakeup_tick and yields; the timer wakes
+ * it at the deadline while OTHER processes keep running. The deadline and the
  * pending signals are tested, and the process marked BLOCKED, with interrupts
  * off, so neither a signal nor the deadline's tick can come between the test
  * and the block unseen; the halt after a yield that ran nothing is masked for
@@ -412,50 +567,12 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint32
  *
  * Once the deadline tick has come the sleep is over, and the call returns 0
  * whether or not a signal is pending. A signal the process acts on, found
- * pending before then, ends the sleep with -EINTR; a wake by one it does not
- * act on sends it back to sleep with the deadline stored again. rem is the
- * ticks left to the deadline less the tick added for the tick in progress, so
- * a caller that sleeps again for the remainder in the same tick ends at the
- * first sleep's deadline, and later by the ticks it takes to call again; a
- * signal in the last tick leaves no remainder, so that sleep can end up to a
- * tick before the time first asked. rem is written as zero on normal
- * completion.
+ * pending before then, ends the sleep through `nanosleep_interrupted`, which
+ * writes `urem` when it is not NULL and returns -EINTR; a wake by one it does
+ * not act on sends it back to sleep with the deadline stored again.
  */
-static int32_t sys_nanosleep(isr_params_t *params)
+static int32_t sleep_until(uint32_t target, struct kernel_timespec __user *urem)
 {
-    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)params->ebx;
-    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)params->ecx;
-    struct kernel_timespec req;
-    uint32_t ticks, target;
-
-    if (!current_proc || !ureq) {
-        return -EFAULT;
-    }
-    if (copy_from_user(&req, ureq, sizeof(req)) != 0) {
-        return -EFAULT;
-    }
-    if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {
-        return -EINVAL;
-    }
-
-    /* Convert to whole 10 ms ticks without 64-bit division (the freestanding
-     * kernel has no libgcc __udivdi3): 1 s == 100 ticks, plus the ceil of the
-     * sub-second nanoseconds, so any nonzero request is a tick at least.
-     * Absurd durations are clamped so sec*100 cannot overflow and the signed
-     * tick comparison below stays valid with the tick in progress added. */
-    {
-        uint32_t sec = (uint32_t)req.tv_sec;
-        uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999999u) / 10000000u;
-        if (sec > 21474836u) {
-            sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */
-        }
-        ticks = sec * 100u + nsec_ticks;
-        if (ticks > 0x7FFFFFFEu) {
-            ticks = 0x7FFFFFFEu; /* keep the signed (target-now) delta valid */
-        }
-    }
-
-    target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
     for (;;) {
         uint32_t flags = kirq_save();
         int32_t left = (int32_t)(target - kernel_ticks);
@@ -481,6 +598,88 @@ static int32_t sys_nanosleep(isr_params_t *params)
     }
     current_proc->wakeup_tick = 0;
     current_proc->state = PROC_RUNNING;
+    return 0;
+}
+
+/**
+ * A nonnegative interval as whole 10 ms ticks, rounded up, so any nonzero
+ * interval is a tick at least.
+ *
+ * Converted without 64-bit division, which the freestanding kernel has no
+ * libgcc `__udivdi3` for: 1 s is 100 ticks, plus the ceiling of the
+ * sub-second nanoseconds. Absurd intervals are clamped so sec*100 cannot
+ * overflow and the signed tick comparison in `sleep_until` stays valid with
+ * the tick in progress added.
+ */
+static uint32_t timespec_ticks(const struct kernel_timespec *req)
+{
+    uint32_t sec = (uint32_t)req->tv_sec;
+    uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;
+    uint32_t ticks;
+
+    if (sec > 21474836u) {
+        sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */
+    }
+    ticks = sec * 100u + nsec_ticks;
+    if (ticks > 0x7FFFFFFEu) {
+        ticks = 0x7FFFFFFEu; /* keep the signed (target-now) delta valid */
+    }
+    return ticks;
+}
+
+/** Whether `req` is a time a sleep takes: seconds not negative, and
+ * nanoseconds from 0 through 999999999. */
+static int timespec_valid(const struct kernel_timespec *req)
+{
+    return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;
+}
+
+/**
+ * Sleep `ticks` whole ticks, not counting the tick in progress, so a sleep is
+ * never shorter than asked, up to the clamp in `timespec_ticks`.
+ *
+ * A signal's remainder, written to `urem`, is the ticks left to the deadline
+ * less the tick added for the tick in progress, so a caller that sleeps again
+ * for the remainder in the same tick ends at the first sleep's deadline, and
+ * later by the ticks it takes to call again; a signal in the last tick leaves
+ * no remainder, so that sleep can end up to a tick before the time first
+ * asked.
+ */
+static int32_t sleep_for(uint32_t ticks, struct kernel_timespec __user *urem)
+{
+    uint32_t target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+
+    return sleep_until(target, urem);
+}
+
+/**
+ * Block-and-schedule sleep (nanosleep, syscall 162, 32-bit timespec).
+ *
+ * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
+ * Rounds up to whole 10 ms ticks and sleeps for them through `sleep_for`,
+ * which has the rules of the deadline, the signals and the remainder. rem is
+ * written as zero on normal completion.
+ */
+static int32_t sys_nanosleep(isr_params_t *params)
+{
+    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)params->ebx;
+    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)params->ecx;
+    struct kernel_timespec req;
+    int32_t rc;
+
+    if (!current_proc || !ureq) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&req, ureq, sizeof(req)) != 0) {
+        return -EFAULT;
+    }
+    if (!timespec_valid(&req)) {
+        return -EINVAL;
+    }
+    rc = sleep_for(timespec_ticks(&req), urem);
+    if (rc != 0) {
+        return rc;
+    }
 
     if (urem) {
         struct kernel_timespec zero;
@@ -492,6 +691,161 @@ static int32_t sys_nanosleep(isr_params_t *params)
     }
     return 0;
 }
+
+/**
+ * Sleep until real time or time since boot, `kind`, reads `when` or later.
+ *
+ * Both clocks advance with the tick: real time is the boot's epoch, from
+ * `rtc_boot_epoch`, plus the time since boot, and time since boot at a tick
+ * is that tick's count in hundredths of a second. So the sleep ends at the
+ * first tick whose count reaches `when`, and a program that reads the clock
+ * then reads `when` or later. The tick count and the time since boot are read
+ * in one masked step, since the tick changes both. A deadline further than
+ * `sleep_until` can wait for, about 248 days, is waited for in pieces, and
+ * the clock read again after each. Returns 0, or -EINTR when a signal the
+ * process acts on comes first.
+ */
+static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when)
+{
+    for (;;) {
+        uint32_t flags = kirq_save();
+        uint64_t now = (uint64_t)kernel_uptime_seconds * 100u + kernel_second_ticks;
+        uint32_t base = kernel_ticks;
+        int64_t sec = when->tv_sec;
+        uint64_t due;
+        int32_t rc;
+
+        kirq_restore(flags);
+        if (kind == KCLOCK_REAL) {
+            sec -= rtc_boot_epoch();
+        }
+        if (sec < 0) {
+            return 0;
+        }
+        due = (uint64_t)sec * 100u + ((uint32_t)when->tv_nsec + 9999999u) / 10000000u;
+        if (due <= now) {
+            return 0;
+        }
+        if (due - now <= 0x7FFFFFFEu) {
+            return sleep_until(base + (uint32_t)(due - now), NULL);
+        }
+        rc = sleep_until(base + 0x7FFFFFFEu, NULL);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+}
+
+/**
+ * Sleep until the CPU clock `clk` reads `due` ticks or more.
+ *
+ * The clock is looked up again at every turn, since the process whose time it
+ * reads may be reaped meanwhile. The caller's own clock does not advance
+ * while it sleeps, one thread per process, and neither does a reaped
+ * process's, so the wait for either ends only at a signal; another process's
+ * is read again at every tick. A relative sleep's remainder is the ticks
+ * still due at the last reading. Returns 0, or -EINTR.
+ */
+static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec __user *urem)
+{
+    uint32_t now = 0;
+
+    for (;;) {
+        struct kclock c;
+        uint32_t wait = 0x7FFFFFFEu;
+        int32_t rc;
+
+        if (clock_resolve(clk, &c) == 0) {
+            now = clock_cpu_ticks(&c);
+            if (now >= due) {
+                return 0;
+            }
+            if (c.proc != current_proc) {
+                wait = 1;
+            }
+        }
+        rc = sleep_until(kernel_ticks + wait, NULL);
+        if (rc != 0) {
+            if (urem) {
+                struct kernel_timespec rem;
+
+                rem.tv_sec = (int32_t)((due - now) / 100u);
+                rem.tv_nsec = (int32_t)(((due - now) % 100u) * 10000000u);
+                (void)copy_to_user(urem, &rem, sizeof(rem));
+            }
+            return rc;
+        }
+    }
+}
+
+/**
+ * Sleep against a chosen clock (clock_nanosleep, syscall 267, 32-bit
+ * timespec).
+ *
+ * EBX = clockid, ECX = flags, EDX = const struct timespec *req, ESI = struct
+ * timespec *rem. Flags 0 makes `req` an interval, which sleeps as `nanosleep`
+ * does except that nothing is written to `rem` on completion; TIMER_ABSTIME
+ * makes it a time of the clock, reached as `sleep_until_time` or
+ * `sleep_until_cpu` describe, and returns at once for a time already past.
+ * Other flag bits are ignored, as Linux ignores them, and `rem` is written
+ * only for an interval a signal cut short.
+ *
+ * Real time, time since boot and boot time sleep; the raw and coarse clocks
+ * and the calling thread's CPU clock return -EOPNOTSUPP, the clocks Linux
+ * cannot sleep on either, and a thread CPU clock by id returns -EINVAL. The
+ * caller's process CPU clock is Linux's too: its time does not advance while
+ * it sleeps, so an interval or a time not yet reached is waited out only by a
+ * signal. The order of the checks is Linux's: the clock, then the request
+ * (-EFAULT, then -EINVAL for a negative second or nanoseconds past a
+ * second), then a CPU clock by id.
+ */
+static int32_t sys_clock_nanosleep(isr_params_t *params)
+{
+    int32_t clk = (int32_t)params->ebx;
+    int absolute = (params->ecx & TIMER_ABSTIME) != 0;
+    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)params->edx;
+    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)params->esi;
+    struct kernel_timespec req;
+    struct kclock c;
+    int32_t rc;
+
+    if (clk > CLOCK_BOOTTIME) {
+        return -EINVAL;
+    }
+    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||
+        clk == CLOCK_REALTIME_COARSE || clk == CLOCK_MONOTONIC_COARSE) {
+        return -EOPNOTSUPP;
+    }
+    if (!current_proc || !ureq || copy_from_user(&req, ureq, sizeof(req)) != 0) {
+        return -EFAULT;
+    }
+    if (!timespec_valid(&req)) {
+        return -EINVAL;
+    }
+    if (absolute) {
+        urem = NULL;
+    }
+    if (clk < 0 && ((uint32_t)clk & CPUCLOCK_PERTHREAD)) {
+        return -EINVAL;
+    }
+    rc = clock_resolve(clk, &c);
+    if (rc != 0) {
+        return rc;
+    }
+    if (c.kind == KCLOCK_CPU) {
+        uint32_t due = timespec_ticks(&req);
+
+        if (!absolute) {
+            due += clock_cpu_ticks(&c);
+        }
+        return sleep_until_cpu(clk, due, urem);
+    }
+    if (!absolute) {
+        return sleep_for(timespec_ticks(&req), urem);
+    }
+    return sleep_until_time(c.kind, &req);
+}
+
 /* ITIMER_REAL, the one interval timer this kernel keeps. */
 #define ITIMER_REAL 0
 
@@ -1540,6 +1894,8 @@ void init_syscall(void)
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
+    _syscall_table[SYS_CLOCK_GETRES] = sys_clock_getres;
+    _syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
     _syscall_table[SYS_NANOSLEEP] = sys_nanosleep;
     _syscall_table[SYS_SETITIMER] = sys_setitimer;
     _syscall_table[SYS_GETITIMER] = sys_getitimer;

@@ -82,7 +82,10 @@ for mutation in connect-wait connect-result connect-nonblock framebuffer-owner f
     timer-usec-one timer-usec-near \
     timer-sec-clamp timer-clamp timer-clamp-low timer-interval-read timer-interval-sec \
     timer-interval-read-sec timer-usec timer-mask getitimer-which alarm-round alarm-nearest \
-    alarm-half alarm-interval alarm-mask; do
+    alarm-half alarm-interval alarm-mask clock-coarse clock-cpu-system clock-cpu-user \
+    clock-cpu-pid clock-cpu-thread clock-descriptor clock-res clock-sleep-clock \
+    clock-sleep-thread clock-sleep-due clock-sleep-epoch clock-sleep-absolute-rem \
+    clock-sleep-cpu-due; do
     python3 - "$work" "$mutation" <<'PY'
 from pathlib import Path
 import sys
@@ -167,23 +170,23 @@ changes = {
         'target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);',
         'target = kernel_ticks + ticks + 1u;'),
     'sleep-nsec': ('syscall',
-        'uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999999u) / 10000000u;',
-        'uint32_t nsec_ticks = (uint32_t)req.tv_nsec / 10000000u;'),
+        'uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;',
+        'uint32_t nsec_ticks = (uint32_t)req->tv_nsec / 10000000u;'),
     'sleep-nsec-one': ('syscall',
-        'uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999999u) / 10000000u;',
-        'uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999998u) / 10000000u;'),
+        'uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;',
+        'uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999998u) / 10000000u;'),
     'sleep-nsec-near': ('syscall',
-        'uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 9999999u) / 10000000u;',
-        'uint32_t nsec_ticks = ((uint32_t)req.tv_nsec + 5000000u) / 10000000u;'),
+        'uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;',
+        'uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 5000000u) / 10000000u;'),
     'sleep-arg-nsec-neg': ('syscall',
-        'if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {',
-        'if (req.tv_sec < 0 || req.tv_nsec >= 1000000000) {'),
+        'return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;',
+        'return req->tv_sec >= 0 && req->tv_nsec < 1000000000;'),
     'sleep-arg-sec': ('syscall',
-        'if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {',
-        'if (req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {'),
+        'return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;',
+        'return req->tv_nsec >= 0 && req->tv_nsec < 1000000000;'),
     'sleep-arg-nsec': ('syscall',
-        'if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {',
-        'if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec > 1000000000) {'),
+        'return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;',
+        'return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec <= 1000000000;'),
     'sleep-remainder': ('syscall',
         'uint32_t unslept = left - 1u;',
         'uint32_t unslept = left;'),
@@ -220,14 +223,14 @@ changes = {
         'current_proc->wakeup_tick = target != 0 ? target : 1u;',
         'current_proc->wakeup_tick = target;'),
     'sleep-clamp': ('syscall',
-        '        if (ticks > 0x7FFFFFFEu) {\n'
-        '            ticks = 0x7FFFFFFEu;',
-        '        if (ticks > 0x7FFFFFFFu) {\n'
-        '            ticks = 0x7FFFFFFFu;'),
+        '    if (ticks > 0x7FFFFFFEu) {\n'
+        '        ticks = 0x7FFFFFFEu;',
+        '    if (ticks > 0x7FFFFFFFu) {\n'
+        '        ticks = 0x7FFFFFFFu;'),
     'sleep-sec-clamp': ('syscall',
-        '        if (sec > 21474836u) {\n'
-        '            sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */\n'
-        '        }\n',
+        '    if (sec > 21474836u) {\n'
+        '        sec = 21474836u; /* keeps the intermediate sec*100 below 2^31 */\n'
+        '    }\n',
         ''),
     'sleep-unmask': ('syscall',
         '        if (left <= 0) {\n'
@@ -240,11 +243,11 @@ changes = {
     'sleep-running': ('syscall',
         '    current_proc->wakeup_tick = 0;\n'
         '    current_proc->state = PROC_RUNNING;\n'
-        '\n'
-        '    if (urem) {',
+        '    return 0;\n'
+        '}',
         '    current_proc->wakeup_tick = 0;\n'
-        '\n'
-        '    if (urem) {'),
+        '    return 0;\n'
+        '}'),
     'rem-zero': ('syscall',
         'if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {',
         'if (0 && copy_to_user(urem, &zero, sizeof(zero)) != 0) {'),
@@ -333,10 +336,62 @@ changes = {
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {',
         '    if ((seconds == 0 && usec != 0) || usec != 0) {'),
     'clock': ('syscall',
-        'kts.tv_sec = (int32_t)kernel_uptime_seconds;\n'
-        '        kts.tv_nsec = (int32_t)(kernel_second_ticks * 10000000);',
-        'kts.tv_sec = (int32_t)(kernel_ticks / 100);\n'
-        '        kts.tv_nsec = (int32_t)((kernel_ticks % 100) * 10000000);'),
+        'out->tv_sec = (int32_t)kernel_uptime_seconds;\n'
+        '        out->tv_nsec = (int32_t)(kernel_second_ticks * 10000000);',
+        'out->tv_sec = (int32_t)(kernel_ticks / 100);\n'
+        '        out->tv_nsec = (int32_t)((kernel_ticks % 100) * 10000000);'),
+    'clock-coarse': ('syscall',
+        'seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;',
+        'seconds = (int64_t)kernel_uptime_seconds;'),
+    'clock-cpu-system': ('syscall',
+        '    if (!c->user_only) {\n'
+        '        ticks += c->proc->stime;\n'
+        '    }\n',
+        ''),
+    'clock-cpu-user': ('syscall',
+        'out->user_only = ((uint32_t)clk & CPUCLOCK_WHICH) == CPUCLOCK_VIRT;',
+        'out->user_only = 0;'),
+    'clock-cpu-pid': ('syscall',
+        '    out->proc = get_process(id);\n'
+        '    return out->proc ? 0 : -EINVAL;',
+        '    return 0;'),
+    'clock-cpu-thread': ('syscall',
+        '    if ((uint32_t)clk & CPUCLOCK_PERTHREAD) {\n'
+        '        return -EINVAL;\n'
+        '    }\n',
+        ''),
+    'clock-descriptor': ('syscall',
+        'if (clk >= 0 || ((uint32_t)clk & CPUCLOCK_WHICH) == 3u) {',
+        'if (clk >= 0) {'),
+    'clock-res': ('syscall',
+        'res.tv_nsec = c.kind == KCLOCK_REAL ? 1000 : 10000000;',
+        'res.tv_nsec = 10000000;'),
+    'clock-sleep-clock': ('syscall',
+        '    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||\n'
+        '        clk == CLOCK_REALTIME_COARSE || clk == CLOCK_MONOTONIC_COARSE) {',
+        '    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||\n'
+        '        clk == CLOCK_MONOTONIC_COARSE) {'),
+    'clock-sleep-thread': ('syscall',
+        '    if (clk < 0 && ((uint32_t)clk & CPUCLOCK_PERTHREAD)) {\n'
+        '        return -EINVAL;\n'
+        '    }\n',
+        ''),
+    'clock-sleep-due': ('syscall',
+        'due = (uint64_t)sec * 100u + ((uint32_t)when->tv_nsec + 9999999u) / 10000000u;',
+        'due = (uint64_t)sec * 100u + (uint32_t)when->tv_nsec / 10000000u;'),
+    'clock-sleep-epoch': ('syscall',
+        '        if (kind == KCLOCK_REAL) {\n'
+        '            sec -= rtc_boot_epoch();\n'
+        '        }\n',
+        ''),
+    'clock-sleep-absolute-rem': ('syscall',
+        '    if (absolute) {\n'
+        '        urem = NULL;\n'
+        '    }\n',
+        ''),
+    'clock-sleep-cpu-due': ('syscall',
+        'rem.tv_nsec = (int32_t)(((due - now) % 100u) * 10000000u);',
+        'rem.tv_nsec = (int32_t)((due % 100u) * 10000000u);'),
 }
 name, old, new = changes[sys.argv[2]]
 path = work / (name + '.c')
@@ -401,6 +456,19 @@ PY
         alarm-half) detail='alarm reports 4.5 s left as 5' ;;
         alarm-interval) detail='and leaves no interval' ;;
         alarm-mask) detail='the timer is armed with interrupts masked' ;;
+        clock-coarse) detail='coarse real time is the boot'"'"'s epoch plus the uptime at the tick' ;;
+        clock-cpu-system) detail='the process CPU clock reads user and system time' ;;
+        clock-cpu-user) detail='a CPU clock of user time reads user time alone' ;;
+        clock-cpu-pid) detail='a CPU clock by pid reads that process'"'"'s time' ;;
+        clock-cpu-thread) detail='a thread clock of another process is refused' ;;
+        clock-descriptor) detail='a descriptor'"'"'s clock is refused' ;;
+        clock-res) detail='real time resolves to the microsecond' ;;
+        clock-sleep-clock) detail='a clock Linux cannot sleep on is refused' ;;
+        clock-sleep-thread) detail='a thread CPU clock by id cannot be slept on' ;;
+        clock-sleep-due) detail='10.035 s since boot is reached at tick 1004' ;;
+        clock-sleep-epoch) detail='real time is counted from the boot'"'"'s epoch' ;;
+        clock-sleep-absolute-rem) detail='and an absolute one leaves no remainder' ;;
+        clock-sleep-cpu-due) detail='and leaves the ticks still due' ;;
     esac
     run_phase "$mutation" 1 "$detail"
     restore
