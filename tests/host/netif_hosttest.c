@@ -1,7 +1,8 @@
 /**
  * Exercise the socket address and option handlers with two interfaces, the
  * creation flags of socket and accept4, an accept the heap has no room to
- * give a descriptor, and a recvfrom given an address and no length pointer.
+ * give a descriptor, a recvfrom given an address and no length pointer, and
+ * the descriptor accept reserves while it copies the peer's address.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -58,6 +59,8 @@ static int takes;
 static struct socket made;
 static fd_entry_t table[8];
 static struct open_file made_description;
+static void (*copy_sleep)(void);
+static int sibling_found = -1;
 
 #define CHECK(condition, detail)                          \
     do {                                                  \
@@ -67,11 +70,18 @@ static struct open_file made_description;
         }                                                 \
     } while (0)
 
-/** Copy a simulated user range, refusing null and out-of-arena pointers. */
+/** Copy a simulated user range, refusing null and out-of-arena pointers. A
+ * row may arm `copy_sleep`, the call another thread makes while the copy
+ * sleeps in a page fault, which runs once before the copy. */
 int copy_from_user(void *dst, const void *src, uint32_t n)
 {
     unsigned long at = (unsigned long)src;
+    void (*sleep)(void) = copy_sleep;
 
+    copy_sleep = NULL;
+    if (sleep) {
+        sleep();
+    }
     if (!at || at > sizeof(user) || n > sizeof(user) - at) {
         return -EFAULT;
     }
@@ -91,11 +101,14 @@ int copy_to_user(void *dst, const void *src, uint32_t n)
     return 0;
 }
 
-/** Return the sole descriptor used by each row. */
-fd_entry_t *fd_get(fd_table_t *table, int fd)
+/** The descriptor each row works on, 3, or one of the table the creating
+ * rows fill; a slot that is free or only reserved is no descriptor. */
+fd_entry_t *fd_get(fd_table_t *fds, int fd)
 {
-    (void)table;
-    return fd == 3 ? &entry : NULL;
+    if (fd == 3) {
+        return &entry;
+    }
+    return fds == &files && fd >= 0 && fd < 8 && table[fd].type != FD_TYPE_NONE ? &table[fd] : NULL;
 }
 
 /** Descriptor 4 for the socket rows that create one, or the refusal
@@ -471,6 +484,44 @@ static void recvfrom_no_length(void)
           "a recvfrom with a length pointer takes the datagram and reports its sender");
 }
 
+/** Another thread's close of descriptor 4 while a copy sleeps: whether it
+ * found a descriptor there, which it closes. */
+static void close_four(void)
+{
+    fd_entry_t *e = fd_get(&files, 4);
+
+    sibling_found = e != NULL;
+    if (e) {
+        e->type = FD_TYPE_NONE;
+    }
+}
+
+/** The descriptor accept makes is reserved while the peer's address is
+ * copied out, which can sleep: another thread's close of its number then
+ * finds nothing, and the connection is published after the copy. */
+static void accept_reserved(void)
+{
+    static struct socket conn;
+
+    proc.fds = &files;
+    files.entries = table;
+    k_memset(&table[4], 0, sizeof(table[4]));
+    table[4].ofd = &made_description;
+    sock.type = SOCK_STREAM;
+    sock.listening = 1;
+    alloc_to = 4;
+    sock.accept_queue[sock.accept_tail] = &conn;
+    sock.accept_tail = (sock.accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+    SC_WLE32(user + 8, 16);
+    copy_sleep = close_four;
+    CHECK(do_accept(3, 32, 8, 0) == 4, "an accept with an address takes the queued connection");
+    CHECK(sibling_found == 0, "another thread's close of the number accept reserved finds nothing "
+                              "while the copy of the peer's address sleeps");
+    CHECK(table[4].type == FD_TYPE_SOCKET && table[4].sock == &conn && SC_LE32(user + 8) == 16,
+          "accept publishes the connection once the peer's address is copied");
+    alloc_to = -1;
+}
+
 /** Run the four syscall contracts against distinct addresses and MACs. */
 int main(void)
 {
@@ -494,6 +545,7 @@ int main(void)
     accept_flags();
     accept_refused();
     recvfrom_no_length();
+    accept_reserved();
     if (!failures) {
         printf("netif-test: pass: socket interface contracts\n");
     }

@@ -28,7 +28,9 @@
  * EPIPE when the receiver shuts down reading. A stream whose peer's queue is
  * full polls writable once it is shut down for writing, and the write then
  * fails with EPIPE. A recvfrom given an address and no length pointer fails
- * with EFAULT and leaves the message for the next receive.
+ * with EFAULT and leaves the message for the next receive. A descriptor of a
+ * KRFFS file in /tmp, sent before a write moves the file and received after
+ * the sender's close and the unlink, has the file's size and reads its bytes.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -864,12 +866,84 @@ static int recvfrom_no_length(void)
     return 0;
 }
 
+#define GROW_PATH   "/tmp/unixmusl.grow"
+#define WALL_PATH   "/tmp/unixmusl.wall"
+#define REFILL_PATH "/tmp/unixmusl.refill"
+
+/* The write that moves the file: past the room a new KRFFS file has, which
+ * is under one 357-byte node header. The file written after it is smaller,
+ * to fit where the moved file was, and of a size of its own, so that a
+ * size read through its node tells it apart. */
+#define GROW_BYTES   1024
+#define REFILL_BYTES 1000
+
+/*
+ * A descriptor of a KRFFS file in flight while a write moves the file. The
+ * holder count must find the descriptor by the node the file has after the
+ * move, so that the file outlives its name and its last descriptor, and the
+ * descriptor received must be installed with that node. The file made just
+ * behind it leaves it no room to grow where it is, so the write moves it;
+ * the file written after the name goes takes the place of a file freed
+ * there, so a freed file does not read back as it was.
+ */
+static int moved_in_flight(void)
+{
+    static char bytes[GROW_BYTES], other[REFILL_BYTES], back[GROW_BYTES];
+    struct stat st;
+    int sv[2], fd, wall, refill, got, i;
+
+    for (i = 0; i < GROW_BYTES; i++) {
+        bytes[i] = (char)('a' + i % 26);
+    }
+    memset(other, 'Z', sizeof(other));
+    unlink(GROW_PATH);
+    unlink(WALL_PATH);
+    unlink(REFILL_PATH);
+    fd = open(GROW_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    wall = open(WALL_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0 || wall < 0 || close(wall) != 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        return fail("setup for a file moved while in flight");
+    }
+    if (send_fd(sv[0], fd) != 0) {
+        return fail("sendmsg of a file's descriptor");
+    }
+    if (write(fd, bytes, sizeof(bytes)) != (ssize_t)sizeof(bytes)) {
+        return fail("the write that moves a file in flight");
+    }
+    if (close(fd) != 0 || unlink(GROW_PATH) != 0) {
+        return fail("the close and unlink of a file in flight");
+    }
+    refill = open(REFILL_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (refill < 0 || write(refill, other, sizeof(other)) != (ssize_t)sizeof(other) ||
+        close(refill) != 0) {
+        return fail("a file written after the unlink of a file in flight");
+    }
+    got = recv_fd(sv[1]);
+    if (got < 0) {
+        return fail("recvmsg of a file's descriptor after a move");
+    }
+    if (fstat(got, &st) != 0 || st.st_size != GROW_BYTES) {
+        return fail("a received descriptor of a moved, unlinked file has another size");
+    }
+    if (pread(got, back, sizeof(back), 0) != (ssize_t)sizeof(back) ||
+        memcmp(back, bytes, sizeof(back)) != 0) {
+        return fail("a received descriptor of a moved, unlinked file reads other bytes");
+    }
+    close(got);
+    close(sv[0]);
+    close(sv[1]);
+    unlink(WALL_PATH);
+    unlink(REFILL_PATH);
+    return 0;
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
-        chain_close() || datagram_names() || waiting() || shut_writable() || recvfrom_no_length()) {
+        chain_close() || datagram_names() || waiting() || shut_writable() || recvfrom_no_length() ||
+        moved_in_flight()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");
