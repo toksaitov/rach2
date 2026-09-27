@@ -449,6 +449,20 @@ static int abandon(pid_t pid, const char *what)
     return fail(what);
 }
 
+/** Wait up to ten seconds for a change in the child `pid` that waitpid
+ * reports: the child's id with its status in `*status`, or 0 when none
+ * came, so that a stop that never comes fails its row. */
+static pid_t wait_within(pid_t pid, int *status)
+{
+    pid_t got = 0;
+    int i;
+
+    for (i = 0; i < 1000 && (got = waitpid(pid, status, WNOHANG)) == 0; i++) {
+        usleep(10000);
+    }
+    return got;
+}
+
 static volatile sig_atomic_t usr1_taken;
 
 static void on_usr1(int sig)
@@ -811,34 +825,36 @@ static int attach_stopped(void)
     if (waitpid(pid, &status, WUNTRACED) != pid || !WIFSTOPPED(status)) {
         return fail("the child to be seized did not stop");
     }
-    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
         !WIFSTOPPED(status) || status >> 8 != (SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
-        return fail("seizing a stopped process did not stop it for the tracer");
+        return abandon(pid, "seizing a stopped process did not stop it for the tracer");
     }
     if (ptrace(PTRACE_DETACH, pid, NULL, NULL) != 0) {
-        return fail("PTRACE_DETACH of the seized process");
+        return abandon(pid, "PTRACE_DETACH of the seized process");
     }
     usleep(100000);
     snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
     if (waitpid(pid, &status, WNOHANG) != 0 || stat_state(path) != 'T') {
-        return fail("the detached process ran while its stop was in effect");
+        return abandon(pid, "the detached process ran while its stop was in effect");
     }
     kill(pid, SIGCONT);
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the seized process did not run on after the detach");
+    if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "the seized process did not run on after the detach");
     }
     return 0;
 }
 
 /*
- * PTRACE_INTERRUPT stops a seized tracee blocked in a read of an empty
+ * PTRACE_INTERRUPT stops a seized tracee seen asleep in a read of an empty
  * pipe, with PTRACE_EVENT_STOP and SIGTRAP, and the read, restarted when the
  * tracer resumes it, reads the byte written after.
  */
 static int interrupt_read(void)
 {
+    char path[64];
     int p[2];
     int status;
+    int i;
     char c;
     pid_t pid;
 
@@ -851,16 +867,23 @@ static int interrupt_read(void)
         _exit(read(p[0], &c, 1) == 1 && c == 'g' ? 0 : 1);
     }
     close(p[0]);
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    for (i = 0; i < 500 && stat_state(path) != 'S'; i++) {
+        usleep(10000);
+    }
+    if (i == 500) {
+        return abandon(pid, "the tracee was never seen asleep in its read");
+    }
     if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
-        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
         !WIFSTOPPED(status) || status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
-        return fail("PTRACE_INTERRUPT did not stop a tracee blocked in a read");
+        return abandon(pid, "PTRACE_INTERRUPT did not stop a tracee blocked in a read");
     }
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || write(p[1], "g", 1) != 1) {
-        return fail("resuming the interrupted tracee");
+        return abandon(pid, "resuming the interrupted tracee");
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the interrupted read was not restarted");
+    if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return abandon(pid, "the interrupted read was not restarted");
     }
     close(p[1]);
     return 0;
