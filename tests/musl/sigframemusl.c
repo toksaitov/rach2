@@ -4,17 +4,19 @@
  *
  * A write to a read-only page reaches a SIGSEGV handler with SEGV_ACCERR and
  * the address, and runs again once the handler makes the page writable; a
- * read of an unmapped page gives SEGV_MAPERR. A read blocked on a pipe is
- * restarted after a handler with SA_RESTART and ends with EINTR after one
- * without. A handler with SA_ONSTACK runs on the alternate stack, where
- * sigaltstack reports SS_ONSTACK. `int3` reaches a SIGTRAP handler and the
- * program goes on after it. rt_sigpending reports a blocked signal, and the
- * old sigprocmask call blocks one. sigsuspend returns -1 with EINTR once the
- * pending signal's handler has run under the suspend's mask, and the old mask
- * comes back after it. A child's exit reaches a SIGCHLD handler as CLD_EXITED
- * with its pid and status. A handler that nests on a small alternate stack
- * until its frames no longer fit ends the process with SIGSEGV and writes
- * nothing below the stack.
+ * read of an unmapped page gives SEGV_MAPERR. A read blocked on a pipe, as a
+ * child sees before it sends SIGUSR1, is restarted after a handler with
+ * SA_RESTART and ends with EINTR after one without. Each handler runs once
+ * and answers the child, which writes the byte the restarted read returns
+ * only after the answer. A handler with SA_ONSTACK runs on the alternate
+ * stack, where sigaltstack reports SS_ONSTACK. `int3` reaches a SIGTRAP
+ * handler and the program goes on after it. rt_sigpending reports a blocked
+ * signal, and the old sigprocmask call blocks one. sigsuspend returns -1 with
+ * EINTR once the pending signal's handler has run under the suspend's mask,
+ * and the old mask comes back after it. A child's exit reaches a SIGCHLD
+ * handler as CLD_EXITED with its pid and status. A handler that nests on a
+ * small alternate stack until its frames no longer fit ends the process with
+ * SIGSEGV and writes nothing below the stack.
  *
  * Prints "SIGFRAMEMUSL OK" on success and "SIGFRAMEMUSL FAIL (detail)"
  * otherwise.
@@ -22,6 +24,8 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <stdint.h>
@@ -30,9 +34,10 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
+static volatile sig_atomic_t usr1_runs;
+static int usr1_answer = -1;
 static volatile sig_atomic_t got_code;
 static volatile uintptr_t got_addr;
 static volatile sig_atomic_t on_alt;
@@ -64,9 +69,18 @@ static void on_segv(int sig, siginfo_t *info, void *uc)
     }
 }
 
+/** Count a SIGUSR1, and answer it with a byte on `usr1_answer` when that is
+ * open. */
 static void on_usr1(int sig)
 {
+    int saved = errno;
+
     (void)sig;
+    usr1_runs++;
+    if (usr1_answer >= 0) {
+        (void)write(usr1_answer, "h", 1);
+    }
+    errno = saved;
 }
 
 static void on_alt_handler(int sig)
@@ -190,50 +204,116 @@ static int install(int sig, void (*fn)(int, siginfo_t *, void *), int flags)
     return sigaction(sig, &sa, NULL);
 }
 
-/* A child that sends SIGUSR1 to its parent and, a moment later, writes one
- * byte to `fd`; the parent's read of the other end is what the signal cuts. */
-static pid_t signal_then_write(int fd)
+/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
+static int sleeping(pid_t pid)
 {
-    struct timespec pause = {0, 100000000};
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/**
+ * Fork a child that waits up to 3 s to see this process asleep, sends it
+ * SIGUSR1, waits up to 3 s for the handler's byte on `answer`, and only then
+ * writes one byte to `fd`, the pipe the parent reads. The child exits 0 when
+ * all of that happened, 2 when the parent was never seen asleep and 3 when
+ * the handler's byte did not come; it writes the byte in every case, so the
+ * read ends.
+ */
+static pid_t signal_then_write(int fd, int answer)
+{
+    pid_t parent = getpid();
     pid_t pid = fork();
 
     if (pid == 0) {
-        nanosleep(&pause, NULL);
-        kill(getppid(), SIGUSR1);
-        nanosleep(&pause, NULL);
+        struct pollfd pfd;
+        int tries, code = 0;
+        char c;
+
+        for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
+            usleep(10000);
+        }
+        if (tries == 300) {
+            code = 2;
+        } else {
+            pfd.fd = answer;
+            pfd.events = POLLIN;
+            if (kill(parent, SIGUSR1) != 0 || poll(&pfd, 1, 3000) != 1 ||
+                read(answer, &c, 1) != 1) {
+                code = 3;
+            }
+        }
         (void)write(fd, "x", 1);
-        _exit(0);
+        _exit(code);
     }
     return pid;
 }
 
-/* A blocking read on a pipe cut by SIGUSR1: 1 when the kernel restarted the
- * read, -1 with EINTR when it did not. */
+/**
+ * A blocking read on a pipe cut by SIGUSR1, whose handler has SA_RESTART
+ * when `restart` is set. The handler must run once; the read must then go on
+ * to return the byte the child writes after the handler answered, or end
+ * with EINTR without SA_RESTART. Returns 0, or 1 once the failure is
+ * reported.
+ */
 static int interrupted_read(int restart)
 {
     struct sigaction sa;
-    int fds[2];
+    int fds[2], answer[2];
+    int n, err, status;
     char c;
-    int n;
     pid_t pid;
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_usr1;
     sa.sa_flags = restart ? SA_RESTART : 0;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGUSR1, &sa, NULL);
-    if (pipe(fds) != 0) {
-        return -2;
+    if (sigaction(SIGUSR1, &sa, NULL) != 0 || pipe(fds) != 0 || pipe(answer) != 0) {
+        return fail("setup for the interrupted read");
     }
-    pid = signal_then_write(fds[1]);
+    usr1_runs = 0;
+    usr1_answer = answer[1];
+    pid = signal_then_write(fds[1], answer[0]);
+    if (pid < 0) {
+        return fail("fork for the interrupted read");
+    }
     n = (int)read(fds[0], &c, 1);
-    if (n < 0 && errno != EINTR) {
-        n = -2;
+    err = errno;
+    usr1_answer = -1;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return fail("the child that signals and writes");
     }
-    waitpid(pid, NULL, 0);
     close(fds[0]);
     close(fds[1]);
-    return n;
+    close(answer[0]);
+    close(answer[1]);
+    if (WEXITSTATUS(status) == 2) {
+        return fail("the read was never seen asleep");
+    }
+    if (usr1_runs != 1 || WEXITSTATUS(status) != 0) {
+        return fail(restart ? "the handler with SA_RESTART did not run once"
+                            : "the handler without SA_RESTART did not run once");
+    }
+    if (restart && n != 1) {
+        return fail("SA_RESTART did not restart the read");
+    }
+    if (!restart && (n != -1 || err != EINTR)) {
+        return fail("a read cut by a handler without SA_RESTART did not end with EINTR");
+    }
+    return 0;
 }
 
 int main(void)
@@ -265,11 +345,8 @@ int main(void)
         return fail("SEGV_MAPERR or its address");
     }
 
-    if (interrupted_read(1) != 1) {
-        return fail("SA_RESTART did not restart the read");
-    }
-    if (interrupted_read(0) != -1) {
-        return fail("a read cut by a handler without SA_RESTART did not end with EINTR");
+    if (interrupted_read(1) != 0 || interrupted_read(0) != 0) {
+        return 1;
     }
 
     st.ss_sp = altstack;
