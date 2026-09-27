@@ -512,8 +512,10 @@ Lines of a name, a colon, a tab and a value:
 Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,
 effective, saved and file-system IDs), FDSize, Groups, the memory sizes
 VmPeak to VmSwap in kilobytes, Threads, the signal sets SigPnd, ShdPnd,
-SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets, full for
-effective user ID 0 and empty otherwise, and NoNewPrivs.
+SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets, and
+NoNewPrivs.
+CapPrm and CapEff are full for effective user ID 0 and empty otherwise;
+CapBnd is full, and CapInh and CapAmb are empty, for every process.
 .It Pa /proc/PID/statm
 Seven sizes in pages: total, resident, shared, text, library, data with
 stack, and dirty; the third, fifth and seventh read 0.
