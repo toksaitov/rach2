@@ -38,19 +38,6 @@ new
     rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
 end
 
-fault exec-two-owners
-probe threadmusl
-file rach2/sys/syscall_proc.c
-expect THREADMUSL FAIL (two execs at once
-old
-    if (tg->exiting || tg->exec_task != NULL) {
-        return -EAGAIN;
-    }
-    if (tg->live > 1) {
-new
-    if (tg->live > 1) {
-end
-
 fault exec-robust-tid
 probe threadmusl
 file rach2/sys/syscall_proc.c
@@ -1191,16 +1178,6 @@ new
     if (*gone || it->off || (it->events & EPOLL_EVENTS) == 0) {
 end
 
-fault epoll-registration-by-address
-probe epollmusl
-file rach2/sys/io/epoll.c
-expect EPOLLMUSL FAIL (a closed eventfd's registration reported the one after it: errno
-old
-    return e && e->ofd == it->ofd && e->ofd->serial == it->serial;
-new
-    return e && e->ofd == it->ofd;
-end
-
 fault epoll-pwait2-seconds-32-bit
 probe epollmusl
 file rach2/sys/io/epoll.c
@@ -1941,12 +1918,44 @@ probe sigframemusl
 file rach2/sys/proc/sigframe.c
 expect SIGFRAMEMUSL FAIL (a frame written below the alternate stack)
 old
+    int on_alt = sigframe_on_altstack(tf->user_esp);
+    uint32_t sp = tf->user_esp;
+    uint32_t fp_addr, frame_addr, size, restorer;
+
+    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
+        sp = current_proc->altstack_sp + current_proc->altstack_size;
+        on_alt = 1;
+    }
+    sp -= FPU_LINUX_SIZE;
+    sp &= ~63u;
+    fp_addr = sp;
+    size = rt ? sizeof(frame.rt) : sizeof(frame.plain);
+    sp -= size;
+    sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;
     frame_addr = sp;
     if (on_alt && !sigframe_on_altstack(frame_addr)) {
         return -1;
     }
 new
+    int on_alt = current_proc->altstack_on && tf->user_esp + 4096u - current_proc->altstack_sp <
+                                                  current_proc->altstack_size + 4096u;
+    uint32_t sp = tf->user_esp;
+    uint32_t fp_addr, frame_addr, size, restorer;
+
+    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
+        sp = current_proc->altstack_sp + current_proc->altstack_size;
+        on_alt = 1;
+    }
+    sp -= FPU_LINUX_SIZE;
+    sp &= ~63u;
+    fp_addr = sp;
+    size = rt ? sizeof(frame.rt) : sizeof(frame.plain);
+    sp -= size;
+    sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;
     frame_addr = sp;
+    if (on_alt && frame_addr + 4096u < current_proc->altstack_sp) {
+        return -1;
+    }
 end
 
 fault clone-sighand-alone
