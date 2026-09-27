@@ -23,16 +23,29 @@
  * answers the policy and parameter calls with ENOSYS itself, so those rows
  * call the kernel through `syscall`.
  *
+ * /proc/self/oom_score_adj reads 0 at first and is root's, mode 0644, while
+ * the process is dumpable; a write, opened as a shell's redirection opens
+ * it, reads back, a child inherits it, and a value past -1000 to 1000 or
+ * text that is no number is refused with EINVAL. A caller of user 1000,
+ * made dumpable again after it gave up root, owns its file; it may raise its
+ * value and lower it to the floor a privileged write left, but not below,
+ * which is EACCES, and with no privileged write before, not below 0; it may
+ * not open root's process's file for writing.
+ *
  * Prints "SCHEDMUSL OK" on success and "SCHEDMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -312,9 +325,155 @@ static int scheduling(void)
     return 0;
 }
 
+/* The calling process's OOM score adjustment. */
+#define SELF_OOM "/proc/self/oom_score_adj"
+
+/** Read the OOM score adjustment at `path` into `*v`: 0, or -1 when the file
+ * cannot be read or has no number and newline. */
+static int oom_read(const char *path, int *v)
+{
+    char buf[16];
+    ssize_t n;
+    int fd = open(path, O_RDONLY);
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 1 || buf[n - 1] != '\n') {
+        return -1;
+    }
+    buf[n] = '\0';
+    *v = atoi(buf);
+    return 0;
+}
+
+/** Write `text` to the OOM score adjustment at `path`, opened as a shell's
+ * redirection opens it: 0, or -1 with errno set. */
+static int oom_write(const char *path, const char *text)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    ssize_t n;
+    int saved;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = write(fd, text, strlen(text));
+    saved = errno;
+    close(fd);
+    errno = saved;
+    return n == (ssize_t)strlen(text) ? 0 : -1;
+}
+
+/** Give up root for user 1000 and become dumpable again, which makes the
+ * process's /proc files its own: 0, or -1. */
+static int become_user(void)
+{
+    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0 ||
+        prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * A child of root: its adjustment's first value, mode and owner, a write
+ * that reads back and a child that inherits it, the range, and the floor a
+ * privileged write sets for the user 1000 the child becomes, which may not
+ * open root's process's file for writing. 0, or the number of the row that
+ * failed.
+ */
+static int adjusted(void)
+{
+    char parent[64];
+    struct stat st;
+    pid_t pid;
+    int v, status;
+
+    snprintf(parent, sizeof(parent), "/proc/%d/oom_score_adj", (int)getppid());
+    if (oom_read(SELF_OOM, &v) != 0 || v != 0) {
+        return 1;
+    }
+    if (stat(SELF_OOM, &st) != 0 || (st.st_mode & 07777) != 0644 || st.st_uid != 0) {
+        return 2;
+    }
+    if (oom_write(SELF_OOM, "-500\n") != 0 || oom_read(SELF_OOM, &v) != 0 || v != -500) {
+        return 3;
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(oom_read(SELF_OOM, &v) == 0 && v == -500 ? 0 : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return 4;
+    }
+    if (oom_write(SELF_OOM, "1001") != -1 || errno != EINVAL ||
+        oom_write(SELF_OOM, "-1001") != -1 || errno != EINVAL || oom_write(SELF_OOM, "one") != -1 ||
+        errno != EINVAL) {
+        return 5;
+    }
+    if (oom_write(SELF_OOM, "100") != 0 || become_user() != 0) {
+        return 6;
+    }
+    if (oom_write(SELF_OOM, "200") != 0 || oom_write(SELF_OOM, "100") != 0) {
+        return 7;
+    }
+    if (oom_write(SELF_OOM, "50") != -1 || errno != EACCES || oom_read(SELF_OOM, &v) != 0 ||
+        v != 100) {
+        return 8;
+    }
+    if (open(parent, O_WRONLY) != -1 || errno != EACCES || oom_read(parent, &v) != 0) {
+        return 9;
+    }
+    return 0;
+}
+
+/** A child of root that becomes user 1000 before any privileged write: it
+ * may not lower its adjustment below 0. 0, or 1 when it could, 2 when it
+ * could not become the user. */
+static int floor_zero(void)
+{
+    if (become_user() != 0) {
+        return 2;
+    }
+    if (oom_write(SELF_OOM, "10") != 0 || oom_write(SELF_OOM, "-1") != -1 || errno != EACCES) {
+        return 1;
+    }
+    return 0;
+}
+
+/** The OOM score adjustment, as `adjusted` and `floor_zero` try it. */
+static int oom_score(void)
+{
+    static const char *const rows[] = {
+        "the OOM score adjustment does not read 0 at first",
+        "oom_score_adj is not root's with mode 0644",
+        "a write of the OOM score adjustment through a redirection did not read back",
+        "a child did not inherit the OOM score adjustment",
+        "an OOM score adjustment past -1000 to 1000 or no number was not refused with EINVAL",
+        "root could not set the OOM score adjustment and become user 1000",
+        "user 1000 could not raise its OOM score adjustment and lower it to the floor",
+        "user 1000 lowered its OOM score adjustment below the floor root's write set",
+        "user 1000 opened root's process's oom_score_adj for writing"};
+    int rc = in_child(adjusted);
+
+    if (rc != 0) {
+        return fail(rc >= 1 && rc <= 9 ? rows[rc - 1] : "the OOM score child did not run");
+    }
+    rc = in_child(floor_zero);
+    if (rc != 0) {
+        return fail(rc == 1 ? "user 1000 lowered its OOM score adjustment below 0"
+                            : "the second OOM score child did not run");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (thread_ids() != 0 || priorities() != 0 || scheduling() != 0) {
+    if (thread_ids() != 0 || priorities() != 0 || scheduling() != 0 || oom_score() != 0) {
         return 1;
     }
     printf("SCHEDMUSL OK\n");

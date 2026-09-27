@@ -33,6 +33,8 @@ static uint32_t procfs_ino_nettcp(void);
 static uint32_t procfs_fd_ino(struct fd_entry *e);
 static uint32_t procfs_ino_pid(int pid);
 static uint32_t procfs_task_links(int pid);
+static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
+static int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 #include "fs/procfs.c"
 
 #include "fs/synthfs.c"

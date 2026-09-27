@@ -4267,14 +4267,24 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_nlink = procfs_task_links(procfs_resolve_id(vp));
         }
         return 0;
-    case VNODE_PROC_FILE:
+    case VNODE_PROC_FILE: {
+        uint32_t uid, gid;
+
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
+        /* oom_score_adj is its owner's to write, as on Linux. */
+        if (vp->procfile == SYNTH_PROC_OOM_ADJ &&
+            procfs_oom_owner(procfs_resolve_id(vp), &uid, &gid) == 0) {
+            kst->st_mode = S_IFREG | 0644;
+            kst->st_uid = uid;
+            kst->st_gid = gid;
+        }
         return 0;
+    }
     case VNODE_PROC_FD_LINK: {
         char scratch[16];
         int rpid = procfs_resolve_id(vp);
@@ -5010,12 +5020,20 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_ino = devfs_fd_ino(entry);
     } else if (entry->type == FD_TYPE_PROC) {
         /* A /proc text snapshot: a regular file whose inode is its origin's,
-         * so fstat matches the stat of the path it was opened by. */
+         * so fstat matches the stat of the path it was opened by, and whose
+         * mode and owner are too, which for oom_score_adj are its owner's. */
+        uint32_t uid, gid;
+
         kst->st_mode = 0100444; /* S_IFREG | 0444 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_dev = PROCFS_FSID;
         kst->st_ino = procfs_fd_ino(entry);
+        if (procfs_fd_oom_owner(entry, &uid, &gid) == 0) {
+            kst->st_mode = 0100644; /* S_IFREG | 0644 */
+            kst->st_uid = uid;
+            kst->st_gid = gid;
+        }
     } else if (entry->type == FD_TYPE_CONSOLE) {
         /* stdin/stdout/stderr and /dev/console: report the same identity as
          * stat("/dev/console") so ttyname's (st_dev, st_ino) comparison
@@ -8630,9 +8648,11 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
     static const struct {
         const char *name;
         uint8_t type;
-    } files[12] = {{"stat", DT_REG},   {"cmdline", DT_REG}, {"fd", DT_DIR},   {"maps", DT_REG},
-                   {"status", DT_REG}, {"statm", DT_REG},   {"auxv", DT_REG}, {"environ", DT_REG},
-                   {"comm", DT_REG},   {"mem", DT_REG},     {"exe", DT_LNK},  {"task", DT_DIR}};
+    } files[13] = {{"stat", DT_REG}, {"cmdline", DT_REG},       {"fd", DT_DIR},
+                   {"maps", DT_REG}, {"status", DT_REG},        {"statm", DT_REG},
+                   {"auxv", DT_REG}, {"environ", DT_REG},       {"comm", DT_REG},
+                   {"mem", DT_REG},  {"oom_score_adj", DT_REG}, {"exe", DT_LNK},
+                   {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int id, i, c = 0;
@@ -8644,7 +8664,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         return 0; /* the process exited: an empty directory (just . and ..) */
     }
     if (sd->kind == VNODE_PROC_PID) {
-        if (n >= (sd->tid != 0 ? 11 : 12)) {
+        if (n >= (sd->tid != 0 ? 12 : 13)) {
             return 0;
         }
         for (i = 0; files[n].name[i]; i++) {

@@ -2,8 +2,8 @@
  * Check proc stat generation when every text allocation fails, the CPU time
  * of a process's stat and of a thread's, the descriptor links of a process,
  * which a closed descriptor has none of, the ids a path under a process's
- * task directory needs, and a read of a process's arguments while the
- * process ends and is reaped.
+ * task directory needs, a read of a process's arguments while the process
+ * ends and is reaped, and the reads and writes of oom_score_adj.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -15,6 +15,11 @@
  * its record. The read goes on through the address space it holds, and each
  * later read looks the page up in it again: nothing may be read from the
  * freed record or a freed address space, which AddressSanitizer judges.
+ *
+ * A write to oom_score_adj is read as Linux reads it, and the value must
+ * be in -1000 to 1000; a caller without privilege may not write a value
+ * below the floor a privileged caller's write sets, and a read gives the
+ * value as it is at the read.
  */
 #include "lib/kint.h"
 struct vpath;
@@ -46,6 +51,8 @@ static uint32_t procfs_ino_nettcp(void);
 static uint32_t procfs_fd_ino(struct fd_entry *e);
 static uint32_t procfs_ino_pid(int pid);
 static uint32_t procfs_task_links(int pid);
+static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
+static int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
 #include "fs/procfs.c"
 
 extern int printf(const char *format, ...);
@@ -310,6 +317,107 @@ static void descriptor_links(void)
           "a descriptor being released has no link");
 }
 
+/** The user memory of the rows is the host's. */
+int copy_from_user(void *dst, const void __user *src, uint32_t n)
+{
+    k_memcpy(dst, (const void __force *)src, n);
+    return 0;
+}
+
+int copy_to_user(void __user *dst, const void *src, uint32_t n)
+{
+    k_memcpy((void __force *)dst, src, n);
+    return 0;
+}
+
+/* The descriptor the oom_score_adj rows read and write, on process 7. */
+static struct procfs_file oom_file;
+static struct open_file oom_desc;
+static fd_entry_t oom_entry;
+
+/** Write the text `text` to process 7's oom_score_adj as the caller `who`;
+ * the call's answer. */
+static int32_t oom_write(process_t *who, const char *text)
+{
+    process_t *self = current_proc;
+    int32_t rc;
+
+    current_proc = who;
+    rc = procfs_oom_write(&oom_entry, (const char __user *)text, (uint32_t)__builtin_strlen(text));
+    current_proc = self;
+    return rc;
+}
+
+/** Whether a read of process 7's oom_score_adj from its start gives `want`. */
+static int oom_reads(const char *want)
+{
+    char buf[16];
+    int32_t n;
+
+    oom_desc.offset = 0;
+    n = procfs_oom_read(&oom_entry, (char __user *)buf, sizeof(buf));
+    return n == (int32_t)__builtin_strlen(want) && __builtin_memcmp(buf, want, (size_t)n) == 0 &&
+           procfs_oom_read(&oom_entry, (char __user *)buf, sizeof(buf)) == 0;
+}
+
+/**
+ * A write to oom_score_adj takes an integer from -1000 to 1000 as Linux's
+ * `kstrtoint` in base 0 reads it, spaces stripped at both ends, and at most
+ * 12 bytes of the write; anything else is EINVAL, and a number an int does
+ * not hold ERANGE. A read gives the value and a newline.
+ */
+static void oom_values(void)
+{
+    oom_file.origin_pid = 7;
+    oom_file.origin_file = SYNTH_PROC_OOM_ADJ;
+    oom_entry.priv = &oom_file;
+    oom_entry.ofd = &oom_desc;
+    check(oom_reads("0\n"), "oom_score_adj reads 0 at first");
+    check(oom_write(&process, "500\n") == 4 && oom_reads("500\n"),
+          "a write of 500 takes its four bytes and reads back");
+    check(oom_write(&process, " -1000\n") == 7 && oom_reads("-1000\n"),
+          "spaces around the value are stripped");
+    check(oom_write(&process, "0x1f4") == 5 && oom_reads("500\n"), "0x begins a hexadecimal value");
+    check(oom_write(&process, "-0764") == 5 && oom_reads("-500\n"), "0 begins an octal value");
+    check(oom_write(&process, "  300        \n\n") == 12 && oom_reads("300\n"),
+          "the first 12 bytes of a longer write are read");
+    check(oom_write(&process, "1001") == -EINVAL && oom_write(&process, "-1001") == -EINVAL &&
+              oom_reads("300\n"),
+          "a value past -1000 to 1000 is EINVAL and changes nothing");
+    check(oom_write(&process, "") == -EINVAL && oom_write(&process, "5 0") == -EINVAL &&
+              oom_write(&process, "12a") == -EINVAL && oom_write(&process, "+-5") == -EINVAL &&
+              oom_write(&process, "09") == -EINVAL,
+          "text that is no integer is EINVAL");
+    check(oom_write(&process, "99999999999") == -ERANGE, "a number an int does not hold is ERANGE");
+    check(oom_write(&process, "0") == 1 && oom_reads("0\n"), "a write of 0");
+}
+
+/**
+ * A caller without privilege may raise the value and lower it to the floor,
+ * which starts at 0, but not below it; a privileged caller's write sets the
+ * floor to what it wrote.
+ */
+static void oom_floor(void)
+{
+    process_t user;
+
+    k_memset(&user, 0, sizeof(user));
+    user.euid = 1000;
+    user.tg = &other_group;
+    check(oom_write(&user, "300") == 3 && oom_write(&user, "0") == 1 && oom_reads("0\n"),
+          "a caller without privilege raises the value and lowers it to the floor");
+    check(oom_write(&user, "-1") == -EACCES && oom_reads("0\n"),
+          "and may not lower it below the floor");
+    check(oom_write(&process, "200") == 3 && group.oom_score_adj_min == 200,
+          "a privileged write sets the floor");
+    check(oom_write(&user, "150") == -EACCES && oom_write(&user, "250") == 3 &&
+              oom_reads("250\n") && group.oom_score_adj_min == 200,
+          "which a caller without privilege may not pass");
+    check(oom_write(&process, "-1000") == 5 && oom_reads("-1000\n"),
+          "a privileged caller writes below the floor");
+    group.oom_score_adj = group.oom_score_adj_min = 0;
+}
+
 /**
  * A read of a process's arguments that sleeps for a page while the process
  * ends and is reaped reads the rest through the address space it holds,
@@ -379,10 +487,12 @@ int main(void)
     descriptor_links();
     task_ids();
     reaped_during_read();
+    oom_values();
+    oom_floor();
     if (!failures) {
         printf(
             "procfs-hosttest: result: pass: stat allocation failure and times, descriptor links, "
-            "task ids and a read of a reaped process's arguments\n");
+            "task ids, a read of a reaped process's arguments and oom_score_adj\n");
     }
     return failures != 0;
 }

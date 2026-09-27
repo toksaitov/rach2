@@ -1,9 +1,11 @@
 #!/bin/sh
 # Compile synthetic-file regressions before, during and after each fault:
 # the ptmx dispatch before the flag checks, the text's terminator written
-# with no buffer, and a read of a process's arguments that holds no
-# reference to the address space or reads the process's record after the
-# first read, which may sleep while the process is reaped.
+# with no buffer, a read of a process's arguments that holds no reference to
+# the address space or reads the process's record after the first read,
+# which may sleep while the process is reaped, and an oom_score_adj write
+# that takes a value out of range, lowers the value below the floor without
+# privilege, or leaves the floor where a privileged write found it.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -63,7 +65,8 @@ run_phase()
 }
 
 echo "synth-open-mutation: logs: $work"
-for case in devfs:ptmx procfs:terminator procfs:unheld-space procfs:record-after-sleep; do
+for case in devfs:ptmx procfs:terminator procfs:unheld-space procfs:record-after-sleep \
+    procfs:oom-range procfs:oom-floor procfs:oom-floor-kept; do
     test=${case%%:*}
     fault=${case#*:}
     run_phase "$test" "$fault-fixed" 0 "$test-hosttest: result: pass:"
@@ -90,6 +93,12 @@ else:
                                 "            break;\n        }\n        for (i = 0; i < n; i++) {",
                                 "        if (paging_access(p->mm, start, chunk, n, 0) != 0) {\n"
                                 "            break;\n        }\n        for (i = 0; i < n; i++) {")],
+        'oom-range': [("    if (v < OOM_SCORE_ADJ_MIN || v > OOM_SCORE_ADJ_MAX) {", "    if (0) {")],
+        'oom-floor': [("    if (v < p->tg->oom_score_adj_min && !proc_privileged(current_proc)) {",
+                       "    if (0) {")],
+        'oom-floor-kept': [("    p->tg->oom_score_adj = v;\n    if (proc_privileged(current_proc)) {\n"
+                            "        p->tg->oom_score_adj_min = v;\n    }\n",
+                            "    p->tg->oom_score_adj = v;\n")],
     }
     for old, new in changes[sys.argv[2]]:
         assert source.count(old) == 1
@@ -100,6 +109,9 @@ PY
         ptmx) message='ptmx exclusive create returns EEXIST before dispatch' ;;
         terminator) message='runtime error: store to null pointer' ;;
         unheld-space | record-after-sleep) message='heap-use-after-free' ;;
+        oom-range) message='a value past -1000 to 1000 is EINVAL and changes nothing' ;;
+        oom-floor) message='and may not lower it below the floor' ;;
+        oom-floor-kept) message='a privileged write sets the floor' ;;
     esac
     run_phase "$test" "$fault-mutated" 1 "$message"
     cleanup
