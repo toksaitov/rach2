@@ -788,10 +788,10 @@ static int robust_exec(void)
  * Two execs at once. The child's second thread stops at the entry of its
  * execve under the probe's PTRACE_SYSCALL, and only then does the first
  * thread call execve, which sends it SIGKILL and waits for it to end. The
- * SIGKILL ends the stop, and the second call must give up and let its
- * thread end rather than wait for the first: the child then runs the first
- * one's program. An alarm bounds the waits, since two calls that each
- * waited for the other would never end.
+ * SIGKILL ends the stop, and the second call does not run, as on Linux: its
+ * thread ends, and the child runs the first one's program. An alarm bounds
+ * the waits, since a second call that ran and waited for the first would
+ * never end.
  */
 static int two_execs(void)
 {
