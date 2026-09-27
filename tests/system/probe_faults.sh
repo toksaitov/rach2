@@ -9,11 +9,14 @@
 # words come before the hang, and the runner's deadline ends the boot.
 #
 # The file is restored and touched after each fault, and the trap restores it
-# and rebuilds if the run is stopped, after the suite's processes are
-# stopped. The kernel and the programs rebuilt at the end must be the first
-# ones, byte for byte, so the full set run on this tree afterwards is what
-# shows each restored row passing; this script does not run the rows on the
-# unmodified tree. It refuses to start while a suite holds the run lock.
+# and rebuilds whenever a fault was built and the rebuild of the restored
+# tree has not finished, after the suite's processes are stopped. The kernel
+# and the programs rebuilt at the end must be the first ones, byte for byte,
+# so the full set run on this tree afterwards is what shows each restored
+# row passing; this script does not run the rows on the unmodified tree. It
+# holds the run lock, as tests/run does, so that no suite builds or boots the
+# tree while a fault is in it, and refuses to start while another run holds
+# it.
 #
 # NAME arguments run those faults alone. -s K/N runs the faults whose place
 # in the list, counted from 0, is K modulo N, so that N copies of the tree can
@@ -33,11 +36,15 @@ fi
 case ${1:-} in
     -*) echo 'probe-faults: usage: probe_faults.sh [-s K/N] [NAME...]' >&2; exit 2 ;;
 esac
-[ ! -d build/.run.lock ] || {
-    echo 'probe-faults: another suite owns this tree' >&2; exit 1;
-}
 mkdir -p build/tests
+mkdir build/.run.lock 2>/dev/null || {
+    echo 'probe-faults: another run owns this tree' >&2; exit 1;
+}
+trap 'rm -rf build/.run.lock' EXIT
 work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
+printf 'pid %s\npgid %s\nargs probe_faults.sh %s\nsince %s\nwork %s\n' "$$" \
+    "$(ps -o pgid= -p $$ | tr -d ' ')" "$*" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
+    > build/.run.lock/owner
 
 # `faults select SHARD [NAME...]` prints the chosen faults, one a line, as
 # NAME, PROBE, FILE and WORDS separated by tabs; `faults apply NAME` puts that
@@ -119,6 +126,7 @@ done <"$work/selected"
 cc -O2 -Wall -Wextra -Werror tests/system/runner/runutil.c -o "$work/runutil"
 child=
 changed=
+built=
 missed=
 
 stop_child()
@@ -145,10 +153,11 @@ restore()
 cleanup()
 {
     stop_child
-    if [ -n "$changed" ]; then
-        restore
+    restore
+    if [ -n "$built" ]; then
         make -s rach2 test-image >"$work/cleanup.build.log" 2>&1 </dev/null || :
     fi
+    rm -rf build/.run.lock
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -169,6 +178,7 @@ probe_fault()
 {
     name=$1 probe=$2 file=$3 words=$4
     changed=$file
+    built=1
     faults apply "$name"
     touch "$file"
     rm -f build/images/default-test.log
@@ -202,6 +212,7 @@ done <"$work/selected"
 
 make -s rach2 test-image >"$work/restored.build.log" 2>&1 </dev/null ||
     { cat "$work/restored.build.log"; exit 1; }
+built=
 products >"$work/restored.sums"
 diff "$work/first.sums" "$work/restored.sums" ||
     { echo 'probe-faults: the restored products differ from the first' >&2; exit 1; }
