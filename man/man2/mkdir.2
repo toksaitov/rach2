@@ -3,12 +3,15 @@
 .Os
 .Sh NAME
 .Nm mkdir ,
+.Nm mkdirat ,
 .Nm rmdir
 .Nd create or remove a directory
 .Sh SYNOPSIS
 .In sys/stat.h
 .Ft int
 .Fn mkdir "const char *path" "mode_t mode"
+.Ft int
+.Fn mkdirat "int dirfd" "const char *path" "mode_t mode"
 .In unistd.h
 .Ft int
 .Fn rmdir "const char *path"
@@ -16,6 +19,20 @@
 .Fn mkdir
 creates the directory
 .Fa path .
+.Fn mkdirat
+does the same with a relative
+.Fa path
+resolved from the directory
+.Fa dirfd
+is open on, or from the current working directory for
+.Dv AT_FDCWD ;
+an absolute path ignores
+.Fa dirfd .
+.Xr unlinkat 2
+with
+.Dv AT_REMOVEDIR
+is the matching form of
+.Fn rmdir .
 Its parent must exist and the final name must not already exist.
 Creating the root directory or a mount point returns
 .Er EEXIST .
@@ -71,12 +88,20 @@ Changes on a read-only mount return
 .Er EROFS .
 .Pp
 The i386 system call numbers are 39 for
-.Fn mkdir
+.Fn mkdir ,
+296 for
+.Fn mkdirat
 and 40 for
 .Fn rmdir .
-Both take the path in EBX;
 .Fn mkdir
-takes the mode in ECX.
+and
+.Fn rmdir
+take the path in EBX, and
+.Fn mkdir
+the mode in ECX;
+.Fn mkdirat
+takes the directory descriptor, the path and the mode in EBX, ECX and
+EDX.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .
@@ -95,6 +120,11 @@ the file and the empty directory.
 .It Bq Er EACCES
 Search permission on an ancestor or write permission on the parent
 was denied.
+.It Bq Er EBADF
+.Fn mkdirat
+was given a relative path and a
+.Fa dirfd
+that is not open, or one on a KRFFS boot-root directory removed since.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted, or
 .Fn rmdir
@@ -134,7 +164,11 @@ The file system could not allocate a node or other required memory.
 .It Bq Er ENOSPC
 There is no space for the new directory or its parent entry.
 .It Bq Er ENOTDIR
-An ancestor is not a directory, or
+An ancestor is not a directory,
+.Fn mkdirat
+was given a relative path and a
+.Fa dirfd
+that is not open on a directory, or
 .Fn rmdir
 selected a non-directory on a file system that reports this error.
 .It Bq Er ENOTEMPTY

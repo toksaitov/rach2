@@ -2952,6 +2952,54 @@ int32_t sys_chdir(isr_params_t *params)
     return rc;
 }
 
+/**
+ * fchdir(2): EBX = fd. Make the directory `fd` is open on the working
+ * directory.
+ *
+ * The working directory's path is the one the descriptor's `*at` calls
+ * resolve against (`fd_dir_path`), so it follows a directory a type can name
+ * after a rename; a descriptor on anything but a directory is -ENOTDIR, and
+ * one on a directory of the KRFFS boot root removed since is -EBADF. Entering
+ * takes search permission on the directory, which a synthetic one grants
+ * everybody, and the mount hold chdir takes. A descriptor opened with O_PATH
+ * does as well as any other.
+ */
+int32_t sys_fchdir(isr_params_t *params)
+{
+    fd_entry_t *entry;
+    struct vfs_ref ref;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, (int)params->ebx);
+    if (!entry) {
+        return -EBADF;
+    }
+    path = path_buf_get();
+    if (!path) {
+        return -ENOMEM;
+    }
+    rc = fd_dir_path(entry, path, VFS_PATH_MAX);
+    if (rc == 0 && entry->type == FD_TYPE_SYNTH_DIR) {
+        rc = cwd_enter(path, NULL, NULL);
+    } else if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
+        rc = -EBADF;
+    } else if (rc == 0) {
+        ref.mnt = entry->ofd->vmnt;
+        ref.node = entry->ofd->vnode;
+        rc = mnt_is_root(ref.mnt) ? cred_access_node((krffs_node_t *)ref.node, CRED_X, 0)
+                                  : cred_access_ref(&ref, CRED_X, 0);
+        if (rc == 0) {
+            rc = cwd_enter(path, ref.mnt, ref.node);
+        }
+    }
+    path_buf_put(path);
+    return rc;
+}
+
 /* getcwd(2): EBX = buf, ECX = size. Returns the path length including the
  * NUL, or -errno. */
 int32_t sys_getcwd(isr_params_t *params)
@@ -5563,6 +5611,26 @@ int32_t sys_mkdir(isr_params_t *params)
     return rc;
 }
 
+/* mkdirat(2): EBX = dirfd, ECX = path, EDX = mode; a relative path is
+ * resolved from `dirfd` as openat's is. */
+int32_t sys_mkdirat(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ecx;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user((int)params->ebx, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_mkdir(path, params->edx);
+    path_buf_put(path);
+    return rc;
+}
+
 /**
  * Remove the empty directory `path`, an absolute canonical path: the core of
  * rmdir(2) and of unlinkat(2) with AT_REMOVEDIR. Returns 0 or -errno
@@ -5650,9 +5718,86 @@ int32_t sys_rmdir(isr_params_t *params)
     return rc;
 }
 
+/* The unlinkat flag that makes it rmdir. */
+#define AT_REMOVEDIR 0x200
+
+/**
+ * unlinkat(2): EBX = dirfd, ECX = path, EDX = flags. The name is removed as
+ * unlink removes it, or as rmdir does with AT_REMOVEDIR; any other flag is
+ * -EINVAL before the path is read. A relative path is resolved from `dirfd`.
+ */
+int32_t sys_unlinkat(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ecx;
+    int flags = (int)params->edx;
+    char *path;
+    int32_t rc;
+
+    if (flags & ~AT_REMOVEDIR) {
+        return -EINVAL;
+    }
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user((int)params->ebx, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = (flags & AT_REMOVEDIR) ? do_rmdir(path) : do_unlink(path);
+    path_buf_put(path);
+    return rc;
+}
+
+/* The renameat2 flag this kernel does: refuse to replace the new name. */
+#define RENAME_NOREPLACE 1
+
+/**
+ * Whether `name` is in directory `dir` of `mnt`: 1 or 0, or a negative errno
+ * for a lookup that failed another way. The node a lookup takes goes back.
+ */
+static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    void *found;
+    int rc = mnt->type->ops->lookup(mnt, dir, name, &found);
+
+    if (rc == -ENOENT) {
+        return 0;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (mnt->type->ops->put) {
+        mnt->type->ops->put(mnt, found);
+    }
+    return 1;
+}
+
+/**
+ * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
+ * not there, as the rename would answer, then -EEXIST for a new name that is.
+ * The caller holds the mount's namespace lock from this check through the
+ * rename, and every namespace change takes that lock, so no name can appear
+ * between the two.
+ */
+static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
+                                const struct vfs_ref *npar, const char *nleaf)
+{
+    int rc = name_present(opar->mnt, opar->node, oleaf);
+
+    if (rc <= 0) {
+        return rc == 0 ? -ENOENT : rc;
+    }
+    rc = name_present(npar->mnt, npar->node, nleaf);
+    return rc == 1 ? -EEXIST : rc;
+}
+
 /**
  * Rename `old_buf` to `new_buf`, both absolute canonical paths: the core of
- * rename(2) and renameat(2). Returns 0 or -errno.
+ * rename(2), renameat(2) and renameat2(2), whose RENAME_NOREPLACE in `flags`
+ * refuses a new name that exists with -EEXIST, decided with the rename under
+ * one namespace lock. The directories' write permission is checked before
+ * either name is looked up, so a caller without it sees -EACCES where Linux
+ * would report -EEXIST. Returns 0 or -errno.
  *
  * As in `unlink`, every refusal is decided here, because `krffs_rename`
  * answers all of them with a bare -1, which the wrapper reports as `EIO`.
@@ -5675,7 +5820,7 @@ int32_t sys_rmdir(isr_params_t *params)
  * destination would take the file system with it, and that guarantee should
  * not rest on a canonicalizer in another function.
  */
-static int32_t do_rename(const char *old_buf, const char *new_buf)
+static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
 {
     char oleaf[VFS_NAME_MAX + 1];
     char nleaf[VFS_NAME_MAX + 1];
@@ -5740,7 +5885,10 @@ static int32_t do_rename(const char *old_buf, const char *new_buf)
     }
     if (!mnt_is_root(opar.mnt)) {
         vfs_ns_lock(opar.mnt);
-        rc = cred_remove_ref(&opar, oleaf);
+        rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(&opar, oleaf, &npar, nleaf) : 0;
+        if (rc == 0) {
+            rc = cred_remove_ref(&opar, oleaf);
+        }
         if (rc == 0) {
             rc = cred_remove_ref(&npar, nleaf);
         }
@@ -5764,6 +5912,15 @@ static int32_t do_rename(const char *old_buf, const char *new_buf)
     }
     if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
         rc = -EPERM; /* a directory's children reference its id */
+        goto out;
+    }
+    if (flags & RENAME_NOREPLACE) {
+        vfs_ns_lock(opar.mnt);
+        rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
+        if (rc == 0) {
+            rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
+        }
+        vfs_ns_unlock(opar.mnt);
         goto out;
     }
 
@@ -5807,11 +5964,12 @@ out:
 }
 
 /**
- * rename(2) and renameat(2) after their arguments: both paths are copied,
- * each relative one joined to its own directory, before either is resolved.
+ * rename(2), renameat(2) and renameat2(2) after their arguments: both paths
+ * are copied, each relative one joined to its own directory, before either
+ * is resolved.
  */
 static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdirfd,
-                                const char __user *unew)
+                                const char __user *unew, int flags)
 {
     char *oldpath = NULL;
     char *newpath = NULL;
@@ -5821,7 +5979,7 @@ static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdi
         rc = path_from_user(newdirfd, unew, &newpath);
     }
     if (rc == 0) {
-        rc = do_rename(oldpath, newpath);
+        rc = do_rename(oldpath, newpath, flags);
     }
     path_buf_put(newpath);
     path_buf_put(oldpath);
@@ -5837,7 +5995,41 @@ int32_t sys_rename(isr_params_t *params)
     if (!current_proc || !old_path || !new_path) {
         return -EFAULT;
     }
-    return rename_from_user(AT_FDCWD, old_path, AT_FDCWD, new_path);
+    return rename_from_user(AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
+}
+
+/* renameat(2): EBX = old dirfd, ECX = old path, EDX = new dirfd, ESI = new
+ * path; each relative path is resolved from its own descriptor. */
+int32_t sys_renameat(isr_params_t *params)
+{
+    const char __user *old_path = (const char __user *)params->ecx;
+    const char __user *new_path = (const char __user *)params->esi;
+
+    if (!current_proc || !old_path || !new_path) {
+        return -EFAULT;
+    }
+    return rename_from_user((int)params->ebx, old_path, (int)params->edx, new_path, 0);
+}
+
+/**
+ * renameat2(2): renameat's arguments and EDI = flags. RENAME_NOREPLACE
+ * refuses a new name that exists with -EEXIST; RENAME_EXCHANGE,
+ * RENAME_WHITEOUT and any other flag are -EINVAL before a path is read, as a
+ * Linux file system without them answers them later.
+ */
+int32_t sys_renameat2(isr_params_t *params)
+{
+    const char __user *old_path = (const char __user *)params->ecx;
+    const char __user *new_path = (const char __user *)params->esi;
+    int flags = (int)params->edi;
+
+    if (flags & ~RENAME_NOREPLACE) {
+        return -EINVAL;
+    }
+    if (!current_proc || !old_path || !new_path) {
+        return -EFAULT;
+    }
+    return rename_from_user((int)params->ebx, old_path, (int)params->edx, new_path, flags);
 }
 
 /* Special nsec values */

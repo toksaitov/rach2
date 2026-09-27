@@ -2,12 +2,18 @@
 .Dt RENAME 2
 .Os
 .Sh NAME
-.Nm rename
+.Nm rename ,
+.Nm renameat ,
+.Nm renameat2
 .Nd rename a file within a mount
 .Sh SYNOPSIS
 .In stdio.h
 .Ft int
 .Fn rename "const char *oldpath" "const char *newpath"
+.Ft int
+.Fn renameat "int olddirfd" "const char *oldpath" "int newdirfd" "const char *newpath"
+.Ft int
+.Fn renameat2 "int olddirfd" "const char *oldpath" "int newdirfd" "const char *newpath" "unsigned int flags"
 .Sh DESCRIPTION
 .Fn rename
 changes the name
@@ -15,9 +21,60 @@ changes the name
 to
 .Fa newpath .
 Relative paths are resolved from the current working directory.
+.Fn renameat
+and
+.Fn renameat2
+resolve a relative
+.Fa oldpath
+from the directory
+.Fa olddirfd
+is open on and a relative
+.Fa newpath
+from
+.Fa newdirfd ;
+either may be
+.Dv AT_FDCWD
+for the current working directory, and an absolute path ignores its
+directory argument.
 The two parent directories must be on the same mount.
 A final symbolic link is renamed or replaced as an entry; its target
 is not followed.
+.Pp
+.Fn renameat2
+with
+.Dv RENAME_NOREPLACE
+in
+.Fa flags
+refuses a
+.Fa newpath
+that exists with
+.Er EEXIST ,
+after a missing
+.Fa oldpath
+has given
+.Er ENOENT .
+Both names are looked up under the mount's namespace lock, which every
+change of a name on the mount takes, and the rename is made before the
+lock is released, so no other process can create the new name between
+the check and the rename.
+With
+.Fa flags
+0 it is
+.Fn renameat .
+.Dv RENAME_EXCHANGE ,
+.Dv RENAME_WHITEOUT
+and any other flag return
+.Er EINVAL
+before either path is read; a Linux file system without them returns
+.Er EINVAL
+after the paths are resolved.
+musl declares no
+.Fn renameat2 ;
+a program calls it through
+.Fn syscall ,
+with
+.Dv RENAME_NOREPLACE
+being 1.
 .Pp
 An existing regular-file destination may be replaced.
 An open descriptor continues to refer to the file it opened, including
@@ -28,7 +85,13 @@ It is absent from lookup and directory listings.
 .Pp
 Search permission is required on ancestor directories and write
 permission on both parent directories.
-The parent write checks precede lookup of the source.
+The parent write checks precede lookup of the source, and of the
+destination for
+.Dv RENAME_NOREPLACE :
+a caller without them gets
+.Er EACCES
+where Linux reports
+.Er EEXIST .
 In a sticky directory, removing the source entry or replacing the
 destination entry additionally requires effective user ID 0, ownership
 of the directory, or ownership of the affected entry.
@@ -73,12 +136,16 @@ This is a check on the destination, not the source.
 Ext2 permits renaming or replacing a loop-backed file because the loop
 device retains its inode.
 .Pp
-The i386 system call number is 38.
+The i386 system call numbers are 38 for
+.Nm rename ,
+302 for
+.Nm renameat
+and 353 for
+.Nm renameat2 .
 .Sh RETURN VALUES
-.Fn rename
-returns 0 on success, or -1 on failure and sets
+These functions return 0 on success, or -1 on failure and set
 .Va errno .
-The raw kernel call returns a negative error number.
+The raw kernel calls return a negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/fdstale.c
@@ -86,11 +153,22 @@ has a child open a file while its parent renames a replacement onto
 that name.
 The child reads the original contents through its descriptor;
 opening the name again reads the replacement.
+.Pa tests/musl/atcallmusl.c
+renames through two directory descriptors, and checks that
+.Dv RENAME_NOREPLACE
+refuses an existing name and leaves both files as they were.
 .Sh ERRORS
 .Bl -tag -width ENAMETOOLONG
 .It Er EACCES
 Search permission was denied on an ancestor directory, or write
 permission was denied on either parent directory.
+.It Er EBADF
+A relative path's directory descriptor is not open.
+.It Er EEXIST
+.Dv RENAME_NOREPLACE
+was given and
+.Fa newpath
+exists.
 .It Er EBUSY
 A path entered a mount being mounted or unmounted, either entry is a
 mount point, or a destination directory is held open.
@@ -103,8 +181,11 @@ An ext2 directory cannot grow further or a required block exceeds the
 file system's addressing limit.
 .It Er EINVAL
 Either path normalizes to the root, a destination has no leaf component, a
-directory would move into itself or below itself, or a file system
-rejects the name or cannot supply required attributes.
+directory would move into itself or below itself, a file system
+rejects the name or cannot supply required attributes, or
+.Fn renameat2
+was given a flag other than
+.Dv RENAME_NOREPLACE .
 .It Er EIO
 File system data or metadata could not be read or written, or the
 device was removed.
@@ -131,7 +212,8 @@ or the rename.
 .It Er ENOSPC
 The destination directory cannot allocate space for the new entry.
 .It Er ENOTDIR
-A path component used as a directory is not a directory, or a directory
+A path component used as a directory is not a directory, a relative
+path's directory descriptor is not open on a directory, or a directory
 source would replace a nondirectory on ext2, FAT32, or exFAT.
 .It Er ENOTEMPTY
 A directory destination is not empty on ext2, FAT32, or exFAT.

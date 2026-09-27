@@ -97,6 +97,8 @@ int32_t sys_dup2(isr_params_t *params);
 
 int32_t sys_chdir(isr_params_t *params);
 
+int32_t sys_fchdir(isr_params_t *params);
+
 int32_t sys_getcwd(isr_params_t *params);
 
 int32_t sys_readlink(isr_params_t *params);
@@ -159,11 +161,19 @@ int32_t sys_creat(isr_params_t *params);
 
 int32_t sys_unlink(isr_params_t *params);
 
+int32_t sys_unlinkat(isr_params_t *params);
+
 int32_t sys_mkdir(isr_params_t *params);
+
+int32_t sys_mkdirat(isr_params_t *params);
 
 int32_t sys_rmdir(isr_params_t *params);
 
 int32_t sys_rename(isr_params_t *params);
+
+int32_t sys_renameat(isr_params_t *params);
+
+int32_t sys_renameat2(isr_params_t *params);
 
 /*
  * Timespec structure for utimensat
