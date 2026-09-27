@@ -89,12 +89,13 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  *
  * OpenSSH's `sshd` takes `-D` for the same foreground and `-e` to write its
  * log to standard error, which is the service log, since the system has no
- * syslog daemon. Its argv[0] is its absolute path, which it requires, since
- * it executes itself again for each connection. It makes no host keys:
- * `ssh-keygen -A` runs before each start and makes those missing from
- * `/etc/ssh`, every one on a first boot, with the same need for the kernel's
- * entropy. The same policy file decides root's password, which
- * `PermitRootLogin prohibit-password` bars and `PermitRootLogin yes` permits.
+ * syslog daemon. Its argv[0] is its absolute path, without which it refuses
+ * to start, since a SIGHUP makes it execute itself again by that name to
+ * read its configuration anew. It makes no host keys: `ssh-keygen -A` runs
+ * before each start and makes those missing from `/etc/ssh`, every one on a
+ * first boot, with the same need for the kernel's entropy. The same policy
+ * file decides root's password, which `PermitRootLogin prohibit-password`
+ * bars and `PermitRootLogin yes` permits.
  */
 #define SSHD_PROGRAM    "/bin/dropbearmulti"
 #define OPENSSH_PROGRAM "/usr/sbin/sshd"
