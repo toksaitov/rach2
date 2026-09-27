@@ -15,9 +15,11 @@
  * another thread closes during the wait fails with EBADF when the holder lets
  * go, and leaves the byte free. A flock
  * LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
- * EWOULDBLOCK, a dup shares the lock, and the last close of a description
- * releases it. An open file description lock conflicts with a second open
- * in the same process, and with that process's POSIX lock.
+ * EWOULDBLOCK, and a dup shares the lock. A description's lock stays through
+ * the close of one of its two descriptors, as another open's LOCK_EX|LOCK_NB
+ * finds, and goes at the last close. An open file description lock conflicts
+ * with a second open in the same process, and with that process's POSIX
+ * lock.
  *
  * Prints "LOCKMUSL OK" on success and "LOCKMUSL FAIL (detail)" otherwise.
  */
@@ -387,8 +389,16 @@ static int flocks(void)
     if (flock(a, LOCK_SH | LOCK_NB) != 0) {
         return fail("the close did not release the flock lock");
     }
+    b = open(LOCK_PATH, O_RDWR);
     close(a);
+    if (b < 0 || flock(b, LOCK_EX | LOCK_NB) != -1 || errno != EWOULDBLOCK) {
+        return fail("the close of one of two descriptors released the flock lock");
+    }
     close(d);
+    if (flock(b, LOCK_EX | LOCK_NB) != 0) {
+        return fail("the last close of a description did not release the flock lock");
+    }
+    close(b);
 
     a = open(LOCK_PATH, O_RDWR);
     b = open(LOCK_PATH, O_RDWR);
