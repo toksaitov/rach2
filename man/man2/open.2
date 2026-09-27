@@ -206,8 +206,26 @@ The process's table starts with 16 entries and grows up to 1024,
 subject to its descriptor resource limit.
 Allocation failure returns
 .Er EMFILE .
-The kernel checks available descriptor capacity before creating or
-truncating an ordinary file, but a later allocation can still fail.
+An open of a path takes its descriptor number before it resolves the
+path, as Linux does, so an open that finds no free number creates and
+truncates nothing.
+Until the open ends the number is reserved: a
+.Fn close
+of it by another thread sharing the table answers
+.Er EBADF ,
+a
+.Xr dup2 2
+onto it
+.Er EBUSY ,
+and a
+.Xr fork 2
+child does not inherit it.
+An open of a
+.Pa /dev
+or
+.Pa /proc
+node, a device node or a socket file gives the number back before its
+own allocation.
 .Pp
 .Fn close
 releases

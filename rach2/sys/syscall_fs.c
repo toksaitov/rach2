@@ -1711,25 +1711,19 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
 }
 
 /**
- * The FIFO half of `open_special`: a descriptor whose description holds the
- * file and its mount, as a regular file's does, made an end of the file's
- * pipe. The walk's lock goes before `fifo_attach`, which may wait for the
- * other end. Returns the descriptor or a negative errno, with `ref`
- * released either way.
+ * The FIFO half of `open_special`: the descriptor `fd` the open reserved,
+ * whose description holds the file and its mount, as a regular file's does,
+ * made an end of the file's pipe. The walk's lock goes before
+ * `fifo_attach`, which may wait for the other end, with the slot still a
+ * reservation. Returns the descriptor or a negative errno, with `ref`
+ * released and the reservation installed or freed either way.
  */
-static int32_t open_fifo(struct vfs_ref *ref, uint64_t ino, int flags)
+static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
 {
     struct vfs_mount *mnt = ref->mnt;
-    fd_entry_t *e;
+    fd_entry_t *e = &current_proc->fds->entries[fd];
     int32_t rc;
-    int fd = fd_alloc(current_proc->fds);
 
-    if (fd < 0) {
-        vfs_walk_unlock(mnt);
-        vfs_ref_release(ref);
-        return -EMFILE;
-    }
-    e = &current_proc->fds->entries[fd];
     rc = vfs_open_node(mnt, ref->node, flags, &e->ofd->fhandle);
     if (rc != 0) {
         vfs_walk_unlock(mnt);
@@ -1773,9 +1767,11 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
 
 /**
  * Open the FIFO, the socket file or the device node at `ref`, which name no
- * bytes of their own: 1 with the descriptor or the errno in `*result`, and
- * `ref` and the walk's lock released; 0, with both as they were, for any
- * other node, which the ordinary open takes.
+ * bytes of their own: 1 with the descriptor or the errno in `*result`, `ref`
+ * and the walk's lock released, and the descriptor `fd` the open reserved
+ * taken, by a FIFO, or freed, since a device's open takes a descriptor of
+ * its own; 0, with all three as they were, for any other node, which the
+ * ordinary open takes.
  *
  * The checks are open's, in its order: O_CREAT|O_EXCL is EEXIST,
  * O_DIRECTORY is ENOTDIR, then the permission the access mode asks for; a
@@ -1784,7 +1780,7 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
  * nothing is written to the file. A socket file is ENXIO, as it is on Linux,
  * whose sockets are reached by connect(2).
  */
-static int open_special(struct vfs_ref *ref, int flags, int32_t *result)
+static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
 {
     struct vfs_mount *mnt = ref->mnt;
     unsigned acc = (unsigned)flags & 3u;
@@ -1827,11 +1823,12 @@ static int open_special(struct vfs_ref *ref, int flags, int32_t *result)
         rc = -EACCES;
     }
     if (rc == 0 && type == S_IFIFO) {
-        *result = open_fifo(ref, ino, flags);
+        *result = open_fifo(ref, fd, ino, flags);
         return 1;
     }
     vfs_walk_unlock(mnt);
     vfs_ref_release(ref);
+    fd_free(current_proc->fds, fd);
     if (rc == 0) {
         rc = type == S_IFSOCK ? -ENXIO : open_device(type == S_IFBLK, rdev, flags);
     }
@@ -1959,38 +1956,30 @@ static int open_root_node(struct vfs_ref *ref, int flags)
 }
 
 /**
- * The descriptor for an opened node: a directory opens as a FD_TYPE_DIR (its
- * node is the directory whose children getdents lists); a regular file as
- * FD_TYPE_FILE. A path that resolved to the root (e.g. "x/..") is the root
- * directory, stored with a NULL node like a literal "/" open. A node of
- * another type keeps `node` NULL: the description's own fields name it, and
- * the KRFFS-only paths (the holder rule, the set-id clear) have nothing to
- * do with it. Returns the fd or a negative errno, with the reference
- * released. Register the mounted description before truncation so a
- * relocation while waiting updates its node. A failed truncation frees
+ * The descriptor for an opened node, in the slot `fd` the open reserved: a
+ * directory opens as a FD_TYPE_DIR (its node is the directory whose children
+ * getdents lists); a regular file as FD_TYPE_FILE. A path that resolved to
+ * the root (e.g. "x/..") is the root directory, stored with a NULL node like
+ * a literal "/" open. A node of another type keeps `node` NULL: the
+ * description's own fields name it, and the KRFFS-only paths (the holder
+ * rule, the set-id clear) have nothing to do with it. Returns the fd or a
+ * negative errno, with the reference released and, on an error, the
+ * reservation freed. Register the mounted description before truncation so
+ * a relocation while waiting updates its node. A failed truncation frees
  * the description and its open handle.
+ *
+ * The entry gets its type last, which is what publishes it: until then the
+ * slot is a reservation, which no other thread's lookup, close or dup2 can
+ * take while the file system's open or the truncation sleeps with the
+ * description in use.
  */
-static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
+static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags)
 {
-    fd_entry_t *entry;
+    fd_entry_t *entry = &current_proc->fds->entries[fd];
     krffs_node_t *node = ref->node;
-    int fd;
+    fd_type_t type;
     int rc;
 
-    fd = fd_alloc(current_proc->fds);
-    if (fd < 0) {
-        vfs_ref_release(ref);
-        return -EMFILE; /* No free fds */
-    }
-
-    /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
-     * directory whose children getdents lists); a regular file as FD_TYPE_FILE.
-     * A path that resolved to the root (e.g. "x/..") is the root directory,
-     * stored with a NULL node like a literal "/" open. A node of another
-     * type keeps `node` NULL: the description's own fields name it, and
-     * the KRFFS-only paths (the holder rule, the set-id clear) have nothing
-     * to do with it. */
-    entry = &current_proc->fds->entries[fd];
     if (!mnt_is_root(ref->mnt)) {
         struct vfs_stat vst;
 
@@ -2000,8 +1989,7 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
             vfs_ref_release(ref);
             return rc;
         }
-        entry->type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
-        entry->node = NULL;
+        type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->ofd->ino = vst.ino;
         entry->ofd->dirpath[0] = '\0';
         if (k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
@@ -2009,12 +1997,10 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
             k_memcpy(entry->ofd->dirpath + 1, name, k_strlen(name) + 1);
         }
     } else if (node == krffs_fs->node) {
-        entry->type = FD_TYPE_DIR;
-        entry->node = NULL;
+        type = FD_TYPE_DIR;
         entry->ofd->ino = 1;
     } else {
-        entry->type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
-        entry->node = node;
+        type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->ofd->ino = krffs_node_ino(node);
     }
     entry->ofd->offset = 0;
@@ -2064,8 +2050,28 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
     if (flags & O_CLOEXEC) {
         entry->flags |= FD_FLAG_CLOEXEC; /* opendir() and fopen(.,"e") rely on this */
     }
-
+    entry->node = mnt_is_root(entry->ofd->vmnt) && entry->ofd->vnode != krffs_fs->node
+                      ? (krffs_node_t *)entry->ofd->vnode
+                      : NULL;
+    entry->type = type;
     return fd;
+}
+
+/**
+ * The open of the synthetic node `vp` a resolution arrived at, for
+ * `do_open`. The /proc links, /proc/self and the descriptor links, are links
+ * too, and give a mounted type's two answers: ELOOP under O_NOFOLLOW and
+ * EEXIST under O_CREAT|O_EXCL. Anything else opens as its kind opens.
+ */
+static int32_t open_synth_node(const struct vpath *vp, int flags)
+{
+    if (synth_is_link(vp) && (flags & O_NOFOLLOW)) {
+        return -ELOOP;
+    }
+    if (synth_is_link(vp) && (flags & O_CREAT) && (flags & O_EXCL)) {
+        return -EEXIST;
+    }
+    return synth_open(vp, flags);
 }
 
 /**
@@ -2083,6 +2089,13 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
  * final mount's namespace lock, which is what keeps a writer from moving the
  * file between the lookup and the registration. O_PATH goes to `open_path`,
  * which names the file and opens nothing.
+ *
+ * The descriptor is reserved before the path is resolved, as Linux reserves
+ * it, so that no other thread sharing the table can take the last one while
+ * the resolution sleeps and leave a created or truncated file behind an
+ * EMFILE. A synthetic node, a device node and a socket file give the
+ * reservation back, since their opens take their own descriptors and create
+ * and truncate nothing; every error gives it back too.
  */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
@@ -2090,6 +2103,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     struct vfs_mount *locked;
     char *through = NULL; /* the path a dangling link's target makes, in a path page */
     int followed = 0;
+    int fd;
     int rc;
 
     if (flags & O_PATH) {
@@ -2101,8 +2115,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     if (name_is(name, "mouse")) {
         return open_mouse();
     }
-    if (!fd_can_alloc(current_proc->fds)) {
-        return -EMFILE; /* known before anything is created or truncated */
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        return -EMFILE;
     }
 again:
     rc = vfs_resolve(0, name,
@@ -2115,7 +2130,8 @@ again:
         if (!through) {
             through = path_buf_get();
             if (!through) {
-                return -ENOMEM;
+                rc = -ENOMEM;
+                goto out;
             }
         }
         rc = open_link_target(name, through, VFS_PATH_MAX, &followed);
@@ -2143,18 +2159,13 @@ again:
 
             vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
-            /* The /proc links, /proc/self and the descriptor links, are
-             * links too: the same two answers as on a mounted type. */
-            if (synth_is_link(&vpc) && (flags & O_NOFOLLOW)) {
-                rc = -ELOOP;
-            } else if (synth_is_link(&vpc) && (flags & O_CREAT) && (flags & O_EXCL)) {
-                rc = -EEXIST;
-            } else {
-                rc = synth_open(&vpc, flags);
-            }
+            fd_free(current_proc->fds, fd);
+            fd = -1;
+            rc = open_synth_node(&vpc, flags);
             goto out;
         }
-        if (open_special(&ref, flags, &rc)) {
+        if (open_special(&ref, fd, flags, &rc)) {
+            fd = -1;
             goto out;
         }
         locked = ref.mnt;
@@ -2165,9 +2176,13 @@ again:
         }
     }
     locked = ref.mnt;
-    rc = open_install(&ref, name, flags);
+    rc = open_install(&ref, fd, name, flags);
+    fd = -1;
     vfs_walk_unlock(locked);
 out:
+    if (fd >= 0) {
+        fd_free(current_proc->fds, fd);
+    }
     path_buf_put(through);
     return rc;
 }

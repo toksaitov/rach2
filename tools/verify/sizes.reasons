@@ -208,7 +208,6 @@ rach2/sys/syscall.c:tty_common_ioctl lines 135 a dispatcher, one arm per command
 
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_old_stat lines 110 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:do_open complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_rename complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_rename lines 139 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:fstat_fill complexity 33 one system call's contract, its checks in the order the manual page lists the errors

@@ -136,6 +136,8 @@ static int open_error, truncate_error, dropped, attrs, relocate;
  * file system's release of its description sleeps. */
 static int releasing = -1;
 static void (*in_release)(void);
+/* The descriptor an open under way has reserved. */
+static int installing = -1;
 /* Whether a record lock exists, and the drops of one process's locks. */
 static int locking, lock_closes;
 static process_t *lock_closer;
@@ -217,6 +219,10 @@ int vfs_open_node(struct vfs_mount *mnt, void *at, int flags, void **out)
 {
     (void)flags;
     check(mnt == &mount && at == &node, "open uses node identity");
+    check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
+                             proc.fds->entries[installing].type == FD_TYPE_NONE &&
+                             proc.fds->entries[installing].ofd),
+          "an open's descriptor is a reservation while the file system opens it");
     if (open_error) {
         return open_error;
     }
@@ -230,6 +236,9 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
 {
     check(mnt == &mount && at == &handle && opens == releases + 1 && size == 0,
           "mounted truncation uses a live open handle");
+    check(installing < 0 || (fd_get(proc.fds, installing) == NULL &&
+                             proc.fds->entries[installing].type == FD_TYPE_NONE),
+          "an open's descriptor is not published while it truncates");
     fd_ofd_repoint(mnt, &node, &moved);
     relocate = 1;
     truncates++;
@@ -378,7 +387,11 @@ static void truncation(void)
         ref.node = &node;
         check(open_mounted_node(&ref, 2 | O_TRUNC) == 0 && truncates == 0,
               "mounted node checks do not truncate before open");
-        rc = open_install(&ref, "target", 2 | (mode == 3 ? 0 : O_TRUNC));
+        installing = fd_alloc(proc.fds);
+        rc = open_install(&ref, installing, "target", 2 | (mode == 3 ? 0 : O_TRUNC));
+        check(rc < 0 || (rc == installing && fd_get(proc.fds, rc) == &proc.fds->entries[rc]),
+              "a finished open publishes the descriptor it reserved");
+        installing = -1;
         if (mode == 0 || mode == 3) {
             check(rc >= 0 && refs == 1 && leaves == 1 && dropped == 0,
                   "successful open transfers reference");
@@ -446,7 +459,9 @@ static int model_open(void)
 
     ref.mnt = &mount;
     ref.node = &node;
-    return open_install(&ref, "target", 2);
+    int fd = fd_alloc(proc.fds);
+
+    return fd < 0 ? fd : open_install(&ref, fd, "target", 2);
 }
 
 /** While a close's release sleeps, its descriptor is closed to a lookup and
