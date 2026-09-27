@@ -5,23 +5,27 @@
  * EFD_SEMAPHORE each read takes one, and a counter of 3 is empty after three. A
  * nonblocking read of zero fails with EAGAIN, and a read of zero bytes and a
  * write of the all-ones value with EINVAL. poll reports it readable once
- * written. An epoll set reports a pipe with data, level-triggered, at every
- * wait while the data is there; edge-triggered only once until more arrives;
- * with EPOLLONESHOT once until EPOLL_CTL_MOD. Its data word comes back as it
- * was given. A wait on nothing ready ends at its timeout with 0; a registration
- * is removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a
- * regular file is refused with EPERM and a second add with EEXIST. A child's
- * write wakes a parent blocked in epoll_wait. A registration of no events is
- * told of a hangup. A pipe added to a set while a wait on it sleeps, then
- * written, wakes the wait. A set whose edge-triggered event was reported does
- * not poll readable, and a poll of a set is woken by a child's write to a pipe
- * it watches. A write to a pipe in a set inside a set inside a third wakes a
- * wait on the third, and a cycle of sets is ELOOP. Waits with room for one
- * event report two ready descriptors in turn. A one-shot event a wait cannot
- * store, EFAULT, is reported by the next wait. The registration of a closed
- * eventfd does not report the eventfd made next at its number, which can be
- * added. epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative
- * seconds with EINVAL.
+ * written.
+ *
+ * An epoll set reports a pipe with data, level-triggered, at every wait while
+ * the data is there; edge-triggered only once until more arrives; with
+ * EPOLLONESHOT once until EPOLL_CTL_MOD. Its data word comes back as it was
+ * given. A wait on nothing ready ends at its timeout with 0; a registration is
+ * removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a regular
+ * file is refused with EPERM and a second add with EEXIST. A child's write
+ * wakes a parent the child has seen asleep in an epoll_wait with no timeout.
+ * The child stays alive until the parent answers, so that only the write can
+ * end the wait, and an alarm bounds it. A registration of no events is told of
+ * a hangup. A pipe added to a set while a wait on it sleeps, then written,
+ * wakes the wait. A set whose edge-triggered event was reported does not poll
+ * readable, and a poll of a set is woken by a child's write to a pipe it
+ * watches. A write to a pipe in a set inside a set inside a third wakes a wait
+ * on the third, and a cycle of sets is ELOOP. Waits with room for one event
+ * report two ready descriptors in turn. A one-shot event a wait cannot store,
+ * EFAULT, is reported by the next wait. The registration of a closed eventfd
+ * does not report the eventfd made next at its number, which can be added.
+ * epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative seconds
+ * with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -39,6 +43,7 @@
 #include <sys/eventfd.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t alarms;

@@ -9,30 +9,24 @@
  * its own ends of the pipe, and the child writes through it. A child that
  * becomes user and group 1000 reads the pair's creator from SO_PEERCRED, and
  * the byte it writes reaches the creator's end, which has SO_PASSCRED, with the
- * child's pid, uid and gid. A listener bound to a path makes a socket file,
- * accepts a connection queued before the accept, and both ends report the A
- * descriptor sent with SCM_RIGHTS reaches a child, which writes through it.
- * SO_PEERCRED reports the peer, and SO_PASSCRED brings the sender's
- * credentials; an unprivileged thread that is not the leader may name its
- * process's id in SCM_CREDENTIALS.
- * names; a second bind of the path fails with EADDRINUSE, and a connect to the
- * file after the listener is gone fails with ECONNREFUSED. An abstract name
- * works without a file. A datagram sent to a name arrives with the sender's
- * name. A nonblocking receive on an empty socket fails with EAGAIN, and poll
- * reports the socket readable once a byte arrives. A descriptor sent with
- * SCM_RIGHTS reaches a child, which writes through it. SO_PEERCRED reports the
- * peer, and SO_PASSCRED brings the sender's credentials. An accept given an
- * address and no length pointer fails with EFAULT. A listener shut down for
- * reading gives up the connection queued before, then fails an accept with
- * EINVAL and refuses a connect. A connect waiting for room in a full queue
+ * child's pid, uid and gid; an unprivileged thread that is not the leader may
+ * name its process's id in SCM_CREDENTIALS. A listener bound to a path makes a
+ * socket file, accepts a connection queued before the accept, and both ends
+ * report the names; a second bind of the path fails with EADDRINUSE, and a
+ * connect to the file after the listener is gone fails with ECONNREFUSED. An
+ * abstract name works without a file. A datagram sent to a name arrives with
+ * the sender's name. A nonblocking receive on an empty socket fails with
+ * EAGAIN, and poll reports the socket readable once a byte arrives. An accept
+ * given an address and no length pointer fails with EFAULT. A listener shut
+ * down for reading gives up the connection queued before, then fails an accept
+ * with EINVAL and refuses a connect. A connect waiting for room in a full queue
  * finishes when listen makes the backlog larger. A datagram socket refuses a
- * connect with EPERM while it is connected to another. A datagram socket
- * refuses a connect with EPERM while it is connected to another; one that
- * connects elsewhere or disconnects drops its queued messages, and the peer it
- * left gets ECONNRESET. A chain of a thousand datagram pairs, each queued in
- * the pair before, closes from its head. A datagram send waiting for room fails
- * with EPIPE when the receiver shuts down reading. A stream whose peer's queue
- * is full polls writable once it is shut down for writing, and the write then
+ * connect with EPERM while it is connected to another; one that connects
+ * elsewhere or disconnects drops its queued messages, and the peer it left gets
+ * ECONNRESET. A chain of a thousand datagram pairs, each queued in the pair
+ * before, closes from its head. A datagram send waiting for room fails with
+ * EPIPE when the receiver shuts down reading. A stream whose peer's queue is
+ * full polls writable once it is shut down for writing, and the write then
  * fails with EPIPE.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
