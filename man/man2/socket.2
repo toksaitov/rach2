@@ -56,7 +56,9 @@ Zero leaves the protocol unspecified until
 A socket between processes of this machine, described in
 .Xr unix 7 .
 .Fa protocol
-must be 0.
+must be 0 or
+.Dv AF_UNIX
+(1), as Linux takes it.
 .Dv SOCK_RAW
 is taken as
 .Dv SOCK_DGRAM ,
@@ -172,7 +174,8 @@ nor
 .Dv IPPROTO_ICMP ,
 or an
 .Dv AF_UNIX
-protocol is not 0.
+protocol is neither 0 nor
+.Dv AF_UNIX .
 .It Bq Er ESOCKTNOSUPPORT
 A privileged caller requested
 .Dv AF_PACKET , SOCK_STREAM ,
