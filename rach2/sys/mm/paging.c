@@ -1711,59 +1711,6 @@ int paging_move_range(page_dir_t *dir, uint32_t from, uint32_t to, uint32_t len)
     return 0;
 }
 
-int paging_store_u32(page_dir_t *dir, struct vm_space *vm, uint32_t addr, uint32_t value)
-{
-    uint32_t page_num = addr / PAGE_SIZE;
-    uint32_t table_index = page_num / 1024;
-    uint32_t page_index = page_num % 1024;
-    page_table_t *table;
-    vma_t *vma = vm_find(vm, addr);
-    uint32_t pte, frame;
-    uintptr_t phys;
-    uint32_t *word;
-
-    if (!vma || !(vma->prot & VM_PROT_WRITE) || (addr & 3u) != 0) {
-        return -1;
-    }
-    table = dir->logical_page_tables[table_index];
-    pte = table ? table->pages[page_index] : 0;
-    if (!(pte & 0x1)) {
-        phys = alloc_user_page(dir, addr);
-        if (phys == 0 || paging_zero_frame(phys) != 0) {
-            return -1;
-        }
-    } else {
-        phys = pte & ~0xFFFu;
-        frame = phys / PAGE_SIZE;
-        if (frame < _frames_number && _frames[frame] > 1) {
-            uintptr_t copy = alloc_user_page(dir, addr);
-
-            if (copy == 0) {
-                return -1;
-            }
-            if (paging_copy_frame(copy, phys) != 0) {
-                table->pages[page_index] = pte;
-                frame_unref(copy);
-                return -1;
-            }
-            frame_unref(phys);
-            phys = copy;
-        } else if (pte & PTE_COW) {
-            table->pages[page_index] = (pte & ~PTE_COW) | 0x2u;
-            if (dir == _curr_dir) {
-                paging_flush_tlb(addr);
-            }
-        }
-    }
-    word = (uint32_t *)kmap_temp(phys);
-    if (!word) {
-        return -1;
-    }
-    word[(addr & (PAGE_SIZE - 1)) / 4] = value;
-    kunmap_temp(word);
-    return 0;
-}
-
 void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot)
 {
     uint32_t addr;
