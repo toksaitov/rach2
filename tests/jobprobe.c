@@ -13,7 +13,8 @@
  *   * the error contract has: setsid by a group leader is -EPERM, getpgid of
  *     a missing pid is -ESRCH, setpgid with a negative pgid is -EINVAL.
  *
- * Children report each check via exit status; the parent decodes WEXITSTATUS.
+ * Children report each check via exit status; the parent decodes WEXITSTATUS,
+ * and a child that a signal ended fails its row, whatever its status reads.
  * Prints "JOBPROBE OK" or "JOBPROBE FAIL". Freestanding; direct int 0x80.
  *
  * Needs: a shell with job control, which makes each command its own
@@ -227,6 +228,11 @@ static int child_setsid(void)
     return 0;
 }
 
+/**
+ * Run `body` in a forked child and return the child's exit status: -1 when
+ * the fork fails, -2 when the wait does not return the child, and -3 when a
+ * signal ended it, whose exit status reads 0.
+ */
 static int run_child(int (*body)(void))
 {
     int pid = fork();
@@ -240,6 +246,9 @@ static int run_child(int (*body)(void))
     }
     if (waitpid(pid, &status, 0) != pid) {
         return -2;
+    }
+    if ((status & 0x7f) != 0) {
+        return -3; /* WTERMSIG */
     }
     return (status >> 8) & 0xff; /* WEXITSTATUS */
 }

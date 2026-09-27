@@ -772,8 +772,9 @@ void _start(void)
 
         for (k = 0; k < 2; k++) {
             status = -1;
-            syscall3(SYS_WAITPID, kids[k], (int)(size_t)&status, 0);
-            check(((status >> 8) & 0xff) == 0, "the child that held sockets held some");
+            check(syscall3(SYS_WAITPID, kids[k], (int)(size_t)&status, 0) == kids[k] &&
+                      (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+                  "the child that held sockets held some");
         }
         args[0] = AF_INET;
         args[1] = SOCK_DGRAM;

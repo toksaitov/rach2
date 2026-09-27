@@ -644,6 +644,9 @@ static void rows_flags(void)
     {
         int st = wait_status(pid);
 
+        if ((st & 0x7f) != 0) {
+            fail("a program runs from the mount: a signal ended it");
+        }
         if ((st & 0xff00) != 0) {
             static char why[40] = "a program runs from the mount: errno ";
             int v = (st >> 8) & 0xff;

@@ -320,9 +320,11 @@ void _start(void)
             off += w;
         }
         syscall1(SYS_CLOSE, p[1]); /* signal EOF to the reader */
-        syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
         check(off == BIG, "parent wrote all 5000 bytes (blocked through full)");
-        check(((status >> 8) & 0xff) == 0, "child read every byte intact");
+        status = -1;
+        check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid && (status & 0x7f) == 0 &&
+                  ((status >> 8) & 0xff) == 0,
+              "child read every byte intact");
     }
 
     /* (e) no pool leak: many create/close cycles past the pool size must keep
@@ -461,8 +463,10 @@ void _start(void)
             check(rd(q[0], ack, 2) == 2, "and the reader, woken at every refill, read them all");
             syscall1(SYS_CLOSE, p[1]);
             syscall1(SYS_CLOSE, q[0]);
-            syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
-            check(((status >> 8) & 0xff) == 0, "and said so");
+            status = -1;
+            check(syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) == pid &&
+                      (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+                  "and said so");
         }
     }
 
