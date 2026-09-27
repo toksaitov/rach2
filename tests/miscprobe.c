@@ -4,9 +4,8 @@
  * Proves getppid (a child sees the parent's pid), umask (set returns the
  * previous mask, inherited across fork), times (a monotonic tick count plus
  * the four CPU times, none negative and none past the ticks since boot),
- * sysinfo (a live-process count, mem_unit 1), and vfork (the child shares
- * the parent's memory and stack until it exits with 7, and the parent then
- * gets its pid and that status).
+ * sysinfo (a live-process count, mem_unit 1), and vfork (the child runs
+ * and exits with 7, and the parent then gets its pid and that status).
  *
  * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct int 0x80.
  */
