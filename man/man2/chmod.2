@@ -25,6 +25,25 @@ File type bits are not changed.
 .Fn fchmod
 applies the change to the file or directory referred to by
 .Fa fd .
+The kernel's
+.Fn fchmod
+returns
+.Er EBADF
+for a descriptor opened with
+.Dv O_PATH ,
+as Linux does, and for a pseudoterminal slave descriptor whose terminal
+no longer exists.
+Musl's
+.Fn fchmod
+retries that error, when
+.Dv F_GETFD
+finds the descriptor open, as a
+.Fn chmod
+of
+.Pa /proc/self/fd/N ,
+which the kernel treats as fixed synthetic metadata: root then receives
+success without a change, and other callers
+.Er EPERM .
 .Pp
 Relative paths are resolved from the current working directory.
 .Fn fchmodat
@@ -120,11 +139,17 @@ Musl's
 sequence can also require read permission when it opens the target.
 .It Er EBADF
 .Fa fd
-is invalid, was opened with
-.Dv O_PATH
-or has a pseudoterminal that no longer exists, or a relative path uses
-an invalid or stale
+is not open, or a relative path uses an invalid or stale
 .Fa dirfd .
+The kernel's
+.Fn fchmod
+also returns it for a descriptor opened with
+.Dv O_PATH
+and for one whose pseudoterminal no longer exists; musl's
+.Fn fchmod
+retries the error through
+.Pa /proc/self/fd/N ,
+as the description says.
 .It Er EBUSY
 Path resolution enters a mount being mounted or unmounted.
 .It Er EFAULT

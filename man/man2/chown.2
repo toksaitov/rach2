@@ -48,11 +48,26 @@ same; the
 links have fixed ownership either way.
 .Fn fchown
 uses the open descriptor
-.Fa fd ;
-one opened with
-.Dv O_PATH
+.Fa fd .
+The kernel's
+.Fn fchown
 returns
-.Er EBADF .
+.Er EBADF
+for one opened with
+.Dv O_PATH ,
+as Linux does, and for a pseudo-terminal slave descriptor with no live
+terminal.
+Musl's
+.Fn fchown
+retries that error, when
+.Dv F_GETFD
+finds the descriptor open, as a
+.Fn chown
+of
+.Pa /proc/self/fd/N ,
+a link with fixed root ownership: a request of 0 or -1 for each ID
+succeeds without a change, for any caller, and any other returns
+.Er EPERM .
 .Pp
 .Fn fchownat
 resolves a relative
@@ -197,17 +212,31 @@ changes the target, and that a dangling link can be changed.
 Search permission was denied on an ancestor directory.
 .It Bq Er EBADF
 .Fa fd
-is invalid, was opened with
-.Dv O_PATH ,
-or is a pseudo-terminal slave descriptor with no live terminal; a
-relative
+is not open; a relative
 .Fn fchownat
 path uses an invalid or stale directory descriptor; or
 .Fn fchownat
 with
 .Dv AT_EMPTY_PATH
-and an empty path was given an invalid
-.Fa dirfd .
+and an empty path was given a
+.Fa dirfd
+that is not open.
+The kernel's
+.Fn fchown ,
+and
+.Fn fchownat
+with
+.Dv AT_EMPTY_PATH ,
+also return it for a pseudo-terminal slave descriptor with no live
+terminal, and
+.Fn fchown
+for a descriptor opened with
+.Dv O_PATH ;
+musl's
+.Fn fchown
+retries the error through
+.Pa /proc/self/fd/N ,
+as the description says.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EFAULT
