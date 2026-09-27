@@ -25,9 +25,34 @@ are null-terminated arrays of pointers to null-terminated strings.
 They become the new program's arguments and environment on a System V
 i386 initial stack.
 A null pointer for either array supplies an empty vector.
-Each vector may contain at most 63 strings.
-Together their strings may occupy at most 3072 bytes, counting each
-terminating null byte.
+An empty
+.Fa argv
+is given one empty string, so the new program sees
+.Va argc
+1 and an empty
+.Fa argv Ns [0] ,
+as Linux gives it.
+.Pp
+The limits are Linux's.
+The strings of both vectors, the
+.Fa path
+string as passed, and a 4-byte pointer for each vector entry may take a
+quarter of the soft
+.Dv RLIMIT_STACK
+limit, but no more than 6 MiB and no less than 128 KiB.
+An empty
+.Fa argv
+counts one pointer.
+Each string may be at most 131072 bytes, its null terminator included.
+The default soft limit of 8 MiB allows 2 MiB.
+A vector is read only as far as the pointers fit that budget, and one
+longer is refused there; Linux reads a vector to its end first, and
+reports
+.Er EFAULT
+for a pointer it cannot read past the budget.
+The initial stack spans as many pages below
+.Ad 0xC0000000
+as the strings and the pointers need.
 The copied path, including any current-directory prefix and its null
 terminator, must fit 256 bytes.
 .Pp
@@ -57,7 +82,8 @@ The original
 .Fa argv Ns [0]
 is omitted; the supplied script path, made absolute with repeated slashes
 and dot components removed, is inserted instead.
-The expanded argument vector must still fit 63 entries.
+The strings added count against the same limits as the caller's.
+Linux inserts the script path as the caller passed it.
 Only one interpreter level is supported: an interpreter that is itself
 a script is refused.
 A first line that fills the 128-byte read buffer without a newline is
@@ -90,18 +116,23 @@ old address space is freed.
 This includes descriptors 0, 1, and 2 if marked.
 Other open descriptors remain available to the new image.
 .Ss Failure
-The path, arguments, and environment are copied into a workspace
-belonging to the current process.
-The executable header and access permissions are checked before the
-old image is destroyed.
-A failure at this stage returns to the caller without replacing its
-image, changing its credentials, or closing its marked descriptors.
+The path is resolved and its permissions checked first, as Linux opens
+the program before it copies the vectors.
+The strings are then copied, the path's at the top, then the environment
+and then the arguments, each vector from its last string, onto pages
+taken for the new stack while the old image still exists.
+The executable header is checked, and the pages for the pointers and the
+auxiliary vector are taken, before the old image is destroyed.
+A failure at any of these stages returns to the caller without replacing
+its image, changing its credentials, or closing its marked descriptors.
+The pages are given back when the call ends.
 .Pp
-Program segments and the initial stack are loaded after the old user
-pages are freed.
+Program segments are loaded after the old user pages are freed, and the
+initial stack's pointers and auxiliary vector are written after them.
 A failure then terminates the process; it cannot return to the caller.
 This includes malformed program segments, allocation or load failures,
-and an image whose address-space regions exceed
+and an image whose address-space regions, the initial stack's pages
+among them, exceed
 .Dv RLIMIT_AS .
 The parent receives a wait status indicating
 .Dv SIGKILL .
@@ -119,10 +150,14 @@ The kernel interface returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/musl/execargmusl.c
-executes itself with vectors at the 63-entry and 3072-byte limits: the
-63-argument case checks the count and the last argument the new image
-received, and the other cases check that the execution succeeded.
-It also exceeds each limit and checks that
+executes itself with 5000 arguments and then 5000 environment strings,
+which the new image checks one by one; with one string of 131072 bytes;
+with strings and pointers that fill the 256 KiB a stack limit of 1 MiB
+allows, split across both vectors; and with an empty
+.Fa argv ,
+for which the new image checks its one empty argument.
+It also passes a string one byte longer, the budget one byte over, and
+32768 pointers under a 128 KiB budget, and checks that
 .Fn execve
 returns -1 with
 .Va errno
@@ -132,8 +167,10 @@ and the caller still running.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG
-An argument or environment vector exceeds 63 entries, the strings exceed
-their shared 3072-byte budget, or script expansion exceeds the entry limit.
+The pointers, or the strings with them, exceed a quarter of the soft
+.Dv RLIMIT_STACK
+limit as described above, a string exceeds 131072 bytes, or the strings a
+script adds do not fit.
 .It Bq Er EACCES
 Search or execute permission was denied, the program or interpreter is
 on a noexec mount, or its path resolves into a synthetic mount.
@@ -161,8 +198,8 @@ the interpreter path is empty or relative, the first line fills the
 128-byte buffer without a newline, or the interpreter is not a valid
 ELF executable.
 .It Bq Er ENOMEM
-The exec workspace or storage needed to resolve or open the program
-could not be allocated.
+The exec workspace, a page of the new stack, or storage needed to resolve
+or open the program could not be allocated.
 .It Bq Er ENOTDIR
 A path component used as a directory is not a directory.
 .It Bq Er ESRCH

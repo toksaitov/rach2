@@ -83,6 +83,10 @@ size in whole pages, and no further than
 .Ad 0xB0000000 ,
 below which anonymous mappings are placed; a fault past that is
 .Dv SIGSEGV .
+The stack always reaches as far as the pages its arguments took.
+A quarter of the soft limit, between 128 KiB and 6 MiB, is what
+.Xr execve 2
+lets the arguments and the environment take.
 A change applies at the next
 .Xr execve 2 .
 An exec that runs with an effective ID its caller lacks lowers a soft

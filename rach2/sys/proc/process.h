@@ -162,8 +162,8 @@ struct process {
     struct process *prev;
     /* The record this process sleeps with, see `struct wq_waiter`. */
     struct wq_waiter waiter;
-    /* The `execve` workspace, allocated at the first exec and kept for the
-     * record's life; `syscall.c` owns its type. */
+    /* The workspace of the `execve` in progress, NULL outside one;
+     * `syscall_proc.c` owns its type and gives it back when the call ends. */
     void *exec_ws;
     /* Interrupt handlers entered and not left on this process's stack;
      * kept in the record and not in one global, since a handler that

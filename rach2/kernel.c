@@ -204,8 +204,9 @@ static void test_switch(void);
 static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 
-/* The page the first user stack is built in. The stack starts at its end,
-   a page higher, and grows down from there. */
+/* The highest user page, the top page of a program's first stack. The
+   stack's strings start at the page's end, a page higher, and take as many
+   pages below it as they need; the stack grows down from there. */
 #define USER_STACK_BASE 0xBFFFF000
 
 /**
@@ -1066,6 +1067,51 @@ static void boot_exec_done(void)
 }
 
 /**
+ * Build the initial stack of the program `exec_program` starts, in `dir`:
+ * its path, the environment `envp` and the `argc` strings of `argv`, laid
+ * down as execve lays them (`proc/uimage.c`) under the default stack limit.
+ *
+ * @return the entry stack pointer, with the lowest page the stack took in
+ *         `*bottom`; 0 when the strings do not fit or the pages or their
+ *         mappings could not be had.
+ */
+static uint32_t boot_stack(page_dir_t *dir, int argc, char *argv[], char *envp[],
+                           const elf_image_t *img, uint32_t *bottom)
+{
+    struct uimage u;
+    uint8_t random16[16];
+    uint32_t envc = 0;
+    uint32_t esp = 0;
+    int rc;
+    int i;
+
+    while (envp[envc] != 0) {
+        envc++;
+    }
+    rc = uimage_start(&u, USER_STACK_BASE + PAGE_SIZE, RLIM_STACK_DEFAULT, (uint32_t)argc, envc);
+    if (rc == 0) {
+        rc = uimage_push(&u, argv[0]);
+    }
+    for (i = (int)envc - 1; i >= 0 && rc == 0; i--) {
+        rc = uimage_push(&u, envp[i]);
+    }
+    for (i = argc - 1; i >= 0 && rc == 0; i--) {
+        rc = uimage_push(&u, argv[i]);
+    }
+    if (rc == 0) {
+        rc = uimage_place(&u, (uint32_t)argc, envc);
+    }
+    krandom_bytes(random16, 16);
+    if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, 0) == 0 &&
+        uimage_map(&u, dir) == 0) {
+        esp = u.esp;
+        *bottom = uimage_bottom(&u);
+    }
+    uimage_release(&u);
+    return esp;
+}
+
+/**
  * Load and run an ELF program, entering ring 3 at its entry point.
  *
  * The program comes from the KRFFS root, or through the mounted root's file
@@ -1091,11 +1137,8 @@ static void exec_program(int argc, char *argv[])
     elf_image_t img;
     page_dir_t *user_dir;
     process_t *user_proc;
-    uintptr_t user_stack_phys;
-    void *user_stack_page;
-    uint32_t user_stack_vaddr;
     uint32_t user_esp;
-    uint8_t random16[16];
+    uint32_t stack_bottom = USER_STACK_BASE;
     int init_is_starting;
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
@@ -1156,29 +1199,9 @@ static void exec_program(int argc, char *argv[])
     boot_exec_done();
     entry_point = img.entry;
 
-    user_stack_vaddr = USER_STACK_BASE;
-    user_stack_phys = alloc_user_page(user_dir, user_stack_vaddr);
-    if (user_stack_phys == 0) {
-        console_puts("exec: Failed to allocate user stack");
-        return;
-    }
-
-    user_stack_page = kmap_temp(user_stack_phys);
-    if (!user_stack_page) {
-        console_puts("exec: no temporary mapping for the user stack");
-        return;
-    }
-    k_memset(user_stack_page, 0, PAGE_SIZE);
-
-    /* build_user_stack copies the strings in and lays out the argv/envp pointer
-     * arrays and the AT_NULL-terminated auxv, 16-byte-aligning the entry ESP.
-     * The layout is verified host-side (tests/host/uimage_hosttest.c). */
-    krandom_bytes(random16, 16);
-    user_esp = build_user_stack(user_stack_page, user_stack_vaddr, PAGE_SIZE, argc, argv,
-                                default_envp, &img, random16, 0);
-    kunmap_temp(user_stack_page);
+    user_esp = boot_stack(user_dir, argc, argv, default_envp, &img, &stack_bottom);
     if (user_esp == 0) {
-        console_puts("exec: argv/env too large for the initial stack");
+        console_puts("exec: the initial stack could not be built");
         return;
     }
 
@@ -1201,7 +1224,9 @@ static void exec_program(int argc, char *argv[])
 
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
-    if (elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0) {
+    if (elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
+        (stack_bottom < USER_STACK_BASE &&
+         !vm_grow_stack(&user_proc->vm, stack_bottom, RLIM_INFINITY32))) {
         k_panic("boot: no memory for the first process's regions");
     }
 

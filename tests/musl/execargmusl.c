@@ -1,26 +1,19 @@
 /**
- * How much of a command line this machine's `execve` will carry.
+ * How much of a command line this machine's `execve` will carry, which is
+ * what Linux carries.
  *
- * A link line is why this matters: a compiler, `-static`, `-o`, an output name
- * and a dozen object files is more than fifteen arguments and more than five
- * hundred bytes, which is what the old limits were. A build tool that cannot
- * exec its own recipe is not a build tool.
+ * The program's path, the strings of argv and envp and a pointer for each
+ * string may take a quarter of the soft RLIMIT_STACK, at least 128 KiB and at
+ * most 6 MiB, and one string may be 128 KiB with its NUL. The strings are
+ * copied onto the new stack's pages before the old image is destroyed, so a
+ * vector past a limit is refused with E2BIG and the caller is still running
+ * to see it: each exec here runs in a forked child, which exits 7 when
+ * `execve` returns E2BIG and 9 when it returns anything else.
  *
- * Every case here is on a BOUNDARY, because a limit is only tested at its edge:
- * the largest vector that must work and the smallest that must not, for the
- * entry count of each vector and for the byte budget the two of them share.
- *
- * The byte cases are the ones worth explaining. The strings of both vectors are
- * laid into ONE 4096-byte page by `build_user_stack`, and that runs after the
- * old address space is freed, so a vector that passes the copy-in and fails
- * there kills the process instead of failing the call. The over-budget case
- * therefore asserts two things at once: that `execve` returns `E2BIG`, and that
- * this program is still running to see it. Before the budget was checked at
- * copy-in, that case did not return at all.
- *
- * The child half asserts, not reports: it exits nonzero unless it was
- * handed exactly the count and the exact last string the parent sent, so a
- * vector delivered short is a failure and not a line in a log.
+ * Every limit is tested at its edge: the largest vector that must work and
+ * the smallest that must not. The child half asserts, not reports: it exits
+ * nonzero unless it was handed exactly what the parent sent, so a vector
+ * delivered short is a failure and not a line in a log.
  *
  * Prints "EXECARGMUSL OK" on success and "EXECARGMUSL FAIL (detail)" otherwise.
  */
@@ -30,22 +23,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-/*
- * What the kernel has: EXEC_MAX_ENTRIES arguments in each vector, and
- * EXEC_MAX_STRINGS bytes of strings across argv and envp TOGETHER, each string
- * counted with its terminator (rach2/sys/syscall.c). Written out here rather
- * than derived, so a change to either is a change to this test.
- */
-#define KERNEL_MAX_ENTRIES 63
-#define KERNEL_MAX_STRINGS 3072
-
-/* The last argument of the full vector, which the child compares against. */
-#define LAST_ARG "tail-of-the-line"
+#define KIB     1024UL
+#define MIB     (1024UL * 1024UL)
+#define MANY    5000
+#define LONGEST 131071 /* the longest string: 128 KiB with its NUL */
 
 static const char *const SELF = "/musl/execargmusl";
+
+static char names[MANY][8];
+static char *vec[32770];
+static char big_a[LONGEST + 2];
+static char big_b[LONGEST + 2];
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -55,220 +47,186 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Wait for `pid` and return its exit status, or -1 if it did not exit. */
-static int status_of(pid_t pid)
-{
-    int status = 0;
-    pid_t seen = waitpid(pid, &status, 0);
-
-    if (seen != pid || !WIFEXITED(status)) {
-        printf("EXECARG WAIT pid %d seen %d errno %d status 0x%x\n", (int)pid, (int)seen, errno,
-               status);
-
-        return -1; /* a wait that did not report a normal exit */
-    }
-
-    return WEXITSTATUS(status);
-}
-
 /**
- * Run `argv` and `envp` through a forked exec and return the child's status.
- *
- * Forked, so a vector this kernel refuses leaves the probe running to report
- * it; the child reports a refused exec as status 9.
+ * Exec this program with `argv` and `envp` in a forked child whose soft
+ * RLIMIT_STACK is `limit`, and return the child's exit status: the new
+ * image's, or 7 when `execve` returned E2BIG and 9 when it returned another
+ * error. -1 when the child did not exit.
  */
-static int exec_child(char *const argv[], char *const envp[])
+static int run(char *const argv[], char *const envp[], rlim_t limit)
 {
+    struct rlimit rl;
+    int status = 0;
     pid_t pid = fork();
 
     if (pid < 0) {
-        printf("EXECARG FORK failed, errno %d\n", errno);
-
         return -1;
     }
     if (pid == 0) {
+        rl.rlim_cur = limit;
+        rl.rlim_max = RLIM_INFINITY;
+        if (setrlimit(RLIMIT_STACK, &rl) != 0) {
+            _exit(8);
+        }
         execve(SELF, argv, envp);
-        _exit(9);
+        _exit(errno == E2BIG ? 7 : 9);
     }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return -1;
+    }
+    return WEXITSTATUS(status);
+}
 
-    return status_of(pid);
+/** The child half: 0 when this image was handed what its mode says. */
+static int child(int argc, char *argv[])
+{
+    int i;
+
+    if (getenv("EXECARG_EMPTY") != NULL) {
+        return argc == 1 && argv[0] != NULL && argv[0][0] == '\0' && argv[1] == NULL ? 0 : 1;
+    }
+    if (argc < 2) {
+        return 1;
+    }
+    if (strcmp(argv[1], "many") == 0) {
+        if (argc != MANY + 2) {
+            return 1;
+        }
+        for (i = 0; i < MANY; i++) {
+            if (strcmp(argv[i + 2], names[i]) != 0) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+    if (strcmp(argv[1], "long") == 0) {
+        return argc == 3 && strlen(argv[2]) == LONGEST && argv[2][LONGEST - 1] == 'x' ? 0 : 1;
+    }
+    if (strcmp(argv[1], "env") == 0) {
+        for (i = 0; environ[i] != NULL; i++) {
+        }
+        return i == MANY && strcmp(environ[MANY - 1], "E4999=v") == 0 ? 0 : 1;
+    }
+    return strcmp(argv[1], "ok") == 0 ? 0 : 1;
+}
+
+/** Fill `s` with `n` copies of `c` and a NUL. */
+static char *text(char *s, size_t n, char c)
+{
+    memset(s, c, n);
+    s[n] = '\0';
+    return s;
+}
+
+/** Five thousand arguments, and five thousand variables, are delivered
+ * whole. */
+static int many(void)
+{
+    char *none[1] = {NULL};
+    int i;
+
+    vec[0] = (char *)SELF;
+    vec[1] = (char *)"many";
+    for (i = 0; i < MANY; i++) {
+        vec[i + 2] = names[i];
+    }
+    vec[MANY + 2] = NULL;
+    if (run(vec, none, 8 * MIB) != 0) {
+        return fail("five thousand arguments were not delivered whole");
+    }
+    for (i = 0; i < MANY; i++) {
+        snprintf(names[i], sizeof(names[i]), "E%04d", i);
+        memcpy(names[i] + 5, "=v", 3);
+        vec[i] = names[i];
+    }
+    vec[MANY] = NULL;
+    {
+        char *argv[3] = {(char *)SELF, (char *)"env", NULL};
+
+        if (run(argv, vec, 8 * MIB) != 0) {
+            return fail("five thousand variables were not delivered whole");
+        }
+    }
+    return 0;
+}
+
+/** One string of 128 KiB with its NUL is delivered; one a byte longer is
+ * E2BIG. */
+static int one_string(void)
+{
+    char *none[1] = {NULL};
+    char *argv[4] = {(char *)SELF, (char *)"long", NULL, NULL};
+
+    argv[2] = text(big_a, LONGEST, 'x');
+    if (run(argv, none, 8 * MIB) != 0) {
+        return fail("a string of 128 KiB with its NUL was not delivered");
+    }
+    argv[2] = text(big_a, LONGEST + 1, 'x');
+    if (run(argv, none, 8 * MIB) != 7) {
+        return fail("a string of 128 KiB and a NUL was not refused with E2BIG");
+    }
+    return 0;
+}
+
+/**
+ * Under a stack limit of 1 MiB the budget is 256 KiB: the path, four strings
+ * and four pointers fill it to the byte, split across argv and envp, and a
+ * byte more is E2BIG.
+ */
+static int budget(void)
+{
+    char *argv[4] = {(char *)SELF, (char *)"ok", NULL, NULL};
+    char *envp[2] = {NULL, NULL};
+    size_t fixed = 2 * (strlen(SELF) + 1) + strlen("ok") + 1 + 4 * sizeof(char *);
+    size_t env_len = 256 * KIB - fixed - (LONGEST + 1) - 1;
+
+    argv[2] = text(big_a, LONGEST, 'y');
+    envp[0] = text(big_b, env_len, 'z');
+    memcpy(big_b, "E=", 2);
+    if (run(argv, envp, 1 * MIB) != 0) {
+        return fail("strings and pointers of exactly the budget were refused");
+    }
+    envp[0] = text(big_b, env_len + 1, 'z');
+    memcpy(big_b, "E=", 2);
+    if (run(argv, envp, 1 * MIB) != 7) {
+        return fail("a byte past the budget was not refused with E2BIG");
+    }
+    return 0;
+}
+
+/** Pointers that take a 128 KiB budget by themselves are E2BIG, and an
+ * empty argv is given one empty argument. */
+static int pointers(void)
+{
+    char *empty_env[2] = {(char *)"EXECARG_EMPTY=1", NULL};
+    char *none[1] = {NULL};
+    int i;
+
+    for (i = 0; i < 32768; i++) {
+        vec[i] = (char *)"";
+    }
+    vec[32768] = NULL;
+    if (run(vec, none, 256 * KIB) != 7) {
+        return fail("32768 pointers under a 128 KiB budget were not refused with E2BIG");
+    }
+    if (run(none, empty_env, 8 * MIB) != 0) {
+        return fail("an empty argv was not given one empty argument");
+    }
+    return 0;
 }
 
 int main(int argc, char *argv[])
 {
-    static char storage[KERNEL_MAX_ENTRIES + 2][24];
-    static char big_arg[KERNEL_MAX_STRINGS];
-    static char big_env[KERNEL_MAX_STRINGS];
-    char *args[KERNEL_MAX_ENTRIES + 3];
-    char *env[KERNEL_MAX_ENTRIES + 3];
-    char *two_env[2];
     int i;
 
-    /* The child half. Handed the full vector, it must have received all of
-     * it. */
-    if (argc > 1 && strcmp(argv[1], "full") == 0) {
-        if (argc != KERNEL_MAX_ENTRIES) {
-            printf("EXECARG CHILD saw %d arguments, wanted %d\n", argc, KERNEL_MAX_ENTRIES);
-
-            return 1;
-        }
-        if (strcmp(argv[argc - 1], LAST_ARG) != 0) {
-            printf("EXECARG CHILD last argument is '%s'\n", argv[argc - 1]);
-
-            return 1;
-        }
-
-        return 0;
+    for (i = 0; i < MANY; i++) {
+        snprintf(names[i], sizeof(names[i]), "a%04d", i);
     }
-    if (argc > 1 && strcmp(argv[1], "ok") == 0) {
-        return 0;
+    if (argc != 1 || getenv("EXECARG_EMPTY") != NULL) {
+        return child(argc, argv);
     }
-
-    two_env[0] = (char *)"PATH=/bin";
-    two_env[1] = (char *)0;
-
-    /* The largest argv that must work: every entry the kernel has. */
-    args[0] = (char *)SELF;
-    args[1] = (char *)"full";
-    for (i = 2; i < KERNEL_MAX_ENTRIES - 1; i++) {
-        snprintf(storage[i], sizeof(storage[i]), "arg%02d", i);
-        args[i] = storage[i];
-    }
-    args[KERNEL_MAX_ENTRIES - 1] = (char *)LAST_ARG;
-    args[KERNEL_MAX_ENTRIES] = (char *)0;
-    {
-        int rc = exec_child(args, two_env);
-
-        if (rc != 0) {
-            char detail[96];
-
-            snprintf(detail, sizeof(detail),
-                     "the largest allowed argv came back as status %d (9 means the exec "
-                     "was refused)",
-                     rc);
-
-            return fail(detail);
-        }
-    }
-
-    /* One more entry than that must be refused. */
-    args[0] = (char *)SELF;
-    args[1] = (char *)"ok";
-    for (i = 2; i <= KERNEL_MAX_ENTRIES; i++) {
-        args[i] = (char *)"x";
-    }
-    args[KERNEL_MAX_ENTRIES + 1] = (char *)0;
-    if (execve(SELF, args, two_env) == 0) {
-        return fail("an exec with one argument too many was accepted");
-    }
-    if (errno != E2BIG) {
-        return fail("one argument too many did not report E2BIG");
-    }
-
-    /* The same boundary for the environment, which has an array of its own. */
-    args[0] = (char *)SELF;
-    args[1] = (char *)"ok";
-    args[2] = (char *)0;
-    for (i = 0; i < KERNEL_MAX_ENTRIES; i++) {
-        snprintf(storage[i], sizeof(storage[i]), "E%02d=v", i);
-        env[i] = storage[i];
-    }
-    env[KERNEL_MAX_ENTRIES] = (char *)0;
-    if (exec_child(args, env) != 0) {
-        return fail("an environment of exactly the largest allowed size was refused");
-    }
-    env[KERNEL_MAX_ENTRIES] = (char *)"E99=v";
-    env[KERNEL_MAX_ENTRIES + 1] = (char *)0;
-    if (execve(SELF, args, env) == 0) {
-        return fail("an exec with one environment entry too many was accepted");
-    }
-    if (errno != E2BIG) {
-        return fail("one environment entry too many did not report E2BIG");
-    }
-
-    /*
-     * The byte budget, at its edge, split across both vectors so that only the
-     * check adding them together can refuse it. Each string costs its length
-     * plus a terminator, and argv[0] is a string like any other.
-     */
-    {
-        int arg_text = 1500;
-        int spent = (int)strlen(SELF) + 1 + (int)strlen("ok") + 1 + arg_text + 1;
-        int env_text = KERNEL_MAX_STRINGS - spent - 1;
-
-        memset(big_arg, 'y', (size_t)arg_text);
-        big_arg[arg_text] = '\0';
-        big_env[0] = 'E';
-        big_env[1] = '=';
-        memset(big_env + 2, 'z', (size_t)(env_text - 2));
-        big_env[env_text] = '\0';
-
-        /* The MODE goes first and the bulk second: a child that did not
-         * recognise its first argument would run this whole sequence again,
-         * forking as it went, which is a fork bomb, not a test. */
-        args[0] = (char *)SELF;
-        args[1] = (char *)"ok";
-        args[2] = big_arg;
-        args[3] = (char *)0;
-        env[0] = big_env;
-        env[1] = (char *)0;
-        {
-            int rc = exec_child(args, env);
-
-            if (rc != 0) {
-                char detail[96];
-
-                snprintf(detail, sizeof(detail),
-                         "a vector of exactly %d bytes came back as status %d", KERNEL_MAX_STRINGS,
-                         rc);
-
-                return fail(detail);
-            }
-        }
-
-        /* One byte more must be refused, and this program must still be here
-         * to say so: that is the half the copy-in check exists for. */
-        big_env[env_text] = 'z';
-        big_env[env_text + 1] = '\0';
-        if (execve(SELF, args, env) == 0) {
-            return fail("an exec one byte over the budget was accepted");
-        }
-        if (errno != E2BIG) {
-            return fail("one byte over the budget did not report E2BIG");
-        }
-    }
-
-    /*
-     * The exact-fill path: argv alone consumes the whole budget and another
-     * argument follows, with an empty environment so the combined check has
-     * nothing to add. That reaches the storage-exhausted branch, which is a
-     * size limit and must say so; it answered EFAULT until this milestone,
-     * which tells a program its addresses are bad when its command line is
-     * merely too long.
-     */
-    {
-        int fill = KERNEL_MAX_STRINGS - ((int)strlen(SELF) + 1) - ((int)strlen("ok") + 1) - 1;
-        char *empty_env[1];
-
-        empty_env[0] = (char *)0;
-        memset(big_arg, 'y', (size_t)fill);
-        big_arg[fill] = '\0';
-        args[0] = (char *)SELF;
-        args[1] = (char *)"ok";
-        args[2] = big_arg;
-        args[3] = (char *)"one-too-many";
-        args[4] = (char *)0;
-        if (execve(SELF, args, empty_env) == 0) {
-            return fail("an exec whose arguments exactly filled the buffer took another");
-        }
-        if (errno != E2BIG) {
-            char detail[80];
-
-            snprintf(detail, sizeof(detail), "a full argument buffer reported errno %d, not E2BIG",
-                     errno);
-
-            return fail(detail);
-        }
+    if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0) {
+        return 1;
     }
 
     printf("EXECARGMUSL OK\n");

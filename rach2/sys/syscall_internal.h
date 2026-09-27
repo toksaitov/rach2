@@ -9,8 +9,9 @@
  * milestone 53 divided it along its arms; the bodies did not change.
  */
 
-/* The initial user stack's lowest address: one page is mapped here, and
-   `build_user_stack` fills it downward from the page's end. */
+/* The highest user page, the top page of a new image's stack. execve lays
+   the strings down from the page's end (`proc/uimage.c`), taking as many
+   pages below it as they need. */
 #define USER_STACK_BASE 0xBFFFF000
 
 extern volatile uint32_t fb_owner_pid;
