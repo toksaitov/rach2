@@ -249,8 +249,8 @@ void _start(void)
         ts.tv_nsec = 50000000; /* 50 ms */
         syscall2(SYS_NANOSLEEP, (int)(size_t)&ts, 0);
         syscall2(SYS_KILL, pid, SIGUSR1);
-        syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
-        check(((status >> 8) & 0xff) == 0, "child recvfrom interrupted with -EINTR (no hang)");
+        r = syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
+        check(r == pid && status == 0, "child recvfrom interrupted with -EINTR (no hang)");
     }
 
     if (fails == 0) {
