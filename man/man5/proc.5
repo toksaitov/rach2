@@ -431,6 +431,9 @@ resident size are zero.
 .It Pa /proc/PID/cmdline
 The arguments as the program's initial stack has them, each ended by a
 NUL; a process with no address space shows its program name alone.
+At most the first 128 KiB of them are read, so a longer list ends inside
+a string, without that string's NUL, and a page the address space cannot
+read ends it early.
 .It Pa /proc/PID/fd/N
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file of the KRFFS root by its path now, a file
@@ -520,7 +523,10 @@ through the
 .Dv AT_NULL
 pair.
 .It Pa /proc/PID/environ
-The environment strings of the initial stack, each ended by a NUL.
+The environment strings of the initial stack, each ended by a NUL, at
+most their first 128 KiB, cut as
+.Pa cmdline
+is.
 It,
 .Pa auxv
 and the
