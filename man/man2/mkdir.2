@@ -49,9 +49,14 @@ the read-only attribute removes write permission.
 removes an empty directory without following a symbolic link in the
 final component.
 It cannot remove a mount point, the root directory, or a directory that
-is a process's root directory, which
+is any process's root directory, which
 .Xr chroot 2
-set; on Linux only the caller's own root is refused.
+set.
+Linux refuses the first two only, the root by the path that names it:
+it removes a directory some process has as its root, the caller's own
+among them when the caller names it from outside, since
+.Xr chroot 2
+leaves the working directory where it was.
 A nonempty directory returns
 .Er ENOTEMPTY .
 On a mounted KRFFS volume, a missing final entry or a final entry that
