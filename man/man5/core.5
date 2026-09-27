@@ -38,6 +38,8 @@ and
 .Dv O_NOFOLLOW ,
 mode 0600 less the umask, owned by the effective user and group IDs, so a
 link planted at the name cannot send the file elsewhere.
+On a FAT32 or exFAT volume the file has the owner and the permissions the
+mount gives every file, whatever the mode asked for.
 A directory the process cannot write, or a descriptor table with no free
 entry, leaves no file.
 .Pp
@@ -74,7 +76,7 @@ and the TLS entries as notes, leaves out the pages of a private file
 mapping the process never wrote, and writes a core file for a process
 that is not dumpable when
 .Pa /proc/sys/fs/suid_dumpable
-asks; this kernel does none of these.
+permits it; this kernel does none of these.
 Linux holds the other threads before they release anything; here they
 end first, so the file has the robust futexes they held already given
 .Dv FUTEX_OWNER_DIED ,
