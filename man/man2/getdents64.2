@@ -103,8 +103,10 @@ for
 files,
 .Dv DT_LNK
 for
-.Pa /proc/self
-and the descriptor links,
+.Pa /proc/self ,
+the
+.Pa exe
+links and the descriptor links,
 .Dv DT_CHR
 for a character device and
 .Dv DT_BLK
@@ -171,8 +173,26 @@ and
 lists
 .Pa stat ,
 .Pa cmdline ,
+.Pa fd ,
+.Pa maps ,
+.Pa status ,
+.Pa statm ,
+.Pa auxv ,
+.Pa environ ,
+.Pa comm ,
+.Pa mem ,
+.Pa exe
 and
-.Pa fd ;
+.Pa task .
+.Pa /proc/<pid>/task
+lists the process's threads as directories named by thread ID, the
+thread whose ID is the process ID first; a thread that has ended and
+waits to be reaped is left out unless it is that one.
+.Pa /proc/<pid>/task/<tid>
+lists the entries of
+.Pa /proc/<pid>
+but
+.Pa task .
 .Pa /proc/<pid>/fd
 lists that process's open descriptors as links named by descriptor number.
 Enumeration of the root file system does not add synthetic mount names.
