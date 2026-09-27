@@ -153,9 +153,11 @@ among them, as in Linux.
 A signal arrived before a descriptor was ready.
 .It Er EINVAL
 .Fa epfd
-is not an epoll set, or is
+is not an epoll set;
 .Fa fd
-or the set it names;
+is
+.Fa epfd ,
+or another descriptor of the same set;
 .Fa op
 or
 .Fa flags
