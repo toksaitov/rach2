@@ -31,6 +31,28 @@
 #include <string.h>
 #include <stdio.h>
 
+/** Advisory locks on `fd`, which is open for reading alone: a read lock is
+ * granted, and a write lock refused with EBADF. 0, or 1 once the failure is
+ * reported. */
+static int lock_rows(int fd)
+{
+    struct flock lk;
+
+    memset(&lk, 0, sizeof(lk));
+    lk.l_type = F_RDLCK;
+    lk.l_whence = SEEK_SET;
+    if (fcntl(fd, F_SETLK, &lk) != 0) {
+        printf("AUTHMUSL FAIL (F_SETLK)\n");
+        return 1;
+    }
+    lk.l_type = F_WRLCK;
+    if (fcntl(fd, F_SETLK, &lk) != -1 || errno != EBADF) {
+        printf("AUTHMUSL FAIL (F_SETLK F_WRLCK on a descriptor for reading)\n");
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     struct passwd *pw;
@@ -40,7 +62,6 @@ int main(void)
     char host[64];
     int fd, nfd, fl;
     uid_t ru, eu, su;
-    struct flock lk;
 
     pw = getpwnam("root");
     if (!pw || pw->pw_uid != 0 || pw->pw_gid != 0) {
@@ -95,17 +116,7 @@ int main(void)
         return 1;
     }
 
-    /* Advisory locks on the dup'd fd, which is open for reading alone. */
-    memset(&lk, 0, sizeof(lk));
-    lk.l_type = F_RDLCK;
-    lk.l_whence = SEEK_SET;
-    if (fcntl(nfd, F_SETLK, &lk) != 0) {
-        printf("AUTHMUSL FAIL (F_SETLK)\n");
-        return 1;
-    }
-    lk.l_type = F_WRLCK;
-    if (fcntl(nfd, F_SETLK, &lk) != -1 || errno != EBADF) {
-        printf("AUTHMUSL FAIL (F_SETLK F_WRLCK on a descriptor for reading)\n");
+    if (lock_rows(nfd) != 0) {
         return 1;
     }
     close(fd);
