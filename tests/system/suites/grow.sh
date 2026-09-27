@@ -45,11 +45,12 @@ if [ "${RACH2_GROW_SMALL:-0}" = 1 ]; then
 fi
 END=$((DISK_SECTORS - START))
 ID=47470001
-# The smallest machine on which the recovery system boots and the grow of
-# a 1 GiB root to this disk finishes, measured on 2026-09-07 with every
-# power of two down to 16 MiB; 8 MiB does not boot. Its MemTotal, 7232 kB,
-# is what utils/growroot.c refuses below.
-MEM=16
+# The machine the grow runs on. The grow of a 1 GiB root to this disk was
+# measured on 2026-09-07 to finish on 16 MiB, whose MemTotal, 7232 kB, is
+# what utils/growroot.c refuses below. The recovery kernel of milestone 54
+# leaves 7108 kB of 16 MiB, under that, and 23476 kB of 32 MiB, the next
+# power of two.
+MEM=32
 # The kill lands inside resize2fs: the 1 GiB check takes a few seconds,
 # the grow minutes on the Lenovo's disk and seconds on the small one.
 KILL_AFTER=$([ -n "${RACH2_GROW_LENOVO:-}" ] && echo 25 || echo 6)

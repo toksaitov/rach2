@@ -25,10 +25,9 @@ extern char **environ;
 
 /* The memory a grow of a 1 GiB root to a partition the size of the
  * installed machine's disk was measured to need, as
- * dev-log/47-storage/notes.md records: resize2fs and e2fsck finished on the
- * smallest QEMU machine the recovery system boots on, 16 MiB, whose
- * `MemTotal` is 7232 kB. The two keep their bitmaps as runs, so the volume's
- * size hardly moves the need. */
+ * dev-log/47-storage/notes.md records: resize2fs and e2fsck finished on a
+ * QEMU machine of 16 MiB, whose `MemTotal` was then 7232 kB. The two keep
+ * their bitmaps as runs, so the volume's size hardly moves the need. */
 #ifndef GROWROOT_MEMORY_MIB
 #define GROWROOT_MEMORY_MIB 7u
 #endif
