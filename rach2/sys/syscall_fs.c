@@ -177,13 +177,16 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
  * Drop the calling process's record locks on what `e` is open on, when `e`
  * is one of its own descriptors, as POSIX has every close do. The copy of an
  * entry a file mapping or a message in flight keeps is not a descriptor of
- * the process (`fd_in_table`), and its release drops none.
+ * the process (`fd_in_table`), and its release drops none; nor does the
+ * close of an O_PATH descriptor, which Linux does not count as a close of
+ * the file.
  */
 static void fd_close_locks(const fd_entry_t *e)
 {
     struct lock_key key;
 
-    if (!lock_any() || !e->ofd || !current_proc || !fd_in_table(&current_proc->fds, e)) {
+    if (!lock_any() || !e->ofd || (e->flags & FD_FLAG_PATH) || !current_proc ||
+        !fd_in_table(&current_proc->fds, e)) {
         return;
     }
     fd_lock_key(e, &key);
@@ -6332,9 +6335,10 @@ int32_t sys_memfd_create(isr_params_t *params)
  * the description lets it go. A lock of the other kind the description holds
  * is let go first, so a conversion is not atomic, as on Linux. LOCK_MAND is
  * accepted and ignored, as Linux does. Returns 0; EINVAL for another
- * operation; EBADF for a descriptor that is not open, or not open for
- * reading or writing when it asks for a lock; EWOULDBLOCK when LOCK_NB meets
- * a conflict; EINTR when a signal ends the wait; or ENOLCK.
+ * operation; EBADF for a descriptor that is not open, is an O_PATH one, or
+ * is not open for reading or writing when it asks for a lock; EWOULDBLOCK
+ * when LOCK_NB meets a conflict; EINTR when a signal ends the wait; or
+ * ENOLCK.
  */
 int32_t sys_flock(isr_params_t *params)
 {
@@ -6353,7 +6357,8 @@ int32_t sys_flock(isr_params_t *params)
         return -ESRCH;
     }
     e = fd_get(&current_proc->fds, (int)params->ebx);
-    if (!e || !e->ofd || (kind != LOCK_UN && !(e->flags & (FD_FLAG_READ | FD_FLAG_WRITE)))) {
+    if (!e || !e->ofd || (e->flags & FD_FLAG_PATH) ||
+        (kind != LOCK_UN && !(e->flags & (FD_FLAG_READ | FD_FLAG_WRITE)))) {
         return -EBADF;
     }
     fd_lock_key(e, &key);

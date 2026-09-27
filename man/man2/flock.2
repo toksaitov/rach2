@@ -85,8 +85,9 @@ descriptor lets its lock go.
 .Bl -tag -width "[EWOULDBLOCK]"
 .It Bq Er EBADF
 .Fa fd
-is not an open descriptor, or a lock was asked for on one open neither
-for reading nor for writing.
+is not an open descriptor, was opened with
+.Dv O_PATH ,
+or a lock was asked for on one open neither for reading nor for writing.
 .It Bq Er EINTR
 A signal ended the wait.
 .It Bq Er EINVAL

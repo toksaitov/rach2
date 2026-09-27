@@ -189,7 +189,10 @@ Every
 by the process of any descriptor of the file drops all of its locks on
 the file, and so do
 .Xr dup2 2
-over such a descriptor, close-on-exec and exit.
+over such a descriptor, close-on-exec and exit; the close of a
+descriptor opened with
+.Dv O_PATH
+drops none, as on Linux.
 .Xr fork 2
 does not pass the locks to the child;
 .Xr execve 2

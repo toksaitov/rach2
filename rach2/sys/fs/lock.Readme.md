@@ -4,7 +4,7 @@
 
 ## The kinds
 
-A POSIX record lock (`F_SETLK`, `F_SETLKW`, `F_GETLK` and their 64-bit forms) covers a range of bytes and belongs to a process. A second lock of the same process over the same bytes replaces the first, of either type, splitting or cutting back what it covers, and locks of one owner and one type that touch are joined, so `F_GETLK` reports one range where one was taken. Every close by the process of a descriptor of the file drops all its record locks on the file, whichever descriptor took them, as POSIX has it; a lock is not inherited by `fork` and is kept by `execve`.
+A POSIX record lock (`F_SETLK`, `F_SETLKW`, `F_GETLK` and their 64-bit forms) covers a range of bytes and belongs to a process, whose threads are one owner, known by the thread group id. A second lock of the same process over the same bytes replaces the first, of either type, splitting or cutting back what it covers, and locks of one owner and one type that touch are joined, so `F_GETLK` reports one range where one was taken. Every close by the process of a descriptor of the file drops all its record locks on the file, whichever descriptor took them, as POSIX has it; the close of an `O_PATH` descriptor drops none, as on Linux. A lock is not inherited by `fork` and is kept by `execve`.
 
 An open file description lock (`F_OFD_SETLK`, `F_OFD_SETLKW`, `F_OFD_GETLK`) is a record lock that belongs to the open file description instead: every descriptor a `dup` or a `fork` made shares it, a close drops it only with the description's last reference, and a second open of the file in the same process is another owner.
 
