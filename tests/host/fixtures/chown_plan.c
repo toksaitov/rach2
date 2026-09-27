@@ -22,12 +22,16 @@
 struct fixture_proc {
     uint32_t euid;
     uint32_t egid;
+    uint32_t nocaps;
     uint32_t ngroups;
     uint32_t groups[8];
 };
 
 static struct fixture_proc caller;
 static struct fixture_proc *current_proc = &caller;
+
+/* `cred_privileged` asks this, as rach2/sys/proc/process.h defines it. */
+#define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps)
 
 #include "chown_plan.inc"
 
