@@ -84,9 +84,13 @@ static void writer(pid_t parent, int told)
     _exit(w >= 0 && write(w, "child", 5) == 5 ? 0 : 1);
 }
 
+static volatile sig_atomic_t alarms;
+
+/** Count a SIGALRM. */
 static void on_alarm(int sig)
 {
     (void)sig;
+    alarms++;
 }
 
 /** Wait up to 3 s to see `parent` asleep, open the FIFO for reading and
@@ -123,8 +127,8 @@ static void drainer(pid_t parent, int ack)
 /* A FIFO open for reading and writing does not wait, and once full polls
  * writable when another open reads a byte. The reader is a child that reads
  * once it sees the poll asleep and keeps running after, and the poll has no
- * time limit of its own, only a 10 s alarm, so the read's wake alone can
- * end it in time. */
+ * time limit of its own, only a 10 s alarm; a poll the alarm ends finds the
+ * room as it wakes, so the row fails when the alarm fired. */
 static int rdwr_opens(void)
 {
     struct sigaction sa;
@@ -163,6 +167,7 @@ static int rdwr_opens(void)
     if (pid == 0) {
         drainer(parent, ack[0]);
     }
+    alarms = 0;
     alarm(10);
     n = poll(&pfd, 1, -1);
     alarm(0);
@@ -172,7 +177,7 @@ static int rdwr_opens(void)
                         ? "the parent was never seen asleep in poll"
                         : "the reading child");
     }
-    if (n != 1 || !(pfd.revents & POLLOUT)) {
+    if (n != 1 || !(pfd.revents & POLLOUT) || alarms) {
         return fail("a read by another open did not wake a poll for output");
     }
     close(ack[0]);

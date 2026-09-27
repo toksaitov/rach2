@@ -147,9 +147,10 @@ static void add_when_asleep(pid_t parent, int ep, int in)
 /**
  * Start a child that runs `writer` on `out`, and arm a 10 s alarm for the
  * wait its write must end, which the caller begins next with no time limit
- * of its own, so that only the write's wake or the alarm ends it. With `ep`
- * not -1, the child first adds `in` to the set `ep` once it sees this
- * process asleep. 0, or -1.
+ * of its own. A wait the alarm ends finds the event there as it wakes, and
+ * returns it, so the caller fails its row when `alarms` counts one: only
+ * the write's wake may end the wait. With `ep` not -1, the child first adds
+ * `in` to the set `ep` once it sees this process asleep. 0, or -1.
  */
 static int wake_start(struct woken *w, int out, int ep, int in)
 {
@@ -335,7 +336,7 @@ static int sets(void)
                     : rc == 2 ? "the parent was never seen asleep in epoll_wait"
                               : "the child's write");
     }
-    if (n != 1 || out.data.u32 != 7) {
+    if (n != 1 || out.data.u32 != 7 || alarms) {
         return fail(alarms ? "the child's write did not wake the wait"
                            : "the wait the child's write ended");
     }
@@ -369,7 +370,7 @@ static int added_while_waiting(void)
         return fail(rc == 2 ? "the parent was never seen asleep in epoll_wait"
                             : "the child that added the pipe");
     }
-    if (n != 1 || out.data.u32 != (uint32_t)p[0]) {
+    if (n != 1 || out.data.u32 != (uint32_t)p[0] || alarms) {
         return fail("a pipe added during a wait did not wake it");
     }
     close(p[0]);
@@ -439,7 +440,7 @@ static int nested(void)
         return fail(rc == 2 ? "the parent was never seen asleep in epoll_wait"
                             : "the writing child");
     }
-    if (n != 1 || out.data.u32 != 9 || wait_one(c, 0, &out) != 1) {
+    if (n != 1 || out.data.u32 != 9 || alarms || wait_one(c, 0, &out) != 1) {
         return fail("a write to a pipe two sets deep did not wake the outer set");
     }
     close(p[0]);
@@ -474,7 +475,7 @@ static int polled_set_woken(void)
     if (rc != 0) {
         return fail(rc == 2 ? "the parent was never seen asleep in poll" : "the writing child");
     }
-    if (n != 1 || !(pfd.revents & POLLIN)) {
+    if (n != 1 || !(pfd.revents & POLLIN) || alarms) {
         return fail("a write to a pipe in a set did not wake a poll of the set");
     }
     close(p[0]);

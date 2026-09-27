@@ -526,9 +526,13 @@ static int listening(void)
     return 0;
 }
 
+static volatile sig_atomic_t alarms;
+
+/** Count a SIGALRM. */
 static void on_alarm(int sig)
 {
     (void)sig;
+    alarms++;
 }
 
 /** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
@@ -572,8 +576,9 @@ static pid_t reap_running(pid_t pid, int *status)
 
 /* A connect waiting for room in a listener's queue finishes when listen
  * makes the backlog larger. The connect has no time limit of its own, only
- * a 10 s alarm, and listen runs once it is seen asleep, so its wake alone can
- * end it in time. */
+ * a 10 s alarm, and listen runs once it is seen asleep; a connect the alarm
+ * wakes finds the room and finishes, so the child fails when the alarm
+ * fired, and only listen's wake passes the row. */
 static int backlog_growth(void)
 {
     struct sockaddr_un a;
@@ -596,7 +601,7 @@ static int backlog_growth(void)
         sa.sa_handler = on_alarm;
         sigaction(SIGALRM, &sa, NULL);
         alarm(10);
-        _exit(connect(w, (struct sockaddr *)&a, alen) == 0 ? 0 : 1);
+        _exit(connect(w, (struct sockaddr *)&a, alen) == 0 && !alarms ? 0 : 1);
     }
     for (tries = 0; pid > 0 && tries < 300 && !sleeping(pid); tries++) {
         usleep(10000);
