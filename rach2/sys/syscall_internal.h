@@ -155,6 +155,8 @@ int32_t sys_waitpid(isr_params_t *params);
 
 int32_t sys_wait4(isr_params_t *params);
 
+int32_t sys_waitid(isr_params_t *params);
+
 int32_t sys_getrusage(isr_params_t *params);
 
 int32_t sys_creat(isr_params_t *params);

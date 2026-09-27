@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 140 calls.
+The kernel registers the following 141 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -150,6 +150,7 @@ The kernel registers the following 140 calls.
 .It 268 Ta Xr statfs64 2
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
+.It 284 Ta Xr waitid 2
 .It 295 Ta Xr openat 2
 .It 298 Ta Xr fchownat 2
 .It 300 Ta Xr fstatat64 2

@@ -399,6 +399,7 @@ vi 1 busybox-editors
 volname 1 busybox-miscutils
 w 1 busybox-coreutils
 wait4 2 wait
+waitid 2 wait
 waitpid 2 wait
 watch 1 busybox-procps
 wc 1 busybox-coreutils

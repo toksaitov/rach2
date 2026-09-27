@@ -1553,12 +1553,44 @@ fail_built:
     return -ENOMEM;
 }
 
-/* waitpid/wait4 options. */
+/* The options of waitpid, wait4 and waitid. */
 #define WNOHANG 1
 
-#define WUNTRACED 2 /* also report a child that has STOPPED */
+#define WUNTRACED 2 /* also report a child that has STOPPED; waitid's WSTOPPED */
+
+#define WEXITED 4 /* report a child that has exited, which wait4 always does */
 
 #define WCONTINUED 8 /* also report a child that has CONTINUED */
+
+#define WNOWAIT 0x01000000 /* waitid: report the event and leave it */
+
+#define W_NOTHREAD 0x20000000 /* Linux's __WNOTHREAD */
+
+#define W_ALL 0x40000000 /* Linux's __WALL */
+
+#define W_CLONE 0x80000000u /* Linux's __WCLONE */
+
+/* The children a wait selects, as waitid's idtype names them: every child,
+ * the child with an id, or the children in a process group. A pidfd names
+ * no child here, since no descriptor is one. */
+#define P_ALL 0
+
+#define P_PID 1
+
+#define P_PGID 2
+
+#define P_PIDFD 3
+
+/* The si_code of the SIGCHLD siginfo waitid fills. */
+#define CLD_EXITED 1
+
+#define CLD_KILLED 2
+
+#define CLD_DUMPED 3
+
+#define CLD_STOPPED 5
+
+#define CLD_CONTINUED 6
 
 /* The i386 struct rusage, 72 bytes: the user and system CPU time as two
  * timevals of 32-bit seconds and microseconds, then fourteen longs, maxrss
@@ -1598,133 +1630,143 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
     rusage_from_ticks(ru, user, sys);
 }
 
+/* What a wait found: the child, its real uid, the wait status wait4 stores,
+ * the si_code and si_status waitid stores, and the child's usage. */
+struct wait_report {
+    uint32_t pid;
+    uint32_t uid;
+    int32_t status;
+    int32_t code;
+    int32_t info_status;
+    struct kernel_rusage ru;
+};
+
 /* Interrupts-off helpers (defined below with the signal code); used here for
- * the lost-wakeup-safe sleep in do_wait. */
+ * the lost-wakeup-safe sleep in wait_find. */
 static uint32_t sig_irq_save(void);
 
 static void sig_irq_restore(uint32_t flags);
 
-/* Does process p match a wait pid selector? pid > 0 = that exact pid; -1 = any
- * child; 0 = any child in the caller's process group; < -1 = any child in group
- * (-pid). (The caller has already confirmed p is its child.) */
-static int wait_pid_match(int pid, const process_t *p)
+/**
+ * Whether `p` is a child of the caller that `idtype` and `id` select.
+ *
+ * Linux's __WCLONE asks for the children that report their end with a signal
+ * other than SIGCHLD, unless __WALL is beside it, and every child here
+ * reports with SIGCHLD, so it selects none.
+ */
+static int wait_selects(int idtype, uint32_t id, int options, const process_t *p)
 {
-    if (pid > 0) {
-        return (int)p->pid == pid;
+    if (p->parent_pid != current_proc->pid) {
+        return 0;
     }
-    if (pid == -1) {
+    if (((uint32_t)options & W_CLONE) && !(options & W_ALL)) {
+        return 0;
+    }
+    switch (idtype) {
+    case P_PID:
+        return p->pid == id;
+    case P_PGID:
+        return p->pgid == id;
+    default:
         return 1;
     }
-    if (pid == 0) {
-        return (int)p->pgid == (int)current_proc->pgid;
-    }
-    if (pid == -2147483647 - 1) {
-        return 0; /* INT_MIN: -pid would overflow; no such group */
-    }
-    return (int)p->pgid == -pid;
+}
+
+/** Fill `r` with the report of child `p` and the `code` and `info_status`
+ * a waitid gives it. */
+static void wait_fill(struct wait_report *r, const process_t *p, int32_t status, int32_t code,
+                      int32_t info_status)
+{
+    r->pid = p->pid;
+    r->uid = p->ruid;
+    r->status = status;
+    r->code = code;
+    r->info_status = info_status;
+    rusage_of_child(&r->ru, p);
 }
 
 /**
- * Shared core of waitpid(7) and wait4(114).
- *
- * `status` (may be NULL) receives the Linux-encoded wait status that
- * sys_exit/terminate already stored in exit_code; `rusage_ptr` (0 for
- * waitpid, may be 0 for wait4) receives the child's CPU time with its reaped
- * children's, for a stop or a continue as for an exit. A reap adds the same
- * two times to the caller's children's totals. With WNOHANG, returns 0
- * instead of blocking when a child exists but has not exited.
+ * Reap zombie `p`: add its CPU time, with its reaped children's, to the
+ * caller's children's totals, and give back its pages, page directory,
+ * kernel stack and record. The zombie no longer runs on its kernel stack,
+ * and this is the single release point for a per-fork stack.
  */
-static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
+static void wait_reap(process_t *p)
 {
-    uint32_t child_pid;
-    int exit_code;
+    current_proc->cutime += p->utime + p->cutime;
+    current_proc->cstime += p->stime + p->cstime;
+    if (p->cr3 != 0) {
+        page_dir_t *child_dir = p->page_dir;
+        free_user_pages(child_dir);
+        free_page_directory(child_dir);
+    }
+    kstack_free(p->kernel_stack);
+    free_process(p);
+}
+
+/**
+ * The shared core of waitpid, wait4 and waitid: find a child `idtype` and
+ * `id` select that has an event `options` asks for, fill `out` with it and
+ * return its pid.
+ *
+ * The events are an exit (WEXITED), which reaps the zombie; a stop
+ * (WUNTRACED), reported once, while the child is stopped; and a continue
+ * (WCONTINUED), reported once. With WNOWAIT a zombie is left to be reaped and
+ * a stop or a continue to be reported again. A zombie that is not waited for
+ * as one may still report a continue it has not reported, as Linux lets it.
+ * The exit's si_code is CLD_EXITED with the exit status, or CLD_KILLED or
+ * CLD_DUMPED with the signal; a stop's is CLD_STOPPED with the stop signal,
+ * and a continue's CLD_CONTINUED with SIGCONT.
+ *
+ * Returns the pid; 0 with WNOHANG when a selected child has nothing to
+ * report; -ECHILD when no child is selected; or -EINTR when a signal the
+ * caller acts on arrives while it waits.
+ */
+static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_report *out)
+{
     process_t *p;
     uint32_t flags;
-    struct kernel_rusage ru;
-
-    if (!current_proc) {
-        return -ESRCH;
-    }
-
-    /* Validate AND fault in the status (and rusage) pointers up front (a NULL
-     * status means "don't report status"), so a bad or not-yet-present address
-     * is rejected before any child is reaped; otherwise the copy_to_user below
-     * could fail after free_process() has destroyed the zombie, losing it.
-     * Prefault for write, since that is how the results are delivered. */
-    if (status && !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
-        return -EFAULT;
-    }
-    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
-        return -EFAULT;
-    }
 
     while (1) {
         int have_child = 0;
 
-        /* Scan ALL matching children for a reportable event (a zombie to reap,
-         * or a stop/continue to report), not just the first non-zombie. */
+        /* Scan ALL selected children for a reportable event (a zombie to
+         * reap, or a stop/continue to report), not just the first. */
         for (p = proc_list; p; p = p->next) {
-            if (p->parent_pid != current_proc->pid) {
-                continue;
-            }
-            if (!wait_pid_match(pid, p)) {
+            if (!wait_selects(idtype, id, options, p)) {
                 continue;
             }
             have_child = 1;
 
-            /* A zombie is reaped: collect status, free pages + slot. */
-            if (p->state == PROC_ZOMBIE) {
-                child_pid = p->pid;
-                exit_code = p->exit_code;
-                rusage_of_child(&ru, p);
-                current_proc->cutime += p->utime + p->cutime;
-                current_proc->cstime += p->stime + p->cstime;
-                if (p->cr3 != 0) {
-                    page_dir_t *child_dir = p->page_dir;
-                    free_user_pages(child_dir);
-                    free_page_directory(child_dir);
-                }
-                /* The zombie no longer runs on its kernel stack, so return it
-                 * to the arena for the next fork; this is the single release
-                 * point for a per-fork stack. */
-                kstack_free(p->kernel_stack);
-                free_process(p);
-                if (status) {
-                    copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
-                }
-                if (rusage_ptr) {
-                    copy_to_user((void __user *)rusage_ptr, &ru, RUSAGE_BYTES);
-                }
-                return (int32_t)child_pid;
-            }
+            if (p->state == PROC_ZOMBIE && (options & WEXITED)) {
+                int32_t status = p->exit_code;
 
-            /* A stop (WUNTRACED) or continue (WCONTINUED) is REPORTED, not
-             * reaped; jc_status is consumed so the same event is not delivered
-             * twice. */
+                if ((status & 0x7f) == 0) {
+                    wait_fill(out, p, status, CLD_EXITED, (status >> 8) & 0xff);
+                } else {
+                    wait_fill(out, p, status, (status & 0x80) ? CLD_DUMPED : CLD_KILLED,
+                              status & 0x7f);
+                }
+                if (!(options & WNOWAIT)) {
+                    wait_reap(p);
+                }
+                return (int32_t)out->pid;
+            }
             if ((options & WUNTRACED) && p->state == PROC_STOPPED &&
                 (p->jc_status & 0xff) == 0x7f) {
-                exit_code = (int)p->jc_status;
-                p->jc_status = 0;
-                if (status) {
-                    copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
+                wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
+                          (int32_t)((p->jc_status >> 8) & 0xff));
+                if (!(options & WNOWAIT)) {
+                    p->jc_status = 0;
                 }
-                if (rusage_ptr) {
-                    rusage_of_child(&ru, p);
-                    copy_to_user((void __user *)rusage_ptr, &ru, RUSAGE_BYTES);
-                }
-                return (int32_t)p->pid;
+                return (int32_t)out->pid;
             }
             if ((options & WCONTINUED) && p->jc_status == 0xffff) {
-                exit_code = (int)p->jc_status;
-                p->jc_status = 0;
-                if (status) {
-                    copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
+                wait_fill(out, p, 0xffff, CLD_CONTINUED, SIGCONT);
+                if (!(options & WNOWAIT)) {
+                    p->jc_status = 0;
                 }
-                if (rusage_ptr) {
-                    rusage_of_child(&ru, p);
-                    copy_to_user((void __user *)rusage_ptr, &ru, RUSAGE_BYTES);
-                }
-                return (int32_t)p->pid;
+                return (int32_t)out->pid;
             }
         }
 
@@ -1757,6 +1799,61 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     }
 }
 
+/**
+ * Shared core of waitpid(7) and wait4(114).
+ *
+ * `pid` selects as Linux's does: a pid, -1 for every child, 0 for the
+ * caller's process group, and less than -1 for the group -pid; the most
+ * negative int names no group. The options are WNOHANG, WUNTRACED and
+ * WCONTINUED, with Linux's three thread bits, and an exit is always waited
+ * for; the other bits are ignored. `status` (may be NULL) receives the
+ * Linux-encoded wait status that sys_exit/terminate already stored in
+ * exit_code; `rusage_ptr` (0 for waitpid, may be 0 for wait4) receives the
+ * child's CPU time with its reaped children's, for a stop or a continue as
+ * for an exit. Both are faulted in for writing before any child is reaped,
+ * so a bad address answers -EFAULT instead of losing the zombie.
+ */
+static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
+{
+    struct wait_report r;
+    int idtype = P_PGID;
+    uint32_t id;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (status && !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
+        return -EFAULT;
+    }
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
+        return -EFAULT;
+    }
+    if (pid > 0) {
+        idtype = P_PID;
+        id = (uint32_t)pid;
+    } else if (pid == -1) {
+        idtype = P_ALL;
+        id = 0;
+    } else if (pid == 0) {
+        id = current_proc->pgid;
+    } else {
+        id = 0u - (uint32_t)pid;
+    }
+    options &= (int)(WNOHANG | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE);
+    rc = wait_find(idtype, id, options | WEXITED, &r);
+    if (rc <= 0) {
+        return rc;
+    }
+    if (status) {
+        copy_to_user((void __user *)status, &r.status, sizeof(r.status));
+    }
+    if (rusage_ptr) {
+        copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES);
+    }
+    return rc;
+}
+
 /*
  * sys_waitpid - wait for a child to change state.
  * Args: EBX = pid (-1 = any child), ECX = status pointer, EDX = options.
@@ -1769,13 +1866,109 @@ int32_t sys_waitpid(isr_params_t *params)
 }
 
 /*
- * sys_wait4 - like waitpid plus an optional rusage out-pointer
- * (zero-filled). Args: EBX = pid, ECX = status, EDX = options, ESI = rusage.
- * musl's wait/waitpid are implemented on top of this.
+ * sys_wait4 - like waitpid plus an optional rusage out-pointer, which
+ * receives the child's CPU time. Args: EBX = pid, ECX = status, EDX =
+ * options, ESI = rusage. musl's wait/waitpid are implemented on top of this.
  */
 int32_t sys_wait4(isr_params_t *params)
 {
     return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, params->esi);
+}
+
+/* The six fields of the SIGCHLD siginfo_t that waitid writes, at the start
+ * of the 128-byte i386 structure. */
+struct kernel_chld_info {
+    int32_t signo;
+    int32_t err;
+    int32_t code;
+    int32_t pid;
+    int32_t uid;
+    int32_t status;
+};
+
+/**
+ * Wait for a child to change state (waitid(2), syscall 284).
+ *
+ * EBX = idtype, ECX = id, EDX = siginfo_t *, ESI = options, EDI = struct
+ * rusage *, Linux's fifth argument. P_ALL selects every child, P_PID the
+ * child with a positive id, and P_PGID the group with a nonnegative id, 0
+ * being the caller's. At least one of WEXITED, WSTOPPED and WCONTINUED must
+ * be given, beside which WNOHANG, WNOWAIT and Linux's three thread bits are
+ * accepted; `wait_find` has what each means.
+ *
+ * Returns 0 when a child was reported, with the siginfo's si_signo SIGCHLD,
+ * si_code, si_pid, si_uid (the child's real uid) and si_status filled and
+ * the child's usage in the rusage; and 0 with WNOHANG when no selected child
+ * has an event, with those siginfo fields zero and the rusage untouched.
+ * Only those six fields are written. -EINVAL for an unknown option or idtype,
+ * no event asked for, or an id that does not suit its idtype; -EBADF for a
+ * pidfd, since no descriptor is one; -ECHILD, -EINTR; -EFAULT, found before
+ * any child is reaped, as `do_wait` finds it.
+ */
+int32_t sys_waitid(isr_params_t *params)
+{
+    int idtype = (int)params->ebx;
+    int32_t upid = (int32_t)params->ecx;
+    uint32_t uinfo = params->edx;
+    int options = (int)params->esi;
+    uint32_t rusage_ptr = params->edi;
+    struct kernel_chld_info info;
+    struct wait_report r;
+    uint32_t id = 0;
+    int32_t rc;
+
+    if ((uint32_t)options & ~(WNOHANG | WNOWAIT | WEXITED | WUNTRACED | WCONTINUED | W_NOTHREAD |
+                              W_ALL | W_CLONE)) {
+        return -EINVAL;
+    }
+    if (!(options & (WEXITED | WUNTRACED | WCONTINUED))) {
+        return -EINVAL;
+    }
+    switch (idtype) {
+    case P_ALL:
+        break;
+    case P_PID:
+        if (upid <= 0) {
+            return -EINVAL;
+        }
+        id = (uint32_t)upid;
+        break;
+    case P_PGID:
+        if (upid < 0) {
+            return -EINVAL;
+        }
+        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        break;
+    case P_PIDFD:
+        return upid < 0 ? -EINVAL : -EBADF;
+    default:
+        return -EINVAL;
+    }
+    if (uinfo && !user_buffer_ok(uinfo, sizeof(info), 1)) {
+        return -EFAULT;
+    }
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
+        return -EFAULT;
+    }
+    rc = wait_find(idtype, id, options, &r);
+    if (rc < 0) {
+        return rc;
+    }
+    k_memset(&info, 0, sizeof(info));
+    if (rc > 0) {
+        info.signo = SIGCHLD;
+        info.code = r.code;
+        info.pid = (int32_t)r.pid;
+        info.uid = (int32_t)r.uid;
+        info.status = r.info_status;
+        if (rusage_ptr) {
+            copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES);
+        }
+    }
+    if (uinfo) {
+        copy_to_user((void __user *)uinfo, &info, sizeof(info));
+    }
+    return 0;
 }
 
 /* The targets getrusage(2) takes: the caller, its reaped children, and the

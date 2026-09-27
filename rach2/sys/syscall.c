@@ -1852,6 +1852,7 @@ void init_syscall(void)
     _syscall_table[SYS_CLOSE] = sys_close;
     _syscall_table[SYS_WAITPID] = sys_waitpid;
     _syscall_table[SYS_WAIT4] = sys_wait4;
+    _syscall_table[SYS_WAITID] = sys_waitid;
     _syscall_table[SYS_GETRUSAGE] = sys_getrusage;
     _syscall_table[SYS_CREAT] = sys_creat;
     _syscall_table[SYS_UNLINK] = sys_unlink;
