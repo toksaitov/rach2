@@ -223,7 +223,8 @@ int fd_limit(const fd_table_t *table);
 
 /**
  * Grow the table so that `fd` is inside it, for dup2 onto a number past
- * the end; 0 when it is, -1 when `fd` is past the process's limit or the
+ * the end; 0 when it is, -EBADF when `fd` is negative or past the process's
+ * limit, which is dup2's answer for such a destination, or -ENOMEM when the
  * heap has no room.
  */
 int fd_table_reach(fd_table_t *table, int fd);
@@ -231,8 +232,9 @@ int fd_table_reach(fd_table_t *table, int fd);
 /** Wire fd 0/1/2 as console stdin/stdout/stderr; call after fd_table_init. */
 int fd_init_stdio(fd_table_t *table);
 
-/** Reserve the lowest free descriptor; fd (>= 0) on success, -1 if table
- * full. */
+/** Reserve the lowest free descriptor: its number; -EMFILE when the table
+ * has none below the caller's limit; or -ENOMEM when the heap has no room
+ * for the table's growth or the descriptor's open-file description. */
 int fd_alloc(fd_table_t *table);
 
 /** 1 when `fd_alloc` would find or make a slot, for a call that must know
@@ -241,7 +243,7 @@ int fd_alloc(fd_table_t *table);
 int fd_can_alloc(const fd_table_t *table);
 
 /** Reserve the lowest free descriptor >= minfd (the fcntl(F_DUPFD)
- * contract). */
+ * contract), with `fd_alloc`'s results. */
 int fd_alloc_from(fd_table_t *table, int minfd);
 
 /** Release a descriptor and its OFD reference; 0 ok, -1 if fd invalid. */

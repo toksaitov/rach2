@@ -207,10 +207,14 @@ The handle follows later relocations, including after reuse of an old extent.
 Descriptors are allocated from the lowest available number.
 The process's table starts with 16 entries and grows up to 1024,
 subject to its descriptor resource limit.
-Allocation failure returns
-.Er EMFILE .
+An open that finds no free number below the limit returns
+.Er EMFILE ,
+and one for which the kernel heap has no room to grow the table or for
+the open-file description returns
+.Er ENOMEM ,
+as on Linux.
 An open of a path takes its descriptor number before it resolves the
-path, as Linux does, so an open that finds no free number creates and
+path, as Linux does, so an open that gets no number creates and
 truncates nothing.
 Until the open ends the number is reserved: a
 .Fn close
@@ -543,7 +547,7 @@ A final symbolic link was selected with
 .Dv O_NOFOLLOW ,
 or path resolution would follow more than 40 links.
 .It Bq Er EMFILE
-The process cannot allocate another descriptor or open-file description.
+The process has no free descriptor below its limit.
 .It Bq Er ENAMETOOLONG
 A copied path, directory prefix, component, reconstructed directory
 path, or symbolic-link expansion is too long.
@@ -556,8 +560,8 @@ The special mouse device was requested but no mouse is available.
 The path is empty, a required component does not exist, or a synthetic
 entry or process no longer exists.
 .It Bq Er ENOMEM
-A file-system node, per-open handle, or proc snapshot cannot be allocated,
-or the copy of the table
+A file-system node, per-open handle, proc snapshot, open-file description
+or larger descriptor table cannot be allocated, or the copy of the table
 .Dv CLOSE_RANGE_UNSHARE
 asks for.
 .It Bq Er ENOSPC

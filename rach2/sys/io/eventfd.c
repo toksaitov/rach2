@@ -163,7 +163,7 @@ int32_t sys_eventfd2(struct isr_params *params)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(ev);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;

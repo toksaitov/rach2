@@ -130,9 +130,10 @@ or a bit that is no flag, or both
 and
 .Dv MFD_EXEC .
 .It Bq Er EMFILE
-The process has no free descriptor.
+The process has no free descriptor below its limit.
 .It Bq Er ENOMEM
-The kernel heap has no room for the file.
+The kernel heap has no room for the file, a larger descriptor table or
+an open-file description.
 .El
 .Sh SEE ALSO
 .Xr fcntl 2 ,

@@ -413,7 +413,7 @@ static int32_t do_socket(int domain, int type, int protocol)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         socket_unref(sock);
-        return -EMFILE;
+        return fd;
     }
 
     entry = &current_proc->fds->entries[fd];
@@ -1089,7 +1089,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
 
     new_fd = fd_alloc(current_proc->fds);
     if (new_fd < 0) {
-        return -EMFILE;
+        return new_fd;
     }
     conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
     listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);

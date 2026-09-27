@@ -84,7 +84,13 @@ reads and lowers limits.
 Process records are allocated from the kernel heap.
 If the kernel cannot allocate a process record, fork returns
 .Er ENOMEM .
-Sockets and TCP control blocks also come from the heap.
+Sockets and TCP control blocks also come from the heap, and so do a
+descriptor table's growth and each open-file description: a call that
+makes a descriptor returns
+.Er ENOMEM
+when the heap has no room for them, and
+.Er EMFILE
+only at the descriptor limit.
 These allocations are outside the resource-limit table.
 Other fixed capacities are the loopback ring, 64 frames;
 the USB table, twelve entries; and the disk registry, eight records.

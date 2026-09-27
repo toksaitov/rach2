@@ -1,6 +1,7 @@
 /**
- * Exercise the socket address and option handlers with two interfaces, and
- * the creation flags of socket and accept4.
+ * Exercise the socket address and option handlers with two interfaces, the
+ * creation flags of socket and accept4, and an accept the heap has no room
+ * to give a descriptor.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -96,12 +97,13 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return fd == 3 ? &entry : NULL;
 }
 
-/** Descriptor 4 for the socket rows that create one; no accept row may
- * allocate. */
+/** Descriptor 4 for the socket rows that create one, or the refusal
+ * `alloc_to` has for the row that is refused one; an `alloc_to` of -1 is
+ * for the rows that may not allocate, which invalid accepts are. */
 int fd_alloc(fd_table_t *fds)
 {
     (void)fds;
-    CHECK(alloc_to >= 0, "invalid accept must not allocate a descriptor");
+    CHECK(alloc_to != -1, "invalid accept must not allocate a descriptor");
     return alloc_to;
 }
 
@@ -382,6 +384,24 @@ static void accept_flags(void)
     alloc_to = -1;
 }
 
+/** An accept whose descriptor the heap has no room for returns ENOMEM, as
+ * the allocator answered, and leaves the connection queued. */
+static void accept_refused(void)
+{
+    static struct socket conn;
+    int head = sock.accept_head;
+
+    sock.type = SOCK_STREAM;
+    sock.listening = 1;
+    sock.accept_queue[sock.accept_tail] = &conn;
+    sock.accept_tail = (sock.accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+    alloc_to = -ENOMEM;
+    CHECK(do_accept(3, 0, 0, 0) == -ENOMEM && sock.accept_head == head,
+          "an accept the heap has no room for is ENOMEM and leaves the connection queued");
+    alloc_to = -1;
+    sock.accept_head = sock.accept_tail;
+}
+
 /** Run the four syscall contracts against distinct addresses and MACs. */
 int main(void)
 {
@@ -403,6 +423,7 @@ int main(void)
     invalid_accept();
     socket_flags();
     accept_flags();
+    accept_refused();
     if (!failures) {
         printf("netif-test: pass: socket interface contracts\n");
     }

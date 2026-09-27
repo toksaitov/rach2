@@ -125,11 +125,12 @@ was given a flag other than
 or
 .Dv O_CLOEXEC .
 .It Bq Er EMFILE
-Two descriptors cannot be allocated within the process's descriptor
-limit, or memory for a descriptor table or open-file description is
-unavailable.
+Two descriptors are not free below the process's descriptor limit.
 .It Bq Er ENFILE
 The kernel heap cannot allocate the pipe.
+.It Bq Er ENOMEM
+The kernel heap has no room for a larger descriptor table or for an
+open-file description.
 .It Bq Er ESRCH
 There is no current process.
 .El

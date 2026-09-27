@@ -2179,7 +2179,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
-        return -EMFILE;
+        return fd;
     }
     mm_get(p->mm);
     f->mm = p->mm;
@@ -2451,7 +2451,7 @@ int procfs_open(const struct vpath *vp, int flags)
     if (fd < 0) {
         kfree(f->data);
         kfree(f);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;

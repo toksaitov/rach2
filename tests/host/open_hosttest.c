@@ -1,8 +1,9 @@
 /**
  * Check mounted open truncation, cleanup and loop handle relocation, the
  * close of a descriptor whose release sleeps, by one thread or by the end of
- * another thread's call, an unlink and a rename on the KRFFS root of a file
- * an open is installing, and a chmod and a chown of a file a write moves.
+ * another thread's call, the errors of an open, a dup and a dup2 that get no
+ * descriptor, an unlink and a rename on the KRFFS root of a file an open is
+ * installing, and a chmod and a chown of a file a write moves.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -197,10 +198,22 @@ void lock_ofd_gone(const struct open_file *ofd)
     (void)ofd;
 }
 
-/** Count host allocations. */
+/* The allocation that fails: 0 the next one, n the one after n more, and
+ * -1 none. */
+static int fail_after = -1;
+
+/** Count host allocations, and refuse the one `fail_after` names. */
 void *kzalloc(size_t size)
 {
-    void *p = calloc(1, size);
+    void *p;
+
+    if (fail_after == 0) {
+        return NULL;
+    }
+    if (fail_after > 0) {
+        fail_after--;
+    }
+    p = calloc(1, size);
     if (p) {
         allocations++;
     }
@@ -214,6 +227,54 @@ void kfree(void *p)
         allocations--;
         free(p);
     }
+}
+
+/** No row's open reaches a device, a FIFO, a terminal or the target of a
+ * dangling link: the opens of the descriptor rows end at the allocation. */
+int devfs_open(const char *name, int flags)
+{
+    (void)name;
+    (void)flags;
+    check(0, "unexpected device open");
+    return -ENODEV;
+}
+
+const char *devfs_name_of(int block, uint32_t rdev)
+{
+    (void)block;
+    (void)rdev;
+    check(0, "unexpected device name");
+    return 0;
+}
+
+int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)
+{
+    (void)e;
+    (void)mnt;
+    (void)ino;
+    (void)flags;
+    check(0, "unexpected FIFO open");
+    return -ENXIO;
+}
+
+struct pty *pty_get(int index)
+{
+    (void)index;
+    check(0, "unexpected terminal lookup");
+    return 0;
+}
+
+int pty_open_slave(int index, int flags)
+{
+    (void)index;
+    (void)flags;
+    check(0, "unexpected terminal open");
+    return -ENXIO;
+}
+
+void path_buf_put(char *buf)
+{
+    check(!buf, "unexpected path page");
 }
 
 /** Identify a mounted type rather than the memory root. */
@@ -884,6 +945,46 @@ static void dup2_source_closed(void)
     row_end();
 }
 
+/**
+ * An open, a dup and a dup2 that get no descriptor return what the
+ * allocator answered, as Linux's do: ENOMEM when the heap has no room for
+ * the description or the table's growth, and EMFILE at the descriptor
+ * limit. The open reaches no file system either way.
+ */
+static void descriptor_errors(void)
+{
+    isr_params_t params;
+    int fd, rc;
+
+    row_begin();
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    fail_after = 0;
+    rc = do_open("target", 2, 0);
+    fail_after = -1;
+    check(rc == -ENOMEM && opens == 0, "an open the heap has no room for is ENOMEM");
+    proc.rlim[RLIM_NOFILE].cur = 0;
+    rc = do_open("target", 2, 0);
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    check(rc == -EMFILE && opens == 0, "an open at the descriptor limit is EMFILE");
+    fd = model_open();
+    check(fd >= 0, "open a descriptor to duplicate");
+    if (fd >= 0) {
+        k_memset(&params, 0, sizeof(params));
+        params.ebx = (uint32_t)fd;
+        fail_after = 0;
+        rc = sys_dup(&params);
+        fail_after = -1;
+        check(rc == -ENOMEM, "a dup the heap has no room for is ENOMEM");
+        params.ecx = FD_TABLE_FIRST;
+        fail_after = 0;
+        rc = sys_dup2(&params);
+        fail_after = -1;
+        check(rc == -ENOMEM && fd_table_cap(proc.fds) == FD_TABLE_FIRST,
+              "a dup2 past the end of a table the heap cannot grow is ENOMEM");
+    }
+    row_end();
+}
+
 /** Check node repointing without changing a mounted open identity. */
 static void loop_handles(void)
 {
@@ -911,6 +1012,7 @@ int main(void)
     close_sleeping();
     deferred_release();
     dup2_source_closed();
+    descriptor_errors();
     unlink_installing();
     rename_over_installing();
     attrs_after_move();

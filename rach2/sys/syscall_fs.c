@@ -1525,7 +1525,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(sd);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_SYNTH_DIR;
@@ -1585,7 +1585,7 @@ static int32_t open_framebuffer(void)
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        return -EMFILE;
+        return fd;
     }
 
     entry = &current_proc->fds->entries[fd];
@@ -1616,7 +1616,7 @@ static int32_t open_mouse(void)
 
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        return -EMFILE;
+        return fd;
     }
 
     entry = &current_proc->fds->entries[fd];
@@ -2202,7 +2202,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
-        return -EMFILE;
+        return fd;
     }
 again:
     rc = vfs_resolve(0, name,
@@ -3374,7 +3374,7 @@ int32_t sys_dup(isr_params_t *params)
 
     newfd = fd_alloc_from(current_proc->fds, 0);
     if (newfd < 0) {
-        return -EMFILE;
+        return newfd;
     }
     /* The table may have grown, and its entries moved: the source is looked
      * up again. */
@@ -3422,7 +3422,9 @@ static int32_t dup_clear(int fd)
 }
 
 /**
- * dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno.
+ * dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. A `newfd`
+ * past the end of the table grows it, and a heap with no room for that is
+ * ENOMEM.
  *
  * The replacement of an open `newfd` may sleep (`dup_clear`), and another
  * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
@@ -3436,6 +3438,7 @@ int32_t sys_dup2(isr_params_t *params)
     int newfd = (int)params->ecx;
     fd_entry_t *old_entry;
     fd_entry_t *new_entry;
+    int32_t rc;
 
     if (!current_proc) {
         return -ESRCH;
@@ -3453,8 +3456,9 @@ int32_t sys_dup2(isr_params_t *params)
     if (oldfd == newfd) {
         return newfd;
     }
-    if (fd_table_reach(current_proc->fds, newfd) != 0) {
-        return -EMFILE;
+    rc = fd_table_reach(current_proc->fds, newfd);
+    if (rc != 0) {
+        return rc;
     }
     old_entry = fd_get(current_proc->fds, oldfd); /* the entries may have moved */
 
@@ -4370,7 +4374,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(copy);
-        return -EMFILE;
+        return fd;
     }
     *copy = *vp;
     e = &current_proc->fds->entries[fd];
@@ -4428,7 +4432,7 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         vfs_ref_release(ref);
-        return -EMFILE;
+        return fd;
     }
     entry = &current_proc->fds->entries[fd];
     if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin) {
@@ -7044,7 +7048,7 @@ int32_t sys_memfd_create(isr_params_t *params)
             fd_free(current_proc->fds, fd);
         }
         mnt->type->ops->put(mnt, node);
-        return fd < 0 ? -EMFILE : -ENOMEM;
+        return fd < 0 ? fd : -ENOMEM;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_FILE;
@@ -7183,14 +7187,14 @@ int32_t sys_fcntl64(isr_params_t *params)
         fd_entry_t *dst;
         /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
          * contract). An arg past the descriptor limit is -EINVAL, since the
-         * table grows to it and no higher; no slot at or above
-         * it is -EMFILE. */
+         * table grows to it and no higher; no slot at or above it is
+         * -EMFILE, and no room in the heap -ENOMEM. */
         if (arg >= (uint32_t)fd_limit(current_proc->fds)) {
             return -EINVAL;
         }
         newfd = fd_alloc_from(current_proc->fds, (int)arg);
         if (newfd < 0) {
-            return -EMFILE;
+            return newfd;
         }
         entry = fd_get(current_proc->fds, fd); /* the entries may have moved */
         dst = &current_proc->fds->entries[newfd];

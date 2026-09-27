@@ -258,7 +258,7 @@ int32_t sys_timerfd_create(struct isr_params *params)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(t);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;

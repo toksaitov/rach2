@@ -188,8 +188,11 @@ has a bit other than
 and
 .Dv SOCK_NONBLOCK .
 .It Er EMFILE
-No descriptor or open-file description could be allocated for the
-connection, which stays queued.
+No descriptor below the process's limit is free for the connection,
+which stays queued.
+.It Er ENOMEM
+The kernel heap has no room for a larger descriptor table or for the
+connection's open-file description; the connection stays queued.
 .It Er ENOTSOCK
 .Fa fd
 is invalid or does not refer to a socket.
