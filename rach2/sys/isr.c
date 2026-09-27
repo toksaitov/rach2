@@ -161,7 +161,8 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
         info->code = BUS_ADRALN;
         return SIGBUS;
     case 19: /* SIMD FP exception */
-        __asm__ __volatile__("stmxcsr (%0)" : : "r"(&status) : "memory");
+        /* `stmxcsr (%eax)` as bytes: the staged TinyCC's assembler lacks it. */
+        __asm__ __volatile__(".byte 0x0f, 0xae, 0x18" : : "a"(&status) : "memory");
         info->code = _fpe_code(status & 0x3Fu, (status >> 7) & 0x3Fu);
         info->addr = params->eip;
         return SIGFPE;
