@@ -110,7 +110,12 @@ file-creation mask themselves, so a
 .Xr chroot 2
 or
 .Xr umask 2
-by either changes both;
+by either changes both, and which fails while a thread that shares them is
+inside an
+.Xr execve 2
+that gives a caller without effective user ID 0 the IDs of a set-ID
+program, since that call has chosen them on the ground that no other
+process shares its directories;
 .Dv CLONE_THREAD
 with
 .Dv CLONE_SIGHAND ,
@@ -216,7 +221,14 @@ descriptor cannot be read.
 The number of threads with the parent's real user ID has reached the
 parent's soft
 .Dv RLIMIT_NPROC
-limit.
+limit, or
+.Fn clone
+was given
+.Dv CLONE_FS
+while a thread that shares the caller's directories is inside an
+.Xr execve 2
+that gives a caller without effective user ID 0 the IDs of a set-ID
+program.
 .It Bq Er ENOMEM
 The kernel could not allocate the child's process record, page tables,
 user page state, kernel stack, memory region records, or descriptor table.

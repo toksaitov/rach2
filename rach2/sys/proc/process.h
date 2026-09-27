@@ -94,6 +94,11 @@ struct fs_struct {
     void *root_node;
     /* File-creation mask (umask(2)), low 9 bits. */
     uint32_t umask;
+    /* The execs in progress, by threads without root that share this, that
+     * apply set-id bits: while there are any, clone with CLONE_FS fails, so
+     * no process outside the thread group comes to share the record before
+     * those execs have their new ids (`exec_ids` in syscall_proc.c). */
+    int in_exec;
 };
 
 /* Policy: the pages one process's system calls may copy paths into at once

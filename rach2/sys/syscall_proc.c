@@ -725,8 +725,9 @@ struct exec_state {
     elf_layout_t layout;
     elf_layout_t ilayout; /* the interpreter's */
     elf_image_t img;
-    elf_image_t iimg;  /* the interpreter's */
-    fd_table_t *files; /* the caller's own table (`exec_files`) */
+    elf_image_t iimg;          /* the interpreter's */
+    fd_table_t *files;         /* the caller's own table (`exec_files`) */
+    struct fs_struct *fs_held; /* holds off CLONE_FS (`exec_ids`) */
     char path[VFS_PATH_MAX];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
 };
@@ -734,14 +735,17 @@ struct exec_state {
 /** Give back the current process's exec workspace, if it has one: the
  * file held open, the frames of a stack no page directory took, the
  * address space of an image that did not commit, the storage of a
- * descriptor table it did not install, which holds no references, and the
- * workspace itself. */
+ * descriptor table it did not install, which holds no references, the
+ * hold on CLONE_FS, and the workspace itself. */
 static void exec_release(void)
 {
     struct exec_state *s = current_proc->exec_ws;
 
     if (s == NULL) {
         return;
+    }
+    if (s->fs_held != NULL) {
+        s->fs_held->in_exec--;
     }
     exec_file_close(&s->prog);
     uimage_release(&s->args);
@@ -1169,6 +1173,26 @@ static int exec_traced(void)
 }
 
 /**
+ * Whether the calling thread's working directory, root and umask are shared
+ * with a process outside its thread group, which could change them under
+ * the new image once it had the ids its set-id bits give, as Linux's
+ * `check_unsafe_exec` asks: more records share them than threads of the
+ * caller's process do.
+ */
+static int exec_fs_shared(void)
+{
+    const process_t *t;
+    int sharers = 0;
+
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == current_proc->tg && t->fs == current_proc->fs) {
+            sharers++;
+        }
+    }
+    return current_proc->fs->refs > sharers;
+}
+
+/**
  * The ids the new image runs with, into `s`: the file owner's where a
  * set-id bit applies, the way privilege is regained, and the caller's
  * effective ids otherwise. `secure`, which is AT_SECURE, says whether the
@@ -1178,19 +1202,27 @@ static int exec_traced(void)
  *
  * A process that set no_new_privs gains nothing: its bits are read and
  * ignored, as a nosuid mount's are. Neither does a caller without effective
- * uid 0 whose thread has a tracer that is not root (`exec_traced`), which
- * could change the image once it had the ids; Linux's
- * `cap_bprm_creds_from_file` ignores the bits in the same case for a caller
- * without CAP_SETUID. No tracer that is not root can attach while the exec
- * runs (`ptrace_attach`), so the choice made here holds until the image is
- * the process's.
+ * uid 0 whose thread has a tracer that is not root (`exec_traced`), or
+ * whose directories and umask another process shares (`exec_fs_shared`),
+ * since either could change the image once it had the ids; Linux's
+ * `cap_bprm_creds_from_file` ignores the bits in the same cases for a
+ * caller without CAP_SETUID. No tracer that is not root can attach while
+ * the exec runs (`ptrace_attach`), and an exec that applies the bits for
+ * such a caller holds off CLONE_FS in the threads that share its directories
+ * (`fork_fs`) until its workspace goes, so the choice made here holds until
+ * the image is the process's.
  */
 static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
 
-    if (mode != 0 && current_proc->euid != 0 && exec_traced()) {
-        mode = 0;
+    if (mode != 0 && current_proc->euid != 0) {
+        if (exec_traced() || exec_fs_shared()) {
+            mode = 0;
+        } else {
+            s->fs_held = current_proc->fs;
+            s->fs_held->in_exec++;
+        }
     }
 
     s->euid = (mode & KRFFS_MODE_SUID) ? s->id.uid : current_proc->euid;
@@ -1727,11 +1759,17 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
 /**
  * Give `child` the directories and umask of `parent`: the same record under
  * CLONE_FS, and otherwise a copy, with holds of its own on the working
- * directory's mount and on the root. 0, or -ENOMEM.
+ * directory's mount and on the root. 0; -EAGAIN for CLONE_FS while a
+ * thread without root that shares the record is in an exec that applies
+ * set-id bits (`exec_ids`), as Linux's `copy_fs` refuses it during an exec;
+ * or -ENOMEM.
  */
 static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
 {
     if (flags & CLONE_FS) {
+        if (parent->fs->in_exec != 0) {
+            return -EAGAIN;
+        }
         proc_fs_put(child);
         child->fs = parent->fs;
         parent->fs->refs++;
@@ -1841,6 +1879,16 @@ static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
     return child->fds ? 0 : -ENOMEM;
 }
 
+/** Give `child` the directories and the descriptor table of `parent`, each
+ * shared or copied as `flags` asks (`fork_fs`, `fork_files`); 0, or the
+ * error of the first that failed. */
+static int32_t fork_shares(process_t *child, process_t *parent, uint32_t flags)
+{
+    int32_t rc = fork_fs(child, parent, flags);
+
+    return rc != 0 ? rc : fork_files(child, parent, flags);
+}
+
 /**
  * Store the child's id where CLONE_CHILD_SETTID and CLONE_PARENT_SETTID ask:
  * in the child's address space through its regions, in a writable one only,
@@ -1898,7 +1946,7 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * kernel has.
  *
  * The child's record takes its parts from the parent's (`fork_ids`,
- * `fork_fs`, `fork_files`, `fork_signals`), and its address space is a
+ * `fork_shares`, `fork_signals`), and its address space is a
  * copy-on-write copy, or under CLONE_VM the parent's own. The child is set
  * up to return from fork with value 0 (`fork_frame`); the parent gets the
  * child's PID, after the child has called execve or ended when `req` has
@@ -1968,8 +2016,8 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
 
-    rc = -ENOMEM;
-    if (fork_fs(child, parent, req->flags) != 0 || fork_files(child, parent, req->flags) != 0) {
+    rc = fork_shares(child, parent, req->flags);
+    if (rc != 0) {
         goto fail_built;
     }
     fork_store_ids(child, req);

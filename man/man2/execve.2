@@ -155,10 +155,30 @@ describes, and so act with the image's IDs.
 Such a tracer cannot attach to a thread inside
 .Fn execve ,
 so none can begin once the call has chosen the IDs.
-Linux suppresses the changes in the same case for a caller without
+For such a caller, so does a working directory, root directory and
+file-creation mask it shares, through
+.Xr clone 2
+with
+.Dv CLONE_FS ,
+with a process other than its own, which could change them under the new
+image.
+While an
+.Fn execve
+by such a caller applies the bits, a
+.Xr clone 2
+with
+.Dv CLONE_FS
+by a thread that shares its directories fails with
+.Er EAGAIN ,
+so no such sharing begins once the call has chosen the IDs.
+Linux suppresses the changes in these two cases for a caller without
 .Dv CAP_SETUID ,
-judging the tracer by the credentials it had when it attached, and makes
-such an attach wait for the exec to end.
+judging a tracer by the credentials it had when it attached, makes such
+an attach wait for the exec to end, and refuses
+.Dv CLONE_FS
+during any
+.Fn execve
+of a thread whose directories no other process shares.
 Script execution applies neither the script's nor the interpreter's
 set-ID bits.
 Real IDs are unchanged; saved IDs become the resulting effective IDs.

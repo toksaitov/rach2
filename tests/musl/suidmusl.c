@@ -10,15 +10,17 @@
  * getresuid reports real 1000 and effective and saved 0, that
  * getauxval(AT_SECURE) is 1, and that the saved uid lets it shed root to euid
  * 1000 and take it back. A child traced by the probe, whose tracer is root,
- * gets the same. A child traced by a helper that is uid 1000 too execs the
- * copy with the argument `plain`, which must find every id 1000, AT_SECURE
- * 0 and itself dumpable. The parent relays each status.
+ * gets the same. A child traced by a helper that is uid 1000 too, and one
+ * such a helper makes with CLONE_FS, sharing its directories and umask,
+ * exec the copy with the argument `plain`, which must find every id 1000,
+ * AT_SECURE 0 and itself dumpable. The parent relays each status.
  *
  * Prints "SUIDMUSL OK" on success, "SUIDMUSL FAIL ..." otherwise. Linked
  * against the ported musl.
  */
 
-#define _GNU_SOURCE /* getresuid, setresuid, setresgid */
+#define _GNU_SOURCE /* getresuid, setresuid, setresgid, clone */
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -106,8 +108,37 @@ static int exec_copy(const char *mode, int traced)
     return WEXITSTATUS(status);
 }
 
-/** Run `exec_copy` from a helper that is uid 1000 itself; its status, or 1. */
-static int exec_copy_as_user(const char *mode, int traced)
+/** The copy traced by a helper that is uid 1000 itself. */
+static int traced_row(void)
+{
+    return exec_copy("plain", 1);
+}
+
+static char clone_stack[16384] __attribute__((aligned(16)));
+
+/** The child of `shared_row`, which execs the copy. */
+static int exec_plain(void *arg)
+{
+    (void)arg;
+    execl("/musl/suidmusl.suid", "suidmusl", "plain", (char *)0);
+    return 1;
+}
+
+/** The copy run by a child the helper makes with CLONE_FS, which shares
+ * the helper's working directory, root and umask. */
+static int shared_row(void)
+{
+    pid_t pid = clone(exec_plain, clone_stack + sizeof(clone_stack), CLONE_FS | SIGCHLD, NULL);
+    int status;
+
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return 1;
+    }
+    return WEXITSTATUS(status);
+}
+
+/** Run `row` in a helper that is uid 1000; its status, or 1. */
+static int as_user(int (*row)(void))
 {
     pid_t pid = fork();
     int status;
@@ -116,7 +147,7 @@ static int exec_copy_as_user(const char *mode, int traced)
         return 1;
     }
     if (pid == 0) {
-        _exit(drop() != 0 ? 1 : exec_copy(mode, traced));
+        _exit(drop() != 0 ? 1 : row());
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
         return 1;
@@ -140,8 +171,12 @@ int main(int argc, char **argv)
         printf("SUIDMUSL FAIL (the exec traced by root)\n");
         return 1;
     }
-    if (exec_copy_as_user("plain", 1) != 0) {
+    if (as_user(traced_row) != 0) {
         printf("SUIDMUSL FAIL (the exec traced by uid 1000)\n");
+        return 1;
+    }
+    if (as_user(shared_row) != 0) {
+        printf("SUIDMUSL FAIL (the exec whose directories uid 1000 shares)\n");
         return 1;
     }
     printf("SUIDMUSL OK\n");
