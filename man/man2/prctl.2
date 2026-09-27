@@ -30,6 +30,12 @@ Store that signal as an int at the second argument.
 Return whether the caller is dumpable, 1 or 0.
 .It Dv PR_SET_DUMPABLE No (4)
 Set it to the second argument, 0 or 1.
+The flag belongs to the address space, as on Linux: the threads of a
+process, and a child that
+.Xr clone 2
+made with
+.Dv CLONE_VM ,
+share one, so what one of them sets the others read.
 .It Dv PR_SET_NAME No (15)
 Set the caller's program name, which
 .Pa /proc/ Ns Ar pid Ns Pa /stat

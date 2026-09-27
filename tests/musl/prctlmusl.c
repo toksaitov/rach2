@@ -3,7 +3,8 @@
  *
  * The program name starts as the exec's basename, is set cut to 15 bytes
  * and read back as 16 NUL-padded bytes, and shows in /proc/self/stat. The
- * dumpable flag starts at 1 and takes 0 and 1 and nothing else. The
+ * dumpable flag starts at 1 and takes 0 and 1 and nothing else, and a thread
+ * that was already running sees the value another thread set. The
  * parent-death signal is kept and read back, a signal past 64 is refused, a
  * fork does not pass it on, and a grandchild that set it receives it when its
  * parent exits. A change of the effective uid clears the signal and the
@@ -20,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -93,12 +95,39 @@ static int names(void)
     return 0;
 }
 
-/** The dumpable flag's values. */
+/* The pipe that tells the thread of `dumpable` to read the flag. */
+static int flag_pipe[2];
+
+/** A thread that reads the dumpable flag once told to; the value it read. */
+static void *read_dumpable(void *arg)
+{
+    char c;
+
+    (void)arg;
+    if (read(flag_pipe[0], &c, 1) != 1) {
+        return (void *)-1L;
+    }
+    return (void *)(long)prctl(PR_GET_DUMPABLE, 0, 0, 0, 0);
+}
+
+/** The dumpable flag's values, and a running thread's view of a change. */
 static int dumpable(void)
 {
+    pthread_t t;
+    void *seen;
+
     if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1) {
         return fail("a process does not start dumpable");
     }
+    if (pipe(flag_pipe) != 0 || pthread_create(&t, NULL, read_dumpable, NULL) != 0) {
+        return fail("the thread that reads the dumpable flag");
+    }
+    if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || write(flag_pipe[1], "x", 1) != 1 ||
+        pthread_join(t, &seen) != 0 || (long)seen != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0) {
+        return fail("a running thread did not see the dumpable flag another thread cleared");
+    }
+    close(flag_pipe[0]);
+    close(flag_pipe[1]);
     if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1) {
         return fail("the dumpable flag did not take 0 and 1");

@@ -266,13 +266,11 @@ struct process {
     /* What prctl keeps. The signal posted to this process when its parent
      * exits, 0 for none: a fork does not pass it on, and it is cleared when
      * an exec or an identity call moves the effective ids and by an exec
-     * that runs with ids its caller lacks. Whether the process is dumpable,
-     * 1 from birth: an exec sets it again, 0 where the new ids differ from
-     * the real ones, and a move of the effective ids clears it. Whether the
-     * process and its descendants may gain no privilege, which a fork passes
-     * on and nothing clears, and under which exec ignores set-id bits. */
+     * that runs with ids its caller lacks. Whether the process and its
+     * descendants may gain no privilege, which a fork passes on and nothing
+     * clears, and under which exec ignores set-id bits. Whether the process
+     * is dumpable is its address space's (`mm.h`). */
     uint32_t pdeath_signal;
-    uint32_t dumpable;
     uint32_t no_new_privs;
     /* Set while a parent that made this process with CLONE_VFORK waits for
      * it to call execve or end; cleared, and the parent woken, at the one or

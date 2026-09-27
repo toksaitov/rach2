@@ -23,6 +23,7 @@ struct mm *mm_new(void)
     }
     mm->cr3 = get_page_dir_phys(mm->dir);
     mm->refs = 1;
+    mm->dumpable = 1;
     return mm;
 }
 
@@ -67,6 +68,7 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->env_start = from->env_start;
     to->env_end = from->env_end;
     k_memcpy(to->auxv, from->auxv, sizeof(to->auxv));
+    to->dumpable = from->dumpable;
 }
 
 void mm_drop(struct process *p)

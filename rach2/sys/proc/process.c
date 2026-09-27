@@ -159,7 +159,6 @@ process_t *alloc_process(void)
     p->state = PROC_READY;
     p->sid = candidate;
     p->pgid = candidate;
-    p->dumpable = 1;
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
     p->rlim[RLIM_NOFILE].cur = p->rlim[RLIM_NOFILE].max = FD_TABLE_LIMIT;
     p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY32;

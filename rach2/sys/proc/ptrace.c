@@ -711,7 +711,7 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
     if (current_proc->euid != 0 &&
         (current_proc->ruid != t->ruid || current_proc->ruid != t->euid ||
          current_proc->ruid != t->suid || current_proc->rgid != t->rgid ||
-         current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->dumpable)) {
+         current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable)) {
         return -EPERM;
     }
     if (seize && (opts & ~PTRACE_O_MASK)) {

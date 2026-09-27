@@ -283,7 +283,7 @@ static void timer_handler(isr_params_t *params)
  */
 static int32_t terminate_core(int32_t signo)
 {
-    if (!current_proc->dumpable || current_proc->rlim[RLIM_CORE].cur < PAGE_SIZE) {
+    if (!current_proc->mm->dumpable || current_proc->rlim[RLIM_CORE].cur < PAGE_SIZE) {
         return signo;
     }
     if (fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur) != 0) {

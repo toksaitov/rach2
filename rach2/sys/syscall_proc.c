@@ -846,34 +846,40 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
 /**
  * What a move of the effective ids undoes, as Linux's `commit_creds` undoes
  * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
- * the process stops being dumpable and loses its parent-death signal, so the
- * parent it had cannot signal the identity it now has.
+ * its address space stops being dumpable, for every thread that shares it,
+ * and it loses its parent-death signal, so the parent it had cannot signal
+ * the identity it now has.
  */
 static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 {
     if (p->euid != old_euid || p->egid != old_egid) {
-        p->dumpable = 0;
+        if (p->mm) {
+            p->mm->dumpable = 0;
+        }
         p->pdeath_signal = 0;
     }
 }
 
 /**
  * What an exec's credentials change beside the ids, as Linux's exec does:
- * the process is dumpable again unless it runs with ids its caller lacks
- * (`secure`), such an exec clears the parent-death signal, and one that moved
- * the effective ids from `old_euid` and `old_egid` is treated as
- * `cred_moved` treats an identity call.
+ * the new image's address space `mm` is dumpable unless the image runs with
+ * ids its caller lacks (`secure`) or its effective ids moved from `old_euid`
+ * and `old_egid`, either of which clears the parent-death signal too, as
+ * `cred_moved` clears it; a secure exec lowers a soft RLIMIT_STACK above
+ * 8 MiB to 8 MiB. The flag is set before the address space is installed, so
+ * no other process sees the image dumpable while it runs with new ids.
  */
-static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
+static void exec_privileges(struct mm *mm, int secure, uint32_t old_euid, uint32_t old_egid)
 {
-    current_proc->dumpable = secure ? 0u : 1u;
-    if (secure) {
+    int moved = current_proc->euid != old_euid || current_proc->egid != old_egid;
+
+    mm->dumpable = secure || moved ? 0u : 1u;
+    if (secure || moved) {
         current_proc->pdeath_signal = 0;
-        if (current_proc->rlim[RLIM_STACK].cur > RLIM_STACK_DEFAULT) {
-            current_proc->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
-        }
     }
-    cred_moved(current_proc, old_euid, old_egid);
+    if (secure && current_proc->rlim[RLIM_STACK].cur > RLIM_STACK_DEFAULT) {
+        current_proc->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
+    }
 }
 
 /**
@@ -1342,7 +1348,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->egid = s->egid;
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
-    exec_privileges(s->secure, old_euid, old_egid);
+    exec_privileges(s->mm, s->secure, old_euid, old_egid);
     proc_set_comm(current_proc, s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         if (current_proc->sigacts[sig].handler != KSIG_DFL &&
@@ -1639,8 +1645,8 @@ static int32_t fork_nproc(const process_t *parent)
 /**
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
- * setsid or setpgid, the nice value, the persona, the dumpable and
- * no_new_privs flags, the limits, the credentials, and the program name,
+ * setsid or setpgid, the nice value, the persona, the no_new_privs flag, the
+ * limits, the credentials, and the program name,
  * which `execve` sets and a child that never execs would otherwise never
  * have: a daemon that forks itself into the background is such a child, and
  * without it shows in `ps` and in /proc/<pid>/stat with no name.
@@ -1651,7 +1657,6 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->pgid = parent->pgid;
     child->nice = parent->nice;
     child->persona = parent->persona;
-    child->dumpable = parent->dumpable;
     child->no_new_privs = parent->no_new_privs;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->ruid = parent->ruid;
@@ -5620,8 +5625,10 @@ int32_t sys_sched_setaffinity(isr_params_t *params)
  * PR_GET_PDEATHSIG stores it as an int at the second argument.
  *
  * PR_GET_DUMPABLE returns whether the process is dumpable, and
- * PR_SET_DUMPABLE sets it to 0 or 1. Nothing reads it here, since the kernel
- * writes no core files and has no tracing.
+ * PR_SET_DUMPABLE sets it to 0 or 1. The flag is the address space's, so
+ * every thread of the process has the one flag; it decides whether the
+ * process may leave a core file (`terminate_core`), and whether a caller
+ * without effective uid 0 may trace it or open its /proc/PID/mem.
  *
  * PR_SET_NAME sets the program name `/proc/<pid>/stat` and ps show from the
  * string at the second argument, cut to 15 bytes, and PR_GET_NAME stores the
@@ -5653,12 +5660,12 @@ int32_t sys_prctl(isr_params_t *params)
         value = (int32_t)current_proc->pdeath_signal;
         return copy_to_user((void __user *)arg2, &value, sizeof(value)) != 0 ? -EFAULT : 0;
     case PR_GET_DUMPABLE:
-        return (int32_t)current_proc->dumpable;
+        return (int32_t)current_proc->mm->dumpable;
     case PR_SET_DUMPABLE:
         if (arg2 > 1) {
             return -EINVAL;
         }
-        current_proc->dumpable = arg2;
+        current_proc->mm->dumpable = arg2;
         return 0;
     case PR_SET_NAME:
         k_memset(name, 0, sizeof(name));

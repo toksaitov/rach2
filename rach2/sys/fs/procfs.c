@@ -2042,7 +2042,7 @@ static int procfs_open_mem(int pid, int flags)
     if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (current_proc->euid != 0 && (current_proc->ruid != p->ruid || !p->dumpable)) {
+    if (current_proc->euid != 0 && (current_proc->ruid != p->ruid || !p->mm->dumpable)) {
         return -EACCES;
     }
     f = kzalloc(sizeof(*f));
