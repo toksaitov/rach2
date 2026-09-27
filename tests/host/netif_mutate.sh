@@ -78,7 +78,7 @@ changes = {
     "socket-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
                      "        return -EINVAL;\n    }\n    fd = do_socket(",
                      "    fd = do_socket("),
-    "socket-flags": ("        sock_fd_flags(&current_proc->fds.entries[fd], flags);\n", ""),
+    "socket-flags": ("        sock_fd_flags(&current_proc->fds->entries[fd], flags);\n", ""),
     "accept-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
                      "        return -EINVAL;\n    }\n    entry = fd_get(",
                      "    entry = fd_get("),
