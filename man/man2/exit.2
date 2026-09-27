@@ -69,17 +69,22 @@ the robust futexes it holds, as
 .Xr futex 2
 describes.
 The record of a thread that is not the process's first is freed at the
-next return to user mode of any process.
+next return to user mode of any process, unless another process traces
+the thread: its record then stays until its tracer's wait reports the
+end, as
+.Xr ptrace 2
+describes.
 The first thread's record stays, as a zombie no wait reports, until the
 last thread ends.
 .Pp
-Each thread's end releases its descriptor table and working directory.
+Each thread's end gives up its address space, its descriptor table and
+its working directory, and the one that held the last reference to any
+of them releases it then, before the end is published.
 With the last thread the kernel reparents the process's children to init,
 marks it as a zombie, and wakes its parent.
 The scheduler then selects another process.
 If none is ready, the kernel waits for interrupts and checks again.
-The parent reclaims a normal child's remaining mappings, descriptor-table
-storage, process record, and kernel stack when it waits for the child.
+The parent's wait reclaims the child's process record and kernel stack.
 .Pp
 The death of the normal system init is fatal and panics the kernel.
 When the kernel debug shell is the supervisor, a transient init instead
