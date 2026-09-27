@@ -62,19 +62,21 @@ typedef enum {
 
 /*
  * A file a region maps. The record is the first member of its owner's own,
- * which keeps the open file; `refs` counts the regions that map it, and the
- * last one to go calls `release`. A private mapping's `fill` reads the
- * file's page `pgoff` into the frame `phys`, with zeros past the end of the
- * file: 0, or -1 when the read fails. A shared mapping's `share` gives the
- * frame of page `pgoff` itself, with a reference taken for the mapping, or 0
- * when none can be had.
+ * which keeps the open file; `refs` counts the regions that map it and the
+ * faults reading it, and the last one to go puts the file on the list that
+ * `vm_file_reap` empties, calling `release`. A private mapping's `fill`
+ * reads the file's page `pgoff` into the frame `phys`, with zeros past the
+ * end of the file: 0, or -1 when the read fails. A shared mapping's `share`
+ * gives the frame of page `pgoff` itself, with a reference taken for the
+ * mapping, or 0 when none can be had.
  */
 struct vm_file {
     uint32_t refs;
     int (*fill)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
     uintptr_t (*share)(struct vm_file *f, uint32_t pgoff);
     void (*release)(struct vm_file *f);
-    char *path; /* the file's path, which /proc/PID/maps names; or NULL */
+    char *path;           /* the file's path for /proc/PID/maps, or NULL */
+    struct vm_file *dead; /* the next file waiting for `vm_file_reap` */
 };
 
 /* A single virtual memory area: [start, end) page-aligned. A region that
@@ -125,9 +127,20 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
 int vm_insert_file(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type,
                    struct vm_file *file, uint32_t pgoff);
 
-/** Take a reference to `f`, or drop one, releasing it with the last. */
+/** Take a reference to `f`, or drop one. The last one does not release the
+ * file but puts it on the list `vm_file_reap` empties, so that a change to
+ * the regions never sleeps part way through. */
 void vm_file_get(struct vm_file *f);
 void vm_file_put(struct vm_file *f);
+
+/**
+ * Release every file whose last reference went. A release may sleep while
+ * it closes the file, and a region that still named the file would then be
+ * copied by a fork, or its pages reached through the page tables, after the
+ * file is gone. A caller runs this once the regions it changed and their
+ * page tables agree, and never between the two.
+ */
+void vm_file_reap(void);
 
 /** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room,
  * in which case nothing has changed. */

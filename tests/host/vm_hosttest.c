@@ -8,7 +8,8 @@
  * trim, middle split), the array's growth past what it starts with, the
  * merging of neighbours, mprotect's splits and merges and its refusal of a
  * gap, the search for a free range, the bytes a range covers, and the file
- * a region maps: its pages through splits and merges, and its references.
+ * a region maps: its pages through splits and merges, its references, and
+ * its release, which waits for vm_file_reap after the last one goes.
  * Returns the failed-check count (0 == all passed). Run natively under
  * AddressSanitizer/UBSan.
  */
@@ -347,7 +348,30 @@ int main(void)
         vm_free(&m);
         CHECK(file.refs == 1 && released == 0);
         vm_file_put(&file);
+        CHECK(file.refs == 0 && released == 0);
+        vm_file_reap();
         CHECK(released == 1);
+    }
+
+    /* The last region to let go of a file leaves it for vm_file_reap, which
+     * releases each file it finds once: a removal must not sleep in the
+     * release while the regions are half changed. */
+    {
+        vm_space_t m = {0};
+        struct vm_file one = {1, no_fill, NULL, count_release};
+        struct vm_file two = {1, no_fill, NULL, count_release};
+
+        released = 0;
+        CHECK(vm_insert_file(&m, 0x40000, 0x42000, VM_PROT_READ, VM_FILE, &one, 0) == 0);
+        CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_FILE, &two, 0) == 0);
+        vm_file_put(&one);
+        vm_file_put(&two);
+        CHECK(vm_remove(&m, 0x40000, 0x43000) == 0 && m.count == 0 && released == 0);
+        vm_file_reap();
+        CHECK(released == 2 && one.refs == 0 && two.refs == 0);
+        vm_file_reap();
+        CHECK(released == 2);
+        vm_free(&m);
     }
 
     return (fails > 100) ? 100 : fails;

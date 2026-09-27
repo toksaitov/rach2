@@ -42,6 +42,7 @@ void mm_put(struct mm *mm)
     vm_free(&mm->vm);
     kfree(mm->exe);
     kfree(mm);
+    vm_file_reap();
 }
 
 void mm_set_exe(struct mm *mm, const char *path)

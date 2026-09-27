@@ -8,6 +8,9 @@
 #define VM_PAGE_MASK  0xFFFu
 #define VM_PAGE_SHIFT 12
 
+/* The files whose last reference went, waiting for `vm_file_reap`. */
+static struct vm_file *vm_dead;
+
 void vm_file_get(struct vm_file *f)
 {
     if (f) {
@@ -18,6 +21,19 @@ void vm_file_get(struct vm_file *f)
 void vm_file_put(struct vm_file *f)
 {
     if (f && --f->refs == 0) {
+        f->dead = vm_dead;
+        vm_dead = f;
+    }
+}
+
+void vm_file_reap(void)
+{
+    struct vm_file *f;
+
+    while (vm_dead) {
+        f = vm_dead;
+        vm_dead = f->dead;
+        f->dead = NULL;
         f->release(f);
     }
 }

@@ -63,8 +63,9 @@ void mm_set_exe(struct mm *mm, const char *path);
 /** Take a reference to `mm`. */
 void mm_get(struct mm *mm);
 
-/** Drop a reference; the last one frees the address space. Its directory
- * must not be the one in use, which the caller switches away from first. */
+/** Drop a reference; the last one frees the address space and then releases
+ * the files its regions mapped, which may sleep. Its directory must not be
+ * the one in use, which the caller switches away from first. */
 void mm_put(struct mm *mm);
 
 struct process;

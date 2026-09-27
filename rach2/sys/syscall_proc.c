@@ -4748,6 +4748,7 @@ int32_t sys_brk(isr_params_t *params)
     }
 
     vm->brk = req;
+    vm_file_reap();
     return (int32_t)req;
 }
 
@@ -4949,18 +4950,20 @@ int32_t sys_mmap2(isr_params_t *params)
            before the old mapping goes. */
         if (vm_reserve(vm, 2) != 0) {
             vm_file_put(file);
+            vm_file_reap();
             vma_exhausted("mmap");
             return -ENOMEM;
         }
         vm_remove(vm, base, base + len);
         unmap_user_range(_curr_dir, base, base + len);
     }
-    if (vm_insert_file(vm, base, base + len, vm_prot_of(prot), type, file, params->ebp) != 0) {
-        vm_file_put(file);
+    rc = vm_insert_file(vm, base, base + len, vm_prot_of(prot), type, file, params->ebp);
+    vm_file_put(file);
+    vm_file_reap();
+    if (rc != 0) {
         vma_exhausted("mmap");
         return -ENOMEM;
     }
-    vm_file_put(file);
     return (int32_t)base;
 }
 
@@ -4999,6 +5002,7 @@ int32_t sys_munmap(isr_params_t *params)
         return -ENOMEM;
     }
     unmap_user_range(_curr_dir, start, end);
+    vm_file_reap();
     return 0;
 }
 
@@ -5115,6 +5119,7 @@ int32_t sys_mremap(isr_params_t *params)
     uint32_t to = params->edi;
     vm_space_t *vm;
     vma_t *r;
+    int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -5149,7 +5154,9 @@ int32_t sys_mremap(isr_params_t *params)
         vm_remove(vm, to, to + new_len);
         unmap_user_range(_curr_dir, to, to + new_len);
         r = vm_find(vm, addr);
-        return remap_move(vm, r, addr, old_len, to, new_len);
+        rc = remap_move(vm, r, addr, old_len, to, new_len);
+        vm_file_reap();
+        return rc;
     }
     if (new_len <= old_len) {
         if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
@@ -5157,6 +5164,7 @@ int32_t sys_mremap(isr_params_t *params)
             return -ENOMEM;
         }
         unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
+        vm_file_reap();
         return (int32_t)addr;
     }
     if (vm_total(vm) + (new_len - old_len) > current_proc->rlim[RLIM_AS].cur) {
@@ -5178,7 +5186,9 @@ int32_t sys_mremap(isr_params_t *params)
     if (to == 0) {
         return -ENOMEM;
     }
-    return remap_move(vm, r, addr, old_len, to, new_len);
+    rc = remap_move(vm, r, addr, old_len, to, new_len);
+    vm_file_reap();
+    return rc;
 }
 
 #define MADV_DONTNEED 4
