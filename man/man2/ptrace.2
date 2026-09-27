@@ -17,6 +17,9 @@ GDB and strace do.
 is a thread ID.
 The tracer is a process: any thread of it may make the requests and wait
 for the tracees.
+On Linux the tracer is the thread that attached, and a request from
+another thread of its process is
+.Er ESRCH .
 .Pp
 A tracee stops for its tracer in a
 .Em ptrace stop ,
@@ -182,7 +185,9 @@ breakpoint changes this process alone; a page of no mapping, of a
 one, or of a read-only shared one for a write, is
 .Er EIO ,
 and so is every address of a tracee an exec after the attach made not
-dumpable, for a tracer without effective user ID 0, as on Linux.
+dumpable, for a requesting thread that is not privileged, as on Linux,
+whose check reads the credentials of the attach where this one reads
+the requesting thread's own.
 .It Dv PTRACE_PEEKUSER , PTRACE_POKEUSER
 A word of the i386
 .Vt struct user

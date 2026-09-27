@@ -127,9 +127,14 @@ process ID.
 .Nm get_robust_list ,
 number 312, stores the list's head and 12 for the thread
 .Fa tid ,
-0 for the caller; another's needs effective user ID 0, or one of its IDs
-and a thread that is not privileged
-.Pq see Xr capget 2 .
+0 for the caller.
+Another thread's needs a thread of the caller's process, a privileged
+caller
+.Pq see Xr capget 2 ,
+or an effective user ID equal to the thread's real or effective one and
+a thread that is not privileged; Linux asks what a read by
+.Xr ptrace 2
+asks, every ID of the thread and a dumpable process.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;

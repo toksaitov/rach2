@@ -6,11 +6,16 @@
 .Nm capset
 .Nd read or give up the calling thread's capabilities
 .Sh SYNOPSIS
-.In linux/capability.h
-.Ft int
-.Fn capget "cap_user_header_t hdrp" "cap_user_data_t datap"
-.Ft int
-.Fn capset "cap_user_header_t hdrp" "const cap_user_data_t datap"
+.In sys/syscall.h
+.In unistd.h
+.Ft long
+.Fn syscall SYS_capget "void *hdrp" "void *datap"
+.Ft long
+.Fn syscall SYS_capset "void *hdrp" "const void *datap"
+.Pp
+musl has no wrappers for the two calls; GNU libc declares them in
+.In sys/capability.h
+of libcap.
 .Sh DESCRIPTION
 Capabilities are the privileges Linux divides the power of user ID 0
 into.
@@ -56,7 +61,8 @@ it checks the version alone.
 changes the caller's sets.
 With every set empty, the thread gives up its capabilities.
 With the effective and permitted sets whole and the inheritable set
-empty, it keeps what it has.
+empty, it keeps what it has; a version-1 header, whose sets have no
+second word, cannot give them whole, and only gives them up.
 Chromium's zygote gives up the capabilities of each process it forks.
 .Pp
 A fork passes the state on.
@@ -66,18 +72,25 @@ is set
 .Pq see Xr prctl 2 ,
 the thread has a tracer that is not privileged, or another process
 shares its directories; the thread then has none.
+The tracer is judged at the exec, by every live thread of the tracing
+process; Linux judges the credentials the attaching thread had when it
+attached.
 An exec that gives them back leaves the new image not dumpable and
 clears the parent-death signal, as an exec that changes the effective
 user ID does.
-A root thread that gave up its capabilities may not attach to another
-process that has them, nor open its memory, and a thread that has them
-may not make its tracer, with
+A root thread that gave up its capabilities may not attach to a thread
+of another process that has them, nor open its memory through
+.Pa /proc ,
+and a thread that has them may not make its tracer, with
 .Dv PTRACE_TRACEME ,
 a parent process with a live thread that gave them up
 .Pq see Xr ptrace 2 .
-The check is made at the attach and the open, as on Linux: a tracer
-that attached before it gave them up, and a descriptor opened before,
-keep working.
+The target is judged by the thread named, as on Linux: a thread of the
+same process that has them shares the memory reached.
+The check is made at the attach and the open: a descriptor opened before
+keeps working, and a tracer that attached before keeps its tracee, whose
+memory it reads while the tracee is dumpable or the requesting thread
+privileged, where Linux judges the credentials of the attach.
 .Sh RETURN VALUES
 .Rv -std capget capset
 .Sh ERRORS

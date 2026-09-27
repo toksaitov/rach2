@@ -549,7 +549,8 @@ It,
 and the
 .Pa exe
 link need a thread of the process, effective user ID 0, or the process's
-real user ID and a process that is not privileged.
+real user ID and a process that is not privileged; Linux asks more, the
+process's three user and group IDs and a dumpable process.
 .It Pa /proc/PID/mem
 The process's memory, read and written at the descriptor's offset, which
 is the address, as GDB uses it through
@@ -562,13 +563,19 @@ and a write reaches read-only program text, as a tracer's does.
 A transfer that runs into such an address returns the bytes it did
 before it, as on Linux, and moves the offset past them.
 Opening it needs a thread of the process, effective user ID 0, or the
-process's real user ID and a dumpable process that is not privileged.
+process's real user ID and a dumpable process that is not privileged;
+Linux compares the caller's file-system IDs with every user and group ID
+of the process.
 The descriptor reaches the address space the open found: once the
 process runs in another, after an
 .Xr execve 2 ,
-or ends, a read or a write returns 0, as on Linux, so a program the
-process executes later, a set-user-ID one among them, is not reached
-through a descriptor opened before.
+or ends, a read or a write returns 0, so a program the process executes
+later, a set-user-ID one among them, is not reached through a descriptor
+opened before.
+Linux keeps the old address space for the descriptor while another
+process that shares it with
+.Dv CLONE_VM
+runs in it.
 .It Pa /proc/self
 The calling thread's process.
 .Pa /proc
