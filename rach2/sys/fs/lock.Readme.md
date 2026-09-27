@@ -24,7 +24,7 @@ A wait for a POSIX record lock that would close a cycle of waiting processes fai
 
 ## Limits
 
-The locks are a list from the heap, with no fixed count; a lock the heap cannot give fails with `ENOLCK`, before anything changes. Every lock operation walks the whole list, and so does the close of a descriptor whenever any lock exists anywhere (`lock_any`); a close with no lock in the system costs one test.
+The locks are a list from the heap, with no fixed count. A record lock the heap cannot give fails with `ENOLCK` before anything changes, since the records a split needs are had first. A flock lock is taken from the heap last, after a conversion has let go of the description's old lock, so a conversion that fails with `ENOLCK` leaves the description with no lock, as any failed conversion does. Every lock operation walks the whole list, and so does the close of a descriptor whenever any lock exists anywhere (`lock_any`); a close with no lock in the system costs one test.
 
 ## Verification
 
