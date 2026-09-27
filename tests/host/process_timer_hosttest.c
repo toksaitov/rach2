@@ -2,6 +2,7 @@
  * Check the timer tick's part of `proc/process.c`: `proc_wake_sleepers` and
  * `proc_alarm_at`.
  *
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The functions `process.c` exports that the tick does not use are made

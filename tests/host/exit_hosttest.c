@@ -102,8 +102,15 @@ process_t *get_process(uint32_t pid)
     return with_parent ? &parent : 0;
 }
 
-void signal_post(process_t *target, int signo)
+void proc_child_info(const process_t *p, struct k_siginfo *info)
 {
+    (void)p;
+    (void)info;
+}
+
+void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
+{
+    (void)info;
     CHECK(target == &parent && signo == SIGCHLD, "the parent receives sigchld");
     CHECK(closed && cwd_released && adopted, "notification follows all cleanup");
     CHECK(child.state == PROC_ZOMBIE, "notification exposes a completed zombie");

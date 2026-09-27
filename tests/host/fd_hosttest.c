@@ -103,6 +103,23 @@ void signal_post(process_t *p, int signo)
     check(0, "unexpected signal");
 }
 
+void signal_post_info(process_t *p, int signo, const struct k_siginfo *info)
+{
+    (void)info;
+    signal_post(p, signo);
+}
+
+/** No row takes a lock. */
+int lock_any(void)
+{
+    return 0;
+}
+
+void lock_ofd_gone(const struct open_file *ofd)
+{
+    (void)ofd;
+}
+
 /** Stop on any architecture check reached by mistake. */
 void k_panic(const char *message)
 {
