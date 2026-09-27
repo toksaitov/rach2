@@ -9,9 +9,11 @@
 # send judged after its copy as before and a datagram send not at all; and
 # a receive's descriptors in flight not found by the holder count while it
 # installs or closes them, the one being closed counted as its own file's
-# holder, or one it installed still counted. Each compiled fault must fail
-# its named row and end the run with status 1; each restored source is
-# touched, rebuilt and must pass again under ASan and UBSan.
+# holder, or one it installed still counted; and a descriptor in flight
+# whose file moved counted, installed or released by the node it had
+# before. Each compiled fault must fail its named row and end the run with
+# status 1; each restored source is touched, rebuilt and must pass again
+# under ASan and UBSan.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -74,7 +76,7 @@ run_phase()
 echo "unix-proof: logs: $work"
 run_phase fixed 0 'unix-hosttest: result: pass:'
 for fault in accept socketpair rights pipe2 connect bind receive send-stream send-datagram \
-    transit-count transit-release transit-installed; do
+    transit-count transit-release transit-installed moved-count moved-install moved-release; do
     python3 - "$work/sys/ipc" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -129,6 +131,12 @@ faults = {
          '        flight_drop(&e);\n        fds[i].type = FD_TYPE_NONE;\n')]),
     'transit-installed': ('unix.c', [
         ('        in->fds[given++].type = FD_TYPE_NONE;\n', '        given++;\n')]),
+    'moved-count': ('unix.c', [
+        ('        if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {\n',
+         '        if (e->type == FD_TYPE_FILE && e->node == node) {\n')]),
+    'moved-install': ('unix.c', [('        flight_sync(slot);\n', '')]),
+    'moved-release': ('unix.c', [
+        ('    flight_sync(e);\n    fd_release_backing(e);\n', '    fd_release_backing(e);\n')]),
 }
 name, changes = faults[sys.argv[2]]
 path = ipc / name
@@ -153,6 +161,9 @@ PY
         transit-count) message='a file is not freed by the close of its last descriptor while a receive installs' ;;
         transit-release) message="the release of a descriptor in flight that is its file's last holder frees the file" ;;
         transit-installed) message='a descriptor a receive has installed is not counted in flight' ;;
+        moved-count) message='a descriptor in flight is counted by the node its file moved to' ;;
+        moved-install) message='a descriptor received after its file moved is installed with the node' ;;
+        moved-release) message='a descriptor in flight never received releases the node its file moved to' ;;
     esac
     run_phase "$fault-mutated" 1 "unix-hosttest: fail: $message"
     restore

@@ -35,7 +35,9 @@
  * installs that descriptor or closes it with the others it has no room for;
  * the release of a descriptor in flight that is its file's last holder
  * frees the file; and a descriptor the receive has installed is no longer
- * counted in flight. Each row ends with nothing allocated.
+ * counted in flight. A descriptor in flight while its file moves is counted,
+ * installed and released by the node the move gave its description. Each
+ * row ends with nothing allocated.
  */
 #include "ipc/unix.c"
 #include "ipc/pipe.c"
@@ -1177,6 +1179,64 @@ static void transit_row(void)
     end_row("transit after installing");
 }
 
+/** Move the file `nodes[from]` to `nodes[to]`, as a write that grows a
+ * KRFFS file can, and repoint what `vfs_repoint` repoints: the descriptors
+ * in the table and their descriptions, and not the copies in flight. */
+static void move_file(int from, int to)
+{
+    int i;
+
+    for (i = 0; i < SLOTS; i++) {
+        fd_entry_t *e = &slots[i];
+
+        if (e->type == FD_TYPE_FILE && e->node == &nodes[from]) {
+            e->node = &nodes[to];
+        }
+        if (e->ofd && e->ofd->vnode == &nodes[from]) {
+            e->ofd->vnode = &nodes[to];
+        }
+    }
+}
+
+/**
+ * A descriptor in flight while its file moves: the holder count must find
+ * it by the node its description names, so that the close of the file's
+ * last descriptor leaves the file; a receive must install it with that
+ * node; and one that is never received must release that node when its
+ * queue is dropped.
+ */
+static void moved_row(void)
+{
+    int f;
+
+    setup();
+    check(pair(SOCK_STREAM) == 0, "moved: a stream pair");
+    f = open_orphan(0);
+    check(f == 2 && send_rights(0, &f, 1) == 1, "moved: a file's descriptor sent");
+    move_file(0, 1);
+    check(unix_inflight_holds(&nodes[1]) && !unix_inflight_holds(&nodes[0]),
+          "a descriptor in flight is counted by the node its file moved to");
+    check(do_close(2) == 0 && freed[0] == 0 && freed[1] == 0,
+          "moved: the file outlives the close of its last descriptor");
+    check(recv_rights(1, AT(2, 0), CMSG_HDR + 4u) == 1 && fd_at(2)->type == FD_TYPE_FILE &&
+              fd_at(2)->node == &nodes[1],
+          "a descriptor received after its file moved is installed with the node it moved to");
+    do_close(2);
+    check(freed[0] == 0 && freed[1] == 1, "moved: the close of the installed descriptor frees it");
+    end_row("moved and received");
+
+    setup();
+    check(pair(SOCK_STREAM) == 0, "moved: a stream pair");
+    f = open_orphan(0);
+    check(f == 2 && send_rights(0, &f, 1) == 1, "moved: a file's descriptor sent");
+    move_file(0, 1);
+    do_close(2);
+    do_close(1);
+    check(freed[0] == 0 && freed[1] == 1,
+          "a descriptor in flight never received releases the node its file moved to");
+    end_row("moved and dropped");
+}
+
 int main(void)
 {
     unix_init();
@@ -1206,6 +1266,7 @@ int main(void)
     send_row(SOCK_DGRAM, "a datagram send whose copy sleeps while the socket is shut down for "
                          "writing queues nothing and fails with EPIPE");
     transit_row();
+    moved_row();
     dprintf(1, "unix-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
