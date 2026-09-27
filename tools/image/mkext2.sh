@@ -25,9 +25,10 @@
 # the manifest is staged and before the volume is written, for a system that
 # a manifest cannot describe, such as one with links (vendor/gnu's
 # install_root.sh). What it adds is root's, with the mode it has in the
-# directory and the fixed staged instant as its times; a node the manifest
-# staged keeps the owner and mode the manifest gives it, and one the program
-# removed fails the build.
+# directory and the fixed staged instant as its times, so a set-id bit it
+# leaves would be root's, and the set-id guard, which reads the finished
+# volume, refuses it; a node the manifest staged keeps the owner and mode the
+# manifest gives it, and one the program removed fails the build.
 #
 
 set -e
