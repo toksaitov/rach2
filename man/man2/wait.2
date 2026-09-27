@@ -73,6 +73,9 @@ is beside it, and so selects none: every child here reports with
 .Dv SIGCHLD .
 Other option bits are ignored.
 Stop and continue events are reported once and do not reap the child.
+A stop is reported only while the child lives: a child that has ended,
+or whose end has begun, reports no stop, though a stop it did not report
+is still recorded.
 .Pp
 If
 .Fa status

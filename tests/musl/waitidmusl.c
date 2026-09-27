@@ -7,10 +7,11 @@
  * and a continue CLD_CONTINUED with SIGCONT, each with SIGCHLD, the child's
  * pid and its real uid. WNOHANG with nothing to report returns 0 with si_pid
  * 0 and leaves the resource usage alone; WNOWAIT reports an exit and leaves
- * the zombie for `waitpid` to reap. A child is selected by pid, by its
- * process group and by the caller's, and the raw call's fifth argument
- * receives the CPU time of a child that spun. No event, an unknown option or
- * idtype, a pid of 0 and a pidfd are refused, and no child at all is ECHILD.
+ * the zombie for `waitpid` to reap, and a stop it left reports no more once
+ * the child has been killed. A child is selected by pid, by its process
+ * group and by the caller's, and the raw call's fifth argument receives the
+ * CPU time of a child that spun. No event, an unknown option or idtype, a
+ * pid of 0 and a pidfd are refused, and no child at all is ECHILD.
  *
  * Prints "WAITIDMUSL OK" on success and "WAITIDMUSL FAIL (detail)" otherwise.
  */
@@ -105,6 +106,35 @@ static int reports(const siginfo_t *si, pid_t pid, int code, int status)
            si->si_uid == getuid() && si->si_status == status;
 }
 
+/** A stop that WNOWAIT left, then a SIGKILL: once the child has died, a wait
+ * for a stop finds none. */
+static int dead_stop(void)
+{
+    siginfo_t si;
+    pid_t pid = idle_child();
+    int status;
+
+    kill(pid, SIGSTOP);
+    if (waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOWAIT) != 0 ||
+        !reports(&si, pid, CLD_STOPPED, SIGSTOP)) {
+        kill(pid, SIGKILL);
+        return fail("WNOWAIT did not report the stop");
+    }
+    kill(pid, SIGKILL);
+    if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT) != 0 ||
+        !reports(&si, pid, CLD_KILLED, SIGKILL)) {
+        return fail("WNOWAIT did not report the death");
+    }
+    memset(&si, 0xFF, sizeof(si));
+    if (waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOHANG) != 0 || si.si_pid != 0) {
+        return fail("a child that died was reported stopped");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
+        return fail("the killed child was not reaped");
+    }
+    return 0;
+}
+
 /** Exits, deaths, stops and continues, and the fields each fills. */
 static int events(void)
 {
@@ -144,7 +174,7 @@ static int events(void)
     if (waitid(P_PID, (id_t)pid, &si, WEXITED) != 0 || !reports(&si, pid, CLD_KILLED, SIGKILL)) {
         return fail("a death by SIGKILL was not reported");
     }
-    return 0;
+    return dead_stop();
 }
 
 /** WNOWAIT, the selections, the resource usage and the refusals. */

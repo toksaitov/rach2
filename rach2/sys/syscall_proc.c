@@ -2299,22 +2299,24 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
 /**
  * What a wait finds of its child `p`: its end (WEXITED), once every thread
  * has ended, which the report reaps; a stop (WUNTRACED), reported once while
- * the child is stopped; or a continue (WCONTINUED), reported once. A process
- * another process traces is reaped only after its tracer's wait has reported
- * its end and let it go (`wait_tracee`), as Linux has it, so that the tracer
- * learns of the end first. Returns 1 with `out` filled and the event held
- * (`wait_hold`), or 0.
+ * the child is stopped and has not ended or begun to end, since the stop a
+ * SIGKILL ended stays recorded; or a continue (WCONTINUED), reported once.
+ * A process another process traces is reaped only after its tracer's wait
+ * has reported its end and let it go (`wait_tracee`), as Linux has it, so
+ * that the tracer learns of the end first. Returns 1 with `out` filled and
+ * the event held (`wait_hold`), or 0.
  */
 static int wait_child(process_t *p, int options, struct wait_report *out)
 {
     int traced = (p->ptrace & PT_TRACED) && p->tracer != current_proc->tgid;
+    int stopped = p->tg->stop != 0 && p->tg->live != 0 && !p->tg->exiting;
 
     if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED) && !traced) {
         wait_fill_exit(out, p, p->exit_code);
         wait_hold(out, p, WAIT_REAP, options);
         return 1;
     }
-    if ((options & WUNTRACED) && p->tg->stop != 0 && (p->jc_status & 0xff) == 0x7f) {
+    if ((options & WUNTRACED) && stopped && (p->jc_status & 0xff) == 0x7f) {
         wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
                   (int32_t)((p->jc_status >> 8) & 0xff));
     } else if ((options & WCONTINUED) && p->jc_status == 0xffff) {
