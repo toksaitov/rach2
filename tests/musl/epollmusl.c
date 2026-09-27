@@ -15,7 +15,8 @@
  * EEXIST. A child's write wakes a parent the child has seen asleep in an
  * epoll_wait with no timeout. The child stays alive until the parent
  * answers, so that only the write can end the wait, and an alarm bounds
- * it.
+ * it. epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative
+ * seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -30,6 +31,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -255,9 +257,40 @@ static int sets(void)
     return 0;
 }
 
+/* epoll_pwait2 takes 64-bit seconds: a timeout of 2^31 seconds is valid,
+ * and with a descriptor ready the wait returns at once. */
+static int long_timeout(void)
+{
+    struct {
+        long long sec;
+        long long nsec;
+    } ts = {2147483648LL, 0};
+    struct epoll_event ev, out;
+    uint64_t v = 1;
+    int ep = epoll_create1(0);
+    int e = eventfd(0, 0);
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    if (ep < 0 || e < 0 || write(e, &v, sizeof(v)) != 8 ||
+        epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
+        return fail("setup for epoll_pwait2");
+    }
+    if (syscall(441, ep, &out, 1, &ts, NULL, 8) != 1) {
+        return fail("epoll_pwait2 of 2^31 seconds with a descriptor ready");
+    }
+    ts.sec = -1;
+    if (syscall(441, ep, &out, 1, &ts, NULL, 8) != -1 || errno != EINVAL) {
+        return fail("epoll_pwait2 of negative seconds was not EINVAL");
+    }
+    close(e);
+    close(ep);
+    return 0;
+}
+
 int main(void)
 {
-    if (counters() || sets()) {
+    if (counters() || sets() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

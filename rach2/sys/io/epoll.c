@@ -348,6 +348,12 @@ int32_t sys_epoll_pwait(struct isr_params *params)
         epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx, has_deadline, deadline));
 }
 
+/**
+ * epoll_pwait2(2): epoll_pwait with a struct __kernel_timespec timeout, 64-bit
+ * seconds and nanoseconds, or none for a null pointer. The seconds are one
+ * signed 64-bit value, low word first; a negative one is EINVAL, and a
+ * timeout past 2147483647 milliseconds, about 24.8 days, is shortened to it.
+ */
 int32_t sys_epoll_pwait2(struct isr_params *params)
 {
     int has_deadline = 0;
@@ -355,17 +361,22 @@ int32_t sys_epoll_pwait2(struct isr_params *params)
     int32_t rc;
 
     if (params->esi) {
-        int32_t ts[4]; /* struct __kernel_timespec: 64-bit seconds and nanoseconds */
+        uint32_t ts[4]; /* struct __kernel_timespec: 64-bit seconds and nanoseconds */
+        int64_t sec;
         uint64_t ms;
 
         if (copy_from_user(ts, (const void __user *)params->esi, sizeof(ts)) != 0) {
             return -EFAULT;
         }
-        if (ts[1] < 0 || ts[0] < 0 || ts[3] != 0 || ts[2] < 0 || ts[2] >= 1000000000) {
+        sec = (int64_t)(((uint64_t)ts[1] << 32) | ts[0]);
+        if (sec < 0 || ts[3] != 0 || ts[2] >= 1000000000u) {
             return -EINVAL;
         }
-        ms = (uint64_t)(uint32_t)ts[0] * 1000u + ((uint32_t)ts[2] + 999999u) / 1000000u;
-        if (ts[1] != 0 || ms > 0x7FFFFFFFu) {
+        ms = 0x7FFFFFFFu;
+        if (sec < 0x7FFFFFFF / 1000) {
+            ms = (uint64_t)sec * 1000u + (ts[2] + 999999u) / 1000000u;
+        }
+        if (ms > 0x7FFFFFFFu) {
             ms = 0x7FFFFFFFu;
         }
         deadline = poll_ms_deadline((int)ms, &has_deadline);

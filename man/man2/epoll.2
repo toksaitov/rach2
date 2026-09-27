@@ -93,7 +93,10 @@ does.
 .Fn epoll_pwait2 ,
 number 441, takes its timeout as a
 .Vt struct timespec
-of 64-bit seconds and nanoseconds.
+of 64-bit seconds and nanoseconds; negative seconds are
+.Er EINVAL ,
+and a timeout longer than 2147483647 milliseconds, about 24.8 days, is
+shortened to that.
 A timeout is rounded up to whole 10 ms ticks.
 .Pp
 A registration belongs to the descriptor number and the open file it
@@ -137,10 +140,13 @@ or
 .Fa flags
 is not one of those above;
 .Fa maxevents
-is not positive; or
+is not positive;
 .Dv EPOLL_CTL_MOD
 touched
-.Dv EPOLLEXCLUSIVE .
+.Dv EPOLLEXCLUSIVE ;
+or the timeout of
+.Fn epoll_pwait2
+has negative seconds, or nanoseconds outside 0 to 999999999.
 .It Er ENOENT
 .Dv EPOLL_CTL_MOD
 or
