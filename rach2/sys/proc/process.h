@@ -532,4 +532,8 @@ void process_count_fork(void);
  */
 int kstack_overrun_pid(uint32_t addr);
 
+/** Test switch `rach2.stackoverrun`: run a thread down its kernel stack
+ * until the guard below it faults. Defined in syscall_proc.c. */
+void kstack_overrun_test(void);
+
 #endif

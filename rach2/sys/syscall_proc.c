@@ -150,6 +150,69 @@ int kstack_overrun_pid(uint32_t addr)
     return addr - guard < PAGE_SIZE ? (int)current_proc->pid : -1;
 }
 
+/* The depth at which the overrun test's descent would turn back; a stack of
+ * KERNEL_STACK_SIZE holds fewer than sixteen of its frames. */
+#define KSTACK_DESCENT_MAX 4096u
+
+/* One frame of the overrun test's descent: a quarter page of locals, the
+ * lowest byte written, so every page the descent reaches is touched. */
+static uint32_t kstack_descend(uint32_t depth)
+{
+    volatile uint8_t frame[1024];
+
+    frame[0] = (uint8_t)depth;
+    if (depth >= KSTACK_DESCENT_MAX) {
+        return frame[0];
+    }
+    return kstack_descend(depth + 1) + frame[0];
+}
+
+/* The overrun test's descent, on the stack of the running thread. */
+static void kstack_overrun_run(void)
+{
+    klog(KLOG_INFO, "kstack", "overrun: pid %d descends its stack at 0x%x", (int)current_proc->pid,
+         current_proc->kernel_stack - KERNEL_STACK_SIZE);
+    kstack_descend(0);
+    k_panic("kstack: overrun: the descent came back");
+}
+
+/**
+ * Test switch: run a thread down its kernel stack until the guard below it
+ * faults. `rach2.stackoverrun=fork` on the boot line runs a thread on a
+ * stack `kstack_alloc` gives, as a fork's child has one, and
+ * `rach2.stackoverrun=boot` descends the boot stack as process 0. The fault
+ * is a double fault, since the page fault's own frame cannot be pushed, and
+ * its handler reports the thread and stops the machine. Called once, before
+ * the first program; without the option it returns at once.
+ */
+void kstack_overrun_test(void)
+{
+    process_t *from = current_proc;
+    process_t *thread;
+    uintptr_t base;
+
+    if (!from) {
+        return;
+    }
+    if (kcmdline_has("rach2.stackoverrun=boot")) {
+        kstack_overrun_run();
+    }
+    if (!kcmdline_has("rach2.stackoverrun=fork")) {
+        return;
+    }
+    thread = alloc_process();
+    base = kstack_alloc();
+    if (!thread || !base) {
+        k_panic("kstack: overrun: no record or stack for the thread");
+    }
+    thread->kernel_stack = base + KERNEL_STACK_SIZE;
+    thread->cr3 = 0;
+    thread->state = PROC_RUNNING;
+    setup_process_stack(thread, kstack_overrun_run);
+    current_proc = thread;
+    switch_context(from, thread);
+}
+
 /**
  * Give back the record `p` of a thread or a process that has ended: its
  * address space reference, its kernel stack and the record. The release of

@@ -3673,6 +3673,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     init_sched();
     klog(KLOG_DEBUG, "boot", "scheduler: ready");
 
+    kstack_overrun_test();
+
     if (kcmdline_has("rach2.noaudio")) {
         klog(KLOG_INFO, "audio", "skipped: rach2.noaudio");
     } else {
