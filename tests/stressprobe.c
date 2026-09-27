@@ -8,7 +8,9 @@
  * the whole run is a continuous storm of eviction and writeback; that it
  * round-trips exactly is the proof that a file system bigger than memory works
  * through the cache. Prints "STRESSPROBE OK n=<files> bytes=<total>" and exits
- * 0, or exits 1 on any mismatch. Each file stays well under the cache budget.
+ * 0, or prints "STRESSPROBE FAIL:" with the step, the file and the call's
+ * result or the offset that differs, and exits 1. Each file stays well under
+ * the cache budget.
  *
  * Freestanding; direct int 0x80.
  */
@@ -102,30 +104,52 @@ static unsigned char pattern(unsigned file, size_t off)
     return (unsigned char)((off * 31u + 7u) ^ (file * 131u) ^ (off >> 11));
 }
 
+/** Write all `n` bytes: 1, or the result of the write that failed, a
+ * negative errno or 0 for one that moved nothing. */
 static int write_all(int fd, const unsigned char *p, size_t n)
 {
     size_t off = 0;
     while (off < n) {
         int w = syscall3(SYS_WRITE, fd, (int)(size_t)(p + off), (int)(n - off));
         if (w <= 0) {
-            return -1;
+            return w;
         }
         off += (size_t)w;
     }
-    return 0;
+    return 1;
 }
 
+/** Read all `n` bytes: 1, or the result of the read that failed. */
 static int read_all(int fd, unsigned char *p, size_t n)
 {
     size_t off = 0;
     while (off < n) {
         int r = syscall3(SYS_READ, fd, (int)(size_t)(p + off), (int)(n - off));
         if (r <= 0) {
-            return -1;
+            return r;
         }
         off += (size_t)r;
     }
-    return 0;
+    return 1;
+}
+
+/** Report that the step `what` of file `file` failed with `rc`, a call's
+ * result or the offset of a byte that differs, and end the probe. */
+static void fail_at(const char *what, unsigned file, int rc)
+{
+    out("STRESSPROBE FAIL: ");
+    out(what);
+    out(" of file ");
+    out_num(file);
+    out(": ");
+    if (rc < 0) {
+        out("-");
+        out_num((unsigned long)-rc);
+    } else {
+        out_num((unsigned long)rc);
+    }
+    out("\n");
+    sys_exit(1);
 }
 
 void _start(void)
@@ -133,7 +157,7 @@ void _start(void)
     char path[8];
     unsigned f;
     size_t i;
-    int fd;
+    int fd, rc;
 
     for (f = 0; f < NFILES; ++f) {
         path_of(path, f);
@@ -141,9 +165,16 @@ void _start(void)
             buf[i] = pattern(f, i);
         }
         fd = syscall3(SYS_OPEN, (int)(size_t)path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0 || write_all(fd, buf, FILE_SIZE) != 0 || syscall1(SYS_FSYNC, fd) != 0) {
-            out("STRESSPROBE FAIL: write\n");
-            sys_exit(1);
+        if (fd < 0) {
+            fail_at("the open to write", f, fd);
+        }
+        rc = write_all(fd, buf, FILE_SIZE);
+        if (rc != 1) {
+            fail_at("a write", f, rc);
+        }
+        rc = syscall1(SYS_FSYNC, fd);
+        if (rc != 0) {
+            fail_at("the fsync", f, rc);
         }
         syscall1(SYS_CLOSE, fd);
     }
@@ -154,15 +185,17 @@ void _start(void)
             buf[i] = 0;
         }
         fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
-        if (fd < 0 || read_all(fd, buf, FILE_SIZE) != 0) {
-            out("STRESSPROBE FAIL: read\n");
-            sys_exit(1);
+        if (fd < 0) {
+            fail_at("the open to read", f, fd);
+        }
+        rc = read_all(fd, buf, FILE_SIZE);
+        if (rc != 1) {
+            fail_at("a read", f, rc);
         }
         syscall1(SYS_CLOSE, fd);
         for (i = 0; i < FILE_SIZE; ++i) {
             if (buf[i] != pattern(f, i)) {
-                out("STRESSPROBE FAIL: data mismatch\n");
-                sys_exit(1);
+                fail_at("the bytes", f, (int)i);
             }
         }
         syscall3(SYS_UNLINK, (int)(size_t)path, 0, 0);
