@@ -55,6 +55,11 @@ of eight bytes returns the number of expirations since the last read or
 setting, and waits while there are none, or fails with
 .Er EAGAIN
 for a nonblocking descriptor.
+The count is taken before it is copied to the caller, as in Linux: an
+expiration during the copy is kept for the next read, and a read whose
+buffer cannot be written fails with
+.Er EFAULT
+and loses the count it took.
 .Xr poll 2
 and
 .Xr epoll 2

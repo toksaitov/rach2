@@ -13,6 +13,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 
 #define CLOCK_REALTIME       0
@@ -60,19 +61,6 @@ struct setting {
 };
 
 static struct timerfd *armed;
-
-static uint32_t irq_save(void)
-{
-    uint32_t flags;
-
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-
-static void irq_restore(uint32_t flags)
-{
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
-}
 
 static void disarm(struct timerfd *t)
 {
@@ -135,6 +123,15 @@ static int readable(void *arg)
     return ((struct timerfd *)arg)->count != 0;
 }
 
+/**
+ * read(2) of a timerfd: the expirations since the last read, which it takes.
+ *
+ * The count is read and cleared with interrupts off, since the timer
+ * interrupt adds to it (`timerfd_tick`), and before the copy to the caller,
+ * which can sleep in a page fault: an expiration that comes meanwhile is
+ * kept for the next read, and a second reader finds none of the ones this
+ * read took. A copy that fails loses the count, as in Linux.
+ */
 static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct timerfd *t = (struct timerfd *)e->priv;
@@ -143,7 +140,15 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (count < sizeof(n)) {
         return -EINVAL;
     }
-    while (t->count == 0) {
+    for (;;) {
+        uint32_t irq = kirq_save();
+
+        n = t->count;
+        t->count = 0;
+        kirq_restore(irq);
+        if (n != 0) {
+            break;
+        }
         if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
             return -EAGAIN;
         }
@@ -151,11 +156,9 @@ static int32_t timerfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
             return -EINTR;
         }
     }
-    n = t->count;
     if (copy_to_user((void __user *)buf, &n, sizeof(n)) != 0) {
         return -EFAULT;
     }
-    t->count = 0;
     return (int32_t)sizeof(n);
 }
 
@@ -172,12 +175,12 @@ static short timerfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 static void timerfd_close(fd_entry_t *e)
 {
     struct timerfd *t = (struct timerfd *)e->priv;
-    uint32_t flags = irq_save();
+    uint32_t flags = kirq_save();
 
     if (t->armed) {
         disarm(t);
     }
-    irq_restore(flags);
+    kirq_restore(flags);
     kfree(t);
     e->priv = NULL;
 }
@@ -272,7 +275,7 @@ static int32_t arm(struct timerfd *t, int flags, const struct setting *s)
         }
         wait = sec < 0 ? 0u : ticks_of(sec, nsec);
     }
-    irq = irq_save();
+    irq = kirq_save();
     if (t->armed) {
         disarm(t);
     }
@@ -284,7 +287,7 @@ static int32_t arm(struct timerfd *t, int flags, const struct setting *s)
         t->next = armed;
         armed = t;
     }
-    irq_restore(irq);
+    kirq_restore(irq);
     return 0;
 }
 
