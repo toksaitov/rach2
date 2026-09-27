@@ -771,6 +771,46 @@ static int ptrace_traceme(void)
     return 0;
 }
 
+/**
+ * The thread `pid` when the caller's process traces it and it is in a
+ * ptrace stop, which the requests other than the attaching ones, KILL and
+ * INTERRUPT need; NULL otherwise. A request finds it again after a copy
+ * from the caller's memory, which may sleep for a page: meanwhile another
+ * thread of the tracer may resume the thread, and reap it when it ends, or
+ * SIGKILL end it, and its record may be gone.
+ */
+static process_t *ptrace_tracee(uint32_t pid)
+{
+    process_t *t = get_process(pid);
+
+    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE || !(t->ptrace & PT_TRACED) ||
+        t->tracer != current_proc->tgid || t->ptrace_status == 0) {
+        return NULL;
+    }
+    return t;
+}
+
+/**
+ * PTRACE_PEEKTEXT and friends: read the word at `addr` of the stopped
+ * thread `t`'s memory into `*word`, or with `write` write it there. The
+ * address space has a reference of the caller's while it is used, since
+ * bringing a page in may sleep, and the thread may end and drop its own
+ * meanwhile; nothing of `t` is read after the access.
+ */
+static int32_t tracee_memory(process_t *t, uint32_t addr, uint32_t *word, int write)
+{
+    struct mm *mm = t->mm;
+    int32_t rc;
+
+    if (!mm) {
+        return -EIO;
+    }
+    mm_get(mm);
+    rc = paging_access(mm, addr, word, sizeof(*word), write);
+    mm_put(mm);
+    return rc;
+}
+
 /** The 624-byte form of `t`'s floating-point state that `fpu_to_linux`
  * writes: the x87 part in the `fnsave` layout, then the `fxsave` image at
  * byte 112 unless the magic word at byte 110 is 0xFFFF. */
@@ -779,11 +819,12 @@ static void fp_linux(const process_t *t, uint8_t *buf)
     fpu_to_linux(t->fpu, buf);
 }
 
-/** PTRACE_GETFPREGS and friends: copy the floating-point state of `t` to or
- * from the user at `data`, as the 108-byte `user_i387_struct` or, with
- * `fx`, the 512-byte `fxsave` image. -EIO for the image on a processor
- * without FXSR, -EINVAL for one `fxrstor` would fault on. */
-static int fp_access(process_t *t, uint32_t data, int fx, int set)
+/** PTRACE_GETFPREGS and friends: copy the floating-point state of `t`, the
+ * thread `pid`, to or from the user at `data`, as the 108-byte
+ * `user_i387_struct` or, with `fx`, the 512-byte `fxsave` image. -EIO for
+ * the image on a processor without FXSR, -EINVAL for one `fxrstor` would
+ * fault on, -ESRCH for a thread that left its stop during the copy. */
+static int fp_access(uint32_t pid, process_t *t, uint32_t data, int fx, int set)
 {
     uint8_t buf[FPU_LINUX_SIZE];
     uint8_t area[FPU_STATE_SIZE + 16];
@@ -798,11 +839,16 @@ static int fp_access(process_t *t, uint32_t data, int fx, int set)
     if (!set) {
         return copy_to_user((void __user *)data, buf + off, len) == 0 ? 0 : -EFAULT;
     }
-    if (copy_from_user(buf + off, (const void __user *)data, len) != 0) {
+    if (copy_from_user(aligned, (const void __user *)data, len) != 0) {
         return -EFAULT;
     }
+    t = ptrace_tracee(pid);
+    if (!t) {
+        return -ESRCH;
+    }
+    fp_linux(t, buf);
+    k_memcpy(buf + off, aligned, len);
     if (fx) {
-        k_memcpy(aligned, buf + off, FPU_STATE_SIZE);
         fpu_to_linux(aligned, buf);
     }
     if (fpu_from_linux(buf, aligned) != 0) {
@@ -812,9 +858,9 @@ static int fp_access(process_t *t, uint32_t data, int fx, int set)
     return 0;
 }
 
-/** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of `t`'s stop, as
- * the 128-byte i386 `siginfo_t`. */
-static int siginfo_access(process_t *t, uint32_t data, int set)
+/** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the stop of `t`,
+ * the thread `pid`, as the 128-byte i386 `siginfo_t`. */
+static int siginfo_access(uint32_t pid, process_t *t, uint32_t data, int set)
 {
     uint8_t buf[128];
     int32_t code;
@@ -825,6 +871,10 @@ static int siginfo_access(process_t *t, uint32_t data, int set)
     }
     if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
         return -EFAULT;
+    }
+    t = ptrace_tracee(pid);
+    if (!t) {
+        return -ESRCH;
     }
     k_memcpy(&code, buf + 8, 4);
     k_memset(&t->ptrace_info, 0, sizeof(t->ptrace_info));
@@ -837,8 +887,9 @@ static int siginfo_access(process_t *t, uint32_t data, int set)
 }
 
 /** PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA: the TLS entry `idx` of
- * `t`, whose one entry is GDT_TLS_ENTRY, as a `user_desc` at `data`. */
-static int tls_access(process_t *t, uint32_t idx, uint32_t data, int set)
+ * `t`, the thread `pid`, whose one entry is GDT_TLS_ENTRY, as a `user_desc`
+ * at `data`. */
+static int tls_access(uint32_t pid, process_t *t, uint32_t idx, uint32_t data, int set)
 {
     user_desc_t desc;
     uint32_t base;
@@ -859,12 +910,23 @@ static int tls_access(process_t *t, uint32_t idx, uint32_t data, int set)
     if (tls_resolve_base(&desc, &base) != 0) {
         return -EINVAL;
     }
+    t = ptrace_tracee(pid);
+    if (!t) {
+        return -ESRCH;
+    }
     t->tls_base = base;
     return 0;
 }
 
-/** The requests that need `t` stopped for the caller, as Linux has them. */
-static int32_t ptrace_stopped(process_t *t, uint32_t request, uint32_t addr, uint32_t data)
+/**
+ * The requests that need `t`, the thread `pid`, stopped for the caller, as
+ * Linux has them. No request uses `t` after a copy that may sleep: one that
+ * copies from the caller's memory finds the thread again after the copy
+ * (`ptrace_tracee`), one that copies out takes what it copies first, and
+ * the memory requests hold the address space themselves (`tracee_memory`).
+ */
+static int32_t ptrace_stopped(process_t *t, uint32_t pid, uint32_t request, uint32_t addr,
+                              uint32_t data)
 {
     uint32_t word;
     uint32_t r[R_COUNT];
@@ -874,14 +936,14 @@ static int32_t ptrace_stopped(process_t *t, uint32_t request, uint32_t addr, uin
     switch (request) {
     case PTRACE_PEEKTEXT:
     case PTRACE_PEEKDATA:
-        rc = paging_access(t->mm, addr, &word, sizeof(word), 0);
+        rc = tracee_memory(t, addr, &word, 0);
         if (rc == 0 && copy_to_user((void __user *)data, &word, sizeof(word)) != 0) {
             rc = -EFAULT;
         }
         return rc;
     case PTRACE_POKETEXT:
     case PTRACE_POKEDATA:
-        return paging_access(t->mm, addr, &data, sizeof(data), 1);
+        return tracee_memory(t, addr, &data, 1);
     case PTRACE_PEEKUSER:
         rc = user_peek(t, addr, &word);
         if (rc == 0 && copy_to_user((void __user *)data, &word, sizeof(word)) != 0) {
@@ -897,6 +959,10 @@ static int32_t ptrace_stopped(process_t *t, uint32_t request, uint32_t addr, uin
         if (copy_from_user(r, (const void __user *)data, sizeof(r)) != 0) {
             return -EFAULT;
         }
+        t = ptrace_tracee(pid);
+        if (!t) {
+            return -ESRCH;
+        }
         for (i = 0; i < R_COUNT; i++) {
             rc = regs_set(t, i, r[i]);
             if (rc != 0) {
@@ -906,10 +972,10 @@ static int32_t ptrace_stopped(process_t *t, uint32_t request, uint32_t addr, uin
         return 0;
     case PTRACE_GETFPREGS:
     case PTRACE_SETFPREGS:
-        return fp_access(t, data, 0, request == PTRACE_SETFPREGS);
+        return fp_access(pid, t, data, 0, request == PTRACE_SETFPREGS);
     case PTRACE_GETFPXREGS:
     case PTRACE_SETFPXREGS:
-        return fp_access(t, data, 1, request == PTRACE_SETFPXREGS);
+        return fp_access(pid, t, data, 1, request == PTRACE_SETFPXREGS);
     case PTRACE_CONT:
         return ptrace_resume(t, data, 0, 0);
     case PTRACE_SYSCALL:
@@ -931,13 +997,14 @@ static int32_t ptrace_stopped(process_t *t, uint32_t request, uint32_t addr, uin
         t->ptrace_opts = data;
         return 0;
     case PTRACE_GETEVENTMSG:
-        return copy_to_user((void __user *)data, &t->ptrace_msg, 4) == 0 ? 0 : -EFAULT;
+        word = t->ptrace_msg;
+        return copy_to_user((void __user *)data, &word, sizeof(word)) == 0 ? 0 : -EFAULT;
     case PTRACE_GETSIGINFO:
     case PTRACE_SETSIGINFO:
-        return siginfo_access(t, data, request == PTRACE_SETSIGINFO);
+        return siginfo_access(pid, t, data, request == PTRACE_SETSIGINFO);
     case PTRACE_GET_THREAD_AREA:
     case PTRACE_SET_THREAD_AREA:
-        return tls_access(t, addr, data, request == PTRACE_SET_THREAD_AREA);
+        return tls_access(pid, t, addr, data, request == PTRACE_SET_THREAD_AREA);
     default:
         return -EIO;
     }
@@ -989,5 +1056,5 @@ int32_t sys_ptrace(isr_params_t *params)
     if (t->ptrace_status == 0) {
         return -ESRCH;
     }
-    return ptrace_stopped(t, request, addr, data);
+    return ptrace_stopped(t, params->ecx, request, addr, data);
 }

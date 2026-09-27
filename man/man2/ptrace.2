@@ -339,7 +339,9 @@ and the caller's effective user ID is not 0, or the caller is already
 traced.
 .It Bq Er ESRCH
 No such thread, one the caller's process does not trace, or one not in a
-ptrace stop.
+ptrace stop, which for a request that reads from
+.Fa data
+is judged again after the read.
 .El
 .Sh SEE ALSO
 .Xr execve 2 ,
