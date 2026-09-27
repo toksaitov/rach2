@@ -667,15 +667,15 @@ static int datagram_peers(void)
     return 0;
 }
 
-/* A datagram send waiting for room in a full queue fails with EPIPE when
- * the receiver shuts down reading; SO_SNDTIMEO bounds the wait of a kernel
- * that does not end it. */
+/* A send waiting for room in a full datagram queue fails with EPIPE when
+ * the receiver shuts down reading. The send has no time limit of its own,
+ * only a 10 s alarm, and the shutdown comes once it is seen asleep; a send
+ * the alarm wakes finds the shutdown and fails with EPIPE too, so the child
+ * fails when the alarm fired, and only the shutdown's wake passes the row. */
 static int full_receiver_shut(void)
 {
-    struct timeval limit = {5, 0};
-    struct timespec pause = {0, 100000000};
     int sv[2];
-    int status;
+    int status = 0, tries;
     pid_t pid;
 
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
@@ -688,11 +688,26 @@ static int full_receiver_shut(void)
     }
     pid = fork();
     if (pid == 0) {
-        setsockopt(sv[0], SOL_SOCKET, SO_SNDTIMEO, &limit, sizeof(limit));
-        _exit(send(sv[0], "w", 1, 0) == -1 && errno == EPIPE ? 0 : 1);
+        struct sigaction sa;
+
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = on_alarm;
+        sigaction(SIGALRM, &sa, NULL);
+        alarms = 0;
+        alarm(10);
+        _exit(send(sv[0], "w", 1, 0) == -1 && errno == EPIPE && !alarms ? 0 : 1);
     }
-    nanosleep(&pause, NULL);
-    if (shutdown(sv[1], SHUT_RD) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+    for (tries = 0; pid > 0 && tries < 300 && !sleeping(pid); tries++) {
+        usleep(10000);
+    }
+    if (pid < 0 || tries == 300) {
+        if (pid > 0) {
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+        }
+        return fail("the send waiting for room was never seen asleep");
+    }
+    if (shutdown(sv[1], SHUT_RD) != 0 || reap_running(pid, &status) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
         return fail("a send waiting on a receiver shut down for reading was not EPIPE");
     }
