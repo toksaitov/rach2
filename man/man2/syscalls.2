@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 151 calls.
+The kernel registers the following 156 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -87,8 +87,10 @@ The kernel registers the following 151 calls.
 .It 116 Ta Xr sysinfo 2
 .It 118 Ta Xr fsync 2
 .It 119 Ta Xr sigreturn 2
+.It 120 Ta Xr clone 2
 .It 122 Ta Xr uname 2
 .It 125 Ta Xr mprotect 2
+.It 126 Ta Xr sigprocmask 2
 .It 132 Ta Xr getpgid 2
 .It 133 Ta Xr fchdir 2
 .It 140 Ta Xr llseek 2
@@ -111,11 +113,13 @@ The kernel registers the following 151 calls.
 .It 173 Ta Xr rt_sigreturn 2
 .It 174 Ta Xr rt_sigaction 2
 .It 175 Ta Xr rt_sigprocmask 2
+.It 176 Ta Xr rt_sigpending 2
 .It 179 Ta Xr rt_sigsuspend 2
 .It 180 Ta Xr pread64 2
 .It 181 Ta Xr pwrite64 2
 .It 182 Ta Xr chown 2
 .It 183 Ta Xr getcwd 2
+.It 186 Ta Xr sigaltstack 2
 .It 190 Ta Xr vfork 2
 .It 191 Ta Xr ugetrlimit 2
 .It 192 Ta Xr mmap2 2
@@ -145,6 +149,7 @@ The kernel registers the following 151 calls.
 .It 221 Ta Xr fcntl64 2
 .It 224 Ta Xr gettid 2
 .It 238 Ta Xr tkill 2
+.It 240 Ta Xr futex 2
 .It 241 Ta Xr sched_setaffinity 2
 .It 242 Ta Xr sched_getaffinity 2
 .It 243 Ta Xr set_thread_area 2
