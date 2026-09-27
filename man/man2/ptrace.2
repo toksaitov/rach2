@@ -247,9 +247,10 @@ needs the tracee in a ptrace stop.
 DR0 to DR3 hold breakpoint addresses, DR6 the status of the last debug
 exception, and DR7 the control bits, which the kernel loads when the
 tracee runs.
-DR7 may enable a breakpoint only on a user address aligned to its length
-of 1, 2 or 4 bytes, an execute breakpoint only of length 1, and neither an
-I/O breakpoint nor the general-detect bit; a value against these is
+DR7 may enable a breakpoint only on an address aligned to its length of
+1, 2 or 4 bytes whose bytes are all user addresses, from 0x02000000 to
+0xbfffffff, an execute breakpoint only of length 1, and neither an I/O
+breakpoint nor the general-detect bit; a value against these is
 .Er EINVAL .
 A breakpoint that fires sends
 .Dv SIGTRAP
@@ -270,8 +271,9 @@ reads its registers and floating-point state, steps an instruction, stops
 it at a breakpoint in its read-only text and moves it back, stops it at
 the entry and exit of a system call and after an
 .Xr execve 2 ,
-sets and reads a debug register, and attaches to and detaches from a
-running process.
+sets and reads a debug register, has a breakpoint on a kernel address
+refused and one ending at the last user address taken, and attaches to
+and detaches from a running process.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT

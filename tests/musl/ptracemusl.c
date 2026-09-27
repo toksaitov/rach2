@@ -14,14 +14,16 @@
  * signal with PTRACE_O_TRACESYSGOOD. PTRACE_O_TRACEEXEC stops the child
  * after an execve with the exec event, which waitid reports in si_status
  * above the signal. A debug register set through POKEUSER reads back
- * through PEEKUSER. PTRACE_ATTACH stops a running process, which runs on
- * after PTRACE_DETACH. A signal sent to a process
- * whose first thread its tracer holds stopped wakes the other thread, asleep
- * in pause, which takes it. The usage a tracer's wait4 reports for the end
- * of a traced thread that is not the first has the time of the children its
- * process reaped. A process another process traces, which ends, is reported
- * to its tracer before its parent may reap it, and then to the parent; the
- * tracer's next wait finds nothing left to wait for.
+ * through PEEKUSER, and DR7 enables a breakpoint on a user address, the
+ * last of which a breakpoint may end at, and not on a kernel address.
+ * PTRACE_ATTACH stops a running process, which runs on after PTRACE_DETACH.
+ * A signal sent to a process whose first thread its tracer holds stopped
+ * wakes the other thread, asleep in pause, which takes it. The usage a
+ * tracer's wait4 reports for the end of a traced thread that is not the
+ * first has the time of the children its process reaped. A process another
+ * process traces, which ends, is reported to its tracer before its parent
+ * may reap it, and then to the parent; the tracer's next wait finds nothing
+ * left to wait for.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -151,6 +153,31 @@ static int exec_event(pid_t pid)
     return 0;
 }
 
+/* Set debug register `n` of the stopped `pid` to `v`; the raw result. */
+static long debug_set(pid_t pid, int n, unsigned long v)
+{
+    return ptrace(PTRACE_POKEUSER, pid, (void *)(offsetof(struct user, u_debugreg) + 4 * n),
+                  (void *)v);
+}
+
+/*
+ * DR7 enables a breakpoint only on user addresses: an execute breakpoint
+ * at the kernel's 0x1000 in DR0 is refused, and a 4-byte write breakpoint
+ * whose last byte is the last user address, 0xbfffffff, is taken; DR7 is
+ * then cleared again.
+ */
+static int debug_bounds(pid_t pid)
+{
+    if (debug_set(pid, 0, 0x1000) != 0 || debug_set(pid, 7, 0x1) != -1 || errno != EINVAL) {
+        return fail("an execute breakpoint on a kernel address was not refused");
+    }
+    if (debug_set(pid, 0, 0xbffffffcUL) != 0 ||
+        debug_set(pid, 7, 0x1 | 0x1UL << 16 | 0x3UL << 18) != 0 || debug_set(pid, 7, 0) != 0) {
+        return fail("a breakpoint ending at the last user address was refused");
+    }
+    return 0;
+}
+
 static int syscalls_and_exec(void)
 {
     struct user_regs_struct regs;
@@ -176,6 +203,9 @@ static int syscalls_and_exec(void)
         ptrace(PTRACE_PEEKUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), NULL) !=
             0x1000) {
         return fail("a debug register through POKEUSER and PEEKUSER");
+    }
+    if (debug_bounds(pid) != 0) {
+        return 1;
     }
     for (;;) {
         if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||

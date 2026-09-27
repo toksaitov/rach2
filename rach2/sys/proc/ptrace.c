@@ -462,9 +462,12 @@ int32_t ptrace_debug_status(void)
 /**
  * Whether the DR7 value `v` sets what a tracer may set with the addresses
  * `t` has in DR0 to DR3: no general-detect bit, and for each breakpoint it
- * enables a user address aligned to its length, a length of 1, 2 or 4 bytes,
- * and an execute breakpoint of length 1; an I/O breakpoint, which needs
- * CR4.DE, is refused.
+ * enables an address aligned to its length whose bytes are all user
+ * addresses, from USER_ADDR_MIN to the last below USER_ADDR_MAX, a length of
+ * 1, 2 or 4 bytes, and an execute breakpoint of length 1; an I/O breakpoint,
+ * which needs CR4.DE, is refused. The scheduler loads what this accepts into
+ * the processor, where a breakpoint on a kernel address would fire in the
+ * kernel's own code, an execute breakpoint there at every return to it.
  */
 static int dr7_valid(const process_t *t, uint32_t v)
 {
@@ -482,7 +485,8 @@ static int dr7_valid(const process_t *t, uint32_t v)
             continue;
         }
         if (rw == 2u || len == 2u || (rw == 0u && len != 0u) ||
-            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] >= USER_ADDR_MAX - bytes) {
+            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] < USER_ADDR_MIN ||
+            t->debugreg[i] > USER_ADDR_MAX - bytes) {
             return 0;
         }
     }
