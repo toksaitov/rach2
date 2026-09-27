@@ -129,7 +129,7 @@ An installed root needs the probes' fixtures as well as their executables. Run t
 
 * `shelltest` executes the `hello` probe at `/hello`. Its working directory does not select that path.
 * `limitprobe` needs readable `/hello`, its own executable at `/limitprobe`, only descriptors 0 through 2 open, `RLIMIT_NOFILE` at 1024/1024, unlimited `RLIMIT_AS`, and no other processes owned by uid 1000 or 1001.
-* `dirprobe` reads the root type from `/proc/mounts`. Ext2 must list `a`, `b`, `.` and `..`; KRFFS must list only `a` and `b`. Reserve `/d`, `/e`, `/g`, `/h`, `/m` and `/work`; `/nope` must be absent.
+* `dirprobe` reads the root type from `/proc/mounts`. Ext2 must list `a`, `b`, `.` and `..`; KRFFS must list only `a` and `b`, and refuse `/ids/cb` beside `/ids/bC` with `EINVAL`. Reserve `/d`, `/e`, `/g`, `/h`, `/ids`, `/m` and `/work`; `/nope` must be absent.
 * `unlinkdirprobe` uses `/unlinkdir` for forty files. It accepts `.` and `..` only as directories and never unlinks them. Both roots must enumerate every file across intervening deletions.
 * `mvtest` reads the root type from `/proc/mounts`. A directory rename must succeed on ext2 and return `EPERM` on KRFFS. Run from a writable directory on that root, with `mvtest*`, `nonexistent` and `other` absent.
 * `vfsprobe` reads the root type from `/proc/mounts`. KRFFS must reject hard links with `EPERM`; ext2 must preserve the inode, bytes and link count through a second name and its removal. Each root must report its own `statfs` magic. `/vp` and `/procx` must be absent.

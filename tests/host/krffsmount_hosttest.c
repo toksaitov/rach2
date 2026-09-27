@@ -1,6 +1,7 @@
 /**
  * Check mounted KRFFS relocation, O_PATH pins, writeback errors, clean-flag
- * ordering, and the errno a failed creation answers.
+ * ordering, and the errno a failed creation answers, a directory whose
+ * identifier another directory has among them.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -580,6 +581,23 @@ static void owner_across(void)
     teardown();
 }
 
+/**
+ * A directory whose identifier another directory has is EINVAL. `bC` and
+ * `cb` hash alike, so the second in one directory would share the first
+ * one's children, and the core refuses it with a result the volume reports
+ * as a name the file system cannot hold, not as a full or a failing volume.
+ */
+static void taken_identifier(void)
+{
+    setup();
+    vfs_ns_lock(&mount);
+    check(kv_mkdir(&mount, mount.root, "bC", 0755) == 0, "a directory is made");
+    check(kv_mkdir(&mount, mount.root, "cb", 0755) == -EINVAL,
+          "a directory whose identifier another directory has is EINVAL");
+    vfs_ns_unlock(&mount);
+    teardown();
+}
+
 /** Exercise both relocating operations and the unmount write order. */
 int main(void)
 {
@@ -593,6 +611,7 @@ int main(void)
     failed_clean_flush();
     creation_errors();
     owner_across();
+    taken_identifier();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }

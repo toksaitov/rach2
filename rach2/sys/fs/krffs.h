@@ -315,6 +315,11 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
 /* What a creation answers, beside those two, when the medium refused a read,
  * a write or a sync it needed: a failing or removed device, not a full one. */
 #define KRFFS_EIO      (-3)
+/* What mkdir answers for a directory whose identifier, its parent's mixed
+ * with the hash of its name, another directory already has: two names can
+ * have one hash, and a name the format cannot hold beside the other is
+ * neither a full volume nor a failing one. */
+#define KRFFS_ETAKEN   (-4)
 int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size, uint32_t offset);
 int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, uint32_t offset);
 int krffs_truncate_node(krffs_node_t **nodep, uint32_t new_size);

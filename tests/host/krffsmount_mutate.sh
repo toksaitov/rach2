@@ -56,7 +56,7 @@ echo "krffsmount-mutation: logs: $work"
 run_phase fixed 0 'krffsmount-hosttest: result: pass:'
 if [ "$#" -eq 0 ]; then
     set -- read-identity write-identity truncate-identity write-repoint truncate-repoint \
-        write-failure truncate-failure flush readonly directory clean-flush pin
+        write-failure truncate-failure flush readonly directory clean-flush pin taken-errno
 fi
 for fault in "$@"; do
     python3 - "$work/sys/fs/krffsmount.c" "$fault" <<'PY'
@@ -107,6 +107,9 @@ else:
         "readonly": ("    (void)handle;\n    vfs_ns_lock(mnt);",
                      "    (void)handle;\n    if (begin_write(mnt) != 0) {\n"
                      "        return 0;\n    }"),
+        "taken-errno": ("    if (rc == KRFFS_ETAKEN) {\n        return -EINVAL;\n    }\n"
+                        "    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;",
+                        "    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;"),
     }
     old, new = changes[fault]
     if source.count(old) != 1:
@@ -124,6 +127,7 @@ PY
         directory) message='directory read resolves its open handle' ;;
         clean-flush) message='write after failed clean-flag flush is refused' ;;
         pin) message='pinned node keeps its offset' ;;
+        taken-errno) message='a directory whose identifier another directory has is EINVAL' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

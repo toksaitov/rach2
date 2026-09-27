@@ -45,6 +45,19 @@ group ID, and mask.
 Their reported permissions are 0777 with the mount mask removed;
 the read-only attribute removes write permission.
 .Pp
+A KRFFS directory's identifier, by which its children name it, is its
+parent's mixed with the 64-bit hash of its name, and two names can have
+one hash:
+.Pa bC
+and
+.Pa cb
+do.
+The second of two such names in one directory is refused with
+.Er EINVAL ,
+the answer for a name the file system cannot hold, since the two
+directories would share their children.
+Linux has no such refusal.
+.Pp
 .Fn rmdir
 removes an empty directory without following a symbolic link in the
 final component.
@@ -128,6 +141,12 @@ with mode 0755, checks that another creation fails, and creates a file
 inside it.
 It checks that removal of the nonempty directory fails, then removes
 the file and the empty directory.
+On a KRFFS root it creates
+.Pa /ids/bC
+and checks that
+.Pa /ids/cb
+is refused with
+.Er EINVAL .
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
@@ -156,8 +175,9 @@ addressing limit.
 .It Bq Er EINVAL
 .Fn rmdir
 was given the root path, a parent resolution has no final component,
-the file system rejects a new name, or required attributes cannot be
-obtained.
+the file system rejects a new name, KRFFS among them for a directory
+whose identifier another directory has, or required attributes cannot
+be obtained.
 .It Bq Er EIO
 The backing device was removed, or file system metadata could not be
 read or written.

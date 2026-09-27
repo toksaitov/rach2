@@ -1705,12 +1705,6 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_
 }
 
 /**
- * Create a directory at `path`.
- *
- * Returns 0 on success, -1 if the parent directory is missing or the name is
- * already taken.
- */
-/**
  * Whether a directory on the medium already has the logical id `id`.
  *
  * Two names can mix to one id. A second directory with a taken id would share
@@ -1743,9 +1737,10 @@ static int krffs_id_taken(krffs_mount_t *mount, uint64_t id)
  * owned by `uid` and `gid`, all on the medium before its name with its three
  * times, as `krffs_create_node_at` makes a node.
  *
- * Returns 0; KRFFS_EBAD for a name that is taken, a directory id another
- * directory has, or a path with no last name or whose directory is not
- * found; or KRFFS_ENOSPACE or KRFFS_EIO as `krffs_create_node_at` does.
+ * Returns 0; KRFFS_EBAD for a name that is taken, or a path with no last name
+ * or whose directory is not found; KRFFS_ETAKEN for a directory whose id,
+ * the mix of its parent's and its name's hash, another directory has; or
+ * KRFFS_ENOSPACE or KRFFS_EIO as `krffs_create_node_at` does.
  */
 int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32_t uid,
                    uint32_t gid)
@@ -1772,7 +1767,7 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32
     }
 
     if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {
-        return KRFFS_EBAD;
+        return KRFFS_ETAKEN;
     }
 
     node = krffs_allocate_err(mount, 0, KRFFS_NO_NODE, &rc);

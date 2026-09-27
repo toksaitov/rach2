@@ -1587,6 +1587,12 @@ static int kfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_unlink(path + (path[0] == '/')) == 0 ? 0 : -EIO;
 }
 
+/**
+ * Make the directory `name` in `dir`. The parent is resolved and held, so
+ * the core refuses one of two things: a name whose directory identifier
+ * another directory has (`KRFFS_ETAKEN`), which is EINVAL, the answer for a
+ * name the file system cannot hold, and a root with no room, ENOSPC.
+ */
 static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     char path[256];
@@ -1597,8 +1603,11 @@ static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (rc != 0) {
         return rc;
     }
-    /* The parent is resolved and held, so the one failure left is space. */
-    return krffs_mkdir(path) == 0 ? 0 : -ENOSPC;
+    rc = krffs_mkdir(path);
+    if (rc == KRFFS_ETAKEN) {
+        return -EINVAL;
+    }
+    return rc == 0 ? 0 : -ENOSPC;
 }
 
 static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)

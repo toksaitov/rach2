@@ -995,14 +995,17 @@ static void straddle_create_rows(void)
  * hash of its name, and a child names its parent by that identifier alone.
  * `bC` and `cb` hash alike, so a second directory of the two in one parent
  * would share the first one's children (entry 125 of milestone 50). The
- * first is made and given a child; the second must be refused, the first
- * must keep its child, and the refused name must reach nothing.
+ * first is made and given a child; the second must be refused with
+ * `KRFFS_ETAKEN`, a result of its own that the adapters report as EINVAL and
+ * not as a full or a failing volume (entry 243), the first must keep its
+ * child, and the refused name must reach nothing.
  */
 static void id_collision_rows(void)
 {
     krffs_mount_t mount;
     char name[64];
     int is_dir = 0;
+    int rc;
 
     make_image(image, IMAGE_SIZE);
     mount = mount_over(&memory_backend, image, IMAGE_SIZE);
@@ -1011,8 +1014,10 @@ static void id_collision_rows(void)
     check(krffs_mkdir_at(&mount, "/bC", 0755, 0, 0) == 0,
           "the first of two colliding directories is made");
     check(krffs_create_at(&mount, "/bC/kept") == 0, "and given a child");
-    check(krffs_mkdir_at(&mount, "/cb", 0755, 0, 0) == -1,
-          "a second directory with the first one's identifier is refused");
+    rc = krffs_mkdir_at(&mount, "/cb", 0755, 0, 0);
+    check(rc != 0, "a second directory with the first one's identifier is refused");
+    check(rc == KRFFS_ETAKEN,
+          "with the result of a taken identifier, which names no full or failing volume");
     check(krffs_walk(&mount, "/cb") == KRFFS_NO_NODE, "the refused directory is not made");
     check(krffs_walk(&mount, "/cb/kept") == KRFFS_NO_NODE,
           "the refused name does not reach the first directory's child");
