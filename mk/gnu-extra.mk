@@ -1,16 +1,18 @@
 # The programs of the GNU layer that have build scripts of their own rather
-# than port recipes. Like gnu-toolchain, each target builds on a Linux host,
-# is not part of `all`, and runs its script from nothing behind a stamp,
-# again whenever the script or a list of sources it reads changes, and again
-# when the cross toolchain is rebuilt: `make gnu-native` builds GCC and
-# binutils to run on Rach2, and `make gnu-gdb` GDB and gdbserver
-# (vendor/gnu/native).
+# than port recipes (vendor/gnu/native and spidermonkey). Like gnu-toolchain,
+# each target builds on a Linux host, is not part of `all`, and runs its
+# script from nothing behind a stamp, again whenever the script or a list of
+# sources it reads changes, and again when the cross toolchain is rebuilt:
+# `make gnu-native` builds GCC and binutils to run on Rach2, `make gnu-gdb`
+# GDB and gdbserver, and `make gnu-js` the SpiderMonkey shell.
 GNU_NATIVE_STAMP = $(GNU_OUT)/native.stamp
 GNU_GDB_STAMP = $(GNU_OUT)/gdb.stamp
+GNU_JS_STAMP = $(GNU_OUT)/js.stamp
 
-.PHONY: gnu-native gnu-gdb
+.PHONY: gnu-native gnu-gdb gnu-js
 gnu-native: $(GNU_NATIVE_STAMP)
 gnu-gdb: $(GNU_GDB_STAMP)
+gnu-js: $(GNU_JS_STAMP)
 
 $(GNU_NATIVE_STAMP): vendor/gnu/native/build_native.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt $(GNU_TOOLCHAIN_STAMP)
 	@rm -f $@
@@ -22,4 +24,10 @@ $(GNU_GDB_STAMP): vendor/gnu/native/build_gdb.sh vendor/gnu/fetch.sh vendor/gnu/
 	@rm -f $@
 	+@./vendor/gnu/native/build_gdb.sh
 	@test -x $(GNU_OUT)/gdb/usr/bin/gdb || { echo "gnu: gdb: the build produced no $(GNU_OUT)/gdb/usr/bin/gdb" >&2; exit 1; }
+	@touch $@
+
+$(GNU_JS_STAMP): vendor/gnu/spidermonkey/build_js.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt $(GNU_TOOLCHAIN_STAMP)
+	@rm -f $@
+	@./vendor/gnu/spidermonkey/build_js.sh
+	@test -x $(GNU_OUT)/js/usr/bin/js || { echo "gnu: js: the build produced no $(GNU_OUT)/js/usr/bin/js" >&2; exit 1; }
 	@touch $@
