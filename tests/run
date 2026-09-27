@@ -664,8 +664,9 @@ scripts_inventory() {
            tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
-products_inventory() { # products_inventory TARGET
-    ( cd "$REPO" && ls build/rach2*/kernel 2>/dev/null; closure "$1" ) | present
+products_inventory() { # products_inventory TARGET...
+    ( cd "$REPO" && ls build/rach2*/kernel 2>/dev/null; for t in "$@"; do closure "$t"; done ) |
+        present
 }
 hasher() {
     cksum
@@ -679,8 +680,8 @@ take_scripts() {
     scripts_inventory > "$WORK/inventory.scripts"
     hash_list "$WORK/inventory.scripts" "$WORK/hashes.scripts"
 }
-take_products() { # take_products TARGET
-    products_inventory "$1" > "$WORK/inventory.products"
+take_products() { # take_products TARGET...
+    products_inventory "$@" > "$WORK/inventory.products"
     hash_list "$WORK/inventory.products" "$WORK/hashes.products"
 }
 # The scripts are checked as the set runs, not only at its end: the runner,
@@ -736,6 +737,22 @@ prepare() {
     run_make -j prepare-all || {
         echo "run: result: refused: preparation failed" >&2; exit 1
     }
+}
+# The GNU system's image is not among the products `prepare-all` builds: it
+# builds on a Linux host only (mk/gnu-image.mk), and a set without the gnu
+# suite must not need it. A set with the suite builds what the suite's
+# target names here, before the pool, as a suite run alone does, and adds
+# the target to the ones whose products are hashed, so that a change to the
+# image while the set runs voids the run like a change to any product.
+PREPARED=prepare-all
+prepare_gnu() { # prepare_gnu NAMES
+    case " $* " in *" gnu "*) ;; *) return 0 ;; esac
+    products=$(closure run-gnu | grep '^build/')
+    # shellcheck disable=SC2086 # the prerequisites are one word each
+    [ -z "$products" ] || run_make -j $products || {
+        echo "run: result: refused: the gnu suite's products did not build" >&2; exit 1
+    }
+    PREPARED="$PREPARED run-gnu"
 }
 
 # Completion bounds keep their written values unless the caller supplies a
@@ -930,7 +947,9 @@ if [ "$#" -eq 1 ]; then
     RUNNING=""
 else
     prepare
-    take_products prepare-all
+    prepare_gnu "$@"
+    # shellcheck disable=SC2086 # the targets are one word each
+    take_products $PREPARED
     images_stamp
     run_set "$*" || rc=1
 fi
