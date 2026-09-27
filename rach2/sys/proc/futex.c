@@ -362,9 +362,18 @@ int32_t sys_set_robust_list(isr_params_t *params)
     return 0;
 }
 
+/**
+ * get_robust_list (312): the head and length of the robust list of thread
+ * EBX, the caller for 0, into the words at ECX and EDX.
+ *
+ * The head is read from the thread's record before anything is copied out: a
+ * copy may sleep to bring the caller's page in, and the thread may end and
+ * its record be freed meanwhile.
+ */
 int32_t sys_get_robust_list(isr_params_t *params)
 {
     process_t *t = current_proc;
+    uint32_t head;
     uint32_t len = sizeof(struct robust_head);
 
     if (!current_proc) {
@@ -380,7 +389,8 @@ int32_t sys_get_robust_list(isr_params_t *params)
             return -EPERM;
         }
     }
-    if (copy_to_user((void __user *)params->ecx, &t->robust_list, sizeof(uint32_t)) != 0 ||
+    head = t->robust_list;
+    if (copy_to_user((void __user *)params->ecx, &head, sizeof(head)) != 0 ||
         copy_to_user((void __user *)params->edx, &len, sizeof(len)) != 0) {
         return -EFAULT;
     }
