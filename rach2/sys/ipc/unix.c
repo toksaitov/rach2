@@ -200,7 +200,8 @@ struct unix_in {
     int has_cred;
     uint32_t nfds;
     fd_entry_t *fds;
-    uint32_t flags; /* MSG_TRUNC, MSG_CTRUNC */
+    uint32_t flags;          /* MSG_TRUNC, MSG_CTRUNC */
+    struct unix_in *transit; /* the next on the transit list */
 };
 
 static int32_t unix_read(fd_entry_t *e, char __user *buf, uint32_t count);
@@ -219,12 +220,17 @@ static struct unix_msg *reap_head;
 static struct unix_msg *reap_tail;
 static int reaping;
 
+/* The receives in progress, whose descriptors are off their queue and not
+ * yet installed or closed (`transit_enter`). */
+static struct unix_in *transits;
+
 void unix_init(void)
 {
     socks = NULL;
     reap_head = NULL;
     reap_tail = NULL;
     reaping = 0;
+    transits = NULL;
 }
 
 static fd_table_t *table(void)
@@ -324,14 +330,52 @@ static void flight_drop(fd_entry_t *e)
     fd_ofd_unref(e->ofd);
 }
 
+/*
+ * Close the descriptors in flight `fds[from..n)` and free the array. Each is
+ * closed from a copy, with its place in the array emptied first: the close
+ * can sleep, and the ones after it stay where `unix_inflight_holds` finds
+ * them, while the one being closed is no holder of its own file.
+ */
 static void drop_fds(fd_entry_t *fds, uint32_t from, uint32_t n)
 {
     uint32_t i;
 
     for (i = from; i < n; i++) {
-        flight_drop(&fds[i]);
+        fd_entry_t e = fds[i];
+
+        fds[i].type = FD_TYPE_NONE;
+        flight_drop(&e);
     }
     kfree(fds);
+}
+
+/**
+ * Put the receive `in` on the transit list, before it takes descriptors
+ * off a queue, and take it off with `transit_leave` once they are
+ * installed or closed.
+ *
+ * A descriptor in flight holds its KRFFS file as a descriptor in a table
+ * does, and the holder count looks for it on the queues; taken off its
+ * queue, it is on neither, while installing it or closing the rest can
+ * sleep, and a close of the file's last descriptor elsewhere would free a
+ * file it still holds. `unix_inflight_holds` looks here too.
+ */
+static void transit_enter(struct unix_in *in)
+{
+    in->transit = transits;
+    transits = in;
+}
+
+static void transit_leave(struct unix_in *in)
+{
+    struct unix_in **link = &transits;
+
+    while (*link && *link != in) {
+        link = &(*link)->transit;
+    }
+    if (*link) {
+        *link = in->transit;
+    }
 }
 
 static struct unix_msg *msg_alloc(uint32_t len)
@@ -396,19 +440,29 @@ static void msg_free(struct unix_msg *m)
     reaping = 0;
 }
 
-/* Whether a message of the chain from `m` carries a descriptor of the KRFFS
- * file `node`, which its description names (`flight_sync`). */
-static int chain_holds(const struct unix_msg *m, const void *node)
+/* Whether one of the `n` descriptors in flight at `fds` is the KRFFS file
+ * `node`, which its description names (`flight_sync`). */
+static int fds_hold(const fd_entry_t *fds, uint32_t n, const void *node)
 {
     uint32_t i;
 
-    for (; m; m = m->next) {
-        for (i = 0; i < m->nfds; i++) {
-            const fd_entry_t *e = &m->fds[i];
+    for (i = 0; i < n; i++) {
+        const fd_entry_t *e = &fds[i];
 
-            if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {
-                return 1;
-            }
+        if (e->type == FD_TYPE_FILE && e->node && e->ofd && e->ofd->vnode == node) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Whether a message of the chain from `m` carries a descriptor of the KRFFS
+ * file `node`. */
+static int chain_holds(const struct unix_msg *m, const void *node)
+{
+    for (; m; m = m->next) {
+        if (fds_hold(m->fds, m->nfds, node)) {
+            return 1;
         }
     }
     return 0;
@@ -417,9 +471,15 @@ static int chain_holds(const struct unix_msg *m, const void *node)
 int unix_inflight_holds(const void *node)
 {
     const struct unix_sock *s;
+    const struct unix_in *in;
 
     for (s = socks; s; s = s->next) {
         if (chain_holds(s->rq_head, node)) {
+            return 1;
+        }
+    }
+    for (in = transits; in; in = in->transit) {
+        if (fds_hold(in->fds, in->nfds, node)) {
             return 1;
         }
     }
@@ -2159,7 +2219,8 @@ static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int f
         }
         slot = &table()->entries[fd];
         fd_ofd_unref(slot->ofd);
-        *slot = in->fds[given++];
+        *slot = in->fds[given];
+        in->fds[given++].type = FD_TYPE_NONE;
         flight_sync(slot);
         if (flags & MSG_CMSG_CLOEXEC) {
             slot->flags |= FD_FLAG_CLOEXEC;
@@ -2251,8 +2312,10 @@ int32_t unix_recvfrom(fd_entry_t *e, uint32_t buf, uint32_t len, int flags, uint
     iov.iov_base = buf;
     iov.iov_len = len;
     k_memset(&in, 0, sizeof(in));
+    transit_enter(&in);
     rc = recv_core(e, &iov, 1, len, flags, &in);
     release_in(&in);
+    transit_leave(&in);
     if (rc >= 0 && addr && addrlen_ptr) {
         int32_t err = put_name(addr, addrlen_ptr, &in.from, 1);
 
@@ -2349,13 +2412,16 @@ int32_t unix_recvmsg(fd_entry_t *e, uint32_t msg, int flags)
         return rc;
     }
     k_memset(&in, 0, sizeof(in));
+    transit_enter(&in);
     rc = recv_core(e, iov, hdr[MH_IOVLEN], total, flags, &in);
     kfree(iov);
     if (rc < 0) {
         release_in(&in);
+        transit_leave(&in);
         return rc;
     }
     hdr[MH_CONTROLLEN] = put_control(hdr[MH_CONTROL], hdr[MH_CONTROLLEN], &in, flags);
+    transit_leave(&in);
     if (hdr[MH_NAME]) {
         uint8_t sa[SUN_PATH_OFF + UNIX_PATH_MAX + 1];
         uint32_t full = in.from.len ? name_addrlen(&in.from) : 0u;
