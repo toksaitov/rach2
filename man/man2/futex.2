@@ -167,7 +167,8 @@ has a negative field or nanoseconds past 999999999, or
 was given a length other than 12.
 .It Er EPERM
 .Nm get_robust_list
-named a thread of another user.
+named a thread of another user, or a privileged thread of another
+process when the caller is not privileged.
 .It Er ENOSYS
 The operation is not one of the four above, or
 .Dv FUTEX_CLOCK_REALTIME
