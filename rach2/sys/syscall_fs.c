@@ -3240,7 +3240,10 @@ static int synth_kind_is_dir(int kind)
  * Make `path`, the canonical path of the directory at (`mnt`, `node`), the
  * working directory, and hold the mount it is on: `vfs_cwd_set` takes no hold
  * on a permanent mount, and a synthetic directory, whose `mnt` is NULL, has
- * none to take. Returns 0, or -ENOMEM with nothing changed.
+ * none to take. The path and the hold are stored with nothing between them
+ * that sleeps, and the old hold is let go after both, so a thread that shares
+ * them (CLONE_FS) finds the path and the hold of one directory. Returns 0, or
+ * -ENOMEM with nothing changed.
  */
 static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
 {
@@ -3249,11 +3252,7 @@ static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
     if (rc != 0) {
         return rc;
     }
-    if (mnt) {
-        vfs_cwd_set(current_proc, mnt, node);
-    } else {
-        vfs_cwd_clear(current_proc);
-    }
+    vfs_cwd_set(current_proc, mnt, node);
     return 0;
 }
 

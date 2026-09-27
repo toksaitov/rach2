@@ -2503,19 +2503,32 @@ static void hold_release(struct vfs_mount *mnt, void *node)
     mnt->refs--;
 }
 
+/**
+ * Hold the new working directory, store it, and only then let go of the old
+ * one, whose put may sleep: a thread that shares the working directory
+ * (CLONE_FS) and changes it meanwhile replaces a hold that is in the record,
+ * and the pair in the record stays the directory its path names. /dev,
+ * /proc and the KRFFS boot root need no hold and take none; a root of
+ * another type does.
+ */
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
-    vfs_cwd_clear(p);
-    if (!mnt || mnt == mounts[1] || mnt == mounts[2] ||
+    struct vfs_mount *was = p->fs->cwd_mnt;
+    void *was_node = p->fs->cwd_node;
+
+    if (mnt == mounts[1] || mnt == mounts[2] ||
         (mnt == mounts[0] && mnt->type == &vfs_krffs_type)) {
-        return; /* the permanent mounts need no hold, but a root of another type does */
+        mnt = 0;
+    }
+    if (mnt) {
+        if (mnt->type->ops->hold) {
+            mnt->type->ops->hold(mnt, node);
+        }
+        mnt->refs++;
     }
     p->fs->cwd_mnt = mnt;
-    p->fs->cwd_node = node;
-    if (mnt->type->ops->hold) {
-        mnt->type->ops->hold(mnt, node);
-    }
-    mnt->refs++;
+    p->fs->cwd_node = mnt ? node : 0;
+    hold_release(was, was_node);
 }
 
 /**
@@ -2555,19 +2568,5 @@ void vfs_root_clear(struct process *p)
 
 void vfs_cwd_clear(struct process *p)
 {
-    struct vfs_ref r;
-    struct vfs_mount *was;
-
-    if (!p->fs->cwd_mnt) {
-        return;
-    }
-    was = p->fs->cwd_mnt;
-
-    r.mnt = was;
-    r.node = p->fs->cwd_node;
-    p->fs->cwd_mnt = 0;
-    p->fs->cwd_node = 0;
-    /* The put may sleep; the mount's count keeps it until the put is done. */
-    vfs_ref_put(&r);
-    was->refs--;
+    vfs_cwd_set(p, 0, 0);
 }
