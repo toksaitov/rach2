@@ -4,6 +4,8 @@
  * The refusals come first: a file that is not a directory is ENOTDIR, a
  * missing path ENOENT, /proc and /dev EINVAL, and a caller who is not root
  * EPERM, after the path's own errors; chroot("/") changes nothing. A child
+ * that chroots into a directory of mode 0700 and takes another uid is
+ * refused chdir("/") with EACCES. A child
  * that chroots into a KRFFS directory under /tmp keeps its working directory
  * there, under its path from the new root; reads the root's files by
  * absolute paths and finds nothing of the tree above it; stays at the root
@@ -35,6 +37,7 @@
 #define JAIL  "/tmp/chrootmusl"
 #define EMPTY "/tmp/chrootmusl-e"
 #define TJAIL "/tmp/chrootmusl-t"
+#define PRIV  "/tmp/chrootmusl-p"
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -191,6 +194,34 @@ static int refusals(void)
     }
     st = child_status(pid);
     return st == 0 ? 0 : fail_step("a caller who is not root", st);
+}
+
+/**
+ * A root the caller may not search: a child that chroots into a directory of
+ * mode 0700 owned by root and then takes uid 1000 is refused chdir("/") with
+ * EACCES, as it is refused any directory it may not search.
+ */
+static int private_root(void)
+{
+    pid_t pid;
+    int st;
+
+    mkdir(PRIV, 0700);
+    if (chmod(PRIV, 0700) != 0) {
+        return fail("the private root");
+    }
+    pid = fork();
+    if (pid == 0) {
+        if (chroot(PRIV) != 0 || setgid(1000) != 0 || setuid(1000) != 0) {
+            _exit(2);
+        }
+        _exit(refused(chdir("/"), EACCES) ? 0 : 3);
+    }
+    st = child_status(pid);
+    if (rmdir(PRIV) != 0) {
+        return fail("the private root's removal");
+    }
+    return st == 0 ? 0 : fail_step("a root the caller may not search", st);
 }
 
 /**
@@ -373,8 +404,8 @@ int main(int argc, char **argv)
         return 0;
     }
     mkdir(EMPTY, 0755);
-    if (build_jail() || refusals() || krffs_root() || moved_cwd() || tmpfs_root() ||
-        busy(EMPTY, NULL) || busy(TJAIL "/a", TJAIL) || clean()) {
+    if (build_jail() || refusals() || private_root() || krffs_root() || moved_cwd() ||
+        tmpfs_root() || busy(EMPTY, NULL) || busy(TJAIL "/a", TJAIL) || clean()) {
         return 1;
     }
     printf("CHROOTMUSL OK\n");

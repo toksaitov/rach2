@@ -3270,7 +3270,9 @@ static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
  * the KRFFS boot root by its node. Entering a directory takes search
  * permission on it; anything else is -ENOTDIR. The KRFFS root is a directory
  * whatever its stored mode says: it is the file system's anchor, not a node
- * `mkdir` made.
+ * `mkdir` made. "/" is taken without a walk only when it names the KRFFS boot
+ * root itself, which everyone may search; a root chroot gave the process is
+ * resolved and checked like any other directory.
  */
 static int32_t do_chdir(char *path)
 {
@@ -3279,7 +3281,7 @@ static int32_t do_chdir(char *path)
     krffs_node_t *node;
     int32_t rc;
 
-    if (path[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+    if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         return cwd_enter("/", NULL, NULL);
     }
     rc = vfs_resolve(0, path, 0, &ref, 0, 0);
