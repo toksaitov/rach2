@@ -2256,9 +2256,11 @@ probe ptyprobe
 file rach2/sys/syscall.c
 expect PTYPROBE FAIL (the child refused its terminal: status 23)
 old
-    case TCGETS2: {
+    case TCGETS2:
+        return tty_get_termios_at(t, request, arg);
 new
-    case TCGETS2 + 0x100: {
+    case TCGETS2 + 0x100:
+        return tty_get_termios_at(t, request, arg);
 end
 
 fault tcsetsw2-unknown
@@ -2267,8 +2269,12 @@ file rach2/sys/syscall.c
 expect PTYPROBE FAIL (the child refused its terminal: status 25)
 old
     case TCSETSW2:
+    case TCSETSF2:
+        return tty_set_termios_at(t, request, arg);
 new
     case TCSETSW2 + 0x100:
+    case TCSETSF2:
+        return tty_set_termios_at(t, request, arg);
 end
 
 fault tcgets2-no-speed
@@ -2276,7 +2282,7 @@ probe ptyprobe
 file rach2/sys/syscall.c
 expect PTYPROBE FAIL (the child refused its terminal: status 26)
 old
-        kt2.c_ospeed = tty_code_speed(kt2.tio.c_cflag);
+    kt2.c_ospeed = tty_code_speed(kt2.tio.c_cflag);
 new
-        kt2.c_ospeed = 0;
+    kt2.c_ospeed = 0;
 end
