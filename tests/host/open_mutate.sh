@@ -1,6 +1,7 @@
 #!/bin/sh
 # Compile mounted open cleanup, and the KRFFS root's unlink and rename under
-# the root's lock, before, during and after each fault.
+# the root's lock and of a program's file, before, during and after each
+# fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -61,7 +62,7 @@ run_phase()
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
-    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked; do
+    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked program-holder; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -102,6 +103,9 @@ changes = {
                             "    rc = vfs_resolve(0, name, 0, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    svp = vfs_synth_vpath(ref.mnt, ref.node);\n    if (svp) {\n        vp = *svp;\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        if (vp.kind == VNODE_PTS) {"),
     "chown-walk-unlocked": ("(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, &ref, 0, 0);",
                             "(follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);"),
+    "program-holder": ("    if (unix_inflight_holds(node) || filemap_holds(node) || "
+                       "mm_exe_holds(vfs_root_mount(), node)) {",
+                       "    if (unix_inflight_holds(node) || filemap_holds(node)) {"),
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
@@ -125,6 +129,7 @@ PY
         rename-locked-walk) message='a walk starts with no namespace lock held' ;;
         rename-relocked) message='the lookups, the count and the change run under one hold of the root' ;;
         chmod-walk-unlocked | chown-walk-unlocked) message='attributes use node identity' ;;
+        program-holder) message='an unlink keeps the file a program runs from' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

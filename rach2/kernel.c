@@ -1142,6 +1142,23 @@ static int boot_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     return got < 0 ? -1 : (int)got;
 }
 
+/**
+ * Keep the program `exec_program` loaded from `path` with its address space
+ * `mm`, as an execve's image keeps its file (`mm_exe_open`): the node the
+ * load read through on a root that is not KRFFS, and the node `path` names
+ * on the KRFFS root. 0, or -1 for no node or no room.
+ */
+static int boot_keep_exe(struct mm *mm, const char *path)
+{
+    struct vfs_ref exe = boot_ctx.ref;
+
+    if (!exe.mnt) {
+        exe.mnt = vfs_root_mount();
+        exe.node = krffs_resolve(path);
+    }
+    return exe.node && mm_exe_open(mm, &exe) == 0 ? 0 : -1;
+}
+
 static void boot_exec_done(void)
 {
     if (boot_ctx.ref.mnt) {
@@ -1211,8 +1228,9 @@ static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
  * The program comes from the KRFFS root, or through the mounted root's file
  * system when that root is not KRFFS. Clones a fresh page directory, streams
  * the program's segments straight from the file (no whole-file buffer, so
- * binary size is unbounded), builds the SysV/i386 initial stack (argc, argv,
- * a default envp, and the auxv with 16 random bytes), and allocates the
+ * binary size is unbounded) and keeps the file with the address space
+ * (`boot_keep_exe`), builds the SysV/i386 initial stack (argc, argv, a
+ * default envp, and the auxv with 16 random bytes), and allocates the
  * process. The first user program becomes init.
  *
  * Every program but a real `/sbin/init` is made the console's
@@ -1281,11 +1299,10 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
-    /* Stream the segments straight from the file (no whole-file buffer, so
-     * the binary size is unbounded); img records entry and auxv metadata. */
     kctx.name = path;
     if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, &img) != 0) {
+                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, &img) != 0 ||
+        boot_keep_exe(mm, path) != 0) {
         boot_exec_done();
         mm_put(mm);
         console_puts("exec: Failed to load ELF segments");

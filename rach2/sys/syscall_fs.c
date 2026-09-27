@@ -66,6 +66,7 @@
 #include "network/net.h"
 #include "ipc/unix.h"
 #include "mm/filemap.h"
+#include "mm/mm.h"
 #include "proc/coredump.h"
 #include "syscall_internal.h"
 
@@ -108,9 +109,10 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  *
  * The tables are a few pointer compares per live process, of kernel memory;
  * the scan never touches the page-cache window, and the node's own mode is
- * the one read of it. A descriptor in flight on an AF_UNIX socket and a
- * file mapping hold the node as a descriptor does, and count as one holder
- * more. The ends of a FIFO hold it too, by their descriptions, whose
+ * the one read of it. A descriptor in flight on an AF_UNIX socket, a file
+ * mapping and an address space whose program the file is hold the node as a
+ * descriptor does, and count as one holder more. The ends of a FIFO hold it
+ * too, by their descriptions, whose
  * descriptors name a pipe and no node: every description of the FIFO
  * counts, `except`'s only when a descriptor besides it keeps it, since the
  * FIFO's pipe is found by the node's address, which a new node must not
@@ -134,7 +136,7 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
             }
         }
     }
-    if (unix_inflight_holds(node) || filemap_holds(node)) {
+    if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node)) {
         held++;
     }
     if (krffs_mode_type(node->mode) == KRFFS_S_IFIFO) {
@@ -315,6 +317,58 @@ void fd_release_backing(fd_entry_t *e)
     }
     fd_close_locks(e);
     fd_release_objects(e);
+}
+
+/**
+ * A description of the file `ref` names for an address space to keep its
+ * program by (`mm_exe_open`): one that opens nothing, as `path_install` makes
+ * for O_PATH, with a hold of its own on the node and a reference on the
+ * mount, so a volume is not unmounted while a program on it runs, as on
+ * Linux; and on a type that keeps a node only while it is open, mounted
+ * KRFFS, a pin, so a rename or an unlink leaves the file to it. On the KRFFS
+ * root the address space counts as a holder of the node (`fd_node_holders`),
+ * and a relocation moves the description's node (`fd_ofd_repoint`). NULL
+ * when the heap has no room or the pin fails.
+ */
+struct open_file *fs_exe_open(const struct vfs_ref *ref)
+{
+    struct open_file *ofd = fd_ofd_new();
+
+    if (!ofd) {
+        return NULL;
+    }
+    if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin &&
+        ref->mnt->type->ops->pin(ref->mnt, ref->node, &ofd->pin) != 0) {
+        fd_ofd_unref(ofd);
+        return NULL;
+    }
+    vfs_ref_hold(ref);
+    ofd->vmnt = ref->mnt;
+    ofd->vnode = ref->node;
+    vfs_desc_open(ref->mnt);
+    return ofd;
+}
+
+/**
+ * Let go of `ofd`, the description an address space kept its program's file
+ * by, once that address space is off the list `mm_exe_holds` reads: a file of
+ * the KRFFS root that lost its name is freed when nothing else holds it, as
+ * the release of a file's last descriptor frees one (`fd_release_objects`),
+ * and the description's last reference closes it. May sleep.
+ */
+void fs_exe_close(struct open_file *ofd)
+{
+    fd_entry_t e;
+
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_FILE;
+    e.flags = FD_FLAG_PATH;
+    e.ofd = ofd;
+    if (mnt_is_root(ofd->vmnt) && ofd->vnode != krffs_fs->node) {
+        e.node = ofd->vnode;
+    }
+    fd_release_objects(&e);
+    fd_ofd_unref(ofd);
 }
 
 /** Dispatch an ops-backed write, serializing a raw device's offset. */

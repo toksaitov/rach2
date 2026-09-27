@@ -205,6 +205,15 @@ with
 .Dv CLONE_FILES ,
 first gets a copy of its own, so the marked descriptors are closed for it
 alone and the other sharers keep the table.
+.Ss The program's file
+The new image keeps the program's file, the interpreter's for a script,
+from the moment its path is resolved until the last thread that runs the
+image ends or executes another program, as Linux keeps it.
+The load reads that file, whatever is put at its path meanwhile.
+A removal of the file's name, or a rename over it, leaves the file,
+without a name, until then, and a file system the program is on is busy
+for
+.Xr umount2 2 .
 .Ss Failure
 The path is resolved and its permissions checked first, as Linux opens
 the program before it copies the vectors.

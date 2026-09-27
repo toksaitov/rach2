@@ -1,6 +1,7 @@
 /**
  * Check the two counts of an address space: the users, whose last put frees
- * the memory, and the holds, which keep only the record.
+ * the memory, and the holds, which keep only the record; and the program's
+ * file it keeps.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -10,8 +11,14 @@
  * directory and the regions while the hold remains, a holder then takes no
  * user's count, and the last hold frees the record, which AddressSanitizer
  * judges by any use after.
+ *
+ * The file system's part of the program's file is a model that makes a
+ * description with a count and, at each release, notes whether the holder
+ * count still finds the file: an address space must be off the list before
+ * its release, so a release sees only the others that keep the file.
  */
 #include "mm/mm.c"
+#include "fs/vfs.h"
 
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
@@ -21,6 +28,13 @@ page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
 static page_dir_t kernel_dir;
 static int dirs, pages_freed, dirs_freed, regions_freed, reaps, rows, failures;
+/* The mount and the nodes of the program's file rows, the descriptions made
+ * and released, and whether the holder count found the file at each
+ * release. */
+static struct vfs_mount root;
+static int program_node, other_node;
+static int exe_opens, exe_closes, refuse_exe;
+static int held_at_close[4];
 
 #define CHECK(c, detail)                           \
     do {                                           \
@@ -84,6 +98,40 @@ void vm_free(vm_space_t *vm)
 void vm_file_reap(void)
 {
     reaps++;
+}
+
+/** A description of the program's file with one reference; NULL when the
+ * row refuses it. */
+struct open_file *fs_exe_open(const struct vfs_ref *ref)
+{
+    struct open_file *ofd;
+
+    if (refuse_exe) {
+        return NULL;
+    }
+    ofd = calloc(1, sizeof(*ofd));
+    if (ofd) {
+        ofd->refcount = 1;
+        ofd->vmnt = ref->mnt;
+        ofd->vnode = ref->node;
+        exe_opens++;
+    }
+    return ofd;
+}
+
+/** Note whether the holder count finds the file still, and drop the
+ * reference. */
+void fs_exe_close(struct open_file *ofd)
+{
+    held_at_close[exe_closes++ & 3] = mm_exe_holds(ofd->vmnt, ofd->vnode);
+    if (--ofd->refcount == 0) {
+        free(ofd);
+    }
+}
+
+void fd_ofd_ref(struct open_file *ofd)
+{
+    ofd->refcount++;
 }
 
 /** A /proc/PID/mem descriptor's hold keeps the record and none of the
@@ -161,6 +209,49 @@ static void drop_switches(void)
     rows++;
 }
 
+/**
+ * An address space keeps its program's file on the list the holder count
+ * reads; a fork's copy shares the description and is on it too; the last
+ * user's put of each takes it off the list before the release, so the first
+ * release finds the file still held by the other and the last finds it held
+ * no more; and one whose description the heap has no room for keeps none.
+ */
+static void program_file(void)
+{
+    struct vfs_ref ref;
+    struct mm *parent = mm_new();
+    struct mm *child = mm_new();
+
+    if (!parent || !child) {
+        CHECK(0, "two new address spaces");
+        return;
+    }
+    ref.mnt = &root;
+    ref.node = &program_node;
+    CHECK(mm_exe_open(parent, &ref) == 0 && exe_opens == 1,
+          "an address space keeps its program's file");
+    CHECK(mm_exe_holds(&root, &program_node) && !mm_exe_holds(&root, &other_node) &&
+              !mm_exe_holds(NULL, &program_node),
+          "the holder count finds the file's node on its mount");
+    mm_copy_info(child, parent);
+    CHECK(child->exe_file == parent->exe_file && parent->exe_file->refcount == 2,
+          "a fork's copy shares the description");
+    mm_put(parent);
+    CHECK(exe_closes == 1 && held_at_close[0] == 1 && mm_exe_holds(&root, &program_node),
+          "the first end leaves the file held by the copy");
+    mm_put(child);
+    CHECK(exe_closes == 2 && held_at_close[1] == 0 && !mm_exe_holds(&root, &program_node),
+          "the last end releases the file off the list");
+    refuse_exe = 1;
+    parent = mm_new();
+    CHECK(parent && mm_exe_open(parent, &ref) == -ENOMEM && parent->exe_file == NULL &&
+              !mm_exe_holds(&root, &program_node),
+          "a description the heap has no room for keeps no file");
+    refuse_exe = 0;
+    mm_put(parent);
+    rows++;
+}
+
 int main(void)
 {
     _kernel_dir = &kernel_dir;
@@ -168,10 +259,11 @@ int main(void)
     hold_keeps_record();
     live_user();
     drop_switches();
-    CHECK(rows == 3 && dirs == 3, "every row ran");
+    program_file();
+    CHECK(rows == 4 && dirs == 6, "every row ran");
     if (failures) {
         return 1;
     }
-    printf("mm-test: pass: a hold keeps the record, a user the memory\n");
+    printf("mm-test: pass: a hold keeps the record, a user the memory and the program's file\n");
     return 0;
 }
