@@ -41,7 +41,9 @@ or
 as in
 .Pa /proc/self/.\& ,
 which it then follows, as Linux does.
-Both follow links in preceding components.
+Both follow links in preceding components, and a path that names a
+directory by its end and reaches anything else fails with
+.Er ENOTDIR .
 .Fn fstat
 reports the object referred to by
 .Fa fd .

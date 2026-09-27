@@ -8,7 +8,9 @@
  * anything but a regular file; /dev/null, /proc/self, /proc/meminfo and
  * /proc/net have their own types by name. Each listing must end without an
  * error from readdir and check at least one entry, and lstat may fail only
- * with ENOENT, only in /proc and /dev/pts, whose entries come and go.
+ * with ENOENT, only in /proc and /dev/pts, whose entries come and go. A path
+ * that names a directory by its end is followed there, by lstat and by the
+ * old lstat, and a file named that way is ENOTDIR.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -25,6 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 /* The directory the probe makes, and its entries. */
@@ -108,6 +111,37 @@ static int type_of(const char *dir, const char *name)
     return type;
 }
 
+/**
+ * Paths that name a directory by their end: lstat of /proc/self/., and the
+ * old lstat, call 107, of it, follow the link to the directory, and the
+ * regular file `file` named with a trailing slash or a last "." is ENOTDIR
+ * to stat and lstat. 0, or 1 once the failure is reported.
+ */
+static int dir_ends(const char *file)
+{
+    unsigned char old[64];
+    char path[520];
+    struct stat st;
+
+    if (lstat("/proc/self/.", &st) != 0 || !S_ISDIR(st.st_mode)) {
+        return fail("lstat of /proc/self/. did not reach the directory");
+    }
+    memset(old, 0, sizeof(old));
+    if (syscall(SYS_lstat, "/proc/self/.", old) != 0 ||
+        !S_ISDIR((mode_t)(old[8] | (old[9] << 8)))) {
+        return fail("the old lstat of /proc/self/. did not reach the directory");
+    }
+    snprintf(path, sizeof(path), "%s/", file);
+    if (stat(path, &st) != -1 || errno != ENOTDIR || lstat(path, &st) != -1 || errno != ENOTDIR) {
+        return fail("a file named with a trailing slash was not ENOTDIR");
+    }
+    snprintf(path, sizeof(path), "%s/.", file);
+    if (lstat(path, &st) != -1 || errno != ENOTDIR) {
+        return fail("a file named with a last . was not ENOTDIR");
+    }
+    return 0;
+}
+
 /** Remove what the probe made. */
 static void tidy(void)
 {
@@ -143,6 +177,10 @@ int main(int argc, char **argv)
         (links && type_of(base, "l") != DT_LNK) || !types_agree(base, 0)) {
         tidy();
         return fail("the probe's own directory");
+    }
+    if (dir_ends(file) != 0) {
+        tidy();
+        return 1;
     }
     tidy();
     if (type_of("/dev", "null") != DT_CHR || !types_agree("/dev", 0) ||

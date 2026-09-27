@@ -4636,13 +4636,13 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
 {
     struct linux_stat64 kst;
     char *pathbuf;
+    int dir = 0;
 
     if (!current_proc || !path || !st) {
         return -EFAULT;
     }
 
     {
-        int dir = 0;
         int rc = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);
 
         if (rc != 0) {
@@ -4693,6 +4693,9 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         }
     }
 
+    if (dir && (kst.st_mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
     }
@@ -4705,7 +4708,8 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
  * only works once 196 exists. The follow flag decides whether a symbolic
  * link at the end, on /proc or on a mounted type, is the result or its
  * target; a link the path names as a directory by its end is followed
- * either way (`path_names_dir`). */
+ * either way (`path_names_dir`), and such a path that reaches anything but a
+ * directory is -ENOTDIR. */
 int32_t sys_stat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)params->ebx, (struct linux_stat64 __user *)params->ecx,
@@ -5165,7 +5169,8 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
  * directory for AT_FDCWD or to the directory `dirfd` is open on (see
  * copy_path_at). AT_SYMLINK_NOFOLLOW reports a final symbolic link itself,
  * but not one the path names as a directory by a trailing slash, "." or
- * "..", which is followed, as Linux's walk does.
+ * "..", which is followed, as Linux's walk does; a path that names a
+ * directory by its end and reaches anything else is -ENOTDIR.
  * With AT_EMPTY_PATH an empty or null path reports the object `dirfd` refers
  * to, whatever it is, as fstat64 does, or the working directory for
  * AT_FDCWD. Returns 0 or a negative errno.
@@ -5206,6 +5211,9 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct li
     }
     rc = fstatat_path(pathbuf, follow || dir, kst);
     path_buf_put(pathbuf);
+    if (rc == 0 && dir && (kst->st_mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
     return rc;
 }
 
@@ -7238,6 +7246,17 @@ static void stat_node_times(struct linux_stat *kst, const krffs_node_t *node)
     stat_times_from_stat64(kst, &s64);
 }
 
+/** Copy the old stat `kst` out to `st`, or answer -ENOTDIR when the path
+ * named a directory by its end (`path_names_dir`) and reached something
+ * else, as Linux's walk does. */
+static int32_t old_stat_put(struct linux_stat __user *st, const struct linux_stat *kst, int dir)
+{
+    if (dir && (kst->st_mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
+    return copy_to_user(st, kst, sizeof(*kst)) != 0 ? -EFAULT : 0;
+}
+
 /** The root directory's three times, into the old stat. */
 static void stat_root_times(struct linux_stat *kst)
 {
@@ -7252,16 +7271,18 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     struct linux_stat kst;
     char *pathbuf;
     krffs_node_t *node;
+    int dir = 0;
     int len;
 
     if (!current_proc || !path || !st) {
         return -EFAULT;
     }
 
-    len = path_from_user(AT_FDCWD, path, &pathbuf);
+    len = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);
     if (len != 0) {
         return len;
     }
+    follow |= dir;
 
     /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
@@ -7308,10 +7329,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             kst.st_rdev = (unsigned long)s64.st_rdev;
             kst.st_blksize = (unsigned long)s64.st_blksize;
             stat_times_from_stat64(&kst, &s64);
-            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+            return old_stat_put(st, &kst, dir);
         }
         if (!mnt_is_root(ref.mnt)) {
             struct linux_stat64 s64;
@@ -7332,10 +7350,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             kst.st_blksize = (unsigned long)s64.st_blksize;
             kst.st_blocks = (unsigned long)s64.st_blocks;
             stat_times_from_stat64(&kst, &s64);
-            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+            return old_stat_put(st, &kst, dir);
         }
         node = ref.node;
         vfs_ref_release(&ref);
@@ -7353,12 +7368,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     kst.st_blocks = (node->data_size + 511) / 512;
     kst.st_ino = (unsigned long)krffs_node_ino(node);
     stat_node_times(&kst, node);
-
-    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-        return -EFAULT;
-    }
-
-    return 0;
+    return old_stat_put(st, &kst, dir);
 }
 
 /* stat(106) follows symlinks; lstat(107) does not. musl maps SYS_stat and

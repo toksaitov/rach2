@@ -2222,3 +2222,31 @@ new
     } else if (level == SOL_IP && optname == IP_OPTIONS) {
         olen = 4;
 end
+
+fault stat-dir-end-not-checked
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a file named with a trailing slash was not ENOTDIR)
+old
+    if (rc == 0 && dir && (kst->st_mode & S_IFMT) != S_IFDIR) {
+        return -ENOTDIR;
+    }
+new
+end
+
+fault old-lstat-dot-no-follow
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (the old lstat of /proc/self/. did not reach the directory)
+old
+    len = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);
+    if (len != 0) {
+        return len;
+    }
+    follow |= dir;
+new
+    len = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);
+    if (len != 0) {
+        return len;
+    }
+end
