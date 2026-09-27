@@ -16,3 +16,7 @@ This directory builds the GNU system of milestone 54 (`dev-log/54-gnu/plan.md`):
 The order is binutils, the headers, a first GCC for C without a C library, glibc, the final GCC, and libxcrypt. glibc keeps its default minimum kernel, 3.2.0, so it falls back from the newer system calls to the older ones Rach2 has. The script takes step names (`binutils`, `headers`, `gcc1`, `glibc`, `gcc2`, `libxcrypt`) to run only those over an earlier build; with none, it starts from nothing. Under make its sub-makes share the caller's jobs, so `make -j32 gnu-toolchain` built it in ten minutes on the testing host.
 
 The host needs a C and C++ compiler, GNU make 4, gawk, bison, flex, m4, Python 3, texinfo, xz, patch, and curl or wget.
+
+## The ports
+
+`build_port.sh NAME...` builds programs with that toolchain. Each program has a recipe in `ports/`, a shell fragment that sets its version, its configure arguments, the configure answers a cross build cannot find out for itself, and the pinned patches applied after the extract. The program is configured for i686-linux-gnu with `--prefix=/usr`, compiled with the toolchain's GCC named by its full path, and installed with its manual pages into `build/vendor/gnu/root`, the tree the GNU system is staged from. It is linked statically unless `GNU_LINK=shared`, since the kernel loads no shared libraries yet. The recipes so far are coreutils 9.12, GNU make 4.4.1 and bash 5.3 with its twenty official patches.
