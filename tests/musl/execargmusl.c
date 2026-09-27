@@ -103,9 +103,16 @@ static int child(int argc, char *argv[])
         return argc == 3 && strlen(argv[2]) == LONGEST && argv[2][LONGEST - 1] == 'x' ? 0 : 1;
     }
     if (strcmp(argv[1], "env") == 0) {
+        char want[8];
+
         for (i = 0; environ[i] != NULL; i++) {
+            snprintf(want, sizeof(want), "E%04d", i);
+            memcpy(want + 5, "=v", 3);
+            if (i >= MANY || strcmp(environ[i], want) != 0) {
+                return 1;
+            }
         }
-        return i == MANY && strcmp(environ[MANY - 1], "E4999=v") == 0 ? 0 : 1;
+        return i == MANY ? 0 : 1;
     }
     return strcmp(argv[1], "ok") == 0 ? 0 : 1;
 }
