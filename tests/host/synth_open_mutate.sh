@@ -1,5 +1,9 @@
 #!/bin/sh
-# Compile synthetic-file regressions before, during and after each fault.
+# Compile synthetic-file regressions before, during and after each fault:
+# the ptmx dispatch before the flag checks, the text's terminator written
+# with no buffer, and a read of a process's arguments that holds no
+# reference to the address space or reads the process's record after the
+# first read, which may sleep while the process is reaped.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -35,7 +39,7 @@ run_phase()
     phase=$2
     expected=$3
     message=$4
-    binary="$work/$test-$phase"
+    binary="$work/$phase"
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
         -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
@@ -59,32 +63,46 @@ run_phase()
 }
 
 echo "synth-open-mutation: logs: $work"
-for test in devfs procfs; do
-    run_phase "$test" fixed 0 "$test-hosttest: result: pass:"
-    python3 - "$work/sys/fs/$test.c" "$test" <<'PY'
+for case in devfs:ptmx procfs:terminator procfs:unheld-space procfs:record-after-sleep; do
+    test=${case%%:*}
+    fault=${case#*:}
+    run_phase "$test" "$fault-fixed" 0 "$test-hosttest: result: pass:"
+    python3 - "$work/sys/fs/$test.c" "$fault" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
-if sys.argv[2] == 'devfs':
+if sys.argv[2] == 'ptmx':
     old = '    if (name_eq(name, "ptmx")) {\n        return pty_open_master(flags);\n    }\n'
     assert source.count(old) == 1
     source = source.replace(old, '')
     at = source.index('    dev = devfs_find(name);', source.index('int devfs_open('))
     source = source[:at] + old + source[at:]
 else:
-    old = "    if (!t->nomem) {\n        t->buf[t->len] = '\\0';\n    }"
-    assert source.count(old) == 1
-    source = source.replace(old, "    t->buf[t->len] = '\\0';")
+    changes = {
+        'terminator': [("    if (!t->nomem) {\n        t->buf[t->len] = '\\0';\n    }",
+                        "    t->buf[t->len] = '\\0';")],
+        'unheld-space': [("    mm_get(mm);\n    while (start < end) {", "    while (start < end) {"),
+                         ("        start += n;\n    }\n    procfs_mm_put(mm);\n}",
+                          "        start += n;\n    }\n}")],
+        'record-after-sleep': [("        if (paging_access(mm, start, chunk, n, 0) != 0) {\n"
+                                "            break;\n        }\n        for (i = 0; i < n; i++) {",
+                                "        if (paging_access(p->mm, start, chunk, n, 0) != 0) {\n"
+                                "            break;\n        }\n        for (i = 0; i < n; i++) {")],
+    }
+    for old, new in changes[sys.argv[2]]:
+        assert source.count(old) == 1
+        source = source.replace(old, new)
 path.write_text(source)
 PY
-    case $test in
-        devfs) message='ptmx exclusive create returns EEXIST before dispatch' ;;
-        procfs) message='runtime error: store to null pointer' ;;
+    case $fault in
+        ptmx) message='ptmx exclusive create returns EEXIST before dispatch' ;;
+        terminator) message='runtime error: store to null pointer' ;;
+        unheld-space | record-after-sleep) message='heap-use-after-free' ;;
     esac
-    run_phase "$test" mutated 1 "$message"
+    run_phase "$test" "$fault-mutated" 1 "$message"
     cleanup
-    run_phase "$test" restored 0 "$test-hosttest: result: pass:"
+    run_phase "$test" "$fault-restored" 0 "$test-hosttest: result: pass:"
     cmp "$work/$test.saved" "$work/sys/fs/$test.c"
 done

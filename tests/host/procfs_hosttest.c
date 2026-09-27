@@ -1,12 +1,20 @@
 /**
  * Check proc stat generation when every text allocation fails, the CPU time
  * of a process's stat and of a thread's, the descriptor links of a process,
- * which a closed descriptor has none of, and the ids a path under a
- * process's task directory needs.
+ * which a closed descriptor has none of, the ids a path under a process's
+ * task directory needs, and a read of a process's arguments while the
+ * process ends and is reaped.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * Unused exports are private so the compiler removes unrelated generators.
+ *
+ * The first read of a process's arguments sleeps for the page, as a read of
+ * a page of a file the process maps does, and meanwhile the process ends,
+ * dropping its reference to the address space, and is reaped, which frees
+ * its record. The read goes on through the address space it holds, and each
+ * later read looks the page up in it again: nothing may be read from the
+ * freed record or a freed address space, which AddressSanitizer judges.
  */
 #include "lib/kint.h"
 struct vpath;
@@ -43,6 +51,7 @@ static uint32_t procfs_task_links(int pid);
 extern int printf(const char *format, ...);
 extern int sscanf(const char *str, const char *format, ...);
 extern void *malloc(unsigned long size);
+extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
 
 static process_t process, thread, stranger;
@@ -51,6 +60,16 @@ process_t *current_proc = &process;
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;
+/* The process whose arguments `reaped_during_read` reads, 13, from the heap,
+ * since its end and its reap free its record and its address space; NULL
+ * once reaped. */
+static process_t *reading;
+static struct tgroup reading_group;
+static int reaps;
+/* The directory the reader runs in, which is not the reaped process's. */
+static page_dir_t reader_dir;
+page_dir_t *_kernel_dir;
+page_dir_t *_curr_dir = &reader_dir;
 
 /** Record a failed invariant. */
 static void check(int ok, const char *what)
@@ -62,7 +81,8 @@ static void check(int ok, const char *what)
 }
 
 /** Return the process whose stat file is generated, 7, a thread of it, 9,
- * and a process of another group, 11. */
+ * a process of another group, 11, and the process whose arguments are read
+ * while it is reaped, 13. */
 process_t *get_process(uint32_t pid)
 {
     if (pid == 9) {
@@ -70,6 +90,9 @@ process_t *get_process(uint32_t pid)
     }
     if (pid == 11) {
         return &stranger;
+    }
+    if (pid == 13) {
+        return reading;
     }
     return pid == 7 ? &process : NULL;
 }
@@ -151,6 +174,51 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     if (cap > 0) {
         out[0] = '\0';
     }
+}
+
+/** Take a reference to an address space. */
+void mm_get(struct mm *mm)
+{
+    mm->refs++;
+}
+
+/** Drop a reference to an address space; the last one frees it. */
+void mm_put(struct mm *mm)
+{
+    if (--mm->refs == 0) {
+        free(mm);
+    }
+}
+
+/** Load a page directory, which the last drop of an address space does only
+ * when it is the one in use, and the reader's is not. */
+void switch_page_directory(page_dir_t *dir)
+{
+    _curr_dir = dir;
+}
+
+/**
+ * Read `len` bytes at `addr` of the process's arguments, which are all 'a'.
+ * The first read sleeps for the page, and meanwhile the process ends,
+ * dropping its own reference to its address space, and is reaped, which
+ * frees its record; each read then looks the page up in `mm`, as
+ * `paging_access` looks up the region and the page after a sleep.
+ */
+int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
+{
+    (void)write;
+    if (reading) {
+        struct mm *own = reading->mm;
+
+        free(reading);
+        reading = NULL;
+        mm_put(own);
+        reaps++;
+    }
+    check(addr >= mm->arg_start && addr + len <= mm->arg_end,
+          "a read of the arguments stays in them");
+    k_memset(buf, 'a', len);
+    return 0;
 }
 
 /** Whether the stat line `line` has the user and system times `user` and
@@ -242,6 +310,39 @@ static void descriptor_links(void)
           "a descriptor being released has no link");
 }
 
+/**
+ * A read of a process's arguments that sleeps for a page while the process
+ * ends and is reaped reads the rest through the address space it holds,
+ * which the read's own reference then frees, and nothing of the freed
+ * record: all 300 bytes come back, three reads of up to 128 each.
+ */
+static void reaped_during_read(void)
+{
+    struct procfs_text text;
+    struct mm *mm = calloc(1, sizeof(*mm));
+
+    reading = calloc(1, sizeof(*reading));
+    check(mm && reading, "allocate the process and its address space");
+    if (!mm || !reading) {
+        return;
+    }
+    mm->refs = 1;
+    mm->arg_start = 0x1000u;
+    mm->arg_end = 0x1000u + 300u;
+    reading->pid = reading->tgid = 13;
+    reading->state = PROC_READY;
+    reading->tg = &reading_group;
+    reading->mm = mm;
+    reading_group.leader = reading;
+    reading_group.live = 1;
+    procfs_text_init(&text);
+    check(procfs_gen_cmdline(&text, 13) == 300 && reaps == 1 && !reading,
+          "a read of the arguments of a process reaped while it sleeps reads them all");
+    check(text.len == 300 && text.buf[0] == 'a' && text.buf[299] == 'a',
+          "and every byte comes from the address space");
+    kfree(text.buf);
+}
+
 /** Exercise empty and partially allocated text, then normal generation. */
 int main(void)
 {
@@ -277,9 +378,11 @@ int main(void)
     thread_times();
     descriptor_links();
     task_ids();
+    reaped_during_read();
     if (!failures) {
-        printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor links "
-               "and task ids\n");
+        printf(
+            "procfs-hosttest: result: pass: stat allocation failure and times, descriptor links, "
+            "task ids and a read of a reaped process's arguments\n");
     }
     return failures != 0;
 }
