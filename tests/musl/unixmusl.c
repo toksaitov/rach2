@@ -6,15 +6,17 @@
  * the peer's input only. A datagram pair and a sequenced-packet pair keep
  * the boundaries of messages, and a datagram too long for the buffer is cut
  * with MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child that has
- * closed its own ends of the pipe, and the child writes through it.
- * SO_PEERCRED reports the peer, and SO_PASSCRED brings the sender's
- * credentials. A listener bound to a path makes a socket file, accepts a
- * connection queued before the accept, and both ends report the names; a
- * second bind of the path fails with EADDRINUSE, and a connect to the file
- * after the listener is gone fails with ECONNREFUSED. An abstract name works
- * without a file. A datagram sent to a name arrives with the sender's name.
- * A nonblocking receive on an empty socket fails with EAGAIN, and poll
- * reports the socket readable once a byte arrives.
+ * closed its own ends of the pipe, and the child writes through it. A child
+ * that becomes user and group 1000 reads the pair's creator from
+ * SO_PEERCRED, and the byte it writes reaches the creator's end, which has
+ * SO_PASSCRED, with the child's pid, uid and gid. A listener bound to a path
+ * makes a socket file, accepts a connection queued before the accept, and
+ * both ends report the names; a second bind of the path fails with
+ * EADDRINUSE, and a connect to the file after the listener is gone fails
+ * with ECONNREFUSED. An abstract name works without a file. A datagram sent
+ * to a name arrives with the sender's name. A nonblocking receive on an
+ * empty socket fails with EAGAIN, and poll reports the socket readable once
+ * a byte arrives.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -195,10 +197,36 @@ static int message_pairs(void)
     return 0;
 }
 
-static int rights_and_creds(void)
+/**
+ * In a child of the pair's creator, whose effective ids are `uid` and `gid`:
+ * become user and group 1000, read the creator's credentials from `mine`
+ * with SO_PEERCRED, which a pair saves when it is made, and write a byte for
+ * the creator to read with the child's own. 0, or the step that failed.
+ */
+static int peer_child(int mine, pid_t creator, uid_t uid, gid_t gid)
 {
     struct ucred cr;
     socklen_t len = sizeof(cr);
+
+    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+        return 2;
+    }
+    if (getsockopt(mine, SOL_SOCKET, SO_PEERCRED, &cr, &len) != 0 || len != sizeof(cr) ||
+        cr.pid != creator || cr.uid != uid || cr.gid != gid) {
+        return 3;
+    }
+    return write(mine, "c", 1) == 1 ? 0 : 4;
+}
+
+/**
+ * The credentials a pair carries, between its creator and a child of other
+ * ids: the child's SO_PEERCRED reports the creator, and the byte the child
+ * writes reaches the creator's end, which has SO_PASSCRED, with the child's
+ * pid, uid and gid in SCM_CREDENTIALS.
+ */
+static int creds(void)
+{
+    struct ucred cr;
     union {
         struct cmsghdr h;
         char buf[CMSG_SPACE(sizeof(struct ucred))];
@@ -206,9 +234,52 @@ static int rights_and_creds(void)
     struct msghdr msg;
     struct iovec iov;
     struct cmsghdr *c;
+    pid_t creator = getpid();
+    pid_t pid;
+    int sv[2], n, status = 0;
+    int on = 1;
+    char buf[8];
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        setsockopt(sv[0], SOL_SOCKET, SO_PASSCRED, &on, sizeof(on)) != 0) {
+        return fail("the pair for credentials");
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(sv[0]);
+        _exit(peer_child(sv[1], creator, geteuid(), getegid()));
+    }
+    close(sv[1]);
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = buf;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctl.buf;
+    msg.msg_controllen = sizeof(ctl.buf);
+    n = pid < 0 ? -1 : (int)recvmsg(sv[0], &msg, 0);
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail(pid > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 3
+                        ? "the child's SO_PEERCRED did not report the pair's creator"
+                        : "the child of other ids");
+    }
+    c = CMSG_FIRSTHDR(&msg);
+    if (n != 1 || !c || c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_CREDENTIALS) {
+        return fail("no SCM_CREDENTIALS with the child's byte");
+    }
+    memcpy(&cr, CMSG_DATA(c), sizeof(cr));
+    if (cr.pid != pid || cr.uid != 1000 || cr.gid != 1000) {
+        return fail("the SCM_CREDENTIALS values are not the sender's");
+    }
+    close(sv[0]);
+    return 0;
+}
+
+static int rights_and_creds(void)
+{
     int sv[2], p[2];
     char buf[8];
-    int on = 1;
     int status;
     pid_t pid;
 
@@ -238,39 +309,7 @@ static int rights_and_creds(void)
     }
     close(p[0]);
     close(sv[0]);
-
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
-        return fail("socketpair for credentials");
-    }
-    if (getsockopt(sv[0], SOL_SOCKET, SO_PEERCRED, &cr, &len) != 0 || cr.pid != getpid() ||
-        cr.uid != geteuid()) {
-        return fail("SO_PEERCRED");
-    }
-    if (setsockopt(sv[1], SOL_SOCKET, SO_PASSCRED, &on, sizeof(on)) != 0 ||
-        write(sv[0], "c", 1) != 1) {
-        return fail("SO_PASSCRED");
-    }
-    memset(&msg, 0, sizeof(msg));
-    iov.iov_base = buf;
-    iov.iov_len = 1;
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = ctl.buf;
-    msg.msg_controllen = sizeof(ctl.buf);
-    if (recvmsg(sv[1], &msg, 0) != 1) {
-        return fail("recvmsg for credentials");
-    }
-    c = CMSG_FIRSTHDR(&msg);
-    if (!c || c->cmsg_type != SCM_CREDENTIALS) {
-        return fail("no SCM_CREDENTIALS");
-    }
-    memcpy(&cr, CMSG_DATA(c), sizeof(cr));
-    if (cr.pid != getpid() || cr.uid != getuid()) {
-        return fail("the SCM_CREDENTIALS values");
-    }
-    close(sv[0]);
-    close(sv[1]);
-    return 0;
+    return creds();
 }
 
 static int named(void)
