@@ -13,11 +13,21 @@
 # built under a temporary name and renamed into place only after every step
 # passes, so no unchecked image ever exists under the target's name.
 #
-# Usage: ./mkext2.sh <manifest> <output.ext2> [size_mb] [blocks_per_group]
+# Usage: ./mkext2.sh [--overlay PROGRAM] <manifest> <output.ext2> [size_mb]
+#                    [blocks_per_group]
 #
 # The default size is 1024 MiB, the size of the sealed disk's third partition;
 # the file is sparse on the host. Run from anywhere; the manifest's `build/...`
-# host paths resolve because this cd's to the repo root first.
+# host paths resolve because this cd's to the repo root first, and so does
+# PROGRAM's.
+#
+# --overlay runs PROGRAM with the staged directory as its one argument, after
+# the manifest is staged and before the volume is written, for a system that
+# a manifest cannot describe, such as one with links (vendor/gnu's
+# install_root.sh). What it adds is root's, with the mode it has in the
+# directory and the fixed staged instant as its times; a node the manifest
+# staged keeps the owner and mode the manifest gives it, and one the program
+# removed fails the build.
 #
 
 set -e
@@ -27,13 +37,18 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 STAGEIMAGE="$REPO/build/krffs/stageimage.krffs"
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
 
+OVERLAY=
+if [ "$1" = --overlay ]; then
+    OVERLAY="$2"
+    shift 2
+fi
 MANIFEST="$1"
 OUT="$2"
 SIZE="${3:-1024}"
 GROUP_BLOCKS="${4:-}"
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
-    echo "usage: mkext2.sh <manifest> <output.ext2> [size_mb] [blocks_per_group]" >&2
+    echo "usage: mkext2.sh [--overlay PROGRAM] <manifest> <output.ext2> [size_mb] [blocks_per_group]" >&2
     exit 2
 fi
 set --
@@ -62,6 +77,10 @@ for t in mke2fs debugfs e2fsck; do
 done
 
 cd "$REPO"
+if [ -n "$OVERLAY" ] && [ ! -x "$OVERLAY" ]; then
+    echo "mkext2: the overlay $OVERLAY is not an executable file" >&2
+    exit 1
+fi
 mkdir -p "$(dirname "$OUT")"
 
 # Every intermediate lives in a directory of this run's own, so that two
@@ -74,9 +93,33 @@ NODES="$WORK/nodes"
 SCRIPT="$WORK/debugfs"
 FSCK="$WORK/fsck.log"
 MKLOG="$WORK/mke2fs.log"
+ADDED="$WORK/added"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 "$STAGEIMAGE" "$MANIFEST" --tree "$TREE" > "$NODES"
+: > "$ADDED"
+if [ -n "$OVERLAY" ]; then
+    "$OVERLAY" "$TREE"
+    # The nodes the program added are the paths of the directory the node
+    # list does not have; the list names a directory twice when a line
+    # makes it as a parent before its own line. debugfs reads a command's
+    # words split at spaces, so a name with a space or a quote could not be
+    # given to it.
+    awk '$1 == "node" { print $5 }' "$NODES" | LC_ALL=C sort -u > "$WORK/staged"
+    (cd "$TREE" && find . -mindepth 1) | sed 's|^\.||' | LC_ALL=C sort > "$WORK/paths"
+    LC_ALL=C comm -23 "$WORK/staged" "$WORK/paths" > "$WORK/removed"
+    if [ -s "$WORK/removed" ]; then
+        echo "mkext2: $OVERLAY removed what the manifest staged:" >&2
+        head -n 5 "$WORK/removed" >&2
+        exit 1
+    fi
+    LC_ALL=C comm -13 "$WORK/staged" "$WORK/paths" > "$ADDED"
+    if grep -q '[[:space:]"\\]' "$ADDED"; then
+        echo "mkext2: $OVERLAY added a name with a space, a quote or a backslash:" >&2
+        grep '[[:space:]"\\]' "$ADDED" | head -n 3 >&2
+        exit 1
+    fi
+fi
 
 # The profile: revision 1, 4 KiB blocks, 128-byte inodes, the three
 # features the driver writes and the resize inode that keeps room for the
@@ -114,13 +157,30 @@ fi
 # The owners, modes and set-id bits from the manifest, one debugfs command
 # each, with the type bits kept: `mode` is the whole i_mode. The change
 # time as well, which mke2fs copies from the staged tree and no builder can
-# set there, so that one manifest makes one image.
-awk '$1 == "node" {
+# set there, so that one manifest makes one image. Where an overlay ran, it
+# may have changed the times of a staged directory by adding to it, so every
+# node has the staged instant as all three times, and what it added is
+# root's.
+awk -v overlay="$OVERLAY" '$1 == "node" {
     printf "set_inode_field %s mode %s\n", $5, $2;
     printf "set_inode_field %s uid %s\n", $5, $3;
     printf "set_inode_field %s gid %s\n", $5, $4;
     printf "set_inode_field %s ctime @1\n", $5;
+    if (overlay != "") {
+        printf "set_inode_field %s atime @1\n", $5;
+        printf "set_inode_field %s mtime @1\n", $5;
+    }
 }' "$NODES" > "$SCRIPT"
+awk '{
+    printf "set_inode_field %s uid 0\n", $0;
+    printf "set_inode_field %s gid 0\n", $0;
+    printf "set_inode_field %s atime @1\n", $0;
+    printf "set_inode_field %s mtime @1\n", $0;
+    printf "set_inode_field %s ctime @1\n", $0;
+}' "$ADDED" >> "$SCRIPT"
+if [ -n "$OVERLAY" ]; then
+    printf 'set_inode_field / %s @1\n' atime mtime ctime >> "$SCRIPT"
+fi
 debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1
 DBSTATUS=$?
 if [ "$DBSTATUS" -ne 0 ] || grep -v '^debugfs' "$WORK/debugfs.log" | grep -q .; then
@@ -139,4 +199,6 @@ fi
 "$SETIDCHECK" --ext2 "$TMP" --manifest "$MANIFEST"
 
 mv "$TMP" "$OUT"
-echo "mkext2: wrote $OUT from $MANIFEST ($(grep -c '^node ' "$NODES") nodes, ${SIZE} MiB)"
+ADDED_NOTE=
+[ -z "$OVERLAY" ] || ADDED_NOTE=" and $(wc -l < "$ADDED" | tr -d ' ') from $OVERLAY"
+echo "mkext2: wrote $OUT from $MANIFEST ($(grep -c '^node ' "$NODES") nodes$ADDED_NOTE, ${SIZE} MiB)"
