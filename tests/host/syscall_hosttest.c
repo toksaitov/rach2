@@ -376,6 +376,10 @@ static void clock_to(uint32_t tick)
  * otherwise to two ticks short of the deadline, leaving the sleeper blocked
  * for the halts to carry to it. A woken sleeper is READY, or RUNNING for
  * `switch_back`, as the real `schedule` leaves it when it switches back.
+ *
+ * No row yields a thousand times. A sleep that does, one that returns before
+ * its clock moves to a caller that sleeps again until it has, is a fault the
+ * model ends by posting a signal, so that its row fails and the rest run.
  */
 void schedule(void)
 {
@@ -386,7 +390,10 @@ void schedule(void)
     if (wakeup_at_unmask == 0) {
         unarmed_unmasks++;
     }
-    sleeps++;
+    if (++sleeps == 1000) {
+        CHECK(0, "a sleep ends within a thousand yields");
+        pending = 1;
+    }
     if (current_proc->state != PROC_BLOCKED) {
         return;
     }
