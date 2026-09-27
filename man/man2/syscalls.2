@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 27, 2026
 .Dt SYSCALLS 2
 .Os
 .Sh NAME
@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 123 calls.
+The kernel registers the following 124 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -84,6 +84,7 @@ The kernel registers the following 123 calls.
 .It 118 Ta Xr fsync 2
 .It 119 Ta Xr sigreturn 2
 .It 122 Ta Xr uname 2
+.It 125 Ta Xr mprotect 2
 .It 132 Ta Xr getpgid 2
 .It 140 Ta Xr llseek 2
 .It 142 Ta Xr newselect 2
