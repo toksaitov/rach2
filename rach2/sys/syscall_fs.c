@@ -3259,13 +3259,13 @@ int32_t sys_dup(isr_params_t *params)
     return newfd;
 }
 
-/* dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. */
 /**
  * Free slot `fd` for dup2 and dup3 to put a copy in, closing the descriptor
  * there if there is one, with every backing it held. -EBUSY when the slot
- * cannot be had: an open has reserved it, or a call of another thread
- * sharing the table holds its descriptor or the descriptor a close left to
- * such a call, which is when Linux's dup2 answers EBUSY too.
+ * cannot be had: an open has reserved it and not yet filled it, which is
+ * when Linux's dup2 answers EBUSY; or a call of another thread sharing the
+ * table holds its descriptor, or the descriptor a close left to such a call,
+ * where Linux replaces the descriptor and the call keeps its file.
  */
 static int32_t dup_clear(int fd)
 {
@@ -3283,6 +3283,7 @@ static int32_t dup_clear(int fd)
     return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
 }
 
+/* dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. */
 int32_t sys_dup2(isr_params_t *params)
 {
     int oldfd = (int)params->ebx;
