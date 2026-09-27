@@ -107,6 +107,18 @@
 #define SYS_TKILL           238
 #define SYS_TGKILL          270
 
+/* The scheduling calls, whose names are longer than the column above. */
+#define SYS_SCHED_SETPARAM         154
+#define SYS_SCHED_GETPARAM         155
+#define SYS_SCHED_SETSCHEDULER     156
+#define SYS_SCHED_GETSCHEDULER     157
+#define SYS_SCHED_YIELD            158
+#define SYS_SCHED_GET_PRIORITY_MAX 159
+#define SYS_SCHED_GET_PRIORITY_MIN 160
+#define SYS_SCHED_RR_GET_INTERVAL  161
+#define SYS_SCHED_SETAFFINITY      241
+#define SYS_SCHED_GETAFFINITY      242
+
 /* Auth/identity, resource, and tail syscalls a login server touches. */
 #define SYS_SETHOSTNAME 74
 #define SYS_SETRLIMIT   75

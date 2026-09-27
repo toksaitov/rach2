@@ -3500,3 +3500,290 @@ int32_t sys_setpriority(isr_params_t *params)
     }
     return rc;
 }
+
+/* The scheduling policies Linux numbers. Only SCHED_OTHER is run here; the
+ * others are known so that each is refused as Linux refuses it, or answered
+ * as Linux answers for it. */
+#define SCHED_OTHER 0
+
+#define SCHED_FIFO 1
+
+#define SCHED_RR 2
+
+#define SCHED_BATCH 3
+
+#define SCHED_IDLE 5
+
+#define SCHED_DEADLINE 6
+
+#define SCHED_EXT 7
+
+/* The flag a policy may carry that asks a fork not to pass the policy on;
+ * accepted with SCHED_OTHER, which it changes nothing for here. */
+#define SCHED_RESET_ON_FORK 0x40000000
+
+/* The highest real-time priority Linux gives SCHED_FIFO and SCHED_RR. */
+#define SCHED_RT_PRIO_MAX 99
+
+/* The bytes of a CPU mask: one 32-bit word, of which CPU 0 is the only
+ * bit a machine of one processor sets. */
+#define CPU_MASK_BYTES 4u
+
+/**
+ * The process a scheduling call names: the caller for pid 0, otherwise the
+ * process with that pid, zombies included as Linux includes them, or NULL.
+ */
+static process_t *sched_target(int pid)
+{
+    if (pid == 0) {
+        return current_proc;
+    }
+    return get_process((uint32_t)pid);
+}
+
+/**
+ * Whether the caller may change `p`'s scheduling: effective uid 0, or an
+ * effective uid equal to the target's effective or real uid, Linux's rule for
+ * a caller without CAP_SYS_NICE.
+ */
+static int sched_may_change(const process_t *p)
+{
+    return cred_privileged() || current_proc->euid == p->euid || current_proc->euid == p->ruid;
+}
+
+/**
+ * Give way to the other ready processes (sched_yield(2), syscall 158).
+ *
+ * The caller is put behind them in the round-robin order and runs again when
+ * its turn comes, at once when no other process is ready. Returns 0.
+ */
+int32_t sys_sched_yield(isr_params_t *params)
+{
+    (void)params;
+    schedule();
+    return 0;
+}
+
+/**
+ * Change a process's policy and priority (sched_setscheduler(2), syscall
+ * 156), or its priority alone (sched_setparam(2), syscall 154, which passes
+ * `policy` -1).
+ *
+ * `uparam` points at a struct sched_param, one int. SCHED_OTHER with priority
+ * 0 is the one setting a process has here, and asking for it succeeds for a
+ * caller that may change the target; SCHED_RESET_ON_FORK beside it is
+ * accepted and kept nowhere, since a fork has no other policy to reset. The
+ * rest is refused in Linux's order and with its errors: no parameter or a
+ * negative pid, -EINVAL; an unreadable parameter, -EFAULT; no such process,
+ * -ESRCH; a priority past 99, or one that does not suit the policy, -EINVAL,
+ * as for SCHED_DEADLINE, which takes its parameters from sched_setattr
+ * alone; SCHED_FIFO and SCHED_RR, -EPERM, as Linux answers a caller without
+ * CAP_SYS_NICE when RLIMIT_RTPRIO is 0; and a caller that may not change the
+ * target, -EPERM. SCHED_BATCH and SCHED_IDLE, which Linux grants anyone, and
+ * every other number, -EINVAL: this kernel has one policy.
+ */
+static int32_t sched_set(int pid, int policy, const void __user *uparam)
+{
+    int32_t priority;
+    process_t *p;
+
+    if (!uparam || pid < 0) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&priority, uparam, sizeof(priority)) != 0) {
+        return -EFAULT;
+    }
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (policy >= 0) {
+        policy &= ~SCHED_RESET_ON_FORK;
+    } else {
+        policy = SCHED_OTHER;
+    }
+    if (priority < 0 || priority > SCHED_RT_PRIO_MAX) {
+        return -EINVAL;
+    }
+    switch (policy) {
+    case SCHED_OTHER:
+        if (priority != 0) {
+            return -EINVAL;
+        }
+        return sched_may_change(p) ? 0 : -EPERM;
+    case SCHED_FIFO:
+    case SCHED_RR:
+        return priority == 0 ? -EINVAL : -EPERM;
+    default:
+        return -EINVAL;
+    }
+}
+
+/** sched_setscheduler(2), syscall 156: EBX = pid, ECX = policy, EDX = the
+ * struct sched_param; see `sched_set`. A negative policy is -EINVAL first. */
+int32_t sys_sched_setscheduler(isr_params_t *params)
+{
+    if ((int)params->ecx < 0) {
+        return -EINVAL;
+    }
+    return sched_set((int)params->ebx, (int)params->ecx, (const void __user *)params->edx);
+}
+
+/** sched_setparam(2), syscall 154: EBX = pid, ECX = the struct
+ * sched_param; see `sched_set`. */
+int32_t sys_sched_setparam(isr_params_t *params)
+{
+    return sched_set((int)params->ebx, -1, (const void __user *)params->ecx);
+}
+
+/**
+ * A process's policy (sched_getscheduler(2), syscall 157): SCHED_OTHER, the
+ * one every process has. -EINVAL for a negative pid, -ESRCH for no process.
+ */
+int32_t sys_sched_getscheduler(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+
+    if (pid < 0) {
+        return -EINVAL;
+    }
+    return sched_target(pid) ? SCHED_OTHER : -ESRCH;
+}
+
+/**
+ * A process's scheduling parameter (sched_getparam(2), syscall 155): the
+ * priority 0 of SCHED_OTHER, written to the struct sched_param at ECX.
+ * -EINVAL for no parameter or a negative pid, -ESRCH, -EFAULT.
+ */
+int32_t sys_sched_getparam(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+    void __user *uparam = (void __user *)params->ecx;
+    int32_t priority = 0;
+
+    if (!uparam || pid < 0) {
+        return -EINVAL;
+    }
+    if (!sched_target(pid)) {
+        return -ESRCH;
+    }
+    return copy_to_user(uparam, &priority, sizeof(priority)) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * The priority range of a policy, as Linux gives it whether the policy runs
+ * here or not: 1 to 99 for SCHED_FIFO and SCHED_RR, 0 to 0 for the other
+ * policies Linux has, and -EINVAL for a number that is none. `max` picks the
+ * top of the range.
+ */
+static int32_t sched_priority_bound(int policy, int max)
+{
+    switch (policy) {
+    case SCHED_FIFO:
+    case SCHED_RR:
+        return max ? SCHED_RT_PRIO_MAX : 1;
+    case SCHED_OTHER:
+    case SCHED_BATCH:
+    case SCHED_IDLE:
+    case SCHED_DEADLINE:
+    case SCHED_EXT:
+        return 0;
+    default:
+        return -EINVAL;
+    }
+}
+
+/** sched_get_priority_max(2), syscall 159: EBX = policy. */
+int32_t sys_sched_get_priority_max(isr_params_t *params)
+{
+    return sched_priority_bound((int)params->ebx, 1);
+}
+
+/** sched_get_priority_min(2), syscall 160: EBX = policy. */
+int32_t sys_sched_get_priority_min(isr_params_t *params)
+{
+    return sched_priority_bound((int)params->ebx, 0);
+}
+
+/**
+ * A process's round-robin time slice (sched_rr_get_interval(2), syscall 161,
+ * 32-bit timespec): one tick, 10 ms, since the timer takes the processor
+ * from every process at each tick. -EINVAL for a negative pid, -ESRCH,
+ * -EFAULT.
+ */
+int32_t sys_sched_rr_get_interval(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+    struct kernel_timespec slice;
+
+    if (pid < 0) {
+        return -EINVAL;
+    }
+    if (!sched_target(pid)) {
+        return -ESRCH;
+    }
+    slice.tv_sec = 0;
+    slice.tv_nsec = 10000000;
+    if (copy_to_user((void __user *)params->ecx, &slice, sizeof(slice)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * The CPUs a process may run on (sched_getaffinity(2), syscall 242).
+ *
+ * EBX = pid, ECX = the bytes of the mask at EDX. The mask has CPU 0 alone,
+ * the one processor, and the call writes its four bytes and returns 4, as
+ * Linux returns the bytes it wrote; the C library clears the rest of a larger
+ * set. -EINVAL for a length that is zero or not a multiple of four bytes,
+ * -ESRCH for no process, -EFAULT.
+ */
+int32_t sys_sched_getaffinity(isr_params_t *params)
+{
+    uint32_t len = params->ecx;
+    uint32_t mask = 1;
+
+    if (len == 0 || (len & 3u) != 0) {
+        return -EINVAL;
+    }
+    if (!sched_target((int)params->ebx)) {
+        return -ESRCH;
+    }
+    if (copy_to_user((void __user *)params->edx, &mask, CPU_MASK_BYTES) != 0) {
+        return -EFAULT;
+    }
+    return (int32_t)CPU_MASK_BYTES;
+}
+
+/**
+ * Set the CPUs a process may run on (sched_setaffinity(2), syscall 241).
+ *
+ * EBX = pid, ECX = the bytes of the mask at EDX. At most four bytes are read,
+ * as Linux reads no more than its own mask's size, and a shorter mask is
+ * zero past its end. A mask with CPU 0 is accepted, since that is where every
+ * process runs; one without it names no CPU of this machine and is refused
+ * with -EINVAL. -EFAULT, then -ESRCH, then -EPERM for a caller that may not
+ * change the target, in Linux's order.
+ */
+int32_t sys_sched_setaffinity(isr_params_t *params)
+{
+    uint32_t len = params->ecx;
+    uint32_t mask = 0;
+    process_t *p;
+
+    if (len > CPU_MASK_BYTES) {
+        len = CPU_MASK_BYTES;
+    }
+    if (copy_from_user(&mask, (const void __user *)params->edx, len) != 0) {
+        return -EFAULT;
+    }
+    p = sched_target((int)params->ebx);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (!sched_may_change(p)) {
+        return -EPERM;
+    }
+    return (mask & 1u) ? 0 : -EINVAL;
+}

@@ -1922,6 +1922,16 @@ void init_syscall(void)
     _syscall_table[SYS_GETTID] = sys_gettid;
     _syscall_table[SYS_GETPRIORITY] = sys_getpriority;
     _syscall_table[SYS_SETPRIORITY] = sys_setpriority;
+    _syscall_table[SYS_SCHED_SETPARAM] = sys_sched_setparam;
+    _syscall_table[SYS_SCHED_GETPARAM] = sys_sched_getparam;
+    _syscall_table[SYS_SCHED_SETSCHEDULER] = sys_sched_setscheduler;
+    _syscall_table[SYS_SCHED_GETSCHEDULER] = sys_sched_getscheduler;
+    _syscall_table[SYS_SCHED_YIELD] = sys_sched_yield;
+    _syscall_table[SYS_SCHED_GET_PRIORITY_MAX] = sys_sched_get_priority_max;
+    _syscall_table[SYS_SCHED_GET_PRIORITY_MIN] = sys_sched_get_priority_min;
+    _syscall_table[SYS_SCHED_RR_GET_INTERVAL] = sys_sched_rr_get_interval;
+    _syscall_table[SYS_SCHED_SETAFFINITY] = sys_sched_setaffinity;
+    _syscall_table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
     _syscall_table[SYS_SETSID] = sys_setsid;
     _syscall_table[SYS_SETPGID] = sys_setpgid;
     _syscall_table[SYS_GETPGID] = sys_getpgid;

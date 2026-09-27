@@ -291,4 +291,24 @@ int32_t sys_getpriority(isr_params_t *params);
 
 int32_t sys_setpriority(isr_params_t *params);
 
+int32_t sys_sched_yield(isr_params_t *params);
+
+int32_t sys_sched_setscheduler(isr_params_t *params);
+
+int32_t sys_sched_setparam(isr_params_t *params);
+
+int32_t sys_sched_getscheduler(isr_params_t *params);
+
+int32_t sys_sched_getparam(isr_params_t *params);
+
+int32_t sys_sched_get_priority_max(isr_params_t *params);
+
+int32_t sys_sched_get_priority_min(isr_params_t *params);
+
+int32_t sys_sched_rr_get_interval(isr_params_t *params);
+
+int32_t sys_sched_getaffinity(isr_params_t *params);
+
+int32_t sys_sched_setaffinity(isr_params_t *params);
+
 #endif
