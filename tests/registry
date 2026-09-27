@@ -25,7 +25,7 @@
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
-gnu|qemu-system-i386,ssh,scp,sftp|full|gnu-test*,os-real-gnu.ext2|2048
+gnu|qemu-system-i386,ssh,scp,sftp,debugfs|full|gnu-test*,os-real-gnu.ext2|2048
 install|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*
 installer-repair|qemu-system-i386,qemu-img,shasum,ssh,ssh-keygen,mcopy,mmd,mdeltree,debugfs|full

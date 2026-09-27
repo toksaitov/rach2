@@ -45,13 +45,20 @@ LOG="$DISK.log"
 KNOWN="$DISK.known"
 QPID=""
 
-cleanup() {
+. "$REPO/tools/setup/e2fsprogs_path.sh"
+
+# The machine, stopped; safe to call twice, since the pid is forgotten
+# before it is signalled.
+stop_machine() {
     qpid=$QPID
     QPID=""
     if [ -n "$qpid" ]; then
         kill -9 "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
+}
+cleanup() {
+    stop_machine
     rm -f "$DISK" "$KNOWN" "$DISK.back"
 }
 trap 'cleanup' EXIT
@@ -59,8 +66,18 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
+# What the SSH server said is in the machine's service log, not on its
+# console, so a failure reads the log off the stopped machine's disk, from
+# the partition at 1 MiB.
 fail() {
     echo "gnu-test: FAIL: $1" >&2
+    stop_machine
+    if [ -f "$DISK" ]; then
+        debugfs -R "cat /var/log/services" "$DISK?offset=1048576" > "$DISK.services" 2>/dev/null
+        if [ -s "$DISK.services" ]; then
+            echo "gnu-test: the machine's service log: $DISK.services" >&2
+        fi
+    fi
     echo "gnu-test: the console log: $LOG" >&2
     exit 1
 }
