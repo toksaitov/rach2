@@ -8,10 +8,13 @@
  * new length, including one the file has to move to reach. An unprivileged
  * caller's truncation drops the set-id bits, one the file has to move for
  * included, a privileged caller's keeps them, and a caller without write
- * permission is refused. Then each refusal, in Linux's order: a negative
- * length before the path is looked at, a missing file, a directory, a
- * device, a /proc file, a file used as a directory, a path too long, and a
- * length past what the file system can hold.
+ * permission is refused. A file that has to move is made afresh for the row,
+ * empty, with a second empty file made right after it, so that nothing
+ * behind its node is free, the method tests/fdstale.c describes. Then each
+ * refusal, in Linux's order: a negative length before the path is looked at,
+ * a missing file, a directory, a device, a /proc file, a file used as a
+ * directory, a path too long, and a length past what the file system can
+ * hold.
  *
  * Prints "TRUNCMUSL OK" on success and "TRUNCMUSL FAIL (detail)" otherwise.
  */
@@ -27,10 +30,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* The file the rows make and remove. */
+/* The file the rows make and remove, and the file made right after it. */
 #define FILE_PATH "/trunc.tmp"
+#define NEXT_PATH "/trunc.next"
 
-/* A length the file cannot reach without moving. */
+/* A length past the room a new, empty file's node has. */
 #define FAR 65536
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -61,6 +65,31 @@ static int mode_is(mode_t mode)
     struct stat st;
 
     return stat(FILE_PATH, &st) == 0 && (st.st_mode & 07777) == mode;
+}
+
+/**
+ * Make the file afresh and empty, and a second empty file right after it,
+ * so that the file's first growth past the room its new node has must move
+ * it. The allocator is first-fit: the file takes the first free node, and
+ * the second file takes the rest of that node, right behind the file, or,
+ * when the node was too small to split, what follows it was taken already,
+ * since no two free nodes are adjacent (tests/fdstale.c). Returns 0, or -1.
+ */
+static int fresh_file(void)
+{
+    int fd, next;
+
+    unlink(FILE_PATH);
+    unlink(NEXT_PATH);
+    fd = open(FILE_PATH, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    next = open(NEXT_PATH, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (next >= 0) {
+        close(next);
+    }
+    return fd >= 0 && next >= 0 ? 0 : -1;
 }
 
 /**
@@ -111,13 +140,16 @@ static int length_rows(void)
     if (syscall(SYS_truncate64, FILE_PATH, 7L, 0L) != 0 || !size_is(fd, 7)) {
         return fail("call 193 with the length in two words");
     }
+    close(fd);
+    if (fresh_file() != 0 || (fd = open(FILE_PATH, O_RDWR)) < 0) {
+        return fail("make the file afresh, with a file right after it");
+    }
     memset(buf, 'x', sizeof(buf));
     if (truncate(FILE_PATH, FAR) != 0 || !size_is(fd, FAR) || pread(fd, buf, 4, FAR - 4) != 4 ||
-        memcmp(buf, "\0\0\0\0", 4) != 0 || pread(fd, buf, 3, 0) != 3 ||
-        memcmp(buf, "01\0", 3) != 0) {
+        memcmp(buf, "\0\0\0\0", 4) != 0) {
         return fail("a length the file moves to reach");
     }
-    if (write(fd, "Z", 1) != 1 || pread(fd, buf, 1, 10) != 1 || buf[0] != 'Z') {
+    if (write(fd, "Z", 1) != 1 || pread(fd, buf, 1, 0) != 1 || buf[0] != 'Z') {
         return fail("write through the descriptor after the move");
     }
     if (truncate(FILE_PATH, 0) != 0 || !size_is(fd, 0)) {
@@ -136,7 +168,8 @@ static int identity_rows(void)
     if (!as_user(5, 0, 0) || !mode_is(0777)) {
         return fail("an unprivileged truncate drops the set-id bits");
     }
-    if (chmod(FILE_PATH, 06777) != 0 || !as_user(2 * FAR, 0, 0) || !mode_is(0777)) {
+    if (fresh_file() != 0 || chmod(FILE_PATH, 06777) != 0 || !as_user(2 * FAR, 0, 0) ||
+        !mode_is(0777)) {
         return fail("the set-id bits of a file that moved");
     }
     if (chmod(FILE_PATH, 0644) != 0 || !as_user(1, -1, EACCES)) {
@@ -192,9 +225,11 @@ int main(void)
 {
     if (length_rows() != 0 || identity_rows() != 0 || refusal_rows() != 0) {
         unlink(FILE_PATH);
+        unlink(NEXT_PATH);
         return 1;
     }
     unlink(FILE_PATH);
+    unlink(NEXT_PATH);
     printf("TRUNCMUSL OK\n");
     return 0;
 }
