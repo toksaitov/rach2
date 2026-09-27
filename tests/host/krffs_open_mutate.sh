@@ -56,6 +56,8 @@ for source, output, names in groups:
     parts = []
     if source == "syscall_fs.c":
         parts = re.findall(r"^#define (?:O_|CRED_|S_IF).*", text, re.M)
+        shared = (work / "sys" / "syscall_internal.h").read_text()
+        parts += re.findall(r"^#define CRED_.*", shared, re.M)
     for name in names.split():
         matches = list(re.finditer(r"^[A-Za-z_][\w *]*\b" + name + r"\([^;]*?\n\{", text, re.M))
         if len(matches) != 1:

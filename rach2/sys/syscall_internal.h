@@ -62,6 +62,11 @@ void cred_kill_setid(krffs_node_t *node);
 
 void vfs_kill_setid(struct vfs_mount *mnt, void *node);
 
+/* Access-check `want` bits, matching an octal permission digit. */
+#define CRED_R 4
+
+#define CRED_W 2
+
 #define CRED_X 1
 
 int mnt_is_root(const struct vfs_mount *mnt);

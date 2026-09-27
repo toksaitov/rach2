@@ -1108,11 +1108,6 @@ static int cred_in_group(uint32_t gid)
     return gid == current_proc->egid || cred_in_suppl(gid);
 }
 
-/* Access-check `want` bits, matching an octal permission digit. */
-#define CRED_R 4
-
-#define CRED_W 2
-
 /**
  * The nine-bit permission check over explicit metadata: one identity class is
  * chosen and judged alone, the classic rule. The owner is judged by the owner
