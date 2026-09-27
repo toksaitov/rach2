@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt SOCKETCALL 2
 .Os
 .Sh NAME
@@ -38,11 +38,13 @@ Arguments are in array order; pointers occupy one word.
 .It 14 Ta Xr setsockopt 2 Ta fd, level, option, value, len
 .It 15 Ta Xr getsockopt 2 Ta fd, level, option, value, len
 .It 17 Ta Xr recvmsg 2 Ta fd, msg, flags
+.It 18 Ta Xr accept4 2 Ta fd, addr, addrlen, flags
 .It 0x1000 Ta Xr ping 2 Ta address
 .El
 .Pp
 An address length for
 .Fn accept ,
+.Fn accept4 ,
 .Fn getsockname ,
 .Fn getpeername ,
 or
@@ -54,11 +56,9 @@ is also a pointer.
 Other lengths in the table are values.
 .Pp
 Operations 8
-.Pq Fn socketpair ,
-16
-.Pq Fn sendmsg ,
-and 18
-.Pq Fn accept4
+.Pq Fn socketpair
+and 16
+.Pq Fn sendmsg
 are not implemented and return
 .Er EINVAL .
 Every other unlisted operation also returns
@@ -103,6 +103,7 @@ Errors from the selected operation are returned unchanged.
 Their conditions are documented on the corresponding pages.
 .Sh SEE ALSO
 .Xr accept 2 ,
+.Xr accept4 2 ,
 .Xr bind 2 ,
 .Xr connect 2 ,
 .Xr getsockname 2 ,

@@ -528,72 +528,55 @@ static void exec_vfs_done(struct exec_vfs_ctx *c)
 }
 
 /*
- * Where execve has the new image's arguments while it destroys the old one.
+ * Where execve has the program's path and the new image's arguments while it
+ * destroys the old image.
  *
- * One workspace per process, and not one for the machine: a program on a
- * mounted volume is read through the buffer cache, which sleeps, so a second
- * execve runs while the first is inside a read. Sharing one set of buffers
- * meant the second overwrote the first's arguments, its open file and the
- * reference its resolution held, and the mount that reference belongs to
- * could never be unmounted afterwards. `in_syscall` stops the timer from
- * scheduling; it does not stop a call that gives the processor up.
+ * Each call has a workspace of its own in the heap, which the caller's record
+ * points at until the call ends, so `exec_fail_destroyed` can give it back
+ * too. It is not one for the machine: a program on a mounted volume is read
+ * through the buffer cache, which sleeps, so a second execve runs while the
+ * first is inside a read, and a shared workspace let the second overwrite the
+ * first's arguments, its open file and the reference its resolution held.
+ * `in_syscall` stops the timer from scheduling; it does not stop a call that
+ * gives the processor up.
  *
- * They cannot be on the stack (the kernel stack is 16 KB and this is about
- * seven of them) and cannot be in the caller's address space (that is what
- * is being torn down).
- *
- * The sizes come from the page these end up in, not from a round number.
- * `build_user_stack` lays the strings, both pointer arrays, the argc word, a
- * nine-entry auxv and 16 bytes of AT_RANDOM into ONE 4096-byte page, and it
- * runs AFTER the old image is freed, so a vector that fits here and not there
- * kills the caller instead of failing it. For 63 entries in each vector the
- * fixed part is 147 words of info block, 16 bytes of AT_RANDOM and up to 15
- * bytes of alignment, about 640 bytes; the remaining space is shared by the
- * strings of BOTH vectors, which is why the budget below is one number for the
- * two of them and not one each. 3072 leaves room for an auxv entry somebody
- * adds later.
- *
- * The old limits were 15 entries and 512 bytes each, which a link line
- * passes without trying: a compiler, `-static`, `-o`, an output name and a
- * dozen objects is over both.
+ * The strings are in `args`, the pages of the new stack (`proc/uimage.h`),
+ * taken before the old image is destroyed, so every limit on them is checked
+ * while there is still a caller to return an error to.
  */
-#define EXEC_MAX_ENTRIES 63
 
-#define EXEC_MAX_STRINGS 3072
-
-/* A script's first line, and the script's own path, which becomes an argument
- * to its interpreter. Both in the workspace, because the argv pointers handed
- * on point into them and the caller's memory is gone by the time they are
- * read. */
+/* A script's first line, read here to be parsed. */
 #define EXEC_SHEBANG_MAX 128
 
 struct exec_state {
     struct exec_vfs_ctx vfs;
+    struct uimage args;
     char path[VFS_PATH_MAX];
-    char argv_storage[EXEC_MAX_STRINGS];
-    char *argv_bufs[EXEC_MAX_ENTRIES + 1];
-    char envp_storage[EXEC_MAX_STRINGS];
-    char *envp_bufs[EXEC_MAX_ENTRIES + 1];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
-    char script_path[VFS_PATH_MAX];
 };
 
-/* A process's workspace is allocated at its first exec and kept in its
- * record for the record's life, since a program that execs once execs
- * again; `free_process` gives it back. */
-static struct exec_state *exec_state_of(process_t *proc)
+/** Give back the current process's exec workspace, if it has one: the
+ * program held open, the frames of a stack no page directory took, and the
+ * workspace itself. */
+static void exec_release(void)
 {
-    if (!proc->exec_ws) {
-        proc->exec_ws = kzalloc(sizeof(struct exec_state));
+    struct exec_state *s = current_proc->exec_ws;
+
+    if (s == NULL) {
+        return;
     }
-    return proc->exec_ws;
+    exec_vfs_done(&s->vfs);
+    uimage_release(&s->args);
+    kfree(s);
+    current_proc->exec_ws = NULL;
 }
 
 /**
  * Kill the current process after exec has destroyed its old address space.
  *
  * Past free_user_pages there is no image to return to, so a load/stack failure
- * cannot continue. Mark the process a zombie, wake any parent waiting on it (so
+ * cannot continue. Give back the exec workspace, which `sys_execve` never
+ * sees again, mark the process a zombie, wake any parent waiting on it (so
  * the scheduler has a target), switch away, and never iret back into the
  * destroyed space.
  */
@@ -605,6 +588,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
     page_dir_t *dir;
     int was_init = (current_proc->pid == init_pid && init_pid != 0);
 
+    exec_release();
     klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
          (int)current_proc->pid, where);
 
@@ -693,15 +677,19 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
  * not followed, because a chain of them is a loop nobody can see the
  * end of, and nothing here needs one.
  *
- * The caller's `path` and `argv_bufs` are rewritten in place on success.
- * The script is read through `read` over `ctx`: the root's reader by path,
- * or the mount's over an open handle.
+ * The arguments on the new stack are rewritten as Linux's `load_script`
+ * rewrites them: argv[0] is taken away, and the script's path, the argument
+ * and the interpreter are put below the rest, under the limits the caller's
+ * strings met. The caller's `path` becomes the interpreter's. The script is
+ * read through `read` over `ctx`: the root's reader by path, or the mount's
+ * over an open handle.
  *
  * @param argc the argument count, updated when the vector grows.
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
- *         errno for one whose first line names nothing.
+ *         errno for one whose first line names nothing or whose arguments no
+ *         longer fit.
  */
-static int32_t exec_shebang(struct exec_state *s, int *argc,
+static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
                             int (*read)(void *, void *, uint32_t, uint32_t), void *ctx)
 {
     char *interp;
@@ -709,9 +697,7 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
     char *p;
     int n;
     int i;
-    int extra;
-    int count;
-    char *rebuilt[EXEC_MAX_ENTRIES + 1];
+    int32_t rc;
 
     n = read(ctx, s->shebang_line, EXEC_SHEBANG_MAX, 0);
     if (n < 3 || s->shebang_line[0] != '#' || s->shebang_line[1] != '!') {
@@ -766,33 +752,21 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
         return -ENOEXEC; /* an interpreter is named by an absolute path */
     }
 
-    /* The script's own path becomes an argument, so it must outlive the buffer
-       the interpreter's path is about to be written into. The two buffers are
-       the same size, so this is a copy and never a truncation: handing the
-       interpreter a shortened name would run a different file from the one
-       whose permissions were just checked. */
-    k_strncpy(s->script_path, s->path, sizeof(s->script_path) - 1);
-    s->script_path[sizeof(s->script_path) - 1] = '\0';
-
-    extra = arg ? 2 : 1;
-    count = extra + (*argc > 0 ? *argc - 1 : 0);
-    if (count >= EXEC_MAX_ENTRIES) {
-        return -E2BIG;
+    rc = uimage_drop_first(&s->args);
+    if (rc == 0) {
+        rc = uimage_push(&s->args, s->path);
     }
-    rebuilt[0] = interp;
-    i = 1;
-    if (arg) {
-        rebuilt[i++] = arg;
+    if (rc == 0 && arg != NULL) {
+        rc = uimage_push(&s->args, arg);
+        (*argc)++;
     }
-    rebuilt[i++] = s->script_path;
-    for (n = 1; n < *argc; n++) {
-        rebuilt[i++] = s->argv_bufs[n];
+    if (rc == 0) {
+        rc = uimage_push(&s->args, interp);
     }
-    rebuilt[i] = NULL;
-    for (n = 0; n <= i; n++) {
-        s->argv_bufs[n] = rebuilt[n];
+    if (rc != 0) {
+        return rc;
     }
-    *argc = i;
+    (*argc)++;
 
     k_strncpy(s->path, interp, sizeof(s->path) - 1);
     s->path[sizeof(s->path) - 1] = '\0';
@@ -841,48 +815,151 @@ static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
 }
 
 /**
- * How far below its first page the stack of a new image may grow: the soft
- * RLIMIT_STACK in force at the exec, which bounds the whole stack as Linux's
- * does, in whole pages, less the page it starts with, and never into the
- * range below VM_MMAP_BASE where anonymous mappings are placed. A limit
- * changed later applies at the next exec.
+ * How far below its top page the stack of a new image may grow, when the
+ * pages its arguments took start at `bottom`: to the soft RLIMIT_STACK in
+ * force at the exec, in whole pages, which bounds the whole stack as Linux's
+ * does, but never into the range below VM_MMAP_BASE where anonymous mappings
+ * are placed, and always as far as `bottom`. A limit changed later applies at
+ * the next exec.
  */
-static uint32_t exec_stack_window(void)
+static uint32_t exec_stack_window(uint32_t bottom)
 {
-    uint32_t limit = current_proc->rlim[RLIM_STACK].cur & ~(uint32_t)(PAGE_SIZE - 1);
-    uint32_t room = USER_STACK_BASE - VM_MMAP_BASE;
+    uint32_t size = current_proc->rlim[RLIM_STACK].cur & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t floor;
 
-    if (limit <= PAGE_SIZE) {
-        return 0;
+    if (size > USER_ADDR_MAX - VM_MMAP_BASE) {
+        size = USER_ADDR_MAX - VM_MMAP_BASE;
     }
-    limit -= PAGE_SIZE;
-    return limit < room ? limit : room;
+    floor = USER_ADDR_MAX - size;
+    if (floor > bottom) {
+        floor = bottom;
+    }
+    return USER_STACK_BASE - floor;
 }
 
 /**
- * Replace the current process image with a new program (execve(2)).
- *
- * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
- * the path, argv, and envp into the process's exec workspace, allocated at
- * its first exec, resolves a `#!` script to its interpreter, and validates
- * the ELF header BEFORE tearing the old image down (so a format the loader
- * does not take leaves the caller intact), then frees the old user pages,
- * streams the new program in, builds the SysV/i386
- * initial stack, and redirects the iret frame to the entry point. A failure
- * after the old image is gone, a segment that does not load, routes to
- * exec_fail_destroyed, which ends the process.
+ * Count the pointers of the user vector `vec` before its NULL into `*n`, as
+ * Linux's `count` counts them; a NULL `vec` has none. More than `max` is
+ * -E2BIG, found without reading on to the end, and a pointer that cannot be
+ * read is -EFAULT.
  */
-int32_t sys_execve(isr_params_t *params)
+static int32_t exec_count(char *const __user *vec, uint32_t max, uint32_t *n)
+{
+    uint32_t i;
+
+    *n = 0;
+    if (vec == NULL) {
+        return 0;
+    }
+    for (i = 0;; i++) {
+        uint32_t ptr;
+
+        if (copy_from_user(&ptr, (const void __user *)&vec[i], sizeof(ptr)) != 0) {
+            return -EFAULT;
+        }
+        if (ptr == 0) {
+            *n = i;
+            return 0;
+        }
+        if (i == max) {
+            return -E2BIG;
+        }
+        if ((i & 1023u) == 1023u) {
+            sched_service_point();
+        }
+    }
+}
+
+/**
+ * Copy the `n` strings of the user vector `vec` onto the new stack `u`, the
+ * last first, as Linux's `copy_strings` copies them: each pointer is read
+ * again, and a string that cannot be read is -EFAULT, one past the length
+ * limit or the budget -E2BIG.
+ */
+static int32_t exec_copy_strings(struct uimage *u, char *const __user *vec, uint32_t n)
+{
+    while (n > 0) {
+        uint32_t ptr;
+        int32_t rc;
+
+        n--;
+        if (copy_from_user(&ptr, (const void __user *)&vec[n], sizeof(ptr)) != 0) {
+            return -EFAULT;
+        }
+        rc = uimage_push_user(u, (const char __user *)ptr);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Copy the program's path and the caller's vectors onto the new stack in
+ * `s`, and count them into `*argc` and `*envc`, as Linux's
+ * `do_execveat_common` does.
+ *
+ * Both vectors are counted first, and their pointers are measured against
+ * the budget `uimage_start` sets from the soft RLIMIT_STACK. The strings
+ * follow, the path the caller passed at the top, then the environment and
+ * then the arguments, each vector last string first. An empty argv gets one
+ * empty string, so a program that starts reading at argv[1] does not read
+ * the environment. 0, -E2BIG, -EFAULT or -ENOMEM.
+ */
+static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path,
+                              char *const __user *user_argv, char *const __user *user_envp,
+                              uint32_t *argc, uint32_t *envc)
+{
+    uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
+    uint32_t max = uimage_budget(limit) / 4u;
+    int32_t rc;
+
+    rc = exec_count(user_argv, max, argc);
+    if (rc == 0) {
+        rc = exec_count(user_envp, max, envc);
+    }
+    if (rc == 0) {
+        rc = uimage_start(&s->args, USER_ADDR_MAX, limit, *argc, *envc);
+    }
+    if (rc == 0) {
+        rc = uimage_push_user(&s->args, user_path);
+    }
+    if (rc == 0) {
+        rc = exec_copy_strings(&s->args, user_envp, *envc);
+    }
+    if (rc == 0) {
+        rc = exec_copy_strings(&s->args, user_argv, *argc);
+    }
+    if (rc == 0 && *argc == 0) {
+        rc = uimage_push(&s->args, "");
+        *argc = 1;
+    }
+    return rc;
+}
+
+/**
+ * Replace the current process image with a new program, in the workspace
+ * `s`; the body of `sys_execve`.
+ *
+ * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success.
+ * Resolves the path and checks the execute right, copies the path, argv and
+ * envp onto the new stack's pages, resolves a `#!` script to its
+ * interpreter, validates the ELF header and places the stack's information
+ * block, all BEFORE tearing the old image down, so a refusal leaves the
+ * caller intact; then frees the old user pages, streams the new program in,
+ * writes and maps the SysV/i386 initial stack, and redirects the iret frame
+ * to the entry point. A failure after the old image is gone, a segment that
+ * does not load, routes to exec_fail_destroyed, which ends the process.
+ */
+static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 {
     const char __user *user_path = (const char __user *)params->ebx;
     char *const __user *user_argv = (char *const __user *)params->ecx;
     char *const __user *user_envp = (char *const __user *)params->edx;
     struct exec_krffs_ctx kctx;
 
-    int argc = 0;
-    int envc = 0;
-    uint32_t argv_offset = 0;
-    uint32_t envp_offset = 0;
+    uint32_t argc = 0;
+    uint32_t envc = 0;
     int owned_console = 0;
     uint32_t setid_mode = 0;
     uint32_t file_uid = 0;
@@ -890,32 +967,16 @@ int32_t sys_execve(isr_params_t *params)
     int secure = 0;
     uint32_t old_euid;
     uint32_t old_egid;
-
-    struct exec_state *s;
     uint32_t entry_point;
+    int32_t err;
 
     elf_image_t img;
     uint8_t random16[16];
     page_dir_t *proc_dir;
-    uintptr_t stack_phys;
-    void *stack_page;
     const char *name;
     int len;
 
-    mem_balance();
-    if (!current_proc) {
-        return -ESRCH;
-    }
-    /* This caller's workspace, by its place in the process table: what it
-     * puts there is read again after a sleep, and another exec must not be
-     * able to reach it. */
-    s = exec_state_of(current_proc);
-    if (!s) {
-        return -ENOMEM;
-    }
-    k_memset(s, 0, sizeof(*s));
-
-    /* Resolve the program path (relative names against the cwd) into that
+    /* Resolve the program path (relative names against the cwd) into the
      * workspace. A bad user pointer, an over-long path, or an empty path is
      * rejected by the return value, so a kernel-range pointer cannot leak
      * kernel memory. The buffer is VFS_PATH_MAX bytes (NUL included). */
@@ -925,109 +986,6 @@ int32_t sys_execve(isr_params_t *params)
     len = copy_path_cwd(s->path, sizeof(s->path), user_path);
     if (len < 0) {
         return len;
-    }
-
-    /* Copy argv from user space, range-checking every user pointer and bounding
-     * the cumulative offset so s->argv_storage cannot overflow. An argument
-     * that does not fit fails the exec instead of being silently truncated.
-     * The pointer array and each string are read through the copy helpers,
-     * which fault-check each access.
-     *
-     * The two vectors share one string budget, which is checked after both are
-     * in: the page they are laid into is one page whichever of them fills it,
-     * and the check that would otherwise catch it runs after the old image is
-     * gone, where the only way to fail is to kill the caller. */
-    if (user_argv) {
-        for (argc = 0; argc < EXEC_MAX_ENTRIES; argc++) {
-            uint32_t arg_ptr = 0;
-            int r;
-
-            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc], sizeof(arg_ptr)) !=
-                0) {
-                return -EFAULT;
-            }
-            if (arg_ptr == 0) {
-                break; /* NULL terminator */
-            }
-            /* The storage is exactly full and another argument is waiting:
-             * that is a size limit reached, not a bad address. */
-            if (argv_offset >= sizeof(s->argv_storage)) {
-                return -E2BIG;
-            }
-            s->argv_bufs[argc] = &s->argv_storage[argv_offset];
-            r = strncpy_from_user(&s->argv_storage[argv_offset], (const char __user *)arg_ptr,
-                                  sizeof(s->argv_storage) - argv_offset);
-            if (r == -EFAULT) {
-                return -EFAULT;
-            }
-            if (r < 0) {
-                return -E2BIG; /* did not fit */
-            }
-            argv_offset += (uint32_t)r + 1;
-        }
-        /* The bufs array has EXEC_MAX_ENTRIES args plus a NULL terminator;
-         * one more non-NULL pointer is too many args, not a silent truncation.
-         */
-        if (argc == EXEC_MAX_ENTRIES) {
-            uint32_t arg_ptr = 0;
-            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[EXEC_MAX_ENTRIES],
-                               sizeof(arg_ptr)) != 0) {
-                return -EFAULT;
-            }
-            if (arg_ptr != 0) {
-                return -E2BIG;
-            }
-        }
-    }
-    s->argv_bufs[argc] = NULL;
-
-    if (user_envp) {
-        for (envc = 0; envc < EXEC_MAX_ENTRIES; envc++) {
-            uint32_t env_ptr = 0;
-            int r;
-
-            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[envc], sizeof(env_ptr)) !=
-                0) {
-                return -EFAULT;
-            }
-            if (env_ptr == 0) {
-                break; /* NULL terminator */
-            }
-            if (envp_offset >= sizeof(s->envp_storage)) {
-                return -E2BIG;
-            }
-            s->envp_bufs[envc] = &s->envp_storage[envp_offset];
-            r = strncpy_from_user(&s->envp_storage[envp_offset], (const char __user *)env_ptr,
-                                  sizeof(s->envp_storage) - envp_offset);
-            if (r == -EFAULT) {
-                return -EFAULT;
-            }
-            if (r < 0) {
-                return -E2BIG; /* did not fit */
-            }
-            envp_offset += (uint32_t)r + 1;
-        }
-        /* As with argv: one more non-NULL envp pointer overflows the bufs
-         * array; fail, not silently drop the tail of the environment. */
-        if (envc == EXEC_MAX_ENTRIES) {
-            uint32_t env_ptr = 0;
-            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[EXEC_MAX_ENTRIES],
-                               sizeof(env_ptr)) != 0) {
-                return -EFAULT;
-            }
-            if (env_ptr != 0) {
-                return -E2BIG;
-            }
-        }
-    }
-    s->envp_bufs[envc] = NULL;
-
-    /* The two vectors share the page they are laid into, so they share a
-     * budget, and it is checked HERE: `build_user_stack` would catch it, but it
-     * runs after `free_user_pages`, where there is no image left to return an
-     * error to and the caller is killed instead. */
-    if (argv_offset + envp_offset > EXEC_MAX_STRINGS) {
-        return -E2BIG;
     }
 
     name = s->path;
@@ -1132,6 +1090,11 @@ int32_t sys_execve(isr_params_t *params)
         vfs_ref_release(&xref);
     }
 checked:
+
+    err = exec_copy_args(s, user_path, user_argv, user_envp, &argc, &envc);
+    if (err != 0) {
+        return err;
+    }
 
     if (current_proc->cr3 == 0) {
         proc_dir = _kernel_dir;
@@ -1253,6 +1216,11 @@ checked:
         }
     }
 
+    err = uimage_place(&s->args, argc, envc);
+    if (err != 0) {
+        return err;
+    }
+
     /* The exec is now committed (the image is valid). Drop close-on-exec
      * descriptors before the old address space goes away. */
     close_cloexec_fds();
@@ -1336,30 +1304,21 @@ checked:
     exec_vfs_done(&s->vfs);
     entry_point = img.entry;
 
-    stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
-    if (stack_phys == 0) {
-        exec_fail_destroyed(2);
-    }
-
-    stack_page = kmap_temp(stack_phys);
-    if (!stack_page) {
-        exec_fail_destroyed(3); /* the old image is gone; nothing to return to */
-    }
-    k_memset(stack_page, 0, PAGE_SIZE);
-
-    /* Build the SysV/i386 initial stack (argc, the argv and real envp pointer
-     * arrays, and the auxv) in the freshly zeroed page. build_user_stack copies
-     * the strings in and 16-byte-aligns the entry ESP; the layout is verified
-     * host-side (tests/host/uimage_hosttest.c). */
+    /* Write the SysV/i386 initial stack (argc, the argv and envp pointer
+     * arrays, and the auxv) below the strings on the pages taken for it, and
+     * map them; the layout is verified host-side
+     * (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
     {
-        uint32_t user_esp = build_user_stack(stack_page, USER_STACK_BASE, PAGE_SIZE, argc,
-                                             s->argv_bufs, s->envp_bufs, &img, random16, secure);
+        uint32_t user_esp = s->args.esp;
+        uint32_t bottom = uimage_bottom(&s->args);
+        uint32_t window = exec_stack_window(bottom);
 
-        kunmap_temp(stack_page);
-
-        if (user_esp == 0) {
-            exec_fail_destroyed(4);
+        if (uimage_write(&s->args, argc, envc, &img, random16, secure) != 0) {
+            exec_fail_destroyed(2);
+        }
+        if (uimage_map(&s->args, proc_dir) != 0) {
+            exec_fail_destroyed(3);
         }
 
         /* Modify the ISR return frame so iret resumes at the new program's
@@ -1399,15 +1358,17 @@ checked:
         /* Build the address-space map (VMAs) for the new image so the
          * page-fault handler can demand-page, grow the stack, or segfault. The
          * ELF code/data pages themselves are still eagerly loaded above. */
-        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, exec_stack_window()) != 0) {
-            exec_fail_destroyed(5); /* the regions could not be made */
+        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, window) != 0 ||
+            (bottom < USER_STACK_BASE &&
+             !vm_grow_stack(&current_proc->vm, bottom, RLIM_INFINITY32))) {
+            exec_fail_destroyed(4); /* the regions could not be made */
         }
         /* RLIMIT_AS: an image whose regions cover more than the limit does
          * not run; the old image is gone by now, so the process ends. */
         if (vm_total(&current_proc->vm) > current_proc->rlim[RLIM_AS].cur) {
             klog(KLOG_WARN, "exec", "refused: the image is past RLIMIT_AS, pid %d",
                  (int)current_proc->pid);
-            exec_fail_destroyed(6);
+            exec_fail_destroyed(5);
         }
         /* The new image may report a full descriptor table once of its own. */
         current_proc->vma_reported = 0;
@@ -1428,6 +1389,33 @@ checked:
     }
 
     return 0; /* unused: iret resumes at the new entry point */
+}
+
+/**
+ * Replace the current process image with a new program (execve(2)).
+ *
+ * Gives the call a workspace of its own, which `exec_run` does the work in,
+ * and gives it back when that returns, whether the exec failed or the new
+ * image is about to be entered. A failure past the destruction of the old
+ * image does not return here; `exec_fail_destroyed` gives the workspace back.
+ */
+int32_t sys_execve(isr_params_t *params)
+{
+    struct exec_state *s;
+    int32_t rc;
+
+    mem_balance();
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    s = kzalloc(sizeof(*s));
+    if (!s) {
+        return -ENOMEM;
+    }
+    current_proc->exec_ws = s;
+    rc = exec_run(params, s);
+    exec_release();
+    return rc;
 }
 
 /**

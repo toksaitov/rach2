@@ -99,9 +99,10 @@ static const char *const PROBES[] = {
     "musl/truncmusl",
     /* The process calls static GNU programs make, each group through the
        libc that has them: the CPU time the kernel charges, the clocks, how a
-       process is named and scheduled, waitid, prctl, and the stack limit. */
+       process is named and scheduled, waitid, prctl, the stack limit, and the
+       flags a socket is made with. */
     "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl",
-    "musl/prctlmusl", "musl/stackmusl",
+    "musl/prctlmusl", "musl/stackmusl", "musl/sockflagmusl",
     /* eventfd, and epoll's level-triggered, edge-triggered and one-shot
        reports; timerfd's expirations, alone and through epoll. */
     "musl/epollmusl", "musl/timerfdmusl",

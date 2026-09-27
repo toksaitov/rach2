@@ -38,4 +38,8 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n);
  * returns its length, or a negative errno. */
 int strncpy_from_user(char *dst, const char __user *src, uint32_t n);
 
+/** The length of the NUL-terminated user string at src, when its NUL lies
+ * within n bytes; -EFAULT, or -ENAMETOOLONG when it does not. */
+int strnlen_user(const char __user *src, uint32_t n);
+
 #endif /* _USERCOPY_H_ */

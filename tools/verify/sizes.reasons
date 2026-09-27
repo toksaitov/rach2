@@ -37,7 +37,7 @@ krffs/stageimage.krffs.c:stage_node params 8 one procedure over a file format, i
 krffs/stageimage.krffs.c:stage_tree lines 127 one procedure over a file format, in the order the format is read
 
 rach2/kernel.c:check_strings nesting 6 a parser over an external format, one check per field in the format's order
-rach2/kernel.c:exec_program lines 165 one program loaded and entered, its stages in the order the loader takes them
+rach2/kernel.c:exec_program lines 144 one program loaded and entered, its stages in the order the loader takes them
 rach2/kernel.c:k_main complexity 77 the boot sequence, in the order the hardware requires
 rach2/kernel.c:k_main lines 507 the boot sequence, in the order the hardware requires
 rach2/kernel.c:process_command complexity 122 a dispatcher, one arm per command, read as a table
@@ -189,13 +189,10 @@ rach2/sys/proc/elf.c:elf_load_image complexity 38 a parser over an external form
 rach2/sys/proc/elf.c:elf_load_image lines 187 a parser over an external format, one check per field in the format's order
 rach2/sys/proc/elf.c:elf_load_image nesting 5 a parser over an external format, one check per field in the format's order
 
-rach2/sys/proc/uimage.c:build_user_stack lines 119 a parser over an external format, one check per field in the format's order
-rach2/sys/proc/uimage.c:build_user_stack params 9 the parameters are the fields of one initial stack; a struct for them would be filled and unpacked once
-
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 144 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 163 a table, one entry per system call number
 rach2/sys/syscall.c:sys_ioctl complexity 43 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 162 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
@@ -242,15 +239,13 @@ rach2/sys/syscall_net.c:do_sendto lines 144 one system call's contract, its chec
 rach2/sys/syscall_net.c:do_setsockopt complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_proc.c:deliver_signals nesting 5 a state machine, one arm per state, read as a table
-rach2/sys/syscall_proc.c:do_wait lines 109 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_proc.c:exec_run complexity 82 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_proc.c:exec_run lines 431 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_proc.c:exec_run nesting 5 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:exec_shebang lines 101 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:signal_post nesting 5 a state machine, one arm per state, read as a table
-rach2/sys/syscall_proc.c:sys_execve complexity 82 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:sys_execve lines 541 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:sys_execve nesting 5 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:sys_exit lines 116 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:sys_fork lines 193 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_proc.c:sys_fork lines 196 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 
@@ -475,8 +470,6 @@ tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 
-tests/host/uimage_hosttest.c:main lines 132 a test's rows, each a case, read as one table
-
 tests/host/usb_hosttest.c:hub_attach params 8 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:main lines 140 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:quiesce_rows complexity 48 a test's rows, each a case, read as one table
@@ -553,8 +546,6 @@ tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one tabl
 
 tests/musl/devtest.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one table
-
-tests/musl/execargmusl.c:main lines 178 a test's rows, each a case, read as one table
 
 tests/musl/loginmusl.c:check_wedges complexity 33 a test's rows, each a case, read as one table
 tests/musl/loginmusl.c:check_wedges lines 160 a test's rows, each a case, read as one table
