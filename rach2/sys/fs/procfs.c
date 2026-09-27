@@ -169,6 +169,19 @@ struct procfs_file {
     int origin_task; /* the process whose task/<origin_pid> it came from, or 0 */
 };
 
+/**
+ * Drop a reference to `mm` that /proc took, loading the kernel's directory
+ * first when this is the last reference and its directory is the one in
+ * use, as `mm_drop` does for a process's own reference.
+ */
+static void procfs_mm_put(struct mm *mm)
+{
+    if (mm->refs == 1 && _curr_dir == mm->dir) {
+        switch_page_directory(_kernel_dir);
+    }
+    mm_put(mm);
+}
+
 /*
  * One text under construction: its buffer in the heap, the buffer's size,
  * how much is written, and whether the heap ran out. The buffer doubles
@@ -464,26 +477,34 @@ int procfs_readlink_exe(int pid, char *buf, int cap)
  * Append the bytes of `p`'s memory from `start` to `end`, read through its
  * address space, at most 128 KiB: the strings of its arguments or its
  * environment, as its initial stack has them.
+ *
+ * A read may sleep, bringing in a page of a file the process maps, and the
+ * process may end and be reaped meanwhile, so the address space is held for
+ * the length of the reads, and `p`, whose record the reap frees, is read
+ * only before the first; the caller took `start` and `end` from it before.
  */
-static void ap_memory(struct procfs_text *t, process_t *p, uint32_t start, uint32_t end)
+static void ap_memory(struct procfs_text *t, const process_t *p, uint32_t start, uint32_t end)
 {
+    struct mm *mm = p->mm;
     char chunk[128];
 
     if (end > start + 131072u) {
         end = start + 131072u;
     }
+    mm_get(mm);
     while (start < end) {
         uint32_t n = end - start < sizeof(chunk) ? end - start : (uint32_t)sizeof(chunk);
         uint32_t i;
 
-        if (paging_access(p->mm, start, chunk, n, 0) != 0) {
-            return;
+        if (paging_access(mm, start, chunk, n, 0) != 0) {
+            break;
         }
         for (i = 0; i < n; i++) {
             ap_ch(t, chunk[i]);
         }
         start += n;
     }
+    procfs_mm_put(mm);
 }
 
 /**
@@ -503,7 +524,10 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
         return -ENOENT;
     }
     if (p->mm && p->mm->arg_end > p->mm->arg_start) {
-        ap_memory(t, p, p->mm->arg_start, p->mm->arg_end);
+        uint32_t start = p->mm->arg_start;
+        uint32_t end = p->mm->arg_end;
+
+        ap_memory(t, p, start, end);
         return t->len;
     }
     for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
@@ -528,7 +552,10 @@ static int procfs_gen_environ(struct procfs_text *t, int pid)
         return -EACCES;
     }
     if (p->mm && p->mm->env_end > p->mm->env_start) {
-        ap_memory(t, p, p->mm->env_start, p->mm->env_end);
+        uint32_t start = p->mm->env_start;
+        uint32_t end = p->mm->env_end;
+
+        ap_memory(t, p, start, end);
     }
     return t->len;
 }
@@ -2010,11 +2037,15 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
  * pread64 and pwrite64. A write reaches read-only program text, as a
  * tracer's does. The bytes done are returned, -EIO when none could be at an
  * address no region allows, and 0 once the process has no address space.
+ * The address space is held for the length of the call, which may sleep
+ * bringing a page in while the process ends and is reaped, and the process
+ * is not looked at after it.
  */
 static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     process_t *p = f ? get_process((uint32_t)f->origin_pid) : NULL;
+    struct mm *mm;
     uint32_t addr = (uint32_t)e->ofd->offset;
     uint32_t done = 0;
     char buf[256];
@@ -2023,6 +2054,8 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
     if (!p || p->state == PROC_UNUSED || !p->mm) {
         return 0;
     }
+    mm = p->mm;
+    mm_get(mm);
     while (done < count) {
         uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
 
@@ -2031,9 +2064,9 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
                 rc = -EFAULT;
                 break;
             }
-            rc = paging_access(p->mm, addr, buf, n, 1);
+            rc = paging_access(mm, addr, buf, n, 1);
         } else {
-            rc = paging_access(p->mm, addr, buf, n, 0);
+            rc = paging_access(mm, addr, buf, n, 0);
             if (rc == 0 && copy_to_user(ubuf + done, buf, n) != 0) {
                 rc = -EFAULT;
             }
@@ -2044,6 +2077,7 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
         done += n;
         addr += n;
     }
+    procfs_mm_put(mm);
     e->ofd->offset = addr;
     return done > 0 ? (int32_t)done : rc;
 }
