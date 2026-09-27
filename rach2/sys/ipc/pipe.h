@@ -49,6 +49,11 @@ typedef struct pipe {
     uint32_t read_opens;
     uint32_t write_opens;
     wait_queue_t open_wq;
+    /* The descriptions of a FIFO open for reading and writing at once, and
+     * the queue their pollers wait on, which every change of either end
+     * wakes while there is one. */
+    int rdwr_open;
+    wait_queue_t rdwr_wq;
 } pipe_t;
 
 /** Allocate the pipe pool from kernel memory; called once from init. */
