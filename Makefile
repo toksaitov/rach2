@@ -1007,6 +1007,7 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 # dependency graph covers the product and the variants only a suite needs.
 include mk/host.mk
 include mk/images.mk
+include mk/gnu.mk
 include tests/system/suites.mk
 
 # The host programs the build itself needs, for the compilation database
