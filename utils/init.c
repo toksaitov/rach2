@@ -983,33 +983,61 @@ static void configure_network(void)
 }
 
 /**
- * Configure networking in a redirected child, then wait for it.
- * A failed fork skips configuration. Redirection failure exits only the child;
- * init keeps the console descriptors used by later login sessions.
- * Block shutdown signals across fork until the child has default dispositions,
- * so a signal to the worker terminates it without invoking init's handler.
+ * Block init's shutdown signals, SIGUSR1, SIGUSR2 and SIGTERM, before a fork,
+ * with the mask before in `saved`; 0, or -1 when the mask cannot change.
+ * A child forked with them blocked cannot run init's handlers, which would
+ * shut the machine down, before `shutdown_defaults`.
  */
-static void start_network(void)
+static int shutdown_block(sigset_t *saved)
 {
-    sigset_t shutdown, saved;
-    struct sigaction action;
-    pid_t network;
+    sigset_t shutdown;
 
     sigemptyset(&shutdown);
     sigaddset(&shutdown, SIGUSR1);
     sigaddset(&shutdown, SIGUSR2);
     sigaddset(&shutdown, SIGTERM);
-    if (sigprocmask(SIG_BLOCK, &shutdown, &saved) != 0) {
+    return sigprocmask(SIG_BLOCK, &shutdown, saved);
+}
+
+/**
+ * In a child forked under `shutdown_block`, give the shutdown signals their
+ * default actions and put back the mask `saved`, so that one sent to the
+ * child ends it; 0, or -1 on failure.
+ */
+static int shutdown_defaults(const sigset_t *saved)
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = SIG_DFL;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGUSR1, &action, NULL) != 0 || sigaction(SIGUSR2, &action, NULL) != 0 ||
+        sigaction(SIGTERM, &action, NULL) != 0 || sigprocmask(SIG_SETMASK, saved, NULL) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Configure networking in a redirected child, then wait for it.
+ * A failed fork skips configuration. Redirection failure exits only the child;
+ * init keeps the console descriptors used by later login sessions.
+ * Shutdown signals are blocked across the fork until the child has default
+ * dispositions, so a signal to the worker terminates it without invoking
+ * init's handler.
+ */
+static void start_network(void)
+{
+    sigset_t saved;
+    pid_t network;
+
+    if (shutdown_block(&saved) != 0) {
         return;
     }
     network = fork();
 
     if (network == 0) {
-        memset(&action, 0, sizeof(action));
-        action.sa_handler = SIG_DFL;
-        sigemptyset(&action.sa_mask);
-        if (sigaction(SIGUSR1, &action, NULL) != 0 || sigaction(SIGUSR2, &action, NULL) != 0 ||
-            sigaction(SIGTERM, &action, NULL) != 0 || sigprocmask(SIG_SETMASK, &saved, NULL) != 0) {
+        if (shutdown_defaults(&saved) != 0) {
             _exit(126);
         }
         service_output();
@@ -1136,16 +1164,28 @@ static void make_host_keys(void)
  * controlling terminal. The server makes a session per login and gives each
  * one a pty of its own; handing it the console as well would put two sessions
  * on one terminal, and the console login is the recovery path precisely
- * because nothing else is on it.
+ * because nothing else is on it. Shutdown signals are blocked across the fork
+ * until the child has default dispositions, since the child waits for
+ * `ssh-keygen` on a first boot before its exec, and a signal to the service's
+ * pid in that time must end the child, not run init's handler.
  */
 static pid_t spawn_sshd(void)
 {
     int password_login = root_password_login();
     int openssh = access(OPENSSH_PROGRAM, X_OK) == 0;
-    pid_t pid = fork();
+    sigset_t saved;
+    pid_t pid;
 
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
     if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
         return pid; /* init (the parent), or -1 if fork failed */
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
     }
     service_output();
     {

@@ -144,13 +144,17 @@ static int policy_execv(const char *path, char *const argv[])
 /**
  * Stand in for the console login's exec: the child exits 0 when the first
  * `LOGIN_TIMEOUT` in the environment it passes is `LOGIN_TIMEOUT=0`, the one
- * getenv(3) gives login, and 3 otherwise. Any other program is executed as
- * before.
+ * getenv(3) gives login, and 3 otherwise. In a signal case a child that
+ * reaches an exec has outlived the signal, and exits 91 rather than run the
+ * host's ssh-keygen or sshd. Any other program is executed as before.
  */
 static int policy_execve(const char *path, char *const argv[], char *const envp[])
 {
     int i;
 
+    if (Network_signal) {
+        _exit(91);
+    }
     if (strcmp(path, "/bin/login") != 0) {
         return execve(path, argv, envp);
     }
@@ -333,6 +337,63 @@ static void network_signal_case(int nullfd, int logfd, int sig, int early, int f
 }
 
 /**
+ * The SSH service's child with init's shutdown handlers installed: a signal
+ * it sends itself before its fork returns must end it by the signal's
+ * default action once it has default dispositions, where init's handler
+ * would call reboot, which exits 90 here. The fork must block the signals,
+ * and init's mask and handlers must be as they were.
+ */
+static void sshd_signal_case(int nullfd, int logfd, int sig)
+{
+    static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
+    struct sigaction action, saved[3], current;
+    sigset_t original, after;
+    pid_t pid;
+    int status = 0;
+    size_t i;
+
+    if (sigprocmask(SIG_BLOCK, NULL, &original) != 0) {
+        exit(2);
+    }
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = shutdown_handler;
+    sigemptyset(&action.sa_mask);
+    for (i = 0; i < 3; i++) {
+        if (sigaction(signals[i], &action, &saved[i]) != 0) {
+            exit(2);
+        }
+    }
+    Network_signal = sig;
+    Early_signal = 1;
+    Fork_fail = Fork_blocked = 0;
+    Network_pid = 0;
+    service_null_fd = nullfd;
+    service_log_fd = logfd;
+    Dup_calls = Dup_fail = 0;
+    Policy = NULL;
+    pid = spawn_sshd();
+    check(Fork_blocked, "the SSH service's fork blocks shutdown signals");
+    check(pid > 0 && waitpid(pid, &status, 0) == pid && WIFSIGNALED(status) &&
+              WTERMSIG(status) == sig,
+          "a shutdown signal ends the SSH service's child, not init's handler");
+    if (sigprocmask(SIG_BLOCK, NULL, &after) != 0) {
+        exit(2);
+    }
+    for (i = 1; i < NSIG; i++) {
+        check(sigismember(&original, (int)i) == sigismember(&after, (int)i),
+              "the SSH service's fork restores init's signal mask");
+    }
+    for (i = 0; i < 3; i++) {
+        check(sigaction(signals[i], NULL, &current) == 0 && current.sa_handler == shutdown_handler,
+              "the SSH service's fork keeps init's shutdown handlers");
+        if (sigaction(signals[i], &saved[i], NULL) != 0) {
+            exit(2);
+        }
+    }
+    Network_signal = Early_signal = 0;
+}
+
+/**
  * Require init to start the console's login with its prompt timeout off
  * when init's own environment has `inherited` as `LOGIN_TIMEOUT`, or no
  * `LOGIN_TIMEOUT` when it is null, and to set it in the console's child
@@ -439,6 +500,9 @@ int main(void)
         network_signal_case(nullfd, logfd, signals[i], 1, 0);
     }
     network_signal_case(nullfd, logfd, SIGTERM, 0, 1);
+    for (i = 0; i < 3; i++) {
+        sshd_signal_case(nullfd, logfd, signals[i]);
+    }
     login_case(NULL);
     login_case("60");
     fclose(log);
