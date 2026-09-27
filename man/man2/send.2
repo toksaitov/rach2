@@ -164,7 +164,15 @@ when none is bound.
 The payload must contain 1 through 1500 bytes.
 The kernel adds the Ethernet header.
 .Sh RETURN VALUES
-On success, these functions return the number of bytes accepted.
+On success,
+.Fn send ,
+.Fn sendto
+and
+.Fn sendmsg
+return the number of bytes accepted, and
+.Fn sendmmsg
+the number of messages sent, with each message's count of bytes in its
+.Va msg_len .
 A stream may return fewer bytes than requested.
 A successful datagram send returns
 .Fa len .

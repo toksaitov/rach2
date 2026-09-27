@@ -183,9 +183,18 @@ The direct kernel operation 10 accepts streams and datagrams but rejects
 all raw sockets; the musl wrapper can receive raw ICMP data through
 operation 12.
 .Sh RETURN VALUES
-On success, these functions return the bytes copied.
-Zero can mean stream end of input, an empty datagram, or a receive with
-no buffer capacity.
+On success,
+.Fn recv ,
+.Fn recvfrom
+and
+.Fn recvmsg
+return the bytes copied, and
+.Fn recvmmsg
+the number of messages received, with each message's count of bytes in
+its
+.Va msg_len .
+Zero bytes can mean stream end of input, an empty datagram, or a receive
+with no buffer capacity.
 On failure they return -1 and set
 .Va errno .
 The raw kernel operations return a negative error number.
