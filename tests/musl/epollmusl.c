@@ -14,11 +14,13 @@
  * write wakes a parent blocked in epoll_wait. A registration of no events is
  * told of a hangup. A pipe added to a set while a wait on it sleeps, then
  * written, wakes the wait. A set whose edge-triggered event was reported does
- * not poll readable. Waits with room for one event report two ready descriptors
- * in turn. A one-shot event a wait cannot store, EFAULT, is reported by the
- * next wait. The registration of a closed eventfd does not report the eventfd
- * made next at its number, which can be added. epoll_pwait2 takes a timeout of
- * 2^31 seconds, and refuses negative seconds with EINVAL.
+ * not poll readable. A write to a pipe in a set inside a set inside a third
+ * wakes a wait on the third, and a cycle of sets is ELOOP. Waits with room for
+ * one event report two ready descriptors in turn. A one-shot event a wait
+ * cannot store, EFAULT, is reported by the next wait. The registration of a
+ * closed eventfd does not report the eventfd made next at its number, which can
+ * be added. epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative
+ * seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -327,6 +329,52 @@ static int polled_after_edge(void)
     return 0;
 }
 
+/* Sets inside sets: with a pipe in A, A in B and B in C, a child's write to
+ * the pipe wakes a wait on C, which reports B while the data is there; and
+ * adding C to A, a cycle, is ELOOP. */
+static int nested(void)
+{
+    struct epoll_event ev, out;
+    int a = epoll_create1(0);
+    int b = epoll_create1(0);
+    int c = epoll_create1(0);
+    int p[2], status;
+    pid_t pid;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    if (a < 0 || b < 0 || c < 0 || pipe(p) != 0 || epoll_ctl(a, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
+        epoll_ctl(b, EPOLL_CTL_ADD, a, &ev) != 0) {
+        return fail("setup for sets inside sets");
+    }
+    ev.data.u32 = 9;
+    if (epoll_ctl(c, EPOLL_CTL_ADD, b, &ev) != 0 || wait_one(c, 0, &out) != 0) {
+        return fail("a chain of sets over an empty pipe");
+    }
+    if (epoll_ctl(a, EPOLL_CTL_ADD, c, &ev) != -1 || errno != ELOOP) {
+        return fail("a cycle of sets was not ELOOP");
+    }
+    pid = fork();
+    if (pid == 0) {
+        struct timespec pause = {0, 100000000};
+
+        nanosleep(&pause, NULL);
+        _exit(write(p[1], "n", 1) == 1 ? 0 : 1);
+    }
+    if (wait_one(c, 5000, &out) != 1 || out.data.u32 != 9 || wait_one(c, 0, &out) != 1) {
+        return fail("a write to a pipe two sets deep did not wake the outer set");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the writing child");
+    }
+    close(p[0]);
+    close(p[1]);
+    close(a);
+    close(b);
+    close(c);
+    return 0;
+}
+
 /* Two descriptors ready, and waits with room for one event: the waits
  * report each in turn. */
 static int in_turn(void)
@@ -472,7 +520,7 @@ static int long_timeout(void)
 int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
-        polled_after_edge() || in_turn() || failed_copy() || long_timeout()) {
+        polled_after_edge() || nested() || in_turn() || failed_copy() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

@@ -116,8 +116,12 @@ and
 report a set readable while a wait on it would report an event: an
 edge-triggered event already reported, or a one-shot registration that
 is off, does not make it readable.
-A set inside another set is reported ready by what it holds, but a
-change in it does not wake a wait on the outer set.
+A set may be added to another: the outer set is ready while a wait on
+the inner one would report an event, and a change in what the inner set
+watches wakes a wait on the outer one, as in Linux.
+A scan looks four sets deep at most; adding a set that would make a
+cycle, or nest deeper, fails with
+.Er ELOOP .
 .Sh RETURN VALUES
 .Fn epoll_create1
 returns the new descriptor,
@@ -150,7 +154,8 @@ A signal arrived before a descriptor was ready.
 .It Er EINVAL
 .Fa epfd
 is not an epoll set, or is
-.Fa fd ;
+.Fa fd
+or the set it names;
 .Fa op
 or
 .Fa flags
@@ -163,6 +168,10 @@ touched
 or the timeout of
 .Fn epoll_pwait2
 has negative seconds, or nanoseconds outside 0 to 999999999.
+.It Er ELOOP
+.Dv EPOLL_CTL_ADD
+of a set would make a cycle of sets, or sets nested more than four
+deep.
 .It Er ENOENT
 .Dv EPOLL_CTL_MOD
 or
