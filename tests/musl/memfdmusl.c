@@ -11,9 +11,12 @@
  * F_SEAL_SEAL refuses more seals; F_GET_SEALS reports each one. A memfd made
  * without MFD_ALLOW_SEALING starts with F_SEAL_SEAL and refuses F_ADD_SEALS
  * with EPERM, and one made with MFD_NOEXEC_SEAL has mode 0666 and
- * F_SEAL_EXEC. F_ADD_SEALS is EINVAL on a KRFFS file and EPERM on a tmpfs
- * file with a name, and on a descriptor not open for writing. A name of 250
- * bytes, MFD_HUGETLB and an unknown flag are EINVAL.
+ * F_SEAL_EXEC. F_ADD_SEALS is EINVAL on a KRFFS file. On a tmpfs file with a
+ * name it is EPERM, since the file is sealed against sealing, but EINVAL for
+ * a bit that is no seal, which is checked first; through a descriptor not
+ * open for writing it is EPERM for that bit too, since the access is checked
+ * before both. A name of 250 bytes, MFD_HUGETLB and an unknown flag are
+ * EINVAL.
  *
  * Prints "MEMFDMUSL OK" on success and "MEMFDMUSL FAIL (detail)" otherwise.
  */
@@ -31,6 +34,9 @@
 /* The flag and the seal of Linux 6.3, which this musl does not name. */
 #define MFD_NOEXEC_SEAL 0x0008u
 #define F_SEAL_EXEC     0x0020
+
+/* The bit after F_SEAL_EXEC, the last seal. */
+#define NO_SEAL 0x0040
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -131,7 +137,9 @@ static int others(void)
     ro = open("/dev/shm/memfdmusl", O_RDONLY);
     if (fd < 0 || ro < 0 || fcntl(fd, F_GET_SEALS) != F_SEAL_SEAL ||
         !refused(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE), EPERM) ||
-        !refused(fcntl(ro, F_ADD_SEALS, F_SEAL_WRITE), EPERM)) {
+        !refused(fcntl(fd, F_ADD_SEALS, NO_SEAL), EINVAL) ||
+        !refused(fcntl(ro, F_ADD_SEALS, F_SEAL_WRITE), EPERM) ||
+        !refused(fcntl(ro, F_ADD_SEALS, NO_SEAL), EPERM)) {
         return fail("the seal commands on a named tmpfs file");
     }
     close(fd);
