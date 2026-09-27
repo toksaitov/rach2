@@ -2649,21 +2649,32 @@ static void sig_job_control(process_t *target, int signo)
 }
 
 /**
+ * Whether the thread `t` can take one of the signals `bits` now: it has not
+ * ended, it is not stopped, and it does not block them all. A stopped thread
+ * is passed over, as Linux's `wants_signal` passes it over, since `sig_wake`
+ * cannot wake it and a sibling that could take the signal would sleep on.
+ */
+static int sig_wants(const process_t *t, uint64_t bits)
+{
+    return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED && t->state != PROC_STOPPED &&
+           (bits & ~t->sig_blocked) != 0;
+}
+
+/**
  * The thread of `target`'s process to wake for `signo`, as Linux's
- * `complete_signal` chooses it: `target` when it does not block the signal,
- * or else the first thread that does not; `target` itself when every thread
- * blocks it, and nothing when `target` has ended.
+ * `complete_signal` chooses it: `target` when it can take the signal
+ * (`sig_wants`), or else the first thread that can; `target` itself when no
+ * thread can, and nothing when `target` has ended.
  */
 static process_t *sig_taker(process_t *target, int signo)
 {
     process_t *t;
 
-    if (target->state != PROC_ZOMBIE && !(target->sig_blocked & KSIG_BIT(signo))) {
+    if (sig_wants(target, KSIG_BIT(signo))) {
         return target;
     }
     for (t = proc_list; t; t = t->next) {
-        if (t->tg == target->tg && t->state != PROC_ZOMBIE && t->state != PROC_UNUSED &&
-            !(t->sig_blocked & KSIG_BIT(signo))) {
+        if (t->tg == target->tg && sig_wants(t, KSIG_BIT(signo))) {
             return t;
         }
     }

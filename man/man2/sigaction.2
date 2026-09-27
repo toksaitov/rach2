@@ -61,6 +61,9 @@ The dispositions belong to the process and are shared by its threads.
 The blocked mask, the alternate stack and a set of pending signals belong
 to each thread; a signal sent to the process is pending for the process,
 and any thread that does not block it may take it.
+The thread woken to take it is the thread the sender named, or else the
+first thread, that does not block it and is not stopped by job control or
+by a tracer.
 A thread takes its own pending signals before the process's.
 .Ss Dispositions
 .Va sa_handler

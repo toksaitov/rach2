@@ -14,7 +14,7 @@ The main implementation is in `sys/syscall_proc.c`, which the system-call table 
 
 ## Posting and permission
 
-`signal_post` and `signal_post_info` send a signal to a process: they set the process's pending bit and make ready the thread `sig_taker` chooses, the thread named when it does not block the signal and otherwise the first that does not, as Linux's `complete_signal` chooses. `signal_post_thread` sends one to a single thread, which alone may take it; `tkill`, `tgkill`, the faults, and the `SIGKILL` that `exit_group` and `execve` send the other threads use it. Posting has additional job-control effects:
+`signal_post` and `signal_post_info` send a signal to a process: they set the process's pending bit and make ready the thread `sig_taker` chooses, as Linux's `complete_signal` chooses: the thread named when it can take the signal, and otherwise the first that can, where a thread that can is one that has not ended, is not stopped, by job control or by its tracer, and does not block the signal. `signal_post_thread` sends one to a single thread, which alone may take it; `tkill`, `tgkill`, the faults, and the `SIGKILL` that `exit_group` and `execve` send the other threads use it. Posting has additional job-control effects:
 
 * `SIGCONT` removes pending stop signals, the process's and each thread's, and resumes a stopped process, every thread of it. The parent receives `SIGCHLD` and a `wait4(WCONTINUED)` event.
 * A stop signal removes a pending `SIGCONT`.

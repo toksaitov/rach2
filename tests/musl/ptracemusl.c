@@ -14,7 +14,9 @@
  * signal with PTRACE_O_TRACESYSGOOD. PTRACE_O_TRACEEXEC stops the child
  * after an execve with the exec event. A debug register set through
  * POKEUSER reads back through PEEKUSER. PTRACE_ATTACH stops a running
- * process, which runs on after PTRACE_DETACH.
+ * process, which runs on after PTRACE_DETACH. A signal sent to a process
+ * whose first thread its tracer holds stopped wakes the other thread, asleep
+ * in pause, which takes it.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -23,6 +25,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -203,9 +206,107 @@ static int attach(void)
     return 0;
 }
 
+static volatile sig_atomic_t usr1_taken;
+
+static void on_usr1(int sig)
+{
+    (void)sig;
+    usr1_taken = 1;
+}
+
+/** The second thread of the child `stopped_leader` makes: it writes its id
+ * to the descriptor `*arg`, sleeps until its handler has taken a SIGUSR1,
+ * and ends the process with 5. */
+static void *usr1_sleeper(void *arg)
+{
+    pid_t self = (pid_t)syscall(SYS_gettid);
+
+    if (write(*(int *)arg, &self, sizeof(self)) != sizeof(self)) {
+        _exit(1);
+    }
+    while (!usr1_taken) {
+        pause();
+    }
+    _exit(5);
+}
+
+/** Whether thread `t` of process `pid` sleeps, by its state in
+ * /proc/PID/task/T/stat. */
+static int sleeping(pid_t pid, pid_t t)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", (int)pid, (int)t);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/**
+ * A SIGUSR1 sent to a child whose first thread the parent has stopped with
+ * PTRACE_ATTACH: the thread the signal names cannot take it, so the other
+ * thread, asleep in pause with the signal unblocked, is woken to, and its
+ * handler runs and it ends the process with 5.
+ */
+static int stopped_leader(void)
+{
+    pthread_t t;
+    pid_t pid, sleeper = 0;
+    int p[2], status = 0, i;
+
+    if (pipe(p) != 0) {
+        return fail("pipe");
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(p[0]);
+        signal(SIGUSR1, on_usr1);
+        if (pthread_create(&t, NULL, usr1_sleeper, &p[1]) != 0) {
+            _exit(1);
+        }
+        for (;;) {
+            pause();
+        }
+    }
+    close(p[1]);
+    if (read(p[0], &sleeper, sizeof(sleeper)) != sizeof(sleeper)) {
+        return fail("the child's second thread");
+    }
+    close(p[0]);
+    for (i = 0; i < 500 && !sleeping(pid, sleeper); i++) {
+        usleep(10000);
+    }
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGSTOP)) {
+        return fail("PTRACE_ATTACH to the child's first thread");
+    }
+    kill(pid, SIGUSR1);
+    for (i = 0; i < 1000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
+        usleep(10000);
+    }
+    if (i == 1000) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail("a process signal did not wake the thread beside the stopped one");
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 5) {
+        return fail("the thread beside the stopped one did not take the signal");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (memory_and_registers() || syscalls_and_exec() || attach()) {
+    if (memory_and_registers() || syscalls_and_exec() || attach() || stopped_leader()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");
