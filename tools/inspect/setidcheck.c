@@ -1666,8 +1666,9 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
    4 KiB blocks, 128-byte inodes, and the features filetype, sparse_super
    and large_file with no other. It fails closed: any other feature, any
    block outside the volume or inside its structural blocks, any malformed
-   directory entry and any inode it cannot place refuses the image, so that
-   an image this checker cannot read is one the build rejects. It lists
+   directory entry, any inode it cannot place and a file larger than
+   `EXT2_FILE_MAX` refuses the image, so that an image this checker cannot
+   read is one the build rejects. It lists
    every node reached from the root with its type, owner, group, mode and
    set-id bits, follows every directory to its end, and lists a second name
    for one inode as a node of its own, which is how a hard link to a set-id
@@ -1678,6 +1679,12 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 #define EXT2_INODE     128u
 #define EXT2_FIRST_INO 11u
 #define EXT2_FT_MAX    7u
+
+/* The largest regular file the reader copies: about twice the largest any
+   image stages, the GNU system's chromium-headless-shell at 197 MiB, so
+   that the size a damaged inode claims cannot ask for any amount of
+   memory. */
+#define EXT2_FILE_MAX (512ul * 1024 * 1024)
 
 struct ext2 {
     FILE *f;
@@ -2053,7 +2060,7 @@ static int ext2_reach(struct ext2 *fs, struct image *im, const char *path, unsig
     if (type == 0100000) {
         struct ext2_copy c;
 
-        if (size > 64u * 1024 * 1024)
+        if (size > EXT2_FILE_MAX)
             return ext2_fail(fs,
                              "%s: %llu bytes is larger than any staged "
                              "file",

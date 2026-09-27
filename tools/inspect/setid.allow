@@ -92,6 +92,36 @@ init init-recovery
 manifest rach2-metal-disk copy os-real
 init init-metal
 
+# The GNU system's root: os-real's privilege set with OpenSSH in Dropbear's
+# place, so there is no dropbearmulti to declare, and the accounts, shells and
+# path that go with it, the metal init that starts OpenSSH's server, and
+# the two files by which glibc decides whose account a name is and which
+# libraries a program of root's loads. What vendor/gnu/install_root.sh adds
+# over the staged tree is not in the manifest and cannot be declared, so
+# none of it may be set-id: OpenSSH's ssh-keysign is installed without its
+# bit.
+manifest os-real-gnu
+setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
+setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
+setid /bin/login 04755:0:0 build/vendor/busybox/busybox-suid
+trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
+trusted file 0755:0:0 /bin/sh build/vendor/busybox/busybox
+trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\nsshd:x:74:74::/var/empty:/usr/bin/false\n
+trusted file 0600:0:0 /etc/shadow krffs/shadow
+trusted text 0644:0:0 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\n
+trusted text 0644:0:0 /etc/shells /bin/sh\n/bin/bash\n
+trusted text 0644:0:0 /etc/profile export PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
+trusted text 0644:0:0 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n
+trusted text 0644:0:0 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n
+trusted file 0600:0:0 /root/.ssh/authorized_keys krffs/authorized_keys
+trusted file 0755:0:0 /bin/bootctl build/utils/sbin/bootctl
+trusted file 0644:0:0 /src/rach2/guest.mk rach2/guest.mk
+trusted file 0644:0:0 /src/utils/guest.mk utils/guest.mk
+trusted file 0644:0:0 /src/ish/guest.mk ish/guest.mk
+trusted file 0644:0:0 /src/rach2/sys/syscall.c rach2/sys/syscall.c
+init init-metal
+sysroot
+
 # `tests/run grub` boots os-real with marked GRUB cores staged beside it;
 # its privilege set is os-real's and must stay so.
 manifest grub-test copy os-real

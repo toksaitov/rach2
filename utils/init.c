@@ -71,7 +71,9 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 
 #ifdef INIT_METAL
 /*
- * The SSH server this build supervises, and how it is asked to run.
+ * The SSH server this build supervises, and how it is asked to run. An image
+ * that has OpenSSH's server at `OPENSSH_PROGRAM`, which the GNU system's root
+ * has, runs that; every other image runs Dropbear's.
  *
  * `dropbearmulti` dispatches on its first argument, so the program name is
  * argv[1] and the flags follow. `-F` keeps it in the foreground, which is what
@@ -84,8 +86,20 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * which is why both are kept); an installed root keeps its keys. `-g` bars
  * root's password from the exchange, so root arrives by key, unless
  * `/etc/rach2/sshd.conf` permits it (`root_password_login`).
+ *
+ * OpenSSH's `sshd` takes `-D` for the same foreground and `-e` to write its
+ * log to standard error, which is the service log, since the system has no
+ * syslog daemon. Its argv[0] is its absolute path, without which it refuses
+ * to start, since a SIGHUP makes it execute itself again by that name to
+ * read its configuration anew. It makes no host keys: `ssh-keygen -A` runs
+ * before each start and makes those missing from `/etc/ssh`, every one on a
+ * first boot, with the same need for the kernel's entropy. The same policy
+ * file decides root's password, which `PermitRootLogin prohibit-password`
+ * bars and `PermitRootLogin yes` permits.
  */
-#define SSHD_PROGRAM "/bin/dropbearmulti"
+#define SSHD_PROGRAM    "/bin/dropbearmulti"
+#define OPENSSH_PROGRAM "/usr/sbin/sshd"
+#define OPENSSH_KEYGEN  "/usr/bin/ssh-keygen"
 
 /* The pause after an SSH server that died almost at once. Long enough that a
  * server failing for a permanent reason (no entropy, no network, a port
@@ -1053,17 +1067,81 @@ static int root_password_login(void)
 }
 
 /**
+ * Fill `argv`, which has room for eight pointers, with the SSH server's
+ * command line, and return the program to execute: OpenSSH's when `openssh`
+ * is set and Dropbear's when it is not, with root's password barred unless
+ * `password_login` is set.
+ */
+static const char *sshd_command(int openssh, int password_login, char **argv)
+{
+    int n = 0;
+
+    if (openssh) {
+        argv[n++] = (char *)OPENSSH_PROGRAM;
+        argv[n++] = (char *)"-D";
+        argv[n++] = (char *)"-e";
+        argv[n++] = (char *)"-o";
+        argv[n++] =
+            (char *)(password_login ? "PermitRootLogin=yes" : "PermitRootLogin=prohibit-password");
+        argv[n] = 0;
+        return OPENSSH_PROGRAM;
+    }
+    argv[n++] = (char *)"dropbearmulti";
+    argv[n++] = (char *)"dropbear";
+    argv[n++] = (char *)"-F";
+    argv[n++] = (char *)"-R";
+    if (!password_login) {
+        argv[n++] = (char *)"-g";
+    }
+    argv[n++] = (char *)"-p";
+    argv[n++] = (char *)"22";
+    argv[n] = 0;
+    return SSHD_PROGRAM;
+}
+
+/**
+ * Make the host keys OpenSSH's server lacks with `ssh-keygen -A`, and wait
+ * for it.
+ *
+ * It runs in the server's child after the redirection, so what it prints goes
+ * to the service log and init's own loop goes on reaping while a key is made,
+ * which takes seconds on an emulated machine. A key it could not make is
+ * reported by the server, which does not start without one.
+ */
+static void make_host_keys(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid < 0) {
+        return;
+    }
+    if (pid == 0) {
+        char *argv[3];
+
+        argv[0] = (char *)"ssh-keygen";
+        argv[1] = (char *)"-A";
+        argv[2] = 0;
+        execve(OPENSSH_KEYGEN, argv, environ);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+}
+
+/**
  * Fork the SSH server and return its pid (-1 on failure).
  *
  * Unlike the console session this child does NOT call `setsid` or claim a
- * controlling terminal. Dropbear makes a session per login and gives each one
- * a pty of its own; handing it the console as well would put two sessions on
- * one terminal, and the console login is the recovery path precisely because
- * nothing else is on it.
+ * controlling terminal. The server makes a session per login and gives each
+ * one a pty of its own; handing it the console as well would put two sessions
+ * on one terminal, and the console login is the recovery path precisely
+ * because nothing else is on it.
  */
 static pid_t spawn_sshd(void)
 {
     int password_login = root_password_login();
+    int openssh = access(OPENSSH_PROGRAM, X_OK) == 0;
     pid_t pid = fork();
 
     if (pid != 0) {
@@ -1071,24 +1149,17 @@ static pid_t spawn_sshd(void)
     }
     service_output();
     {
+        static const char msg[] = "init: cannot exec ";
         char *argv[8];
-        int n = 0;
+        const char *program = sshd_command(openssh, password_login, argv);
 
-        argv[n++] = (char *)"dropbearmulti";
-        argv[n++] = (char *)"dropbear";
-        argv[n++] = (char *)"-F";
-        argv[n++] = (char *)"-R";
-        if (!password_login) {
-            argv[n++] = (char *)"-g";
+        if (openssh) {
+            make_host_keys();
         }
-        argv[n++] = (char *)"-p";
-        argv[n++] = (char *)"22";
-        argv[n] = 0;
-        execve(SSHD_PROGRAM, argv, environ); /* returns only on failure */
-    }
-    {
-        static const char msg[] = "init: cannot exec /bin/dropbearmulti\n";
+        execve(program, argv, environ); /* returns only on failure */
         (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        (void)write(STDERR_FILENO, program, strlen(program));
+        (void)write(STDERR_FILENO, "\n", 1);
     }
     _exit(127);
     return -1; /* unreachable; quiets the compiler */
