@@ -14,7 +14,11 @@ maintains them;
 and the kernel call
 .Xr ugetrlimit 2
 use the same table.
-Fork inherits both values and exec preserves them.
+Fork inherits both values and exec preserves them, except that an exec
+that runs a program with IDs its caller lacks, a set-user-ID or
+set-group-ID program, lowers a soft
+.Dv RLIMIT_STACK
+above 8 MiB to 8 MiB, as Linux does.
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
 The number of threads with the same real user ID across the machine, each
