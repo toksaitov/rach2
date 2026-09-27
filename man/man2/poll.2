@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -111,17 +111,18 @@ The kernel limits the seconds field to 21474836, keeps the nanoseconds,
 rounds the timeout up to whole ticks, and limits the result to
 2147483646 ticks, about 248.55 days.
 .Pp
-The
+A non-null
 .Fa sigmask
-argument is ignored.
-Unlike Linux,
-.Fn ppoll
-does not replace the signal mask atomically around the wait.
+replaces the signal mask for the wait, atomically with its start.
+When a signal ends the wait, its handler runs under
+.Fa sigmask
+and the previous mask comes back when the handler returns; otherwise the
+previous mask comes back as the call returns.
 If no entry is ready, a pending signal that is neither blocked nor
 ignored gives
 .Er EINTR ;
 .Dv SA_RESTART
-does not restart the call.
+does not restart the call, as on Linux.
 .Pp
 The i386 system call numbers are 168 for
 .Nm poll

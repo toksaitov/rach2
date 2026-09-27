@@ -31,8 +31,10 @@ void init_idt(void)
     _idt_set_desciptor(0, (uintptr_t)&isr0, 0x08, 0x8E);
     _idt_set_desciptor(1, (uintptr_t)&isr1, 0x08, 0x8E);
     _idt_set_desciptor(2, (uintptr_t)&isr2, 0x08, 0x8E);
-    _idt_set_desciptor(3, (uintptr_t)&isr3, 0x08, 0x8E);
-    _idt_set_desciptor(4, (uintptr_t)&isr4, 0x08, 0x8E);
+    /* The breakpoint and overflow gates are DPL 3, so a user `int3` or
+     * `into` reaches its own handler and not a general-protection fault. */
+    _idt_set_desciptor(3, (uintptr_t)&isr3, 0x08, 0xEE);
+    _idt_set_desciptor(4, (uintptr_t)&isr4, 0x08, 0xEE);
     _idt_set_desciptor(5, (uintptr_t)&isr5, 0x08, 0x8E);
     _idt_set_desciptor(6, (uintptr_t)&isr6, 0x08, 0x8E);
     _idt_set_desciptor(7, (uintptr_t)&isr7, 0x08, 0x8E);

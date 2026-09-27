@@ -59,6 +59,7 @@ typedef unsigned int size_t;
 #define ITIMER_REAL    0
 #define ITIMER_VIRTUAL 1
 
+#define SA_SIGINFO   0x00000004u
 #define SA_RESTORER  0x04000000u
 #define SA_RESETHAND 0x80000000u
 
@@ -146,11 +147,12 @@ static volatile int handler_ran;
 static volatile int handler_sig;
 static volatile int forge_ran;
 
-/* The saved trapframe inside the signal frame the kernel built: its first
- * word is the saved `gs` (struct isr_params in rach2/sys/isr.h), and the
- * frame begins four words before the handler's own return address, which is
- * what `&signo` stands one word past. */
-#define SAVED_GS_FROM_ARG(argp) ((volatile unsigned *)((char *)(argp) + 3 * 4))
+/* The saved `gs` in the Linux rt frame the kernel built for an SA_SIGINFO
+ * handler: `&signo` is followed by the siginfo and ucontext pointers, and the
+ * ucontext's `uc_mcontext` starts 20 bytes in with `gs` as its first word.
+ * The restorer's rt_sigreturn reloads it from there. */
+#define SAVED_GS_FROM_ARG(argp) \
+    ((volatile unsigned *)(*(char *const *)((const char *)(argp) + 2 * 4) + 5 * 4))
 
 /* A selector with a ring-3 RPL whose index names no descriptor: the GDT has
  * seven entries, so index 8191 is past its limit. A kernel that loaded it
@@ -176,7 +178,7 @@ static void install_with(int signo, void (*h)(int), unsigned long extra)
     struct k_sigaction ka;
 
     ka.handler = h;
-    ka.flags = SA_RESTORER | extra;
+    ka.flags = SA_SIGINFO | SA_RESTORER | extra;
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;

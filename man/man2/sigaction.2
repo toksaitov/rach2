@@ -1,13 +1,16 @@
-.Dd September 25, 2026
+.Dd September 27, 2026
 .Dt SIGACTION 2
 .Os
 .Sh NAME
 .Nm sigaction ,
 .Nm sigprocmask ,
 .Nm sigsuspend ,
+.Nm sigpending ,
+.Nm sigaltstack ,
 .Nm rt_sigaction ,
 .Nm rt_sigprocmask ,
 .Nm rt_sigsuspend ,
+.Nm rt_sigpending ,
 .Nm sigreturn ,
 .Nm rt_sigreturn ,
 .Nm pause
@@ -20,6 +23,10 @@
 .Fn sigprocmask "int how" "const sigset_t *restrict set" "sigset_t *restrict oldset"
 .Ft int
 .Fn sigsuspend "const sigset_t *mask"
+.Ft int
+.Fn sigpending "sigset_t *set"
+.Ft int
+.Fn sigaltstack "const stack_t *restrict ss" "stack_t *restrict old_ss"
 .In unistd.h
 .Ft int
 .Fn pause void
@@ -45,8 +52,9 @@ The kernel accepts signal numbers 1 through 64.
 Numbers 1 through 31 have their Linux i386 meanings.
 Musl reserves numbers 32 through 34 and rejects them in
 .Fn sigaction .
-Pending signals occupy one bit each; repeated instances coalesce.
-There is no queue of real-time signals or sender information.
+Pending signals occupy one bit each; repeated instances coalesce, and
+the sender information of the first is what the handler receives.
+There is no queue of real-time signals.
 .Ss Dispositions
 .Va sa_handler
 selects
@@ -90,15 +98,49 @@ An ignored signal does not interrupt a blocking wait.
 A caught, stopping, or terminating signal that is not blocked can
 interrupt a wait;
 an operation that has transferred data may return a partial count.
-A stop signal that takes its default action ends such a wait as any other
-signal does, and the call returns when the process is continued, where
-Linux restarts most such calls.
+A system call interrupted before it transferred anything is restarted
+when no handler runs, as after a stop and a continue, and when the
+handler that runs has
+.Dv SA_RESTART ;
+otherwise it fails with
+.Er EINTR .
+The calls that wait for a signal or a deadline are never restarted:
+.Fn pause ,
+.Fn sigsuspend ,
+.Fn nanosleep ,
+.Fn clock_nanosleep ,
+.Fn poll ,
+.Fn ppoll ,
+.Fn select
+and
+.Fn pselect .
 .Pp
-Unhandled user-mode CPU exceptions are different: they terminate the
-process directly
-without consulting its signal mask or disposition.
-A handler for a fault signal can run when that signal is posted,
-but cannot recover from the corresponding CPU exception.
+A user-mode CPU exception raises its signal as Linux raises it:
+.Dv SIGSEGV
+with
+.Dv SEGV_MAPERR
+or
+.Dv SEGV_ACCERR
+and the faulting address for a page fault,
+.Dv SIGILL
+with
+.Dv ILL_ILLOPN ,
+.Dv SIGFPE
+with the code of the error the unit raised,
+.Dv SIGBUS
+for a segment or alignment fault,
+.Dv SIGTRAP
+for the
+.Li int3
+instruction, which user mode may execute, and for a single step, and
+.Dv SIGSEGV
+with
+.Dv SI_KERNEL
+for a protection fault.
+A signal the process blocks or ignores cannot recover it: the disposition
+returns to default, the signal is unblocked, and the process dies.
+A handler runs otherwise, and the faulting instruction runs again when the
+handler returns.
 .Ss Handlers
 While a handler runs, its
 .Va sa_mask
@@ -115,16 +157,52 @@ resets the disposition to default before entering the handler.
 .Pp
 With
 .Dv SA_SIGINFO ,
-the handler receives pointers to signal information and context storage.
-Only
-.Va si_signo
-is filled; the remaining information and context storage are zero.
-They do not contain a complete Linux signal context.
+the handler receives pointers to a
+.Vt siginfo_t
+and a
+.Vt ucontext_t
+in Linux's i386 layouts.
+The
+.Vt siginfo_t
+has the signal number and code:
+.Dv SI_USER
+with the sender's process and real user IDs for
+.Fn kill ,
+.Dv SI_TKILL
+with them for
+.Fn tkill
+and
+.Fn tgkill ,
+the codes above with the address for a fault,
+.Dv CLD_EXITED ,
+.Dv CLD_KILLED ,
+.Dv CLD_STOPPED
+or
+.Dv CLD_CONTINUED
+with the child's process ID, real user ID and status for
+.Dv SIGCHLD ,
+and
+.Dv SI_KERNEL
+for what the kernel sends, such as terminal signals and
+.Dv SIGALRM .
+The
+.Vt ucontext_t
+holds the interrupted registers, the address of the floating-point state
+in Linux's
+.Vt struct _fpstate_32
+form, the mask from before the handler, and the alternate stack.
+A handler that changes the saved registers or floating-point state
+returns to what it wrote.
 .Pp
 All action flags are stored and returned.
 .Dv SA_RESTART
-does not restart interrupted system calls.
-.Dv SA_ONSTACK , SA_NOCLDSTOP ,
+restarts an interrupted system call as described above, and
+.Dv SA_ONSTACK
+runs the handler on the alternate stack when one is set and not in use.
+Without
+.Dv SA_RESTORER ,
+the handler returns to code in its own frame that makes the return call.
+.Dv SA_NOCLDSTOP
 and
 .Dv SA_NOCLDWAIT
 have no special effect.
@@ -154,11 +232,41 @@ waits for a signal that can act.
 .Fn sigsuspend
 installs
 .Fa mask
-for the wait and restores the previous mask before returning.
-Unlike Linux, the kernel restores that mask before delivering the signal.
-If the old mask blocks the signal that ended the wait, the signal remains
-pending; otherwise the handler runs with the restored mask, modified by
-the handler's own masking rules.
+for the wait.
+The handler of the signal that ends it runs under
+.Fa mask ,
+modified by the handler's own masking rules, and the previous mask comes
+back when the handler returns; when no handler runs it comes back on the
+return from the call.
+.Pp
+.Fn sigpending
+reports the signals that are pending while blocked.
+.Ss Alternate stack
+.Fn sigaltstack
+sets the stack a handler with
+.Dv SA_ONSTACK
+runs on, and reports the previous one through a non-null
+.Fa old_ss :
+its base, its size, and
+.Dv SS_DISABLE
+when none is set or
+.Dv SS_ONSTACK
+while the process runs on it.
+.Dv SS_DISABLE
+in
+.Fa ss
+removes the stack.
+A process on its alternate stack cannot change it, and a stack smaller
+than
+.Dv MINSIGSTKSZ ,
+2048 bytes, is refused.
+.Dv SS_AUTODISARM
+is accepted and has no effect.
+A child made by
+.Xr fork 2
+inherits the stack, and
+.Xr execve 2
+removes it.
 .Ss System call interface
 Musl's
 .Vt sigset_t
@@ -190,6 +298,21 @@ EBX points to the temporary set and ECX is its size, 8.
 Musl's
 .Fn sigsuspend
 uses this call.
+.It Nm rt_sigpending No (176)
+EBX points to the set and ECX is its size, at most 8.
+.It Nm sigprocmask No (126)
+The older form of
+.Nm rt_sigprocmask ,
+with signals 1 through 32 in one word: EBX is
+.Fa how ,
+ECX the new set pointer and EDX the old set pointer.
+GNU libc's
+.Fn getcontext
+uses it.
+.It Nm sigaltstack No (186)
+EBX points to the new
+.Vt stack_t
+and ECX to the old one; either may be null.
 .It Nm pause No (29)
 No arguments.
 .It Nm sigreturn No (119)
@@ -203,19 +326,34 @@ restorer issues the call without popping the signal argument.
 The saved frame begins 4 bytes below the user stack pointer.
 .El
 .Pp
-Musl declares no public functions for the
+Musl and GNU libc declare no public functions for the
 .Li rt_*
 calls or
-.Nm sigreturn .
-It supplies the restorer address when installing an action.
-The kernel always uses that address; it supplies no fallback restorer.
+.Nm sigreturn ;
+each supplies a restorer address when installing an action.
 .Pp
-Both return calls validate the same kernel-built frame and restore the
-saved registers, instruction and stack pointers, floating-point state,
-and pre-handler signal mask.
-Segment selectors and processor flags are restricted to safe user values.
-An unreadable or invalid frame, including an invalid floating-point
-image, terminates the process with
+The frames are Linux's: a plain handler's holds the return address, the
+signal number, a
+.Vt struct sigcontext
+and the upper word of the mask to restore; an
+.Dv SA_SIGINFO
+handler's holds the return address, the signal number, the two pointers,
+the
+.Vt siginfo_t
+and the
+.Vt ucontext_t .
+The floating-point state lies above the frame, 64-byte aligned.
+The handler starts with the signal number in EAX and, with
+.Dv SA_SIGINFO ,
+the two pointers in EDX and ECX, with the direction and trap flags clear
+and the initial floating-point state.
+Both return calls restore the saved general registers, instruction and
+stack pointers, the processor flags a program may change, the
+floating-point state, and the saved mask; the rt form restores the
+alternate stack as well.
+Segment selectors are restricted to the ones this kernel has.
+An unreadable frame, or a floating-point state with a reserved MXCSR bit
+set, terminates the process with
 .Dv SIGSEGV .
 .Sh RETURN VALUES
 .Fn sigaction
@@ -242,6 +380,19 @@ installs a
 handler, blocks and posts the signal, then unblocks it and checks that
 the handler runs and returns through
 .Nm rt_sigreturn .
+.Pa tests/musl/sigframemusl.c
+recovers from a write to a read-only page in its handler, restarts a read
+with
+.Dv SA_RESTART ,
+runs a handler on the alternate stack, catches
+.Li int3 ,
+and checks the pending set, the masks of
+.Fn sigsuspend
+and the old
+.Nm sigprocmask ,
+and
+.Dv SIGCHLD Ns 's
+information.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT
@@ -258,9 +409,17 @@ The signal is outside 1 through 64, is
 or
 .Dv SIGSTOP ,
 or is reserved by musl;
-a kernel set size is not 8; or
+a kernel set size is not 8, or more than 8 for
+.Nm rt_sigpending ;
 .Fa how
-is invalid when a new mask is supplied.
+is invalid when a new mask is supplied; or
+.Fn sigaltstack
+was given flags other than those above.
+.It Bq Er ENOMEM
+The alternate stack is smaller than
+.Dv MINSIGSTKSZ .
+.It Bq Er EPERM
+The process tried to change its alternate stack while running on it.
 .It Bq Er ESRCH
 There is no current process.
 .El

@@ -1381,6 +1381,33 @@ static uint32_t _enosys_big_num = 0;
 static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 
 /**
+ * Whether a call that a signal interrupted with EINTR may be restarted, by a
+ * signal no handler takes or by a handler with SA_RESTART. The calls Linux
+ * never restarts are the ones that wait for a signal or for a deadline, and
+ * the two returns from a handler, whose EAX is the interrupted call's.
+ */
+static int syscall_restartable(uint32_t nr)
+{
+    switch (nr) {
+    case 29:  /* pause */
+    case 82:  /* select */
+    case 119: /* sigreturn */
+    case 142: /* _newselect */
+    case 162: /* nanosleep */
+    case 168: /* poll */
+    case 173: /* rt_sigreturn */
+    case 177: /* rt_sigtimedwait */
+    case 179: /* rt_sigsuspend */
+    case 267: /* clock_nanosleep */
+    case 308: /* pselect6 */
+    case 309: /* ppoll */
+        return 0;
+    default:
+        return 1;
+    }
+}
+
+/**
  * The syscall trap handler: dispatch on the number in EAX.
  *
  * Looks up _syscall_table[EAX] and calls it, storing the result back in
@@ -1453,6 +1480,13 @@ static void _syscall_handler(isr_params_t *params)
      * and %gs) atomically; iret then restores the caller's IF. */
     __asm__ __volatile__("cli");
 
+    /* deliver_signals, on this return, decides whether an interrupted call
+     * restarts. */
+    if (current_proc) {
+        current_proc->restart_nr =
+            (ret == -EINTR && syscall_restartable(syscall_num)) ? syscall_num + 1u : 0;
+    }
+
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
@@ -1505,6 +1539,9 @@ void init_syscall(void)
     _syscall_table[SYS_MPROTECT] = sys_mprotect;
     _syscall_table[SYS_CLONE] = sys_clone;
     _syscall_table[SYS_FUTEX] = sys_futex;
+    _syscall_table[SYS_SIGALTSTACK] = sys_sigaltstack;
+    _syscall_table[SYS_RT_SIGPENDING] = sys_rt_sigpending;
+    _syscall_table[SYS_SIGPROCMASK] = sys_sigprocmask;
     _syscall_table[SYS_LSEEK] = sys_lseek;
     _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_IOCTL] = sys_ioctl;

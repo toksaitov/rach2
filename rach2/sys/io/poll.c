@@ -374,6 +374,45 @@ int32_t sys_poll(struct isr_params *params)
     return poll_common(ufds, nfds, has_deadline, deadline);
 }
 
+/**
+ * Install the signal mask a ppoll or pselect6 waits under.
+ *
+ * `umask` is a user signal set of `size` bytes, or 0 for none. The mask it
+ * replaces becomes the process's saved mask: `deliver_signals` puts it back
+ * after the handler a signal runs for this wait, or at once when none runs,
+ * and a wait that did not end for a signal puts it back through
+ * `wait_mask_done`. Returns 0, or -EINVAL or -EFAULT.
+ */
+static int32_t wait_mask_set(uint32_t umask, uint32_t size)
+{
+    uint64_t mask;
+
+    if (!umask) {
+        return 0;
+    }
+    if (size != sizeof(mask)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&mask, (const void __user *)umask, sizeof(mask)) != 0) {
+        return -EFAULT;
+    }
+    current_proc->saved_sigmask = current_proc->sig_blocked;
+    current_proc->sigmask_saved = 1;
+    current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
+    return 0;
+}
+
+/* The mask back, unless the wait ended for a signal, whose delivery puts it
+ * back after its handler. */
+static int32_t wait_mask_done(int32_t ret)
+{
+    if (current_proc->sigmask_saved && ret != -EINTR) {
+        current_proc->sig_blocked = current_proc->saved_sigmask;
+        current_proc->sigmask_saved = 0;
+    }
+    return ret;
+}
+
 int32_t sys_ppoll(struct isr_params *params)
 {
     uint32_t ufds = params->ebx;
@@ -394,8 +433,17 @@ int32_t sys_ppoll(struct isr_params *params)
     } else {
         deadline = ts_deadline(NULL, &has_deadline);
     }
-    /* The signal mask in ESI is not applied, as poll(2) documents. */
-    return poll_common(ufds, nfds, has_deadline, deadline);
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    {
+        int32_t rc = wait_mask_set(params->esi, params->edi);
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return wait_mask_done(poll_common(ufds, nfds, has_deadline, deadline));
 }
 
 /**
@@ -545,7 +593,16 @@ int32_t sys_pselect6(struct isr_params *params)
     int has_deadline;
     uint32_t deadline;
 
-    /* The signal mask, reached through EBP, is not applied; see select(2). */
+    uint32_t sigarg[2] = {0, 0};
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    /* EBP points at the mask's address and its size in bytes. */
+    if (params->ebp &&
+        copy_from_user(sigarg, (const void __user *)params->ebp, sizeof(sigarg)) != 0) {
+        return -EFAULT;
+    }
     if (uts) {
         if (copy_from_user(&ts, (const void __user *)uts, sizeof(ts)) != 0) {
             return -EFAULT;
@@ -557,5 +614,12 @@ int32_t sys_pselect6(struct isr_params *params)
     } else {
         deadline = ts_deadline(NULL, &has_deadline);
     }
-    return select_common(nfds, ur, uw, ue, has_deadline, deadline);
+    {
+        int32_t rc = wait_mask_set(sigarg[0], sigarg[1]);
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return wait_mask_done(select_common(nfds, ur, uw, ue, has_deadline, deadline));
 }

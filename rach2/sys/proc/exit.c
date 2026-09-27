@@ -35,7 +35,10 @@ void proc_exit_cleanup(int32_t status)
     current_proc->state = PROC_ZOMBIE;
     parent = get_process(current_proc->parent_pid);
     if (parent) {
-        signal_post(parent, SIGCHLD);
+        struct k_siginfo info;
+
+        proc_child_info(current_proc, &info);
+        signal_post_info(parent, SIGCHLD, &info);
         if (parent->state == PROC_BLOCKED) {
             parent->state = PROC_READY;
         }

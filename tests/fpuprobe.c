@@ -41,9 +41,9 @@ typedef unsigned int size_t;
 #define SIGSEGV     11
 #define SIGUSR1     10
 #define SIGUSR2     12
+#define SA_SIGINFO  0x00000004u
 #define SA_RESTORER 0x04000000u
 
-#define SIG_FRAME_MAGIC 0x5347464du /* what the kernel tags its frame with */
 
 struct k_sigaction {
     void (*handler)(int);
@@ -271,7 +271,7 @@ static void install(int signo, void (*h)(int))
     struct k_sigaction ka;
 
     ka.handler = h;
-    ka.flags = SA_RESTORER;
+    ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
@@ -314,33 +314,35 @@ static int damage_pipe[2];
  * Damage MXCSR in the saved floating-point image.
  *
  * The frame the kernel built starts where the handler's stack pointer was
- * at entry, which is one word above the saved frame pointer. Its layout is
- * the kernel's `struct sig_frame`: four words, the 76-byte trapframe, the
- * 8-byte mask, the magic word at byte 100, 128-byte siginfo, 348-byte
- * ucontext, and the floating-point image at byte 580 with MXCSR 24 bytes
- * into it. The magic word is checked at byte 100. A byte goes down the pipe
- * after the write, so the parent knows the frame was damaged before the
+ * at entry, which is one word above the saved frame pointer. It is Linux's
+ * rt frame: the return address, the signal number, the siginfo and ucontext
+ * pointers, the 128-byte siginfo, and the ucontext at byte 144. The
+ * ucontext's `uc_mcontext` starts 20 bytes in, and its `fpstate` word, 76
+ * bytes further, holds the address of the `_fpstate_32`, whose `fxsave`
+ * image starts at byte 112 with MXCSR 24 bytes into it. A byte goes down the
+ * pipe after the write, so the parent knows the frame was damaged before the
  * kernel refused it.
  */
 static void damage_handler(int sig)
 {
     unsigned char *frame = (unsigned char *)((unsigned *)__builtin_frame_address(0) + 1);
-    unsigned magic, mxcsr;
+    unsigned char *uc = *(unsigned char **)(frame + 12);
+    unsigned char *fpstate;
+    unsigned mxcsr;
     int k;
 
     (void)sig;
-    magic = (unsigned)frame[100] | ((unsigned)frame[101] << 8) | ((unsigned)frame[102] << 16) |
-            ((unsigned)frame[103] << 24);
-    if (magic != SIG_FRAME_MAGIC) {
-        puts("FPUPROBE FAIL: the frame's magic word is not where the layout puts it");
+    if (uc != frame + 144) {
+        puts("FPUPROBE FAIL: the ucontext is not where Linux's rt frame puts it");
         sys_exit(1);
     }
+    fpstate = *(unsigned char **)(uc + 20 + 76);
     for (k = 0; k < 4; k++) {
-        ((unsigned char *)&mxcsr)[k] = frame[580 + 24 + k];
+        ((unsigned char *)&mxcsr)[k] = fpstate[112 + 24 + k];
     }
     mxcsr |= 0x80000000u;
     for (k = 0; k < 4; k++) {
-        frame[580 + 24 + k] = ((unsigned char *)&mxcsr)[k];
+        fpstate[112 + 24 + k] = ((unsigned char *)&mxcsr)[k];
     }
     syscall3(SYS_WRITE, damage_pipe[1], (int)(size_t)"d", 1);
 }

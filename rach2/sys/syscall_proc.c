@@ -19,6 +19,7 @@
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
+#include "proc/sigframe.h"
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -1222,6 +1223,9 @@ checked:
         }
     }
     current_proc->clear_child_tid = 0;
+    current_proc->altstack_on = 0;
+    current_proc->altstack_sp = 0;
+    current_proc->altstack_size = 0;
 
     /* If this process owns the console, release the controlling terminal across
      * the destructive load below: once free_user_pages runs the old image is
@@ -1486,6 +1490,9 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     k_memcpy(child->sigacts, parent->sigacts, sizeof(child->sigacts));
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
+    child->altstack_sp = parent->altstack_sp;
+    child->altstack_size = parent->altstack_size;
+    child->altstack_on = parent->altstack_on;
 
     /* Copy file descriptor table. The child shares the parent's open-file
      * descriptions (so a seek in one is seen by the other, per POSIX), so each
@@ -1846,19 +1853,6 @@ static uint64_t sigact_mask(const struct k_sigaction *sa)
     return (uint64_t)sa->mask[0] | ((uint64_t)sa->mask[1] << 32);
 }
 
-/* Coerce a restored data/TLS selector to one this kernel has: flat user data
- * (0x23) or the per-process TLS entry (0x33), and flat user data for anything
- * else. The return path loads these with `mov` while still at ring 0, so a
- * selector whose index is past the GDT's limit raises a general-protection
- * fault in the kernel rather than in the process: a ring-3 RPL is not enough
- * to make a selector safe to load, and a forged frame could name one. */
-static uint32_t safe_user_seg(uint32_t sel)
-{
-    uint32_t s = sel & 0xFFFFu;
-
-    return (s == GDT_USER_DATA_SELECTOR || s == GDT_TLS_SELECTOR) ? s : GDT_USER_DATA_SELECTOR;
-}
-
 /* The signal masks are 64-bit, so a read-modify-write is two stores on i386;
  * signal_post runs from IRQ context (Ctrl-C) as well as from a syscall, so a
  * mutation an interrupt can meet half done is made with interrupts off.
@@ -1881,15 +1875,16 @@ static void sig_irq_restore(uint32_t flags)
 }
 
 /*
- * Post signal `signo` to `target`: set its pending bit. If the target is
- * blocked in the scheduler (sleeping/waiting), make it runnable and clear its
- * timed wake, whatever the signal's disposition and mask: an interruptible
- * wait then asks `signal_pending` whether to end with -EINTR, and any wait
- * that goes on arms its own deadline again. SIGKILL/SIGSTOP cannot be
- * caught, so a pending SIGKILL is honored even before delivery by leaving it
- * pending for the default path.
+ * Post signal `signo` to `target` with the siginfo `info`: set its pending
+ * bit, and keep `info` when the signal was not already pending. If the target
+ * is blocked in the scheduler (sleeping/waiting), make it runnable and clear
+ * its timed wake, whatever the signal's disposition and mask: an
+ * interruptible wait then asks `signal_pending` whether to end with -EINTR,
+ * and any wait that goes on arms its own deadline again. SIGKILL/SIGSTOP
+ * cannot be caught, so a pending SIGKILL is honored even before delivery by
+ * leaving it pending for the default path.
  */
-void signal_post(process_t *target, int signo)
+void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
     if (!target || signo < 1 || signo > KSIG_MAX) {
         return;
@@ -1899,6 +1894,9 @@ void signal_post(process_t *target, int signo)
     }
     {
         uint32_t f = sig_irq_save();
+        if (!(target->sig_pending & KSIG_BIT(signo))) {
+            target->sig_info[signo] = *info;
+        }
         target->sig_pending |= KSIG_BIT(signo);
         if (target->state == PROC_BLOCKED) {
             target->wakeup_tick = 0;
@@ -1916,6 +1914,13 @@ void signal_post(process_t *target, int signo)
                 target->state = PROC_READY;
                 target->jc_status = 0xffff; /* WIFCONTINUED */
                 if (parent) {
+                    if (!(parent->sig_pending & KSIG_BIT(SIGCHLD))) {
+                        parent->sig_info[SIGCHLD].code = CLD_CONTINUED;
+                        parent->sig_info[SIGCHLD].pid = target->pid;
+                        parent->sig_info[SIGCHLD].uid = target->ruid;
+                        parent->sig_info[SIGCHLD].status = SIGCONT;
+                        parent->sig_info[SIGCHLD].addr = 0;
+                    }
                     parent->sig_pending |= KSIG_BIT(SIGCHLD);
                     if (parent->state == PROC_BLOCKED) {
                         parent->wakeup_tick = 0;
@@ -1930,6 +1935,38 @@ void signal_post(process_t *target, int signo)
         }
         sig_irq_restore(f);
     }
+}
+
+void signal_post(process_t *target, int signo)
+{
+    struct k_siginfo info;
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
+    signal_post_info(target, signo, &info);
+}
+
+void signal_force(process_t *target, int signo, const struct k_siginfo *info)
+{
+    struct k_sigaction *sa = &target->sigacts[signo];
+    uint32_t f = sig_irq_save();
+
+    if (sa->handler == KSIG_IGN || (target->sig_blocked & KSIG_BIT(signo))) {
+        sa->handler = KSIG_DFL;
+        target->sig_blocked &= ~KSIG_BIT(signo);
+    }
+    sig_irq_restore(f);
+    signal_post_info(target, signo, info);
+}
+
+/* The siginfo of a signal a process sends: `code` SI_USER for kill and
+ * SI_TKILL for tkill and tgkill, with the sender's pid and real uid. */
+static void sender_info(struct k_siginfo *info, int32_t code)
+{
+    k_memset(info, 0, sizeof(*info));
+    info->code = code;
+    info->pid = current_proc ? current_proc->pid : 0;
+    info->uid = current_proc ? current_proc->ruid : 0;
 }
 
 /* Non-zero if the current process has a pending signal that is neither
@@ -2034,7 +2071,10 @@ static int32_t kill_group(int pgid, int signo)
         }
         allowed = 1;
         if (signo != 0) {
-            signal_post(p, signo);
+            struct k_siginfo info;
+
+            sender_info(&info, SI_USER);
+            signal_post_info(p, signo, &info);
         }
     }
     if (!found) {
@@ -2045,10 +2085,12 @@ static int32_t kill_group(int pgid, int signo)
 
 /* kill(2): pid > 0 a single process; pid == 0 the caller's process group; pid <
  * -1 the group (-pid). (pid == -1 "all processes" is not supported here.) signo
- * 0 just probes existence and permission. */
-static int32_t do_kill(int pid, int signo)
+ * 0 just probes existence and permission. `code` is the siginfo's si_code: a
+ * single target gets it, a group SI_USER. */
+static int32_t do_kill(int pid, int signo, int32_t code)
 {
     process_t *target;
+    struct k_siginfo info;
 
     if (signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
@@ -2075,13 +2117,14 @@ static int32_t do_kill(int pid, int signo)
     if (signo == 0) {
         return 0; /* existence and permission check only */
     }
-    signal_post(target, signo);
+    sender_info(&info, code);
+    signal_post_info(target, signo, &info);
     return 0;
 }
 
 int32_t sys_kill(isr_params_t *params)
 {
-    return do_kill((int)params->ebx, (int)params->ecx);
+    return do_kill((int)params->ebx, (int)params->ecx, SI_USER);
 }
 
 int32_t sys_tkill(isr_params_t *params)
@@ -2092,7 +2135,7 @@ int32_t sys_tkill(isr_params_t *params)
     if ((int)params->ebx <= 0) {
         return -EINVAL;
     }
-    return do_kill((int)params->ebx, (int)params->ecx);
+    return do_kill((int)params->ebx, (int)params->ecx, SI_TKILL);
 }
 
 int32_t sys_tgkill(isr_params_t *params)
@@ -2114,7 +2157,7 @@ int32_t sys_tgkill(isr_params_t *params)
         (uint32_t)tgid != target->pid) {
         return -ESRCH;
     }
-    return do_kill(tid, sig);
+    return do_kill(tid, sig, SI_TKILL);
 }
 
 /* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending
@@ -2159,16 +2202,16 @@ int32_t sys_pause(isr_params_t *params)
  * Atomically install a signal mask and wait (rt_sigsuspend(2)).
  *
  * EBX = const sigset_t *mask, ECX = sigsetsize (8). Replaces the blocked mask
- * with *mask, waits for a deliverable signal, restores the old mask, then
- * returns -EINTR. The handler runs under the RESTORED mask: a simplification,
- * since full save-the-mask-through-the-handler semantics are not modelled.
+ * with *mask, waits for a deliverable signal, and returns -EINTR. The handler
+ * the signal runs runs under *mask, and the frame it gets carries the old
+ * mask, which its return restores; without a handler the old mask comes back
+ * on the return to user mode.
  */
 int32_t sys_rt_sigsuspend(isr_params_t *params)
 {
     const void __user *umask = (const void __user *)params->ebx;
     uint32_t sigsetsize = params->ecx;
     uint64_t newmask = 0;
-    uint64_t oldmask;
 
     if (!current_proc) {
         return -ESRCH;
@@ -2180,10 +2223,10 @@ int32_t sys_rt_sigsuspend(isr_params_t *params)
         return -EFAULT;
     }
     newmask &= ~(uint64_t)KSIG_UNCATCHABLE; /* SIGKILL/SIGSTOP can never be blocked */
-    oldmask = current_proc->sig_blocked;
+    current_proc->saved_sigmask = current_proc->sig_blocked;
+    current_proc->sigmask_saved = 1;
     current_proc->sig_blocked = newmask;
     sig_wait();
-    current_proc->sig_blocked = oldmask;
     return -EINTR;
 }
 
@@ -2284,175 +2327,192 @@ int32_t sys_rt_sigprocmask(isr_params_t *params)
 }
 
 /**
- * The user-stack frame shared by signal delivery and both restorers.
+ * The shared body of sigreturn and rt_sigreturn.
  *
- * Only `saved`, `saved_mask` and `fpu` restore the interrupted state. The
- * SA_SIGINFO arguments are placeholders: `info` has only si_signo, and `uc`
- * is zeroed over all 348 bytes of musl 1.2.5's i386 ucontext_t.
+ * The frame the handler returned from gives back the registers, the
+ * floating-point state and the mask; a frame that cannot be read or that
+ * would load a faulting state kills the process with SIGSEGV. Returns the
+ * restored EAX, so the dispatcher's store of the result leaves it as it was.
  */
-struct sig_frame {
-    uint32_t pretcode;           /* return address: the restorer (musl __restore_rt) */
-    uint32_t sig;                /* handler arg 1 */
-    uint32_t pinfo;              /* handler arg 2 (&info) */
-    uint32_t puc;                /* handler arg 3 (&uc) */
-    isr_params_t saved;          /* the interrupted trapframe, restored by sigreturn */
-    uint64_t saved_mask;         /* the blocked mask to restore */
-    uint32_t magic;              /* sanity tag checked by rt_sigreturn */
-    uint8_t info[128];           /* siginfo_t storage (zeroed; si_signo set) */
-    uint8_t uc[348];             /* musl i386 ucontext_t storage (zeroed) */
-    uint8_t fpu[FPU_STATE_SIZE]; /* the x87 and SSE state at delivery */
-};
-
-#define SIG_FRAME_MAGIC 0x5347464du /* "SGFM" */
-
-/**
- * Build a signal frame on the user stack and redirect the trapframe to the
- * handler. Returns 0, or -1 if the user stack could not be written.
- */
-static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *sa)
+static int32_t signal_return(isr_params_t *tf, int rt)
 {
-    uint32_t handler;
-    struct sig_frame frame;
-    uint32_t sp = tf->user_esp;
-    uint32_t frame_addr;
-    uint64_t newblock;
-
-    /* Place the frame below the current user esp, aligned so the handler entry
-     * esp+4 is 16-byte aligned (the i386 call ABI). */
-    sp -= sizeof(struct sig_frame);
-    sp &= ~0xFu;
-    sp -= 4;
-    frame_addr = sp;
-
-    k_memset(&frame, 0, sizeof(frame));
-    frame.pretcode = sa->restorer;
-    frame.sig = (uint32_t)signo;
-    frame.pinfo = frame_addr + (uint32_t)((char *)frame.info - (char *)&frame);
-    frame.puc = frame_addr + (uint32_t)((char *)frame.uc - (char *)&frame);
-    frame.saved = *tf;
-    frame.saved_mask = current_proc->sig_blocked;
-    frame.magic = SIG_FRAME_MAGIC;
-    frame.info[0] = (uint8_t)signo; /* siginfo_t.si_signo (first int) low byte */
-    fpu_save(frame.fpu);
-
-    if (copy_to_user((void __user *)frame_addr, &frame, sizeof(frame)) != 0) {
-        return -1;
-    }
-    /* The handler starts with the initial state, as a fresh image does; the
-     * interrupted state is on the frame for sigreturn. */
-    fpu_reset();
-
-    /* Block the handler's mask, plus this signal unless SA_NODEFER, for the
-     * run. */
-    newblock = current_proc->sig_blocked | sigact_mask(sa);
-    if (!(sa->flags & SA_NODEFER)) {
-        newblock |= KSIG_BIT(signo);
-    }
-    newblock &= ~KSIG_UNCATCHABLE;
-    current_proc->sig_blocked = newblock;
-
-    /* The handler this delivery enters, taken before `SA_RESETHAND` puts the
-     * disposition back: the reset is for the next signal, not for this one. */
-    handler = sa->handler;
-    if (sa->flags & SA_RESETHAND) {
-        sa->handler = KSIG_DFL; /* one-shot */
-    }
-
-    /* Enter the handler: eip = handler, esp = frame (args just above it). */
-    tf->eip = handler;
-    tf->user_esp = frame_addr;
-    return 0;
-}
-
-/**
- * The shared body of sigreturn.
- *
- * Reads the frame the restorer left on the user stack, validates it, and
- * restores the saved trapframe (segment selectors and EFLAGS forced to safe
- * user values, since the frame is on the untrusted user stack) plus the
- * pre-handler signal mask. Returns the restored EAX so the dispatcher does not
- * clobber it.
- *
- * `delta` is how far below the current user esp the frame begins, which
- * differs by trampoline: musl's __restore_rt enters with esp just past
- * `pretcode` (delta 4), while the legacy __restore pops the signal word
- * first and so enters 4 bytes higher (delta 8). Both read the same
- * kernel-built frame.
- */
-static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
-{
-    struct sig_frame frame;
-    uint32_t frame_addr;
+    uint64_t mask;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    frame_addr = tf->user_esp - delta;
-    if (copy_from_user(&frame, (const void __user *)frame_addr, sizeof(frame)) != 0) {
+    if (sigframe_restore(tf, rt, &mask) != 0) {
         terminate_current_process(SIGSEGV);
         return 0;
     }
-    if (frame.magic != SIG_FRAME_MAGIC) {
-        terminate_current_process(SIGSEGV); /* forged/clobbered frame */
-        return 0;
-    }
-    /* The floating-point image is loaded into the registers by `fxrstor`,
-     * which faults in the kernel on a reserved MXCSR bit; a frame with one
-     * is refused as a forged frame is. */
-    if (fpu_check_area(frame.fpu) != 0) {
-        terminate_current_process(SIGSEGV);
-        return 0;
-    }
-    fpu_restore(frame.fpu);
-
-    /* Restore the general registers and instruction/stack pointers, but FORCE
-     * the segment selectors to ring-3 user values and sanitize EFLAGS (keep IF
-     * set, mask the privileged/IOPL bits) so a tampered frame cannot escalate.
-     */
-    tf->edi = frame.saved.edi;
-    tf->esi = frame.saved.esi;
-    tf->ebp = frame.saved.ebp;
-    tf->ebx = frame.saved.ebx;
-    tf->edx = frame.saved.edx;
-    tf->ecx = frame.saved.ecx;
-    tf->eax = frame.saved.eax;
-    tf->eip = frame.saved.eip;
-    tf->user_esp = frame.saved.user_esp;
-    tf->cs = 0x1b;      /* privilege-critical: always the user code selector */
-    tf->user_ss = 0x23; /* privilege-critical: always the user data selector */
-    /* Restore the saved data/TLS selectors so %gs keeps the per-process TLS
-     * selector the handler ran with; `safe_user_seg` keeps only the two this
-     * kernel has, since the return path loads them at ring 0 and a selector
-     * past the GDT's limit would fault the kernel and not the process. */
-    tf->ds = safe_user_seg(frame.saved.ds);
-    tf->es = safe_user_seg(frame.saved.es);
-    tf->fs = safe_user_seg(frame.saved.fs);
-    tf->gs = safe_user_seg(frame.saved.gs);
-    tf->eflags = (frame.saved.eflags & 0x00000cd5u) | 0x202u; /* safe flags + IF */
-
-    current_proc->sig_blocked = frame.saved_mask & ~KSIG_UNCATCHABLE;
+    current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
     return (int32_t)tf->eax;
 }
 
 /*
- * rt_sigreturn (syscall 173): return through musl's __restore_rt (SA_SIGINFO
- * handlers), a bare `int $0x80`, so the frame sits 4 bytes below the user esp.
+ * rt_sigreturn (syscall 173): the return of an SA_SIGINFO handler, through a
+ * restorer that issues the call with the stack pointer 4 bytes past the
+ * frame's start.
  */
 int32_t sys_rt_sigreturn(isr_params_t *tf)
 {
-    return signal_restore(tf, 4);
+    return signal_return(tf, 1);
 }
 
 /*
- * sigreturn (syscall 119): return through musl's legacy __restore (plain
- * handlers, no SA_SIGINFO). It pops the signal word before the `int $0x80`,
- * so the frame sits 8 bytes below the user esp. Reads the same kernel-built
- * frame as the rt path; the popped word is the handler's `sig` argument and
- * is discarded.
+ * sigreturn (syscall 119): the return of a plain handler, through a restorer
+ * that pops the signal number first, 8 bytes past the frame's start.
  */
 int32_t sys_sigreturn(isr_params_t *tf)
 {
-    return signal_restore(tf, 8);
+    return signal_return(tf, 0);
+}
+
+/* The i386 stack_t of sigaltstack. */
+struct k_stack {
+    uint32_t ss_sp;
+    int32_t ss_flags;
+    uint32_t ss_size;
+};
+
+#define SS_ONSTACK    1
+#define SS_DISABLE    2
+#define SS_AUTODISARM (1 << 31)
+#define MINSIGSTKSZ   2048u
+
+/**
+ * sigaltstack (186): set or read the alternate stack a handler with
+ * SA_ONSTACK runs on. EBX=new stack or NULL, ECX=old stack or NULL.
+ *
+ * The old settings are read before the change: SS_DISABLE for none, and
+ * SS_ONSTACK while the process runs on the stack, when a change is refused
+ * with EPERM. SS_AUTODISARM is accepted and has no effect. A stack smaller
+ * than MINSIGSTKSZ is refused with ENOMEM.
+ */
+int32_t sys_sigaltstack(isr_params_t *params)
+{
+    const struct k_stack __user *uss = (const struct k_stack __user *)params->ebx;
+    struct k_stack __user *uoss = (struct k_stack __user *)params->ecx;
+    struct k_stack cur;
+    struct k_stack ss;
+    int on;
+    int32_t flags;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    on = sigframe_on_altstack(params->user_esp);
+    cur.ss_sp = current_proc->altstack_sp;
+    cur.ss_size = current_proc->altstack_size;
+    cur.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on ? SS_ONSTACK : 0);
+    if (uss) {
+        if (copy_from_user(&ss, uss, sizeof(ss)) != 0) {
+            return -EFAULT;
+        }
+        if (on) {
+            return -EPERM;
+        }
+        flags = ss.ss_flags & ~SS_AUTODISARM;
+        if (flags != 0 && flags != SS_DISABLE && flags != SS_ONSTACK) {
+            return -EINVAL;
+        }
+        if (flags == SS_DISABLE) {
+            current_proc->altstack_on = 0;
+            current_proc->altstack_sp = 0;
+            current_proc->altstack_size = 0;
+        } else {
+            if (ss.ss_size < MINSIGSTKSZ) {
+                return -ENOMEM;
+            }
+            current_proc->altstack_sp = ss.ss_sp;
+            current_proc->altstack_size = ss.ss_size;
+            current_proc->altstack_on = 1;
+        }
+    }
+    if (uoss && copy_to_user(uoss, &cur, sizeof(cur)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * rt_sigpending (176): the signals pending while blocked. EBX=set, ECX=size
+ * of the set in bytes, at most 8.
+ */
+int32_t sys_rt_sigpending(isr_params_t *params)
+{
+    uint32_t size = params->ecx;
+    uint32_t words[2];
+    uint64_t set;
+    uint32_t flags;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (size > sizeof(words)) {
+        return -EINVAL;
+    }
+    flags = sig_irq_save();
+    set = current_proc->sig_pending & current_proc->sig_blocked;
+    sig_irq_restore(flags);
+    words[0] = (uint32_t)set;
+    words[1] = (uint32_t)(set >> 32);
+    if (copy_to_user((void __user *)params->ebx, words, size) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * sigprocmask (126): the old form of rt_sigprocmask, with signals 1 to 32
+ * in one word. EBX=how, ECX=new set or NULL, EDX=old set or NULL. SIG_SETMASK
+ * replaces signals 1 to 32 and leaves the rest.
+ */
+int32_t sys_sigprocmask(isr_params_t *params)
+{
+    int how = (int)params->ebx;
+    const uint32_t __user *uset = (const uint32_t __user *)params->ecx;
+    uint32_t __user *uold = (uint32_t __user *)params->edx;
+    uint32_t old;
+    uint32_t set;
+    uint64_t mask;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    old = (uint32_t)current_proc->sig_blocked;
+    if (uset) {
+        if (copy_from_user(&set, uset, sizeof(set)) != 0) {
+            return -EFAULT;
+        }
+        mask = current_proc->sig_blocked;
+        switch (how) {
+        case 0: /* SIG_BLOCK */
+            mask |= set;
+            break;
+        case 1: /* SIG_UNBLOCK */
+            mask &= ~(uint64_t)set;
+            break;
+        case 2: /* SIG_SETMASK */
+            mask = (mask & 0xFFFFFFFF00000000ULL) | set;
+            break;
+        default:
+            return -EINVAL;
+        }
+        current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
+    }
+    if (uold && copy_to_user(uold, &old, sizeof(old)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/* Restart the system call the dispatcher recorded: its number back in EAX and
+ * the instruction pointer back on its two-byte `int $0x80`. */
+static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
+{
+    tf->eax = restart_nr - 1u;
+    tf->eip -= 2u;
 }
 
 /**
@@ -2463,23 +2523,36 @@ int32_t sys_sigreturn(isr_params_t *tf)
  * has a deliverable (pending, not blocked) signal, act on the
  * lowest-numbered one: ignore it, terminate (default), stop, or build a
  * handler frame.
+ *
+ * A system call the dispatcher found interrupted and restartable is
+ * restarted when no handler runs, and when the handler that runs has
+ * SA_RESTART; otherwise it keeps its EINTR. A mask rt_sigsuspend, pselect6 or
+ * ppoll replaced goes into the handler's frame, or back in place at once when
+ * no handler runs.
  */
 void deliver_signals(isr_params_t *tf)
 {
+    uint32_t restart_nr;
+
     if (!current_proc) {
         return;
     }
     if ((tf->cs & 3) != 3) {
         return; /* not returning to user mode */
     }
+    restart_nr = current_proc->restart_nr;
+    current_proc->restart_nr = 0;
 
     for (;;) {
         uint64_t deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
         struct k_sigaction *sa;
+        struct k_siginfo info;
+        uint64_t oldmask, newblock;
+        uint32_t handler_flags;
         int signo;
 
         if (deliverable == 0) {
-            return;
+            break;
         }
         for (signo = 1; signo <= KSIG_MAX; signo++) {
             if (deliverable & KSIG_BIT(signo)) {
@@ -2487,9 +2560,10 @@ void deliver_signals(isr_params_t *tf)
             }
         }
         if (signo > KSIG_MAX) {
-            return; /* unreachable (deliverable != 0); keeps the shift bounded */
+            break; /* unreachable (deliverable != 0); keeps the shift bounded */
         }
         current_proc->sig_pending &= ~KSIG_BIT(signo);
+        info = current_proc->sig_info[signo];
         sa = &current_proc->sigacts[signo];
 
         if (sa->handler == KSIG_IGN) {
@@ -2516,7 +2590,14 @@ void deliver_signals(isr_params_t *tf)
                 current_proc->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
                 current_proc->state = PROC_STOPPED;
                 if (parent) {
-                    signal_post(parent, SIGCHLD);
+                    struct k_siginfo child;
+
+                    k_memset(&child, 0, sizeof(child));
+                    child.code = CLD_STOPPED;
+                    child.pid = current_proc->pid;
+                    child.uid = current_proc->ruid;
+                    child.status = signo;
+                    signal_post_info(parent, SIGCHLD, &child);
                 }
                 /* Yield to others; if none are runnable, idle. The scheduler
                  * keeps us STOPPED (it only flips RUNNING->READY); signal_post
@@ -2531,12 +2612,41 @@ void deliver_signals(isr_params_t *tf)
             }
             continue; /* default ignore (SIGCHLD/SIGCONT/SIGURG/SIGWINCH) */
         }
+
         /* A user handler: build the frame and run it. The remaining pending
          * signals deliver after sigreturn returns through this path again. */
-        if (signal_setup_frame(tf, signo, sa) != 0) {
+        handler_flags = sa->flags;
+        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
+            restart_syscall(tf, restart_nr);
+        }
+        oldmask = current_proc->sigmask_saved ? current_proc->saved_sigmask
+                                              : current_proc->sig_blocked;
+        if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {
             terminate_current_process(SIGSEGV);
+            return;
+        }
+        current_proc->sigmask_saved = 0;
+        /* Block the handler's mask, plus this signal unless SA_NODEFER, for
+         * the run. */
+        newblock = current_proc->sig_blocked | sigact_mask(sa);
+        if (!(handler_flags & SA_NODEFER)) {
+            newblock |= KSIG_BIT(signo);
+        }
+        current_proc->sig_blocked = newblock & ~KSIG_UNCATCHABLE;
+        /* SA_RESETHAND is for the next signal; this one's handler is in the
+         * frame already. */
+        if (handler_flags & SA_RESETHAND) {
+            sa->handler = KSIG_DFL;
         }
         return;
+    }
+
+    if (restart_nr != 0) {
+        restart_syscall(tf, restart_nr);
+    }
+    if (current_proc->sigmask_saved) {
+        current_proc->sig_blocked = current_proc->saved_sigmask;
+        current_proc->sigmask_saved = 0;
     }
 }
 

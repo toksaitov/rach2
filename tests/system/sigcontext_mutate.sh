@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prove the complete musl context is separate from the saved FP image.
+# Prove sigmusl catches a signal frame whose ucontext lacks the saved registers.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -9,7 +9,7 @@ cd "$repo"
 }
 mkdir -p build
 work=$(mktemp -d "$repo/build/sigcontext-proof.XXXXXX")
-source=rach2/sys/syscall_proc.c
+source=rach2/sys/proc/sigframe.c
 cp "$source" "$work/source.saved"
 child=
 changed=
@@ -28,7 +28,7 @@ stop_child()
 
 rebuild()
 {
-    rm -f build/rach2/sys/syscall_proc.o build/rach2/kernel
+    rm -f build/rach2/sys/proc/sigframe.o build/rach2/kernel
     make -s -C rach2
 }
 
@@ -84,7 +84,7 @@ run_phase()
             [ "$status" -ne 0 ] || {
                 echo "sigcontext-mutation: fault passed: $mode" >&2; exit 1;
             }
-            grep -F 'SIGMUSL FAIL: ucontext bytes=348 size=348 first nonzero=128' \
+            grep -F 'SIGMUSL FAIL: ucontext cs=0x0 esp=0x0 fpregs=0x0' \
                 "$work/$phase.$mode.serial.log" >/dev/null || {
                 echo "sigcontext-mutation: wrong failure: $mode" >&2; exit 1;
             }
@@ -108,9 +108,9 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
-old = 'uint8_t uc[348];'
+old = '        fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);\n'
 assert text.count(old) == 1
-path.write_text(text.replace(old, 'uint8_t uc[128];'))
+path.write_text(text.replace(old, ''))
 PY
 run_phase short fail
 if cmp -s "$work/fixed.kernel" "$work/short.kernel"; then

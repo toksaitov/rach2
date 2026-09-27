@@ -290,7 +290,10 @@ void reparent_children(uint32_t dead_pid)
         }
         p->parent_pid = init_pid;
         if (p->state == PROC_ZOMBIE) {
-            signal_post(init, SIGCHLD);
+            struct k_siginfo info;
+
+            proc_child_info(p, &info);
+            signal_post_info(init, SIGCHLD, &info);
         }
     }
 }
@@ -353,4 +356,20 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void))
     *sp = 0; /* EDI */
 
     proc->regs.esp = (uint32_t)sp;
+}
+
+void proc_child_info(const process_t *child, struct k_siginfo *info)
+{
+    uint32_t status = (uint32_t)child->exit_code;
+
+    k_memset(info, 0, sizeof(*info));
+    info->pid = child->pid;
+    info->uid = child->ruid;
+    if ((status & 0x7Fu) == 0) {
+        info->code = CLD_EXITED;
+        info->status = (int32_t)((status >> 8) & 0xFFu);
+    } else {
+        info->code = (status & 0x80u) ? CLD_DUMPED : CLD_KILLED;
+        info->status = (int32_t)(status & 0x7Fu);
+    }
 }

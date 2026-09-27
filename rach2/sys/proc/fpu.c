@@ -172,13 +172,149 @@ void fpu_reset(void)
     restore_aligned(initial_state);
 }
 
-int fpu_check_area(const void *area)
+/* Byte offsets in the `fxsave` image. */
+#define FX_CWD   0
+#define FX_SWD   2
+#define FX_TWD   4
+#define FX_FOP   6
+#define FX_FIP   8
+#define FX_FCS   12
+#define FX_FOO   16
+#define FX_FOS   20
+#define FX_MXCSR 24
+#define FX_ST    32
+
+/* Byte offsets in the `fnsave` layout that opens `_fpstate_32`. */
+#define FN_CWD    0
+#define FN_SWD    4
+#define FN_TWD    8
+#define FN_FIP    12
+#define FN_FCS    16
+#define FN_FOO    20
+#define FN_FOS    24
+#define FN_ST     28
+#define LX_STATUS 108
+#define LX_MAGIC  110
+#define LX_FXSR   112
+
+static uint16_t get16(const uint8_t *p)
 {
-    uint32_t mxcsr;
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
+
+static uint32_t get32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void put16(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void put32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+/* The full x87 tag word from the abridged one `fxsave` keeps: two bits per
+ * physical register, classified from the register's contents. */
+static uint32_t full_tag(const uint8_t *fx)
+{
+    uint32_t top = ((uint32_t)get16(fx + FX_SWD) >> 11) & 7u;
+    uint32_t abridged = fx[FX_TWD];
+    uint32_t tags = 0xFFFF0000u;
+    uint32_t i;
+
+    for (i = 0; i < 8; i++) {
+        uint32_t tag = 3; /* empty */
+
+        if (abridged & (1u << i)) {
+            const uint8_t *st = fx + FX_ST + ((i - top) & 7u) * 16u;
+            uint32_t exponent = get16(st + 8) & 0x7FFFu;
+
+            if (exponent == 0x7FFFu) {
+                tag = 2; /* special */
+            } else if (exponent == 0) {
+                tag = (get32(st) == 0 && get32(st + 4) == 0) ? 1u : 2u;
+            } else {
+                tag = (st[7] & 0x80) ? 0u : 2u;
+            }
+        }
+        tags |= tag << (2 * i);
+    }
+    return tags;
+}
+
+/* The abridged tag byte from a full tag word: a register is in use unless its
+ * two bits say empty. */
+static uint32_t abridged_tag(uint32_t tags)
+{
+    uint32_t abridged = 0;
+    uint32_t i;
+
+    for (i = 0; i < 8; i++) {
+        if (((tags >> (2 * i)) & 3u) != 3u) {
+            abridged |= 1u << i;
+        }
+    }
+    return abridged;
+}
+
+void fpu_to_linux(const void *area, uint8_t *out)
+{
+    const uint8_t *fx = (const uint8_t *)area;
+    uint32_t i;
+
+    k_memset(out, 0, FPU_LINUX_SIZE);
+    if (!use_fxsr) {
+        k_memcpy(out, area, 108);
+        put16(out + LX_STATUS, get32(out + FN_SWD));
+        put16(out + LX_MAGIC, 0xFFFFu);
+        return;
+    }
+    put32(out + FN_CWD, get16(fx + FX_CWD) | 0xFFFF0000u);
+    put32(out + FN_SWD, get16(fx + FX_SWD) | 0xFFFF0000u);
+    put32(out + FN_TWD, full_tag(fx));
+    put32(out + FN_FIP, get32(fx + FX_FIP));
+    put32(out + FN_FCS, get16(fx + FX_FCS) | ((uint32_t)get16(fx + FX_FOP) << 16));
+    put32(out + FN_FOO, get32(fx + FX_FOO));
+    put32(out + FN_FOS, get16(fx + FX_FOS) | 0xFFFF0000u);
+    for (i = 0; i < 8; i++) {
+        k_memcpy(out + FN_ST + i * 10u, fx + FX_ST + i * 16u, 10);
+    }
+    put16(out + LX_STATUS, get16(fx + FX_SWD));
+    put16(out + LX_MAGIC, 0);
+    k_memcpy(out + LX_FXSR, area, FPU_STATE_SIZE);
+}
+
+int fpu_from_linux(const uint8_t *in, void *area)
+{
+    uint8_t *fx = (uint8_t *)area;
+    uint32_t i;
 
     if (!use_fxsr) {
+        k_memcpy(area, in, 108);
         return 0;
     }
-    k_memcpy(&mxcsr, (const uint8_t *)area + 24, sizeof(mxcsr));
-    return (mxcsr & ~mxcsr_mask) ? -1 : 0;
+    k_memcpy(area, in + LX_FXSR, FPU_STATE_SIZE);
+    if (get32(fx + FX_MXCSR) & ~mxcsr_mask) {
+        return -1;
+    }
+    put16(fx + FX_CWD, get32(in + FN_CWD));
+    put16(fx + FX_SWD, get32(in + FN_SWD));
+    fx[FX_TWD] = (uint8_t)abridged_tag(get32(in + FN_TWD));
+    put16(fx + FX_FOP, get32(in + FN_FCS) >> 16);
+    put32(fx + FX_FIP, get32(in + FN_FIP));
+    put32(fx + FX_FCS, get32(in + FN_FCS) & 0xFFFFu);
+    put32(fx + FX_FOO, get32(in + FN_FOO));
+    put32(fx + FX_FOS, get32(in + FN_FOS) & 0xFFFFu);
+    for (i = 0; i < 8; i++) {
+        k_memcpy(fx + FX_ST + i * 16u, in + FN_ST + i * 10u, 10);
+    }
+    return 0;
 }

@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -114,12 +114,13 @@ call requires nonnegative seconds and nanoseconds from 0 through 999999999.
 Its deadline calculation caps seconds at 21474836 and the total interval
 at 2147483646 ticks.
 .Pp
-The
+A non-null
 .Fa sigmask
-argument is ignored.
-Unlike Linux,
-.Fn pselect
-does not replace the signal mask atomically around the wait.
+replaces the signal mask for the wait, atomically with its start.
+When a signal ends the wait, its handler runs under
+.Fa sigmask
+and the previous mask comes back when the handler returns; otherwise the
+previous mask comes back as the call returns.
 A pending signal that is neither blocked nor ignored interrupts the call
 if no selected descriptor is ready.
 .Ss System call numbers

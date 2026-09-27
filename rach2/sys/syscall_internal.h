@@ -287,4 +287,10 @@ int32_t sys_mprotect(isr_params_t *params);
 
 int32_t sys_clone(isr_params_t *params);
 
+int32_t sys_sigaltstack(isr_params_t *params);
+
+int32_t sys_rt_sigpending(isr_params_t *params);
+
+int32_t sys_sigprocmask(isr_params_t *params);
+
 #endif

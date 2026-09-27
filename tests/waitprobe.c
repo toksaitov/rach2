@@ -158,6 +158,7 @@ static void usr1_handler(int sig)
     got_usr1 = 1;
 }
 
+#define SA_SIGINFO  0x00000004
 #define SA_RESTORER 0x04000000
 
 /**
@@ -172,7 +173,7 @@ static void eintr_child(void)
     char buf[16];
 
     ka.handler = usr1_handler;
-    ka.flags = SA_RESTORER;
+    ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
     ka.restorer = sig_restorer;
     ka.mask = 0;
     if (syscall4(SYS_RT_SIGACTION, SIGUSR1, (int)(size_t)&ka, 0, 8) != 0) {

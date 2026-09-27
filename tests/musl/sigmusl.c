@@ -9,8 +9,10 @@
  * stays pending instead of running, and is delivered once unblocked. Third,
  * the default action terminates: a child that abort()s with no handler is
  * reaped as killed by SIGABRT (WIFSIGNALED / WTERMSIG). Fourth, an SA_SIGINFO
- * handler reads every byte of musl's ucontext_t, which Rach2 supplies as a
- * zeroed placeholder separate from the saved floating-point image.
+ * handler finds the interrupted context in Linux's layout: the user code
+ * selector and a stack pointer in the saved registers, the floating-point
+ * state's address, the mask from before the handler, and a siginfo that names
+ * raise's tkill and its sender.
  *
  * "SIGMUSL OK" means the whole path worked through libc: sigaction, the signal
  * mask, synchronous delivery on syscall return, musl's restorer trampoline,
@@ -20,6 +22,7 @@
  * Linked statically against the ported musl; see tests/musl/build.sh.
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <signal.h>
 #include <unistd.h>
@@ -29,9 +32,13 @@
 
 static volatile sig_atomic_t handler_ran;
 static volatile sig_atomic_t handler_sig;
-static volatile sig_atomic_t context_bytes;
-static volatile sig_atomic_t context_nonzero;
 static volatile sig_atomic_t info_signo;
+static volatile sig_atomic_t info_code;
+static volatile sig_atomic_t info_pid;
+static volatile unsigned long context_cs;
+static volatile unsigned long context_esp;
+static volatile unsigned long context_fpregs;
+static volatile int context_mask_has_usr1;
 
 /** Record delivery to the plain handler. */
 static void usr1_handler(int sig)
@@ -40,21 +47,20 @@ static void usr1_handler(int sig)
     handler_sig = sig;
 }
 
-/** Read the entire context, including its signal mask and FP storage. */
+/** Record the siginfo and the parts of the context the kernel fills. */
 static void info_handler(int sig, siginfo_t *info, void *context)
 {
-    const volatile unsigned char *bytes = context;
-    size_t i;
+    const ucontext_t *uc = context;
 
     handler_ran = 1;
     handler_sig = sig;
     info_signo = info->si_signo;
-    for (i = 0; i < sizeof(ucontext_t); i++) {
-        if (bytes[i] != 0 && context_nonzero == 0) {
-            context_nonzero = (sig_atomic_t)(i + 1);
-        }
-        context_bytes++;
-    }
+    info_code = info->si_code;
+    info_pid = info->si_pid;
+    context_cs = (unsigned long)uc->uc_mcontext.gregs[REG_CS] & 0xFFFFu;
+    context_esp = (unsigned long)uc->uc_mcontext.gregs[REG_ESP];
+    context_fpregs = (unsigned long)uc->uc_mcontext.fpregs;
+    context_mask_has_usr1 = sigismember(&uc->uc_sigmask, SIGUSR1);
 }
 
 /** Check musl's SA_SIGINFO arguments and return through __restore_rt. */
@@ -76,9 +82,14 @@ static int run_context(void)
         printf("SIGMUSL FAIL: siginfo delivery\n");
         return 1;
     }
-    if ((size_t)context_bytes != sizeof(ucontext_t) || context_nonzero != 0) {
-        printf("SIGMUSL FAIL: ucontext bytes=%d size=%u first nonzero=%d\n", (int)context_bytes,
-               (unsigned)sizeof(ucontext_t), (int)context_nonzero - 1);
+    /* raise() is tkill on the caller, so the siginfo says SI_TKILL (-6). */
+    if (info_code != -6 || info_pid != getpid()) {
+        printf("SIGMUSL FAIL: siginfo code=%d pid=%d\n", (int)info_code, (int)info_pid);
+        return 1;
+    }
+    if (context_cs != 0x1B || context_esp == 0 || context_fpregs == 0 || context_mask_has_usr1) {
+        printf("SIGMUSL FAIL: ucontext cs=0x%lx esp=0x%lx fpregs=0x%lx usr1-masked=%d\n",
+               context_cs, context_esp, context_fpregs, context_mask_has_usr1);
         return 1;
     }
     return 0;

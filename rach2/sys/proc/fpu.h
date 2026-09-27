@@ -1,6 +1,8 @@
 #ifndef _FPU_H_
 #define _FPU_H_
 
+#include "../lib/kint.h"
+
 /*
  * fpu: the x87 and SSE register state of a process, saved at every switch.
  *
@@ -50,13 +52,28 @@ void fpu_init_area(void *area);
 /** Load the initial state into the registers, for a handler about to run. */
 void fpu_reset(void);
 
+/** The bytes of Linux's i386 `struct _fpstate_32`, the floating-point state
+ * a signal frame carries: the x87 environment and registers in the 108-byte
+ * `fnsave` layout, the status word, a magic word, and then the 512-byte
+ * `fxsave` image. */
+#define FPU_LINUX_SIZE 624
+
 /**
- * Check a state that came from user memory before it is restored.
+ * Write the state in `area` as Linux's `_fpstate_32` into `out`.
  *
- * Returns 0 when `area` may be loaded. In the FXSR format a set reserved bit
- * of MXCSR makes `fxrstor` fault, in the kernel, so such an area answers -1
- * and the caller refuses the frame. The x87 format cannot fault on a load.
+ * In the FXSR format the first 108 bytes are the x87 part converted from the
+ * `fxsave` image, as Linux's `convert_from_fxsr` makes it, the magic word is
+ * 0, and the image follows at byte 112. In the x87 format the first 108 bytes
+ * are the `fnsave` image, the magic word is 0xFFFF, and the rest is zero.
  */
-int fpu_check_area(const void *area);
+void fpu_to_linux(const void *area, uint8_t *out);
+
+/**
+ * Build a save area from Linux's `_fpstate_32` in `in`, as a signal return
+ * does: the SSE state from the `fxsave` image and the x87 state from the
+ * 108-byte part, which a handler may have changed. Returns 0, or -1 for an
+ * image `fxrstor` would fault on.
+ */
+int fpu_from_linux(const uint8_t *in, void *area);
 
 #endif /* _FPU_H_ */

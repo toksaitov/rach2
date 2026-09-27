@@ -6,6 +6,8 @@
 #include "mm/pressure.h"
 
 #include "lib/ksignal.h"
+#include "lib/kstring.h"
+#include "proc/process.h"
 
 /*
  * Kill the faulting process with `signo` and schedule another; defined in the
@@ -88,33 +90,77 @@ static const char *const _exception_names[32] = {"divide error",
                                                  "reserved",
                                                  "reserved"};
 
-/**
- * Map a CPU exception vector to the signal a faulting user process dies with.
- *
- * The few faults that name a precise cause map to it; everything else is, from
- * the process's point of view, a memory violation, so it gets `SIGSEGV`.
- */
-static int _exception_signal(uint32_t vector)
+/* The floating-point exception an FPU status names, as Linux reports it:
+ * invalid operation, then division by zero, overflow, underflow and precision,
+ * among the flags `status` raised and `mask` does not mask. */
+static int32_t _fpe_code(uint32_t status, uint32_t mask)
 {
-    switch (vector) {
-    case 0:
-        return SIGFPE; /* divide error */
-    case 1:
-        return SIGTRAP; /* debug */
-    case 3:
-        return SIGTRAP; /* breakpoint */
-    case 6:
-        return SIGILL; /* invalid opcode */
-    case 11:
-        return SIGBUS; /* segment not present */
-    case 12:
-        return SIGBUS; /* stack-segment fault */
-    case 16:
-        return SIGFPE; /* x87 FPU error */
-    case 17:
-        return SIGBUS; /* alignment check */
-    case 19:
-        return SIGFPE; /* SIMD FP exception */
+    uint32_t raised = status & ~mask;
+
+    if (raised & 0x01u) {
+        return FPE_FLTINV;
+    }
+    if (raised & 0x04u) {
+        return FPE_FLTDIV;
+    }
+    if (raised & 0x08u) {
+        return FPE_FLTOVF;
+    }
+    if (raised & 0x12u) {
+        return FPE_FLTUND;
+    }
+    if (raised & 0x20u) {
+        return FPE_FLTRES;
+    }
+    return 0;
+}
+
+/**
+ * Map a CPU exception to the signal and siginfo a user process receives, as
+ * Linux's traps do: the precise causes to their signal and code with the
+ * faulting instruction's address, and the protection faults to SIGSEGV or
+ * SIGBUS with SI_KERNEL. A breakpoint's SIGTRAP is SI_KERNEL too, and a
+ * single step's is TRAP_TRACE.
+ */
+static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
+{
+    uint32_t status;
+    uint32_t mask;
+
+    k_memset(info, 0, sizeof(*info));
+    info->code = SI_KERNEL;
+    switch (params->vector) {
+    case 0: /* divide error */
+        info->code = FPE_INTDIV;
+        info->addr = params->eip;
+        return SIGFPE;
+    case 1: /* debug */
+        info->code = TRAP_TRACE;
+        info->addr = params->eip;
+        return SIGTRAP;
+    case 3: /* breakpoint */
+        return SIGTRAP;
+    case 6: /* invalid opcode */
+        info->code = ILL_ILLOPN;
+        info->addr = params->eip;
+        return SIGILL;
+    case 11: /* segment not present */
+    case 12: /* stack-segment fault */
+        return SIGBUS;
+    case 16: /* x87 FPU error */
+        __asm__ __volatile__("fnstsw %%ax; movzwl %%ax, %0" : "=r"(status) : : "eax");
+        __asm__ __volatile__("fnstcw (%0)" : : "r"(&mask) : "memory");
+        info->code = _fpe_code(status, mask & 0x3Fu);
+        info->addr = params->eip;
+        return SIGFPE;
+    case 17: /* alignment check */
+        info->code = BUS_ADRALN;
+        return SIGBUS;
+    case 19: /* SIMD FP exception */
+        __asm__ __volatile__("stmxcsr (%0)" : : "r"(&status) : "memory");
+        info->code = _fpe_code(status & 0x3Fu, (status >> 7) & 0x3Fu);
+        info->addr = params->eip;
+        return SIGFPE;
     default:
         return SIGSEGV;
     }
@@ -127,20 +173,27 @@ static int _exception_signal(uint32_t vector)
  * 0-31 share this one. Without it an unhandled exception returns into the
  * faulting instruction, which faults again to a triple fault and a silent
  * reset. A fault taken in user mode (the saved `CS` is at RPL 3) is that
- * process's own bug, so it is killed with the signal its cause maps to and the
- * kernel survives. A fault in kernel mode has no safe recovery and panics.
- * Either way the cause is printed: the mnemonic, vector, error code, and EIP.
+ * process's own, so it gets the signal its cause maps to, forced as Linux
+ * forces one: a handler the process installed runs, and otherwise the
+ * process dies and the cause is printed. A fault in kernel mode has no safe
+ * recovery and panics.
  */
 static void _exception_handler(isr_params_t *params)
 {
     const char *name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
 
     if ((params->cs & 3) == 3) {
-        klog(KLOG_WARN, "isr",
-             "user exception: %s (vector %d, err 0x%x, "
-             "eip 0x%x): killing process\n",
-             name, params->vector, params->error_code, params->eip);
-        terminate_current_process(_exception_signal(params->vector));
+        struct k_siginfo info;
+        int signo = _exception_signal(params, &info);
+
+        current_proc->trap_nr = params->vector;
+        current_proc->trap_err = params->error_code;
+        current_proc->trap_addr = 0;
+        signal_force(current_proc, signo, &info);
+        if (current_proc->sigacts[signo].handler == KSIG_DFL) {
+            klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, eip 0x%x): signal %d",
+                 name, params->vector, params->error_code, params->eip, signo);
+        }
         return;
     }
 

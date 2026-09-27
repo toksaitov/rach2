@@ -270,6 +270,7 @@ route 1 busybox-networking
 rpm 1 busybox-archival
 rpm2cpio 1 busybox-archival
 rt_sigaction 2 sigaction
+rt_sigpending 2 sigaction
 rt_sigprocmask 2 sigaction
 rt_sigreturn 2 sigaction
 rt_sigsuspend 2 sigaction
@@ -309,6 +310,8 @@ sha3sum 1 busybox-coreutils
 sha512sum 1 busybox-coreutils
 shred 1 busybox-coreutils
 shuf 1 busybox-coreutils
+sigaltstack 2 sigaction
+sigpending 2 sigaction
 sigreturn 2 sigaction
 sleep 1 busybox-coreutils
 smemcap 1 busybox-procps

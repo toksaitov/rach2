@@ -39,6 +39,10 @@ typedef struct gdt_ptr gdt_ptr_t;
  *  runs with in ds, es, fs and ss. */
 #define GDT_USER_DATA_SELECTOR 0x23u
 
+/** The flat user code selector, index 3 at RPL 3, which every user context
+ *  runs with in cs. */
+#define GDT_USER_CODE_SELECTOR 0x1Bu
+
 /** The Global Descriptor Table. */
 extern gdt_descriptor_t gdt_descriptors[GDT_ENTRY_COUNT];
 

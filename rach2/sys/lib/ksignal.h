@@ -7,8 +7,9 @@
  * Linux i386 signals: numbers, the kernel-side sigaction, and the per-signal
  * default-action classes. The delivery machinery (per-process disposition,
  * pending and blocked masks, delivery on return-to-user via a signal frame on
- * the user stack, and rt_sigreturn) lives in syscall.c and the ISR return path.
- * Standard signals only (1..64); no real-time queueing.
+ * the user stack, and rt_sigreturn) lives in syscall_proc.c, sigframe.c and the
+ * ISR return path. Signals 1..64, each with one pending bit; no real-time
+ * queueing.
  */
 #define SIGHUP    1
 #define SIGINT    2 /* terminal interrupt (CTRL+C) */
@@ -48,16 +49,52 @@
 #define KSIG_DFL 0u /* default action */
 #define KSIG_IGN 1u /* ignore */
 
-/* sa_flags bits (Linux i386 values). The kernel honors SA_RESTORER, SA_NODEFER,
- * and SA_RESETHAND. SA_RESTART is accepted and round-trips through sigaction
- * but is NOT honored: an interrupted slow syscall always returns -EINTR rather
- * than restarting, so a handler must not rely on the kernel re-issuing the
- * call. */
+/* sa_flags bits (Linux i386 values). The kernel honors SA_SIGINFO, SA_ONSTACK,
+ * SA_RESTORER, SA_RESTART, SA_NODEFER and SA_RESETHAND; SA_NOCLDSTOP and
+ * SA_NOCLDWAIT are stored and have no effect. */
+#define SA_NOCLDSTOP 0x00000001u
 #define SA_SIGINFO   0x00000004u
 #define SA_RESTORER  0x04000000u
+#define SA_ONSTACK   0x08000000u
 #define SA_RESTART   0x10000000u
 #define SA_NODEFER   0x40000000u
 #define SA_RESETHAND 0x80000000u
+
+/* si_code values (Linux). */
+#define SI_USER       0
+#define SI_KERNEL     0x80
+#define SI_TKILL      (-6)
+#define ILL_ILLOPN    2
+#define FPE_INTDIV    1
+#define FPE_FLTDIV    3
+#define FPE_FLTOVF    4
+#define FPE_FLTUND    5
+#define FPE_FLTRES    6
+#define FPE_FLTINV    7
+#define SEGV_MAPERR   1
+#define SEGV_ACCERR   2
+#define BUS_ADRALN    1
+#define TRAP_BRKPT    1
+#define TRAP_TRACE    2
+#define CLD_EXITED    1
+#define CLD_KILLED    2
+#define CLD_DUMPED    3
+#define CLD_STOPPED   5
+#define CLD_CONTINUED 6
+
+/*
+ * What the kernel keeps with a pending signal for the `siginfo_t` its
+ * handler receives: `si_code`, the sender's pid and uid, a child's status,
+ * and a fault's address. One record per signal number, like the pending bit:
+ * the first instance's record stays until the signal is delivered.
+ */
+struct k_siginfo {
+    int32_t code;
+    uint32_t pid;
+    uint32_t uid;
+    int32_t status;
+    uint32_t addr;
+};
 
 /*
  * The kernel-side sigaction as musl's rt_sigaction(174) passes it on i386:

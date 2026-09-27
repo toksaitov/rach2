@@ -254,7 +254,16 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         uint32_t addr = (uint32_t)(__force uintptr_t)(buf + done);
 
         if (!p->read_open) {
-            signal_post(current_proc, SIGPIPE);
+            {
+                /* As Linux sends it: SI_USER, from the writer itself. */
+                struct k_siginfo info;
+
+                k_memset(&info, 0, sizeof(info));
+                info.code = SI_USER;
+                info.pid = current_proc->pid;
+                info.uid = current_proc->ruid;
+                signal_post_info(current_proc, SIGPIPE, &info);
+            }
             return (done > 0) ? (int32_t)done : -EPIPE;
         }
 

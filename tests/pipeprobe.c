@@ -42,6 +42,7 @@ typedef unsigned int size_t;
 #define EAGAIN      11
 #define EPIPE       32
 #define SIGPIPE     13
+#define SA_SIGINFO  0x00000004
 #define SA_RESTORER 0x04000000
 
 #define PIPE_BUF_SIZE 4096
@@ -277,7 +278,7 @@ void _start(void)
 
     /* (c) SIGPIPE + -EPIPE: write with the read end closed. */
     ka.handler = sigpipe_handler;
-    ka.flags = SA_RESTORER;
+    ka.flags = SA_SIGINFO | SA_RESTORER; /* the rt frame its restorer returns from */
     ka.restorer = sig_restorer;
     ka.mask = 0;
     syscall4(SYS_RT_SIGACTION, SIGPIPE, (int)(size_t)&ka, 0, 8);

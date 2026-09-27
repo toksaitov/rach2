@@ -189,6 +189,29 @@ struct process {
      * word is cleared and woken when the thread ends; 0 for none. Kept, not
      * used, while every address space has one thread. */
     uint32_t clear_child_tid;
+    /* The siginfo of each pending signal, kept with its pending bit. */
+    struct k_siginfo sig_info[KSIG_MAX + 1];
+    /* The alternate signal stack sigaltstack set: its base and size, and
+     * whether one is set. Inherited by fork, cleared by execve. */
+    uint32_t altstack_sp;
+    uint32_t altstack_size;
+    uint32_t altstack_on;
+    /* The mask rt_sigsuspend, pselect6 or ppoll replaced for its wait, with
+     * `sigmask_saved`: the frame of the handler the wait ended for carries
+     * it, so sigreturn puts it back, and a return to user mode with no
+     * handler puts it back at once. */
+    uint64_t saved_sigmask;
+    uint32_t sigmask_saved;
+    /* One more than the number of a system call that returned EINTR and
+     * that a signal without a handler, or one whose handler has SA_RESTART,
+     * restarts; 0 for none. Set by the dispatcher, consumed by
+     * deliver_signals on the same return. */
+    uint32_t restart_nr;
+    /* The trap number, error code and fault address of the last processor
+     * exception, for the signal frame's sigcontext. */
+    uint32_t trap_nr;
+    uint32_t trap_err;
+    uint32_t trap_addr;
 };
 
 typedef struct process process_t;
@@ -253,6 +276,18 @@ void proc_wake_sleepers(uint32_t now);
  * syscall_proc.c.
  */
 void signal_post(process_t *target, int signo);
+
+/* Post `signo` with the siginfo `info` records for its handler. */
+void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
+
+/* Post a signal a processor exception raised: a handler that is blocked or
+ * ignored cannot run, so the disposition goes back to default and the signal
+ * is unblocked, and the process is killed unless a handler is installed. */
+void signal_force(process_t *target, int signo, const struct k_siginfo *info);
+
+/* The siginfo of the SIGCHLD a child's end sends: CLD_EXITED with the exit
+ * code, or CLD_KILLED or CLD_DUMPED with the signal, from its wait status. */
+void proc_child_info(const process_t *child, struct k_siginfo *info);
 
 /**
  * The tick `ticks` after `now` at which a real-time timer is due, never 0,

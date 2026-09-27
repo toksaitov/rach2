@@ -85,6 +85,7 @@ C_SRC = kernel.c \
         sys/proc/sched.c \
         sys/proc/wait_queue.c \
         sys/proc/futex.c \
+        sys/proc/sigframe.c \
         sys/ipc/pipe.c \
         sys/ipc/pipe_ring.c \
         sys/io/poll.c \

@@ -85,6 +85,9 @@ static const char *const PROBES[] = {
     "musl/spawnmusl", "musl/sigmusl",
     /* clone in glibc's fork form, set_tid_address and futex. */
     "musl/clonemusl",
+    /* Faults to handlers, SA_RESTART, the alternate stack, int3, the
+       pending set, sigsuspend's mask and SIGCHLD's siginfo. */
+    "musl/sigframemusl",
     /* How many mappings a process may hold, which the compiler found too
        few. */
     "musl/vmamusl",
