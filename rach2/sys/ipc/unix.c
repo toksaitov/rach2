@@ -161,9 +161,6 @@ struct unix_sock {
     struct unix_msg *rq_tail;
     uint32_t rq_bytes;
     uint32_t rq_count;
-    /* Changed whenever a message is read from the queue, so a reader that
-     * slept knows whether the message it chose is still there. */
-    uint32_t rq_gen;
     int shut;
     int err;
     int passcred;
@@ -180,8 +177,11 @@ struct unix_sock {
     uint32_t sndtimeo;
     wait_queue_t wq;
     /* A bind in progress, which holds the socket across the file system's
-     * sleeps (`bind_lock`), and the queue its waiters sleep on. */
+     * sleeps (`bind_lock`); a receive, which holds its queue from choosing a
+     * message to consuming it (`recv_lock`); and the queue the waiters for
+     * either sleep on. */
     int binding;
+    int reading;
     wait_queue_t lock_wq;
 };
 
@@ -395,7 +395,6 @@ static struct unix_msg *dequeue(struct unix_sock *s)
     }
     s->rq_bytes -= m->len - m->off;
     s->rq_count--;
-    s->rq_gen++;
     if (was_full && !queue_full(s)) {
         wake_writers(s);
     }
@@ -1403,35 +1402,6 @@ static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t sk
     return 0;
 }
 
-/**
- * Make the pages of a caller's buffers a receive is about to fill present
- * and writable, so that the copy after it does not sleep; a sleep here may
- * change the queue, which the caller then looks at again. 0, or -EFAULT.
- */
-static int iov_prefault(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t skip, uint32_t n)
-{
-    uint32_t i;
-
-    for (i = 0; i < iovlen && n > 0; i++) {
-        uint32_t take;
-
-        if (skip >= iov[i].iov_len) {
-            skip -= iov[i].iov_len;
-            continue;
-        }
-        take = iov[i].iov_len - skip;
-        if (take > n) {
-            take = n;
-        }
-        if (!vm_prefault_range(iov[i].iov_base + skip, take, 1)) {
-            return -EFAULT;
-        }
-        n -= take;
-        skip = 0;
-    }
-    return 0;
-}
-
 /* The descriptors of one SCM_RIGHTS message added to `out`, each with the
  * references of a descriptor taken. */
 static int32_t get_rights(uint32_t data, uint32_t n, struct unix_out *out)
@@ -1762,6 +1732,35 @@ static int32_t send_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
     return rc;
 }
 
+static int recv_idle(void *arg)
+{
+    return !((const struct unix_sock *)arg)->reading;
+}
+
+/**
+ * Take `s`'s receive lock, which a receive holds from choosing a message to
+ * consuming it, as Linux holds its iolock.
+ *
+ * The copy to the caller's buffers can sleep in a page fault, even for pages
+ * made present before it, since another thread sharing the address space
+ * can unmap one. The message must stay while the copy sleeps, so another
+ * receiver, and a connect that drops the queue, wait for the lock. The wait
+ * is the length of one copy, and a signal does not end it.
+ */
+static void recv_lock(struct unix_sock *s)
+{
+    while (s->reading) {
+        wq_wait_event_nointr(&s->lock_wq, recv_idle, s);
+    }
+    s->reading = 1;
+}
+
+static void recv_unlock(struct unix_sock *s)
+{
+    s->reading = 0;
+    wq_wake_all(&s->lock_wq);
+}
+
 static int has_data(void *arg)
 {
     const struct unix_sock *s = (const struct unix_sock *)arg;
@@ -1845,16 +1844,35 @@ static struct unix_msg *stream_at(struct unix_sock *s, uint32_t copied, int peek
     return m;
 }
 
-/* A receive on a stream socket: bytes across messages, up to and including
+/* Consume `chunk` bytes of the stream message `m` at the head of `s`'s
+ * queue, and the message once they are all read. */
+static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chunk)
+{
+    int was_full = queue_full(s);
+
+    m->off += chunk;
+    s->rq_bytes -= chunk;
+    if (m->off == m->len) {
+        msg_free(dequeue(s));
+    }
+    if (was_full && !queue_full(s)) {
+        wake_writers(s);
+    }
+}
+
+/*
+ * A receive on a stream socket: bytes across messages, up to and including
  * one that carries descriptors, and not past a change of credentials when
- * they are asked for. */
+ * they are asked for. The receive lock is held throughout but for the wait
+ * for data.
+ */
 static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                            uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
     uint32_t copied = 0;
     uint32_t want = (flags & MSG_WAITALL) ? total : 1u;
     int peek = (flags & MSG_PEEK) != 0;
-    int32_t rc;
+    int32_t rc = 0;
 
     if (s->state != US_CONNECTED) {
         return -EINVAL;
@@ -1862,8 +1880,9 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
     if (total == 0) {
         return 0;
     }
+    recv_lock(s);
     for (;;) {
-        uint32_t off, chunk, gen;
+        uint32_t off, chunk;
         struct unix_msg *m = stream_at(s, copied, peek, &off);
         int had_fds;
 
@@ -1871,12 +1890,14 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
             if (copied >= want || (copied > 0 && (peek || nonblock))) {
                 break;
             }
+            recv_unlock(s);
             rc = wait_data(s, nonblock);
+            recv_lock(s);
             if (rc == 1 || (rc < 0 && copied > 0)) {
-                break;
+                rc = 0;
             }
-            if (rc < 0) {
-                return rc;
+            if (rc != 0) {
+                break;
             }
             continue;
         }
@@ -1887,15 +1908,9 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
         if (chunk > total - copied) {
             chunk = total - copied;
         }
-        gen = s->rq_gen;
-        if (iov_prefault(iov, iovlen, copied, chunk) != 0) {
-            return copied ? (int32_t)copied : -EFAULT;
-        }
-        if (s->rq_gen != gen) {
-            continue;
-        }
         if (iov_copy(iov, iovlen, copied, m->data + off, chunk, 1) != 0) {
-            return copied ? (int32_t)copied : -EFAULT;
+            rc = -EFAULT;
+            break;
         }
         if (copied == 0) {
             in->from = m->from;
@@ -1905,32 +1920,24 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
         copied += chunk;
         had_fds = take_fds(m, in, peek);
         if (!peek) {
-            int was_full = queue_full(s);
-
-            m->off += chunk;
-            s->rq_bytes -= chunk;
-            s->rq_gen++;
-            if (m->off == m->len) {
-                msg_free(dequeue(s));
-            }
-            if (was_full && !queue_full(s)) {
-                wake_writers(s);
-            }
+            stream_consume(s, m, chunk);
         }
         if (had_fds || copied >= total) {
             break;
         }
     }
-    return (int32_t)copied;
+    recv_unlock(s);
+    return copied ? (int32_t)copied : rc;
 }
 
-/* A receive on a datagram or sequenced-packet socket: one message. */
+/* A receive on a datagram or sequenced-packet socket: one message, which
+ * the receive lock keeps from its choice to its consumption. */
 static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                         uint32_t iovlen, uint32_t total, int flags, struct unix_in *in)
 {
     int peek = (flags & MSG_PEEK) != 0;
     struct unix_msg *m;
-    uint32_t chunk, gen;
+    uint32_t chunk;
     int32_t rc;
 
     if (s->type == SOCK_SEQPACKET && s->state != US_CONNECTED) {
@@ -1944,17 +1951,16 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
         if (rc < 0) {
             return rc;
         }
-        m = s->rq_head;
-        chunk = m->len < total ? m->len : total;
-        gen = s->rq_gen;
-        if (iov_prefault(iov, iovlen, 0, chunk) != 0) {
-            return -EFAULT;
-        }
-        if (s->rq_gen == gen) {
+        recv_lock(s);
+        if (s->rq_head) {
             break;
         }
+        recv_unlock(s);
     }
+    m = s->rq_head;
+    chunk = m->len < total ? m->len : total;
     if (iov_copy(iov, iovlen, 0, m->data, chunk, 1) != 0) {
+        recv_unlock(s);
         return -EFAULT;
     }
     if (m->len > total) {
@@ -1968,6 +1974,7 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
     if (!peek) {
         msg_free(dequeue(s));
     }
+    recv_unlock(s);
     return rc;
 }
 
