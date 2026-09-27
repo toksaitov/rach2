@@ -81,8 +81,9 @@ changes = {
              "loops[i].handle == from"),
     "unlink-lock": ("vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf,",
                     "vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf,"),
-    "rename-lock": ("vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,",
-                    "vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,"),
+    "rename-lock": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
+                    "    vfs_ns_unlock(opar.mnt);\n",
+                    "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
 }
 old, new = changes[sys.argv[2]]
 if source.count(old) != 1:

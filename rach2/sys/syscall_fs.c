@@ -8058,7 +8058,7 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
 /**
  * Rename `oleaf` in `opar` to `nleaf` in `npar` on the KRFFS root: the
  * root's half of `do_rename`, run under the root's namespace lock, which the
- * caller took with the walk of the old name and keeps until this returns.
+ * caller takes after both walks and keeps until this returns.
  * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST.
  *
  * The sticky rule applies to both names, since taking an entry out of its
@@ -8148,12 +8148,14 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
  * as a replaced destination would take the file system with it, and that
  * guarantee should not rest on a canonicalizer in another function.
  *
- * The walk of the old name keeps its mount's namespace lock, where the type
- * takes one, until the rename is done, and the new name is walked without
- * taking a lock, so no rename waits for a second mount's lock while it holds
- * one. On the KRFFS root the holder count of the replaced file is right only
- * under that lock, which an open holds until it has published its
- * descriptor.
+ * Both names are walked without the namespace lock, which is taken for the
+ * lookups and the rename that follow. A walk takes the lock of each mount it
+ * looks in, as ext2's lookup does, so a rename that walked its new name
+ * holding the lock of the old one would hold one mount's lock while it waited
+ * for another's, and two renames, or a rename and a read through a loop
+ * device, could wait for each other. On the KRFFS root the holder count of
+ * the replaced file is right only under the lock, which an open holds until
+ * it has published its descriptor.
  */
 static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
 {
@@ -8181,7 +8183,7 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
     /* A rename writes both directories: the entry leaves one and lands in
      * the other. Both write bits are checked before the source is even
      * looked up, as unlink orders it. */
-    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf, sizeof(oleaf));
+    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf, sizeof(oleaf));
     if (rc != 0) {
         return rc;
     }
@@ -8191,7 +8193,6 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
         rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf, sizeof(nleaf));
     }
     if (rc != 0) {
-        vfs_walk_unlock(opar.mnt);
         vfs_ref_release(&opar);
         return rc;
     }
@@ -8229,9 +8230,10 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
         vfs_ns_unlock(opar.mnt);
         goto out;
     }
+    vfs_ns_lock(opar.mnt);
     rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);
+    vfs_ns_unlock(opar.mnt);
 out:
-    vfs_walk_unlock(opar.mnt);
     vfs_ref_release(&npar);
     vfs_ref_release(&opar);
     return rc;
