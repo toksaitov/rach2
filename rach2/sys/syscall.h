@@ -68,6 +68,7 @@
 #define SYS_POLL            168
 #define SYS_PSELECT6        308
 #define SYS_PPOLL           309
+#define SYS_GETRUSAGE       77
 #define SYS_GETTIMEOFDAY    78
 #define SYS_STAT            106
 #define SYS_LSTAT           107

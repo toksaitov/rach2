@@ -17,6 +17,10 @@
  * reaped by `wait4`, whose resource usage reports that child's time, and the
  * parent's children's user time then rises by exactly the ticks reported.
  *
+ * `getrusage` reports the same ticks as timevals: for the process and for
+ * its thread what `times` reports, read between two readings of it, and for
+ * the children their totals; any other `who` is refused.
+ *
  * The loops are bounded by the ticks since boot: a kernel that never charged
  * the time would otherwise spin forever instead of failing.
  *
@@ -24,6 +28,7 @@
  * otherwise.
  */
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +88,29 @@ static long spin_for(long want, struct tms *from)
         at = times(&now);
     }
     return (long)(now.tms_utime - from->tms_utime);
+}
+
+/**
+ * Whether getrusage(`who`) reads between two readings of `times`: 0 when
+ * it does, 1 when it does not.
+ */
+static int usage_between(int who)
+{
+    struct tms before;
+    struct tms after;
+    struct rusage ru;
+    long user;
+    long sys;
+
+    times(&before);
+    if (getrusage(who, &ru) != 0) {
+        return 1;
+    }
+    times(&after);
+    user = ticks_of(&ru.ru_utime);
+    sys = ticks_of(&ru.ru_stime);
+    return user < (long)before.tms_utime || user > (long)after.tms_utime ||
+           sys < (long)before.tms_stime || sys > (long)after.tms_stime;
 }
 
 int main(void)
@@ -153,6 +181,18 @@ int main(void)
     if ((long)(after.tms_cutime - before.tms_cutime) != ticks_of(&ru.ru_utime) ||
         (long)(after.tms_cstime - before.tms_cstime) != ticks_of(&ru.ru_stime)) {
         return fail("the children's times did not rise by what wait4 reported");
+    }
+
+    /* getrusage: the same ticks, as timevals. */
+    if (getrusage(RUSAGE_CHILDREN, &ru) != 0 || ticks_of(&ru.ru_utime) != (long)after.tms_cutime ||
+        ticks_of(&ru.ru_stime) != (long)after.tms_cstime) {
+        return fail("getrusage of the children is not their times");
+    }
+    if (usage_between(RUSAGE_SELF) != 0 || usage_between(RUSAGE_THREAD) != 0) {
+        return fail("getrusage of the process or its thread is not its times");
+    }
+    if (getrusage(2, &ru) != -1 || errno != EINVAL) {
+        return fail("getrusage of an unknown who was not refused with EINVAL");
     }
 
     printf("CPUTIMEMUSL OK\n");

@@ -1778,6 +1778,47 @@ int32_t sys_wait4(isr_params_t *params)
     return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, params->esi);
 }
 
+/* The targets getrusage(2) takes: the caller, its reaped children, and the
+ * calling thread, which is the caller while each process is one thread. */
+#define RUSAGE_SELF 0
+
+#define RUSAGE_CHILDREN (-1)
+
+#define RUSAGE_THREAD 1
+
+/**
+ * Resource usage (getrusage(2), syscall 77).
+ *
+ * EBX = who, ECX = the 72-byte i386 struct rusage. `ru_utime` and `ru_stime`
+ * are the caller's user and system time for RUSAGE_SELF and RUSAGE_THREAD,
+ * and the totals of the children it has reaped, each with the children those
+ * reaped, for RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
+ * fourteen counters after them, maximum resident size through context
+ * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
+ * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
+ */
+int32_t sys_getrusage(isr_params_t *params)
+{
+    int who = (int)params->ebx;
+    struct kernel_rusage ru;
+    uint32_t flags;
+    uint32_t user;
+    uint32_t sys;
+
+    if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
+        return -EINVAL;
+    }
+    flags = kirq_save();
+    user = who == RUSAGE_CHILDREN ? current_proc->cutime : current_proc->utime;
+    sys = who == RUSAGE_CHILDREN ? current_proc->cstime : current_proc->stime;
+    kirq_restore(flags);
+    rusage_from_ticks(&ru, user, sys);
+    if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /*
  * Identity (the i386 *32 variants, 199-202): the four getters read the PCB
  * credentials, all zero (root) until a login server drops them. The setters
