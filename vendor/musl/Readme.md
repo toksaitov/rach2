@@ -36,11 +36,11 @@ The root `check-libc` target checks both `libc.a` and the extracted crypt source
 
 ## Project patch
 
-The build applies one source patch. `0001-posix-spawn-forks.patch` changes musl's `posix_spawn` child creation from `clone(CLONE_VM|CLONE_VFORK|SIGCHLD)` to the raw `fork` syscall.
+The build applies one source patch. `0001-posix-spawn-forks.patch` changes musl's `posix_spawn` child creation from `clone(CLONE_VM|CLONE_VFORK|SIGCHLD)` to the raw `fork` syscall, so the child runs in a copy of the parent's memory rather than in the parent's own.
 
-Rach2 has no shared address spaces and leaves syscall 120, `clone`, unimplemented. Pretending that a private copy satisfied `CLONE_VM` would give the caller the wrong contract. A forked spawn child can use the existing implementation because it either execs or writes its errno through the existing pipe and exits. The raw syscall also preserves musl's negative-errno path and does not run `pthread_atfork` handlers.
+The kernel implements `clone` with those flags, which GNU libc's `posix_spawn` uses; musl's spawn does not need them. A forked spawn child uses the existing implementation because it either execs or writes its errno through the existing pipe and exits. The raw syscall also preserves musl's negative-errno path and does not run `pthread_atfork` handlers.
 
-The patch is required by `posix_spawn`, `system`, and `popen`; pdpmake uses the latter interfaces to run recipes. The default `spawnmusl` probe checks command status, pipe output, spawn errors, child cleanup, parent memory, repeated calls, and continued `clone` refusal with `ENOSYS`.
+The patch serves `posix_spawn`, `system`, and `popen`; pdpmake uses the latter interfaces to run recipes. The default `spawnmusl` probe checks command status, pipe output, spawn errors, child cleanup, parent memory, and repeated calls.
 
 Any additional project patch belongs under `patches/` with a numbered descriptive name. Rebase and explain a patch when the pinned release changes. Do not edit the extracted source as the maintained copy.
 
@@ -73,7 +73,7 @@ Rach2 supplies `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`, `AT_PAGESZ`, `AT_C
 
 Musl's i386 `_start` preserves the entry stack, aligns its working stack, and calls `__libc_start_main`. Startup finds envp and the following auxiliary vector, initializes the thread pointer and stack protector, runs constructors, calls `main`, and passes its return value to `exit`.
 
-Static TLS scans the program headers for `PT_TLS`, creates the initial thread block, calls `set_thread_area`, loads `%gs`, and registers the clear-tid address. Rach2 provides one per-process TLS descriptor and restores its base on a context switch. It does not provide `clone` or threads. The [TLS document](../../rach2/sys/proc/tls.Readme.md) defines the supported descriptor and inheritance rules.
+Static TLS scans the program headers for `PT_TLS`, creates the initial thread block, calls `set_thread_area`, loads `%gs`, and registers the clear-tid address. Rach2 keeps a TLS base for each thread and loads it into its one TLS descriptor as it switches to the thread; a thread `pthread_create` makes gets its base from `clone`'s `CLONE_SETTLS`. The [TLS document](../../rach2/sys/proc/tls.Readme.md) defines the supported descriptor and inheritance rules.
 
 Rach2 publishes no `AT_SYSINFO` or `AT_SYSINFO_EHDR`, so musl uses its i386 `int 0x80` syscall path. The kernel returns failures as negative Linux errno values. The kernel and subsystem Readmes own the individual syscall contracts.
 

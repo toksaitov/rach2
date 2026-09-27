@@ -1,19 +1,13 @@
 /**
- * `system(3)` and `popen(3)`, which this kernel could not run at all.
+ * `system(3)` and `popen(3)`, which reach a child only through `posix_spawn`.
  *
- * musl reaches a child from both of them only through `posix_spawn`, and
- * upstream `posix_spawn` issues `clone` with CLONE_VM|CLONE_VFORK: the child
- * runs in the PARENT's address space until it execs. This kernel cannot share
- * an address space, so every program that shelled out failed with a bare -1 and
- * a line on the console about syscall 120. A make runs every recipe that way.
- *
- * The fix is one pinned patch to the vendored musl (see
- * vendor/musl/patches/): posix_spawn forks. The child function never returns
- * and reports failure through a pipe, not through shared memory, so a
- * forked child serves it exactly as a cloned one did. Syscall 120 stays
- * unimplemented, which is the correct answer from a kernel with no threads and
- * no shared address spaces: a shim that accepted those flags and handed back a
- * private copy would be reporting semantics it does not provide.
+ * Upstream musl's `posix_spawn` starts the child with `clone` and
+ * CLONE_VM|CLONE_VFORK, so the child runs in the PARENT's address space
+ * until it execs. One pinned patch to the vendored musl (see
+ * vendor/musl/patches/) makes it fork instead. The child function never
+ * returns and reports failure through a pipe, not through shared memory, so
+ * a forked child serves it as a cloned one does, in a copy of the parent's
+ * memory. A make runs every recipe this way.
  *
  * What is asserted:
  *
@@ -23,13 +17,9 @@
  * A command's OUTPUT arrives. `popen` reads a line back and `pclose` reports
  * the status, which is the pair `$(shell ...)` and a `!=` assignment need.
  *
- * The PARENT survives intact. The child is a fork now, with a copy of the
+ * The PARENT survives intact. The child is a fork, with a copy of the
  * parent's memory, not a share of it, so this writes a canary into its
  * own stack and heap around the calls and requires both to be untouched.
- *
- * And `clone` is still REFUSED. A kernel that cannot share an address space
- * must not answer the call that asks for one: `clone` with the spawn's own
- * flags must come back ENOSYS, not a process with the wrong semantics.
  *
  * Prints "SPAWNMUSL OK" on success and "SPAWNMUSL FAIL (detail)" otherwise.
  */
@@ -40,16 +30,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <spawn.h>
-#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-/* The flags upstream musl's posix_spawn passes to `clone`. This kernel cannot
- * share an address space, so syscall 120 is unimplemented whatever the flags
- * are (`ENOSYS`, asserted below) and the port patches posix_spawn to fork. */
-#define CLONE_VM      0x00000100
-#define CLONE_VFORK   0x00004000
-#define CLONE_SIGCHLD 0x00000011
 
 #define CANARY_BYTES 512
 #define CANARY_VALUE 0x5A
@@ -149,37 +131,6 @@ int main(void)
     }
     free(heap_canary);
     heap_canary = NULL;
-
-    /* Even upstream spawn's own flags are refused: this kernel implements no
-     * `clone` at all, whatever is asked for. A thread library wanting a shared
-     * address space must be told no, not handed a copy. */
-    {
-        /* A REAL stack, so a kernel that answered this call would get a
-         * usable one and the refusal is about the call, not about a
-         * null pointer. */
-        unsigned char *stack = malloc(4096);
-        unsigned char *stack_top;
-
-        if (stack == NULL) {
-            return fail("out of memory for the clone stack");
-        }
-        stack_top = stack + 4096;
-        if (syscall(SYS_clone, CLONE_VM | CLONE_VFORK | CLONE_SIGCHLD, stack_top, (void *)0,
-                    (void *)0, (void *)0) != -1) {
-            free(stack);
-
-            return fail("clone was answered by a kernel that cannot share an address space");
-        }
-        if (errno != ENOSYS) {
-            char detail[80];
-
-            snprintf(detail, sizeof(detail), "clone reported errno %d, wanted ENOSYS", errno);
-            free(stack);
-
-            return fail(detail);
-        }
-        free(stack);
-    }
 
     /* A spawn that FAILS. Nothing above this line exercises the error pipe:
      * every command so far execs. A missing program must come back as the

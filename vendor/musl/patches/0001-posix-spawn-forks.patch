@@ -1,12 +1,11 @@
-Make posix_spawn fork instead of clone, for a kernel with no shared address space.
+Make posix_spawn fork instead of clone, so the child runs in a copy of the parent.
 
 musl reaches the child of posix_spawn, and therefore of system(3) and popen(3),
 through __clone with CLONE_VM|CLONE_VFORK: the child runs in the PARENT's
-address space on a stack of its own until it execs. Rach2 has no way to share an
-address space between two processes, and a syscall that accepted those flags and
-quietly handed back a private copy-on-write image would be reporting semantics it
-does not provide. So syscall 120 stays unimplemented here, and this patch makes
-posix_spawn use the fork this kernel does have.
+address space on a stack of its own until it execs. This patch makes posix_spawn
+fork instead, so the child runs the same function in a copy of the parent's
+memory. Rach2 implements clone with those flags too, which GNU libc's
+posix_spawn uses; the musl system spawns by fork.
 
 The child function never returns (it execs, or writes its errno to the pipe and
 _exits), and it communicates failure through that pipe rather than through shared
@@ -23,8 +22,8 @@ a fork as far as the caller is concerned.
  
 -	pid = __clone(child, stack+sizeof stack,
 -		CLONE_VM|CLONE_VFORK|SIGCHLD, &args);
-+	/* Rach2: this kernel has no clone and no shared address space, so the
-+	 * child is forked and runs the same function on its own copy. `child`
++	/* Rach2: the child is forked and runs the same function on its own
++	 * copy of the parent's memory, not in the parent's own. `child`
 +	 * never returns: it execs, or reports its errno through the pipe and
 +	 * exits. The raw syscall keeps the negative-errno convention the error
 +	 * path below expects. */
