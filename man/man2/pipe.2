@@ -95,6 +95,11 @@ These functions return 0 on success, or -1 on failure and set
 .Va errno .
 The kernel interface returns the negative error number.
 Failure releases any pipe and descriptors allocated by the call.
+The descriptors are reserved and given their ends only after both
+numbers have been stored in
+.Fa pipefd ,
+so another thread sharing the descriptor table cannot use or duplicate
+either before the call returns.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/pipeprobe.c

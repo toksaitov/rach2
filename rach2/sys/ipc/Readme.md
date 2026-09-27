@@ -4,7 +4,7 @@ Rach2 implements anonymous byte pipes through `pipe` and `pipe2`, the pipe behin
 
 ## Creation and lifetime
 
-`pipe(int pipefd[2])` writes the read descriptor to `pipefd[0]` and the write descriptor to `pipefd[1]`. `pipe2` accepts only `O_CLOEXEC` and `O_NONBLOCK`; it applies either flag to both new descriptors and rejects any other bit with `EINVAL`.
+`pipe(int pipefd[2])` writes the read descriptor to `pipefd[0]` and the write descriptor to `pipefd[1]`. `pipe2` accepts only `O_CLOEXEC` and `O_NONBLOCK`; it applies either flag to both new descriptors and rejects any other bit with `EINVAL`. The two slots are reserved and given their ends only after both numbers have been copied to the caller: the copy can sleep, a reserved slot has no type for another thread sharing the table to find, and a copy that fails frees the slots and the pipe.
 
 The two ends start with separate open-file descriptions. `dup`, `dup2`, `dup3`, `F_DUPFD`, `F_DUPFD_CLOEXEC`, and `fork` share the open-file description for the end they copy. Its status flags are shared too, so `O_NONBLOCK` changes made through `fcntl` or `FIONBIO` are visible through duplicates of that end. `FD_CLOEXEC` remains a descriptor flag.
 

@@ -531,12 +531,18 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
     return 0;
 }
 
+/**
+ * pipe2(2). Both descriptors are reserved, their numbers copied to the
+ * caller, and only then given their ends, as Linux's do_pipe2 does: the copy
+ * can sleep, and a reserved slot has no type, so a thread sharing the table
+ * can neither use nor duplicate an end before the call succeeds, and a copy
+ * that fails frees the slots and the pipe, which nothing else can reach.
+ */
 int32_t sys_pipe2(struct isr_params *params)
 {
     uint32_t fds_ptr = params->ebx;
     int flags = (int)params->ecx;
     pipe_t *pipe;
-    int rfd, wfd;
     int kfds[2];
 
     if (!current_proc) {
@@ -552,30 +558,20 @@ int32_t sys_pipe2(struct isr_params *params)
         return -ENFILE;
     }
 
-    rfd = fd_alloc(current_proc->fds);
-    if (rfd < 0) {
+    kfds[0] = fd_alloc(current_proc->fds);
+    kfds[1] = kfds[0] >= 0 ? fd_alloc(current_proc->fds) : -1;
+    if (kfds[1] < 0 || copy_to_user((void __user *)fds_ptr, kfds, sizeof(kfds)) != 0) {
+        if (kfds[1] >= 0) {
+            fd_free(current_proc->fds, kfds[1]);
+        }
+        if (kfds[0] >= 0) {
+            fd_free(current_proc->fds, kfds[0]);
+        }
         pipe_free(pipe);
-        return -EMFILE;
+        return kfds[1] < 0 ? -EMFILE : -EFAULT;
     }
-    pipe_setup_end(rfd, pipe, FD_FLAG_READ, flags);
-
-    wfd = fd_alloc(current_proc->fds);
-    if (wfd < 0) {
-        fd_free(current_proc->fds, rfd);
-        pipe_free(pipe);
-        return -EMFILE;
-    }
-    pipe_setup_end(wfd, pipe, FD_FLAG_WRITE, flags);
-
-    kfds[0] = rfd;
-    kfds[1] = wfd;
-    if (copy_to_user((void __user *)fds_ptr, kfds, sizeof(kfds)) != 0) {
-        /* Both ends are fresh: free the pipe and descriptors directly. */
-        pipe_free(pipe);
-        fd_free(current_proc->fds, rfd);
-        fd_free(current_proc->fds, wfd);
-        return -EFAULT;
-    }
+    pipe_setup_end(kfds[0], pipe, FD_FLAG_READ, flags);
+    pipe_setup_end(kfds[1], pipe, FD_FLAG_WRITE, flags);
     return 0;
 }
 
