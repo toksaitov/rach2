@@ -53,7 +53,7 @@ static uintptr_t filemap_share(struct vm_file *f, uint32_t pgoff)
 }
 
 /* The KRFFS root node the mapping's file is now, or NULL for a file of
- * another type, whose copy of the descriptor names no node. The copy keeps
+ * another type, whose copy of the descriptor has no node. The copy keeps
  * the node the file was opened on, which a relocation leaves behind; the
  * description's is the one `vfs_repoint` moves. */
 static void *filemap_node(const struct filemap *m)

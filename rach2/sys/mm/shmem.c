@@ -45,7 +45,7 @@ static int reach(struct shmem *sh, uint32_t n)
 
 /* The frame of page `i`, made and zeroed when there is none; 0 when none
  * can be had, or when `i` is past the pages a file in memory may have: a
- * mapping names its page by an offset the caller chose. */
+ * mapping asks for its page by an offset the caller chose. */
 static uintptr_t page_at(struct shmem *sh, uint32_t i)
 {
     uintptr_t phys;
