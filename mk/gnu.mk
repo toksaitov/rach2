@@ -27,11 +27,11 @@ $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 
 $(GNU_TOOLCHAIN_STAMP): vendor/gnu/build_toolchain.sh vendor/gnu/fetch.sh $(GNU_TOOLCHAIN_PINS)
 	@rm -f $@
-	+@./vendor/gnu/build_toolchain.sh
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else ./vendor/gnu/build_toolchain.sh; fi
 	@test -x $(GNU_CC) || { echo "gnu: toolchain: the build produced no $(GNU_CC)" >&2; exit 1; }
 	@touch $@
 
 $(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) vendor/gnu/build_port.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt $(GNU_RECIPES)
 	@rm -f $@
-	+@./vendor/gnu/build_port.sh --all
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else ./vendor/gnu/build_port.sh --all; fi
 	@touch $@

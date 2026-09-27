@@ -20,13 +20,13 @@ gnu-chromium: $(GNU_CHROMIUM_STAMP)
 
 $(GNU_NATIVE_STAMP): vendor/gnu/native/build_native.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt $(GNU_TOOLCHAIN_STAMP)
 	@rm -f $@
-	+@./vendor/gnu/native/build_native.sh
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else ./vendor/gnu/native/build_native.sh; fi
 	@test -x $(GNU_OUT)/native/usr/bin/gcc || { echo "gnu: native: the build produced no $(GNU_OUT)/native/usr/bin/gcc" >&2; exit 1; }
 	@touch $@
 
 $(GNU_GDB_STAMP): vendor/gnu/native/build_gdb.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt vendor/gnu/sources-extra.txt $(GNU_TOOLCHAIN_STAMP)
 	@rm -f $@
-	+@./vendor/gnu/native/build_gdb.sh
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else ./vendor/gnu/native/build_gdb.sh; fi
 	@test -x $(GNU_OUT)/gdb/usr/bin/gdb || { echo "gnu: gdb: the build produced no $(GNU_OUT)/gdb/usr/bin/gdb" >&2; exit 1; }
 	@touch $@
 
