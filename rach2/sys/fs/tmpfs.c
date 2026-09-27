@@ -429,7 +429,9 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         (*cursor)++;
         return 1;
     }
-    for (e = d->entries, i = 2; e && i < *cursor; e = e->next, i++) {
+    e = d->entries;
+    for (i = 2; e && i < *cursor; i++) {
+        e = e->next;
     }
     if (!e) {
         return 0;

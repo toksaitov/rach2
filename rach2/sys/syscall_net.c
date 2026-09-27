@@ -1734,7 +1734,8 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
     if (!gathered) {
         return -ENOMEM;
     }
-    for (i = 0, total = 0; i < iovlen; i++) {
+    total = 0;
+    for (i = 0; i < iovlen; i++) {
         if (copy_from_user(gathered + total, (const void __user *)iov[i].iov_base,
                            iov[i].iov_len) != 0) {
             kfree(gathered);
