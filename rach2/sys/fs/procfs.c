@@ -1354,10 +1354,9 @@ static int procfs_gen_uptime(struct procfs_text *t)
  *
  * The `cpu` line has user, nice, system and idle in that order. The
  * machine-wide counters do not separate user from system time, which only the
- * per-process ones do, so what this line knows is one busy figure and one
- * idle figure: busy goes in the system column, since that is where a kernel's
- * own time belongs, and user and nice are zero rather than a share invented
- * to look plausible.
+ * per-process ones do. This line reports busy and idle ticks: busy goes in
+ * the system column, since that is where a kernel's own time belongs, and
+ * user and nice are zero rather than a share invented to look plausible.
  *
  * `processes` is what Linux means by it, the count of processes CREATED since
  * boot and not the count alive now. `procs_running` and `procs_blocked` are
