@@ -913,6 +913,35 @@ static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrle
     return 0;
 }
 
+/*
+ * Why the stream or sequenced-packet socket `s` cannot connect to `target`
+ * now, or 0 when it can.
+ */
+static int32_t connect_refusal(const struct unix_sock *s, const struct unix_sock *target)
+{
+    if (s->state != US_UNCONNECTED) {
+        return s->state == US_CONNECTED ? -EISCONN : -EINVAL;
+    }
+    if (target->type != s->type) {
+        return -EPROTOTYPE;
+    }
+    if (target->state != US_LISTENING) {
+        return -ECONNREFUSED;
+    }
+    return 0;
+}
+
+/**
+ * connect(2). A stream or sequenced-packet socket queues a new socket on the
+ * listener, joined to it, and a datagram socket takes the target as its peer
+ * (`connect_dgram`).
+ *
+ * Copying the address, finding a path's socket file and waiting for room in
+ * the listener's queue can each sleep, and another thread may connect the
+ * socket, or make it listen, while this one sleeps; so the state of both
+ * sockets is judged after the last of them, and nothing between that and
+ * the join can sleep.
+ */
 int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
 {
     struct unix_sock *s = sock_of(e);
@@ -944,28 +973,19 @@ int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
         if (!target) {
             return rc;
         }
-        if (target->type != s->type) {
-            unix_put(target);
-            return -EPROTOTYPE;
-        }
-        if (target->state != US_LISTENING) {
-            unix_put(target);
-            return -ECONNREFUSED;
-        }
-        if ((int)target->acc_len <= target->backlog) {
+        rc = connect_refusal(s, target);
+        if (rc == 0 && (int)target->acc_len <= target->backlog) {
             break;
         }
-        if (nonblocking(e, 0)) {
-            unix_put(target);
-            return -EAGAIN;
+        if (rc == 0 && nonblocking(e, 0)) {
+            rc = -EAGAIN;
         }
-        rc = unix_wait(&target->wq, listener_has_room, target, s->sndtimeo);
+        if (rc == 0) {
+            rc = unix_wait(&target->wq, listener_has_room, target, s->sndtimeo);
+        }
         unix_put(target);
         if (rc != 0) {
             return rc;
-        }
-        if (s->state != US_UNCONNECTED) {
-            return s->state == US_CONNECTED ? -EISCONN : -EINVAL;
         }
     }
     c = unix_alloc(s->type);
