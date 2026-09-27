@@ -1693,20 +1693,41 @@ static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
 }
 
 /**
+ * Store the child's id where CLONE_CHILD_SETTID and CLONE_PARENT_SETTID ask:
+ * in the child's address space through its regions, in a writable one only,
+ * a private page taking a copy of its own and a shared one written in place,
+ * and in the parent's. A failed store leaves the word as it was, as Linux's
+ * does. Either store may sleep, bringing a page in.
+ */
+static void fork_store_ids(process_t *child, const struct fork_req *req)
+{
+    uint32_t pid = child->pid;
+    const vma_t *r;
+
+    if (req->settid) {
+        r = vm_find(&child->mm->vm, req->settid);
+        if (r && (r->prot & VM_PROT_WRITE)) {
+            (void)paging_access(child->mm, req->settid, &pid, sizeof(pid), 1);
+        }
+    }
+    child->clear_child_tid = req->cleartid;
+    if (req->ptid) {
+        (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
+    }
+}
+
+/**
  * Lay out `child`'s kernel stack for its first switch, from the parent's
  * trap frame `params`: the frame, with 0 in EAX, fork's return, and the new
  * stack pointer a clone asks for; above it the return address `isr_return`
  * and the four registers `switch_context` pops. When the child is first
  * scheduled, switch_context pops EDI, ESI, EBX and EBP, returns to
- * isr_return, and the frame takes it to user mode. The ids CLONE_CHILD_SETTID
- * and CLONE_PARENT_SETTID ask for are stored before the child runs, a failed
- * store leaving the word as it was, as Linux's does.
+ * isr_return, and the frame takes it to user mode.
  */
 static void fork_frame(process_t *child, const isr_params_t *params, const struct fork_req *req)
 {
     uint32_t *sp = (uint32_t *)child->kernel_stack;
     isr_params_t *frame;
-    uint32_t pid = child->pid;
 
     sp -= sizeof(isr_params_t) / sizeof(uint32_t);
     frame = (isr_params_t *)sp;
@@ -1714,13 +1735,6 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
     frame->eax = 0;
     if (req->newsp) {
         frame->user_esp = req->newsp;
-    }
-    if (req->settid) {
-        (void)paging_store_u32(child->mm->dir, &child->mm->vm, req->settid, pid);
-    }
-    child->clear_child_tid = req->cleartid;
-    if (req->ptid) {
-        (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
     }
     *--sp = (uint32_t)isr_return;
     *--sp = 0; /* EBP */
@@ -1743,7 +1757,8 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * child starts with and the addresses of the ids clone stores: the parent's
  * CLONE_PARENT_SETTID word, stored before the child runs, and the child's
  * CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address its thread end
- * clears.
+ * clears. -EINTR when a SIGKILL came for the caller while the child was
+ * built.
  */
 static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
@@ -1766,6 +1781,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (!child) {
         return -ENOMEM; /* a record the heap could not give */
     }
+    /* Not runnable, and no process to the other calls, while it is built,
+     * since the building may sleep and a switch to it before its frame is
+     * laid out would run nothing; it becomes ready at the end. */
+    child->state = PROC_UNUSED;
 
     /* alloc_process gave the child a table with its own stdio open-file
      * descriptions; it goes now, before any failure path, since the child
@@ -1800,7 +1819,17 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
 
+    rc = -ENOMEM;
     if (fork_fs(child, parent, req->flags) != 0 || fork_files(child, parent, req->flags) != 0) {
+        goto fail_built;
+    }
+    fork_store_ids(child, req);
+    /* A SIGKILL, which an exit_group or an exec by another thread sends,
+     * refuses the child, since one made now would outlive its process's end;
+     * nothing after this sleeps. */
+    if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) ||
+        parent->tg->exiting || parent->tg->exec_task) {
+        rc = -EINTR;
         goto fail_built;
     }
 
@@ -1830,7 +1859,7 @@ fail_built:
     kstack_free(child->kernel_stack);
     mm_drop(child);
     free_process(child);
-    return -ENOMEM;
+    return rc;
 }
 
 int32_t sys_fork(isr_params_t *params)
