@@ -31,8 +31,13 @@ rest of their lifetime.
 .Pp
 .Fn fsync
 accepts any open descriptor
-.Fa fd ;
-it does not check the descriptor's type.
+.Fa fd
+but one opened with
+.Dv O_PATH ,
+which returns
+.Er EBADF
+before anything is flushed, as on Linux; it does not check the
+descriptor's type.
 For a descriptor on a mounted file system, it runs that file system's
 fsync operation, or writes the device's dirty buffers if the file
 system has no such operation.
