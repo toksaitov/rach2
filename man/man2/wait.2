@@ -31,6 +31,10 @@ Any child whose process group ID equals
 The value -2147483648 matches no child.
 .El
 .Pp
+The children of a process are the children of all its threads, and any
+thread may wait for any of them.
+A child is a process: it has exited once its last thread has ended, and
+its threads are never reported one by one.
 By default, the call waits for a child to exit and reaps it.
 The
 .Fa options
@@ -48,7 +52,8 @@ Linux's
 .Dv __WALL
 and
 .Dv __WNOTHREAD
-are accepted and change nothing, since each process is one thread.
+are accepted and change nothing: every thread waits for the children of
+its whole process.
 .Dv __WCLONE
 asks for the children that report their end with a signal other than
 .Dv SIGCHLD ,
@@ -83,8 +88,8 @@ performs the same wait and accepts an optional
 .Fa rusage
 pointer.
 For every report, an exit, a stop or a continue, the kernel fills the
-72-byte i386 resource usage structure with the child's CPU time added to
-that of the children the child has reaped:
+72-byte i386 resource usage structure with the child's CPU time, that of
+all its threads, added to that of the children the child has reaped:
 .Va ru_utime
 and
 .Va ru_stime
@@ -92,8 +97,8 @@ are the ticks the timer charged in user mode and in the kernel, as
 .Xr times 2
 counts them, and the fourteen counters after them, which the kernel does
 not keep, are zero.
-Reaping a child adds the same two times to the caller's children's
-totals.
+Reaping a child adds the same two times to the children's totals of the
+caller's process.
 Nonnull status and resource usage pointers are checked for write
 access before any child is reaped.
 .Ss waitid

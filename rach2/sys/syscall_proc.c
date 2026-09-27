@@ -17,6 +17,7 @@
 #include "proc/process.h"
 #include "proc/sched.h"
 #include "proc/wait_queue.h"
+#include "proc/tgroup.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
@@ -204,6 +205,10 @@ static void proc_end_others(void)
                 continue;
             }
             if (p->state == PROC_ZOMBIE) {
+                if (p->pid == p->tgid && p->tg->live != 0) {
+                    alive++; /* a leader waits for the rest of its threads */
+                    continue;
+                }
                 mm_drop(p);
                 kstack_free(p->kernel_stack);
                 free_process(p);
@@ -223,13 +228,68 @@ static void proc_end_others(void)
 }
 
 /**
- * Terminate the current process (exit(2)/exit_group(2)). Does not return.
+ * What a process's end releases beyond its threads: the framebuffer it owns,
+ * the console its session leads, and the pty slaves that session controls,
+ * so a later session can claim them. The console goes before the process is
+ * published as a zombie while the teardown runs with interrupts on;
+ * otherwise the timer-IRQ serial drain (tty_console_poll) keeps draining
+ * COM1 against the vanishing session, dropping a ^C/^Z and stealing bytes
+ * the kernel debug shell should read. shell_reset_input on the init path
+ * releases the console again, which changes nothing.
+ */
+static void exit_release_session(void)
+{
+    fb_release_if_owner(current_proc->tgid);
+    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->tgid)) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+    pty_release_leader((int)current_proc->sid, (int)current_proc->tgid);
+}
+
+/**
+ * Leave the processor for good: the record of a thread that has ended is
+ * never selected again, and a thread that is not its process's last is
+ * freed by another's return to user mode.
+ */
+static void __attribute__((noreturn)) exit_schedule_away(void)
+{
+    for (;;) {
+        __asm__ __volatile__("cli");
+        schedule();
+        idle_wait_irq_off();
+    }
+}
+
+void proc_group_exit(int32_t code)
+{
+    struct tgroup *tg = current_proc->tg;
+    struct k_siginfo info;
+    process_t *t;
+
+    if (tg->exiting || tg->exec_task) {
+        return;
+    }
+    tg->exiting = 1;
+    tg->exit_code = code;
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
+            signal_post_thread(t, SIGKILL, &info);
+        }
+    }
+}
+
+/**
+ * End the calling thread with the encoded wait status `code`, and with the
+ * last thread the process. Does not return.
  *
- * EBX has the exit status. Releases files and cwd, reparents children to init,
- * publishes the zombie and wakes its parent, then reschedules. A normal child
- * leaves its mappings, descriptor-table storage, record and stack to do_wait.
- * A real init's exit is fatal (panic_init_died); an init exiting under the
- * debug shell returns to it.
+ * A thread that is not its process's last only releases what it holds and
+ * leaves. The last one releases the process's session, reparents the
+ * children to init, publishes the zombie and wakes its parent, then
+ * reschedules. A normal child leaves its mappings, descriptor-table storage,
+ * record and stack to do_wait. A real init's exit is fatal
+ * (panic_init_died); an init exiting under the debug shell returns to it.
  *
  * The plain status line goes out only where the debug shell is the supervisor.
  * There it is how a person, and the harness in its no-token mode, read a
@@ -248,48 +308,35 @@ static void proc_end_others(void)
  * because the timer's preemption is deferred inside a call. A halt there
  * kept the machine forever.
  */
-int32_t sys_exit(isr_params_t *params)
+static int32_t exit_current(int32_t code)
 {
-    int status = (int)params->ebx;
-    bool is_init = false;
+    int status = (code >> 8) & 0xFF;
+    bool is_init;
+    int alone;
     uint32_t exiting_pid;
-
-    if (current_proc && fb_owner_pid == current_proc->pid) {
-        vga_mode13h_exit();
-        fb_owner_pid = 0;
-    }
-
-    if (debug_shell_is_home) {
-        klog(KLOG_INFO, "process", "exited with status %d", status);
-    }
 
     if (!current_proc) {
         __asm__ __volatile__("cli; hlt");
         return 0;
     }
-
-    exiting_pid = current_proc->pid;
+    exiting_pid = current_proc->tgid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
-
-    /* If the dying process is the console-owning session leader (init, or a
-     * later leader that claimed the console via TIOCSCTTY, NOT only init),
-     * release the controlling terminal NOW, before it zombifies and the
-     * teardown below runs with interrupts on. Otherwise the timer-IRQ serial
-     * drain (tty_console_poll) keeps draining COM1 against this vanishing
-     * session, dropping a ^C/^Z and stealing bytes the kernel debug shell
-     * should read. shell_reset_input on the is_init path releases again
-     * (idempotent). */
-    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
-        tty_set_session(&console_tty, 0, 0);
+    alone = current_proc->tg->live == 1;
+    if (alone) {
+        exit_release_session();
+        if (is_init && debug_shell_is_home) {
+            proc_end_others();
+        }
     }
-    /* A dying session leader also disassociates any pty slave it controlled, so
-     * a later session can claim the same /dev/pts/N. */
-    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
-
-    if (is_init && debug_shell_is_home) {
-        proc_end_others();
+    if (!proc_exit_cleanup(code)) {
+        exit_schedule_away();
     }
-    proc_exit_cleanup((status & 0xFF) << 8);
+    if (!alone) {
+        exit_release_session();
+    }
+    if (debug_shell_is_home) {
+        klog(KLOG_INFO, "process", "exited with status %d", status);
+    }
 
 #ifdef RACH2_HARNESS
     /* Harness build: the instant the probe (run as init) exits, report its
@@ -311,55 +358,71 @@ int32_t sys_exit(isr_params_t *params)
     }
 
     if (!is_init) {
-        schedule();
+        exit_schedule_away();
     }
 
-    if (is_init) {
-        klog(KLOG_INFO, "sys_exit",
-             "init process %d exited with status %d, returning to kernel shell", exiting_pid,
-             status);
-        console_puts("Init process exited. Returning to kernel debug shell.");
+    klog(KLOG_INFO, "sys_exit", "init process %d exited with status %d, returning to kernel shell",
+         exiting_pid, status);
+    console_puts("Init process exited. Returning to kernel debug shell.");
 
-        /* Clean up the init process resources; `mm_drop` switches off the
-         * address space first, since free_page_directory refuses the
-         * directory in CR3. */
-        mm_drop(current_proc);
-        switch_page_directory(_kernel_dir);
-        /* Freed and replaced with interrupts off: a handler between the two
-         * would count its entry in the record just freed. */
-        __asm__ __volatile__("cli");
-        free_process(current_proc);
+    /* Clean up the init process resources; `mm_drop` switches off the
+     * address space first, since free_page_directory refuses the directory
+     * in CR3. */
+    mm_drop(current_proc);
+    switch_page_directory(_kernel_dir);
+    /* Freed and replaced with interrupts off: a handler between the two
+     * would count its entry in the record just freed. */
+    __asm__ __volatile__("cli");
+    free_process(current_proc);
 
-        init_pid = 0;
+    init_pid = 0;
 
-        current_proc = proc_idle;
-        current_proc->state = PROC_RUNNING;
+    current_proc = proc_idle;
+    current_proc->state = PROC_RUNNING;
 
-        /* Clear the shell's command line and stdin-wait state while interrupts
-         * are still off, so a keyboard IRQ cannot append to a stale command
-         * buffer or see a dangling stdin waiter. shell_loop resets again on
-         * entry as the catch-all. */
-        shell_reset_input();
-        __asm__ __volatile__("sti");
+    /* Clear the shell's command line and stdin-wait state while interrupts
+     * are still off, so a keyboard IRQ cannot append to a stale command
+     * buffer or see a dangling stdin waiter. shell_loop resets again on
+     * entry as the catch-all. */
+    shell_reset_input();
+    __asm__ __volatile__("sti");
 
-        sched_disable();
+    sched_disable();
 
-        /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe
-         * because we are in kernel mode and init has been torn down. */
-        __asm__ __volatile__("movl %0, %%esp\n\t"
-                             "sti\n\t"
-                             "jmp *%1\n\t"
-                             :
-                             : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
-                               "r"((uint32_t)shell_loop)
-                             : "memory");
+    /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe because
+     * we are in kernel mode and init has been torn down. */
+    __asm__ __volatile__("movl %0, %%esp\n\t"
+                         "sti\n\t"
+                         "jmp *%1\n\t"
+                         :
+                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL), "r"((uint32_t)shell_loop)
+                         : "memory");
+    exit_schedule_away();
+}
+
+/**
+ * exit (1): end the calling thread with the status in EBX; the process ends
+ * with its last thread. A thread's return from its start function makes
+ * this call through glibc's and musl's thread code; exit(3) and _exit(2)
+ * make exit_group.
+ */
+int32_t sys_exit(isr_params_t *params)
+{
+    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+}
+
+/**
+ * exit_group (252): end every thread of the process, the process with the
+ * status in EBX.
+ */
+int32_t sys_exit_group(isr_params_t *params)
+{
+    int32_t code = (int32_t)((params->ebx & 0xFFu) << 8);
+
+    if (current_proc) {
+        proc_group_exit(code);
     }
-
-    for (;;) {
-        __asm__ __volatile__("cli");
-        schedule();
-        idle_wait_irq_off();
-    }
+    return exit_current(code);
 }
 
 /**
@@ -1088,17 +1151,83 @@ static int32_t exec_build(struct exec_state *s)
     return 0;
 }
 
+/** Whether the execve in the group `arg` is the group's only live
+ * thread. */
+static int exec_alone(void *arg)
+{
+    return ((const struct tgroup *)arg)->live == 1;
+}
+
+/**
+ * Give the current thread the place of its process's leader, whose record,
+ * that of a thread that has ended, goes: the thread takes the leader's id,
+ * which is the process id, with what the process keeps in the leader's
+ * record, its reaped children's time and its alarm, as Linux's `de_thread`
+ * exchanges the two ids.
+ */
+static void exec_take_leader(void)
+{
+    struct tgroup *tg = current_proc->tg;
+    process_t *old = tg->leader;
+
+    current_proc->pid = old->pid;
+    current_proc->cutime = old->cutime;
+    current_proc->cstime = old->cstime;
+    current_proc->alarm_tick = old->alarm_tick;
+    current_proc->alarm_interval = old->alarm_interval;
+    current_proc->jc_status = old->jc_status;
+    tg->utime += old->utime;
+    tg->stime += old->stime;
+    tg->leader = current_proc;
+    mm_drop(old);
+    kstack_free(old->kernel_stack);
+    free_process(old);
+}
+
+/**
+ * Make the current thread its process's only one before execve replaces the
+ * image, as Linux's `de_thread` does: every other thread is sent SIGKILL and
+ * the caller waits, whatever it is sent, until they have ended; a caller
+ * that is not the leader then takes the leader's place. While `exec_task`
+ * is set, a thread the SIGKILL ends ends alone and does not make the
+ * process end.
+ */
+static void exec_one_thread(void)
+{
+    struct tgroup *tg = current_proc->tg;
+    struct k_siginfo info;
+    process_t *t;
+
+    if (tg->live > 1) {
+        tg->exec_task = current_proc;
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_KERNEL;
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
+                signal_post_thread(t, SIGKILL, &info);
+            }
+        }
+        (void)wq_wait_event_nointr(&tg->gone, exec_alone, tg);
+        tg->exec_task = NULL;
+    }
+    if (current_proc != tg->leader) {
+        exec_take_leader();
+    }
+}
+
 /**
  * Make the image `s` built the process's; past here execve cannot fail.
  *
- * Drops the close-on-exec descriptors; takes the new ids, the saved ids
- * becoming the new effective ones, which is the POSIX rule for every exec
- * and what lets an image shed acquired authority and take it back; resets
- * what pointed into the old image: caught signals' handlers (SIG_IGN, the
- * blocked mask and the pending signals are kept, as POSIX says), the
- * alternate signal stack, the address a thread end clears, the TLS base and
- * the floating-point state. Then it switches to the new address space and
- * puts the old one, which the parent of a vfork child keeps, lets that
+ * Ends the process's other threads first, and releases the robust futexes
+ * the thread holds and clears the word CLONE_CHILD_CLEARTID names while the
+ * old image is still there to hold them. Drops the close-on-exec
+ * descriptors; takes the new ids, the saved ids becoming the new effective
+ * ones, which is the POSIX rule for every exec and what lets an image shed
+ * acquired authority and take it back; resets what pointed into the old
+ * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
+ * signals are kept, as POSIX says), the alternate signal stack, the TLS base
+ * and the floating-point state. Then it switches to the new address space
+ * and puts the old one, which the parent of a vfork child keeps, lets that
  * parent go, and points the return frame at the entry with the stack
  * pointer at argc. A fresh image has no TLS until its libc calls
  * set_thread_area, so the segment registers get the plain user-data
@@ -1114,6 +1243,8 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     uint32_t old_egid = current_proc->egid;
     int sig;
 
+    exec_one_thread();
+    proc_thread_gone(current_proc);
     close_cloexec_fds();
     current_proc->euid = s->euid;
     current_proc->egid = s->egid;
@@ -1233,7 +1364,14 @@ int32_t sys_execve(isr_params_t *params)
  * exit. */
 #define CSIGNAL              0x000000FFu
 #define CLONE_VM             0x00000100u
+#define CLONE_FS             0x00000200u
+#define CLONE_FILES          0x00000400u
+#define CLONE_SIGHAND        0x00000800u
 #define CLONE_VFORK          0x00004000u
+#define CLONE_PARENT         0x00008000u
+#define CLONE_THREAD         0x00010000u
+#define CLONE_SYSVSEM        0x00040000u
+#define CLONE_SETTLS         0x00080000u
 #define CLONE_PARENT_SETTID  0x00100000u
 #define CLONE_CHILD_CLEARTID 0x00200000u
 #define CLONE_DETACHED       0x00400000u
@@ -1241,14 +1379,16 @@ int32_t sys_execve(isr_params_t *params)
 
 /* What a fork or a clone asks of `do_fork`: the clone flags, the stack
  * pointer the child starts with or 0 for the parent's, the parent's address
- * CLONE_PARENT_SETTID names, and the child's addresses CLONE_CHILD_SETTID
- * and CLONE_CHILD_CLEARTID name, each 0 for none. */
+ * CLONE_PARENT_SETTID names, the child's addresses CLONE_CHILD_SETTID and
+ * CLONE_CHILD_CLEARTID name, each 0 for none, and the TLS base
+ * CLONE_SETTLS gives the child. */
 struct fork_req {
     uint32_t flags;
     uint32_t newsp;
     uint32_t ptid;
     uint32_t settid;
     uint32_t cleartid;
+    uint32_t tls;
 };
 
 /* The parents that wait in vfork until their child calls execve or ends. */
@@ -1261,7 +1401,7 @@ static int vfork_done(void *arg)
     const process_t *child = get_process(*(const uint32_t *)arg);
 
     return child == NULL || !child->vfork_waiting ||
-           (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
+           ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
 }
 
 /**
@@ -1384,7 +1524,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         return -ENOMEM;
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
-    child->parent_pid = parent->pid;
+    /* A thread's parent, and that of a CLONE_PARENT child, is the caller's
+     * process's parent. */
+    child->parent_pid =
+        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
 
     /* Inherit the parent's session and process group: a forked child stays in
      * the parent's job-control group until it (or the parent) calls
@@ -1417,7 +1560,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
      * switch would reprogram the TLS descriptor to 0 for the child and its
      * %gs-relative reads (errno, the stack canary) would fault or read garbage.
      */
-    child->tls_base = parent->tls_base;
+    child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : parent->tls_base;
     /* The floating-point registers as they are now, since the parent's record
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
@@ -1429,12 +1572,16 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 
     /* Signals: the child inherits the dispositions and the blocked mask, but
      * its pending set starts empty (POSIX fork semantics). */
-    k_memcpy(child->sigacts, parent->sigacts, sizeof(child->sigacts));
+    k_memcpy(child->tg->action, parent->tg->action, sizeof(child->tg->action));
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
-    child->altstack_sp = parent->altstack_sp;
-    child->altstack_size = parent->altstack_size;
-    child->altstack_on = parent->altstack_on;
+    /* A child that shares the memory and runs beside the parent does not
+     * share its alternate stack, as Linux's does not. */
+    if ((req->flags & (CLONE_VM | CLONE_VFORK)) != CLONE_VM) {
+        child->altstack_sp = parent->altstack_sp;
+        child->altstack_size = parent->altstack_size;
+        child->altstack_on = parent->altstack_on;
+    }
 
     /* Copy file descriptor table. The child shares the parent's open-file
      * descriptions (so a seek in one is seen by the other, per POSIX), so each
@@ -1503,6 +1650,14 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     *child_sp = 0; /* EDI */
 
     child->regs.esp = (uint32_t)child_sp;
+    if (req->flags & CLONE_THREAD) {
+        tgroup_put(child->tg);
+        child->tg = parent->tg;
+        child->tg->refs++;
+        child->tg->live++;
+        child->tgid = parent->tgid;
+        child->sigacts = child->tg->action;
+    }
     if (req->flags & CLONE_VFORK) {
         child->vfork_waiting = 1;
     }
@@ -1525,7 +1680,7 @@ fail_built:
 
 int32_t sys_fork(isr_params_t *params)
 {
-    struct fork_req req = {0, 0, 0, 0, 0};
+    struct fork_req req = {0, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
@@ -1538,36 +1693,54 @@ int32_t sys_fork(isr_params_t *params)
  */
 int32_t sys_vfork(isr_params_t *params)
 {
-    struct fork_req req = {CLONE_VM | CLONE_VFORK, 0, 0, 0, 0};
+    struct fork_req req = {CLONE_VM | CLONE_VFORK, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
 
 /**
- * clone (120), in the forms glibc's fork and the two C libraries'
- * posix_spawn use: a new process with its own copy of the address space,
- * files and signal handlers, as fork makes one, or with the caller's
- * address space itself under CLONE_VM, and with the caller waiting as vfork
- * waits under CLONE_VFORK.
+ * clone (120), in the forms glibc's and musl's fork, posix_spawn and
+ * pthread_create use: a new process with its own copy of the address space,
+ * files and signal handlers, as fork makes one; with the caller's address
+ * space itself under CLONE_VM, and with the caller waiting as vfork waits
+ * under CLONE_VFORK; or a new thread of the caller's process under
+ * CLONE_THREAD, which needs CLONE_SIGHAND, which in turn needs CLONE_VM.
  *
  * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
- * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD,
- * and the flags other than CLONE_VM, CLONE_VFORK, CLONE_PARENT_SETTID,
- * CLONE_CHILD_SETTID, CLONE_CHILD_CLEARTID and CLONE_DETACHED, which Linux
- * ignores, are refused with EINVAL: sharing files or handlers, and threads,
- * are a later phase's work. CLONE_PARENT_SETTID stores the child's id in
- * the parent's memory before the child runs, and a failed store is ignored,
- * as Linux ignores it.
+ * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD
+ * for a process; a thread sends none, whatever the low byte says.
+ * CLONE_SETTLS gives the child the TLS base of the user_desc at ESI, which
+ * set_thread_area would take. CLONE_PARENT makes the child a child of the
+ * caller's parent. CLONE_PARENT_SETTID stores the child's id in the
+ * parent's memory before the child runs, and a failed store is ignored, as
+ * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored, as there
+ * are no System V semaphores and Linux ignores the second. Any other flag is
+ * refused with EINVAL.
  */
 int32_t sys_clone(isr_params_t *params)
 {
     uint32_t flags = params->ebx;
     struct fork_req req;
 
-    if ((flags & CSIGNAL) != SIGCHLD ||
-        (flags & ~(CSIGNAL | CLONE_VM | CLONE_VFORK | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID |
-                   CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0) {
+    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_SIGHAND | CLONE_VFORK | CLONE_PARENT |
+                   CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
+                   CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0 ||
+        (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
+        ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
         return -EINVAL;
+    }
+    req.tls = 0;
+    if (flags & CLONE_SETTLS) {
+        user_desc_t desc;
+
+        if (copy_from_user(&desc, (const void __user *)params->esi, sizeof(desc)) != 0) {
+            return -EFAULT;
+        }
+        if (tls_resolve_base(&desc, &req.tls) != 0) {
+            return -EINVAL;
+        }
     }
     req.flags = flags;
     req.newsp = params->ecx;
@@ -1641,17 +1814,16 @@ static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t 
 
 /**
  * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
- * the child's own CPU time with that of the children it has reaped. Read
- * with interrupts masked, since the tick adds to a live child's.
+ * the CPU time of the child process, every thread's, with that of the
+ * children it has reaped, which its leader's record keeps.
  */
 static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 {
-    uint32_t flags = kirq_save();
-    uint32_t user = p->utime + p->cutime;
-    uint32_t sys = p->stime + p->cstime;
+    uint32_t user;
+    uint32_t sys;
 
-    kirq_restore(flags);
-    rusage_from_ticks(ru, user, sys);
+    proc_cpu_time(p, &user, &sys);
+    rusage_from_ticks(ru, user + p->cutime, sys + p->cstime);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -1672,7 +1844,9 @@ static uint32_t sig_irq_save(void);
 static void sig_irq_restore(uint32_t flags);
 
 /**
- * Whether `p` is a child of the caller that `idtype` and `id` select.
+ * Whether `p` is a child of the caller's process that `idtype` and `id`
+ * select: the leader of a process whose parent is any thread of the
+ * caller's, since the children of a process are all its threads'.
  *
  * Linux's __WCLONE asks for the children that report their end with a signal
  * other than SIGCHLD, unless __WALL is beside it, and every child here
@@ -1680,7 +1854,7 @@ static void sig_irq_restore(uint32_t flags);
  */
 static int wait_selects(int idtype, uint32_t id, int options, const process_t *p)
 {
-    if (p->parent_pid != current_proc->pid) {
+    if (p->parent_pid != current_proc->tgid || p->pid != p->tgid) {
         return 0;
     }
     if (((uint32_t)options & W_CLONE) && !(options & W_ALL)) {
@@ -1710,15 +1884,21 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 }
 
 /**
- * Reap zombie `p`: add its CPU time, with its reaped children's, to the
- * caller's children's totals, and give back its address space, kernel stack
- * and record. The zombie no longer runs on its kernel stack,
- * and this is the single release point for a per-fork stack.
+ * Reap zombie `p`, the leader of a process whose threads have all ended: add
+ * the process's CPU time, with its reaped children's, to the children's
+ * totals of the caller's process, which its leader keeps, and give back its
+ * address space, kernel stack and record. The zombie no longer runs on its
+ * kernel stack, and this is the single release point for a per-fork stack.
  */
 static void wait_reap(process_t *p)
 {
-    current_proc->cutime += p->utime + p->cutime;
-    current_proc->cstime += p->stime + p->cstime;
+    process_t *me = current_proc->tg->leader;
+    uint32_t user;
+    uint32_t sys;
+
+    proc_cpu_time(p, &user, &sys);
+    me->cutime += user + p->cutime;
+    me->cstime += sys + p->cstime;
     mm_drop(p);
     kstack_free(p->kernel_stack);
     free_process(p);
@@ -1758,7 +1938,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             }
             have_child = 1;
 
-            if (p->state == PROC_ZOMBIE && (options & WEXITED)) {
+            if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED)) {
                 int32_t status = p->exit_code;
 
                 if ((status & 0x7f) == 0) {
@@ -1772,8 +1952,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
                 }
                 return (int32_t)out->pid;
             }
-            if ((options & WUNTRACED) && p->state == PROC_STOPPED &&
-                (p->jc_status & 0xff) == 0x7f) {
+            if ((options & WUNTRACED) && p->tg->stop != 0 && (p->jc_status & 0xff) == 0x7f) {
                 wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
                           (int32_t)((p->jc_status >> 8) & 0xff));
                 if (!(options & WNOWAIT)) {
@@ -1794,11 +1973,12 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             return -ECHILD;
         }
         /* A child exists but has no reportable event. WNOHANG returns 0;
-         * otherwise block until a child changes state (exit/stop/continue wakes
-         * us) or a signal interrupts. Lost-wakeup-safe: the signal_pending
-         * check and the PROC_BLOCKED transition are one interrupts-off step, so
-         * a signal posted from an IRQ either is seen here or finds us BLOCKED
-         * and wakes us. */
+         * otherwise block on the process's child queue until a child changes
+         * state (an exit, stop or continue wakes the queue) or a signal
+         * interrupts. Lost-wakeup-safe: the signal_pending check, joining the
+         * queue and the PROC_BLOCKED transition are one interrupts-off step,
+         * so a wake or a signal posted from an IRQ either is seen here or
+         * finds us BLOCKED and wakes us. */
         if (options & WNOHANG) {
             return 0;
         }
@@ -1807,6 +1987,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             sig_irq_restore(flags);
             return -EINTR;
         }
+        wq_poll_add(&current_proc->tg->chld, &current_proc->waiter);
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -1814,6 +1995,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off(); /* idle until a waker, then re-scan */
         }
+        wq_poll_remove(&current_proc->tg->chld, &current_proc->waiter);
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
     }
@@ -1991,8 +2173,8 @@ int32_t sys_waitid(isr_params_t *params)
     return 0;
 }
 
-/* The targets getrusage(2) takes: the caller, its reaped children, and the
- * calling thread, which is the caller while each process is one thread. */
+/* The targets getrusage(2) takes: the caller's process, its reaped
+ * children, and the calling thread. */
 #define RUSAGE_SELF 0
 
 #define RUSAGE_CHILDREN (-1)
@@ -2003,9 +2185,10 @@ int32_t sys_waitid(isr_params_t *params)
  * Resource usage (getrusage(2), syscall 77).
  *
  * EBX = who, ECX = the 72-byte i386 struct rusage. `ru_utime` and `ru_stime`
- * are the caller's user and system time for RUSAGE_SELF and RUSAGE_THREAD,
- * and the totals of the children it has reaped, each with the children those
- * reaped, for RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
+ * are the user and system time of the caller's process, every thread's, for
+ * RUSAGE_SELF, the calling thread's for RUSAGE_THREAD, and the totals of the
+ * children the process has reaped, each with the children those reaped, for
+ * RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
  * fourteen counters after them, maximum resident size through context
  * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
  * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
@@ -2021,10 +2204,14 @@ int32_t sys_getrusage(isr_params_t *params)
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
         return -EINVAL;
     }
-    flags = kirq_save();
-    user = who == RUSAGE_CHILDREN ? current_proc->cutime : current_proc->utime;
-    sys = who == RUSAGE_CHILDREN ? current_proc->cstime : current_proc->stime;
-    kirq_restore(flags);
+    if (who == RUSAGE_SELF) {
+        proc_cpu_time(current_proc, &user, &sys);
+    } else {
+        flags = kirq_save();
+        user = who == RUSAGE_CHILDREN ? current_proc->tg->leader->cutime : current_proc->utime;
+        sys = who == RUSAGE_CHILDREN ? current_proc->tg->leader->cstime : current_proc->stime;
+        kirq_restore(flags);
+    }
     rusage_from_ticks(&ru, user, sys);
     if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
         return -EFAULT;
@@ -2107,67 +2294,151 @@ static void sig_irq_restore(uint32_t flags)
     }
 }
 
-/*
- * Post signal `signo` to `target` with the siginfo `info`: set its pending
- * bit, and keep `info` when the signal was not already pending. If the target
- * is blocked in the scheduler (sleeping/waiting), make it runnable and clear
- * its timed wake, whatever the signal's disposition and mask: an
+/* The stop signals, which SIGCONT cancels and which cancel SIGCONT. */
+#define SIG_STOPS (KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU))
+
+/** Make `t` runnable if it sleeps, clearing its timed wake: an
  * interruptible wait then asks `signal_pending` whether to end with -EINTR,
- * and any wait that goes on arms its own deadline again. SIGKILL/SIGSTOP
- * cannot be caught, so a pending SIGKILL is honored even before delivery by
- * leaving it pending for the default path.
+ * and any wait that goes on arms its own deadline again. */
+static void sig_wake(process_t *t)
+{
+    if (t && t->state == PROC_BLOCKED) {
+        t->wakeup_tick = 0;
+        t->state = PROC_READY;
+    }
+}
+
+/** Clear the signals `bits` from the process of `target` and from each of
+ * its threads. */
+static void sig_discard(process_t *target, uint64_t bits)
+{
+    process_t *t;
+
+    target->tg->pending &= ~bits;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == target->tg) {
+            t->sig_pending &= ~bits;
+        }
+    }
+}
+
+/**
+ * What a signal to the process of `target` does before any thread takes it,
+ * with interrupts off. SIGCONT cancels the pending stops and ends a stop in
+ * effect: every stopped thread runs again, and the parent learns of it from
+ * wait4(WCONTINUED) and a SIGCHLD. SIGKILL makes a stopped thread runnable,
+ * so it can take its lethal default. A stop signal cancels a pending
+ * SIGCONT. Every other signal stays pending while the process is stopped.
+ */
+static void sig_job_control(process_t *target, int signo)
+{
+    struct tgroup *tg = target->tg;
+    process_t *t;
+
+    if (signo == SIGCONT) {
+        sig_discard(target, SIG_STOPS);
+        if (tg->stop) {
+            struct k_siginfo child;
+            process_t *parent = get_process(tg->leader->parent_pid);
+
+            tg->stop = 0;
+            for (t = proc_list; t; t = t->next) {
+                if (t->tg == tg && t->state == PROC_STOPPED) {
+                    t->state = PROC_READY;
+                }
+            }
+            tg->leader->jc_status = 0xffff; /* WIFCONTINUED */
+            if (parent) {
+                k_memset(&child, 0, sizeof(child));
+                child.code = CLD_CONTINUED;
+                child.pid = tg->leader->pid;
+                child.uid = tg->leader->ruid;
+                child.status = SIGCONT;
+                signal_post_info(parent, SIGCHLD, &child);
+                wq_wake_all(&parent->tg->chld);
+            }
+        }
+    } else if (signo == SIGKILL) {
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg == tg && t->state == PROC_STOPPED) {
+                t->state = PROC_READY;
+            }
+        }
+    } else if (KSIG_BIT(signo) & SIG_STOPS) {
+        sig_discard(target, KSIG_BIT(SIGCONT));
+    }
+}
+
+/**
+ * The thread of `target`'s process to wake for `signo`, as Linux's
+ * `complete_signal` chooses it: `target` when it does not block the signal,
+ * or else the first thread that does not; `target` itself when every thread
+ * blocks it, and nothing when `target` has ended.
+ */
+static process_t *sig_taker(process_t *target, int signo)
+{
+    process_t *t;
+
+    if (target->state != PROC_ZOMBIE && !(target->sig_blocked & KSIG_BIT(signo))) {
+        return target;
+    }
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == target->tg && t->state != PROC_ZOMBIE && t->state != PROC_UNUSED &&
+            !(t->sig_blocked & KSIG_BIT(signo))) {
+            return t;
+        }
+    }
+    return target->state != PROC_ZOMBIE ? target : NULL;
+}
+
+/*
+ * Post signal `signo` to the process `target` is a thread of, with the
+ * siginfo `info`: set the process's pending bit, keeping `info` when the
+ * signal was not already pending, and wake the thread `sig_taker` chooses,
+ * whatever the signal's disposition and mask. Any thread that does not
+ * block the signal may take it. A process whose threads have all ended
+ * takes nothing. SIGKILL and SIGSTOP cannot be caught, so a pending SIGKILL
+ * is honored even before delivery by leaving it pending for the default
+ * path.
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
-    if (!target || signo < 1 || signo > KSIG_MAX) {
+    struct tgroup *tg;
+    uint32_t f;
+
+    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED) {
         return;
     }
-    if (target->state == PROC_ZOMBIE || target->state == PROC_UNUSED) {
+    tg = target->tg;
+    if (tg->live == 0) {
         return;
     }
-    {
-        uint32_t f = sig_irq_save();
-        if (!(target->sig_pending & KSIG_BIT(signo))) {
-            target->sig_info[signo] = *info;
-        }
-        target->sig_pending |= KSIG_BIT(signo);
-        if (target->state == PROC_BLOCKED) {
-            target->wakeup_tick = 0;
-            target->state = PROC_READY;
-        }
-        /* Job control: SIGCONT cancels any pending stop and resumes a stopped
-         * process (its parent learns via wait4(WCONTINUED)); SIGKILL wakes a
-         * stopped process so it can take its lethal default. Every other signal
-         * stays pending on a stopped process until it is continued. */
-        if (signo == SIGCONT) {
-            target->sig_pending &=
-                ~(KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU));
-            if (target->state == PROC_STOPPED) {
-                process_t *parent = get_process(target->parent_pid);
-                target->state = PROC_READY;
-                target->jc_status = 0xffff; /* WIFCONTINUED */
-                if (parent) {
-                    if (!(parent->sig_pending & KSIG_BIT(SIGCHLD))) {
-                        parent->sig_info[SIGCHLD].code = CLD_CONTINUED;
-                        parent->sig_info[SIGCHLD].pid = target->pid;
-                        parent->sig_info[SIGCHLD].uid = target->ruid;
-                        parent->sig_info[SIGCHLD].status = SIGCONT;
-                        parent->sig_info[SIGCHLD].addr = 0;
-                    }
-                    parent->sig_pending |= KSIG_BIT(SIGCHLD);
-                    if (parent->state == PROC_BLOCKED) {
-                        parent->wakeup_tick = 0;
-                        parent->state = PROC_READY;
-                    }
-                }
-            }
-        } else if (signo == SIGKILL && target->state == PROC_STOPPED) {
-            target->state = PROC_READY;
-        } else if ((signo == SIGSTOP || signo == SIGTSTP || signo == SIGTTIN || signo == SIGTTOU)) {
-            target->sig_pending &= ~KSIG_BIT(SIGCONT); /* a stop cancels pending cont */
-        }
-        sig_irq_restore(f);
+    f = sig_irq_save();
+    if (!(tg->pending & KSIG_BIT(signo))) {
+        tg->info[signo] = *info;
     }
+    tg->pending |= KSIG_BIT(signo);
+    sig_job_control(target, signo);
+    sig_wake(sig_taker(target, signo));
+    sig_irq_restore(f);
+}
+
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    uint32_t f;
+
+    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE ||
+        t->state == PROC_UNUSED) {
+        return;
+    }
+    f = sig_irq_save();
+    if (!(t->sig_pending & KSIG_BIT(signo))) {
+        t->sig_info[signo] = *info;
+    }
+    t->sig_pending |= KSIG_BIT(signo);
+    sig_job_control(t, signo);
+    sig_wake(t);
+    sig_irq_restore(f);
 }
 
 void signal_post(process_t *target, int signo)
@@ -2189,7 +2460,18 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
         target->sig_blocked &= ~KSIG_BIT(signo);
     }
     sig_irq_restore(f);
-    signal_post_info(target, signo, info);
+    signal_post_thread(target, signo, info);
+}
+
+/** The signals pending for the current thread: its own and its process's.
+ * Read with interrupts off, since a 64-bit read is two loads. */
+static uint64_t sig_pending_now(void)
+{
+    uint32_t flags = sig_irq_save();
+    uint64_t set = current_proc->sig_pending | current_proc->tg->pending;
+
+    sig_irq_restore(flags);
+    return set;
 }
 
 /* The siginfo of a signal a process sends: `code` SI_USER for kill and
@@ -2198,7 +2480,7 @@ static void sender_info(struct k_siginfo *info, int32_t code)
 {
     k_memset(info, 0, sizeof(*info));
     info->code = code;
-    info->pid = current_proc ? current_proc->pid : 0;
+    info->pid = current_proc ? current_proc->tgid : 0;
     info->uid = current_proc ? current_proc->ruid : 0;
 }
 
@@ -2220,7 +2502,7 @@ int signal_pending(void)
      * 32-bit loads, and a signal posted from an IRQ in between could tear it.
      */
     flags = sig_irq_save();
-    deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
+    deliverable = (current_proc->sig_pending | current_proc->tg->pending) & ~current_proc->sig_blocked;
     sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler, a
      * default terminate or a default stop. A pending signal that is ignored
@@ -2316,11 +2598,11 @@ static int32_t kill_group(int pgid, int signo)
     return allowed ? 0 : -EPERM;
 }
 
-/* kill(2): pid > 0 a single process; pid == 0 the caller's process group; pid <
- * -1 the group (-pid). (pid == -1 "all processes" is not supported here.) signo
- * 0 just probes existence and permission. `code` is the siginfo's si_code: a
- * single target gets it, a group SI_USER. */
-static int32_t do_kill(int pid, int signo, int32_t code)
+/* kill(2): pid > 0 a single process, which the id of any of its threads
+ * names; pid == 0 the caller's process group; pid < -1 the group (-pid).
+ * (pid == -1 "all processes" is not supported here.) signo 0 just probes
+ * existence and permission. */
+static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
     struct k_siginfo info;
@@ -2341,7 +2623,7 @@ static int32_t do_kill(int pid, int signo, int32_t code)
         return -ESRCH; /* broadcast-to-all is not supported */
     }
     target = get_process((uint32_t)pid);
-    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE) {
+    if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
     if (!cred_may_signal(target, signo)) {
@@ -2350,47 +2632,59 @@ static int32_t do_kill(int pid, int signo, int32_t code)
     if (signo == 0) {
         return 0; /* existence and permission check only */
     }
-    sender_info(&info, code);
+    sender_info(&info, SI_USER);
     signal_post_info(target, signo, &info);
+    return 0;
+}
+
+/**
+ * tkill and tgkill: send `signo` to the thread `tid` alone, which must be a
+ * thread of the process `tgid` unless `tgid` is 0. Both ids are positive: a
+ * thread id is never a kill(2) group selector, so a zero or negative one is
+ * -EINVAL, not a group.
+ */
+static int32_t do_tkill(int tgid, int tid, int signo)
+{
+    process_t *t;
+    struct k_siginfo info;
+
+    if (tid <= 0 || tgid < 0 || signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
+    }
+    t = get_process((uint32_t)tid);
+    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
+        (tgid != 0 && t->tgid != (uint32_t)tgid)) {
+        return -ESRCH;
+    }
+    if (!cred_may_signal(t, signo)) {
+        return -EPERM;
+    }
+    if (signo == 0) {
+        return 0;
+    }
+    sender_info(&info, SI_TKILL);
+    signal_post_thread(t, signo, &info);
     return 0;
 }
 
 int32_t sys_kill(isr_params_t *params)
 {
-    return do_kill((int)params->ebx, (int)params->ecx, SI_USER);
+    return do_kill((int)params->ebx, (int)params->ecx);
 }
 
+/** tkill (238): EBX=tid, ECX=signal. */
 int32_t sys_tkill(isr_params_t *params)
 {
-    /* tkill(tid, sig): tid == pid here. A tid must be a positive thread id;
-     * unlike kill(2), a zero or negative value is an error, not a group
-     * selector, so reject it before do_kill would read it as one. */
+    return do_tkill(0, (int)params->ebx, (int)params->ecx);
+}
+
+/** tgkill (270): EBX=tgid, ECX=tid, EDX=signal; a tgid of 0 is -EINVAL. */
+int32_t sys_tgkill(isr_params_t *params)
+{
     if ((int)params->ebx <= 0) {
         return -EINVAL;
     }
-    return do_kill((int)params->ebx, (int)params->ecx, SI_TKILL);
-}
-
-int32_t sys_tgkill(isr_params_t *params)
-{
-    int tgid = (int)params->ebx;
-    int tid = (int)params->ecx;
-    int sig = (int)params->edx;
-    process_t *target;
-
-    /* tgkill(tgid, tid, sig): both ids must be positive (a tid is never a
-     * kill(2) group selector, so a zero or negative one is an error, not a
-     * group), and the tgid must name the same single process as the tid, one
-     * thread per process here. */
-    if (tgid <= 0 || tid <= 0) {
-        return -EINVAL;
-    }
-    target = get_process((uint32_t)tid);
-    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE ||
-        (uint32_t)tgid != target->pid) {
-        return -ESRCH;
-    }
-    return do_kill(tid, sig, SI_TKILL);
+    return do_tkill((int)params->ebx, (int)params->ecx, (int)params->edx);
 }
 
 /* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending
@@ -2497,11 +2791,12 @@ int32_t sys_rt_sigaction(isr_params_t *params)
             return -EFAULT;
         }
         current_proc->sigacts[signo] = act;
-        /* Installing SIG_IGN drops any already-pending instance the way Linux
-         * does. Guard the pending RMW against a concurrent IRQ signal_post. */
+        /* Installing SIG_IGN drops any already-pending instance, the
+         * process's and each thread's, the way Linux does. Guard the pending
+         * RMW against a concurrent IRQ signal_post. */
         if (act.handler == KSIG_IGN) {
             uint32_t f = sig_irq_save();
-            current_proc->sig_pending &= ~KSIG_BIT(signo);
+            sig_discard(current_proc, KSIG_BIT(signo));
             sig_irq_restore(f);
         }
     }
@@ -2686,7 +2981,7 @@ int32_t sys_rt_sigpending(isr_params_t *params)
         return -EINVAL;
     }
     flags = sig_irq_save();
-    set = current_proc->sig_pending & current_proc->sig_blocked;
+    set = (current_proc->sig_pending | current_proc->tg->pending) & current_proc->sig_blocked;
     sig_irq_restore(flags);
     words[0] = (uint32_t)set;
     words[1] = (uint32_t)(set >> 32);
@@ -2749,13 +3044,120 @@ static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
 }
 
 /**
+ * Free the records of the threads that have ended and are not leaders,
+ * which no wait reaps: their CPU time goes to their process, and their
+ * address space reference, kernel stack and record go back. A record the
+ * current process is not is never running, so its stack is free to take.
+ */
+static void reap_threads(void)
+{
+    process_t *p, *next;
+
+    for (p = proc_list; p && proc_dead_threads != 0; p = next) {
+        next = p->next;
+        if (p != current_proc && p->state == PROC_ZOMBIE && p->pid != p->tgid) {
+            p->tg->utime += p->utime;
+            p->tg->stime += p->stime;
+            mm_drop(p);
+            kstack_free(p->kernel_stack);
+            free_process(p);
+            proc_dead_threads--;
+        }
+    }
+}
+
+/**
+ * Stop the current thread, and with it its process, for the stop signal
+ * `signo`: the first thread to stop records the stop for the parent's
+ * wait4(WUNTRACED) and sends it SIGCHLD, and every thread parks as it next
+ * returns to user mode, until a SIGCONT, or a SIGKILL to die, makes it
+ * runnable. The real init (PID 1) is unstoppable, like Unix init: stopping
+ * it would freeze the system with no reaper and no way back, so a
+ * job-control stop aimed at it is dropped.
+ */
+static void sig_group_stop(int signo)
+{
+    struct tgroup *tg = current_proc->tg;
+    process_t *parent;
+
+    if (current_proc->tgid == init_pid && !debug_shell_is_home) {
+        return;
+    }
+    if (tg->stop) {
+        return;
+    }
+    tg->stop = (uint32_t)signo;
+    tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
+    parent = get_process(tg->leader->parent_pid);
+    if (parent) {
+        struct k_siginfo child;
+
+        k_memset(&child, 0, sizeof(child));
+        child.code = CLD_STOPPED;
+        child.pid = tg->leader->pid;
+        child.uid = tg->leader->ruid;
+        child.status = signo;
+        signal_post_info(parent, SIGCHLD, &child);
+        wq_wake_all(&parent->tg->chld);
+    }
+}
+
+/**
+ * Park the current thread while its process is stopped and no SIGKILL is
+ * pending. The scheduler keeps a STOPPED thread off the processor (it only
+ * flips RUNNING to READY); `sig_job_control` makes it READY again. `sti;hlt;
+ * cli` from IF=0 is lost-wakeup-safe.
+ */
+static void sig_park(void)
+{
+    uint32_t flags = sig_irq_save();
+
+    while (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL))) {
+        current_proc->state = PROC_STOPPED;
+        schedule();
+        if (current_proc->state == PROC_STOPPED) {
+            idle_wait_irq_off();
+        }
+    }
+    current_proc->state = PROC_RUNNING;
+    sig_irq_restore(flags);
+}
+
+/** Take the lowest signal of `deliverable` off the current thread's pending
+ * set, or else off its process's, into `*info`; the signal. */
+static int sig_dequeue(uint64_t deliverable, struct k_siginfo *info)
+{
+    uint32_t flags;
+    int signo;
+
+    for (signo = 1; signo < KSIG_MAX; signo++) {
+        if (deliverable & KSIG_BIT(signo)) {
+            break;
+        }
+    }
+    flags = sig_irq_save();
+    if (current_proc->sig_pending & KSIG_BIT(signo)) {
+        current_proc->sig_pending &= ~KSIG_BIT(signo);
+        *info = current_proc->sig_info[signo];
+    } else {
+        current_proc->tg->pending &= ~KSIG_BIT(signo);
+        *info = current_proc->tg->info[signo];
+    }
+    sig_irq_restore(flags);
+    return signo;
+}
+
+/**
  * Act on a pending signal at the return-to-user boundary.
  *
  * Called from the ISR/IRQ return path just before iret, with the trapframe
- * about to be restored. If the current process is returning to USER mode and
- * has a deliverable (pending, not blocked) signal, act on the
- * lowest-numbered one: ignore it, terminate (default), stop, or build a
- * handler frame.
+ * about to be restored. If the current thread is returning to USER mode and
+ * has a deliverable signal, one pending for it or for its process and not
+ * blocked, act on the lowest-numbered one, the thread's own first: ignore it,
+ * end the process (a default that terminates), stop the process, or build a
+ * handler frame. A thread whose process is stopped parks here first. The
+ * records of ended threads are freed here too, a point every running process
+ * passes where none of them is in use.
  *
  * A system call the dispatcher found interrupted and restartable is
  * restarted when no handler runs, and when the handler that runs has
@@ -2773,30 +3175,28 @@ void deliver_signals(isr_params_t *tf)
     if ((tf->cs & 3) != 3) {
         return; /* not returning to user mode */
     }
+    if (proc_dead_threads != 0) {
+        reap_threads();
+    }
     restart_nr = current_proc->restart_nr;
     current_proc->restart_nr = 0;
 
     for (;;) {
-        uint64_t deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
+        uint64_t deliverable;
         struct k_sigaction *sa;
         struct k_siginfo info;
         uint64_t oldmask, newblock;
         uint32_t handler_flags;
         int signo;
 
+        if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL))) {
+            sig_park();
+        }
+        deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {
             break;
         }
-        for (signo = 1; signo <= KSIG_MAX; signo++) {
-            if (deliverable & KSIG_BIT(signo)) {
-                break;
-            }
-        }
-        if (signo > KSIG_MAX) {
-            break; /* unreachable (deliverable != 0); keeps the shift bounded */
-        }
-        current_proc->sig_pending &= ~KSIG_BIT(signo);
-        info = current_proc->sig_info[signo];
+        signo = sig_dequeue(deliverable, &info);
         sa = &current_proc->sigacts[signo];
 
         if (sa->handler == KSIG_IGN) {
@@ -2809,39 +3209,8 @@ void deliver_signals(isr_params_t *tf)
                 return;
             }
             if (def == KSIG_DEFAULT_STOP) {
-                process_t *parent;
-                /* The real init (PID 1) is unstoppable, like Unix init:
-                 * stopping it would freeze the system with no reaper and no way
-                 * back. Drop a job-control stop aimed at it. */
-                if (current_proc->pid == init_pid && !debug_shell_is_home) {
-                    continue;
-                }
-                /* Job-control stop: park as PROC_STOPPED until a SIGCONT (or a
-                 * SIGKILL, to die) flips us back to READY. Record the stop for
-                 * the parent's wait4(WUNTRACED) and nudge it with SIGCHLD. */
-                parent = get_process(current_proc->parent_pid);
-                current_proc->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
-                current_proc->state = PROC_STOPPED;
-                if (parent) {
-                    struct k_siginfo child;
-
-                    k_memset(&child, 0, sizeof(child));
-                    child.code = CLD_STOPPED;
-                    child.pid = current_proc->pid;
-                    child.uid = current_proc->ruid;
-                    child.status = signo;
-                    signal_post_info(parent, SIGCHLD, &child);
-                }
-                /* Yield to others; if none are runnable, idle. The scheduler
-                 * keeps us STOPPED (it only flips RUNNING->READY); signal_post
-                 * resumes us. `sti;hlt;cli` from IF=0 is lost-wakeup-safe. */
-                while (current_proc->state == PROC_STOPPED) {
-                    schedule();
-                    if (current_proc->state == PROC_STOPPED) {
-                        idle_wait_irq_off();
-                    }
-                }
-                continue; /* resumed: re-check pending signals */
+                sig_group_stop(signo);
+                continue; /* parks at the top, then re-checks pending signals */
             }
             continue; /* default ignore (SIGCHLD/SIGCONT/SIGURG/SIGWINCH) */
         }
@@ -2884,9 +3253,24 @@ void deliver_signals(isr_params_t *tf)
 }
 
 /*
- * sys_getpid - return the calling process's PID (getpid(2)).
+ * sys_getpid - return the calling process's PID (getpid(2)), which is its
+ * thread group's id.
  */
 int32_t sys_getpid(isr_params_t *params)
+{
+    (void)params;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    return (int32_t)current_proc->tgid;
+}
+
+/**
+ * The calling thread's id (gettid(2)); the process id for the thread that
+ * began the process.
+ */
+int32_t sys_gettid(isr_params_t *params)
 {
     (void)params;
 
@@ -2896,13 +3280,18 @@ int32_t sys_getpid(isr_params_t *params)
     return (int32_t)current_proc->pid;
 }
 
-/**
- * The calling thread's id (gettid(2)): the process id, since each process
- * is one thread, as Linux's is for a process that has made none.
- */
-int32_t sys_gettid(isr_params_t *params)
+/** Give every thread of the process of `p` the session `sid` and the
+ * process group `pgid`, which are the process's. */
+static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid)
 {
-    return sys_getpid(params);
+    process_t *t;
+
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == p->tg) {
+            t->sid = sid;
+            t->pgid = pgid;
+        }
+    }
 }
 
 /**
@@ -2920,12 +3309,11 @@ int32_t sys_setsid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (current_proc->pgid == current_proc->pid) {
+    if (current_proc->pgid == current_proc->tgid) {
         return -EPERM; /* already a process-group leader */
     }
-    current_proc->sid = current_proc->pid;
-    current_proc->pgid = current_proc->pid;
-    return (int32_t)current_proc->pid;
+    group_set_ids(current_proc, current_proc->tgid, current_proc->tgid);
+    return (int32_t)current_proc->tgid;
 }
 
 /**
@@ -2949,28 +3337,28 @@ int32_t sys_setpgid(isr_params_t *params)
         return -EINVAL;
     }
     target = (pid == 0) ? current_proc : get_process((uint32_t)pid);
-    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE) {
+    if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
-    /* Only the caller or one of its children may be moved. */
-    if (target != current_proc && target->parent_pid != current_proc->pid) {
+    /* Only the caller's process or one of its children may be moved. */
+    if (target->tg != current_proc->tg && target->parent_pid != current_proc->tgid) {
         return -ESRCH;
     }
     /* A session leader's group is fixed (it anchors the session). */
-    if (target->sid == target->pid) {
+    if (target->sid == target->tgid) {
         return -EPERM;
     }
     if (pgid == 0) {
-        pgid = (int)target->pid; /* create/lead the group named by the target */
+        pgid = (int)target->tgid; /* create/lead the group named by the target */
     }
     /* The destination group must be in the target's session: either the target
      * creates its own group, or a process is ALREADY in group `pgid` within the
      * same session (an existing group, regardless of whether its leader is
      * still alive, not merely "a process whose pid == pgid"). */
-    if ((uint32_t)pgid != target->pid && !pgrp_in_session(pgid, (int)target->sid)) {
+    if ((uint32_t)pgid != target->tgid && !pgrp_in_session(pgid, (int)target->sid)) {
         return -EPERM;
     }
-    target->pgid = (uint32_t)pgid;
+    group_set_ids(target, target->sid, (uint32_t)pgid);
     return 0;
 }
 
@@ -3345,14 +3733,16 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
 }
 
 /**
- * Set a kept limit of `p`: the soft value at most the hard, the hard raised
- * by root only and lowered by anyone, and RLIMIT_NOFILE never above the
- * table's limit. A limit that is not kept is accepted and not changed.
- * 0, or -EINVAL and -EPERM as POSIX names them.
+ * Set a kept limit of `p`'s process, in the record of each of its threads:
+ * the soft value at most the hard, the hard raised by root only and lowered
+ * by anyone, and RLIMIT_NOFILE never above the table's limit. A limit that
+ * is not kept is accepted and not changed. 0, or -EINVAL and -EPERM as POSIX
+ * names them.
  */
 static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t max)
 {
     int slot = rlimit_slot(resource);
+    process_t *t;
 
     if (slot < 0) {
         return 0;
@@ -3363,14 +3753,19 @@ static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t ma
     if (max > p->rlim[slot].max && current_proc->euid != 0) {
         return -EPERM;
     }
-    if (slot == RLIM_NOFILE) {
-        if (max > FD_TABLE_LIMIT) {
-            return -EPERM;
-        }
-        p->fds.limit = (int)cur;
+    if (slot == RLIM_NOFILE && max > FD_TABLE_LIMIT) {
+        return -EPERM;
     }
-    p->rlim[slot].cur = cur;
-    p->rlim[slot].max = max;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg != p->tg) {
+            continue;
+        }
+        if (slot == RLIM_NOFILE) {
+            t->fds.limit = (int)cur;
+        }
+        t->rlim[slot].cur = cur;
+        t->rlim[slot].max = max;
+    }
     return 0;
 }
 
@@ -3382,11 +3777,11 @@ static process_t *rlimit_target(uint32_t pid)
 {
     process_t *p;
 
-    if (pid == 0 || pid == current_proc->pid) {
+    if (pid == 0 || pid == current_proc->tgid) {
         return current_proc;
     }
     p = get_process(pid);
-    if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) {
+    if (!p || p->state == PROC_UNUSED || p->tg->live == 0) {
         return NULL;
     }
     if (current_proc->euid != 0 && p->ruid != current_proc->ruid) {

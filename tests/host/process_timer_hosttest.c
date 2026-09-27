@@ -41,6 +41,10 @@ static struct process *get_process(uint32_t pid);
 static void reparent_children(uint32_t dead_pid);
 static void proc_set_comm(struct process *p, const char *path);
 static void setup_process_stack(struct process *proc, void (*entry_point)(void));
+struct tgroup;
+static struct tgroup *tgroup_new(struct process *leader);
+static void tgroup_put(struct tgroup *tg);
+static void proc_cpu_time(const struct process *p, uint32_t *user, uint32_t *sys);
 #include "proc/process.c"
 
 extern int printf(const char *format, ...);

@@ -1,10 +1,10 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt EXIT 2
 .Os
 .Sh NAME
 .Nm exit ,
 .Nm exit_group
-.Nd terminate the calling process
+.Nd terminate the calling thread or process
 .Sh SYNOPSIS
 .In unistd.h
 .Ft _Noreturn void
@@ -17,10 +17,14 @@
 .Sh DESCRIPTION
 The
 .Nm exit
-and
+system call terminates the calling thread, and the process with it when
+the thread is its last.
 .Nm exit_group
-system calls terminate the current process.
-Rach2 has no threads, and both calls use the same handler.
+terminates every thread of the process: the others are sent
+.Dv SIGKILL
+and end at their next return to user mode, and the process ends with
+.Fa status
+whichever thread ends last.
 Their i386 system call numbers are 1 and 252, respectively;
 EBX contains
 .Fa status .
@@ -28,6 +32,10 @@ The low eight bits of
 .Fa status
 are made available to the parent through
 .Xr wait 2 .
+When the process's threads ended through
+.Nm exit
+alone, the status is the one the thread whose ID is the process ID ended
+with.
 .Pp
 Musl's
 .Fn _exit
@@ -50,9 +58,24 @@ and standard I/O cleanup, before calling
 .Fn _Exit .
 That work is not performed by the system call.
 .Pp
-The kernel releases the process's open files and current working
-directory, reparents its children to init, marks it as a zombie, and
-wakes its parent.
+A thread's end clears the word
+.Dv CLONE_CHILD_CLEARTID
+or
+.Xr set_tid_address 2
+named, and wakes one
+.Xr futex 2
+waiter on it, when another thread shares its address space, and releases
+the robust futexes it holds, as
+.Xr futex 2
+describes.
+The record of a thread that is not the process's first is freed at the
+next return to user mode of any process.
+The first thread's record stays, as a zombie no wait reports, until the
+last thread ends.
+.Pp
+Each thread's end releases its descriptor table and working directory.
+With the last thread the kernel reparents the process's children to init,
+marks it as a zombie, and wakes its parent.
 The scheduler then selects another process.
 If none is ready, the kernel waits for interrupts and checks again.
 The parent reclaims a normal child's remaining mappings, descriptor-table

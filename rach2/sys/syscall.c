@@ -22,6 +22,7 @@
 #include "proc/uimage.h"
 #include "proc/tls.h"
 #include "proc/futex.h"
+#include "proc/tgroup.h"
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -367,19 +368,21 @@ struct kclock {
     enum kclock_kind kind;
     process_t *proc;
     int user_only;
+    int thread; /* a CPU clock of the thread `proc`, not of its process */
 };
 
 /**
  * Resolve clock id `clk` for the current process.
  *
  * Clocks 0 to 7 are the fixed ones; a negative id is a CPU clock by process or
- * thread id, as `clock_getcpuclockid` makes one. Id 0 in one names the
- * caller, a process id names any process that has not been reaped, and a
- * thread id must be the caller's own, since each process is one thread.
+ * thread id, as `clock_getcpuclockid` and `pthread_getcpuclockid` make one.
+ * Id 0 in one names the caller, a process id names any process that has not
+ * been reaped, and a thread id must name a thread of the caller's process.
  *
  * @return 0, or -EINVAL for an id this kernel does not have: 8 and above, a
- *         descriptor's clock, and a CPU clock of no such process or of
- *         another process's thread.
+ *         descriptor's clock, a process clock named by an id that is not a
+ *         process's, and a CPU clock of no such process or of another
+ *         process's thread.
  */
 static int32_t clock_resolve(int32_t clk, struct kclock *out)
 {
@@ -387,6 +390,7 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
 
     out->proc = current_proc;
     out->user_only = 0;
+    out->thread = 0;
     switch (clk) {
     case CLOCK_REALTIME:
         out->kind = KCLOCK_REAL;
@@ -401,8 +405,11 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
         out->kind = KCLOCK_MONO;
         return 0;
     case CLOCK_PROCESS_CPUTIME_ID:
+        out->kind = KCLOCK_CPU;
+        return 0;
     case CLOCK_THREAD_CPUTIME_ID:
         out->kind = KCLOCK_CPU;
+        out->thread = 1;
         return 0;
     default:
         break;
@@ -412,29 +419,37 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
     }
     out->kind = KCLOCK_CPU;
     out->user_only = ((uint32_t)clk & CPUCLOCK_WHICH) == CPUCLOCK_VIRT;
+    out->thread = ((uint32_t)clk & CPUCLOCK_PERTHREAD) != 0;
     id = ~((uint32_t)clk >> 3) & 0x1FFFFFFFu;
-    if (id == 0 || id == current_proc->pid) {
+    if (id == 0) {
         return 0;
     }
-    if ((uint32_t)clk & CPUCLOCK_PERTHREAD) {
+    out->proc = get_process(id);
+    if (!out->proc || (out->thread && out->proc->tg != current_proc->tg) ||
+        (!out->thread && out->proc->pid != out->proc->tgid)) {
         return -EINVAL;
     }
-    out->proc = get_process(id);
-    return out->proc ? 0 : -EINVAL;
+    return 0;
 }
 
-/** A CPU clock's reading in ticks, taken with interrupts masked, since the
- * tick adds to it. */
+/** A CPU clock's reading in ticks: the thread's own, or every thread's of
+ * the process. The thread's is read with interrupts masked, since the tick
+ * adds to it. */
 static uint32_t clock_cpu_ticks(const struct kclock *c)
 {
-    uint32_t flags = kirq_save();
-    uint32_t ticks = c->proc->utime;
+    uint32_t user;
+    uint32_t sys;
 
-    if (!c->user_only) {
-        ticks += c->proc->stime;
+    if (c->thread) {
+        uint32_t flags = kirq_save();
+
+        user = c->proc->utime;
+        sys = c->proc->stime;
+        kirq_restore(flags);
+    } else {
+        proc_cpu_time(c->proc, &user, &sys);
     }
-    kirq_restore(flags);
-    return ticks;
+    return c->user_only ? user : user + sys;
 }
 
 /**
@@ -909,12 +924,13 @@ static uint32_t itimer_ticks(int32_t sec, int32_t usec)
  * for the tick in progress. Interrupts are off: the tick rearms the timer. */
 static uint32_t itimer_left(void)
 {
+    const process_t *p = current_proc->tg->leader;
     uint32_t left;
 
-    if (current_proc->alarm_tick == 0) {
+    if (p->alarm_tick == 0) {
         return 0;
     }
-    left = current_proc->alarm_tick - kernel_ticks;
+    left = p->alarm_tick - kernel_ticks;
     return (int32_t)left > 1 ? left - 1u : 1u;
 }
 
@@ -926,8 +942,8 @@ static void itimer_read(struct kernel_itimerval *out)
 
     out->value_sec = (int32_t)(left / 100u);
     out->value_usec = (int32_t)((left % 100u) * 10000u);
-    out->interval_sec = (int32_t)(current_proc->alarm_interval / 100u);
-    out->interval_usec = (int32_t)((current_proc->alarm_interval % 100u) * 10000u);
+    out->interval_sec = (int32_t)(current_proc->tg->leader->alarm_interval / 100u);
+    out->interval_usec = (int32_t)((current_proc->tg->leader->alarm_interval % 100u) * 10000u);
 }
 
 /*
@@ -939,13 +955,15 @@ static void itimer_read(struct kernel_itimerval *out)
  */
 static void itimer_set(uint32_t value, uint32_t interval)
 {
+    process_t *p = current_proc->tg->leader;
+
     if (value == 0) {
-        current_proc->alarm_tick = 0;
-        current_proc->alarm_interval = 0;
+        p->alarm_tick = 0;
+        p->alarm_interval = 0;
         return;
     }
-    current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);
-    current_proc->alarm_interval = interval;
+    p->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);
+    p->alarm_interval = interval;
 }
 
 /**
@@ -1260,7 +1278,7 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
     case TIOCSCTTY:
         /* A session leader with no controlling tty claims this terminal for
          * its session; re-claiming by the same session is idempotent. */
-        if ((int)current_proc->sid != (int)current_proc->pid) {
+        if ((int)current_proc->sid != (int)current_proc->tgid) {
             return -EPERM; /* not a session leader */
         }
         if (t->sid != 0 && t->sid != (int)current_proc->sid) {
@@ -1298,7 +1316,7 @@ static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
     if (request != FB_MODE_13H && request != FB_MODE_TEXT && request != FB_SETPALETTE) {
         return -ENOTTY;
     }
-    if (fb_owner_pid != current_proc->pid && (fb_owner_pid != 0 || request != FB_MODE_13H)) {
+    if (fb_owner_pid != current_proc->tgid && (fb_owner_pid != 0 || request != FB_MODE_13H)) {
         return -EBUSY;
     }
     switch (request) {
@@ -1306,7 +1324,7 @@ static int32_t framebuffer_ioctl(uint32_t request, uint32_t arg)
         if (!vga_graphics_mode) {
             vga_mode13h_enter();
         }
-        fb_owner_pid = current_proc->pid;
+        fb_owner_pid = current_proc->tgid;
         return 0;
     case FB_MODE_TEXT:
         vga_mode13h_exit();
@@ -1568,13 +1586,14 @@ static int32_t sys_times(isr_params_t *params)
     } t;
 
     if (params->ebx) {
-        uint32_t flags = kirq_save();
+        uint32_t user;
+        uint32_t sys;
 
-        t.tms_utime = (int32_t)current_proc->utime;
-        t.tms_stime = (int32_t)current_proc->stime;
-        t.tms_cutime = (int32_t)current_proc->cutime;
-        t.tms_cstime = (int32_t)current_proc->cstime;
-        kirq_restore(flags);
+        proc_cpu_time(current_proc, &user, &sys);
+        t.tms_utime = (int32_t)user;
+        t.tms_stime = (int32_t)sys;
+        t.tms_cutime = (int32_t)current_proc->tg->leader->cutime;
+        t.tms_cstime = (int32_t)current_proc->tg->leader->cstime;
         if (copy_to_user((void __user *)params->ebx, &t, sizeof(t)) != 0) {
             return -EFAULT;
         }
@@ -2062,9 +2081,11 @@ void init_syscall(void)
     _syscall_table[SYS_FCHOWN] = sys_fchown;
     _syscall_table[SYS_FCHOWN32] = sys_fchown;
     _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
+    _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
+    _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     /* musl's exit() issues exit_group(); for a single-threaded process it is
      * exactly _exit(). */
-    _syscall_table[SYS_EXIT_GROUP] = sys_exit;
+    _syscall_table[SYS_EXIT_GROUP] = sys_exit_group;
     _syscall_table[SYS_SOCKET] = sys_socket;
     _syscall_table[SYS_SOCKETPAIR] = sys_socketpair;
     _syscall_table[SYS_BIND] = sys_bind;

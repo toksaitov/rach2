@@ -243,7 +243,7 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
 {
     struct record_want want;
     struct file_lock *c;
-    uint32_t pid = current_proc->pid;
+    uint32_t pid = current_proc->tgid;
 
     if ((req->type != F_RDLCK && req->type != F_WRLCK && req->type != F_UNLCK) ||
         req->start > req->end) {
@@ -372,7 +372,7 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
     l->key = *key;
     l->kind = LK_FLOCK;
     l->owner = (uintptr_t)ofd;
-    l->pid = current_proc->pid;
+    l->pid = current_proc->tgid;
     l->type = want.type;
     l->start = 0;
     l->end = LOCK_EOF;
@@ -388,7 +388,7 @@ void lock_close(const struct lock_key *key)
     int dropped = 0;
 
     while ((l = *link) != NULL) {
-        if (mine(l, key, LK_POSIX, (uintptr_t)current_proc->pid)) {
+        if (mine(l, key, LK_POSIX, (uintptr_t)current_proc->tgid)) {
             unlink_lock(link);
             dropped = 1;
         } else {

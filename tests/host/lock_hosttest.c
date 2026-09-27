@@ -63,7 +63,7 @@ static int32_t as(uint32_t pid, struct open_file *ofd, int cmd, int type, uint64
 {
     struct lock_req req;
 
-    process.pid = pid;
+    process.pid = process.tgid = pid;
     req.type = type;
     req.start = start;
     req.end = end;
@@ -104,7 +104,7 @@ static void records(void)
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 12, 12, NULL) == -EAGAIN);
     /* Pid 1's read lock over everything meets pid 2's write locks. */
     CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, LOCK_EOF, NULL) == -EAGAIN);
-    process.pid = 2;
+    process.pid = process.tgid = 2;
     lock_close(&file);
     CHECK(count_locks() == 2);
     /* Its own locks give way: a read lock over both of pid 1's pieces, which
@@ -112,11 +112,11 @@ static void records(void)
     CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, LOCK_EOF, NULL) == 0 && count_locks() == 1);
     CHECK(as(3, NULL, LOCK_SET, F_RDLCK, 1000000, 1000000, NULL) == 0);
     CHECK(as(3, NULL, LOCK_SET, F_WRLCK, 1000001, 1000001, NULL) == -EAGAIN);
-    process.pid = 1;
+    process.pid = process.tgid = 1;
     lock_close(&other);
     CHECK(count_locks() == 2);
     lock_close(&file);
-    process.pid = 3;
+    process.pid = process.tgid = 3;
     lock_close(&file);
     CHECK(count_locks() == 0);
 
@@ -143,13 +143,13 @@ static void descriptions(void)
     lock_ofd_gone(&b);
     CHECK(count_locks() == 0);
 
-    process.pid = 1;
+    process.pid = process.tgid = 1;
     CHECK(lock_flock(&file, &a, LOCK_EX) == 0);
     CHECK(lock_flock(&file, &b, LOCK_EX | LOCK_NB) == -EAGAIN);
     CHECK(lock_flock(&file, &b, LOCK_SH | LOCK_NB) == -EAGAIN);
     /* flock and record locks do not meet. */
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 0, LOCK_EOF, NULL) == 0);
-    process.pid = 2;
+    process.pid = process.tgid = 2;
     lock_close(&file);
     CHECK(lock_flock(&file, &a, LOCK_SH) == 0);
     CHECK(lock_flock(&file, &b, LOCK_SH | LOCK_NB) == 0);

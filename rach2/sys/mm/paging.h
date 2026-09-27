@@ -273,6 +273,10 @@ void free_frame(uintptr_t phys);
  * directory, or 0 when nothing is mapped there. */
 uintptr_t paging_virt_to_phys(uintptr_t va);
 
+/** The physical address `dir` maps the user address `va` to, or 0 when the
+ * page is not present. */
+uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va);
+
 /**
  * Test switch: with `rach2.framefail` on the boot line, `/dev/framefail`
  * takes a count, and the count-th frame allocation made inside a system

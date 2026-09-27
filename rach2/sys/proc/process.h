@@ -76,6 +76,7 @@ struct rlimit32 {
 
 struct vfs_mount;
 struct mm;
+struct tgroup;
 
 /* A sleeper's record on a wait queue: one is in every process record, for
  * the one queue a process sleeps on, and `poll` supplies one per watched
@@ -107,9 +108,10 @@ struct process {
     uint32_t tls_base;    /* Per-process %gs TLS base (set_thread_area) */
     struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
     uint32_t wakeup_tick; /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
-    /* Signal state: per-signal disposition (sigacts[signo], index 0 unused)
-     * plus 64-bit pending and blocked masks (bit signo-1). */
-    struct k_sigaction sigacts[KSIG_MAX + 1];
+    /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
+     * which are the thread group's (`tg->action`), and this thread's 64-bit
+     * pending and blocked masks (bit signo-1). */
+    struct k_sigaction *sigacts;
     uint64_t sig_pending;
     uint64_t sig_blocked;
     /* Program name (basename of the execve'd path, NUL-terminated, truncated):
@@ -197,8 +199,8 @@ struct process {
     uint32_t alarm_tick;
     uint32_t alarm_interval;
     /* The user address set_tid_address and CLONE_CHILD_CLEARTID name, whose
-     * word is cleared and woken when the thread ends; 0 for none. Kept, not
-     * used, while every address space has one thread. */
+     * word is cleared and woken when the thread ends and another thread
+     * shares the address space; 0 for none. */
     uint32_t clear_child_tid;
     /* The siginfo of each pending signal, kept with its pending bit. */
     struct k_siginfo sig_info[KSIG_MAX + 1];
@@ -259,6 +261,14 @@ struct process {
      * it to call execve or end; cleared, and the parent woken, at the one or
      * the other (`proc_vfork_release`). */
     uint32_t vfork_waiting;
+    /* The thread group (tgroup.h) and its id, the leader's `pid`, which is
+     * the process id getpid reports; `pid` is this thread's id. */
+    struct tgroup *tg;
+    uint32_t tgid;
+    /* The robust futex list set_robust_list names, walked at the thread's
+     * end, and its length; 0 for none. */
+    uint32_t robust_list;
+    uint32_t robust_len;
 };
 
 typedef struct process process_t;
@@ -295,6 +305,19 @@ void free_process(process_t *proc);
 /** Get process by PID; returns the record, or NULL if not found. */
 process_t *get_process(uint32_t pid);
 
+/** The CPU time in ticks of the whole process `p` is a thread of: every
+ * thread's, those that have ended included, user and system. */
+void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys);
+
+/* The records of ended threads that are not leaders, which no wait reaps;
+ * the next return to user mode frees them (`deliver_signals`). */
+extern uint32_t proc_dead_threads;
+
+/** Clear the word CLONE_CHILD_CLEARTID names and wake a futex waiter on it,
+ * when another thread shares the address space, and release the robust
+ * futexes the thread held; the start of a thread's end. */
+void proc_thread_gone(process_t *p);
+
 /**
  * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
  * reap any child that is already a zombie, and post each living child the
@@ -304,9 +327,15 @@ process_t *get_process(uint32_t pid);
  */
 void reparent_children(uint32_t dead_pid);
 
-/** Release files, reparent the children onto init, publish the encoded exit
- * status, and wake the parent; see exit.c. */
-void proc_exit_cleanup(int32_t status);
+/** End the current thread: release its files and, with the process's last
+ * thread, reparent the children onto init, publish the encoded exit status
+ * and wake the parent; nonzero when the process ended. See exit.c. */
+int proc_exit_cleanup(int32_t status);
+
+/** Begin the end of the current process: send every other thread SIGKILL,
+ * and have the process end with the encoded wait status `code` whichever
+ * thread ends last. A process already ending keeps its status. */
+void proc_group_exit(int32_t code);
 
 /** Let the parent a CLONE_VFORK clone made `p` for run again, at `p`'s
  * execve or end; nothing when no parent waits. */
@@ -335,6 +364,10 @@ void signal_post(process_t *target, int signo);
 
 /* Post `signo` with the siginfo `info` records for its handler. */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
+
+/** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
+ * with the siginfo `info`, and wake it. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
 
 /* Post a signal a processor exception raised: a handler that is blocked or
  * ignored cannot run, so the disposition goes back to default and the signal

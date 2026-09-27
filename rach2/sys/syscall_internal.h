@@ -166,6 +166,8 @@ int32_t sys_fork(isr_params_t *params);
 
 int32_t sys_vfork(isr_params_t *params);
 
+int32_t sys_exit_group(isr_params_t *params);
+
 int32_t sys_waitpid(isr_params_t *params);
 
 int32_t sys_wait4(isr_params_t *params);

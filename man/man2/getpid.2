@@ -31,12 +31,12 @@
 .Fn setsid "void"
 .Sh DESCRIPTION
 .Fn getpid
-returns the calling process's ID.
+returns the calling process's ID, which is the ID of the thread that began
+it.
 .Fn gettid
-returns the calling thread's ID, which is the process ID: each process is
-one thread, as a Linux process is until it starts another.
+returns the calling thread's ID, the process ID for that first thread.
 .Fn getppid
-returns its parent's ID.
+returns the process ID of its parent, which is the same for every thread.
 .Fn getpgid
 returns the process group ID of
 .Fa pid ;
@@ -59,8 +59,9 @@ of 0 selects the caller.
 A
 .Fa pgid
 of 0 selects the target's own process ID, making it a group leader.
-The target must be the caller or its child and must not be a zombie or
-a session leader.
+The target must be the caller's process or its child and must not have
+ended or be a session leader; any thread's ID names its process.
+Every thread of the target is moved.
 Unless the target is forming its own group, the destination group must
 already have a member in the target's session.
 The group's original leader need not still be alive.
@@ -72,7 +73,7 @@ The destination group is checked against the target's session.
 .Pp
 .Fn setsid
 creates a session and a process group, both with the caller's process ID.
-The caller becomes the leader of both.
+The caller's process, every thread of it, becomes the leader of both.
 A caller that already leads a process group cannot create a session.
 The console session and controlling terminal are described in
 .Xr console 4 .

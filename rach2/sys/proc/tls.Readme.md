@@ -1,8 +1,8 @@
 # Thread-local storage on i386
 
-Rach2 implements the part of the Linux i386 `set_thread_area` ABI that static musl uses during process startup. The kernel gives each process a `%gs` base. musl points that base at its thread control block (TCB), loads the returned segment selector into `%gs`, and then reaches the TCB through `%gs`-relative addresses. This supplies the initial musl thread's `errno`, `pthread_self()`, locale state, and stack canary.
+Rach2 implements the part of the Linux i386 `set_thread_area` ABI that musl and GNU libc use. The kernel gives each thread a `%gs` base. The C library points that base at the thread's thread control block (TCB), loads the returned segment selector into `%gs`, and then reaches the TCB through `%gs`-relative addresses. This supplies each thread's `errno`, `pthread_self()`, locale state, and stack canary.
 
-Rach2 has one execution thread per process. It does not implement `clone`, multiple TLS descriptors, `get_thread_area`, or `modify_ldt`. This interface therefore provides process-local TLS and musl startup compatibility, not Linux thread creation or the complete Linux TLS API.
+A new thread gets its base from the `user_desc` that `clone`'s `CLONE_SETTLS` passes, validated as `set_thread_area` validates one. There is one TLS descriptor, entry 6, which every thread reprograms as it is switched to; there are no further descriptors, `get_thread_area`, or `modify_ldt`.
 
 ## The `set_thread_area` subset
 
@@ -29,13 +29,13 @@ An unreadable input descriptor or unwritable entry-number field returns `EFAULT`
 
 `rach2/sys/tables/gdt.c` creates GDT entry 6 at boot with base zero. `gdt_set_tls` rewrites only its three base fields. Paging, rather than the TLS descriptor limit, enforces access to the resulting linear addresses.
 
-`process_t.tls_base` records the value for each process. A newly allocated process starts with base zero. The kernel's direct `exec_program` path, used for the initial init process and programs launched from the debug shell, passes that base to `gdt_set_tls` because it does not pass through `switch_context`.
+`process_t.tls_base` records the value for each thread. A newly allocated process starts with base zero. The kernel's direct `exec_program` path, used for the initial init process and programs launched from the debug shell, passes that base to `gdt_set_tls` because it does not pass through `switch_context`.
 
-On every process switch, `rach2/sys/proc/switch.s` writes the incoming process's base into entry 6. It disables interrupts while updating the three descriptor fields and reloads `%gs` so the processor's hidden descriptor cache uses the new base. The interrupt-return frame later restores the incoming process's user selector.
+On every switch, `rach2/sys/proc/switch.s` writes the incoming thread's base into entry 6. It disables interrupts while updating the three descriptor fields and reloads `%gs` so the processor's hidden descriptor cache uses the new base. The interrupt-return frame later restores the incoming process's user selector.
 
 System call and interrupt entry save `%gs`, `%fs`, `%es`, and `%ds` separately before loading the kernel data selector. Their return paths restore the four saved selectors. The system call handler does not enable interrupts until it has marked the current process non-preemptible, so a timer interrupt cannot switch away while the entry frame is incomplete. Signal delivery also saves and restores the `%gs` selector through its user frame.
 
-`fork` copies both `tls_base` and the saved `%gs` selector. The child initially uses the same virtual TCB address in its copied address space and may then install a different base. A successful `execve` clears `tls_base`, resets the live descriptor base to zero, and resets `%gs`, `%fs`, `%es`, and `%ds` to the flat user-data selector `0x23`. The new program's libc establishes its own TLS before `main`.
+`fork` copies both `tls_base` and the saved `%gs` selector. The child initially uses the same virtual TCB address in its copied address space and may then install a different base. A `clone` with `CLONE_SETTLS` gives the child the base its descriptor names instead. A successful `execve` clears `tls_base`, resets the live descriptor base to zero, and resets `%gs`, `%fs`, `%es`, and `%ds` to the flat user-data selector `0x23`. The new program's libc establishes its own TLS before `main`.
 
 ## Source map
 

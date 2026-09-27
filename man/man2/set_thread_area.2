@@ -4,7 +4,7 @@
 .Sh NAME
 .Nm set_thread_area ,
 .Nm set_tid_address
-.Nd set the process TLS base and obtain its thread ID
+.Nd set the thread's TLS base and its end's futex word
 .Sh SYNOPSIS
 .Fd "#define _GNU_SOURCE"
 .In unistd.h
@@ -28,7 +28,7 @@ issues number 243; its
 initialization routine issues number 258.
 .Pp
 .Nm set_thread_area
-sets the base of the calling process's thread-local storage (TLS).
+sets the base of the calling thread's thread-local storage (TLS).
 The argument points to the following 16-byte kernel ABI structure;
 each field is a 32-bit word:
 .Bd -literal -offset indent
@@ -69,10 +69,15 @@ If this writeback fails, the new TLS base has already been installed.
 .Pp
 .Nm set_tid_address
 records its pointer argument as the address the caller's thread end
-clears, replacing any earlier one, and returns the caller's process ID as
-its thread ID.
-Each Rach2 process has one thread, so no other thread can wait on that
-word, and the kernel does not yet clear it at exit.
+clears, replacing any earlier one, and returns the caller's thread ID.
+When the thread ends, and when it calls
+.Xr execve 2 ,
+the kernel writes 0 there and wakes one
+.Xr futex 2
+waiter on the word, if another thread shares the address space; this is
+how
+.Fn pthread_join
+learns of a thread's end.
 .Xr execve 2
 forgets the address, and a child made by
 .Xr fork 2

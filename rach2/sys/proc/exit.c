@@ -1,8 +1,10 @@
 #include "process.h"
+#include "tgroup.h"
 #include "../fs/vfs.h"
 
 /**
- * Release files before making the current process available to its reaper.
+ * End the current thread: release what it holds, and when it is the last
+ * thread of its process, make the process available to its reaper.
  *
  * A close or a working-directory release can wait for a mount lock. A wait
  * returns with the process RUNNING, so publishing ZOMBIE before those calls
@@ -14,34 +16,59 @@
  * (`sched_preempt`), also on the exception and signal-delivery paths, which
  * run outside a system call.
  *
- * This helper releases file descriptions and cwd, lets a parent that waits
- * in vfork run again, and reparents the children onto init; it does not
- * drop the address space or free the descriptor-table allocation. A normal
- * exit leaves the address space to the reap; a death by signal drops it
- * before scheduling. A successful reap releases the remaining storage.
+ * The thread's own part comes first: the word CLONE_CHILD_CLEARTID names and
+ * its robust futexes, its file descriptions and working directory, and a
+ * parent waiting in vfork. A thread that is not the last becomes a zombie
+ * no wait reports; one that is not the leader is freed from the next return
+ * to user mode, and the leader, whose id is the process id, waits for the
+ * rest of its group. The last thread reparents the children onto init, gives
+ * the process its status, the group's when exit_group or a fatal signal
+ * ended it and the leader's own otherwise, and notifies the parent. The
+ * address space and the descriptor-table allocation are not released here:
+ * a normal exit leaves them to the reap, and a death by signal drops the
+ * address space before scheduling.
  *
- * `status` is the encoded wait status. The caller must not return to user mode.
+ * `status` is the thread's encoded wait status. Returns nonzero when the
+ * process ended with this thread. The caller must not return to user mode.
  */
-void proc_exit_cleanup(int32_t status)
+int proc_exit_cleanup(int32_t status)
 {
+    process_t *self = current_proc;
+    struct tgroup *tg = self->tg;
+    process_t *leader = tg->leader;
     process_t *parent;
 
-    current_proc->in_syscall = 1;
-    release_fd_table(&current_proc->fds);
-    vfs_cwd_clear(current_proc);
-    proc_vfork_release(current_proc);
-    reparent_children(current_proc->pid);
-
-    current_proc->exit_code = status;
-    current_proc->state = PROC_ZOMBIE;
-    parent = get_process(current_proc->parent_pid);
+    self->in_syscall = 1;
+    proc_thread_gone(self);
+    release_fd_table(&self->fds);
+    vfs_cwd_clear(self);
+    proc_vfork_release(self);
+    self->exit_code = status;
+    tg->live--;
+    if (tg->live == 0) {
+        reparent_children(self->tgid);
+        if (tg->exiting) {
+            leader->exit_code = tg->exit_code;
+        }
+    }
+    self->state = PROC_ZOMBIE;
+    if (self != leader) {
+        proc_dead_threads++;
+    }
+    if (tg->live != 0) {
+        wq_wake_all(&tg->gone);
+        return 0;
+    }
+    parent = get_process(leader->parent_pid);
     if (parent) {
         struct k_siginfo info;
 
-        proc_child_info(current_proc, &info);
+        proc_child_info(leader, &info);
         signal_post_info(parent, SIGCHLD, &info);
+        wq_wake_all(&parent->tg->chld);
         if (parent->state == PROC_BLOCKED) {
             parent->state = PROC_READY;
         }
     }
+    return 1;
 }

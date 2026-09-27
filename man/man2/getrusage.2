@@ -16,12 +16,11 @@ the resources used by
 .Fa who :
 .Bl -tag -width "RUSAGE_CHILDREN"
 .It Dv RUSAGE_SELF
-The calling process.
+The calling process: all its threads, those that have ended included.
 .It Dv RUSAGE_THREAD
-The calling thread, which is the calling process, since each process is
-one thread.
+The calling thread.
 .It Dv RUSAGE_CHILDREN
-The children the caller has reaped with
+The children the caller's process has reaped with
 .Xr wait 2 ,
 each with the children it reaped itself.
 .El

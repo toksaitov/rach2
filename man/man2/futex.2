@@ -2,7 +2,9 @@
 .Dt FUTEX 2
 .Os
 .Sh NAME
-.Nm futex
+.Nm futex ,
+.Nm set_robust_list ,
+.Nm get_robust_list
 .Nd wait on a word of memory and wake its waiters
 .Sh SYNOPSIS
 .In linux/futex.h
@@ -10,6 +12,10 @@
 .In unistd.h
 .Ft long
 .Fn syscall "SYS_futex" "uint32_t *uaddr" "int op" "uint32_t val" "const struct timespec *timeout" "uint32_t *uaddr2" "uint32_t val3"
+.Ft long
+.Fn syscall "SYS_set_robust_list" "struct robust_list_head *head" "size_t len"
+.Ft long
+.Fn syscall "SYS_get_robust_list" "int tid" "struct robust_list_head **head" "size_t *len"
 .Sh DESCRIPTION
 .Nm ,
 number 240, lets a process sleep until the 32-bit word at
@@ -19,11 +25,23 @@ C libraries build their locks, condition variables and one-time
 initialization on it.
 The address must be aligned to four bytes.
 A futex is named by the caller's address space and
-.Fa uaddr ;
-each Rach2 process has an address space of its own, so a waiter and its
-waker are the same process until threads share one.
-.Dv FUTEX_PRIVATE_FLAG
-is accepted with every operation and changes nothing here.
+.Fa uaddr ,
+so the threads of a process, and processes that
+.Xr vfork 2
+or
+.Xr clone 2
+with
+.Dv CLONE_VM
+made to share one, name it alike.
+A word in a shared mapping, a file in
+.Pa /dev/shm
+or shared anonymous memory, is named instead by its page's frame and its
+offset in it, which every process mapping the page names alike, unless the
+operation has
+.Dv FUTEX_PRIVATE_FLAG ;
+a mutex made
+.Dv PTHREAD_PROCESS_SHARED
+is one such word.
 .Pp
 The operations are:
 .Bl -tag -width FUTEX_WAIT_BITSET
@@ -59,6 +77,31 @@ is not counted.
 is ignored.
 The requeue, wake-and-modify and priority-inheritance operations, and
 the time64 form, number 422, are not implemented.
+.Ss Robust lists
+.Nm set_robust_list ,
+number 311, records
+.Fa head
+as the calling thread's robust list, the list of robust mutexes it holds
+that GNU libc keeps;
+.Fa len
+must be 12, the size of the head on i386.
+The head has the first entry, the offset from an entry to its futex word,
+and the entry being taken or released at the moment, if any.
+When the thread ends, and when it calls
+.Xr execve 2 ,
+the kernel walks the list, at most 2048 entries, and gives each word that
+still holds the thread's ID
+.Dv FUTEX_OWNER_DIED
+in its place, keeping
+.Dv FUTEX_WAITERS ,
+and wakes one waiter when the word has waiters; the next owner then
+learns from
+.Er EOWNERDEAD
+that the lock's state may be half made.
+.Nm get_robust_list ,
+number 312, stores the list's head and 12 for the thread
+.Fa tid ,
+0 for the caller; another's needs effective user ID 0 or one of its IDs.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;
@@ -85,16 +128,22 @@ A signal ended the wait.
 .Fa uaddr
 is not aligned, a bitset operation was given a zero
 .Fa val3 ,
-or
 .Fa timeout
-has a negative field or nanoseconds past 999999999.
+has a negative field or nanoseconds past 999999999, or
+.Nm set_robust_list
+was given a length other than 12.
+.It Er EPERM
+.Nm get_robust_list
+named a thread of another user.
 .It Er ENOSYS
 The operation is not one of the four above, or
 .Dv FUTEX_CLOCK_REALTIME
 was given to an operation other than
 .Dv FUTEX_WAIT_BITSET .
 .It Er ESRCH
-There is no current process.
+There is no current process, or
+.Nm get_robust_list
+named no live thread.
 .It Er ETIMEDOUT
 The deadline passed first.
 .El

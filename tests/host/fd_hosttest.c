@@ -109,6 +109,17 @@ void signal_post_info(process_t *p, int signo, const struct k_siginfo *info)
     signal_post(p, signo);
 }
 
+/** The CPU time no row reads is summed without an interrupt to mask. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /** No row takes a lock. */
 int lock_any(void)
 {
@@ -257,7 +268,7 @@ static void process_allocations(void)
     uint32_t forks = process_forks_since_boot();
 
     check(keeper != NULL, "initial process allocation");
-    for (fail = 0; fail < 5; fail++) {
+    for (fail = 0; fail < 6; fail++) {
         process_t *p;
 
         fail_after = fail;
@@ -267,7 +278,7 @@ static void process_allocations(void)
         check(proc_list == keeper && proc_tail == keeper && !keeper->next,
               "failed process is not published");
         check(process_forks_since_boot() == forks, "failed process is not counted");
-        check(allocations == 5, "failed process releases every allocation");
+        check(allocations == 6, "failed process releases every allocation");
         if (p) {
             close_process(p);
             forks = process_forks_since_boot();

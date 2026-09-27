@@ -116,6 +116,7 @@ ftpput 1 busybox-networking
 ftruncate 2 truncate
 ftruncate64 2 truncate
 fuser 1 busybox-procps
+get_robust_list 2 futex
 getcwd 2 chdir
 getegid32 2 getuid
 geteuid32 2 getuid
@@ -307,6 +308,7 @@ sed 1 busybox-editors
 sendmail 1 busybox-mailutils
 sendto 2 send
 seq 1 busybox-coreutils
+set_robust_list 2 futex
 set_tid_address 2 set_thread_area
 setarch 1 busybox-util-linux
 setfattr 1 busybox-miscutils

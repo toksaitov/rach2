@@ -16,6 +16,7 @@
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
 #include "sys/mm/mm.h"
+#include "sys/proc/tgroup.h"
 #include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
@@ -277,10 +278,12 @@ static void timer_handler(isr_params_t *params)
  * handler and the page-fault segfault path both route here. The process dies by
  * signal `signo` (SIGSEGV for a fault, SIGINT for CTRL+C); the exit code stores
  * the Linux wait-status encoding of a signal death (low 7 bits = the signal),
- * so the parent's waitpid sees WIFSIGNALED/WTERMSIG. Posts SIGCHLD and wakes a
- * parent blocked in waitpid, releases the descriptor table, frees the user
- * pages, and switches off the dying address space before freeing its page
- * directory. A dying init panics through panic_init_died, unless the debug
+ * so the parent's waitpid sees WIFSIGNALED/WTERMSIG. The whole process dies:
+ * its other threads are sent SIGKILL, and the last thread to end publishes
+ * the death. This thread releases the descriptor table and its reference to
+ * the address space, switching off it before its page directory can be
+ * freed; the last thread then posts SIGCHLD and wakes a parent blocked in
+ * waitpid. A dying init panics through panic_init_died, unless the debug
  * shell is the supervisor, in which case the shell's input state is reset and
  * this jumps back into shell_loop on a fresh kernel stack. Any other process
  * stays a zombie for the parent's waitpid to collect, and the now-READY parent
@@ -293,35 +296,59 @@ void terminate_current_process(int32_t signo)
 {
     bool is_init;
     uint32_t pid;
+    int alone;
+    int last;
 
-    /* Only user processes have their own page directory; ignore the kernel
+    /* Only user processes have an address space; ignore the kernel
      * idle/shell context. */
-    if (!current_proc || current_proc->cr3 == 0) {
+    if (!current_proc || current_proc->mm == NULL) {
         return;
     }
 
-    pid = current_proc->pid;
+    pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
+
+    /* The signal ends the whole process: the other threads are sent SIGKILL,
+     * and the process ends with this signal whichever thread ends last. */
+    proc_group_exit(signo & 0x7F);
+    alone = current_proc->tg->live == 1;
 
     /* If the console-owning session leader is dying (init, or a later TIOCSCTTY
      * leader, not only init), release the controlling terminal before
      * zombifying so the timer-IRQ serial drain does not target this vanishing
      * session during teardown. shell_reset_input on the is_init path below
      * releases again, which is idempotent. */
-    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
-        tty_set_session(&console_tty, 0, 0);
+    if (alone) {
+        if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
+            tty_set_session(&console_tty, 0, 0);
+        }
+        pty_release_leader((int)current_proc->sid, (int)pid);
+        fb_release_if_owner(pid);
     }
-    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
-    fb_release_if_owner(pid);
-
-    proc_exit_cleanup(signo & 0x7F);
+    last = proc_exit_cleanup(signo & 0x7F);
 
     /* The address space goes now, not at the reap; `mm_drop` switches off
      * it first when this was its last user, since free_page_directory
-     * refuses the directory in CR3. One shared with a vfork parent stays. */
+     * refuses the directory in CR3. One another thread or a vfork parent
+     * shares stays. */
     mm_drop(current_proc);
     switch_page_directory(_kernel_dir);
+
+    if (!last) {
+        for (;;) {
+            __asm__ __volatile__("cli");
+            schedule();
+            idle_wait_irq_off();
+        }
+    }
+    if (!alone) {
+        if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
+            tty_set_session(&console_tty, 0, 0);
+        }
+        pty_release_leader((int)current_proc->sid, (int)pid);
+        fb_release_if_owner(pid);
+    }
 
     if (is_init) {
         /* A real /sbin/init killed by a signal is a fatal init death; only when
@@ -1214,7 +1241,7 @@ static void exec_program(int argc, char *argv[])
     user_proc->cr3 = mm->cr3;
     user_proc->page_dir = mm->dir;
     user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
-    user_proc->parent_pid = current_proc ? current_proc->pid : 0;
+    user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
     proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
     current_proc = user_proc;
     /* Entered without a switch, so the registers are loaded here: the

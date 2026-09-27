@@ -978,6 +978,21 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
     return (pte & ~(PAGE_SIZE - 1)) | (va & (PAGE_SIZE - 1));
 }
 
+uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va)
+{
+    page_table_t *table = dir->logical_page_tables[va / PAGE_SIZE / 1024];
+    uint32_t pte;
+
+    if (!table) {
+        return 0;
+    }
+    pte = table->pages[(va / PAGE_SIZE) % 1024];
+    if (!(pte & 0x1)) {
+        return 0;
+    }
+    return (pte & ~(PAGE_SIZE - 1)) | (va & (PAGE_SIZE - 1));
+}
+
 /**
  * Reserve one free physical frame for kernel-internal use and return its
  * physical address, or 0 if none is free.

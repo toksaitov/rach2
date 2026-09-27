@@ -10,12 +10,16 @@
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
 #include "proc/exit.c"
+#include "proc/tgroup.h"
 
 extern int printf(const char *format, ...);
 
 static process_t child;
 static process_t parent;
+static struct tgroup child_group;
+static struct tgroup parent_group;
 process_t *current_proc;
+uint32_t proc_dead_threads;
 static wait_queue_t lock_wait;
 static int lock_free;
 static int fd_wait;
@@ -91,6 +95,13 @@ void vfs_cwd_clear(process_t *p)
 }
 
 static int vfork_released;
+static int thread_released;
+
+void proc_thread_gone(process_t *p)
+{
+    CHECK(p == &child && !closed, "the thread's futexes go before its files");
+    thread_released++;
+}
 
 void proc_vfork_release(process_t *p)
 {
@@ -131,7 +142,14 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     cwd_wait = directory;
     with_parent = has_parent;
     closed = cwd_released = adopted = notified = switches = vfork_released = 0;
+    thread_released = 0;
     child.pid = 42;
+    child.tgid = 42;
+    child.tg = &child_group;
+    child_group.leader = &child;
+    child_group.live = 1;
+    child_group.exiting = 0;
+    parent.tg = &parent_group;
     child.parent_pid = 7;
     child.state = PROC_RUNNING;
     child.in_syscall = 0;
@@ -142,9 +160,11 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     current_proc = &child;
     wait_queue_init(&lock_wait);
 
-    proc_exit_cleanup(status);
+    CHECK(proc_exit_cleanup(status) == 1, "the only thread's end is the process's");
 
     CHECK(switches == files + directory, "every requested wait was reached");
+    CHECK(thread_released == 1, "the thread's futexes are released once");
+    CHECK(child_group.live == 0, "the process has no thread left");
     CHECK(child.state == PROC_ZOMBIE, "cleanup ends as a zombie");
     CHECK(child.exit_code == status, "the encoded wait status is preserved");
     CHECK(child.in_syscall, "remaining teardown cannot be preempted");

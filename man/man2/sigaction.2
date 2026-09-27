@@ -55,6 +55,12 @@ Musl reserves numbers 32 through 34 and rejects them in
 Pending signals occupy one bit each; repeated instances coalesce, and
 the sender information of the first is what the handler receives.
 There is no queue of real-time signals.
+.Pp
+The dispositions belong to the process and are shared by its threads.
+The blocked mask, the alternate stack and a set of pending signals belong
+to each thread; a signal sent to the process is pending for the process,
+and any thread that does not block it may take it.
+A thread takes its own pending signals before the process's.
 .Ss Dispositions
 .Va sa_handler
 selects
@@ -63,7 +69,8 @@ selects
 or a handler address.
 Installing
 .Dv SIG_IGN
-also discards an instance already pending.
+also discards an instance already pending, the process's and each
+thread's.
 The default actions are:
 .Bl -tag -width "Terminate"
 .It Ignore
@@ -78,14 +85,20 @@ and
 Every other accepted signal number.
 .El
 .Pp
+A stop stops the whole process: the thread that takes the stop signal
+records the stop, and every thread parks as it next returns to user mode.
 Posting
 .Dv SIGCONT
-resumes a stopped process and removes pending stop signals, regardless
-of its disposition or blocked status.
+resumes a stopped process, every thread of it, and removes pending stop
+signals, regardless of its disposition or blocked status.
 A stop signal removes pending
 .Dv SIGCONT .
 .Dv SIGKILL
 makes a stopped process runnable so it can terminate.
+A terminating default ends every thread of the process, as
+.Xr exit 2
+describes for
+.Nm exit_group .
 Stop and continue events notify the parent with
 .Dv SIGCHLD
 and are reported by
@@ -240,7 +253,8 @@ back when the handler returns; when no handler runs it comes back on the
 return from the call.
 .Pp
 .Fn sigpending
-reports the signals that are pending while blocked.
+reports the signals pending for the calling thread or its process while
+the thread blocks them.
 .Ss Alternate stack
 .Fn sigaltstack
 sets the stack a handler with

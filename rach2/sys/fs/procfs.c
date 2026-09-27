@@ -31,6 +31,7 @@
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
 #include "../tty/pty.h"
+#include "../proc/tgroup.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
@@ -289,7 +290,7 @@ int procfs_resolve_pid(int pid)
     process_t *p;
 
     if (pid == SYNTH_PID_SELF) {
-        return current_proc ? (int)current_proc->pid : -1;
+        return current_proc ? (int)current_proc->tgid : -1;
     }
     if (pid < 0) {
         return -1;
@@ -331,6 +332,8 @@ static char proc_state_char(proc_state_t s)
 static int procfs_gen_stat(struct procfs_text *t, int pid)
 {
     process_t *p;
+    uint32_t user;
+    uint32_t sys;
     int i;
 
     p = get_process((uint32_t)pid);
@@ -360,20 +363,23 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
     ap_str(t, " 0 0 0 0 0 ");
-    ap_u32(t, p->utime);
+    proc_cpu_time(p, &user, &sys);
+    ap_u32(t, user);
     ap_ch(t, ' ');
-    ap_u32(t, p->stime);
+    ap_u32(t, sys);
     ap_ch(t, ' ');
-    ap_u32(t, p->cutime);
+    ap_u32(t, p->tg->leader->cutime);
     ap_ch(t, ' ');
-    ap_u32(t, p->cstime);
+    ap_u32(t, p->tg->leader->cstime);
     /* 18 priority, which Linux reports as 20 more than the nice value for a
        process of no real-time policy; 19 nice */
     ap_ch(t, ' ');
     ap_int(t, 20 + (int)p->nice);
     ap_ch(t, ' ');
     ap_int(t, (int)p->nice);
-    ap_str(t, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
+    ap_ch(t, ' ');
+    ap_u32(t, p->tg->live);  /* 20 num_threads */
+    ap_str(t, " 0 0");       /* 21 itrealvalue, 22 starttime */
     ap_str(t, " 0 0");   /* 23 vsize, 24 rss */
     ap_ch(t, '\n');
     if (!t->nomem) {
@@ -577,6 +583,8 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
  * Return the pid of the n-th live process in process-table order, or -1.
  *
  * Lets a /proc directory read walk the table by index without exposing slots.
+ * A process is listed once, by its leader; the ids of its other threads are
+ * not listed, as on Linux, though /proc/<tid> still opens.
  */
 int procfs_nth_pid(int n)
 {
@@ -587,6 +595,9 @@ int procfs_nth_pid(int n)
         return -1;
     }
     for (p = proc_list; p; p = p->next) {
+        if (p->pid != p->tgid) {
+            continue;
+        }
         if (seen == n) {
             return (int)p->pid;
         }
