@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt SETUID 2
 .Os
 .Sh NAME
@@ -98,6 +98,10 @@ The complete list is copied before the credentials change.
 .Fn getgroups
 with size zero reports the current count; see
 .Xr getuid 2 .
+.Pp
+A call that changes the effective user or group ID also clears the
+process's dumpable flag and its parent-death signal, as on Linux; see
+.Xr prctl 2 .
 .Pp
 A change of real user ID makes the process count against the new user's
 total for

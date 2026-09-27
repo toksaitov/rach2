@@ -1,0 +1,104 @@
+.Dd September 27, 2026
+.Dt PRCTL 2
+.Os
+.Sh NAME
+.Nm prctl
+.Nd operations on the calling process
+.Sh SYNOPSIS
+.In sys/prctl.h
+.Ft int
+.Fn prctl "int option" "..."
+.Sh DESCRIPTION
+.Fn prctl
+reads or changes an attribute of the calling process, named by
+.Fa option .
+The arguments after it are unsigned longs, the second through the fifth.
+The options are:
+.Bl -tag -width "PR_SET_NO_NEW_PRIVS"
+.It Dv PR_SET_PDEATHSIG No (1)
+Set the signal the caller receives when its parent exits, from 1 to 64,
+or 0 for none.
+The signal is posted when the parent exits, after the caller has been
+given to init, so a handler that asks for its parent finds init.
+.It Dv PR_GET_PDEATHSIG No (2)
+Store that signal as an int at the second argument.
+.It Dv PR_GET_DUMPABLE No (3)
+Return whether the caller is dumpable, 1 or 0.
+.It Dv PR_SET_DUMPABLE No (4)
+Set it to the second argument, 0 or 1.
+.It Dv PR_SET_NAME No (15)
+Set the caller's program name, which
+.Pa /proc/ Ns Ar pid Ns Pa /stat
+and
+.Xr ps 1
+show, to the string at the second argument, cut to 15 bytes.
+.It Dv PR_GET_NAME No (16)
+Store the program name at the second argument: 16 bytes, padded with
+null bytes.
+.It Dv PR_SET_NO_NEW_PRIVS No (38)
+With the second argument 1 and the rest 0, set the caller's no_new_privs
+bit.
+It cannot be cleared.
+.It Dv PR_GET_NO_NEW_PRIVS No (39)
+With every other argument 0, return the no_new_privs bit.
+.El
+.Pp
+The attributes follow the process as on Linux.
+.Xr fork 2
+passes the dumpable flag and the no_new_privs bit to the child and not the
+parent-death signal.
+.Xr execve 2
+makes the process dumpable again, or not dumpable when the new program
+runs with an effective ID that differs from its real one; such an exec
+also clears the parent-death signal, and so does a change of the effective
+user or group ID by an exec or by
+.Xr setuid 2
+and its relatives, which clears the dumpable flag as well.
+Under no_new_privs,
+.Xr execve 2
+ignores the set-user-ID and set-group-ID bits of the program, as it
+ignores them on a nosuid mount.
+.Pp
+The dumpable flag is kept and reported, and nothing else reads it: the
+kernel writes no core files and has no tracing.
+.Ss System call interface
+The i386 system call number is 172.
+EBX contains
+.Fa option
+and ECX through EDI the second through fifth arguments.
+.Sh RETURN VALUES
+.Dv PR_GET_DUMPABLE
+and
+.Dv PR_GET_NO_NEW_PRIVS
+return the value asked for; the other options return 0.
+On failure
+.Fn prctl
+returns -1 and sets
+.Va errno .
+The kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/prctlmusl.c
+sets and reads each attribute, checks that a child receives its
+parent-death signal when its parent exits, that a fork passes on what it
+should, that a change of the effective user ID clears the dumpable flag
+and the signal, and that a program with the set-user-ID bit runs without
+its owner's ID under no_new_privs.
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EFAULT
+The name or the signal cannot be read or written at the second argument.
+.It Bq Er EINVAL
+.Fa option
+is none of those above, the signal is past 64, the dumpable value is
+neither 0 nor 1, or the arguments of the no_new_privs options are not as
+above.
+Every option Linux has and this kernel does not is refused this way, as
+Linux refuses an option it does not know.
+.El
+.Sh SEE ALSO
+.Xr execve 2 ,
+.Xr fork 2 ,
+.Xr setuid 2 ,
+.Xr sigaction 2 ,
+.Xr proc 5

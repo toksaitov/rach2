@@ -1,9 +1,10 @@
-.Dd September 25, 2026
+.Dd September 27, 2026
 .Dt WAIT 2
 .Os
 .Sh NAME
 .Nm waitpid ,
-.Nm wait4
+.Nm wait4 ,
+.Nm waitid
 .Nd wait for a child to change state
 .Sh SYNOPSIS
 .In sys/wait.h
@@ -11,6 +12,8 @@
 .Fn waitpid "pid_t pid" "int *status" "int options"
 .Ft pid_t
 .Fn wait4 "pid_t pid" "int *status" "int options" "struct rusage *rusage"
+.Ft int
+.Fn waitid "idtype_t idtype" "id_t id" "siginfo_t *infop" "int options"
 .Sh DESCRIPTION
 .Fn waitpid
 waits for a state change in a child selected by
@@ -41,6 +44,18 @@ Also report a stopped child.
 Also report a continued child.
 .El
 .Pp
+Linux's
+.Dv __WALL
+and
+.Dv __WNOTHREAD
+are accepted and change nothing, since each process is one thread.
+.Dv __WCLONE
+asks for the children that report their end with a signal other than
+.Dv SIGCHLD ,
+unless
+.Dv __WALL
+is beside it, and so selects none: every child here reports with
+.Dv SIGCHLD .
 Other option bits are ignored.
 Stop and continue events are reported once and do not reap the child.
 .Pp
@@ -67,23 +82,128 @@ for a continuation.
 performs the same wait and accepts an optional
 .Fa rusage
 pointer.
-When the kernel reaps a child, it zeroes the 72-byte i386 resource usage
-structure;
-per-process resource usage is not tracked.
-Stop and continue reports do not fill this structure.
+For every report, an exit, a stop or a continue, the kernel fills the
+72-byte i386 resource usage structure with the child's CPU time added to
+that of the children the child has reaped:
+.Va ru_utime
+and
+.Va ru_stime
+are the ticks the timer charged in user mode and in the kernel, as
+.Xr times 2
+counts them, and the fourteen counters after them, which the kernel does
+not keep, are zero.
+Reaping a child adds the same two times to the caller's children's
+totals.
 Nonnull status and resource usage pointers are checked for write
 access before any child is reaped.
+.Ss waitid
+.Fn waitid
+selects children by
+.Fa idtype :
+.Dv P_ALL
+.Pq 0
+for every child,
+.Dv P_PID
+.Pq 1
+for the child whose process ID is
+.Fa id ,
+and
+.Dv P_PGID
+.Pq 2
+for the children in process group
+.Fa id ,
+the caller's when
+.Fa id
+is 0.
+.Fa options
+must have at least one of the events it waits for:
+.Dv WEXITED
+.Pq 4
+for an exit,
+.Dv WSTOPPED
+.Pq 2 ,
+which is
+.Dv WUNTRACED ,
+for a stop, and
+.Dv WCONTINUED
+for a continue.
+.Dv WNOHANG
+and the three thread bits mean what they mean above, and
+.Dv WNOWAIT
+.Pq 0x01000000
+reports an event and leaves it, so that a zombie can still be reaped and a
+stop or continue reported again.
+A zombie that is not waited for with
+.Dv WEXITED
+may still report a continue it has not reported, as on Linux.
 .Pp
+The event is written to the
+.Vt siginfo_t
+at
+.Fa infop ,
+when it is not null:
+.Va si_signo
+is
+.Dv SIGCHLD ,
+.Va si_pid
+the child's process ID and
+.Va si_uid
+its real user ID, and
+.Va si_code
+and
+.Va si_status
+say what happened: an exit,
+.Dv CLD_EXITED
+with the exit status; a death by a signal,
+.Dv CLD_KILLED ,
+or
+.Dv CLD_DUMPED
+where the wait status says a core was dumped, with the signal; a stop,
+.Dv CLD_STOPPED
+with the stop signal; and a continue,
+.Dv CLD_CONTINUED
+with
+.Dv SIGCONT .
+With
+.Dv WNOHANG
+and no event, those five fields and
+.Va si_errno
+are zero, so
+.Va si_pid
+0 says nothing was found.
+The kernel writes only these six fields.
+.Pp
+The raw call takes a fifth argument, as Linux's does: a
+.Vt struct rusage
+pointer, which, when it is not null, receives the child's usage as
+.Fn wait4
+gives it when a child was reported, and is not written otherwise.
+musl passes 0 there.
+glibc's
+.Fn posix_spawn
+reaps a child that could not run its program with
+.Fn waitid .
+.Ss System call interface
 The i386 system call numbers are 7 for
-.Nm waitpid
-and 114 for
-.Nm wait4 .
+.Nm waitpid ,
+114 for
+.Nm wait4 ,
+and 284 for
+.Nm waitid .
 EBX contains
 .Fa pid ,
 ECX the status pointer, and EDX the options.
 For
 .Nm wait4 ,
 ESI contains the resource usage pointer.
+For
+.Nm waitid ,
+EBX contains
+.Fa idtype ,
+ECX
+.Fa id ,
+EDX the siginfo pointer, ESI the options and EDI the resource usage
+pointer.
 Musl's
 .Fn wait
 and
@@ -91,11 +211,35 @@ and
 use the
 .Nm wait4
 system call.
+.Ss Differences from Linux
+A pidfd names no child here, since no descriptor is one:
+.Dv P_PIDFD
+.Pq 3
+fails with
+.Er EBADF ,
+as Linux's does for a descriptor that is not a pidfd.
+A
+.Fn waitid
+whose siginfo or resource usage pointer cannot be written fails before
+any child is reaped, as
+.Fn wait4
+does here; Linux reaps the child and then fails.
+Linux refuses unknown option bits for
+.Fn waitpid
+and
+.Fn wait4
+with
+.Er EINVAL ,
+where this kernel ignores them.
 .Sh RETURN VALUES
-These functions return the process ID of the child whose state was
-reported, or 0 when
+.Fn waitpid
+and
+.Fn wait4
+return the process ID of the child whose state was reported, or 0 when
 .Dv WNOHANG
 is set and a matching child has no reportable state change.
+.Fn waitid
+returns 0 in both cases.
 On failure they return -1 and set
 .Va errno .
 The kernel returns a negative error number on failure.
@@ -112,17 +256,50 @@ stops a child and waits with
 continues it and waits with
 .Dv WCONTINUED ,
 then kills it and checks the reported signal.
+.Pa tests/musl/waitidmusl.c
+checks each field
+.Fn waitid
+fills for an exit, a death by a signal, a stop and a continue, the
+resource usage it returns, what
+.Dv WNOHANG
+and
+.Dv WNOWAIT
+leave, the selection by process ID and process group, and the refusals.
 .Sh ERRORS
 .Bl -tag -width "[ECHILD]"
+.It Bq Er EBADF
+.Fn waitid
+was given
+.Dv P_PIDFD
+with a nonnegative
+.Fa id .
 .It Bq Er ECHILD
 No child matches
-.Fa pid .
+.Fa pid ,
+or
+.Fa idtype
+and
+.Fa id .
 .It Bq Er EFAULT
-A nonnull status or resource usage pointer does not refer to writable
-user memory.
+A nonnull status, siginfo or resource usage pointer does not refer to
+writable user memory.
 .It Bq Er EINTR
 A signal that is neither blocked nor ignored is pending while the call
 would otherwise block.
+.It Bq Er EINVAL
+For
+.Fn waitid ,
+.Fa options
+has a bit other than those above or none of the three events,
+.Fa idtype
+is unknown, or
+.Fa id
+is not positive for
+.Dv P_PID
+or is negative for
+.Dv P_PGID
+or
+.Dv P_PIDFD .
 .It Bq Er ESRCH
 There is no current process.
 .El

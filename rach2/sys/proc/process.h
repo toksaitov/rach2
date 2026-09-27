@@ -54,8 +54,13 @@ struct rlimit32 {
 #define RLIM_NPROC      0
 #define RLIM_NOFILE     1
 #define RLIM_AS         2
-#define RLIM_COUNT      3
+#define RLIM_STACK      3
+#define RLIM_COUNT      4
 #define RLIM_INFINITY32 0xFFFFFFFFu
+
+/* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;
+ * an exec that runs with ids its caller lacks lowers a larger one to it. */
+#define RLIM_STACK_DEFAULT 0x800000u
 
 /* Policy: the working directory's path is kept in the record when it fits
  * here, which nearly every path does; a longer one, up to PATH_MAX, is kept
@@ -170,8 +175,8 @@ struct process {
      * switches away leaves the count with the process it interrupted. */
     uint32_t irq_depth;
     /* The resource limits `prlimit64` keeps: processes of the real user,
-     * open descriptors, and the address space in bytes; soft and hard,
-     * inherited by fork and exec. */
+     * open descriptors, the address space and the stack in bytes; soft and
+     * hard, inherited by fork and exec. */
     struct rlimit32 rlim[RLIM_COUNT];
     /* Inside `mem_reclaim`: its own allocations, the requests a writeback
      * needs, may take from the reserve. */
@@ -226,6 +231,29 @@ struct process {
     /* The working directory's path when it is too long for `cwd`, from the
      * heap; NULL while it fits `cwd`. `proc_cwd` reads whichever it is. */
     char *cwd_long;
+    /* CPU time in ticks. The timer adds the tick it interrupts to `utime`
+     * when this process was in user mode and to `stime` when it was in the
+     * kernel, and a tick of an idle wait to neither. A reap adds a child's
+     * two, with the children the child reaped, to `cutime` and `cstime`.
+     * A fork starts all four at zero; an exec keeps them. */
+    uint32_t utime;
+    uint32_t stime;
+    uint32_t cutime;
+    uint32_t cstime;
+    /* The nice value `setpriority` keeps, -20 to 19; fork passes it on and
+     * exec keeps it. The scheduler does not read it. */
+    int32_t nice;
+    /* What prctl keeps. The signal posted to this process when its parent
+     * exits, 0 for none: a fork does not pass it on, and it is cleared when
+     * an exec or an identity call moves the effective ids and by an exec
+     * that runs with ids its caller lacks. Whether the process is dumpable,
+     * 1 from birth: an exec sets it again, 0 where the new ids differ from
+     * the real ones, and a move of the effective ids clears it. Whether the
+     * process and its descendants may gain no privilege, which a fork passes
+     * on and nothing clears, and under which exec ignores set-id bits. */
+    uint32_t pdeath_signal;
+    uint32_t dumpable;
+    uint32_t no_new_privs;
 };
 
 typedef struct process process_t;
@@ -264,9 +292,10 @@ process_t *get_process(uint32_t pid);
 
 /**
  * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
- * reap any child that is already a zombie. Called from the death paths so an
- * exiting process never orphans a child onto a record about to be freed.
- * No-op when there is no init or when init itself is dying.
+ * reap any child that is already a zombie, and post each living child the
+ * parent-death signal it asked for. Called from the death paths so an exiting
+ * process never orphans a child onto a record about to be freed. No child is
+ * adopted when there is no init or when init itself is dying.
  */
 void reparent_children(uint32_t dead_pid);
 

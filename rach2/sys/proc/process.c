@@ -149,9 +149,12 @@ process_t *alloc_process(void)
     p->sid = candidate;
     p->pgid = candidate;
     p->umask = 022;
+    p->dumpable = 1;
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
     p->rlim[RLIM_NOFILE].cur = p->rlim[RLIM_NOFILE].max = FD_TABLE_LIMIT;
     p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY32;
+    p->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
+    p->rlim[RLIM_STACK].max = RLIM_INFINITY32;
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
 
@@ -263,39 +266,43 @@ process_t *get_process(uint32_t pid)
 }
 
 /**
- * Reparent every child of `dead_pid` onto init.
+ * Reparent every child of `dead_pid` onto init, and post each living child
+ * the parent-death signal it asked prctl for.
  *
  * Called from a process's death path before its record is reclaimed: a
  * child left with a dead parent's pid would never be matched in `do_wait`,
  * and its frames, page directory and record would leak. A child that is
  * already a zombie has no future exit event to wake init, so init is
  * signalled now to reap it; `signal_post` makes a blocked init ready
- * itself. A no-op when there is no init yet (`init_pid == 0`, the
- * debug-shell-only boot) or when init itself is the one dying, since no
- * other init is left to adopt the children.
+ * itself. No child is adopted when there is no init yet (`init_pid == 0`,
+ * the debug-shell-only boot) or when init itself is the one dying, since no
+ * other init is left to adopt them; the parent-death signals are posted
+ * either way, after the adoption, so a handler that asks for its parent
+ * finds init, as on Linux.
  */
 void reparent_children(uint32_t dead_pid)
 {
-    process_t *init;
+    process_t *init = NULL;
     process_t *p;
 
-    if (init_pid == 0 || dead_pid == init_pid) {
-        return;
-    }
-    init = get_process(init_pid);
-    if (init == NULL) {
-        return;
+    if (init_pid != 0 && dead_pid != init_pid) {
+        init = get_process(init_pid);
     }
     for (p = proc_list; p; p = p->next) {
         if (p->parent_pid != dead_pid) {
             continue;
         }
-        p->parent_pid = init_pid;
-        if (p->state == PROC_ZOMBIE) {
-            struct k_siginfo info;
+        if (init != NULL) {
+            p->parent_pid = init_pid;
+            if (p->state == PROC_ZOMBIE) {
+                struct k_siginfo info;
 
-            proc_child_info(p, &info);
-            signal_post_info(init, SIGCHLD, &info);
+                proc_child_info(p, &info);
+                signal_post_info(init, SIGCHLD, &info);
+            }
+        }
+        if (p->pdeath_signal != 0 && p->state != PROC_ZOMBIE) {
+            signal_post(p, (int)p->pdeath_signal);
         }
     }
 }

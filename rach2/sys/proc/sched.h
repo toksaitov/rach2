@@ -61,7 +61,9 @@ void idle_wait_irq_on(void);  /* sti; hlt */
 uint32_t sched_idle_ticks(void);
 uint32_t sched_busy_ticks(void);
 
-/** Count one delivered tick as idle or busy. Called by the timer alone. */
-void sched_account_tick(void);
+/** Count one delivered tick as idle or busy, and charge a busy one to the
+ * current process as user time when `user` is set and as system time when it
+ * is not. Called by the timer alone. */
+void sched_account_tick(int user);
 
 #endif

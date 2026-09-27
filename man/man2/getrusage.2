@@ -1,0 +1,71 @@
+.Dd September 27, 2026
+.Dt GETRUSAGE 2
+.Os
+.Sh NAME
+.Nm getrusage
+.Nd get resource usage
+.Sh SYNOPSIS
+.In sys/resource.h
+.Ft int
+.Fn getrusage "int who" "struct rusage *usage"
+.Sh DESCRIPTION
+.Fn getrusage
+stores in
+.Fa usage
+the resources used by
+.Fa who :
+.Bl -tag -width "RUSAGE_CHILDREN"
+.It Dv RUSAGE_SELF
+The calling process.
+.It Dv RUSAGE_THREAD
+The calling thread, which is the calling process, since each process is
+one thread.
+.It Dv RUSAGE_CHILDREN
+The children the caller has reaped with
+.Xr wait 2 ,
+each with the children it reaped itself.
+.El
+.Pp
+.Va ru_utime
+and
+.Va ru_stime
+are the CPU time the timer charged in user mode and in the kernel, the
+ticks
+.Xr times 2
+reports, as seconds and microseconds.
+The kernel keeps no other resource count, so
+.Va ru_maxrss
+and the thirteen counters after it are zero.
+.Ss System call interface
+The i386 system call number is 77.
+EBX contains
+.Fa who
+and ECX points to the 72-byte i386 structure: two timevals of 32-bit
+seconds and microseconds, then fourteen 32-bit counters.
+musl and glibc convert it to their structure with 64-bit seconds.
+.Sh RETURN VALUES
+.Fn getrusage
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/cputimemusl.c
+checks that the usage of the process and of its thread is what
+.Fn times
+reports, and that the children's usage rises by what
+.Xr wait4 2
+reported for a child it reaped.
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EFAULT
+.Fa usage
+cannot be written.
+.It Bq Er EINVAL
+.Fa who
+is none of the three.
+.El
+.Sh SEE ALSO
+.Xr gettimeofday 2 ,
+.Xr wait 2 ,
+.Xr proc 5

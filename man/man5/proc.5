@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 27, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -302,8 +302,10 @@ cpu0 0 0 BUSY IDLE 0 0 0 0 0 0
 .Ed
 .Pp
 The first four columns are user, nice, system, and idle ticks.
-The kernel does not separate user and system time: busy ticks appear
-in the system column, and user and nice are zero.
+These machine-wide counters do not separate user and system time, which
+only the per-process ones in
+.Pa /proc/PID/stat
+do: busy ticks appear in the system column, and user and nice are zero.
 .Pp
 The remaining lines have a name and one value:
 .Bl -tag -width loopback_delivered_call
@@ -318,6 +320,8 @@ Processes created since boot.
 .It Li sleeps_interrupted
 Sleeps in
 .Xr nanosleep 2
+and
+.Xr clock_nanosleep 2
 that a signal ended before their deadline, since boot.
 A sleep that ran its whole length is not counted.
 .It Li latency_timer_us
@@ -403,10 +407,18 @@ for blocked, or
 .Ql Z
 for zombie.
 The parent, process group, and session IDs are recorded values.
-The terminal number is 0, terminal process group is -1, priority is
-20, and thread count is 1.
-Fields 9 through 17, nice, interval timer, start time, virtual size,
-and resident size are zero.
+Fields 14 through 17 are the process's user and system time and its
+reaped children's, in 1/100 second ticks, as
+.Xr times 2
+reports them.
+Field 19 is the nice value
+.Xr setpriority 2
+keeps, and field 18 the priority Linux reports for it, 20 more than the
+nice value.
+The terminal number is 0, terminal process group is -1, and thread count
+is 1.
+Fields 9 through 13, interval timer, start time, virtual size, and
+resident size are zero.
 .It Pa /proc/PID/cmdline
 The program name as one NUL-terminated argument.
 The full argument vector is not retained.

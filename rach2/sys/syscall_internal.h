@@ -165,6 +165,10 @@ int32_t sys_waitpid(isr_params_t *params);
 
 int32_t sys_wait4(isr_params_t *params);
 
+int32_t sys_waitid(isr_params_t *params);
+
+int32_t sys_getrusage(isr_params_t *params);
+
 int32_t sys_creat(isr_params_t *params);
 
 int32_t sys_unlink(isr_params_t *params);
@@ -244,6 +248,8 @@ int32_t sys_socketcall(isr_params_t *params);
 
 int32_t sys_getpid(isr_params_t *params);
 
+int32_t sys_gettid(isr_params_t *params);
+
 int32_t sys_setsid(isr_params_t *params);
 
 int32_t sys_setpgid(isr_params_t *params);
@@ -310,5 +316,31 @@ int32_t sys_sigaltstack(isr_params_t *params);
 int32_t sys_rt_sigpending(isr_params_t *params);
 
 int32_t sys_sigprocmask(isr_params_t *params);
+
+int32_t sys_getpriority(isr_params_t *params);
+
+int32_t sys_setpriority(isr_params_t *params);
+
+int32_t sys_sched_yield(isr_params_t *params);
+
+int32_t sys_sched_setscheduler(isr_params_t *params);
+
+int32_t sys_sched_setparam(isr_params_t *params);
+
+int32_t sys_sched_getscheduler(isr_params_t *params);
+
+int32_t sys_sched_getparam(isr_params_t *params);
+
+int32_t sys_sched_get_priority_max(isr_params_t *params);
+
+int32_t sys_sched_get_priority_min(isr_params_t *params);
+
+int32_t sys_sched_rr_get_interval(isr_params_t *params);
+
+int32_t sys_sched_getaffinity(isr_params_t *params);
+
+int32_t sys_sched_setaffinity(isr_params_t *params);
+
+int32_t sys_prctl(isr_params_t *params);
 
 #endif

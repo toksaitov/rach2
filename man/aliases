@@ -35,7 +35,9 @@ chroot 1 busybox-coreutils
 chrt 1 busybox-util-linux
 cksum 1 busybox-coreutils
 clear 1 busybox-console-tools
+clock_getres 2 gettimeofday
 clock_gettime 2 gettimeofday
+clock_nanosleep 2 nanosleep
 clone 2 fork
 close 2 open
 cmp 1 busybox-editors
@@ -129,6 +131,7 @@ getresuid32 2 getuid
 getrlimit 2 prlimit64
 getsid 2 getpid
 getsockopt 2 setsockopt
+gettid 2 getpid
 getuid32 2 getuid
 grep 1 busybox-findutils
 groups 1 busybox-coreutils
@@ -288,6 +291,15 @@ runlevel 1 busybox-miscutils
 runsv 8 busybox-runit
 runsvdir 8 busybox-runit
 rx 1 busybox-miscutils
+sched_get_priority_max 2 sched_setscheduler
+sched_get_priority_min 2 sched_setscheduler
+sched_getaffinity 2 sched_setscheduler
+sched_getparam 2 sched_setscheduler
+sched_getscheduler 2 sched_setscheduler
+sched_rr_get_interval 2 sched_setscheduler
+sched_setaffinity 2 sched_setscheduler
+sched_setparam 2 sched_setscheduler
+sched_yield 2 sched_setscheduler
 script 1 busybox-util-linux
 scriptreplay 1 busybox-util-linux
 sed 1 busybox-editors
@@ -302,6 +314,7 @@ setgroups32 2 setuid
 sethostname 2 uname
 setlogcons 1 busybox-console-tools
 setpgid 2 getpid
+setpriority 2 getpriority
 setregid32 2 setuid
 setresgid32 2 setuid
 setresuid32 2 setuid
@@ -400,6 +413,7 @@ vi 1 busybox-editors
 volname 1 busybox-miscutils
 w 1 busybox-coreutils
 wait4 2 wait
+waitid 2 wait
 waitpid 2 wait
 watch 1 busybox-procps
 wc 1 busybox-coreutils

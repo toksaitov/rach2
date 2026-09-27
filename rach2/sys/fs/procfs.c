@@ -322,8 +322,10 @@ static char proc_state_char(proc_state_t s)
  *
  * Emits the space-separated fields ps and friends parse. comm (field 2) is
  * wrapped in parentheses, with any stray parens scrubbed so a naive parser that
- * scans for the closing ')' is not fooled. Accounting fields we do not track
- * (faults, cpu time, sizes) are zero, but every field is present and in order.
+ * scans for the closing ')' is not fooled. The CPU times are the process's
+ * ticks, which are the 100 Hz clock ticks the fields count, and the nice value
+ * is the one setpriority keeps; the accounting fields the kernel does not keep
+ * (faults, sizes) are zero, but every field is present and in order.
  */
 static int procfs_gen_stat(struct procfs_text *t, int pid)
 {
@@ -356,8 +358,20 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     ap_str(t, " 0 -1");     /* 7 tty_nr, 8 tpgid (not modeled) */
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
-    ap_str(t, " 0 0 0 0 0 0 0 0 0");
-    ap_str(t, " 20 0");  /* 18 priority, 19 nice */
+    ap_str(t, " 0 0 0 0 0 ");
+    ap_u32(t, p->utime);
+    ap_ch(t, ' ');
+    ap_u32(t, p->stime);
+    ap_ch(t, ' ');
+    ap_u32(t, p->cutime);
+    ap_ch(t, ' ');
+    ap_u32(t, p->cstime);
+    /* 18 priority, which Linux reports as 20 more than the nice value for a
+       process of no real-time policy; 19 nice */
+    ap_ch(t, ' ');
+    ap_int(t, 20 + (int)p->nice);
+    ap_ch(t, ' ');
+    ap_int(t, (int)p->nice);
     ap_str(t, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
     ap_str(t, " 0 0");   /* 23 vsize, 24 rss */
     ap_ch(t, '\n');
@@ -855,11 +869,12 @@ static int procfs_gen_uptime(struct procfs_text *t)
  * has held at once, which is what says how much room it has over a window's
  * worth.
  *
- * The `cpu` line has user, nice, system and idle in that order. This
- * kernel does not separate user from system time, so what it knows is one
- * busy figure and one idle figure: busy goes in the system column, since that
- * is where a kernel's own time belongs, and user and nice are zero rather than
- * a share invented to look plausible.
+ * The `cpu` line has user, nice, system and idle in that order. The
+ * machine-wide counters do not separate user from system time, which only the
+ * per-process ones do, so what this line knows is one busy figure and one
+ * idle figure: busy goes in the system column, since that is where a kernel's
+ * own time belongs, and user and nice are zero rather than a share invented
+ * to look plausible.
  *
  * `processes` is what Linux means by it, the count of processes CREATED since
  * boot and not the count alive now. `procs_running` and `procs_blocked` are

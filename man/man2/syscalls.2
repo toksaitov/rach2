@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 132 calls.
+The kernel registers the following 151 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -65,6 +65,7 @@ The kernel registers the following 132 calls.
 .It 74 Ta Xr sethostname 2
 .It 75 Ta Xr setrlimit 2
 .It 76 Ta Xr getrlimit 2
+.It 77 Ta Xr getrusage 2
 .It 78 Ta Xr gettimeofday 2
 .It 82 Ta Xr select 2
 .It 83 Ta Xr symlink 2
@@ -75,6 +76,8 @@ The kernel registers the following 132 calls.
 .It 93 Ta Xr ftruncate 2
 .It 94 Ta Xr fchmod 2
 .It 95 Ta Xr fchown 2
+.It 96 Ta Xr getpriority 2
+.It 97 Ta Xr setpriority 2
 .It 102 Ta Xr socketcall 2
 .It 104 Ta Xr setitimer 2
 .It 105 Ta Xr getitimer 2
@@ -85,6 +88,7 @@ The kernel registers the following 132 calls.
 .It 118 Ta Xr fsync 2
 .It 119 Ta Xr sigreturn 2
 .It 122 Ta Xr uname 2
+.It 125 Ta Xr mprotect 2
 .It 132 Ta Xr getpgid 2
 .It 133 Ta Xr fchdir 2
 .It 140 Ta Xr llseek 2
@@ -93,8 +97,17 @@ The kernel registers the following 132 calls.
 .It 146 Ta Xr writev 2
 .It 147 Ta Xr getsid 2
 .It 148 Ta Xr fdatasync 2
+.It 154 Ta Xr sched_setparam 2
+.It 155 Ta Xr sched_getparam 2
+.It 156 Ta Xr sched_setscheduler 2
+.It 157 Ta Xr sched_getscheduler 2
+.It 158 Ta Xr sched_yield 2
+.It 159 Ta Xr sched_get_priority_max 2
+.It 160 Ta Xr sched_get_priority_min 2
+.It 161 Ta Xr sched_rr_get_interval 2
 .It 162 Ta Xr nanosleep 2
 .It 168 Ta Xr poll 2
+.It 172 Ta Xr prctl 2
 .It 173 Ta Xr rt_sigreturn 2
 .It 174 Ta Xr rt_sigaction 2
 .It 175 Ta Xr rt_sigprocmask 2
@@ -130,14 +143,20 @@ The kernel registers the following 132 calls.
 .It 214 Ta Xr setgid32 2
 .It 220 Ta Xr getdents64 2
 .It 221 Ta Xr fcntl64 2
+.It 224 Ta Xr gettid 2
 .It 238 Ta Xr tkill 2
+.It 241 Ta Xr sched_setaffinity 2
+.It 242 Ta Xr sched_getaffinity 2
 .It 243 Ta Xr set_thread_area 2
 .It 252 Ta Xr exit_group 2
 .It 258 Ta Xr set_tid_address 2
 .It 265 Ta Xr clock_gettime 2
+.It 266 Ta Xr clock_getres 2
+.It 267 Ta Xr clock_nanosleep 2
 .It 268 Ta Xr statfs64 2
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
+.It 284 Ta Xr waitid 2
 .It 295 Ta Xr openat 2
 .It 296 Ta Xr mkdirat 2
 .It 298 Ta Xr fchownat 2

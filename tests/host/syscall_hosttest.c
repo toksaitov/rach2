@@ -1,7 +1,7 @@
 /**
- * Exercise completed connects, framebuffer ownership, clock rollover, and the
- * sleep and the interval timer: their deadlines, masks, remainders, clamps
- * and argument checks.
+ * Exercise completed connects, framebuffer ownership, the clocks, their
+ * rollover and resolutions, and the sleeps and the interval timer: their
+ * deadlines, masks, remainders, clamps and argument checks.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -22,6 +22,8 @@ static int user_access_ok(uint32_t addr, uint32_t len);
 static int user_buffer_ok(uint32_t addr, uint32_t len, int write);
 static int32_t sys_socketcall(isr_params_t *params);
 static int32_t sys_nanosleep(isr_params_t *params);
+static int32_t sys_clock_getres(isr_params_t *params);
+static int32_t sys_clock_nanosleep(isr_params_t *params);
 static int32_t sys_setitimer(isr_params_t *params);
 static int32_t sys_getitimer(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
@@ -134,6 +136,25 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = 123;
     *nanoseconds = 450000000;
+}
+
+/** The real time at boot, which coarse real time and a real-time deadline
+ * are counted from. */
+int64_t rtc_boot_epoch(void)
+{
+    return 1000000;
+}
+
+/** The model's one other process, pid 9, whose CPU clock a caller may read. */
+static process_t other;
+
+/** Find the model's processes: this one and pid 9. */
+process_t *get_process(uint32_t pid)
+{
+    if (pid == proc.pid) {
+        return &proc;
+    }
+    return pid == 9 ? &other : NULL;
 }
 
 /** Record the actual request to enter graphics mode. */
@@ -812,10 +833,248 @@ static void clocks(void)
     CHECK(sys_clock_gettime(&p) == 0, "read realtime clock");
     k_memcpy(&ts, user + 16, sizeof(ts));
     CHECK(ts.tv_sec == 123 && ts.tv_nsec == 450000000, "realtime unchanged");
-    p.ebx = 2;
+    p.ebx = 12;
     CHECK(sys_clock_gettime(&p) == -EINVAL, "unknown clock refused");
+    p.ebx = 1;
     p.ecx = 0;
     CHECK(sys_clock_gettime(&p) == -EFAULT, "null timespec refused");
+}
+
+/** Read clock `clk` into `ts`, returning what clock_gettime returned. */
+static int32_t read_clock(int32_t clk, struct kernel_timespec *ts)
+{
+    isr_params_t p;
+    int32_t rc;
+
+    k_memset(&p, 0, sizeof(p));
+    k_memset(user + 16, 0xA5, sizeof(*ts));
+    p.ebx = (uint32_t)clk;
+    p.ecx = 16;
+    rc = sys_clock_gettime(&p);
+    k_memcpy(ts, user + 16, sizeof(*ts));
+    return rc;
+}
+
+/** Ask clock_getres about clock `clk`, returning its nanoseconds or the
+ * error it returned. */
+static int32_t clock_res(int32_t clk)
+{
+    isr_params_t p;
+    struct kernel_timespec ts;
+    int32_t rc;
+
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = (uint32_t)clk;
+    p.ecx = 16;
+    rc = sys_clock_getres(&p);
+    k_memcpy(&ts, user + 16, sizeof(ts));
+    return rc != 0 ? rc : ts.tv_nsec;
+}
+
+/** Linux's CPU clock id for process or thread `id` reading time `which`. */
+static int32_t cpu_clock_id(uint32_t id, int thread, uint32_t which)
+{
+    return (int32_t)((~id << 3) | (thread ? 4u : 0u) | which);
+}
+
+/**
+ * The eight clocks and the CPU clocks by id.
+ *
+ * At tick 4205 of second 42, the four clocks of time since boot read 42.05 s
+ * and coarse real time the boot's epoch plus that; the two CPU clocks read
+ * the 250 ticks of user and 120 of system time the process was charged. A
+ * process's CPU clock by id reads that process's time, pid 0 reading the
+ * caller's; one clock reads user time alone. A thread clock names only the
+ * caller, a clock of no such process and a descriptor's clock are refused,
+ * and so are ids 8 and above. Real time resolves to the microsecond and every
+ * other clock to the tick, and a resolution may be asked for with no
+ * timespec to write.
+ */
+static void clock_ids(void)
+{
+    struct kernel_timespec ts;
+    isr_params_t p;
+    int32_t clk;
+
+    kernel_ticks = 4205;
+    kernel_uptime_seconds = 42;
+    kernel_second_ticks = 5;
+    proc.pid = 3;
+    proc.utime = 250;
+    proc.stime = 120;
+    other.pid = 9;
+    other.utime = 7;
+    other.stime = 1;
+    for (clk = 1; clk <= 7; clk++) {
+        if (clk == 2 || clk == 3 || clk == 5) {
+            continue;
+        }
+        CHECK(read_clock(clk, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 50000000,
+              "the clocks of time since boot read the uptime");
+    }
+    CHECK(read_clock(5, &ts) == 0 && ts.tv_sec == 1000042 && ts.tv_nsec == 50000000,
+          "coarse real time is the boot's epoch plus the uptime at the tick");
+    CHECK(read_clock(2, &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
+          "the process CPU clock reads user and system time");
+    CHECK(read_clock(3, &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
+          "the thread CPU clock reads the process's time");
+    CHECK(read_clock(cpu_clock_id(9, 0, 2), &ts) == 0 && ts.tv_sec == 0 &&
+              ts.tv_nsec == 80000000,
+          "a CPU clock by pid reads that process's time");
+    CHECK(read_clock(cpu_clock_id(9, 0, 1), &ts) == 0 && ts.tv_nsec == 70000000,
+          "a CPU clock of user time reads user time alone");
+    CHECK(read_clock(cpu_clock_id(0, 0, 0), &ts) == 0 && ts.tv_sec == 3 &&
+              ts.tv_nsec == 700000000,
+          "a CPU clock of pid 0 reads the caller's time");
+    CHECK(read_clock(cpu_clock_id(3, 1, 2), &ts) == 0 && ts.tv_sec == 3,
+          "the caller's own thread clock by id is read");
+    CHECK(read_clock(cpu_clock_id(9, 1, 2), &ts) == -EINVAL,
+          "a thread clock of another process is refused");
+    CHECK(read_clock(cpu_clock_id(10, 0, 2), &ts) == -EINVAL,
+          "a CPU clock of no such process is refused");
+    CHECK(read_clock(cpu_clock_id(9, 0, 3), &ts) == -EINVAL, "a descriptor's clock is refused");
+    CHECK(read_clock(8, &ts) == -EINVAL && read_clock(11, &ts) == -EINVAL,
+          "clock ids past 7 are refused");
+    CHECK(clock_res(0) == 1000, "real time resolves to the microsecond");
+    for (clk = 1; clk <= 7; clk++) {
+        CHECK(clock_res(clk) == 10000000, "the other clocks resolve to the tick");
+    }
+    CHECK(clock_res(cpu_clock_id(9, 0, 2)) == 10000000, "a CPU clock by pid resolves to the tick");
+    CHECK(clock_res(8) == -EINVAL, "an unknown clock has no resolution");
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 1;
+    CHECK(sys_clock_getres(&p) == 0, "a resolution may be asked for with no timespec");
+}
+
+/** Put a clock_nanosleep of `sec` s and `nsec` ns on clock `clk` with
+ * `flags` where the call reads it. */
+static void ask_clock_sleep(isr_params_t *p, int32_t clk, uint32_t flags, int32_t sec,
+                            int32_t nsec)
+{
+    ask_sleep(p, sec, nsec);
+    p->ebx = (uint32_t)clk;
+    p->ecx = flags;
+    p->edx = 32;
+    p->esi = 64;
+}
+
+/** Call clock_nanosleep, requiring the return of `sleep_call`. */
+static int32_t clock_sleep_call(isr_params_t *p)
+{
+    int32_t rc = sys_clock_nanosleep(p);
+
+    CHECK(!masked, "the clock sleep returns with the mask lifted");
+    CHECK(current_proc->state == PROC_RUNNING && current_proc->wakeup_tick == 0,
+          "the clock sleep returns running with no deadline");
+    return rc;
+}
+
+/** Set the model's tick count and the uptime it reads as, together. */
+static void uptime_at(uint32_t tick)
+{
+    model_at(tick);
+    kernel_uptime_seconds = tick / 100u;
+    kernel_second_ticks = tick % 100u;
+}
+
+/**
+ * clock_nanosleep's clocks, deadlines and remainders.
+ *
+ * The raw and coarse clocks and the thread CPU clock cannot be slept on
+ * (EOPNOTSUPP), nor a thread clock by id (EINVAL); an unknown clock and a bad
+ * request are refused. An interval sleeps as nanosleep does, three ticks from
+ * tick 1000 until 1004, but writes nothing on completion; a signal leaves the
+ * whole interval. An absolute time of time since boot, 10.035 s, is reached at
+ * tick 1004 from tick 1000, the first tick that reads it; one of real time is
+ * counted from the boot's epoch, 1000010.02 s reached at 1002; a time already
+ * past returns at once, and a signal leaves no remainder. The caller's CPU
+ * clock returns at once for a time it has reached, and a signal ends a wait
+ * for one it has not, leaving the ticks still due of an interval. A signal is
+ * pending in each row that must return without sleeping, so a fault that makes
+ * one sleep ends it at once instead of waiting out a deadline the model never
+ * reaches.
+ */
+static void clock_sleeps(void)
+{
+    isr_params_t p;
+    struct kernel_timespec rem;
+    int clk;
+    static const int nosleep[] = {3, 4, 5, 6};
+
+    for (clk = 0; clk < 4; clk++) {
+        ask_clock_sleep(&p, nosleep[clk], 0, 0, 30000000);
+        uptime_at(1000);
+        pending = 1;
+        CHECK(clock_sleep_call(&p) == -EOPNOTSUPP, "a clock Linux cannot sleep on is refused");
+    }
+    ask_clock_sleep(&p, cpu_clock_id(0, 1, 2), 0, 0, 30000000);
+    CHECK(clock_sleep_call(&p) == -EINVAL, "a thread CPU clock by id cannot be slept on");
+    ask_clock_sleep(&p, 12, 0, 0, 30000000);
+    CHECK(clock_sleep_call(&p) == -EINVAL, "an unknown clock cannot be slept on");
+    ask_clock_sleep(&p, 1, 0, 0, 1000000000);
+    CHECK(clock_sleep_call(&p) == -EINVAL,
+          "a clock sleep of a whole second in nanoseconds is refused");
+
+    ask_clock_sleep(&p, 1, 0, 0, 30000000);
+    uptime_at(1000);
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1004 && kernel_ticks == 1004,
+          "an interval of three ticks from tick 1000 sleeps until 1004");
+    rem = remainder();
+    CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "an interval that ran its length writes nothing");
+    ask_clock_sleep(&p, 0, 0, 0, 30000000);
+    uptime_at(2000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends an interval");
+    rem = remainder();
+    CHECK(rem.tv_sec == 0 && rem.tv_nsec == 30000000, "and leaves the whole interval");
+
+    ask_clock_sleep(&p, 1, 1, 10, 35000000);
+    uptime_at(1000);
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1004 && kernel_ticks == 1004,
+          "10.035 s since boot is reached at tick 1004");
+    ask_clock_sleep(&p, 7, 1, 10, 35000000);
+    uptime_at(1000);
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1004,
+          "boot time sleeps as time since boot");
+    ask_clock_sleep(&p, 0, 1, 1000010, 20000000);
+    uptime_at(1000);
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1002 && kernel_ticks == 1002,
+          "real time is counted from the boot's epoch");
+    ask_clock_sleep(&p, 1, 1, 9, 990000000);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == 0 && sleeps == 0 && kernel_ticks == 1000,
+          "a time already past returns at once");
+    ask_clock_sleep(&p, 0, 1, 999, 0);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == 0 && sleeps == 0, "a real time before the boot returns at once");
+    ask_clock_sleep(&p, 1, 1, 10, 35000000);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends an absolute sleep");
+    rem = remainder();
+    CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "and leaves no remainder");
+
+    proc.utime = 250;
+    proc.stime = 120;
+    ask_clock_sleep(&p, 2, 1, 3, 700000000);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == 0 && sleeps == 0,
+          "the caller's CPU clock returns at once for a time it has reached");
+    ask_clock_sleep(&p, 2, 0, 0, 50000000);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends a wait for the caller's CPU clock");
+    rem = remainder();
+    CHECK(rem.tv_sec == 0 && rem.tv_nsec == 50000000, "and leaves the ticks still due");
+    ask_clock_sleep(&p, 2, 1, 10, 0);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends a wait for a CPU time not reached");
+    rem = remainder();
+    CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "and an absolute one leaves no remainder");
 }
 
 /** Run the independent syscall state cases. */
@@ -824,12 +1083,14 @@ int main(void)
     connects();
     framebuffer();
     clocks();
+    clock_ids();
+    clock_sleeps();
     sleeps_masked();
     sleep_edges();
     sleep_races();
     timer_first_expiry();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, framebuffer, clock, sleep and timer\n");
+    printf("syscall-test: pass: connect, framebuffer, clocks, sleeps and timer\n");
     return 0;
 }

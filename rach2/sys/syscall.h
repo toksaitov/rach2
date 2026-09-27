@@ -60,6 +60,8 @@
 #define SYS_BRK             45
 #define SYS_MUNMAP          91
 #define SYS_WAIT4           114
+#define SYS_GETPRIORITY     96
+#define SYS_SETPRIORITY     97
 #define SYS_MMAP2           192
 #define SYS_MPROTECT        125
 #define SYS_CLONE           120
@@ -76,8 +78,10 @@
 #define SYS_SELECT          82  /* old i386 select: 5 args behind one pointer */
 #define SYS_NEWSELECT       142 /* _newselect: the normal 5-arg form */
 #define SYS_POLL            168
+#define SYS_PRCTL           172
 #define SYS_PSELECT6        308
 #define SYS_PPOLL           309
+#define SYS_GETRUSAGE       77
 #define SYS_GETTIMEOFDAY    78
 #define SYS_STAT            106
 #define SYS_LSTAT           107
@@ -92,6 +96,7 @@
 #define SYS_STATFS64        268
 #define SYS_FSTATFS64       269
 #define SYS_FCNTL64         221
+#define SYS_GETTID          224
 #define SYS_OPENAT          295
 #define SYS_FSTATAT64       300
 #define SYS_STAT64          195
@@ -100,6 +105,7 @@
 #define SYS_SET_THREAD_AREA 243
 #define SYS_EXIT_GROUP      252
 #define SYS_SET_TID_ADDRESS 258
+#define SYS_WAITID          284
 #define SYS_UTIMENSAT       320
 #define SYS_NANOSLEEP       162
 #define SYS_GETUID32        199
@@ -107,6 +113,8 @@
 #define SYS_GETEUID32       201
 #define SYS_GETEGID32       202
 #define SYS_CLOCK_GETTIME   265
+#define SYS_CLOCK_GETRES    266
+#define SYS_CLOCK_NANOSLEEP 267
 #define SYS_GETRANDOM       355
 #define SYS_KILL            37
 #define SYS_SIGRETURN       119
@@ -115,6 +123,18 @@
 #define SYS_RT_SIGPROCMASK  175
 #define SYS_TKILL           238
 #define SYS_TGKILL          270
+
+/* The scheduling calls, whose names are longer than the column above. */
+#define SYS_SCHED_SETPARAM         154
+#define SYS_SCHED_GETPARAM         155
+#define SYS_SCHED_SETSCHEDULER     156
+#define SYS_SCHED_GETSCHEDULER     157
+#define SYS_SCHED_YIELD            158
+#define SYS_SCHED_GET_PRIORITY_MAX 159
+#define SYS_SCHED_GET_PRIORITY_MIN 160
+#define SYS_SCHED_RR_GET_INTERVAL  161
+#define SYS_SCHED_SETAFFINITY      241
+#define SYS_SCHED_GETAFFINITY      242
 
 /* Auth/identity, resource, and tail syscalls a login server touches. */
 #define SYS_SETHOSTNAME 74

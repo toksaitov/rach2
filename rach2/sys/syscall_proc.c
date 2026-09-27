@@ -23,6 +23,7 @@
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
+#include "lib/kirq.h"
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
@@ -790,6 +791,58 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
 }
 
 /**
+ * What a move of the effective ids undoes, as Linux's `commit_creds` undoes
+ * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
+ * the process stops being dumpable and loses its parent-death signal, so the
+ * parent it had cannot signal the identity it now has.
+ */
+static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
+{
+    if (p->euid != old_euid || p->egid != old_egid) {
+        p->dumpable = 0;
+        p->pdeath_signal = 0;
+    }
+}
+
+/**
+ * What an exec's credentials change beside the ids, as Linux's exec does:
+ * the process is dumpable again unless it runs with ids its caller lacks
+ * (`secure`), such an exec clears the parent-death signal, and one that moved
+ * the effective ids from `old_euid` and `old_egid` is treated as
+ * `cred_moved` treats an identity call.
+ */
+static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
+{
+    current_proc->dumpable = secure ? 0u : 1u;
+    if (secure) {
+        current_proc->pdeath_signal = 0;
+        if (current_proc->rlim[RLIM_STACK].cur > RLIM_STACK_DEFAULT) {
+            current_proc->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
+        }
+    }
+    cred_moved(current_proc, old_euid, old_egid);
+}
+
+/**
+ * How far below its first page the stack of a new image may grow: the soft
+ * RLIMIT_STACK in force at the exec, which bounds the whole stack as Linux's
+ * does, in whole pages, less the page it starts with, and never into the
+ * range below VM_MMAP_BASE where anonymous mappings are placed. A limit
+ * changed later applies at the next exec.
+ */
+static uint32_t exec_stack_window(void)
+{
+    uint32_t limit = current_proc->rlim[RLIM_STACK].cur & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t room = USER_STACK_BASE - VM_MMAP_BASE;
+
+    if (limit <= PAGE_SIZE) {
+        return 0;
+    }
+    limit -= PAGE_SIZE;
+    return limit < room ? limit : room;
+}
+
+/**
  * Replace the current process image with a new program (execve(2)).
  *
  * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
@@ -818,6 +871,8 @@ int32_t sys_execve(isr_params_t *params)
     uint32_t file_uid = 0;
     uint32_t file_gid = 0;
     int secure = 0;
+    uint32_t old_euid;
+    uint32_t old_egid;
 
     struct exec_state *s;
     uint32_t entry_point;
@@ -1193,7 +1248,15 @@ checked:
      * the image runs with authority its invoker lacks, the effective id
      * differing from the real one either way, so libc distrusts the
      * caller-supplied environment; it is the only such signal, since the
-     * stack has no AT_UID/AT_EUID for libc to compare. */
+     * stack has no AT_UID/AT_EUID for libc to compare. A process that set
+     * no_new_privs gains nothing: its bits are read and ignored, as a
+     * nosuid mount's are. An exec that runs with ids its caller lacks also
+     * lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB, as Linux's does. */
+    if (current_proc->no_new_privs) {
+        setid_mode = 0;
+    }
+    old_euid = current_proc->euid;
+    old_egid = current_proc->egid;
     if (setid_mode & KRFFS_MODE_SUID) {
         current_proc->euid = file_uid;
     }
@@ -1204,6 +1267,7 @@ checked:
     current_proc->sgid = current_proc->egid;
     secure =
         (current_proc->euid != current_proc->ruid) || (current_proc->egid != current_proc->rgid);
+    exec_privileges(secure, old_euid, old_egid);
 
     /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
     proc_set_comm(current_proc, name);
@@ -1318,7 +1382,7 @@ checked:
         /* Build the address-space map (VMAs) for the new image so the
          * page-fault handler can demand-page, grow the stack, or segfault. The
          * ELF code/data pages themselves are still eagerly loaded above. */
-        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0) {
+        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, exec_stack_window()) != 0) {
             exec_fail_destroyed(5); /* the regions could not be made */
         }
         /* RLIMIT_AS: an image whose regions cover more than the limit does
@@ -1447,6 +1511,9 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
+    child->nice = parent->nice;
+    child->dumpable = parent->dumpable;
+    child->no_new_privs = parent->no_new_privs;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->fds.limit = parent->fds.limit;
     child->ruid = parent->ruid; /* credentials: the child is who the parent was */
@@ -1622,133 +1689,220 @@ int32_t sys_clone(isr_params_t *params)
     return pid;
 }
 
-/* waitpid/wait4 options. */
+/* The options of waitpid, wait4 and waitid. */
 #define WNOHANG 1
 
-#define WUNTRACED 2 /* also report a child that has STOPPED */
+#define WUNTRACED 2 /* also report a child that has STOPPED; waitid's WSTOPPED */
+
+#define WEXITED 4 /* report a child that has exited, which wait4 always does */
 
 #define WCONTINUED 8 /* also report a child that has CONTINUED */
 
-/* Bytes of struct rusage to zero-fill for wait4 (i386: two 8-byte timevals plus
- * 14 longs). We do not track per-process resource usage yet, so it is reported
- * as all zero. */
+#define WNOWAIT 0x01000000 /* waitid: report the event and leave it */
+
+#define W_NOTHREAD 0x20000000 /* Linux's __WNOTHREAD */
+
+#define W_ALL 0x40000000 /* Linux's __WALL */
+
+#define W_CLONE 0x80000000u /* Linux's __WCLONE */
+
+/* The children a wait selects, as waitid's idtype names them: every child,
+ * the child with an id, or the children in a process group. A pidfd names
+ * no child here, since no descriptor is one. */
+#define P_ALL 0
+
+#define P_PID 1
+
+#define P_PGID 2
+
+#define P_PIDFD 3
+
+/* The si_code of the SIGCHLD siginfo waitid fills. */
+#define CLD_EXITED 1
+
+#define CLD_KILLED 2
+
+#define CLD_DUMPED 3
+
+#define CLD_STOPPED 5
+
+#define CLD_CONTINUED 6
+
+/* The i386 struct rusage, 72 bytes: the user and system CPU time as two
+ * timevals of 32-bit seconds and microseconds, then fourteen longs, maxrss
+ * through nivcsw, which this kernel does not count and reports as zero. */
+struct kernel_rusage {
+    int32_t utime_sec;
+    int32_t utime_usec;
+    int32_t stime_sec;
+    int32_t stime_usec;
+    int32_t uncounted[14];
+};
+
 #define RUSAGE_BYTES 72
 
+/** Fill `ru` with `user` and `sys` ticks of CPU time and zero the rest. */
+static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t sys)
+{
+    k_memset(ru, 0, sizeof(*ru));
+    ru->utime_sec = (int32_t)(user / 100u);
+    ru->utime_usec = (int32_t)((user % 100u) * 10000u);
+    ru->stime_sec = (int32_t)(sys / 100u);
+    ru->stime_usec = (int32_t)((sys % 100u) * 10000u);
+}
+
+/**
+ * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
+ * the child's own CPU time with that of the children it has reaped. Read
+ * with interrupts masked, since the tick adds to a live child's.
+ */
+static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
+{
+    uint32_t flags = kirq_save();
+    uint32_t user = p->utime + p->cutime;
+    uint32_t sys = p->stime + p->cstime;
+
+    kirq_restore(flags);
+    rusage_from_ticks(ru, user, sys);
+}
+
+/* What a wait found: the child, its real uid, the wait status wait4 stores,
+ * the si_code and si_status waitid stores, and the child's usage. */
+struct wait_report {
+    uint32_t pid;
+    uint32_t uid;
+    int32_t status;
+    int32_t code;
+    int32_t info_status;
+    struct kernel_rusage ru;
+};
+
 /* Interrupts-off helpers (defined below with the signal code); used here for
- * the lost-wakeup-safe sleep in do_wait. */
+ * the lost-wakeup-safe sleep in wait_find. */
 static uint32_t sig_irq_save(void);
 
 static void sig_irq_restore(uint32_t flags);
 
-/* Does process p match a wait pid selector? pid > 0 = that exact pid; -1 = any
- * child; 0 = any child in the caller's process group; < -1 = any child in group
- * (-pid). (The caller has already confirmed p is its child.) */
-static int wait_pid_match(int pid, const process_t *p)
+/**
+ * Whether `p` is a child of the caller that `idtype` and `id` select.
+ *
+ * Linux's __WCLONE asks for the children that report their end with a signal
+ * other than SIGCHLD, unless __WALL is beside it, and every child here
+ * reports with SIGCHLD, so it selects none.
+ */
+static int wait_selects(int idtype, uint32_t id, int options, const process_t *p)
 {
-    if (pid > 0) {
-        return (int)p->pid == pid;
+    if (p->parent_pid != current_proc->pid) {
+        return 0;
     }
-    if (pid == -1) {
+    if (((uint32_t)options & W_CLONE) && !(options & W_ALL)) {
+        return 0;
+    }
+    switch (idtype) {
+    case P_PID:
+        return p->pid == id;
+    case P_PGID:
+        return p->pgid == id;
+    default:
         return 1;
     }
-    if (pid == 0) {
-        return (int)p->pgid == (int)current_proc->pgid;
-    }
-    if (pid == -2147483647 - 1) {
-        return 0; /* INT_MIN: -pid would overflow; no such group */
-    }
-    return (int)p->pgid == -pid;
+}
+
+/** Fill `r` with the report of child `p` and the `code` and `info_status`
+ * a waitid gives it. */
+static void wait_fill(struct wait_report *r, const process_t *p, int32_t status, int32_t code,
+                      int32_t info_status)
+{
+    r->pid = p->pid;
+    r->uid = p->ruid;
+    r->status = status;
+    r->code = code;
+    r->info_status = info_status;
+    rusage_of_child(&r->ru, p);
 }
 
 /**
- * Shared core of waitpid(7) and wait4(114).
- *
- * `status` (may be NULL) receives the Linux-encoded wait status that
- * sys_exit/terminate already stored in exit_code; `rusage_ptr` (0 for
- * waitpid, may be 0 for wait4) is zero-filled on reap. With WNOHANG, returns
- * 0 instead of blocking when a child exists but has not exited.
+ * Reap zombie `p`: add its CPU time, with its reaped children's, to the
+ * caller's children's totals, and give back its pages, page directory,
+ * kernel stack and record. The zombie no longer runs on its kernel stack,
+ * and this is the single release point for a per-fork stack.
  */
-static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
+static void wait_reap(process_t *p)
 {
-    uint32_t child_pid;
-    int exit_code;
+    current_proc->cutime += p->utime + p->cutime;
+    current_proc->cstime += p->stime + p->cstime;
+    if (p->cr3 != 0) {
+        page_dir_t *child_dir = p->page_dir;
+        free_user_pages(child_dir);
+        free_page_directory(child_dir);
+    }
+    kstack_free(p->kernel_stack);
+    free_process(p);
+}
+
+/**
+ * The shared core of waitpid, wait4 and waitid: find a child `idtype` and
+ * `id` select that has an event `options` asks for, fill `out` with it and
+ * return its pid.
+ *
+ * The events are an exit (WEXITED), which reaps the zombie; a stop
+ * (WUNTRACED), reported once, while the child is stopped; and a continue
+ * (WCONTINUED), reported once. With WNOWAIT a zombie is left to be reaped and
+ * a stop or a continue to be reported again. A zombie that is not waited for
+ * as one may still report a continue it has not reported, as Linux lets it.
+ * The exit's si_code is CLD_EXITED with the exit status, or CLD_KILLED or
+ * CLD_DUMPED with the signal; a stop's is CLD_STOPPED with the stop signal,
+ * and a continue's CLD_CONTINUED with SIGCONT.
+ *
+ * Returns the pid; 0 with WNOHANG when a selected child has nothing to
+ * report; -ECHILD when no child is selected; or -EINTR when a signal the
+ * caller acts on arrives while it waits.
+ */
+static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_report *out)
+{
     process_t *p;
     uint32_t flags;
-
-    if (!current_proc) {
-        return -ESRCH;
-    }
-
-    /* Validate AND fault in the status (and rusage) pointers up front (a NULL
-     * status means "don't report status"), so a bad or not-yet-present address
-     * is rejected before any child is reaped; otherwise the copy_to_user below
-     * could fail after free_process() has destroyed the zombie, losing it.
-     * Prefault for write, since that is how the results are delivered. */
-    if (status && !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
-        return -EFAULT;
-    }
-    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
-        return -EFAULT;
-    }
 
     while (1) {
         int have_child = 0;
 
-        /* Scan ALL matching children for a reportable event (a zombie to reap,
-         * or a stop/continue to report), not just the first non-zombie. */
+        /* Scan ALL selected children for a reportable event (a zombie to
+         * reap, or a stop/continue to report), not just the first. */
         for (p = proc_list; p; p = p->next) {
-            if (p->parent_pid != current_proc->pid) {
-                continue;
-            }
-            if (!wait_pid_match(pid, p)) {
+            if (!wait_selects(idtype, id, options, p)) {
                 continue;
             }
             have_child = 1;
 
-            /* A zombie is reaped: collect status, free pages + slot. */
-            if (p->state == PROC_ZOMBIE) {
-                child_pid = p->pid;
-                exit_code = p->exit_code;
-                if (p->cr3 != 0) {
-                    page_dir_t *child_dir = p->page_dir;
-                    free_user_pages(child_dir);
-                    free_page_directory(child_dir);
-                }
-                /* The zombie no longer runs on its kernel stack, so return it
-                 * to the arena for the next fork; this is the single release
-                 * point for a per-fork stack. */
-                kstack_free(p->kernel_stack);
-                free_process(p);
-                if (status) {
-                    copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
-                }
-                if (rusage_ptr) {
-                    uint8_t zero[RUSAGE_BYTES];
-                    k_memset(zero, 0, sizeof(zero));
-                    copy_to_user((void __user *)rusage_ptr, zero, RUSAGE_BYTES);
-                }
-                return (int32_t)child_pid;
-            }
+            if (p->state == PROC_ZOMBIE && (options & WEXITED)) {
+                int32_t status = p->exit_code;
 
-            /* A stop (WUNTRACED) or continue (WCONTINUED) is REPORTED, not
-             * reaped; jc_status is consumed so the same event is not delivered
-             * twice. */
+                if ((status & 0x7f) == 0) {
+                    wait_fill(out, p, status, CLD_EXITED, (status >> 8) & 0xff);
+                } else {
+                    wait_fill(out, p, status, (status & 0x80) ? CLD_DUMPED : CLD_KILLED,
+                              status & 0x7f);
+                }
+                if (!(options & WNOWAIT)) {
+                    wait_reap(p);
+                }
+                return (int32_t)out->pid;
+            }
             if ((options & WUNTRACED) && p->state == PROC_STOPPED &&
                 (p->jc_status & 0xff) == 0x7f) {
-                exit_code = (int)p->jc_status;
-                p->jc_status = 0;
-                if (status) {
-                    copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
+                wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
+                          (int32_t)((p->jc_status >> 8) & 0xff));
+                if (!(options & WNOWAIT)) {
+                    p->jc_status = 0;
                 }
-                return (int32_t)p->pid;
+                return (int32_t)out->pid;
             }
             if ((options & WCONTINUED) && p->jc_status == 0xffff) {
-                exit_code = (int)p->jc_status;
-                p->jc_status = 0;
-                if (status) {
-                    copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
+                wait_fill(out, p, 0xffff, CLD_CONTINUED, SIGCONT);
+                if (!(options & WNOWAIT)) {
+                    p->jc_status = 0;
                 }
-                return (int32_t)p->pid;
+                return (int32_t)out->pid;
             }
         }
 
@@ -1781,6 +1935,61 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     }
 }
 
+/**
+ * Shared core of waitpid(7) and wait4(114).
+ *
+ * `pid` selects as Linux's does: a pid, -1 for every child, 0 for the
+ * caller's process group, and less than -1 for the group -pid; the most
+ * negative int names no group. The options are WNOHANG, WUNTRACED and
+ * WCONTINUED, with Linux's three thread bits, and an exit is always waited
+ * for; the other bits are ignored. `status` (may be NULL) receives the
+ * Linux-encoded wait status that sys_exit/terminate already stored in
+ * exit_code; `rusage_ptr` (0 for waitpid, may be 0 for wait4) receives the
+ * child's CPU time with its reaped children's, for a stop or a continue as
+ * for an exit. Both are faulted in for writing before any child is reaped,
+ * so a bad address answers -EFAULT instead of losing the zombie.
+ */
+static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
+{
+    struct wait_report r;
+    int idtype = P_PGID;
+    uint32_t id;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (status && !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
+        return -EFAULT;
+    }
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
+        return -EFAULT;
+    }
+    if (pid > 0) {
+        idtype = P_PID;
+        id = (uint32_t)pid;
+    } else if (pid == -1) {
+        idtype = P_ALL;
+        id = 0;
+    } else if (pid == 0) {
+        id = current_proc->pgid;
+    } else {
+        id = 0u - (uint32_t)pid;
+    }
+    options &= (int)(WNOHANG | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE);
+    rc = wait_find(idtype, id, options | WEXITED, &r);
+    if (rc <= 0) {
+        return rc;
+    }
+    if (status) {
+        copy_to_user((void __user *)status, &r.status, sizeof(r.status));
+    }
+    if (rusage_ptr) {
+        copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES);
+    }
+    return rc;
+}
+
 /*
  * sys_waitpid - wait for a child to change state.
  * Args: EBX = pid (-1 = any child), ECX = status pointer, EDX = options.
@@ -1793,13 +2002,150 @@ int32_t sys_waitpid(isr_params_t *params)
 }
 
 /*
- * sys_wait4 - like waitpid plus an optional rusage out-pointer
- * (zero-filled). Args: EBX = pid, ECX = status, EDX = options, ESI = rusage.
- * musl's wait/waitpid are implemented on top of this.
+ * sys_wait4 - like waitpid plus an optional rusage out-pointer, which
+ * receives the child's CPU time. Args: EBX = pid, ECX = status, EDX =
+ * options, ESI = rusage. musl's wait/waitpid are implemented on top of this.
  */
 int32_t sys_wait4(isr_params_t *params)
 {
     return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, params->esi);
+}
+
+/* The six fields of the SIGCHLD siginfo_t that waitid writes, at the start
+ * of the 128-byte i386 structure. */
+struct kernel_chld_info {
+    int32_t signo;
+    int32_t err;
+    int32_t code;
+    int32_t pid;
+    int32_t uid;
+    int32_t status;
+};
+
+/**
+ * Wait for a child to change state (waitid(2), syscall 284).
+ *
+ * EBX = idtype, ECX = id, EDX = siginfo_t *, ESI = options, EDI = struct
+ * rusage *, Linux's fifth argument. P_ALL selects every child, P_PID the
+ * child with a positive id, and P_PGID the group with a nonnegative id, 0
+ * being the caller's. At least one of WEXITED, WSTOPPED and WCONTINUED must
+ * be given, beside which WNOHANG, WNOWAIT and Linux's three thread bits are
+ * accepted; `wait_find` has what each means.
+ *
+ * Returns 0 when a child was reported, with the siginfo's si_signo SIGCHLD,
+ * si_code, si_pid, si_uid (the child's real uid) and si_status filled and
+ * the child's usage in the rusage; and 0 with WNOHANG when no selected child
+ * has an event, with those siginfo fields zero and the rusage untouched.
+ * Only those six fields are written. -EINVAL for an unknown option or idtype,
+ * no event asked for, or an id that does not suit its idtype; -EBADF for a
+ * pidfd, since no descriptor is one; -ECHILD, -EINTR; -EFAULT, found before
+ * any child is reaped, as `do_wait` finds it.
+ */
+int32_t sys_waitid(isr_params_t *params)
+{
+    int idtype = (int)params->ebx;
+    int32_t upid = (int32_t)params->ecx;
+    uint32_t uinfo = params->edx;
+    int options = (int)params->esi;
+    uint32_t rusage_ptr = params->edi;
+    struct kernel_chld_info info;
+    struct wait_report r;
+    uint32_t id = 0;
+    int32_t rc;
+
+    if ((uint32_t)options & ~(WNOHANG | WNOWAIT | WEXITED | WUNTRACED | WCONTINUED | W_NOTHREAD |
+                              W_ALL | W_CLONE)) {
+        return -EINVAL;
+    }
+    if (!(options & (WEXITED | WUNTRACED | WCONTINUED))) {
+        return -EINVAL;
+    }
+    switch (idtype) {
+    case P_ALL:
+        break;
+    case P_PID:
+        if (upid <= 0) {
+            return -EINVAL;
+        }
+        id = (uint32_t)upid;
+        break;
+    case P_PGID:
+        if (upid < 0) {
+            return -EINVAL;
+        }
+        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        break;
+    case P_PIDFD:
+        return upid < 0 ? -EINVAL : -EBADF;
+    default:
+        return -EINVAL;
+    }
+    if (uinfo && !user_buffer_ok(uinfo, sizeof(info), 1)) {
+        return -EFAULT;
+    }
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
+        return -EFAULT;
+    }
+    rc = wait_find(idtype, id, options, &r);
+    if (rc < 0) {
+        return rc;
+    }
+    k_memset(&info, 0, sizeof(info));
+    if (rc > 0) {
+        info.signo = SIGCHLD;
+        info.code = r.code;
+        info.pid = (int32_t)r.pid;
+        info.uid = (int32_t)r.uid;
+        info.status = r.info_status;
+        if (rusage_ptr) {
+            copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES);
+        }
+    }
+    if (uinfo) {
+        copy_to_user((void __user *)uinfo, &info, sizeof(info));
+    }
+    return 0;
+}
+
+/* The targets getrusage(2) takes: the caller, its reaped children, and the
+ * calling thread, which is the caller while each process is one thread. */
+#define RUSAGE_SELF 0
+
+#define RUSAGE_CHILDREN (-1)
+
+#define RUSAGE_THREAD 1
+
+/**
+ * Resource usage (getrusage(2), syscall 77).
+ *
+ * EBX = who, ECX = the 72-byte i386 struct rusage. `ru_utime` and `ru_stime`
+ * are the caller's user and system time for RUSAGE_SELF and RUSAGE_THREAD,
+ * and the totals of the children it has reaped, each with the children those
+ * reaped, for RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
+ * fourteen counters after them, maximum resident size through context
+ * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
+ * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
+ */
+int32_t sys_getrusage(isr_params_t *params)
+{
+    int who = (int)params->ebx;
+    struct kernel_rusage ru;
+    uint32_t flags;
+    uint32_t user;
+    uint32_t sys;
+
+    if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
+        return -EINVAL;
+    }
+    flags = kirq_save();
+    user = who == RUSAGE_CHILDREN ? current_proc->cutime : current_proc->utime;
+    sys = who == RUSAGE_CHILDREN ? current_proc->cstime : current_proc->stime;
+    kirq_restore(flags);
+    rusage_from_ticks(&ru, user, sys);
+    if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
+        return -EFAULT;
+    }
+    return 0;
 }
 
 /*
@@ -2667,6 +3013,15 @@ int32_t sys_getpid(isr_params_t *params)
 }
 
 /**
+ * The calling thread's id (gettid(2)): the process id, since each process
+ * is one thread, as Linux's is for a process that has made none.
+ */
+int32_t sys_gettid(isr_params_t *params)
+{
+    return sys_getpid(params);
+}
+
+/**
  * Create a new session (setsid(2)).
  *
  * The caller becomes the leader of a new session AND a new process group,
@@ -2828,15 +3183,18 @@ int32_t sys_setuid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t uid = params->ebx;
+    uint32_t old_euid = p->euid;
 
     if (cred_privileged()) {
         p->ruid = uid;
         p->euid = uid;
         p->suid = uid;
+        cred_moved(p, old_euid, p->egid);
         return 0;
     }
     if (uid == p->ruid || uid == p->suid) {
         p->euid = uid;
+        cred_moved(p, old_euid, p->egid);
         return 0;
     }
     return -EPERM;
@@ -2846,15 +3204,18 @@ int32_t sys_setgid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t gid = params->ebx;
+    uint32_t old_egid = p->egid;
 
     if (cred_privileged()) {
         p->rgid = gid;
         p->egid = gid;
         p->sgid = gid;
+        cred_moved(p, p->euid, old_egid);
         return 0;
     }
     if (gid == p->rgid || gid == p->sgid) {
         p->egid = gid;
+        cred_moved(p, p->euid, old_egid);
         return 0;
     }
     return -EPERM;
@@ -2867,6 +3228,7 @@ int32_t sys_setreuid(isr_params_t *params)
     uint32_t e = params->ecx;
     uint32_t new_r = (r == SC_ID_KEEP) ? p->ruid : r;
     uint32_t new_e = (e == SC_ID_KEEP) ? p->euid : e;
+    uint32_t old_euid = p->euid;
 
     if (!cred_privileged()) {
         if (r != SC_ID_KEEP && new_r != p->ruid && new_r != p->euid) {
@@ -2881,6 +3243,7 @@ int32_t sys_setreuid(isr_params_t *params)
     }
     p->ruid = new_r;
     p->euid = new_e;
+    cred_moved(p, old_euid, p->egid);
     return 0;
 }
 
@@ -2891,6 +3254,7 @@ int32_t sys_setregid(isr_params_t *params)
     uint32_t e = params->ecx;
     uint32_t new_r = (r == SC_ID_KEEP) ? p->rgid : r;
     uint32_t new_e = (e == SC_ID_KEEP) ? p->egid : e;
+    uint32_t old_egid = p->egid;
 
     if (!cred_privileged()) {
         if (r != SC_ID_KEEP && new_r != p->rgid && new_r != p->egid) {
@@ -2905,6 +3269,7 @@ int32_t sys_setregid(isr_params_t *params)
     }
     p->rgid = new_r;
     p->egid = new_e;
+    cred_moved(p, p->euid, old_egid);
     return 0;
 }
 
@@ -2914,6 +3279,7 @@ int32_t sys_setresuid(isr_params_t *params)
     uint32_t r = params->ebx;
     uint32_t e = params->ecx;
     uint32_t s = params->edx;
+    uint32_t old_euid = p->euid;
 
     if (!cred_privileged()) {
         uint32_t v[3];
@@ -2936,6 +3302,7 @@ int32_t sys_setresuid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->suid = s;
     }
+    cred_moved(p, old_euid, p->egid);
     return 0;
 }
 
@@ -2945,6 +3312,7 @@ int32_t sys_setresgid(isr_params_t *params)
     uint32_t r = params->ebx;
     uint32_t e = params->ecx;
     uint32_t s = params->edx;
+    uint32_t old_egid = p->egid;
 
     if (!cred_privileged()) {
         uint32_t v[3];
@@ -2967,6 +3335,7 @@ int32_t sys_setresgid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->sgid = s;
     }
+    cred_moved(p, p->euid, old_egid);
     return 0;
 }
 
@@ -3050,8 +3419,8 @@ int32_t sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: three are kept in the record and enforced, RLIMIT_STACK
- * reports the stack growth cap, and the rest are unlimited. */
+/* The resources: four are kept in the record and enforced, and the rest
+ * are unlimited. */
 #define RLIMIT_STACK_RES 3
 
 #define RLIMIT_NPROC_RES 6
@@ -3072,6 +3441,8 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_NOFILE;
     case RLIMIT_AS_RES:
         return RLIM_AS;
+    case RLIMIT_STACK_RES:
+        return RLIM_STACK;
     default:
         return -1;
     }
@@ -3086,7 +3457,7 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
         *max = p->rlim[slot].max;
         return;
     }
-    *cur = *max = resource == RLIMIT_STACK_RES ? 0x800000u : RLIM_INF32;
+    *cur = *max = RLIM_INF32;
 }
 
 /**
@@ -3508,4 +3879,495 @@ int32_t sys_mprotect(isr_params_t *params)
     }
     paging_protect_range(_curr_dir, addr, end, vmprot);
     return 0;
+}
+
+/* The three kinds of target setpriority(2) and getpriority(2) take. */
+#define PRIO_PROCESS 0
+
+#define PRIO_PGRP 1
+
+#define PRIO_USER 2
+
+/* The range of a nice value. */
+#define NICE_MIN (-20)
+
+#define NICE_MAX 19
+
+/**
+ * Whether `p` is a target of a priority call: the process `who` names for
+ * PRIO_PROCESS, a member of group `who` for PRIO_PGRP, and a process of real
+ * user `who` for PRIO_USER, where `who` 0 is the caller, its group or its
+ * real uid. Zombies count, as Linux counts them until they are reaped, and
+ * the kernel's own record, pid 0, does not.
+ */
+static int prio_target(const process_t *p, int which, uint32_t who)
+{
+    if (p->pid == 0) {
+        return 0;
+    }
+    switch (which) {
+    case PRIO_PROCESS:
+        return p->pid == (who != 0 ? who : current_proc->pid);
+    case PRIO_PGRP:
+        return p->pgid == (who != 0 ? who : current_proc->pgid);
+    default:
+        return p->ruid == (who != 0 ? who : current_proc->ruid);
+    }
+}
+
+/**
+ * Read a priority (getpriority(2), syscall 96).
+ *
+ * EBX = which, ECX = who. Returns the highest priority among the targets,
+ * as Linux's raw call returns it, 20 less the nice value, so 1 for nice 19
+ * and 40 for nice -20; the C library turns it back into the nice value.
+ * -EINVAL for an unknown `which`, -ESRCH when nothing matches.
+ */
+int32_t sys_getpriority(isr_params_t *params)
+{
+    int which = (int)params->ebx;
+    process_t *p;
+    int32_t best = -ESRCH;
+
+    if (which < PRIO_PROCESS || which > PRIO_USER) {
+        return -EINVAL;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (prio_target(p, which, params->ecx) && 20 - p->nice > best) {
+            best = 20 - p->nice;
+        }
+    }
+    return best;
+}
+
+/**
+ * Set a priority (setpriority(2), syscall 97).
+ *
+ * EBX = which, ECX = who, EDX = the nice value, clamped to -20 through 19
+ * as Linux clamps it. Each target is changed on Linux's terms: a caller
+ * whose effective uid is neither the target's real nor its effective uid
+ * gets -EPERM, and one that would lower the target's nice value, raising its
+ * priority, gets -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do
+ * both. The targets that pass are changed whatever the others answer, and the
+ * call returns the last refusal, 0 when there was none, or -ESRCH when
+ * nothing matched. The value is kept and inherited, and the scheduler does
+ * not read it: every ready process takes its turn.
+ */
+int32_t sys_setpriority(isr_params_t *params)
+{
+    int which = (int)params->ebx;
+    int32_t nice = (int32_t)params->edx;
+    process_t *p;
+    int32_t rc = -ESRCH;
+
+    if (which < PRIO_PROCESS || which > PRIO_USER) {
+        return -EINVAL;
+    }
+    if (nice < NICE_MIN) {
+        nice = NICE_MIN;
+    }
+    if (nice > NICE_MAX) {
+        nice = NICE_MAX;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (!prio_target(p, which, params->ecx)) {
+            continue;
+        }
+        if (!cred_privileged() && current_proc->euid != p->ruid &&
+            current_proc->euid != p->euid) {
+            rc = -EPERM;
+            continue;
+        }
+        if (nice < p->nice && !cred_privileged()) {
+            rc = -EACCES;
+            continue;
+        }
+        if (rc == -ESRCH) {
+            rc = 0;
+        }
+        p->nice = nice;
+    }
+    return rc;
+}
+
+/* The scheduling policies Linux numbers. Only SCHED_OTHER is run here; the
+ * others are known so that each is refused as Linux refuses it, or answered
+ * as Linux answers for it. */
+#define SCHED_OTHER 0
+
+#define SCHED_FIFO 1
+
+#define SCHED_RR 2
+
+#define SCHED_BATCH 3
+
+#define SCHED_IDLE 5
+
+#define SCHED_DEADLINE 6
+
+#define SCHED_EXT 7
+
+/* The flag a policy may carry that asks a fork not to pass the policy on;
+ * accepted with SCHED_OTHER, which it changes nothing for here. */
+#define SCHED_RESET_ON_FORK 0x40000000
+
+/* The highest real-time priority Linux gives SCHED_FIFO and SCHED_RR. */
+#define SCHED_RT_PRIO_MAX 99
+
+/* The bytes of a CPU mask: one 32-bit word, of which CPU 0 is the only
+ * bit a machine of one processor sets. */
+#define CPU_MASK_BYTES 4u
+
+/**
+ * The process a scheduling call names: the caller for pid 0, otherwise the
+ * process with that pid, zombies included as Linux includes them, or NULL.
+ */
+static process_t *sched_target(int pid)
+{
+    if (pid == 0) {
+        return current_proc;
+    }
+    return get_process((uint32_t)pid);
+}
+
+/**
+ * Whether the caller may change `p`'s scheduling: effective uid 0, or an
+ * effective uid equal to the target's effective or real uid, Linux's rule for
+ * a caller without CAP_SYS_NICE.
+ */
+static int sched_may_change(const process_t *p)
+{
+    return cred_privileged() || current_proc->euid == p->euid || current_proc->euid == p->ruid;
+}
+
+/**
+ * Give way to the other ready processes (sched_yield(2), syscall 158).
+ *
+ * The caller is put behind them in the round-robin order and runs again when
+ * its turn comes, at once when no other process is ready. Returns 0.
+ */
+int32_t sys_sched_yield(isr_params_t *params)
+{
+    (void)params;
+    schedule();
+    return 0;
+}
+
+/**
+ * Change a process's policy and priority (sched_setscheduler(2), syscall
+ * 156), or its priority alone (sched_setparam(2), syscall 154, which passes
+ * `policy` -1).
+ *
+ * `uparam` points at a struct sched_param, one int. SCHED_OTHER with priority
+ * 0 is the one setting a process has here, and asking for it succeeds for a
+ * caller that may change the target; SCHED_RESET_ON_FORK beside it is
+ * accepted and kept nowhere, since a fork has no other policy to reset. The
+ * rest is refused in Linux's order and with its errors: no parameter or a
+ * negative pid, -EINVAL; an unreadable parameter, -EFAULT; no such process,
+ * -ESRCH; a priority past 99, or one that does not suit the policy, -EINVAL,
+ * as for SCHED_DEADLINE, which takes its parameters from sched_setattr
+ * alone; SCHED_FIFO and SCHED_RR, -EPERM, as Linux answers a caller without
+ * CAP_SYS_NICE when RLIMIT_RTPRIO is 0; and a caller that may not change the
+ * target, -EPERM. SCHED_BATCH and SCHED_IDLE, which Linux grants anyone, and
+ * every other number, -EINVAL: this kernel has one policy.
+ */
+static int32_t sched_set(int pid, int policy, const void __user *uparam)
+{
+    int32_t priority;
+    process_t *p;
+
+    if (!uparam || pid < 0) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&priority, uparam, sizeof(priority)) != 0) {
+        return -EFAULT;
+    }
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (policy >= 0) {
+        policy &= ~SCHED_RESET_ON_FORK;
+    } else {
+        policy = SCHED_OTHER;
+    }
+    if (priority < 0 || priority > SCHED_RT_PRIO_MAX) {
+        return -EINVAL;
+    }
+    switch (policy) {
+    case SCHED_OTHER:
+        if (priority != 0) {
+            return -EINVAL;
+        }
+        return sched_may_change(p) ? 0 : -EPERM;
+    case SCHED_FIFO:
+    case SCHED_RR:
+        return priority == 0 ? -EINVAL : -EPERM;
+    default:
+        return -EINVAL;
+    }
+}
+
+/** sched_setscheduler(2), syscall 156: EBX = pid, ECX = policy, EDX = the
+ * struct sched_param; see `sched_set`. A negative policy is -EINVAL first. */
+int32_t sys_sched_setscheduler(isr_params_t *params)
+{
+    if ((int)params->ecx < 0) {
+        return -EINVAL;
+    }
+    return sched_set((int)params->ebx, (int)params->ecx, (const void __user *)params->edx);
+}
+
+/** sched_setparam(2), syscall 154: EBX = pid, ECX = the struct
+ * sched_param; see `sched_set`. */
+int32_t sys_sched_setparam(isr_params_t *params)
+{
+    return sched_set((int)params->ebx, -1, (const void __user *)params->ecx);
+}
+
+/**
+ * A process's policy (sched_getscheduler(2), syscall 157): SCHED_OTHER, the
+ * one every process has. -EINVAL for a negative pid, -ESRCH for no process.
+ */
+int32_t sys_sched_getscheduler(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+
+    if (pid < 0) {
+        return -EINVAL;
+    }
+    return sched_target(pid) ? SCHED_OTHER : -ESRCH;
+}
+
+/**
+ * A process's scheduling parameter (sched_getparam(2), syscall 155): the
+ * priority 0 of SCHED_OTHER, written to the struct sched_param at ECX.
+ * -EINVAL for no parameter or a negative pid, -ESRCH, -EFAULT.
+ */
+int32_t sys_sched_getparam(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+    void __user *uparam = (void __user *)params->ecx;
+    int32_t priority = 0;
+
+    if (!uparam || pid < 0) {
+        return -EINVAL;
+    }
+    if (!sched_target(pid)) {
+        return -ESRCH;
+    }
+    return copy_to_user(uparam, &priority, sizeof(priority)) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * The priority range of a policy, as Linux gives it whether the policy runs
+ * here or not: 1 to 99 for SCHED_FIFO and SCHED_RR, 0 to 0 for the other
+ * policies Linux has, and -EINVAL for a number that is none. `max` picks the
+ * top of the range.
+ */
+static int32_t sched_priority_bound(int policy, int max)
+{
+    switch (policy) {
+    case SCHED_FIFO:
+    case SCHED_RR:
+        return max ? SCHED_RT_PRIO_MAX : 1;
+    case SCHED_OTHER:
+    case SCHED_BATCH:
+    case SCHED_IDLE:
+    case SCHED_DEADLINE:
+    case SCHED_EXT:
+        return 0;
+    default:
+        return -EINVAL;
+    }
+}
+
+/** sched_get_priority_max(2), syscall 159: EBX = policy. */
+int32_t sys_sched_get_priority_max(isr_params_t *params)
+{
+    return sched_priority_bound((int)params->ebx, 1);
+}
+
+/** sched_get_priority_min(2), syscall 160: EBX = policy. */
+int32_t sys_sched_get_priority_min(isr_params_t *params)
+{
+    return sched_priority_bound((int)params->ebx, 0);
+}
+
+/**
+ * A process's round-robin time slice (sched_rr_get_interval(2), syscall 161,
+ * 32-bit timespec): one tick, 10 ms, since the timer takes the processor
+ * from every process at each tick. -EINVAL for a negative pid, -ESRCH,
+ * -EFAULT.
+ */
+int32_t sys_sched_rr_get_interval(isr_params_t *params)
+{
+    int pid = (int)params->ebx;
+    struct kernel_timespec slice;
+
+    if (pid < 0) {
+        return -EINVAL;
+    }
+    if (!sched_target(pid)) {
+        return -ESRCH;
+    }
+    slice.tv_sec = 0;
+    slice.tv_nsec = 10000000;
+    if (copy_to_user((void __user *)params->ecx, &slice, sizeof(slice)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * The CPUs a process may run on (sched_getaffinity(2), syscall 242).
+ *
+ * EBX = pid, ECX = the bytes of the mask at EDX. The mask has CPU 0 alone,
+ * the one processor, and the call writes its four bytes and returns 4, as
+ * Linux returns the bytes it wrote; the C library clears the rest of a larger
+ * set. -EINVAL for a length that is zero or not a multiple of four bytes,
+ * -ESRCH for no process, -EFAULT.
+ */
+int32_t sys_sched_getaffinity(isr_params_t *params)
+{
+    uint32_t len = params->ecx;
+    uint32_t mask = 1;
+
+    if (len == 0 || (len & 3u) != 0) {
+        return -EINVAL;
+    }
+    if (!sched_target((int)params->ebx)) {
+        return -ESRCH;
+    }
+    if (copy_to_user((void __user *)params->edx, &mask, CPU_MASK_BYTES) != 0) {
+        return -EFAULT;
+    }
+    return (int32_t)CPU_MASK_BYTES;
+}
+
+/**
+ * Set the CPUs a process may run on (sched_setaffinity(2), syscall 241).
+ *
+ * EBX = pid, ECX = the bytes of the mask at EDX. At most four bytes are read,
+ * as Linux reads no more than its own mask's size, and a shorter mask is
+ * zero past its end. A mask with CPU 0 is accepted, since that is where every
+ * process runs; one without it names no CPU of this machine and is refused
+ * with -EINVAL. -EFAULT, then -ESRCH, then -EPERM for a caller that may not
+ * change the target, in Linux's order.
+ */
+int32_t sys_sched_setaffinity(isr_params_t *params)
+{
+    uint32_t len = params->ecx;
+    uint32_t mask = 0;
+    process_t *p;
+
+    if (len > CPU_MASK_BYTES) {
+        len = CPU_MASK_BYTES;
+    }
+    if (copy_from_user(&mask, (const void __user *)params->edx, len) != 0) {
+        return -EFAULT;
+    }
+    p = sched_target((int)params->ebx);
+    if (!p) {
+        return -ESRCH;
+    }
+    if (!sched_may_change(p)) {
+        return -EPERM;
+    }
+    return (mask & 1u) ? 0 : -EINVAL;
+}
+
+/* The prctl options this kernel has; every other is EINVAL, as Linux answers
+ * an option it does not know. */
+#define PR_SET_PDEATHSIG 1
+
+#define PR_GET_PDEATHSIG 2
+
+#define PR_GET_DUMPABLE 3
+
+#define PR_SET_DUMPABLE 4
+
+#define PR_SET_NAME 15
+
+#define PR_GET_NAME 16
+
+#define PR_SET_NO_NEW_PRIVS 38
+
+#define PR_GET_NO_NEW_PRIVS 39
+
+/**
+ * Operations on the calling process (prctl(2), syscall 172).
+ *
+ * EBX = option, ECX to EDI = its four arguments, each as Linux takes it:
+ *
+ * PR_SET_PDEATHSIG sets the signal, 1 to 64 or 0 for none, that this
+ * process receives when its parent exits (`reparent_children` posts it), and
+ * PR_GET_PDEATHSIG stores it as an int at the second argument.
+ *
+ * PR_GET_DUMPABLE returns whether the process is dumpable, and
+ * PR_SET_DUMPABLE sets it to 0 or 1. Nothing reads it here, since the kernel
+ * writes no core files and has no tracing.
+ *
+ * PR_SET_NAME sets the program name `/proc/<pid>/stat` and ps show from the
+ * string at the second argument, cut to 15 bytes, and PR_GET_NAME stores the
+ * name's 16 bytes, NUL-padded, at the second argument.
+ *
+ * PR_SET_NO_NEW_PRIVS, with the second argument 1 and the rest 0, sets
+ * no_new_privs for good: fork passes it on and exec then ignores set-id bits.
+ * PR_GET_NO_NEW_PRIVS, with every argument 0, returns it.
+ *
+ * Returns 0 or the value asked for; -EINVAL for any other option, a signal
+ * past 64, a dumpable value other than 0 and 1, or arguments not as above;
+ * -EFAULT for a pointer that cannot be read or written.
+ */
+int32_t sys_prctl(isr_params_t *params)
+{
+    uint32_t arg2 = params->ecx;
+    uint32_t rest = params->edx | params->esi | params->edi;
+    int32_t value;
+    char name[sizeof(current_proc->comm)];
+
+    switch (params->ebx) {
+    case PR_SET_PDEATHSIG:
+        if (arg2 > KSIG_MAX) {
+            return -EINVAL;
+        }
+        current_proc->pdeath_signal = arg2;
+        return 0;
+    case PR_GET_PDEATHSIG:
+        value = (int32_t)current_proc->pdeath_signal;
+        return copy_to_user((void __user *)arg2, &value, sizeof(value)) != 0 ? -EFAULT : 0;
+    case PR_GET_DUMPABLE:
+        return (int32_t)current_proc->dumpable;
+    case PR_SET_DUMPABLE:
+        if (arg2 > 1) {
+            return -EINVAL;
+        }
+        current_proc->dumpable = arg2;
+        return 0;
+    case PR_SET_NAME:
+        k_memset(name, 0, sizeof(name));
+        if (strncpy_from_user(name, (const char __user *)arg2, sizeof(name) - 1) == -EFAULT) {
+            return -EFAULT;
+        }
+        name[sizeof(name) - 1] = '\0';
+        k_memcpy(current_proc->comm, name, sizeof(name));
+        return 0;
+    case PR_GET_NAME:
+        k_memcpy(name, current_proc->comm, sizeof(name));
+        return copy_to_user((void __user *)arg2, name, sizeof(name)) != 0 ? -EFAULT : 0;
+    case PR_SET_NO_NEW_PRIVS:
+        if (arg2 != 1 || rest != 0) {
+            return -EINVAL;
+        }
+        current_proc->no_new_privs = 1;
+        return 0;
+    case PR_GET_NO_NEW_PRIVS:
+        if (arg2 != 0 || rest != 0) {
+            return -EINVAL;
+        }
+        return current_proc->no_new_privs ? 1 : 0;
+    default:
+        return -EINVAL;
+    }
 }

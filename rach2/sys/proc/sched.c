@@ -231,12 +231,30 @@ uint32_t sched_busy_ticks(void)
     return _busy_ticks;
 }
 
-void sched_account_tick(void)
+/**
+ * Count one delivered tick as idle or busy, and charge a busy one to the
+ * process it interrupted.
+ *
+ * The process charged is `current_proc`, whose code, system call or
+ * interrupt handler the tick interrupted, and `user` says whether the
+ * interrupted code was ring 3's; Linux charges an interrupt handler's time to
+ * the process it interrupted too. A tick that finds the processor in an idle
+ * wait is charged to no one, although the process whose call is waiting is
+ * still current.
+ */
+void sched_account_tick(int user)
 {
     if (_in_idle_wait) {
         ++_idle_ticks;
-    } else {
-        ++_busy_ticks;
+        return;
+    }
+    ++_busy_ticks;
+    if (current_proc) {
+        if (user) {
+            ++current_proc->utime;
+        } else {
+            ++current_proc->stime;
+        }
     }
 }
 

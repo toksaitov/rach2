@@ -1,0 +1,220 @@
+.Dd September 27, 2026
+.Dt SCHED_SETSCHEDULER 2
+.Os
+.Sh NAME
+.Nm sched_setscheduler ,
+.Nm sched_getscheduler ,
+.Nm sched_setparam ,
+.Nm sched_getparam ,
+.Nm sched_get_priority_max ,
+.Nm sched_get_priority_min ,
+.Nm sched_rr_get_interval ,
+.Nm sched_setaffinity ,
+.Nm sched_getaffinity ,
+.Nm sched_yield
+.Nd scheduling policy, priority, affinity and yielding
+.Sh SYNOPSIS
+.In sched.h
+.Ft int
+.Fn sched_setscheduler "pid_t pid" "int policy" "const struct sched_param *param"
+.Ft int
+.Fn sched_getscheduler "pid_t pid"
+.Ft int
+.Fn sched_setparam "pid_t pid" "const struct sched_param *param"
+.Ft int
+.Fn sched_getparam "pid_t pid" "struct sched_param *param"
+.Ft int
+.Fn sched_get_priority_max "int policy"
+.Ft int
+.Fn sched_get_priority_min "int policy"
+.Ft int
+.Fn sched_rr_get_interval "pid_t pid" "struct timespec *tp"
+.Ft int
+.Fn sched_setaffinity "pid_t pid" "size_t cpusetsize" "const cpu_set_t *mask"
+.Ft int
+.Fn sched_getaffinity "pid_t pid" "size_t cpusetsize" "cpu_set_t *mask"
+.Ft int
+.Fn sched_yield "void"
+.Sh DESCRIPTION
+The scheduler gives every ready process the processor in turn, a tick at
+a time, and has one policy,
+.Dv SCHED_OTHER ,
+with priority 0.
+The machine has one processor, CPU 0.
+A
+.Fa pid
+of 0 names the caller; any other names a process that has not been
+reaped.
+.Pp
+.Fn sched_getscheduler
+returns
+.Dv SCHED_OTHER
+.Pq 0
+for every process, and
+.Fn sched_getparam
+stores its priority, 0.
+.Fn sched_setscheduler
+and
+.Fn sched_setparam
+accept
+.Dv SCHED_OTHER
+with priority 0, the setting every process already has, from a caller
+that may change the process: one with effective user ID 0, or whose
+effective user ID equals the process's real or effective user ID.
+.Dv SCHED_RESET_ON_FORK
+may be added to the policy and is not kept, since a fork has no other
+policy to reset.
+The other policies are refused:
+.Dv SCHED_FIFO
+and
+.Dv SCHED_RR
+with a priority from 1 to 99 with
+.Er EPERM ,
+and every other policy and priority with
+.Er EINVAL .
+.Pp
+.Fn sched_get_priority_max
+and
+.Fn sched_get_priority_min
+give Linux's range for each policy Linux has, whether or not it runs here:
+1 to 99 for
+.Dv SCHED_FIFO
+and
+.Dv SCHED_RR ,
+and 0 to 0 for
+.Dv SCHED_OTHER ,
+.Dv SCHED_BATCH ,
+.Dv SCHED_IDLE ,
+.Dv SCHED_DEADLINE
+and
+.Dv SCHED_EXT .
+.Fn sched_rr_get_interval
+stores the time slice, one 10 ms tick, since the timer takes the
+processor from the running process at every tick.
+.Pp
+.Fn sched_getaffinity
+stores a mask with CPU 0 alone.
+.Fn sched_setaffinity
+accepts a mask that has CPU 0, whatever it says of CPUs the machine does
+not have, from a caller that may change the process, and changes nothing,
+since every process runs on CPU 0.
+.Pp
+.Fn sched_yield
+puts the caller behind the other ready processes in the round-robin
+order.
+It returns when the caller's turn comes again, at once when no other
+process is ready.
+.Ss Differences from Linux
+Linux grants
+.Dv SCHED_BATCH
+and
+.Dv SCHED_IDLE
+to any process that may change the target, and
+.Dv SCHED_FIFO
+and
+.Dv SCHED_RR
+to a caller with
+.Dv CAP_SYS_NICE
+or a
+.Dv RLIMIT_RTPRIO
+that allows the priority.
+This kernel has one policy and refuses them all, to root too.
+Linux reports
+.Dv SCHED_RESET_ON_FORK
+back once it has been set.
+.Ss System call interface
+The i386 system call numbers are 154 for
+.Fn sched_setparam ,
+155 for
+.Fn sched_getparam ,
+156 for
+.Fn sched_setscheduler ,
+157 for
+.Fn sched_getscheduler ,
+158 for
+.Fn sched_yield ,
+159 for
+.Fn sched_get_priority_max ,
+160 for
+.Fn sched_get_priority_min ,
+161 for
+.Fn sched_rr_get_interval ,
+241 for
+.Fn sched_setaffinity ,
+and 242 for
+.Fn sched_getaffinity .
+The raw
+.Fn sched_getaffinity
+returns the bytes of the mask it wrote, four, and fails with
+.Er EINVAL
+for a
+.Fa cpusetsize
+that is zero or not a multiple of four; the C library clears the rest of
+a larger set and returns 0.
+The raw
+.Fn sched_setaffinity
+reads at most four bytes of the mask.
+.Fn sched_rr_get_interval
+writes a 32-bit timespec.
+.Pp
+musl implements
+.Fn sched_setscheduler ,
+.Fn sched_getscheduler ,
+.Fn sched_setparam
+and
+.Fn sched_getparam
+as failures with
+.Er ENOSYS
+and does not call the kernel, since Linux's calls act on a thread and
+POSIX's on a process; glibc calls it.
+.Sh RETURN VALUES
+.Fn sched_getscheduler
+returns the policy,
+.Fn sched_get_priority_max
+and
+.Fn sched_get_priority_min
+the priority, and the other functions 0.
+On failure they return -1 and set
+.Va errno .
+The kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/schedmusl.c
+yields, reads the policy, the parameter, the priority ranges, the time
+slice and the affinity, sets
+.Dv SCHED_OTHER
+and an affinity with CPU 0, and checks the refusals of the other policies,
+of an affinity without CPU 0, and of another user's process.
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EFAULT
+A parameter, time slice or mask cannot be read or written.
+.It Bq Er EINVAL
+A
+.Fa pid
+is negative, a
+.Fa param
+is null, a policy or priority is one this kernel does not run, a policy
+number is unknown to
+.Fn sched_get_priority_max
+or
+.Fn sched_get_priority_min ,
+a
+.Fa cpusetsize
+for
+.Fn sched_getaffinity
+is zero or not a multiple of four, or a mask for
+.Fn sched_setaffinity
+lacks CPU 0.
+.It Bq Er EPERM
+The caller may not change the process, or asked for
+.Dv SCHED_FIFO
+or
+.Dv SCHED_RR .
+.It Bq Er ESRCH
+No process has the ID
+.Fa pid .
+.El
+.Sh SEE ALSO
+.Xr getpriority 2 ,
+.Xr proc 5

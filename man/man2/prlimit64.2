@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt PRLIMIT64 2
 .Os
 .Sh NAME
@@ -52,7 +52,7 @@ If
 is non-null, it receives the values from before the attempted change.
 Either or both pointers may be null.
 .Pp
-Three resources are stored and enforced:
+Four resources are stored and enforced:
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
 The number of processes with the same real user ID across the machine.
@@ -75,6 +75,18 @@ The bytes covered by the process's virtual memory regions.
 Growth beyond the soft limit makes mmap return
 .Er ENOMEM ,
 leaves the break unchanged in brk, and prevents stack growth.
+.It Dv RLIMIT_STACK
+The bytes of the stack.
+.Xr execve 2
+gives the new image a stack that may grow until it is the soft limit's
+size in whole pages, and no further than
+.Ad 0xB0000000 ,
+below which anonymous mappings are placed; a fault past that is
+.Dv SIGSEGV .
+A change applies at the next
+.Xr execve 2 .
+An exec that runs with an effective ID its caller lacks lowers a soft
+limit above 8 MiB to 8 MiB, as Linux's does.
 .El
 .Pp
 For these resources the soft limit must not exceed the hard limit.
@@ -82,16 +94,21 @@ A process may lower its hard limits; only a caller with effective user
 ID 0 may raise a hard limit.
 Fork inherits both values and exec preserves them.
 The kernel's initial soft and hard limits are 4096 processes,
-1024 descriptors, and unlimited address space.
+1024 descriptors, and unlimited address space, and the stack's are
+8 MiB soft and unlimited hard, which are Linux's.
 Init may replace these defaults as described in
 .Xr limits 7 .
 .Pp
-.Dv RLIMIT_STACK
-always reports 8388608 bytes for both values.
 Every other resource number, including an unknown number, reports
 unlimited values.
-Setting any resource other than the three stored resources succeeds
+Setting any resource other than the four stored resources succeeds
 without changing anything, even if its soft value exceeds its hard value.
+.Pp
+Linux measures each growth of the stack against the limit in force when
+it happens, so a process that raises its own
+.Dv RLIMIT_STACK
+may grow its stack further at once; here the limit of the exec that
+started the image applies until the next exec.
 .Pp
 The kernel stores limits in 32 bits.
 A 64-bit value with a nonzero high word, or the value 4294967295,
@@ -140,6 +157,12 @@ destination at or above eight with
 .Er EBADF .
 It also checks process and address-space limits, inheritance, and the
 privilege required to raise a hard limit.
+.Pa tests/musl/stackmusl.c
+checks the stack limit's default, inheritance and refusals, and that an
+exec lets the stack grow to 12 MiB under a limit of 16 MiB and kills it
+with
+.Dv SIGSEGV
+past a limit of 256 KiB.
 .Sh ERRORS
 .Bl -tag -width EINVAL
 .It Er EFAULT

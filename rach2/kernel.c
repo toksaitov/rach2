@@ -217,7 +217,9 @@ static void exec_program(int argc, char *argv[]);
  * loopback delivery, and the interrupt-less console serial drain. Finally
  * Accounts the tick as idle or busy FIRST, before anything below can wake a
  * process: the marker names what the processor was doing when this tick
- * arrived, not what it is about to do. Then reschedules through
+ * arrived, not what it is about to do, and a busy tick is charged to the
+ * process it interrupted, as user time when the interrupted code segment is
+ * ring 3's and as system time otherwise. Then reschedules through
  * `sched_preempt`: at once when the current process is not inside a system
  * call, and at the call's exit when it is, since timer IRQs stay enabled
  * during a call so HDA streaming keeps running, yet a switch in the middle of
@@ -226,8 +228,6 @@ static void exec_program(int argc, char *argv[]);
  */
 static void timer_handler(isr_params_t *params)
 {
-    (void)params;
-
     ++kernel_ticks;
     /* The microsecond clock's periods are this tick's to count; see
        `pit_now_us`. */
@@ -238,7 +238,7 @@ static void timer_handler(isr_params_t *params)
         ++kernel_uptime_seconds;
     }
 
-    sched_account_tick();
+    sched_account_tick((params->cs & 3u) == 3u);
 
     /* Runs regardless of in_syscall, so a sleeper parked inside its syscall
      * still becomes runnable on time. */

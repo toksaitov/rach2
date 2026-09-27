@@ -1,13 +1,16 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt NANOSLEEP 2
 .Os
 .Sh NAME
-.Nm nanosleep
-.Nd suspend the calling process for an interval
+.Nm nanosleep ,
+.Nm clock_nanosleep
+.Nd suspend the calling process for an interval or until a time
 .Sh SYNOPSIS
 .In time.h
 .Ft int
 .Fn nanosleep "const struct timespec *req" "struct timespec *rem"
+.Ft int
+.Fn clock_nanosleep "clockid_t clockid" "int flags" "const struct timespec *req" "struct timespec *rem"
 .Sh DESCRIPTION
 .Fn nanosleep
 suspends the calling process for the interval in
@@ -43,6 +46,58 @@ A signal in the last tick before the deadline leaves a remainder of zero,
 since the kernel counts whole ticks and does not record where in its tick
 the sleep began; a sleep begun again with it returns at once, up to a
 tick before the time first asked.
+.Ss clock_nanosleep
+.Fn clock_nanosleep
+sleeps against the clock
+.Fa clockid .
+With
+.Fa flags
+0,
+.Fa req
+is an interval, slept as
+.Fn nanosleep
+sleeps one, with the same deadline and the same remainder, except that
+nothing is written to
+.Fa rem
+when the sleep reaches its deadline.
+With
+.Dv TIMER_ABSTIME
+.Pq 1 ,
+.Fa req
+is a time of the clock: the call returns at the first tick at which the
+clock reads that time or later, and at once for a time already past.
+.Fa rem
+is not written, and other flag bits are ignored.
+.Pp
+Four clocks can be slept on.
+.Dv CLOCK_MONOTONIC
+and
+.Dv CLOCK_BOOTTIME
+read the same time since boot, and
+.Dv CLOCK_REALTIME
+is that time with the boot's real time added, so an absolute sleep on any
+of the three ends at the tick whose count reaches the time asked for.
+The fourth is the caller's process CPU clock,
+.Dv CLOCK_PROCESS_CPUTIME_ID ,
+or any process's in the negative form
+.Xr clock_gettime 2
+describes.
+The caller's own CPU time does not advance while it sleeps, since each
+process is one thread, so a sleep on it for an interval, or until a time
+not yet reached, ends only at a signal; another process's CPU clock is read
+at every tick, and the sleep ends at the first tick that finds it at the
+time asked for.
+For an interval on a CPU clock a signal leaves the CPU time still due in
+.Fa rem .
+.Pp
+The raw and coarse clocks,
+.Dv CLOCK_MONOTONIC_RAW ,
+.Dv CLOCK_REALTIME_COARSE
+and
+.Dv CLOCK_MONOTONIC_COARSE ,
+and the calling thread's CPU clock,
+.Dv CLOCK_THREAD_CPUTIME_ID ,
+cannot be slept on, as on Linux.
 .Ss Differences from Linux
 A stop signal that takes its default action, such as the terminal's
 Ctrl-Z, ends the sleep as any other signal does.
@@ -53,16 +108,26 @@ Linux resumes the sleep, which still ends at its first deadline.
 Linux's remainder is exact, so a sleep begun again with it does not end
 early; here the remainder counts whole 10 ms ticks, and a sleep begun
 again with it can end up to a tick early.
+Linux can also sleep on
+.Dv CLOCK_TAI
+and its two alarm clocks, which this kernel does not have.
 .Ss System call interface
-The i386 system call number is 162.
-EBX points to the request and ECX to the optional remainder.
+The i386 system call number is 162 for
+.Fn nanosleep ,
+with EBX pointing to the request and ECX to the optional remainder, and
+267 for
+.Fn clock_nanosleep ,
+with the clock in EBX, the flags in ECX, the request in EDX and the
+remainder in ESI.
 The kernel timespec consists of two signed 32-bit fields: seconds,
 then nanoseconds.
 The kernel limits the seconds field to 21474836, keeps the nanoseconds,
 rounds the interval up to whole ticks, and limits the result to
 2147483646 ticks, about 248.55 days.
 .Pp
-The raw call writes a zero remainder on normal completion.
+The raw
+.Fn nanosleep
+call writes a zero remainder on normal completion.
 If interrupted, it attempts to write the remainder but returns
 .Er EINTR
 even if that copy fails.
@@ -79,30 +144,78 @@ It copies the remainder back to the caller only on
 on success, the caller's
 .Fa rem
 is unchanged.
+.Pp
+musl's
+.Fn clock_nanosleep
+calls system call 162 for an interval of
+.Dv CLOCK_REALTIME
+and 267 for everything else, and answers
+.Er EINVAL
+for
+.Dv CLOCK_THREAD_CPUTIME_ID
+without calling the kernel.
+glibc does the same for that clock, and its
+.Fn nanosleep ,
+.Fn sleep
+and
+.Fn usleep
+are
+.Fn clock_nanosleep
+on
+.Dv CLOCK_REALTIME .
+Both first try system call 407, the 64-bit
+.Fn clock_nanosleep ,
+for a time past the 32-bit range, and the kernel answers
+.Er ENOSYS .
 .Sh RETURN VALUES
 .Fn nanosleep
 returns 0 on completion, or -1 on failure and sets
 .Va errno .
-The raw kernel call returns a negative error number on failure.
+.Fn clock_nanosleep
+returns 0 on completion, or the error number itself on failure, without
+setting
+.Va errno .
+The raw kernel calls return a negative error number on failure.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/timeprobe.c
 requests a 150 ms sleep through system call 162 after forking a child.
 It checks the elapsed interval and that the child made progress while
 the parent slept.
+.Pa tests/musl/clockidmusl.c
+sleeps until a time of each clock that can be slept on and checks that the
+clock reads it afterwards, has a signal end a relative and an absolute
+sleep, and checks the clocks and requests that are refused.
 .Sh ERRORS
-The kernel handler returns:
-.Bl -tag -width "[EINVAL]"
+The kernel handlers return:
+.Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EFAULT
 The request is null or cannot be read, there is no current process,
-or the remainder cannot be written after normal completion.
+or, for
+.Fn nanosleep ,
+the remainder cannot be written after normal completion.
 The musl wrapper reads the public request and writes the public
 remainder in user space.
 .It Bq Er EINTR
 A pending signal interrupted the sleep.
 .It Bq Er EINVAL
 Seconds are negative, or nanoseconds are outside the permitted range.
+For
+.Fn clock_nanosleep ,
+the clock is 8 or greater, a thread CPU clock named by ID, or a CPU clock
+of no process that has not been reaped.
+A clock of 8 or greater is refused before the request is read, the others
+after it.
+.It Bq Er EOPNOTSUPP
+.Fn clock_nanosleep
+was asked to sleep on
+.Dv CLOCK_MONOTONIC_RAW ,
+.Dv CLOCK_REALTIME_COARSE ,
+.Dv CLOCK_MONOTONIC_COARSE
+or
+.Dv CLOCK_THREAD_CPUTIME_ID .
 .El
 .Sh SEE ALSO
+.Xr clock_gettime 2 ,
 .Xr gettimeofday 2 ,
 .Xr sigaction 2

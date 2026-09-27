@@ -97,6 +97,11 @@ static const char *const PROBES[] = {
        and truncation by path. */
     "musl/pathmaxmusl", "musl/fdcallmusl", "musl/atcallmusl", "musl/preadmusl",
     "musl/truncmusl",
+    /* The process calls static GNU programs make, each group through the
+       libc that has them: the CPU time the kernel charges, the clocks, how a
+       process is named and scheduled, waitid, prctl, and the stack limit. */
+    "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl",
+    "musl/prctlmusl", "musl/stackmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */
