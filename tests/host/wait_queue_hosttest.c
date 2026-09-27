@@ -107,6 +107,39 @@ static void dequeue(wait_queue_t *wq, process_t *p)
     wq_dequeue(wq, &p->waiter);
 }
 
+/**
+ * Each wake is counted for every kind it names, with waiters or none, and an
+ * init starts the counts over; a wake of one kind, or of none, still wakes
+ * every waiter.
+ */
+static void wake_kinds(void)
+{
+    wait_queue_t wq;
+    static process_t a, b;
+
+    wait_queue_init(&wq);
+    wq_wake(&wq, WQ_DATA);
+    CHECK(wq_wakes(&wq, WQ_DATA) == 1);
+    CHECK(wq_wakes(&wq, WQ_ROOM) == 0 && wq_wakes(&wq, WQ_HANGUP) == 0);
+    wq_wake(&wq, WQ_ROOM | WQ_HANGUP);
+    CHECK(wq_wakes(&wq, WQ_DATA) == 1 && wq_wakes(&wq, WQ_ROOM) == 1);
+    CHECK(wq_wakes(&wq, WQ_HANGUP) == 1 && wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 2);
+    wq_wake(&wq, 0);
+    CHECK(wq_wakes(&wq, WQ_ALL) == 3);
+    wait_queue_init(&wq);
+    CHECK(wq_wakes(&wq, WQ_ALL) == 0);
+
+    a.state = PROC_BLOCKED;
+    b.state = PROC_BLOCKED;
+    enqueue(&wq, &a);
+    wq_wake(&wq, WQ_ROOM);
+    CHECK(a.state == PROC_READY && total_queued(&wq) == 0);
+    enqueue(&wq, &b);
+    wq_wake(&wq, 0);
+    CHECK(b.state == PROC_READY && total_queued(&wq) == 0);
+    CHECK(wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 0 && wq_wakes(&wq, WQ_ROOM) == 1);
+}
+
 int main(void)
 {
     wait_queue_t wq;
@@ -147,31 +180,9 @@ int main(void)
     CHECK(c.state == PROC_READY);
     CHECK(total_queued(&wq) == 0); /* multi-waiter wake clears all slots */
 
-    /* Each wake is counted for every kind it names, with waiters or none,
-     * and init starts over. */
+    /* The wake is counted for every kind (wake_kinds). */
     CHECK(wq_wakes(&wq, WQ_DATA) == 1 && wq_wakes(&wq, WQ_ROOM) == 1);
     CHECK(wq_wakes(&wq, WQ_HANGUP) == 1 && wq_wakes(&wq, WQ_ALL) == 3);
-    wq_wake(&wq, WQ_DATA);
-    CHECK(wq_wakes(&wq, WQ_DATA) == 2);
-    CHECK(wq_wakes(&wq, WQ_ROOM) == 1 && wq_wakes(&wq, WQ_HANGUP) == 1);
-    wq_wake(&wq, WQ_ROOM | WQ_HANGUP);
-    CHECK(wq_wakes(&wq, WQ_DATA) == 2 && wq_wakes(&wq, WQ_ROOM) == 2);
-    CHECK(wq_wakes(&wq, WQ_HANGUP) == 2 && wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 4);
-    wq_wake(&wq, 0);
-    CHECK(wq_wakes(&wq, WQ_ALL) == 6);
-    wait_queue_init(&wq);
-    CHECK(wq_wakes(&wq, WQ_ALL) == 0);
-
-    /* A wake of one kind, or of none, still wakes every waiter. */
-    a.state = PROC_BLOCKED;
-    b.state = PROC_BLOCKED;
-    enqueue(&wq, &a);
-    wq_wake(&wq, WQ_ROOM);
-    CHECK(a.state == PROC_READY && total_queued(&wq) == 0);
-    enqueue(&wq, &b);
-    wq_wake(&wq, 0);
-    CHECK(b.state == PROC_READY && total_queued(&wq) == 0);
-    CHECK(wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 0 && wq_wakes(&wq, WQ_ROOM) == 1);
 
     /* A non-BLOCKED waiter is left alone but still dequeued. */
     wait_queue_init(&wq);
@@ -217,5 +228,6 @@ int main(void)
         CHECK(sleeper.state == PROC_RUNNING && total_queued(&wq) == 0);
         current_proc = 0;
     }
+    wake_kinds();
     return fails > 255 ? 255 : fails;
 }

@@ -161,7 +161,7 @@ prove wake-every-kind wait_queue_hosttest proc/wait_queue.c \
             wq->wakes[k]++;' \
     '        if (k < WQ_KINDS) {
             wq->wakes[k]++;' \
-    'wq_wakes(&wq, WQ_ROOM) == 1 && wq_wakes(&wq, WQ_HANGUP) == 1|wq_wakes(&wq, WQ_ALL) == 6'
+    'wq_wakes(&wq, WQ_ROOM) == 0 && wq_wakes(&wq, WQ_HANGUP) == 0|wq_wakes(&wq, WQ_ALL) == 3'
 prove wakes-every-kind wait_queue_hosttest proc/wait_queue.c \
     '        if (kinds & (1u << k)) {
             sum += wq->wakes[k];' \
