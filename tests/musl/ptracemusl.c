@@ -13,9 +13,9 @@
  * orig_eax and its result in eax at the exit, and bit 0x80 on the stop
  * signal with PTRACE_O_TRACESYSGOOD. PTRACE_O_TRACEEXEC stops the child
  * after an execve with the exec event, which waitid reports in si_status
- * above the signal. A debug register set through
- * POKEUSER reads back through PEEKUSER. PTRACE_ATTACH stops a running
- * process, which runs on after PTRACE_DETACH. A signal sent to a process
+ * above the signal. A debug register set through POKEUSER reads back
+ * through PEEKUSER. PTRACE_ATTACH stops a running process, which runs on
+ * after PTRACE_DETACH. A signal sent to a process
  * whose first thread its tracer holds stopped wakes the other thread, asleep
  * in pause, which takes it. The usage a tracer's wait4 reports for the end
  * of a traced thread that is not the first has the time of the children its
@@ -233,6 +233,15 @@ static int attach(void)
     return 0;
 }
 
+/** End the child `pid` of a row that failed, so that nothing of the row runs
+ * on, and report `what`. */
+static int abandon(pid_t pid, const char *what)
+{
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, __WALL);
+    return fail(what);
+}
+
 static volatile sig_atomic_t usr1_taken;
 
 static void on_usr1(int sig)
@@ -326,23 +335,21 @@ static int stopped_leader(void)
     }
     close(p[1]);
     if (read(p[0], &sleeper, sizeof(sleeper)) != sizeof(sleeper)) {
-        return fail("the child's second thread");
+        return abandon(pid, "the child's second thread");
     }
     close(p[0]);
     for (i = 0; i < 500 && !sleeping(pid, sleeper); i++) {
         usleep(10000);
     }
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGSTOP)) {
-        return fail("PTRACE_ATTACH to the child's first thread");
+        return abandon(pid, "PTRACE_ATTACH to the child's first thread");
     }
     kill(pid, SIGUSR1);
     for (i = 0; i < 1000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
         usleep(10000);
     }
     if (i == 1000) {
-        kill(pid, SIGKILL);
-        waitpid(pid, &status, 0);
-        return fail("a process signal did not wake the thread beside the stopped one");
+        return abandon(pid, "a process signal did not wake the thread beside the stopped one");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 5) {
         return fail("the thread beside the stopped one did not take the signal");
@@ -429,17 +436,17 @@ static int traced_thread_usage(void)
         _exit(0);
     }
     if (read(usage_pipe[0], got, sizeof(got)) != sizeof(got) || got[1] < 2) {
-        return fail("the child's thread or its reaped grandchild's time");
+        return abandon(pid, "the child's thread or its reaped grandchild's time");
     }
     if (ptrace(PTRACE_ATTACH, (pid_t)got[0], NULL, NULL) != 0 ||
         waitpid((pid_t)got[0], &status, __WALL) != (pid_t)got[0] || !WIFSTOPPED(status) ||
         ptrace(PTRACE_CONT, (pid_t)got[0], NULL, NULL) != 0 || write(go_pipe[1], "g", 1) != 1) {
-        return fail("attaching to the child's second thread");
+        return abandon(pid, "attaching to the child's second thread");
     }
     memset(&ru, 0xFF, sizeof(ru));
     if (syscall(SYS_wait4, got[0], &status, __WALL, &ru) != got[0] || !WIFEXITED(status) ||
         ru.utime_sec * 100 + ru.utime_usec / 10000 < got[1]) {
-        return fail("the usage of a traced thread's end lacks its process's reaped children");
+        return abandon(pid, "a traced thread's end lacks the reaped children's time");
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the child with the traced thread");
@@ -490,48 +497,53 @@ static int tracer_first(void)
     }
     c = fork();
     if (c == 0) {
+        close(to_c[1]);
         _exit(read(to_c[0], &ch, 1) == 1 ? 9 : 1);
     }
+    close(to_c[0]);
     if (pipe(to_m) != 0 || pipe(to_x) != 0) {
-        return fail("pipe");
+        return abandon(c, "pipe");
     }
     x = fork();
     if (x == 0) {
+        close(to_c[1]);
+        close(to_m[0]);
+        close(to_x[1]);
         _exit(tracer_side(c, to_m[1], to_x[0]));
     }
     close(to_m[1]);
     close(to_x[0]);
     if (read(to_m[0], &ch, 1) != 1 || write(to_c[1], "x", 1) != 1) {
-        return fail("the second child did not seize the first");
+        kill(x, SIGKILL);
+        return abandon(c, "the second child did not seize the first");
     }
     for (i = 0; i < 500 && !zombie(c); i++) {
         usleep(10000);
     }
     if (waitpid(c, &status, WNOHANG) != 0 || write(to_x[1], "g", 1) != 1) {
+        kill(x, SIGKILL);
         return fail("the parent reaped a child before its tracer saw its end");
     }
     for (i = 0; i < 1000 && (got = waitpid(c, &status, WNOHANG)) == 0; i++) {
         usleep(10000);
     }
     if (got != c || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
+        kill(x, SIGKILL);
         return fail("the parent did not reap the child once its tracer saw the end");
     }
     for (i = 0; i < 1000 && waitpid(x, &status, WNOHANG) == 0; i++) {
         usleep(10000);
     }
+    close(to_c[1]);
+    close(to_m[0]);
+    close(to_x[1]);
     if (i == 1000) {
-        kill(x, SIGKILL);
-        waitpid(x, &status, 0);
-        return fail("the tracer's wait after the end did not return");
+        return abandon(x, "the tracer's wait after the end did not return");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         printf("PTRACEMUSL FAIL (the tracer's step %d)\n", WEXITSTATUS(status));
         return 1;
     }
-    close(to_c[0]);
-    close(to_c[1]);
-    close(to_m[0]);
-    close(to_x[1]);
     return 0;
 }
 
