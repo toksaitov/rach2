@@ -35,10 +35,11 @@
  * An edge-triggered registration is told only of the kinds of change its
  * events watch, as in Linux: an AF_UNIX stream end watched for output is not
  * reported again when a byte comes to it, nor when a read makes room in its
- * own full queue, while one watched for input is reported for each byte; a
- * listener is not reported again when an accept leaves a connection queued;
- * and a datagram, or a TCP segment over the loopback, that comes to a socket
- * watched for output is no edge.
+ * own full queue, while one watched for input is reported for each byte, and
+ * a shutdown of the end is an edge of every kind; a listener is not reported
+ * again when an accept leaves a connection queued; and a datagram, or a TCP
+ * segment over the loopback, that comes to a socket watched for output is no
+ * edge.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -679,6 +680,30 @@ static int unix_kinds(void)
     return 0;
 }
 
+/* A shutdown of an AF_UNIX stream end changes the end itself, and is an
+ * edge of every kind: its registration for output is reported again. */
+static int unix_shutdown_edge(void)
+{
+    struct epoll_event ev, out;
+    int ep = epoll_create1(0);
+    int sv[2];
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT | EPOLLET;
+    if (ep < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &ev) != 0 || wait_one(ep, 0, &out) != 1 ||
+        wait_one(ep, 0, &out) != 0) {
+        return fail("setup for a shutdown of an AF_UNIX end");
+    }
+    if (shutdown(sv[0], SHUT_WR) != 0 || wait_one(ep, 0, &out) != 1) {
+        return fail("a shutdown of an AF_UNIX end was not an edge of its registration");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    close(ep);
+    return 0;
+}
+
 /* A read that makes room in an AF_UNIX stream end's own full queue is room
  * for the sends of its peer, not its own: an edge-triggered registration of
  * the end for output is not reported again. */
@@ -924,8 +949,9 @@ int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
-        long_timeout() || unix_kinds() || unix_own_room() || unix_accept_edge() || udp_arrival() ||
-        tcp_arrival() || nested_six() || nested_two_paths()) {
+        long_timeout() || unix_kinds() || unix_shutdown_edge() || unix_own_room() ||
+        unix_accept_edge() || udp_arrival() || tcp_arrival() || nested_six() ||
+        nested_two_paths()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");
