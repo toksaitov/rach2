@@ -322,9 +322,9 @@ static char proc_state_char(proc_state_t s)
  * Emits the space-separated fields ps and friends parse. comm (field 2) is
  * wrapped in parentheses, with any stray parens scrubbed so a naive parser that
  * scans for the closing ')' is not fooled. The CPU times are the process's
- * ticks, which are the 100 Hz clock ticks the fields count; the accounting
- * fields the kernel does not keep (faults, sizes) are zero, but every field is
- * present and in order.
+ * ticks, which are the 100 Hz clock ticks the fields count, and the nice value
+ * is the one setpriority keeps; the accounting fields the kernel does not keep
+ * (faults, sizes) are zero, but every field is present and in order.
  */
 static int procfs_gen_stat(struct procfs_text *t, int pid)
 {
@@ -365,7 +365,12 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     ap_u32(t, p->cutime);
     ap_ch(t, ' ');
     ap_u32(t, p->cstime);
-    ap_str(t, " 20 0");  /* 18 priority, 19 nice */
+    /* 18 priority, which Linux reports as 20 more than the nice value for a
+       process of no real-time policy; 19 nice */
+    ap_ch(t, ' ');
+    ap_int(t, 20 + (int)p->nice);
+    ap_ch(t, ' ');
+    ap_int(t, (int)p->nice);
     ap_str(t, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
     ap_str(t, " 0 0");   /* 23 vsize, 24 rss */
     ap_ch(t, '\n');

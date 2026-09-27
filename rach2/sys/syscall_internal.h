@@ -287,4 +287,8 @@ int32_t sys_munmap(isr_params_t *params);
 
 int32_t sys_mprotect(isr_params_t *params);
 
+int32_t sys_getpriority(isr_params_t *params);
+
+int32_t sys_setpriority(isr_params_t *params);
+
 #endif

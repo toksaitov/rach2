@@ -53,6 +53,8 @@
 #define SYS_BRK             45
 #define SYS_MUNMAP          91
 #define SYS_WAIT4           114
+#define SYS_GETPRIORITY     96
+#define SYS_SETPRIORITY     97
 #define SYS_MMAP2           192
 #define SYS_MPROTECT        125
 #define SYS_SOCKETCALL      102

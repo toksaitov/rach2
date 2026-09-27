@@ -1,0 +1,109 @@
+.Dd September 27, 2026
+.Dt GETPRIORITY 2
+.Os
+.Sh NAME
+.Nm getpriority ,
+.Nm setpriority
+.Nd get or set the nice value of processes
+.Sh SYNOPSIS
+.In sys/resource.h
+.Ft int
+.Fn getpriority "int which" "id_t who"
+.Ft int
+.Fn setpriority "int which" "id_t who" "int prio"
+.Sh DESCRIPTION
+Each process has a nice value from -20 to 19, 0 at boot.
+.Xr fork 2
+passes it to the child and
+.Xr execve 2
+keeps it.
+.Pp
+.Fa which
+and
+.Fa who
+select the processes:
+.Bl -tag -width "PRIO_PROCESS"
+.It Dv PRIO_PROCESS
+The process whose ID is
+.Fa who .
+.It Dv PRIO_PGRP
+The members of the process group
+.Fa who .
+.It Dv PRIO_USER
+The processes whose real user ID is
+.Fa who .
+.El
+.Pp
+A
+.Fa who
+of 0 selects the caller, its process group, or its real user ID.
+A zombie not yet reaped is selected like any process, as on Linux.
+.Pp
+.Fn getpriority
+returns the lowest nice value among the selected processes.
+.Pp
+.Fn setpriority
+sets the nice value of each selected process to
+.Fa prio ,
+clamped to the range -20 through 19.
+A caller with effective user ID 0 may change any process.
+Any other caller may change a process only when its effective user ID
+equals that process's real or effective user ID, and may only raise the
+nice value, since it may not raise a process's priority; with a resource
+limit on the nice value of 0, the Linux default, the same rules hold on
+Linux.
+When some selected processes may not be changed, the others are changed
+and the call fails with the error of the last refusal.
+.Pp
+The scheduler does not read the nice value: every ready process takes
+its turn in the same round-robin order.
+.Pa /proc/ Ns Ar pid Ns Pa /stat
+reports it as field 19, and field 18 as 20 more than it.
+.Ss System call interface
+The i386 system call numbers are 96 for
+.Fn getpriority
+and 97 for
+.Fn setpriority .
+EBX contains
+.Fa which ,
+ECX
+.Fa who ,
+and EDX the nice value.
+As on Linux, the raw
+.Fn getpriority
+returns 20 less the nice value, 40 for -20 through 1 for 19, so that no
+success is negative; the C library returns the nice value itself.
+.Sh RETURN VALUES
+.Fn getpriority
+returns the nice value, which may be -1, so a caller that needs to tell
+an error from a nice value of -1 sets
+.Va errno
+to 0 first and reads it afterwards.
+.Fn setpriority
+returns 0.
+On failure both return -1 and set
+.Va errno .
+The kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/schedmusl.c
+sets and reads the nice value of the process, its group and a user,
+checks that a child inherits it, that the raw call returns 20 less it,
+and that a caller of another user ID is refused both another user's
+process and a lower nice value of its own.
+.Sh ERRORS
+.Bl -tag -width "[EACCES]"
+.It Bq Er EACCES
+A caller without effective user ID 0 asked to lower a nice value.
+.It Bq Er EINVAL
+.Fa which
+is none of the three.
+.It Bq Er EPERM
+A caller without effective user ID 0 selected a process whose real and
+effective user IDs both differ from its effective user ID.
+.It Bq Er ESRCH
+No process was selected.
+.El
+.Sh SEE ALSO
+.Xr fork 2 ,
+.Xr proc 5

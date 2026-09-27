@@ -295,6 +295,7 @@ setgroups32 2 setuid
 sethostname 2 uname
 setlogcons 1 busybox-console-tools
 setpgid 2 getpid
+setpriority 2 getpriority
 setregid32 2 setuid
 setresgid32 2 setuid
 setresuid32 2 setuid

@@ -1436,6 +1436,7 @@ int32_t sys_fork(isr_params_t *params)
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
+    child->nice = parent->nice;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->fds.limit = parent->fds.limit;
     child->ruid = parent->ruid; /* credentials: the child is who the parent was */
@@ -3389,4 +3390,113 @@ int32_t sys_mprotect(isr_params_t *params)
     }
     paging_protect_range(_curr_dir, addr, end, vmprot);
     return 0;
+}
+
+/* The three kinds of target setpriority(2) and getpriority(2) take. */
+#define PRIO_PROCESS 0
+
+#define PRIO_PGRP 1
+
+#define PRIO_USER 2
+
+/* The range of a nice value. */
+#define NICE_MIN (-20)
+
+#define NICE_MAX 19
+
+/**
+ * Whether `p` is a target of a priority call: the process `who` names for
+ * PRIO_PROCESS, a member of group `who` for PRIO_PGRP, and a process of real
+ * user `who` for PRIO_USER, where `who` 0 is the caller, its group or its
+ * real uid. Zombies count, as Linux counts them until they are reaped, and
+ * the kernel's own record, pid 0, does not.
+ */
+static int prio_target(const process_t *p, int which, uint32_t who)
+{
+    if (p->pid == 0) {
+        return 0;
+    }
+    switch (which) {
+    case PRIO_PROCESS:
+        return p->pid == (who != 0 ? who : current_proc->pid);
+    case PRIO_PGRP:
+        return p->pgid == (who != 0 ? who : current_proc->pgid);
+    default:
+        return p->ruid == (who != 0 ? who : current_proc->ruid);
+    }
+}
+
+/**
+ * Read a priority (getpriority(2), syscall 96).
+ *
+ * EBX = which, ECX = who. Returns the highest priority among the targets,
+ * as Linux's raw call returns it, 20 less the nice value, so 1 for nice 19
+ * and 40 for nice -20; the C library turns it back into the nice value.
+ * -EINVAL for an unknown `which`, -ESRCH when nothing matches.
+ */
+int32_t sys_getpriority(isr_params_t *params)
+{
+    int which = (int)params->ebx;
+    process_t *p;
+    int32_t best = -ESRCH;
+
+    if (which < PRIO_PROCESS || which > PRIO_USER) {
+        return -EINVAL;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (prio_target(p, which, params->ecx) && 20 - p->nice > best) {
+            best = 20 - p->nice;
+        }
+    }
+    return best;
+}
+
+/**
+ * Set a priority (setpriority(2), syscall 97).
+ *
+ * EBX = which, ECX = who, EDX = the nice value, clamped to -20 through 19
+ * as Linux clamps it. Each target is changed on Linux's terms: a caller
+ * whose effective uid is neither the target's real nor its effective uid
+ * gets -EPERM, and one that would lower the target's nice value, raising its
+ * priority, gets -EACCES, since `RLIMIT_NICE` is 0; effective uid 0 may do
+ * both. The targets that pass are changed whatever the others answer, and the
+ * call returns the last refusal, 0 when there was none, or -ESRCH when
+ * nothing matched. The value is kept and inherited, and the scheduler does
+ * not read it: every ready process takes its turn.
+ */
+int32_t sys_setpriority(isr_params_t *params)
+{
+    int which = (int)params->ebx;
+    int32_t nice = (int32_t)params->edx;
+    process_t *p;
+    int32_t rc = -ESRCH;
+
+    if (which < PRIO_PROCESS || which > PRIO_USER) {
+        return -EINVAL;
+    }
+    if (nice < NICE_MIN) {
+        nice = NICE_MIN;
+    }
+    if (nice > NICE_MAX) {
+        nice = NICE_MAX;
+    }
+    for (p = proc_list; p; p = p->next) {
+        if (!prio_target(p, which, params->ecx)) {
+            continue;
+        }
+        if (!cred_privileged() && current_proc->euid != p->ruid &&
+            current_proc->euid != p->euid) {
+            rc = -EPERM;
+            continue;
+        }
+        if (nice < p->nice && !cred_privileged()) {
+            rc = -EACCES;
+            continue;
+        }
+        if (rc == -ESRCH) {
+            rc = 0;
+        }
+        p->nice = nice;
+    }
+    return rc;
 }

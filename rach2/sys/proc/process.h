@@ -194,6 +194,9 @@ struct process {
     uint32_t stime;
     uint32_t cutime;
     uint32_t cstime;
+    /* The nice value `setpriority` keeps, -20 to 19; fork passes it on and
+     * exec keeps it. The scheduler does not read it. */
+    int32_t nice;
 };
 
 typedef struct process process_t;
