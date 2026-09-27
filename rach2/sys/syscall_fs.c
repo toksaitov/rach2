@@ -4745,9 +4745,10 @@ struct linux_statfs64 {
 #define STATFS_BSIZE 1024u
 
 /* The three permanent mounts and the magic each reports; `/proc/mounts` names
- * these and every volume `mount(2)` has placed. The values are Linux's for the
- * two synthetic ones, so a program that recognises them finds what it expects;
- * KRFFS has no assigned magic and uses its own name. */
+ * these, the tmpfs at /dev/shm, which answers with its own statfs as any
+ * mounted volume does, and every volume `mount(2)` has placed. The values are
+ * Linux's for the two synthetic ones, so a program that recognises them finds
+ * what it expects; KRFFS has no assigned magic and uses its own name. */
 #define STATFS_MAGIC_KRFFS 0x4B524646u /* "KRFF" */
 
 #define STATFS_MAGIC_PROC 0x9FA0u

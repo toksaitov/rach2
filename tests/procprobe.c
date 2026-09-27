@@ -907,7 +907,8 @@ void probe_main(unsigned int *sp)
 
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
-    check(lines_in(buf, n) == 3, "/proc/mounts names the root and the two synthetic mounts");
+    check(lines_in(buf, n) == 4,
+          "/proc/mounts names the root, the two synthetic mounts and the tmpfs at /dev/shm");
     check(ends_with(buf, n, " 0 0\n"), "/proc/mounts's last line is a whole fstab row");
     print_rootmount(buf, n);
 
