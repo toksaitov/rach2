@@ -1,7 +1,8 @@
 /**
- * Check mounted open truncation, cleanup and loop handle relocation, and the
+ * Check mounted open truncation, cleanup and loop handle relocation, the
  * close of a descriptor whose release sleeps, by one thread or by the end of
- * another thread's call.
+ * another thread's call, and an unlink and a rename on the KRFFS root of a
+ * file an open is installing.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -126,7 +127,9 @@ process_t *current_proc = &proc;
 process_t *proc_list;
 volatile uint32_t fb_owner_pid;
 krffs_file_system_t *krffs_fs;
-const struct vfs_type vfs_krffs_type = {0};
+static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
+static const struct vfs_ops root_ops = {.lookup = root_lookup};
+const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
 static const struct vfs_type mounted_type = {0};
 static struct vfs_mount mount;
 static int node, handle, moved;
@@ -141,6 +144,17 @@ static int installing = -1;
 /* Whether a record lock exists, and the drops of one process's locks. */
 static int locking, lock_closes;
 static process_t *lock_closer;
+/* The KRFFS root of the unlink and rename rows: its directory, the file an
+ * open is installing, the file a rename moves over it, and the frees and
+ * keeps of that file. */
+static krffs_node_t root_dir, victim, source;
+static krffs_file_system_t root_fs;
+static int removals, keeps;
+/* The call that holds the root's namespace lock when a row's call first
+ * asks for it, which runs before the row's call has the lock, and the depth
+ * of the lock. */
+static void (*waiting)(void);
+static int ns_depth;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -364,16 +378,130 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** No root namespace lock is needed by these descriptions. */
+/** Take the namespace lock, first running the call that holds it, which
+ * the caller waits for. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
+    void (*run)(void) = waiting;
+
     (void)mnt;
+    waiting = 0;
+    if (run) {
+        run();
+    }
+    ns_depth++;
 }
 
-/** Balance the unused root namespace lock. */
+/** Require balanced namespace locking. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
     (void)mnt;
+    check(ns_depth > 0, "balanced namespace lock");
+    ns_depth--;
+}
+
+/** Find `victim` or `source` by its name in the root directory. */
+static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found)
+{
+    krffs_node_t *nodes[2];
+    int i;
+
+    nodes[0] = &victim;
+    nodes[1] = &source;
+    check(mnt == &mount && dir == &root_dir, "a lookup in the root directory");
+    for (i = 0; i < 2; i++) {
+        if (nodes[i]->name[0] != '\0' &&
+            __builtin_strcmp((const char *)nodes[i]->name, name) == 0) {
+            *found = nodes[i];
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
+/** Resolve a path of the root to the root directory and its last name,
+ * taking the root's lock for a locked walk, as the resolver does for a type
+ * that asks for it. */
+int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
+                char *leaf, uint32_t leafcap)
+{
+    const char *name = path;
+    const char *p;
+
+    (void)start;
+    for (p = path; *p; p++) {
+        if (*p == '/') {
+            name = p + 1;
+        }
+    }
+    check((flags & VFS_WALK_PARENT) && k_strlen(name) < leafcap, "a walk to a parent");
+    k_strncpy(leaf, name, leafcap);
+    out->mnt = &mount;
+    out->node = &root_dir;
+    if ((flags & VFS_WALK_LOCK) && mount.type->ns_serialised) {
+        vfs_ns_lock(&mount);
+    }
+    return 0;
+}
+
+/** Give back the lock a locked walk took. */
+void vfs_walk_unlock(struct vfs_mount *mnt)
+{
+    if (mnt->type->ns_serialised) {
+        vfs_ns_unlock(mnt);
+    }
+}
+
+/** The root rows name no synthetic node and no mount point. */
+const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    (void)node;
+    return 0;
+}
+
+struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
+{
+    (void)mnt;
+    (void)node;
+    (void)name;
+    return 0;
+}
+
+/** Free the file an unlink takes the name of, as the root does. */
+int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    check(mnt == &mount && dir == &root_dir && __builtin_strcmp(name, "kept") == 0,
+          "the unlink removes the name it was given");
+    removals++;
+    return 0;
+}
+
+/** Rename in the root directory, freeing a destination that still has its
+ * name, as the root does. */
+int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+               const char *newname)
+{
+    check(mnt == &mount && olddir == &root_dir && newdir == &root_dir &&
+              __builtin_strcmp(oldname, "src") == 0 && __builtin_strcmp(newname, "kept") == 0,
+          "the rename moves the names it was given");
+    if (victim.name[0] != '\0') {
+        removals++;
+    }
+    return 0;
+}
+
+/** Take the name off a node a descriptor holds, keeping the node. */
+void krffs_unlink_held(krffs_node_t *n)
+{
+    n->name[0] = '\0';
+    keeps++;
+}
+
+void krffs_orphan_node(krffs_node_t *n)
+{
+    n->name[0] = '\0';
+    keeps++;
 }
 
 /** Check successful installation and both failure paths. */
@@ -457,6 +585,79 @@ static void row_end(void)
     releasing = -1;
     in_release = 0;
     locking = 0;
+}
+
+/** A row on the KRFFS root, whose file `victim` is named "kept" and the file
+ * `source` "src", with the calling process privileged. */
+static void root_row_begin(void)
+{
+    row_begin();
+    proc.euid = 0;
+    proc_list = &proc;
+    krffs_fs = &root_fs;
+    root_fs.node = &root_dir;
+    mount.type = &vfs_krffs_type;
+    k_memset(&victim, 0, sizeof(victim));
+    k_memset(&source, 0, sizeof(source));
+    victim.type = source.type = KRFFS_RESERVED_NODE;
+    victim.mode = source.mode = 0100644;
+    k_strncpy((char *)victim.name, "kept", sizeof(victim.name));
+    k_strncpy((char *)source.name, "src", sizeof(source.name));
+    removals = keeps = 0;
+}
+
+/** End a root row with the root's lock given back. */
+static void root_row_end(void)
+{
+    check(ns_depth == 0 && !waiting, "the root's namespace lock is given back");
+    waiting = 0;
+    ns_depth = 0;
+    krffs_fs = 0;
+    mount.type = &mounted_type;
+    row_end();
+}
+
+/** The open a root row's call waits for: it has walked to "kept" holding
+ * the root's lock, and publishes its descriptor before it lets the lock go. */
+static void open_publishes(void)
+{
+    int fd = fd_alloc(proc.fds);
+
+    check(fd >= 0, "the waiting open reserves a descriptor");
+    if (fd >= 0) {
+        proc.fds->entries[fd].node = &victim;
+        proc.fds->entries[fd].type = FD_TYPE_FILE;
+    }
+}
+
+/**
+ * An unlink on the KRFFS root of a file an open is installing, the open
+ * holding the root's lock in its walk: the unlink counts the file's holders
+ * only once it has that lock, so it counts the open's descriptor and keeps
+ * the file, nameless, for it.
+ */
+static void unlink_installing(void)
+{
+    root_row_begin();
+    waiting = open_publishes;
+    check(do_unlink("/kept") == 0, "an unlink of a file an open is installing");
+    check(keeps == 1 && removals == 0, "the unlink keeps the file for the open's descriptor");
+    root_row_end();
+}
+
+/**
+ * A rename on the KRFFS root over a file an open is installing: the rename
+ * counts the replaced file's holders under the root's lock, so it takes the
+ * file's name and leaves the node to the open's descriptor.
+ */
+static void rename_over_installing(void)
+{
+    root_row_begin();
+    waiting = open_publishes;
+    check(do_rename("/src", "/kept", 0) == 0, "a rename over a file an open is installing");
+    check(keeps == 1 && removals == 0,
+          "the rename keeps the file it replaces for the open's descriptor");
+    root_row_end();
 }
 
 /** A descriptor on the model file, open for reading and writing. */
@@ -627,9 +828,11 @@ int main(void)
     close_sleeping();
     deferred_release();
     dup2_source_closed();
+    unlink_installing();
+    rename_over_installing();
     loop_handles();
     if (!failures) {
-        printf("open-hosttest: result: pass: mounted truncation and loop handles\n");
+        printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }
     return failures != 0;
 }

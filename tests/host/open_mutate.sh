@@ -1,5 +1,6 @@
 #!/bin/sh
-# Compile mounted open cleanup before, during and after each fault.
+# Compile mounted open cleanup, and the KRFFS root's unlink and rename under
+# the root's lock, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -59,7 +60,7 @@ run_phase()
 
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
-for fault in node release truncate loop registration; do
+for fault in node release truncate loop registration unlink-lock rename-lock; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -78,6 +79,10 @@ changes = {
                  "if (0) {"),
     "loop": ("mnt->type == &vfs_krffs_type && loops[i].handle == from",
              "loops[i].handle == from"),
+    "unlink-lock": ("vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf,",
+                    "vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf,"),
+    "rename-lock": ("vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,",
+                    "vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,"),
 }
 old, new = changes[sys.argv[2]]
 if source.count(old) != 1:
@@ -90,6 +95,8 @@ PY
         truncate) message='only O_TRUNC truncates and clears set-id bits' ;;
         loop) message='mounted loop handle stays stable when node moves' ;;
         registration) message='close retains current node identity' ;;
+        unlink-lock) message="the unlink keeps the file for the open's descriptor" ;;
+        rename-lock) message="the rename keeps the file it replaces for the open's descriptor" ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

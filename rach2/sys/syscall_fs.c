@@ -7415,6 +7415,58 @@ int32_t sys_creat(isr_params_t *params)
 }
 
 /**
+ * Remove the name `leaf` from the KRFFS root's directory `parent`: the
+ * root's half of `do_unlink`, run under the root's namespace lock, which
+ * the caller took with its walk and keeps until this returns.
+ *
+ * The directory's write bit is checked before the name is looked up, so a
+ * caller who may not write there sees -EACCES and does not learn whether
+ * the name exists. The root and a directory are -EISDIR, the sticky rule
+ * may answer -EPERM, and a file a loop device stands on is -EBUSY: the
+ * holder count below is the descriptor tables, which an attachment is not
+ * in, and the root has no count of its own to keep the extent.
+ *
+ * The holder count is the last decision, because keeping the node bypasses
+ * the refusals the file system would have made: with a holder the node
+ * loses its name and stays until the last close; with none it is freed
+ * now, since only a last close frees a kept node and a node nobody holds
+ * would never be freed. The count is right only under the lock. An open
+ * holds it from its walk until it has published its descriptor, so the
+ * count sees every descriptor an open has made, and an open that walks
+ * after the removal finds no name.
+ */
+static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf)
+{
+    krffs_node_t *node;
+    void *found;
+    int32_t rc = cred_access_node((krffs_node_t *)parent->node, CRED_W, 0);
+
+    if (rc != 0) {
+        return rc;
+    }
+    rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
+    if (rc != 0) {
+        return rc;
+    }
+    node = found;
+    if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        return -EISDIR;
+    }
+    rc = cred_sticky_ok((krffs_node_t *)parent->node, node);
+    if (rc != 0) {
+        return rc;
+    }
+    if (loop_backs(parent->mnt, node)) {
+        return -EBUSY;
+    }
+    if (fd_node_holders(node, NULL) > 0) {
+        krffs_unlink_held(node);
+        return 0;
+    }
+    return vfs_unlink_name(parent->mnt, parent->node, leaf);
+}
+
+/**
  * Remove the name `path`, an absolute canonical path, which is not a
  * directory: the core of unlink(2) and of unlinkat(2) without AT_REMOVEDIR.
  *
@@ -7425,10 +7477,18 @@ int32_t sys_creat(isr_params_t *params)
  * the root and any directory give `-EISDIR`, which is what tells a caller
  * to use `rmdir`. The root is tested by node identity because it has
  * 0755 with no type bits and would otherwise read as a plain file.
+ *
+ * The walk keeps the parent's namespace lock, where its type takes one,
+ * until the name is gone: on the KRFFS root the holder count of
+ * `unlink_root_name` is right only under that lock, which an open holds
+ * until it has published its descriptor.
  */
 static int32_t do_unlink(const char *path)
 {
     const char *name;
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc;
 
     if (path[0] == '/' && path[1] == '\0') {
         return -EISDIR; /* the root directory cannot be unlinked */
@@ -7442,85 +7502,27 @@ static int32_t do_unlink(const char *path)
     if (name[0] == '\0') {
         return -EINVAL; /* empty filename */
     }
-
-    {
-        struct vfs_ref parent;
-        char leaf[VFS_NAME_MAX + 1];
-        krffs_node_t *node;
-        void *found;
-        int32_t rc;
-
-        rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
-        if (rc != 0) {
-            return rc;
-        }
-        if (vfs_synth_vpath(parent.mnt, parent.node)) {
-            vfs_ref_release(&parent);
-            return -EROFS; /* the synthetic mounts are read-only */
-        }
-        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
-            vfs_ref_release(&parent);
-            return -EBUSY; /* a mount point cannot be unlinked */
-        }
-        if (!mnt_is_root(parent.mnt)) {
-            vfs_ns_lock(parent.mnt);
-            rc = cred_remove_ref(&parent, leaf);
-            if (rc == 0) {
-                rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
-            }
-            vfs_ns_unlock(parent.mnt);
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        /* The directory's write bit is checked before the target is even
-         * looked up: a caller with no write permission there must see
-         * -EACCES, not learn whether the name exists. */
-        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        node = found;
-        if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-            vfs_ref_release(&parent);
-            return -EISDIR;
-        }
-        rc = cred_sticky_ok((krffs_node_t *)parent.node, node);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        /* A file a loop device stands on is not removed while it stands
-         * there. The holder rule below is the descriptor tables, which an
-         * attachment is not in, and the memory root has no count of its own
-         * to keep the extent alive; the other file systems keep an unlinked
-         * node for whoever holds it, so this is the root's answer only. */
-        if (loop_backs(parent.mnt, node)) {
-            vfs_ref_release(&parent);
-            return -EBUSY;
-        }
-        /* The last decision, never the first: orphaning bypasses the refusals
-         * the file system would have made, so every one of them is decided
-         * above. With a holder the node stays live and nameless until the
-         * last close; with none it is freed now, because the release lives
-         * at that close and an unconditional orphan would leak an extent on
-         * every removal made while nothing happened to be reading. */
-        if (fd_node_holders(node, NULL) > 0) {
-            krffs_unlink_held(node);
-            vfs_ref_release(&parent);
-            return 0;
-        }
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
-        vfs_ns_unlock(parent.mnt);
-        vfs_ref_release(&parent);
+    rc = vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
         return rc;
     }
+    if (vfs_synth_vpath(parent.mnt, parent.node)) {
+        rc = -EROFS; /* the synthetic mounts are read-only */
+    } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
+        rc = -EBUSY; /* a mount point cannot be unlinked */
+    } else if (mnt_is_root(parent.mnt)) {
+        rc = unlink_root_name(&parent, leaf);
+    } else {
+        vfs_ns_lock(parent.mnt);
+        rc = cred_remove_ref(&parent, leaf);
+        if (rc == 0) {
+            rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
+        }
+        vfs_ns_unlock(parent.mnt);
+    }
+    vfs_walk_unlock(parent.mnt);
+    vfs_ref_release(&parent);
+    return rc;
 }
 
 /* unlink(2): EBX = path. Returns 0 or -errno. */
@@ -8054,6 +8056,70 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
 }
 
 /**
+ * Rename `oleaf` in `opar` to `nleaf` in `npar` on the KRFFS root: the
+ * root's half of `do_rename`, run under the root's namespace lock, which the
+ * caller took with the walk of the old name and keeps until this returns.
+ * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST.
+ *
+ * The sticky rule applies to both names, since taking an entry out of its
+ * directory is a removal and so is renaming over one; a caller that checked
+ * only the source would leave the attack open while a probe that tries only
+ * unlink passes. A directory source is -EPERM, since a directory's children
+ * reference its id; a directory destination is -EISDIR; a destination a loop
+ * device stands on is -EBUSY.
+ *
+ * A destination the rename replaces loses its name first when a descriptor
+ * holds it, so the holder keeps reading the file it opened, and is freed by
+ * the rename when none does. That count comes after every refusal, since a
+ * rename that then failed would have taken the name of the file it refused
+ * to touch, and it is right only under the lock, which an open holds until
+ * it has published its descriptor.
+ */
+static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
+                                 const struct vfs_ref *npar, const char *nleaf, int flags)
+{
+    krffs_node_t *node;
+    krffs_node_t *existing = NULL;
+    void *found;
+    int32_t rc = opar->mnt->type->ops->lookup(opar->mnt, opar->node, oleaf, &found);
+
+    if (rc != 0) {
+        return rc;
+    }
+    node = found;
+    rc = cred_sticky_ok((krffs_node_t *)opar->node, node);
+    if (rc != 0) {
+        return rc;
+    }
+    if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        return -EPERM;
+    }
+    if (flags & RENAME_NOREPLACE) {
+        rc = rename_noreplace(opar, oleaf, npar, nleaf);
+        return rc != 0 ? rc : vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
+    }
+    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {
+        existing = found;
+    }
+    if (existing && existing != node) {
+        rc = cred_sticky_ok((krffs_node_t *)npar->node, existing);
+        if (rc != 0) {
+            return rc;
+        }
+        if (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode)) {
+            return -EISDIR;
+        }
+        if (loop_backs(npar->mnt, existing)) {
+            return -EBUSY;
+        }
+        if (fd_node_holders(existing, NULL) > 0) {
+            krffs_orphan_node(existing);
+        }
+    }
+    return vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
+}
+
+/**
  * Rename `old_buf` to `new_buf`, both absolute canonical paths: the core of
  * rename(2), renameat(2) and renameat2(2), whose RENAME_NOREPLACE in `flags`
  * refuses a new name that exists with -EEXIST, decided with the rename under
@@ -8077,10 +8143,17 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
  * Either path naming the root is `-EINVAL`, from the empty-name check below:
  * the path copy canonicalizes it to "/", which loses its only component.
  * `-ENOENT` would be a lie, since the root exists, and POSIX names `EINVAL`
- * for a pathname that is the root. The identity tests below are therefore
- * unreachable today and are kept as defence: freeing the root as a replaced
- * destination would take the file system with it, and that guarantee should
- * not rest on a canonicalizer in another function.
+ * for a pathname that is the root. The identity tests of `rename_root_names`
+ * are therefore unreachable today and are kept as defence: freeing the root
+ * as a replaced destination would take the file system with it, and that
+ * guarantee should not rest on a canonicalizer in another function.
+ *
+ * The walk of the old name keeps its mount's namespace lock, where the type
+ * takes one, until the rename is done, and the new name is walked without
+ * taking a lock, so no rename waits for a second mount's lock while it holds
+ * one. On the KRFFS root the holder count of the replaced file is right only
+ * under that lock, which an open holds until it has published its
+ * descriptor.
  */
 static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
 {
@@ -8090,9 +8163,6 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
     const char *new_name;
     struct vfs_ref opar;
     struct vfs_ref npar;
-    krffs_node_t *node;
-    krffs_node_t *existing;
-    void *found;
     int32_t rc;
 
     old_name = old_buf;
@@ -8111,18 +8181,17 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
     /* A rename writes both directories: the entry leaves one and lands in
      * the other. Both write bits are checked before the source is even
      * looked up, as unlink orders it. */
-    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf, sizeof(oleaf));
+    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf, sizeof(oleaf));
     if (rc != 0) {
         return rc;
     }
     rc = mnt_is_root(opar.mnt) ? cred_access_node((krffs_node_t *)opar.node, CRED_W, 0)
                                : cred_access_ref(&opar, CRED_W, 0);
-    if (rc != 0) {
-        vfs_ref_release(&opar);
-        return rc;
+    if (rc == 0) {
+        rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf, sizeof(nleaf));
     }
-    rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf, sizeof(nleaf));
     if (rc != 0) {
+        vfs_walk_unlock(opar.mnt);
         vfs_ref_release(&opar);
         return rc;
     }
@@ -8160,66 +8229,9 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
         vfs_ns_unlock(opar.mnt);
         goto out;
     }
-
-    rc = opar.mnt->type->ops->lookup(opar.mnt, opar.node, oleaf, &found);
-    if (rc != 0) {
-        goto out;
-    }
-    node = found;
-    /* The sticky rule on the SOURCE: taking the entry out of its directory
-     * is a removal, whatever it is called. */
-    rc = cred_sticky_ok((krffs_node_t *)opar.node, node);
-    if (rc != 0) {
-        goto out;
-    }
-    if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        rc = -EPERM; /* a directory's children reference its id */
-        goto out;
-    }
-    if (flags & RENAME_NOREPLACE) {
-        vfs_ns_lock(opar.mnt);
-        rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
-        if (rc == 0) {
-            rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
-        }
-        vfs_ns_unlock(opar.mnt);
-        goto out;
-    }
-
-    existing = NULL;
-    if (npar.mnt->type->ops->lookup(npar.mnt, npar.node, nleaf, &found) == 0) {
-        existing = found;
-    }
-    if (existing && existing != node) {
-        /* The sticky rule on the DESTINATION, which is the half whose
-         * omission leaves the attack open while a probe that only tries
-         * unlink goes green: renaming over an entry removes it just as
-         * surely. */
-        rc = cred_sticky_ok((krffs_node_t *)npar.node, existing);
-        if (rc != 0) {
-            goto out;
-        }
-        if (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode)) {
-            rc = -EISDIR;
-            goto out;
-        }
-        if (loop_backs(npar.mnt, existing)) {
-            rc = -EBUSY; /* a loop device stands on what this would replace */
-            goto out;
-        }
-        /* Orphan the destination the rename is about to replace, so a
-         * reader holding it keeps reading the file it opened whole. Last,
-         * after every refusal above: otherwise a rename that then fails
-         * would have destroyed the very file it refused to touch. With no
-         * holder, the file system frees it exactly as before. */
-        if (fd_node_holders(existing, NULL) > 0) {
-            krffs_orphan_node(existing);
-        }
-    }
-    vfs_ns_lock(opar.mnt);
-    rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
-    vfs_ns_unlock(opar.mnt);
+    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);
 out:
+    vfs_walk_unlock(opar.mnt);
     vfs_ref_release(&npar);
     vfs_ref_release(&opar);
     return rc;
