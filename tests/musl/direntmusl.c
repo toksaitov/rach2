@@ -6,10 +6,14 @@
  * and a directory the probe makes must report the type lstat gives it, the
  * mode's type bits shifted down, or DT_UNKNOWN, and never DT_REG for
  * anything but a regular file; /dev/null, /proc/self, /proc/meminfo and
- * /proc/net have their own types by name. With a directory argument, which
- * tests/system/suites/ext2.sh gives as /tmp on an ext2 root, the probe's own
- * directory is made there and must hold a symbolic link reported as DT_LNK,
- * and / and /bin of that root are checked too.
+ * /proc/net have their own types by name. Each listing must end without an
+ * error from readdir and check at least one entry, and lstat may fail only
+ * with ENOENT, only in /proc and /dev/pts, whose entries come and go.
+ *
+ * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
+ * on an ext2 root, the probe's own directory is made there and must hold a
+ * symbolic link reported as DT_LNK, and / and /bin of that root are checked
+ * too.
  *
  * Prints "DIRENTMUSL OK" on success and "DIRENTMUSL FAIL (detail)" otherwise.
  */
@@ -36,22 +40,39 @@ static int fail(const char *what)
 
 /**
  * Whether every entry of `dir` reports the type lstat gives it or
- * DT_UNKNOWN. An entry that is gone by the time of the lstat, a process that
- * exited among them, is passed over. Prints the first entry that disagrees.
+ * DT_UNKNOWN, readdir ends without an error, and at least one entry was
+ * checked. With `vanish`, an entry lstat no longer finds, a process that
+ * exited or a terminal that closed, is passed over; any other lstat error
+ * fails. Prints the first entry or error that disagrees.
  */
-static int types_agree(const char *dir)
+static int types_agree(const char *dir, int vanish)
 {
     char path[512];
     struct dirent *de;
     struct stat st;
     DIR *d = opendir(dir);
+    int checked = 0;
     int ok = d != NULL;
 
-    while (ok && (de = readdir(d)) != NULL) {
+    while (ok) {
+        errno = 0;
+        de = readdir(d);
+        if (de == NULL) {
+            if (errno != 0) {
+                printf("direntmusl: %s: readdir: errno %d\n", dir, errno);
+                ok = 0;
+            }
+            break;
+        }
         snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
         if (lstat(path, &st) != 0) {
+            if (!vanish || errno != ENOENT) {
+                printf("direntmusl: %s: lstat: errno %d\n", path, errno);
+                ok = 0;
+            }
             continue;
         }
+        checked++;
         if (de->d_type != DT_UNKNOWN && de->d_type != IFTODT(st.st_mode)) {
             printf("direntmusl: %s: d_type %d, lstat type %d\n", path, de->d_type,
                    (int)IFTODT(st.st_mode));
@@ -60,6 +81,10 @@ static int types_agree(const char *dir)
     }
     if (d) {
         closedir(d);
+    }
+    if (ok && checked == 0) {
+        printf("direntmusl: %s: no entry checked\n", dir);
+        ok = 0;
     }
     return ok;
 }
@@ -115,20 +140,22 @@ int main(int argc, char **argv)
         return fail("a symbolic link where the file system has them");
     }
     if (type_of(base, "f") != DT_REG || type_of(base, "s") != DT_DIR ||
-        (links && type_of(base, "l") != DT_LNK) || !types_agree(base)) {
+        (links && type_of(base, "l") != DT_LNK) || !types_agree(base, 0)) {
         tidy();
         return fail("the probe's own directory");
     }
     tidy();
-    if (type_of("/dev", "null") != DT_CHR || !types_agree("/dev") || !types_agree("/dev/pts")) {
+    if (type_of("/dev", "null") != DT_CHR || !types_agree("/dev", 0) ||
+        !types_agree("/dev/pts", 1)) {
         return fail("/dev");
     }
     if (type_of("/proc", "self") != DT_LNK || type_of("/proc", "meminfo") != DT_REG ||
-        type_of("/proc", "net") != DT_DIR || !types_agree("/proc") || !types_agree("/proc/self") ||
-        !types_agree("/proc/self/fd") || !types_agree("/proc/net")) {
+        type_of("/proc", "net") != DT_DIR || !types_agree("/proc", 1) ||
+        !types_agree("/proc/self", 0) || !types_agree("/proc/self/fd", 0) ||
+        !types_agree("/proc/net", 0)) {
         return fail("/proc");
     }
-    if (argc > 1 && (!types_agree("/") || !types_agree("/bin"))) {
+    if (argc > 1 && (!types_agree("/", 0) || !types_agree("/bin", 0))) {
         return fail("the root and /bin");
     }
     printf("DIRENTMUSL OK%s\n", links ? " (links)" : "");
