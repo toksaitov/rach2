@@ -1648,10 +1648,11 @@ static int32_t fork_nproc(const process_t *parent)
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
  * setsid or setpgid, the nice value, the persona, the no_new_privs flag, the
- * limits, the credentials, and the program name,
- * which `execve` sets and a child that never execs would otherwise never
- * have: a daemon that forks itself into the background is such a child, and
- * without it shows in `ps` and in /proc/<pid>/stat with no name.
+ * limits, the credentials, and the program name, which `execve` sets and a
+ * child that never execs would otherwise never have: a daemon that forks
+ * itself into the background is such a child, and without it shows in `ps`
+ * and in /proc/<pid>/stat with no name. The dumpable flag comes with the
+ * address space (`fork_mm`).
  */
 static void fork_ids(process_t *child, const process_t *parent)
 {
