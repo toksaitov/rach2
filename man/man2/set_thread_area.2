@@ -89,7 +89,7 @@ names one with
 .Nm set_thread_area
 returns zero on success.
 .Nm set_tid_address
-returns the process ID.
+returns the calling thread's ID.
 The raw calls return a negative error number on failure;
 .Fn syscall
 instead returns -1 and sets
