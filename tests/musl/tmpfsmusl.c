@@ -105,6 +105,18 @@ static int holds(const char *path, const char *want)
     return n == (ssize_t)strlen(want) && memcmp(buf, want, (size_t)n) == 0;
 }
 
+/** Whether readlink of `path` gives exactly `want`, into a buffer marked
+ * first, so the bytes it compares are the call's. */
+static int link_is(const char *path, const char *want)
+{
+    char target[16];
+    ssize_t n;
+
+    memset(target, '#', sizeof(target));
+    n = readlink(path, target, sizeof(target));
+    return n == (ssize_t)strlen(want) && memcmp(target, want, (size_t)n) == 0;
+}
+
 /** Write `text` to a new file at `path`. */
 static int put(const char *path, const char *text)
 {
@@ -121,7 +133,6 @@ static int placed(void)
 {
     struct stat st;
     struct statfs sf;
-    char target[16];
     int fd;
 
     mkdir(DIR_PATH, 0755);
@@ -138,7 +149,7 @@ static int placed(void)
     }
     if (mkdir(DIR_PATH "/d", 0755) != 0 || link(DIR_PATH "/f", DIR_PATH "/d/g") != 0 ||
         stat(DIR_PATH "/f", &st) != 0 || st.st_nlink != 2 || symlink("f", DIR_PATH "/l") != 0 ||
-        readlink(DIR_PATH "/l", target, sizeof(target)) != 1 || !holds(DIR_PATH "/l", "tmpfs")) {
+        !link_is(DIR_PATH "/l", "f") || !holds(DIR_PATH "/l", "tmpfs")) {
         return fail("a directory and the two links");
     }
     if (!put(DIR_PATH "/e", "E") || rename(DIR_PATH "/e", DIR_PATH "/f") != 0 ||
