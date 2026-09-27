@@ -46,10 +46,12 @@ void mm_put(struct mm *mm)
 void mm_set_exe(struct mm *mm, const char *path)
 {
     uint32_t len = (uint32_t)k_strlen(path);
-    char *copy = kmalloc(len + 1);
+    uint32_t slash = path[0] != '/' ? 1u : 0u;
+    char *copy = kmalloc(len + slash + 1);
 
     if (copy) {
-        k_memcpy(copy, path, len + 1);
+        copy[0] = '/';
+        k_memcpy(copy + slash, path, len + 1);
     }
     kfree(mm->exe);
     mm->exe = copy;

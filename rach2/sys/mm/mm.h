@@ -45,7 +45,9 @@ struct mm *mm_new(void);
 void mm_copy_info(struct mm *to, const struct mm *from);
 
 /** Keep the heap copy of the path `path` as `mm`'s program, in place of
- * any it had; none when there is no room. */
+ * any it had; none when there is no room. A path without its leading slash,
+ * as the debug shell names a program from the root, is given one, since
+ * /proc/PID/exe is absolute. */
 void mm_set_exe(struct mm *mm, const char *path);
 
 /** Take a reference to `mm`. */

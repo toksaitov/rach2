@@ -1370,7 +1370,8 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
  * of the /proc/<pid>/exe link it names, if it names one: Chromium runs its
  * children by executing /proc/self/exe, and the program they run must have
  * its own path, not the link's, for its /proc/self/exe to name it in turn.
- * 0, or the link's error.
+ * A process chroot put in a directory has no /proc, and its path is left for
+ * the resolver to refuse. 0, or the link's error.
  */
 static int32_t exec_follow_exe(char *path)
 {
@@ -1378,7 +1379,7 @@ static int32_t exec_follow_exe(char *path)
     int pid;
     int n;
 
-    if (synth_classify(path, &vp) != VNODE_PROC_EXE) {
+    if (current_proc->fs->root_mnt || synth_classify(path, &vp) != VNODE_PROC_EXE) {
         return 0;
     }
     pid = procfs_resolve_pid(vp.pid);
