@@ -69,6 +69,12 @@ enum vnode_kind {
 #define SYNTH_PROC_INTERRUPTS  16
 #define SYNTH_PROC_CONSOLE     17
 #define SYNTH_PROC_AUDIO       18
+#define SYNTH_PROC_MAPS        19
+#define SYNTH_PROC_STATUS      20
+#define SYNTH_PROC_STATM       21
+#define SYNTH_PROC_AUXV        22
+#define SYNTH_PROC_ENVIRON     23
+#define SYNTH_PROC_COMM        24
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

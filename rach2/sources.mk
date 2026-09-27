@@ -90,6 +90,7 @@ C_SRC = kernel.c \
         sys/proc/futex.c \
         sys/proc/sigframe.c \
         sys/proc/ptrace.c \
+        sys/proc/coredump.c \
         sys/ipc/pipe.c \
         sys/ipc/pipe_ring.c \
         sys/ipc/unix.c \

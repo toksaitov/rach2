@@ -65,6 +65,17 @@ int main(void)
           vp.pid == 7);
     CHECK(synth_classify("proc/9/cmdline", &vp) == VNODE_PROC_FILE &&
           vp.procfile == SYNTH_PROC_CMDLINE);
+    CHECK(synth_classify("proc/self/maps", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_MAPS && vp.pid == SYNTH_PID_SELF);
+    CHECK(synth_classify("proc/5/status", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_STATUS && vp.pid == 5);
+    CHECK(synth_classify("proc/5/statm", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_STATM);
+    CHECK(synth_classify("proc/5/auxv", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_AUXV);
+    CHECK(synth_classify("proc/5/environ", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_ENVIRON);
+    CHECK(synth_classify("proc/5/comm", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_COMM);
+    CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOENT);
 
     /* /proc/<pid>/fd/<n> magic links: the ttyname path. */
     CHECK(synth_classify("proc/self/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.pid == SYNTH_PID_SELF &&

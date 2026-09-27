@@ -7056,13 +7056,14 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
     }
     if (kind == VNODE_PROC_PID) {
-        static const char *files[3] = {"stat", "cmdline", "fd"};
+        static const char *files[9] = {"stat", "cmdline", "fd",      "maps", "status",
+                                       "statm", "auxv",   "environ", "comm"};
         process_t *pp = get_process((uint32_t)pid);
         int i;
         if (!pp || pp->state == PROC_UNUSED) {
             return 0; /* the process exited: an empty directory (just . and ..) */
         }
-        if (n >= 3) {
+        if (n >= 9) {
             return 0;
         }
         for (i = 0; files[n][i]; i++) {
