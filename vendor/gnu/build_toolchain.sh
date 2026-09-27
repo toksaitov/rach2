@@ -10,8 +10,9 @@
 # GCC with C and C++, and libxcrypt, whose libcrypt glibc 2.44 no longer has.
 # The compilers go in cross/, the target's headers and libraries in sysroot/.
 # The steps are binutils, headers, gcc1, glibc, gcc2 and libxcrypt; with no
-# STEP the whole toolchain is built again from nothing, and naming steps runs
-# only those, over what an earlier run left. Under make the sub-makes share
+# STEP the whole toolchain is built again from nothing, its own sources and
+# build directories removed and the ports' and Chromium's left alone, and
+# naming steps runs only those, over what an earlier run left. Under make the sub-makes share
 # the caller's jobs; run alone, the script uses every processor.
 #
 
@@ -146,7 +147,10 @@ step_libxcrypt()
 }
 
 if [ $# -eq 0 ]; then
-    rm -rf "$SRC" "$WORK" "$CROSS" "$SYSROOT"
+    rm -rf "$CROSS" "$SYSROOT"
+    for dir in binutils gcc1 glibc gcc2 libxcrypt; do
+        rm -rf "${WORK:?}/$dir"
+    done
     set -- binutils headers gcc1 glibc gcc2 libxcrypt
 fi
 for step in "$@"; do
