@@ -2630,8 +2630,8 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
     struct vfs_mount *was = p->fs->cwd_mnt;
     void *was_node = p->fs->cwd_node;
 
-    if (mnt == mounts[1] || mnt == mounts[2] ||
-        (mnt == mounts[0] && mnt->type == &vfs_krffs_type)) {
+    if (mnt && (mnt == mounts[1] || mnt == mounts[2] ||
+                (mnt == mounts[0] && mnt->type == &vfs_krffs_type))) {
         mnt = 0;
     }
     if (mnt) {
@@ -2656,7 +2656,7 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
     struct vfs_mount *was = p->fs->root_mnt;
     void *was_node = p->fs->root_node;
 
-    if (mnt == mounts[0] && node == mounts[0]->root) {
+    if (mnt && mnt == mounts[0] && node == mnt->root) {
         mnt = 0;
     }
     if (mnt) {
