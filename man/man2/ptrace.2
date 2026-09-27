@@ -228,6 +228,14 @@ with
 and
 .Dv SIGTRAP ,
 at its next return to user mode.
+A tracee blocked in a system call that a signal would interrupt is
+interrupted for the stop, as a stop signal would interrupt it: a call that
+is restarted after a stop and a continue is restarted when the tracer
+resumes the tracee, and one that is not, such as
+.Xr nanosleep 2 ,
+fails with
+.Er EINTR ,
+where Linux restarts it.
 .It Dv PTRACE_LISTEN
 Accepted for a seized tracee, which stays stopped.
 .It Dv PTRACE_SETOPTIONS
@@ -300,7 +308,8 @@ changes one call into another and has another run none at their entry
 stops, cancels the restart of an interrupted read at its exit stop, sets
 and reads a debug register, has a breakpoint on a kernel address
 refused and one ending at the last user address taken, attaches to and
-detaches from a running process, seizes a stopped one, and reads the
+detaches from a running process, seizes a stopped one, interrupts a
+seized one blocked in a read, and reads the
 .Dv SIGCHLD
 of a tracee
 .Dv SIGKILL

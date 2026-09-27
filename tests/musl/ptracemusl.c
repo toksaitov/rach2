@@ -21,13 +21,14 @@
  * PEEKUSER, and DR7 enables a breakpoint on a user address, the last of which a
  * breakpoint may end at, and not on a kernel address. PTRACE_ATTACH stops a
  * running process, which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops
- * for the tracer one that a stop signal has already stopped. A signal sent to a
- * process whose first thread its tracer holds stopped wakes the other thread,
- * asleep in pause, which takes it. The usage a tracer's wait4 reports for the
- * end of a traced thread that is not the first has the time of the children its
- * process reaped. A process another process traces, which ends, is reported to
- * its tracer before its parent may reap it, and then to the parent; the
- * tracer's next wait finds nothing left to wait for. A tracee SIGKILL ends
+ * for the tracer one that a stop signal has already stopped. PTRACE_INTERRUPT
+ * stops a seized tracee blocked in a read, which is restarted after. A signal
+ * sent to a process whose first thread its tracer holds stopped wakes the other
+ * thread, asleep in pause, which takes it. The usage a tracer's wait4 reports
+ * for the end of a traced thread that is not the first has the time of the
+ * children its process reaped. A process another process traces, which ends, is
+ * reported to its tracer before its parent may reap it, and then to the parent;
+ * the tracer's next wait finds nothing left to wait for. A tracee SIGKILL ends
  * sends its tracer, here its parent, a SIGCHLD of CLD_KILLED with the signal.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
@@ -741,6 +742,42 @@ static int attach_stopped(void)
 }
 
 /*
+ * PTRACE_INTERRUPT stops a seized tracee blocked in a read of an empty
+ * pipe, with PTRACE_EVENT_STOP and SIGTRAP, and the read, restarted when the
+ * tracer resumes it, reads the byte written after.
+ */
+static int interrupt_read(void)
+{
+    int p[2];
+    int status;
+    char c;
+    pid_t pid;
+
+    if (pipe(p) != 0) {
+        return fail("pipe");
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(p[1]);
+        _exit(read(p[0], &c, 1) == 1 && c == 'g' ? 0 : 1);
+    }
+    close(p[0]);
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
+        !WIFSTOPPED(status) || status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
+        return fail("PTRACE_INTERRUPT did not stop a tracee blocked in a read");
+    }
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || write(p[1], "g", 1) != 1) {
+        return fail("resuming the interrupted tracee");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the interrupted read was not restarted");
+    }
+    close(p[1]);
+    return 0;
+}
+
+/*
  * A tracee that SIGKILL ends tells its tracer, which is its parent here,
  * with a SIGCHLD whose siginfo is CLD_KILLED and the signal, and the wait
  * reports it killed. SIGCHLD is blocked, and the one the stop sent taken,
@@ -785,8 +822,8 @@ static int killed_tracee(void)
 int main(void)
 {
     if (memory_and_registers() || syscalls_and_exec() || syscall_changes() ||
-        restart_cancelled() || attach() || attach_stopped() || stopped_leader() ||
-        traced_thread_usage() || tracer_first() || killed_tracee()) {
+        restart_cancelled() || attach() || attach_stopped() || interrupt_read() ||
+        stopped_leader() || traced_thread_usage() || tracer_first() || killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

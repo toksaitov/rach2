@@ -3141,9 +3141,11 @@ static void sender_info(struct k_siginfo *info, int32_t code)
 
 /* Non-zero if the current process has a pending signal that is neither
  * blocked nor ignored: one that is caught, or whose default action terminates
- * or stops the process. Blocking syscall loops poll this so a signal
- * interrupts the wait (the signal is then delivered/acts on the syscall's
- * return to user). */
+ * or stops the process; or if its tracer asked for a stop with
+ * PTRACE_INTERRUPT, which, as a stop signal would, ends the wait so the stop
+ * is taken on the way back to user mode (`ptrace_return_stops`). Blocking
+ * syscall loops poll this so a signal interrupts the wait (the signal is then
+ * delivered/acts on the syscall's return to user). */
 int signal_pending(void)
 {
     uint64_t deliverable;
@@ -3152,6 +3154,9 @@ int signal_pending(void)
 
     if (!current_proc) {
         return 0;
+    }
+    if (current_proc->ptrace & PT_INTERRUPT) {
+        return 1;
     }
     /* Snapshot the 64-bit masks with IRQs off: on i386 a 64-bit read is two
      * 32-bit loads, and a signal posted from an IRQ in between could tear it.
