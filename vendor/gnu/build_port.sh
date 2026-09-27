@@ -21,7 +21,9 @@
 # before it installed where the target system has it. A port installs into
 # stage/NAME, where the debugging information is stripped from its ELF files,
 # which keep their symbol tables, and its libtool archives and Info index are
-# removed; the rest is copied into the root and listed in stage/NAME.files. A
+# removed; the rest is copied into the root and listed in stage/NAME.files,
+# once the files the port's last list has and the new one has not are
+# removed from the root, so a build that installs less leaves nothing old. A
 # port is built for another's DEPENDS only when it has no such list, and
 # every port depends on the runtime, the toolchain's glibc. --all builds
 # every recipe into an empty root. Programs link with the shared libraries;
@@ -170,7 +172,10 @@ build()
     fi
     WORK="$OUT/work/port-$name"
     DEST="$STAGE/$name"
-    rm -rf "$WORK" "$DEST" "$STAGE/$name.files"
+    if [ -f "$STAGE/$name.files" ]; then
+        mv -f "$STAGE/$name.files" "$STAGE/$name.old"
+    fi
+    rm -rf "$WORK" "$DEST"
     mkdir -p "$WORK" "$DEST" "$ROOT"
     (
         cd "$WORK"
@@ -184,11 +189,17 @@ build()
         -exec "$TARGET-strip" --strip-debug {} + 2>/dev/null || true
     find "$DEST" -type f -name '*.la' -exec rm -f {} +
     rm -f "$DEST/usr/share/info/dir"
-    cp -af "$DEST/." "$ROOT/"
     (
         cd "$DEST"
         find . ! -type d | LC_ALL=C sort
     ) >"$STAGE/$name.files"
+    if [ -f "$STAGE/$name.old" ]; then
+        LC_ALL=C comm -23 "$STAGE/$name.old" "$STAGE/$name.files" | while IFS= read -r f; do
+            rm -f "$ROOT/$f"
+        done
+        rm -f "$STAGE/$name.old"
+    fi
+    cp -af "$DEST/." "$ROOT/"
     size=$(du -sk "$DEST" | awk '{ printf "%.1f", $1 / 1024 }')
     echo "gnu: port: $name: done in $(($(date +%s) - t0)) s, $size MB installed"
 }
