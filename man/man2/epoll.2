@@ -110,6 +110,12 @@ named when it was added.
 When the number is closed, or names another open file, the next wait
 drops the registration; Linux keeps it while the open file stays open
 through another descriptor.
+.Xr poll 2
+and
+.Xr select 2
+report a set readable while a wait on it would report an event: an
+edge-triggered event already reported, or a one-shot registration that
+is off, does not make it readable.
 A set inside another set is reported ready by what it holds, but a
 change in it does not wake a wait on the outer set.
 .Sh RETURN VALUES

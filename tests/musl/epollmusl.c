@@ -13,11 +13,12 @@
  * regular file is refused with EPERM and a second add with EEXIST. A child's
  * write wakes a parent blocked in epoll_wait. A registration of no events is
  * told of a hangup. A pipe added to a set while a wait on it sleeps, then
- * written, wakes the wait. Waits with room for one event report two ready
- * descriptors in turn. A one-shot event a wait cannot store, EFAULT, is
- * reported by the next wait. The registration of a closed eventfd does not
- * report the eventfd made next at its number, which can be added. epoll_pwait2
- * takes a timeout of 2^31 seconds, and refuses negative seconds with EINVAL.
+ * written, wakes the wait. A set whose edge-triggered event was reported does
+ * not poll readable. Waits with room for one event report two ready descriptors
+ * in turn. A one-shot event a wait cannot store, EFAULT, is reported by the
+ * next wait. The registration of a closed eventfd does not report the eventfd
+ * made next at its number, which can be added. epoll_pwait2 takes a timeout of
+ * 2^31 seconds, and refuses negative seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -299,6 +300,33 @@ static int added_while_waiting(void)
     return 0;
 }
 
+/* A set whose only event is edge-triggered and reported already does not
+ * poll readable, as a wait on it would report nothing. */
+static int polled_after_edge(void)
+{
+    struct epoll_event ev, out;
+    struct pollfd pfd;
+    int ep = epoll_create1(0);
+    int p[2];
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLET;
+    if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
+        write(p[1], "e", 1) != 1 || wait_one(ep, 0, &out) != 1) {
+        return fail("setup for a poll after an edge");
+    }
+    pfd.fd = ep;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (wait_one(ep, 0, &out) != 0 || poll(&pfd, 1, 0) != 0) {
+        return fail("a set with its edge reported polled readable");
+    }
+    close(p[0]);
+    close(p[1]);
+    close(ep);
+    return 0;
+}
+
 /* Two descriptors ready, and waits with room for one event: the waits
  * report each in turn. */
 static int in_turn(void)
@@ -444,7 +472,7 @@ static int long_timeout(void)
 int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
-        in_turn() || failed_copy() || long_timeout()) {
+        polled_after_edge() || in_turn() || failed_copy() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

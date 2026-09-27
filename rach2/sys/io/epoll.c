@@ -255,6 +255,12 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
     return (int)sc->n;
 }
 
+/*
+ * The readiness of an epoll set for poll: readable when a wait would report
+ * an event, which `item_ready` says without taking it, so an edge-triggered
+ * event reported already, or a one-shot registration that is off, does not
+ * make the set readable.
+ */
 static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     struct epoll *ep = (struct epoll *)e->priv;
@@ -266,10 +272,9 @@ static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     for (it = ep->items; it; it = it->next) {
         fd_entry_t *t = fd_get(current_proc->fds, it->fd);
         struct wait_queue *ignored;
-        uint32_t want = (it->events & EPOLL_EVENTS) | EPOLLERR | EPOLLHUP;
+        int gone;
 
-        if (item_names(it, t) && t->ops != e->ops && !it->off &&
-            ((uint32_t)(uint16_t)poll_fd(t, (short)want, &ignored) & want)) {
+        if (t && t->ops != e->ops && item_ready(it, &ignored, &gone)) {
             return (short)(events & 0x001);
         }
     }
