@@ -3926,8 +3926,12 @@ done:
     return rc;
 }
 
-/* The path of a directory node within the mount, from the parents the
- * nodes remember and the names their sets carry, up to the root. */
+/**
+ * The path of a directory node within the mount, from the parents the nodes
+ * remember and the names their sets carry, up to the root. A directory more
+ * than 64 levels below the root has no path here and is -ENAMETOOLONG, as a
+ * path longer than `cap` is.
+ */
 static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct ex_mount *em = em_of(mnt);
@@ -4005,7 +4009,7 @@ static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
         cluster = parent_cluster == 0 ? em->root : parent_cluster;
     }
     if (cluster != em->root) {
-        return -ENAMETOOLONG; /* deeper than the climb, and not the root's path */
+        return -ENAMETOOLONG;
     }
     if (len == 0) {
         buf[0] = '/';
