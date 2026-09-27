@@ -222,6 +222,7 @@ Send the tracee
 Resume the tracee with the signal
 .Fa data
 and stop tracing it; its debug registers are cleared.
+A tracee whose process is stopped then stops with it, as on Linux.
 .It Dv PTRACE_INTERRUPT
 Stop a tracee attached with
 .Dv PTRACE_SEIZE

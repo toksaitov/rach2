@@ -3836,9 +3836,11 @@ static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
  * blocked, act on one (`sig_dequeue`), the lowest-numbered of the thread's
  * own or, when it has none, of its process's: ignore it, end the process (a
  * default that terminates), stop the process, or build a handler frame. A
- * thread whose process is stopped parks here first. The records of ended
- * threads are freed here too, a point every running process passes where
- * none of them is in use.
+ * thread whose process is stopped parks here first; a traced one reports the
+ * stop to its tracer instead and looks at the stop again when it resumes, so
+ * one its tracer detached meanwhile parks, as Linux's detach leaves a tracee
+ * to its group's stop. The records of ended threads are freed here too, a
+ * point every running process passes where none of them is in use.
  *
  * A system call the dispatcher found interrupted and restartable is
  * restarted when no handler runs, and when the handler that runs has
@@ -3874,8 +3876,10 @@ void deliver_signals(isr_params_t *tf)
         int signo;
 
         if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
-            !ptrace_group_stop((int)current_proc->tg->stop) && !current_proc->stop_seen) {
-            sig_park();
+            !current_proc->stop_seen) {
+            if (!ptrace_group_stop((int)current_proc->tg->stop)) {
+                sig_park();
+            }
             continue;
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
