@@ -101,8 +101,8 @@ changes = {
         'if (connect_established(entry->sock)) {',
         'if (entry->sock->tcb && entry->sock->tcb->state == TCP_ESTABLISHED) {'),
     'framebuffer-owner': ('syscall',
-        'if (fb_owner_pid != current_proc->pid &&',
-        'if (0 && fb_owner_pid != current_proc->pid &&'),
+        'if (fb_owner_pid != current_proc->tgid &&',
+        'if (0 && fb_owner_pid != current_proc->tgid &&'),
     'framebuffer-reentry': ('syscall',
         'if (!vga_graphics_mode) {',
         'if (0) {'),
@@ -257,8 +257,8 @@ changes = {
         'rem.tv_sec = 0;\n'
         '        rem.tv_nsec = (int32_t)(unslept * 10000000u);'),
     'timer-first': ('syscall',
-        'current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);',
-        'current_proc->alarm_tick = proc_alarm_at(kernel_ticks, value);'),
+        'p->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);',
+        'p->alarm_tick = proc_alarm_at(kernel_ticks, value);'),
     'timer-left': ('syscall',
         'return (int32_t)left > 1 ? left - 1u : 1u;',
         'return (int32_t)left > 0 ? left : 1u;'),
@@ -267,9 +267,9 @@ changes = {
         'return (int32_t)left > 1 ? left - 1u : 0u;'),
     'timer-disarm': ('syscall',
         '    if (value == 0) {\n'
-        '        current_proc->alarm_tick = 0;',
+        '        p->alarm_tick = 0;',
         '    if (0) {\n'
-        '        current_proc->alarm_tick = 0;'),
+        '        p->alarm_tick = 0;'),
     'timer-round': ('syscall',
         'ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;',
         'ticks = whole * 100u + (uint32_t)usec / 10000u;'),
@@ -294,7 +294,7 @@ changes = {
         '               itimer_ticks(set.interval_sec, set.interval_usec));',
         '               itimer_ticks(0, set.interval_usec));'),
     'timer-interval-read-sec': ('syscall',
-        'out->interval_sec = (int32_t)(current_proc->alarm_interval / 100u);',
+        'out->interval_sec = (int32_t)(current_proc->tg->leader->alarm_interval / 100u);',
         'out->interval_sec = 0;'),
     'timer-usec': ('syscall',
         'set.interval_sec < 0 || set.interval_usec < 0 || set.interval_usec >= 1000000) {',
@@ -325,8 +325,8 @@ changes = {
         '    uint32_t flags = 0;\n'
         '    uint32_t left = itimer_left();'),
     'timer-interval-read': ('syscall',
-        'out->interval_usec = (int32_t)((current_proc->alarm_interval % 100u) * 10000u);',
-        'out->interval_usec = (int32_t)((current_proc->alarm_interval % 100u) * 1000u);'),
+        'out->interval_usec = (int32_t)((current_proc->tg->leader->alarm_interval % 100u) * 10000u);',
+        'out->interval_usec = (int32_t)((current_proc->tg->leader->alarm_interval % 100u) * 1000u);'),
     'alarm-round': ('syscall',
         '    if ((seconds == 0 && usec != 0) || usec >= 500000u) {\n'
         '        seconds++;\n'
@@ -344,22 +344,17 @@ changes = {
         'seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;',
         'seconds = (int64_t)kernel_uptime_seconds;'),
     'clock-cpu-system': ('syscall',
-        '    if (!c->user_only) {\n'
-        '        ticks += c->proc->stime;\n'
-        '    }\n',
-        ''),
+        'return c->user_only ? user : user + sys;',
+        'return user;'),
     'clock-cpu-user': ('syscall',
         'out->user_only = ((uint32_t)clk & CPUCLOCK_WHICH) == CPUCLOCK_VIRT;',
         'out->user_only = 0;'),
     'clock-cpu-pid': ('syscall',
-        '    out->proc = get_process(id);\n'
-        '    return out->proc ? 0 : -EINVAL;',
-        '    return 0;'),
-    'clock-cpu-thread': ('syscall',
-        '    if ((uint32_t)clk & CPUCLOCK_PERTHREAD) {\n'
-        '        return -EINVAL;\n'
-        '    }\n',
+        '    out->proc = get_process(id);\n',
         ''),
+    'clock-cpu-thread': ('syscall',
+        '    if (!out->proc || (out->thread && out->proc->tg != current_proc->tg) ||\n',
+        '    if (!out->proc ||\n'),
     'clock-descriptor': ('syscall',
         'if (clk >= 0 || ((uint32_t)clk & CPUCLOCK_WHICH) == 3u) {',
         'if (clk >= 0) {'),
