@@ -379,7 +379,7 @@ static pid_t hole_child(rlim_t less, int *status, uint32_t *counted)
             sigaction(SIGUSR1, &sa, NULL) != 0) {
             _exit(2);
         }
-        raise(SIGUSR1);
+        kill(getpid(), SIGUSR1);
         _exit(3);
     }
     close(count_pipe[1]);

@@ -728,7 +728,8 @@ static void *use_framebuffer(void *arg)
     fd = open("/fb", O_RDWR);
     if (fd < 0) {
         fb_errno = errno;
-        return (void *)1L;
+        step = 1;
+        return (void *)step;
     }
     flags = fcntl(0, F_GETFL);
     if (ioctl(fd, FB_SETPALETTE, palette) != 0) {
