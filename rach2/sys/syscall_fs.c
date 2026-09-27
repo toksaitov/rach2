@@ -7438,6 +7438,16 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
     return 0;
 }
 
+/**
+ * The core file of the current process (coredump.h), through a descriptor
+ * of its table that no other call can reach: it is marked closing and
+ * releasing as soon as the open has published it, before anything sleeps,
+ * so a process that shares the table cannot write through it, or take a
+ * reference to a description the end of the dump frees, and it stays in
+ * the table, where the holder rule of the KRFFS root counts it. The slot is
+ * taken as it is, not through `fd_get`, whose hold on a shared table no
+ * call's end would let go of on the way to a death.
+ */
 int32_t fs_core_file(int signo, uint32_t limit)
 {
     static const char zero;
@@ -7470,8 +7480,9 @@ out:
         kfree(notes);
         return fd;
     }
-    entry = fd_get(current_proc->fds, fd);
-    if (!entry || !entry->ofd || !entry->ofd->vmnt) {
+    entry = &current_proc->fds->entries[fd];
+    entry->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+    if (!entry->ofd || !entry->ofd->vmnt) {
         rc = -EINVAL;
     } else {
         cf.ofd = entry->ofd;

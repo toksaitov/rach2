@@ -42,6 +42,9 @@ On a FAT32 or exFAT volume the file has the owner and the permissions the
 mount gives every file, whatever the mode asked for.
 A directory the process cannot write, or a descriptor table with no free
 entry, leaves no file.
+The descriptor the file is written through is closed to every other
+thread and process from the moment it is opened, so a process that
+shares the descriptor table cannot use it.
 .Pp
 The other threads of the process are sent
 .Dv SIGKILL ,
