@@ -55,9 +55,9 @@ run_phase()
 
 echo "exit-mutation: logs: $work"
 run_phase fixed
-[ "$(grep -c 'current_proc->state = PROC_ZOMBIE;' "$work/exit.saved")" -eq 1 ]
-sed '/current_proc->state = PROC_ZOMBIE;/d; /current_proc->in_syscall = 1;/a\
-    current_proc->state = PROC_ZOMBIE;
+[ "$(grep -c 'self->state = PROC_ZOMBIE;' "$work/exit.saved")" -eq 1 ]
+sed '/self->state = PROC_ZOMBIE;/d; /self->in_syscall = 1;/a\
+    self->state = PROC_ZOMBIE;
 ' "$work/exit.saved" > "$work/proc/exit.c"
 touch "$work/proc/exit.c"
 run_phase mutated
