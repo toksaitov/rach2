@@ -33,6 +33,13 @@ is not the first of its process only with
 .Dv __WALL
 or
 .Dv __WCLONE .
+The end of a traced process whose parent is another process is reported
+to the tracer first, and the report lets the process go: its parent then
+receives
+.Dv SIGCHLD
+and may reap it.
+A tracer that ends lets its tracees go, and the parent of one whose
+process has ended is told of the end the same way.
 The stops are:
 .Bl -tag -width "signal-delivery stop"
 .It signal-delivery stop

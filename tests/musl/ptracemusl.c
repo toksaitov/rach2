@@ -18,7 +18,9 @@
  * whose first thread its tracer holds stopped wakes the other thread, asleep
  * in pause, which takes it. The usage a tracer's wait4 reports for the end
  * of a traced thread that is not the first has the time of the children its
- * process reaped.
+ * process reaped. A process another process traces, which ends, is reported
+ * to its tracer before its parent may reap it, and then to the parent; the
+ * tracer's next wait finds nothing left to wait for.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -233,14 +235,13 @@ static void *usr1_sleeper(void *arg)
     _exit(5);
 }
 
-/** Whether thread `t` of process `pid` sleeps, by its state in
- * /proc/PID/task/T/stat. */
-static int sleeping(pid_t pid, pid_t t)
+/** The state letter the stat file at `path` gives, 0 when it cannot be
+ * read. */
+static char stat_state(const char *path)
 {
-    char path[64], line[256], *state;
+    char line[256], *state;
     int fd, n;
 
-    snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", (int)pid, (int)t);
     fd = open(path, O_RDONLY);
     if (fd < 0) {
         return 0;
@@ -252,7 +253,27 @@ static int sleeping(pid_t pid, pid_t t)
     }
     line[n] = '\0';
     state = strrchr(line, ')');
-    return state && state[1] == ' ' && state[2] == 'S';
+    return state && state[1] == ' ' ? state[2] : 0;
+}
+
+/** Whether thread `t` of process `pid` sleeps, by its state in
+ * /proc/PID/task/T/stat. */
+static int sleeping(pid_t pid, pid_t t)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/%d/task/%d/stat", (int)pid, (int)t);
+    return stat_state(path) == 'S';
+}
+
+/** Whether process `pid` has ended and waits to be reaped, by its state in
+ * /proc/PID/stat. */
+static int zombie(pid_t pid)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    return stat_state(path) == 'Z';
 }
 
 /**
@@ -404,10 +425,98 @@ static int traced_thread_usage(void)
     return 0;
 }
 
+/**
+ * The tracer of `tracer_first`: it seizes the child `c`, which is not its
+ * own, tells the parent through `to_m`, waits for the word `from_m` brings,
+ * then waits for the child's end, which it must see with status 9, and waits
+ * again, which must find nothing. Returns 0, or the step that failed.
+ */
+static int tracer_side(pid_t c, int to_m, int from_m)
+{
+    int status;
+    char ch;
+
+    if (ptrace(PTRACE_SEIZE, c, NULL, NULL) != 0 || write(to_m, "a", 1) != 1) {
+        return 1;
+    }
+    if (read(from_m, &ch, 1) != 1) {
+        return 2;
+    }
+    if (waitpid(c, &status, 0) != c || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
+        return 3;
+    }
+    if (waitpid(-1, &status, __WALL) != -1 || errno != ECHILD) {
+        return 4;
+    }
+    return 0;
+}
+
+/**
+ * A child, which a second child traces, ends with 9. Its parent's wait does
+ * not reap it while the tracer has not seen the end; once the tracer's wait
+ * has reported it, the parent reaps it with its status, and the tracer's
+ * next wait answers ECHILD rather than waiting on a tracee that is gone.
+ */
+static int tracer_first(void)
+{
+    int to_c[2], to_m[2], to_x[2], status = 0, i;
+    pid_t c, x, got = 0;
+    char ch;
+
+    if (pipe(to_c) != 0) {
+        return fail("pipe");
+    }
+    c = fork();
+    if (c == 0) {
+        _exit(read(to_c[0], &ch, 1) == 1 ? 9 : 1);
+    }
+    if (pipe(to_m) != 0 || pipe(to_x) != 0) {
+        return fail("pipe");
+    }
+    x = fork();
+    if (x == 0) {
+        _exit(tracer_side(c, to_m[1], to_x[0]));
+    }
+    close(to_m[1]);
+    close(to_x[0]);
+    if (read(to_m[0], &ch, 1) != 1 || write(to_c[1], "x", 1) != 1) {
+        return fail("the second child did not seize the first");
+    }
+    for (i = 0; i < 500 && !zombie(c); i++) {
+        usleep(10000);
+    }
+    if (waitpid(c, &status, WNOHANG) != 0 || write(to_x[1], "g", 1) != 1) {
+        return fail("the parent reaped a child before its tracer saw its end");
+    }
+    for (i = 0; i < 1000 && (got = waitpid(c, &status, WNOHANG)) == 0; i++) {
+        usleep(10000);
+    }
+    if (got != c || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
+        return fail("the parent did not reap the child once its tracer saw the end");
+    }
+    for (i = 0; i < 1000 && waitpid(x, &status, WNOHANG) == 0; i++) {
+        usleep(10000);
+    }
+    if (i == 1000) {
+        kill(x, SIGKILL);
+        waitpid(x, &status, 0);
+        return fail("the tracer's wait after the end did not return");
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        printf("PTRACEMUSL FAIL (the tracer's step %d)\n", WEXITSTATUS(status));
+        return 1;
+    }
+    close(to_c[0]);
+    close(to_c[1]);
+    close(to_m[0]);
+    close(to_x[1]);
+    return 0;
+}
+
 int main(void)
 {
     if (memory_and_registers() || syscalls_and_exec() || attach() || stopped_leader() ||
-        traced_thread_usage()) {
+        traced_thread_usage() || tracer_first()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

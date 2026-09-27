@@ -76,12 +76,20 @@ int ptrace_fork_attach(process_t *child, uint32_t flags);
  * `old_tid` before: PTRACE_EVENT_EXEC with the options, else a SIGTRAP. */
 void ptrace_exec(uint32_t old_tid);
 
-/** Tell the tracer of the ending thread `p` of it: a SIGCHLD and a wake of
- * its wait. */
+/** Tell the tracer of `p` of its end, the thread's, or, for a leader whose
+ * process has ended, the process's: a SIGCHLD with the siginfo
+ * `proc_child_info` gives, and a wake of its wait. */
 void ptrace_exit_notify(process_t *p);
 
+/** The tracer's wait has reported the end of the process `t` leads, whose
+ * parent is another process: `t` is let go, and its parent is told of the
+ * end and may reap it. */
+void ptrace_exit_release(process_t *t);
+
 /** Detach the tracees of the process `tgid`, which is ending; with
- * PTRACE_O_EXITKILL they are sent SIGKILL. */
+ * PTRACE_O_EXITKILL they are sent SIGKILL. The parent of a tracee whose
+ * process has ended, the tracer's wait not having reported it, is told of
+ * the end, as `ptrace_exit_release` tells it. */
 void ptrace_tracer_gone(uint32_t tgid);
 
 /** Load the debug registers of `next`, or clear what `old` left, at a switch

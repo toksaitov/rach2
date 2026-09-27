@@ -28,7 +28,9 @@
  * rest of its group. The last thread detaches the process's own tracees,
  * reparents the children onto init, gives the process its status, the
  * group's when exit_group or a fatal signal ended it and the leader's own
- * otherwise, and notifies the parent. The address space and the
+ * otherwise, and notifies the parent; or, when a process other than the
+ * parent traces the leader, the tracer, whose wait reports the end first and
+ * then tells the parent (`ptrace_exit_release`). The address space and the
  * descriptor-table allocation are not released here: a normal exit leaves
  * them to the reap, and a death by signal drops the address space before it
  * calls this, since a release that sleeps must come before the zombie is
@@ -70,6 +72,12 @@ int proc_exit_cleanup(int32_t status)
     if (tg->live != 0) {
         wq_wake_all(&tg->gone);
         return 0;
+    }
+    if ((leader->ptrace & PT_TRACED) && leader->tracer != leader->parent_pid) {
+        if (leader != self) {
+            ptrace_exit_notify(leader);
+        }
+        return 1;
     }
     parent = get_process(leader->parent_pid);
     if (parent) {

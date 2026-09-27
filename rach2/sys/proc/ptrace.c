@@ -333,23 +333,45 @@ void ptrace_exit_notify(process_t *p)
     if (!(p->ptrace & PT_TRACED) || tracer == NULL) {
         return;
     }
-    k_memset(&info, 0, sizeof(info));
-    info.code = CLD_EXITED;
-    info.pid = p->pid;
-    info.uid = p->ruid;
-    info.status = (p->exit_code >> 8) & 0xFF;
+    proc_child_info(p, &info);
     signal_post_info(tracer, SIGCHLD, &info);
     wq_wake_all(&tracer->tg->chld);
 }
 
 /**
- * Take `t` from its tracer, as PTRACE_DETACH and a tracer's end do: the step
- * flag the kernel set and the debug registers go, and a thread in a ptrace
- * stop resumes with `sig`. A thread that ended while traced, which its tracer
- * would have freed, is left for the next return to user mode to free.
+ * Tell the parent of the process `t` leads, which has ended and which its
+ * tracer has let go, of the end, as the process's last thread tells the
+ * parent of a process no other process traces: a SIGCHLD, and a wake of its
+ * wait, which passed the process over while it was traced.
+ */
+static void ptrace_parent_notify(const process_t *t)
+{
+    process_t *parent = get_process(t->parent_pid);
+    struct k_siginfo info;
+
+    if (parent == NULL) {
+        return;
+    }
+    proc_child_info(t, &info);
+    signal_post_info(parent, SIGCHLD, &info);
+    wq_wake_all(&parent->tg->chld);
+}
+
+/**
+ * Take `t` from its tracer, as PTRACE_DETACH, a tracer's end and its wait's
+ * report of a process's end do: the step flag the kernel set and the debug
+ * registers go, and a thread in a ptrace stop resumes with `sig`. A thread
+ * that ended while traced, which its tracer would have freed, is left for the
+ * next return to user mode to free. A process that has ended, which its
+ * parent's wait passed over while another process traced it, is left to the
+ * parent, which is told of the end (`ptrace_parent_notify`); a parent that
+ * is the tracer is ending itself, and the process goes to init with its
+ * other children (`reparent_children`).
  */
 static void ptrace_detach(process_t *t, int sig)
 {
+    uint32_t tracer = t->tracer;
+
     if (t->ptrace & PT_STEP) {
         user_frame(t)->eflags &= ~EFLAGS_TF;
     }
@@ -362,6 +384,12 @@ static void ptrace_detach(process_t *t, int sig)
         proc_dead_threads++;
         return;
     }
+    if (t->state == PROC_ZOMBIE && t->tg->live == 0) {
+        if (t->parent_pid != tracer) {
+            ptrace_parent_notify(t);
+        }
+        return;
+    }
     if (t->ptrace_status != 0) {
         t->ptrace_signo = sig;
         t->ptrace_status = 0;
@@ -369,6 +397,11 @@ static void ptrace_detach(process_t *t, int sig)
             t->state = PROC_READY;
         }
     }
+}
+
+void ptrace_exit_release(process_t *t)
+{
+    ptrace_detach(t, 0);
 }
 
 void ptrace_tracer_gone(uint32_t tgid)

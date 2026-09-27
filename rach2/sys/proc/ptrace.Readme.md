@@ -23,7 +23,7 @@ A stopped tracee is not running, and its user registers are the trap frame at th
 
 ## Wait
 
-`wait_find` reports a tracee to its tracer before the tracee's own parent sees anything: an unreported ptrace stop, a traced thread that ended, which the report frees, since such a thread is not freed at the next return to user mode as an untraced one is, and the end of a process whose parent the tracer is not, reported once and left to the parent. A thread that is not its process's leader is selected only with `__WALL` or `__WCLONE`. A tracer's end detaches its tracees (`ptrace_tracer_gone`), with `SIGKILL` under `PTRACE_O_EXITKILL`.
+`wait_find` reports a tracee to its tracer before the tracee's own parent sees anything: an unreported ptrace stop; a traced thread that ended, which the report frees, since such a thread is not freed at the next return to user mode as an untraced one is; and the end of a process whose parent the tracer is not. The last thread of such a process tells the leader's tracer of the end and not the parent (`proc_exit_cleanup`), and the parent's wait passes the zombie over while another process traces it. The tracer's report lets the process go (`ptrace_exit_release`), which sends the parent `SIGCHLD` and wakes its wait, and the parent reaps it. A thread that is not its process's leader is selected only with `__WALL` or `__WCLONE`. A tracer's end detaches its tracees (`ptrace_tracer_gone`), with `SIGKILL` under `PTRACE_O_EXITKILL`, and tells the parent of a tracee whose process has ended, as the report would have.
 
 ## Debug registers
 

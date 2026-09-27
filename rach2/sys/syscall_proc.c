@@ -2206,8 +2206,10 @@ static void wait_hold(struct wait_report *r, process_t *p, int take, int options
 /**
  * Take the event the wait holds in `r`, whose report the caller has copied
  * out: reap the zombie process or free the traced thread that ended, which
- * no other wait could take meanwhile. The other events were taken when they
- * were held.
+ * no other wait could take meanwhile, or let go the process whose end its
+ * tracer has now seen, which its parent may then reap (`ptrace_exit_release`),
+ * when no other part of the kernel freed it meanwhile. The other events were
+ * taken when they were held.
  */
 static void wait_take(const struct wait_report *r)
 {
@@ -2219,6 +2221,8 @@ static void wait_take(const struct wait_report *r)
         p->tg->utime += p->utime;
         p->tg->stime += p->stime;
         proc_release(p);
+    } else if (r->take == WAIT_SEEN && get_process(r->pid) == p) {
+        ptrace_exit_release(p);
     }
 }
 
@@ -2262,8 +2266,9 @@ static void wait_done(struct wait_report *r, int ok)
  * What a tracer's wait finds of its tracee `p`: a ptrace stop the wait has
  * not reported, reported once; a thread that ended while traced, which the
  * report frees, as no other wait reports it; or the end of a process whose
- * parent the tracer is not, reported once and left for the parent to reap.
- * Returns 1 with `out` filled and the event held (`wait_hold`), or 0.
+ * parent the tracer is not, which the parent's wait passes over until this
+ * report lets the process go to the parent (`wait_take`). Returns 1 with
+ * `out` filled and the event held (`wait_hold`), or 0.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
@@ -2292,12 +2297,17 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
 /**
  * What a wait finds of its child `p`: its end (WEXITED), once every thread
  * has ended, which the report reaps; a stop (WUNTRACED), reported once while
- * the child is stopped; or a continue (WCONTINUED), reported once. Returns 1
- * with `out` filled and the event held (`wait_hold`), or 0.
+ * the child is stopped; or a continue (WCONTINUED), reported once. A process
+ * another process traces is reaped only after its tracer's wait has reported
+ * its end and let it go (`wait_tracee`), as Linux has it, so that the tracer
+ * learns of the end first. Returns 1 with `out` filled and the event held
+ * (`wait_hold`), or 0.
  */
 static int wait_child(process_t *p, int options, struct wait_report *out)
 {
-    if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED)) {
+    int traced = (p->ptrace & PT_TRACED) && p->tracer != current_proc->tgid;
+
+    if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED) && !traced) {
         wait_fill_exit(out, p, p->exit_code);
         wait_hold(out, p, WAIT_REAP, options);
         return 1;

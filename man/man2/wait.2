@@ -39,6 +39,12 @@ A tracer's wait also reports the threads its process traces, as
 .Xr ptrace 2
 describes: their ptrace stops, a traced thread's end, and the end of a
 traced process whose parent is another.
+The end of a child that another process traces is the tracer's to report
+first: the parent's wait passes the ended child over until the tracer's
+wait has reported its end, or the tracer has ended, and the parent then
+receives
+.Dv SIGCHLD
+and may reap it, as on Linux.
 By default, the call waits for a child to exit and reaps it.
 The
 .Fa options
