@@ -1,0 +1,2153 @@
+# The faults tests/system/probe_faults.sh puts into the tree, one at a time,
+# each under a row of the default suite that must fail with it. A block is
+#
+#   fault NAME     a name unique in this list
+#   probe PROBE    the probe, as the runner names it
+#   file PATH      the file the fault changes, from the top of the tree
+#   expect WORDS   words the probe prints only when that row fails
+#   old            lines of the file, which occur in it exactly once,
+#   ...
+#   new            and the lines that replace them
+#   ...
+#   end
+#
+# and a line starting with # outside a block is a comment. Most faults take
+# a fix of milestone 54's review back, or bring back the defect its row is
+# about; the comment before each group names the part of the system its
+# faults are in.
+
+# execve.
+
+fault exec-failed-unshares
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (a descriptor a thread opened after its execve failed
+old
+    if (!user_path) {
+        return -EFAULT;
+    }
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
+new
+    if (!user_path) {
+        return -EFAULT;
+    }
+    rc = proc_files_unshare();
+    if (rc < 0) {
+        return rc;
+    }
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
+end
+
+fault exec-two-owners
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (two execs at once
+old
+    if (tg->exiting || tg->exec_task != NULL) {
+        return -EAGAIN;
+    }
+    if (tg->live > 1) {
+new
+    if (tg->live > 1) {
+end
+
+fault exec-robust-tid
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (a robust mutex a thread held into its execve
+old
+    proc_thread_gone(current_proc);
+    if (current_proc != current_proc->tg->leader) {
+        exec_take_leader();
+    }
+    exec_files(s);
+new
+    if (current_proc != current_proc->tg->leader) {
+        exec_take_leader();
+    }
+    proc_thread_gone(current_proc);
+    exec_files(s);
+end
+
+fault exec-setid-ignored
+probe suidmusl
+file rach2/sys/syscall_proc.c
+expect SUIDMUSL FAIL (child status)
+old
+    uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
+new
+    uint32_t mode = 0u;
+end
+
+fault exec-root-tracer-suppresses
+probe suidmusl
+file rach2/sys/syscall_proc.c
+expect SUIDMUSL FAIL (the exec traced by root)
+old
+static int exec_traced(void)
+{
+    const process_t *tracer;
+
+    if (!(current_proc->ptrace & PT_TRACED)) {
+        return 0;
+    }
+    tracer = get_process(current_proc->tracer);
+    return tracer == NULL || tracer->euid != 0;
+}
+new
+static int exec_traced(void)
+{
+    return (current_proc->ptrace & PT_TRACED) != 0;
+}
+end
+
+fault exec-user-tracer-gains
+probe suidmusl
+file rach2/sys/syscall_proc.c
+expect SUIDMUSL FAIL (the exec traced by uid 1000)
+old
+    return tracer == NULL || tracer->euid != 0;
+new
+    return tracer == NULL;
+end
+
+fault exec-shared-fs-gains
+probe suidmusl
+file rach2/sys/syscall_proc.c
+expect SUIDMUSL FAIL (the exec whose directories uid 1000 shares)
+old
+        if (t->tg == current_proc->tg && t->fs == current_proc->fs) {
+new
+        if (t->fs == current_proc->fs) {
+end
+
+fault exec-xonly-dumpable
+probe suidmusl
+file rach2/sys/syscall_proc.c
+expect SUIDMUSL FAIL (the execute-only copy is dumpable)
+old
+    s->unreadable = !s->prog.readable;
+new
+    s->unreadable = 0;
+end
+
+# Signals and waits.
+
+fault sig-taker-stopped
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (a process signal did not wake the thread beside the stopped one: errno
+old
+    return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED && t->state != PROC_STOPPED &&
+           (bits & ~t->sig_blocked) != 0;
+new
+    return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED &&
+           (bits & ~t->sig_blocked) != 0;
+end
+
+fault handler-mask-no-retarget
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (a signal a handler's mask blocked did not wake the other thread: errno
+old
+        signal_set_blocked(newblock);
+new
+        current_proc->sig_blocked = newblock & ~KSIG_UNCATCHABLE;
+end
+
+fault dequeue-union-lowest
+probe callsmusl
+file rach2/sys/syscall_proc.c
+expect CALLSMUSL FAIL (sigtimedwait did not take the thread's signal before the process's: errno
+old
+    for (signo = 1; signo < KSIG_MAX; signo++) {
+        if (from & KSIG_BIT(signo)) {
+            break;
+        }
+    }
+    if (own != 0) {
+new
+    for (signo = 1; signo < KSIG_MAX; signo++) {
+        if ((from | wanted) & KSIG_BIT(signo)) {
+            break;
+        }
+    }
+    if (own & KSIG_BIT(signo)) {
+end
+
+fault sigtimedwait-unclamped
+probe callsmusl
+file rach2/sys/syscall_proc.c
+expect CALLSMUSL FAIL (sigtimedwait under a timeout past 2^31 ticks did not wait for the alarm: errno
+old
+        if (ticks > 0x7FFFFFFEu) {
+            ticks = 0x7FFFFFFEu;
+        }
+        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+new
+        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+end
+
+fault usage-children-leader-only
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (a traced thread's end lacks the reaped children's time: errno
+old
+    rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
+new
+    rusage_from_ticks(ru, user + (p->pid == p->tgid ? p->tg->cutime : 0u),
+                      sys + (p->pid == p->tgid ? p->tg->cstime : 0u));
+end
+
+fault wait-copy-unchecked
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (a wait whose status page went while it slept did not fail with EFAULT: errno
+old
+    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
+         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
+    wait_done(&r, ok);
+new
+    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
+         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
+    ok = 1;
+    wait_done(&r, ok);
+end
+
+fault wait-failed-copy-reaps
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (the zombie a failed wait left was not reaped with its status: errno
+old
+    if (p == NULL || ok) {
+new
+    if (p == NULL || ok || r->take == WAIT_REAP) {
+end
+
+fault parent-reaps-traced
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (the parent reaped a child before its tracer saw its end: errno
+old
+    int traced = (p->ptrace & PT_TRACED) && p->tracer != current_proc->tgid;
+new
+    int traced = 0;
+end
+
+fault tracer-report-keeps-tracee
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (the parent did not reap the child once its tracer saw the end: errno
+old
+    } else if (r->take == WAIT_SEEN && get_process(r->pid) == p) {
+        ptrace_exit_release(p);
+    }
+new
+    }
+end
+
+fault waitid-trap-status-byte
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (waitid's si_status of the exec event: errno
+old
+        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED, (int32_t)(p->ptrace_status >> 8));
+new
+        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED,
+                  (int32_t)((p->ptrace_status >> 8) & 0xFF));
+end
+
+fault stop-after-death
+probe waitidmusl
+file rach2/sys/syscall_proc.c
+expect WAITIDMUSL FAIL (a child that died was reported stopped)
+old
+    int stopped = p->tg->stop != 0 && p->tg->live != 0 && !p->tg->exiting;
+new
+    int stopped = p->tg->stop != 0;
+end
+
+fault dumpable-per-thread
+probe prctlmusl
+file rach2/sys/syscall_proc.c
+expect PRCTLMUSL FAIL (a running thread did not see the dumpable flag another thread cleared)
+old
+    case PR_GET_DUMPABLE:
+        return (int32_t)current_proc->mm->dumpable;
+new
+    case PR_GET_DUMPABLE:
+        return current_proc->pid == current_proc->tgid ? (int32_t)current_proc->mm->dumpable : 1;
+end
+
+fault comm-unpadded
+probe prctlmusl
+file rach2/sys/proc/process.c
+expect PRCTLMUSL FAIL (an exec left the end of a longer name after the program name)
+old
+    k_memset(p->comm, 0, sizeof(p->comm));
+    for (i = 0; i < (int)sizeof(p->comm) - 1 && base[i]; i++) {
+        p->comm[i] = base[i];
+    }
+}
+new
+    for (i = 0; i < (int)sizeof(p->comm) - 1 && base[i]; i++) {
+        p->comm[i] = base[i];
+    }
+    p->comm[i] = '\0';
+}
+end
+
+# Memory mappings, protection and shared memory.
+
+fault shmem-truncate-keeps-mapped-page
+probe mapmusl
+file rach2/sys/mm/shmem.c
+expect MAPMUSL FAIL (a shared mapping kept a page its file's truncation freed
+old
+    keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);
+    if (sh->maps && keep < sh->npages) {
+        filemap_shmem_cut(sh, keep);
+    }
+new
+    keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);
+end
+
+fault mprotect-shared-readonly-writable
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (mprotect made a read-only file's shared mapping writable
+old
+    if (shared && (!sh || !(e->flags & FD_FLAG_WRITE))) {
+        src->prot |= VM_PROT_NOWRITE;
+    }
+    src->file = sh ? filemap_shared(e, sh) : filemap_new(e);
+new
+    src->file = sh ? filemap_shared(e, sh) : filemap_new(e);
+end
+
+fault mprotect-private-readonly-refused
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (mprotect of a read-only file's private mapping
+old
+    if (shared && (!sh || !(e->flags & FD_FLAG_WRITE))) {
+new
+    if ((shared && !sh) || !(e->flags & FD_FLAG_WRITE)) {
+end
+
+fault mmap2-offset-past-32-bits
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (mmap2 of a file whose last page is past 32 bits
+old
+    if (params->ebp > 0xFFFFFFFFu - len / PAGE_SIZE) {
+        return -EOVERFLOW;
+    }
+    mem_balance();
+new
+    mem_balance();
+end
+
+fault shmem-page-past-1gib-backed
+probe mapmusl
+file rach2/sys/mm/shmem.c
+expect MAPMUSL FAIL (a touch of a file in memory past 1 GiB was not SIGSEGV
+old
+    if (i >= SHMEM_MAX_PAGES || reach(sh, i + 1u) != 0) {
+new
+    i %= SHMEM_MAX_PAGES;
+    if (reach(sh, i + 1u) != 0) {
+end
+
+fault mremap-wrap-removes-source
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (mremap took an old length that wraps past the end of memory
+old
+    return remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len);
+}
+
+/**
+ * Whether mremap's arguments name ranges it can work on: a page-aligned
+ * address and two lengths that are not zero, flags it knows with
+ * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside
+ * user space and a new length that fits in it. The lengths are judged as
+ * they are given, before they are rounded up to pages, so that neither
+ * range can wrap past the end of the address space: with an old length
+ * near 4 GiB the old range would seem to end below its start, and a fixed
+ * move onto its own address would remove its source.
+ */
+static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
+{
+    return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
+           (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
+           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= USER_ADDR_MAX &&
+           old_len <= USER_ADDR_MAX - addr && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;
+new
+    return vm_find(vm, addr) ? remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len)
+                             : -EFAULT;
+}
+
+/**
+ * Whether mremap's arguments name ranges it can work on: a page-aligned
+ * address and two lengths that are not zero, flags it knows with
+ * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside
+ * user space and a new length that fits in it. The lengths are judged as
+ * they are given, before they are rounded up to pages, so that neither
+ * range can wrap past the end of the address space: with an old length
+ * near 4 GiB the old range would seem to end below its start, and a fixed
+ * move onto its own address would remove its source.
+ */
+static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
+{
+    return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
+           (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
+           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= USER_ADDR_MAX &&
+           addr <= USER_ADDR_MAX - PAGE_UP(old_len) && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;
+end
+
+fault madvise-length-rounded-first
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (madvise took a length that rounds up to 0 for an empty range
+old
+    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
+        params->ecx > USER_ADDR_MAX - addr || advice == MADV_REMOVE || advice >= MADV_HWPOISON) {
+new
+    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
+        PAGE_UP(params->ecx) > USER_ADDR_MAX - addr || advice == MADV_REMOVE ||
+        advice >= MADV_HWPOISON) {
+end
+
+fault msync-length-rounded-first
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (msync took a length that rounds up to 0 for an empty range
+old
+    if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
+        addr > USER_ADDR_MAX || params->ecx > USER_ADDR_MAX - addr) {
+new
+    if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
+        addr > USER_ADDR_MAX || PAGE_UP(params->ecx) > USER_ADDR_MAX - addr) {
+end
+
+fault forced-write-grants-write
+probe mapmusl
+file rach2/sys/mm/paging.c
+expect MAPMUSL FAIL (a store reached a read-only page after a write through /proc/self/mem
+old
+                      : page_private(mm->dir, addr, (vma->prot & VM_PROT_WRITE) != 0) != 0)) {
+new
+                      : page_private(mm->dir, addr, 1) != 0)) {
+end
+
+fault mremap-fixed-shrink-counts-old-size
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (a fixed mremap that shrinks was held to its old size
+old
+    rest = vm_total(vm) - vm_covered(vm, to, to + new_len) - old_len;
+    if (new_len > limit || rest > limit - new_len) {
+new
+    rest = vm_total(vm) - vm_covered(vm, to, to + new_len);
+    if (rest + (new_len > old_len ? new_len - old_len : 0) > limit) {
+end
+
+# Futexes, ptrace, core files and the system call dispatcher.
+
+fault futex-timed-restart
+probe clonemusl
+file rach2/sys/proc/futex.c
+expect CLONEMUSL FAIL (a timed wait a handler with SA_RESTART interrupted did not end with EINTR)
+old
+    int cmd = (int)params->ecx & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+new
+    int cmd = FUTEX_WAKE;
+end
+
+fault cpu-clock-sibling
+probe clockidmusl
+file rach2/sys/syscall.c
+expect CLOCKIDMUSL FAIL (a sleep on the process CPU clock another thread advanced did not end)
+old
+            if (c.proc->tg != current_proc->tg || current_proc->tg->live > 1) {
+new
+            if (c.proc != current_proc) {
+end
+
+fault dr7-kernel-address
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (an execute breakpoint on a kernel address was not refused: errno
+old
+            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] < USER_ADDR_MIN ||
+            t->debugreg[i] > USER_ADDR_MAX - bytes) {
+new
+            (t->debugreg[i] & (bytes - 1u)) != 0 || t->debugreg[i] > USER_ADDR_MAX - bytes) {
+end
+
+fault dr7-last-user-address
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (a breakpoint ending at the last user address was refused: errno
+old
+            t->debugreg[i] > USER_ADDR_MAX - bytes) {
+new
+            t->debugreg[i] >= USER_ADDR_MAX - bytes) {
+end
+
+fault syscall-number-reload
+probe ptracemusl
+file rach2/sys/syscall.c
+expect PTRACEMUSL FAIL (the entry stop of write: errno
+old
+            syscall_num = (uint32_t)current_proc->orig_eax;
+            skip = current_proc->orig_eax == -1;
+new
+            skip = current_proc->orig_eax == -1;
+end
+
+fault syscall-skip-runs-call
+probe ptracemusl
+file rach2/sys/syscall.c
+expect PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno
+old
+            syscall_num = (uint32_t)current_proc->orig_eax;
+            skip = current_proc->orig_eax == -1;
+new
+            if (current_proc->orig_eax != -1) {
+                syscall_num = (uint32_t)current_proc->orig_eax;
+            }
+end
+
+fault syscall-entry-eax
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno
+old
+    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
+new
+    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    if (!leaving) {
+        tf->eax = nr;
+    }
+    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
+end
+
+fault restart-after-exit-stop
+probe ptracemusl
+file rach2/sys/syscall.c
+expect PTRACEMUSL FAIL (a read whose restart the tracer cancelled was restarted: errno
+old
+        ret = (int32_t)params->eax;
+        if (ret != -EINTR) {
+            current_proc->restart_nr = 0;
+        }
+new
+        ret = (int32_t)params->eax;
+        current_proc->restart_nr = 0;
+        if (!skip && ret == -EINTR && syscall_restartable(syscall_num, params)) {
+            current_proc->restart_nr = syscall_num + 1u;
+        }
+end
+
+fault tracee-end-cld-exited
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (the SIGCHLD of a killed tracee was not CLD_KILLED with SIGKILL: errno
+old
+    if (!(p->ptrace & PT_TRACED) || tracer == NULL) {
+        return;
+    }
+    proc_child_info(p, &info);
+new
+    if (!(p->ptrace & PT_TRACED) || tracer == NULL) {
+        return;
+    }
+    k_memset(&info, 0, sizeof(info));
+    info.code = CLD_EXITED;
+    info.pid = p->pid;
+    info.uid = p->ruid;
+    info.status = (p->exit_code >> 8) & 0xFF;
+end
+
+# Descriptors, open, mknod, FIFOs and /proc.
+
+fault mknod-kind-after-path
+probe mknodmusl
+file rach2/sys/syscall_fs.c
+expect MKNODMUSL FAIL (the kind before the path
+old
+    rc = mknod_kind(params->ecx);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+new
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = mknod_kind(params->ecx);
+    if (rc != 0) {
+        return rc;
+    }
+end
+
+fault mknodat-kind-after-path
+probe mknodmusl
+file rach2/sys/syscall_fs.c
+expect MKNODMUSL FAIL (the kind before the path
+old
+    rc = mknod_kind(params->edx);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+new
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = mknod_kind(params->edx);
+    if (rc != 0) {
+        return rc;
+    }
+end
+
+fault fifo-key-name-hash
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (the second found the first's reader
+old
+        ino = (uint64_t)(uintptr_t)node;
+new
+        ino = krffs_node_ino(node);
+end
+
+fault fifo-key-follows-name
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (the renamed FIFO lost its reader
+old
+        ino = (uint64_t)(uintptr_t)node;
+new
+        ino = (uint64_t)(uintptr_t)node ^ krffs_node_ino(node);
+end
+
+fault fifo-unlink-keeps-name
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (a FIFO in an unlinked one's name
+old
+        if (fd_node_holders(node, NULL) > 0) {
+            krffs_unlink_held(node);
+new
+        if (fd_node_holders(node, NULL) > 0) {
+            if (krffs_mode_type(node->mode) != KRFFS_S_IFIFO) {
+                krffs_unlink_held(node);
+            }
+end
+
+fault fifo-ends-not-holders
+probe fifomusl
+file rach2/sys/syscall_fs.c
+expect FIFOMUSL FAIL (a new FIFO found the unlinked one's reader
+old
+    if (krffs_mode_type(node->mode) == KRFFS_S_IFIFO) {
+        held += fd_ofd_holders(vfs_root_mount(), node, except ? except->ofd : NULL);
+    }
+    return held;
+new
+    return held;
+end
+
+fault thread-dir-lists-task
+probe threadmusl
+file rach2/sys/syscall_fs.c
+expect THREADMUSL FAIL (a thread's directory lists a task directory
+old
+        if (n >= (sd->tid != 0 ? 11 : 12)) {
+new
+        if (n >= 12) {
+end
+
+fault thread-dir-link-drops-tid
+probe threadmusl
+file rach2/sys/fs/procfs.c
+expect THREADMUSL FAIL (the link of a thread's directory
+old
+            synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
+new
+            synth_dir_path(sd->kind, sd->pid, 0, path, (int)sizeof(path));
+end
+
+fault proc-path-cut-at-five
+probe threadmusl
+file rach2/sys/fs/synthfs.c
+expect THREADMUSL FAIL (a thread's descriptor link
+old
+    n = synth_split(path, c, SYNTH_MAXC + 1);
+new
+    n = synth_split(path, c, SYNTH_MAXC - 1);
+end
+
+fault task-path-by-tid-alone
+probe threadmusl
+file rach2/sys/fs/procfs.c
+expect THREADMUSL FAIL (a thread under another process's task directory
+old
+    if (pid < 0 || vp->tid == 0) {
+        return pid;
+    }
+new
+    if (vp->tid != 0 && get_process((uint32_t)vp->tid)) {
+        return vp->tid;
+    }
+    if (pid < 0 || vp->tid == 0) {
+        return pid;
+    }
+end
+
+fault thread-stat-children-time
+probe threadmusl
+file rach2/sys/fs/procfs.c
+expect THREADMUSL FAIL (a busy thread's own time
+old
+        user = p->utime;
+        sys = p->stime;
+new
+        user = p->tg->cutime;
+        sys = p->tg->cstime;
+end
+
+fault thread-stat-whole-process
+probe threadmusl
+file rach2/sys/fs/procfs.c
+expect THREADMUSL FAIL (a sleeping thread's time in its task stat
+old
+        len = procfs_gen_stat(&text, pid, vp->tid == 0);
+new
+        len = procfs_gen_stat(&text, pid, 1);
+end
+
+fault mem-transfer-past-page
+probe ptracemusl
+file rach2/sys/fs/procfs.c
+expect PTRACEMUSL FAIL (a transfer through /proc/PID/mem that runs into a hole
+old
+        if (n > PAGE_SIZE - (addr & (PAGE_SIZE - 1u))) {
+            n = PAGE_SIZE - (addr & (PAGE_SIZE - 1u));
+        }
+        if (write) {
+new
+        if (write) {
+end
+
+fault mem-follows-exec
+probe ptracemusl
+file rach2/sys/fs/procfs.c
+expect PTRACEMUSL FAIL (a /proc/PID/mem descriptor opened before the exec
+old
+    if (!p || p->state == PROC_UNUSED || p->mm != mm) {
+        f->mm = NULL;
+        procfs_mm_put(mm);
+        return NULL;
+    }
+    mm_get(mm);
+    return mm;
+new
+    if (!p || p->state == PROC_UNUSED || !p->mm) {
+        f->mm = NULL;
+        procfs_mm_put(mm);
+        return NULL;
+    }
+    mm_get(p->mm);
+    return p->mm;
+end
+
+fault thread-dir-relative-drops-tid
+probe threadmusl
+file rach2/sys/syscall_fs.c
+expect THREADMUSL FAIL (a name relative to a thread's directory
+old
+        synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
+new
+        synth_dir_path(sd->kind, sd->pid, 0, out, (int)cap);
+end
+
+fault task-path-under-no-process
+probe threadmusl
+file rach2/sys/fs/procfs.c
+expect THREADMUSL FAIL (a task path under no process
+old
+    if (pid < 0 || vp->tid == 0) {
+        return pid;
+    }
+new
+    if (pid < 0 && vp->tid != 0) {
+        return vp->tid;
+    }
+    if (pid < 0 || vp->tid == 0) {
+        return pid;
+    }
+end
+
+fault process-stat-first-thread-only
+probe threadmusl
+file rach2/sys/fs/procfs.c
+expect THREADMUSL FAIL (the process's time in its stat
+old
+        len = procfs_gen_stat(&text, pid, vp->tid == 0);
+new
+        len = procfs_gen_stat(&text, pid, 0);
+end
+
+# The path walk, record locks, tmpfs and the disk.
+
+fault synth-named-mount
+probe tmpfsmusl
+file rach2/sys/fs/vfs.c
+expect TMPFSMUSL FAIL (/dev/shm by way of /dev/pts/..
+old
+        if (out == plen && mount_named_at(mnt, comp, len)) {
+new
+        if (0 && out == plen && mount_named_at(mnt, comp, len)) {
+end
+
+fault shm-dotdot-replay
+probe tmpfsmusl
+file rach2/sys/fs/vfs.c
+expect TMPFSMUSL FAIL (a working directory in /dev/shm
+old
+            if (cur.node == cur.mnt->root) {
+                rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
+new
+            if (cur.node == cur.mnt->root) {
+                p -= 2;
+                rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
+end
+
+fault chdir-root-shortcut
+probe chrootmusl
+file rach2/sys/syscall_fs.c
+expect CHROOTMUSL FAIL (a root the caller may not search: step 3)
+old
+    if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
+        return cwd_enter("/", NULL, NULL);
+new
+    if (path[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+        return cwd_enter("/", NULL, NULL);
+end
+
+fault lock-range-largest
+probe lockmusl
+file rach2/sys/syscall_fs.c
+expect LOCKMUSL FAIL (the locks that reach the largest offset are not one to the end
+old
+    if (req->end == (uint64_t)max) {
+new
+    if (0 && req->end == (uint64_t)max) {
+end
+
+fault lock-closed-wait
+probe lockmusl
+file rach2/sys/syscall_fs.c
+expect LOCKMUSL FAIL (a wait whose descriptor was closed did not fail with EBADF
+old
+    if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
+new
+    if (0 && rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
+end
+
+fault writev-seal-grow
+probe memfdmusl
+file rach2/sys/syscall_fs.c
+expect MEMFDMUSL FAIL (a writev under F_SEAL_GROW
+old
+    if (pos + extent > st.size) {
+new
+    if (0 && pos + extent > st.size) {
+end
+
+# AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs.
+
+fault unix-scm-creds-thread-pid
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a thread's SCM_CREDENTIALS naming its process was refused: errno
+old
+        (c.pid != p->tgid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
+new
+        (c.pid != p->pid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
+end
+
+fault unix-accept-address-no-length
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (an accept with an address and no length was not EFAULT: errno
+old
+    if (addr) {
+        rc = put_name(addr, addrlen_ptr, c->peer ? &c->peer->name : &none, 0);
+new
+    if (addr && addrlen_ptr) {
+        rc = put_name(addr, addrlen_ptr, c->peer ? &c->peer->name : &none, 0);
+end
+
+fault unix-accept-shut-drops-queued
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (the connection queued before SHUT_RD was not accepted: errno
+old
+    while (!s->acc_head) {
+new
+    if (s->shut & SHUT_RCV) {
+        return -EINVAL;
+    }
+    while (!s->acc_head) {
+end
+
+fault unix-accept-shut-empty-not-einval
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (an accept with none queued after SHUT_RD was not EINVAL: errno
+old
+        if (s->state != US_LISTENING || (s->shut & SHUT_RCV)) {
+            return -EINVAL;
+        }
+        if (nonblocking(e, 0)) {
+            return -EAGAIN;
+        }
+new
+        if (s->state != US_LISTENING) {
+            return -EINVAL;
+        }
+        if (nonblocking(e, 0) || (s->shut & SHUT_RCV)) {
+            return -EAGAIN;
+        }
+end
+
+fault unix-connect-shut-listener
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a connect to a listener shut down for reading was not ECONNREFUSED: errno
+old
+    if (target->state != US_LISTENING || (target->shut & SHUT_RCV)) {
+new
+    if (target->state != US_LISTENING) {
+end
+
+fault unix-dgram-connect-taken-peer
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a connect to a datagram socket connected elsewhere was not EPERM: errno
+old
+    if (target->peer && target->peer != s) {
+        unix_put(target);
+        return -EPERM;
+    }
+    dgram_repeer(s, target);
+new
+    dgram_repeer(s, target);
+end
+
+fault unix-dgram-reconnect-keeps-queue
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a reconnected datagram socket kept its old peer's message: errno
+old
+    dgram_repeer(s, target);
+new
+    if (s->peer) {
+        unix_put(s->peer);
+    }
+    s->peer = target;
+end
+
+fault unix-dgram-left-peer-no-reset
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (the peer left with a message lost was not ECONNRESET: errno
+old
+        recv_unlock(s);
+        if (!old->closed && old->peer == s) {
+            old->err = ECONNRESET;
+            wq_wake_all(&old->wq);
+        }
+new
+        recv_unlock(s);
+end
+
+fault unix-dgram-disconnect-keeps-queue
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a disconnected datagram socket kept its old peer's message: errno
+old
+        dgram_repeer(s, NULL);
+new
+        if (s->peer) {
+            unix_put(s->peer);
+            s->peer = NULL;
+        }
+end
+
+fault unix-dgram-full-not-eagain
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a full datagram queue was not EAGAIN: errno
+old
+        if (nonblock) {
+            rc = -EAGAIN;
+            break;
+        }
+        rc = unix_wait(&t->wq, target_has_room, t, s->sndtimeo);
+new
+        if (nonblock) {
+            rc = -ENOBUFS;
+            break;
+        }
+        rc = unix_wait(&t->wq, target_has_room, t, s->sndtimeo);
+end
+
+fault unix-dgram-wait-ignores-shut
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a send waiting on a receiver shut down for reading was not EPIPE: errno
+old
+    return t->closed || (t->shut & SHUT_RCV) || !queue_full(t);
+new
+    return t->closed || !queue_full(t);
+end
+
+fault unix-stream-full-not-eagain
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a full stream was not EAGAIN: errno
+old
+            if (nonblock) {
+                return done ? (int32_t)done : -EAGAIN;
+            }
+new
+            if (nonblock) {
+                return done ? (int32_t)done : -ENOBUFS;
+            }
+end
+
+fault unix-stream-full-polls-writable
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a full stream polled writable: errno
+old
+    return !queue_full(p);
+new
+    return 1;
+end
+
+fault unix-stream-shut-not-writable
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a stream shut down for writing did not poll writable: errno
+old
+    if (!p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV)) {
+        return 1;
+    }
+new
+    if (!p || p->closed) {
+        return 1;
+    }
+end
+
+fault unix-stream-shut-write-eagain
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a write after SHUT_WR was not EPIPE: errno
+old
+        if (send_stopped(s, p)) {
+new
+        if (send_stopped(s, p) && !(nonblock && p && queue_full(p))) {
+end
+
+fault eventfd-zero-read
+probe epollmusl
+file rach2/sys/syscall_fs.c
+expect EPOLLMUSL FAIL (a read of zero bytes was not EINVAL: errno
+old
+    if (params->edx == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
+        return read_ops(e, (char __user *)params->ecx, 0);
+    }
+    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
+new
+    (void)e;
+    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
+end
+
+fault epoll-edge-polls-readable
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a set with its edge reported polled readable: errno
+old
+        if (item_ready(it, depth, q, &wq, &wakes, &gone)) {
+new
+        if (item_ready(it, depth, q, &wq, &wakes, &gone) || (it->seen && !gone)) {
+end
+
+fault epoll-nested-always-readable
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a chain of sets over an empty pipe: errno
+old
+        ready = set_ready(inner, depth + 1, q) ? EPOLLIN | EPOLLRDNORM : 0u;
+new
+        ready = set_ready(inner, depth + 1, q) ? EPOLLIN | EPOLLRDNORM : EPOLLIN;
+end
+
+fault epoll-cycle-not-refused
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a cycle of sets was not ELOOP: errno
+old
+    if (inner == ep || depth > EP_MAX_NESTS) {
+new
+    if (depth > EP_MAX_NESTS) {
+end
+
+fault epoll-nested-one-deep
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a write to a pipe two sets deep did not wake the outer set: errno
+old
+    if (depth > EP_MAX_NESTS) {
+        return 0;
+    }
+new
+    if (depth > 1) {
+        return 0;
+    }
+end
+
+fault epoll-reported-stays-first
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (two waits for one event reported the same descriptor: errno
+old
+    while (*link) {
+        link = &(*link)->next;
+    }
+    *link = reported;
+new
+    *tail = sc->ep->items;
+    sc->ep->items = reported;
+end
+
+fault epoll-failed-copy-returns-zero
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a wait into a read-only buffer was not EFAULT: errno
+old
+            rc = i > 0 ? (int32_t)i : -EFAULT;
+new
+            rc = (int32_t)i;
+end
+
+fault epoll-failed-copy-keeps-off
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a one-shot event a failed copy took was not reported again: errno
+old
+    if (it) {
+        it->off = o->off;
+        it->seen = o->seen;
+new
+    if (it) {
+        it->seen = o->seen;
+end
+
+fault epoll-no-events-reported
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a registration of no events was reported: errno
+old
+        if (!ready) {
+            link = &it->next;
+            continue;
+        }
+new
+        if (!ready && (it->events & EPOLL_EVENTS) != 0) {
+            link = &it->next;
+            continue;
+        }
+end
+
+fault epoll-no-events-no-hangup
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a registration of no events was not told of the hangup: errno
+old
+    if (*gone || it->off) {
+new
+    if (*gone || it->off || (it->events & EPOLL_EVENTS) == 0) {
+end
+
+fault epoll-registration-by-address
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a closed eventfd's registration reported the one after it: errno
+old
+    return e && e->ofd == it->ofd && e->ofd->serial == it->serial;
+new
+    return e && e->ofd == it->ofd;
+end
+
+fault epoll-pwait2-seconds-32-bit
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (epoll_pwait2 of 2^31 seconds with a descriptor ready: errno
+old
+        sec = (int64_t)(((uint64_t)ts[1] << 32) | ts[0]);
+new
+        sec = (int32_t)ts[0];
+end
+
+fault epoll-pwait2-negative-seconds
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (epoll_pwait2 of negative seconds was not EINVAL: errno
+old
+        if (sec < 0 || ts[3] != 0 || ts[2] >= 1000000000u) {
+new
+        if (ts[3] != 0 || ts[2] >= 1000000000u) {
+end
+
+fault fifo-rdwr-full-polls-writable
+probe fifomusl
+file rach2/sys/ipc/pipe.c
+expect FIFOMUSL FAIL (a full FIFO polled writable: errno
+old
+        if (pipe_free_space(p) != 0 || !p->read_open) {
+new
+        if (pipe_free_space(p) != 0 || !p->read_open || (e->flags & FD_FLAG_READ)) {
+end
+
+fault timerfd-zero-read
+probe timerfdmusl
+file rach2/sys/syscall_fs.c
+expect TIMERFDMUSL FAIL (a read of zero bytes was not EINVAL: errno
+old
+    if (params->edx == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
+        return read_ops(e, (char __user *)params->ecx, 0);
+    }
+    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
+new
+    (void)e;
+    return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
+end
+
+fault timerfd-long-cut-to-span
+probe timerfdmusl
+file rach2/sys/io/timerfd.c
+expect TIMERFDMUSL FAIL (a timer of 200 days did not report 200 days: errno
+old
+    if (sec >= (int64_t)TIME_MAX) {
+        *s = TIME_MAX;
+        return;
+    }
+new
+    if (sec >= (int64_t)SPAN_SEC) {
+        *s = SPAN_SEC;
+        return;
+    }
+end
+
+fault epoll-add-no-restart
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a pipe added during a wait did not wake it: errno
+old
+    if (sc->n == 0 && q.n > sc->queues) {
+        sc->grow = q.n;
+        return 1;
+    }
+    return (int)sc->n;
+new
+    return (int)sc->n;
+end
+
+fault epoll-poll-set-own-queue
+probe epollmusl
+file rach2/sys/io/poll.c
+expect EPOLLMUSL FAIL (a write to a pipe in a set did not wake a poll of the set: errno
+old
+    if (epoll_is_set(e)) {
+new
+    if (0) {
+end
+
+fault epoll-nested-queues-left-off
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a write to a pipe two sets deep did not wake the outer set: errno
+old
+    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
+    q_add(q, *wq);
+new
+    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
+    if (depth == 0) {
+        q_add(q, *wq);
+    }
+end
+
+fault fifo-rdwr-poll-read-queue
+probe fifomusl
+file rach2/sys/ipc/pipe.c
+expect FIFOMUSL FAIL (a read by another open did not wake a poll for output: errno
+old
+        if ((e->flags & FD_FLAG_READ) && (e->flags & FD_FLAG_WRITE)) {
+            *wq = &p->rdwr_wq;
+        } else {
+            *wq = (e->flags & FD_FLAG_READ) ? &p->read_wq : &p->write_wq;
+        }
+new
+        *wq = (e->flags & FD_FLAG_READ) ? &p->read_wq : &p->write_wq;
+end
+
+fault unix-listen-no-wake
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (a larger backlog did not let a waiting connect finish: errno
+old
+    s->has_peercred = 1;
+    wq_wake_all(&s->wq);
+    return 0;
+new
+    s->has_peercred = 1;
+    return 0;
+end
+
+# Probe rows the review found weak.
+
+fault seal-without-write-check
+probe memfdmusl
+file rach2/sys/syscall_fs.c
+expect MEMFDMUSL FAIL (the seal commands on a named tmpfs file
+old
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EPERM;
+    }
+    return tmpfs_add_seals(entry->ofd->vnode, arg);
+new
+    return tmpfs_add_seals(entry->ofd->vnode, arg);
+end
+
+fault fdupfd-drops-path
+probe opathmusl
+file rach2/sys/syscall_fs.c
+expect OPATHMUSL FAIL (F_DUPFD keeps O_PATH)
+old
+        dst->flags = entry->flags;
+new
+        dst->flags = entry->flags & ~(uint32_t)FD_FLAG_PATH;
+end
+
+fault dup-drops-path
+probe opathmusl
+file rach2/sys/syscall_fs.c
+expect OPATHMUSL FAIL (dup keeps O_PATH)
+old
+    dst->flags = entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
+new
+    dst->flags = entry->flags & ~(uint32_t)(FD_FLAG_CLOEXEC | FD_FLAG_PATH);
+end
+
+fault mremap-shrink-keeps-tail
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (the pages a shrink cut were still mapped
+old
+    if (new_len <= old_len) {
+        if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
+            vma_exhausted("mremap");
+            return -ENOMEM;
+        }
+        unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
+        vm_file_reap();
+        return (int32_t)addr;
+    }
+new
+    if (new_len <= old_len) {
+        return (int32_t)addr;
+    }
+end
+
+fault mremap-shrink-drops-kept-page
+probe mapmusl
+file rach2/sys/syscall_proc.c
+expect MAPMUSL FAIL (the page a shrink kept lost its bytes
+old
+        unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
+        vm_file_reap();
+        return (int32_t)addr;
+new
+        unmap_user_range(_curr_dir, addr, addr + old_len);
+        vm_file_reap();
+        return (int32_t)addr;
+end
+
+fault setlkw-never-waits
+probe lockmusl
+file rach2/sys/fs/lock.c
+expect LOCKMUSL FAIL (F_SETLKW did not wait
+old
+    if (cmd != LOCK_WAIT) {
+        return -EAGAIN;
+    }
+    me.pid = pid;
+new
+    if (cmd != LOCK_WAIT || want.kind == LK_POSIX) {
+        return -EAGAIN;
+    }
+    me.pid = pid;
+end
+
+fault deadlock-when-caller-holds-a-lock
+probe lockmusl
+file rach2/sys/fs/lock.c
+expect LOCKMUSL FAIL (the child's F_SETLKW did not wait for the parent's lock
+old
+    rw->me->blocker = c->kind == LK_POSIX ? c->pid : 0u;
+    if (w->kind == LK_POSIX && c->kind == LK_POSIX && deadlock(rw->me->pid, c->pid)) {
+new
+    rw->me->blocker = c->kind == LK_POSIX ? c->pid : 0u;
+    if (w->kind == LK_POSIX && c->kind == LK_POSIX &&
+        (deadlock(rw->me->pid, c->pid) ||
+         record_conflict(w->key, LK_POSIX, (uintptr_t)c->pid, F_WRLCK, 0, LOCK_EOF) != NULL)) {
+end
+
+fault woken-waiter-enolck
+probe lockmusl
+file rach2/sys/fs/lock.c
+expect LOCKMUSL FAIL (the child of the deadlock took neither the lock nor EDEADLK
+old
+    if (rc < 0) {
+        return -EINTR;
+    }
+    return record_apply(&want, pid);
+}
+new
+    if (rc < 0) {
+        return -EINTR;
+    }
+    if (record_conflict(key, want.kind, (uintptr_t)0, F_WRLCK, 0, LOCK_EOF) != NULL) {
+        return -ENOLCK;
+    }
+    return record_apply(&want, pid);
+}
+end
+
+fault flock-released-at-first-close
+probe lockmusl
+file rach2/sys/fs/fd.c
+expect LOCKMUSL FAIL (the close of one of two descriptors released the flock lock
+old
+    if (ofd && ofd->refcount > 0) {
+        ofd->refcount--;
+        if (ofd->refcount == 0) {
+new
+    if (ofd && ofd->refcount > 0) {
+        ofd->refcount--;
+        if (lock_any()) {
+            lock_ofd_gone(ofd);
+        }
+        if (ofd->refcount == 0) {
+end
+
+fault split-loses-upper-part
+probe lockmusl
+file rach2/sys/fs/lock.c
+expect LOCKMUSL FAIL (the child's unlock of the middle did not leave bytes 10 to 14 and 20 to 29
+old
+            *tail = *l;
+            tail->start = end + 1u;
+            l->end = start - 1u;
+            l->next = tail;
+            link = &tail->next;
+new
+            *tail = *l;
+            tail->start = end + 1u;
+            l->end = start - 1u;
+            kfree(tail);
+            link = &l->next;
+end
+
+fault fchownat-ignores-dirfd
+probe lchownmusl
+file rach2/sys/syscall_fs.c
+expect LCHOWNMUSL FAIL (fchownat through a directory descriptor, from a directory with a decoy)
+old
+    } else {
+        rc = path_from_user(dirfd, upath, &path);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = do_chown(path_name(path), uid, gid, !(flags & AT_SYMLINK_NOFOLLOW));
+new
+    } else {
+        rc = path_from_user(AT_FDCWD, upath, &path);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = do_chown(path_name(path), uid, gid, !(flags & AT_SYMLINK_NOFOLLOW));
+end
+
+fault sigsuspend-enosys
+probe sigframemusl
+file rach2/sys/syscall_proc.c
+expect SIGFRAMEMUSL FAIL (sigsuspend did not return -1 with EINTR)
+old
+    current_proc->saved_sigmask = current_proc->sig_blocked;
+    current_proc->sigmask_saved = 1;
+    signal_set_blocked(newmask);
+    sig_wait();
+    return -EINTR;
+}
+new
+    return -ENOSYS;
+}
+end
+
+fault sa-restart-handler-skipped
+probe sigframemusl
+file rach2/sys/syscall_proc.c
+expect SIGFRAMEMUSL FAIL (the handler with SA_RESTART did not run once)
+old
+        handler_flags = sa->flags;
+        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
+            restart_syscall(tf, restart_nr);
+        }
+new
+        handler_flags = sa->flags;
+        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
+            continue;
+        }
+end
+
+fault eintr-without-handler
+probe sigframemusl
+file rach2/sys/syscall_proc.c
+expect SIGFRAMEMUSL FAIL (the handler without SA_RESTART did not run once)
+old
+        handler_flags = sa->flags;
+        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
+            restart_syscall(tf, restart_nr);
+        }
+new
+        handler_flags = sa->flags;
+        if (restart_nr != 0 && !(handler_flags & SA_RESTART) && signo == SIGUSR1) {
+            restart_nr = 0;
+            continue;
+        }
+        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
+            restart_syscall(tf, restart_nr);
+        }
+end
+
+fault setresuid-keeps-pdeath
+probe prctlmusl
+file rach2/sys/syscall_proc.c
+expect PRCTLMUSL FAIL (a move of the effective uid alone kept the signal or the dumpable flag)
+old
+    if (s != SC_ID_KEEP) {
+        p->suid = s;
+    }
+    cred_moved(p, old_euid, p->egid);
+    return 0;
+}
+new
+    if (s != SC_ID_KEEP) {
+        p->suid = s;
+    }
+    (void)old_euid;
+    return 0;
+}
+end
+
+fault setresgid-keeps-pdeath
+probe prctlmusl
+file rach2/sys/syscall_proc.c
+expect PRCTLMUSL FAIL (a move of the effective gid alone kept the signal or the dumpable flag)
+old
+    if (s != SC_ID_KEEP) {
+        p->sgid = s;
+    }
+    cred_moved(p, p->euid, old_egid);
+    return 0;
+}
+new
+    if (s != SC_ID_KEEP) {
+        p->sgid = s;
+    }
+    (void)old_egid;
+    return 0;
+}
+end
+
+fault get-name-without-padding
+probe prctlmusl
+file rach2/sys/syscall_proc.c
+expect PRCTLMUSL FAIL (a short name set after a longer one was not read back padded with NULs)
+old
+    case PR_GET_NAME:
+        k_memcpy(name, current_proc->comm, sizeof(name));
+        return copy_to_user((void __user *)arg2, name, sizeof(name)) != 0 ? -EFAULT : 0;
+new
+    case PR_GET_NAME:
+        k_memcpy(name, current_proc->comm, sizeof(name));
+        return copy_to_user((void __user *)arg2, name, k_strlen(name) + 1) != 0 ? -EFAULT : 0;
+end
+
+fault futex-wait-never-sleeps
+probe threadmusl
+file rach2/sys/proc/futex.c
+expect THREADMUSL FAIL (the receiver was never seen asleep in pthread_cond_wait
+old
+    if (cur != val) {
+        kirq_restore(flags);
+        return -EAGAIN;
+    }
+new
+    if (cur != val) {
+        kirq_restore(flags);
+        return -EAGAIN;
+    }
+    if (!q.timed) {
+        kirq_restore(flags);
+        return 0;
+    }
+end
+
+fault blocked-process-signal-dropped
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (a process signal all threads block was not pending with no handler run
+old
+    tg = target->tg;
+    if (tg->live == 0) {
+        return;
+    }
+    f = sig_irq_save();
+new
+    tg = target->tg;
+    if (tg->live == 0) {
+        return;
+    }
+    if (tg->live > 1 && (target->sig_blocked & KSIG_BIT(signo)) &&
+        sig_taker(target, signo) == target) {
+        return;
+    }
+    f = sig_irq_save();
+end
+
+fault timerfd-poll-no-queue
+probe timerfdmusl
+file rach2/sys/io/timerfd.c
+expect TIMERFDMUSL FAIL (the timer did not wake the epoll wait
+old
+    if (wq) {
+        *wq = &t->wq;
+    }
+    return (short)(t->count ? (events & POLLIN) : 0);
+new
+    (void)wq;
+    return (short)(t->count ? (events & POLLIN) : 0);
+end
+
+fault timerfd-past-absolute-never-expires
+probe timerfdmusl
+file rach2/sys/io/timerfd.c
+expect TIMERFDMUSL FAIL (an absolute time already past did not expire
+old
+    *s = 0;
+    *sub = 0;
+    if (sec < 0) {
+        return;
+    }
+new
+    *s = 0;
+    *sub = 0;
+    if (sec < 0) {
+        *s = TIME_MAX;
+        return;
+    }
+end
+
+fault rights-name-no-new-descriptor
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (the child did not write through the descriptor it received
+old
+        if (fd < 0) {
+            break;
+        }
+        if (copy_to_user((void __user *)(at + CMSG_HDR + 4u * given), &fd, sizeof(fd)) != 0) {
+            fd_free(table(), fd);
+            break;
+        }
+        slot = &table()->entries[fd];
+        fd_ofd_unref(slot->ofd);
+        *slot = in->fds[given];
+        in->fds[given++].type = FD_TYPE_NONE;
+        flight_sync(slot);
+        if (flags & MSG_CMSG_CLOEXEC) {
+            slot->flags |= FD_FLAG_CLOEXEC;
+        }
+    }
+    if (given < in->nfds) {
+        in->flags |= MSG_CTRUNC;
+    }
+    drop_fds(in->fds, given, in->nfds);
+new
+        if (fd < 0) {
+            break;
+        }
+        fd_free(table(), fd);
+        {
+            int k;
+            for (k = 0; k < fd_limit(table()); k++) {
+                slot = fd_get(table(), k);
+                if (slot && slot->ofd == in->fds[given].ofd) {
+                    fd = k;
+                    break;
+                }
+            }
+        }
+        if (copy_to_user((void __user *)(at + CMSG_HDR + 4u * given), &fd, sizeof(fd)) != 0) {
+            break;
+        }
+        given++;
+    }
+    (void)flags;
+    if (given < in->nfds) {
+        in->flags |= MSG_CTRUNC;
+    }
+    drop_fds(in->fds, 0, in->nfds);
+end
+
+fault peercred-is-the-callers
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (the child's SO_PEERCRED did not report the pair's creator
+old
+        if (s->has_peercred) {
+            c = s->peercred;
+        }
+new
+        if (s->has_peercred) {
+            own_cred(&c, 1);
+        }
+end
+
+fault scm-credentials-are-the-receivers
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (the SCM_CREDENTIALS values are not the sender's
+old
+        if (copied == 0) {
+            in->from = m->from;
+            in->cred = m->cred;
+            in->has_cred = s->passcred;
+        }
+new
+        if (copied == 0) {
+            in->from = m->from;
+            own_cred(&in->cred, 0);
+            in->has_cred = s->passcred;
+        }
+end
+
+fault credentials-without-gid
+probe unixmusl
+file rach2/sys/ipc/unix.c
+expect UNIXMUSL FAIL (the SCM_CREDENTIALS values are not the sender's
+old
+    c->gid = effective ? current_proc->egid : current_proc->rgid;
+new
+    c->gid = 0;
+end
+
+fault path-truncate-repoints-nothing
+probe truncmusl
+file rach2/sys/syscall_fs.c
+expect TRUNCMUSL FAIL (a length the file moves to reach)
+old
+    rc = -EBUSY;
+    if (!loop_backs(desc->vmnt, desc->vnode)) {
+        rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
+    }
+new
+    rc = -EBUSY;
+    if (!loop_backs(desc->vmnt, desc->vnode)) {
+        krffs_node_t *n = desc->fhandle;
+        rc = krffs_truncate_node(&n, (uint32_t)length) == 0 ? 0 : -EIO;
+    }
+end
+
+fault setid-clear-on-old-node
+probe truncmusl
+file rach2/sys/syscall_fs.c
+expect TRUNCMUSL FAIL (the set-id bits of a file that moved)
+old
+        if (mnt_is_root(desc->vmnt)) {
+            cred_kill_setid(desc->vnode);
+        } else {
+new
+        if (mnt_is_root(desc->vmnt)) {
+            cred_kill_setid(ref.node);
+        } else {
+end
+
+fault exec-keeps-vfork-parent
+probe vforkmusl
+file rach2/sys/syscall_proc.c
+expect VFORKMUSL FAIL (the parent ran again at the child's exit, not its exec
+old
+    mm_put(old);
+    proc_vfork_release(current_proc);
+new
+    mm_put(old);
+end
+
+fault waitid-pid-selects-all
+probe waitidmusl
+file rach2/sys/syscall_proc.c
+expect WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)
+old
+    case P_PID:
+        if (upid <= 0) {
+            return -EINVAL;
+        }
+        id = (uint32_t)upid;
+        break;
+new
+    case P_PID:
+        if (upid <= 0) {
+            return -EINVAL;
+        }
+        id = (uint32_t)upid;
+        idtype = P_ALL;
+        break;
+end
+
+fault waitid-pgid-selects-all
+probe waitidmusl
+file rach2/sys/syscall_proc.c
+expect WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)
+old
+        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        break;
+new
+        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        if (upid != 0) {
+            idtype = P_ALL;
+        }
+        break;
+end
+
+fault waitid-own-pgid-selects-all
+probe waitidmusl
+file rach2/sys/syscall_proc.c
+expect WAITIDMUSL FAIL (a wait reported the exit of a child it does not select)
+old
+        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        break;
+new
+        id = upid != 0 ? (uint32_t)upid : current_proc->pgid;
+        if (upid == 0) {
+            idtype = P_ALL;
+        }
+        break;
+end
+
+fault readlink-copies-nothing
+probe tmpfsmusl
+file rach2/sys/syscall_fs.c
+expect TMPFSMUSL FAIL (a directory and the two links
+old
+        n = ref.mnt->type->ops->readlink
+                ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX)
+                : -EINVAL;
+        vfs_ref_release(&ref);
+        goto out;
+    }
+new
+        n = ref.mnt->type->ops->readlink
+                ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX)
+                : -EINVAL;
+        vfs_ref_release(&ref);
+        if (n >= 0) {
+            path_buf_put(link);
+            return n < (int)bufsiz ? n : (int)bufsiz;
+        }
+        goto out;
+    }
+end
+
+fault rt-context-unfilled
+probe sigmusl
+file rach2/sys/proc/sigframe.c
+expect SIGMUSL FAIL: ucontext cs=0x0 esp=0x0 fpregs=0x0
+old
+        fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);
+        frame.rt.uc.sigmask[0] = (uint32_t)oldmask;
+new
+        frame.rt.uc.sigmask[0] = (uint32_t)oldmask;
+end
+
+fault times-user-time-past-int-max
+probe miscprobe
+file rach2/sys/syscall.c
+expect FAIL: times() reports no more CPU time than the ticks since boot
+old
+        t.tms_utime = (int32_t)user;
+        t.tms_stime = (int32_t)sys;
+new
+        t.tms_utime = 0x7FFFFFFF;
+        t.tms_stime = 1;
+end
+
+fault rt-frame-kills-with-sigsegv
+probe waitprobe
+file rach2/sys/proc/sigframe.c
+expect FAIL: child recvfrom interrupted with -EINTR (no hang)
+old
+    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
+new
+    if (rt) {
+        return -1;
+    }
+    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
+end
+
+# Rows the close added or strengthened: probe rows the review found weak,
+# the alternate stack, a tracer's view of an image an exec made not
+# dumpable, and the ptrace waits bounded for their proofs.
+
+fault altstack-frame-below
+probe sigframemusl
+file rach2/sys/proc/sigframe.c
+expect SIGFRAMEMUSL FAIL (a frame written below the alternate stack)
+old
+    frame_addr = sp;
+    if (on_alt && !sigframe_on_altstack(frame_addr)) {
+        return -1;
+    }
+new
+    frame_addr = sp;
+end
+
+fault clone-sighand-alone
+probe clonemusl
+file rach2/sys/syscall_proc.c
+expect CLONEMUSL FAIL (CLONE_SIGHAND without CLONE_VM was not refused)
+old
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
+        ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
+new
+        ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND))) {
+end
+
+fault futex-relative-nsec
+probe clonemusl
+file rach2/sys/proc/futex.c
+expect CLONEMUSL FAIL (a relative wait of 20 ms ended sooner)
+old
+                         : futex_ticks(ts.tv_sec, ts.tv_nsec);
+new
+                         : futex_ticks(ts.tv_sec, 0);
+end
+
+fault futex-absolute-nsec
+probe clonemusl
+file rach2/sys/proc/futex.c
+expect CLONEMUSL FAIL (an absolute monotonic wait ended before its deadline)
+old
+    return futex_ticks(dsec > 0x7FFFFFFF ? 0x7FFFFFFF : (int32_t)dsec, dnsec);
+new
+    return futex_ticks(dsec > 0x7FFFFFFF ? 0x7FFFFFFF : (int32_t)dsec, 0);
+end
+
+fault close-range-cloexec-closes
+probe callsmusl
+file rach2/sys/syscall_fs.c
+expect CALLSMUSL FAIL (close_range with CLOSE_RANGE_CLOEXEC left a descriptor unmarked
+old
+        if (e && (flags & CLOSE_RANGE_CLOEXEC)) {
+            e->flags |= FD_FLAG_CLOEXEC;
+        } else if (e) {
+new
+        if (e) {
+end
+
+fault core-small-limit-no-file
+probe coremusl
+file rach2/sys/syscall_fs.c
+expect COREMUSL FAIL (reading the short core file
+old
+    (void)do_unlink(path);
+    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+new
+    if (limit < 3u * 4096u) {
+        fd = -EFBIG;
+        goto out;
+    }
+    (void)do_unlink(path);
+    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+end
+
+fault cpu-clock-other-pid
+probe clockidmusl
+file rach2/sys/syscall.c
+expect CLOCKIDMUSL FAIL (a child's CPU clock by id did not read the time the child reported)
+old
+    out->proc = get_process(id);
+new
+    out->proc = get_process(id) ? current_proc : NULL;
+end
+
+fault eventfd-read-keeps-count
+probe epollmusl
+file rach2/sys/io/eventfd.c
+expect EPOLLMUSL FAIL (a read did not leave the counter empty
+old
+    ev->count -= value;
+new
+    ev->count -= ev->semaphore ? value : 0u;
+end
+
+fault epoll-no-target-queue
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (the child's write did not wake the wait
+old
+    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
+    q_add(q, *wq);
+new
+    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
+end
+
+fault exec-walk-stops-at-64k
+probe execargmusl
+file rach2/sys/proc/uimage.c
+expect EXECARGMUSL FAIL (strings and pointers of exactly the budget were refused)
+old
+static int uimage_next(struct uwin *w, uint32_t *str)
+{
+    while (*str < w->u->top) {
+new
+static int uimage_next(struct uwin *w, uint32_t *str)
+{
+    uint32_t first = *str;
+
+    while (*str < w->u->top && *str - first < 65536u) {
+end
+
+fault proc-net-empty
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect direntmusl: /proc/net: no entry checked
+old
+    int kind = sd->kind;
+
+    if (n == 0) {
+new
+    int kind = sd->kind;
+
+    if (kind == VNODE_PROC_NET_DIR) {
+        return 0;
+    }
+    if (n == 0) {
+end
+
+fault proc-fd-list-error
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect direntmusl: /proc/self/fd: readdir: errno 5
+old
+    while (synth_dirent_at(sd, (int)idx, name, &ino, &dtype)) {
+new
+    if (sd->kind == VNODE_PROC_FD_DIR) {
+        return -EIO;
+    }
+    while (synth_dirent_at(sd, (int)idx, name, &ino, &dtype)) {
+end
+
+fault fifo-reader-no-wait
+probe fifomusl
+file rach2/sys/ipc/pipe.c
+expect FIFOMUSL FAIL (a blocking open for reading returned before a writer opened
+old
+    if (!nonblock && acc != 2 && (acc == 0 ? !p->write_open : !p->read_open)) {
+new
+    if (!nonblock && acc == 1 && !p->read_open) {
+end
+
+fault peek-nondumpable
+probe suidmusl
+file rach2/sys/proc/ptrace.c
+expect SUIDMUSL FAIL (a uid 1000 tracer read the execute-only copy)
+old
+    if (!mm || (current_proc->euid != 0 && !mm->dumpable)) {
+new
+    if (!mm) {
+end
+
+fault entry-kill-runs-call
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (a write the tracee was killed at the entry of ran
+old
+    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
+        self->orig_eax = -1;
+    }
+new
+    sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+end
+
+fault detach-keeps-stop-seen
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (the detached process ran while its stop was in effect
+old
+    t->ptrace_opts = 0;
+    t->stop_seen = 0;
+new
+    t->ptrace_opts = 0;
+end
+
+fault seize-stopped-stays-parked
+probe ptracemusl
+file rach2/sys/proc/ptrace.c
+expect PTRACEMUSL FAIL (seizing a stopped process did not stop it for the tracer
+old
+    ptrace_unpark(t);
+    return 0;
+new
+    (void)ptrace_unpark;
+    return 0;
+end
+
+fault interrupt-no-wake
+probe ptracemusl
+file rach2/sys/syscall_proc.c
+expect PTRACEMUSL FAIL (PTRACE_INTERRUPT did not stop a tracee blocked in a read
+old
+    if (current_proc->ptrace & PT_INTERRUPT) {
+        return 1;
+    }
+new
+end
