@@ -14,10 +14,10 @@
  * owns. A child that keeps them may not make a parent that gave them up its
  * tracer, nor a parent whose first thread ended with them and whose live
  * thread gave them up, and a thread that gave them up still reads its own
- * process's exe link. An exec gives them back, and the image is then not dumpable, except
- * under no_new_privs or with another process sharing its directories; the
- * exec of a thread of user 1000 that gave up the none it had keeps its
- * parent-death signal and stays dumpable.
+ * process's exe link. An exec gives them back, and the image is then not
+ * dumpable, except under no_new_privs or with another process sharing its
+ * directories; the exec of a thread of user 1000 that gave up the none it
+ * had keeps its parent-death signal and stays dumpable.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
