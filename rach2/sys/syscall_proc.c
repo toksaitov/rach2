@@ -1466,7 +1466,6 @@ static void exec_files(struct exec_state *s)
         return;
     }
     k_memcpy(own->entries, shared->entries, sizeof(fd_entry_t) * (size_t)shared->cap);
-    own->limit = shared->limit;
     files_take(own);
     s->files = NULL;
     proc_files_put(current_proc);
