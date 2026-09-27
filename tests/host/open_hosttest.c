@@ -857,7 +857,7 @@ static void rename_over_installing(void)
 {
     root_row_begin();
     waiting = open_publishes;
-    check(do_rename("/src", "/kept", 0) == 0, "a rename over a file an open is installing");
+    check(do_rename("/src", "/kept", 0, 0) == 0, "a rename over a file an open is installing");
     check(keeps == 1 && removals == 0,
           "the rename keeps the file it replaces for the open's descriptor");
     root_row_end();
@@ -888,7 +888,7 @@ static void attrs_after_move(void)
         mount.type = &locked_type;
         attr_row = 1;
         waiting = write_moves;
-        check((round == 0 ? do_chmod("f", 0600) : do_chown("f", 5, (uint32_t)-1, 1)) == 0,
+        check((round == 0 ? do_chmod("f", 0600, 0) : do_chown("f", 5, (uint32_t)-1, 1, 0)) == 0,
               "a chmod or chown of a file a write moves");
         check(attrs == 1 && ns_depth == 0 && !waiting,
               "the change is made once, with the mount's lock given back");
@@ -927,7 +927,7 @@ static void stats_after_move(void)
         } else if (round == 2) {
             rc = fstatat_path("/f", 1, &wide);
         } else {
-            rc = do_access("f", R_OK);
+            rc = do_access("f", R_OK, 0);
         }
         check(rc == 0, "a stat or an access of a file a write moves");
         check(ns_depth == 0 && !waiting, "the node is read with the mount's lock, then given back");
@@ -969,7 +969,7 @@ static void times_after_move(void)
         attr_row = 1;
         if (round == 0) {
             waiting = write_moves;
-            rc = utimes_path("/f", 0, NULL);
+            rc = utimes_path("/f", 0, 0, NULL);
         } else {
             int fd = model_open();
 

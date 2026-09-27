@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -199,7 +199,12 @@ A node needed for path resolution cannot be allocated.
 .It Bq Er ENOSYS
 The descriptor type has no file-system statistics.
 .It Bq Er ENOTDIR
-A path component is not a directory.
+A path component is not a directory, or a path that ends in a slash or
+in
+.Pa \&.
+or
+.Pa \&..
+reaches something else, as on Linux.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,

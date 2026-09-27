@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt SYMLINK 2
 .Os
 .Sh NAME
@@ -27,6 +27,21 @@ The target is stored without resolving it and need not exist.
 An existing destination, including a dangling symbolic link, is not
 replaced.
 An empty target is refused.
+A
+.Fa linkpath
+that names a directory by its end, which no symbolic link is, makes
+nothing, as on Linux: with a slash after its last name it returns
+.Er ENOENT
+when nothing has that name and
+.Er EEXIST
+when something does, and with a last component of
+.Pa \&.
+or
+.Pa \&..
+it returns
+.Er EEXIST .
+These come before the refusals of a read-only mount and of a file
+system without symbolic links.
 .Pp
 ext2 and tmpfs, whose mounts include
 .Pa /dev/shm ,
@@ -45,7 +60,17 @@ copies up to
 bytes of a link's text into
 .Fa buf
 and returns the number copied.
-It does not follow the final link or append a terminating null byte.
+It does not follow the final link or append a terminating null byte,
+except for a path that ends in a slash or in
+.Pa \&.
+or
+.Pa \&.. ,
+which names a directory: the final link is followed then, and the call
+returns
+.Er EINVAL
+for the directory it reaches and
+.Er ENOTDIR
+for anything else, as on Linux.
 A short buffer truncates the text without an error.
 A return equal to
 .Fa bufsiz
@@ -151,7 +176,10 @@ A relative path uses an invalid or removed directory descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EEXIST
-The new link's name already exists.
+The new link's name already exists, or its last component is
+.Pa \&.
+or
+.Pa \&.. .
 .It Bq Er EFAULT
 A pathname, target, or result buffer cannot be accessed as required,
 a required pathname or target pointer is null, or there is no current
@@ -173,7 +201,8 @@ A copied or reconstructed path, component, target, or link expansion
 exceeds its buffer.
 .It Bq Er ENOENT
 A pathname or creation target is empty, a required component is absent,
-or the process or descriptor referred to by a proc link no longer exists.
+the new link's name has a slash after it and nothing has that name, or
+the process or descriptor referred to by a proc link no longer exists.
 .It Bq Er ENOMEM
 A required file-system node or the text buffer of a proc link cannot be
 allocated.
@@ -181,7 +210,12 @@ allocated.
 The file system has no inode or data space available for the link or
 its directory entry.
 .It Bq Er ENOTDIR
-A path component or relative-path base descriptor is not a directory.
+A path component or relative-path base descriptor is not a directory,
+or a path to read that ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+reaches something else.
 .It Bq Er EPERM
 The writable file system does not support symbolic-link creation.
 .It Bq Er EROFS

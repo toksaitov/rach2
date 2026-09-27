@@ -15,6 +15,14 @@
  * after rewinddir, and seekdir to the place telldir gave after the first
  * entry lists the second next.
  *
+ * The other calls that take a path answer one that names a directory by its
+ * end as Linux does, in the probe's own directory and in one of /dev/shm: a
+ * regular file so named is ENOTDIR to open, access, chmod, chown, lchown,
+ * truncate, utimensat, readlink, statfs, link, unlink and rename, and a new
+ * name so named is EISDIR to open with O_CREAT and ENOENT or EEXIST to link,
+ * symlink, mknod and mkdir, which make nothing; rmdir is EINVAL for a last
+ * "." and ENOTEMPTY for a last "..", and rename EBUSY for either.
+ *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
  * symbolic link reported as DT_LNK, and / and /bin of that root are checked
@@ -30,6 +38,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -198,10 +207,217 @@ static int rewinds(const char *dir)
     return 0;
 }
 
+/** Whether a call returned -1 with `err`. */
+static int refused(long rc, int err)
+{
+    return rc == -1 && errno == err;
+}
+
+/* The paths the rows of `dir_end_calls` name in one directory: the regular
+ * file f and the directory s, which the directory has, the empty directory
+ * e, which the rows make, and the name n, which nothing has, each also with
+ * a slash after it, "s", or a last "." or "..". */
+struct ends {
+    char f[300], fs[304], fdot[304];
+    char s[300], ss[304], sdot[304], sdotdot[304];
+    char e[300], edot[304], edotdot[304];
+    char n[300], ns[304], ndot[304];
+};
+
+/** Fill `p` with the paths of the rows in `dir`. */
+static void ends_in(struct ends *p, const char *dir)
+{
+    snprintf(p->f, sizeof(p->f), "%s/f", dir);
+    snprintf(p->fs, sizeof(p->fs), "%s/f/", dir);
+    snprintf(p->fdot, sizeof(p->fdot), "%s/f/.", dir);
+    snprintf(p->s, sizeof(p->s), "%s/s", dir);
+    snprintf(p->ss, sizeof(p->ss), "%s/s/", dir);
+    snprintf(p->sdot, sizeof(p->sdot), "%s/s/.", dir);
+    snprintf(p->sdotdot, sizeof(p->sdotdot), "%s/s/..", dir);
+    snprintf(p->e, sizeof(p->e), "%s/e", dir);
+    snprintf(p->edot, sizeof(p->edot), "%s/e/.", dir);
+    snprintf(p->edotdot, sizeof(p->edotdot), "%s/e/..", dir);
+    snprintf(p->n, sizeof(p->n), "%s/n", dir);
+    snprintf(p->ns, sizeof(p->ns), "%s/n/", dir);
+    snprintf(p->ndot, sizeof(p->ndot), "%s/n/.", dir);
+}
+
+/**
+ * The calls that look a path up, given a regular file named as a directory
+ * by its end: open, with O_PATH too, access, chmod, chown, lchown, truncate,
+ * utimensat, statfs and link's source are ENOTDIR, and so is readlink,
+ * which is EINVAL for a directory so named. 0, or 1 once the failure is
+ * reported.
+ */
+static int lookup_ends(const struct ends *p)
+{
+    struct statfs sf;
+    char buf[16];
+
+    if (!refused(open(p->fs, O_RDONLY), ENOTDIR) || !refused(open(p->fdot, O_RDONLY), ENOTDIR) ||
+        !refused(open(p->fs, O_PATH), ENOTDIR)) {
+        return fail("open of a file named with a trailing slash or a last . was not ENOTDIR");
+    }
+    if (!refused(access(p->fs, F_OK), ENOTDIR)) {
+        return fail("access of a file named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(chmod(p->fs, 0644), ENOTDIR)) {
+        return fail("chmod of a file named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(chown(p->fs, (uid_t)-1, (gid_t)-1), ENOTDIR) ||
+        !refused(lchown(p->fs, (uid_t)-1, (gid_t)-1), ENOTDIR)) {
+        return fail("chown or lchown of a file named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(truncate(p->fs, 0), ENOTDIR)) {
+        return fail("truncate of a file named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(utimensat(AT_FDCWD, p->fs, NULL, 0), ENOTDIR)) {
+        return fail("utimensat of a file named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(readlink(p->fs, buf, sizeof(buf)), ENOTDIR) ||
+        !refused(readlink(p->ss, buf, sizeof(buf)), EINVAL)) {
+        return fail("readlink of a name with a trailing slash was not ENOTDIR or EINVAL");
+    }
+    if (!refused(statfs(p->fs, &sf), ENOTDIR)) {
+        return fail("statfs of a file named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(link(p->fs, p->n), ENOTDIR)) {
+        return fail("link from a file named with a trailing slash was not ENOTDIR");
+    }
+    return 0;
+}
+
+/**
+ * The calls that make a node, given a new name as a directory by its end:
+ * open with O_CREAT is EISDIR; link, symlink and mknod are ENOENT for a
+ * name nothing has with a slash after it, and EEXIST for a last "." after a
+ * directory, and mknod ENOTDIR for one after the file; mkdir is EEXIST for
+ * a last "." after a directory and ENOENT for one after a name nothing has;
+ * and none of them makes n. 0, or 1 once the failure is reported.
+ */
+static int make_ends(const struct ends *p)
+{
+    struct stat st;
+
+    if (!refused(open(p->ns, O_WRONLY | O_CREAT, 0644), EISDIR) ||
+        !refused(open(p->sdot, O_WRONLY | O_CREAT, 0644), EISDIR) || lstat(p->n, &st) == 0) {
+        return fail("an open with O_CREAT of a path that names a directory by its end");
+    }
+    if (!refused(link(p->f, p->ns), ENOENT) || !refused(link(p->f, p->sdot), EEXIST)) {
+        return fail("link to a new name with a trailing slash or a last .");
+    }
+    if (!refused(symlink("f", p->ns), ENOENT) || !refused(symlink("f", p->sdot), EEXIST)) {
+        return fail("symlink to a new name with a trailing slash or a last .");
+    }
+    if (!refused(mknod(p->ns, S_IFIFO | 0644, 0), ENOENT) ||
+        !refused(mknod(p->sdot, S_IFIFO | 0644, 0), EEXIST) ||
+        !refused(mknod(p->fdot, S_IFIFO | 0644, 0), ENOTDIR)) {
+        return fail("mknod of a new name with a trailing slash or a last .");
+    }
+    if (!refused(mkdir(p->sdot, 0755), EEXIST) || !refused(mkdir(p->ndot, 0755), ENOENT) ||
+        lstat(p->n, &st) == 0) {
+        return fail("mkdir of a path whose last name is .");
+    }
+    return 0;
+}
+
+/**
+ * The calls that remove or move a name, given one as a directory by its
+ * end: unlink is ENOTDIR for the file with a slash or a last "." after it
+ * and EISDIR for a last "." after a directory; rmdir is EINVAL for a last
+ * "." and ENOTEMPTY for a last "..";
+ * rename is EBUSY for either as the last component of either name, and
+ * ENOTDIR for the file with a slash after either name; and none of them
+ * takes f or e away. 0, or 1 once the failure is reported.
+ */
+static int remove_ends(const struct ends *p)
+{
+    struct stat st;
+
+    if (!refused(unlink(p->fs), ENOTDIR) || !refused(unlink(p->fdot), ENOTDIR) ||
+        !refused(unlink(p->sdot), EISDIR) || lstat(p->f, &st) != 0) {
+        return fail("unlink of a file named with a trailing slash or of a last .");
+    }
+    if (!refused(rmdir(p->edot), EINVAL) || !refused(rmdir(p->edotdot), ENOTEMPTY) ||
+        lstat(p->e, &st) != 0) {
+        return fail("rmdir of a directory's . or ..");
+    }
+    if (!refused(rename(p->sdot, p->n), EBUSY) || !refused(rename(p->f, p->sdot), EBUSY) ||
+        !refused(rename(p->sdotdot, p->n), EBUSY)) {
+        return fail("rename of a name whose last component is . or ..");
+    }
+    if (!refused(rename(p->fs, p->n), ENOTDIR) || !refused(rename(p->f, p->ns), ENOTDIR) ||
+        lstat(p->f, &st) != 0) {
+        return fail("rename of a file named with a trailing slash");
+    }
+    return 0;
+}
+
+/**
+ * The calls that take a path, other than the stat calls, given one that
+ * names a directory by its end, in `dir`, which has the regular file f and
+ * the directory s: `lookup_ends`, `make_ends` and `remove_ends`, with the
+ * empty directory e made for them and taken away after, as is whatever a
+ * failing row made at n. 0, or 1 once the failure is reported.
+ */
+static int dir_end_calls(const char *dir)
+{
+    struct ends p;
+    int rc;
+
+    ends_in(&p, dir);
+    if (mkdir(p.e, 0755) != 0) {
+        return fail("make an empty directory");
+    }
+    rc = lookup_ends(&p);
+    if (rc == 0) {
+        rc = make_ends(&p);
+    }
+    if (rc == 0) {
+        rc = remove_ends(&p);
+    }
+    rmdir(p.e);
+    unlink(p.n);
+    rmdir(p.n);
+    return rc;
+}
+
+/**
+ * `dir_end_calls` in a directory of /dev/shm, a tmpfs, whose calls take a
+ * mounted type's paths where the probe's own directory on the KRFFS root
+ * takes the root's. 0, or 1 once the failure is reported.
+ */
+static int shm_dir_end_calls(void)
+{
+    static const char dir[] = "/dev/shm/dirent.d";
+    char f[64], s[64];
+    int rc = 1;
+    int fd;
+
+    snprintf(f, sizeof(f), "%s/f", dir);
+    snprintf(s, sizeof(s), "%s/s", dir);
+    unlink(f);
+    rmdir(s);
+    rmdir(dir);
+    if (mkdir(dir, 0755) != 0 || mkdir(s, 0755) != 0 ||
+        (fd = open(f, O_WRONLY | O_CREAT, 0644)) < 0) {
+        fail("make a directory in /dev/shm");
+    } else {
+        close(fd);
+        rc = dir_end_calls(dir);
+    }
+    unlink(f);
+    rmdir(s);
+    rmdir(dir);
+    return rc;
+}
+
 /**
  * The rows that read the probe's own directory beyond the types of its
- * listing: the path ends of `dir_ends`, and rewinddir and seekdir of it and
- * of /proc/self (`rewinds`). 0, or 1 once the failure is reported.
+ * listing: the path ends of `dir_ends`, rewinddir and seekdir of it and of
+ * /proc/self (`rewinds`), and the other calls given a path that names a
+ * directory by its end, there and in /dev/shm (`dir_end_calls`). 0, or 1
+ * once the failure is reported.
  */
 static int own_dir_rows(void)
 {
@@ -218,7 +434,7 @@ static int own_dir_rows(void)
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
-    return 0;
+    return dir_end_calls(base) != 0 || shm_dir_end_calls() != 0;
 }
 
 /** Remove what the probe made. */

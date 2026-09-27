@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt MKDIR 2
 .Os
 .Sh NAME
@@ -36,6 +36,16 @@ is the matching form of
 Its parent must exist and the final name must not already exist.
 Creating the root directory or a mount point returns
 .Er EEXIST .
+A slash after the final name is allowed.
+A last component of
+.Pa \&.
+or
+.Pa \&..
+returns
+.Er EEXIST
+once the directory before it is walked, which returns
+.Er ENOENT
+when it is missing, as on Linux; nothing is made.
 .Pp
 On KRFFS and ext2, the new directory receives the caller's effective
 user and group IDs and the permission bits
@@ -59,6 +69,19 @@ among them when the caller names it from outside, since
 leaves the working directory where it was.
 A nonempty directory returns
 .Er ENOTEMPTY .
+A path whose last component is
+.Pa \&.
+returns
+.Er EINVAL ,
+and one whose last component is
+.Pa \&..
+returns
+.Er ENOTEMPTY ,
+once the directories before it are walked and whatever the directory
+holds, as on Linux.
+A slash after the final name is allowed, and names the directory; a
+symbolic link so named is not followed and is refused as a
+non-directory.
 On a mounted KRFFS volume, a missing final entry or a final entry that
 is not a directory also returns
 .Er ENOTEMPTY ;
@@ -146,7 +169,11 @@ references prevent removal.
 .It Bq Er EEXIST
 The name passed to
 .Fn mkdir
-already exists, including the root and mount points.
+already exists, including the root and mount points, or its last
+component is
+.Pa \&.
+or
+.Pa \&.. .
 .It Bq Er EFAULT
 The path is null or cannot be read from user memory, or there is no
 current process.
@@ -155,9 +182,10 @@ An ext2 directory cannot grow further or a required block exceeds its
 addressing limit.
 .It Bq Er EINVAL
 .Fn rmdir
-was given the root path, a parent resolution has no final component,
-the file system rejects a new name, or required attributes cannot be
-obtained.
+was given the root path or a path whose last component is
+.Pa \&. ,
+a parent resolution has no final component, the file system rejects a
+new name, or required attributes cannot be obtained.
 .It Bq Er EIO
 The backing device was removed, or file system metadata could not be
 read or written.
@@ -186,7 +214,10 @@ that is not open on a directory, or
 .Fn rmdir
 selected a non-directory on a file system that reports this error.
 .It Bq Er ENOTEMPTY
-The directory is not empty.
+The directory is not empty, or the last component of the path given to
+.Fn rmdir
+is
+.Pa \&.. .
 A mounted KRFFS volume also uses this error for a missing final entry
 or a final entry that is not a directory.
 .It Bq Er EPERM

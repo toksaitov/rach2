@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt LINK 2
 .Os
 .Sh NAME
@@ -31,6 +31,33 @@ the file system does not support hard links.
 The final symbolic link in
 .Fa oldpath
 is not followed.
+An
+.Fa oldpath
+that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+names a directory, as on Linux: its final link is followed, and it
+returns
+.Er ENOTDIR
+unless it reaches a directory, which is
+.Er EPERM .
+A
+.Fa newpath
+that names a directory by its end makes nothing: with a slash after its
+last name it returns
+.Er ENOENT
+when nothing has that name and
+.Er EEXIST
+when something does, and with a last component of
+.Pa \&.
+or
+.Pa \&..
+it returns
+.Er EEXIST ,
+before
+.Er EXDEV
+and the refusal of a file system without hard links.
 .Pp
 .Fn link
 and
@@ -116,7 +143,22 @@ A directory is removed with
 .Fn unlink
 returns
 .Er EISDIR
-for the root or a directory on the KRFFS boot root, ext2, FAT32, or exFAT.
+for the root or a directory on the KRFFS boot root, ext2, FAT32, or exFAT,
+and for a path whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+which names a directory.
+A path with a slash after its last name names one too: a directory
+there returns
+.Er EISDIR ,
+a name nothing has
+.Er ENOENT ,
+and anything else, a symbolic link to a directory among them,
+.Er ENOTDIR ,
+as on Linux, and nothing is removed.
+On the KRFFS boot root the directory's write permission is checked
+first.
 A mounted KRFFS volume reports
 .Er EIO
 for its directory refusal.
@@ -164,7 +206,9 @@ Path resolution entered a mount being mounted or unmounted,
 selected a mount point, or the file on the KRFFS boot root backs an
 attached loop device.
 .It Bq Er EEXIST
-The ext2 destination name already exists.
+The ext2 destination name already exists, or a
+.Fn link
+destination names one by its end.
 .It Bq Er EFAULT
 A path cannot be read from user memory, or there is no current process.
 .It Bq Er EFBIG
@@ -175,6 +219,11 @@ exceeds the file system's addressing limit.
 or
 .Fn unlinkat
 was given unsupported flags, a destination has no leaf component,
+.Fn unlinkat
+with
+.Dv AT_REMOVEDIR
+was given a path whose last component is
+.Pa \&. ,
 or the file system cannot supply required attributes.
 .It Bq Er EIO
 File system metadata could not be read or written, or the device was removed.
@@ -183,7 +232,10 @@ entry or a directory.
 .It Bq Er EISDIR
 .Fn unlink
 selected the root or a directory on the KRFFS boot root, ext2, FAT32,
-or exFAT.
+or exFAT, or a path whose last component is
+.Pa \&.
+or
+.Pa \&.. .
 .It Bq Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Bq Er EMLINK
@@ -194,8 +246,10 @@ The copied path and its directory prefix must fit 4096 bytes, including
 the terminating null byte.
 .It Bq Er ENOENT
 A path is empty, the source or a required path component does not exist,
-or the entry to unlink does not exist on a file system that reports
-this error.
+a
+.Fn link
+destination with a slash after its last name names nothing, or the
+entry to unlink does not exist on a file system that reports this error.
 .It Bq Er ENOMEM
 The file system could not allocate storage needed to resolve a path.
 .It Bq Er ENOSPC
@@ -205,7 +259,14 @@ A component used as a directory is not a directory, a relative
 .Fn linkat
 or
 .Fn unlinkat
-path uses a descriptor that is not a directory, or
+path uses a descriptor that is not a directory, a path that ends in a
+slash, or a
+.Fn link
+source that ends in
+.Pa \&.
+or
+.Pa \&.. ,
+names something else, or
 .Fn unlinkat
 with
 .Dv AT_REMOVEDIR
@@ -214,7 +275,9 @@ selected a nondirectory on a file system that reports this error.
 .Fn unlinkat
 with
 .Dv AT_REMOVEDIR
-selected a directory that is not empty.
+selected a directory that is not empty, or a path whose last component
+is
+.Pa \&.. .
 .It Bq Er EPERM
 A hard link was requested to a directory, to a synthetic object, or on
 a writable file system without hard links, or the sticky-directory

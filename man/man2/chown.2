@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt CHOWN 2
 .Os
 .Sh NAME
@@ -44,6 +44,14 @@ follows a final symbolic link on a file system that has them, and
 changes the link itself, as on Linux.
 The KRFFS boot root has no symbolic links, so there the two are the
 same.
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+names a directory: both calls follow a final symbolic link then, and
+anything but a directory returns
+.Er ENOTDIR ,
+as on Linux.
 The
 .Pa /proc
 links have fixed ownership, which
@@ -284,9 +292,14 @@ or a required path component does not exist.
 .It Bq Er ENOMEM
 The file system could not allocate storage needed to resolve the path.
 .It Bq Er ENOTDIR
-A path component used as a directory is not a directory, or
+A path component used as a directory is not a directory,
 .Fa dirfd
-is not a directory descriptor for a relative path.
+is not a directory descriptor for a relative path, or a path that ends
+in a slash or in
+.Pa \&.
+or
+.Pa \&..
+reaches something else.
 .It Bq Er EPERM
 The caller lacks permission to make the ownership change, or the object
 has fixed ownership.

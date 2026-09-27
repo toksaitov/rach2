@@ -85,13 +85,13 @@ changes = {
              "loops[i].handle == from"),
     "unlink-lock": ("vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf,",
                     "vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf,"),
-    "rename-lock": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
+    "rename-lock": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"
                     "    vfs_ns_unlock(opar.mnt);\n",
-                    "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
-    "rename-unlocked": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
+                    "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"),
+    "rename-unlocked": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"
                         "    vfs_ns_unlock(opar.mnt);\n",
                         "    vfs_ns_lock(opar.mnt);\n    vfs_ns_unlock(opar.mnt);\n"
-                        "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
+                        "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"),
     "rename-locked-walk": [
         ("vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,",
          "vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,"),
@@ -101,20 +101,19 @@ changes = {
          "        return rc;\n    }\n    rc = mnt_is_root(npar.mnt)"),
         ("out:\n    vfs_ref_release(&npar);", "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"),
     ],
-    "chmod-walk-unlocked": ("    rc = vfs_resolve(0, name, VFS_WALK_LOCK, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    svp = vfs_synth_vpath(ref.mnt, ref.node);\n    if (svp) {\n        vp = *svp;\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        if (vp.kind == VNODE_PTS) {",
-                            "    rc = vfs_resolve(0, name, 0, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    svp = vfs_synth_vpath(ref.mnt, ref.node);\n    if (svp) {\n        vp = *svp;\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        if (vp.kind == VNODE_PTS) {"),
-    "chown-walk-unlocked": ("(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, &ref, 0, 0);",
-                            "(follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);"),
+    "chmod-walk-unlocked": ("    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);", "    rc = resolve_named(name, 0, dir, &ref);"),
+    "chown-walk-unlocked": ("(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);",
+                            "(follow ? 0 : VFS_WALK_NOFOLLOW), dir, &ref);"),
     "stat64-walk-unlocked": ("        int rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
                              "        int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
     "old-stat-walk-unlocked": ("        int32_t rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
                                "        int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
     "fstatat-walk-unlocked": ("    rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
                               "    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
-    "access-walk-unlocked": ("vfs_resolve(0, name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, &ref, 0, 0);",
-                             "vfs_resolve(0, name, VFS_WALK_REAL_IDS, &ref, 0, 0);"),
-    "utimensat-walk-unlocked": ("((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, &ref,",
-                                "((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), &ref,"),
+    "access-walk-unlocked": ("resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, dir, &ref);",
+                             "resolve_named(name, VFS_WALK_REAL_IDS, dir, &ref);"),
+    "utimensat-walk-unlocked": ("((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);",
+                                "((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), dir, &ref);"),
     "utimensat-fd-node-unlocked": ("    mnt = entry->ofd->vmnt;\n    vfs_ns_lock(mnt);\n"
                                    "    if (entry->node && fd_node_check(entry) != 0) {\n"
                                    "        rc = -EBADF;\n    } else {\n"

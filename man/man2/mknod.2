@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt MKNOD 2
 .Os
 .Sh NAME
@@ -56,6 +56,17 @@ ancestors and write permission on the parent, and the final name must
 not exist, whether as a file, a directory, a symbolic link or a mount
 point.
 A device node needs effective user ID 0.
+A path that names a directory by its end, which the node is not, makes
+nothing, as on Linux: with a slash after the final name it returns
+.Er ENOENT
+when nothing has the name and
+.Er EEXIST
+when something does, and with a last component of
+.Pa \&.
+or
+.Pa \&..
+it returns
+.Er EEXIST .
 .Pp
 .Fa dev
 is Linux's 32-bit encoding, which musl's
@@ -152,7 +163,11 @@ that is not open.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EEXIST
-The name exists, as any kind of node or as a mount point.
+The name exists, as any kind of node or as a mount point, or the last
+component of the path is
+.Pa \&.
+or
+.Pa \&.. .
 .It Bq Er EFAULT
 The path is null or cannot be read from user memory, or there is no
 current process.
@@ -168,7 +183,8 @@ Path resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
 A path, component or symbolic-link expansion is too long.
 .It Bq Er ENOENT
-The path is empty or an ancestor is missing.
+The path is empty, an ancestor is missing, or a slash follows a final
+name nothing has.
 .It Bq Er ENOSPC
 There is no space for the node or its directory entry.
 .It Bq Er ENOTDIR
