@@ -1620,11 +1620,13 @@ static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
 }
 
 /**
- * RLIMIT_NPROC for a fork by `parent`: the processes of its real user, this
- * one included, against its limit; root is not limited. Counted by the real
- * uid at the time, so a process that took a new identity with setuid counts
- * for that user, and counted after the reclaim that may sleep, so two forks
- * cannot both see the last place. 0, or -EAGAIN.
+ * RLIMIT_NPROC for a fork or a clone by `parent`: the threads of its real
+ * user, this one included, against its limit; root is not limited. Every
+ * record counts, as Linux counts every task: each thread of a process, and
+ * one that has ended until it is reaped. Counted by the real uid at the
+ * time, so a thread that took a new identity with setuid counts for that
+ * user, and counted after the reclaim that may sleep, so two forks cannot
+ * both see the last place. 0, or -EAGAIN.
  */
 static int32_t fork_nproc(const process_t *parent)
 {

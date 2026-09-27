@@ -57,12 +57,18 @@ Either or both pointers may be null.
 Five resources are stored and enforced:
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
-The number of processes with the same real user ID across the machine.
-Fork returns
+The number of threads with the same real user ID across the machine, as
+Linux counts them: each thread of a process counts, and one that has
+ended counts until it is reaped.
+.Xr fork 2 ,
+.Xr vfork 2
+and
+.Xr clone 2 ,
+a new thread's included, return
 .Er EAGAIN
-when the parent's soft limit is reached.
+when the caller's soft limit is reached.
 Real user ID 0 is exempt.
-A change of real user ID moves the process to the new user's count.
+A change of real user ID moves the thread to the new user's count.
 .It Dv RLIMIT_NOFILE
 One greater than the highest descriptor number the process may receive.
 The hard limit cannot exceed 1024, even for root.

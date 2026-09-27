@@ -8,9 +8,10 @@
 #include "../mm/vm.h"
 #include "fpu.h"
 
-/* Policy: the processes one real user may have unless `prlimit64` or
- * `/etc/rach2/limits` says otherwise, and what `sysconf` reports; the bound
- * on processes is memory. Root is not limited. */
+/* Policy: the threads one real user may have, each thread of a process
+ * counting, unless `prlimit64` or `/etc/rach2/limits` says otherwise, and
+ * what `sysconf` reports; the bound on processes is memory. Root is not
+ * limited. */
 #define PROC_COUNT_POLICY 4096
 
 /* Process states. */
@@ -200,7 +201,7 @@ struct process {
      * kept in the record and not in one global, since a handler that
      * switches away leaves the count with the process it interrupted. */
     uint32_t irq_depth;
-    /* The resource limits `prlimit64` keeps: processes of the real user,
+    /* The resource limits `prlimit64` keeps: threads of the real user,
      * open descriptors, the address space and the stack in bytes; soft and
      * hard, inherited by fork and exec. */
     struct rlimit32 rlim[RLIM_COUNT];

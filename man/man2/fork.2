@@ -44,8 +44,10 @@ Parent and child can close their descriptors independently.
 .Pp
 The soft
 .Dv RLIMIT_NPROC
-limit bounds the number of processes with the parent's real user ID,
-including the parent.
+limit bounds the number of threads with the parent's real user ID, the
+parent's included: each thread of a process counts, as on Linux, and one
+that has ended counts until it is reaped.
+It bounds a new thread as it bounds a new process.
 A parent with real user ID 0 is exempt.
 .Pp
 .Fn vfork
@@ -208,7 +210,7 @@ The
 .Dv CLONE_SETTLS
 descriptor cannot be read.
 .It Bq Er EAGAIN
-The number of processes with the parent's real user ID has reached the
+The number of threads with the parent's real user ID has reached the
 parent's soft
 .Dv RLIMIT_NPROC
 limit.

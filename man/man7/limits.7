@@ -17,12 +17,13 @@ use the same table.
 Fork inherits both values and exec preserves them.
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
-The number of processes with the same real user ID across the machine.
-Fork returns
+The number of threads with the same real user ID across the machine, each
+thread of a process counting, as on Linux.
+Fork and clone return
 .Er EAGAIN
 when the soft limit is reached.
 Real user ID 0 is exempt.
-A setuid operation that changes the real user ID moves the process to the
+A setuid operation that changes the real user ID moves the thread to the
 new user's count.
 .It Dv RLIMIT_NOFILE
 One greater than the highest descriptor number the process may be given,

@@ -103,13 +103,13 @@ A call that changes the effective user or group ID also clears the
 process's dumpable flag and its parent-death signal, as on Linux; see
 .Xr prctl 2 .
 .Pp
-A change of real user ID makes the process count against the new user's
+A change of real user ID makes the thread count against the new user's
 total for
 .Dv RLIMIT_NPROC .
 These setters do not enforce that limit.
 .Xr fork 2
-counts processes by their current real user IDs and compares the count
-with the caller's soft limit.
+counts threads, each thread of a process, by their current real user IDs
+and compares the count with the caller's soft limit.
 Real user ID 0 is exempt.
 .Ss System call numbers
 Musl uses the i386 32-bit ID calls:
