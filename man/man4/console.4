@@ -79,6 +79,15 @@ Read the terminal settings.
 Set the terminal settings.
 .Dv TCSETSF
 also discards unread input.
+.It Dv TCGETS2
+Read the terminal settings with the speeds their baud codes name.
+.It Dv TCSETS2 , TCSETSW2 , TCSETSF2
+Set the terminal settings as
+.Dv TCSETS ,
+.Dv TCSETSW
+and
+.Dv TCSETSF
+do; the speeds are not kept.
 .It Dv TCFLSH
 Discard unread input for selectors 0 and 2.
 Selector 1 does nothing, and selector 2 discards unread input only;

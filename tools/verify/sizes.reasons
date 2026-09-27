@@ -200,11 +200,10 @@ rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one c
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
 rach2/sys/syscall.c:init_syscall lines 231 a table, one entry per system call number
-rach2/sys/syscall.c:sys_ioctl complexity 43 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:sys_ioctl lines 162 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:sys_ioctl complexity 31 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:sys_ioctl lines 138 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:tty_common_ioctl complexity 27 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:tty_common_ioctl lines 135 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:tty_common_ioctl lines 122 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_old_stat lines 110 one system call's contract, its checks in the order the manual page lists the errors
@@ -644,8 +643,8 @@ tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order t
 tests/procprobe.c:probe_main complexity 66 a probe, one sequence of steps in the order the log records them
 tests/procprobe.c:probe_main lines 494 a probe, one sequence of steps in the order the log records them
 
-tests/ptyprobe.c:_start complexity 47 a probe, one sequence of steps in the order the log records them
-tests/ptyprobe.c:_start lines 198 a probe, one sequence of steps in the order the log records them
+tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
+tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them
 
 tests/rawprobe.c:_start complexity 42 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:_start lines 442 a probe, one sequence of steps in the order the log records them

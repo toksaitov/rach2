@@ -45,6 +45,36 @@ acts immediately, like
 .Dv TCSETS .
 .Dv TCSETSF
 also discards unread input.
+.It Dv TCGETS2
+Copy the 44-byte termios2 to
+.Fa arg :
+the kernel termios, then the input and output speeds as unsigned
+integers.
+The output speed is the one the baud code in
+.Va c_cflag
+names, and the input speed the one its input code names, or the output
+speed when that code is zero.
+.Dv BOTHER ,
+a speed given by number, reads as 0.
+GNU libc's
+.Fn tcgetattr
+and
+.Fn isatty
+make this request.
+.It Dv TCSETS2 , TCSETSW2 , TCSETSF2
+Read a 44-byte termios2 from
+.Fa arg
+and install its termios as
+.Dv TCSETS ,
+.Dv TCSETSW
+and
+.Dv TCSETSF
+do.
+The speeds are not kept, since no terminal here has a line speed;
+Linux keeps them.
+GNU libc's
+.Fn tcsetattr
+makes these requests.
 .It Dv TCFLSH
 The integer
 .Fa arg

@@ -11,7 +11,9 @@
  * * On the slave: TIOCGWINSZ reports the size the master set, and TCGETS and
  *   TCSETS read and write the termios. These reach the shared terminal handler
  *   rather than the slave's own ops, and `stty` over a network login is
- *   nothing but these three.
+ *   nothing but these three. TCGETS2 and TCSETSW2, the termios2 requests GNU
+ *   libc's tcgetattr, tcsetattr and isatty make, read the same settings with
+ *   the speeds the baud code names, and install them.
  * * master write -> the slave reads the cooked line, and the echo comes back
  *   on the master; slave write -> the master reads the ONLCR output.
  *
@@ -52,15 +54,24 @@ typedef unsigned int size_t;
 #define FIONBIO    0x5421
 #define TCGETS     0x5401
 #define TCSETS     0x5402
+#define TCGETS2    0x802C542A
+#define TCSETSW2   0x402C542C
 #define TIOCGWINSZ 0x5413
 #define TIOCSWINSZ 0x5414
 
-#define ECHO 0x0008 /* c_lflag bit, the one a password prompt clears */
+#define ECHO   0x0008  /* c_lflag bit, the one a password prompt clears */
+#define CBAUD  0010017 /* c_cflag's baud code */
+#define B38400 0000017
 
 /* The kernel termios (sys/tty/n_tty.h): four flag words, a line discipline
-   byte, and nineteen control characters. */
-#define TIO_LFLAG 12
-#define TIO_SIZE  36
+   byte, and nineteen control characters; the termios2 adds the input and
+   output speeds. */
+#define TIO_CFLAG   8
+#define TIO_LFLAG   12
+#define TIO_SIZE    36
+#define TIO2_ISPEED 36
+#define TIO2_OSPEED 40
+#define TIO2_SIZE   44
 
 #define WS_ROWS 40 /* the size the master sets, as a login server does */
 #define WS_COLS 100
@@ -211,6 +222,95 @@ static void numbered_path(char *path, const char *prefix, int number, const char
         *path++ = *suffix++;
     }
     *path = 0;
+}
+
+/**
+ * The termios2 rows on the slave, whose settings as TCGETS reads them are
+ * `tio`: TCGETS2 must read the same 36 bytes, and TCSETSW2 must install a
+ * change to the echo and to the baud code, which TCGETS2 then reads back
+ * with B38400's speed in both speed fields. Returns 0 with the echo off, or
+ * the status that says which row failed.
+ */
+static int termios2_rows(int slave, const unsigned char *tio)
+{
+    unsigned char tio2[TIO2_SIZE], back[TIO2_SIZE];
+    unsigned int *cflag = (unsigned int *)(tio2 + TIO_CFLAG);
+    unsigned int *lflag = (unsigned int *)(tio2 + TIO_LFLAG);
+    int b;
+
+    for (b = 0; b < TIO2_SIZE; b++) {
+        tio2[b] = 0xFF;
+    }
+    if (sys_ioctl(slave, TCGETS2, tio2) < 0) {
+        return 23; /* the slave has no TCGETS2 */
+    }
+    for (b = 0; b < TIO_SIZE && tio2[b] == tio[b]; b++) {
+    }
+    if (b < TIO_SIZE) {
+        return 24; /* TCGETS2 read other settings than TCGETS */
+    }
+    *cflag = (*cflag & ~(unsigned int)CBAUD) | B38400;
+    *lflag &= ~(unsigned int)ECHO;
+    if (sys_ioctl(slave, TCSETSW2, tio2) < 0) {
+        return 25; /* the slave has no TCSETSW2 */
+    }
+    if (sys_ioctl(slave, TCGETS2, back) < 0 || (*(unsigned int *)(back + TIO_LFLAG) & ECHO) ||
+        *(unsigned int *)(back + TIO2_ISPEED) != 38400 ||
+        *(unsigned int *)(back + TIO2_OSPEED) != 38400) {
+        return 26; /* the change did not take, or the speeds are not B38400's */
+    }
+    return 0;
+}
+
+/**
+ * The child's rows on its slave: the window size the master set, a TCGETS
+ * and TCSETS round trip of the echo, and the termios2 rows. Returns 0 with
+ * the settings as they were, or the status that says which row failed.
+ */
+static int slave_rows(int slave)
+{
+    unsigned char tio[TIO_SIZE], back[TIO_SIZE];
+    unsigned int lflag;
+    short ws[4];
+    int b;
+
+    ws[0] = 0;
+    ws[1] = 0;
+    if (sys_ioctl(slave, TIOCGWINSZ, ws) < 0) {
+        return 14; /* the slave has no TIOCGWINSZ */
+    }
+    if (ws[0] != WS_ROWS || ws[1] != WS_COLS) {
+        return 15; /* the size the master set did not reach it */
+    }
+    for (b = 0; b < TIO_SIZE; b++) {
+        tio[b] = 0;
+    }
+    if (sys_ioctl(slave, TCGETS, tio) < 0) {
+        return 16; /* the slave has no TCGETS */
+    }
+    lflag = *(unsigned int *)(tio + TIO_LFLAG);
+    if (!(lflag & ECHO)) {
+        return 17; /* a fresh slave echoes */
+    }
+    *(unsigned int *)(tio + TIO_LFLAG) = lflag & ~(unsigned int)ECHO;
+    if (sys_ioctl(slave, TCSETS, tio) < 0) {
+        return 18; /* the slave has no TCSETS */
+    }
+    if (sys_ioctl(slave, TCGETS, back) < 0 || (*(unsigned int *)(back + TIO_LFLAG) & ECHO)) {
+        return 19; /* the write did not take */
+    }
+    *(unsigned int *)(tio + TIO_LFLAG) = lflag;
+    if (sys_ioctl(slave, TCSETS, tio) < 0) {
+        return 20; /* the echo must return for the round trip */
+    }
+    b = termios2_rows(slave, tio);
+    if (b != 0) {
+        return b;
+    }
+    if (sys_ioctl(slave, TCSETS, tio) < 0) {
+        return 27; /* the echo must return again */
+    }
+    return 0;
 }
 
 /** Open a fresh canonical pair with both endpoints blocking. */
@@ -448,42 +548,9 @@ void _start(void)
         if (sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
             sys_exit(12); /* TIOCSCTTY failed */
         }
-        {
-            unsigned char tio[TIO_SIZE], back[TIO_SIZE];
-            unsigned int lflag;
-            short ws[4];
-            int b;
-
-            ws[0] = 0;
-            ws[1] = 0;
-            if (sys_ioctl(slave, TIOCGWINSZ, ws) < 0) {
-                sys_exit(14); /* the slave has no TIOCGWINSZ */
-            }
-            if (ws[0] != WS_ROWS || ws[1] != WS_COLS) {
-                sys_exit(15); /* the size the master set did not reach it */
-            }
-            for (b = 0; b < TIO_SIZE; b++) {
-                tio[b] = 0;
-            }
-            if (sys_ioctl(slave, TCGETS, tio) < 0) {
-                sys_exit(16); /* the slave has no TCGETS */
-            }
-            lflag = *(unsigned int *)(tio + TIO_LFLAG);
-            if (!(lflag & ECHO)) {
-                sys_exit(17); /* a fresh slave echoes */
-            }
-            *(unsigned int *)(tio + TIO_LFLAG) = lflag & ~(unsigned int)ECHO;
-            if (sys_ioctl(slave, TCSETS, tio) < 0) {
-                sys_exit(18); /* the slave has no TCSETS */
-            }
-            if (sys_ioctl(slave, TCGETS, back) < 0 ||
-                (*(unsigned int *)(back + TIO_LFLAG) & ECHO)) {
-                sys_exit(19); /* the write did not take */
-            }
-            *(unsigned int *)(tio + TIO_LFLAG) = lflag;
-            if (sys_ioctl(slave, TCSETS, tio) < 0) {
-                sys_exit(20); /* the echo must return for the round trip */
-            }
+        sn = slave_rows(slave);
+        if (sn != 0) {
+            sys_exit(sn);
         }
         /* The line the parent waits for before it writes. */
         if (sys_write(slave, "ready\n", 6) != 6) {
@@ -532,8 +599,11 @@ void _start(void)
             puts("PTYPROBE FAIL (the child never reported its terminal ready)\n");
             sys_exit(1);
         }
-        puts("PTYPROBE FAIL (the child refused its terminal)\n");
-        sys_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 1);
+        status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+        numbered_path(mbuf, "PTYPROBE FAIL (the child refused its terminal: status ", status,
+                      ")\n");
+        puts(mbuf);
+        sys_exit(status);
     }
     if (sys_write(master, "hello\n", 6) != 6) {
         puts("PTYPROBE FAIL (the master would not take the line)\n");

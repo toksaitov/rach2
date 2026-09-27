@@ -15,8 +15,8 @@
 /*
  * Kernel termios: the TCGETS/TCSETS struct, the 19-c_cc prefix of musl's
  * larger userspace struct termios (NCCS=32 plus speeds). The kernel
- * reads/writes only this prefix; baud lives in c_cflag, so the speeds are
- * musl's concern. 36 bytes.
+ * reads/writes only this prefix; baud lives in c_cflag, and the termios2 of
+ * TCGETS2 adds the speeds its codes name. 36 bytes.
  */
 #define KNCCS 19
 struct ktermios {

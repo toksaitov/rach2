@@ -95,6 +95,14 @@ extern volatile uint32_t kernel_second_ticks;
 
 #define TCSETSF 0x5404 /* Set after output drains, flush input */
 
+#define TCGETS2 0x802C542A /* Get the termios2 attributes: termios and speeds */
+
+#define TCSETS2 0x402C542B /* Set the termios2 attributes now */
+
+#define TCSETSW2 0x402C542C /* Set them after the output drains */
+
+#define TCSETSF2 0x402C542D /* Set them after output drains, flush input */
+
 #define TCFLSH 0x540B /* Flush input and/or output queues */
 
 #define FIONREAD 0x541B /* Bytes available to read */
@@ -1209,6 +1217,109 @@ int pgrp_in_session(int pgid, int sid)
     return 0;
 }
 
+/* The termios2 of TCGETS2 and the TCSETS2 family: the kernel termios, then
+ * the input and output speeds. GNU libc uses these for tcgetattr, tcsetattr
+ * and isatty. */
+struct ktermios2 {
+    struct ktermios tio;
+    uint32_t c_ispeed;
+    uint32_t c_ospeed;
+};
+
+typedef char ktermios2_is_44_bytes[sizeof(struct ktermios2) == 44 ? 1 : -1];
+
+/**
+ * The line speed that the baud code `code` names, as TCGETS2 reports it:
+ * the sixteen codes from B0 to B38400 in the low four bits, and with CBAUDEX
+ * (010000) the fifteen up to B4000000. CBAUDEX alone is BOTHER, a speed
+ * given by number, which reads as 0, since no terminal here has a line speed
+ * to keep one in.
+ */
+static uint32_t tty_code_speed(uint32_t code)
+{
+    static const uint32_t speeds[32] = {
+        0,       50,      75,      110,     134,     150,     200,     300,
+        600,     1200,    1800,    2400,    4800,    9600,    19200,   38400,
+        0,       57600,   115200,  230400,  460800,  500000,  576000,  921600,
+        1000000, 1152000, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000};
+
+    return speeds[(code & 017u) + ((code & 010000u) ? 16u : 0u)];
+}
+
+/**
+ * TCGETS and TCGETS2: copy the terminal's termios to `arg`, and for TCGETS2
+ * the speeds after it that its baud codes name, the input speed that of the
+ * input code or, with none, the output speed.
+ */
+static int32_t tty_get_termios_at(const struct tty *t, uint32_t request, uint32_t arg)
+{
+    struct ktermios2 kt2;
+    uint32_t size = request == TCGETS2 ? sizeof(struct ktermios2) : sizeof(struct ktermios);
+    uint32_t in;
+
+    if (!arg) {
+        return -EFAULT;
+    }
+    kt2.tio = t->ldisc.tio;
+    in = (kt2.tio.c_cflag >> 16) & 010017u;
+    kt2.c_ospeed = tty_code_speed(kt2.tio.c_cflag);
+    kt2.c_ispeed = in ? tty_code_speed(in) : kt2.c_ospeed;
+    if (copy_to_user((void __user *)arg, &kt2, size) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * The TCSETS and TCSETS2 families: install the termios at `arg`, which for
+ * the second is the start of a termios2 whose speeds are not kept. The
+ * install runs with interrupts off, so an input interrupt never reads a
+ * half-written termios; TCSETSF and TCSETSF2 also discard pending input.
+ */
+static int32_t tty_set_termios_at(struct tty *t, uint32_t request, uint32_t arg)
+{
+    struct ktermios2 kt2;
+    int two = request == TCSETS2 || request == TCSETSW2 || request == TCSETSF2;
+    uint32_t size = two ? sizeof(struct ktermios2) : sizeof(struct ktermios);
+
+    if (!arg) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&kt2, (const void __user *)arg, size) != 0) {
+        return -EFAULT;
+    }
+    tty_set_termios(t, &kt2.tio, request == TCSETSF || request == TCSETSF2);
+    return 0;
+}
+
+/**
+ * Whether `request` is one only a terminal answers, which any other
+ * descriptor refuses with -ENOTTY, as Linux does.
+ */
+static int tty_request(uint32_t request)
+{
+    switch (request) {
+    case TCGETS:
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF:
+    case TCGETS2:
+    case TCSETS2:
+    case TCSETSW2:
+    case TCSETSF2:
+    case TCFLSH:
+    case TIOCGWINSZ:
+    case TIOCSWINSZ:
+    case TIOCGPGRP:
+    case TIOCSPGRP:
+    case TIOCSCTTY:
+    case TIOCNOTTY:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* The tty behind a descriptor for the shared terminal ioctls: the console for a
  * FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else
  * NULL. */
@@ -1230,21 +1341,18 @@ struct tty *fd_tty(fd_entry_t *e)
  * console and a pty slave share one implementation. Sets *handled = 1 and
  * returns the result for a recognized terminal request; sets *handled = 0
  * (return value unused) otherwise, so the caller falls through to its own
- * handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h);
- * TCSETSF and TCFLSH flush the unread input.
+ * handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h),
+ * and TCGETS2 and the TCSETS2 family the 44-byte termios2, whose speeds
+ * TCGETS2 takes from the baud codes of c_cflag and a set does not keep;
+ * TCSETSF, TCSETSF2 and TCFLSH flush the unread input.
  */
 static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, int *handled)
 {
     *handled = 1;
     switch (request) {
     case TCGETS:
-        if (!arg) {
-            return -EFAULT;
-        }
-        if (copy_to_user((void __user *)arg, &t->ldisc.tio, sizeof(struct ktermios)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
+    case TCGETS2:
+        return tty_get_termios_at(t, request, arg);
 
     case FIONREAD: {
         /* Bytes a read would return right now (a complete cooked line, or
@@ -1263,19 +1371,11 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
 
     case TCSETS:
     case TCSETSW:
-    case TCSETSF: {
-        struct ktermios kt;
-        if (!arg) {
-            return -EFAULT;
-        }
-        if (copy_from_user(&kt, (const void __user *)arg, sizeof(struct ktermios)) != 0) {
-            return -EFAULT;
-        }
-        /* Install with interrupts off (vs IRQ-side input); TCSETSF also
-         * discards pending input. */
-        tty_set_termios(t, &kt, request == TCSETSF);
-        return 0;
-    }
+    case TCSETSF:
+    case TCSETS2:
+    case TCSETSW2:
+    case TCSETSF2:
+        return tty_set_termios_at(t, request, arg);
 
     case TCFLSH:
         /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
@@ -1470,10 +1570,7 @@ static int32_t sys_ioctl(isr_params_t *params)
     if (entry->ops) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
     }
-    if (request == TCGETS || request == TCSETS || request == TCSETSW || request == TCSETSF ||
-        request == TCFLSH || request == TIOCGWINSZ || request == TIOCSWINSZ ||
-        request == TIOCGPGRP || request == TIOCSPGRP || request == TIOCSCTTY ||
-        request == TIOCNOTTY) {
+    if (tty_request(request)) {
         return -ENOTTY; /* terminal-only requests on a non-terminal fd */
     }
 
