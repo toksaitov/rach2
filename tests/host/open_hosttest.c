@@ -151,10 +151,11 @@ static krffs_node_t root_dir, victim, source;
 static krffs_file_system_t root_fs;
 static int removals, keeps;
 /* The call that holds the root's namespace lock when a row's call first
- * asks for it, which runs before the row's call has the lock, and the depth
- * of the lock. */
+ * asks for it, which runs before the row's call has the lock, the depth of
+ * the lock, the number of times it was taken from a depth of 0, and that
+ * number at the last lookup in the root. */
 static void (*waiting)(void);
-static int ns_depth;
+static int ns_depth, ns_takes, lookup_take;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -389,7 +390,9 @@ void vfs_ns_lock(struct vfs_mount *mnt)
     if (run) {
         run();
     }
-    ns_depth++;
+    if (ns_depth++ == 0) {
+        ns_takes++;
+    }
 }
 
 /** Require balanced namespace locking. */
@@ -409,6 +412,8 @@ static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     nodes[0] = &victim;
     nodes[1] = &source;
     check(mnt == &mount && dir == &root_dir, "a lookup in the root directory");
+    check(ns_depth > 0, "a lookup in the root runs under the root's lock");
+    lookup_take = ns_takes;
     for (i = 0; i < 2; i++) {
         if (nodes[i]->name[0] != '\0' &&
             __builtin_strcmp((const char *)nodes[i]->name, name) == 0) {
@@ -429,6 +434,7 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     const char *p;
 
     (void)start;
+    check(ns_depth == 0, "a walk starts with no namespace lock held");
     for (p = path; *p; p++) {
         if (*p == '/') {
             name = p + 1;
@@ -468,11 +474,20 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     return 0;
 }
 
+/** Whether a change to the root runs in the hold of the root's lock that
+ * its lookups ran in, so that the holder count between them did too. */
+static void changed_in_lookup_hold(void)
+{
+    check(ns_depth > 0 && ns_takes == lookup_take,
+          "the lookups, the count and the change run under one hold of the root's lock");
+}
+
 /** Free the file an unlink takes the name of, as the root does. */
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
     check(mnt == &mount && dir == &root_dir && __builtin_strcmp(name, "kept") == 0,
           "the unlink removes the name it was given");
+    changed_in_lookup_hold();
     removals++;
     return 0;
 }
@@ -485,6 +500,7 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     check(mnt == &mount && olddir == &root_dir && newdir == &root_dir &&
               __builtin_strcmp(oldname, "src") == 0 && __builtin_strcmp(newname, "kept") == 0,
           "the rename moves the names it was given");
+    changed_in_lookup_hold();
     if (victim.name[0] != '\0') {
         removals++;
     }
@@ -494,12 +510,14 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
 /** Take the name off a node a descriptor holds, keeping the node. */
 void krffs_unlink_held(krffs_node_t *n)
 {
+    changed_in_lookup_hold();
     n->name[0] = '\0';
     keeps++;
 }
 
 void krffs_orphan_node(krffs_node_t *n)
 {
+    changed_in_lookup_hold();
     n->name[0] = '\0';
     keeps++;
 }
@@ -604,6 +622,7 @@ static void root_row_begin(void)
     k_strncpy((char *)victim.name, "kept", sizeof(victim.name));
     k_strncpy((char *)source.name, "src", sizeof(source.name));
     removals = keeps = 0;
+    ns_takes = lookup_take = 0;
 }
 
 /** End a root row with the root's lock given back. */

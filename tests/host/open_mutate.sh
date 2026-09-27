@@ -60,7 +60,8 @@ run_phase()
 
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
-for fault in node release truncate loop registration unlink-lock rename-lock; do
+for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
+    rename-locked-walk; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -84,11 +85,26 @@ changes = {
     "rename-lock": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
                     "    vfs_ns_unlock(opar.mnt);\n",
                     "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
+    "rename-unlocked": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
+                        "    vfs_ns_unlock(opar.mnt);\n",
+                        "    vfs_ns_lock(opar.mnt);\n    vfs_ns_unlock(opar.mnt);\n"
+                        "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
+    "rename-locked-walk": [
+        ("vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,",
+         "vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,"),
+        ("    if (rc != 0) {\n        vfs_ref_release(&opar);\n        return rc;\n    }\n"
+         "    rc = mnt_is_root(npar.mnt)",
+         "    if (rc != 0) {\n        vfs_walk_unlock(opar.mnt);\n        vfs_ref_release(&opar);\n"
+         "        return rc;\n    }\n    rc = mnt_is_root(npar.mnt)"),
+        ("out:\n    vfs_ref_release(&npar);", "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"),
+    ],
 }
-old, new = changes[sys.argv[2]]
-if source.count(old) != 1:
-    raise SystemExit("open-mutation: source pattern is not unique")
-path.write_text(source.replace(old, new))
+edits = changes[sys.argv[2]]
+for old, new in edits if isinstance(edits, list) else [edits]:
+    if source.count(old) != 1:
+        raise SystemExit("open-mutation: source pattern is not unique")
+    source = source.replace(old, new)
+path.write_text(source)
 PY
     case $fault in
         node) message='mounted truncation uses a live open handle' ;;
@@ -98,6 +114,8 @@ PY
         registration) message='close retains current node identity' ;;
         unlink-lock) message="the unlink keeps the file for the open's descriptor" ;;
         rename-lock) message="the rename keeps the file it replaces for the open's descriptor" ;;
+        rename-unlocked) message="a lookup in the root runs under the root's lock" ;;
+        rename-locked-walk) message='a walk starts with no namespace lock held' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
