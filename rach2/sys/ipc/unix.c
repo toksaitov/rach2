@@ -919,6 +919,11 @@ int32_t unix_bind(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
     return rc;
 }
 
+/**
+ * listen(2), which a listening socket may call again to change its backlog.
+ * The connects waiting for room in the queue are woken, since a larger
+ * backlog may have made it.
+ */
 int32_t unix_listen(fd_entry_t *e, int backlog)
 {
     struct unix_sock *s = sock_of(e);
@@ -936,6 +941,7 @@ int32_t unix_listen(fd_entry_t *e, int backlog)
     s->state = US_LISTENING;
     own_cred(&s->peercred, 1);
     s->has_peercred = 1;
+    wq_wake_all(&s->wq);
     return 0;
 }
 

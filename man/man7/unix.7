@@ -66,11 +66,13 @@ its listener's name.
 .Ss Connections
 .Xr listen 2
 makes a bound stream or sequenced-packet socket accept connections; its
-backlog is at most 4096.
+backlog is at most 4096, and a second
+.Xr listen 2
+changes it.
 .Xr connect 2
 queues a connection at once, and the connecting socket may send before
-it is accepted; with the queue past the backlog, a connect waits, or
-fails with
+it is accepted; with the queue past the backlog, a connect waits until an
+accept or a larger backlog makes room, or fails with
 .Er EAGAIN
 when the socket is nonblocking.
 .Xr accept4 2

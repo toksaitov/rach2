@@ -20,7 +20,8 @@
  * peer, and SO_PASSCRED brings the sender's credentials. An accept given an
  * address and no length pointer fails with EFAULT. A listener shut down for
  * reading gives up the connection queued before, then fails an accept with
- * EINVAL and refuses a connect.
+ * EINVAL and refuses a connect. A connect waiting for room in a full queue
+ * finishes when listen makes the backlog larger.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -35,8 +36,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SOCK_PATH  "/tmp/unixmusl.sock"
@@ -456,6 +459,41 @@ static int listening(void)
     return 0;
 }
 
+/* A connect waiting for room in a listener's queue finishes when listen
+ * makes the backlog larger; SO_SNDTIMEO bounds the wait of a kernel that
+ * does not wake it. */
+static int backlog_growth(void)
+{
+    struct timeval limit = {5, 0};
+    struct timespec pause = {0, 100000000};
+    struct sockaddr_un a;
+    socklen_t alen = abstract_addr(&a, "unixmusl.backlog");
+    int l = socket(AF_UNIX, SOCK_STREAM, 0);
+    int c = socket(AF_UNIX, SOCK_STREAM, 0);
+    int status;
+    pid_t pid;
+
+    if (bind(l, (struct sockaddr *)&a, alen) != 0 || listen(l, 0) != 0 ||
+        connect(c, (struct sockaddr *)&a, alen) != 0) {
+        return fail("a listener with a backlog of 0");
+    }
+    pid = fork();
+    if (pid == 0) {
+        int w = socket(AF_UNIX, SOCK_STREAM, 0);
+
+        setsockopt(w, SOL_SOCKET, SO_SNDTIMEO, &limit, sizeof(limit));
+        _exit(connect(w, (struct sockaddr *)&a, alen) == 0 ? 0 : 1);
+    }
+    nanosleep(&pause, NULL);
+    if (listen(l, 10) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("a larger backlog did not let a waiting connect finish");
+    }
+    close(c);
+    close(l);
+    return 0;
+}
+
 static int datagram_names(void)
 {
     struct sockaddr_un to, from, got;
@@ -518,7 +556,7 @@ int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
-        datagram_names() || waiting()) {
+        backlog_growth() || datagram_names() || waiting()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");
