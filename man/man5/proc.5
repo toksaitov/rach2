@@ -445,6 +445,31 @@ as
 .Ql /memfd: Ns Ar NAME Ns Ql " (deleted)" ,
 as Linux names each.
 A followed link reports the descriptor's attributes.
+.It Pa /proc/PID/exe
+A symbolic link to the program the process runs, by the path its
+.Xr execve 2
+found it at.
+A path through it reaches the program, so an
+.Xr open 2 ,
+a
+.Xr stat 2
+or an
+.Xr execve 2
+of
+.Pa /proc/self/exe
+is one of the program itself, as on Linux, where a program runs itself
+again this way.
+Reading the link needs effective user ID 0 or the process's real user
+ID.
+.It Pa /proc/PID/task
+A directory with an entry for each thread of the process, named by its
+thread ID, the thread whose ID is the process ID first.
+.Pa /proc/PID/task/TID
+has the files of
+.Pa /proc/TID ,
+which are the thread's own where a thread has any, and no
+.Pa task
+directory of its own.
 .It Pa /proc/PID/comm
 The program name and a newline.
 .It Pa /proc/PID/maps
@@ -482,9 +507,11 @@ through the
 pair.
 .It Pa /proc/PID/environ
 The environment strings of the initial stack, each ended by a NUL.
-It and
+It,
 .Pa auxv
-need effective user ID 0 or the process's real user ID.
+and the
+.Pa exe
+link need effective user ID 0 or the process's real user ID.
 .It Pa /proc/PID/mem
 The process's memory, read and written at the descriptor's offset, which
 is the address, as GDB uses it through

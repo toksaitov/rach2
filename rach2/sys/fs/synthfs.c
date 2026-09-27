@@ -159,6 +159,10 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
         synth_put(out, cap, &pos, "/proc/");
         synth_put_uint(out, cap, &pos, (unsigned int)pid);
         synth_put(out, cap, &pos, "/fd");
+    } else if (kind == VNODE_PROC_TASK_DIR) {
+        synth_put(out, cap, &pos, "/proc/");
+        synth_put_uint(out, cap, &pos, (unsigned int)pid);
+        synth_put(out, cap, &pos, "/task");
     } else {
         synth_put(out, cap, &pos, "/");
     }
@@ -183,6 +187,75 @@ static int synth_pid_file(struct comp name)
         }
     }
     return 0;
+}
+
+/**
+ * Classify the part of a /proc path from its pid component on: `c[0]` is
+ * the pid, already in `vp->pid`, and `n` counts the components from it. A
+ * thread's directory under `task` is classified as the thread's own
+ * /proc/<tid>, which has the same files, and holds no `task` of its own
+ * (`task` is 0 then).
+ */
+static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int task)
+{
+    int f = n == 2 ? synth_pid_file(c[1]) : 0;
+
+    if (n == 1) {
+        vp->kind = VNODE_PROC_PID;
+        return vp->kind;
+    }
+    if (n == 2 && comp_eq(c[1], "stat")) {
+        vp->kind = VNODE_PROC_FILE;
+        vp->procfile = SYNTH_PROC_STAT;
+        return vp->kind;
+    }
+    if (n == 2 && comp_eq(c[1], "cmdline")) {
+        vp->kind = VNODE_PROC_FILE;
+        vp->procfile = SYNTH_PROC_CMDLINE;
+        return vp->kind;
+    }
+    if (n == 2 && comp_eq(c[1], "exe")) {
+        vp->kind = VNODE_PROC_EXE;
+        return vp->kind;
+    }
+    if (f != 0) {
+        vp->kind = VNODE_PROC_FILE;
+        vp->procfile = f;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "fd")) {
+        if (n == 2) {
+            vp->kind = VNODE_PROC_FD_DIR;
+            return vp->kind;
+        }
+        if (n == 3) {
+            int fd = comp_uint(c[2]);
+            if (fd < 0) {
+                vp->kind = VNODE_ENOENT;
+                return vp->kind;
+            }
+            vp->procfd = fd;
+            vp->kind = VNODE_PROC_FD_LINK;
+            return vp->kind;
+        }
+    }
+    if (task && comp_eq(c[1], "task")) {
+        int tid;
+
+        if (n == 2) {
+            vp->kind = VNODE_PROC_TASK_DIR;
+            return vp->kind;
+        }
+        tid = comp_uint(c[2]);
+        if (tid < 0) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+        vp->pid = tid;
+        return synth_classify_pid(c + 2, n - 2, vp, 0);
+    }
+    vp->kind = VNODE_ENOENT; /* unrecognised /proc entry */
+    return vp->kind;
 }
 
 /** Classify system-wide proc files by their literal leaf names. */
@@ -321,48 +394,7 @@ int synth_classify(const char *path, struct vpath *vp)
             }
         }
         vp->pid = pid;
-
-        if (n == 2) {
-            vp->kind = VNODE_PROC_PID;
-            return vp->kind;
-        }
-        if (comp_eq(c[2], "stat") && n == 3) {
-            vp->kind = VNODE_PROC_FILE;
-            vp->procfile = SYNTH_PROC_STAT;
-            return vp->kind;
-        }
-        if (comp_eq(c[2], "cmdline") && n == 3) {
-            vp->kind = VNODE_PROC_FILE;
-            vp->procfile = SYNTH_PROC_CMDLINE;
-            return vp->kind;
-        }
-        if (n == 3) {
-            int f = synth_pid_file(c[2]);
-
-            if (f != 0) {
-                vp->kind = VNODE_PROC_FILE;
-                vp->procfile = f;
-                return vp->kind;
-            }
-        }
-        if (comp_eq(c[2], "fd")) {
-            if (n == 3) {
-                vp->kind = VNODE_PROC_FD_DIR;
-                return vp->kind;
-            }
-            if (n == 4) {
-                int fd = comp_uint(c[3]);
-                if (fd < 0) {
-                    vp->kind = VNODE_ENOENT;
-                    return vp->kind;
-                }
-                vp->procfd = fd;
-                vp->kind = VNODE_PROC_FD_LINK;
-                return vp->kind;
-            }
-        }
-        vp->kind = VNODE_ENOENT; /* unrecognised /proc entry */
-        return vp->kind;
+        return synth_classify_pid(c + 1, n - 1, vp, 1);
     }
 
     vp->kind = VNODE_KRFFS;

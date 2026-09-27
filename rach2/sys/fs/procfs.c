@@ -407,6 +407,25 @@ static int procfs_may_read_mem(const process_t *p)
     return current_proc && (current_proc->euid == 0 || current_proc->ruid == p->ruid);
 }
 
+int procfs_readlink_exe(int pid, char *buf, int cap)
+{
+    process_t *p = procfs_proc(pid);
+    int n;
+
+    if (!p || !p->mm || !p->mm->exe) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    n = (int)k_strlen(p->mm->exe);
+    if (n > cap) {
+        n = cap;
+    }
+    k_memcpy(buf, p->mm->exe, (uint32_t)n);
+    return n;
+}
+
 /**
  * Append the bytes of `p`'s memory from `start` to `end`, read through its
  * address space, at most 128 KiB: the strings of its arguments or its

@@ -83,6 +83,20 @@ int main(void)
     CHECK(synth_classify("proc/7/fd/3", &vp) == VNODE_PROC_FD_LINK && vp.pid == 7 &&
           vp.procfd == 3);
 
+    /* The program's link, and the threads' directory, each thread's entry
+     * being the thread's own /proc/<tid> with no task directory in it. */
+    CHECK(synth_classify("proc/self/exe", &vp) == VNODE_PROC_EXE && vp.pid == SYNTH_PID_SELF);
+    CHECK(synth_classify("proc/7/exe/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/task", &vp) == VNODE_PROC_TASK_DIR && vp.pid == 7);
+    CHECK(synth_classify("proc/7/task/9", &vp) == VNODE_PROC_PID && vp.pid == 9);
+    CHECK(synth_classify("proc/7/task/9/stat", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_STAT && vp.pid == 9);
+    CHECK(synth_classify("proc/7/task/9/comm", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_COMM && vp.pid == 9);
+    CHECK(synth_classify("proc/7/task/9/exe", &vp) == VNODE_PROC_EXE && vp.pid == 9);
+    CHECK(synth_classify("proc/7/task/9/task", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/task/x", &vp) == VNODE_ENOENT);
+
     /* Bad /proc entries are ENOENT, never KRFFS (so they don't
      * shadow-resolve). */
     CHECK(synth_classify("proc/abc", &vp) == VNODE_ENOENT);     /* not a pid */

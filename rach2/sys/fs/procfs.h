@@ -26,6 +26,14 @@ int procfs_open(const struct vpath *vp, int flags);
  *  returns the byte length or -errno. */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 
+/**
+ * The target of /proc/<pid>/exe, the path of the program `pid` runs, into
+ * `buf` of `cap` bytes with no terminator: its length, -ENOENT for no such
+ * process or no program, or -EACCES for a caller that may not read the
+ * process's memory, as Linux asks a ptrace read check of the reader.
+ */
+int procfs_readlink_exe(int pid, char *buf, int cap);
+
 /** PID-directory enumeration: the nth live pid (n >= 0), or -1 past the end. */
 int procfs_nth_pid(int n);
 

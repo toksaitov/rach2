@@ -24,6 +24,7 @@
 #include "../block/loop.h"
 #include "krffsmount.h"
 #include "pathbuf.h"
+#include "procfs.h"
 #include "synthfs.h"
 #include "tmpfs.h"
 
@@ -606,6 +607,64 @@ static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char 
     return 0;
 }
 
+/*
+ * Splice the target of the link `found` on `mnt` in front of `rest`, the
+ * part of the path after the link, in the path page `*linkpath`, taking it
+ * and `*target` at the first link of the walk; `found` is put. The walk goes
+ * on at `*linkpath`, from the root when `*absolute` says the target is
+ * absolute. 0, or -ELOOP past VFS_LINK_MAX links, -ENOENT for an empty
+ * target, -ENAMETOOLONG, -ENOMEM, or the type's error.
+ */
+static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char **linkpath,
+                     char **target, int *links, int *absolute)
+{
+    uint32_t rlen = (uint32_t)k_strlen(rest);
+    uint32_t join = rlen != 0 ? 1u : 0u;
+    int tlen;
+
+    if (++*links > VFS_LINK_MAX) {
+        node_put(mnt, found);
+        return -ELOOP;
+    }
+    if (!*linkpath) {
+        *linkpath = path_buf_get();
+        *target = path_buf_get();
+        if (!*linkpath || !*target) {
+            node_put(mnt, found);
+            return -ENOMEM;
+        }
+    }
+    tlen = mnt->type->ops->readlink(mnt, found, *target, VFS_PATH_MAX);
+    node_put(mnt, found);
+    if (tlen < 0) {
+        return tlen;
+    }
+    if (tlen == 0) {
+        return -ENOENT; /* an empty target names nothing */
+    }
+    if ((uint32_t)tlen + join + rlen + 1 > VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    /* The rest may already be inside `linkpath`, from a link followed before
+     * this one, so it moves before the target is written over it. */
+    k_memmove(*linkpath + tlen + join, rest, rlen + 1);
+    k_memcpy(*linkpath, *target, (uint32_t)tlen);
+    if (join) {
+        (*linkpath)[tlen] = '/';
+    }
+    *absolute = (*target)[0] == '/';
+    return 0;
+}
+
+/** Whether `node` on `mnt` is a symbolic link its type can read. */
+static int walk_is_link(struct vfs_mount *mnt, void *node)
+{
+    struct vfs_stat st;
+
+    return mnt->type->ops->readlink && mnt->type->ops->getattr &&
+           mnt->type->ops->getattr(mnt, node, &st) == 0 && (st.mode & 0170000u) == 0120000u;
+}
+
 /**
  * Resolve one path. See vfs.h for the whole contract. The loop takes one
  * component at a time and handles five cases: `.`, `..`, a mount whose type
@@ -731,6 +790,22 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
             if (rc != 0) {
                 goto out_err;
             }
+            if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
+                int absolute;
+
+                rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links, &absolute);
+                if (rc != 0) {
+                    goto out_err;
+                }
+                p = linkpath;
+                if (absolute) {
+                    rc = walk_move_root(&cur, locked);
+                    if (rc != 0) {
+                        goto out_err;
+                    }
+                }
+                continue;
+            }
             ref_move_node(&cur, found);
             break;
         }
@@ -802,45 +877,11 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 goto out_err;
             }
             if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
-                int tlen;
-                uint32_t rlen = (uint32_t)k_strlen(rest);
-                uint32_t join = rlen != 0 ? 1u : 0u;
+                int absolute;
 
-                if (++links > VFS_LINK_MAX) {
-                    node_put(cur.mnt, found);
-                    rc = -ELOOP;
+                rc = walk_link(cur.mnt, found, rest, &linkpath, &target, &links, &absolute);
+                if (rc != 0) {
                     goto out_err;
-                }
-                if (!linkpath) {
-                    linkpath = path_buf_get();
-                    target = path_buf_get();
-                    if (!linkpath || !target) {
-                        node_put(cur.mnt, found);
-                        rc = -ENOMEM;
-                        goto out_err;
-                    }
-                }
-                tlen = cur.mnt->type->ops->readlink(cur.mnt, found, target, VFS_PATH_MAX);
-                node_put(cur.mnt, found);
-                if (tlen < 0) {
-                    rc = tlen;
-                    goto out_err;
-                }
-                if (tlen == 0) {
-                    rc = -ENOENT; /* an empty target names nothing */
-                    goto out_err;
-                }
-                if ((uint32_t)tlen + join + rlen + 1 > VFS_PATH_MAX) {
-                    rc = -ENAMETOOLONG;
-                    goto out_err;
-                }
-                /* The rest may already be inside `linkpath`, from a link
-                 * followed before this one, so it moves before the target
-                 * is written over it. */
-                k_memmove(linkpath + tlen + join, rest, rlen + 1);
-                k_memcpy(linkpath, target, (uint32_t)tlen);
-                if (join) {
-                    linkpath[tlen] = '/';
                 }
                 if (last_comp) {
                     /* The leaf returned to the caller is the last component
@@ -856,7 +897,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                     }
                 }
                 p = linkpath;
-                if (target[0] == '/') {
+                if (absolute) {
                     rc = walk_move_root(&cur, locked);
                     if (rc != 0) {
                         goto out_err;
@@ -1834,24 +1875,42 @@ static int procfs_rest(struct vfs_mount *mnt, const char *rest, void **node, con
     return synth_rest(mnt, "proc", rest, node, left);
 }
 
-/* What the resolver needs of a synthetic node: whether it is a directory,
- * and the mode the search rule reads (0755 under /dev, 0555 under /proc,
- * both root's). The syscall layer reports the full attributes itself. */
+/* What the resolver needs of a synthetic node: whether it is a directory or
+ * a link it follows, /proc/<pid>/exe, and the mode the search rule reads
+ * (0755 under /dev, 0555 under /proc, both root's). The syscall layer
+ * reports the full attributes itself. */
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct synth_node *sn = node;
     int kind = sn->vp.kind;
     int is_dir = kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
-                 kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR;
+                 kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID ||
+                 kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_TASK_DIR;
 
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {
         st->mode = VFS_S_IFDIR | (mnt == mounts[1] ? 0755u : 0555u);
+    } else if (kind == VNODE_PROC_EXE) {
+        st->mode = 0120000u | 0777u;
     } else {
         st->mode = VFS_S_IFREG | 0444u;
     }
     st->nlink = 1;
     return 0;
+}
+
+/* The target of a /proc link the resolver follows: /proc/<pid>/exe, the
+ * path of the program the process runs. */
+static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    const struct synth_node *sn = node;
+    int pid = procfs_resolve_pid(sn->vp.pid);
+
+    (void)mnt;
+    if (sn->vp.kind != VNODE_PROC_EXE) {
+        return -EINVAL;
+    }
+    return pid < 0 ? -ENOENT : procfs_readlink_exe(pid, buf, (int)cap);
 }
 
 static const struct vfs_ops devfs_vops = {
@@ -1869,7 +1928,7 @@ static const struct vfs_ops procfs_vops = {
     0, procfs_rest, synth_hold, synth_put, synth_getattr,
     0, 0,           0,          0,         0,
     0, 0,           0,          0,         0,
-    0, 0,           0,          0,         0,
+    0, 0,           0,          0,         synth_readlink,
     0, 0,           0,          0,         0,
     0, /* abort_unmount */
     0, /* symlink */

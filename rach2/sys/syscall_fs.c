@@ -17,6 +17,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/tgroup.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
@@ -1294,6 +1295,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_NET_DIR:
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_TASK_DIR:
         return synth_open_dir(vp, flags);
     case VNODE_ENOTDIR:
         return -ENOTDIR;
@@ -1313,7 +1315,8 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 
     struct synth_dir *sd;
 
-    if (vp->kind == VNODE_PROC_PID || vp->kind == VNODE_PROC_FD_DIR) {
+    if (vp->kind == VNODE_PROC_PID || vp->kind == VNODE_PROC_FD_DIR ||
+        vp->kind == VNODE_PROC_TASK_DIR) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;
@@ -3188,7 +3191,8 @@ int32_t sys_dup2(isr_params_t *params)
 static int synth_kind_is_dir(int kind)
 {
     return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
-           kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR;
+           kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
+           kind == VNODE_PROC_TASK_DIR;
 }
 
 /**
@@ -3248,7 +3252,8 @@ static int32_t do_chdir(char *path)
         int rpid = 0;
 
         vfs_ref_release(&ref);
-        if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR) {
+        if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR ||
+            vp.kind == VNODE_PROC_TASK_DIR) {
             rpid = procfs_resolve_pid(vp.pid);
             if (rpid < 0) {
                 return -ENOENT;
@@ -3822,8 +3827,23 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_mode = S_IFREG | 0400;
         kst->st_ino = procfs_ino_disk();
         return 0;
+    case VNODE_PROC_EXE: {
+        char scratch[1];
+        int rpid = procfs_resolve_pid(vp->pid);
+
+        /* The resolver follows the link to the program itself, so only an
+         * un-followed stat, or one of a process with no program, is here. */
+        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) < 0) {
+            return -ENOENT;
+        }
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = procfs_ino_pid(rpid);
+        return 0;
+    }
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
+    case VNODE_PROC_TASK_DIR:
         if (procfs_resolve_pid(vp->pid) < 0) {
             return -ENOENT;
         }
@@ -4137,6 +4157,9 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
     } else if (kind == VNODE_PROC_FD_LINK) {
         pid = procfs_resolve_pid(vp.pid);
         n = pid < 0 ? -ENOENT : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
+    } else if (kind == VNODE_PROC_EXE) {
+        pid = procfs_resolve_pid(vp.pid);
+        n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, link, VFS_PATH_MAX);
     } else {
         n = -EINVAL; /* not a symlink */
     }
@@ -8184,23 +8207,51 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
     }
     if (kind == VNODE_PROC_PID) {
-        static const char *files[10] = {"stat",  "cmdline", "fd",      "maps", "status",
-                                        "statm", "auxv",    "environ", "comm", "mem"};
+        static const struct {
+            const char *name;
+            uint8_t type;
+        } files[12] = {{"stat", DT_REG},  {"cmdline", DT_REG}, {"fd", DT_DIR},      {"maps", DT_REG},
+                       {"status", DT_REG}, {"statm", DT_REG},  {"auxv", DT_REG},    {"environ", DT_REG},
+                       {"comm", DT_REG},  {"mem", DT_REG},     {"exe", DT_LNK},     {"task", DT_DIR}};
         process_t *pp = get_process((uint32_t)pid);
         int i;
         if (!pp || pp->state == PROC_UNUSED) {
             return 0; /* the process exited: an empty directory (just . and ..) */
         }
-        if (n >= 10) {
+        if (n >= 12) {
             return 0;
         }
-        for (i = 0; files[n][i]; i++) {
-            name[i] = files[n][i];
+        for (i = 0; files[n].name[i]; i++) {
+            name[i] = files[n].name[i];
         }
         name[i] = '\0';
         *ino = procfs_ino_pid(pid);
-        *dtype = (n == 2) ? (uint8_t)DT_DIR : (uint8_t)DT_REG;
+        *dtype = files[n].type;
         return 1;
+    }
+    if (kind == VNODE_PROC_TASK_DIR) {
+        /* The process's threads, the leader first, which a thread whose end
+         * is still to be reaped is not among unless it is the leader. */
+        process_t *pp = get_process((uint32_t)pid);
+        process_t *t;
+        int c = 0;
+
+        if (!pp || pp->state == PROC_UNUSED) {
+            return 0;
+        }
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg != pp->tg || t->state == PROC_UNUSED ||
+                (t->state == PROC_ZOMBIE && t != pp->tg->leader)) {
+                continue;
+            }
+            if (c++ == n) {
+                synth_u32_str(name, t->pid);
+                *ino = procfs_ino_pid((int)t->pid);
+                *dtype = DT_DIR;
+                return 1;
+            }
+        }
+        return 0;
     }
     if (kind == VNODE_PROC_FD_DIR) {
         process_t *pp = get_process((uint32_t)pid);
@@ -8209,7 +8260,8 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 0;
         }
         for (i = 0; i < fd_table_cap(pp->fds); i++) {
-            if (pp->fds->entries[i].type != FD_TYPE_NONE) {
+            if (pp->fds->entries[i].type != FD_TYPE_NONE &&
+                !(pp->fds->entries[i].flags & FD_FLAG_CLOSING)) {
                 if (c == n) {
                     synth_u32_str(name, (uint32_t)i);
                     *ino = procfs_ino_pid(pid);
