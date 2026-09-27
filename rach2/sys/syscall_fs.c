@@ -922,12 +922,18 @@ static int path_under(const char *path, const char *root, uint32_t rl)
  * Make `path`, a path from the root of the mount table, the path the calling
  * process has for the same place from the root chroot gave it: the root's
  * own path comes off the front, and the root itself is "/". A process with
- * no root of its own keeps `path` as it is. Returns 0; -ENOENT for a place
- * outside the process's root, which no path of the process reaches; -ENOMEM;
- * or the error `vfs_node_path` gives for the root.
+ * no root of its own keeps `path` as it is.
+ *
+ * The root is held while its path is rebuilt from its volume, which may
+ * sleep, as `cwd_global` holds it: a thread that shares the directories
+ * (CLONE_FS) may chroot meanwhile and let the old root go. Returns 0;
+ * -ENOENT for a place outside the process's root, which no path of the
+ * process reaches; -ENOMEM; -EBUSY for a root on a mount being unmounted; or
+ * the error `vfs_node_path` gives for the root.
  */
 static int32_t path_in_root(char *path)
 {
+    struct vfs_ref r;
     char *root;
     uint32_t rl = 0;
     int32_t rc;
@@ -939,7 +945,15 @@ static int32_t path_in_root(char *path)
     if (!root) {
         return -ENOMEM;
     }
-    rc = vfs_node_path(current_proc->fs->root_mnt, current_proc->fs->root_node, root, VFS_PATH_MAX);
+    r.mnt = current_proc->fs->root_mnt;
+    r.node = current_proc->fs->root_node;
+    if (vfs_enter(r.mnt) != 0) {
+        path_buf_put(root);
+        return -EBUSY;
+    }
+    vfs_ref_hold(&r);
+    rc = vfs_node_path(r.mnt, r.node, root, VFS_PATH_MAX);
+    vfs_ref_release(&r);
     if (rc == 0) {
         rl = (uint32_t)k_strlen(root);
         rc = path_under(path, root, rl) ? 0 : -ENOENT;
