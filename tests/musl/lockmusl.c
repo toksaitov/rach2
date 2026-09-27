@@ -7,10 +7,12 @@
  * lock in two, and its close of another descriptor of the file drops what is
  * left. A child's locks of the largest offset and of every byte before it
  * join into one F_GETLK reports with a length of 0. F_SETLKW waits until the
- * holder unlocks. Two processes that each wait
- * for the other's lock: one of the two waits fails with EDEADLK. A thread's
- * F_SETLKW whose descriptor another thread closes during the wait fails with
- * EBADF when the holder lets go, and leaves the byte free. A flock
+ * holder unlocks: the child that asks is seen asleep, with nothing taken,
+ * before the parent unlocks. Two processes that each wait for the other's
+ * lock, the parent asking only once the child is seen asleep in its wait: one
+ * of the two waits fails with EDEADLK. A thread's F_SETLKW whose descriptor
+ * another thread closes during the wait fails with EBADF when the holder lets
+ * go, and leaves the byte free. A flock
  * LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
  * EWOULDBLOCK, a dup shares the lock, and the last close of a description
  * releases it. An open file description lock conflicts with a second open
@@ -60,6 +62,41 @@ static void await(int fd)
     char c;
 
     (void)read(fd, &c, 1);
+}
+
+/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
+static int sleeping(pid_t pid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/** Whether process `pid` is seen asleep within 3 s. */
+static int seen_asleep(pid_t pid)
+{
+    int tries;
+
+    for (tries = 0; tries < 300; tries++) {
+        if (sleeping(pid)) {
+            return 1;
+        }
+        usleep(10000);
+    }
+    return 0;
 }
 
 static int records(int fd)
@@ -154,7 +191,7 @@ static int waits(int fd)
     }
     pfd.fd = done[0];
     pfd.events = POLLIN;
-    if (poll(&pfd, 1, 200) != 0) {
+    if (!seen_asleep(pid) || poll(&pfd, 1, 0) != 0) {
         return fail("F_SETLKW did not wait");
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 1);
@@ -178,8 +215,9 @@ static int waits(int fd)
         _exit(dead ? 1 : 0);
     }
     await(ready[0]);
-    pfd.fd = ready[0];
-    (void)poll(&pfd, 1, 100);
+    if (!seen_asleep(pid)) {
+        return fail("the child's F_SETLKW did not wait for the parent's lock");
+    }
     parent_dead = lk(fd, F_SETLKW, F_WRLCK, 1, 1) != 0 && errno == EDEADLK;
     if (parent_dead) {
         lk(fd, F_SETLK, F_UNLCK, 0, 1);
