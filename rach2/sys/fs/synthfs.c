@@ -16,8 +16,11 @@ struct comp {
     int len;
 };
 
-/* Policy: the components a path under /dev or /proc is split into. */
-#define SYNTH_MAXC 5
+/* The components of the deepest path under /dev or /proc,
+ * /proc/PID/task/TID/fd/N. A path is split into one more than this, so a
+ * longer one is counted past every depth a rule accepts and answers ENOENT
+ * or ENOTDIR, where one cut at this depth would name a shorter path. */
+#define SYNTH_MAXC 6
 
 /*
  * Split a slash path into up to max components, skipping empty ones (so
@@ -296,7 +299,7 @@ static int synth_global_file(struct comp name)
  */
 int synth_classify(const char *path, struct vpath *vp)
 {
-    struct comp c[SYNTH_MAXC];
+    struct comp c[SYNTH_MAXC + 1];
     int n;
 
     vp->name[0] = '\0';
@@ -305,7 +308,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->procfile = 0;
     vp->pts_index = -1;
 
-    n = synth_split(path, c, SYNTH_MAXC);
+    n = synth_split(path, c, SYNTH_MAXC + 1);
 
     if (n == 0) {
         vp->kind = VNODE_KRFFS;

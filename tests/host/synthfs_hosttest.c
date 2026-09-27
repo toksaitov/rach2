@@ -32,6 +32,37 @@ static int eq(const char *a, const char *b)
     return *a == *b;
 }
 
+/** The parser's bounds, of a number and of a path's depth. */
+static void bounds(void)
+{
+    struct vpath vp;
+
+    /* A pid that would overflow or wrap a 32-bit int is rejected, never folded
+     * to a small pid another process might own; the boundary is 2147483639. */
+    CHECK(synth_classify("proc/99999999999", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/4294967297", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/2147483639", &vp) == VNODE_PROC_PID && vp.pid == 2147483639);
+    CHECK(synth_classify("proc/2147483640", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/fd/99999999999", &vp) == VNODE_ENOENT);
+
+    /* A leading '-' is not a digit, so a negative token cannot be read as the
+     * SYNTH_PID_SELF (-1) sentinel. */
+    CHECK(synth_classify("proc/-1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/-1/stat", &vp) == VNODE_ENOENT);
+
+    /* The deepest path, a thread's descriptor link, is whole, and a path
+     * deeper than any is refused rather than cut to a shorter one. */
+    CHECK(synth_classify("proc/7/task/9/fd", &vp) == VNODE_PROC_FD_DIR);
+    CHECK(synth_classify("proc/7/task/9/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 0);
+    CHECK(synth_classify("proc/7/task/9/fd/12", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 12);
+    CHECK(synth_classify("proc/7/task/9/stat/junk", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/task/9/fd/0/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/task/9/fd/0/x/y/z", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/fd/0/a/b/c/d", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/cmdline/a/b/c/d/e/f", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("dev/pts/1/a/b/c/d", &vp) == VNODE_ENOENT);
+}
+
 int main(void)
 {
     struct vpath vp;
@@ -122,18 +153,6 @@ int main(void)
     CHECK(synth_classify("proc/7/.", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("dev/./null", &vp) == VNODE_ENOENT);
 
-    /* A pid that would overflow or wrap a 32-bit int is rejected, never folded
-     * to a small pid another process might own; the boundary is 2147483639. */
-    CHECK(synth_classify("proc/99999999999", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("proc/4294967297", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("proc/2147483639", &vp) == VNODE_PROC_PID && vp.pid == 2147483639);
-    CHECK(synth_classify("proc/2147483640", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("proc/7/fd/99999999999", &vp) == VNODE_ENOENT);
-
-    /* A leading '-' is not a digit, so a negative token cannot be read as the
-     * SYNTH_PID_SELF (-1) sentinel. */
-    CHECK(synth_classify("proc/-1", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("proc/-1/stat", &vp) == VNODE_ENOENT);
-
+    bounds();
     return fails > 255 ? 255 : fails;
 }

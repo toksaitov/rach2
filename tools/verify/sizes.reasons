@@ -465,7 +465,6 @@ tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
 tests/host/synthfs_hosttest.c:main complexity 33 a test's rows, each a case, read as one table
-tests/host/synthfs_hosttest.c:main lines 102 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one table
