@@ -59,19 +59,25 @@ An unblocked, nonignored pending signal interrupts the wait with
 .Pp
 If
 .Fa addr
-is non-null, the call reports the peer's IPv4 address and port.
+is non-null, the call reports the peer's address.
 Before the call,
 .Pf * Fa addrlen
 is the capacity of
 .Fa addr
 in bytes.
-At most that many bytes of the 16-byte
-.Vt sockaddr_in
-are copied, and
+At most that many bytes of the address are copied, and
 .Pf * Fa addrlen
-is set to 16 even if the result was truncated.
-The family is in host byte order; the address and port are in network
-byte order.
+is set to its whole length even if the result was truncated.
+A TCP peer is reported as its IPv4 address and port in a 16-byte
+.Vt sockaddr_in ,
+whose family is in host byte order and whose address and port are in
+network byte order.
+An
+.Dv AF_UNIX
+peer is reported by the name it was bound to, as
+.Xr unix 7
+describes; a client with no name, which is the usual case, is reported
+as the family alone, a length of 2.
 If
 .Fa addr
 is null, no address is returned and
@@ -91,11 +97,19 @@ returns.
 An address-copy failure frees the descriptor and discards the dequeued
 connection.
 .Pp
-The accept queue holds at most 15 completed connections.
+A TCP listener's accept queue holds at most 15 completed connections,
+whatever the backlog
+.Xr listen 2
+was given.
 The TCP listener drops an incoming SYN when the free-frame count is at
 or below the memory reserve, before allocating the connection.
 Such a drop produces no error from
 .Fn accept .
+An
+.Dv AF_UNIX
+listener queues connections up to its backlog, as
+.Xr unix 7
+describes.
 .Pp
 The kernel interface is
 .Xr socketcall 2
@@ -155,7 +169,8 @@ is null.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL
-The socket is a datagram or a stream that is not listening, or
+The socket is a TCP datagram socket, or a stream or sequenced-packet
+socket that is not listening, or
 .Fa flags
 has a bit other than
 .Dv SOCK_CLOEXEC
@@ -169,7 +184,9 @@ connection, which stays queued.
 is invalid or does not refer to a socket.
 .It Er EOPNOTSUPP
 .Fa fd
-refers to a raw socket.
+refers to a raw socket or an
+.Dv AF_UNIX
+datagram socket.
 .El
 .Sh SEE ALSO
 .Xr bind 2 ,
