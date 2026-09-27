@@ -90,6 +90,16 @@ static void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 static int32_t sys_utimensat(isr_params_t *params);
 static int32_t sys_getdents64(isr_params_t *params);
 static int32_t sys_dup3(isr_params_t *params);
+static int32_t sys_statx(isr_params_t *params);
+static int32_t sys_memfd_create(isr_params_t *params);
+static int32_t sys_flock(isr_params_t *params);
+static int32_t fs_core_file(int signo, uint32_t limit);
+static int32_t sys_mknod(isr_params_t *params);
+static int32_t sys_mknodat(isr_params_t *params);
+static int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino);
+static void fs_socket_unbind(struct vfs_ref *ref);
+static int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino);
+static int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off);
 static block_device_t *loop_device_at(int index);
 static int loop_attach(int index, const char *path, int writable);
 static int loop_detach(int index);
@@ -122,6 +132,17 @@ static void check(int ok, const char *what)
         printf("open-hosttest: fail: %s\n", what);
         failures++;
     }
+}
+
+/** No row takes a lock. */
+int lock_any(void)
+{
+    return 0;
+}
+
+void lock_ofd_gone(const struct open_file *ofd)
+{
+    (void)ofd;
 }
 
 /** Count host allocations. */
