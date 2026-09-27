@@ -98,3 +98,5 @@ BusyBox's applets are not files on the path. Its ash, `/bin/sh`, runs an applet 
 ### OpenSSH in Dropbear's place
 
 The image's `/sbin/init` is `init-metal`, which starts OpenSSH's `sshd` at boot where the machine's disk starts Dropbear: after the console login and, on a boot with `rach2.ip=none`, after `ifup -a` (`init(8)`). Before each start it runs `ssh-keygen -A`, which on the first boot makes the host keys in `/etc/ssh`, RSA, ECDSA, Ed25519 and ML-DSA-44 with Ed25519, and needs the kernel's entropy. The server runs in the foreground with its log in `/var/log/services`, and its unprivileged child runs as `sshd`, uid 74, with no password and `/usr/bin/false` for a shell, in `/var/empty`, which is root's and mode 0755. Root logs in by key alone unless `/etc/rach2/sshd.conf` permits its password, and the test account by key or by the password in `/etc/shadow`, which glibc and libxcrypt check. `ssh`, `scp` and `sftp` are the clients, and `sftp-server` serves the last two. Dropbear stays in the other images.
+
+`tests/run gnu` boots the image and has each port do its main job on the machine ([the system tests' Readme](../../tests/system/Readme.md)).

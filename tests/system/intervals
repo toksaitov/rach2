@@ -8,6 +8,7 @@ tests/system/suites/diskdiag.sh: a try of SSH every two seconds until the server
 tests/system/suites/doom.sh: doom runs for ten seconds; the row counts its disk commands
 tests/system/suites/drill.sh: the service log is read every second for recovery's fixed address
 tests/system/suites/drill.sh: the service log is read every three seconds for the lease
+tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/grow.sh: the resizer is killed after its period; the row proves the repair
 tests/system/suites/make.sh: the file's time must pass the second, which make compares whole
 tests/system/suites/metal.sh: a try of SSH every two seconds until the server answers

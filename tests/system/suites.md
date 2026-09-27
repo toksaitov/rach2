@@ -2,6 +2,7 @@
 
 One line per suite, in the order the pool starts them, from `tests/run inventory`: the tier, the external commands the suite needs, the most guest memory its machines ask for at once, and what it proves, which is the sentence in `tests/system/suites.mk` that names it. `tests/run style` compares this file with that output.
 
+* `gnu` (full tier; needs qemu-system-i386, ssh, scp, sftp; 2048 MiB): the GNU system on its ext2 root, driven over OpenSSH with nobody at the console, logged in to by key and by password, and each port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell doing its main job on the machine.
 * `install` (full tier; needs qemu-system-i386, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine installs its own kernel.
 * `selfbuild` (full tier; needs qemu-system-i386, mformat, mmd, mcopy; 128 MiB): the machine builds its own kernel.
 * `installer-repair` (full tier; needs qemu-system-i386, qemu-img, shasum, ssh, ssh-keygen, mcopy, mmd, mdeltree, debugfs; 128 MiB): the other half, the machine that will not boot.

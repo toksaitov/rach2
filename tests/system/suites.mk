@@ -54,6 +54,7 @@ BOOT_KERNEL ?= build/rach2/kernel
 # file, and neither can say which of them wrote what.
 DISKDIAG_PORT    = 2225
 METAL_PORT       = 2223
+GNU_PORT         = 2296
 SEALED_PORT      = 2297
 DRILL_PORT       = 2298
 PROCFILES_PORT   = 2299
@@ -1413,6 +1414,19 @@ run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(RUNUTIL) $(MKM
           rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/ext2.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
 	    build/tools/image/mkmbr $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
+
+# `tests/run gnu`: the GNU system on its ext2 root, driven over OpenSSH with
+# nobody at the console, logged in to by key and by password, and each port,
+# GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell
+# doing its main job on the machine. The image is not among the products
+# `prepare-all` builds: it is made from the GNU layer, on a Linux host only
+# (mk/gnu-image.mk), which a set without this suite must not need, so the
+# suite's own target asks for it through `os-real-gnu-ext2`, and the
+# registry names the image among the files this suite writes.
+GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
+run-gnu: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL) $(MKMBR)
+	sh tests/system/suites/gnu.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(GNU_TEST_DISK) \
+	    $(GNU_PORT) "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
