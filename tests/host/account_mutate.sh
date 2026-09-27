@@ -73,8 +73,8 @@ for test in pwauthfault accounttools initpolicy ncwrite; do
 done
 for fault in pid-nul pid-tail echo tty-detect tty-error lock-cleanup temp-cleanup \
     login-eof login-fds su-fds sudo-fds sudo-line init-redirect init-network \
-    init-block init-signals init-login-timeout init-login-keep init-login-parent \
-    ssh-suffix nc-socket nc-stdout; do
+    init-block init-signals init-sshd-block init-sshd-defaults init-sshd-mask \
+    init-login-timeout init-login-keep init-login-parent ssh-suffix nc-socket nc-stdout; do
     python3 - "$work/utils" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -90,8 +90,15 @@ changes = {
     'tty-detect': ('pwauth.c', 'static int pwauth_prepare_tty(void)\n{',
                    'static int pwauth_prepare_tty(void)\n{\n    if (!isatty(0)) { return 0; }'),
     'tty-error': ('pwauth.c', 'return errno == ENOTTY ? 0 : -1;', 'return 0;'),
-    'init-block': ('init.c', 'sigprocmask(SIG_BLOCK, &shutdown, &saved)',
-                   'sigprocmask(SIG_BLOCK, NULL, &saved)'),
+    'init-block': ('init.c', 'return sigprocmask(SIG_BLOCK, &shutdown, saved);',
+                   'return sigprocmask(SIG_BLOCK, NULL, saved);'),
+    'init-sshd-block': ('init.c', '    if (shutdown_block(&saved) != 0) {\n        return -1;\n    }',
+                        '    if (sigprocmask(SIG_BLOCK, NULL, &saved) != 0) {\n        return -1;\n    }'),
+    'init-sshd-defaults': ('init.c',
+                           '    if (shutdown_defaults(&saved) != 0) {\n        _exit(126);\n    }\n    service_output();\n    {',
+                           '    service_output();\n    {'),
+    'init-sshd-mask': ('init.c', '        (void)sigprocmask(SIG_SETMASK, &saved, NULL);\n        return pid;',
+                       '        return pid;'),
     'lock-cleanup': ('pwauth.c', 'failed = unlink(lock_path) != 0 && errno != ENOENT;',
                      '(void)unlink(lock_path);\n        failed = 0;'),
     'login-eof': ('login.c', 'if (len == 0 && !over) {\n                return -1;\n            }\n            break;',
@@ -183,6 +190,9 @@ PY
         init-network) test=initpolicy; message='network setup requires redirected descriptors' ;;
         init-block) test=initpolicy; message='early network signal terminates worker' ;;
         init-signals) test=initpolicy; message='ifup signal terminates worker' ;;
+        init-sshd-block|init-sshd-defaults) test=initpolicy
+            message="a shutdown signal ends the SSH service's child, not init's handler" ;;
+        init-sshd-mask) test=initpolicy; message="the SSH service's fork restores init's signal mask" ;;
         init-login-timeout|init-login-keep) test=initpolicy; message='the console login waits without a timeout' ;;
         init-login-parent) test=initpolicy; message="init's own environment keeps its LOGIN_TIMEOUT" ;;
         ssh-suffix) test=initpolicy; message='SSH trailing text rejected' ;;
@@ -193,4 +203,4 @@ PY
     run_phase "$fault-restored" "$test" 0 "$test-hosttest: result: pass"
     diff -q "$work/saved" "$work/utils"
 done
-echo 'account-mutation: result: pass: 22 compiled faults failed; restored tests passed'
+echo 'account-mutation: result: pass: 25 compiled faults failed; restored tests passed'
