@@ -3322,24 +3322,35 @@ static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
 
 /**
  * Free the records of the threads that have ended and are not leaders,
- * which no wait reaps: their CPU time goes to their process, and their
- * address space reference, kernel stack and record go back. A record the
- * current process is not is never running, so its stack is free to take.
+ * which no wait reaps, a traced one aside, which its tracer's wait reaps:
+ * their CPU time goes to their process, and their address space reference,
+ * kernel stack and record go back. A record the current process is not is
+ * never running, so its stack is free to take. The release of the address
+ * space may sleep, and another reaper may run then, so a record is taken
+ * off the zombies first, and the walk starts again after each one, since the
+ * list may have changed under it.
  */
 static void reap_threads(void)
 {
-    process_t *p, *next;
+    process_t *p;
 
-    for (p = proc_list; p && proc_dead_threads != 0; p = next) {
-        next = p->next;
-        if (p != current_proc && p->state == PROC_ZOMBIE && p->pid != p->tgid) {
-            p->tg->utime += p->utime;
-            p->tg->stime += p->stime;
-            mm_drop(p);
-            kstack_free(p->kernel_stack);
-            free_process(p);
-            proc_dead_threads--;
+    while (proc_dead_threads != 0) {
+        for (p = proc_list; p; p = p->next) {
+            if (p != current_proc && p->state == PROC_ZOMBIE && p->pid != p->tgid &&
+                !(p->ptrace & PT_TRACED)) {
+                break;
+            }
         }
+        if (!p) {
+            return;
+        }
+        p->state = PROC_UNUSED;
+        proc_dead_threads--;
+        p->tg->utime += p->utime;
+        p->tg->stime += p->stime;
+        mm_drop(p);
+        kstack_free(p->kernel_stack);
+        free_process(p);
     }
 }
 
