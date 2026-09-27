@@ -277,9 +277,10 @@ static void timer_handler(isr_params_t *params)
  * Leave the core file of the current process, which the signal `signo`
  * ends, when it is dumpable and its soft RLIMIT_CORE allows a page: the
  * status it ends with, which has WCOREFLAG, as WCOREDUMP reads it, only when
- * the whole file was written. The caller has set `in_syscall`, as a system
- * call writing the file would, so that the timer does not switch away in the
- * middle of the file system's work.
+ * the whole file was written. The caller has set `in_syscall` and enabled
+ * interrupts, as a system call writing the file would: the timer does not
+ * switch away in the middle of the file system's work, and a disk that
+ * answers only by interrupt, as a USB stick does, can be waited for.
  */
 static int32_t terminate_core(int32_t signo)
 {
@@ -294,6 +295,20 @@ static int32_t terminate_core(int32_t signo)
 }
 
 /**
+ * Release what the end of process `pid`, the current one, gives up beyond
+ * its threads: the console its session leads, the pty slaves that session
+ * controls, and the framebuffer it owns, so a later session can claim them.
+ */
+static void terminate_release_session(uint32_t pid)
+{
+    if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+    pty_release_leader((int)current_proc->sid, (int)pid);
+    fb_release_if_owner(pid);
+}
+
+/**
  * Terminate the current user process by signal and give up its CPU.
  *
  * Shared teardown for every death by signal: a signal whose default action
@@ -304,9 +319,12 @@ static int32_t terminate_core(int32_t signo)
  * leaves a core file first (`terminate_core`), unless another thread has
  * begun to end it, after the other threads are sent SIGKILL and before any
  * of the process is released, as Linux's `do_coredump` does. The teardown
- * runs with `in_syscall` set, as a system call does, since what it releases
- * may sleep and the timer must not switch away in the middle. The whole
- * process dies:
+ * runs as a system call does, with `in_syscall` set and interrupts on, also
+ * when the signal is acted on at an interrupt's return, which comes here with
+ * them off: what it releases and writes may sleep in a disk that answers
+ * only by interrupt, and the timer must not switch away in the middle.
+ * Interrupts go off again once the process's end is published, before its
+ * record can be freed or the processor given up. The whole process dies:
  * its other threads are sent SIGKILL, and the last thread to end publishes
  * the death. This thread releases the descriptor table and its reference to
  * the address space, switching off it before its page directory can be
@@ -335,6 +353,7 @@ void terminate_current_process(int32_t signo)
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
     current_proc->in_syscall = 1;
+    __asm__ __volatile__("sti" ::: "memory");
 
     /* The signal ends the whole process: the other threads are sent SIGKILL,
      * and the process ends with this signal whichever thread ends last. */
@@ -352,11 +371,7 @@ void terminate_current_process(int32_t signo)
      * session during teardown. shell_reset_input on the is_init path below
      * releases again, which is idempotent. */
     if (alone) {
-        if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
-            tty_set_session(&console_tty, 0, 0);
-        }
-        pty_release_leader((int)current_proc->sid, (int)pid);
-        fb_release_if_owner(pid);
+        terminate_release_session(pid);
     }
 
     /* The address space goes now, not at the reap, and before the zombie is
@@ -369,6 +384,7 @@ void terminate_current_process(int32_t signo)
     switch_page_directory(_kernel_dir);
 
     last = proc_exit_cleanup(signo);
+    __asm__ __volatile__("cli" ::: "memory");
 
     if (!last) {
         for (;;) {
@@ -378,11 +394,7 @@ void terminate_current_process(int32_t signo)
         }
     }
     if (!alone) {
-        if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
-            tty_set_session(&console_tty, 0, 0);
-        }
-        pty_release_leader((int)current_proc->sid, (int)pid);
-        fb_release_if_owner(pid);
+        terminate_release_session(pid);
     }
 
     if (is_init) {
