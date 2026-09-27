@@ -179,6 +179,10 @@ struct unix_sock {
     uint32_t rcvtimeo; /* ticks, 0 for none */
     uint32_t sndtimeo;
     wait_queue_t wq;
+    /* A bind in progress, which holds the socket across the file system's
+     * sleeps (`bind_lock`), and the queue its waiters sleep on. */
+    int binding;
+    wait_queue_t lock_wq;
 };
 
 /* What a send carries besides its bytes. */
@@ -261,6 +265,7 @@ static struct unix_sock *unix_alloc(int type)
     s->sndbuf = UNIX_BUF;
     s->rcvbuf = UNIX_BUF;
     wait_queue_init(&s->wq);
+    wait_queue_init(&s->lock_wq);
     s->next = socks;
     socks = s;
     return s;
@@ -811,38 +816,107 @@ static int32_t autobind(struct unix_sock *s)
     return -ENOSPC;
 }
 
-int32_t unix_bind(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
+static int bind_idle(void *arg)
 {
-    struct unix_sock *s = sock_of(e);
-    struct unix_name n;
-    int32_t rc = get_name(addr, addrlen, &n);
+    return !((const struct unix_sock *)arg)->binding;
+}
 
-    if (rc != 0) {
-        return rc;
+/**
+ * Take `s`'s bind lock: 0, or -EINTR when a signal ends the wait for it.
+ *
+ * A bind to a path holds it across the file system's sleeps, so that a
+ * second bind, and the name a connect or a send gives a socket with
+ * SO_PASSCRED, waits for the first to finish and then finds the socket
+ * named, as Linux's bindlock has it.
+ */
+static int32_t bind_lock(struct unix_sock *s)
+{
+    while (s->binding) {
+        if (wq_wait_event(&s->lock_wq, bind_idle, s) < 0) {
+            return -EINTR;
+        }
     }
+    s->binding = 1;
+    return 0;
+}
+
+static void bind_unlock(struct unix_sock *s)
+{
+    s->binding = 0;
+    wq_wake_all(&s->lock_wq);
+}
+
+/* Give a socket with SO_PASSCRED and no name the automatic one, before a
+ * connect or a send, as Linux does. */
+static int32_t passcred_name(struct unix_sock *s)
+{
+    int32_t rc;
+
+    if (!s->passcred || s->bound) {
+        return 0;
+    }
+    rc = bind_lock(s);
+    if (rc == 0) {
+        rc = s->bound ? 0 : autobind(s);
+        bind_unlock(s);
+    }
+    return rc;
+}
+
+/* Bind the socket `s`, whose bind lock the caller holds, to the name `n`. */
+static int32_t bind_name(struct unix_sock *s, const struct unix_name *n)
+{
+    struct vfs_ref ref;
+    uint32_t ino;
+    int32_t rc;
+
     if (s->bound || s->closed) {
         return -EINVAL;
     }
-    if (n.len == 0) {
+    if (n->len == 0) {
         return autobind(s);
     }
-    if (abstract(&n)) {
-        struct unix_sock *other = lookup(&n, s->type, &rc);
+    if (abstract(n)) {
+        struct unix_sock *other = lookup(n, s->type, &rc);
 
         if (other) {
             unix_put(other);
             return -EADDRINUSE;
         }
     } else {
-        rc = fs_socket_bind(n.path, 0777u & ~current_proc->fs->umask, &s->fs_ref, &s->fs_ino);
+        rc = fs_socket_bind(n->path, 0777u & ~current_proc->fs->umask, &ref, &ino);
         if (rc != 0) {
             return rc;
         }
+        s->fs_ref = ref;
+        s->fs_ino = ino;
         s->bound_fs = 1;
     }
-    s->name = n;
+    s->name = *n;
     s->bound = 1;
     return 0;
+}
+
+/**
+ * bind(2). The name is judged free and taken under the socket's bind lock
+ * (`bind_lock`), and the socket file a path makes is recorded only once it
+ * is made, so two binds of one socket cannot both succeed and lose the
+ * first one's hold on its file and its mount.
+ */
+int32_t unix_bind(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
+{
+    struct unix_sock *s = sock_of(e);
+    struct unix_name n;
+    int32_t rc = get_name(addr, addrlen, &n);
+
+    if (rc == 0) {
+        rc = bind_lock(s);
+    }
+    if (rc == 0) {
+        rc = bind_name(s, &n);
+        bind_unlock(s);
+    }
+    return rc;
 }
 
 int32_t unix_listen(fd_entry_t *e, int backlog)
@@ -895,7 +969,8 @@ static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrle
     if (n.len == 0) {
         return -EINVAL;
     }
-    if (s->passcred && !s->bound && (rc = autobind(s)) != 0) {
+    rc = passcred_name(s);
+    if (rc != 0) {
         return rc;
     }
     target = lookup(&n, SOCK_DGRAM, &rc);
@@ -965,7 +1040,8 @@ int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
     if (n.len == 0) {
         return -EINVAL;
     }
-    if (s->passcred && !s->bound && (rc = autobind(s)) != 0) {
+    rc = passcred_name(s);
+    if (rc != 0) {
         return rc;
     }
     for (;;) {
@@ -1578,7 +1654,8 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
     if (s->shut & SHUT_SEND) {
         return -EPIPE;
     }
-    if (s->passcred && !s->bound && (rc = autobind(s)) != 0) {
+    rc = passcred_name(s);
+    if (rc != 0) {
         return rc;
     }
     if (to) {
