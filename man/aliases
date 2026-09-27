@@ -82,6 +82,7 @@ fallocate 1 busybox-util-linux
 false 1 busybox-coreutils
 fatattr 1 busybox-util-linux
 fbset 1 busybox-util-linux
+fchdir 2 chdir
 fchmod 2 chmod
 fchmodat 2 chmod
 fchown 2 chown
@@ -192,6 +193,7 @@ mesg 1 busybox-util-linux
 microcom 1 busybox-miscutils
 mim 1 busybox-miscutils
 mkdir 1 busybox-coreutils
+mkdirat 2 mkdir
 mkfifo 1 busybox-coreutils
 mkfs.minix 1 busybox-util-linux
 mknod 1 busybox-coreutils
@@ -235,6 +237,8 @@ popmaildir 1 busybox-mailutils
 poweroff 8 busybox-init
 powertop 1 busybox-procps
 ppoll 2 poll
+pread 2 read
+pread64 2 read
 printenv 1 busybox-coreutils
 printf 1 busybox-coreutils
 ps 1 busybox-procps
@@ -243,6 +247,8 @@ pselect6 2 select
 pstree 1 busybox-procps
 pwd 1 busybox-coreutils
 pwdx 1 busybox-procps
+pwrite 2 write
+pwrite64 2 write
 rdate 1 busybox-util-linux
 rdev 1 busybox-util-linux
 readahead 1 busybox-miscutils
@@ -257,6 +263,8 @@ recvfrom 2 recv
 recvmsg 2 recv
 reformime 1 busybox-mailutils
 remove-shell 8 busybox-loginutils
+renameat 2 rename
+renameat2 2 rename
 renice 1 busybox-util-linux
 reset 1 busybox-console-tools
 resize 1 busybox-console-tools
@@ -360,6 +368,7 @@ traceroute 1 busybox-networking
 tree 1 busybox-miscutils
 true 1 busybox-coreutils
 truncate 1 busybox-coreutils
+truncate64 2 truncate
 ts 1 busybox-miscutils
 tsort 1 busybox-coreutils
 tty 1 busybox-coreutils
@@ -374,6 +383,7 @@ uniq 1 busybox-coreutils
 unix2dos 1 busybox-coreutils
 unlink 1 busybox-coreutils
 unlink 2 link
+unlinkat 2 link
 unlzma 1 busybox-archival
 unshare 1 busybox-util-linux
 unxz 1 busybox-archival

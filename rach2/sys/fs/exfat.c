@@ -3992,19 +3992,19 @@ static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
         }
         {
             uint32_t l = k_strlen(rev);
-            char tmp[VFS_NAME_MAX * 2 + 2];
 
             if (len + l + 1 >= cap) {
                 return -ENAMETOOLONG;
             }
-            k_strncpy(tmp, buf, sizeof(tmp));
-            k_memcpy(buf, "/", 1);
+            k_memmove(buf + 1 + l, buf, len + 1);
+            buf[0] = '/';
             k_memcpy(buf + 1, rev, l);
-            k_memcpy(buf + 1 + l, tmp, len);
             len += l + 1;
-            buf[len] = '\0';
         }
         cluster = parent_cluster == 0 ? em->root : parent_cluster;
+    }
+    if (cluster != em->root) {
+        return -ENAMETOOLONG; /* deeper than the climb, and not the root's path */
     }
     if (len == 0) {
         buf[0] = '/';

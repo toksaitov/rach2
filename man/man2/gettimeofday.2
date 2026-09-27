@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -82,6 +82,32 @@ or against the directory referred to by
 .Fa dirfd
 otherwise.
 .Pp
+A null
+.Fa path
+names the file
+.Fa dirfd
+refers to; GNU libc's and musl's
+.Fn futimens
+are this call.
+It takes no flags and returns
+.Er EINVAL
+for any; with
+.Dv AT_FDCWD
+it returns
+.Er EFAULT .
+With
+.Dv AT_EMPTY_PATH ,
+an empty
+.Fa path
+names the file
+.Fa dirfd
+refers to, or the current working directory for
+.Dv AT_FDCWD .
+A descriptor on a pipe, a socket, a terminal, a device or a synthetic
+directory has no stored times and returns
+.Er EROFS ;
+Linux sets the times of such a file.
+.Pp
 The
 .Fa times
 argument points to two timespecs: access time first, modification time second.
@@ -95,20 +121,30 @@ selects the current time;
 leaves that timestamp unchanged.
 When both elements specify
 .Dv UTIME_OMIT ,
-neither timestamp nor the change time is changed.
+neither timestamp nor the change time is changed, and the call returns 0
+before it looks at the path, the descriptor or the flags, as Linux does.
 .Pp
 Setting both timestamps to the current time requires ownership, write
 permission on the file, or effective user ID 0.
 Any other change requires ownership or effective user ID 0.
-Omitting both timestamps requires neither, but the path must still resolve.
+Omitting both timestamps requires neither.
 .Pp
 The
 .Fa flags
-argument is 0 or
-.Dv AT_SYMLINK_NOFOLLOW .
-The latter changes a symbolic link's own timestamps instead of following it.
-Other bits are rejected.
-The kernel does not range-check explicit nanosecond values.
+argument may have
+.Dv AT_SYMLINK_NOFOLLOW ,
+which changes a symbolic link's own timestamps instead of following it,
+and
+.Dv AT_EMPTY_PATH .
+Other bits return
+.Er EINVAL .
+A
+.Va tv_nsec
+other than
+.Dv UTIME_NOW ,
+.Dv UTIME_OMIT
+or 0 to 999999999 returns
+.Er EINVAL .
 .Pp
 Timestamp changes are supported on KRFFS, ext2, FAT32, and exFAT,
 subject to the file system's stored precision.
@@ -121,8 +157,8 @@ Synthetic files under
 and
 .Pa /proc
 return
-.Er EROFS ,
-including when both timestamps are omitted.
+.Er EROFS
+unless both timestamps are omitted.
 .Ss System call interface
 The i386 system call numbers are 78 for
 .Fn gettimeofday ,
@@ -180,6 +216,10 @@ twice and checks that the second result is not earlier than the first.
 checks that
 .Fn times
 sets the four process-time fields to zero.
+.Pa tests/musl/fdcallmusl.c
+sets a file's times through a null path and through an empty one with
+.Dv AT_EMPTY_PATH ,
+and checks the refusals of a null path.
 .Sh ERRORS
 The kernel handlers return the following errors:
 .Bl -tag -width "[ENAMETOOLONG]"
@@ -192,7 +232,10 @@ time without write permission.
 .It Bq Er EBADF
 .Fn utimensat
 was given an invalid directory descriptor for a relative path, or the
-descriptor refers to a removed KRFFS boot-root directory.
+descriptor refers to a removed KRFFS boot-root directory; or, with a null
+path or an empty one and
+.Dv AT_EMPTY_PATH ,
+the descriptor is invalid or refers to a KRFFS boot-root file that is gone.
 .It Bq Er EBUSY
 The
 .Fn utimensat
@@ -206,7 +249,9 @@ timeval or
 timespec is null.
 For
 .Fn utimensat ,
-the path is null or there is no current process.
+the path is null with
+.Dv AT_FDCWD ,
+or there is no current process.
 .It Bq Er EINVAL
 .Fa clockid
 is neither
@@ -216,7 +261,12 @@ nor
 or
 .Fn utimensat
 has flag bits other than
-.Dv AT_SYMLINK_NOFOLLOW .
+.Dv AT_SYMLINK_NOFOLLOW
+and
+.Dv AT_EMPTY_PATH ,
+any flag with a null path, or a
+.Va tv_nsec
+out of range.
 .It Bq Er EIO
 For
 .Fn utimensat ,
@@ -234,11 +284,13 @@ symbolic-link path exceeds the resolver's buffer limit.
 .It Bq Er ENOENT
 The
 .Fn utimensat
-path is empty or a component does not exist.
+path is empty without
+.Dv AT_EMPTY_PATH ,
+or a component does not exist.
 .It Bq Er ENOMEM
 The file system cannot allocate a node while resolving the
 .Fn utimensat
-path.
+path, or the kernel has no page to copy the path into.
 .It Bq Er ENOTDIR
 A component of the
 .Fn utimensat
@@ -249,8 +301,10 @@ A caller that is neither the owner nor privileged requests a timestamp
 change other than setting both times to the current time.
 .It Bq Er EROFS
 .Fn utimensat
-targets a synthetic file, or a timestamp update reaches a read-only
-mount or a file system without a timestamp-setting operation.
+targets a synthetic file, or a descriptor on a pipe, a socket, a
+terminal, a device or a synthetic directory, or a timestamp update
+reaches a read-only mount or a file system without a timestamp-setting
+operation.
 .El
 .Sh SEE ALSO
 .Xr nanosleep 2 ,

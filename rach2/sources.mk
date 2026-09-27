@@ -104,6 +104,7 @@ C_SRC = kernel.c \
         sys/fs/fd.c \
         sys/fs/lock.c \
         sys/fs/tmpfs.c \
+        sys/fs/pathbuf.c \
         sys/fs/devfs.c \
         sys/fs/synthfs.c \
         sys/fs/procfs.c \

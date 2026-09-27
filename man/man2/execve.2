@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt EXECVE 2
 .Os
 .Sh NAME
@@ -29,7 +29,7 @@ Each vector may contain at most 63 strings.
 Together their strings may occupy at most 3072 bytes, counting each
 terminating null byte.
 The copied path, including any current-directory prefix and its null
-terminator, must fit 256 bytes.
+terminator, must fit 4096 bytes.
 .Pp
 The kernel checks search permission on ancestor directories and execute
 permission on the program.

@@ -26,6 +26,7 @@
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
+#include "fs/pathbuf.h"
 #include "ipc/pipe.h"
 #include "io/poll.h"
 #include "tty/tty.h"
@@ -213,6 +214,75 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
 }
 
 /**
+ * Write `count` bytes of user buffer `buf` to the file of a mounted type or
+ * of the KRFFS root that `entry` is open on: at the description's offset,
+ * which moves past what was written, or at `*at` for pwrite64, which leaves
+ * it where it was.
+ *
+ * With O_APPEND every write lands at the current end of the file, whatever
+ * the offset says and whatever `at` asks for, as Linux's pwrite does. The
+ * file system reads the user buffer directly, so its pages are range-checked
+ * and faulted in first. A file that backs a loop device is reached through
+ * that device and nowhere else, since the file system mounted on it may not
+ * have its image change underneath: that is asked before the description is
+ * locked, since a return from under the lock leaves a description nobody can
+ * use again, and again under it, since an attachment can publish itself
+ * while this call waits for the lock. Only a write that moved bytes disarms
+ * the set-id bits, through the node as the write left it (a grow relocates a
+ * KRFFS file and repoints every holder), and a privileged writer is exempt:
+ * that is the CAP_FSETID analogue, without which any root process disarms
+ * /bin/su by rewriting it.
+ */
+static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
+                          const uint64_t *at)
+{
+    struct open_file *ofd = entry->ofd;
+    uint64_t pos;
+    int32_t written;
+
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (!ofd || !ofd->vmnt) {
+        return -EBADF;
+    }
+    if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
+        return -EFAULT;
+    }
+    if (loop_backs(ofd->vmnt, ofd->vnode)) {
+        return -EBUSY;
+    }
+    fd_ofd_lock(ofd);
+    if (loop_backs(ofd->vmnt, ofd->vnode)) {
+        fd_ofd_unlock(ofd);
+        return -EBUSY;
+    }
+    pos = at ? *at : ofd->offset;
+    if (ofd->status_flags & OFD_APPEND) {
+        struct vfs_stat vst;
+
+        if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
+            pos = vst.size;
+        }
+    }
+    written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, pos);
+    if (written > 0) {
+        if (!cred_privileged()) {
+            if (entry->node) {
+                cred_kill_setid(entry->node);
+            } else {
+                vfs_kill_setid(ofd->vmnt, ofd->vnode);
+            }
+        }
+        if (!at) {
+            ofd->offset = pos + (uint64_t)written;
+        }
+    }
+    fd_ofd_unlock(ofd);
+    return written;
+}
+
+/**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
  * The shared body of write(2) and writev(2). Dispatches by backing kind: an
@@ -318,65 +388,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        struct open_file *ofd = entry->ofd;
-        int32_t written;
-
-        if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF; /* Not opened for writing */
-        }
-        if (!ofd || !ofd->vmnt) {
-            return -EBADF;
-        }
-        /* The file system reads the user buffer directly, so range-check AND
-         * fault its pages in first (as the socket path does) before stripping
-         * __user. */
-        if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
-            return -EFAULT;
-        }
-        /* A file that backs a loop device is reached through that device and
-         * nowhere else: the file system mounted on it may not have its image
-         * change underneath. Answered before the description is locked, since
-         * a return from under that lock is a description nobody can use
-         * again. */
-        if (loop_backs(ofd->vmnt, ofd->vnode)) {
-            return -EBUSY;
-        }
-        fd_ofd_lock(ofd);
-        /* And again under it: taking the lock waits, and an attachment can
-         * publish itself while this call is in that wait. */
-        if (loop_backs(ofd->vmnt, ofd->vnode)) {
-            fd_ofd_unlock(ofd);
-            return -EBUSY;
-        }
-        /* O_APPEND: every write lands at the current end of file, regardless of
-         * any intervening seek (the POSIX append contract). The flag lives on
-         * the shared open-file description. */
-        if (ofd->status_flags & OFD_APPEND) {
-            struct vfs_stat vst;
-
-            if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
-                ofd->offset = vst.size;
-            }
-        }
-        written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, ofd->offset);
-        if (written > 0) {
-            /* Through the UPDATED node pointer: a grow relocates the file and
-             * the write repointed every holder, this descriptor included.
-             * Only a write that moved bytes disarms the set-id bits, and a
-             * privileged writer is exempt: that is the CAP_FSETID analogue,
-             * and without it any root process silently disarms /bin/su by
-             * rewriting it. */
-            if (!cred_privileged()) {
-                if (entry->node) {
-                    cred_kill_setid(entry->node);
-                } else {
-                    vfs_kill_setid(ofd->vmnt, ofd->vnode);
-                }
-            }
-            ofd->offset += (uint64_t)written;
-        }
-        fd_ofd_unlock(ofd);
-        return written;
+        return file_write(entry, buf, count, NULL);
     }
 
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
@@ -545,32 +557,26 @@ int32_t sys_writev(isr_params_t *params)
 #define AT_NO_AUTOMOUNT 0x800 /* fstatat: accepted and meaningless here */
 
 /**
- * Join base + '/' + rel into pathbuf as an absolute path.
+ * Put `base` and a slash in front of the relative path of `len` bytes in
+ * `buf`, in place: the join of a directory and a name below it.
  *
- * `base` is "/" or "/a/b" with no trailing slash; `rellen` is k_strlen(rel).
- * Returns the length, or -ENAMETOOLONG if it would not fit.
+ * `base` is "/" or "/a/b" with no trailing slash, and not inside `buf`.
+ * Returns the new length, or -ENAMETOOLONG when the whole does not fit `size`.
  */
-static int join_abs(char *pathbuf, uint32_t size, const char *base, const char *rel,
-                    uint32_t rellen)
+static int path_prepend(char *buf, uint32_t size, uint32_t len, const char *base)
 {
     uint32_t blen = (uint32_t)k_strlen(base);
 
     if (blen <= 1) {
-        /* base is "/" (or empty): the result is just "/" + rel. */
-        if (1 + rellen + 1 > size) {
-            return -ENAMETOOLONG;
-        }
-        pathbuf[0] = '/';
-        k_memcpy(pathbuf + 1, rel, rellen + 1);
-        return (int)(1 + rellen);
+        blen = 0; /* the root: the slash alone */
     }
-    if (blen + 1 + rellen + 1 > size) {
+    if (blen + 1 + len + 1 > size) {
         return -ENAMETOOLONG;
     }
-    k_memcpy(pathbuf, base, blen);
-    pathbuf[blen] = '/';
-    k_memcpy(pathbuf + blen + 1, rel, rellen + 1);
-    return (int)(blen + 1 + rellen);
+    k_memmove(buf + blen + 1, buf, len + 1);
+    k_memcpy(buf, base, blen);
+    buf[blen] = '/';
+    return (int)(blen + 1 + len);
 }
 
 /**
@@ -660,37 +666,32 @@ int canonicalize_abs(char *path)
 }
 
 /**
- * Copy a user path into pathbuf as an ABSOLUTE path.
+ * Copy a user path into `pathbuf` as an absolute, canonical path.
  *
- * An absolute user path is taken verbatim; a relative one is joined onto the
- * process's current working directory so the root-relative resolver (which
- * already honors '.'/'..') walks the right tree. Same return contract as
- * strncpy_from_user: the resulting length on success, or a negative errno (a
- * join that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device
- * names resolve only when the joined path has no directory part, so a program
- * names them absolutely rather than relying on its working directory.
+ * An absolute user path is taken as it is; a relative one is joined onto the
+ * process's working directory, so the resolver, which walks from the root,
+ * walks the right tree. `size` is at most `VFS_PATH_MAX`: the path the caller
+ * gives may be that long with its terminator, and so may the joined one.
+ * Returns the length, or a negative errno: -EFAULT for a pointer outside the
+ * caller's memory, -ENOENT for the empty path, which names no file, and
+ * -ENAMETOOLONG for either path longer than the buffer. The "fb"/"mouse"
+ * device names resolve only when the joined path has no directory part, so a
+ * program names them absolutely rather than relying on its working directory.
  */
 int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 {
-    char tmp[256];
-    int len;
+    int len = strncpy_from_user(pathbuf, upath, size);
 
-    len = strncpy_from_user(tmp, upath, sizeof(tmp));
     if (len < 0) {
         return len;
     }
     if (len == 0) {
-        return -ENOENT; /* the empty path is never a valid file (Linux ENOENT) */
+        return -ENOENT;
     }
-    if (tmp[0] == '/') {
-        if ((uint32_t)len + 1 > size) {
-            return -ENAMETOOLONG;
-        }
-        k_memcpy(pathbuf, tmp, (uint32_t)len + 1);
-    } else {
-        int r = join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
-        if (r < 0) {
-            return r;
+    if (pathbuf[0] != '/') {
+        len = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
+        if (len < 0) {
+            return len;
         }
     }
     return canonicalize_abs(pathbuf);
@@ -738,108 +739,172 @@ int fd_node_check(fd_entry_t *entry)
     return 0;
 }
 
-static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath)
+/**
+ * The absolute path of directory `node` of a mount of a type with a `path`
+ * operation, into `out` of `cap` bytes: the path of the directory the mount
+ * covers, then the directory's path inside the mount, which the type rebuilds
+ * from the volume and so gives after a rename too. Returns 0 or the type's
+ * error, -ENAMETOOLONG among them.
+ */
+static int mount_dir_path(struct vfs_mount *vm, void *node, char *out, uint32_t cap)
 {
-    char tmp[256];
-    char dirpath[256];
-    fd_entry_t *entry;
-    krffs_node_t *dnode;
-    int len;
+    uint32_t ml = k_strlen(vm->covered_path);
+    int r;
 
-    len = strncpy_from_user(tmp, upath, sizeof(tmp));
-    if (len < 0) {
-        return len;
+    if (ml <= 1) {
+        ml = 0; /* a root of another type: the type's path is the whole */
     }
-    if (len == 0) {
-        /* Empty path: Linux needs AT_EMPTY_PATH (unsupported) to mean the dirfd
-         * itself, so this is ENOENT for both open and stat. */
-        return -ENOENT;
+    if (ml + 2 > cap) {
+        return -ENAMETOOLONG;
     }
-    if (tmp[0] == '/') {
-        if ((uint32_t)len + 1 > size) {
-            return -ENAMETOOLONG;
-        }
-        k_memcpy(pathbuf, tmp, (uint32_t)len + 1);
-        return canonicalize_abs(pathbuf);
+    k_memcpy(out, vm->covered_path, ml);
+    r = vm->type->ops->path(vm, node, out + ml, cap - ml);
+    if (r != 0) {
+        return r;
     }
-    if (dirfd == AT_FDCWD) {
-        int r = join_abs(pathbuf, size, current_proc->cwd, tmp, (uint32_t)len);
-        return r < 0 ? r : canonicalize_abs(pathbuf);
+    if (ml > 0 && out[ml + 1] == '\0') {
+        out[ml] = '\0'; /* the mount's root is the directory it covers */
     }
+    return 0;
+}
 
-    /* A real dirfd must be an open directory; resolve relative to its path. */
-    entry = fd_get(&current_proc->fds, dirfd);
-    if (!entry) {
-        return -EBADF;
-    }
-    /* A synthetic directory fd (/dev, /proc, /proc/<pid>[/fd]): reconstruct its
-     * absolute path from the pooled kind/pid and resolve the relative name
-     * there. */
+/**
+ * The absolute path of the directory a descriptor is open on, into `out` of
+ * `cap` bytes: what its `*at` calls resolve relative names against, and what
+ * `fchdir` makes the working directory.
+ *
+ * A synthetic directory's path is rebuilt from its kind and pid. A directory
+ * of a mounted type is named by the type, so the descriptor follows a rename
+ * of it, behind the path of the directory the mount covers; a type without a
+ * `path` operation keeps the path the directory was opened by. A directory of
+ * the KRFFS boot root is named by its node, which must still resolve back to
+ * itself: KRFFS nodes are not counted, and `rmdir` frees a directory another
+ * descriptor has open. Returns 0, -ENOTDIR for a descriptor on anything but a
+ * directory, -EBADF for a removed one, or -ENAMETOOLONG.
+ */
+static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
+{
+    krffs_node_t *dnode = entry->node; /* NULL for the root, and for other types */
+
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         struct synth_dir *sd = (struct synth_dir *)entry->priv;
+
         if (!sd) {
             return -EBADF;
         }
-        synth_dir_path(sd->kind, sd->pid, dirpath, (int)sizeof(dirpath));
-        {
-            int r = join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
-            return r < 0 ? r : canonicalize_abs(pathbuf);
-        }
+        synth_dir_path(sd->kind, sd->pid, out, (int)cap);
+        return 0;
     }
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
     }
-    dnode = entry->node; /* NULL marks the root directory */
     if (!dnode && entry->ofd && entry->ofd->vmnt && !mnt_is_root(entry->ofd->vmnt)) {
         struct vfs_mount *vm = entry->ofd->vmnt;
 
         if (vm->type->ops->path) {
-            /* The type rebuilds the directory's path, so the descriptor
-             * follows a rename; the mount's own path goes in front. */
-            char inside[256];
-            uint32_t ml = k_strlen(vm->covered_path);
-            int r = vm->type->ops->path(vm, entry->ofd->vnode, inside, sizeof(inside));
-
-            if (r != 0) {
-                return r;
-            }
-            if (ml + k_strlen(inside) + 1 > sizeof(dirpath)) {
-                return -ENAMETOOLONG;
-            }
-            k_memcpy(dirpath, vm->covered_path, ml);
-            k_memcpy(dirpath + ml, inside[1] ? inside : "", k_strlen(inside) + 1);
-            if (dirpath[0] == '\0') {
-                dirpath[0] = '/';
-                dirpath[1] = '\0';
-            }
-        } else {
-            if (entry->ofd->dirpath[0] == '\0') {
-                return -ENAMETOOLONG;
-            }
-            k_memcpy(dirpath, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
+            return mount_dir_path(vm, entry->ofd->vnode, out, cap);
         }
-    } else if (dnode) {
-        /* KRFFS nodes are not refcounted, so a directory fd can outlive its
-         * node if the directory is rmdir'd. Reject a stale fd defensively: the
-         * node must still be a live reserved node, and its reconstructed path
-         * must round-trip back to the same node. */
+        if (entry->ofd->dirpath[0] == '\0' || k_strlen(entry->ofd->dirpath) + 1 > cap) {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(out, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
+        return 0;
+    }
+    if (dnode) {
         if (dnode->type != KRFFS_RESERVED_NODE) {
             return -EBADF;
         }
-        if (krffs_node_path(dnode, dirpath, sizeof(dirpath)) != 0) {
+        if (krffs_node_path(dnode, out, cap) != 0) {
             return -ENAMETOOLONG;
         }
-        if (krffs_resolve(dirpath) != dnode) {
+        if (krffs_resolve(out) != dnode) {
             return -EBADF;
         }
-    } else {
-        dirpath[0] = '/';
-        dirpath[1] = '\0';
+        return 0;
     }
-    {
-        int r = join_abs(pathbuf, size, dirpath, tmp, (uint32_t)len);
+    out[0] = '/';
+    out[1] = '\0';
+    return 0;
+}
+
+/**
+ * Copy a user path into `pathbuf` as an absolute, canonical path, a
+ * relative one joined to the directory `dirfd` is open on, or to the working
+ * directory for `AT_FDCWD`.
+ *
+ * The rules and the errors are `copy_path_cwd`'s, with the directory's:
+ * -EBADF for a descriptor that is not open and -ENOTDIR for one that is not
+ * a directory, both for a relative path only, since an absolute one does not
+ * read `dirfd`. The joined path, like the caller's, must fit `size`, at most
+ * `VFS_PATH_MAX`. The empty path is -ENOENT; a call that takes AT_EMPTY_PATH
+ * looks for it before copying.
+ */
+static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath)
+{
+    fd_entry_t *entry;
+    char *dirpath;
+    int len, r;
+
+    len = strncpy_from_user(pathbuf, upath, size);
+    if (len < 0) {
+        return len;
+    }
+    if (len == 0) {
+        return -ENOENT;
+    }
+    if (pathbuf[0] == '/') {
+        return canonicalize_abs(pathbuf);
+    }
+    if (dirfd == AT_FDCWD) {
+        r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
         return r < 0 ? r : canonicalize_abs(pathbuf);
     }
+    entry = fd_get(&current_proc->fds, dirfd);
+    if (!entry) {
+        return -EBADF;
+    }
+    dirpath = path_buf_get();
+    if (!dirpath) {
+        return -ENOMEM;
+    }
+    r = fd_dir_path(entry, dirpath, VFS_PATH_MAX);
+    if (r == 0) {
+        r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
+    }
+    path_buf_put(dirpath);
+    return r < 0 ? r : canonicalize_abs(pathbuf);
+}
+
+/**
+ * The path a caller named, in a path page: absolute, canonical, and joined to
+ * the directory `dirfd` is open on when it is relative, or to the working
+ * directory for `AT_FDCWD`.
+ *
+ * Returns 0 with the page in `*out`, which the caller gives back with
+ * `path_buf_put`, or a negative errno with nothing taken: -ENOMEM when the
+ * heap has no page, or `copy_path_at`'s.
+ */
+static int path_from_user(int dirfd, const char __user *upath, char **out)
+{
+    char *buf = path_buf_get();
+    int len;
+
+    if (!buf) {
+        return -ENOMEM;
+    }
+    len = copy_path_at(buf, VFS_PATH_MAX, dirfd, upath);
+    if (len < 0) {
+        path_buf_put(buf);
+        return len;
+    }
+    *out = buf;
+    return 0;
+}
+
+/** The absolute path `abs` without its leading slash, as the cores take it. */
+static const char *path_name(const char *abs)
+{
+    return abs[0] == '/' ? abs + 1 : abs;
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
@@ -1269,12 +1334,15 @@ static int32_t open_mouse(void)
  * O_CREAT to create: as on Linux, the target is what is created. Returns 1
  * with the target's path in `through`, the link's directory in front of a
  * relative one; 0 when `name` is not a link; or a negative errno, ELOOP once
- * `followed` passes the resolver's bound of forty links.
+ * `followed` passes the resolver's bound of forty links. `name` may be in
+ * `through`, from the link before.
  */
 static int open_link_target(const char *name, char *through, uint32_t through_size, int *followed)
 {
     struct vfs_ref linkref;
     struct vfs_stat lst;
+    char *target;
+    int tlen;
     int is_link;
 
     if (vfs_resolve(0, name, VFS_WALK_NOFOLLOW, &linkref, 0, 0) != 0) {
@@ -1283,37 +1351,41 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
     is_link = !vfs_synth_vpath(linkref.mnt, linkref.node) && linkref.mnt->type->ops->readlink &&
               vfs_getattr(linkref.mnt, linkref.node, &lst) == 0 &&
               (lst.mode & 0170000u) == 0120000u;
-    if (is_link) {
-        char target[VFS_WALK_PATH_MAX];
-        int tlen =
-            linkref.mnt->type->ops->readlink(linkref.mnt, linkref.node, target, sizeof(target));
-        uint32_t dlen;
-
+    if (!is_link) {
         vfs_ref_release(&linkref);
-        if (tlen < 0) {
-            return tlen;
+        return 0;
+    }
+    target = path_buf_get();
+    if (!target) {
+        vfs_ref_release(&linkref);
+        return -ENOMEM;
+    }
+    tlen = linkref.mnt->type->ops->readlink(linkref.mnt, linkref.node, target, VFS_PATH_MAX);
+    vfs_ref_release(&linkref);
+    if (tlen == 0) {
+        tlen = -ENOENT; /* an empty target names nothing, as the resolver answers */
+    }
+    if (tlen >= 0 && ++*followed > VFS_LINK_MAX) {
+        tlen = -ELOOP;
+    }
+    if (tlen >= 0 && target[0] != '/') {
+        /* The link's own directory, then the target. */
+        uint32_t dlen = (uint32_t)k_strlen(name);
+
+        while (dlen > 0 && name[dlen - 1] != '/') {
+            dlen--;
         }
-        if (++*followed > VFS_LINK_MAX) {
-            return -ELOOP;
-        }
-        if (target[0] != '/') {
-            /* The link's own directory, then the target. */
-            dlen = (uint32_t)k_strlen(name);
-            while (dlen > 0 && name[dlen - 1] != '/') {
-                dlen--;
-            }
-            if (dlen + (uint32_t)tlen + 1 > through_size) {
-                return -ENAMETOOLONG;
-            }
+        if (dlen + (uint32_t)tlen + 1 > through_size) {
+            tlen = -ENAMETOOLONG;
+        } else {
             k_memmove(through, name, dlen);
             k_memcpy(through + dlen, target, (uint32_t)tlen + 1);
-        } else {
-            k_memcpy(through, target + 1, (uint32_t)tlen);
         }
-        return 1;
+    } else if (tlen >= 0) {
+        k_memcpy(through, target + 1, (uint32_t)tlen);
     }
-    vfs_ref_release(&linkref);
-    return 0;
+    path_buf_put(target);
+    return tlen < 0 ? tlen : 1;
 }
 
 /**
@@ -1634,7 +1706,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     struct vfs_ref ref;
     struct vfs_mount *locked;
-    char through[VFS_WALK_PATH_MAX]; /* the path a dangling link's target makes */
+    char *through = NULL; /* the path a dangling link's target makes, in a path page */
     int followed = 0;
     int rc;
 
@@ -1655,9 +1727,15 @@ again:
                               : 0),
                      &ref, 0, 0);
     if (rc == -ENOENT && (flags & O_CREAT)) {
-        rc = open_link_target(name, through, sizeof(through), &followed);
+        if (!through) {
+            through = path_buf_get();
+            if (!through) {
+                return -ENOMEM;
+            }
+        }
+        rc = open_link_target(name, through, VFS_PATH_MAX, &followed);
         if (rc < 0) {
-            return rc;
+            goto out;
         }
         if (rc > 0) {
             name = through;
@@ -1668,10 +1746,10 @@ again:
             goto again;
         }
         if (rc != 0) {
-            return rc;
+            goto out;
         }
     } else if (rc != 0) {
-        return rc;
+        goto out;
     } else {
         const struct vpath *vp = vfs_synth_vpath(ref.mnt, ref.node);
 
@@ -1682,26 +1760,27 @@ again:
             vfs_ref_release(&ref);
             /* The /proc links, /proc/self and the descriptor links, are
              * links too: the same two answers as on a mounted type. */
-            if (synth_is_link(&vpc)) {
-                if (flags & O_NOFOLLOW) {
-                    return -ELOOP;
-                }
-                if ((flags & O_CREAT) && (flags & O_EXCL)) {
-                    return -EEXIST;
-                }
+            if (synth_is_link(&vpc) && (flags & O_NOFOLLOW)) {
+                rc = -ELOOP;
+            } else if (synth_is_link(&vpc) && (flags & O_CREAT) && (flags & O_EXCL)) {
+                rc = -EEXIST;
+            } else {
+                rc = synth_open(&vpc, flags);
             }
-            return synth_open(&vpc, flags);
+            goto out;
         }
         locked = ref.mnt;
         rc = mnt_is_root(ref.mnt) ? open_root_node(&ref, flags) : open_mounted_node(&ref, flags);
         if (rc != 0) {
             vfs_walk_unlock(locked);
-            return rc;
+            goto out;
         }
     }
     locked = ref.mnt;
     rc = open_install(&ref, name, flags);
     vfs_walk_unlock(locked);
+out:
+    path_buf_put(through);
     return rc;
 }
 
@@ -1714,9 +1793,8 @@ again:
  */
 int32_t sys_mount(isr_params_t *params)
 {
-    char tpath[256];
+    char *tpath;
     char source[64];
-    char target[256];
     char type[16];
     char data[128];
     int n;
@@ -1734,48 +1812,22 @@ int32_t sys_mount(isr_params_t *params)
     if (n < 0) {
         return n;
     }
-    n = strncpy_from_user(target, (const char __user *)params->ecx, sizeof(target));
-    if (n < 0) {
-        return n;
-    }
     /* The target as an absolute canonical path: a relative one is joined
      * to the working directory, as every other path-taking call does. */
-    if (target[0] == '/') {
-        k_memcpy(tpath, target, k_strlen(target) + 1);
-        n = canonicalize_abs(tpath);
-    } else {
-        n = join_abs(tpath, sizeof(tpath), current_proc->cwd, target, k_strlen(target));
-        if (n >= 0) {
-            n = canonicalize_abs(tpath);
-        }
-    }
-    if (n < 0) {
+    n = path_from_user(AT_FDCWD, (const char __user *)params->ecx, &tpath);
+    if (n != 0) {
         return n;
     }
     n = strncpy_from_user(type, (const char __user *)params->edx, sizeof(type));
-    if (n < 0) {
-        return n;
-    }
     data[0] = '\0';
-    if (params->edi) {
+    if (n >= 0 && params->edi) {
         n = strncpy_from_user(data, (const char __user *)params->edi, sizeof(data));
-        if (n < 0) {
-            return n;
-        }
     }
-    if (target[0] != '/') {
-        /* A relative target is joined to the working directory the way
-         * every other path is. */
-        char joined[256];
-        int r =
-            join_abs(joined, sizeof(joined), current_proc->cwd, target, (uint32_t)k_strlen(target));
-
-        if (r < 0) {
-            return r;
-        }
-        k_memcpy(target, joined, sizeof(target));
+    if (n >= 0) {
+        n = vfs_do_mount(source, tpath, type, params->esi, data);
     }
-    return vfs_do_mount(source, tpath, type, params->esi, data);
+    path_buf_put(tpath);
+    return n;
 }
 
 /**
@@ -1785,8 +1837,7 @@ int32_t sys_mount(isr_params_t *params)
  */
 int32_t sys_umount2(isr_params_t *params)
 {
-    char tpath[256];
-    char target[256];
+    char *tpath;
     int n;
 
     if (!current_proc) {
@@ -1801,35 +1852,13 @@ int32_t sys_umount2(isr_params_t *params)
     if (!params->ebx) {
         return -EFAULT;
     }
-    n = strncpy_from_user(target, (const char __user *)params->ebx, sizeof(target));
-    if (n < 0) {
+    n = path_from_user(AT_FDCWD, (const char __user *)params->ebx, &tpath);
+    if (n != 0) {
         return n;
     }
-    /* The target as an absolute canonical path: a relative one is joined
-     * to the working directory, as every other path-taking call does. */
-    if (target[0] == '/') {
-        k_memcpy(tpath, target, k_strlen(target) + 1);
-        n = canonicalize_abs(tpath);
-    } else {
-        n = join_abs(tpath, sizeof(tpath), current_proc->cwd, target, k_strlen(target));
-        if (n >= 0) {
-            n = canonicalize_abs(tpath);
-        }
-    }
-    if (n < 0) {
-        return n;
-    }
-    if (target[0] != '/') {
-        char joined[256];
-        int r =
-            join_abs(joined, sizeof(joined), current_proc->cwd, target, (uint32_t)k_strlen(target));
-
-        if (r < 0) {
-            return r;
-        }
-        k_memcpy(target, joined, sizeof(target));
-    }
-    return vfs_do_umount(tpath);
+    n = vfs_do_umount(tpath);
+    path_buf_put(tpath);
+    return n;
 }
 
 /**
@@ -1870,22 +1899,19 @@ int32_t sys_open(isr_params_t *params)
     const char __user *upath = (const char __user *)params->ebx;
     int flags = (int)params->ecx;
     uint32_t mode = params->edx; /* open(2): the O_CREAT mode is the third arg */
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_open(name, flags, mode);
+    rc = do_open(path_name(path), flags, mode);
+    path_buf_put(path);
+    return rc;
 }
 
 /*
@@ -1902,22 +1928,19 @@ int32_t sys_openat(isr_params_t *params)
     const char __user *upath = (const char __user *)params->ecx;
     int flags = (int)params->edx;
     uint32_t mode = params->esi; /* openat(2): the O_CREAT mode is the fourth arg */
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(dirfd, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_open(name, flags, mode);
+    rc = do_open(path_name(path), flags, mode);
+    path_buf_put(path);
+    return rc;
 }
 
 /* close(2): EBX = fd. Returns 0 or -EBADF. */
@@ -2216,6 +2239,42 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
 }
 
 /**
+ * Read up to `count` bytes into user buffer `buf` from the file of a mounted
+ * type or of the KRFFS root that `entry` is open on: at the description's
+ * offset, which moves past what was read, or at `*at` for pread64, which
+ * leaves it where it was.
+ *
+ * The file system writes straight into the user buffer, so its pages are
+ * range-checked and faulted in first. The description is held across the
+ * operation: with dup or fork sharing the offset, a second reader sleeps
+ * rather than reading the same bytes while the first is in a request, and a
+ * KRFFS relocation cannot move the handle while it is in use.
+ */
+static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at)
+{
+    struct open_file *ofd = entry->ofd;
+    int32_t bytes_read;
+
+    if (!(entry->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    if (!ofd || !ofd->vmnt) {
+        return -EBADF;
+    }
+    if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
+        return -EFAULT;
+    }
+    fd_ofd_lock(ofd);
+    bytes_read =
+        vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, at ? *at : ofd->offset);
+    if (bytes_read > 0 && !at) {
+        ofd->offset += (uint64_t)bytes_read;
+    }
+    fd_ofd_unlock(ofd);
+    return bytes_read;
+}
+
+/**
  * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
  * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or
@@ -2374,31 +2433,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        struct open_file *ofd = entry->ofd;
-        int32_t bytes_read;
-
-        if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF; /* Not opened for reading */
-        }
-        if (!ofd || !ofd->vmnt) {
-            return -EBADF;
-        }
-        /* The file system writes straight into the user buffer, so
-         * range-check AND fault its pages in (write) before stripping the
-         * __user tag. The description is held across the operation: with
-         * dup or fork sharing this offset, the second reader sleeps here
-         * rather than reading the same bytes while the first is in a
-         * request. */
-        if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
-            return -EFAULT;
-        }
-        fd_ofd_lock(ofd);
-        bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, ofd->offset);
-        if (bytes_read > 0) {
-            ofd->offset += (uint64_t)bytes_read;
-        }
-        fd_ofd_unlock(ofd);
-        return bytes_read;
+        return file_read(entry, buf, count, NULL);
     }
 
     return -EBADF;
@@ -2797,6 +2832,123 @@ int32_t sys_dup2(isr_params_t *params)
     return newfd;
 }
 
+/** Whether a synthetic node of `kind` is one of the directories. */
+static int synth_kind_is_dir(int kind)
+{
+    return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
+           kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR;
+}
+
+/**
+ * Make `path`, the canonical path of the directory at (`mnt`, `node`), the
+ * working directory, and hold the mount it is on: `vfs_cwd_set` takes no hold
+ * on a permanent mount, and a synthetic directory, whose `mnt` is NULL, has
+ * none to take. Returns 0, or -ENOMEM with nothing changed.
+ */
+static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
+{
+    int32_t rc = proc_cwd_set(current_proc, path);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (mnt) {
+        vfs_cwd_set(current_proc, mnt, node);
+    } else {
+        vfs_cwd_clear(current_proc);
+    }
+    return 0;
+}
+
+/**
+ * Change the working directory to `path`, an absolute canonical path in a
+ * path page, which this may write over.
+ *
+ * The working directory keeps a canonical path, so each kind of directory is
+ * named its own way: a synthetic one by its kind, with /proc/self resolved to
+ * the caller's pid so that a later relative name classifies right; one of
+ * another type by the type, when it can name it, so a walk through a link
+ * records where it arrived and not what was typed, and otherwise by the
+ * request with its dots collapsed, which the physical walk that just
+ * succeeded makes exact; one of the KRFFS boot root by its node. Entering
+ * a directory takes search permission on it; anything else is -ENOTDIR. The
+ * KRFFS root is a directory whatever its stored mode says: it is the file
+ * system's anchor, not a node `mkdir` made.
+ */
+static int32_t do_chdir(char *path)
+{
+    struct vfs_ref ref;
+    const struct vpath *svp;
+    krffs_node_t *node;
+    int32_t rc;
+
+    if (path[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+        return cwd_enter("/", NULL, NULL);
+    }
+    rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp) {
+        struct vpath vp = *svp;
+        int rpid = 0;
+
+        vfs_ref_release(&ref);
+        if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR) {
+            rpid = procfs_resolve_pid(vp.pid);
+            if (rpid < 0) {
+                return -ENOENT;
+            }
+        }
+        if (!synth_kind_is_dir(vp.kind)) {
+            return -ENOTDIR;
+        }
+        synth_dir_path(vp.kind, rpid, path, VFS_PATH_MAX);
+        return cwd_enter(path, NULL, NULL);
+    }
+    node = ref.node;
+    if (!mnt_is_root(ref.mnt)) {
+        struct vfs_stat vst;
+        char *named;
+
+        rc = vfs_getattr(ref.mnt, node, &vst);
+        if (rc == 0 && (vst.mode & 0170000u) != 0040000u) {
+            rc = -ENOTDIR;
+        }
+        if (rc == 0) {
+            rc = (int)cred_access_ref(&ref, CRED_X, 0);
+        }
+        if (rc != 0) {
+            vfs_ref_release(&ref);
+            return rc;
+        }
+        collapse_dots(path);
+        named = ref.mnt->type->ops->path ? path_buf_get() : NULL;
+        if (named && mount_dir_path(ref.mnt, node, named, VFS_PATH_MAX) == 0) {
+            rc = cwd_enter(named, ref.mnt, node);
+        } else {
+            rc = cwd_enter(path, ref.mnt, node);
+        }
+        path_buf_put(named);
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+        vfs_ref_release(&ref);
+        return -ENOTDIR;
+    }
+    rc = cred_access_node(node, CRED_X, 0);
+    if (rc == 0 && krffs_node_path(node, path, VFS_PATH_MAX) != 0) {
+        rc = -ENAMETOOLONG;
+    }
+    if (rc == 0) {
+        rc = cwd_enter(path, ref.mnt, node);
+    }
+    vfs_ref_release(&ref);
+    return rc;
+}
+
 /**
  * Change the current working directory (chdir(2)).
  *
@@ -2808,139 +2960,67 @@ int32_t sys_dup2(isr_params_t *params)
 int32_t sys_chdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
-    char pathbuf[256];
-    const char *name;
-    krffs_node_t *node;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-
-    /* Resolve the target relative to the current cwd, into an absolute path. */
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
+    rc = do_chdir(path);
+    path_buf_put(path);
+    return rc;
+}
 
-    /* "/" (or an empty path that absolutized to "/") is the root. */
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
+/**
+ * fchdir(2): EBX = fd. Make the directory `fd` is open on the working
+ * directory.
+ *
+ * The working directory's path is the one the descriptor's `*at` calls
+ * resolve against (`fd_dir_path`), so it follows a directory a type can name
+ * after a rename; a descriptor on anything but a directory is -ENOTDIR, and
+ * one on a directory of the KRFFS boot root removed since is -EBADF. Entering
+ * takes search permission on the directory, which a synthetic one grants
+ * everybody, and the mount hold chdir takes. A descriptor opened with O_PATH
+ * does as well as any other.
+ */
+int32_t sys_fchdir(isr_params_t *params)
+{
+    fd_entry_t *entry;
+    struct vfs_ref ref;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
     }
-    if (name[0] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
-        current_proc->cwd[0] = '/';
-        current_proc->cwd[1] = '\0';
-        vfs_cwd_clear(current_proc);
-        return 0;
+    entry = fd_get(&current_proc->fds, (int)params->ebx);
+    if (!entry) {
+        return -EBADF;
     }
-
-    /* A synthetic directory becomes the cwd (its canonical path, self resolved
-     * to a real pid, so later relative opens re-classify correctly); a
-     * synthetic leaf is ENOTDIR, a missing one ENOENT. */
-    {
-        struct vfs_ref ref;
-        const struct vpath *svp;
-        int32_t rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
-
-        if (rc != 0) {
-            return rc;
-        }
-        svp = vfs_synth_vpath(ref.mnt, ref.node);
-        if (svp) {
-            struct vpath vp = *svp;
-            int rpid = 0;
-
-            vfs_ref_release(&ref);
-            if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR) {
-                rpid = procfs_resolve_pid(vp.pid);
-                if (rpid < 0) {
-                    return -ENOENT;
-                }
-            }
-            if (vp.kind == VNODE_DEV_DIR || vp.kind == VNODE_PTS_DIR || vp.kind == VNODE_PROC_DIR ||
-                vp.kind == VNODE_PROC_NET_DIR || vp.kind == VNODE_PROC_PID ||
-                vp.kind == VNODE_PROC_FD_DIR) {
-                synth_dir_path(vp.kind, rpid, current_proc->cwd, sizeof(current_proc->cwd));
-                vfs_cwd_clear(current_proc);
-                return 0;
-            }
-            return -ENOTDIR; /* a synthetic leaf */
-        }
-        node = ref.node;
-        if (!mnt_is_root(ref.mnt)) {
-            /* A directory on another type: its attributes decide, and the
-             * canonical string is the request with `.` and `..` collapsed,
-             * which the physical walk that just succeeded makes exact. */
-            struct vfs_stat vst;
-
-            rc = vfs_getattr(ref.mnt, node, &vst);
-            if (rc == 0 && (vst.mode & 0170000u) != 0040000u) {
-                rc = -ENOTDIR;
-            }
-            if (rc == 0) {
-                rc = (int)cred_access_ref(&ref, CRED_X, 0);
-            }
-            if (rc != 0) {
-                vfs_ref_release(&ref);
-                return rc;
-            }
-            if (k_strlen(pathbuf) + 1 > sizeof(current_proc->cwd)) {
-                vfs_ref_release(&ref);
-                return -ENAMETOOLONG;
-            }
-            k_strncpy(current_proc->cwd, pathbuf, sizeof(current_proc->cwd));
-            collapse_dots(current_proc->cwd);
-            /* A type that can name its directories names this one, so a
-             * walk through a link records where it arrived and not what
-             * was typed. */
-            if (ref.mnt->type->ops->path) {
-                char inside[256];
-
-                if (ref.mnt->type->ops->path(ref.mnt, ref.node, inside, sizeof(inside)) == 0 &&
-                    k_strlen(ref.mnt->covered_path) + k_strlen(inside) + 1 <=
-                        sizeof(current_proc->cwd)) {
-                    const char *mp = ref.mnt->covered_path;
-                    uint32_t ml = k_strlen(mp);
-
-                    if (ml == 1 && mp[0] == '/') {
-                        ml = 0;
-                    }
-                    k_memcpy(current_proc->cwd, mp, ml);
-                    k_memcpy(current_proc->cwd + ml, inside, k_strlen(inside) + 1);
-                    if (current_proc->cwd[0] == '\0') {
-                        current_proc->cwd[0] = '/';
-                        current_proc->cwd[1] = '\0';
-                    }
-                }
-            }
-            vfs_cwd_set(current_proc, ref.mnt, ref.node);
-            vfs_ref_release(&ref);
-            return 0;
-        }
-        /* The root node is always a directory even if its on-disk mode lacks
-         * the S_IFDIR bit (it is the filesystem anchor, not a mkdir'd node). A
-         * regular file as the final component is ENOTDIR. */
-        if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
-            vfs_ref_release(&ref);
-            return -ENOTDIR;
-        }
-        rc = cred_access_node(node, CRED_X, 0);
-        if (rc != 0) {
-            vfs_ref_release(&ref);
-            return rc; /* entering a directory is the search (x) right */
-        }
-        /* Store the canonical absolute path (krffs_node_path follows real
-         * parent links, so any '.'/'..' in the request is collapsed). If it
-         * does not fit the fixed cwd buffer the cwd is left unchanged. */
-        if (krffs_node_path(node, current_proc->cwd, sizeof(current_proc->cwd)) != 0) {
-            vfs_ref_release(&ref);
-            return -ENAMETOOLONG;
-        }
-        vfs_cwd_set(current_proc, ref.mnt, ref.node);
-        vfs_ref_release(&ref);
+    path = path_buf_get();
+    if (!path) {
+        return -ENOMEM;
     }
-    return 0;
+    rc = fd_dir_path(entry, path, VFS_PATH_MAX);
+    if (rc == 0 && entry->type == FD_TYPE_SYNTH_DIR) {
+        rc = cwd_enter(path, NULL, NULL);
+    } else if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
+        rc = -EBADF;
+    } else if (rc == 0) {
+        ref.mnt = entry->ofd->vmnt;
+        ref.node = entry->ofd->vnode;
+        rc = mnt_is_root(ref.mnt) ? cred_access_node((krffs_node_t *)ref.node, CRED_X, 0)
+                                  : cred_access_ref(&ref, CRED_X, 0);
+        if (rc == 0) {
+            rc = cwd_enter(path, ref.mnt, ref.node);
+        }
+    }
+    path_buf_put(path);
+    return rc;
 }
 
 /* getcwd(2): EBX = buf, ECX = size. Returns the path length including the
@@ -2961,12 +3041,12 @@ int32_t sys_getcwd(isr_params_t *params)
         return -EINVAL;
     }
 
-    cwd_len = k_strlen(current_proc->cwd);
+    cwd_len = k_strlen(proc_cwd(current_proc));
     if (cwd_len + 1 > size) {
         return -ERANGE; /* buffer too small for the path + NUL */
     }
 
-    if (copy_to_user(buf, current_proc->cwd, cwd_len + 1) != 0) {
+    if (copy_to_user(buf, proc_cwd(current_proc), cwd_len + 1) != 0) {
         return -EFAULT;
     }
 
@@ -3363,7 +3443,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
     struct vpath vp;
     struct vfs_ref ref;
     const struct vpath *svp;
-    char link[VFS_WALK_PATH_MAX]; /* a target up to the resolver's own bound */
+    char *link; /* a target up to the resolver's own bound, in a path page */
     int n, pid, kind;
 
     if (!ubuf || bufsiz == 0) {
@@ -3373,26 +3453,20 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
     if (kind != 0) {
         return kind;
     }
+    link = path_buf_get();
+    if (!link) {
+        vfs_ref_release(&ref);
+        return -ENOMEM;
+    }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (!svp) {
         /* A link on a mounted type: its target from the type, copied out
          * without the terminator, as readlink(2) does. */
-        if (!ref.mnt->type->ops->readlink) {
-            vfs_ref_release(&ref);
-            return -EINVAL;
-        }
-        n = ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, sizeof(link));
+        n = ref.mnt->type->ops->readlink
+                ? ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, VFS_PATH_MAX)
+                : -EINVAL;
         vfs_ref_release(&ref);
-        if (n < 0) {
-            return n;
-        }
-        if ((uint32_t)n > bufsiz) {
-            n = (int)bufsiz;
-        }
-        if (copy_to_user(ubuf, link, (uint32_t)n) != 0) {
-            return -EFAULT;
-        }
-        return n;
+        goto out;
     }
     vp = *svp;
     vfs_ref_release(&ref);
@@ -3404,12 +3478,11 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
         char t[12];
         int tn = 0;
         pid = procfs_resolve_pid(vp.pid);
-        if (pid < 0) {
-            return -ENOENT;
-        }
         n = 0;
         uv = (uint32_t)pid;
-        if (uv == 0) {
+        if (pid < 0) {
+            n = -ENOENT;
+        } else if (uv == 0) {
             link[n++] = '0';
         } else {
             while (uv) {
@@ -3422,23 +3495,19 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
         }
     } else if (kind == VNODE_PROC_FD_LINK) {
         pid = procfs_resolve_pid(vp.pid);
-        if (pid < 0) {
-            return -ENOENT;
-        }
-        n = procfs_readlink_fd(pid, vp.procfd, link, (int)sizeof(link));
-        if (n < 0) {
-            return n;
-        }
+        n = pid < 0 ? -ENOENT : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
     } else {
-        return -EINVAL; /* not a symlink */
+        n = -EINVAL; /* not a symlink */
     }
 
-    if ((uint32_t)n > bufsiz) {
+out:
+    if (n >= 0 && (uint32_t)n > bufsiz) {
         n = (int)bufsiz; /* truncate to the caller's buffer */
     }
-    if (copy_to_user(ubuf, link, (uint32_t)n) != 0) {
-        return -EFAULT;
+    if (n >= 0 && copy_to_user(ubuf, link, (uint32_t)n) != 0) {
+        n = -EFAULT;
     }
+    path_buf_put(link);
     return n;
 }
 
@@ -3447,22 +3516,19 @@ int32_t sys_readlink(isr_params_t *params)
     const char __user *upath = (const char __user *)params->ebx;
     char __user *ubuf = (char __user *)params->ecx;
     uint32_t bufsiz = params->edx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_readlink(name, ubuf, bufsiz);
+    rc = do_readlink(path_name(path), ubuf, bufsiz);
+    path_buf_put(path);
+    return rc;
 }
 
 int32_t sys_readlinkat(isr_params_t *params)
@@ -3471,22 +3537,19 @@ int32_t sys_readlinkat(isr_params_t *params)
     const char __user *upath = (const char __user *)params->ecx;
     char __user *ubuf = (char __user *)params->edx;
     uint32_t bufsiz = params->esi;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(dirfd, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_readlink(name, ubuf, bufsiz);
+    rc = do_readlink(path_name(path), ubuf, bufsiz);
+    path_buf_put(path);
+    return rc;
 }
 
 /* Whether a synthetic node is one of /proc's links, by its unfollowed mode. */
@@ -3500,16 +3563,18 @@ static int synth_is_link(const struct vpath *vp)
 static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st, int follow)
 {
     struct linux_stat64 kst;
-    char pathbuf[256];
-    int len;
+    char *pathbuf;
 
     if (!current_proc || !path || !st) {
         return -EFAULT;
     }
 
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
-    if (len < 0) {
-        return len;
+    {
+        int rc = path_from_user(AT_FDCWD, path, &pathbuf);
+
+        if (rc != 0) {
+            return rc;
+        }
     }
 
     /* Build the result in a kernel struct, then copy it out in one shot. */
@@ -3520,6 +3585,7 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         const struct vpath *vp;
         int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
 
+        path_buf_put(pathbuf);
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
         }
@@ -3698,7 +3764,7 @@ static uint32_t statfs_magic_for_kind(int kind)
  */
 int32_t sys_statfs64(isr_params_t *params)
 {
-    char pathbuf[256];
+    char *pathbuf;
     int len;
 
     if (!current_proc || !params->ebx || !params->edx) {
@@ -3707,8 +3773,8 @@ int32_t sys_statfs64(isr_params_t *params)
     if (params->ecx != sizeof(struct linux_statfs64)) {
         return -EINVAL;
     }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), (const char __user *)params->ebx);
-    if (len < 0) {
+    len = path_from_user(AT_FDCWD, (const char __user *)params->ebx, &pathbuf);
+    if (len != 0) {
         return len;
     }
     /* The path has to name something. Answering for a path that does not exist
@@ -3720,6 +3786,7 @@ int32_t sys_statfs64(isr_params_t *params)
         uint32_t magic = STATFS_MAGIC_KRFFS;
         int rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
 
+        path_buf_put(pathbuf);
         if (rc != 0) {
             return rc;
         }
@@ -3927,80 +3994,127 @@ int32_t sys_fstat64(isr_params_t *params)
     return 0;
 }
 
-/*
+/**
+ * Whether the user's path is the empty string, which with AT_EMPTY_PATH names
+ * the descriptor a call is given rather than a file below it. A NULL path
+ * counts as empty, as it does on Linux since 6.11. Returns 1, 0 or -EFAULT.
+ */
+static int user_path_empty(const char __user *upath)
+{
+    char c;
+
+    if (!upath) {
+        return 1;
+    }
+    if (copy_from_user(&c, upath, 1) != 0) {
+        return -EFAULT;
+    }
+    return c == '\0';
+}
+
+/**
+ * Fill `kst` for the absolute canonical path `path`, a final symbolic link
+ * followed when `follow`: the path half of fstatat64. The KRFFS root has the
+ * fixed identity `stat` reports for it, and a /proc link is reported as a
+ * link when it is not followed.
+ */
+static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *kst)
+{
+    struct vfs_ref ref;
+    const struct vpath *svp;
+    int32_t rc;
+
+    k_memset(kst, 0, sizeof(*kst));
+    if (path[0] == '/' && path[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+        kst->st_mode = S_IFDIR | 0755;
+        kst->st_ino = kst->__st_ino = 1;
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        stat64_root_times(kst);
+        return 0;
+    }
+    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp) {
+        rc = synth_stat(svp, kst, follow);
+    } else if (!mnt_is_root(ref.mnt)) {
+        rc = vfs_fill_stat64(kst, &ref);
+    } else {
+        krffs_fill_stat64(kst, (krffs_node_t *)ref.node);
+    }
+    vfs_ref_release(&ref);
+    return rc;
+}
+
+/**
  * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI
- * = flags. The path resolves the same way as openat (absolute, or relative
- * to AT_FDCWD/the dirfd; see copy_path_at). AT_SYMLINK_NOFOLLOW is honored
- * for the /proc magic symlinks; KRFFS has none.
+ * = flags.
+ *
+ * The path resolves as openat's does: absolute, or relative to the working
+ * directory for AT_FDCWD or to the directory `dirfd` is open on (see
+ * copy_path_at). AT_SYMLINK_NOFOLLOW reports a final symbolic link itself.
+ * With AT_EMPTY_PATH an empty path reports the object `dirfd` refers to,
+ * whatever it is, as fstat64 does, or the working directory for AT_FDCWD;
+ * GNU libc's fstat is this call. AT_NO_AUTOMOUNT is accepted and means
+ * nothing here, and any other flag is -EINVAL before the path is read.
  */
 int32_t sys_fstatat64(isr_params_t *params)
 {
     int dirfd = (int)params->ebx;
     const char __user *upath = (const char __user *)params->ecx;
     struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->edx;
+    int flags = (int)params->esi;
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     struct linux_stat64 kst;
-    char pathbuf[256];
-    krffs_node_t *node;
-    int len;
+    char *pathbuf;
+    int empty = 0;
+    int32_t rc;
 
-    if (!current_proc || !upath || !st) {
+    if (!current_proc || !st) {
         return -EFAULT;
     }
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
-    if (len < 0) {
-        return len;
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
+        return -EINVAL;
     }
-
-    k_memset(&kst, 0, sizeof(kst));
-    if (pathbuf[0] == '/' && pathbuf[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
-        kst.st_mode = S_IFDIR | 0755; /* the KRFFS root directory */
-        kst.st_ino = kst.__st_ino = 1;
-        kst.st_nlink = 1;
-        kst.st_blksize = 4096;
-        stat64_root_times(&kst);
-    } else {
-        struct vfs_ref ref;
-        const struct vpath *svp;
-        int32_t rc;
-
-        if ((int)params->esi & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
-            return -EINVAL;
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
         }
-        rc = vfs_resolve(0, pathbuf,
-                         ((int)params->esi & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0,
-                         0);
+    }
+    if (empty && dirfd != AT_FDCWD) {
+        fd_entry_t *entry = fd_get(&current_proc->fds, dirfd);
 
+        if (!entry) {
+            return -EBADF;
+        }
+        rc = fstat_fill(entry, &kst);
+    } else if (empty) {
+        pathbuf = path_buf_get();
+        if (!pathbuf) {
+            return -ENOMEM;
+        }
+        k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
+        rc = fstatat_path(pathbuf, follow, &kst);
+        path_buf_put(pathbuf);
+    } else {
+        if (!upath) {
+            return -EFAULT;
+        }
+        rc = path_from_user(dirfd, upath, &pathbuf);
         if (rc != 0) {
             return rc;
         }
-        svp = vfs_synth_vpath(ref.mnt, ref.node);
-        if (svp) {
-            /* AT_SYMLINK_NOFOLLOW (lstat) reports the magic symlinks;
-             * otherwise they are followed. */
-            int follow = !((int)params->esi & AT_SYMLINK_NOFOLLOW);
-
-            rc = synth_stat(svp, &kst, follow);
-            vfs_ref_release(&ref);
-            if (rc != 0) {
-                return rc;
-            }
-        } else if (!mnt_is_root(ref.mnt)) {
-            rc = vfs_fill_stat64(&kst, &ref);
-            vfs_ref_release(&ref);
-            if (rc != 0) {
-                return rc;
-            }
-        } else {
-            node = ref.node;
-            krffs_fill_stat64(&kst, node);
-            vfs_ref_release(&ref);
-        }
+        rc = fstatat_path(pathbuf, follow, &kst);
+        path_buf_put(pathbuf);
     }
-
-    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-        return -EFAULT;
+    if (rc == 0 && copy_to_user(st, &kst, sizeof(kst)) != 0) {
+        rc = -EFAULT;
     }
-    return 0;
+    return rc;
 }
 
 /* access(2) mode bits. */
@@ -4068,22 +4182,19 @@ int32_t sys_access(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
     int mode = (int)params->ecx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_access(name, mode);
+    rc = do_access(path_name(path), mode);
+    path_buf_put(path);
+    return rc;
 }
 
 int32_t sys_faccessat(isr_params_t *params)
@@ -4091,22 +4202,19 @@ int32_t sys_faccessat(isr_params_t *params)
     int dirfd = (int)params->ebx;
     const char __user *upath = (const char __user *)params->ecx;
     int mode = (int)params->edx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(dirfd, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_access(name, mode);
+    rc = do_access(path_name(path), mode);
+    path_buf_put(path);
+    return rc;
 }
 
 /**
@@ -4371,22 +4479,19 @@ int32_t sys_chmod(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
     uint32_t mode = params->ecx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_chmod(name, mode);
+    rc = do_chmod(path_name(path), mode);
+    path_buf_put(path);
+    return rc;
 }
 
 int32_t sys_fchmodat(isr_params_t *params)
@@ -4394,22 +4499,19 @@ int32_t sys_fchmodat(isr_params_t *params)
     int dirfd = (int)params->ebx;
     const char __user *upath = (const char __user *)params->ecx;
     uint32_t mode = params->edx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(dirfd, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_chmod(name, mode);
+    rc = do_chmod(path_name(path), mode);
+    path_buf_put(path);
+    return rc;
 }
 
 /* fchmod(fd, mode): the descriptor form, under the rules do_chmod keeps:
@@ -4475,22 +4577,19 @@ int32_t sys_chown(isr_params_t *params)
     const char __user *upath = (const char __user *)params->ebx;
     uint32_t uid = params->ecx;
     uint32_t gid = params->edx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_chown(name, uid, gid);
+    rc = do_chown(path_name(path), uid, gid);
+    path_buf_put(path);
+    return rc;
 }
 
 int32_t sys_fchownat(isr_params_t *params)
@@ -4499,22 +4598,19 @@ int32_t sys_fchownat(isr_params_t *params)
     const char __user *upath = (const char __user *)params->ecx;
     uint32_t uid = params->edx;
     uint32_t gid = params->esi;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, upath);
-    if (len < 0) {
-        return len;
+    rc = path_from_user(dirfd, upath, &path);
+    if (rc != 0) {
+        return rc;
     }
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    return do_chown(name, uid, gid);
+    rc = do_chown(path_name(path), uid, gid);
+    path_buf_put(path);
+    return rc;
 }
 
 /* fchown(fd, uid, gid): the descriptor form, under the same ownership rule
@@ -4589,6 +4685,166 @@ int32_t sys_fchown(isr_params_t *params)
         return -EPERM;
     }
     return 0;
+}
+
+/**
+ * The refusals of truncate(2) for the file `ref` resolved to, in Linux's
+ * order: a directory is -EISDIR and anything but a regular file -EINVAL, a
+ * read-only mount -EROFS, a caller without write permission -EACCES, and a
+ * file a loop device holds -EBUSY. A /proc file is -EACCES to every caller,
+ * root included, as an open of one for writing is. Returns 0 or the errno.
+ */
+static int32_t truncate_checks(const struct vfs_ref *ref)
+{
+    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    krffs_node_t *node = ref->node;
+    uint32_t mode;
+    int32_t rc;
+
+    if (vp) {
+        struct linux_stat64 kst;
+
+        rc = synth_stat(vp, &kst, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        mode = kst.st_mode;
+    } else if (mnt_is_root(ref->mnt)) {
+        mode = (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? S_IFDIR : S_IFREG;
+    } else {
+        struct vfs_stat vst;
+
+        rc = vfs_getattr(ref->mnt, ref->node, &vst);
+        if (rc != 0) {
+            return rc;
+        }
+        mode = vst.mode;
+    }
+    if ((mode & S_IFMT) == S_IFDIR) {
+        return -EISDIR;
+    }
+    if ((mode & S_IFMT) != S_IFREG) {
+        return -EINVAL;
+    }
+    if (vp) {
+        return -EACCES;
+    }
+    if (ref->mnt->flags & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
+    if (mnt_is_root(ref->mnt)) {
+        rc = cred_access_node(node, CRED_W, 0);
+    } else {
+        rc = cred_access_ref(ref, CRED_W, 0);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    return loop_backs(ref->mnt, ref->node) ? -EBUSY : 0;
+}
+
+/**
+ * Set the length of the file at `path`, an absolute path in a path page, to
+ * `length` bytes, which is not negative, for truncate(2) and truncate64(2).
+ *
+ * The path is resolved through links and `truncate_checks` has what is
+ * refused. The file is then truncated through an open-file description of
+ * its own, which no descriptor points at, with the open, the lock and the
+ * close of an open for writing and an ftruncate: a KRFFS file that must move
+ * to grow repoints the description, so the set-id clear of an unprivileged
+ * caller finds the file where it is now, and a loop attachment sees the
+ * truncation in progress, as it sees an ftruncate. Linux has ETXTBSY where
+ * a program being run is truncated, and no loop rule; this kernel has the
+ * loop rule and no ETXTBSY.
+ */
+static int32_t truncate_path(const char *path, long long length)
+{
+    struct vfs_ref ref;
+    struct vfs_mount *locked;
+    struct open_file *desc = NULL;
+    int32_t rc;
+
+    rc = vfs_resolve(0, path_name(path), VFS_WALK_LOCK, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    locked = ref.mnt;
+    rc = truncate_checks(&ref);
+    if (rc == 0) {
+        desc = fd_ofd_new();
+        rc = desc ? vfs_open_node(ref.mnt, ref.node, 1 /* O_WRONLY */, &desc->fhandle) : -ENOMEM;
+    }
+    if (rc != 0) {
+        fd_ofd_unref(desc);
+        vfs_walk_unlock(locked);
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    desc->vmnt = ref.mnt;
+    desc->vnode = ref.node;
+    vfs_desc_open(ref.mnt);
+    vfs_leave(ref.mnt);
+    fd_ofd_lock(desc);
+    rc = -EBUSY;
+    if (!loop_backs(desc->vmnt, desc->vnode)) {
+        rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
+    }
+    if (rc == 0 && !cred_privileged()) {
+        if (mnt_is_root(desc->vmnt)) {
+            cred_kill_setid(desc->vnode);
+        } else {
+            vfs_kill_setid(desc->vmnt, desc->vnode);
+        }
+    }
+    fd_ofd_unlock(desc);
+    fd_ofd_unref(desc);
+    vfs_walk_unlock(locked);
+    return rc;
+}
+
+/**
+ * The shared body of truncate(2) and truncate64(2): a negative length is
+ * -EINVAL before the path is looked at, as on Linux, and the path is copied
+ * into a path page for `truncate_path`.
+ */
+static int32_t truncate_user(const char __user *upath, long long length)
+{
+    char *path;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (length < 0) {
+        return -EINVAL;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = truncate_path(path, length);
+    path_buf_put(path);
+    return rc;
+}
+
+/** truncate(2): EBX = path, ECX = the length, a signed 32-bit value. */
+int32_t sys_truncate(isr_params_t *params)
+{
+    return truncate_user((const char __user *)params->ebx, (long long)(int32_t)params->ecx);
+}
+
+/**
+ * truncate64(2): EBX = path, ECX and EDX = the length's low and high words.
+ * Musl's and GNU libc's truncate are this call on i386.
+ */
+int32_t sys_truncate64(isr_params_t *params)
+{
+    uint64_t length = (uint64_t)params->ecx | ((uint64_t)params->edx << 32);
+
+    return truncate_user((const char __user *)params->ebx, (long long)length);
 }
 
 /*
@@ -4669,26 +4925,44 @@ static int32_t do_symlink(const char *target, const char *newname)
     return rc;
 }
 
+/**
+ * symlink(2) and symlinkat(2) after their arguments: the target is copied as
+ * it is, up to `VFS_PATH_MAX` bytes with its terminator, and never resolved;
+ * the new name is resolved from `newdirfd`.
+ */
+static int32_t symlink_from_user(const char __user *utarget, int newdirfd, const char __user *unew)
+{
+    char *target = path_buf_get();
+    char *newpath = NULL;
+    int32_t rc;
+
+    if (!target) {
+        return -ENOMEM;
+    }
+    rc = strncpy_from_user(target, utarget, VFS_PATH_MAX);
+    if (rc == 0) {
+        rc = -ENOENT; /* an empty target, as Linux answers */
+    }
+    if (rc > 0) {
+        rc = path_from_user(newdirfd, unew, &newpath);
+    }
+    if (rc == 0) {
+        rc = do_symlink(target, path_name(newpath));
+    }
+    path_buf_put(newpath);
+    path_buf_put(target);
+    return rc;
+}
+
 int32_t sys_symlink(isr_params_t *params)
 {
     const char __user *utarget = (const char __user *)params->ebx;
     const char __user *unew = (const char __user *)params->ecx;
-    char target[VFS_WALK_PATH_MAX];
-    char newbuf[256];
-    int len;
 
     if (!current_proc || !utarget || !unew) {
         return -EFAULT;
     }
-    len = strncpy_from_user(target, utarget, sizeof(target));
-    if (len < 0) {
-        return len;
-    }
-    len = copy_path_cwd(newbuf, sizeof(newbuf), unew);
-    if (len < 0) {
-        return len;
-    }
-    return do_symlink(target, newbuf[0] == '/' ? newbuf + 1 : newbuf);
+    return symlink_from_user(utarget, AT_FDCWD, unew);
 }
 
 int32_t sys_symlinkat(isr_params_t *params)
@@ -4696,55 +4970,46 @@ int32_t sys_symlinkat(isr_params_t *params)
     const char __user *utarget = (const char __user *)params->ebx;
     int newdirfd = (int)params->ecx;
     const char __user *unew = (const char __user *)params->edx;
-    char target[VFS_WALK_PATH_MAX];
-    char newbuf[256];
-    int len;
 
     if (!current_proc || !utarget || !unew) {
         return -EFAULT;
     }
-    len = strncpy_from_user(target, utarget, sizeof(target));
-    if (len < 0) {
-        return len;
+    return symlink_from_user(utarget, newdirfd, unew);
+}
+
+/**
+ * link(2) and linkat(2) after their arguments: both paths are copied, which
+ * reports a bad pointer as -EFAULT and a bad directory descriptor as -EBADF,
+ * before the source is looked up, so a missing source is -ENOENT and not the
+ * -EPERM of a file system without links.
+ */
+static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirfd,
+                              const char __user *unew, int follow)
+{
+    char *oldpath = NULL;
+    char *newpath = NULL;
+    int32_t rc = path_from_user(olddirfd, uold, &oldpath);
+
+    if (rc == 0) {
+        rc = path_from_user(newdirfd, unew, &newpath);
     }
-    len = copy_path_at(newbuf, sizeof(newbuf), newdirfd, unew);
-    if (len < 0) {
-        return len;
+    if (rc == 0) {
+        rc = do_link(path_name(oldpath), path_name(newpath), follow);
     }
-    return do_symlink(target, newbuf[0] == '/' ? newbuf + 1 : newbuf);
+    path_buf_put(newpath);
+    path_buf_put(oldpath);
+    return rc;
 }
 
 int32_t sys_link(isr_params_t *params)
 {
     const char __user *uold = (const char __user *)params->ebx;
     const char __user *unew = (const char __user *)params->ecx;
-    char oldbuf[256];
-    char newbuf[256];
-    const char *name;
-    int len;
-    int32_t rc;
 
     if (!current_proc || !uold || !unew) {
         return -EFAULT;
     }
-    /* Validate BOTH paths (copy_path_cwd faults a bad pointer to -EFAULT) and
-     * that the source exists, before reporting that the filesystem cannot
-     * hard-link: link(valid, bad_ptr) is -EFAULT, link(missing, x) is
-     * -ENOENT, not -EPERM. */
-    len = copy_path_cwd(oldbuf, sizeof(oldbuf), uold);
-    if (len < 0) {
-        return len;
-    }
-    len = copy_path_cwd(newbuf, sizeof(newbuf), unew);
-    if (len < 0) {
-        return len;
-    }
-    name = oldbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    rc = do_link(name, newbuf[0] == '/' ? newbuf + 1 : newbuf, 0);
-    return rc;
+    return link_from_user(AT_FDCWD, uold, AT_FDCWD, unew, 0);
 }
 
 int32_t sys_linkat(isr_params_t *params)
@@ -4754,11 +5019,6 @@ int32_t sys_linkat(isr_params_t *params)
     int newdirfd = (int)params->edx;
     const char __user *unew = (const char __user *)params->esi;
     int flags = (int)params->edi;
-    char oldbuf[256];
-    char newbuf[256];
-    const char *name;
-    int len;
-    int32_t rc;
 
     if (!current_proc || !uold || !unew) {
         return -EFAULT;
@@ -4767,23 +5027,7 @@ int32_t sys_linkat(isr_params_t *params)
     if (flags & ~(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
     }
-    /* Resolve the source against olddirfd and the destination against newdirfd,
-     * so a bad dirfd (-EBADF) or pointer (-EFAULT) and a missing source
-     * (-ENOENT) are reported before the "no hard links" -EPERM. */
-    len = copy_path_at(oldbuf, sizeof(oldbuf), olddirfd, uold);
-    if (len < 0) {
-        return len;
-    }
-    len = copy_path_at(newbuf, sizeof(newbuf), newdirfd, unew);
-    if (len < 0) {
-        return len;
-    }
-    name = oldbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-    rc = do_link(name, newbuf[0] == '/' ? newbuf + 1 : newbuf, (flags & AT_SYMLINK_FOLLOW) != 0);
-    return rc;
+    return link_from_user(olddirfd, uold, newdirfd, unew, (flags & AT_SYMLINK_FOLLOW) != 0);
 }
 
 /* The 64-bit displacement `_llseek` takes as two words. */
@@ -4994,6 +5238,139 @@ int32_t sys__llseek(isr_params_t *params)
 }
 
 /**
+ * The refusals pread64 and pwrite64 share, in Linux's order: a negative
+ * offset is -EINVAL before the descriptor is looked at, a descriptor that is
+ * not open is -EBADF, one that cannot seek is -ESPIPE, one not open for the
+ * direction (`write` or not) is -EBADF, a count or an end past the signed
+ * range is -EINVAL, and a directory is -EISDIR.
+ *
+ * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
+ * mouse, the framebuffer, and a device other than a raw disk window, the log
+ * and the three whose seek always lands at 0, /dev/null, /dev/zero and
+ * /dev/full. A /proc snapshot is read at an offset, as Linux reads one,
+ * though lseek refuses it. Returns 0 with the descriptor in `*out`, or the
+ * errno.
+ */
+static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_entry_t **out)
+{
+    fd_entry_t *entry;
+
+    if (pos < 0) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_DEVICE) {
+        if (!devfs_fd_is_raw(entry) && !devfs_fd_log_size(entry, NULL) &&
+            !devfs_lseek_zero(entry)) {
+            return -ESPIPE;
+        }
+    } else if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR &&
+               entry->type != FD_TYPE_SYNTH_DIR && entry->type != FD_TYPE_PROC) {
+        return -ESPIPE;
+    }
+    if (!(entry->flags & (write ? FD_FLAG_WRITE : FD_FLAG_READ))) {
+        return -EBADF;
+    }
+    if (count > 0x7FFFFFFFu || (uint64_t)count > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+        return -EINVAL;
+    }
+    if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
+        return -EISDIR;
+    }
+    *out = entry;
+    return 0;
+}
+
+/**
+ * Make `view` a copy of the device or /proc descriptor `entry` whose
+ * description is `desc`, a copy of the shared one with both offsets at `at`,
+ * for pread64 and pwrite64.
+ *
+ * A device's read or write moves the offset it uses, a raw window's own or
+ * the description's for the log and a /proc snapshot, and reads nothing else
+ * of the description. Given the copy, it uses and moves the copy's, and the
+ * shared description, which a sharer may be reading or seeking at the same
+ * time, never changes. The log and a snapshot take a 32-bit offset and are
+ * shorter than 4 GiB, so a position past that is their end.
+ */
+static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct open_file *desc)
+{
+    *desc = *entry->ofd;
+    desc->offset = at > 0xFFFFFFFFu ? 0xFFFFFFFFu : at;
+    desc->raw_offset = at;
+    *view = *entry;
+    view->ofd = desc;
+}
+
+/**
+ * pread64(2): EBX = fd, ECX = buffer, EDX = count, ESI and EDI = the
+ * offset's low and high words, the i386 order. Reads at the offset and
+ * leaves the descriptor's own where it was; `pio_entry` has what it refuses.
+ * A regular file is read at the offset under the description's lock, as
+ * read(2) reads it, and a device or a /proc snapshot through `pio_view`.
+ */
+int32_t sys_pread64(isr_params_t *params)
+{
+    char __user *buf = (char __user *)params->ecx;
+    uint32_t count = params->edx;
+    long long pos = off_from(params->edi, params->esi);
+    uint64_t at = (uint64_t)pos;
+    fd_entry_t *entry = NULL;
+    fd_entry_t view;
+    struct open_file desc;
+    int32_t rc = pio_entry((int)params->ebx, 0, count, pos, &entry);
+
+    if (rc != 0 || count == 0) {
+        return rc;
+    }
+    if (entry->type == FD_TYPE_FILE) {
+        return file_read(entry, buf, count, &at);
+    }
+    if (!entry->ops || !entry->ops->read || !entry->ofd) {
+        return -EBADF;
+    }
+    pio_view(entry, at, &view, &desc);
+    return entry->ops->read(&view, buf, count);
+}
+
+/**
+ * pwrite64(2): pread64's arguments, with the buffer written from. Writes at
+ * the offset and leaves the descriptor's own where it was, except that
+ * O_APPEND writes at the end of the file, as Linux's pwrite does; the
+ * set-id bits and the loop device's file are write's rules (`file_write`).
+ * A device is written as pread64 reads it.
+ */
+int32_t sys_pwrite64(isr_params_t *params)
+{
+    const char __user *buf = (const char __user *)params->ecx;
+    uint32_t count = params->edx;
+    long long pos = off_from(params->edi, params->esi);
+    uint64_t at = (uint64_t)pos;
+    fd_entry_t *entry = NULL;
+    fd_entry_t view;
+    struct open_file desc;
+    int32_t rc = pio_entry((int)params->ebx, 1, count, pos, &entry);
+
+    if (rc != 0 || count == 0) {
+        return rc;
+    }
+    if (entry->type == FD_TYPE_FILE) {
+        return file_write(entry, buf, count, &at);
+    }
+    if (!entry->ops || !entry->ops->write || !entry->ofd) {
+        return -EBADF;
+    }
+    pio_view(entry, at, &view, &desc);
+    return entry->ops->write(&view, buf, count);
+}
+
+/**
  * Descriptor control (fcntl64, syscall 221).
  *
  * EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
@@ -5175,7 +5552,7 @@ static void stat_root_times(struct linux_stat *kst)
 static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st, int follow)
 {
     struct linux_stat kst;
-    char pathbuf[256];
+    char *pathbuf;
     krffs_node_t *node;
     int len;
 
@@ -5183,8 +5560,8 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         return -EFAULT;
     }
 
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
-    if (len < 0) {
+    len = path_from_user(AT_FDCWD, path, &pathbuf);
+    if (len != 0) {
         return len;
     }
 
@@ -5192,6 +5569,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     k_memset(&kst, 0, sizeof(kst));
 
     if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
+        path_buf_put(pathbuf);
         kst.st_mode = S_IFDIR | 0755; /* drwxr-xr-x */
         kst.st_nlink = 1;
         kst.st_ino = 1;
@@ -5212,6 +5590,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         const struct vpath *svp;
         int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
 
+        path_buf_put(pathbuf);
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
         }
@@ -5308,32 +5687,28 @@ int32_t sys_creat(isr_params_t *params)
 {
     const char __user *path = (const char __user *)params->ebx;
     uint32_t mode = params->ecx;
-    char pathbuf[256];
-    const char *name;
-    int len;
+    char *pathbuf;
+    int32_t rc;
 
     if (!current_proc || !path) {
         return -EFAULT;
     }
-
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), path);
-    if (len < 0) {
-        return len;
-    }
-
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
+    rc = path_from_user(AT_FDCWD, path, &pathbuf);
+    if (rc != 0) {
+        return rc;
     }
     /* creat(2) is open(O_WRONLY|O_CREAT|O_TRUNC), and it is exactly that
      * call, so the two cannot drift: the EISDIR for a directory, the write
      * check, the truncate with its set-id clear, and the stamp of a new
      * node all happen where open does them. */
-    return do_open(name, 1 /* O_WRONLY */ | O_CREAT | O_TRUNC, mode);
+    rc = do_open(path_name(pathbuf), 1 /* O_WRONLY */ | O_CREAT | O_TRUNC, mode);
+    path_buf_put(pathbuf);
+    return rc;
 }
 
 /**
- * unlink(2): EBX = path. Returns 0 or -errno.
+ * Remove the name `path`, an absolute canonical path, which is not a
+ * directory: the core of unlink(2) and of unlinkat(2) without AT_REMOVEDIR.
  *
  * Every refusal is decided here, not below, because `krffs_unlink`
  * answers all of them with a bare -1, which the wrapper reports as `EIO`
@@ -5343,23 +5718,9 @@ int32_t sys_creat(isr_params_t *params)
  * to use `rmdir`. The root is tested by node identity because it has
  * 0755 with no type bits and would otherwise read as a plain file.
  */
-int32_t sys_unlink(isr_params_t *params)
+static int32_t do_unlink(const char *path)
 {
-    const char __user *upath = (const char __user *)params->ebx;
-    char pathbuf[256];
-    const char *path;
     const char *name;
-    int len;
-
-    if (!current_proc || !upath) {
-        return -EFAULT;
-    }
-
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
-    }
-    path = pathbuf;
 
     if (path[0] == '/' && path[1] == '\0') {
         return -EISDIR; /* the root directory cannot be unlinked */
@@ -5381,7 +5742,7 @@ int32_t sys_unlink(isr_params_t *params)
         void *found;
         int32_t rc;
 
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+        rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
         if (rc != 0) {
             return rc;
         }
@@ -5454,27 +5815,37 @@ int32_t sys_unlink(isr_params_t *params)
     }
 }
 
-/*
- * sys_mkdir - create a directory.
- * Args: EBX = path, ECX = mode (masked by umask, like any creation). Returns 0
- * or -errno (-EEXIST if it exists, -ENOENT if a parent is missing).
- */
-int32_t sys_mkdir(isr_params_t *params)
+/* unlink(2): EBX = path. Returns 0 or -errno. */
+int32_t sys_unlink(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
-    krffs_node_t *node;
-    char pathbuf[256];
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_unlink(path);
+    path_buf_put(path);
+    return rc;
+}
+
+/**
+ * Create the directory `path`, an absolute canonical path, with the
+ * permission bits of `mode` less the umask, as any creation takes them: the
+ * core of mkdir(2) and mkdirat(2). Returns 0 or -errno (-EEXIST if it exists,
+ * -ENOENT if a parent is missing).
+ */
+static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
+{
+    krffs_node_t *node;
+
     if (!vfs_root_mounted()) {
         return -ENOENT;
-    }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
     }
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
         return -EEXIST; /* the root exists; mkdir -p walks through here */
@@ -5510,8 +5881,7 @@ int32_t sys_mkdir(isr_params_t *params)
             rc = cred_access_ref(&parent, CRED_W, 0);
             if (rc == 0) {
                 vfs_ns_lock(parent.mnt);
-                rc = vfs_mkdir(parent.mnt, parent.node, leaf,
-                               params->ecx & 07777u & ~current_proc->umask);
+                rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode & 07777u & ~current_proc->umask);
                 vfs_ns_unlock(parent.mnt);
             }
             vfs_ref_release(&parent);
@@ -5523,7 +5893,7 @@ int32_t sys_mkdir(isr_params_t *params)
             return rc;
         }
         vfs_ns_lock(parent.mnt);
-        rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+        rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode);
         vfs_ns_unlock(parent.mnt);
         if (rc != 0) {
             vfs_ref_release(&parent);
@@ -5531,33 +5901,63 @@ int32_t sys_mkdir(isr_params_t *params)
         }
         if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
             node = found;
-            krffs_stamp_new_node(node, params->ecx);
+            krffs_stamp_new_node(node, mode);
         }
         vfs_ref_release(&parent);
     }
     return 0;
 }
 
-/*
- * sys_rmdir - remove an empty directory.
- * Args: EBX = path. Returns 0 or -errno (-ENOENT, -ENOTDIR, -ENOTEMPTY).
- */
-int32_t sys_rmdir(isr_params_t *params)
+/* mkdir(2): EBX = path, ECX = mode. */
+int32_t sys_mkdir(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
-    krffs_node_t *node;
-    char pathbuf[256];
-    int len;
+    char *path;
+    int32_t rc;
 
     if (!current_proc || !upath) {
         return -EFAULT;
     }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_mkdir(path, params->ecx);
+    path_buf_put(path);
+    return rc;
+}
+
+/* mkdirat(2): EBX = dirfd, ECX = path, EDX = mode; a relative path is
+ * resolved from `dirfd` as openat's is. */
+int32_t sys_mkdirat(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ecx;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user((int)params->ebx, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_mkdir(path, params->edx);
+    path_buf_put(path);
+    return rc;
+}
+
+/**
+ * Remove the empty directory `path`, an absolute canonical path: the core of
+ * rmdir(2) and of unlinkat(2) with AT_REMOVEDIR. Returns 0 or -errno
+ * (-ENOENT, -ENOTDIR, -ENOTEMPTY).
+ */
+static int32_t do_rmdir(const char *pathbuf)
+{
+    krffs_node_t *node;
+
     if (!vfs_root_mounted()) {
         return -ENOENT;
-    }
-    len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
-    if (len < 0) {
-        return len;
     }
     {
         struct vfs_ref parent;
@@ -5615,8 +6015,105 @@ int32_t sys_rmdir(isr_params_t *params)
     }
 }
 
+/* rmdir(2): EBX = path. */
+int32_t sys_rmdir(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_rmdir(path);
+    path_buf_put(path);
+    return rc;
+}
+
+/* The unlinkat flag that makes it rmdir. */
+#define AT_REMOVEDIR 0x200
+
 /**
- * rename(2): EBX = old path, ECX = new path. Returns 0 or -errno.
+ * unlinkat(2): EBX = dirfd, ECX = path, EDX = flags. The name is removed as
+ * unlink removes it, or as rmdir does with AT_REMOVEDIR; any other flag is
+ * -EINVAL before the path is read. A relative path is resolved from `dirfd`.
+ */
+int32_t sys_unlinkat(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ecx;
+    int flags = (int)params->edx;
+    char *path;
+    int32_t rc;
+
+    if (flags & ~AT_REMOVEDIR) {
+        return -EINVAL;
+    }
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user((int)params->ebx, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = (flags & AT_REMOVEDIR) ? do_rmdir(path) : do_unlink(path);
+    path_buf_put(path);
+    return rc;
+}
+
+/* The renameat2 flag this kernel does: refuse to replace the new name. */
+#define RENAME_NOREPLACE 1
+
+/**
+ * Whether `name` is in directory `dir` of `mnt`: 1 or 0, or a negative errno
+ * for a lookup that failed another way. The node a lookup takes goes back.
+ */
+static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    void *found;
+    int rc = mnt->type->ops->lookup(mnt, dir, name, &found);
+
+    if (rc == -ENOENT) {
+        return 0;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (mnt->type->ops->put) {
+        mnt->type->ops->put(mnt, found);
+    }
+    return 1;
+}
+
+/**
+ * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
+ * not there, as the rename would answer, then -EEXIST for a new name that is.
+ * The caller holds the mount's namespace lock from this check through the
+ * rename, and every namespace change takes that lock, so no name can appear
+ * between the two.
+ */
+static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
+                                const struct vfs_ref *npar, const char *nleaf)
+{
+    int rc = name_present(opar->mnt, opar->node, oleaf);
+
+    if (rc <= 0) {
+        return rc == 0 ? -ENOENT : rc;
+    }
+    rc = name_present(npar->mnt, npar->node, nleaf);
+    return rc == 1 ? -EEXIST : rc;
+}
+
+/**
+ * Rename `old_buf` to `new_buf`, both absolute canonical paths: the core of
+ * rename(2), renameat(2) and renameat2(2), whose RENAME_NOREPLACE in `flags`
+ * refuses a new name that exists with -EEXIST, decided with the rename under
+ * one namespace lock. The directories' write permission is checked before
+ * either name is looked up, so a caller without it sees -EACCES where Linux
+ * would report -EEXIST. Returns 0 or -errno.
  *
  * As in `unlink`, every refusal is decided here, because `krffs_rename`
  * answers all of them with a bare -1, which the wrapper reports as `EIO`.
@@ -5631,20 +6128,16 @@ int32_t sys_rmdir(isr_params_t *params)
  * `-ENOTDIR` for a plain file used as a path component, `-EINVAL` for a
  * destination naming no entry.
  *
- * Either path naming the root is `-EINVAL`, from the empty-name check above:
- * `copy_path_cwd` canonicalizes it to "/", which loses its only component.
+ * Either path naming the root is `-EINVAL`, from the empty-name check below:
+ * the path copy canonicalizes it to "/", which loses its only component.
  * `-ENOENT` would be a lie, since the root exists, and POSIX names `EINVAL`
  * for a pathname that is the root. The identity tests below are therefore
  * unreachable today and are kept as defence: freeing the root as a replaced
  * destination would take the file system with it, and that guarantee should
  * not rest on a canonicalizer in another function.
  */
-int32_t sys_rename(isr_params_t *params)
+static int32_t do_rename(const char *old_buf, const char *new_buf, int flags)
 {
-    const char __user *old_path = (const char __user *)params->ebx;
-    const char __user *new_path = (const char __user *)params->ecx;
-    char old_buf[256];
-    char new_buf[256];
     char oleaf[VFS_NAME_MAX + 1];
     char nleaf[VFS_NAME_MAX + 1];
     const char *old_name;
@@ -5654,23 +6147,7 @@ int32_t sys_rename(isr_params_t *params)
     krffs_node_t *node;
     krffs_node_t *existing;
     void *found;
-    int len;
     int32_t rc;
-
-    if (!current_proc || !old_path || !new_path) {
-        return -EFAULT;
-    }
-
-    /* Copy both paths into kernel buffers, resolving relative names against
-     * cwd. */
-    len = copy_path_cwd(old_buf, sizeof(old_buf), old_path);
-    if (len < 0) {
-        return len;
-    }
-    len = copy_path_cwd(new_buf, sizeof(new_buf), new_path);
-    if (len < 0) {
-        return len;
-    }
 
     old_name = old_buf;
     if (old_name[0] == '/') {
@@ -5724,7 +6201,10 @@ int32_t sys_rename(isr_params_t *params)
     }
     if (!mnt_is_root(opar.mnt)) {
         vfs_ns_lock(opar.mnt);
-        rc = cred_remove_ref(&opar, oleaf);
+        rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(&opar, oleaf, &npar, nleaf) : 0;
+        if (rc == 0) {
+            rc = cred_remove_ref(&opar, oleaf);
+        }
         if (rc == 0) {
             rc = cred_remove_ref(&npar, nleaf);
         }
@@ -5748,6 +6228,15 @@ int32_t sys_rename(isr_params_t *params)
     }
     if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
         rc = -EPERM; /* a directory's children reference its id */
+        goto out;
+    }
+    if (flags & RENAME_NOREPLACE) {
+        vfs_ns_lock(opar.mnt);
+        rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
+        if (rc == 0) {
+            rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
+        }
+        vfs_ns_unlock(opar.mnt);
         goto out;
     }
 
@@ -5790,6 +6279,75 @@ out:
     return rc;
 }
 
+/**
+ * rename(2), renameat(2) and renameat2(2) after their arguments: both paths
+ * are copied, each relative one joined to its own directory, before either
+ * is resolved.
+ */
+static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdirfd,
+                                const char __user *unew, int flags)
+{
+    char *oldpath = NULL;
+    char *newpath = NULL;
+    int32_t rc = path_from_user(olddirfd, uold, &oldpath);
+
+    if (rc == 0) {
+        rc = path_from_user(newdirfd, unew, &newpath);
+    }
+    if (rc == 0) {
+        rc = do_rename(oldpath, newpath, flags);
+    }
+    path_buf_put(newpath);
+    path_buf_put(oldpath);
+    return rc;
+}
+
+/* rename(2): EBX = old path, ECX = new path. Returns 0 or -errno. */
+int32_t sys_rename(isr_params_t *params)
+{
+    const char __user *old_path = (const char __user *)params->ebx;
+    const char __user *new_path = (const char __user *)params->ecx;
+
+    if (!current_proc || !old_path || !new_path) {
+        return -EFAULT;
+    }
+    return rename_from_user(AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
+}
+
+/* renameat(2): EBX = old dirfd, ECX = old path, EDX = new dirfd, ESI = new
+ * path; each relative path is resolved from its own descriptor. */
+int32_t sys_renameat(isr_params_t *params)
+{
+    const char __user *old_path = (const char __user *)params->ecx;
+    const char __user *new_path = (const char __user *)params->esi;
+
+    if (!current_proc || !old_path || !new_path) {
+        return -EFAULT;
+    }
+    return rename_from_user((int)params->ebx, old_path, (int)params->edx, new_path, 0);
+}
+
+/**
+ * renameat2(2): renameat's arguments and EDI = flags. RENAME_NOREPLACE
+ * refuses a new name that exists with -EEXIST; RENAME_EXCHANGE,
+ * RENAME_WHITEOUT and any other flag are -EINVAL before a path is read, as a
+ * Linux file system without them answers them later.
+ */
+int32_t sys_renameat2(isr_params_t *params)
+{
+    const char __user *old_path = (const char __user *)params->ecx;
+    const char __user *new_path = (const char __user *)params->esi;
+    int flags = (int)params->edi;
+
+    if (flags & ~RENAME_NOREPLACE) {
+        return -EINVAL;
+    }
+    if (!current_proc || !old_path || !new_path) {
+        return -EFAULT;
+    }
+    return rename_from_user((int)params->ebx, old_path, (int)params->edx, new_path, flags);
+}
+
 /* Special nsec values */
 #define UTIME_NOW ((1L << 30) - 1L)
 
@@ -5811,13 +6369,138 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     rtc_realtime(seconds, nanoseconds);
 }
 
+/** Whether `nsec` is a time's nanoseconds, UTIME_NOW or UTIME_OMIT. */
+static int utime_nsec_valid(int32_t nsec)
+{
+    return nsec == UTIME_NOW || nsec == UTIME_OMIT || (nsec >= 0 && nsec <= 999999999);
+}
+
+/**
+ * Set the access and modification times of the file at (`mnt`, `node`), for
+ * utimensat by path and by descriptor. `times` is the pair [atime, mtime];
+ * NULL sets both to now, a tv_nsec of UTIME_NOW sets that one to now and
+ * UTIME_OMIT leaves it, and any change advances ctime.
+ *
+ * The POSIX permission split: setting both to now is the owner's, or anyone's
+ * with write permission, or root's; an explicit time is the owner's or root's
+ * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
+ * no stored times and is -EROFS; the KRFFS root's times are not changed and
+ * the call succeeds. On another type the read, the check and the store are
+ * one step under the mount's namespace lock, as for chmod and chown.
+ */
+static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kernel_timespec *times)
+{
+    krffs_node_t *kn = node;
+    int64_t now_sec, now_nsec;
+    int now_both =
+        times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
+    int32_t rc = 0;
+
+    if (times && (!utime_nsec_valid(times[0].tv_nsec) || !utime_nsec_valid(times[1].tv_nsec))) {
+        return -EINVAL;
+    }
+    if (vfs_synth_vpath(mnt, node)) {
+        return -EROFS;
+    }
+    get_current_time(&now_sec, &now_nsec);
+    if (!mnt_is_root(mnt)) {
+        struct vfs_ref ref;
+        struct vfs_stat vst;
+        int what = 0;
+
+        ref.mnt = mnt;
+        ref.node = node;
+        vfs_ns_lock(mnt);
+        rc = vfs_getattr(mnt, node, &vst);
+        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+            rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
+        }
+        if (rc == 0 && (times == NULL || times[0].tv_nsec != UTIME_OMIT)) {
+            int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
+
+            vst.atime_sec = now ? now_sec : times[0].tv_sec;
+            vst.atime_nsec = now ? now_nsec : times[0].tv_nsec;
+            what |= VFS_SET_ATIME;
+        }
+        if (rc == 0 && (times == NULL || times[1].tv_nsec != UTIME_OMIT)) {
+            int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
+
+            vst.mtime_sec = now ? now_sec : times[1].tv_sec;
+            vst.mtime_nsec = now ? now_nsec : times[1].tv_nsec;
+            what |= VFS_SET_MTIME;
+        }
+        if (rc == 0) {
+            rc = vfs_setattr(mnt, node, what, &vst);
+        }
+        vfs_ns_unlock(mnt);
+        return rc;
+    }
+    if (kn == krffs_fs->node) {
+        return 0;
+    }
+    if (now_both) {
+        if (!cred_privileged() && current_proc->euid != kn->uid &&
+            cred_access_node(kn, CRED_W, 0) != 0) {
+            return -EACCES;
+        }
+    } else if (!cred_privileged() && current_proc->euid != kn->uid) {
+        return -EPERM;
+    }
+    if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
+        int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
+
+        kn->access_time.seconds = now ? now_sec : times[0].tv_sec;
+        kn->access_time.nanoseconds = now ? now_nsec : times[0].tv_nsec;
+    }
+    if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
+        int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
+
+        kn->modification_time.seconds = now ? now_sec : times[1].tv_sec;
+        kn->modification_time.nanoseconds = now ? now_nsec : times[1].tv_nsec;
+    }
+    kn->attribute_change_time.seconds = now_sec;
+    kn->attribute_change_time.nanoseconds = now_nsec;
+    return 0;
+}
+
+/**
+ * utimensat on the file descriptor `fd` refers to: a NULL path, which is GNU
+ * libc's futimens, and an empty one with AT_EMPTY_PATH.
+ *
+ * A file or a directory of a file system has its times set by the rules of
+ * `utimes_node`, and one of the KRFFS boot root must still be the node it
+ * was, or have lost its name to an unlink since. A pipe, a socket, a
+ * terminal, a device or a synthetic directory has no times stored for it and
+ * is -EROFS, as the path to a synthetic one answers; Linux sets the times of
+ * such an inode.
+ */
+static int32_t utimes_fd(int fd, const struct kernel_timespec *times)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
+        return -EROFS;
+    }
+    if ((entry->node && fd_node_check(entry) != 0) || !entry->ofd || !entry->ofd->vmnt) {
+        return -EBADF;
+    }
+    return utimes_node(entry->ofd->vmnt, entry->ofd->vnode, times);
+}
+
 /**
  * Update a file's access and modification timestamps (utimensat(2)).
  *
- * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is a 2-element
- * timespec array [atime, mtime]; a NULL `times` sets both to the current
- * time. A tv_nsec of UTIME_NOW means "now", UTIME_OMIT means "leave
- * unchanged". Returns 0 or -errno.
+ * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is the pair
+ * [atime, mtime] or NULL, as `utimes_node` takes it, and a pair of
+ * UTIME_OMIT changes nothing and returns 0 before anything else is looked at,
+ * as on Linux. A NULL path names the file `dirfd` refers to, with no flags
+ * (-EINVAL otherwise); with AT_FDCWD it is -EFAULT. Otherwise the path
+ * resolves as openat's does, AT_SYMLINK_NOFOLLOW sets a final symbolic link's
+ * own times, and with AT_EMPTY_PATH an empty path names the file `dirfd`
+ * refers to, or the working directory for AT_FDCWD. Returns 0 or -errno.
  */
 int32_t sys_utimensat(isr_params_t *params)
 {
@@ -5825,151 +6508,63 @@ int32_t sys_utimensat(isr_params_t *params)
     const char __user *user_path = (const char __user *)params->ecx;
     struct kernel_timespec __user *user_times = (struct kernel_timespec __user *)params->edx;
     int flags = (int)params->esi;
-    char pathbuf[256];
     struct kernel_timespec ktimes[2];
     const struct kernel_timespec *times = NULL;
-    const char *name;
-    krffs_node_t *node;
-    int64_t now_sec, now_nsec;
-    int len;
+    struct vfs_ref ref;
+    char *pathbuf;
+    int empty = 0;
+    int32_t rc;
 
-    if (flags & ~AT_SYMLINK_NOFOLLOW) {
-        return -EINVAL;
-    }
-
-    if (!current_proc || !user_path) {
+    if (!current_proc) {
         return -EFAULT;
-    }
-
-    /* Copy the path (resolved against AT_FDCWD/the dirfd) and, if given, the
-     * two timespecs into kernel memory through the fault-safe helpers. */
-    len = copy_path_at(pathbuf, sizeof(pathbuf), dirfd, user_path);
-    if (len < 0) {
-        return len;
     }
     if (user_times) {
         if (copy_from_user(ktimes, user_times, sizeof(ktimes)) != 0) {
             return -EFAULT;
         }
+        if (ktimes[0].tv_nsec == UTIME_OMIT && ktimes[1].tv_nsec == UTIME_OMIT) {
+            return 0;
+        }
         times = ktimes;
     }
-
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
+    if (!user_path && dirfd != AT_FDCWD) {
+        return flags != 0 ? -EINVAL : utimes_fd(dirfd, times);
     }
-
-    if (name[0] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
-        return 0; /* the KRFFS root's timestamps are not modifiable; report success */
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
     }
-
-    {
-        struct vfs_ref ref;
-        int rc =
-            vfs_resolve(0, name, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0, 0);
-
+    if (!user_path) {
+        return -EFAULT;
+    }
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(user_path);
+        if (empty < 0) {
+            return empty;
+        }
+    }
+    if (empty && dirfd != AT_FDCWD) {
+        return utimes_fd(dirfd, times);
+    }
+    if (empty) {
+        pathbuf = path_buf_get();
+        if (!pathbuf) {
+            return -ENOMEM;
+        }
+        k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
+    } else {
+        rc = path_from_user(dirfd, user_path, &pathbuf);
         if (rc != 0) {
-            return rc; /* missing, not-a-dir, or a denied ancestor */
-        }
-        if (vfs_synth_vpath(ref.mnt, ref.node)) {
-            vfs_ref_release(&ref);
-            return -EROFS; /* the synthetic mounts are read-only */
-        }
-        if (!mnt_is_root(ref.mnt)) {
-            struct vfs_stat vst;
-            int what = 0;
-            int now_both =
-                times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
-
-            rc = vfs_getattr(ref.mnt, ref.node, &vst);
-            if (rc == 0 && times != NULL && times[0].tv_nsec == UTIME_OMIT &&
-                times[1].tv_nsec == UTIME_OMIT) {
-                vfs_ref_release(&ref);
-                return 0;
-            }
-            if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
-                rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
-            }
-            if (rc == 0) {
-                get_current_time(&now_sec, &now_nsec);
-                if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
-                    int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
-
-                    vst.atime_sec = now ? now_sec : times[0].tv_sec;
-                    vst.atime_nsec = now ? now_nsec : times[0].tv_nsec;
-                    what |= VFS_SET_ATIME;
-                }
-                if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
-                    int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
-
-                    vst.mtime_sec = now ? now_sec : times[1].tv_sec;
-                    vst.mtime_nsec = now ? now_nsec : times[1].tv_nsec;
-                    what |= VFS_SET_MTIME;
-                }
-                rc = vfs_setattr(ref.mnt, ref.node, what, &vst);
-            }
-            vfs_ref_release(&ref);
             return rc;
         }
-        node = ref.node;
-        /* The hold is a no-op for the root type and the times are stored
-         * before anything else can run, so the ref is returned here. */
-        vfs_ref_release(&ref);
-        if (node == krffs_fs->node) {
-            return 0; /* root timestamps are not modifiable; report success */
-        }
     }
-
-    /* The POSIX permission split. Both UTIME_OMIT changes nothing, so it
-     * needs no right and touches no timestamp (not even ctime). Setting both
-     * to "now" (times NULL, or both UTIME_NOW) is the owner's, or anyone with
-     * write, or root. Any explicit time is the owner's or root's alone. */
-    if (times != NULL && times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT) {
-        return 0;
+    rc = vfs_resolve(0, pathbuf, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0, 0);
+    path_buf_put(pathbuf);
+    if (rc != 0) {
+        return rc;
     }
-    if (times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW)) {
-        if (!cred_privileged() && current_proc->euid != node->uid &&
-            cred_access_node(node, CRED_W, 0) != 0) {
-            return -EACCES;
-        }
-    } else if (!cred_privileged() && current_proc->euid != node->uid) {
-        return -EPERM;
-    }
-
-    get_current_time(&now_sec, &now_nsec);
-
-    if (times == NULL) {
-        node->access_time.seconds = now_sec;
-        node->access_time.nanoseconds = now_nsec;
-        node->modification_time.seconds = now_sec;
-        node->modification_time.nanoseconds = now_nsec;
-    } else {
-        if (times[0].tv_nsec == UTIME_OMIT) {
-            /* leave atime unchanged */
-        } else if (times[0].tv_nsec == UTIME_NOW) {
-            node->access_time.seconds = now_sec;
-            node->access_time.nanoseconds = now_nsec;
-        } else {
-            node->access_time.seconds = times[0].tv_sec;
-            node->access_time.nanoseconds = times[0].tv_nsec;
-        }
-
-        if (times[1].tv_nsec == UTIME_OMIT) {
-            /* leave mtime unchanged */
-        } else if (times[1].tv_nsec == UTIME_NOW) {
-            node->modification_time.seconds = now_sec;
-            node->modification_time.nanoseconds = now_nsec;
-        } else {
-            node->modification_time.seconds = times[1].tv_sec;
-            node->modification_time.nanoseconds = times[1].tv_nsec;
-        }
-    }
-
-    /* ctime always advances on a metadata change. */
-    node->attribute_change_time.seconds = now_sec;
-    node->attribute_change_time.nanoseconds = now_nsec;
-
-    return 0;
+    rc = utimes_node(ref.mnt, ref.node, times);
+    vfs_ref_release(&ref);
+    return rc;
 }
 
 /*

@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 27, 2026
 .Dt SYSCALLS 2
 .Os
 .Sh NAME
@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 123 calls.
+The kernel registers the following 132 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -71,6 +71,7 @@ The kernel registers the following 123 calls.
 .It 85 Ta Xr readlink 2
 .It 88 Ta Xr reboot 2
 .It 91 Ta Xr munmap 2
+.It 92 Ta Xr truncate 2
 .It 93 Ta Xr ftruncate 2
 .It 94 Ta Xr fchmod 2
 .It 95 Ta Xr fchown 2
@@ -85,6 +86,7 @@ The kernel registers the following 123 calls.
 .It 119 Ta Xr sigreturn 2
 .It 122 Ta Xr uname 2
 .It 132 Ta Xr getpgid 2
+.It 133 Ta Xr fchdir 2
 .It 140 Ta Xr llseek 2
 .It 142 Ta Xr newselect 2
 .It 145 Ta Xr readv 2
@@ -97,11 +99,14 @@ The kernel registers the following 123 calls.
 .It 174 Ta Xr rt_sigaction 2
 .It 175 Ta Xr rt_sigprocmask 2
 .It 179 Ta Xr rt_sigsuspend 2
+.It 180 Ta Xr pread64 2
+.It 181 Ta Xr pwrite64 2
 .It 182 Ta Xr chown 2
 .It 183 Ta Xr getcwd 2
 .It 190 Ta Xr vfork 2
 .It 191 Ta Xr ugetrlimit 2
 .It 192 Ta Xr mmap2 2
+.It 193 Ta Xr truncate64 2
 .It 194 Ta Xr ftruncate64 2
 .It 195 Ta Xr stat64 2
 .It 196 Ta Xr lstat64 2
@@ -134,8 +139,11 @@ The kernel registers the following 123 calls.
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
 .It 295 Ta Xr openat 2
+.It 296 Ta Xr mkdirat 2
 .It 298 Ta Xr fchownat 2
 .It 300 Ta Xr fstatat64 2
+.It 301 Ta Xr unlinkat 2
+.It 302 Ta Xr renameat 2
 .It 303 Ta Xr linkat 2
 .It 304 Ta Xr symlinkat 2
 .It 305 Ta Xr readlinkat 2
@@ -147,6 +155,7 @@ The kernel registers the following 123 calls.
 .It 330 Ta Xr dup3 2
 .It 331 Ta Xr pipe2 2
 .It 340 Ta Xr prlimit64 2
+.It 353 Ta Xr renameat2 2
 .It 355 Ta Xr getrandom 2
 .El
 .Ss Socket operations

@@ -26,13 +26,18 @@
 #define SYS_UNLINK          10
 #define SYS_EXECVE          11
 #define SYS_CHDIR           12
+#define SYS_FCHDIR          133
 #define SYS_LSEEK           19
 #define SYS_MOUNT           21
 #define SYS_UMOUNT2         52
+#define SYS_TRUNCATE        92
+#define SYS_TRUNCATE64      193
 #define SYS_FTRUNCATE       93
 #define SYS_FTRUNCATE64     194
 #define SYS_MKDIR           39
 #define SYS_RMDIR           40
+#define SYS_MKDIRAT         296
+#define SYS_UNLINKAT        301
 #define SYS_GETPID          20
 #define SYS_TIMES           43
 #define SYS_UMASK           60
@@ -50,6 +55,8 @@
 #define SYS_GETSID          147
 #define SYS_RT_SIGSUSPEND   179
 #define SYS_RENAME          38
+#define SYS_RENAMEAT        302
+#define SYS_RENAMEAT2       353
 #define SYS_BRK             45
 #define SYS_MUNMAP          91
 #define SYS_WAIT4           114
@@ -77,6 +84,8 @@
 #define SYS_UNAME           122
 #define SYS_READV           145
 #define SYS_WRITEV          146
+#define SYS_PREAD64         180
+#define SYS_PWRITE64        181
 #define SYS_GETCWD          183
 #define SYS_LLSEEK          140
 #define SYS_FSTAT64         197

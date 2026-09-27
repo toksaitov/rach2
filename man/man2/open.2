@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -111,7 +111,7 @@ With
 .Dv O_CREAT ,
 a dangling link causes its missing target to be created.
 Path resolution follows at most 40 symbolic links.
-The copied path, including any directory prefix, must fit 256 bytes
+The copied path, including any directory prefix, must fit 4096 bytes
 with its terminating null byte.
 .Pp
 On an existing ordinary target, the checks for

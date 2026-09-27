@@ -1,14 +1,17 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt CHDIR 2
 .Os
 .Sh NAME
 .Nm chdir ,
+.Nm fchdir ,
 .Nm getcwd
 .Nd change or obtain the current working directory
 .Sh SYNOPSIS
 .In unistd.h
 .Ft int
 .Fn chdir "const char *path"
+.Ft int
+.Fn fchdir "int fd"
 .Ft char *
 .Fn getcwd "char *buf" "size_t size"
 .Sh DESCRIPTION
@@ -21,12 +24,16 @@ Directory search uses the caller's effective user and group IDs and
 supplementary groups; the target also requires search permission.
 The KRFFS root is treated as a directory with mode 0755.
 .Pp
-The kernel records an absolute path for the new working directory.
+The kernel records an absolute path of at most 4095 bytes for the new
+working directory: in the process record when it is shorter than 64
+bytes, and in kernel memory when it is longer.
 On KRFFS it reconstructs that path from the directory's parents.
 On another file system it uses the resolved directory's path operation
 when it has one, the reconstruction succeeds and the mount's prefix plus
-the path fits the stored size; otherwise it stores the request with dot
-components collapsed after resolution.
+the path fits 4096 bytes with its terminator; otherwise it stores the
+request with dot components collapsed after resolution.
+A relative path joined to a working directory must also fit 4096 bytes;
+Linux bounds only the path the caller passes.
 The working directory may also be a synthetic directory under
 .Pa /dev
 or
@@ -34,6 +41,23 @@ or
 A process directory reached through
 .Pa /proc/self
 is recorded with the actual process ID.
+.Pp
+.Fn fchdir
+makes the directory
+.Fa fd
+is open on the working directory.
+Its path is the one the descriptor's
+.Li *at
+calls resolve against: a directory of a file system that rebuilds its
+path is named where it is now, after a rename too, and a directory of
+the KRFFS boot root removed since returns
+.Er EBADF ;
+Linux enters a removed directory.
+A descriptor on anything but a directory returns
+.Er ENOTDIR .
+Entering takes search permission on the directory, as
+.Fn chdir
+does.
 .Pp
 A working directory on a mounted file system holds a reference to its
 node and mount, preventing unmount while it remains in use.
@@ -61,7 +85,9 @@ allocated copy; the caller releases it with
 .Fn free .
 .Pp
 The kernel calls are 12 for
-.Fn chdir
+.Fn chdir ,
+133 for
+.Fn fchdir
 and 183 for
 .Fn getcwd .
 The raw
@@ -70,7 +96,9 @@ call requires a non-null buffer and returns the length including the
 terminating null byte.
 .Sh RETURN VALUES
 .Fn chdir
-returns 0 on success, or -1 and sets
+and
+.Fn fchdir
+return 0 on success, or -1 and set
 .Va errno
 on failure.
 .Fn getcwd
@@ -91,10 +119,18 @@ It creates a file by a relative name, then changes to
 .Pa ..
 and checks that the working directory is
 .Pa / .
+.Pa tests/musl/atcallmusl.c
+changes to a directory through a descriptor on it, and checks that
+.Fn fchdir
+on a file returns
+.Er ENOTDIR .
 .Sh ERRORS
 .Bl -tag -width ENAMETOOLONG
 .It Er EACCES
 Search permission is denied on a directory in the path or on the target.
+.It Er EBADF
+.Fa fd
+is not open, or is open on a KRFFS boot-root directory removed since.
 .It Er EBUSY
 Path resolution enters a mount being mounted or unmounted.
 .It Er EFAULT
@@ -109,18 +145,22 @@ Path lookup or metadata access fails, including access to a removed device.
 .It Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Er ENAMETOOLONG
-The supplied path or its joined absolute form exceeds 255 bytes, a
-component exceeds 255 bytes, or symbolic-link expansion exceeds 511
+The supplied path or its joined absolute form exceeds 4095 bytes, a
+component exceeds 255 bytes, or symbolic-link expansion exceeds 4095
 bytes; a reconstructed path too long to store falls back to the
 collapsed request instead.
 .It Er ENOENT
 The path is empty or a component or synthetic process directory is missing.
 A symbolic link has an empty target.
 .It Er ENOMEM
-Path lookup cannot allocate a file-system node, or musl cannot allocate
-the requested copy of the working directory.
+Path lookup cannot allocate a file-system node, the kernel has no page to
+copy the path into or no memory for a working directory path of 64 bytes
+or more, or musl cannot allocate the requested copy of the working
+directory.
 .It Er ENOTDIR
-The target or a component used as a directory is not a directory.
+The target or a component used as a directory is not a directory, or
+.Fa fd
+is not open on a directory.
 .It Er ERANGE
 The output buffer is too small for the path and terminating null byte.
 .It Er ESRCH
