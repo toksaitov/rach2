@@ -42,11 +42,6 @@
 #define HIGH_WORD 0x1FFu /* capabilities 32 to 40 */
 #define SECRET    "/tmp/capmusl.secret"
 
-struct cap_header {
-    unsigned version;
-    int pid;
-};
-
 struct cap_data {
     unsigned effective;
     unsigned permitted;
@@ -81,21 +76,22 @@ static int fail(const char *what)
     return 1;
 }
 
-/** Read the caller's two sets into `d`; 0, or -1 with errno set. */
+/** Read the caller's two sets into `d`; 0, or -1 with errno set. The
+ * header is the version and then a pid, 0 for the caller. */
 static int get_caps(struct cap_data *d)
 {
-    struct cap_header h = {VERSION_3, 0};
+    unsigned h[2] = {VERSION_3, 0};
 
     memset(d, 0xAA, 2 * sizeof(*d));
-    return (int)syscall(SYS_capget, &h, d);
+    return (int)syscall(SYS_capget, h, d);
 }
 
 /** Set the caller's two sets to `d`; 0, or -1 with errno set. */
 static int set_caps(const struct cap_data *d)
 {
-    struct cap_header h = {VERSION_3, 0};
+    unsigned h[2] = {VERSION_3, 0};
 
-    return (int)syscall(SYS_capset, &h, d);
+    return (int)syscall(SYS_capset, h, d);
 }
 
 /** Whether `d` is every capability, effective and permitted. */
@@ -332,7 +328,7 @@ static int make_secret(void)
 
 int main(int argc, char **argv)
 {
-    struct cap_header h = {0x12345678u, 0};
+    unsigned h[2] = {0x12345678u, 0};
     struct cap_data d[2];
     int row;
 
@@ -350,11 +346,11 @@ int main(int argc, char **argv)
     if (get_caps(d) != 0 || !all_of(d)) {
         return fail("root does not have every capability");
     }
-    if (syscall(SYS_capget, &h, NULL) != 0 || h.version != VERSION_3) {
+    if (syscall(SYS_capget, h, NULL) != 0 || h[0] != VERSION_3) {
         return fail("an unknown version with no data was not 0 with version 3 written back");
     }
-    h.version = 0x12345678u;
-    if (syscall(SYS_capget, &h, d) != -1 || errno != EINVAL) {
+    h[0] = 0x12345678u;
+    if (syscall(SYS_capget, h, d) != -1 || errno != EINVAL) {
         return fail("an unknown version was not EINVAL");
     }
     if (!version_ends_page()) {

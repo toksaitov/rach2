@@ -199,7 +199,7 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 231 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 233 a table, one entry per system call number
 rach2/sys/syscall.c:sys_ioctl complexity 32 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 141 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
@@ -549,7 +549,7 @@ tests/musl/clonemusl.c:raw params 7 the parameters are the arguments of one call
 tests/musl/devtest.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one table
 
-tests/musl/direntmusl.c:main complexity 28 a test's rows, each a case, read as one table
+tests/musl/direntmusl.c:main complexity 29 a test's rows, each a case, read as one table
 
 tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
 
@@ -601,7 +601,7 @@ tests/musl/statmusl.c:main lines 168 a test's rows, each a case, read as one tab
 
 tests/musl/statxmusl.c:kinds complexity 29 a test's rows, each a case, read as one table
 
-tests/musl/threadmusl.c:main complexity 35 a test's rows, each a case, read as one table
+tests/musl/threadmusl.c:main complexity 37 a test's rows, each a case, read as one table
 tests/musl/threadmusl.c:sharing complexity 36 a test's rows, each a case, read as one table
 
 tests/musl/tmpfsmusl.c:placed complexity 34 a test's rows, each a case, read as one table
