@@ -2095,6 +2095,8 @@ void init_syscall(void)
     _syscall_table[SYS_FCHOWN32] = sys_fchown;
     _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
     _syscall_table[SYS_PTRACE] = sys_ptrace;
+    _syscall_table[SYS_PERSONALITY] = sys_personality;
+    _syscall_table[SYS_GETCPU] = sys_getcpu;
     _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     /* musl's exit() issues exit_group(); for a single-threaded process it is
@@ -2115,6 +2117,8 @@ void init_syscall(void)
     _syscall_table[SYS_RECVFROM] = sys_recvfrom;
     _syscall_table[SYS_RECVMSG] = sys_recvmsg;
     _syscall_table[SYS_SHUTDOWN] = sys_shutdown;
+    _syscall_table[SYS_RECVMMSG] = sys_recvmmsg;
+    _syscall_table[SYS_SENDMMSG] = sys_sendmmsg;
     _syscall_table[SYS_MSYNC] = sys_msync;
     _syscall_table[SYS_MREMAP] = sys_mremap;
     _syscall_table[SYS_MADVISE] = sys_madvise;

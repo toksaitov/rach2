@@ -117,6 +117,7 @@ ftruncate 2 truncate
 ftruncate64 2 truncate
 fuser 1 busybox-procps
 get_robust_list 2 futex
+getcpu 2 sched_setscheduler
 getcwd 2 chdir
 getegid32 2 getuid
 geteuid32 2 getuid
@@ -231,6 +232,7 @@ openat 2 open
 paste 1 busybox-coreutils
 patch 1 busybox-editors
 pause 2 sigaction
+personality 2 prctl
 pgrep 1 busybox-procps
 pidof 1 busybox-procps
 pipe2 2 pipe
@@ -265,6 +267,7 @@ readv 2 read
 realpath 1 busybox-coreutils
 reboot 8 busybox-init
 recvfrom 2 recv
+recvmmsg 2 recv
 recvmsg 2 recv
 reformime 1 busybox-mailutils
 remove-shell 8 busybox-loginutils
@@ -306,6 +309,7 @@ script 1 busybox-util-linux
 scriptreplay 1 busybox-util-linux
 sed 1 busybox-editors
 sendmail 1 busybox-mailutils
+sendmmsg 2 send
 sendto 2 send
 seq 1 busybox-coreutils
 set_robust_list 2 futex

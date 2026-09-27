@@ -105,6 +105,8 @@
 #define SYS_SET_THREAD_AREA 243
 #define SYS_EXIT_GROUP      252
 #define SYS_PTRACE          26
+#define SYS_PERSONALITY     136
+#define SYS_GETCPU          318
 #define SYS_SET_TID_ADDRESS 258
 #define SYS_SET_ROBUST_LIST 311
 #define SYS_GET_ROBUST_LIST 312
@@ -209,6 +211,8 @@
 #define SYS_RECVFROM        371
 #define SYS_RECVMSG         372
 #define SYS_SHUTDOWN        373
+#define SYS_RECVMMSG        337
+#define SYS_SENDMMSG        345
 
 /* eventfd, epoll and timerfd (io/eventfd.c, io/epoll.c, io/timerfd.c). */
 #define SYS_EPOLL_CREATE     254

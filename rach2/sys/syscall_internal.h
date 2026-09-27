@@ -168,6 +168,10 @@ int32_t sys_vfork(isr_params_t *params);
 
 int32_t sys_exit_group(isr_params_t *params);
 
+int32_t sys_getcpu(isr_params_t *params);
+
+int32_t sys_personality(isr_params_t *params);
+
 int32_t sys_waitpid(isr_params_t *params);
 
 int32_t sys_wait4(isr_params_t *params);
@@ -282,6 +286,10 @@ int32_t sys_recvfrom(isr_params_t *params);
 int32_t sys_recvmsg(isr_params_t *params);
 
 int32_t sys_shutdown(isr_params_t *params);
+
+int32_t sys_recvmmsg(isr_params_t *params);
+
+int32_t sys_sendmmsg(isr_params_t *params);
 
 int32_t sys_getpid(isr_params_t *params);
 

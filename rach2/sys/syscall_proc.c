@@ -1542,6 +1542,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
     child->nice = parent->nice;
+    child->persona = parent->persona;
     child->dumpable = parent->dumpable;
     child->no_new_privs = parent->no_new_privs;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
@@ -4891,6 +4892,48 @@ int32_t sys_sched_getaffinity(isr_params_t *params)
         return -EFAULT;
     }
     return (int32_t)CPU_MASK_BYTES;
+}
+
+/**
+ * The CPU and NUMA node the caller runs on (getcpu(2), syscall 318): 0 and 0,
+ * stored where EBX and ECX point unless either is null. EDX, the old cache
+ * argument, is ignored, as Linux ignores it. -EFAULT for a word that cannot
+ * be written.
+ */
+int32_t sys_getcpu(isr_params_t *params)
+{
+    uint32_t zero = 0;
+
+    if ((params->ebx && copy_to_user((void __user *)params->ebx, &zero, sizeof(zero)) != 0) ||
+        (params->ecx && copy_to_user((void __user *)params->ecx, &zero, sizeof(zero)) != 0)) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * The execution domain (personality(2), syscall 136): EBX is the new value,
+ * or 0xFFFFFFFF to read it, and the old value is returned. The domain, the
+ * low byte, must be PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386
+ * program runs in, else -EINVAL; the flag bits above it are kept and change
+ * nothing, since this kernel has no address randomization for
+ * ADDR_NO_RANDOMIZE, which GDB sets, to turn off, and no other domain.
+ */
+int32_t sys_personality(isr_params_t *params)
+{
+    uint32_t old;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    old = current_proc->persona;
+    if (params->ebx != 0xFFFFFFFFu) {
+        if ((params->ebx & 0xFFu) != 0 && (params->ebx & 0xFFu) != 8u) {
+            return -EINVAL;
+        }
+        current_proc->persona = params->ebx;
+    }
+    return (int32_t)old;
 }
 
 /**

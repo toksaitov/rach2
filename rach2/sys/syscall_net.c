@@ -136,6 +136,21 @@
 
 #define SC_ACCEPT4 18
 
+#define SC_RECVMMSG 19
+
+#define SC_SENDMMSG 20
+
+/* The i386 struct mmsghdr: a struct msghdr, then the count the call stores
+ * for it. */
+#define MMSGHDR_SIZE 32u
+#define MMSG_LEN_OFF 28u
+
+/* Policy: the messages one sendmmsg or recvmmsg takes, Linux's UIO_MAXIOV. */
+#define MMSG_MAX 1024u
+
+/* recvmmsg: wait for the first message only. */
+#define MSG_WAITFORONE 0x10000u
+
 /* The creation flags socket(2) takes above the type's low four bits and
  * accept4(2) takes in its flags: the values of O_CLOEXEC and O_NONBLOCK,
  * as Linux defines them. */
@@ -1792,6 +1807,41 @@ static int32_t unix_make(int call, const uint32_t *args)
 static int32_t socket_dispatch(int call, uint32_t *args);
 
 /**
+ * sendmmsg and recvmmsg: sendmsg or recvmsg on the socket `args[0]` for each
+ * of the `args[2]` headers at `args[1]`, with the flags `args[3]`, storing each
+ * message's count in its header, as Linux's do; glibc's resolver sends its
+ * two queries with sendmmsg. Returns the messages done, or the first error
+ * when none was. After the first message recvmmsg waits for no more, with or
+ * without MSG_WAITFORONE, so a call returns what has come; its timeout is not
+ * read.
+ */
+static int32_t mmsg(int call, const uint32_t *args)
+{
+    uint32_t sub[3];
+    uint32_t vlen = args[2] > MMSG_MAX ? MMSG_MAX : args[2];
+    uint32_t i;
+    int32_t rc = 0;
+
+    sub[0] = args[0];
+    sub[2] = args[3] & ~MSG_WAITFORONE;
+    for (i = 0; i < vlen; i++) {
+        sub[1] = args[1] + i * MMSGHDR_SIZE;
+        rc = socket_dispatch(call == SC_SENDMMSG ? SC_SENDMSG : SC_RECVMSG, sub);
+        if (rc < 0) {
+            break;
+        }
+        if (copy_to_user((void __user *)(sub[1] + MMSG_LEN_OFF), &rc, sizeof(rc)) != 0) {
+            rc = -EFAULT;
+            break;
+        }
+        if (call == SC_RECVMMSG) {
+            sub[2] |= MSG_DONTWAIT;
+        }
+    }
+    return i > 0 ? (int32_t)i : rc;
+}
+
+/**
  * Multiplexed socket syscall (socketcall, syscall 102).
  *
  * EBX is the SC_* sub-call number, ECX a user pointer to its argument array.
@@ -1830,10 +1880,12 @@ int32_t sys_socketcall(isr_params_t *params)
     case SC_SEND:
     case SC_RECV:
     case SC_ACCEPT4:
+    case SC_SENDMMSG:
         nargs = 4;
         break;
     case SC_SETSOCKOPT:
     case SC_GETSOCKOPT:
+    case SC_RECVMMSG:
         nargs = 5;
         break;
     case SC_SENDTO:
@@ -1865,6 +1917,9 @@ static int32_t socket_dispatch(int call, uint32_t *args)
     }
     if (call == SC_SOCKETPAIR) {
         return -EOPNOTSUPP;
+    }
+    if (call == SC_SENDMMSG || call == SC_RECVMMSG) {
+        return mmsg(call, args);
     }
     e = (call != SC_SOCKET && call != SC_PING && current_proc)
             ? fd_get(&current_proc->fds, (int)args[0])
@@ -2004,4 +2059,14 @@ int32_t sys_recvmsg(isr_params_t *params)
 int32_t sys_shutdown(isr_params_t *params)
 {
     return direct(SC_SHUTDOWN, params);
+}
+
+int32_t sys_recvmmsg(isr_params_t *params)
+{
+    return direct(SC_RECVMMSG, params);
+}
+
+int32_t sys_sendmmsg(isr_params_t *params)
+{
+    return direct(SC_SENDMMSG, params);
 }

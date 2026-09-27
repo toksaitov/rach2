@@ -11,7 +11,8 @@
 .Nm sched_rr_get_interval ,
 .Nm sched_setaffinity ,
 .Nm sched_getaffinity ,
-.Nm sched_yield
+.Nm sched_yield ,
+.Nm getcpu
 .Nd scheduling policy, priority, affinity and yielding
 .Sh SYNOPSIS
 .In sched.h
@@ -35,6 +36,8 @@
 .Fn sched_getaffinity "pid_t pid" "size_t cpusetsize" "cpu_set_t *mask"
 .Ft int
 .Fn sched_yield "void"
+.Ft int
+.Fn getcpu "unsigned int *cpu" "unsigned int *node"
 .Sh DESCRIPTION
 The scheduler gives every ready process the processor in turn, a tick at
 a time, and has one policy,
@@ -98,6 +101,10 @@ stores a mask with CPU 0 alone.
 accepts a mask that has CPU 0, whatever it says of CPUs the machine does
 not have, from a caller that may change the process, and changes nothing,
 since every process runs on CPU 0.
+.Pp
+.Fn getcpu ,
+number 318, stores 0 for the CPU and 0 for the NUMA node where its
+non-null arguments point.
 .Pp
 .Fn sched_yield
 puts the caller behind the other ready processes in the round-robin

@@ -1,10 +1,11 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
 .Nm recv ,
 .Nm recvfrom ,
-.Nm recvmsg
+.Nm recvmsg ,
+.Nm recvmmsg
 .Nd receive socket data
 .Sh SYNOPSIS
 .In sys/socket.h
@@ -14,6 +15,8 @@
 .Fn recvfrom "int fd" "void *restrict buf" "size_t len" "int flags" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
 .Ft ssize_t
 .Fn recvmsg "int fd" "struct msghdr *msg" "int flags"
+.Ft int
+.Fn recvmmsg "int fd" "struct mmsghdr *msgvec" "unsigned int vlen" "int flags" "struct timespec *timeout"
 .Sh DESCRIPTION
 .Fn recv
 and
@@ -93,6 +96,25 @@ A raw ICMP receive includes the IPv4 header; the receive queue keeps at
 most 1500 bytes of a datagram.
 An ioctl-only raw socket has no receive operation.
 .Ss Scatter receives
+.Fn recvmmsg ,
+subcall 19 and the direct call 337, receives up to
+.Fa vlen
+messages, at most 1024, into the headers at
+.Fa msgvec
+as
+.Fn recvmsg
+receives one, storing each message's count in its
+.Va msg_len ,
+and returns how many it received, or the first error when none came.
+It waits for the first message only, as with
+.Dv MSG_WAITFORONE ,
+and takes the rest that have already come; it does not read
+.Fa timeout .
+Linux waits for all
+.Fa vlen
+messages or the timeout without
+.Dv MSG_WAITFORONE .
+.Pp
 .Fn recvmsg
 supports
 .Dv SOCK_DGRAM

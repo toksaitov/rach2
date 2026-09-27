@@ -292,6 +292,9 @@ struct process {
     int32_t orig_eax;
     uint32_t ptrace_exit_seen;
     uint32_t debugreg[8];
+    /* The execution domain and its flags personality(2) keeps; fork passes
+     * it on and exec keeps it. */
+    uint32_t persona;
 };
 
 typedef struct process process_t;
