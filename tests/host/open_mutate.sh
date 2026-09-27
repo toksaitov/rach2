@@ -1,6 +1,7 @@
 #!/bin/sh
-# Compile mounted open cleanup, and the KRFFS root's unlink and rename under
-# the root's lock, before, during and after each fault.
+# Compile mounted open cleanup, the KRFFS root's unlink and rename under the
+# root's lock, and the calls by path that read or change a node under the lock
+# their walk takes, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -61,7 +62,8 @@ run_phase()
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
-    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked; do
+    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked \
+    stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -102,6 +104,14 @@ changes = {
                             "    rc = vfs_resolve(0, name, 0, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    svp = vfs_synth_vpath(ref.mnt, ref.node);\n    if (svp) {\n        vp = *svp;\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        if (vp.kind == VNODE_PTS) {"),
     "chown-walk-unlocked": ("(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, &ref, 0, 0);",
                             "(follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);"),
+    "stat64-walk-unlocked": ("        int rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+                             "        int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
+    "old-stat-walk-unlocked": ("        int32_t rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+                               "        int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
+    "fstatat-walk-unlocked": ("    rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+                              "    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
+    "access-walk-unlocked": ("vfs_resolve(0, name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, &ref, 0, 0);",
+                             "vfs_resolve(0, name, VFS_WALK_REAL_IDS, &ref, 0, 0);"),
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
@@ -124,7 +134,8 @@ PY
         rename-unlocked) message="a lookup in the root runs under the root's lock" ;;
         rename-locked-walk) message='a walk starts with no namespace lock held' ;;
         rename-relocked) message='the lookups, the count and the change run under one hold of the root' ;;
-        chmod-walk-unlocked | chown-walk-unlocked) message='attributes use node identity' ;;
+        chmod-walk-unlocked | chown-walk-unlocked | stat64-walk-unlocked | old-stat-walk-unlocked | \
+            fstatat-walk-unlocked | access-walk-unlocked) message='attributes use node identity' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

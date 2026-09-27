@@ -2,7 +2,9 @@
  * Check mounted open truncation, cleanup and loop handle relocation, the
  * close of a descriptor whose release sleeps, by one thread or by the end of
  * another thread's call, an unlink and a rename on the KRFFS root of a file
- * an open is installing, and a chmod and a chown of a file a write moves.
+ * an open is installing, a chmod, a chown, the stat calls, access and
+ * utimensat of a file a write moves, and an open that truncates while
+ * another thread sharing its table asks for the table's last free slot.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -159,8 +161,11 @@ static int removals, keeps;
  * number at the row's first lookup in the root. */
 static void (*waiting)(void);
 static int ns_depth, ns_takes, lookup_take;
-/* Set in the rows of chmod and chown on a mounted type. */
+/* Set in the rows of chmod, chown and utimensat on a mounted type. */
 static int attr_row;
+/* The path pages the rows' calls have taken and not given back. */
+static char path_pages[4][VFS_PATH_MAX];
+static int path_pages_out[4];
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -169,6 +174,95 @@ static void check(int ok, const char *what)
         printf("open-hosttest: fail: %s\n", what);
         failures++;
     }
+}
+
+/** Run the call queued to run while a row's call waits: a caller that
+ * holds the mount's lock, or a thread the scheduler runs in a sleep. */
+static void run_waiting(void)
+{
+    void (*run)(void) = waiting;
+
+    waiting = 0;
+    if (run) {
+        run();
+    }
+}
+
+/** A user string, which in the model is the caller's own memory: its length,
+ * or -ENAMETOOLONG when it does not fit `n` bytes with its terminator. */
+int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = src[i];
+        if (src[i] == '\0') {
+            return (int)i;
+        }
+    }
+    return -ENAMETOOLONG;
+}
+
+int copy_to_user(void __user *dst, const void *src, uint32_t n)
+{
+    k_memcpy(dst, src, n);
+    return 0;
+}
+
+/** Take a path page from the model's four; every one must come back. */
+char *path_buf_get(void)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (!path_pages_out[i]) {
+            path_pages_out[i] = 1;
+            return path_pages[i];
+        }
+    }
+    check(0, "a call takes four path pages at most");
+    return 0;
+}
+
+void path_buf_put(char *buf)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (buf == path_pages[i]) {
+            path_pages_out[i] = 0;
+        }
+    }
+}
+
+/** No row's path is relative. */
+const char *proc_cwd(const struct process *p)
+{
+    (void)p;
+    return "/";
+}
+
+/** The mount the model has, at the index a stat reports as its device. */
+int vfs_mount_slots(void)
+{
+    return 1;
+}
+
+struct vfs_mount *vfs_mount_at(int idx)
+{
+    return idx == 0 ? &mount : 0;
+}
+
+/** The clock, which no row reads. */
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 0;
+    *nanoseconds = 0;
+}
+
+int64_t rtc_boot_time(void)
+{
+    return 0;
 }
 
 /** A KRFFS node's inode number, which no row reads. */
@@ -222,9 +316,14 @@ struct vfs_mount *vfs_root_mount(void)
     return &mount;
 }
 
-/** Report an accessible regular file with set-id bits. */
+/** Report an accessible regular file with set-id bits. A read the mount's
+ * lock does not cover may sleep for the disk, and the call queued for the
+ * row, a write that moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (ns_depth == 0) {
+        run_waiting();
+    }
     check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     k_memset(st, 0, sizeof(*st));
     st->mode = 0106777;
@@ -389,13 +488,8 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
  * the caller waits for. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    void (*run)(void) = waiting;
-
     (void)mnt;
-    waiting = 0;
-    if (run) {
-        run();
-    }
+    run_waiting();
     if (ns_depth++ == 0) {
         ns_takes++;
     }
@@ -622,6 +716,8 @@ static void row_end(void)
     check(opens == releases && refs == 0, "every open handle released");
     fd_table_free(proc.fds);
     check(allocations == 0, "all descriptor storage released");
+    check(!path_pages_out[0] && !path_pages_out[1] && !path_pages_out[2] && !path_pages_out[3],
+          "every path page given back");
     k_memset(&other, 0, sizeof(other));
     k_memset(&third, 0, sizeof(third));
     k_memset(proc.fd_held, 0, sizeof(proc.fd_held));
@@ -709,9 +805,11 @@ static void rename_over_installing(void)
 }
 
 /** The write a row's call waits for: it holds the mount's lock and moves
- * the file, as a growing write on a mounted KRFFS volume does. */
+ * the file, as a growing write on a mounted KRFFS volume does, and repoints
+ * the descriptions open on it. */
 static void write_moves(void)
 {
+    fd_ofd_repoint(&mount, &node, &moved);
     relocate = 1;
 }
 
@@ -736,6 +834,44 @@ static void attrs_after_move(void)
         check(attrs == 1 && ns_depth == 0 && !waiting,
               "the change is made once, with the mount's lock given back");
         attr_row = 0;
+        waiting = 0;
+        ns_depth = 0;
+        mount.type = &mounted_type;
+        row_end();
+    }
+}
+
+/**
+ * A stat64, an old stat, an fstatat and an access by path of a file on a
+ * mounted type whose uses are serialised, which a write holding the mount's
+ * lock moves: each must read the node the file is at once it has the lock,
+ * since its walk takes that lock and keeps it until the node is read.
+ * Without it the read sleeps outside the lock, and the write moves the file
+ * from under it.
+ */
+static void stats_after_move(void)
+{
+    struct linux_stat64 wide;
+    struct linux_stat old;
+    int round;
+    int rc;
+
+    for (round = 0; round < 4; round++) {
+        row_begin();
+        proc.euid = 0;
+        mount.type = &locked_type;
+        waiting = write_moves;
+        if (round == 0) {
+            rc = do_stat64("/f", &wide, 1);
+        } else if (round == 1) {
+            rc = do_old_stat("/f", &old, 1);
+        } else if (round == 2) {
+            rc = fstatat_path("/f", 1, &wide);
+        } else {
+            rc = do_access("f", R_OK);
+        }
+        check(rc == 0, "a stat or an access of a file a write moves");
+        check(ns_depth == 0 && !waiting, "the node is read with the mount's lock, then given back");
         waiting = 0;
         ns_depth = 0;
         mount.type = &mounted_type;
@@ -914,6 +1050,7 @@ int main(void)
     unlink_installing();
     rename_over_installing();
     attrs_after_move();
+    stats_after_move();
     loop_handles();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");

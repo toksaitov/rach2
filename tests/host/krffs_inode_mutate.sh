@@ -73,9 +73,11 @@ parts.append('''
 #define VFS_S_IFDIR S_IFDIR
 #define VFS_S_IFREG S_IFREG
 #define VFS_WALK_NOFOLLOW 1
+#define VFS_WALK_LOCK 2
 static int current_proc = 1;
 struct vfs_mount { int unused; };
 struct vfs_ref { struct vfs_mount *mnt; void *node; };
+static void vfs_walk_unlock(struct vfs_mount *m) { (void)m; }
 struct vpath { int unused; };
 #define AT_FDCWD (-100)
 static char path_page[4096];

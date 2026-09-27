@@ -4636,6 +4636,16 @@ static int synth_is_link(const struct vpath *vp)
     return synth_stat(vp, &lst, 0) == 0 && (lst.st_mode & 0170000u) == 0120000u;
 }
 
+/**
+ * The attributes stat64 and lstat64 report for the user's `path`, a final
+ * symbolic link followed when `follow`, copied out to `st`.
+ *
+ * The walk takes the lock of the mount it ends on, where the type asks for
+ * one, and keeps it until the attributes are read: a node of a mounted
+ * KRFFS volume is its offset, which a growing write that held the lock would
+ * move, and a read at the offset the walk found would report whatever the
+ * volume put there since.
+ */
 static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st, int follow)
 {
     struct linux_stat64 kst;
@@ -4661,7 +4671,8 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     {
         struct vfs_ref ref;
         const struct vpath *vp;
-        int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
+        int rc =
+            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);
 
         path_buf_put(pathbuf);
         if (rc != 0) {
@@ -4669,18 +4680,9 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
         }
         vp = vfs_synth_vpath(ref.mnt, ref.node);
         if (vp) {
-            int32_t src = synth_stat(vp, &kst, follow);
-
-            vfs_ref_release(&ref);
-            if (src != 0) {
-                return src;
-            }
+            rc = synth_stat(vp, &kst, follow);
         } else if (!mnt_is_root(ref.mnt)) {
             rc = vfs_fill_stat64(&kst, &ref);
-            vfs_ref_release(&ref);
-            if (rc != 0) {
-                return rc;
-            }
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
             /* The root's identity is fixed: ino 1, 0755, and real times: an
              * entry created in it stamps them, which is how a program
@@ -4690,10 +4692,13 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
             kst.st_ino = kst.__st_ino = 1;
             kst.st_blksize = 4096;
             stat64_root_times(&kst);
-            vfs_ref_release(&ref);
         } else {
             krffs_fill_stat64(&kst, (krffs_node_t *)ref.node);
-            vfs_ref_release(&ref);
+        }
+        vfs_walk_unlock(ref.mnt);
+        vfs_ref_release(&ref);
+        if (rc != 0) {
+            return rc;
         }
     }
 
@@ -5132,7 +5137,9 @@ static int user_path_empty(const char __user *upath)
  * Fill `kst` for the absolute canonical path `path`, a final symbolic link
  * followed when `follow`: the path half of fstatat64. The KRFFS root has the
  * fixed identity `stat` reports for it, and a /proc link is reported as a
- * link when it is not followed.
+ * link when it is not followed. The walk keeps the lock of the mount it ends
+ * on until the attributes are read, as `do_stat64`'s does, and for the same
+ * reason.
  */
 static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *kst)
 {
@@ -5149,7 +5156,7 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
         stat64_root_times(kst);
         return 0;
     }
-    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
+    rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);
     if (rc != 0) {
         return rc;
     }
@@ -5161,6 +5168,7 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
     } else {
         krffs_fill_stat64(kst, (krffs_node_t *)ref.node);
     }
+    vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
     return rc;
 }
@@ -5383,7 +5391,9 @@ int32_t sys_statx(isr_params_t *params)
  * R/W/X are checked against the object's mode bits by the caller's REAL ids
  * (the credential model access(2) uniquely uses), which is what makes
  * /proc/<pid>/stat reject W_OK while granting F_OK/R_OK. `name` is absolute
- * with the leading '/' stripped.
+ * with the leading '/' stripped. The walk keeps the lock of the mount it
+ * ends on until the attributes are read, as `do_stat64`'s does, and for the
+ * same reason.
  */
 static int32_t do_access(const char *name, int mode)
 {
@@ -5399,7 +5409,7 @@ static int32_t do_access(const char *name, int mode)
      * set-id program can ask what its invoker could do. The walk charges
      * search the same way, so a set-id program cannot report reachability
      * its caller does not have. */
-    werr = vfs_resolve(0, name, VFS_WALK_REAL_IDS, &ref, 0, 0);
+    werr = vfs_resolve(0, name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, &ref, 0, 0);
     if (werr != 0) {
         return werr;
     }
@@ -5408,6 +5418,7 @@ static int32_t do_access(const char *name, int mode)
         struct linux_stat64 s;
 
         rc = synth_stat(vp, &s, 1); /* access follows symlinks */
+        vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         if (rc != 0) {
             return rc; /* -ENOENT / -ENOTDIR */
@@ -5425,6 +5436,7 @@ static int32_t do_access(const char *name, int mode)
     } else {
         rc = cred_access_node((krffs_node_t *)ref.node, mode, 1);
     }
+    vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
     return rc;
 }
@@ -7320,11 +7332,13 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     }
 
     /* /dev and /proc are synthetic. The old stat(2) ABI is a narrower struct,
-     * so translate the synthetic stat64 result down into it. */
+     * so translate the synthetic stat64 result down into it. The walk keeps
+     * its mount's lock until the node is read, as `do_stat64`'s does. */
     {
         struct vfs_ref ref;
         const struct vpath *svp;
-        int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
+        int32_t rc =
+            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);
 
         path_buf_put(pathbuf);
         if (rc != 0) {
@@ -7335,6 +7349,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             struct linux_stat64 s64;
 
             rc = synth_stat(svp, &s64, follow);
+            vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
             if (rc != 0) {
                 return rc;
@@ -7352,6 +7367,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             struct linux_stat64 s64;
 
             rc = vfs_fill_stat64(&s64, &ref);
+            vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
             if (rc != 0) {
                 return rc;
@@ -7370,21 +7386,21 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             return old_stat_put(st, &kst, dir);
         }
         node = ref.node;
+        /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
+        kst.st_mode = node == krffs_fs->node
+                          ? S_IFDIR | 0755
+                          : (unsigned short)(krffs_mode_type(node->mode) | (node->mode & 07777));
+        kst.st_nlink = 1; /* Always 1 for KRFFS */
+        kst.st_uid = (unsigned short)node->uid;
+        kst.st_gid = (unsigned short)node->gid;
+        kst.st_size = (unsigned long)node->data_size;
+        kst.st_blksize = 4096;
+        kst.st_blocks = (node->data_size + 511) / 512;
+        kst.st_ino = (unsigned long)krffs_node_ino(node);
+        stat_node_times(&kst, node);
+        vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
     }
-
-    /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
-    kst.st_mode = node == krffs_fs->node
-                      ? S_IFDIR | 0755
-                      : (unsigned short)(krffs_mode_type(node->mode) | (node->mode & 07777));
-    kst.st_nlink = 1; /* Always 1 for KRFFS */
-    kst.st_uid = (unsigned short)node->uid;
-    kst.st_gid = (unsigned short)node->gid;
-    kst.st_size = (unsigned long)node->data_size;
-    kst.st_blksize = 4096;
-    kst.st_blocks = (node->data_size + 511) / 512;
-    kst.st_ino = (unsigned long)krffs_node_ino(node);
-    stat_node_times(&kst, node);
     return old_stat_put(st, &kst, dir);
 }
 
