@@ -1,16 +1,16 @@
 /**
- * Resident-cap proof: an on-disk file system larger than physical RAM.
+ * The page cache under load: more data through a disk-backed file system
+ * than the cache holds.
  *
  * On a KRFFS mounted from a real disk (rach2.fsdisk), writes 132 files of 256
- * KiB each (33 MiB, past the kernel's 32 MiB physical-RAM cap), fsyncs them,
- * then re-reads every file checking a file- and offset-dependent pattern. The
- * on-disk data far exceeds both the 32 MiB RAM and the 4 MiB resident cache, so
- * the whole run is a continuous storm of eviction and writeback; that it
- * round-trips exactly is the proof that a file system bigger than memory works
- * through the cache. Prints "STRESSPROBE OK n=<files> bytes=<total>" and exits
- * 0, or prints "STRESSPROBE FAIL:" with the step, the file and the call's
- * result or the offset that differs, and exits 1. Each file stays well under
- * the cache budget.
+ * KiB each, 33 MiB, fsyncs each, then reads every file back and checks a
+ * pattern that depends on the file and the offset. The page cache holds at
+ * most 8 MiB, so the run evicts and writes back pages throughout, whatever
+ * the machine's memory; that the data round-trips exactly is the proof that
+ * a file system larger than the cache works through it. Prints "STRESSPROBE
+ * OK n=<files> bytes=<total>" and exits 0, or prints "STRESSPROBE FAIL:" with
+ * the step, the file and the call's result or the offset that differs, and
+ * exits 1. Each file stays well under the cache's size.
  *
  * Freestanding; direct int 0x80.
  */
