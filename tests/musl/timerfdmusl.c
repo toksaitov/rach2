@@ -5,8 +5,9 @@
  * expires, then reads a count of at least one, and timerfd_gettime reports
  * the interval it was given. A nonblocking read of a timer not yet expired
  * fails with EAGAIN; a timer armed with a zero value is disarmed and reports
- * zeros. An absolute time already past on the monotonic clock expires at
- * once, as poll sees. A timer in an epoll set wakes the wait.
+ * zeros. An absolute time already past on the monotonic clock, 1 ns, which
+ * the first timer's 50 ms have put behind it, expires at once, as poll sees.
+ * A timer in an epoll set wakes the wait.
  *
  * Prints "TIMERFDMUSL OK" on success and "TIMERFDMUSL FAIL (detail)"
  * otherwise.
@@ -41,7 +42,6 @@ static void set(struct itimerspec *it, long value_ms, long interval_ms)
 int main(void)
 {
     struct itimerspec it, got;
-    struct timespec now;
     struct pollfd pfd;
     struct epoll_event ev;
     uint64_t n;
@@ -79,10 +79,8 @@ int main(void)
         return fail("a nonblocking read of an unexpired timer was not EAGAIN");
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &now);
     memset(&it, 0, sizeof(it));
-    it.it_value.tv_sec = now.tv_sec - 1;
-    it.it_value.tv_nsec = now.tv_nsec;
+    it.it_value.tv_nsec = 1;
     if (timerfd_settime(t, TFD_TIMER_ABSTIME, &it, NULL) != 0) {
         return fail("an absolute time");
     }
