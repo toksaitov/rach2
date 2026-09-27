@@ -40,8 +40,17 @@ on its open-file description.
 Any other bit in
 .Fa flags
 gives
-.Er EINVAL
-before the descriptor is looked at.
+.Er EINVAL .
+For a descriptor that is not an
+.Dv AF_UNIX
+socket the flags are checked before the descriptor is looked at, as in
+Linux; an
+.Dv AF_UNIX
+socket's type is checked first, so an
+.Dv AF_UNIX
+datagram socket gives
+.Er EOPNOTSUPP
+whatever the flags.
 .Fn accept
 is
 .Fn accept4
