@@ -134,12 +134,13 @@ region has none.
 A page the process never touched is a hole in the file, and reads as
 zeros.
 .Pp
-A process of 65534 regions or more has more program headers than the ELF
-header's 16-bit count holds.
-Its file has
+A process of 65534 regions or more has 65535 program headers or more, a
+count the ELF header's 16-bit field does not hold, since 0xffff there,
 .Dv PN_XNUM ,
-0xffff, as that count, and one section header, at the end of the file
-and named by
+means that the count is elsewhere.
+Its file has
+.Dv PN_XNUM
+in that field and one section header, at the end of the file and named by
 .Va e_shoff ,
 a null section whose
 .Va sh_info
