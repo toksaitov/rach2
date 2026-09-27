@@ -4,6 +4,7 @@
 #
 # Usage: testing.sh sync
 #        testing.sh run COMMAND...
+#        testing.sh get PATH...
 #        testing.sh sh
 #
 # `sync` replaces the tracked files of the copy on the testing host with the
@@ -14,8 +15,11 @@
 # file that is sent is the shareware WAD `ports/doom/fetch_wad.sh` downloads,
 # because the Doom suite reads it from the image. `run`
 # syncs and then runs COMMAND in the copy; the command is passed to the remote
-# shell as one string, so quote it as that shell will see it. `sh` opens an
-# interactive shell in the copy.
+# shell as one string, so quote it as that shell will see it. `get` copies
+# each PATH, relative to the copy, from the host to the same path here,
+# compressed on the wire and with a sparse file kept sparse, which is how a
+# product that only the Linux host builds, such as the GNU system's ext2
+# root, reaches this machine. `sh` opens an interactive shell in the copy.
 #
 # The host is reached as `ssh testing`. Its ssh server answers in an MSYS
 # shell on Windows; the copy lives in the WSL distribution, so the receiving
@@ -44,7 +48,7 @@ HOST=testing
 DEST=/home/testing/rach2
 RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
 
-sync_tree()
+need_rsync3()
 {
     case "$(rsync --version 2>/dev/null | head -n 1)" in
         "rsync  version 3"*) ;;
@@ -54,6 +58,11 @@ sync_tree()
             exit 2
             ;;
     esac
+}
+
+sync_tree()
+{
+    need_rsync3
     rsync -a --no-times --checksum --delete \
         --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
@@ -73,11 +82,25 @@ case "${1:-}" in
         sync_tree
         ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'"
         ;;
+    get)
+        shift
+        if [ "$#" -eq 0 ]; then
+            echo "testing: get needs a path" >&2
+            exit 2
+        fi
+        need_rsync3
+        for path in "$@"; do
+            mkdir -p "$REPO/$(dirname "$path")"
+            rsync --times --sparse --compress \
+                --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
+                "$HOST:$DEST/$path" "$REPO/$path"
+        done
+        ;;
     sh)
         ssh -t "$HOST" "wsl.exe -- bash -lc 'cd $DEST && exec bash'"
         ;;
     *)
-        echo "usage: testing.sh sync | run COMMAND... | sh" >&2
+        echo "usage: testing.sh sync | run COMMAND... | get PATH... | sh" >&2
         exit 2
         ;;
 esac
