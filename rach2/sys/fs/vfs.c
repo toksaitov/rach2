@@ -671,6 +671,22 @@ static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char 
 
 static int walk_exe(struct vfs_ref *cur, void *found, int locked);
 
+/** The start of the last component of `path`, trailing slashes passed over:
+ * the leaf a parent walk returns once a link's target is spliced into its
+ * path. */
+static const char *walk_last_comp(const char *path)
+{
+    const char *end = path + k_strlen(path);
+
+    while (end > path && end[-1] == '/') {
+        end--;
+    }
+    while (end > path && end[-1] != '/') {
+        end--;
+    }
+    return end;
+}
+
 /** Whether `node` on `mnt` is a symbolic link its type can read. */
 static int walk_is_link(struct vfs_mount *mnt, void *node)
 {
@@ -934,17 +950,7 @@ begin:
                     goto out_err;
                 }
                 if (last_comp) {
-                    /* The leaf returned to the caller is the last component
-                     * of the spliced path. */
-                    const char *end = linkpath + k_strlen(linkpath);
-
-                    while (end > linkpath && end[-1] == '/') {
-                        end--;
-                    }
-                    last_comp = end;
-                    while (last_comp > linkpath && last_comp[-1] != '/') {
-                        last_comp--;
-                    }
+                    last_comp = walk_last_comp(linkpath);
                 }
                 p = linkpath;
                 if (absolute) {
