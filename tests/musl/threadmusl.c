@@ -102,33 +102,39 @@ static void on_usr1(int sig)
     handled_by = tid();
 }
 
+/**
+ * Wait until SIGUSR1's handler has run. The test of `handled_by` is made with
+ * SIGUSR1 blocked, and sigsuspend unblocks it only for the wait, so a signal
+ * that comes between the test and the wait ends the wait and is not lost.
+ * SIGUSR1 stays blocked after.
+ */
+static void await_usr1(void)
+{
+    sigset_t usr1, during;
+
+    sigemptyset(&usr1);
+    sigaddset(&usr1, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &usr1, &during);
+    sigdelset(&during, SIGUSR1);
+    while (!handled_by) {
+        sigsuspend(&during);
+    }
+}
+
 static void *wait_signal(void *arg)
 {
-    sigset_t set;
-
     (void)arg;
-    sigemptyset(&set);
-    pthread_sigmask(SIG_SETMASK, &set, NULL);
-    while (!handled_by) {
-        pause();
-    }
+    await_usr1();
     return NULL;
 }
 
-/* The thread pthread_kill names: it waits for the signal, then blocks it,
- * so the process-directed signal after it can reach only the thread made
- * for that. */
+/* The thread pthread_kill names: it waits for the signal and keeps it
+ * blocked after, so the process-directed signal later can reach only the
+ * thread made for that. */
 static void *spare_main(void *arg)
 {
-    sigset_t set;
-
     (void)arg;
-    while (!handled_by) {
-        pause();
-    }
-    sigemptyset(&set);
-    sigaddset(&set, SIGUSR1);
-    pthread_sigmask(SIG_BLOCK, &set, NULL);
+    await_usr1();
     spare_blocked = 1;
     for (;;) {
         pause();
