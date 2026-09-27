@@ -33,7 +33,10 @@
  * one call, because its namespace is a flat table classified by string. A
  * `..` inside that remainder that would climb above the mount root is
  * answered with `VFS_CLIMB`, and the resolver continues at the parent's
- * covered node. A `lookup_rest` type may not host a mount point.
+ * covered node. A remainder that comes back to the root directory in front
+ * of the name of a nameless mount standing there is answered with
+ * `VFS_ROOT`, and the resolver enters that mount one component at a time. A
+ * `lookup_rest` type may not host a mount point.
  *
  * An operation a file system does not implement is a NULL pointer, and the
  * common layer answers the standard error for it: EROFS for a write-side
@@ -70,8 +73,11 @@
 #define VFS_MS_SILENT     0x8000u
 #define VFS_MS_RELATIME   0x200000u
 
-/* What `lookup_rest` returns when `..` would climb above the mount root. */
+/* What `lookup_rest` returns when `..` would climb above the mount root, and
+ * when the remainder reaches, at the mount's root directory, the name of a
+ * nameless mount standing there. */
 #define VFS_CLIMB 1
+#define VFS_ROOT  2
 
 struct vfs_mount;
 
@@ -145,9 +151,10 @@ struct vfs_ops {
      * root. The node comes back held. */
     int (*lookup)(struct vfs_mount *mnt, void *dir, const char *name, void **node);
     /* The synthetic exception: the whole remaining path in one call.
-     * Returns 0 with a held node, a negative errno, or VFS_CLIMB with
-     * `*left` at the unconsumed remainder, and the resolver continues at
-     * the covered node. */
+     * Returns 0 with a held node, a negative errno, VFS_CLIMB with `*left`
+     * at the unconsumed remainder, and the resolver continues at the
+     * covered node, or VFS_ROOT with `*left` at a nameless mount's name,
+     * and the resolver continues at the mount root. */
     int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, void **node, const char **left);
     void (*hold)(struct vfs_mount *mnt, void *node);
     void (*put)(struct vfs_mount *mnt, void *node);

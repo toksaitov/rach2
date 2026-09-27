@@ -10,8 +10,8 @@
  * mount there is empty. /dev/shm is a directory of mode 1777 that /dev lists
  * as one, with tmpfs's magic and its line in /proc/mounts with nosuid and
  * nodev; a file is made, written, read and removed there as shm_open makes
- * one; a working directory there climbs to /dev by "..", and umount2
- * refuses /dev/shm with EBUSY.
+ * one; a working directory there climbs to /dev by "..", /dev/pts/../shm
+ * is the same directory, and umount2 refuses /dev/shm with EBUSY.
  *
  * Prints "TMPFSMUSL OK" on success and "TMPFSMUSL FAIL (detail)" otherwise.
  */
@@ -190,6 +190,11 @@ static int shm(void)
     if (chdir("/dev/shm") != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/dev/shm") != 0 ||
         stat("../null", &st) != 0 || !S_ISCHR(st.st_mode) || chdir("/") != 0) {
         return fail("a working directory in /dev/shm");
+    }
+    if (stat("/dev/pts/../shm", &st) != 0 || !S_ISDIR(st.st_mode) ||
+        chdir("/dev/pts/../shm") != 0 || !getcwd(cwd, sizeof(cwd)) ||
+        strcmp(cwd, "/dev/shm") != 0 || chdir("/") != 0) {
+        return fail("/dev/shm by way of /dev/pts/..");
     }
     if (umount2("/dev/shm", 0) != -1 || errno != EBUSY) {
         return fail("an unmount of /dev/shm");

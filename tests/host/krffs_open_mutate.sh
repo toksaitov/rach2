@@ -43,8 +43,9 @@ import sys
 work = Path(sys.argv[1])
 groups = [
     ("fs/vfs.c", "vfs_open.inc", "vfs_mount_gone vfs_ref_hold vfs_ref_put vfs_enter vfs_leave "
-     "ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search mount_covering streq path_last "
-     "mount_named named_in_rest node_put walk_lock walk_unlock vfs_walk_unlock ref_move_node "
+     "ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search mount_covering path_last "
+     "mount_named_at mount_named named_in_rest node_put walk_lock walk_unlock vfs_walk_unlock "
+     "ref_move_node "
      "walk_move walk_root root_current dotdot_stays walk_leaf walk_link walk_is_link "
      "resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
      "vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create"),

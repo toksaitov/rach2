@@ -339,20 +339,36 @@ static const char *path_last(const char *path)
     return last;
 }
 
-/* The nameless mount standing at `name` in the root directory `node` of
- * `mnt`: /dev and /proc in the root's, /dev/shm in /dev's; or NULL. */
-static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node, const char *name)
+/* The nameless mount standing at the name comp[0..len) in the root
+ * directory of `mnt`: /dev and /proc in the root's, /dev/shm in /dev's; or
+ * NULL. */
+static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp, uint32_t len)
 {
     int i;
 
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state == VFS_ACTIVE && mounts[i]->parent == mnt &&
-            !mounts[i]->covered && node == mnt->root &&
-            streq(path_last(mounts[i]->covered_path), name)) {
-            return mounts[i];
+        struct vfs_mount *m = mounts[i];
+        const char *name;
+        uint32_t n;
+
+        if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered) {
+            continue;
+        }
+        name = path_last(m->covered_path);
+        for (n = 0; n < len && name[n] == comp[n]; n++) {
+        }
+        if (n == len && name[n] == '\0') {
+            return m;
         }
     }
     return 0;
+}
+
+/* The nameless mount standing at `name` in the root directory `node` of
+ * `mnt`, or NULL. */
+static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node, const char *name)
+{
+    return node == mnt->root ? mount_named_at(mnt, name, (uint32_t)k_strlen(name)) : 0;
 }
 
 int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, uint64_t *ino)
@@ -571,18 +587,12 @@ static void ref_move_node(struct vfs_ref *cur, void *node)
  */
 static int named_in_rest(const struct vfs_ref *cur, const char *p)
 {
-    char comp[VFS_NAME_MAX + 1];
     uint32_t len = 0;
 
     while (p[len] != '\0' && p[len] != '/') {
         len++;
     }
-    if (cur->node != cur->mnt->root || len > VFS_NAME_MAX) {
-        return 0;
-    }
-    k_memcpy(comp, p, len);
-    comp[len] = '\0';
-    return mount_named(cur->mnt, cur->node, comp) != 0;
+    return cur->node == cur->mnt->root && mount_named_at(cur->mnt, p, len) != 0;
 }
 
 /** Copy the unwalked final component and locate it within a parent path. */
@@ -790,15 +800,18 @@ begin:
                 rest = restbuf;
             }
             rc = cur.mnt->type->ops->lookup_rest(cur.mnt, rest, &found, &left);
-            if (rc == VFS_CLIMB) {
+            if (rc == VFS_CLIMB || rc == VFS_ROOT) {
                 struct vfs_mount *pm = cur.mnt->parent ? cur.mnt->parent : mounts[0];
                 void *pnode = cur.mnt->covered ? cur.mnt->covered : mounts[0]->root;
                 if (rest == restbuf) {
-                    /* The climb consumed part of a bounded copy; continue
-                     * at the same offset of the real path. */
+                    /* The type used part of a bounded copy; continue at the
+                     * same offset of the real path. */
                     p += left - restbuf;
                 } else {
                     p = left;
+                }
+                if (rc == VFS_ROOT) {
+                    continue;
                 }
                 rc = walk_move(&cur, pm, pnode, locked);
                 if (rc != 0) {
@@ -1832,19 +1845,22 @@ static void synth_put(struct vfs_mount *mnt, void *node)
  * resolved lexically because the namespace is a table of spellings, not a
  * tree. A `..` that would climb above the mount root returns `VFS_CLIMB`
  * with `*left` at the remainder, and the resolver continues at the covered
- * node. The full spelling (`prefix` + the canonical rest) goes through
- * `synth_classify`.
+ * node. A name at the mount root that a nameless mount stands at, as `shm`
+ * in /dev after `pts/..`, returns `VFS_ROOT` with `*left` at that name, and
+ * the resolver enters the mount from the root directory. The full spelling
+ * (`prefix` + the canonical rest) goes through `synth_classify`.
  */
 static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *rest, void **node,
                       const char **left)
 {
     char full[256];
     struct vpath vp;
+    uint32_t plen = (uint32_t)k_strlen(prefix);
     uint32_t out;
     const char *p = rest;
     int kind;
 
-    out = k_strlen(prefix);
+    out = plen;
     k_memcpy(full, prefix, out);
 
     while (*p) {
@@ -1862,11 +1878,15 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         if (len == 0) {
             break;
         }
+        if (out == plen && mount_named_at(mnt, comp, len)) {
+            *left = comp;
+            return VFS_ROOT;
+        }
         if (len == 1 && comp[0] == '.') {
             continue;
         }
         if (len == 2 && comp[0] == '.' && comp[1] == '.') {
-            if (out <= k_strlen(prefix)) {
+            if (out <= plen) {
                 while (*p == '/') {
                     p++;
                 }
@@ -1897,7 +1917,6 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
     if (kind == VNODE_ENOTDIR) {
         return -ENOTDIR;
     }
-    (void)mnt;
     return synth_take(&vp, node);
 }
 
