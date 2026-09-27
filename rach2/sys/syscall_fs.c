@@ -7409,11 +7409,13 @@ int32_t sys_unlink(isr_params_t *params)
 }
 
 /* Where `fs_core_file` writes: the open file, the place of the next byte,
- * and the end of the last bytes written, which a hole leaves short of it. */
+ * the end of the last bytes written, which a hole leaves short of it, and
+ * the count of bytes written, the count RLIMIT_CORE bounds. */
 struct core_file {
     struct open_file *ofd;
     uint64_t pos;
     uint64_t end;
+    uint32_t written;
 };
 
 /** The core file's writer for `core_write`: `len` bytes of `buf` at the
@@ -7433,6 +7435,7 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
             return -ENOSPC;
         }
         cf->end = cf->pos + len;
+        cf->written += len;
     }
     cf->pos += len;
     return 0;
@@ -7447,6 +7450,11 @@ static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
  * the table, where the holder rule of the KRFFS root counts it. The slot is
  * taken as it is, not through `fd_get`, whose hold on a shared table no
  * call's end would let go of on the way to a death.
+ *
+ * A file whose last bytes are a hole is given the byte at its end, a zero,
+ * so that it has its whole length. That byte counts toward `limit` as the
+ * others do, as Linux counts the byte its dump writes there: a file already
+ * at the limit stops short, with -EFBIG.
  */
 int32_t fs_core_file(int signo, uint32_t limit)
 {
@@ -7488,10 +7496,11 @@ out:
         cf.ofd = entry->ofd;
         cf.pos = 0;
         cf.end = 0;
+        cf.written = 0;
         rc = core_write(core_file_put, &cf, notes, notes_size, limit);
         if (rc == 0 && cf.end < cf.pos) {
             cf.pos--;
-            rc = core_file_put(&cf, &zero, 1);
+            rc = cf.written < limit ? core_file_put(&cf, &zero, 1) : -EFBIG;
         }
     }
     kfree(notes);
