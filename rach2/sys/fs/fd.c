@@ -236,9 +236,16 @@ fd_table_t *fd_table_new(void)
     return table;
 }
 
+/**
+ * A copy of `src`'s entries in a table of its own. A slot with no type is
+ * either free or reserved by an open of another thread that shares `src`
+ * and has not finished, whose description the copy takes no reference to,
+ * so it is free in the copy.
+ */
 fd_table_t *fd_table_dup(const fd_table_t *src)
 {
     fd_table_t *table = kzalloc(sizeof(*table));
+    int i;
 
     if (!table) {
         return NULL;
@@ -249,6 +256,11 @@ fd_table_t *fd_table_dup(const fd_table_t *src)
         return NULL;
     }
     k_memcpy(table->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
+    for (i = 0; i < src->cap; i++) {
+        if (table->entries[i].type == FD_TYPE_NONE) {
+            k_memset(&table->entries[i], 0, sizeof(fd_entry_t));
+        }
+    }
     table->cap = src->cap;
     table->refs = 1;
     return table;

@@ -330,6 +330,44 @@ static void shared_limits(void)
     check(!proc_list && !allocations, "the shared table's cleanup releases all storage");
 }
 
+/**
+ * Copy a table with a slot another thread's open has reserved and one
+ * descriptor that is open: the reservation is free in the copy, and the open
+ * descriptor is there with the description it shares.
+ */
+static void table_copies(void)
+{
+    fd_table_t table;
+    fd_table_t *copy;
+    int reserved, open;
+
+    check(fd_table_init(&table) == 0, "table allocation for the copy");
+    reserved = fd_alloc(&table);
+    open = fd_alloc(&table);
+    check(reserved >= 0 && open >= 0, "a reservation and an open descriptor");
+    if (reserved < 0 || open < 0) {
+        return;
+    }
+    table.entries[open].type = FD_TYPE_CONSOLE;
+    copy = fd_table_dup(&table);
+    check(copy != NULL, "table copy allocation");
+    if (copy) {
+        check(copy->entries[reserved].type == FD_TYPE_NONE && !copy->entries[reserved].ofd,
+              "a reserved slot is free in the copy");
+        check(copy->entries[open].type == FD_TYPE_CONSOLE &&
+                  copy->entries[open].ofd == table.entries[open].ofd,
+              "an open descriptor is in the copy");
+        check(fd_alloc(copy) == reserved, "the copy allocates the reserved slot");
+        fd_free(copy, reserved);
+        k_memset(&copy->entries[open], 0, sizeof(copy->entries[open]));
+        fd_table_delete(copy);
+    }
+    fd_free(&table, reserved);
+    fd_free(&table, open);
+    fd_table_free(&table);
+    check(allocations == 0, "table copy releases every allocation");
+}
+
 /** Exercise a waiting independent open, a shared open, and other file types. */
 int main(void)
 {
@@ -340,6 +378,7 @@ int main(void)
     stdio_allocations();
     process_allocations();
     shared_limits();
+    table_copies();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
     }

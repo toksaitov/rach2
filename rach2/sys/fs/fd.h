@@ -190,8 +190,9 @@ void fd_table_free(fd_table_t *table);
 fd_table_t *fd_table_new(void);
 
 /** A table from the heap with a copy of `src`'s entries and one reference,
- * for fork; the references the copies share are the caller's to add. NULL
- * when the heap has no room. */
+ * for fork; the references the copies share are the caller's to add, and a
+ * slot an unfinished open has reserved is free in the copy. NULL when the
+ * heap has no room. */
 fd_table_t *fd_table_dup(const fd_table_t *src);
 
 /** Free a table `fd_table_new` or `fd_table_dup` made, entries and all;
