@@ -5,15 +5,16 @@
  * end closes, and gives EPIPE to a write after that; shutdown(SHUT_WR) ends
  * the peer's input only. A datagram pair and a sequenced-packet pair keep
  * the boundaries of messages, and a datagram too long for the buffer is cut
- * with MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child, which
- * writes through it. SO_PEERCRED reports the peer, and SO_PASSCRED brings
- * the sender's credentials. A listener bound to a path makes a socket file,
- * accepts a connection queued before the accept, and both ends report the
- * names; a second bind of the path fails with EADDRINUSE, and a connect to
- * the file after the listener is gone fails with ECONNREFUSED. An abstract
- * name works without a file. A datagram sent to a name arrives with the
- * sender's name. A nonblocking receive on an empty socket fails with
- * EAGAIN, and poll reports the socket readable once a byte arrives.
+ * with MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child that has
+ * closed its own ends of the pipe, and the child writes through it.
+ * SO_PEERCRED reports the peer, and SO_PASSCRED brings the sender's
+ * credentials. A listener bound to a path makes a socket file, accepts a
+ * connection queued before the accept, and both ends report the names; a
+ * second bind of the path fails with EADDRINUSE, and a connect to the file
+ * after the listener is gone fails with ECONNREFUSED. An abstract name works
+ * without a file. A datagram sent to a name arrives with the sender's name.
+ * A nonblocking receive on an empty socket fails with EAGAIN, and poll
+ * reports the socket readable once a byte arrives.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -219,6 +220,8 @@ static int rights_and_creds(void)
         int fd;
 
         close(sv[0]);
+        close(p[0]);
+        close(p[1]);
         fd = recv_fd(sv[1]);
         _exit(fd >= 0 && write(fd, "via", 3) == 3 ? 0 : 1);
     }
