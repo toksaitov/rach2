@@ -188,7 +188,9 @@ static void _load_page_dir(page_dir_t *dir);
  * gets the window, so a machine whose firmware gives no map still boots.
  * The boot allocator placed the table before the map could be consulted, so
  * a table that lies over memory the map does not offer would overwrite
- * firmware's memory, and the machine stops rather than run on it. A frame
+ * firmware's memory, and the machine is refused by name in the memory
+ * report and stops rather than run on it: on a machine too small for the
+ * kernel, its modules and the table, this is where the table lands. A frame
  * the map does not offer is marked `FRAME_ABSENT`.
  *
  * The kernel directory identity-maps the window, supervisor-only, so the
@@ -230,7 +232,10 @@ void init_paging(struct frame_map *map)
 
         for (frame = first; frame <= last; frame++) {
             if (!frame_map_usable(map, (uint32_t)frame)) {
-                k_panic("init_paging: the frame table lies over memory the map does not offer");
+                klog(KLOG_ERR, "memory",
+                     "refused: the frame table needs memory past what the map offers after the "
+                     "kernel's reservations");
+                k_panic("memory: too little for this kernel");
             }
         }
     }
