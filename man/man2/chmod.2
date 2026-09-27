@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt CHMOD 2
 .Os
 .Sh NAME
@@ -58,6 +58,14 @@ An absolute path ignores
 Ancestor search permissions still apply when a directory descriptor
 is used.
 The kernel follows symbolic links.
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+must reach a directory, through a final symbolic link, or the call
+returns
+.Er ENOTDIR ,
+as on Linux.
 .Pp
 The kernel calls are 15 for
 .Fn chmod ,
@@ -181,9 +189,14 @@ room for the descriptor musl's
 .Dv AT_SYMLINK_NOFOLLOW
 sequence opens for the target.
 .It Er ENOTDIR
-A path component used as a directory is not a directory, or a relative
+A path component used as a directory is not a directory, a relative
 path uses a nondirectory
-.Fa dirfd .
+.Fa dirfd ,
+or a path that ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+reaches something else.
 .It Er EOPNOTSUPP
 Musl's
 .Dv AT_SYMLINK_NOFOLLOW

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Compile mounted open cleanup, the errors of an open, a dup and a dup2 that
-# get no descriptor, and the KRFFS root's unlink and rename under the root's
-# lock and of a program's file, before, during and after each fault.
+# get no descriptor, the KRFFS root's unlink and rename under the root's lock
+# and of a program's file, and the calls by path that read or change a node
+# under the lock their walk takes, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -62,7 +63,9 @@ run_phase()
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
-    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked open-enomem \
+    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked \
+    stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked \
+    utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
     open-emfile dup-enomem dup2-enomem program-holder; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
@@ -84,13 +87,13 @@ changes = {
              "loops[i].handle == from"),
     "unlink-lock": ("vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf,",
                     "vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf,"),
-    "rename-lock": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
+    "rename-lock": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"
                     "    vfs_ns_unlock(opar.mnt);\n",
-                    "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
-    "rename-unlocked": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"
+                    "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"),
+    "rename-unlocked": ("    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"
                         "    vfs_ns_unlock(opar.mnt);\n",
                         "    vfs_ns_lock(opar.mnt);\n    vfs_ns_unlock(opar.mnt);\n"
-                        "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags);\n"),
+                        "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"),
     "rename-locked-walk": [
         ("vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,",
          "vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,"),
@@ -100,10 +103,38 @@ changes = {
          "        return rc;\n    }\n    rc = mnt_is_root(npar.mnt)"),
         ("out:\n    vfs_ref_release(&npar);", "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"),
     ],
-    "chmod-walk-unlocked": ("    rc = vfs_resolve(0, name, VFS_WALK_LOCK, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    svp = vfs_synth_vpath(ref.mnt, ref.node);\n    if (svp) {\n        vp = *svp;\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        if (vp.kind == VNODE_PTS) {",
-                            "    rc = vfs_resolve(0, name, 0, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    svp = vfs_synth_vpath(ref.mnt, ref.node);\n    if (svp) {\n        vp = *svp;\n        vfs_walk_unlock(ref.mnt);\n        vfs_ref_release(&ref);\n        if (vp.kind == VNODE_PTS) {"),
-    "chown-walk-unlocked": ("(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, &ref, 0, 0);",
-                            "(follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);"),
+    "chmod-walk-unlocked": ("    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);", "    rc = resolve_named(name, 0, dir, &ref);"),
+    "chown-walk-unlocked": ("(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);",
+                            "(follow ? 0 : VFS_WALK_NOFOLLOW), dir, &ref);"),
+    "stat64-walk-unlocked": ("        int rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+                             "        int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
+    "old-stat-walk-unlocked": ("        int32_t rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+                               "        int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
+    "fstatat-walk-unlocked": ("    rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+                              "    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
+    "access-walk-unlocked": ("resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, dir, &ref);",
+                             "resolve_named(name, VFS_WALK_REAL_IDS, dir, &ref);"),
+    "utimensat-walk-unlocked": ("((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);",
+                                "((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), dir, &ref);"),
+    "utimensat-fd-node-unlocked": ("    mnt = entry->ofd->vmnt;\n    vfs_ns_lock(mnt);\n"
+                                   "    if (entry->node && fd_node_check(entry) != 0) {\n"
+                                   "        rc = -EBADF;\n    } else {\n"
+                                   "        rc = utimes_node(mnt, entry->ofd->vnode, times);\n    }\n"
+                                   "    vfs_ns_unlock(mnt);\n    return rc;",
+                                   "    (void)mnt;\n    (void)rc;\n"
+                                   "    if (entry->node && fd_node_check(entry) != 0) {\n"
+                                   "        return -EBADF;\n    }\n"
+                                   "    return utimes_node(entry->ofd->vmnt, entry->ofd->vnode, times);"),
+    "open-reserves-after-walk": [
+        ("    fd = fd_alloc(current_proc->fds);\n    if (fd < 0) {\n        return fd;\n    }\nagain:\n",
+         "    if (!fd_can_alloc(current_proc->fds)) {\n        return -EMFILE;\n    }\n    fd = -1;\nagain:\n"),
+        ("                     &ref, 0, 0);\n    if (rc == -ENOENT && (flags & O_CREAT)) {",
+         "                     &ref, 0, 0);\n    if (rc == 0 && fd < 0) {\n"
+         "        fd = fd_alloc(current_proc->fds);\n        if (fd < 0) {\n"
+         "            vfs_walk_unlock(ref.mnt);\n            vfs_ref_release(&ref);\n"
+         "            return -EMFILE;\n        }\n    }\n"
+         "    if (rc == -ENOENT && (flags & O_CREAT)) {"),
+    ],
     "open-enomem": ("    if (fd < 0) {\n        return fd;\n    }\nagain:",
                     "    if (fd < 0) {\n        return -EMFILE;\n    }\nagain:"),
     "open-emfile": ("    if (fd < 0) {\n        return fd;\n    }\nagain:",
@@ -137,7 +168,10 @@ PY
         rename-unlocked) message="a lookup in the root runs under the root's lock" ;;
         rename-locked-walk) message='a walk starts with no namespace lock held' ;;
         rename-relocked) message='the lookups, the count and the change run under one hold of the root' ;;
-        chmod-walk-unlocked | chown-walk-unlocked) message='attributes use node identity' ;;
+        chmod-walk-unlocked | chown-walk-unlocked | stat64-walk-unlocked | old-stat-walk-unlocked | \
+            fstatat-walk-unlocked | access-walk-unlocked | utimensat-walk-unlocked | \
+            utimensat-fd-node-unlocked) message='attributes use node identity' ;;
+        open-reserves-after-walk) message='an open that truncates keeps the slot it reserved before its walk' ;;
         open-enomem) message='an open the heap has no room for is ENOMEM' ;;
         open-emfile) message='an open at the descriptor limit is EMFILE' ;;
         dup-enomem) message='a dup the heap has no room for is ENOMEM' ;;

@@ -3,8 +3,9 @@
  * close of a descriptor whose release sleeps, by one thread or by the end of
  * another thread's call, the errors of an open, a dup and a dup2 that get no
  * descriptor, an unlink and a rename on the KRFFS root of a file an open is
- * installing or a program runs from, and a chmod and a chown of a file a
- * write moves.
+ * installing or a program runs from, a chmod, a chown, the stat calls, access
+ * and utimensat of a file a write moves, and an open that truncates while
+ * another thread sharing its table asks for the table's last free slot.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -165,8 +166,11 @@ static const krffs_node_t *program;
  * number at the row's first lookup in the root. */
 static void (*waiting)(void);
 static int ns_depth, ns_takes, lookup_take;
-/* Set in the rows of chmod and chown on a mounted type. */
+/* Set in the rows of chmod, chown and utimensat on a mounted type. */
 static int attr_row;
+/* The path pages the rows' calls have taken and not given back. */
+static char path_pages[4][VFS_PATH_MAX];
+static int path_pages_out[4];
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -175,6 +179,196 @@ static void check(int ok, const char *what)
         printf("open-hosttest: fail: %s\n", what);
         failures++;
     }
+}
+
+/** Run the call queued to run while a row's call waits: a caller that
+ * holds the mount's lock, or a thread the scheduler runs in a sleep. */
+static void run_waiting(void)
+{
+    void (*run)(void) = waiting;
+
+    waiting = 0;
+    if (run) {
+        run();
+    }
+}
+
+/** A user string, which in the model is the caller's own memory: its length,
+ * or -ENAMETOOLONG when it does not fit `n` bytes with its terminator. */
+int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = src[i];
+        if (src[i] == '\0') {
+            return (int)i;
+        }
+    }
+    return -ENAMETOOLONG;
+}
+
+int copy_to_user(void __user *dst, const void *src, uint32_t n)
+{
+    k_memcpy(dst, src, n);
+    return 0;
+}
+
+/** Take a path page from the model's four; every one must come back. */
+char *path_buf_get(void)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (!path_pages_out[i]) {
+            path_pages_out[i] = 1;
+            return path_pages[i];
+        }
+    }
+    check(0, "a call takes four path pages at most");
+    return 0;
+}
+
+void path_buf_put(char *buf)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (buf == path_pages[i]) {
+            path_pages_out[i] = 0;
+        }
+    }
+}
+
+/** No row's path is relative. */
+const char *proc_cwd(const struct process *p)
+{
+    (void)p;
+    return "/";
+}
+
+/** The mount the model has, at the index a stat reports as its device. */
+int vfs_mount_slots(void)
+{
+    return 1;
+}
+
+struct vfs_mount *vfs_mount_at(int idx)
+{
+    return idx == 0 ? &mount : 0;
+}
+
+/** The clock, which no row reads. */
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 0;
+    *nanoseconds = 0;
+}
+
+int64_t rtc_boot_time(void)
+{
+    return 0;
+}
+
+/** No row opens a FIFO, a device node or a terminal, or checks a node of
+ * the KRFFS root by its path. */
+int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)
+{
+    (void)e;
+    (void)mnt;
+    (void)ino;
+    (void)flags;
+    check(0, "unexpected FIFO open");
+    return -ENXIO;
+}
+
+const char *devfs_name_of(int block, uint32_t rdev)
+{
+    (void)block;
+    (void)rdev;
+    check(0, "unexpected device node open");
+    return 0;
+}
+
+int devfs_open(const char *name, int flags)
+{
+    (void)name;
+    (void)flags;
+    check(0, "unexpected device open");
+    return -ENXIO;
+}
+
+struct pty *pty_get(int index)
+{
+    (void)index;
+    check(0, "unexpected terminal lookup");
+    return 0;
+}
+
+int pty_open_slave(int index, int flags)
+{
+    (void)index;
+    (void)flags;
+    check(0, "unexpected terminal open");
+    return -ENXIO;
+}
+
+/** No row creates a file on a mounted type: the one that could, an open
+ * whose fault takes its descriptor after its walk, fails before it would. */
+int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
+{
+    (void)mnt;
+    (void)dir;
+    (void)name;
+    (void)mode;
+    (void)node;
+    check(0, "unexpected create");
+    return -EROFS;
+}
+
+/** No row opens the framebuffer or the mouse by name. */
+uint8_t *vga_mode13h_enter(void)
+{
+    check(0, "unexpected framebuffer open");
+    return 0;
+}
+
+void kbd_clear_scancodes(void)
+{
+    check(0, "unexpected framebuffer open");
+}
+
+bool mouse_is_available(void)
+{
+    check(0, "unexpected mouse open");
+    return false;
+}
+
+int input_mouse_present(void)
+{
+    check(0, "unexpected mouse open");
+    return 0;
+}
+
+void mouse_clear_packets(void)
+{
+    check(0, "unexpected mouse open");
+}
+
+int krffs_node_path(krffs_node_t *n, char *buf, uint32_t size)
+{
+    (void)n;
+    (void)buf;
+    (void)size;
+    check(0, "unexpected root node path");
+    return -1;
+}
+
+krffs_node_t *krffs_resolve(const char *path)
+{
+    (void)path;
+    check(0, "unexpected root path resolution");
+    return 0;
 }
 
 /** A KRFFS node's inode number, which no row reads. */
@@ -234,63 +428,20 @@ void kfree(void *p)
     }
 }
 
-/** No row's open reaches a device, a FIFO, a terminal or the target of a
- * dangling link: the opens of the descriptor rows end at the allocation. */
-int devfs_open(const char *name, int flags)
-{
-    (void)name;
-    (void)flags;
-    check(0, "unexpected device open");
-    return -ENODEV;
-}
-
-const char *devfs_name_of(int block, uint32_t rdev)
-{
-    (void)block;
-    (void)rdev;
-    check(0, "unexpected device name");
-    return 0;
-}
-
-int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)
-{
-    (void)e;
-    (void)mnt;
-    (void)ino;
-    (void)flags;
-    check(0, "unexpected FIFO open");
-    return -ENXIO;
-}
-
-struct pty *pty_get(int index)
-{
-    (void)index;
-    check(0, "unexpected terminal lookup");
-    return 0;
-}
-
-int pty_open_slave(int index, int flags)
-{
-    (void)index;
-    (void)flags;
-    check(0, "unexpected terminal open");
-    return -ENXIO;
-}
-
-void path_buf_put(char *buf)
-{
-    check(!buf, "unexpected path page");
-}
-
 /** Identify a mounted type rather than the memory root. */
 struct vfs_mount *vfs_root_mount(void)
 {
     return &mount;
 }
 
-/** Report an accessible regular file with set-id bits. */
+/** Report an accessible regular file with set-id bits. A read the mount's
+ * lock does not cover may sleep for the disk, and the call queued for the
+ * row, a write that moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (ns_depth == 0) {
+        run_waiting();
+    }
     check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     k_memset(st, 0, sizeof(*st));
     st->mode = 0106777;
@@ -462,13 +613,8 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
  * the caller waits for. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    void (*run)(void) = waiting;
-
     (void)mnt;
-    waiting = 0;
-    if (run) {
-        run();
-    }
+    run_waiting();
     if (ns_depth++ == 0) {
         ns_takes++;
     }
@@ -695,6 +841,8 @@ static void row_end(void)
     check(opens == releases && refs == 0, "every open handle released");
     fd_table_free(proc.fds);
     check(allocations == 0, "all descriptor storage released");
+    check(!path_pages_out[0] && !path_pages_out[1] && !path_pages_out[2] && !path_pages_out[3],
+          "every path page given back");
     k_memset(&other, 0, sizeof(other));
     k_memset(&third, 0, sizeof(third));
     k_memset(proc.fd_held, 0, sizeof(proc.fd_held));
@@ -775,7 +923,7 @@ static void rename_over_installing(void)
 {
     root_row_begin();
     waiting = open_publishes;
-    check(do_rename("/src", "/kept", 0) == 0, "a rename over a file an open is installing");
+    check(do_rename("/src", "/kept", 0, 0) == 0, "a rename over a file an open is installing");
     check(keeps == 1 && removals == 0,
           "the rename keeps the file it replaces for the open's descriptor");
     root_row_end();
@@ -795,16 +943,18 @@ static void program_kept(void)
     root_row_end();
     root_row_begin();
     program = &victim;
-    check(do_rename("/src", "/kept", 0) == 0 && keeps == 1 && removals == 0,
+    check(do_rename("/src", "/kept", 0, 0) == 0 && keeps == 1 && removals == 0,
           "a rename over the file a program runs from keeps it");
     program = NULL;
     root_row_end();
 }
 
 /** The write a row's call waits for: it holds the mount's lock and moves
- * the file, as a growing write on a mounted KRFFS volume does. */
+ * the file, as a growing write on a mounted KRFFS volume does, and repoints
+ * the descriptions open on it. */
 static void write_moves(void)
 {
+    fd_ofd_repoint(&mount, &node, &moved);
     relocate = 1;
 }
 
@@ -824,11 +974,49 @@ static void attrs_after_move(void)
         mount.type = &locked_type;
         attr_row = 1;
         waiting = write_moves;
-        check((round == 0 ? do_chmod("f", 0600) : do_chown("f", 5, (uint32_t)-1, 1)) == 0,
+        check((round == 0 ? do_chmod("f", 0600, 0) : do_chown("f", 5, (uint32_t)-1, 1, 0)) == 0,
               "a chmod or chown of a file a write moves");
         check(attrs == 1 && ns_depth == 0 && !waiting,
               "the change is made once, with the mount's lock given back");
         attr_row = 0;
+        waiting = 0;
+        ns_depth = 0;
+        mount.type = &mounted_type;
+        row_end();
+    }
+}
+
+/**
+ * A stat64, an old stat, an fstatat and an access by path of a file on a
+ * mounted type whose uses are serialised, which a write holding the mount's
+ * lock moves: each must read the node the file is at once it has the lock,
+ * since its walk takes that lock and keeps it until the node is read.
+ * Without it the read sleeps outside the lock, and the write moves the file
+ * from under it.
+ */
+static void stats_after_move(void)
+{
+    struct linux_stat64 wide;
+    struct linux_stat old;
+    int round;
+    int rc;
+
+    for (round = 0; round < 4; round++) {
+        row_begin();
+        proc.euid = 0;
+        mount.type = &locked_type;
+        waiting = write_moves;
+        if (round == 0) {
+            rc = do_stat64("/f", &wide, 1);
+        } else if (round == 1) {
+            rc = do_old_stat("/f", &old, 1);
+        } else if (round == 2) {
+            rc = fstatat_path("/f", 1, &wide);
+        } else {
+            rc = do_access("f", R_OK, 0);
+        }
+        check(rc == 0, "a stat or an access of a file a write moves");
+        check(ns_depth == 0 && !waiting, "the node is read with the mount's lock, then given back");
         waiting = 0;
         ns_depth = 0;
         mount.type = &mounted_type;
@@ -846,6 +1034,93 @@ static int model_open(void)
     int fd = fd_alloc(proc.fds);
 
     return fd < 0 ? fd : open_install(&ref, fd, "target", 2);
+}
+
+/**
+ * A utimensat by path and one by descriptor of a file on a mounted type
+ * whose uses are serialised, which a write holding the mount's lock moves
+ * while the call waits for that lock: the path's walk takes the lock, and
+ * the descriptor's node is read once the lock is held, so each sets the
+ * times of the node the file is at.
+ */
+static void times_after_move(void)
+{
+    int round;
+    int rc;
+
+    for (round = 0; round < 2; round++) {
+        row_begin();
+        proc.euid = 0;
+        mount.type = &locked_type;
+        attr_row = 1;
+        if (round == 0) {
+            waiting = write_moves;
+            rc = utimes_path("/f", 0, 0, NULL);
+        } else {
+            int fd = model_open();
+
+            waiting = write_moves;
+            rc = fd < 0 ? fd : utimes_fd(fd, NULL, 0);
+        }
+        check(rc == 0, "a utimensat of a file a write moves");
+        check(attrs == 1 && ns_depth == 0 && !waiting,
+              "the times are set once, with the mount's lock given back");
+        attr_row = 0;
+        waiting = 0;
+        ns_depth = 0;
+        mount.type = &mounted_type;
+        row_end();
+    }
+}
+
+/* The descriptor the other thread of `open_last_slot` was given, or the
+ * error `fd_alloc` gave it. */
+static int other_slot;
+
+/** Another thread that shares the table asks for a descriptor while the
+ * open waits for the mount's lock in its walk. */
+static void other_takes_slot(void)
+{
+    current_proc = &other;
+    other_slot = fd_alloc(other.fds);
+    current_proc = &proc;
+}
+
+/**
+ * An open that truncates, in a table with one free slot, while another
+ * thread sharing the table asks for a descriptor as the open's walk waits
+ * for the mount's lock: the open reserved the slot before its walk, so the
+ * other thread finds the table full, and the open ends with that slot and
+ * the file truncated.
+ */
+static void open_last_slot(void)
+{
+    int fd;
+
+    row_begin();
+    proc.euid = 0;
+    proc.rlim[RLIM_NOFILE].cur = 4;
+    other.rlim[RLIM_NOFILE].cur = 4;
+    files.refs = 2;
+    other.fds = &files;
+    for (fd = 0; fd < 3; fd++) {
+        check(fd_alloc(proc.fds) == fd, "the table is full but for its last slot");
+        proc.fds->entries[fd].type = FD_TYPE_FILE;
+    }
+    mount.type = &locked_type;
+    installing = 3;
+    other_slot = -2;
+    waiting = other_takes_slot;
+    fd = do_open("f", 2 | O_TRUNC, 0);
+    check(other_slot == -EMFILE && fd == 3 && truncates == 1,
+          "an open that truncates keeps the slot it reserved before its walk");
+    check(ns_depth == 0 && !waiting, "the open gives the mount's lock back");
+    installing = -1;
+    waiting = 0;
+    ns_depth = 0;
+    mount.type = &mounted_type;
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    row_end();
 }
 
 /** While a close's release sleeps, its descriptor is closed to a lookup and
@@ -1049,6 +1324,9 @@ int main(void)
     program_kept();
     rename_over_installing();
     attrs_after_move();
+    stats_after_move();
+    times_after_move();
+    open_last_slot();
     loop_handles();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");

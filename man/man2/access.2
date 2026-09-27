@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt ACCESS 2
 .Os
 .Sh NAME
@@ -65,6 +65,14 @@ An absolute path ignores
 The descriptor is resolved to a path and does not bypass ancestor
 search permissions.
 Symbolic links are followed.
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+must reach a directory, through a final symbolic link, or the call
+returns
+.Er ENOTDIR ,
+as on Linux.
 .Pp
 The kernel calls are 33 for
 .Fn access
@@ -143,9 +151,14 @@ empty target.
 .It Er ENOMEM
 Path lookup cannot allocate a file-system node.
 .It Er ENOTDIR
-A path component used as a directory is not a directory, or a relative
+A path component used as a directory is not a directory, a relative
 path uses a nondirectory
-.Fa dirfd .
+.Fa dirfd ,
+or a path that ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+reaches something else.
 .It Er EROFS
 .Dv W_OK
 was requested on a read-only mount other than the KRFFS boot root

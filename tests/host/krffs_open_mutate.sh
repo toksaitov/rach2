@@ -124,12 +124,12 @@ work = Path(sys.argv[1])
 path = work / "sys/syscall_fs.c"
 text = path.read_text()
 old = "VFS_WALK_LOCK |"
-if text.count(old) != 1:
-    raise SystemExit("krffs-open: mutation pattern is not unique")
-text = text.replace(old, "0 |")
 start = text.index("static int32_t do_open(")
 end = text.index("\n}", start)
 body = text[start:end]
+if body.count(old) != 1:
+    raise SystemExit("krffs-open: mutation pattern is not unique")
+body = body.replace(old, "0 |")
 body = body.replace("            vfs_walk_unlock(ref.mnt);\n", "")
 body = body.replace("            vfs_walk_unlock(locked);\n", "")
 body = body.replace("    vfs_walk_unlock(locked);", "    (void)locked;")

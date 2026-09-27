@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt OPEN 2
 .Os
 .Sh NAME
@@ -119,6 +119,30 @@ a dangling link causes its missing target to be created.
 Path resolution follows at most 40 symbolic links.
 The copied path, including any directory prefix, must fit 4096 bytes
 with its terminating null byte.
+.Pp
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+names a directory, as on Linux: the open acts as with
+.Dv O_DIRECTORY ,
+follows a final symbolic link even under
+.Dv O_NOFOLLOW ,
+and returns
+.Er ENOTDIR
+when the path reaches anything but a directory.
+With
+.Dv O_CREAT ,
+which asks for a file, such a path creates nothing: it returns
+.Er EISDIR
+once the directories before its last name are walked, and a last
+.Pa \&.
+or
+.Pa \&..
+returns
+.Er EEXIST
+under
+.Dv O_EXCL .
 .Pp
 On an existing ordinary target, the checks for
 .Dv O_CREAT Ns | Ns Dv O_EXCL ,
@@ -518,7 +542,11 @@ truncation was requested on a file backing a loop device;
 the framebuffer belongs to another process; or a raw device's
 exclusive-open or sector-claim rules prevent the open.
 .It Bq Er EEXIST
-Exclusive creation found an existing name.
+Exclusive creation found an existing name, or a path whose last
+component is
+.Pa \&.
+or
+.Pa \&.. .
 .It Bq Er EFAULT
 The path is null or cannot be read from user memory, or an open or
 creation call has no current process.
@@ -540,8 +568,10 @@ past
 File-system I/O failed, the device was removed, or a pseudo-terminal
 slave is still locked.
 .It Bq Er EISDIR
-A directory was opened for writing, or an ordinary directory was
-selected for truncation.
+A directory was opened for writing, an ordinary directory was
+selected for truncation, or
+.Dv O_CREAT
+was given with a path that names a directory by its end.
 .It Bq Er ELOOP
 A final symbolic link was selected with
 .Dv O_NOFOLLOW ,
@@ -569,7 +599,11 @@ The file system has no room to create the file or its directory entry.
 .It Bq Er ENOTDIR
 A path component or relative-path base descriptor is not a directory,
 or an existing target is not a directory under
-.Dv O_DIRECTORY .
+.Dv O_DIRECTORY
+or for a path that ends in a slash or in
+.Pa \&.
+or
+.Pa \&.. .
 .It Bq Er ENXIO
 .Pa /dev/tty
 was opened without a controlling terminal, the requested

@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt TRUNCATE 2
 .Os
 .Sh NAME
@@ -45,6 +45,15 @@ resolves
 .Fa path
 through symbolic links, a relative path from the working directory,
 and makes its checks in Linux's order.
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+must reach a directory, which returns
+.Er EISDIR
+as any directory does, and anything else returns
+.Er ENOTDIR ,
+as on Linux.
 A negative length returns
 .Er EINVAL
 before the path is looked at.
@@ -192,7 +201,12 @@ exFAT could not allocate a node for the containing directory.
 A KRFFS, FAT32, or exFAT file system has insufficient space to extend
 the file.
 .It Er ENOTDIR
-A path component used as a directory is not a directory.
+A path component used as a directory is not a directory, or a path that
+ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+reaches something else.
 .It Er ENXIO
 A FAT32 or exFAT cluster chain ends before a required cluster.
 .It Er EROFS

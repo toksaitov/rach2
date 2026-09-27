@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt RENAME 2
 .Os
 .Sh NAME
@@ -111,18 +111,32 @@ not held open, and a directory cannot be moved into itself or below
 itself.
 A directory and a nondirectory cannot replace each other.
 .Pp
-Either path normalized to the root without resolving
-.Ql ..
+The root itself,
+.Pa / ,
 is refused with
-.Er EINVAL ;
-the code keeps
-.Ql .. ,
-so on the KRFFS boot root
-.Pa /..
-as the source gives
-.Er EPERM
-and as the destination of a regular file
-.Er EISDIR .
+.Er EINVAL ,
+where Linux returns
+.Er EBUSY .
+A path whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+.Pa /.\&
+and
+.Pa /..\&
+among them, returns
+.Er EBUSY
+once both paths are walked and found on one mount, and a
+.Fa newpath
+so named returns
+.Er EEXIST
+under
+.Dv RENAME_NOREPLACE ,
+as on Linux.
+A slash after either final name requires the source to be a directory:
+anything else, a symbolic link to a directory among them, returns
+.Er ENOTDIR ,
+as on Linux.
 Mount points cannot be renamed or replaced.
 The synthetic
 .Pa /dev
@@ -168,10 +182,17 @@ A relative path's directory descriptor is not open.
 .Dv RENAME_NOREPLACE
 was given and
 .Fa newpath
-exists.
+exists, or its last component is
+.Pa \&.
+or
+.Pa \&.. .
 .It Er EBUSY
 A path entered a mount being mounted or unmounted, either entry is a
-mount point, or a destination directory is held open.
+mount point, the last component of either path is
+.Pa \&.
+or
+.Pa \&.. ,
+or a destination directory is held open.
 On the KRFFS boot root, a different destination file backs an attached
 loop device.
 .It Er EFAULT
@@ -180,7 +201,7 @@ A path cannot be read from user memory, or there is no current process.
 An ext2 directory cannot grow further or a required block exceeds the
 file system's addressing limit.
 .It Er EINVAL
-Either path normalizes to the root, a destination has no leaf component, a
+Either path is the root, a destination has no leaf component, a
 directory would move into itself or below itself, a file system
 rejects the name or cannot supply required attributes, or
 .Fn renameat2
@@ -213,8 +234,9 @@ or the rename.
 The destination directory cannot allocate space for the new entry.
 .It Er ENOTDIR
 A path component used as a directory is not a directory, a relative
-path's directory descriptor is not open on a directory, or a directory
-source would replace a nondirectory on ext2, FAT32, or exFAT.
+path's directory descriptor is not open on a directory, a directory
+source would replace a nondirectory on ext2, FAT32, or exFAT, or a
+slash follows either final name and the source is not a directory.
 .It Er ENOTEMPTY
 A directory destination is not empty on ext2, FAT32, or exFAT.
 .It Er EPERM

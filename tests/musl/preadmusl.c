@@ -6,7 +6,9 @@
  * offset to stay where lseek left it, a write past the end to leave a hole of
  * zeros, and O_APPEND to write at the end whatever offset is asked for, as
  * Linux does. A /proc snapshot and /dev/zero are read at offsets without
- * moving theirs, and a position past 4 GiB in a snapshot is its end. Then
+ * moving theirs, and a position past 4 GiB in a snapshot is its end. A
+ * /proc snapshot and /proc/self/mem seek with SEEK_SET and SEEK_CUR, by
+ * _llseek and by the old call 19, and not with SEEK_END. Then
  * each refusal, in Linux's order: a negative offset before the descriptor, a
  * pipe, a socket and the terminal that cannot seek, a descriptor open for the
  * other direction, an end past the signed range, and a directory.
@@ -17,6 +19,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -135,6 +138,39 @@ static int device_rows(void)
     return 0;
 }
 
+/* The bytes the /proc/self/mem row reads back from the probe's own memory. */
+static const char mem_mark[] = "procseek";
+
+/**
+ * lseek of a /proc snapshot and of /proc/self/mem, as Linux seeks them:
+ * SEEK_SET and SEEK_CUR move the offset, by _llseek and by the old call 19,
+ * SEEK_END is EINVAL, and an address of /proc/self/mem reads what the probe
+ * has there.
+ */
+static int proc_seek_rows(void)
+{
+    char whole[16], part[8];
+    off_t at = (off_t)(uintptr_t)mem_mark;
+    int fd;
+    int ok;
+
+    fd = open("/proc/meminfo", O_RDONLY);
+    ok = fd >= 0 && read(fd, whole, 16) == 16 && lseek(fd, 4, SEEK_SET) == 4;
+    ok = ok && read(fd, part, 8) == 8 && memcmp(part, whole + 4, 8) == 0;
+    ok = ok && lseek(fd, -6, SEEK_CUR) == 6 && refused(lseek(fd, 0, SEEK_END), EINVAL);
+    ok = ok && syscall(SYS_lseek, fd, 2, SEEK_SET) == 2 && read(fd, part, 8) == 8 &&
+         memcmp(part, whole + 2, 8) == 0;
+    close(fd);
+    fd = open("/proc/self/mem", O_RDONLY);
+    ok = ok && fd >= 0 && lseek(fd, at, SEEK_SET) == at && read(fd, part, 8) == 8 &&
+         memcmp(part, mem_mark, 8) == 0;
+    close(fd);
+    if (!ok) {
+        return fail("lseek of a /proc snapshot or of /proc/self/mem");
+    }
+    return 0;
+}
+
 /** Each refusal, in the order Linux makes them. */
 static int refusal_rows(void)
 {
@@ -196,7 +232,7 @@ static int refusal_rows(void)
 
 int main(void)
 {
-    if (file_rows() != 0 || device_rows() != 0 || refusal_rows() != 0) {
+    if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || refusal_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }

@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt GETDENTS64 2
 .Os
 .Sh NAME
@@ -20,7 +20,15 @@ buffer at
 .Fa dirp .
 It returns complete, variable-length records and advances the cursor
 in the descriptor's shared open-file description.
-The next call continues from that cursor.
+The next call continues from that cursor, which
+.Xr lseek 2
+sets back to 0, as
+.Fn rewinddir
+does, or to a
+.Va d_off
+a call gave, as
+.Fn seekdir
+does.
 .Pp
 musl defines
 .Fn getdents64
@@ -269,6 +277,7 @@ The descriptor does not refer to a directory.
 .El
 .Sh SEE ALSO
 .Xr dup 2 ,
+.Xr lseek 2 ,
 .Xr open 2 ,
 .Xr stat 2 ,
 .Xr proc 5
