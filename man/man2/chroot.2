@@ -90,7 +90,9 @@ nothing above it is, that
 .Ql ..
 stays at the root, that absolute and climbing symbolic links resolve
 inside it, that the working directory keeps its path from the new root
-or moves to it, and that a child of
+or moves to it, that a caller who may not search its root is refused
+.Fn chdir \(dq/\(dq ,
+and that a child of
 .Xr fork 2
 and a program run by
 .Xr execve 2
