@@ -526,18 +526,61 @@ static int listening(void)
     return 0;
 }
 
+static void on_alarm(int sig)
+{
+    (void)sig;
+}
+
+/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
+static int sleeping(pid_t pid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/** The child `pid`'s status, waited for without sleeping for up to 15 s: a
+ * process that runs keeps the kernel from idling, and an idle kernel looks
+ * at a sleeping wait again at every interrupt, which would let the child's
+ * connect finish without its wake. The child's id, or 0 when it has not
+ * ended. */
+static pid_t reap_running(pid_t pid, int *status)
+{
+    struct timespec start, now;
+    pid_t got;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    do {
+        got = waitpid(pid, status, WNOHANG);
+        clock_gettime(CLOCK_MONOTONIC, &now);
+    } while (got == 0 && now.tv_sec - start.tv_sec < 15);
+    return got;
+}
+
 /* A connect waiting for room in a listener's queue finishes when listen
- * makes the backlog larger; SO_SNDTIMEO bounds the wait of a kernel that
- * does not wake it. */
+ * makes the backlog larger. The connect has no time limit of its own, only
+ * a 10 s alarm, and listen runs once it is seen asleep, so its wake alone can
+ * end it in time. */
 static int backlog_growth(void)
 {
-    struct timeval limit = {5, 0};
-    struct timespec pause = {0, 100000000};
     struct sockaddr_un a;
     socklen_t alen = abstract_addr(&a, "unixmusl.backlog");
     int l = socket(AF_UNIX, SOCK_STREAM, 0);
     int c = socket(AF_UNIX, SOCK_STREAM, 0);
-    int status;
+    int status = 0, tries;
     pid_t pid;
 
     if (bind(l, (struct sockaddr *)&a, alen) != 0 || listen(l, 0) != 0 ||
@@ -546,13 +589,26 @@ static int backlog_growth(void)
     }
     pid = fork();
     if (pid == 0) {
+        struct sigaction sa;
         int w = socket(AF_UNIX, SOCK_STREAM, 0);
 
-        setsockopt(w, SOL_SOCKET, SO_SNDTIMEO, &limit, sizeof(limit));
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = on_alarm;
+        sigaction(SIGALRM, &sa, NULL);
+        alarm(10);
         _exit(connect(w, (struct sockaddr *)&a, alen) == 0 ? 0 : 1);
     }
-    nanosleep(&pause, NULL);
-    if (listen(l, 10) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+    for (tries = 0; pid > 0 && tries < 300 && !sleeping(pid); tries++) {
+        usleep(10000);
+    }
+    if (pid < 0 || tries == 300) {
+        if (pid > 0) {
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+        }
+        return fail("the connect waiting for room was never seen asleep");
+    }
+    if (listen(l, 10) != 0 || reap_running(pid, &status) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
         return fail("a larger backlog did not let a waiting connect finish");
     }

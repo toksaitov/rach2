@@ -115,6 +115,89 @@ static void writer(pid_t parent, int out, int ack)
     _exit(3);
 }
 
+/* A child a row starts to write once it sees the parent asleep, and the
+ * pipe the parent answers it on. */
+struct woken {
+    pid_t pid;
+    int ack[2];
+};
+
+/** Wait up to 3 s to see `parent` asleep, then add `in` to the set `ep`
+ * for input, with the descriptor as its data: exits 1 when the add fails
+ * and 2 when the parent was never seen asleep. */
+static void add_when_asleep(pid_t parent, int ep, int in)
+{
+    struct epoll_event ev;
+    int tries;
+
+    for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
+        usleep(10000);
+    }
+    if (tries == 300) {
+        _exit(2);
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data.u32 = (uint32_t)in;
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, in, &ev) != 0) {
+        _exit(1);
+    }
+}
+
+/**
+ * Start a child that runs `writer` on `out`, and arm a 10 s alarm for the
+ * wait its write must end, which the caller begins next with no time limit
+ * of its own, so that only the write's wake or the alarm ends it. With `ep`
+ * not -1, the child first adds `in` to the set `ep` once it sees this
+ * process asleep. 0, or -1.
+ */
+static int wake_start(struct woken *w, int out, int ep, int in)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_alarm;
+    if (pipe(w->ack) != 0 || fcntl(w->ack[0], F_SETFL, O_NONBLOCK) != 0 ||
+        sigaction(SIGALRM, &sa, NULL) != 0) {
+        return -1;
+    }
+    alarms = 0;
+    w->pid = fork();
+    if (w->pid == 0) {
+        if (ep != -1) {
+            add_when_asleep(getppid(), ep, in);
+        }
+        writer(getppid(), out, w->ack[0]);
+    }
+    if (w->pid < 0) {
+        return -1;
+    }
+    alarm(10);
+    return 0;
+}
+
+/** End the row `wake_start` began: disarm the alarm, answer the child and
+ * reap it. 0 when the child did its part, 2 when it never saw this process
+ * asleep, 1 when it failed otherwise, and -1 when it could not be answered
+ * or reaped. */
+static int wake_end(struct woken *w)
+{
+    int status;
+    int reaped;
+
+    alarm(0);
+    reaped = write(w->ack[1], "a", 1) == 1 && waitpid(w->pid, &status, 0) == w->pid;
+    close(w->ack[0]);
+    close(w->ack[1]);
+    if (!reaped) {
+        return -1;
+    }
+    if (!WIFEXITED(status)) {
+        return 1;
+    }
+    return WEXITSTATUS(status) == 0 ? 0 : WEXITSTATUS(status) == 2 ? 2 : 1;
+}
+
 static int counters(void)
 {
     struct pollfd pfd;
@@ -172,7 +255,9 @@ static int wait_one(int ep, int timeout, struct epoll_event *out)
 static int sets(void)
 {
     struct epoll_event ev, out;
+    struct woken w;
     int p[2], q[2];
+    int n, rc;
     int ep = epoll_create1(EPOLL_CLOEXEC);
     int file = open("/etc/passwd", O_RDONLY);
     char buf[4];
@@ -240,40 +325,19 @@ static int sets(void)
     if (epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
         return fail("setup for the child's wake");
     }
-    {
-        struct sigaction sa;
-        int ack[2];
-        pid_t pid;
-        int status;
-        int n;
-
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = on_alarm;
-        if (pipe(ack) != 0 || fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0 ||
-            sigaction(SIGALRM, &sa, NULL) != 0) {
-            return fail("setup for the child's wake");
-        }
-        pid = fork();
-        if (pid == 0) {
-            writer(getppid(), p[1], ack[0]);
-        }
-        alarm(10);
-        n = wait_one(ep, -1, &out);
-        alarm(0);
-        if (pid < 0 || write(ack[1], "a", 1) != 1 || waitpid(pid, &status, 0) != pid) {
-            return fail("the child that writes");
-        }
-        close(ack[0]);
-        close(ack[1]);
-        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-            return fail(WIFEXITED(status) && WEXITSTATUS(status) == 2
-                            ? "the parent was never seen asleep in epoll_wait"
-                            : "the child's write");
-        }
-        if (n != 1 || out.data.u32 != 7) {
-            return fail(alarms ? "the child's write did not wake the wait"
-                               : "the wait the child's write ended");
-        }
+    if (wake_start(&w, p[1], -1, -1) != 0) {
+        return fail("setup for the child's wake");
+    }
+    n = wait_one(ep, -1, &out);
+    rc = wake_end(&w);
+    if (rc != 0) {
+        return fail(rc < 0    ? "the child that writes"
+                    : rc == 2 ? "the parent was never seen asleep in epoll_wait"
+                              : "the child's write");
+    }
+    if (n != 1 || out.data.u32 != 7) {
+        return fail(alarms ? "the child's write did not wake the wait"
+                           : "the wait the child's write ended");
     }
     close(p[0]);
     close(p[1]);
@@ -286,38 +350,27 @@ static int sets(void)
 }
 
 /* A wait on an empty set is woken by a pipe added to the set while it
- * waits and then written: a child shares the set, adds the pipe, lets the
- * wait look again, and writes. */
+ * waits and then written: a child shares the set, adds the pipe once it sees
+ * the wait asleep, lets the wait look again, and writes once it sees it
+ * asleep again. */
 static int added_while_waiting(void)
 {
     struct epoll_event out;
+    struct woken w;
     int ep = epoll_create1(0);
-    int p[2], status;
-    pid_t pid;
+    int p[2], n, rc;
 
-    if (ep < 0 || pipe(p) != 0) {
+    if (ep < 0 || pipe(p) != 0 || wake_start(&w, p[1], ep, p[0]) != 0) {
         return fail("setup for an add during a wait");
     }
-    pid = fork();
-    if (pid == 0) {
-        struct timespec pause = {0, 100000000};
-        struct epoll_event ev;
-
-        memset(&ev, 0, sizeof(ev));
-        ev.events = EPOLLIN;
-        ev.data.u32 = 3;
-        nanosleep(&pause, NULL);
-        if (epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
-            _exit(1);
-        }
-        nanosleep(&pause, NULL);
-        _exit(write(p[1], "a", 1) == 1 ? 0 : 1);
+    n = wait_one(ep, -1, &out);
+    rc = wake_end(&w);
+    if (rc != 0) {
+        return fail(rc == 2 ? "the parent was never seen asleep in epoll_wait"
+                            : "the child that added the pipe");
     }
-    if (wait_one(ep, 5000, &out) != 1 || out.data.u32 != 3) {
+    if (n != 1 || out.data.u32 != (uint32_t)p[0]) {
         return fail("a pipe added during a wait did not wake it");
-    }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the child that added the pipe");
     }
     close(p[0]);
     close(p[1]);
@@ -358,11 +411,11 @@ static int polled_after_edge(void)
 static int nested(void)
 {
     struct epoll_event ev, out;
+    struct woken w;
     int a = epoll_create1(0);
     int b = epoll_create1(0);
     int c = epoll_create1(0);
-    int p[2], status;
-    pid_t pid;
+    int p[2], n, rc;
 
     memset(&ev, 0, sizeof(ev));
     ev.events = EPOLLIN;
@@ -377,18 +430,17 @@ static int nested(void)
     if (epoll_ctl(a, EPOLL_CTL_ADD, c, &ev) != -1 || errno != ELOOP) {
         return fail("a cycle of sets was not ELOOP");
     }
-    pid = fork();
-    if (pid == 0) {
-        struct timespec pause = {0, 100000000};
-
-        nanosleep(&pause, NULL);
-        _exit(write(p[1], "n", 1) == 1 ? 0 : 1);
+    if (wake_start(&w, p[1], -1, -1) != 0) {
+        return fail("setup for sets inside sets");
     }
-    if (wait_one(c, 5000, &out) != 1 || out.data.u32 != 9 || wait_one(c, 0, &out) != 1) {
+    n = wait_one(c, -1, &out);
+    rc = wake_end(&w);
+    if (rc != 0) {
+        return fail(rc == 2 ? "the parent was never seen asleep in epoll_wait"
+                            : "the writing child");
+    }
+    if (n != 1 || out.data.u32 != 9 || wait_one(c, 0, &out) != 1) {
         return fail("a write to a pipe two sets deep did not wake the outer set");
-    }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the writing child");
     }
     close(p[0]);
     close(p[1]);
@@ -404,30 +456,26 @@ static int polled_set_woken(void)
 {
     struct epoll_event ev;
     struct pollfd pfd;
+    struct woken w;
     int ep = epoll_create1(0);
-    int p[2], status;
-    pid_t pid;
+    int p[2], n, rc;
 
     memset(&ev, 0, sizeof(ev));
     ev.events = EPOLLIN;
-    if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
+    if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
+        wake_start(&w, p[1], -1, -1) != 0) {
         return fail("setup for a poll of a set");
-    }
-    pid = fork();
-    if (pid == 0) {
-        struct timespec pause = {0, 100000000};
-
-        nanosleep(&pause, NULL);
-        _exit(write(p[1], "q", 1) == 1 ? 0 : 1);
     }
     pfd.fd = ep;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (poll(&pfd, 1, 5000) != 1 || !(pfd.revents & POLLIN)) {
-        return fail("a write to a pipe in a set did not wake a poll of the set");
+    n = poll(&pfd, 1, -1);
+    rc = wake_end(&w);
+    if (rc != 0) {
+        return fail(rc == 2 ? "the parent was never seen asleep in poll" : "the writing child");
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the writing child");
+    if (n != 1 || !(pfd.revents & POLLIN)) {
+        return fail("a write to a pipe in a set did not wake a poll of the set");
     }
     close(p[0]);
     close(p[1]);
