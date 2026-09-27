@@ -39,6 +39,8 @@
 
 struct epitem {
     struct epitem *next;
+    /* The registration's id, from `ep_ids`; EPOLL_CTL_MOD gives another. */
+    uint32_t id;
     int fd;
     /* The open file the number named when added, and its serial, which a
      * new description at the same address after its last close has not. */
@@ -61,10 +63,21 @@ struct epoll {
     wait_queue_t wq;
 };
 
+/* An event a wait took: the i386 struct epoll_event it goes out as, the
+ * events and the data word, and the registration it came from by its id,
+ * with what the report changed in it, which a failed copy puts back. */
 struct epoll_out {
-    uint32_t events;
-    uint32_t data[2];
+    uint32_t user[3];
+    uint32_t id;
+    int off;
+    uint32_t seen;
+    const struct wait_queue *at;
+    uint32_t wakes;
 };
+
+/* The ids registrations have had, which tell a registration from a later
+ * one at the same address. */
+static uint32_t ep_ids;
 
 static struct epoll *epoll_of(int fd);
 
@@ -149,6 +162,37 @@ static void drop_item(struct epoll *ep, struct epitem **link)
     kfree(it);
 }
 
+/* Fill `o` with the event `ready` of `it`, and what its report is about to
+ * change in `it`. */
+static void took(struct epoll_out *o, const struct epitem *it, uint32_t ready)
+{
+    o->user[0] = ready;
+    o->user[1] = it->data[0];
+    o->user[2] = it->data[1];
+    o->id = it->id;
+    o->off = it->off;
+    o->seen = it->seen;
+    o->at = it->at;
+    o->wakes = it->wakes;
+}
+
+/* Put back what the report of `o` changed in its registration, when the
+ * registration is in `ep` still as it was: the event goes to a later
+ * wait. */
+static void untook(struct epoll *ep, const struct epoll_out *o)
+{
+    struct epitem *it;
+
+    for (it = ep->items; it && it->id != o->id; it = it->next) {
+    }
+    if (it) {
+        it->off = o->off;
+        it->seen = o->seen;
+        it->at = o->at;
+        it->wakes = o->wakes;
+    }
+}
+
 static int scan_set(void *ctx, struct wait_queue **wqs)
 {
     struct epoll_scan *sc = (struct epoll_scan *)ctx;
@@ -172,10 +216,7 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
             wqs[q++] = wq;
         }
         if (ready) {
-            sc->out[sc->n].events = ready;
-            sc->out[sc->n].data[0] = it->data[0];
-            sc->out[sc->n].data[1] = it->data[1];
-            sc->n++;
+            took(&sc->out[sc->n++], it, ready);
             item_reported(it, ready, wq);
         }
         link = &it->next;
@@ -326,6 +367,7 @@ int32_t sys_epoll_ctl(struct isr_params *params)
     default:
         return -EINVAL;
     }
+    it->id = ++ep_ids;
     it->events = ev[0] & ~EPOLLWAKEUP;
     it->data[0] = ev[1];
     it->data[1] = ev[2];
@@ -337,8 +379,18 @@ int32_t sys_epoll_ctl(struct isr_params *params)
     return 0;
 }
 
-/* A wait on the set `epfd` for at most `max` events into the user array
- * `uevents`, until the tick `deadline` when `has_deadline`. */
+/**
+ * A wait on the set `epfd` for at most `max` events into the user array
+ * `uevents`, until the tick `deadline` when `has_deadline`.
+ *
+ * The scan takes each event it reports, so that a second waiter does not
+ * report an edge-triggered or one-shot event again, and the copy to the
+ * caller comes after the wait, and can sleep in a page fault. An event that
+ * cannot be copied is put back in its registration (`untook`), unless the
+ * registration has gone or changed meanwhile, and the wait returns the
+ * events copied before it, or EFAULT when there are none, as Linux's
+ * does.
+ */
 static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_deadline,
                                  uint32_t deadline)
 {
@@ -366,9 +418,12 @@ static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_de
     }
     rc = poll_wait(scan_set, &sc, sc.queues, has_deadline, deadline);
     for (i = 0; rc > 0 && i < sc.n; i++) {
-        if (copy_to_user((void __user *)(uevents + i * EP_EVENT_SIZE), &sc.out[i], EP_EVENT_SIZE) !=
-            0) {
-            rc = -EFAULT;
+        if (copy_to_user((void __user *)(uevents + i * EP_EVENT_SIZE), sc.out[i].user,
+                         EP_EVENT_SIZE) != 0) {
+            rc = i > 0 ? (int32_t)i : -EFAULT;
+            while (i < sc.n) {
+                untook(ep, &sc.out[i++]);
+            }
         }
     }
     kfree(sc.out);

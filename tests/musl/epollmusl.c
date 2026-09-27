@@ -11,10 +11,9 @@
  * was given. A wait on nothing ready ends at its timeout with 0; a registration
  * is removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a
  * regular file is refused with EPERM and a second add with EEXIST. A child's
- * write wakes a parent the child has seen asleep in an epoll_wait with no
- * timeout. The child stays alive until the parent answers, so that only the
- * write can end the wait, and an alarm bounds it. A registration of no events
- * is told of a hangup. The registration of a closed eventfd does not report the
+ * write wakes a parent blocked in epoll_wait. A registration of no events is
+ * told of a hangup. A one-shot event a wait cannot store, EFAULT, is reported
+ * by the next wait. The registration of a closed eventfd does not report the
  * eventfd made next at its number, which can be added. epoll_pwait2 takes a
  * timeout of 2^31 seconds, and refuses negative seconds with EINVAL.
  *
@@ -30,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/eventfd.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -257,6 +257,34 @@ static int sets(void)
     return 0;
 }
 
+/* A one-shot event a wait cannot store in a read-only buffer, EFAULT, is
+ * reported by the next wait. */
+static int failed_copy(void)
+{
+    struct epoll_event ev, out;
+    void *ro = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint64_t v = 1;
+    int ep = epoll_create1(0);
+    int e = eventfd(0, 0);
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLONESHOT;
+    if (ro == MAP_FAILED || ep < 0 || e < 0 || write(e, &v, sizeof(v)) != 8 ||
+        epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
+        return fail("setup for a failed copy");
+    }
+    if (epoll_wait(ep, (struct epoll_event *)ro, 1, 0) != -1 || errno != EFAULT) {
+        return fail("a wait into a read-only buffer was not EFAULT");
+    }
+    if (wait_one(ep, 0, &out) != 1) {
+        return fail("a one-shot event a failed copy took was not reported again");
+    }
+    munmap(ro, 4096);
+    close(e);
+    close(ep);
+    return 0;
+}
+
 /* A registration of no events is still told of a hangup. */
 static int hangup_no_events(void)
 {
@@ -344,7 +372,8 @@ static int long_timeout(void)
 
 int main(void)
 {
-    if (counters() || sets() || hangup_no_events() || number_reused() || long_timeout()) {
+    if (counters() || sets() || hangup_no_events() || number_reused() || failed_copy() ||
+        long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

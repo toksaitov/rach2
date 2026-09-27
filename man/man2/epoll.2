@@ -133,6 +133,10 @@ of a descriptor already in the set.
 or
 .Fa events
 is not in the caller's memory.
+A wait that cannot store an event returns the events it stored before
+it, or this error when there are none; the events it could not store
+are reported again by a later wait, one-shot and edge-triggered ones
+among them, as in Linux.
 .It Er EINTR
 A signal arrived before a descriptor was ready.
 .It Er EINVAL
