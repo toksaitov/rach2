@@ -383,7 +383,11 @@ an address not page-aligned, a length of zero, an unknown flag,
 .Dv MREMAP_FIXED
 without
 .Dv MREMAP_MAYMOVE ,
-or a new address that overlaps the old range; for
+an old range that runs past
+.Ql 0xC0000000
+or a new length larger than user space, both judged before they are
+rounded up to pages, or a new address that is not page-aligned, lies
+outside user space or overlaps the old range; for
 .Fn madvise ,
 .Dv MADV_REMOVE
 or

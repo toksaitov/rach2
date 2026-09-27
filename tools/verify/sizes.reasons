@@ -245,7 +245,6 @@ rach2/sys/syscall_net.c:do_setsockopt complexity 32 a dispatcher, one arm per co
 rach2/sys/syscall_proc.c:copy_user_pages nesting 5 a walk over the two levels of the page tables, each page's case inside it
 rach2/sys/syscall_proc.c:deliver_signals complexity 28 a dispatcher, one arm per disposition, read as a table
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:sys_mremap complexity 32 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 

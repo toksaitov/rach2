@@ -8,8 +8,9 @@
  * anonymous mapping and a shared mapping of a file in /dev/shm carry a
  * child's store to the parent, and a store through the mapping of the file
  * reaches read(2). mremap grows a mapping in place or moves it with its
- * bytes, and shrinks one; madvise(MADV_DONTNEED) gives a private anonymous
- * mapping zero pages again.
+ * bytes, and shrinks one, and refuses an old length that would wrap past
+ * the end of memory, leaving the mapping; madvise(MADV_DONTNEED) gives a
+ * private anonymous mapping zero pages again.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -162,6 +163,10 @@ static int remaps(void)
     moved[3 * PAGE - 1] = 'e';
     if (mremap(moved, 3 * PAGE, PAGE, 0) != moved) {
         return fail("mremap did not shrink in place");
+    }
+    if (mremap(moved, 0xFFFFF000u, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, moved) != MAP_FAILED ||
+        errno != EINVAL || moved[0] != 'r') {
+        return fail("mremap took an old length that wraps past the end of memory");
     }
     munmap(blocker, PAGE);
     munmap(moved, PAGE);

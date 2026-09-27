@@ -5108,24 +5108,71 @@ static int32_t remap_move(vm_space_t *vm, vma_t *r, uint32_t addr, uint32_t len,
     return (int32_t)to;
 }
 
+/**
+ * mremap with MREMAP_FIXED: give [addr, addr + old_len), which lies in one
+ * region, the range [to, to + new_len), whatever was mapped there going
+ * first. EINVAL for a new address not page-aligned, outside user space or
+ * overlapping the old range; ENOMEM past RLIMIT_AS or with no room for the
+ * regions. The destination's removal does not sleep, so the old range is
+ * still in its region when the move starts.
+ */
+static int32_t remap_fixed(vm_space_t *vm, uint32_t addr, uint32_t old_len, uint32_t to,
+                           uint32_t new_len)
+{
+    if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||
+        (to < addr + old_len && addr < to + new_len)) {
+        return -EINVAL;
+    }
+    if (vm_total(vm) - vm_covered(vm, to, to + new_len) +
+            (new_len > old_len ? new_len - old_len : 0) >
+        current_proc->rlim[RLIM_AS].cur) {
+        return -ENOMEM;
+    }
+    if (vm_reserve(vm, 4) != 0) {
+        vma_exhausted("mremap");
+        return -ENOMEM;
+    }
+    vm_remove(vm, to, to + new_len);
+    unmap_user_range(_curr_dir, to, to + new_len);
+    return remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len);
+}
+
+/**
+ * Whether mremap's arguments name ranges it can work on: a page-aligned
+ * address and two lengths that are not zero, flags it knows with
+ * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside
+ * user space and a new length that fits in it. The lengths are judged as
+ * they are given, before they are rounded up to pages, so that neither
+ * range can wrap past the end of the address space: an old length near
+ * 4 GiB once made the old range seem to end below its start, and a fixed
+ * move then removed its own source.
+ */
+static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
+{
+    return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&
+           (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&
+           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= USER_ADDR_MAX &&
+           old_len <= USER_ADDR_MAX - addr && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;
+}
+
 /*
  * sys_mremap - resize a mapping, or move it. Args: EBX=old address, ECX=old
  * length, EDX=new length, ESI=flags, EDI=new address with MREMAP_FIXED.
  * The old range must lie in one region. A shrink cuts its end; a growth
  * takes the range after it when that is free, or with MREMAP_MAYMOVE moves
  * the whole mapping, pages and all, to a free range of the new length, or
- * to the new address with MREMAP_FIXED, whatever was there going first.
- * Returns the mapping's address, or -errno: EINVAL, EFAULT for a range not
- * in one region, ENOMEM when it can grow in place and may not move, or when
- * no range is free. MREMAP_DONTUNMAP is not implemented.
+ * to the new address with MREMAP_FIXED, whatever was there going first
+ * (`remap_fixed`). Returns the mapping's address, or -errno: EINVAL for the
+ * arguments `remap_args_valid` refuses, EFAULT for a range not in one
+ * region, ENOMEM when it can grow in place and may not move, or when no
+ * range is free. MREMAP_DONTUNMAP is not implemented.
  */
 int32_t sys_mremap(isr_params_t *params)
 {
     uint32_t addr = params->ebx;
-    uint32_t old_len = PAGE_UP(params->ecx);
-    uint32_t new_len = PAGE_UP(params->edx);
     uint32_t flags = params->esi;
     uint32_t to = params->edi;
+    uint32_t old_len, new_len;
     vm_space_t *vm;
     vma_t *r;
     int32_t rc;
@@ -5134,36 +5181,17 @@ int32_t sys_mremap(isr_params_t *params)
         return -ESRCH;
     }
     vm = &current_proc->mm->vm;
-    if ((addr & (PAGE_SIZE - 1)) != 0 || new_len == 0 || old_len == 0 ||
-        (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) != 0 ||
-        ((flags & MREMAP_FIXED) && !(flags & MREMAP_MAYMOVE))) {
+    if (!remap_args_valid(addr, params->ecx, params->edx, flags)) {
         return -EINVAL;
     }
-    if (params->edx > USER_ADDR_MAX - USER_ADDR_MIN || addr > USER_ADDR_MAX - old_len) {
-        return -EINVAL;
-    }
+    old_len = PAGE_UP(params->ecx);
+    new_len = PAGE_UP(params->edx);
     r = vm_find(vm, addr);
     if (!r || addr + old_len > r->end) {
         return -EFAULT;
     }
     if (flags & MREMAP_FIXED) {
-        if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||
-            (to < addr + old_len && addr < to + new_len)) {
-            return -EINVAL;
-        }
-        if (vm_total(vm) - vm_covered(vm, to, to + new_len) +
-                (new_len > old_len ? new_len - old_len : 0) >
-            current_proc->rlim[RLIM_AS].cur) {
-            return -ENOMEM;
-        }
-        if (vm_reserve(vm, 4) != 0) {
-            vma_exhausted("mremap");
-            return -ENOMEM;
-        }
-        vm_remove(vm, to, to + new_len);
-        unmap_user_range(_curr_dir, to, to + new_len);
-        r = vm_find(vm, addr);
-        rc = remap_move(vm, r, addr, old_len, to, new_len);
+        rc = remap_fixed(vm, addr, old_len, to, new_len);
         vm_file_reap();
         return rc;
     }
