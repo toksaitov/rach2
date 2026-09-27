@@ -1761,11 +1761,13 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
     }
 }
 
+/* Whether a datagram send waiting for room in the queue of `t` can stop:
+ * there is room, or `t` is gone or takes nothing more, when the send fails. */
 static int target_has_room(void *arg)
 {
     const struct unix_sock *t = (const struct unix_sock *)arg;
 
-    return t->closed || !queue_full(t);
+    return t->closed || (t->shut & SHUT_RCV) || !queue_full(t);
 }
 
 /* A send on a datagram socket, to `to` or to the connected peer. */

@@ -26,7 +26,8 @@
  * refuses a connect with EPERM while it is connected to another; one that
  * connects elsewhere or disconnects drops its queued messages, and the peer it
  * left gets ECONNRESET. A chain of a thousand datagram pairs, each queued in
- * the pair before, closes from its head.
+ * the pair before, closes from its head. A datagram send waiting for room fails
+ * with EPIPE when the receiver shuts down reading.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -544,6 +545,40 @@ static int datagram_peers(void)
     return 0;
 }
 
+/* A datagram send waiting for room in a full queue fails with EPIPE when
+ * the receiver shuts down reading; SO_SNDTIMEO bounds the wait of a kernel
+ * that does not end it. */
+static int full_receiver_shut(void)
+{
+    struct timeval limit = {5, 0};
+    struct timespec pause = {0, 100000000};
+    int sv[2];
+    int status;
+    pid_t pid;
+
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        return fail("a datagram pair to fill");
+    }
+    while (send(sv[0], "f", 1, MSG_DONTWAIT) == 1) {
+    }
+    if (errno != EAGAIN) {
+        return fail("a full datagram queue was not EAGAIN");
+    }
+    pid = fork();
+    if (pid == 0) {
+        setsockopt(sv[0], SOL_SOCKET, SO_SNDTIMEO, &limit, sizeof(limit));
+        _exit(send(sv[0], "w", 1, 0) == -1 && errno == EPIPE ? 0 : 1);
+    }
+    nanosleep(&pause, NULL);
+    if (shutdown(sv[1], SHUT_RD) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("a send waiting on a receiver shut down for reading was not EPIPE");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
 /* A chain of datagram pairs, each pair's two sockets queued in the pair
  * before and closed in the caller, closes from its head; a kernel that
  * nested a close for each pair would run off its stack. */
@@ -639,7 +674,8 @@ int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
-        backlog_growth() || datagram_peers() || chain_close() || datagram_names() || waiting()) {
+        backlog_growth() || datagram_peers() || full_receiver_shut() || chain_close() ||
+        datagram_names() || waiting()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");
