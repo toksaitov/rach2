@@ -307,6 +307,23 @@ static void deadline_fixed(void)
           "a wait of a second from tick 2000 sleeps until 2101");
 }
 
+/** Which futex calls a signal interrupted are restarted: a wait with no
+ * timeout, and not a timed one, whatever its clock and its flags. */
+static void restarts(void)
+{
+    isr_params_t p;
+
+    k_memset(&p, 0, sizeof(p));
+    p.ecx = FUTEX_WAIT | FUTEX_PRIVATE_FLAG;
+    CHECK(futex_restartable(&p), "a wait with no timeout is restarted");
+    p.esi = 608;
+    CHECK(!futex_restartable(&p), "a timed wait is not");
+    p.ecx = FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME;
+    CHECK(!futex_restartable(&p), "nor a timed bitset wait on the real-time clock");
+    p.esi = 0;
+    CHECK(futex_restartable(&p), "a bitset wait with no timeout is restarted");
+}
+
 /**
  * get_robust_list reads the head of thread 5's list before it copies
  * anything out: the first copy ends the thread and frees its record, and the
@@ -348,9 +365,11 @@ int main(void)
     owner_released();
     pending_released();
     deadline_fixed();
+    restarts();
     if (failures) {
         return 1;
     }
-    printf("futex-test: pass: the robust head, the robust release and the deadline\n");
+    printf("futex-test: pass: the robust head, the robust release, the deadline and the "
+           "restarts\n");
     return 0;
 }

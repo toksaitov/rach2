@@ -282,6 +282,13 @@ int futex_wake_address(uint32_t uaddr, uint32_t n)
     return futex_wake(uaddr, n, FUTEX_MATCH_ANY, 0);
 }
 
+int futex_restartable(const isr_params_t *params)
+{
+    int cmd = (int)params->ecx & ~(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+
+    return !((cmd == FUTEX_WAIT || cmd == FUTEX_WAIT_BITSET) && params->esi != 0);
+}
+
 /**
  * Release the robust futex whose word is at `uaddr` if thread `tid` holds
  * it, as Linux's `handle_futex_death` does: the word keeps its waiters bit,

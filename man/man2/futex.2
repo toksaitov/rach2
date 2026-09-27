@@ -75,6 +75,18 @@ A deadline is rounded up to whole 10 ms ticks, and the tick in progress
 is not counted.
 It is fixed when the call begins, so the time taken to bring in the
 word's page counts against it.
+.Pp
+A signal the process acts on ends a wait.
+A wait without a timeout is restarted when no handler runs, as after a
+stop and a continue, or when the handler that runs has
+.Dv SA_RESTART ,
+as
+.Xr sigaction 2
+describes.
+A wait with a timeout is not restarted: it fails with
+.Er EINTR
+whatever the handler's flags, as on Linux, and also when no handler runs,
+where Linux restarts it with its first deadline.
 .Fa uaddr2
 is ignored.
 The requeue, wake-and-modify and priority-inheritance operations, and
@@ -125,7 +137,11 @@ instead returns -1 and sets
 .Sh EXAMPLES
 .Pa tests/musl/clonemusl.c
 waits on a word that holds another value, waits out relative and
-absolute deadlines, and wakes an address with no waiters.
+absolute deadlines, wakes an address with no waiters, and has a handler
+with
+.Dv SA_RESTART
+end a timed wait with
+.Er EINTR .
 .Sh ERRORS
 .Bl -tag -width ETIMEDOUT
 .It Er EAGAIN
@@ -137,7 +153,8 @@ or
 .Fa timeout
 is not readable.
 .It Er EINTR
-A signal ended the wait.
+A signal ended a wait with a timeout, or one without a timeout that is not
+restarted.
 .It Er EINVAL
 .Fa uaddr
 is not aligned, a bitset operation was given a zero
@@ -163,4 +180,5 @@ The deadline passed first.
 .El
 .Sh SEE ALSO
 .Xr clone 2 ,
-.Xr nanosleep 2
+.Xr nanosleep 2 ,
+.Xr sigaction 2

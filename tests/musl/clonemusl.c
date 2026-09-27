@@ -10,7 +10,9 @@
  * word holds the child's id and the parent's copy is untouched, that the
  * parent's CLONE_PARENT_SETTID word holds the child's id, that CLONE_SIGHAND
  * without CLONE_VM is refused, and that futex compares, times out on both
- * clocks no sooner than asked, and refuses what it does not implement.
+ * clocks no sooner than asked, and refuses what it does not implement. A
+ * timed wait that a handler with SA_RESTART interrupts ends with EINTR, as
+ * Linux ends one, and is not restarted with its whole timeout again.
  *
  * The futex call (240) takes the kernel's 32-bit timespec, not musl's, whose
  * seconds are 64 bits wide.
@@ -23,7 +25,9 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -79,6 +83,37 @@ static void to32(long long ns, struct ts32 *ts)
 {
     ts->sec = (long)(ns / 1000000000LL);
     ts->nsec = (long)(ns % 1000000000LL);
+}
+
+static volatile sig_atomic_t alarms;
+
+static void on_alarm(int sig)
+{
+    (void)sig;
+    alarms++;
+}
+
+/* A wait of five seconds on `word`, which holds 7, that a SIGALRM with
+ * SA_RESTART interrupts 20 ms in; the raw call's result. */
+static long interrupted_wait(volatile uint32_t *word)
+{
+    struct sigaction sa;
+    struct itimerval it;
+    struct ts32 ts;
+    long r;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_alarm;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGALRM, &sa, NULL);
+    memset(&it, 0, sizeof(it));
+    it.it_value.tv_usec = 20000;
+    setitimer(ITIMER_REAL, &it, NULL);
+    ts.sec = 5;
+    ts.nsec = 0;
+    r = futex(word, FUTEX_WAIT, 7, &ts, 0);
+    signal(SIGALRM, SIG_DFL);
+    return r;
 }
 
 int main(void)
@@ -164,6 +199,9 @@ int main(void)
     }
     if (futex(&word, FUTEX_WAIT | FUTEX_CLOCK_REALTIME, 7, NULL, 0) != -ENOSYS) {
         return fail("the real-time clock was accepted for FUTEX_WAIT");
+    }
+    if (interrupted_wait(&word) != -EINTR || alarms != 1) {
+        return fail("a timed wait a handler with SA_RESTART interrupted did not end with EINTR");
     }
 
     printf("CLONEMUSL OK\n");

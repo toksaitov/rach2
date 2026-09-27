@@ -1823,12 +1823,14 @@ static uint32_t _enosys_big_num = 0;
 static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 
 /**
- * Whether a call that a signal interrupted with EINTR may be restarted, by a
- * signal no handler takes or by a handler with SA_RESTART. The calls Linux
- * never restarts are the ones that wait for a signal or for a deadline, and
- * the two returns from a handler, whose EAX is the interrupted call's.
+ * Whether call `nr` with the arguments in `params`, which a signal
+ * interrupted with EINTR, may be restarted, by a signal no handler takes or
+ * by a handler with SA_RESTART. The calls that are not are the ones Linux
+ * never restarts after a handler, which wait for a signal or for a deadline,
+ * a timed futex wait among them (`futex_restartable`), and the two returns
+ * from a handler, whose EAX is the interrupted call's.
  */
-static int syscall_restartable(uint32_t nr)
+static int syscall_restartable(uint32_t nr, const isr_params_t *params)
 {
     switch (nr) {
     case 29:  /* pause */
@@ -1847,6 +1849,8 @@ static int syscall_restartable(uint32_t nr)
     case 319: /* epoll_pwait */
     case 441: /* epoll_pwait2 */
         return 0;
+    case 240: /* futex */
+        return futex_restartable(params);
     default:
         return 1;
     }
@@ -1944,7 +1948,7 @@ static void _syscall_handler(isr_params_t *params)
      * restarts. */
     if (current_proc) {
         current_proc->restart_nr =
-            (ret == -EINTR && syscall_restartable(syscall_num)) ? syscall_num + 1u : 0;
+            (ret == -EINTR && syscall_restartable(syscall_num, params)) ? syscall_num + 1u : 0;
     }
 
     if (current_proc) {
