@@ -320,7 +320,7 @@ step_check()
     fi
     rootlib="$(root_libpath)"
     : > "$WORK/list.txt"
-    for f in "$ROOT/$BROWSER" "$ROOT"/usr/lib/chromium/*.so*; do
+    for f in "$ROOT/$BROWSER" "$ROOT"/usr/lib/chromium/*.so "$ROOT"/usr/lib/chromium/*.so.[0-9]*; do
         [ -e "$f" ] || continue
         if ! is_elf "$f"; then
             echo "gnu: chromium: ${f#"$ROOT"/} is not an ELF file" >&2
