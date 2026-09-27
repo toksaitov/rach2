@@ -11,7 +11,9 @@
  * image that passed validation (reached alloc, which the stub then fails). A
  * separate reentry row maps synthetic frame numbers to host buffers and loads
  * a second image inside the first image's read callback. Both loads must retain
- * their own segment geometry and bytes. Returns the failed-check count.
+ * their own segment geometry and bytes. A position-independent image is read
+ * for its layout and interpreter and loaded at a base. Returns the
+ * failed-check count.
  */
 
 #include "proc/elf.c"
@@ -287,6 +289,84 @@ static void header_table_bounds(void)
     CHECK(elf_check(img_buf, img_size));
 }
 
+/* A PT_INTERP header `i` naming `path`, whose bytes, NUL included, are put at
+ * `off`. */
+static void set_interp(int i, uint32_t off, const char *path)
+{
+    Elf32_Phdr *p = (Elf32_Phdr *)(img_buf + sizeof(Elf32_Ehdr)) + i;
+    uint32_t n = 0;
+
+    do {
+        img_buf[off + n] = (unsigned char)path[n];
+    } while (path[n++] != '\0');
+    p->p_type = PT_INTERP;
+    p->p_offset = off;
+    p->p_filesz = n;
+    p->p_memsz = n;
+}
+
+static int same_text(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/**
+ * A position-independent program: its layout names its interpreter, and a
+ * load at a base moves its segment, entry and program headers by the base.
+ * Without a base it lies below the user window and is refused before a page
+ * is taken, as are an unaligned base, a base for an ET_EXEC image, and an
+ * interpreter path that is relative or has no NUL.
+ */
+static void dynamic_images(void)
+{
+    static page_dir_t dir;
+    static page_table_t table;
+    elf_layout_t lay;
+    elf_image_t out;
+
+    base_image(2);
+    ((Elf32_Ehdr *)img_buf)->e_type = ET_DYN;
+    ((Elf32_Ehdr *)img_buf)->e_entry = 0x120u;
+    set_interp(0, 0x100u, "/lib/ld-linux.so.2");
+    set_load(1, 0, 0, 0x200u, 0x1800u, PF_R | PF_X);
+    img_size = 0x200u;
+    CHECK(elf_read_layout(test_read, 0, &lay) == 0);
+    CHECK(lay.type == ET_DYN && lay.lo == 0 && lay.hi == 0x2000u);
+    CHECK(same_text(lay.interp, "/lib/ld-linux.so.2"));
+
+    k_memset(&dir, 0, sizeof(dir));
+    dir.logical_page_tables[ELF_ET_DYN_BASE / PAGE_SIZE / 1024] = &table;
+    frame_count = 0;
+    map_frames = 1;
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == 0);
+    map_frames = 0;
+    CHECK(out.entry == ELF_ET_DYN_BASE + 0x120u);
+    CHECK(out.phdr_vaddr == ELF_ET_DYN_BASE + sizeof(Elf32_Ehdr));
+    CHECK(out.nsegs == 1 && out.segs[0].start == ELF_ET_DYN_BASE &&
+          out.segs[0].end == ELF_ET_DYN_BASE + 0x2000u);
+
+    alloc_reached = 0;
+    CHECK(elf_load_image_at(test_read, 0, &dir, 0, &out) == -1 && alloc_reached == 0);
+    alloc_reached = 0;
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE + 0x10u, &out) == -1 &&
+          alloc_reached == 0);
+
+    img_buf[0x100 + 18] = 'x';
+    CHECK(elf_read_layout(test_read, 0, &lay) == -1);
+    set_interp(0, 0x100u, "ld.so");
+    CHECK(elf_read_layout(test_read, 0, &lay) == -1);
+
+    base_image(1);
+    set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
+    alloc_reached = 0;
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == -1 &&
+          alloc_reached == 0);
+}
+
 int main(void)
 {
     page_dir_t dir;
@@ -355,6 +435,7 @@ int main(void)
 
     reentrant_load();
     header_table_bounds();
+    dynamic_images();
 
     return (fails > 100) ? 100 : fails;
 }

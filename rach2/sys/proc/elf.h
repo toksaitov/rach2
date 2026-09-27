@@ -187,8 +187,31 @@ typedef struct {
     elf_seg_t segs[ELF_MAX_SEGS];
 } elf_image_t;
 
-/** Validate just the ELF header of a streamed image; true if loadable. */
+/** Validate just the ELF header of a streamed image, ET_EXEC or ET_DYN;
+ * true if loadable. */
 bool elf_valid_exec(const void *ehdr, uint32_t len);
+
+/* The longest interpreter path PT_INTERP may name, its NUL included. */
+#define ELF_INTERP_MAX 256
+
+/* The base a position-independent program (ET_DYN) is loaded at. */
+#define ELF_ET_DYN_BASE 0x08000000u
+
+/*
+ * What exec needs to know of an image before it loads it: its type, the page
+ * span of its PT_LOAD segments, and the interpreter PT_INTERP names, "" for
+ * none.
+ */
+typedef struct {
+    uint16_t type;
+    uint32_t lo;
+    uint32_t hi;
+    char interp[ELF_INTERP_MAX];
+} elf_layout_t;
+
+/** Read an image's layout; 0, or -1 for an image this kernel does not load
+ * or an interpreter path that is not an absolute path within the limit. */
+int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out);
 
 /** Run-time vaddr of the program header table (AT_PHDR), or 0 if none
  * covers `phoff`. */
@@ -198,7 +221,16 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
  * on error. */
 int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_t *out);
 
+/** The same with every address moved by `bias`, page-aligned, which must be
+ * 0 for an ET_EXEC image: an ET_DYN program or interpreter at its base. */
+int elf_load_image_at(elf_read_fn read, void *ctx, struct page_dir *dir, uint32_t bias,
+                      elf_image_t *out);
+
 struct vm_space; /* mm/vm.h */
+
+/** Add the regions of a loaded image's segments to `vm`: an interpreter's,
+ * beside its program's. 0, or -1 when a region could not be recorded. */
+int elf_add_vmas(struct vm_space *vm, const elf_image_t *img);
 
 /** Build the VMA map of a fresh address space from a loaded image. */
 int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,

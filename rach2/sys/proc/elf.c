@@ -138,13 +138,57 @@ bool elf_valid_exec(const void *ehdr, uint32_t len)
         e->e_ident[EI_VERSION] != EV_CURRENT) {
         return false;
     }
-    if (e->e_type != ET_EXEC || e->e_machine != EM_386) {
+    if ((e->e_type != ET_EXEC && e->e_type != ET_DYN) || e->e_machine != EM_386) {
         return false;
     }
     if (e->e_phoff == 0 || e->e_phnum == 0 || e->e_phentsize != sizeof(Elf32_Phdr)) {
         return false;
     }
     return true;
+}
+
+int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out)
+{
+    Elf32_Phdr phdrs[ELF_MAX_PHNUM];
+    Elf32_Ehdr ehdr;
+    uint32_t ph_bytes;
+    uint16_t i;
+
+    k_memset(out, 0, sizeof(*out));
+    if (readfn(ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+        !elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
+        return -1;
+    }
+    ph_bytes = (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr);
+    if (readfn(ctx, phdrs, ph_bytes, ehdr.e_phoff) != (int)ph_bytes) {
+        return -1;
+    }
+    out->type = ehdr.e_type;
+    out->lo = 0xFFFFFFFFu;
+    for (i = 0; i < ehdr.e_phnum; i++) {
+        const Elf32_Phdr *ph = &phdrs[i];
+
+        if (ph->p_type == PT_LOAD) {
+            uint32_t end = ph->p_vaddr + ph->p_memsz;
+
+            if (end < ph->p_vaddr || end > 0xFFFFF000u) {
+                return -1;
+            }
+            if ((ph->p_vaddr & ~(PAGE_SIZE - 1)) < out->lo) {
+                out->lo = ph->p_vaddr & ~(PAGE_SIZE - 1);
+            }
+            if (((end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)) > out->hi) {
+                out->hi = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+            }
+        } else if (ph->p_type == PT_INTERP) {
+            if (ph->p_filesz < 2 || ph->p_filesz > sizeof(out->interp) ||
+                readfn(ctx, out->interp, ph->p_filesz, ph->p_offset) != (int)ph->p_filesz ||
+                out->interp[ph->p_filesz - 1] != '\0' || out->interp[0] != '/') {
+                return -1;
+            }
+        }
+    }
+    return out->hi == 0 ? -1 : 0;
 }
 
 /**
@@ -207,6 +251,12 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
  */
 int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
 {
+    return elf_load_image_at(readfn, ctx, dir, 0, out);
+}
+
+int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t bias,
+                      elf_image_t *out)
+{
     Elf32_Phdr phdrs[ELF_MAX_PHNUM];
     Elf32_Ehdr ehdr;
     uint16_t i;
@@ -227,6 +277,9 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
         return -1;
     }
+    if ((ehdr.e_type == ET_EXEC && bias != 0) || (bias & (PAGE_SIZE - 1)) != 0) {
+        return -1;
+    }
 
     ph_bytes = (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr);
     if (readfn(ctx, phdrs, ph_bytes, ehdr.e_phoff) != (int)ph_bytes) {
@@ -245,10 +298,10 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             return -1;
         }
 
-        vaddr = ph->p_vaddr;
+        vaddr = ph->p_vaddr + bias;
         vaddr_end = vaddr + ph->p_memsz;
 
-        if (vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
+        if (vaddr < bias || vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
             return -1;
         }
         if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
@@ -360,10 +413,11 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     if (nload == 0 || out->phdr_vaddr == 0) {
         return -1;
     }
-    if (ehdr.e_entry < ELF_USER_MIN || ehdr.e_entry >= ELF_USER_MAX) {
+    out->phdr_vaddr += bias;
+    if (ehdr.e_entry + bias < ELF_USER_MIN || ehdr.e_entry + bias >= ELF_USER_MAX) {
         return -1;
     }
-    out->entry = ehdr.e_entry;
+    out->entry = ehdr.e_entry + bias;
     out->phent = ehdr.e_phentsize;
     out->phnum = ehdr.e_phnum;
     return 0;
@@ -378,12 +432,9 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
  * 0, or -1 when a region could not be recorded, which is the heap having
  * no room for the array.
  */
-int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,
-                   uint32_t stack_growth)
+int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
 {
     int si;
-
-    vm_init(vm);
 
     /* One VMA per loaded segment, protection from the ELF p_flags. */
     for (si = 0; si < img->nsegs; si++) {
@@ -404,6 +455,16 @@ int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_t
         if (vm_insert(vm, img->segs[si].start, img->segs[si].end, prot, vt) != 0) {
             return -1;
         }
+    }
+    return 0;
+}
+
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,
+                   uint32_t stack_growth)
+{
+    vm_init(vm);
+    if (elf_add_vmas(vm, img) != 0) {
+        return -1;
     }
 
     /* Heap starts empty just past the image; brk grows it on demand. */
