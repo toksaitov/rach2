@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -27,7 +27,14 @@ Starts only
 .Pa /bin/login .
 No shell fallback is compiled into this build.
 .It Sy init-metal
-Starts the console login and supervises Dropbear.
+Starts the console login and supervises the SSH server:
+OpenSSH's
+.Xr sshd 8
+where the image has
+.Pa /usr/sbin/sshd ,
+as the GNU system's root does, and
+.Xr dropbear 8
+on every other image.
 On a boot with
 .Ql rach2.ip=none ,
 it runs BusyBox's
@@ -92,11 +99,30 @@ The console is reserved for the console session.
 The kernel stops writing to the screen when init starts;
 see
 .Xr bootlog 4 .
-The SSH server is started with
+Dropbear is started with
 .Fl g
+and
+.Xr sshd 8
+with
+.Ql PermitRootLogin prohibit-password
 unless
 .Xr sshd.conf 5
-permits its omission, and each start is reported on the console as
+permits root's password, when
+.Fl g
+is left out and
+.Xr sshd 8
+is given
+.Ql PermitRootLogin yes .
+.Xr sshd 8
+runs in the foreground with
+.Fl D
+and writes its log to the service log with
+.Fl e .
+Before each of its starts,
+.Ql ssh-keygen -A
+makes the host keys missing from
+.Pa /etc/ssh .
+Each start of either server is reported on the console as
 .Ql init: sshd: started as pid N .
 .Pp
 .Nm
@@ -115,6 +141,11 @@ Restart the machine.
 Initial resource limits.
 .It Pa /etc/rach2/sshd.conf
 SSH server policy.
+.It Pa /etc/ssh
+OpenSSH's configuration and host keys, on the GNU system's root.
+.It Pa /usr/sbin/sshd
+OpenSSH's server, which the metal build runs in place of Dropbear
+when the image has it.
 .It Pa /var/log/services
 Service output and diagnostics.
 .It Pa /var/run
@@ -129,6 +160,8 @@ The recovery file system check reports its status as:
 .Xr sshd.conf 5 ,
 .Xr limits 7 ,
 .Xr recovery 7 ,
+.Xr dropbear 8 ,
 .Xr halt 8 ,
 .Xr netup 8 ,
+.Xr sshd 8 ,
 .Xr update 8
