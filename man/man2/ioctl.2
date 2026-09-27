@@ -21,7 +21,9 @@ The i386 system call number is 54: EBX is the descriptor, ECX the request,
 and EDX the argument.
 .Pp
 The descriptor is checked before the request.
-Every descriptor accepts
+Every descriptor not opened with
+.Dv O_PATH
+accepts
 .Dv FIONBIO :
 .Fa arg
 points to an
