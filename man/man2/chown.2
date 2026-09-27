@@ -43,9 +43,26 @@ follows a final symbolic link on a file system that has them, and
 .Fn lchown
 changes the link itself, as on Linux.
 The KRFFS boot root has no symbolic links, so there the two are the
-same; the
+same.
+The
 .Pa /proc
-links have fixed ownership either way.
+links have fixed ownership, which
+.Fn lchown
+reaches.
+.Fn chown
+follows
+.Pa /proc/self
+to a process directory, whose ownership is fixed too, and does not
+follow a
+.Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
+link, but it follows
+.Pa /proc/ Ns Ar pid Ns Pa /exe
+to the file at the program's path, as it follows a link of a mounted
+type, and changes that file: a privileged
+.Fn chown
+of
+.Pa /proc/self/exe
+changes the program's owner on a writable file system.
 .Fn fchown
 uses the open descriptor
 .Fa fd .
