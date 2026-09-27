@@ -529,24 +529,27 @@ static void walk_root(struct vfs_ref *r)
     }
 }
 
-/* Whether `..` at `cur` stays there: at the root of the root mount, and at
- * the calling process's root, which chroot set. */
-static int dotdot_stays(const struct vfs_ref *cur)
+/**
+ * Whether `root`, the root a walk started from, is still the calling
+ * process's root. A thread that shares the root (CLONE_FS) may chroot while
+ * the walk sleeps in a lookup, and the walk then starts over from the new
+ * root rather than judge one path by two roots. While the answer is yes, the
+ * process's root holds the node, so the walk may move to it.
+ */
+static int root_current(const struct vfs_ref *root)
 {
-    if (current_proc && current_proc->fs->root_mnt) {
-        return cur->mnt == current_proc->fs->root_mnt && cur->node == current_proc->fs->root_node;
-    }
-    return cur->mnt == mounts[0] && cur->node == mounts[0]->root;
+    struct vfs_ref now;
+
+    walk_root(&now);
+    return now.mnt == root->mnt && now.node == root->node;
 }
 
-/* Move the walk to where an absolute path starts, for a symbolic link whose
- * target is one. */
-static int walk_move_root(struct vfs_ref *cur, int locked)
+/* Whether `..` at `cur` stays there: at the walk's root, and at the root of
+ * the root mount, above which there is nothing, whatever root the walk has. */
+static int dotdot_stays(const struct vfs_ref *cur, const struct vfs_ref *root)
 {
-    struct vfs_ref top;
-
-    walk_root(&top);
-    return walk_move(cur, top.mnt, top.node, locked);
+    return (cur->mnt == root->mnt && cur->node == root->node) ||
+           (cur->mnt == mounts[0] && cur->node == mounts[0]->root);
 }
 
 /* Replace the node `cur` holds with `node`, held already, on the same mount:
@@ -682,6 +685,12 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * the first link and given back on every return; a walk that meets no link
  * takes none.
  *
+ * The walk keeps the root it starts from: `..` stops there, and at the root
+ * of the root mount whatever the root, and an absolute link's target starts
+ * there. A thread that shares the root may chroot while the walk sleeps; at
+ * its next `..` or absolute link the walk sees that (`root_current`), lets
+ * go of where it is and starts over from the new root, so no walk mixes two.
+ *
  * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
  * final mount locked when its type asks for the lock, so an open can
  * register before relocation. An unmount may resolve a removed mount at the
@@ -692,10 +701,12 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                         struct vfs_ref *out, char *leaf, uint32_t leafcap, int unmount)
 {
     struct vfs_ref cur;
-    const char *p = path;
-    const char *last_comp = 0;
+    struct vfs_ref root;
+    const char *p;
+    const char *leaf_comp = 0;
+    const char *last_comp;
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
-    int links = 0;
+    int links;
     int locked = (flags & VFS_WALK_LOCK) != 0;
     struct vfs_mount *was;
     char *linkpath = 0;
@@ -710,22 +721,25 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     }
 
     if (flags & VFS_WALK_PARENT) {
-        rc = walk_leaf(path, leaf, leafcap, &last_comp);
+        rc = walk_leaf(path, leaf, leafcap, &leaf_comp);
         if (rc != 0) {
             return rc;
         }
     }
 
-    if (p[0] == '/' || !start) {
-        walk_root(&cur);
-    } else {
-        cur = *start;
-    }
+begin:
+    p = path;
+    last_comp = leaf_comp;
+    links = 0;
+    walk_root(&root);
+    cur = (p[0] == '/' || !start) ? root : *start;
     if (vfs_enter(cur.mnt) != 0) {
+        path_buf_put(linkpath);
+        path_buf_put(target);
         return -EBUSY;
     }
-    walk_lock(cur.mnt, locked);
     vfs_ref_hold(&cur);
+    walk_lock(cur.mnt, locked);
 
     for (;;) {
         char comp[VFS_NAME_MAX + 1];
@@ -796,7 +810,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 }
                 p = linkpath;
                 if (rc == 1) {
-                    rc = walk_move_root(&cur, locked);
+                    if (!root_current(&root)) {
+                        goto restart;
+                    }
+                    rc = walk_move(&cur, root.mnt, root.node, locked);
                     if (rc != 0) {
                         goto out_err;
                     }
@@ -828,7 +845,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
             continue;
         }
         if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
-            if (dotdot_stays(&cur)) {
+            if (!root_current(&root)) {
+                goto restart;
+            }
+            if (dotdot_stays(&cur, &root)) {
                 continue; /* a root is its own parent */
             }
             if (cur.node == cur.mnt->root) {
@@ -895,7 +915,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 }
                 p = linkpath;
                 if (absolute) {
-                    rc = walk_move_root(&cur, locked);
+                    if (!root_current(&root)) {
+                        goto restart;
+                    }
+                    rc = walk_move(&cur, root.mnt, root.node, locked);
                     if (rc != 0) {
                         goto out_err;
                     }
@@ -930,6 +953,13 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     path_buf_put(target);
     *out = cur;
     return 0;
+
+restart:
+    was = cur.mnt;
+    vfs_ref_put(&cur);
+    walk_unlock(was, locked);
+    vfs_leave(was);
+    goto begin;
 
 out_err:
     path_buf_put(linkpath);
