@@ -2286,3 +2286,17 @@ old
 new
     kt2.c_ospeed = 0;
 end
+
+fault fionbio-per-type
+probe sockflagmusl
+file rach2/sys/syscall.c
+expect SOCKFLAGMUSL FAIL (FIONBIO did not make a connection non-blocking)
+old
+    if (request == FIONBIO) {
+        return fd_ioctl_nbio(entry, arg);
+    }
+new
+    if (request == FIONBIO + 0x100) {
+        return fd_ioctl_nbio(entry, arg);
+    }
+end

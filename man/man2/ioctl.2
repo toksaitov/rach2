@@ -21,6 +21,18 @@ The i386 system call number is 54: EBX is the descriptor, ECX the request,
 and EDX the argument.
 .Pp
 The descriptor is checked before the request.
+Every descriptor accepts
+.Dv FIONBIO :
+.Fa arg
+points to an
+.Vt int ;
+nonzero sets
+.Dv O_NONBLOCK
+in the open file description, as
+.Xr fcntl 2
+does with
+.Dv F_SETFL ,
+and zero clears it.
 Sockets first handle network-interface requests.
 The console and pseudo-terminal slaves share the terminal requests below.
 A descriptor with device operations handles its remaining requests through
@@ -128,14 +140,7 @@ Detach the terminal if it belongs to the caller's session.
 Otherwise succeed without action.
 .El
 .Ss Pipes and pseudo-terminals
-Pipes and both pseudo-terminal ends accept
-.Dv FIONBIO :
-.Fa arg
-points to an
-.Vt int ;
-nonzero enables nonblocking mode in the shared open file description,
-and zero disables it.
-Pipes and pseudo-terminal masters also accept
+Pipes and pseudo-terminal masters accept
 .Dv FIONREAD
 to return their queued byte count through an
 .Vt int

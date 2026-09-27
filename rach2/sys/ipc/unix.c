@@ -97,7 +97,6 @@
 
 #define TIOCOUTQ 0x5411
 #define FIONREAD 0x541B
-#define FIONBIO  0x5421
 
 /* A socket's shutdown bits: it receives nothing more, it sends nothing
  * more. */
@@ -2516,16 +2515,6 @@ static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     case TIOCOUTQ:
         n = (s->type != SOCK_DGRAM && s->peer) ? (int32_t)s->peer->rq_bytes : 0;
         break;
-    case FIONBIO:
-        if (copy_from_user(&n, (const void __user *)arg, sizeof(n)) != 0) {
-            return -EFAULT;
-        }
-        if (n) {
-            e->ofd->status_flags |= OFD_NONBLOCK;
-        } else {
-            e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
-        }
-        return 0;
     default:
         return -ENOTTY;
     }

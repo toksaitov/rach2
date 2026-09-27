@@ -30,7 +30,7 @@ Pipe descriptors use a `struct file_ops` table for `read`, `write`, `poll`, `ioc
 
 The read end reports `POLLIN` when data is buffered or no writer remains, and always reports `POLLHUP` after the last writer closes. The write end reports `POLLOUT` when space exists or no reader remains, and always reports `POLLERR` after the last reader closes. These conditions match the ones that stop `read` and `write` from waiting. A poller waits on its end's queue, which the changes of that end's readiness wake; a FIFO opened for reading and writing is both ends, and its pollers wait on a third queue, which every change of either end wakes while such a description is open.
 
-`FIONREAD` reports the buffered byte count. `FIONBIO` sets or clears `O_NONBLOCK` on that end's open-file description. Other pipe ioctls return `ENOTTY`. `lseek` and `_llseek` return `ESPIPE`.
+`FIONREAD` reports the buffered byte count. `FIONBIO`, which `ioctl` answers for every descriptor, sets or clears `O_NONBLOCK` on that end's open-file description. Other pipe ioctls return `ENOTTY`. `lseek` and `_llseek` return `ESPIPE`.
 
 The ring uses monotonically increasing 32-bit head and tail counters. Occupancy is unsigned `tail - head`; a physical index is the counter masked by `PIPE_BUF_SIZE - 1`. The pure ring operations are in `pipe_ring.c` so the host suite can test the same code as the kernel.
 

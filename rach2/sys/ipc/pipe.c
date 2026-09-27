@@ -23,7 +23,6 @@
 
 /* Linux ioctls a pipe answers. */
 #define FIONREAD 0x541B /* bytes available to read */
-#define FIONBIO  0x5421 /* set/clear non-blocking */
 
 /* The O_* flags pipe2 takes (the values in syscall.c and fd.h). */
 #define O_CLOEXEC_FLAG  02000000
@@ -384,20 +383,6 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
         int n = (int)pipe_available(p);
         if (copy_to_user((void __user *)arg, &n, sizeof(n)) != 0) {
             return -EFAULT;
-        }
-        return 0;
-    }
-    case FIONBIO: {
-        int on;
-        if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
-            return -EFAULT;
-        }
-        if (e->ofd) {
-            if (on) {
-                e->ofd->status_flags |= OFD_NONBLOCK;
-            } else {
-                e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
-            }
         }
         return 0;
     }

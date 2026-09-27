@@ -107,6 +107,8 @@ extern volatile uint32_t kernel_second_ticks;
 
 #define FIONREAD 0x541B /* Bytes available to read */
 
+#define FIONBIO 0x5421 /* Set or clear O_NONBLOCK */
+
 #define TIOCGWINSZ 0x5413 /* Get terminal window size */
 
 #define TIOCSWINSZ 0x5414 /* Set terminal window size */
@@ -1320,6 +1322,27 @@ static int tty_request(uint32_t request)
     }
 }
 
+/**
+ * FIONBIO: set O_NONBLOCK on the open-file description of `entry` when the
+ * int at `arg` is nonzero, and clear it when it is zero, as F_SETFL does.
+ * Linux answers it for every descriptor before the file's own ioctl, and so
+ * does sys_ioctl.
+ */
+static int32_t fd_ioctl_nbio(fd_entry_t *entry, uint32_t arg)
+{
+    int on;
+
+    if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
+        return -EFAULT;
+    }
+    if (on) {
+        entry->ofd->status_flags |= OFD_NONBLOCK;
+    } else {
+        entry->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
+    }
+    return 0;
+}
+
 /* The tty behind a descriptor for the shared terminal ioctls: the console for a
  * FD_TYPE_CONSOLE fd, the slave tty for a FD_TYPE_PTS (pty slave) fd, else
  * NULL. */
@@ -1533,6 +1556,9 @@ static int32_t sys_ioctl(isr_params_t *params)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
+    if (request == FIONBIO) {
+        return fd_ioctl_nbio(entry, arg);
+    }
 
     /* A socket accepts the interface ioctls: this is where a program sets the
      * machine's address, which is what a DHCP client is for. They are checked
@@ -1549,9 +1575,9 @@ static int32_t sys_ioctl(isr_params_t *params)
 
     /* tty-family fds (the console and a pty slave) share the termios/session
      * ioctls, handled here, BEFORE the generic ops dispatch, so a pty slave's
-     * TCGETS/TIOCSCTTY reach the shared handler, not its FIONBIO-only
-     * ops->ioctl. On a non-terminal fd the terminal-only requests stay -ENOTTY
-     * (the fallthrough below), as Linux reports. */
+     * TCGETS/TIOCSCTTY reach the shared handler, not its ops. On a
+     * non-terminal fd the terminal-only requests stay -ENOTTY (the
+     * fallthrough below), as Linux reports. */
     {
         struct tty *t = fd_tty(entry);
         if (t) {
@@ -1560,13 +1586,13 @@ static int32_t sys_ioctl(isr_params_t *params)
             if (handled) {
                 return r;
             }
-            /* not a terminal ioctl: fall through (a pts slave still has its
-             * ops->ioctl for FIONBIO; the console falls to the audio block). */
+            /* not a terminal ioctl: fall through (the console falls to the
+             * audio block). */
         }
     }
 
     /* A backing-ops object (pipe/pty/device) owns its remaining ioctls:
-     * FIONBIO, and (for the pty master) TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
+     * FIONREAD, and for the pty master TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
     if (entry->ops) {
         return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
     }

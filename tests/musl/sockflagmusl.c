@@ -13,6 +13,8 @@
  * with both, whose read with nothing to read is EAGAIN, and one accepted with
  * no flags has neither, and reports no IP options, which OpenSSH's server
  * reads before it talks to a client and ends a connection that has any.
+ * FIONBIO sets and clears that connection's O_NONBLOCK, as OpenSSL's server
+ * sets its sockets'.
  *
  * Prints "SOCKFLAGMUSL OK" on success and "SOCKFLAGMUSL FAIL (detail)"
  * otherwise.
@@ -25,6 +27,7 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -126,6 +129,7 @@ int main(void)
     unsigned char opts[40];
     socklen_t len = sizeof(opts);
     char c;
+    int on;
     int ds;
     int ls;
     int as;
@@ -160,6 +164,14 @@ int main(void)
     }
     if (getsockopt(as, IPPROTO_IP, IP_OPTIONS, opts, &len) != 0 || len != 0) {
         return fail("an accepted connection reported IP options");
+    }
+    on = 1;
+    if (ioctl(as, FIONBIO, &on) != 0 || !has(as, 0, 1)) {
+        return fail("FIONBIO did not make a connection non-blocking");
+    }
+    on = 0;
+    if (ioctl(as, FIONBIO, &on) != 0 || !has(as, 0, 0)) {
+        return fail("FIONBIO did not make a connection blocking again");
     }
 
     printf("SOCKFLAGMUSL OK\n");

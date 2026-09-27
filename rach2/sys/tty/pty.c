@@ -21,7 +21,6 @@
 
 /* Linux ioctls. The pty-number requests have the exact values musl uses. */
 #define FIONREAD   0x541B
-#define FIONBIO    0x5421
 #define TIOCGWINSZ 0x5413
 #define TIOCSWINSZ 0x5414
 #define TIOCGPTN   0x80045430 /* master: get the slave index N (arg int*) */
@@ -355,20 +354,6 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
         }
         return 0;
     }
-    case FIONBIO: {
-        int on;
-        if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
-            return -EFAULT;
-        }
-        if (e->ofd) {
-            if (on) {
-                e->ofd->status_flags |= OFD_NONBLOCK;
-            } else {
-                e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
-            }
-        }
-        return 0;
-    }
     default:
         return -ENOTTY;
     }
@@ -547,32 +532,6 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 /**
- * The slave's own ioctl, FIONBIO. sys_ioctl sends the termios, session and
- * FIONREAD requests to tty_common_ioctl before this op runs.
- */
-static int32_t pts_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
-{
-    switch (request) {
-    case FIONBIO: {
-        int on;
-        if (copy_from_user(&on, (const void __user *)arg, sizeof(on)) != 0) {
-            return -EFAULT;
-        }
-        if (e->ofd) {
-            if (on) {
-                e->ofd->status_flags |= OFD_NONBLOCK;
-            } else {
-                e->ofd->status_flags &= ~(uint32_t)OFD_NONBLOCK;
-            }
-        }
-        return 0;
-    }
-    default:
-        return -ENOTTY;
-    }
-}
-
-/**
  * Drop one slave description. When the last one closes, master readers are
  * woken to read end of file, and the pair is freed if the master is closed
  * too.
@@ -595,7 +554,7 @@ static void pts_close(fd_entry_t *e)
     }
 }
 
-static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, pts_ioctl, pts_close};
+static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, NULL, pts_close};
 
 /* open paths */
 
