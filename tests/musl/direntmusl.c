@@ -104,7 +104,6 @@ int main(int argc, char **argv)
     snprintf(sub, sizeof(sub), "%s/s", base);
     snprintf(link_name, sizeof(link_name), "%s/l", base);
     tidy();
-    fd = -1;
     if (mkdir(base, 0755) != 0 || mkdir(sub, 0755) != 0 ||
         (fd = open(file, O_WRONLY | O_CREAT, 0644)) < 0) {
         return fail("make the directory");

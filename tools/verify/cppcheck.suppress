@@ -47,6 +47,25 @@ duplicateExpression:*sys/lib/krandom.c
 unusedStructMember:*tests/musl/statmusl.c
 unusedStructMember:*tests/musl/stampmusl.c
 
+# The kernel's copies of Linux's structures.
+
+# The i386 signal frame, statx, the rusage and the siginfo a wait fills are
+# Linux's layouts, copied to the user whole: a member nothing here reads is
+# the layout, not dead code.
+unusedStructMember:*sys/proc/sigframe.c
+unusedStructMember:*sys/syscall_fs.c
+unusedStructMember:*sys/syscall_proc.c
+
+# fp_access keeps the floating-point image in the 16-byte-aligned part of a
+# buffer, which it writes through the aligned pointer cppcheck does not follow.
+unassignedVariable:*sys/proc/ptrace.c
+
+# A receive notes the queue's generation, then faults the user's pages in,
+# which sleeps; another receiver may take the queue meanwhile, which is what
+# the second test of the generation finds. cppcheck does not know the fault-in
+# sleeps, so it calls the test constant.
+knownConditionTrueFalse:*sys/ipc/unix.c
+
 # The guest programs.
 
 # main's argv is the ABI's, not ours: cppcheck asks for `const char *argv[]`,
@@ -59,8 +78,25 @@ unreadVariable:*tests/musl/budgetmusl.c
 
 # cppcheck's library marks raise() and abort() as never returning. abort()
 # does not return, and the `_exit` after it is there for a reader; raise() of
-# a blocked signal returns to its caller, which is the case the test covers.
+# a blocked signal returns to its caller, which is the case the test covers,
+# and so does a raise() whose signal a handler takes or a tracer resumes.
 unreachableCode:*tests/musl/sigmusl.c
+unreachableCode:*tests/musl/ptracemusl.c
+unreachableCode:*tests/musl/sigframemusl.c
+
+# ptrace takes the word it stores in its pointer argument.
+intToPointerCast:*tests/musl/ptracemusl.c
+
+# A fault handler makes a page writable and the store runs again, and a
+# fork's child reads what its parent stored before the fork: each test reads
+# what the kernel under test did, which cppcheck takes as a constant.
+knownConditionTrueFalse:*tests/musl/sigframemusl.c
+knownConditionTrueFalse:*tests/musl/mapmusl.c
+
+# Linux's struct stat64 and struct rusage, laid out member for member for a
+# call the probe makes by number.
+unusedStructMember:*tests/musl/fdcallmusl.c
+unusedStructMember:*tests/musl/waitidmusl.c
 
 # The probes reach the kernel through inline assembly, which cppcheck does not
 # read, so an array a system call fills looks to it like one nothing writes.

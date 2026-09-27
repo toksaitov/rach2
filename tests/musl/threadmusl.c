@@ -243,7 +243,7 @@ static int sharing(void)
         usleep(10000);
     }
     if (close(pipe_fds[0]) != 0 || write(pipe_fds[1], "x", 1) != 1 ||
-        pthread_join(t, &result) != 0 || result != (void *)1) {
+        pthread_join(t, &result) != 0 || (long)result != 1) {
         return fail("a read on a descriptor another thread closed");
     }
     i = pipe_fds[0];
@@ -284,7 +284,7 @@ int main(void)
         }
     }
     for (i = 0; i < THREADS; i++) {
-        if (pthread_join(t[i], &result) != 0 || result != (void *)1) {
+        if (pthread_join(t[i], &result) != 0 || (long)result != 1) {
             return fail("a thread's id or its thread-local variable");
         }
     }
@@ -299,7 +299,7 @@ int main(void)
     handed = 5;
     pthread_cond_signal(&ready);
     pthread_mutex_unlock(&lock);
-    if (pthread_join(r, &result) != 0 || result != (void *)5) {
+    if (pthread_join(r, &result) != 0 || (long)result != 5) {
         return fail("the condition variable");
     }
 

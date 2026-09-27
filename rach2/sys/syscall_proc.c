@@ -3139,7 +3139,7 @@ struct k_stack {
 
 #define SS_ONSTACK    1
 #define SS_DISABLE    2
-#define SS_AUTODISARM (1 << 31)
+#define SS_AUTODISARM 0x80000000u
 #define MINSIGSTKSZ   2048u
 
 /**
@@ -4394,9 +4394,7 @@ static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_fil
         if (!e) {
             return -EBADF;
         }
-        if (devfs_rdev(e) == ((1u << 8) | 5u)) { /* /dev/zero, 1:5 */
-            flags |= MAP_ANONYMOUS;
-        } else {
+        if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
             if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
                 return -ENODEV;
             }

@@ -7880,7 +7880,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kerne
     int64_t now_sec, now_nsec;
     int now_both =
         times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
-    int32_t rc = 0;
+    int32_t rc;
 
     if (times && (!utime_nsec_valid(times[0].tv_nsec) || !utime_nsec_valid(times[1].tv_nsec))) {
         return -EINVAL;

@@ -166,9 +166,9 @@ static int ptrace_stop(uint32_t status, const struct k_siginfo *info)
 
     flags = kirq_save();
     while (self->ptrace_status != 0 && !kill_pending()) {
-        self->state = PROC_STOPPED;
+        current_proc->state = PROC_STOPPED;
         schedule();
-        if (self->state == PROC_STOPPED) {
+        if (current_proc->state == PROC_STOPPED) {
             idle_wait_irq_off();
         }
     }
