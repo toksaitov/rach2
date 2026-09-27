@@ -104,6 +104,8 @@ int32_t sys_chdir(isr_params_t *params);
 
 int32_t sys_fchdir(isr_params_t *params);
 
+int32_t sys_chroot(isr_params_t *params);
+
 int32_t sys_getcwd(isr_params_t *params);
 
 int32_t sys_readlink(isr_params_t *params);

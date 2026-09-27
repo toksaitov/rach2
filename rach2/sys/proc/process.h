@@ -295,6 +295,12 @@ struct process {
     /* The execution domain and its flags personality(2) keeps; fork passes
      * it on and exec keeps it. */
     uint32_t persona;
+    /* The root directory chroot set: its mount and held node, or NULL for
+     * the root of the mount table (vfs_root_set). The process's absolute
+     * paths start there and `..` stops there; fork passes it on and exec
+     * keeps it. */
+    struct vfs_mount *root_mnt;
+    void *root_node;
 };
 
 typedef struct process process_t;

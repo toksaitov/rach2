@@ -48,7 +48,10 @@ the read-only attribute removes write permission.
 .Fn rmdir
 removes an empty directory without following a symbolic link in the
 final component.
-It cannot remove a mount point or the root directory.
+It cannot remove a mount point, the root directory, or a directory that
+is a process's root directory, which
+.Xr chroot 2
+set; on Linux only the caller's own root is refused.
 A nonempty directory returns
 .Er ENOTEMPTY .
 On a mounted KRFFS volume, a missing final entry or a final entry that
@@ -128,7 +131,8 @@ that is not open, or one on a KRFFS boot-root directory removed since.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted, or
 .Fn rmdir
-selected a mount point or a directory whose references prevent removal.
+selected a mount point, a process's root directory, or a directory whose
+references prevent removal.
 .It Bq Er EEXIST
 The name passed to
 .Fn mkdir

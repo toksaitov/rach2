@@ -405,6 +405,52 @@ static void node_put(struct vfs_mount *mnt, void *node)
     }
 }
 
+int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
+{
+    void *found;
+    process_t *pr;
+    int is = 0;
+
+    for (pr = proc_list; pr && pr->root_mnt != mnt; pr = pr->next) {
+    }
+    if (!pr || !mnt->type->ops->lookup || mnt->type->ops->lookup(mnt, node, name, &found) != 0) {
+        return 0;
+    }
+    for (pr = proc_list; pr && !is; pr = pr->next) {
+        is = pr->root_mnt == mnt && pr->root_node == found;
+    }
+    node_put(mnt, found);
+    return is;
+}
+
+int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
+{
+    uint32_t ml = k_strlen(mnt->covered_path);
+    int r;
+
+    if (mnt == mounts[0] && mnt->type == &vfs_krffs_type) {
+        return krffs_node_path((krffs_node_t *)node, out, cap) == 0 ? 0 : -ENAMETOOLONG;
+    }
+    if (!mnt->type->ops->path) {
+        return -ENOENT;
+    }
+    if (ml <= 1) {
+        ml = 0; /* the root mount: the type's path is the whole */
+    }
+    if (ml + 2 > cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(out, mnt->covered_path, ml);
+    r = mnt->type->ops->path(mnt, node, out + ml, cap - ml);
+    if (r != 0) {
+        return r;
+    }
+    if (ml > 0 && out[ml + 1] == '\0') {
+        out[ml] = '\0'; /* the mount's root is the directory it covers */
+    }
+    return 0;
+}
+
 /*
  * A locked walk takes a mount's namespace lock only where the type asks for
  * it. KRFFS moves a file's bytes while they are open and ext2 holds a batch
@@ -469,6 +515,39 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
     return 0;
 }
 
+/* Where an absolute path starts: the calling process's root, which chroot
+ * set, or the root of the root mount. */
+static void walk_root(struct vfs_ref *r)
+{
+    if (current_proc && current_proc->root_mnt) {
+        r->mnt = current_proc->root_mnt;
+        r->node = current_proc->root_node;
+    } else {
+        r->mnt = mounts[0];
+        r->node = mounts[0]->root;
+    }
+}
+
+/* Whether `..` at `cur` stays there: at the root of the root mount, and at
+ * the calling process's root, which chroot set. */
+static int dotdot_stays(const struct vfs_ref *cur)
+{
+    if (current_proc && current_proc->root_mnt) {
+        return cur->mnt == current_proc->root_mnt && cur->node == current_proc->root_node;
+    }
+    return cur->mnt == mounts[0] && cur->node == mounts[0]->root;
+}
+
+/* Move the walk to where an absolute path starts, for a symbolic link whose
+ * target is one. */
+static int walk_move_root(struct vfs_ref *cur, int locked)
+{
+    struct vfs_ref top;
+
+    walk_root(&top);
+    return walk_move(cur, top.mnt, top.node, locked);
+}
+
 /* Replace the node `cur` holds with `node`, held already, on the same mount:
  * the put clears the reference, so the mount is kept across it. */
 static void ref_move_node(struct vfs_ref *cur, void *node)
@@ -481,31 +560,25 @@ static void ref_move_node(struct vfs_ref *cur, void *node)
 }
 
 /**
- * The nameless mount the path at `*p` names first, when the walk is at the
- * root directory of a type that takes the rest of a path in one call: the
- * mount is entered before that type sees the rest, as /dev/shm is before
- * devfs would classify "shm". `*p` moves past the name; NULL, with `*p`
- * where it was, for none.
+ * Whether the path at `p` names a nameless mount first, when the walk is at
+ * the root directory of a type that takes the rest of a path in one call:
+ * such a mount, /dev/shm in /dev, is entered by the ordinary step of one
+ * name, before that type sees the rest.
  */
-static struct vfs_mount *named_in_rest(const struct vfs_ref *cur, const char **p)
+static int named_in_rest(const struct vfs_ref *cur, const char *p)
 {
     char comp[VFS_NAME_MAX + 1];
-    struct vfs_mount *m;
     uint32_t len = 0;
 
-    while ((*p)[len] != '\0' && (*p)[len] != '/') {
+    while (p[len] != '\0' && p[len] != '/') {
         len++;
     }
     if (cur->node != cur->mnt->root || len > VFS_NAME_MAX) {
         return 0;
     }
-    k_memcpy(comp, *p, len);
+    k_memcpy(comp, p, len);
     comp[len] = '\0';
-    m = mount_named(cur->mnt, cur->node, comp);
-    if (m) {
-        *p += len;
-    }
-    return m;
+    return mount_named(cur->mnt, cur->node, comp) != 0;
 }
 
 /** Copy the unwalked final component and locate it within a parent path. */
@@ -586,8 +659,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     }
 
     if (p[0] == '/' || !start) {
-        cur.mnt = mounts[0];
-        cur.node = mounts[0]->root;
+        walk_root(&cur);
     } else {
         cur = *start;
     }
@@ -616,19 +688,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
 
         /* The rest-taking mounts: the whole remainder in one call, with a
          * climb above their root returned here to continue at the parent. */
-        if (cur.mnt->type->ops->lookup_rest) {
+        if (cur.mnt->type->ops->lookup_rest && !named_in_rest(&cur, p)) {
             const char *left = 0;
             char restbuf[VFS_NAME_MAX + 1];
             const char *rest = p;
-
-            m = named_in_rest(&cur, &p);
-            if (m) {
-                rc = walk_move(&cur, m, m->root, locked);
-                if (rc != 0) {
-                    goto out_err;
-                }
-                continue;
-            }
 
             /* With WALK_PARENT only the part before the leaf is walked. */
             if (last_comp) {
@@ -693,10 +756,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
             continue;
         }
         if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
+            if (dotdot_stays(&cur)) {
+                continue; /* a root is its own parent */
+            }
             if (cur.node == cur.mnt->root) {
-                if (cur.mnt == mounts[0]) {
-                    continue; /* the root of the root is its own parent */
-                }
                 /* At a mount root: continue at the covered node (the two
                  * nameless mounts hang off the root directory itself), and
                  * re-run this same `..` there. */
@@ -794,7 +857,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 }
                 p = linkpath;
                 if (target[0] == '/') {
-                    rc = walk_move(&cur, mounts[0], mounts[0]->root, locked);
+                    rc = walk_move_root(&cur, locked);
                     if (rc != 0) {
                         goto out_err;
                     }
@@ -898,6 +961,9 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
         }
         if (pr->cwd_mnt == mnt && pr->cwd_node == from) {
             pr->cwd_node = to;
+        }
+        if (pr->root_mnt == mnt && pr->root_node == from) {
+            pr->root_node = to;
         }
     }
     for (i = 0; i < mount_slots; i++) {
@@ -2078,7 +2144,9 @@ static int mount_source(const struct vfs_type *t, const char *source, block_devi
  * `mounting` under the parent's namespace lock so no namespace change runs
  * between the covered check and the reservation, run the constructor,
  * publish. Every failure after the first step releases what the steps
- * before it took. A target on the root is recorded by its canonical path.
+ * before it took. The target is recorded by its path from the root of the
+ * mount table (`vfs_node_path`), not by the path that named it, which may
+ * pass through a link or start at a root chroot gave the caller.
  *
  * The source is a partition window under /dev, claimed as a sector range on
  * the backing disk; a loop device has no disk under it and claims nothing,
@@ -2139,10 +2207,10 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return -ENOTDIR;
     }
-    if (tref.mnt == mounts[0] && mounts[0]->type == &vfs_krffs_type &&
-        krffs_node_path(tref.node, canon, sizeof(canon)) != 0) {
+    rc = vfs_node_path(tref.mnt, tref.node, canon, sizeof(canon));
+    if (rc != 0) {
         vfs_ref_release(&tref);
-        return -ENAMETOOLONG;
+        return rc;
     }
     vfs_ns_lock(tref.mnt);
     for (i = 0; i < mount_slots; i++) {
@@ -2180,9 +2248,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->ns_serving = 0;
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
-    k_strncpy(m->covered_path,
-              tref.mnt == mounts[0] && mounts[0]->type == &vfs_krffs_type ? canon : target,
-              sizeof(m->covered_path));
+    k_strncpy(m->covered_path, canon, sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
     tref.mnt->refs++; /* a child mount is a reference on its parent */
@@ -2380,6 +2446,43 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
         mnt->type->ops->hold(mnt, node);
     }
     mnt->refs++;
+}
+
+void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
+{
+    if (mnt == mounts[0] && node == mounts[0]->root) {
+        mnt = 0;
+    }
+    if (mnt) {
+        if (mnt->type->ops->hold) {
+            mnt->type->ops->hold(mnt, node);
+        }
+        mnt->refs++;
+    }
+    vfs_root_clear(p);
+    p->root_mnt = mnt;
+    p->root_node = mnt ? node : 0;
+}
+
+void vfs_root_copy(struct process *child, const struct process *parent)
+{
+    vfs_root_set(child, parent->root_mnt, parent->root_node);
+}
+
+void vfs_root_clear(struct process *p)
+{
+    struct vfs_ref r;
+    struct vfs_mount *was = p->root_mnt;
+
+    if (!was) {
+        return;
+    }
+    r.mnt = was;
+    r.node = p->root_node;
+    p->root_mnt = 0;
+    p->root_node = 0;
+    vfs_ref_put(&r);
+    was->refs--;
 }
 
 void vfs_cwd_clear(struct process *p)

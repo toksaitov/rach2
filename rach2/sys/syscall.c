@@ -1999,6 +1999,7 @@ void init_syscall(void)
     _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_CHDIR] = sys_chdir;
     _syscall_table[SYS_FCHDIR] = sys_fchdir;
+    _syscall_table[SYS_CHROOT] = sys_chroot;
     _syscall_table[SYS_BRK] = sys_brk;
     _syscall_table[SYS_MMAP2] = sys_mmap2;
     _syscall_table[SYS_MUNMAP] = sys_munmap;

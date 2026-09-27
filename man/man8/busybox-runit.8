@@ -182,11 +182,12 @@ the file's first 255 bytes with trailing whitespace removed, and an empty
 file unsets the variable.
 On Rach2 the option ends the program before it runs, as above.
 .It Fl / Ar DIR
-Change the root directory to
-.Ar DIR .
-Rach2 has no
-.Fn chroot ,
-so the option reports an error and ends before running the program.
+Change the root directory and the working directory to
+.Ar DIR ,
+as
+.Xr chroot 2
+describes, before running the program, which is then found from the new
+root.
 .It Fl n Ar NICE
 Add
 .Ar NICE

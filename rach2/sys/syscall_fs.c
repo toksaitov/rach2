@@ -808,33 +808,67 @@ int fd_node_check(fd_entry_t *entry)
     return 0;
 }
 
-/**
- * The absolute path of directory `node` of a mount of a type with a `path`
- * operation, into `out` of `cap` bytes: the path of the directory the mount
- * covers, then the directory's path inside the mount, which the type rebuilds
- * from the volume and so gives after a rename too. Returns 0 or the type's
- * error, -ENAMETOOLONG among them.
- */
-static int mount_dir_path(struct vfs_mount *vm, void *node, char *out, uint32_t cap)
+/** Whether `path` is `root`, a path of `rl` bytes, or a path below it. */
+static int path_under(const char *path, const char *root, uint32_t rl)
 {
-    uint32_t ml = k_strlen(vm->covered_path);
-    int r;
+    uint32_t i;
 
-    if (ml <= 1) {
-        ml = 0; /* a root of another type: the type's path is the whole */
+    if (rl <= 1) {
+        return 1;
     }
-    if (ml + 2 > cap) {
-        return -ENAMETOOLONG;
+    for (i = 0; i < rl; i++) {
+        if (path[i] != root[i]) {
+            return 0;
+        }
     }
-    k_memcpy(out, vm->covered_path, ml);
-    r = vm->type->ops->path(vm, node, out + ml, cap - ml);
-    if (r != 0) {
-        return r;
+    return path[rl] == '/' || path[rl] == '\0';
+}
+
+/**
+ * Make `path`, a path from the root of the mount table, the path the calling
+ * process has for the same place from the root chroot gave it: the root's
+ * own path comes off the front, and the root itself is "/". A process with
+ * no root of its own keeps `path` as it is. Returns 0; -ENOENT for a place
+ * outside the process's root, which no path of the process reaches; -ENOMEM;
+ * or the error `vfs_node_path` gives for the root.
+ */
+static int32_t path_in_root(char *path)
+{
+    char *root;
+    uint32_t rl = 0;
+    int32_t rc;
+
+    if (!current_proc || !current_proc->root_mnt) {
+        return 0;
     }
-    if (ml > 0 && out[ml + 1] == '\0') {
-        out[ml] = '\0'; /* the mount's root is the directory it covers */
+    root = path_buf_get();
+    if (!root) {
+        return -ENOMEM;
     }
-    return 0;
+    rc = vfs_node_path(current_proc->root_mnt, current_proc->root_node, root, VFS_PATH_MAX);
+    if (rc == 0) {
+        rl = (uint32_t)k_strlen(root);
+        rc = path_under(path, root, rl) ? 0 : -ENOENT;
+    }
+    if (rc == 0 && rl > 1) {
+        k_memmove(path, path + rl, k_strlen(path + rl) + 1);
+        if (path[0] == '\0') {
+            path[0] = '/';
+            path[1] = '\0';
+        }
+    }
+    path_buf_put(root);
+    return rc;
+}
+
+/**
+ * Whether the canonical path `path` is "/" and names the root of the mount
+ * table, which it does for a process chroot has not given a root of its
+ * own; the stat calls report that directory without a walk.
+ */
+static int names_tree_root(const char *path)
+{
+    return path[0] == '/' && path[1] == '\0' && (!current_proc || !current_proc->root_mnt);
 }
 
 /**
@@ -848,12 +882,15 @@ static int mount_dir_path(struct vfs_mount *vm, void *node, char *out, uint32_t 
  * `path` operation keeps the path the directory was opened by. A directory of
  * the KRFFS boot root is named by its node, which must still resolve back to
  * itself: KRFFS nodes are not counted, and `rmdir` frees a directory another
- * descriptor has open. Returns 0, -ENOTDIR for a descriptor on anything but a
- * directory, -EBADF for a removed one, or -ENAMETOOLONG.
+ * descriptor has open. A path from the root of the mount table becomes the
+ * one the calling process has from its own root (`path_in_root`). Returns 0,
+ * -ENOTDIR for a descriptor on anything but a directory, -EBADF for a
+ * removed one, -ENOENT for one outside the process's root, or -ENAMETOOLONG.
  */
 static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
 {
     krffs_node_t *dnode = entry->node; /* NULL for the root, and for other types */
+    int r;
 
     if (entry->type == FD_TYPE_SYNTH_DIR) {
         struct synth_dir *sd = (struct synth_dir *)entry->priv;
@@ -862,7 +899,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
             return -EBADF;
         }
         synth_dir_path(sd->kind, sd->pid, out, (int)cap);
-        return 0;
+        return path_in_root(out);
     }
     if (entry->type != FD_TYPE_DIR) {
         return -ENOTDIR;
@@ -871,7 +908,8 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
         struct vfs_mount *vm = entry->ofd->vmnt;
 
         if (vm->type->ops->path) {
-            return mount_dir_path(vm, entry->ofd->vnode, out, cap);
+            r = vfs_node_path(vm, entry->ofd->vnode, out, cap);
+            return r != 0 ? r : path_in_root(out);
         }
         if (entry->ofd->dirpath[0] == '\0' || k_strlen(entry->ofd->dirpath) + 1 > cap) {
             return -ENAMETOOLONG;
@@ -889,11 +927,11 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
         if (krffs_resolve(out) != dnode) {
             return -EBADF;
         }
-        return 0;
+        return path_in_root(out);
     }
     out[0] = '/';
     out[1] = '\0';
-    return 0;
+    return path_in_root(out);
 }
 
 /**
@@ -3099,16 +3137,17 @@ static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
  * Change the working directory to `path`, an absolute canonical path in a
  * path page, which this may write over.
  *
- * The working directory keeps a canonical path, so each kind of directory is
- * named its own way: a synthetic one by its kind, with /proc/self resolved to
- * the caller's pid so that a later relative name classifies right; one of
- * another type by the type, when it can name it, so a walk through a link
- * records where it arrived and not what was typed, and otherwise by the
- * request with its dots collapsed, which the physical walk that just
- * succeeded makes exact; one of the KRFFS boot root by its node. Entering
- * a directory takes search permission on it; anything else is -ENOTDIR. The
- * KRFFS root is a directory whatever its stored mode says: it is the file
- * system's anchor, not a node `mkdir` made.
+ * The working directory keeps a canonical path from the process's root
+ * (`path_in_root`), so each kind of directory is named its own way: a
+ * synthetic one by its kind, with /proc/self resolved to the caller's pid so
+ * that a later relative name classifies right; one of another type by the
+ * type, when it can name it, so a walk through a link records where it
+ * arrived and not what was typed, and otherwise by the request with its dots
+ * collapsed, which the physical walk that just succeeded makes exact; one of
+ * the KRFFS boot root by its node. Entering a directory takes search
+ * permission on it; anything else is -ENOTDIR. The KRFFS root is a directory
+ * whatever its stored mode says: it is the file system's anchor, not a node
+ * `mkdir` made.
  */
 static int32_t do_chdir(char *path)
 {
@@ -3160,7 +3199,8 @@ static int32_t do_chdir(char *path)
         }
         collapse_dots(path);
         named = ref.mnt->type->ops->path ? path_buf_get() : NULL;
-        if (named && mount_dir_path(ref.mnt, node, named, VFS_PATH_MAX) == 0) {
+        if (named && vfs_node_path(ref.mnt, node, named, VFS_PATH_MAX) == 0 &&
+            path_in_root(named) == 0) {
             rc = cwd_enter(named, ref.mnt, node);
         } else {
             rc = cwd_enter(path, ref.mnt, node);
@@ -3176,6 +3216,9 @@ static int32_t do_chdir(char *path)
     rc = cred_access_node(node, CRED_X, 0);
     if (rc == 0 && krffs_node_path(node, path, VFS_PATH_MAX) != 0) {
         rc = -ENAMETOOLONG;
+    }
+    if (rc == 0) {
+        rc = path_in_root(path);
     }
     if (rc == 0) {
         rc = cwd_enter(path, ref.mnt, node);
@@ -3253,6 +3296,132 @@ int32_t sys_fchdir(isr_params_t *params)
         if (rc == 0) {
             rc = cwd_enter(path, ref.mnt, ref.node);
         }
+    }
+    path_buf_put(path);
+    return rc;
+}
+
+/**
+ * Whether the node `ref` holds may be a process's root: a directory, which
+ * the KRFFS root is whatever its stored mode says, that the caller may
+ * search, and a caller who is root, checked in that order, as Linux checks
+ * them. A directory of /dev or /proc is EINVAL: those types take the rest
+ * of a path in one call, and the resolver could not stop `..` inside it.
+ * Returns 0, -ENOTDIR, -EACCES, -EPERM or -EINVAL.
+ */
+static int32_t root_check(const struct vfs_ref *ref)
+{
+    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    const krffs_node_t *node = ref->node;
+    struct vfs_stat vst;
+    int32_t rc = 0;
+
+    if (vp) {
+        rc = synth_kind_is_dir(vp->kind) ? 0 : -ENOTDIR;
+    } else if (mnt_is_root(ref->mnt)) {
+        rc = (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? 0 : -ENOTDIR;
+        if (rc == 0) {
+            rc = cred_access_node(node, CRED_X, 0);
+        }
+    } else {
+        rc = vfs_getattr(ref->mnt, ref->node, &vst);
+        if (rc == 0 && (vst.mode & S_IFMT) != S_IFDIR) {
+            rc = -ENOTDIR;
+        }
+        if (rc == 0) {
+            rc = cred_access_ref(ref, CRED_X, 0);
+        }
+    }
+    if (rc == 0 && !cred_privileged()) {
+        rc = -EPERM;
+    }
+    return rc == 0 && vp ? -EINVAL : rc;
+}
+
+/**
+ * The working directory's path from the root of the mount table, into `buf`
+ * of VFS_PATH_MAX bytes: its path from the calling process's root, behind
+ * the path of that root when chroot gave the process one. Returns 0, or the
+ * error `vfs_node_path` gives or -ENAMETOOLONG for a path that does not fit.
+ */
+static int32_t cwd_global(char *buf)
+{
+    const char *cwd = proc_cwd(current_proc);
+    uint32_t cl = (uint32_t)k_strlen(cwd);
+    uint32_t rl = 0;
+    int32_t rc;
+
+    if (current_proc->root_mnt) {
+        rc = vfs_node_path(current_proc->root_mnt, current_proc->root_node, buf, VFS_PATH_MAX);
+        if (rc != 0) {
+            return rc;
+        }
+        rl = (uint32_t)k_strlen(buf);
+        if (cl == 1) {
+            return 0; /* the working directory is the root */
+        }
+    }
+    if (rl + cl + 1 > VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(buf + rl, cwd, cl + 1);
+    return 0;
+}
+
+/**
+ * Make the directory `ref` holds the calling process's root, and keep the
+ * working directory in it: `buf`, a path page, takes the working
+ * directory's path, which stays where it is under its path from the new
+ * root when it is inside it, and otherwise moves to the new root.
+ */
+static int32_t root_enter(const struct vfs_ref *ref, char *buf)
+{
+    int32_t rc = cwd_global(buf);
+
+    vfs_root_set(current_proc, ref->mnt, ref->node);
+    if (rc == 0) {
+        rc = path_in_root(buf);
+    }
+    if (rc == 0) {
+        rc = proc_cwd_set(current_proc, buf);
+    }
+    return rc == 0 ? 0 : cwd_enter("/", ref->mnt, ref->node);
+}
+
+/**
+ * chroot(2): EBX = path. Make the directory `path` names the calling
+ * process's root: its absolute paths and the absolute targets of its
+ * symbolic links start there, and `..` there stays there (vfs.Readme.md).
+ *
+ * The refusals come in Linux's order: the path's own (ENOENT, ENOTDIR,
+ * ELOOP, ENAMETOOLONG, EACCES on the way), then `root_check`'s. The working
+ * directory stays where it is when it is inside the new root, and moves to
+ * the new root when it is outside, since it is a path from the process's
+ * root; Linux leaves it where it was either way. fork passes the root on
+ * and exec keeps it. While a process has it, rmdir refuses the directory
+ * with EBUSY and the root holds its mount against unmount.
+ */
+int32_t sys_chroot(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    struct vfs_ref ref;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+    if (rc == 0) {
+        rc = root_check(&ref);
+        if (rc == 0) {
+            rc = root_enter(&ref, path);
+        }
+        vfs_ref_release(&ref);
     }
     path_buf_put(path);
     return rc;
@@ -4452,7 +4621,7 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
     int32_t rc;
 
     k_memset(kst, 0, sizeof(*kst));
-    if (path[0] == '/' && path[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+    if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = kst->__st_ino = 1;
         kst->st_nlink = 1;
@@ -6557,7 +6726,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
 
-    if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
+    if (names_tree_root(pathbuf)) {
         path_buf_put(pathbuf);
         kst.st_mode = S_IFDIR | 0755; /* drwxr-xr-x */
         kst.st_nlink = 1;
@@ -7070,9 +7239,10 @@ static int32_t do_rmdir(const char *pathbuf)
             vfs_ref_release(&parent);
             return -EROFS; /* the synthetic mounts are read-only */
         }
-        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
+        if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
+            vfs_leaf_root(parent.mnt, parent.node, leaf)) {
             vfs_ref_release(&parent);
-            return -EBUSY; /* a mount point cannot be removed */
+            return -EBUSY; /* a mount point, or a process's root */
         }
         if (!mnt_is_root(parent.mnt)) {
             vfs_ns_lock(parent.mnt);

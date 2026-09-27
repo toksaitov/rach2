@@ -124,8 +124,10 @@ Reject the root of an already placed mount with
 Read the target's attributes and require a directory, or return
 .Er ENOTDIR .
 .It
-Reconstruct a target on the KRFFS boot root within the same 63-byte
-limit, or return
+Rebuild the target's path from the root of the mount table, the path
+the mount table records whatever path named the target, a root set by
+.Xr chroot 2
+included, within the same 63-byte limit, or return
 .Er ENAMETOOLONG .
 .It
 Under the parent directory's namespace lock, reject a covered or
@@ -215,8 +217,9 @@ are permanent and return
 .Pp
 The mount stops accepting new operations and waits for operations
 already in progress to finish.
-An open-file description, working directory, or child mount in any
-process then makes it busy.
+An open-file description, working directory, root directory set by
+.Xr chroot 2 ,
+or child mount in any process then makes it busy.
 A loop device attached to a file on the mount also prevents unmounting.
 .Pp
 The file system syncs and prepares to unmount; the kernel writes dirty

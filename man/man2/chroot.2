@@ -1,0 +1,149 @@
+.Dd September 27, 2026
+.Dt CHROOT 2
+.Os
+.Sh NAME
+.Nm chroot
+.Nd change the root directory
+.Sh SYNOPSIS
+.In unistd.h
+.Ft int
+.Fn chroot "const char *path"
+.Sh DESCRIPTION
+.Fn chroot
+makes the directory
+.Fa path
+names the root directory of the calling process.
+The process's absolute paths start there, and so does the target of a
+symbolic link that begins with
+.Ql / ;
+.Ql ..
+in the root stays in the root.
+.Fa path
+itself is resolved as any path is, from the old root or from the working
+directory.
+.Pp
+The root belongs to the process.
+.Xr fork 2
+gives the child the parent's, and a thread takes a copy when it is made,
+as it takes the working directory;
+.Xr execve 2
+keeps it, and the program it runs is found from it.
+While a process has its root in a directory,
+.Xr rmdir 2
+refuses the directory, and
+.Xr umount2 2
+refuses the mount that holds it.
+.Pp
+The working directory stays where it is when it is inside the new root,
+and
+.Xr getcwd 2
+then reports its path from the new root.
+One outside the new root moves to the new root.
+On Linux it stays where it was, and relative paths then reach the tree
+outside the root.
+In the same way, a descriptor of a directory outside the root, opened
+before the call, is refused with
+.Er ENOENT
+by
+.Xr fchdir 2
+and by the
+.Fn *at
+calls for a relative path, where Linux walks from that directory.
+.Pp
+Only the root of the mount table has
+.Pa /dev
+and
+.Pa /proc
+below it.
+A program inside another root reaches a device through a device node
+made with
+.Xr mknod 2
+inside the root, which opens the
+.Pa /dev
+device with its number.
+A directory of
+.Pa /dev
+or
+.Pa /proc
+cannot be a root.
+.Xr mount 2
+takes its source by its name under
+.Pa /dev
+whatever the caller's root, where Linux resolves the name from the root.
+.Fn chroot
+of
+.Pa /
+from the root of the mount table changes nothing.
+.Pp
+The i386 system call number is 61.
+The kernel takes the path in EBX.
+.Sh RETURN VALUES
+.Fn chroot
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/musl/chrootmusl.c
+chroots into a directory of the KRFFS root and one of a tmpfs.
+It checks that the new root's files are found by absolute paths and
+nothing above it is, that
+.Ql ..
+stays at the root, that absolute and climbing symbolic links resolve
+inside it, that the working directory keeps its path from the new root
+or moves to it, and that a child of
+.Xr fork 2
+and a program run by
+.Xr execve 2
+keep the root.
+It also checks that
+.Xr rmdir 2
+and
+.Xr umount2 2
+are refused while a process has its root there.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+A directory of
+.Fa path ,
+the last one included, does not grant search permission.
+.It Bq Er EFAULT
+.Fa path
+is outside the caller's memory.
+.It Bq Er EINVAL
+.Fa path
+names a directory of
+.Pa /dev
+or
+.Pa /proc ,
+whose file systems take the rest of a path in one step, so the resolver
+could not stop
+.Ql ..
+there.
+Linux has no such refusal.
+.It Bq Er ELOOP
+Too many symbolic links were followed.
+.It Bq Er ENAMETOOLONG
+.Fa path
+is too long.
+.It Bq Er ENOENT
+A directory of
+.Fa path
+does not exist, or
+.Fa path
+is empty.
+.It Bq Er ENOMEM
+The kernel had no memory for the path.
+.It Bq Er ENOTDIR
+.Fa path ,
+or a component of it, is not a directory.
+.It Bq Er EPERM
+The caller's effective user ID is not 0.
+The errors above come first, as on Linux.
+.El
+.Sh SEE ALSO
+.Xr chdir 2 ,
+.Xr execve 2 ,
+.Xr fork 2 ,
+.Xr mknod 2 ,
+.Xr mount 2 ,
+.Xr rmdir 2

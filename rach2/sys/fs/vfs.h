@@ -296,8 +296,9 @@ void vfs_init(void);
 /**
  * Resolve `path` to a held node.
  *
- * `start` is where the walk begins: with NULL it is the root of the root
- * mount whether or not `path` begins with '/', because the syscall layer
+ * `start` is where the walk begins: with NULL it is the calling process's
+ * root, the root of the root mount unless chroot gave it one, whether or
+ * not `path` begins with '/', because the syscall layer
  * joins a relative path to the working directory's canonical spelling
  * before resolving and strips the leading slash; an `*at` call may pass
  * its directory descriptor's place instead. On success `out` receives the
@@ -376,6 +377,19 @@ int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, ui
 struct process;
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node);
 void vfs_cwd_clear(struct process *p);
+
+/**
+ * The root directory chroot gives a process, where the resolver starts an
+ * absolute path, stops `..` and restarts an absolute symbolic link's
+ * target. `vfs_root_set` holds the node and counts a reference on its
+ * mount, which unmount then answers EBUSY for, and then lets go of the root
+ * it replaces; NULL `mnt`, or the root of the mount table itself, leaves
+ * the process with that root. `vfs_root_copy` gives a child of fork its
+ * parent's root, and `vfs_root_clear`, at exit, lets go.
+ */
+void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node);
+void vfs_root_copy(struct process *child, const struct process *parent);
+void vfs_root_clear(struct process *p);
 
 /**
  * Count one operation in progress on `mnt`; refused with -EBUSY unless the
@@ -493,6 +507,25 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
  * and rename answer EBUSY.
  */
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name);
+
+/**
+ * Whether the node at `name` inside directory `node` of `mnt` is a
+ * process's root, which rmdir answers EBUSY for as it does for a mount
+ * point: the resolver starts at the root's node, which the KRFFS root and a
+ * KRFFS volume do not count, so it may not be freed from under the process.
+ * The name is looked up only when some process has its root on `mnt`.
+ */
+int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name);
+
+/**
+ * The path of directory `node` of `mnt` from the root of the mount table,
+ * into `out` of `cap` bytes: on the KRFFS root, the path of its node; on
+ * another type, the path of the directory the mount covers followed by the
+ * directory's path inside the mount, which the type rebuilds from the
+ * volume and so gives after a rename too. Returns 0, -ENAMETOOLONG, or
+ * -ENOENT on a type without a `path` operation, /dev and /proc.
+ */
+int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap);
 
 /** The classification stored in a synthetic node, or NULL when `mnt` is not
  * one of the two synthetic mounts. */

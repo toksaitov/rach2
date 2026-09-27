@@ -60,6 +60,11 @@ Entering takes search permission on the directory, as
 does, and a directory opened with
 .Dv O_PATH
 serves as well as one opened for reading, as on Linux.
+A directory outside the root
+.Xr chroot 2
+gave the process returns
+.Er ENOENT ,
+where Linux enters it.
 .Pp
 A working directory on a mounted file system holds a reference to its
 node and mount, preventing unmount while it remains in use.
@@ -74,6 +79,9 @@ Changing the working directory releases the previous reference.
 copies the stored absolute path, including its terminating null byte,
 to
 .Fa buf .
+The path is the one from the process's root directory, which
+.Xr chroot 2
+may have moved.
 .Fa size
 is the buffer capacity in bytes and must include room for that byte.
 With a non-null buffer, size zero gives

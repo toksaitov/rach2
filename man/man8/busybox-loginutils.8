@@ -154,10 +154,12 @@ The default is
 .Ql sha512 .
 .It Fl R Ar DIR
 Change the root directory to
+.Ar DIR ,
+as
+.Xr chroot 2
+describes, before any password changes, so the files changed are those
+under
 .Ar DIR .
-Rach2 has no
-.Fn chroot ,
-so the option fails before any password changes.
 .El
 .Ss cryptpw and mkpasswd
 .Bl -tag -width "-S SALT"

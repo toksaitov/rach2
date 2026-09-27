@@ -310,13 +310,14 @@ Display the DNS domain name.
 Provide a fake ident authentication service.
 .It Nm ftpd
 Serve FTP requests as an inetd service.
-Rach2 has no
-.Fn chroot
-system call, so the applet's change of root to
+Run as root, the applet makes
 .Ar DIR
-fails whatever its privilege, and it changes the current directory to
+its root with
+.Xr chroot 2 ,
+which confines clients to it; otherwise the change of root fails, and it
+changes the current directory to
 .Ar DIR
-instead; clients are not confined to it.
+instead, where clients are not confined.
 .It Nm ftpget
 Download a file through FTP using TCP.
 .It Nm ftpput

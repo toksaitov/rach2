@@ -988,14 +988,20 @@ Change the owner or group of files to
 or
 .Ar GRP .
 .It Nm chroot
-Request a new root directory
+Make
 .Ar NEWROOT
-and run
-.Ar PROG .
-Rach2 does not implement the
-.Fn chroot
-system call.
-The applet fails before running the program.
+the root directory and the working directory, as
+.Xr chroot 2
+describes, and run
+.Ar PROG
+with
+.Ar ARGS
+from the new root, or
+.Ev SHELL
+with
+.Fl i ,
+.Pa /bin/sh
+when it is unset.
 .It Nm cksum
 Calculate CRC32 checksums of files.
 .It Nm comm

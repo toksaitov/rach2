@@ -128,6 +128,9 @@ static const char *const PROBES[] = {
     "musl/mknodmusl",
     /* memfd_create, its descriptor and name, and each seal. */
     "musl/memfdmusl",
+    /* chroot on KRFFS and tmpfs: paths, links and ".." inside the root,
+       fork and exec keeping it, and the rmdir and unmount it refuses. */
+    "musl/chrootmusl",
     /* vfork and clone with CLONE_VM|CLONE_VFORK, as posix_spawn, system
        and popen start their children. */
     "musl/vforkmusl",

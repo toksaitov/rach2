@@ -12,7 +12,11 @@
 .Fn execve
 replaces the calling process's image with the program at
 .Fa path .
-A relative path is resolved from the current working directory.
+A relative path is resolved from the current working directory, and an
+absolute one, an interpreter's included, from the process's root
+directory, which
+.Xr chroot 2
+sets and the new image keeps.
 The loader supports little-endian ELF32 executables for i386 of type
 .Dv ET_EXEC ,
 at the addresses their segments name, and position-independent ones of

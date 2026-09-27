@@ -534,15 +534,16 @@ static void close_cloexec_fds(void)
 
 /*
  * A file execve reads: the program, a script's interpreter, or the dynamic
- * linker a PT_INTERP names. One on the KRFFS root is read by its path; one
- * on another mount through a handle on the node its resolution held, opened
- * once and released after the load. It lives in the caller's own exec
- * workspace below, because a read of a mounted volume sleeps and a second
- * exec runs while it does.
+ * linker a PT_INTERP names. One on the KRFFS root is read by the path of its
+ * node, from the root of the mount table, which is not the path the caller
+ * gave when chroot moved the caller's root; one on another mount through a
+ * handle on the node its resolution held, opened once and released after
+ * the load. It lives in the caller's own exec workspace below, because a
+ * read of a mounted volume sleeps and a second exec runs while it does.
  */
 struct exec_file {
-    const char *path;   /* the path on the KRFFS root */
-    struct vfs_ref ref; /* the mount is NULL on the KRFFS root and once closed */
+    char path[VFS_PATH_MAX]; /* the node's path on the KRFFS root */
+    struct vfs_ref ref;      /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
     int32_t err; /* the last failed read's errno, reported instead of ENOEXEC */
 };
@@ -920,7 +921,9 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
 /**
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
- * would do.
+ * would do. `path` starts at the caller's root, which chroot may have
+ * moved, and a file it names on the KRFFS root is read by its node's own
+ * path, which `f` keeps.
  *
  * The walk may not arrive on the synthetic /dev and /proc mounts, which
  * hold no programs, so execve sees the mount boundary open sees and cannot
@@ -942,7 +945,6 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
     int nosuid;
     int32_t rc;
 
-    f->path = path;
     f->ref.mnt = NULL;
     f->handle = NULL;
     f->err = 0;
@@ -957,6 +959,9 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
         const krffs_node_t *node = ref.node;
 
         rc = cred_access_node(node, CRED_X, 0);
+        if (rc == 0 && krffs_node_path(ref.node, f->path, sizeof(f->path)) != 0) {
+            rc = -ENAMETOOLONG;
+        }
         vst.mode = node->mode;
         vst.uid = node->uid;
         vst.gid = node->gid;
@@ -1565,10 +1570,12 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
     k_memcpy(child->comm, parent->comm, sizeof(child->comm));
-    /* The working directory's hold on its mount is the child's too. */
+    /* The working directory's hold on its mount is the child's too, and so
+     * is the root chroot gave the parent. */
     child->cwd_mnt = NULL;
     child->cwd_node = NULL;
     vfs_cwd_set(child, parent->cwd_mnt, parent->cwd_node);
+    vfs_root_copy(child, parent);
 
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same
@@ -1690,9 +1697,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 
 fail_built:
     /* Everything built for the child so far goes back: the working
-     * directory's hold, the kernel stack and the address space, then the
-     * record. */
+     * directory's and the root's holds, the kernel stack and the address
+     * space, then the record. */
     vfs_cwd_clear(child);
+    vfs_root_clear(child);
     kstack_free(child->kernel_stack);
     mm_drop(child);
     free_process(child);

@@ -27,6 +27,7 @@ static int cwd_wait;
 static int with_parent;
 static int closed;
 static int cwd_released;
+static int root_released;
 static int adopted;
 static int notified;
 static int switches;
@@ -94,6 +95,13 @@ void vfs_cwd_clear(process_t *p)
     cwd_released = 1;
 }
 
+void vfs_root_clear(process_t *p)
+{
+    CHECK(p == &child && cwd_released, "the root is released after the working directory");
+    CHECK(child.state != PROC_ZOMBIE, "the root is released before death is published");
+    root_released = 1;
+}
+
 static int vfork_released;
 static int thread_released;
 
@@ -143,7 +151,7 @@ void signal_post_info(process_t *target, int signo, const struct k_siginfo *info
 {
     (void)info;
     CHECK(target == &parent && signo == SIGCHLD, "the parent receives sigchld");
-    CHECK(closed && cwd_released && adopted, "notification follows all cleanup");
+    CHECK(closed && cwd_released && root_released && adopted, "notification follows all cleanup");
     CHECK(child.state == PROC_ZOMBIE, "notification exposes a completed zombie");
     notified++;
 }
@@ -153,7 +161,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     fd_wait = files;
     cwd_wait = directory;
     with_parent = has_parent;
-    closed = cwd_released = adopted = notified = switches = vfork_released = 0;
+    closed = cwd_released = root_released = adopted = notified = switches = vfork_released = 0;
     thread_released = 0;
     child.pid = 42;
     child.tgid = 42;
