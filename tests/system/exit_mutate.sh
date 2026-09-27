@@ -180,15 +180,17 @@ from pathlib import Path
 import sys
 
 row, fault = sys.argv[1:]
-path, call = {
-    'normal': ('rach2/sys/syscall_proc.c', 'proc_exit_cleanup((status & 0xFF) << 8);'),
-    'signal': ('rach2/kernel.c', 'proc_exit_cleanup(signo & 0x7F);'),
+path, call, removed, waited = {
+    'normal': ('rach2/sys/syscall_proc.c', 'if (!proc_exit_cleanup(code)) {', 'if (1) {',
+               'if (!exit_proof_waited(proc_exit_cleanup(code))) {'),
+    'signal': ('rach2/kernel.c', 'last = proc_exit_cleanup(signo);', 'last = 0;',
+               'last = exit_proof_waited(proc_exit_cleanup(signo));'),
 }[row]
 path = Path(path)
 source = path.read_text()
 if source.count(call) != 1:
     raise SystemExit('exit-integration: caller is not unique')
-replacement = '(void)0;'
+replacement = removed
 if fault == 'wait':
     helper = Path('rach2/sys/proc/exit.c')
     helper.write_text(helper.read_text() + '''
@@ -196,6 +198,7 @@ if fault == 'wait':
 #include "wait_queue.h"
 extern volatile uint32_t kernel_ticks;
 void exit_proof_wait(void);
+int exit_proof_waited(int last);
 
 /** Complete the wait after the real timer wakes this process. */
 static int exit_proof_awake(void *arg)
@@ -216,9 +219,16 @@ void exit_proof_wait(void)
     wq_wait_event_nointr(&queue, exit_proof_awake, 0);
     __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
 }
+
+/** Wait after the cleanup has published the death, and pass on its result. */
+int exit_proof_waited(int last)
+{
+    exit_proof_wait();
+    return last;
+}
 ''')
-    source = 'void exit_proof_wait(void);\n' + source
-    replacement = call + '\n    exit_proof_wait();'
+    source = 'int exit_proof_waited(int last);\n' + source
+    replacement = waited
 path.write_text(source.replace(call, replacement))
 PY
         phase="$row-$fault"
