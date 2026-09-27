@@ -16,7 +16,11 @@
  * `limitprobe show NOFILE` reporting the number it inherited; one user
  * with four processes allowed is refused its fifth fork with `EAGAIN`
  * while another user forks; and a process that took that user's identity
- * with `setuid` counts against that user's four.
+ * with `setuid` counts against that user's four. Last, a child under the
+ * limits OpenSSH's rlimit sandbox sets, none for the files it may grow, the
+ * descriptors it may open and the processes it may fork, still selects and
+ * polls a descriptor it opened before, as the test of that sandbox in
+ * OpenSSH's configure requires.
  *
  * Needs: root privilege, readable /hello, this binary at /limitprobe, and
  * only descriptors 0, 1 and 2 open. Start with RLIMIT_NOFILE at 1024/1024,
@@ -44,7 +48,10 @@ typedef unsigned int size_t;
 #define SYS_MMAP2     192
 #define SYS_SETUID32  213
 #define SYS_PRLIMIT64 340
+#define SYS_NEWSELECT 142
+#define SYS_POLL      168
 
+#define RLIMIT_FSIZE  1
 #define RLIMIT_NPROC  6
 #define RLIMIT_NOFILE 7
 #define RLIMIT_AS     9
@@ -61,6 +68,13 @@ typedef unsigned int size_t;
 struct rlimit64 {
     unsigned cur_lo, cur_hi, max_lo, max_hi;
 };
+
+struct pollfd {
+    int fd;
+    short events, revents;
+};
+
+#define POLLIN 1
 
 static int syscall1(int n, int a)
 {
@@ -87,6 +101,16 @@ static int syscall4(int n, int a, int b, int c, int d)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
+    return r;
+}
+
+static int syscall5(int n, int a, int b, int c, int d, int e)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+                         : "memory");
     return r;
 }
 
@@ -213,6 +237,39 @@ static int body_nofile(void)
     argv[2] = 0;
     syscall3(SYS_EXECVE, (int)(size_t)argv[0], (int)(size_t)argv, 0);
     return 4;
+}
+
+/* OpenSSH's rlimit sandbox: with limits of 0 on the files it may grow, the
+   descriptors it may open and the processes it may fork, the child selects
+   and polls a descriptor it opened before; each answers it ready. */
+static int body_sandbox(void)
+{
+    unsigned rset[32];
+    struct pollfd pfd;
+    int tv[2];
+    int fd, i;
+
+    fd = syscall3(SYS_OPEN, (int)(size_t)"/hello", O_RDONLY, 0);
+    if (fd < 0 || set_limit(RLIMIT_FSIZE, 0, 0) != 0 || set_limit(RLIMIT_NOFILE, 0, 0) != 0 ||
+        set_limit(RLIMIT_NPROC, 0, 0) != 0) {
+        return 2;
+    }
+    for (i = 0; i < 32; i++) {
+        rset[i] = 0;
+    }
+    rset[fd / 32] |= 1u << (fd % 32);
+    tv[0] = 1;
+    tv[1] = 0;
+    if (syscall5(SYS_NEWSELECT, fd + 1, (int)(size_t)rset, 0, 0, (int)(size_t)tv) != 1) {
+        return 3;
+    }
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (syscall3(SYS_POLL, (int)(size_t)&pfd, 1, 1) != 1 || !(pfd.revents & POLLIN)) {
+        return 4;
+    }
+    return 0;
 }
 
 /* Eight megabytes of address space: a mapping of sixteen is refused, one of
@@ -376,6 +433,7 @@ void probe_main(unsigned int *sp)
                "eight descriptors: the ninth open is EMFILE and the exec sees eight");
     child_must(body_as, 0, "eight megabytes: a larger mapping is ENOMEM and the break stays");
     child_must(body_hard, 0, "the hard limit: a user lowers, root raises");
+    child_must(body_sandbox, 0, "select and poll under the limits of 0 of OpenSSH's sandbox");
     if (set_limit(RLIMIT_NOFILE, 200, 200) != 0) {
         fail("setting the limit a child inherits");
     }

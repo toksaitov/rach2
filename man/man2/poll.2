@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -173,6 +173,12 @@ pending.
 exceeds 1024, or the
 .Fn ppoll
 timeout has invalid seconds or nanoseconds.
+Linux also refuses an
+.Fa nfds
+above the caller's soft
+.Dv RLIMIT_NOFILE ;
+this kernel does not, so a process whose limit is 0 still polls the
+descriptors it has, as OpenSSH's rlimit sandbox needs.
 .It Er ENOMEM
 The kernel could not allocate the descriptor or wait arrays.
 .It Er ESRCH
