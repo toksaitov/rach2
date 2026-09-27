@@ -382,10 +382,11 @@ void vfs_cwd_clear(struct process *p);
  * The root directory chroot gives a process, where the resolver starts an
  * absolute path, stops `..` and restarts an absolute symbolic link's
  * target. `vfs_root_set` holds the node and counts a reference on its
- * mount, which unmount then answers EBUSY for, and then lets go of the root
- * it replaces; NULL `mnt`, or the root of the mount table itself, leaves
- * the process with that root. `vfs_root_copy` gives a child of fork its
- * parent's root, and `vfs_root_clear`, at exit, lets go.
+ * mount, which unmount then answers EBUSY for, stores it, and then lets go
+ * of the root it replaces, a put that may sleep; NULL `mnt`, or the root of
+ * the mount table itself, leaves the process with that root.
+ * `vfs_root_copy` gives a child of fork its parent's root, and
+ * `vfs_root_clear`, at exit, lets go.
  */
 void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node);
 void vfs_root_copy(struct process *child, const struct process *parent);

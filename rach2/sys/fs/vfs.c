@@ -2483,7 +2483,25 @@ int vfs_do_umount(const char *target)
     return 0;
 }
 
-/* The working directory's hold on its mount. */
+/* The working directory's and the root's holds. */
+
+/**
+ * Let go of a working directory's or a root's hold on `node` of `mnt`: the
+ * put, which may sleep, and then the mount's count, which keeps the mount
+ * until the put is done. A NULL `mnt` holds nothing.
+ */
+static void hold_release(struct vfs_mount *mnt, void *node)
+{
+    struct vfs_ref r;
+
+    if (!mnt) {
+        return;
+    }
+    r.mnt = mnt;
+    r.node = node;
+    vfs_ref_put(&r);
+    mnt->refs--;
+}
 
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
@@ -2500,8 +2518,17 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
     mnt->refs++;
 }
 
+/**
+ * Hold the new root, store it, and only then let go of the old one. The put
+ * may sleep, and a thread that shares the root (CLONE_FS) and resolves a
+ * path meanwhile finds one of the two roots in the record, never none,
+ * which would be the root of the mount table.
+ */
 void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
+    struct vfs_mount *was = p->fs->root_mnt;
+    void *was_node = p->fs->root_node;
+
     if (mnt == mounts[0] && node == mounts[0]->root) {
         mnt = 0;
     }
@@ -2511,9 +2538,9 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
         }
         mnt->refs++;
     }
-    vfs_root_clear(p);
     p->fs->root_mnt = mnt;
     p->fs->root_node = mnt ? node : 0;
+    hold_release(was, was_node);
 }
 
 void vfs_root_copy(struct process *child, const struct process *parent)
@@ -2523,18 +2550,7 @@ void vfs_root_copy(struct process *child, const struct process *parent)
 
 void vfs_root_clear(struct process *p)
 {
-    struct vfs_ref r;
-    struct vfs_mount *was = p->fs->root_mnt;
-
-    if (!was) {
-        return;
-    }
-    r.mnt = was;
-    r.node = p->fs->root_node;
-    p->fs->root_mnt = 0;
-    p->fs->root_node = 0;
-    vfs_ref_put(&r);
-    was->refs--;
+    vfs_root_set(p, 0, 0);
 }
 
 void vfs_cwd_clear(struct process *p)

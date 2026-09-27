@@ -3519,23 +3519,63 @@ static int32_t cwd_global(char *buf)
 }
 
 /**
+ * Take `root`, a directory's path from the root of the mount table, off the
+ * front of `path`, another such path, which leaves the path the same place
+ * has from that directory: "/" for the directory itself. 0, or -ENOENT when
+ * `path` is not at or below `root`.
+ */
+static int32_t path_strip(char *path, const char *root)
+{
+    uint32_t rl = (uint32_t)k_strlen(root);
+
+    if (!path_under(path, root, rl)) {
+        return -ENOENT;
+    }
+    if (rl > 1) {
+        k_memmove(path, path + rl, k_strlen(path + rl) + 1);
+        if (path[0] == '\0') {
+            path[0] = '/';
+            path[1] = '\0';
+        }
+    }
+    return 0;
+}
+
+/**
  * Make the directory `ref` holds the calling process's root, and keep the
  * working directory in it: `buf`, a path page, takes the working
  * directory's path, which stays where it is under its path from the new
  * root when it is inside it, and otherwise moves to the new root.
+ *
+ * The working directory's new path is made before anything changes, and is
+ * stored just before the root, with nothing between the two that sleeps: a
+ * thread that shares both (CLONE_FS) never joins a path from one root to
+ * the other. A working directory that moves takes its hold on the new root
+ * last, after the old root is let go.
  */
 static int32_t root_enter(const struct vfs_ref *ref, char *buf)
 {
-    int32_t rc = cwd_global(buf);
+    char *root = path_buf_get();
+    int32_t rc = root ? cwd_global(buf) : -ENOMEM;
 
-    vfs_root_set(current_proc, ref->mnt, ref->node);
     if (rc == 0) {
-        rc = path_in_root(buf);
+        rc = vfs_node_path(ref->mnt, ref->node, root, VFS_PATH_MAX);
     }
+    if (rc == 0) {
+        rc = path_strip(buf, root);
+    }
+    path_buf_put(root);
     if (rc == 0) {
         rc = proc_cwd_set(current_proc, buf);
     }
-    return rc == 0 ? 0 : cwd_enter("/", ref->mnt, ref->node);
+    if (rc != 0) {
+        (void)proc_cwd_set(current_proc, "/");
+    }
+    vfs_root_set(current_proc, ref->mnt, ref->node);
+    if (rc != 0) {
+        vfs_cwd_set(current_proc, ref->mnt, ref->node);
+    }
+    return 0;
 }
 
 /**
