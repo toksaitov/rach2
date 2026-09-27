@@ -47,6 +47,7 @@ void console_printf(const char *format, ...)
 }
 
 static int64_t fake_seconds = 1000;
+static int64_t fake_nanoseconds;
 
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
@@ -54,7 +55,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
         *seconds = fake_seconds;
     }
     if (nanoseconds) {
-        *nanoseconds = 0;
+        *nanoseconds = fake_nanoseconds;
     }
 }
 
@@ -1023,6 +1024,156 @@ static void id_collision_rows(void)
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the refusal");
 }
 
+/* The fields of a header whose values a node is made or moved with: the
+   mode, the owner, the group, the three times and the length. */
+static const uint32_t across_fields[] = {KRFFS_FIELD_MODE,     KRFFS_FIELD_UID,   KRFFS_FIELD_GID,
+                                         KRFFS_FIELD_ATIME,    KRFFS_FIELD_MTIME, KRFFS_FIELD_CTIME,
+                                         KRFFS_FIELD_DATA_SIZE};
+
+/** Whether the node at `at` has `mode`, the owner and group 1000, and the
+ * clock's moment in all three times. */
+static int has_given_fields(krffs_mount_t *mount, uint64_t at, uint16_t mode)
+{
+    krffs_node_t head;
+
+    return krffs_head(mount, at, &head) == 0 && head.mode == mode && head.uid == 1000 &&
+           head.gid == 1000 && head.access_time.seconds == fake_seconds &&
+           head.access_time.nanoseconds == fake_nanoseconds &&
+           head.modification_time.seconds == fake_seconds &&
+           head.modification_time.nanoseconds == fake_nanoseconds &&
+           head.attribute_change_time.seconds == fake_seconds &&
+           head.attribute_change_time.nanoseconds == fake_nanoseconds;
+}
+
+/** Whether the node at `at` holds exactly the `size` bytes of `bytes`. */
+static int holds_bytes(krffs_mount_t *mount, uint64_t at, const char *bytes, uint32_t size)
+{
+    char back[1024];
+    krffs_node_t head;
+    uint32_t i;
+
+    if (size > sizeof(back) || krffs_head(mount, at, &head) != 0 || head.data_size != size ||
+        krffs_read_at(mount, at, back, size, 0) != (int)size) {
+        return 0;
+    }
+    for (i = 0; i < size; i++) {
+        if (back[i] != bytes[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Grow `/spacer` so that the node after it starts at `at`, with `gap` more
+ * bytes of it before that node. */
+static int place_after_spacer(krffs_mount_t *mount, uint64_t at, uint32_t gap)
+{
+    return krffs_create_at(mount, "/spacer") == 0 &&
+           krffs_truncate_at(mount, "/spacer", (uint32_t)(at - 2 * sizeof(krffs_node_t)) + gap,
+                             (uint64_t *)0) == 0;
+}
+
+/**
+ * Make and move nodes whose fields fall across a unit of the medium, with the
+ * whole-unit rule on and a clock whose nanoseconds are not zero.
+ *
+ * For each of `across_fields`, the node is placed so that the field's first
+ * byte is the last of one 4 KiB block and its second the first of the next,
+ * and the value it is given differs in both of those bytes from what the
+ * place had. A node being made is read by nobody until its name is written
+ * after every other field, and a copy being filled for a move until its type
+ * is, so their fields are written without the rule (entry 244 of milestone
+ * 50): a file and a directory must be made at each place with every field
+ * they were given, a node must be made over a removed node whose length
+ * crosses the line, and a file that has to move to each place must move
+ * there with its fields and its bytes.
+ */
+static void across_rows(void)
+{
+    krffs_mount_t mount;
+    char bytes[767];
+    uint64_t at;
+    uint64_t node;
+    krffs_node_t head;
+    uint32_t i;
+
+    fake_nanoseconds = 123456789;
+    for (i = 0; i < sizeof(bytes); i++) {
+        bytes[i] = (char)(i * 7 + 1);
+    }
+    for (i = 0; i < sizeof(across_fields) / sizeof(across_fields[0]); i++) {
+        at = 4096 - across_fields[i] - 1;
+
+        make_image(image, IMAGE_SIZE);
+        mount = mount_over(&memory_backend, image, IMAGE_SIZE);
+        check(place_after_spacer(&mount, at, 0),
+              "a file placed so a field of the next falls across");
+        mount.grain = 4096;
+        check(krffs_create_node_at(&mount, "/made", 0644, 1000, 1000) == 0,
+              "a node whose field falls across a block is made with the whole-unit rule on");
+        mount.grain = 0;
+        check(krffs_walk(&mount, "/made") == at && has_given_fields(&mount, at, 0644),
+              "and it is at the place with every field it was given");
+
+        make_image(image, IMAGE_SIZE);
+        check(place_after_spacer(&mount, at, 0),
+              "a file placed so a field of the next falls across");
+        mount.grain = 4096;
+        check(krffs_mkdir_at(&mount, "/made", 0644, 1000, 1000) == 0,
+              "a directory whose field falls across a block is made with the whole-unit rule on");
+        mount.grain = 0;
+        check(krffs_walk(&mount, "/made") == at &&
+                  has_given_fields(&mount, at, (uint16_t)(KRFFS_S_IFDIR | 0644)),
+              "and the directory is at the place with every field it was given");
+
+        /* The spacer holds the place and 2000 bytes after it while the file
+           and a node after the file are made; cut back, it leaves a free
+           node with a fresh header at the place, and the file, which cannot
+           grow into the node after it, has to move there. */
+        make_image(image, IMAGE_SIZE);
+        check(place_after_spacer(&mount, at, 2000) &&
+                  krffs_create_node_at(&mount, "/mover", 0644, 1000, 1000) == 0,
+              "a file past the place");
+        node = krffs_walk(&mount, "/mover");
+        check(krffs_write_at(&mount, &node, bytes, 511, 0) == 511 &&
+                  krffs_create_at(&mount, "/after") == 0 &&
+                  krffs_truncate_at(&mount, "/spacer", (uint32_t)(at - 2 * sizeof(krffs_node_t)),
+                                    (uint64_t *)0) == 0,
+              "with a node after it and a free node at the place");
+        mount.grain = 4096;
+        check(krffs_write_at(&mount, &node, bytes + 511, 256, 511) == 256,
+              "a file that has to move where its field falls across a block moves with the "
+              "whole-unit rule on");
+        mount.grain = 0;
+        check(node == at && krffs_walk(&mount, "/mover") == at &&
+                  has_given_fields(&mount, at, 0644) &&
+                  holds_bytes(&mount, at, bytes, (uint32_t)sizeof(bytes)),
+              "and it is at the place with every field and every byte");
+        check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after the move");
+    }
+
+    /* A node made where a removed file left a length whose first two bytes
+       are on the two sides of the line: the new node's length of 0 changes
+       both. */
+    at = 4096 - KRFFS_FIELD_DATA_SIZE - 1;
+    make_image(image, IMAGE_SIZE);
+    check(place_after_spacer(&mount, at, 0) && krffs_create_at(&mount, "/old") == 0,
+          "a file at the place");
+    node = krffs_walk(&mount, "/old");
+    check(krffs_write_at(&mount, &node, bytes, 511, 0) == 511 &&
+              krffs_create_at(&mount, "/after") == 0 && krffs_unlink_at(&mount, "/old") == 0,
+          "removed with a length across the line and a node after it");
+    mount.grain = 4096;
+    check(krffs_create_at(&mount, "/made") == 0,
+          "a node made over a removed node's length across a block is made with the whole-unit "
+          "rule on");
+    mount.grain = 0;
+    check(krffs_walk(&mount, "/made") == at && krffs_head(&mount, at, &head) == 0 &&
+              head.data_size == 0,
+          "and it is at the place with a length of 0");
+    fake_nanoseconds = 0;
+}
+
 int main(void)
 {
     static uint8_t before[IMAGE_SIZE];
@@ -1040,6 +1191,7 @@ int main(void)
     ino_lifetime_rows();
     straddle_create_rows();
     id_collision_rows();
+    across_rows();
 
     /* ---- the mount check ---- */
 
