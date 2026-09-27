@@ -410,10 +410,12 @@ int32_t sys_poll(struct isr_params *params)
  * Install the signal mask a ppoll or pselect6 waits under.
  *
  * `umask` is a user signal set of `size` bytes, or 0 for none. The mask it
- * replaces becomes the process's saved mask: `deliver_signals` puts it back
+ * replaces becomes the thread's saved mask: `deliver_signals` puts it back
  * after the handler a signal runs for this wait, or at once when none runs,
  * and a wait that did not end for a signal puts it back through
- * `poll_mask_done`. Returns 0, or -EINVAL or -EFAULT.
+ * `poll_mask_done`. Both masks are set through `signal_set_blocked`, which
+ * leaves a signal of the process that a mask blocks to another thread.
+ * Returns 0, or -EINVAL or -EFAULT.
  */
 int32_t poll_mask_set(uint32_t umask, uint32_t size)
 {
@@ -430,7 +432,7 @@ int32_t poll_mask_set(uint32_t umask, uint32_t size)
     }
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
-    current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
+    signal_set_blocked(mask);
     return 0;
 }
 
@@ -439,8 +441,8 @@ int32_t poll_mask_set(uint32_t umask, uint32_t size)
 int32_t poll_mask_done(int32_t ret)
 {
     if (current_proc->sigmask_saved && ret != -EINTR) {
-        current_proc->sig_blocked = current_proc->saved_sigmask;
         current_proc->sigmask_saved = 0;
+        signal_set_blocked(current_proc->saved_sigmask);
     }
     return ret;
 }

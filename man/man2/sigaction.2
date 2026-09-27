@@ -64,6 +64,11 @@ and any thread that does not block it may take it.
 The thread woken to take it is the thread the sender named, or else the
 first thread, that does not block it and is not stopped by job control or
 by a tracer.
+When a thread's mask comes to block such a signal while it is pending,
+through
+.Fn sigprocmask ,
+a handler's mask or its return, or the mask a wait installs or puts back,
+another thread that can take it is woken to.
 A thread takes its own pending signals before the process's.
 .Ss Dispositions
 .Va sa_handler

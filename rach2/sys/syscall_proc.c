@@ -2681,6 +2681,36 @@ static process_t *sig_taker(process_t *target, int signo)
     return target->state != PROC_ZOMBIE ? target : NULL;
 }
 
+/**
+ * Make `mask`, less SIGKILL and SIGSTOP, the current thread's blocked mask.
+ *
+ * A signal sent to the process wakes one thread (`sig_taker`), which may be
+ * this one. When the new mask blocks a signal still pending for the process
+ * that the old mask did not, this thread will not take it, so another thread
+ * that can is woken to take it, as Linux's `retarget_shared_pending` wakes
+ * one; otherwise the signal could wait while a thread that would take it
+ * sleeps. A handler's mask and its return, the masks a wait installs and puts
+ * back, and sigprocmask all set the mask here.
+ */
+void signal_set_blocked(uint64_t mask)
+{
+    process_t *self = current_proc;
+    uint32_t flags = sig_irq_save();
+    uint64_t moved;
+    process_t *t;
+
+    mask &= ~(uint64_t)KSIG_UNCATCHABLE;
+    moved = self->tg->pending & mask & ~self->sig_blocked;
+    self->sig_blocked = mask;
+    for (t = proc_list; t && moved != 0; t = t->next) {
+        if (t != self && t->tg == self->tg && sig_wants(t, moved)) {
+            moved &= t->sig_blocked;
+            sig_wake(t);
+        }
+    }
+    sig_irq_restore(flags);
+}
+
 /*
  * Post signal `signo` to the process `target` is a thread of, with the
  * siginfo `info`: set the process's pending bit, keeping `info` when the
@@ -3039,10 +3069,9 @@ int32_t sys_rt_sigsuspend(isr_params_t *params)
     if (copy_from_user(&newmask, umask, sizeof(newmask)) != 0) {
         return -EFAULT;
     }
-    newmask &= ~(uint64_t)KSIG_UNCATCHABLE; /* SIGKILL/SIGSTOP can never be blocked */
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
-    current_proc->sig_blocked = newmask;
+    signal_set_blocked(newmask);
     sig_wait();
     return -EINTR;
 }
@@ -3097,7 +3126,9 @@ int32_t sys_rt_sigaction(isr_params_t *params)
  * Examine or change the blocked-signal mask (rt_sigprocmask, syscall 175).
  *
  * EBX=how (0 BLOCK/1 UNBLOCK/2 SETMASK), ECX=const set*, EDX=old set*,
- * ESI=sigsetsize. SIGKILL/SIGSTOP can never be blocked.
+ * ESI=sigsetsize. SIGKILL/SIGSTOP can never be blocked, and a signal of the
+ * process that the new mask blocks is left to another thread
+ * (`signal_set_blocked`).
  */
 int32_t sys_rt_sigprocmask(isr_params_t *params)
 {
@@ -3128,18 +3159,17 @@ int32_t sys_rt_sigprocmask(isr_params_t *params)
         set = (uint64_t)words[0] | ((uint64_t)words[1] << 32);
         switch (how) {
         case 0: /* SIG_BLOCK */
-            current_proc->sig_blocked |= set;
+            set |= current_proc->sig_blocked;
             break;
         case 1: /* SIG_UNBLOCK */
-            current_proc->sig_blocked &= ~set;
+            set = current_proc->sig_blocked & ~set;
             break;
         case 2: /* SIG_SETMASK */
-            current_proc->sig_blocked = set;
             break;
         default:
             return -EINVAL;
         }
-        current_proc->sig_blocked &= ~KSIG_UNCATCHABLE; /* never block KILL/STOP */
+        signal_set_blocked(set);
     }
     return 0;
 }
@@ -3163,7 +3193,7 @@ static int32_t signal_return(isr_params_t *tf, int rt)
         terminate_current_process(SIGSEGV | WCOREFLAG);
         return 0;
     }
-    current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
+    signal_set_blocked(mask);
     return (int32_t)tf->eax;
 }
 
@@ -3317,7 +3347,7 @@ int32_t sys_sigprocmask(isr_params_t *params)
         default:
             return -EINVAL;
         }
-        current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
+        signal_set_blocked(mask);
     }
     if (uold && copy_to_user(uold, &old, sizeof(old)) != 0) {
         return -EFAULT;
@@ -3551,7 +3581,7 @@ void deliver_signals(isr_params_t *tf)
         if (!(handler_flags & SA_NODEFER)) {
             newblock |= KSIG_BIT(signo);
         }
-        current_proc->sig_blocked = newblock & ~KSIG_UNCATCHABLE;
+        signal_set_blocked(newblock);
         /* SA_RESETHAND is for the next signal; this one's handler is in the
          * frame already. */
         if (handler_flags & SA_RESETHAND) {
@@ -3564,8 +3594,8 @@ void deliver_signals(isr_params_t *tf)
         restart_syscall(tf, restart_nr);
     }
     if (current_proc->sigmask_saved) {
-        current_proc->sig_blocked = current_proc->saved_sigmask;
         current_proc->sigmask_saved = 0;
+        signal_set_blocked(current_proc->saved_sigmask);
     }
 }
 
@@ -3625,8 +3655,11 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
  * and the thread's own before the process's, is taken off its pending set
  * without its handler running. While the call waits the signals of `set`
  * count as unblocked, as Linux counts them, so a signal sent to the process
- * wakes this thread. The timeout is rounded up to whole 10 ms ticks, and one
- * of zero polls; SIGKILL and SIGSTOP cannot be waited for.
+ * wakes this thread; when it returns the old mask comes back, and a signal
+ * of `set` that it blocks and that is still pending for the process is left
+ * to another thread (`signal_set_blocked`). The timeout is rounded up to
+ * whole 10 ms ticks, and one of zero polls; SIGKILL and SIGSTOP cannot be
+ * waited for.
  */
 int32_t sys_rt_sigtimedwait(isr_params_t *params)
 {
@@ -3662,9 +3695,9 @@ int32_t sys_rt_sigtimedwait(isr_params_t *params)
     }
     set &= ~(uint64_t)KSIG_UNCATCHABLE;
     saved = current_proc->sig_blocked;
-    current_proc->sig_blocked &= ~set;
+    signal_set_blocked(saved & ~set);
     rc = sigwait_set(set, timed, deadline, (void __user *)params->ecx);
-    current_proc->sig_blocked = saved;
+    signal_set_blocked(saved);
     return rc;
 }
 

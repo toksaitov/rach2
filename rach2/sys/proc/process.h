@@ -442,6 +442,12 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
  * is unblocked, and the process is killed unless a handler is installed. */
 void signal_force(process_t *target, int signo, const struct k_siginfo *info);
 
+/** Make `mask`, less SIGKILL and SIGSTOP, the current thread's blocked mask,
+ * and wake another thread to take a signal sent to the process that the new
+ * mask blocks and the old did not. Every change of a thread's own mask is
+ * made through it. Defined in syscall_proc.c. */
+void signal_set_blocked(uint64_t mask);
+
 /* The siginfo of the SIGCHLD a child's end sends: CLD_EXITED with the exit
  * code, or CLD_KILLED or CLD_DUMPED with the signal, from its wait status. */
 void proc_child_info(const process_t *child, struct k_siginfo *info);

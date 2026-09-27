@@ -7,7 +7,9 @@
  * passes a value from one thread to another. pthread_kill reaches the thread
  * it names, which alone runs the handler. A signal sent to the process
  * while every thread blocks it waits, and is taken by the thread that
- * unblocks it. A thread's exit leaves the
+ * unblocks it. Of two signals sent to the process at once, the second, which
+ * the first one's handler blocks, is taken by another thread while that
+ * handler runs. A thread's exit leaves the
  * process running; /proc/self/task lists each live thread, and
  * /proc/self/exe names the program. The threads share the descriptors, the
  * working directory and the umask: what one opens, closes or changes the
@@ -256,6 +258,109 @@ static int sharing(void)
     return 0;
 }
 
+static volatile pid_t takers[2];
+static volatile pid_t usr1_by, usr2_by;
+
+/** SIGUSR1's handler in `handler_mask`: its mask blocks SIGUSR2, and it
+ * waits for SIGUSR2's handler to run in another thread. */
+static void on_usr1_waits(int sig)
+{
+    int i;
+
+    (void)sig;
+    usr1_by = tid();
+    for (i = 0; i < 1000 && !usr2_by; i++) {
+        usleep(10000);
+    }
+}
+
+static void on_usr2(int sig)
+{
+    (void)sig;
+    usr2_by = tid();
+}
+
+/** A thread of `handler_mask`, which sleeps with both signals unblocked
+ * until the two handlers have run. */
+static void *take_signals(void *arg)
+{
+    sigset_t none;
+
+    takers[(long)arg] = tid();
+    sigemptyset(&none);
+    pthread_sigmask(SIG_SETMASK, &none, NULL);
+    while (!usr1_by || !usr2_by) {
+        pause();
+    }
+    return NULL;
+}
+
+/**
+ * Two threads asleep in pause with SIGUSR1 and SIGUSR2 unblocked, while the
+ * first thread blocks both, and the two signals sent to the process one after
+ * the other, so that the first sleeper may be woken for both. SIGUSR1's
+ * handler blocks SIGUSR2 and waits for SIGUSR2's handler, which the other
+ * sleeper must be woken to run. Returns 0 when each thread ran one handler.
+ */
+static int handler_mask(void)
+{
+    struct sigaction sa;
+    sigset_t both;
+    pthread_t a, b;
+    int i;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_usr1_waits;
+    sigemptyset(&sa.sa_mask);
+    sigaddset(&sa.sa_mask, SIGUSR2);
+    sigaction(SIGUSR1, &sa, NULL);
+    sa.sa_handler = on_usr2;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGUSR2, &sa, NULL);
+    sigemptyset(&both);
+    sigaddset(&both, SIGUSR1);
+    sigaddset(&both, SIGUSR2);
+    pthread_sigmask(SIG_BLOCK, &both, NULL);
+    if (pthread_create(&a, NULL, take_signals, (void *)0L) != 0 ||
+        pthread_create(&b, NULL, take_signals, (void *)1L) != 0) {
+        return 1;
+    }
+    for (i = 0; i < 500 && !(takers[0] && sleeping(takers[0]) && takers[1] && sleeping(takers[1]));
+         i++) {
+        usleep(10000);
+    }
+    kill(getpid(), SIGUSR1);
+    kill(getpid(), SIGUSR2);
+    if (pthread_join(a, NULL) != 0 || pthread_join(b, NULL) != 0) {
+        return 1;
+    }
+    return usr1_by != 0 && usr2_by != 0 && usr1_by != usr2_by ? 0 : 1;
+}
+
+/** `handler_mask` in a child, where no other thread of the probe can take
+ * the two signals, judged by the child's status. */
+static int handler_mask_row(void)
+{
+    int i, status = 0;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        _exit(handler_mask());
+    }
+    for (i = 0; i < 2000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
+        usleep(10000);
+    }
+    if (i == 2000) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail("a signal a handler's mask blocked did not wake the other thread");
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the two signals were not taken by the two threads");
+    }
+    return 0;
+}
+
 static void *exec_self(void *arg)
 {
     (void)arg;
@@ -317,7 +422,7 @@ int main(void)
     if (count_tasks() != 2) {
         return fail("/proc/self/task did not list two threads");
     }
-    if (sharing() != 0) {
+    if (sharing() != 0 || handler_mask_row() != 0) {
         return 1;
     }
 
