@@ -209,13 +209,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         fail=1
     fi
     # Two rows over functions extracted from sources no host test can
-    # compile whole: a new kernel stack cleared (syscall_proc.c) and the
-    # set-id rules of a mounted chown (syscall_fs.c).
+    # compile whole: a new kernel stack cleared and guarded (syscall_proc.c)
+    # and the set-id rules of a mounted chown (syscall_fs.c).
     if sh tests/host/kstack_mutate.sh --check >"$VDIR/kstack.rlog" 2>&1; then
-        echo "hosttest: result: pass: a new kernel stack is cleared"
+        echo "hosttest: result: pass: a new kernel stack is cleared and guarded"
     else
         cat "$VDIR/kstack.rlog"
-        echo "hosttest: result: fail: a new kernel stack is cleared" >&2
+        echo "hosttest: result: fail: a new kernel stack is cleared and guarded" >&2
         fail=1
     fi
     if sh tests/host/chown_mutate.sh --check >"$VDIR/chown.rlog" 2>&1; then

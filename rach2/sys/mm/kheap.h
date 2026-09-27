@@ -16,6 +16,8 @@
  * first page of a large object start with a 16-byte header that says the
  * class or the page count, which is how `kfree` finds what it was given:
  * the page base of the pointer. Pages from `kalloc_pages` have no header.
+ * `kalloc_guarded` gives pages with a guard below them, a page of the
+ * region that is marked taken and never mapped.
  *
  * The allocator never sleeps: it scans the frame table and the page bitmap
  * with interrupts masked, so it may be called from any context that may
@@ -69,6 +71,23 @@ void *kalloc_pages_try(uint32_t count, uintptr_t *phys);
 
 /** Give back what `kalloc_pages` returned. */
 void kfree_pages(void *p, uint32_t count);
+
+/**
+ * `count` pages as `kalloc_pages` gives them, with the page below them
+ * marked taken and never mapped: a guard, which no other allocation is
+ * given, so an access that runs off the low end of the pages faults. A
+ * kernel stack comes this way. The guard takes no frame. NULL, with a
+ * record, when the region has no free run of `count + 1` pages or the
+ * frames run out. Freed with `kfree_guarded`.
+ */
+void *kalloc_guarded(uint32_t count);
+
+/**
+ * Give back what `kalloc_guarded` returned, and its guard page with it.
+ * Pages with no guard below them are refused with a record and kept, since
+ * clearing the page below would free another allocation's page.
+ */
+void kfree_guarded(void *p, uint32_t count);
 
 /** Pages the heap holds now, and bytes in use inside them. */
 void kheap_stats(uint32_t *pages, uint32_t *bytes);

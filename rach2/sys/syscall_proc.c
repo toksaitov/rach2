@@ -92,8 +92,8 @@ void fb_release_if_owner(uint32_t pid)
 
 /*
  * A process's kernel stack comes from the heap at fork, KERNEL_STACK_SIZE
- * of pages, and goes back when the zombie is reaped; the one reaping is
- * never the one whose stack it is.
+ * of pages with an unmapped guard page below them, and goes back when the
+ * zombie is reaped; the one reaping is never the one whose stack it is.
  */
 void init_kstacks(void)
 {}
@@ -101,7 +101,10 @@ void init_kstacks(void)
 /**
  * A kernel stack, returning its base, or 0 when the heap has none.
  *
- * The caller uses `base + KERNEL_STACK_SIZE` as the stack top.
+ * The caller uses `base + KERNEL_STACK_SIZE` as the stack top. The page
+ * below the base is the heap's guard (`kalloc_guarded`), taken and never
+ * mapped, so a thread that runs past the base faults there at once instead
+ * of writing over the heap page below; `isr_double_fault` reports it.
  *
  * QEMU can retain code translations in reused frames. Clear every page
  * so translations outside the used part of the stack cannot keep stack
@@ -110,7 +113,7 @@ void init_kstacks(void)
  */
 static uintptr_t kstack_alloc(void)
 {
-    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);
+    void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);
 
     if (base != NULL) {
         k_memset(base, 0, KERNEL_STACK_SIZE);
@@ -118,12 +121,33 @@ static uintptr_t kstack_alloc(void)
     return (uintptr_t)base;
 }
 
-/** Give back the stack whose top is `top`. */
+/** Give back the stack whose top is `top`, with its guard page. */
 static void kstack_free(uintptr_t top)
 {
     if (top != 0) {
-        kfree_pages((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);
+        kfree_guarded((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);
     }
+}
+
+/**
+ * The pid of the running thread when `addr` lies in the page below its
+ * kernel stack, or -1.
+ *
+ * That page is the guard `kstack_alloc` leaves below a stack it gives, or
+ * the one loader.s leaves below the boot stack, which process 0, the first
+ * program and the programs the debug shell starts run on. An access there
+ * is the stack running out; the double fault's handler and the page
+ * fault's ask with the address the processor left in CR2.
+ */
+int kstack_overrun_pid(uint32_t addr)
+{
+    uint32_t guard;
+
+    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
+        return -1;
+    }
+    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;
+    return addr - guard < PAGE_SIZE ? (int)current_proc->pid : -1;
 }
 
 /**

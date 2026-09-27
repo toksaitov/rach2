@@ -18,11 +18,12 @@ static void _gdt_set_descriptor(size_t index, uint32_t base, uint32_t limit, uin
 /**
  * Build the flat GDT and load it.
  *
- * Programs all seven GDT descriptors: a null descriptor, flat 4 GB code and
+ * Programs all eight GDT descriptors: a null descriptor, flat 4 GB code and
  * data for ring 0 and ring 3, the task-state segment used for the ring-0 stack
- * on traps, and a TLS data segment whose base is fixed up later by
- * `gdt_set_tls`. All segments span the full address space, so segmentation is
- * effectively disabled and paging does the protection.
+ * on traps, a TLS data segment whose base is fixed up later by
+ * `gdt_set_tls`, and the double fault's task-state segment, which the gate of
+ * vector 8 names. All segments span the full address space, so segmentation
+ * is effectively disabled and paging does the protection.
  */
 void init_gdt(void)
 {
@@ -45,6 +46,9 @@ void init_gdt(void)
      * context switch. Present from boot so loading 0x33 into %gs never faults
      * even before a thread has set its area. */
     _gdt_set_descriptor(GDT_TLS_ENTRY, 0, 0xFFFFFFFF, 0xF2, 0xCF);
+    /* The double fault's TSS, entry 7: the same access byte as entry 5's. */
+    _gdt_set_descriptor(DOUBLE_FAULT_TSS_SELECTOR >> 3, (uint32_t)&double_fault_tss, tss_limit,
+                        0x89, 0x00);
 
     _load_gdt(&gdt_address);
 }

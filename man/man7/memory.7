@@ -51,6 +51,12 @@ The kernel heap supplies process records, sockets, requests and buffers.
 .Pa /proc/meminfo
 reports memory totals.
 .Pp
+Each process has a kernel stack of 16 KiB with an unmapped page below it,
+which Linux on i386 does not have.
+A process that runs its kernel stack past the base faults on that page,
+and the kernel stops with a record naming the process; see
+.Sx DIAGNOSTICS .
+.Pp
 In the source tree,
 .Ql tests/run memory
 checks memory accounting.
@@ -68,6 +74,13 @@ At boot the kernel reports:
 .Bd -literal -offset indent
 memory: usable N KiB, unreachable N KiB, reserved N KiB, managed N KiB
 .Ed
+.Pp
+A kernel stack that runs out stops the machine with a record that says
+.Dl pid N ran past the end of its kernel stack
+and the panic
+.Dl panic: stopped: double fault: a kernel stack ran out
+or, when the page fault's own frame fits on the stack,
+.Ql page fault: a kernel stack ran out .
 .Sh SEE ALSO
 .Xr brk 2 ,
 .Xr mmap2 2 ,

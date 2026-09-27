@@ -1,13 +1,15 @@
 /*
- * kheap_hosttest.c: the heap's page runs and the reserve for large ones.
+ * kheap_hosttest.c: the heap's page runs, the reserve for large ones, and
+ * the guarded runs kernel stacks come from.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
- * The page allocator is driven with the frames and the page tables replaced
- * by counters. Nothing on this path is dereferenced, since a page from
- * `kalloc_pages` has no header, so the addresses are the kernel's own and
- * the arithmetic on the page map is what is tested. The region is made
- * small, 8192 pages, of which the reserve is 4096.
+ * The page allocator is driven with the frames replaced by a counter and
+ * the page tables by a map of the region's pages that have a mapping.
+ * Nothing on this path is dereferenced, since a page from `kalloc_pages`
+ * has no header, so the addresses are the kernel's own and the arithmetic
+ * on the page map is what is tested. The region is made small, 8192 pages,
+ * of which the reserve is 4096.
  */
 
 extern int printf(const char *fmt, ...);
@@ -39,7 +41,16 @@ static unsigned char heap_mem[KVA_HEAP_SIZE] __attribute__((aligned(4096)));
    given, for the row about a shortage inside a run. */
 static unsigned frames_out;
 static unsigned frame_limit = 0xffffffffu;
-static unsigned maps, unmaps;
+
+/* The region's pages that have a mapping, as the kernel directory's page
+   tables would say: the guard rows read it, and `kfree_guarded` asks it
+   through `paging_virt_to_phys`. */
+static unsigned char mapped[KVA_HEAP_SIZE / PAGE_SIZE];
+
+static unsigned region_page(uintptr_t va)
+{
+    return (unsigned)((va - KVA_HEAP) / PAGE_SIZE);
+}
 
 uintptr_t alloc_frame(void)
 {
@@ -63,21 +74,19 @@ void *alloc_kernel_frame(void)
 
 uintptr_t paging_virt_to_phys(uintptr_t va)
 {
-    return va;
+    return mapped[region_page(va)] ? va : 0;
 }
 
 void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
 {
-    (void)va;
     (void)phys;
     (void)writable;
-    maps++;
+    mapped[region_page(va)] = 1;
 }
 
 void unmap_kernel_frame(uintptr_t va)
 {
-    (void)va;
-    unmaps++;
+    mapped[region_page(va)] = 0;
 }
 
 static unsigned klogs;
@@ -132,6 +141,69 @@ static void give_singles(unsigned n)
             singles[n] = 0;
         }
     }
+}
+
+/**
+ * The guarded runs a kernel stack comes from. The page below the run is
+ * taken and never mapped, takes no frame, and is given to no other
+ * allocation while the run is out; the free gives back the run's frames and
+ * the guard's place. A shortage of frames inside the run leaves no guard
+ * behind, and a run with no guard below it is refused by the guarded free
+ * and kept, with the page below it untouched.
+ */
+static void guard_rows(void)
+{
+    char *stack, *below, *plain;
+    unsigned n, i, guard, hit;
+
+    kheap_init();
+    stack = kalloc_guarded(4);
+    CHECK(stack != 0 && frames_out == 4, "four guarded pages take four frames and the guard none");
+    if (!stack) {
+        return;
+    }
+    guard = region_page((uintptr_t)stack) - 1;
+    CHECK(mapped[guard + 1] && mapped[guard + 4] && !mapped[guard],
+          "the four pages are mapped and the page below them is not");
+    n = take_singles();
+    CHECK(n == REGION_PAGES - RESERVE_PAGES - 5,
+          "single pages fill the region around the guarded run and leave its guard");
+    for (i = 0, hit = 0; i < n; i++) {
+        hit += singles[i] == stack - PAGE_SIZE;
+    }
+    CHECK(hit == 0 && !mapped[guard], "no single page is the guard, and the guard stays unmapped");
+    give_singles(n);
+    kfree_guarded(stack, 4);
+    CHECK(frames_out == 0, "the guarded free gives back the four frames");
+    n = take_singles();
+    CHECK(n == REGION_PAGES - RESERVE_PAGES, "and the guard's page with them");
+    give_singles(n);
+
+    kheap_init();
+    frame_limit = frames_out + 2;
+    klogs = 0;
+    CHECK(kalloc_guarded(4) == 0 && frames_out == 0 && klogs == 1,
+          "a guarded run the frames cannot fill is refused, with a record and no frame kept");
+    frame_limit = 0xffffffffu;
+    n = take_singles();
+    CHECK(n == REGION_PAGES - RESERVE_PAGES, "and leaves no guard behind");
+    give_singles(n);
+
+    kheap_init();
+    CHECK(kalloc_guarded(0) == 0 && kalloc_guarded(KHEAP_RUN_LEAST) == 0,
+          "a guarded run of no pages, or of a reserve run's size, is refused");
+
+    kheap_init();
+    below = kalloc_pages(1, 0);
+    plain = kalloc_pages(4, 0);
+    klogs = 0;
+    kfree_guarded(plain, 4);
+    CHECK(below != 0 && plain != 0 && klogs == 1 && frames_out == 5 &&
+              mapped[region_page((uintptr_t)below)] && page_taken(region_page((uintptr_t)below)),
+          "pages with no guard below them are refused by the guarded free, the page below kept");
+    kfree_pages(plain, 4);
+    kfree_pages(below, 1);
+    CHECK(frames_out == 0, "and every frame went back after the refusal");
 }
 
 int main(void)
@@ -252,7 +324,7 @@ int main(void)
     kfree_pages(runs[0], KHEAP_RUN_PAGES);
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the shortage");
-
+    guard_rows();
     if (fails == 0) {
         printf("kheap_hosttest: PASS\n");
     }

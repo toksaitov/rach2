@@ -1,4 +1,5 @@
 #include "idt.h"
+#include "tss.h"
 
 idt_descriptor_t idt_descriptors[256];
 idt_ptr_t idt_address;
@@ -19,8 +20,15 @@ static void _idt_set_desciptor(size_t index, uint32_t offset, uint16_t segment_s
  * trap at vector 0x80. Exception and IRQ gates use flags 0x8E (present,
  * DPL=0, 32-bit interrupt gate); the breakpoint and overflow gates, vectors 3
  * and 4, and the syscall gate use 0xEE, DPL 3, so user mode reaches them with
- * `int3`, `into` and `int 0x80`. All gates target the kernel code segment
- * 0x08. The PIC is remapped before its IRQ gates are installed.
+ * `int3`, `into` and `int 0x80`. These gates target the kernel code segment
+ * 0x08 and run on the stack in use, or on the process's kernel stack when
+ * they come from ring 3. The PIC is remapped before its IRQ gates are
+ * installed.
+ *
+ * The double fault, vector 8, has a task gate, flags 0x85 (present, DPL 0,
+ * task gate), which names the double fault's TSS instead of a handler: the
+ * processor switches to that task and its own stack, since the fault that
+ * raised it may be one whose frame the stack in use had no room for.
  */
 void init_idt(void)
 {
@@ -39,7 +47,7 @@ void init_idt(void)
     _idt_set_desciptor(5, (uintptr_t)&isr5, 0x08, 0x8E);
     _idt_set_desciptor(6, (uintptr_t)&isr6, 0x08, 0x8E);
     _idt_set_desciptor(7, (uintptr_t)&isr7, 0x08, 0x8E);
-    _idt_set_desciptor(8, (uintptr_t)&isr8, 0x08, 0x8E);
+    _idt_set_desciptor(8, 0, DOUBLE_FAULT_TSS_SELECTOR, 0x85);
     _idt_set_desciptor(9, (uintptr_t)&isr9, 0x08, 0x8E);
     _idt_set_desciptor(10, (uintptr_t)&isr10, 0x08, 0x8E);
     _idt_set_desciptor(11, (uintptr_t)&isr11, 0x08, 0x8E);

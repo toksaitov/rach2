@@ -1,17 +1,20 @@
 #!/bin/sh
-# Prove that fork's kernel stack comes back clear, entry 26 of milestone 50.
-# `kstack_alloc` and `kstack_free` are extracted unchanged from a private
-# copy of rach2/sys/syscall_proc.c, with KERNEL_STACK_SIZE from the same
-# file and PAGE_SIZE from rach2/sys/mm/paging.h, and compiled under ASan and
-# UBSan in tests/host/fixtures/kstack.c, whose heap hands out pages full of
-# code bytes.
+# Prove that fork's kernel stack comes back clear, entry 26 of milestone 50,
+# and with a guard page below it that an overrun is known by, entry 248.
+# `kstack_alloc`, `kstack_free` and `kstack_overrun_pid` are extracted
+# unchanged from a private copy of rach2/sys/syscall_proc.c, with
+# KERNEL_STACK_SIZE from the same file and PAGE_SIZE from
+# rach2/sys/mm/paging.h, and compiled under ASan and UBSan in
+# tests/host/fixtures/kstack.c, whose heap hands out pages full of code
+# bytes.
 #
 # Usage: kstack_mutate.sh [--check]
 # With --check it compiles and runs the source as it is, which is what the
-# host suite does; without, it also compiles each fault in, requires the
-# row to fail, and requires the restored source to pass again. The two
-# faults are the clearing removed, and the clearing of the top page alone,
-# the part fork writes anyway.
+# host suite does; without, it also compiles each fault in, requires its
+# row to fail, and requires the restored source to pass again. The faults
+# are the clearing removed; the clearing of the top page alone, the part
+# fork writes anyway; the stack taken from the heap without a guard; and
+# the guard looked for in the stack's own lowest page.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -86,7 +89,8 @@ def function(text, name):
 source = (work / 'syscall_proc.c').read_text()
 paging = (work / 'paging.h').read_text()
 parts = [define(source, 'KERNEL_STACK_SIZE'), define(paging, 'PAGE_SIZE'),
-         function(source, 'kstack_alloc'), function(source, 'kstack_free')]
+         function(source, 'kstack_alloc'), function(source, 'kstack_free'),
+         function(source, 'kstack_overrun_pid')]
 (work / 'kstack.inc').write_text('\n\n'.join(parts) + '\n')
 PY
     if ! "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
@@ -110,7 +114,7 @@ PY
 echo "kstack-proof: logs: $work"
 run_phase fixed 0 'kstack-proof: result: pass:'
 [ "$#" -eq 0 ] || exit 0
-for fault in none top; do
+for fault in none top unguarded guard-in-stack; do
     python3 - "$work/syscall_proc.c" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -119,21 +123,39 @@ path = Path(sys.argv[1])
 text = path.read_text()
 clear = '        k_memset(base, 0, KERNEL_STACK_SIZE);\n'
 changes = {
-    'none': (clear, ''),
-    'top': (clear, '        k_memset((char *)base + KERNEL_STACK_SIZE - PAGE_SIZE, 0, PAGE_SIZE);\n'),
+    'none': ('static uintptr_t kstack_alloc(void)\n{', clear, ''),
+    'top': ('static uintptr_t kstack_alloc(void)\n{', clear,
+            '        k_memset((char *)base + KERNEL_STACK_SIZE - PAGE_SIZE, 0, PAGE_SIZE);\n'),
+    'unguarded': ('static uintptr_t kstack_alloc(void)\n{',
+                  '    void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);\n',
+                  '    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);\n'),
+    'guard-in-stack': ('int kstack_overrun_pid(uint32_t addr)\n{',
+                       '    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;\n',
+                       '    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE;\n'),
 }
-old, new = changes[sys.argv[2]]
-start = text.index('static uintptr_t kstack_alloc(void)\n{')
+head, old, new = changes[sys.argv[2]]
+start = text.index(head)
 end = text.index('\n}\n', start)
 body = text[start:end]
 if body.count(old) != 1:
-    raise SystemExit('kstack-proof: the clearing is not unique in kstack_alloc')
+    raise SystemExit('kstack-proof: the fault is not unique in its function: ' + sys.argv[2])
 path.write_text(text[:start] + body.replace(old, new) + text[end:])
 PY
     touch "$work/syscall_proc.c"
-    run_phase "$fault-mutated" 1 'kstack-proof: fail: every byte of a new kernel stack is zero'
+    case $fault in
+        none | top)
+            message='kstack-proof: fail: every byte of a new kernel stack is zero'
+            ;;
+        unguarded)
+            message='kstack-proof: fail: a kernel stack is four pages from the heap with a guard page below them'
+            ;;
+        guard-in-stack)
+            message='kstack-proof: fail: an address in the guard page below the running thread'"'"'s stack gives its pid'
+            ;;
+    esac
+    run_phase "$fault-mutated" 1 "$message"
     restore
     run_phase "$fault-restored" 0 'kstack-proof: result: pass:'
     cmp "$work/syscall_proc.saved" "$work/syscall_proc.c"
 done
-echo 'kstack-proof: result: pass: both faults failed the row and the restored source passed'
+echo 'kstack-proof: result: pass: the four faults failed their rows and the restored source passed'

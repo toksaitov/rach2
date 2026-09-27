@@ -9,6 +9,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kerrno.h"
 #include "../proc/process.h"
+#include "../tables/tss.h"
 #include "mm.h"
 #include "pressure.h"
 
@@ -204,6 +205,10 @@ static void _load_page_dir(page_dir_t *dir);
  * those carved after it. The map has the same range reserved, and what the
  * allocator manages and has free is counted from the table and not from the
  * map's arithmetic, so the boot's report compares the two.
+ *
+ * The double fault's task runs with the page directory its TSS names, which
+ * the processor loads in place of the one in use, so the TSS is given the
+ * kernel directory before paging is turned on (tables/tss.c).
  */
 void init_paging(struct frame_map *map)
 {
@@ -341,6 +346,7 @@ void init_paging(struct frame_map *map)
 
     register_isr_handler(14, &_page_fault_handler, "page fault");
 
+    tss_set_double_fault_dir((uintptr_t)&_curr_dir->phys_page_tables);
     _load_page_dir(_curr_dir);
 
     /* From here the heap exists, and every page table and directory made
@@ -863,12 +869,16 @@ int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int wri
  * What is left kills the process with SIGSEGV when the fault came from user
  * mode, and otherwise panics: the usercopy helpers return -EFAULT before the
  * kernel touches a bad user pointer, so a kernel-mode fault here, or one
- * with no user context, is a kernel bug.
+ * with no user context, is a kernel bug. One in the guard page below the
+ * running thread's kernel stack is that stack running out, and the panic
+ * says so. Most overruns do not reach this handler: the fault's own frame
+ * would be pushed into the same guard, and the processor raises a double
+ * fault instead (`isr_double_fault`).
  */
 static void _page_fault_handler(isr_params_t *params)
 {
     uint32_t fault_address;
-    int write, user_mode, have_user_proc, in_user_range;
+    int write, user_mode, have_user_proc, in_user_range, pid;
 
 #ifndef RACH2_HOSTTEST
     __asm__ __volatile__("mov %%cr2, %0" : "=r"(fault_address));
@@ -916,6 +926,15 @@ static void _page_fault_handler(isr_params_t *params)
                  current_proc->pid, write ? "write" : "read", fault_address, params->error_code);
         }
         return;
+    }
+
+    pid = kstack_overrun_pid(fault_address);
+    if (pid >= 0) {
+        klog(KLOG_CRIT, "vm",
+             "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X: "
+             "pid %d ran past the end of its kernel stack",
+             fault_address, params->error_code, params->eip, pid);
+        k_panic("page fault: a kernel stack ran out");
     }
 
     klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X", fault_address,

@@ -37,7 +37,6 @@ extern void isr4(void);
 extern void isr5(void);
 extern void isr6(void);
 extern void isr7(void);
-extern void isr8(void);
 extern void isr9(void);
 extern void isr10(void);
 extern void isr11(void);
@@ -136,6 +135,13 @@ extern void isr128(void);
 
 /** Clear the handler table and enable interrupts. */
 void init_isr(void);
+
+/**
+ * The double fault's task: report the fault, and the kernel stack that ran
+ * out when that is its cause, and panic. The processor starts it through
+ * the task gate of vector 8; nothing calls it.
+ */
+void isr_double_fault(void);
 
 /** Append `handler` to a vector's chain. */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
