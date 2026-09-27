@@ -1,7 +1,9 @@
-# The pinned sources of the programs that the scripts under native/,
-# spidermonkey/ and chromium/ build: name, version, URL and SHA-256, in the
-# format of sources.txt. fetch.sh reads both lists and checks both alike.
-# GDB's tarball is pinned in sources.txt, with the ports.
+# The pinned files of the GNU layer that are not ports: the sources of the
+# programs that the scripts under native/, spidermonkey/ and chromium/ build,
+# the Debian archive keys, and the CA bundle that the GNU system's image
+# installs. Each line gives a name, version, URL and SHA-256, in the format
+# of sources.txt. fetch.sh reads both lists and checks both alike. GDB's
+# tarball is pinned in sources.txt, with the ports.
 #
 # Each digest was recorded after the upstream signature verified: Mozilla's
 # release key, 14F26682D0916CDD81E37B6D61B7B526D98F0353, for Firefox's
@@ -11,6 +13,17 @@
 # and the crate records the git revision from which Firefox's automation
 # builds cbindgen. The Debian archive keys have the fingerprints ftp-master
 # publishes, and Ubuntu's debian-archive-keyring package has the same ones.
+#
+# The CA bundle is curl's extract of Mozilla's root store as Mozilla last
+# changed it, on 2026-09-25: 121 certificates in PEM form. It has no
+# signature. Its digest is the one curl.se publishes beside it, and its
+# certificates were checked against their source. The bundle's header gives
+# the SHA-256 of the certdata.txt it was made from,
+# beb7e6dfe6499926e52c075c27bcfbe4c957f8609c575b3860273ae2806f63eb, and the
+# certdata.txt on the release branch of Mozilla's firefox repository on
+# GitHub had that digest on 2026-09-27; mk-ca-bundle.pl from the verified
+# curl 8.22.0 tarball, run on that file, wrote the same certificates line
+# for line.
 firefox 140.16.0esr https://archive.mozilla.org/pub/firefox/releases/140.16.0esr/source/firefox-140.16.0esr.source.tar.xz 15d2d359b8571ecd0898faa6e05aa902b0de7cb34aadfc4d94adf6c8428f84df
 rustc 1.86.0 https://static.rust-lang.org/dist/rustc-1.86.0-x86_64-unknown-linux-gnu.tar.xz 4438b809ce4a083af31ed17aeeedcc8fc60ccffc0625bef1926620751b6989d7
 cargo 1.86.0 https://static.rust-lang.org/dist/cargo-1.86.0-x86_64-unknown-linux-gnu.tar.xz c5c1590f7e9246ad9f4f97cfe26ffa92707b52a769726596a9ef81565ebd908b
@@ -22,3 +35,4 @@ debian-archive-key-13 13 https://ftp-master.debian.org/keys/archive-key-13.asc 6
 debian-release-key-13 13 https://ftp-master.debian.org/keys/release-13.asc 4d097bb93f83d731f475c5b92a0c2fcf108cfce1d4932792fca72d00b48d198b
 debian-security-key-12 12 https://ftp-master.debian.org/keys/archive-key-12-security.asc 74f81645b4e3156d1e9a88c8dd9259271b89c7099d64af89a2a6996b592faa1f
 debian-security-key-13 13 https://ftp-master.debian.org/keys/archive-key-13-security.asc 844c07d242db37f283afab9d5531270a0550841e90f9f1a9c3bd599722b808b7
+cacert 2026-09-25 https://curl.se/ca/cacert-2026-09-25.pem a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
