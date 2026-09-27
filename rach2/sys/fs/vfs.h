@@ -254,9 +254,12 @@ struct vfs_ref {
 #define VFS_WALK_LOCK     0x8
 /* Symbolic links followed along one path before ELOOP. */
 #define VFS_LINK_MAX      40
-/* The buffer a followed link's target and the rest of the path are joined
- * in, terminator included: 511 bytes of path, ENAMETOOLONG past that. */
-#define VFS_WALK_PATH_MAX 512
+/* A path, terminator included: Linux's PATH_MAX, one page. A path a caller
+ * names may be this long, and so may the absolute path a relative one makes
+ * with the directory it is resolved from, and a followed link's target with
+ * the rest of the path after the link; ENAMETOOLONG past it. The kernel
+ * copies paths into pages from fs/pathbuf.c, not onto its stack. */
+#define VFS_PATH_MAX      4096
 
 /**
  * Install the three permanent mounts. Called once the root file system is

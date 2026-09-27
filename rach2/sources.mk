@@ -97,6 +97,7 @@ C_SRC = kernel.c \
         sys/fs/krffs.c \
         sys/fs/krffsmount.c \
         sys/fs/fd.c \
+        sys/fs/pathbuf.c \
         sys/fs/devfs.c \
         sys/fs/synthfs.c \
         sys/fs/procfs.c \

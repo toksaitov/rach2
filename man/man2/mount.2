@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -70,9 +70,11 @@ The handler checks for a current process and privilege before copying
 any strings.
 It copies the source, then the target, makes the target absolute,
 then copies the type and options.
-The source, target, type, and options must fit buffers of 64, 256, 16,
+The source, target, type, and options must fit buffers of 64, 4096, 16,
 and 128 bytes respectively, including the terminating null byte.
-A relative target is joined to the current working directory.
+A relative target is joined to the current working directory, and an
+empty one is
+.Er ENOENT .
 Repeated slashes and dot components are removed;
 .Ql ..
 is resolved by walking the parent directories.

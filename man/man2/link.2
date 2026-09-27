@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt LINK 2
 .Os
 .Sh NAME
@@ -157,7 +157,7 @@ Path resolution would follow more than 40 symbolic links.
 The ext2 source already has 65000 links.
 .It Bq Er ENAMETOOLONG
 A path, directory prefix, component, or symbolic-link expansion is too long.
-The copied path and its directory prefix must fit 256 bytes, including
+The copied path and its directory prefix must fit 4096 bytes, including
 the terminating null byte.
 .It Bq Er ENOENT
 A path is empty, the source or a required path component does not exist,

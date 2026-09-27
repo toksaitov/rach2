@@ -61,7 +61,10 @@
 #define EXT2_FT_DIR 2u
 #define EXT2_FT_MAX 7u
 
-#define PATH_DEPTH         64 /* directories climbed by `ext2_path` before ENAMETOOLONG */
+/* Directories climbed by `ext2_path` and by the rename check that a directory
+ * is not moved below itself: a directory deeper than this has no path of
+ * VFS_PATH_MAX bytes, since each level is a slash and at least one byte. */
+#define PATH_DEPTH         (VFS_PATH_MAX / 2)
 #define BCACHE_BLOCK_SHIFT 12 /* log2 of BCACHE_BLOCK_BYTES */
 
 /* One held inode. */

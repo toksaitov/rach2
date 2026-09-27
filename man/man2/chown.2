@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt CHOWN 2
 .Os
 .Sh NAME
@@ -155,7 +155,7 @@ Path resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
 The path, its expansion relative to a directory, a component, or a
 symbolic-link expansion is too long.
-The copied path and its directory prefix must fit 256 bytes,
+The copied path and its directory prefix must fit 4096 bytes,
 including the terminating null byte.
 .It Bq Er ENOENT
 The path is empty or a required path component does not exist.

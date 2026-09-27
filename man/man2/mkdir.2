@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt MKDIR 2
 .Os
 .Sh NAME
@@ -124,7 +124,7 @@ The ext2 parent already has 65000 links.
 .It Bq Er ENAMETOOLONG
 A path, component, reconstructed parent path, or symbolic-link
 expansion is too long.
-The copied path and its working-directory prefix must fit 256 bytes,
+The copied path and its working-directory prefix must fit 4096 bytes,
 including the terminating null byte.
 .It Bq Er ENOENT
 The path is empty, an ancestor is missing, no root is mounted, or

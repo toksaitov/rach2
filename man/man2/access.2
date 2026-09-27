@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt ACCESS 2
 .Os
 .Sh NAME
@@ -130,10 +130,10 @@ Path lookup or metadata access fails, including access to a removed device.
 .It Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Er ENAMETOOLONG
-The supplied path or its joined absolute form exceeds 255 bytes, a
+The supplied path or its joined absolute form exceeds 4095 bytes, a
 directory descriptor's path cannot be reconstructed within its buffer,
 a component exceeds 255 bytes, or symbolic-link expansion exceeds
-511 bytes.
+4095 bytes.
 .It Er ENOENT
 The path is empty, a component is missing, or a symbolic link has an
 empty target.

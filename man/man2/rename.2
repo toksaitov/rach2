@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt RENAME 2
 .Os
 .Sh NAME
@@ -121,7 +121,7 @@ An ext2 directory move would exceed the new parent's limit of 65000 links.
 .It Er ENAMETOOLONG
 A path, component, or symbolic-link expansion is too long.
 The copied path, including any current-directory prefix and its
-terminating null byte, must fit 256 bytes.
+terminating null byte, must fit 4096 bytes.
 .It Er ENOENT
 A path is empty, a parent component is missing, or the source does not
 exist on a file system that reports this error.

@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt SYMLINK 2
 .Os
 .Sh NAME
@@ -92,18 +92,18 @@ returns
 .Er ELOOP .
 .Pp
 The copied link pathname, including a current-directory or descriptor
-prefix and terminating null byte, must fit 256 bytes.
+prefix and terminating null byte, must fit 4096 bytes.
 .Fn symlink
 and
 .Fn symlinkat
-can store at most 511 target bytes.
+copy at most 4095 target bytes, and ext2 stores at most a block less
+one byte, 4095 on the volumes this kernel writes.
 A target combined with the remaining path during resolution must also
-fit 511 bytes, excluding the terminator.
+fit 4095 bytes, excluding the terminator; Linux has no such bound on the
+combination.
 .Fn readlink
-uses an internal 512-byte target buffer; an ext2 link too large for that
-buffer returns
-.Er ENAMETOOLONG
-even if the caller supplies more space.
+reads a target into an internal buffer of 4096 bytes, which fits every
+target ext2 stores.
 .Ss System call interface
 The i386 system call numbers and register arguments are:
 .Bl -tag -width "readlinkat (305)"

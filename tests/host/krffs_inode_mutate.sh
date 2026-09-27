@@ -75,8 +75,12 @@ static int current_proc = 1;
 struct vfs_mount { int unused; };
 struct vfs_ref { struct vfs_mount *mnt; void *node; };
 struct vpath { int unused; };
-static int copy_path_cwd(char *out, unsigned size, const char *in)
-{ unsigned n = k_strlen(in) + 1; if (n > size) return -1; k_memcpy(out, in, n); return n - 1; }
+#define AT_FDCWD (-100)
+static char path_page[4096];
+static int path_from_user(int dirfd, const char *in, char **out)
+{ unsigned n = k_strlen(in) + 1; (void)dirfd; if (n > sizeof(path_page)) return -1;
+  k_memcpy(path_page, in, n); *out = path_page; return 0; }
+static void path_buf_put(char *buf) { (void)buf; }
 static int copy_to_user(void *out, const void *in, unsigned n)
 { k_memcpy(out, in, n); return 0; }
 static int vfs_resolve(int a, const char *p, int f, struct vfs_ref *r, int b, int c)

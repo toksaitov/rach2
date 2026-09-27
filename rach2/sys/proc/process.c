@@ -1,6 +1,7 @@
 #include "process.h"
 #include "../lib/kstring.h"
 #include "../fs/fd.h"
+#include "../fs/pathbuf.h"
 #include "../panic.h"
 #include "../mm/kheap.h"
 #include "sched.h"
@@ -203,6 +204,7 @@ void free_process(process_t *proc)
     fd_table_free(&proc->fds);
     vm_free(&proc->vm);
     kfree(proc->exec_ws);
+    path_bufs_free(proc);
     kfree(proc);
 }
 

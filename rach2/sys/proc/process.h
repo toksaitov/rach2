@@ -57,9 +57,14 @@ struct rlimit32 {
 #define RLIM_COUNT      3
 #define RLIM_INFINITY32 0xFFFFFFFFu
 
-/* Policy: the working directory's path is kept in the record, and a
- * directory whose path is longer cannot be made current (ENAMETOOLONG). */
+/* Policy: the working directory's path is kept in the record when it fits
+ * here, which nearly every path does; a longer one, up to PATH_MAX, is kept
+ * in the heap (`cwd_long`). */
 #define CWD_MAX 64
+
+/* Policy: the pages one process's system calls may copy paths into at once
+ * (fs/pathbuf.c); the deepest call takes four. */
+#define PATH_BUFS 8
 
 /* Supplementary group slots per process (the 4.2BSD number). */
 #define NGROUPS_MAX 8
@@ -87,7 +92,7 @@ struct process {
     uint32_t parent_pid;   /* Parent process ID */
     int32_t exit_code;     /* Exit status (for zombie) */
     fd_table_t fds;        /* File descriptor table */
-    char cwd[CWD_MAX];     /* Current working directory (absolute, canonical; "/" at start) */
+    char cwd[CWD_MAX];     /* The working directory's path, unless `cwd_long` has it */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
     /* switch.s reads `regs.esp`, `cr3`, `kernel_stack`, `tls_base` and
      * `page_dir` at fixed offsets, so a new field goes at the end of the
@@ -185,6 +190,15 @@ struct process {
      * zero, since the child inherits no timer; an exec keeps them. */
     uint32_t alarm_tick;
     uint32_t alarm_interval;
+    /* The pages this process's system calls copy their paths into, and which
+     * of them a call is using now, bit i for page i: taken as a call first
+     * needs more at once than the record has, and kept, so that a path costs
+     * no frame after the first (fs/pathbuf.c). */
+    char *path_bufs[PATH_BUFS];
+    uint32_t path_bufs_busy;
+    /* The working directory's path when it is too long for `cwd`, from the
+     * heap; NULL while it fits `cwd`. `proc_cwd` reads whichever it is. */
+    char *cwd_long;
 };
 
 typedef struct process process_t;

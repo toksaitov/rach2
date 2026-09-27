@@ -25,6 +25,7 @@
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
+#include "fs/pathbuf.h"
 #include "ipc/pipe.h"
 #include "io/poll.h"
 #include "tty/tty.h"
@@ -549,13 +550,13 @@ static void exec_vfs_done(struct exec_vfs_ctx *c)
 
 struct exec_state {
     struct exec_vfs_ctx vfs;
-    char path[256];
+    char path[VFS_PATH_MAX];
     char argv_storage[EXEC_MAX_STRINGS];
     char *argv_bufs[EXEC_MAX_ENTRIES + 1];
     char envp_storage[EXEC_MAX_STRINGS];
     char *envp_bufs[EXEC_MAX_ENTRIES + 1];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
-    char script_path[256];
+    char script_path[VFS_PATH_MAX];
 };
 
 /* A process's workspace is allocated at its first exec and kept in its
@@ -844,7 +845,7 @@ int32_t sys_execve(isr_params_t *params)
     /* Resolve the program path (relative names against the cwd) into that
      * workspace. A bad user pointer, an over-long path, or an empty path is
      * rejected by the return value, so a kernel-range pointer cannot leak
-     * kernel memory. The buffer is 256 bytes (NUL included). */
+     * kernel memory. The buffer is VFS_PATH_MAX bytes (NUL included). */
     if (!user_path) {
         return -EFAULT;
     }
@@ -1472,7 +1473,9 @@ int32_t sys_fork(isr_params_t *params)
     }
 
     /* The child inherits the parent's current working directory. */
-    k_memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
+    if (proc_cwd_copy(child, parent) != 0) {
+        goto fail_built;
+    }
 
     /* Signals: the child inherits the dispositions and the blocked mask, but
      * its pending set starts empty (POSIX fork semantics). */

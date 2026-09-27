@@ -61,6 +61,18 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+/** A page for a path from the host heap, where the kernel keeps a set. */
+static char *path_buf_get(void)
+{
+    return calloc(1, VFS_PATH_MAX);
+}
+
+/** Give back a page `path_buf_get` returned. */
+static void path_buf_put(char *buf)
+{
+    free(buf);
+}
+
 #include "vfs_open.inc"
 
 /** All fixture files use the mounted KRFFS adapter. */

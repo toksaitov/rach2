@@ -89,6 +89,12 @@ void vm_free(vm_space_t *vm)
     (void)vm;
 }
 
+/** These process fixtures copy no path. */
+void path_bufs_free(process_t *p)
+{
+    (void)p;
+}
+
 /** No row reparents a child. */
 void signal_post(process_t *p, int signo)
 {

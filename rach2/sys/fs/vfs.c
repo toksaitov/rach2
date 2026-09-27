@@ -23,6 +23,7 @@
 #include "krffs.h"
 #include "../block/loop.h"
 #include "krffsmount.h"
+#include "pathbuf.h"
 #include "synthfs.h"
 
 #define VFS_S_IFMT       0170000u
@@ -470,6 +471,10 @@ static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char 
  * directory the link was found in. A mount covers a directory, so a link is
  * never a covered node.
  *
+ * The target and the path it is joined to are in two path pages, taken at
+ * the first link and given back on every return; a walk that meets no link
+ * takes none.
+ *
  * VFS_WALK_LOCK holds one namespace lock at a time and returns with the
  * final mount locked when its type asks for the lock, so an open can
  * register before relocation. An unmount may resolve a removed mount at the
@@ -486,7 +491,8 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     int links = 0;
     int locked = (flags & VFS_WALK_LOCK) != 0;
     struct vfs_mount *was;
-    char linkpath[VFS_WALK_PATH_MAX];
+    char *linkpath = 0;
+    char *target = 0;
     int rc;
 
     if (!path || !out) {
@@ -651,7 +657,6 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 goto out_err;
             }
             if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
-                char target[VFS_WALK_PATH_MAX];
                 int tlen;
                 uint32_t rlen = (uint32_t)k_strlen(rest);
                 uint32_t join = rlen != 0 ? 1u : 0u;
@@ -661,7 +666,16 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                     rc = -ELOOP;
                     goto out_err;
                 }
-                tlen = cur.mnt->type->ops->readlink(cur.mnt, found, target, sizeof(target));
+                if (!linkpath) {
+                    linkpath = path_buf_get();
+                    target = path_buf_get();
+                    if (!linkpath || !target) {
+                        node_put(cur.mnt, found);
+                        rc = -ENOMEM;
+                        goto out_err;
+                    }
+                }
+                tlen = cur.mnt->type->ops->readlink(cur.mnt, found, target, VFS_PATH_MAX);
                 node_put(cur.mnt, found);
                 if (tlen < 0) {
                     rc = tlen;
@@ -671,7 +685,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                     rc = -ENOENT; /* an empty target names nothing */
                     goto out_err;
                 }
-                if ((uint32_t)tlen + join + rlen + 1 > sizeof(linkpath)) {
+                if ((uint32_t)tlen + join + rlen + 1 > VFS_PATH_MAX) {
                     rc = -ENAMETOOLONG;
                     goto out_err;
                 }
@@ -735,10 +749,14 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
             goto out_err;
         }
     }
+    path_buf_put(linkpath);
+    path_buf_put(target);
     *out = cur;
     return 0;
 
 out_err:
+    path_buf_put(linkpath);
+    path_buf_put(target);
     was = cur.mnt;
     vfs_ref_put(&cur);
     walk_unlock(was, locked);

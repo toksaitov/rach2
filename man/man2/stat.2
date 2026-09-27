@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd September 27, 2026
 .Dt STAT 2
 .Os
 .Sh NAME
@@ -51,7 +51,7 @@ An absolute path ignores
 The descriptor is converted to a path, so ancestor search permissions
 still apply.
 The copied path, including any directory prefix and terminating null
-byte, must fit 256 bytes.
+byte, must fit 4096 bytes.
 .Pp
 .Dv AT_SYMLINK_NOFOLLOW
 in
