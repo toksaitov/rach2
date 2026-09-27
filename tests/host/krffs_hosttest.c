@@ -890,7 +890,7 @@ static void ino_lifetime_rows(void)
     ((krffs_node_t *)image)->mode = 0755;
     mount = mount_over(&memory_backend, image, IMAGE_SIZE);
     check(init_krffs(image, IMAGE_SIZE) == 0, "inode fixture mounts");
-    check(krffs_mkdir_at(&mount, "/tmp") == 0, "inode fixture directory");
+    check(krffs_mkdir_at(&mount, "/tmp", 0755, 0, 0) == 0, "inode fixture directory");
     for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
         uint64_t at = krffs_walk(&mount, paths[i]);
         krffs_node_t *node = krffs_resolve(paths[i]);
@@ -974,7 +974,7 @@ static void straddle_create_rows(void)
               krffs_truncate_at(&mount, "/spacer", 3375, (uint64_t *)0) == 0,
           "a file grown so the next directory's id falls across a block");
     mount.grain = 4096;
-    check(krffs_mkdir_at(&mount, "/across") == 0,
+    check(krffs_mkdir_at(&mount, "/across", 0755, 0, 0) == 0,
           "a directory whose id falls across a block is made with the whole-unit rule on");
     mount.grain = 0;
     across = krffs_walk(&mount, "/across");
@@ -1007,9 +1007,10 @@ static void id_collision_rows(void)
     mount = mount_over(&memory_backend, image, IMAGE_SIZE);
     check(krffs_mix_id(KRFFS_ROOT_ID, "bC") == krffs_mix_id(KRFFS_ROOT_ID, "cb"),
           "bC and cb mix to one identifier in one directory");
-    check(krffs_mkdir_at(&mount, "/bC") == 0, "the first of two colliding directories is made");
+    check(krffs_mkdir_at(&mount, "/bC", 0755, 0, 0) == 0,
+          "the first of two colliding directories is made");
     check(krffs_create_at(&mount, "/bC/kept") == 0, "and given a child");
-    check(krffs_mkdir_at(&mount, "/cb") == -1,
+    check(krffs_mkdir_at(&mount, "/cb", 0755, 0, 0) == -1,
           "a second directory with the first one's identifier is refused");
     check(krffs_walk(&mount, "/cb") == KRFFS_NO_NODE, "the refused directory is not made");
     check(krffs_walk(&mount, "/cb/kept") == KRFFS_NO_NODE,
@@ -1196,8 +1197,8 @@ int main(void)
     }
 
     /* Directories. */
-    check(krffs_mkdir_at(&mount, "/dir") == 0, "a directory is made");
-    check(krffs_mkdir_at(&mount, "/dir") == -1, "and not twice");
+    check(krffs_mkdir_at(&mount, "/dir", 0755, 0, 0) == 0, "a directory is made");
+    check(krffs_mkdir_at(&mount, "/dir", 0755, 0, 0) == -1, "and not twice");
     check(krffs_create_at(&mount, "/dir/inner") == 0, "a file inside it");
     check(krffs_walk(&mount, "/dir/inner") != KRFFS_NO_NODE, "resolves");
     check(krffs_rmdir_at(&mount, "/dir") == -1, "a directory with a child is not removed");
@@ -1309,7 +1310,7 @@ int main(void)
        never a directory's name: its children name it by its id, and clearing
        it would put a whole tree out of reach. */
     make_image(image, IMAGE_SIZE);
-    check(krffs_mkdir_at(&mount, "/both") == 0, "a directory is made");
+    check(krffs_mkdir_at(&mount, "/both", 0755, 0, 0) == 0, "a directory is made");
     check(krffs_create_at(&mount, "/file") == 0, "and a file beside it");
     check(krffs_truncate_at(&mount, "/file", 2048, (uint64_t *)0) == 0,
           "grown past the directory's own size");

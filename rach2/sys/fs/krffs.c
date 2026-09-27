@@ -251,6 +251,19 @@ static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t fie
     return mount->backend->write(mount->ctx, offset + field, &value, (uint32_t)sizeof(value));
 }
 
+/**
+ * A field of any width of a node being made, written as its ids are and for
+ * the same reason: nothing reads it until the name is written after it. The
+ * mode and the owner go this way; under the whole-unit rule an owner astride
+ * two units could not be given to the node at all, and the node would be
+ * published as root's.
+ */
+static int krffs_put_new(krffs_mount_t *mount, uint64_t offset, uint32_t field, const void *value,
+                         uint32_t size)
+{
+    return mount->backend->write(mount->ctx, offset + field, value, size);
+}
+
 static int krffs_put_u32(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint32_t value)
 {
     return krffs_put(mount, offset, field, &value, (uint32_t)sizeof(value));
@@ -1346,7 +1359,7 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
 }
 
 /**
- * Create an empty regular file at `path`, mode 0644.
+ * Create an empty regular file at `path`, mode 0644, owned by root.
  *
  * Idempotent like creat: an existing name (file or directory) returns success.
  * The parent directory must already exist. Returns what `krffs_create_node_at`
@@ -1354,7 +1367,7 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
  */
 int krffs_create_at(krffs_mount_t *mount, const char *path)
 {
-    return krffs_create_node_at(mount, path, 0644);
+    return krffs_create_node_at(mount, path, 0644, 0, 0);
 }
 
 uint32_t krffs_mode_type(uint16_t mode)
@@ -1369,16 +1382,19 @@ uint32_t krffs_mode_type(uint16_t mode)
 
 /**
  * Create an empty node at `path` with `mode`, which has the type bits of a
- * FIFO or a socket, or none for a regular file.
+ * FIFO or a socket, or none for a regular file, owned by `uid` and `gid`.
  *
- * The mode is on the medium before the name, as every field is. An existing
- * name returns success, as `krffs_create_at` says. Returns 0; KRFFS_EBAD for
- * a path with no last name or whose directory is not found; KRFFS_ENOSPACE
- * when no free node can hold the node; or KRFFS_EIO when the medium refused a
- * read, a write or a sync the creation needed, which a device removed on the
- * way does, so a caller can tell a full volume from a failing one.
+ * The mode and the owner are on the medium before the name, as every field
+ * is, so the node is never found with an owner it was not made with. An
+ * existing name returns success, as `krffs_create_at` says. Returns 0;
+ * KRFFS_EBAD for a path with no last name or whose directory is not found;
+ * KRFFS_ENOSPACE when no free node can hold the node; or KRFFS_EIO when the
+ * medium refused a read, a write or a sync the creation needed, which a
+ * device removed on the way does, so a caller can tell a full volume from a
+ * failing one.
  */
-int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode)
+int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32_t uid,
+                         uint32_t gid)
 {
     uint64_t node;
     uint64_t parent_id;
@@ -1411,9 +1427,9 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode)
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, krffs_calculate_djb_hash(name));
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
-    rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, mode);
-    rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
-    rc |= krffs_put_u32(mount, node, KRFFS_FIELD_GID, 0);
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_MODE, &mode, (uint32_t)sizeof(mode));
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_UID, &uid, (uint32_t)sizeof(uid));
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_GID, &gid, (uint32_t)sizeof(gid));
 
     /* Born now, in all three: a file created and never written still has a
      * moment it came into being, and a build tool compares against it. */
@@ -1699,14 +1715,18 @@ static int krffs_id_taken(krffs_mount_t *mount, uint64_t id)
 }
 
 /**
- * Make an empty directory at `path`, mode 0755.
+ * Make an empty directory at `path` with the permission bits of `mode`,
+ * owned by `uid` and `gid`, all on the medium before its name, as
+ * `krffs_create_node_at` makes a node.
  *
  * Returns 0; KRFFS_EBAD for a name that is taken, a directory id another
  * directory has, or a path with no last name or whose directory is not
  * found; or KRFFS_ENOSPACE or KRFFS_EIO as `krffs_create_node_at` does.
  */
-int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
+int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32_t uid,
+                   uint32_t gid)
 {
+    uint16_t dmode = (uint16_t)(KRFFS_S_IFDIR | (mode & 07777u));
     uint64_t node;
     uint64_t parent_id;
     krffs_node_t head;
@@ -1745,9 +1765,9 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, krffs_mix_id(parent_id, base));
-    rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, (uint16_t)(KRFFS_S_IFDIR | 0755));
-    rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
-    rc |= krffs_put_u32(mount, node, KRFFS_FIELD_GID, 0);
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_MODE, &dmode, (uint32_t)sizeof(dmode));
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_UID, &uid, (uint32_t)sizeof(uid));
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_GID, &gid, (uint32_t)sizeof(gid));
     krffs_stamp_at(mount, node, KRFFS_STAMP_DATA);
     if (krffs_head(mount, node, &head) == 0) {
         rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME, &head.modification_time,
@@ -2634,7 +2654,7 @@ int krffs_create_node(const char *path, uint16_t mode)
     if (!krffs_fs) {
         return -1;
     }
-    return krffs_create_node_at(&krffs_root_mount, path, mode);
+    return krffs_create_node_at(&krffs_root_mount, path, mode, 0, 0);
 }
 
 int krffs_unlink(const char *path)
@@ -2658,7 +2678,7 @@ int krffs_mkdir(const char *path)
     if (!krffs_fs) {
         return -1;
     }
-    return krffs_mkdir_at(&krffs_root_mount, path);
+    return krffs_mkdir_at(&krffs_root_mount, path, 0755, 0, 0);
 }
 
 int krffs_rmdir(const char *path)

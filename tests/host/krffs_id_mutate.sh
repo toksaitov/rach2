@@ -97,17 +97,17 @@ text = path.read_text()
 # lived in.
 faults = {
     'new-id-rule': ('int krffs_create_node_at(krffs_mount_t *mount, const char *path, '
-                    'uint16_t mode)\n{',
+                    'uint16_t mode,',
                     '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
                     'krffs_calculate_djb_hash(name));\n',
                     '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '
                     'krffs_calculate_djb_hash(name));\n'),
-    'id-taken': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path)\n{',
+    'id-taken': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
                  '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
                  '        return KRFFS_EBAD;\n'
                  '    }\n',
                  ''),
-    'mkdir-id-rule': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path)\n{',
+    'mkdir-id-rule': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
                       '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
                       'krffs_mix_id(parent_id, base));\n',
                       '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '

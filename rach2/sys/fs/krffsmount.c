@@ -557,25 +557,21 @@ static int made_errno(int rc)
     return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;
 }
 
-/**
- * The mode and the owner a creation asks for, put on the node the core made.
- *
- * The core stamps every new node with the format's defaults, which are root's
- * and 0644; the caller's mode has already been masked by its umask, and the
- * identity is the one that made the call. The kind of the node is the core's
- * and is not touched here.
- */
-static void stamp_made(struct krffs_volume *vol, uint64_t at, uint32_t mode)
+/* The owner a node is made with: the caller's effective ids, which the core
+ * writes before the node's name, and root's when there is no caller. */
+static uint32_t maker_uid(void)
 {
-    uint32_t uid = current_proc ? current_proc->euid : 0;
-    uint32_t gid = current_proc ? current_proc->egid : 0;
+    return current_proc ? current_proc->euid : 0;
+}
 
-    krffs_set_mode_at(&vol->fs, at, (uint16_t)(mode & 07777u));
-    krffs_set_owner_at(&vol->fs, at, uid, gid, KRFFS_SET_UID | KRFFS_SET_GID);
+static uint32_t maker_gid(void)
+{
+    return current_proc ? current_proc->egid : 0;
 }
 
 /**
- * Create `name` in `dir`, with the caller's `mode` and identity.
+ * Create `name` in `dir`, with the caller's `mode`, already masked by its
+ * umask, and the caller's identity, both on the medium before the name.
  *
  * A name that is already there answers -EEXIST. The core would answer
  * success, which would make this a creation of somebody else's file: its
@@ -599,7 +595,7 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
         return -EEXIST;
     }
-    rc = krffs_create_at(&vol->fs, path);
+    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(mode & 07777u), maker_uid(), maker_gid());
     if (rc != 0) {
         return made_errno(rc);
     }
@@ -607,15 +603,15 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (made == KRFFS_NO_NODE) {
         return -EIO;
     }
-    stamp_made(vol, made, mode);
     *node = handle_of(made);
     return 0;
 }
 
 /**
  * A FIFO or a socket `name` in `dir`, made as `kv_create` makes a file, with
- * its type and permission bits on the medium before its name. A device node
- * has a number the format has no field for, and is refused with EPERM.
+ * its type and permission bits and its owner on the medium before its name.
+ * A device node has a number the format has no field for, and is refused
+ * with EPERM.
  */
 static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                     uint32_t rdev, void **node)
@@ -640,7 +636,8 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
         return -EEXIST;
     }
-    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u)));
+    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u)), maker_uid(),
+                              maker_gid());
     if (rc != 0) {
         return made_errno(rc);
     }
@@ -648,7 +645,6 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (made == KRFFS_NO_NODE) {
         return -EIO;
     }
-    stamp_made(vol, made, mode);
     *node = handle_of(made);
     return 0;
 }
@@ -698,6 +694,8 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_unlink_at(&vol->fs, path) == 0 ? 0 : -EIO;
 }
 
+/* A directory `name` in `dir`, with the caller's `mode` and identity on the
+ * medium before its name, as `kv_create` makes a file. */
 static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -711,19 +709,8 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (rc != 0) {
         return rc;
     }
-    rc = krffs_mkdir_at(&vol->fs, path);
-    if (rc != 0) {
-        return made_errno(rc);
-    }
-    {
-        uint64_t made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
-
-        if (made == KRFFS_NO_NODE) {
-            return -EIO;
-        }
-        stamp_made(vol, made, mode);
-    }
-    return 0;
+    rc = krffs_mkdir_at(&vol->fs, path, (uint16_t)(mode & 07777u), maker_uid(), maker_gid());
+    return rc == 0 ? 0 : made_errno(rc);
 }
 
 /**

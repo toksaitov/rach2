@@ -517,6 +517,36 @@ static void creation_errors(void)
     teardown();
 }
 
+/**
+ * A node whose owner falls across a 4 KiB block is made with its maker's
+ * ids: a spacer file places a FIFO at offset 3826, whose uid starts at byte
+ * 4095, and the caller of uid and gid 1000 owns it once it has a name.
+ */
+static void owner_across(void)
+{
+    static process_t maker;
+    struct vfs_stat st;
+    void *node = NULL;
+    int fd;
+
+    setup();
+    fd = open_node(create("spacer"));
+    check(kv_truncate(&mount, table.entries[fd].ofd->fhandle, 3826 - 2 * sizeof(krffs_node_t)) == 0,
+          "a spacer places the next node");
+    maker.euid = maker.egid = 1000;
+    current_proc = &maker;
+    vfs_ns_lock(&mount);
+    check(kv_mknod(&mount, mount.root, "fifo", KRFFS_S_IFIFO | 0600, 0, &node) == 0 &&
+              offset_of(&mount, node) == 3826,
+          "a FIFO is made across the block");
+    vfs_ns_unlock(&mount);
+    current_proc = NULL;
+    check(kv_getattr(&mount, node, &st) == 0 && st.uid == 1000 && st.gid == 1000 &&
+              (st.mode & 07777) == 0600,
+          "a node made across a block has its maker's owner");
+    teardown();
+}
+
 /** Exercise both relocating operations and the unmount write order. */
 int main(void)
 {
@@ -528,6 +558,7 @@ int main(void)
     durability();
     failed_clean_flush();
     creation_errors();
+    owner_across();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }
