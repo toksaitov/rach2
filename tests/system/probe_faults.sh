@@ -184,7 +184,7 @@ probe_fault()
         echo "probe-faults: $name: the suite did not run; see $work/$name.log" >&2
         missed="$missed $name"
     elif [ "$status" -ne 0 ] && grep -Fqs -- "$words" "$work/$name.guest.log" &&
-        ! grep -Eq "^  $probe +.* PASS\$" "$work/$name.log"; then
+        ! grep -Eq "^  (musl/)?$probe +.* PASS\$" "$work/$name.log"; then
         echo "probe-faults: result: $name failed the row of $probe, status $status"
     else
         echo "probe-faults: $name did not fail the row of $probe" >&2

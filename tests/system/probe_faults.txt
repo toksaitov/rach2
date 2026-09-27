@@ -1933,7 +1933,8 @@ end
 
 # Rows the close added or strengthened: probe rows the review found weak,
 # the alternate stack, a tracer's view of an image an exec made not
-# dumpable, and the ptrace waits bounded for their proofs.
+# dumpable, the ptrace waits bounded for their proofs, and the faults the
+# close's first boots found.
 
 fault altstack-frame-below
 probe sigframemusl
@@ -2150,4 +2151,54 @@ old
         return 1;
     }
 new
+end
+
+fault lstat-dot-no-follow
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect direntmusl: /proc/self/.: d_type 4, lstat type 10
+old
+    if (dir) {
+        *dir = path_names_dir(pathbuf, len);
+    }
+new
+    if (dir) {
+        *dir = 0;
+        (void)path_names_dir(pathbuf, len);
+    }
+end
+
+fault stat-stopped-reads-running
+probe ptracemusl
+file rach2/sys/fs/procfs.c
+expect PTRACEMUSL FAIL (the detached process ran while its stop was in effect
+old
+    if (p->state == PROC_STOPPED) {
+        return 'T';
+    }
+new
+    if (p->state == PROC_STOPPED) {
+        return 'R';
+    }
+end
+
+fault init-exit-by-thread-signal
+probe threadmusl
+file rach2/kernel.c
+expect killed by signal 9, returning to kernel shell
+old
+        signo = current_proc->tg->exit_code;
+        if ((signo & 0x7F) == 0) {
+new
+        if ((signo & 0x7F) == 0) {
+end
+
+fault lock-write-on-read-fd
+probe authmusl
+file rach2/sys/syscall_fs.c
+expect AUTHMUSL FAIL (F_SETLK F_WRLCK on a descriptor for reading)
+old
+                           (fl.type == F_WRLCK && !(entry->flags & FD_FLAG_WRITE)))) {
+new
+                           (fl.type == F_WRLCK && !(entry->flags & FD_FLAG_READ)))) {
 end
