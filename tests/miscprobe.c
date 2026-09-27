@@ -4,8 +4,9 @@
  * Proves getppid (a child sees the parent's pid), umask (set returns the
  * previous mask, inherited across fork), times (a monotonic tick count plus
  * the four CPU times, none negative and none past the ticks since boot),
- * sysinfo (a live-process count, mem_unit 1), and vfork (a fork alias: parent
- * gets a pid, child runs and exits).
+ * sysinfo (a live-process count, mem_unit 1), and vfork (the child shares
+ * the parent's memory and stack until it exits with 7, and the parent then
+ * gets its pid and that status).
  *
  * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct int 0x80.
  */
@@ -57,9 +58,26 @@ static int fork(void)
 {
     return syscall1(SYS_FORK, 0);
 }
-static int vfork(void)
+/**
+ * vfork, with the child's exit in the same instructions. The child runs on
+ * the parent's stack until it exits, so it must not return through the
+ * frames the parent returns through later, nor call a function, whose frame
+ * would overwrite them; it exits with `code` from the instructions that made
+ * the call. The parent gets the child's pid, or -errno.
+ */
+static int vfork_exit(int code)
 {
-    return syscall1(SYS_VFORK, 0);
+    int r;
+    __asm__ __volatile__("int $0x80\n\t"
+                         "testl %%eax, %%eax\n\t"
+                         "jnz 1f\n\t"
+                         "movl %2, %%eax\n\t"
+                         "int $0x80\n"
+                         "1:"
+                         : "=a"(r)
+                         : "0"(SYS_VFORK), "i"(SYS_EXIT), "b"(code)
+                         : "memory", "cc");
+    return r;
 }
 static int waitpid(int pid, int *st, int opt)
 {
@@ -148,11 +166,8 @@ void _start(void)
         check(mem_unit == 1, "sysinfo() mem_unit == 1");
     }
 
-    /* vfork: a fork alias (parent gets a pid, child runs and exits). */
-    pid = vfork();
-    if (pid == 0) {
-        sys_exit(7);
-    }
+    /* vfork: the child exits 7 from the call's own instructions. */
+    pid = vfork_exit(7);
     check(pid > 0 && waitpid(pid, &st, 0) == pid && ((st >> 8) & 0xff) == 7,
           "vfork() child runs and exits 7");
 
