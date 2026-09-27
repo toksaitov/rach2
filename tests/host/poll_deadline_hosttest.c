@@ -50,11 +50,11 @@ int main(void)
     int has = -1;
 
     kernel_ticks = 1000;
-    CHECK(ms_deadline(30, &has) == 1004 && has == 1, "a poll of 30 ms from tick 1000 ends at 1004");
-    CHECK(ms_deadline(1, &has) == 1002, "a poll of 1 ms from tick 1000 ends at 1002");
-    CHECK(ms_deadline(21, &has) == 1004, "a poll of 21 ms rounds up to three ticks");
-    CHECK(ms_deadline(0, &has) == 1000 && has == 1, "a zero poll timeout ends at once");
-    CHECK(ms_deadline(-1, &has) == 0 && has == 0, "a negative poll timeout has no deadline");
+    CHECK(poll_ms_deadline(30, &has) == 1004 && has == 1, "a poll of 30 ms from tick 1000 ends at 1004");
+    CHECK(poll_ms_deadline(1, &has) == 1002, "a poll of 1 ms from tick 1000 ends at 1002");
+    CHECK(poll_ms_deadline(21, &has) == 1004, "a poll of 21 ms rounds up to three ticks");
+    CHECK(poll_ms_deadline(0, &has) == 1000 && has == 1, "a zero poll timeout ends at once");
+    CHECK(poll_ms_deadline(-1, &has) == 0 && has == 0, "a negative poll timeout has no deadline");
     ts.tv_sec = 0;
     ts.tv_nsec = 30000000;
     CHECK(ts_deadline(&ts, &has) == 1004 && has == 1,
@@ -69,15 +69,15 @@ int main(void)
     CHECK(ts_deadline(&ts, &has) == 1000 && has == 1, "a zero ppoll timeout ends at once");
     tv.tv_sec = 0;
     tv.tv_usec = 1;
-    CHECK(ms_deadline(tv_to_ms(&tv), &has) == 1002 && has == 1,
+    CHECK(poll_ms_deadline(tv_to_ms(&tv), &has) == 1002 && has == 1,
           "a select of 1 us from tick 1000 ends at 1002");
     tv.tv_sec = 1;
     tv.tv_usec = 11000;
-    CHECK(ms_deadline(tv_to_ms(&tv), &has) == 1103,
+    CHECK(poll_ms_deadline(tv_to_ms(&tv), &has) == 1103,
           "a select of 1 s and 11 ms from tick 1000 ends at 1103");
     tv.tv_sec = 0;
     tv.tv_usec = 0;
-    CHECK(ms_deadline(tv_to_ms(&tv), &has) == 1000 && has == 1,
+    CHECK(poll_ms_deadline(tv_to_ms(&tv), &has) == 1000 && has == 1,
           "a zero select timeout ends at once");
     CHECK(!deadline_reached(1001), "a deadline one tick ahead is not reached");
     CHECK(deadline_reached(1000) && deadline_reached(999),

@@ -138,6 +138,13 @@ static void check(int ok, const char *what)
     }
 }
 
+/** A KRFFS node's inode number, which no row reads. */
+uint64_t krffs_node_ino(const krffs_node_t *node)
+{
+    (void)node;
+    return 0;
+}
+
 /** No row takes a lock. */
 int lock_any(void)
 {

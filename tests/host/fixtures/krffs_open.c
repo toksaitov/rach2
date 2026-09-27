@@ -21,6 +21,8 @@ static struct vfs_mount *mount_table[2];
 static struct vfs_mount **mounts = mount_table;
 static int mount_slots = 1;
 static process_t writer, reader;
+static fd_table_t reader_files;
+static struct fs_struct dirs;
 static int opened_fd, publication_seen, lock_waits, opening_flags, before_publication;
 
 #define VFS_IS_DIR(mode) (((mode) & 0170000u) == 0040000u)
@@ -177,6 +179,26 @@ static int32_t open_path(const char *name, int flags)
     return -EIO;
 }
 
+/** No row takes a lock. */
+int lock_any(void)
+{
+    return 0;
+}
+
+void lock_ofd_gone(const struct open_file *ofd)
+{
+    (void)ofd;
+}
+
+/** No node of the fixture is a FIFO, a socket file or a device node. */
+static int open_special(struct vfs_ref *ref, int flags, int32_t *result)
+{
+    (void)ref;
+    (void)flags;
+    (void)result;
+    return 0;
+}
+
 #include "syscall_open.inc"
 
 /** Run the real open path in the second process. */
@@ -223,8 +245,11 @@ static void publication_open(int flags, int before)
     reader.pid = 2;
     current_proc = &writer;
     setup();
-    writer.fds = table;
-    check(fd_table_init(&reader.fds) == 0, "reader descriptor table");
+    writer.fds = &table;
+    writer.fs = &dirs;
+    reader.fds = &reader_files;
+    reader.fs = &dirs;
+    check(fd_table_init(reader.fds) == 0, "reader descriptor table");
     mount_table[0] = &mount;
     mount.state = VFS_ACTIVE;
     mount.ns_holder = -1;
@@ -232,14 +257,14 @@ static void publication_open(int flags, int before)
     fd = do_open("hole", 2, 0);
     check(fd >= 0, "open free-extent fixture");
     k_memset(payload, 'H', 4096);
-    check(kv_write(&mount, writer.fds.entries[fd].ofd->fhandle, payload, 4096, 0) == 4096,
+    check(kv_write(&mount, writer.fds->entries[fd].ofd->fhandle, payload, 4096, 0) == 4096,
           "size free-extent fixture");
-    fd_free(&writer.fds, fd);
+    fd_free(writer.fds, fd);
     create("separator");
     original = create("target");
     fd = do_open("target", 2, 0);
     check(fd >= 0, "open original target");
-    first = writer.fds.entries[fd].ofd;
+    first = writer.fds->entries[fd].ofd;
     check(kv_write(&mount, first->fhandle, "A", 1, 0) == 1, "seed concurrent target");
     create("blocker");
     vfs_ns_lock(&mount);
@@ -265,7 +290,7 @@ static void publication_open(int flags, int before)
     if (opened_fd < 0) {
         exit(2);
     }
-    second = reader.fds.entries[opened_fd].ofd;
+    second = reader.fds->entries[opened_fd].ofd;
     check(first->vnode == hole, "first relocation uses earlier free extent");
     moved = first->vnode;
     k_memset(payload, 'C', sizeof(payload));
@@ -276,7 +301,7 @@ static void publication_open(int flags, int before)
     check(reused == moved, "first copy offset reused");
     reuse = do_open("reuse-copy", 2, 0);
     check(reuse >= 0, "open reused copy offset");
-    check(kv_write(&mount, writer.fds.entries[reuse].ofd->fhandle, "R", 1, 0) == 1,
+    check(kv_write(&mount, writer.fds->entries[reuse].ofd->fhandle, "R", 1, 0) == 1,
           "write reused copy offset");
     check(kv_read(&mount, first->fhandle, &byte, 1, 0) == 1 && byte == 'C',
           "original open follows second move despite copy reuse");
@@ -284,9 +309,8 @@ static void publication_open(int flags, int before)
           "concurrent open follows second move despite copy reuse");
     check(first->fhandle == second->fhandle && lock_waits == 1,
           "publication open waits and shares one open record");
-    fd_free(&reader.fds, opened_fd);
-    fd_table_free(&reader.fds);
-    table = writer.fds;
+    fd_free(reader.fds, opened_fd);
+    fd_table_free(reader.fds);
     teardown();
     check(mount.refs == 0 && mount.inprogress == 0 && mount.ns_depth == 0,
           "open releases every mount reference and lock");
@@ -302,7 +326,8 @@ static void locked_walks(void)
 
     current_proc = &writer;
     setup();
-    writer.fds = table;
+    writer.fds = &table;
+    writer.fs = &dirs;
     mount_table[0] = &mount;
     mount.state = VFS_ACTIVE;
     mount.ns_holder = -1;
@@ -310,7 +335,7 @@ static void locked_walks(void)
     check(fd >= 0 && mount.ns_depth == 0 && mount.inprogress == 0,
           "creating open registers and releases lock");
     if (fd >= 0) {
-        fd_free(&writer.fds, fd);
+        fd_free(writer.fds, fd);
     }
     check(do_open("created", O_CREAT | O_EXCL, 0644) == -EEXIST && mount.ns_depth == 0,
           "exclusive open error releases lock");
@@ -348,7 +373,6 @@ static void locked_walks(void)
               mount.ns_depth == 0 && child.ns_depth == 0 && child.inprogress == 0,
           "failed walk releases the child mount lock and reference");
     mount_slots = 1;
-    table = writer.fds;
     teardown();
     check(mount.inprogress == 0 && mount.ns_depth == 0, "failed opens release all references");
 }
