@@ -1,5 +1,6 @@
 /**
- * Host test for the two range checks in mm/paging.c.
+ * Host test for the two range checks in mm/paging.c, and for the panic of a
+ * supervisor fault in a kernel stack's guard page.
  *
  * host-deps: rach2/sys/mm/frame.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -27,10 +28,20 @@
  * the top given its two tables; a window that runs past the top of the
  * address space, refused with no table made; a window that ends exactly at
  * the top given its table; and a window at address 0, given its table,
- * which is the regression a868ba10 fixed. tests/host/paging_mutate.sh
- * compiles the old rounding, the old loop bounded by `va_start + size`, and
- * the refusal without its exception for address 0, and requires each to
- * fail its row. Returns 0 when every row passes, 1 otherwise.
+ * which is the regression a868ba10 fixed.
+ *
+ * Two rows drive the page fault handler with a supervisor write fault
+ * (entry 248 of milestone 50): at an address in the guard page below the
+ * running thread's kernel stack, which `kstack_overrun_pid` answers with
+ * the thread's pid, it must panic as that stack's overrun, and at the
+ * stack's lowest byte, above the guard, with the handler's general panic.
+ * Each runs in a forked child, whose exit status says which panic came.
+ *
+ * tests/host/paging_mutate.sh compiles the old rounding, the old loop
+ * bounded by `va_start + size`, the refusal without its exception for
+ * address 0, and the handler without its test of the guard page, and
+ * requires each to fail its row. Returns 0 when every row passes, 1
+ * otherwise.
  */
 
 #include "mm/paging.c"
@@ -39,6 +50,9 @@ extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *p);
 extern void exit(int status);
+extern int fork(void);
+extern int waitpid(int pid, int *status, int options);
+extern void _exit(int status);
 
 static int fails;
 
@@ -101,10 +115,82 @@ void klog(int level, const char *subsystem, const char *format, ...)
     refusals_noted++;
 }
 
+/* Set in a forked child before a fault that must panic: k_panic exits 42
+ * when its text contains this and 43 when it does not. */
+static const char *expect_panic;
+
+static int contains(const char *hay, const char *needle)
+{
+    const char *h;
+
+    for (h = hay; *h; h++) {
+        const char *a = h;
+        const char *b = needle;
+
+        while (*a && *b && *a == *b) {
+            a++;
+            b++;
+        }
+        if (!*b) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void k_panic(const char *str)
 {
+    if (expect_panic) {
+        _exit(contains(str, expect_panic) ? 42 : 43);
+    }
     printf("paging-hosttest: panic: %s\n", str);
     exit(1);
+}
+
+void tss_set_double_fault_dir(uint32_t dir)
+{
+    (void)dir;
+}
+
+/* The page fault handler, which the fault rows call, reaches these too; no
+ * row takes the paths that call them. */
+void signal_force(process_t *target, int signo, const struct k_siginfo *info)
+{
+    (void)target;
+    (void)signo;
+    (void)info;
+}
+
+uint32_t pc_window_size(void)
+{
+    return 0;
+}
+
+int pc_fault(uint32_t fault_address, int write)
+{
+    (void)fault_address;
+    (void)write;
+    return 0;
+}
+
+void vm_file_get(struct vm_file *f)
+{
+    (void)f;
+}
+
+void vm_file_put(struct vm_file *f)
+{
+    (void)f;
+}
+
+/* The guard page below the running thread's kernel stack, and the thread's
+ * pid, as the process layer would answer for them. */
+#define GUARD_PAGE 0xC0104000u
+#define GUARD_PID  7
+
+int kstack_overrun_pid(uint32_t addr)
+{
+    return addr - GUARD_PAGE < PAGE_SIZE ? GUARD_PID : -1;
 }
 
 int kcmdline_has(const char *flag)
@@ -155,10 +241,13 @@ int mem_may_take(int user_page)
     return 1;
 }
 
-/* The fault address the handler reads in place of CR2; no row faults. */
+/* The fault address the handler reads in place of CR2, which the fault rows
+ * set. */
+static uint32_t fault_cr2;
+
 uint32_t paging_hosttest_cr2(void)
 {
-    return 0;
+    return fault_cr2;
 }
 
 /* ---- the rows ---- */
@@ -256,6 +345,44 @@ static void window_rows(void)
     }
 }
 
+/**
+ * Drive the page fault handler in a forked child with a supervisor write
+ * fault at `addr`, which must panic with a text containing `text`.
+ */
+static void fault_row(uint32_t addr, const char *text, const char *what)
+{
+    isr_params_t params;
+    int pid = fork();
+    int status = 0;
+
+    if (pid == 0) {
+        k_memset(&params, 0, sizeof(params));
+        params.vector = 14;
+        params.error_code = PF_ERR_WRITE;
+        params.cs = 0x08;
+        fault_cr2 = addr;
+        expect_panic = text;
+        _page_fault_handler(&params);
+        _exit(44);
+    }
+    check(pid > 0 && waitpid(pid, &status, 0) == pid, "the fault's child ran");
+    check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 42, what);
+}
+
+/**
+ * A supervisor fault in the guard page below the running thread's kernel
+ * stack panics as that stack's overrun; one at the stack's lowest byte,
+ * just above the guard, panics as any other kernel fault does.
+ */
+static void fault_rows(void)
+{
+    fault_row(GUARD_PAGE + PAGE_SIZE - 4, "a kernel stack ran out",
+              "a supervisor fault in the guard page below the running thread's kernel stack "
+              "panics as that stack's overrun");
+    fault_row(GUARD_PAGE + PAGE_SIZE, "page fault while in kernel mode",
+              "a supervisor fault at the stack's lowest byte panics as any kernel fault");
+}
+
 int main(void)
 {
     _kernel_dir = &test_dir;
@@ -264,6 +391,7 @@ int main(void)
 
     mmio_rows();
     window_rows();
+    fault_rows();
     check(boot_carves == 0, "no row reached the boot allocator after the heap exists");
 
     if (fails) {

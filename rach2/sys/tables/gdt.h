@@ -24,8 +24,9 @@ struct gdt_ptr {
 
 typedef struct gdt_ptr gdt_ptr_t;
 
-/** Number of GDT entries: null, kernel code/data, user code/data, TSS, TLS. */
-#define GDT_ENTRY_COUNT 7
+/** Number of GDT entries: null, kernel code/data, user code/data, TSS, TLS,
+ *  and the double fault's TSS. */
+#define GDT_ENTRY_COUNT 8
 
 /**
  * Thread-local-storage descriptor slot. `set_thread_area` programs its base to

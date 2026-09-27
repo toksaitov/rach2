@@ -90,10 +90,14 @@ void fb_release_if_owner(uint32_t pid)
 /* Kernel stack size (16KB) */
 #define KERNEL_STACK_SIZE 0x4000
 
+/* The boot stack, from loader.s, which process 0, the first program and the
+ * programs the debug shell starts run on. */
+extern char stack[];
+
 /*
  * A process's kernel stack comes from the heap at fork, KERNEL_STACK_SIZE
- * of pages, and goes back when the zombie is reaped; the one reaping is
- * never the one whose stack it is.
+ * of pages with an unmapped guard page below them, and goes back when the
+ * zombie is reaped; the one reaping is never the one whose stack it is.
  */
 void init_kstacks(void)
 {}
@@ -101,7 +105,10 @@ void init_kstacks(void)
 /**
  * A kernel stack, returning its base, or 0 when the heap has none.
  *
- * The caller uses `base + KERNEL_STACK_SIZE` as the stack top.
+ * The caller uses `base + KERNEL_STACK_SIZE` as the stack top. The page
+ * below the base is the heap's guard (`kalloc_guarded`), taken and never
+ * mapped, so a thread that runs past the base faults there at once instead
+ * of writing over the heap page below; `isr_double_fault` reports it.
  *
  * QEMU can retain code translations in reused frames. Clear every page
  * so translations outside the used part of the stack cannot keep stack
@@ -110,7 +117,7 @@ void init_kstacks(void)
  */
 static uintptr_t kstack_alloc(void)
 {
-    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);
+    void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);
 
     if (base != NULL) {
         k_memset(base, 0, KERNEL_STACK_SIZE);
@@ -118,12 +125,105 @@ static uintptr_t kstack_alloc(void)
     return (uintptr_t)base;
 }
 
-/** Give back the stack whose top is `top`. */
+/**
+ * Give back the stack whose top is `top`, with its guard page.
+ *
+ * The boot stack is part of the kernel image and not the heap's, and is left
+ * as it is. A record whose stack it is can still come here: a thread of a
+ * program on the boot stack that calls execve takes its leader's place, and
+ * the leader's record goes (`exec_take_leader`).
+ */
 static void kstack_free(uintptr_t top)
 {
-    if (top != 0) {
-        kfree_pages((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);
+    if (top != 0 && top != (uintptr_t)stack + KERNEL_STACK_SIZE) {
+        kfree_guarded((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);
     }
+}
+
+/**
+ * The pid of the running thread when `addr` lies in the page below its
+ * kernel stack, or -1.
+ *
+ * That page is the guard `kstack_alloc` leaves below a stack it gives, or
+ * the one loader.s leaves below the boot stack, which process 0, the first
+ * program and the programs the debug shell starts run on. An access there
+ * is the stack running out; the double fault's handler and the page
+ * fault's ask with the address the processor left in CR2.
+ */
+int kstack_overrun_pid(uint32_t addr)
+{
+    uint32_t guard;
+
+    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {
+        return -1;
+    }
+    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;
+    return addr - guard < PAGE_SIZE ? (int)current_proc->pid : -1;
+}
+
+/* The depth at which the overrun test's descent would turn back; a stack of
+ * KERNEL_STACK_SIZE holds fewer than sixteen of its frames. */
+#define KSTACK_DESCENT_MAX 4096u
+
+/* One frame of the overrun test's descent: a quarter page of locals, the
+ * lowest byte written, so every page the descent reaches is touched. */
+static uint32_t kstack_descend(uint32_t depth)
+{
+    volatile uint8_t frame[1024];
+
+    frame[0] = (uint8_t)depth;
+    if (depth >= KSTACK_DESCENT_MAX) {
+        return frame[0];
+    }
+    return kstack_descend(depth + 1) + frame[0];
+}
+
+/* The overrun test's descent, on the stack of the running thread. */
+static void kstack_overrun_run(void)
+{
+    klog(KLOG_INFO, "kstack", "overrun: pid %d descends its stack at 0x%x", (int)current_proc->pid,
+         current_proc->kernel_stack - KERNEL_STACK_SIZE);
+    kstack_descend(0);
+    k_panic("kstack: overrun: the descent came back");
+}
+
+/**
+ * Test switch: run a thread down its kernel stack until the guard below it
+ * faults. `rach2.stackoverrun=fork` on the boot line runs a thread on a
+ * stack `kstack_alloc` gives, as a fork's child has one, and
+ * `rach2.stackoverrun=boot` descends the boot stack as process 0. The fault
+ * is a double fault, since the page fault's own frame cannot be pushed, and
+ * its handler reports the thread and stops the machine. The thread's record
+ * is taken after its stack, so that it lies above the stack, where a descent
+ * that finds no guard cannot write over it. Called once, before the first
+ * program; without the option it returns at once.
+ */
+void kstack_overrun_test(void)
+{
+    process_t *from = current_proc;
+    process_t *thread;
+    uintptr_t base;
+
+    if (!from) {
+        return;
+    }
+    if (kcmdline_has("rach2.stackoverrun=boot")) {
+        kstack_overrun_run();
+    }
+    if (!kcmdline_has("rach2.stackoverrun=fork")) {
+        return;
+    }
+    base = kstack_alloc();
+    thread = alloc_process();
+    if (!thread || !base) {
+        k_panic("kstack: overrun: no record or stack for the thread");
+    }
+    thread->kernel_stack = base + KERNEL_STACK_SIZE;
+    thread->cr3 = 0;
+    thread->state = PROC_RUNNING;
+    setup_process_stack(thread, kstack_overrun_run);
+    current_proc = thread;
+    switch_context(from, thread);
 }
 
 /**
@@ -162,9 +262,6 @@ extern void shell_reset_input(void);
 extern bool debug_shell_is_home;
 
 extern void panic_init_died(uint32_t pid);
-
-/* Kernel stack from loader.s */
-extern char stack[];
 
 #define KERNEL_STACK_SIZE_LOCAL 0x4000
 

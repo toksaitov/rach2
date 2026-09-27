@@ -525,4 +525,15 @@ void process_count_sleep_cut_short(void);
 /** Count one process handed out; `alloc_process` calls it. */
 void process_count_fork(void);
 
+/**
+ * The pid of the running thread when `addr` lies in the unmapped guard
+ * page below its kernel stack, which an access there says has run out,
+ * or -1. Defined in syscall_proc.c.
+ */
+int kstack_overrun_pid(uint32_t addr);
+
+/** Test switch `rach2.stackoverrun`: run a thread down its kernel stack
+ * until the guard below it faults. Defined in syscall_proc.c. */
+void kstack_overrun_test(void);
+
 #endif

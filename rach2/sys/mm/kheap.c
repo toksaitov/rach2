@@ -278,6 +278,54 @@ void kfree_pages(void *p, uint32_t count)
     irq_restore(flags);
 }
 
+/* The guard is the first page of a run of `count + 1` and is marked taken
+ * only once the pages above it are mapped, so a shortage of frames leaves
+ * nothing behind. A guarded run is smaller than KHEAP_RUN_LEAST and never
+ * comes from the reserve. */
+void *kalloc_guarded(uint32_t count)
+{
+    uint32_t flags = irq_save();
+    uint32_t guard = KHEAP_PAGES;
+
+    if (count > 0 && count < KHEAP_RUN_LEAST) {
+        guard = find_run(count + 1);
+    }
+    if (guard >= KHEAP_PAGES || map_run(guard + 1, count) != 0) {
+        irq_restore(flags);
+        klog(KLOG_ERR, "kheap", "%d pages and a guard: no room or no frame", (int)count);
+        return NULL;
+    }
+    page_set(guard, 1);
+    irq_restore(flags);
+    return (void *)(KVA_HEAP + (guard + 1) * PAGE_SIZE);
+}
+
+/* A guard is a page below the reserve that is taken and has no mapping.
+ * Below the first page of any other run is a mapped page, a free page or
+ * the region's start: every taken page outside the reserve is mapped
+ * except a guard, and the page above a guard begins the guard's own run. */
+void kfree_guarded(void *p, uint32_t count)
+{
+    uintptr_t va = (uintptr_t)p;
+    uint32_t flags, page;
+
+    if (!p || va <= KVA_HEAP || va >= KVA_HEAP + KVA_HEAP_SIZE || (va & (PAGE_SIZE - 1))) {
+        klog(KLOG_ERR, "kheap", "free of pages the heap did not give: 0x%x", (uint32_t)va);
+        return;
+    }
+    page = (va - KVA_HEAP) / PAGE_SIZE;
+    flags = irq_save();
+    if (count == 0 || count >= KHEAP_RESERVE_FIRST || page > KHEAP_RESERVE_FIRST - count ||
+        !page_taken(page - 1) || paging_virt_to_phys(va - PAGE_SIZE) != 0) {
+        irq_restore(flags);
+        klog(KLOG_ERR, "kheap", "free of pages with no guard below them: 0x%x", (uint32_t)va);
+        return;
+    }
+    release_run(page, count);
+    page_set(page - 1, 0);
+    irq_restore(flags);
+}
+
 /* Interrupts off. A page carved into blocks of class `cls`, its blocks on
  * the class's free list; -1 when no page could be had. */
 static int add_class_page(uint32_t cls)

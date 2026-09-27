@@ -9,6 +9,7 @@
 #include "lib/kstring.h"
 #include "proc/process.h"
 #include "proc/ptrace.h"
+#include "tables/tss.h"
 
 /*
  * Kill the faulting process with `signo` and schedule another; defined in the
@@ -226,12 +227,56 @@ static void _exception_handler(isr_params_t *params)
 }
 
 /**
+ * The double fault's task, which the processor enters through the task gate
+ * of vector 8 and not by a call: it saves what was running into
+ * `kernel_tss`, loads `double_fault_tss` and starts here on that TSS's own
+ * stack, with its error code, always 0, where a return address would be.
+ * It never returns.
+ *
+ * A double fault is an exception raised while the processor delivers
+ * another. The one this kernel meets is a page fault whose frame could not
+ * be pushed, since the stack in use ran into the unmapped guard page below
+ * it, and a gate that ran on that stack would fault a third time and reset
+ * the machine. CR2 has the address the push faulted at; one in the guard
+ * below the running thread's kernel stack (`kstack_overrun_pid`) says that
+ * stack ran out, and the diagnostic names the thread. The instruction and
+ * stack pointers are those the processor saved in `kernel_tss`. Either way
+ * the kernel cannot go on and the handler panics; its record goes out
+ * directly, even when the fault came while another record was being
+ * written.
+ */
+void isr_double_fault(void)
+{
+    uint32_t cr2;
+    int pid;
+
+    __asm__ __volatile__("mov %%cr2, %0" : "=r"(cr2));
+    klog_deliver_directly();
+    pid = kstack_overrun_pid(cr2);
+    if (pid >= 0) {
+        klog(KLOG_CRIT, "isr",
+             "kernel exception: double fault (vector 8, eip 0x%x, esp 0x%x): "
+             "pid %d ran past the end of its kernel stack at 0x%x",
+             kernel_tss.eip, kernel_tss.esp, pid, cr2);
+        k_panic("double fault: a kernel stack ran out");
+    }
+    klog(KLOG_CRIT, "isr",
+         "kernel exception: double fault (vector 8, eip 0x%x, esp 0x%x, cr2 0x%x)", kernel_tss.eip,
+         kernel_tss.esp, cr2);
+    k_panic("unrecoverable CPU exception in kernel mode");
+}
+
+/**
  * Clear the handler table, install the default exception handler, and enable
  * interrupts.
  *
- * Every CPU exception except the page fault (vector 14, handled in
- * `init_paging`) gets the shared default so an unhandled fault yields a
+ * Every CPU exception but two gets the shared default, so a fault yields a
  * diagnostic and a contained kill or panic, not a silent triple-fault reset.
+ * The page fault, vector 14, has its handler from `init_paging`, and the
+ * double fault, vector 8, is taken through a task gate onto a stack of its
+ * own by `isr_double_fault`, which reports it and panics: a kernel stack
+ * that runs into its guard page raises one, since the page fault's frame
+ * cannot be pushed there.
  */
 void init_isr(void)
 {
@@ -240,7 +285,7 @@ void init_isr(void)
     k_memset(&_isr_handlers, 0, sizeof(_isr_handlers));
 
     for (vector = 0; vector < 32; vector++) {
-        if (vector != 14) {
+        if (vector != 8 && vector != 14) {
             register_isr_handler((uint8_t)vector, &_exception_handler, "exception");
         }
     }

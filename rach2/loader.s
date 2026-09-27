@@ -65,8 +65,14 @@ enter_usermode:
 
     iret                   # Transition to ring 3
 
+# The boot stack, which the boot, process 0, the debug shell and the first
+# program run on, and the page below it: its guard, which k_main unmaps once
+# paging is on, so that running past the stack's base faults.
 .bss
-.align 4
+.balign 4096
+.globl stack_guard
+stack_guard:
+    .skip 4096
 .globl stack
 stack:
     .skip KERNEL_STACK_SIZE

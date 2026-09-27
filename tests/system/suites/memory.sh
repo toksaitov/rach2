@@ -11,10 +11,14 @@
 # the kernel counts from its frame table and not from the map's arithmetic,
 # is usable less reserved, within the partial frames at the ranges' ends.
 # That the numbers change with the size is what shows the harness passed
-# the size to the boot.
+# the size to the boot. After those boots the suite maps memory past the old
+# window, fails frame allocations on purpose, sweeps the string routines and
+# runs kernel stacks out.
 #
 # Usage: memory.sh KERNEL IMAGE HARNESS RECOVERY_KERNEL RECOVERY_IMAGE
 set -u
+# shellcheck source=tests/system/stackoverrun_row.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/stackoverrun_row.sh"
 KERNEL=$1; IMAGE=$2; HARNESS=$3; RKERNEL=$4; RIMAGE=$5
 # What this suite writes under the images directory starts with `memory-test`.
 OUT="$(dirname "$IMAGE")/memory-test"
@@ -102,4 +106,12 @@ LOG="$OUT.strings.log"
 grep -aq "strings: swept" "$LOG" || \
     fail "the sweep of the string routines did not report: $(grep -a 'strings:' "$LOG" | head -1)"
 echo "memory-test: the copies, the fill and the move swept at every length and alignment: OK"
+# A kernel stack that runs out, on a stack of each kind: the boot must name
+# the thread whose stack ran out and stop (tests/system/stackoverrun_row.sh,
+# which tests/system/stackoverrun_mutate.sh proves).
+for where in fork boot; do
+    row=$(stackoverrun_row "$HARNESS" "$KERNEL" "$IMAGE" "$where" "$OUT.stackoverrun-$where.log") ||
+        fail "$row"
+    echo "memory-test: a $where stack that runs out: its thread named and the machine stopped: OK"
+done
 echo "memory-test: PASS"

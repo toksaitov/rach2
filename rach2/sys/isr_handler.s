@@ -9,13 +9,16 @@
 # [vector][error code][iret frame].
 #
 # Two shapes exist because the CPU pushes an error code for some exceptions
-# and not for others. Vectors 8 (#DF), 10 (#TS), 11 (#NP), 12 (#SS), 13 (#GP),
-# 14 (#PF), 17 (#AC) and 21 (#CP) arrive with the CPU's error code already on
+# and not for others. Vectors 10 (#TS), 11 (#NP), 12 (#SS), 13 (#GP), 14
+# (#PF), 17 (#AC) and 21 (#CP) arrive with the CPU's error code already on
 # the stack, so their stubs push only the vector. Every other stub pushes a
 # zero first, so both shapes leave the frame identical. A stub given the wrong
 # shape leaves the vector slot intact and shifts everything above it: the
 # error code reads as the stub's zero, and the saved iret fields sit one slot
 # off, so the interrupt return consumes a malformed frame.
+#
+# Vector 8 (#DF), the double fault, has no stub: its gate is a task gate,
+# and the processor starts isr_double_fault (isr.c) on a stack of its own.
 
 .text
 
@@ -75,13 +78,6 @@ isr7:
     cli
     pushl $0
     pushl $7
-    jmp isr_common_handler
-
-# #DF double fault: the CPU pushes the error code.
-.globl isr8
-isr8:
-    cli
-    pushl $8
     jmp isr_common_handler
 
 .globl isr9

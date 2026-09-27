@@ -1,16 +1,18 @@
 #!/bin/sh
 # Prove the two range checks of rach2/sys/mm/paging.c, entry 140 of
-# milestone 50. tests/host/paging_hosttest.c is compiled against a private
-# copy of the kernel's sources with each old fault put back in turn, and
-# its row must fail; the restored copy must pass again.
+# milestone 50, and the page fault handler's panic for a kernel stack that
+# ran into its guard page, entry 248. tests/host/paging_hosttest.c is
+# compiled against a private copy of the kernel's sources with each fault
+# put in turn, and its row must fail; the restored copy must pass again.
 #
 # Usage: paging_mutate.sh [--check]
 # With --check it compiles and runs the unmodified test alone. The faults:
 # map_mmio's page count rounded up by `+ PAGE_SIZE - 1`, which wraps for a
 # span that begins in the first page and ends in the last; the loop of
 # premap_kernel_window bounded by `va_start + size`, which wraps below the
-# start for a window that runs past the top; and the refusal without its
-# exception for address 0, the regression a868ba10 fixed.
+# start for a window that runs past the top; the refusal without its
+# exception for address 0, the regression a868ba10 fixed; and the handler
+# without its test of the guard page, which panics as any kernel fault.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -81,7 +83,7 @@ run_phase()
 echo "paging-proof: logs: $work"
 run_phase fixed 0 'paging-hosttest: result: pass'
 [ "$#" -eq 0 ] || exit 0
-for fault in rounding loop zero; do
+for fault in rounding loop zero guard; do
     python3 - "$source" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -93,6 +95,7 @@ function = {
     'rounding': 'uintptr_t map_mmio(uintptr_t phys_addr, size_t size)\n{',
     'loop': 'int premap_kernel_window(uintptr_t va_start, size_t size)\n{',
     'zero': 'int premap_kernel_window(uintptr_t va_start, size_t size)\n{',
+    'guard': 'static void _page_fault_handler(isr_params_t *params)\n{',
 }[fault]
 changes = {
     'rounding': (
@@ -122,6 +125,9 @@ changes = {
     'zero': (
         '    if (va_start != 0 && size > (uintptr_t)0 - va_start) {\n',
         '    if (size > (uintptr_t)0 - va_start) {\n'),
+    'guard': (
+        '    pid = kstack_overrun_pid(fault_address);\n',
+        '    pid = -1;\n'),
 }
 old, new = changes[fault]
 if source.count(function) != 1:
@@ -144,10 +150,13 @@ PY
         zero)
             message='paging-hosttest: fail: a window that starts at address zero gets its table'
             ;;
+        guard)
+            message="paging-hosttest: fail: a supervisor fault in the guard page below the running thread's kernel stack panics as that stack's overrun"
+            ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
     run_phase "$fault-restored" 0 'paging-hosttest: result: pass'
     cmp "$work/paging.saved" "$source"
 done
-echo 'paging-proof: result: pass: the three old faults failed their rows and the restored source passed'
+echo 'paging-proof: result: pass: the four faults failed their rows and the restored source passed'

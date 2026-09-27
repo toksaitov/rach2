@@ -72,8 +72,10 @@
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
-/* Kernel stack and ring-3 entry trampoline, both from loader.s. */
+/* Kernel stack, the page below it and ring-3 entry trampoline, from
+ * loader.s. */
 extern char stack[];
+extern char stack_guard[];
 #define KERNEL_STACK_SIZE 0x4000
 
 extern void enter_usermode(uint32_t eip, uint32_t esp);
@@ -127,6 +129,24 @@ static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 static void boot_init_process(void);
+
+/**
+ * Unmap the page below the boot stack, its guard (loader.s), so that the
+ * boot, process 0, the debug shell and the programs they start fault when
+ * they run the stack past its base, as a thread does below a stack
+ * `kstack_alloc` gives. The page is part of the kernel image, whose frames
+ * no allocator gives, and the identity window's page tables are shared by
+ * every directory, so it stays unmapped everywhere. A linker that did not
+ * align it to a page would have put other data in that page, and the boot
+ * stops there by name rather than unmap it.
+ */
+static void guard_boot_stack(void)
+{
+    if ((uintptr_t)stack_guard & (PAGE_SIZE - 1)) {
+        k_panic("boot: the boot stack's guard is not a page of its own");
+    }
+    unmap_kernel_frame((uintptr_t)stack_guard);
+}
 
 /**
  * Map every boot module into the module region of the kernel's layout,
@@ -3504,6 +3524,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             }
         }
         init_paging(&map);
+        guard_boot_stack();
         map_modules();
         klog(KLOG_INFO, "memory",
              "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
@@ -3651,6 +3672,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     init_sched();
     klog(KLOG_DEBUG, "boot", "scheduler: ready");
+
+    kstack_overrun_test();
 
     if (kcmdline_has("rach2.noaudio")) {
         klog(KLOG_INFO, "audio", "skipped: rach2.noaudio");
