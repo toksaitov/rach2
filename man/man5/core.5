@@ -42,9 +42,17 @@ A directory the process cannot write, or a descriptor table with no free
 entry, leaves no file.
 .Pp
 The other threads of the process are sent
-.Dv SIGKILL
-before the file is written, and the process ends with the signal after
-it.
+.Dv SIGKILL ,
+and the file is written once they have ended, each after the system call
+it was in, so none of them changes the memory the file records; the
+registers the file has of them are the ones they had when the signal came.
+The process ends with the signal after the file.
+A process that shares the address space without being a thread of this
+one, as a
+.Xr vfork 2
+child does, is not ended: the regions the file records are taken when
+the writing begins, and a page such a process unmaps before it is written
+is a hole.
 Its wait status has the core bit,
 .Dv WCOREDUMP
 in
@@ -67,6 +75,14 @@ mapping the process never wrote, and writes a core file for a process
 that is not dumpable when
 .Pa /proc/sys/fs/suid_dumpable
 asks; this kernel does none of these.
+Linux holds the other threads before they release anything; here they
+end first, so the file has the robust futexes they held already given
+.Dv FUTEX_OWNER_DIED ,
+as
+.Xr futex 2
+describes, and the words their
+.Dv CLONE_CHILD_CLEARTID
+named already cleared.
 .Ss Format
 The file is an ELF32 file of type
 .Dv ET_CORE
@@ -137,7 +153,9 @@ where a link has the name, and reads the notes and the memory of the file
 one leaves; a child whose limit is two pages leaves a file cut short, and
 one whose limit is 0, or which is not dumpable, leaves none.
 .Sh SEE ALSO
+.Xr futex 2 ,
 .Xr prctl 2 ,
 .Xr prlimit64 2 ,
 .Xr sigaction 2 ,
+.Xr vfork 2 ,
 .Xr wait 2

@@ -317,8 +317,9 @@ static void terminate_release_session(uint32_t pid)
  * encoding of a signal death (low 7 bits = the signal), so the parent's
  * waitpid sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process
  * leaves a core file first (`terminate_core`), unless another thread has
- * begun to end it, after the other threads are sent SIGKILL and before any
- * of the process is released, as Linux's `do_coredump` does. The teardown
+ * begun to end it, after the other threads are sent SIGKILL and have ended
+ * (`core_write` waits for them) and before this thread releases anything,
+ * as Linux's `do_coredump` does. The teardown
  * runs as a system call does, with `in_syscall` set and interrupts on, also
  * when the signal is acted on at an interrupt's return, which comes here with
  * them off: what it releases and writes may sleep in a disk that answers

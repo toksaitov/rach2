@@ -9,6 +9,7 @@
 #include "fpu.h"
 #include "process.h"
 #include "tgroup.h"
+#include "wait_queue.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -39,6 +40,14 @@ struct core_out {
     uint32_t done;
     uint32_t limit;
     int32_t err;
+};
+
+/* What the file has of a region: its range and protection, taken once
+ * before anything is written. */
+struct core_region {
+    uint32_t start;
+    uint32_t end;
+    uint32_t prot;
 };
 
 static void put16(uint8_t *p, uint16_t v)
@@ -252,15 +261,19 @@ uint8_t *core_notes(int signo, uint32_t *size)
 
 /** The bytes of region `r` the file has: all of a readable region, none of
  * one that is not, as Linux leaves a PROT_NONE reservation out. */
-static uint32_t region_file_size(const vma_t *r)
+static uint32_t region_file_size(const struct core_region *r)
 {
     return (r->prot & VM_PROT_READ) ? r->end - r->start : 0u;
 }
 
-/** Write the pages of region `r`: a page the process has, read through its
+/**
+ * Write the pages of region `r`: a page the process has, read through its
  * address space, and a hole for one it never touched, which is not brought
- * in for the file. */
-static void region_write(struct core_out *o, struct mm *mm, const vma_t *r)
+ * in for the file. Each page is looked up in the address space as it is
+ * read, so a page another process sharing the space has unmapped since the
+ * regions were taken is a hole.
+ */
+static void region_write(struct core_out *o, struct mm *mm, const struct core_region *r)
 {
     uint8_t *page = kmalloc(PAGE_SIZE);
     uint32_t addr;
@@ -280,19 +293,54 @@ static void region_write(struct core_out *o, struct mm *mm, const vma_t *r)
     kfree(page);
 }
 
+/** Whether the core file of the process `arg` may be written: its other
+ * threads have ended, or an execve of one of them waits for the rest to. */
+static int core_quiet(void *arg)
+{
+    const struct tgroup *tg = (const struct tgroup *)arg;
+
+    return tg->live == 1 || tg->exec_task != NULL;
+}
+
+/** The regions of `vm` as the file records them, from the heap, `*count`
+ * of them; NULL when the heap has no room. */
+static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
+{
+    struct core_region *regions = kmalloc((vm->count + 1u) * sizeof(*regions));
+    uint32_t i;
+
+    if (!regions) {
+        return NULL;
+    }
+    for (i = 0; i < vm->count; i++) {
+        regions[i].start = vm->vmas[i].start;
+        regions[i].end = vm->vmas[i].end;
+        regions[i].prot = vm->vmas[i].prot;
+    }
+    *count = vm->count;
+    return regions;
+}
+
 int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
                    uint32_t limit)
 {
     struct mm *mm = current_proc->mm;
-    const vm_space_t *vm = &mm->vm;
+    struct core_region *regions;
     struct core_out o;
     uint8_t ehdr[EHDR_SIZE];
     uint8_t phdr[PHDR_SIZE];
-    uint32_t phnum = vm->count + 1u;
+    uint32_t count;
+    uint32_t phnum;
     uint32_t data;
     uint32_t off;
     uint32_t i;
 
+    (void)wq_wait_event_nointr(&current_proc->tg->gone, core_quiet, current_proc->tg);
+    regions = regions_take(&mm->vm, &count);
+    if (!regions) {
+        return -ENOMEM;
+    }
+    phnum = count + 1u;
     o.write = write;
     o.ctx = ctx;
     o.done = 0;
@@ -323,8 +371,8 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     (void)out(&o, phdr, sizeof(phdr));
     data = (EHDR_SIZE + phnum * PHDR_SIZE + notes_size + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
     off = data;
-    for (i = 0; i < vm->count; i++) {
-        const vma_t *r = &vm->vmas[i];
+    for (i = 0; i < count; i++) {
+        const struct core_region *r = &regions[i];
         uint32_t flags = 0;
 
         if (r->prot & VM_PROT_READ) {
@@ -349,10 +397,11 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     }
     (void)out(&o, notes, notes_size);
     (void)out(&o, NULL, data - (EHDR_SIZE + phnum * PHDR_SIZE + notes_size));
-    for (i = 0; i < vm->count && o.err == 0; i++) {
-        if (region_file_size(&vm->vmas[i]) != 0) {
-            region_write(&o, mm, &vm->vmas[i]);
+    for (i = 0; i < count && o.err == 0; i++) {
+        if (region_file_size(&regions[i]) != 0) {
+            region_write(&o, mm, &regions[i]);
         }
     }
+    kfree(regions);
     return o.err;
 }
