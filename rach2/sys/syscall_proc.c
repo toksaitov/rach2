@@ -234,7 +234,9 @@ void proc_fs_put(process_t *p)
  * reference, so a seek in one process is seen by the other, as POSIX says,
  * and a socket gains one too, so that the two release it independently. A
  * descriptor a sharer closed, which a call of another still holds, is
- * dropped from the copy.
+ * dropped from the copy, and so is a slot a sharer's call has reserved and
+ * not yet given a type, whose description the copy has no reference to, as
+ * Linux's `dup_fd` frees a descriptor not yet installed.
  */
 static void files_take(fd_table_t *table)
 {
@@ -243,7 +245,7 @@ static void files_take(fd_table_t *table)
     for (fdi = 0; fdi < table->cap; fdi++) {
         fd_entry_t *e = &table->entries[fdi];
 
-        if (e->flags & FD_FLAG_CLOSING) {
+        if ((e->flags & FD_FLAG_CLOSING) || (e->type == FD_TYPE_NONE && e->ofd != NULL)) {
             k_memset(e, 0, sizeof(*e));
         }
         if (e->type == FD_TYPE_NONE) {
@@ -2037,8 +2039,8 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     /* A SIGKILL, which an exit_group or an exec by another thread sends,
      * refuses the child, since one made now would outlive its process's end;
      * nothing after this sleeps. */
-    if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) ||
-        parent->tg->exiting || parent->tg->exec_task) {
+    if (((parent->sig_pending | parent->tg->pending) & KSIG_BIT(SIGKILL)) || parent->tg->exiting ||
+        parent->tg->exec_task) {
         rc = -EINTR;
         goto fail_built;
     }
