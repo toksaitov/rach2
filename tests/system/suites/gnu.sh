@@ -144,9 +144,11 @@ echo "gnu-test: the test account logs in by key: OK"
 
 # ssh_password USER PASSWORD PROMPTS COMMAND: a password login through the
 # pty driver, since ssh reads a password from a terminal; the driver's
-# status and whether a password was asked for are in what it prints.
+# status and whether a password was asked for are in what it prints. The
+# driver scales its own timeout by the run's factor, so it is given the
+# idle host's seconds.
 ssh_password() {
-    RACH2_PASSWORD="$2" "$PTYDRIVE" --rows 40 --cols 100 --timeout "$(scaled 120)" -- \
+    RACH2_PASSWORD="$2" "$PTYDRIVE" --rows 40 --cols 100 --timeout 120 -- \
         ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 30)" -o PubkeyAuthentication=no \
         -o PreferredAuthentications=password \
