@@ -260,6 +260,10 @@ step_unpack()
     ln -s usr/sbin "$ROOT/sbin"
     while read -r name _ archive file _ sha; do
         deb="$DEBS/${file##*/}"
+        if [ ! -f "$deb" ] || [ "$(sha256_of "$deb")" != "$sha" ]; then
+            echo "gnu: chromium: $name: ${deb##*/} is missing or not the package the closure names" >&2
+            return 1
+        fi
         member="$(ar t "$deb" | grep '^data\.tar')"
         case "$member" in
             *.xz) unpack="xz -dc" ;;
@@ -310,10 +314,18 @@ step_check()
         echo "gnu: chromium: no sysroot; run make gnu-toolchain first" >&2
         return 1
     fi
+    if [ ! -x "$ROOT/$BROWSER" ] || ! is_elf "$ROOT/$BROWSER"; then
+        echo "gnu: chromium: $BROWSER is missing or not an executable ELF file" >&2
+        return 1
+    fi
     rootlib="$(root_libpath)"
     : > "$WORK/list.txt"
     for f in "$ROOT/$BROWSER" "$ROOT"/usr/lib/chromium/*.so*; do
-        is_elf "$f" || continue
+        [ -e "$f" ] || continue
+        if ! is_elf "$f"; then
+            echo "gnu: chromium: ${f#"$ROOT"/} is not an ELF file" >&2
+            return 1
+        fi
         echo "${f#"$ROOT"/}:" >> "$WORK/list.txt"
         "$SYSROOT/lib/ld-linux.so.2" --list --library-path "$SYSROOT/lib:$rootlib" "$f" \
             >> "$WORK/list.txt" 2>&1 || echo "    the loader exited with $?" >> "$WORK/list.txt"
