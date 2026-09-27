@@ -67,6 +67,9 @@ sends one, and stores each message's count in its
 .Va msg_len .
 It returns the number of messages sent, or the first error when none was;
 GNU libc's resolver sends its two queries with it.
+.Pa tests/musl/callsmusl.c
+sends two datagrams in one call and receives them in one
+.Xr recvmmsg 2 .
 .Ss Streams
 A stream sends to its connected peer.
 .Fn sendto

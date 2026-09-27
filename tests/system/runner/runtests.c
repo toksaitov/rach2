@@ -118,6 +118,9 @@ static const char *const PROBES[] = {
     /* ptrace as GDB drives it: memory, registers, a step, a breakpoint,
        syscall stops, the exec event, a debug register, attach and detach. */
     "musl/ptracemusl",
+    /* sigtimedwait, the memory lock calls, mincore, getcpu, personality,
+       sendmmsg and recvmmsg, and clock_gettime64. */
+    "musl/callsmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

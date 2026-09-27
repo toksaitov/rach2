@@ -326,6 +326,10 @@ queries the raw break, grows it by four pages, checks zero-filled
 memory and writes, then restores the break.
 It also maps eight anonymous read-write pages, checks their contents,
 and unmaps them.
+.Pa tests/musl/callsmusl.c
+locks and unlocks a mapped range, is refused one with a gap, and reads a
+touched page's residency with
+.Fn mincore .
 .Sh DIAGNOSTICS
 An unsuccessful VMA insertion by
 .Nm mmap2

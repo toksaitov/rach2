@@ -431,6 +431,10 @@ and the old
 and
 .Dv SIGCHLD Ns 's
 information.
+.Pa tests/musl/callsmusl.c
+takes a blocked signal with
+.Fn sigtimedwait
+and times out with nothing pending.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT
