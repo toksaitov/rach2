@@ -20,9 +20,9 @@ extern int printf(const char *format, ...);
 extern void exit(int status);
 volatile uint32_t init_pid;
 
-const struct vfs_type vfs_krffs_type = {0, 0, 0, 1};
-static const struct vfs_type other_type = {0, 0, 0, 1};
-static const struct vfs_type plain_type = {0, 0, 0, 0};
+const struct vfs_type vfs_krffs_type = {0, 0, 0, 1, 0};
+static const struct vfs_type other_type = {0, 0, 0, 1, 0};
+static const struct vfs_type plain_type = {0, 0, 0, 0, 0};
 static struct open_file *reader;
 static int old_node, new_node;
 static int pending, depth, waits, fails;
