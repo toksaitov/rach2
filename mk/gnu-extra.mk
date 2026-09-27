@@ -30,7 +30,7 @@ $(GNU_GDB_STAMP): vendor/gnu/native/build_gdb.sh vendor/gnu/fetch.sh vendor/gnu/
 	@test -x $(GNU_OUT)/gdb/usr/bin/gdb || { echo "gnu: gdb: the build produced no $(GNU_OUT)/gdb/usr/bin/gdb" >&2; exit 1; }
 	@touch $@
 
-$(GNU_JS_STAMP): vendor/gnu/spidermonkey/build_js.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt $(GNU_TOOLCHAIN_STAMP)
+$(GNU_JS_STAMP): vendor/gnu/spidermonkey/build_js.sh vendor/gnu/spidermonkey/python-3.14.patch vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt $(GNU_TOOLCHAIN_STAMP)
 	@rm -f $@
 	@./vendor/gnu/spidermonkey/build_js.sh
 	@test -x $(GNU_OUT)/js/usr/bin/js || { echo "gnu: js: the build produced no $(GNU_OUT)/js/usr/bin/js" >&2; exit 1; }
