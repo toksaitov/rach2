@@ -3466,32 +3466,56 @@ static int32_t root_check(const struct vfs_ref *ref)
 /**
  * The working directory's path from the root of the mount table, into `buf`
  * of VFS_PATH_MAX bytes: its path from the calling process's root, behind
- * the path of that root when chroot gave the process one. Returns 0, or the
- * error `vfs_node_path` gives or -ENAMETOOLONG for a path that does not fit.
+ * the path of that root when chroot gave the process one.
+ *
+ * The path and the root are read together before anything sleeps, and the
+ * path is copied into `buf` then: the threads that share them (CLONE_FS) may
+ * change either while the root's path is rebuilt from its volume, and a
+ * chdir frees a long path's string. The root is held while its path is
+ * rebuilt. Returns 0, -ENOMEM, -EBUSY for a root on a mount being unmounted,
+ * the error `vfs_node_path` gives, or -ENAMETOOLONG for a path that does not
+ * fit.
  */
 static int32_t cwd_global(char *buf)
 {
-    const char *cwd = proc_cwd(current_proc);
-    uint32_t cl = (uint32_t)k_strlen(cwd);
-    uint32_t rl = 0;
+    uint32_t cl = (uint32_t)k_strlen(proc_cwd(current_proc));
+    struct vfs_ref root;
+    struct vfs_mount *mnt;
+    char *rpath;
+    uint32_t rl;
     int32_t rc;
 
-    if (current_proc->fs->root_mnt) {
-        rc = vfs_node_path(current_proc->fs->root_mnt, current_proc->fs->root_node, buf,
-                           VFS_PATH_MAX);
-        if (rc != 0) {
-            return rc;
-        }
-        rl = (uint32_t)k_strlen(buf);
+    k_memcpy(buf, proc_cwd(current_proc), cl + 1);
+    root.mnt = current_proc->fs->root_mnt;
+    root.node = current_proc->fs->root_node;
+    if (!root.mnt) {
+        return 0;
+    }
+    rpath = path_buf_get();
+    if (!rpath) {
+        return -ENOMEM;
+    }
+    mnt = root.mnt;
+    if (vfs_enter(mnt) != 0) {
+        path_buf_put(rpath);
+        return -EBUSY;
+    }
+    vfs_ref_hold(&root);
+    rc = vfs_node_path(mnt, root.node, rpath, VFS_PATH_MAX);
+    vfs_ref_release(&root);
+    if (rc == 0) {
+        rl = (uint32_t)k_strlen(rpath);
         if (cl == 1) {
-            return 0; /* the working directory is the root */
+            k_memcpy(buf, rpath, rl + 1);
+        } else if (rl + cl + 1 > VFS_PATH_MAX) {
+            rc = -ENAMETOOLONG;
+        } else {
+            k_memmove(buf + rl, buf, cl + 1);
+            k_memcpy(buf, rpath, rl);
         }
     }
-    if (rl + cl + 1 > VFS_PATH_MAX) {
-        return -ENAMETOOLONG;
-    }
-    k_memcpy(buf + rl, cwd, cl + 1);
-    return 0;
+    path_buf_put(rpath);
+    return rc;
 }
 
 /**
@@ -3553,13 +3577,22 @@ int32_t sys_chroot(isr_params_t *params)
     return rc;
 }
 
-/* getcwd(2): EBX = buf, ECX = size. Returns the path length including the
- * NUL, or -errno. */
+/**
+ * getcwd(2): EBX = buf, ECX = size. Returns the path's length with its NUL,
+ * as Linux's system call does, or -errno.
+ *
+ * The path is copied into a path page before the copy out, which may sleep
+ * on a fault: a thread that shares the working directory (CLONE_FS) may
+ * chdir meanwhile, which frees a long path's string. -ENOMEM when no page is
+ * to be had.
+ */
 int32_t sys_getcwd(isr_params_t *params)
 {
     char __user *buf = (char __user *)params->ebx;
     uint32_t size = params->ecx;
     uint32_t cwd_len;
+    char *cwd;
+    int32_t rc;
 
     if (!current_proc) {
         return -ESRCH;
@@ -3570,20 +3603,21 @@ int32_t sys_getcwd(isr_params_t *params)
     if (size == 0) {
         return -EINVAL;
     }
-
-    cwd_len = k_strlen(proc_cwd(current_proc));
+    cwd = path_buf_get();
+    if (!cwd) {
+        return -ENOMEM;
+    }
+    cwd_len = (uint32_t)k_strlen(proc_cwd(current_proc));
+    k_memcpy(cwd, proc_cwd(current_proc), cwd_len + 1);
     if (cwd_len + 1 > size) {
-        return -ERANGE; /* buffer too small for the path + NUL */
+        rc = -ERANGE;
+    } else if (copy_to_user(buf, cwd, cwd_len + 1) != 0) {
+        rc = -EFAULT;
+    } else {
+        rc = (int32_t)(cwd_len + 1);
     }
-
-    if (copy_to_user(buf, proc_cwd(current_proc), cwd_len + 1) != 0) {
-        return -EFAULT;
-    }
-
-    /* Linux getcwd(2) returns the length including the NUL on success.
-     * (Returning the buffer pointer would be misread as an errno for high user
-     * addresses whose top bit is set.) */
-    return (int32_t)(cwd_len + 1);
+    path_buf_put(cwd);
+    return rc;
 }
 
 /*
