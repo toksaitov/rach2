@@ -2084,13 +2084,13 @@ static int32_t recv_stream(struct unix_sock *s, int nonblock, const struct kerne
             recv_unlock(s);
             rc = wait_data(s, nonblock);
             recv_lock(s);
-            if (rc == 1 || (rc < 0 && copied > 0)) {
+            if (rc == 0) {
+                continue;
+            }
+            if (rc == 1 || copied > 0) {
                 rc = 0;
             }
-            if (rc != 0) {
-                break;
-            }
-            continue;
+            break;
         }
         if (s->passcred && copied > 0 && !same_cred(&in->cred, &m->cred)) {
             break;
