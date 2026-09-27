@@ -2292,7 +2292,7 @@ end
 fault task-dir-one-link
 probe threadmusl
 file rach2/sys/fs/procfs.c
-expect THREADMUSL FAIL (/proc/self/task of two threads did not have four links)
+expect THREADMUSL FAIL (/proc/self/task of two threads did not have four links
 old
     return 2u + (p ? p->tg->live : 0u);
 new
