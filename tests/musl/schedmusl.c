@@ -380,19 +380,15 @@ static int become_user(void)
 
 /**
  * A child of root: its adjustment's first value, mode and owner, a write
- * that reads back and a child that inherits it, the range, and the floor a
- * privileged write sets for the user 1000 the child becomes, which may not
- * open root's process's file for writing. 0, or the number of the row that
- * failed.
+ * that reads back, a child that inherits it, and the range. 0, or the number
+ * of the row that failed, 1 to 5.
  */
-static int adjusted(void)
+static int root_rows(void)
 {
-    char parent[64];
     struct stat st;
     pid_t pid;
     int v, status;
 
-    snprintf(parent, sizeof(parent), "/proc/%d/oom_score_adj", (int)getppid());
     if (oom_read(SELF_OOM, &v) != 0 || v != 0) {
         return 1;
     }
@@ -415,6 +411,21 @@ static int adjusted(void)
         errno != EINVAL) {
         return 5;
     }
+    return 0;
+}
+
+/**
+ * A child of root that sets its adjustment to 100 and becomes user 1000,
+ * which may raise it and lower it to that floor but not below, and may not
+ * open root's process's file for writing. 0, or the number of the row that
+ * failed, 6 to 9.
+ */
+static int user_rows(void)
+{
+    char parent[64];
+    int v;
+
+    snprintf(parent, sizeof(parent), "/proc/%d/oom_score_adj", (int)getppid());
     if (oom_write(SELF_OOM, "100") != 0 || become_user() != 0) {
         return 6;
     }
@@ -445,7 +456,8 @@ static int floor_zero(void)
     return 0;
 }
 
-/** The OOM score adjustment, as `adjusted` and `floor_zero` try it. */
+/** The OOM score adjustment, as `root_rows`, `user_rows` and `floor_zero`
+ * try it. */
 static int oom_score(void)
 {
     static const char *const rows[] = {
@@ -458,10 +470,13 @@ static int oom_score(void)
         "user 1000 could not raise its OOM score adjustment and lower it to the floor",
         "user 1000 lowered its OOM score adjustment below the floor root's write set",
         "user 1000 opened root's process's oom_score_adj for writing"};
-    int rc = in_child(adjusted);
+    int rc = in_child(root_rows);
 
+    if (rc == 0) {
+        rc = in_child(user_rows);
+    }
     if (rc != 0) {
-        return fail(rc >= 1 && rc <= 9 ? rows[rc - 1] : "the OOM score child did not run");
+        return fail(rc >= 1 && rc <= 9 ? rows[rc - 1] : "an OOM score child did not run");
     }
     rc = in_child(floor_zero);
     if (rc != 0) {
