@@ -11,11 +11,11 @@
  * Linux's wide encoding, listed as DT_CHR and DT_BLK; the node with
  * /dev/null's number opens as /dev/null does, and one with a number no
  * device has fails with ENXIO. Then the refusals, in Linux's order: EINVAL
- * for a kind that is none of the five, EPERM for a directory, EEXIST for a
- * name that exists, a symbolic link included, ENOENT and ENOTDIR for a bad
- * path, EROFS under /dev, and EPERM for a device node from a caller who is
- * not root, who may make a FIFO. A device node on /dev/shm, which is nodev,
- * does not open (EACCES).
+ * for a kind that is none of the five, EPERM for a directory, both before a
+ * null path's EFAULT, EEXIST for a name that exists, a symbolic link
+ * included, ENOENT and ENOTDIR for a bad path, EROFS under /dev, and EPERM
+ * for a device node from a caller who is not root, who may make a FIFO. A
+ * device node on /dev/shm, which is nodev, does not open (EACCES).
  *
  * Prints "MKNODMUSL OK" on success and "MKNODMUSL FAIL (detail)" otherwise.
  */
@@ -163,9 +163,15 @@ static int devices(void)
 
 static int refusals(void)
 {
+    const char *no_path = NULL;
     pid_t pid;
     int status;
 
+    if (!refused(mknod(no_path, S_IFDIR | 0700, 0), EPERM) ||
+        !refused(mknodat(AT_FDCWD, no_path, 0170000 | 0600, 0), EINVAL) ||
+        !refused(mknod(no_path, S_IFIFO | 0600, 0), EFAULT)) {
+        return fail("the kind before the path");
+    }
     if (!refused(mknod(MNT "/x", 0170000 | 0600, 0), EINVAL) ||
         !refused(mknod(MNT "/x", S_IFDIR | 0700, 0), EPERM) || symlink("nowhere", MNT "/ln") != 0 ||
         !refused(mknod(MNT "/ln", S_IFIFO | 0600, 0), EEXIST) ||

@@ -7541,17 +7541,36 @@ int32_t sys_mkdirat(isr_params_t *params)
 }
 
 /**
- * Make the node `path` names, an absolute canonical path: the core of
- * mknod(2) and mknodat(2).
+ * The first refusal of mknod(2) and mknodat(2), made before the path is
+ * copied, as Linux makes it: 0 for a `mode` whose S_IF type bits are none
+ * or one of the five kinds, -EPERM for a directory's, and -EINVAL for any
+ * other.
+ */
+static int32_t mknod_kind(uint32_t mode)
+{
+    uint32_t type = mode & S_IFMT;
+
+    if (type == S_IFDIR) {
+        return -EPERM;
+    }
+    if (type != 0 && type != S_IFREG && type != S_IFCHR && type != S_IFBLK && type != S_IFIFO &&
+        type != S_IFSOCK) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/**
+ * Make the node `path` names, an absolute canonical path, of a kind
+ * `mknod_kind` has passed: the core of mknod(2) and mknodat(2).
  *
  * The kind is the S_IF type bits of `mode`, a regular file for none; `dev`
  * is a device's number as the call takes it, Linux's 32-bit encoding, which
- * is the kernel's own. The refusals come in Linux's order: a kind that is not
- * one of the five (EINVAL, or EPERM for a directory), the path, a name that
- * exists (EEXIST, a symbolic link included), a read-only mount, the write
- * permission on the directory, and last a device node made by a caller who
- * is not root (EPERM). A file system that cannot keep the kind answers
- * EPERM; nothing is made under /dev or /proc (EROFS).
+ * is the kernel's own. The refusals after the kind's and the path's come in
+ * Linux's order: a name that exists (EEXIST, a symbolic link included), a
+ * read-only mount, the write permission on the directory, and last a device
+ * node made by a caller who is not root (EPERM). A file system that cannot
+ * keep the kind answers EPERM; nothing is made under /dev or /proc (EROFS).
  */
 static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev)
 {
@@ -7561,13 +7580,6 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev)
     void *made;
     int32_t rc;
 
-    if (type == S_IFDIR) {
-        return -EPERM;
-    }
-    if (type != 0 && type != S_IFREG && type != S_IFCHR && type != S_IFBLK && type != S_IFIFO &&
-        type != S_IFSOCK) {
-        return -EINVAL;
-    }
     rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
@@ -7609,14 +7621,22 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev)
     return rc;
 }
 
-/* mknod(2): EBX = path, ECX = mode, EDX = dev. */
+/* mknod(2): EBX = path, ECX = mode, EDX = dev. The kind is checked before
+ * the path is read. */
 int32_t sys_mknod(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ebx;
     char *path;
     int32_t rc;
 
-    if (!current_proc || !upath) {
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    rc = mknod_kind(params->ecx);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!upath) {
         return -EFAULT;
     }
     rc = path_from_user(AT_FDCWD, upath, &path);
@@ -7629,14 +7649,21 @@ int32_t sys_mknod(isr_params_t *params)
 }
 
 /* mknodat(2): EBX = dirfd, ECX = path, EDX = mode, ESI = dev; a relative
- * path is resolved from `dirfd` as openat's is. */
+ * path is resolved from `dirfd` as openat's is, after the kind is checked. */
 int32_t sys_mknodat(isr_params_t *params)
 {
     const char __user *upath = (const char __user *)params->ecx;
     char *path;
     int32_t rc;
 
-    if (!current_proc || !upath) {
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    rc = mknod_kind(params->edx);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!upath) {
         return -EFAULT;
     }
     rc = path_from_user((int)params->ebx, upath, &path);
