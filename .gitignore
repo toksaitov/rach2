@@ -18,3 +18,7 @@ build/
 
 # Scratch files at the repository root are never part of the build.
 /*.txt
+
+# Worktrees Claude Code makes for its subagents; each is a checkout of this
+# repository, not part of it.
+.claude/worktrees/
