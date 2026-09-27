@@ -41,7 +41,8 @@ struct lock_key {
 
 /* A record-lock request, and for LOCK_GET the answer: the conflicting
  * lock's type, range and owner, or F_UNLCK for none. `end` is the last byte,
- * LOCK_EOF for the end of the file. */
+ * LOCK_EOF for the end of the file, which is also how a range that ends at
+ * the largest offset, 2^63 - 1, is given, since it is the same range. */
 struct lock_req {
     int type;
     uint64_t start;

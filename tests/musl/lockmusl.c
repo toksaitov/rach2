@@ -5,7 +5,9 @@
  * byte 25 fail with EAGAIN, while a lock beside it succeeds; F_GETLK reports
  * the child's pid and range. The child's unlock of bytes 15 to 19 splits its
  * lock in two, and its close of another descriptor of the file drops what is
- * left. F_SETLKW waits until the holder unlocks. Two processes that each wait
+ * left. A child's locks of the largest offset and of every byte before it
+ * join into one F_GETLK reports with a length of 0. F_SETLKW waits until the
+ * holder unlocks. Two processes that each wait
  * for the other's lock: one of the two waits fails with EDEADLK. A thread's
  * F_SETLKW whose descriptor another thread closes during the wait fails with
  * EBADF when the holder lets go, and leaves the byte free. A flock
@@ -197,6 +199,51 @@ static int waits(int fd)
     return 0;
 }
 
+/**
+ * Locks that reach the largest offset: a child's lock of the last byte alone
+ * and its lock of every byte before it join into one lock of the whole file,
+ * which F_GETLK reports from byte 0 with a length of 0.
+ */
+static int largest(int fd)
+{
+    const off_t max = 0x7FFFFFFFFFFFFFFFLL;
+    int to_child[2], to_parent[2];
+    struct flock q;
+    int status;
+    pid_t pid;
+
+    if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
+        return fail("pipes for the largest offset");
+    }
+    pid = fork();
+    if (pid == 0) {
+        if (lk(fd, F_SETLK, F_WRLCK, max, 1) != 0 || lk(fd, F_SETLK, F_WRLCK, 0, max) != 0) {
+            _exit(1);
+        }
+        post(to_parent[1]);
+        await(to_child[0]);
+        _exit(0);
+    }
+    await(to_parent[0]);
+    memset(&q, 0, sizeof(q));
+    q.l_type = F_RDLCK;
+    q.l_whence = SEEK_SET;
+    q.l_start = 5;
+    q.l_len = 1;
+    if (fcntl(fd, F_GETLK, &q) != 0 || q.l_type != F_WRLCK || q.l_start != 0 || q.l_len != 0) {
+        return fail("the locks that reach the largest offset are not one to the end");
+    }
+    post(to_child[1]);
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the child of the largest offset");
+    }
+    close(to_child[0]);
+    close(to_child[1]);
+    close(to_parent[0]);
+    close(to_parent[1]);
+    return 0;
+}
+
 static int waiter_fd, waiter_rc, waiter_errno;
 
 /** Wait for a write lock of byte 50 through `waiter_fd`. */
@@ -335,7 +382,7 @@ int main(void)
     if (fd < 0 || write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
         return fail("the file");
     }
-    if (records(fd) || waits(fd) || closed_wait() || flocks()) {
+    if (records(fd) || largest(fd) || waits(fd) || closed_wait() || flocks()) {
         return 1;
     }
     close(fd);

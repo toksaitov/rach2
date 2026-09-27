@@ -177,6 +177,10 @@ covers that many bytes from
 a negative one the bytes before it, and 0 every byte from
 .Va l_start
 on, however far the file grows.
+A range whose last byte is the largest offset, 2^63 - 1, is the same
+as one with a length of 0, as on Linux: the two join, and
+.Dv F_GETLK
+reports either with a length of 0.
 Two owners' locks conflict when their ranges overlap and one of them is
 a write lock.
 Setting a read lock needs a descriptor open for reading and a write
@@ -274,7 +278,9 @@ The kernel interface returns the negative error number.
 sets record locks from two processes and checks the conflict, the
 report of
 .Dv F_GETLK ,
-a split, the close that drops a process's locks, a wait, one
+a split, the close that drops a process's locks, locks of the largest
+offset and of every byte before it joining into one to the end of the
+file, a wait, one
 .Er EDEADLK
 for two processes that wait for each other, a wait whose descriptor
 another thread closes, and open file description locks against a second

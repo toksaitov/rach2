@@ -6418,12 +6418,14 @@ int32_t sys_pwrite64(isr_params_t *params)
  * The byte range a struct flock names, into `req`, as Linux reads it: from
  * the file's start, the description's offset or the file's end by `whence`,
  * backwards from `start` for a negative length, and to LOCK_EOF, the end
- * however far the file grows, for a length of 0. The end of a file of a
- * mounted type is its size as the file system reports it now, and one of
- * anything else, a pipe or a device, is 0. Returns 0, -EINVAL for a
- * `whence` of none of the three or a range before byte 0, -EOVERFLOW for
- * one past the largest offset, or the error the file system gives for its
- * size, EIO for a removed device among them.
+ * however far the file grows, for a length of 0. A range whose last byte is
+ * the largest offset is that same range, as Linux has it, and is given as
+ * LOCK_EOF too, so the two join and F_GETLK reports either with a length of
+ * 0. The end of a file of a mounted type is its size as the file system
+ * reports it now, and one of anything else, a pipe or a device, is 0.
+ * Returns 0, -EINVAL for a `whence` of none of the three or a range before
+ * byte 0, -EOVERFLOW for one past the largest offset, or the error the file
+ * system gives for its size, EIO for a removed device among them.
  */
 static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, int64_t len,
                            struct lock_req *req)
@@ -6458,7 +6460,10 @@ static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, i
         return -EINVAL;
     }
     req->start = (uint64_t)(len < 0 ? start + len : start);
-    req->end = len > 0 ? (uint64_t)(start + len - 1) : len < 0 ? (uint64_t)(start - 1) : LOCK_EOF;
+    req->end = len > 0 ? (uint64_t)(start + (len - 1)) : len < 0 ? (uint64_t)(start - 1) : LOCK_EOF;
+    if (req->end == (uint64_t)max) {
+        req->end = LOCK_EOF;
+    }
     return 0;
 }
 
