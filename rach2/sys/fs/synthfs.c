@@ -165,6 +165,26 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
     out[pos] = '\0';
 }
 
+/** The kind of the /proc/<pid> file `name` beside stat and cmdline, or 0. */
+static int synth_pid_file(struct comp name)
+{
+    static const struct {
+        const char *name;
+        int kind;
+    } files[] = {{"maps", SYNTH_PROC_MAPS},   {"status", SYNTH_PROC_STATUS},
+                 {"statm", SYNTH_PROC_STATM}, {"auxv", SYNTH_PROC_AUXV},
+                 {"environ", SYNTH_PROC_ENVIRON}, {"comm", SYNTH_PROC_COMM},
+                 {"mem", SYNTH_PROC_MEM}};
+    uint32_t i;
+
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        if (comp_eq(name, files[i].name)) {
+            return files[i].kind;
+        }
+    }
+    return 0;
+}
+
 /** Classify system-wide proc files by their literal leaf names. */
 static int synth_global_file(struct comp name)
 {
@@ -315,6 +335,15 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = VNODE_PROC_FILE;
             vp->procfile = SYNTH_PROC_CMDLINE;
             return vp->kind;
+        }
+        if (n == 3) {
+            int f = synth_pid_file(c[2]);
+
+            if (f != 0) {
+                vp->kind = VNODE_PROC_FILE;
+                vp->procfile = f;
+                return vp->kind;
+            }
         }
         if (comp_eq(c[2], "fd")) {
             if (n == 3) {

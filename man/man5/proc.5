@@ -413,21 +413,21 @@ for blocked, or
 .Ql Z
 for zombie.
 The parent, process group, and session IDs are recorded values.
-Fields 14 through 17 are the process's user and system time and its
-reaped children's, in 1/100 second ticks, as
+Fields 14 through 17 are the user and system time of all the process's
+threads and its reaped children's, in 1/100 second ticks, as
 .Xr times 2
 reports them.
 Field 19 is the nice value
 .Xr setpriority 2
 keeps, and field 18 the priority Linux reports for it, 20 more than the
 nice value.
-The terminal number is 0, terminal process group is -1, and thread count
-is 1.
+The terminal number is 0, terminal process group is -1, and field 20 is
+the number of threads.
 Fields 9 through 13, interval timer, start time, virtual size, and
 resident size are zero.
 .It Pa /proc/PID/cmdline
-The program name as one NUL-terminated argument.
-The full argument vector is not retained.
+The arguments as the program's initial stack has them, each ended by a
+NUL; a process with no address space shows its program name alone.
 .It Pa /proc/PID/fd/N
 A symbolic link for each open descriptor N, whose target names what the
 descriptor is open on: a file of the KRFFS root by its path now, a file
@@ -445,8 +445,62 @@ as
 .Ql /memfd: Ns Ar NAME Ns Ql " (deleted)" ,
 as Linux names each.
 A followed link reports the descriptor's attributes.
-.It Pa /proc/self/stat , /proc/self/cmdline
-The corresponding files for the calling process.
+.It Pa /proc/PID/comm
+The program name and a newline.
+.It Pa /proc/PID/maps
+A line for each region of the address space:
+.Dl start-end perms offset 00:00 0 path
+with the rights as
+.Ql r ,
+.Ql w ,
+.Ql x
+or
+.Ql - ,
+then
+.Ql p
+for a private region or
+.Ql s
+for a shared one, and from column 73 the file the region maps,
+.Ql [heap] ,
+.Ql [stack] ,
+or the program for the segments of its image.
+The device and inode are not kept and read 0.
+.It Pa /proc/PID/status
+Lines of a name, a colon, a tab and a value:
+Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,
+effective, saved and file-system IDs), FDSize, Groups, the memory sizes
+VmPeak to VmSwap in kilobytes, Threads, the signal sets SigPnd, ShdPnd,
+SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets, full for
+effective user ID 0 and empty otherwise, and NoNewPrivs.
+.It Pa /proc/PID/statm
+Seven sizes in pages: total, resident, shared, text, library, data with
+stack, and dirty; the third, fifth and seventh read 0.
+.It Pa /proc/PID/auxv
+The auxiliary vector the program was given, as pairs of 32-bit words
+through the
+.Dv AT_NULL
+pair.
+.It Pa /proc/PID/environ
+The environment strings of the initial stack, each ended by a NUL.
+It and
+.Pa auxv
+need effective user ID 0 or the process's real user ID.
+.It Pa /proc/PID/mem
+The process's memory, read and written at the descriptor's offset, which
+is the address, as GDB uses it through
+.Xr pread 2
+and
+.Xr pwrite 2 .
+An address no region allows is
+.Er EIO ,
+and a write reaches read-only program text, as a tracer's does.
+Opening it needs effective user ID 0, or the process's real user ID and a
+dumpable process.
+.It Pa /proc/self
+The calling thread's process.
+.Pa /proc
+lists each process once; the ID of a thread that did not begin its
+process also names a directory, which is not listed.
 .El
 .Sh SEE ALSO
 .Xr bootlog 4 ,

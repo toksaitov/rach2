@@ -32,6 +32,8 @@
 #include "../block/usbdisk.h"
 #include "../tty/pty.h"
 #include "../proc/tgroup.h"
+#include "../mm/mm.h"
+#include "../mm/paging.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
@@ -389,20 +391,67 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     return t->len;
 }
 
+/** The process `pid` names for one of its /proc files, or NULL. */
+static process_t *procfs_proc(int pid)
+{
+    process_t *p = get_process((uint32_t)pid);
+
+    return (p && p->state != PROC_UNUSED) ? p : NULL;
+}
+
+/** Whether the caller may read what /proc shows of `p`'s memory, its
+ * environment and its auxiliary vector: effective user ID 0, or a real user
+ * ID that is `p`'s, as Linux's ptrace check asks at its simplest. */
+static int procfs_may_read_mem(const process_t *p)
+{
+    return current_proc && (current_proc->euid == 0 || current_proc->ruid == p->ruid);
+}
+
+/**
+ * Append the bytes of `p`'s memory from `start` to `end`, read through its
+ * address space, at most 128 KiB: the strings of its arguments or its
+ * environment, as its initial stack has them.
+ */
+static void ap_memory(struct procfs_text *t, process_t *p, uint32_t start, uint32_t end)
+{
+    char chunk[128];
+
+    if (end > start + 131072u) {
+        end = start + 131072u;
+    }
+    while (start < end) {
+        uint32_t n = end - start < sizeof(chunk) ? end - start : (uint32_t)sizeof(chunk);
+        uint32_t i;
+
+        if (paging_access(p->mm, start, chunk, n, 0) != 0) {
+            return;
+        }
+        for (i = 0; i < n; i++) {
+            ap_ch(t, chunk[i]);
+        }
+        start += n;
+    }
+}
+
 /**
  * Format /proc/<pid>/cmdline into `t`, returning its length or -ENOENT.
  *
- * argv is NUL-separated. We do not retain the full argv, so the program name is
- * emitted as the single argument (busybox falls back to comm).
+ * The arguments as the program's initial stack has them, each ended by a
+ * NUL, read through its address space: a program that rewrote them shows
+ * what it wrote, as on Linux. A process with no address space, or none of
+ * its arguments kept, shows its name as the one argument.
  */
 static int procfs_gen_cmdline(struct procfs_text *t, int pid)
 {
-    process_t *p;
+    process_t *p = procfs_proc(pid);
     int i;
 
-    p = get_process((uint32_t)pid);
-    if (!p || p->state == PROC_UNUSED) {
+    if (!p) {
         return -ENOENT;
+    }
+    if (p->mm && p->mm->arg_end > p->mm->arg_start) {
+        ap_memory(t, p, p->mm->arg_start, p->mm->arg_end);
+        return t->len;
     }
     for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
         ap_ch(t, p->comm[i]);
@@ -411,6 +460,380 @@ static int procfs_gen_cmdline(struct procfs_text *t, int pid)
         ap_ch(t, '\0'); /* argv[0] terminator */
     }
     return t->len;
+}
+
+/** /proc/<pid>/environ: the environment strings of the initial stack, each
+ * ended by a NUL; -EACCES for a caller `procfs_may_read_mem` refuses. */
+static int procfs_gen_environ(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    if (p->mm && p->mm->env_end > p->mm->env_start) {
+        ap_memory(t, p, p->mm->env_start, p->mm->env_end);
+    }
+    return t->len;
+}
+
+/** /proc/<pid>/auxv: the auxiliary vector the program was given, as the
+ * words of its initial stack, through its AT_NULL pair. */
+static int procfs_gen_auxv(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    uint32_t i;
+    int b;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    for (i = 0; p->mm && i + 1 < MM_AUXV_WORDS; i += 2) {
+        for (b = 0; b < 8; b++) {
+            ap_ch(t, (char)(p->mm->auxv[i + (uint32_t)b / 4u] >> (8 * (b % 4))));
+        }
+        if (p->mm->auxv[i] == 0) {
+            break;
+        }
+    }
+    return t->len;
+}
+
+/** /proc/<pid>/comm: the program name and a newline. */
+static int procfs_gen_comm(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    int i;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
+        ap_ch(t, p->comm[i]);
+    }
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/** Append `v` as `width` lowercase hex digits, as /proc/<pid>/maps and
+ * status write numbers. */
+static void ap_xlow(struct procfs_text *t, uint32_t v, int width)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    for (i = width - 1; i >= 0; i--) {
+        ap_ch(t, digits[(v >> (i * 4)) & 0xFu]);
+    }
+}
+
+/** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
+ * [heap], [stack], the program for the segments of its image, which lie
+ * below the heap, or none. */
+static const char *maps_path(const struct mm *mm, const vma_t *r)
+{
+    if (r->file && r->file->path) {
+        return r->file->path;
+    }
+    if (r->type == VM_HEAP) {
+        return "[heap]";
+    }
+    if (r->type == VM_STACK) {
+        return "[stack]";
+    }
+    if ((r->type == VM_CODE || r->type == VM_DATA) && r->end <= mm->vm.heap_start) {
+        return mm->exe;
+    }
+    return NULL;
+}
+
+/**
+ * /proc/<pid>/maps: a line for each region, in Linux's form: the range, the
+ * rights with p or s for private or shared, the offset in the file, a device
+ * and inode of 0, which the kernel does not keep, and the path from column
+ * 73. GNU libc's pthread_getattr_np finds the stack by its [stack] line.
+ */
+static int procfs_gen_maps(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const struct mm *mm;
+    uint32_t i;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    mm = p->mm;
+    for (i = 0; mm && i < mm->vm.count; i++) {
+        const vma_t *r = &mm->vm.vmas[i];
+        const char *path = maps_path(mm, r);
+        int start = t->len;
+
+        ap_xlow(t, r->start, 8);
+        ap_ch(t, '-');
+        ap_xlow(t, r->end, 8);
+        ap_ch(t, ' ');
+        ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
+        ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
+        ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
+        ap_ch(t, r->type == VM_SHARED ? 's' : 'p');
+        ap_ch(t, ' ');
+        ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
+        ap_str(t, " 00:00 0");
+        if (path) {
+            do {
+                ap_ch(t, ' ');
+            } while (t->len - start < 73 && !t->nomem);
+            ap_str(t, path);
+        }
+        ap_ch(t, '\n');
+    }
+    return t->len;
+}
+
+/** The pages of `mm` in memory: the present user pages of its page tables. */
+static uint32_t mm_resident(const struct mm *mm)
+{
+    uint32_t n = 0;
+    uint32_t i;
+
+    for (i = 0; i < mm->vm.count; i++) {
+        uint32_t a;
+
+        for (a = mm->vm.vmas[i].start; a < mm->vm.vmas[i].end; a += PAGE_SIZE) {
+            if (paging_user_phys(mm->dir, a) != 0) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+/** The bytes of `mm`'s regions of type `type`. */
+static uint32_t mm_bytes(const struct mm *mm, vm_type_t type)
+{
+    uint32_t n = 0;
+    uint32_t i;
+
+    for (i = 0; i < mm->vm.count; i++) {
+        if (mm->vm.vmas[i].type == type) {
+            n += mm->vm.vmas[i].end - mm->vm.vmas[i].start;
+        }
+    }
+    return n;
+}
+
+/** Append "Name:\t" and the kilobytes of `bytes`, right-aligned in eight
+ * places as Linux writes them, and " kB". */
+static void ap_kb(struct procfs_text *t, const char *name, uint32_t bytes)
+{
+    uint32_t kb = bytes / 1024u;
+    uint32_t w = 1;
+    uint32_t v;
+
+    for (v = kb; v >= 10u; v /= 10u) {
+        w++;
+    }
+    ap_str(t, name);
+    ap_str(t, ":\t");
+    while (w++ < 8u) {
+        ap_ch(t, ' ');
+    }
+    ap_u32(t, kb);
+    ap_str(t, " kB\n");
+}
+
+/** Append a 64-bit set as sixteen hex digits. */
+static void ap_set(struct procfs_text *t, const char *name, uint64_t set)
+{
+    ap_str(t, name);
+    ap_str(t, ":\t");
+    ap_xlow(t, (uint32_t)(set >> 32), 8);
+    ap_xlow(t, (uint32_t)set, 8);
+    ap_ch(t, '\n');
+}
+
+/** Append "Name:\t" and four ids separated by tabs. */
+static void ap_ids(struct procfs_text *t, const char *name, uint32_t r, uint32_t e, uint32_t s)
+{
+    ap_str(t, name);
+    ap_str(t, ":\t");
+    ap_u32(t, r);
+    ap_ch(t, '\t');
+    ap_u32(t, e);
+    ap_ch(t, '\t');
+    ap_u32(t, s);
+    ap_ch(t, '\t');
+    ap_u32(t, e);
+    ap_ch(t, '\n');
+}
+
+/**
+ * /proc/<pid>/status: the lines of Linux's that programs read, among them
+ * the name, the state, the ids, the tracer, the memory in kilobytes, the
+ * thread count and the signal sets. The file-system ids are the effective
+ * ones, and the capability sets full for effective user ID 0 and empty
+ * otherwise, as this kernel has no capabilities apart from root. VmPeak and
+ * VmHWM are the present sizes, since the kernel keeps no peak.
+ */
+static int procfs_gen_status(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const struct mm *mm;
+    uint64_t ignored = 0;
+    uint64_t caught = 0;
+    uint64_t caps;
+    uint32_t i;
+    int sig;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    mm = p->mm;
+    ap_str(t, "Name:\t");
+    for (i = 0; i < sizeof(p->comm) && p->comm[i]; i++) {
+        ap_ch(t, p->comm[i]);
+    }
+    ap_str(t, "\nUmask:\t0");
+    ap_ch(t, (char)('0' + ((p->umask >> 6) & 7u)));
+    ap_ch(t, (char)('0' + ((p->umask >> 3) & 7u)));
+    ap_ch(t, (char)('0' + (p->umask & 7u)));
+    ap_str(t, "\nState:\t");
+    ap_str(t, p->state == PROC_ZOMBIE    ? "Z (zombie)"
+              : p->ptrace_status != 0    ? "t (tracing stop)"
+              : p->state == PROC_STOPPED ? "T (stopped)"
+              : p->state == PROC_BLOCKED ? "S (sleeping)"
+                                         : "R (running)");
+    ap_str(t, "\nTgid:\t");
+    ap_u32(t, p->tgid);
+    ap_str(t, "\nNgid:\t0\nPid:\t");
+    ap_u32(t, p->pid);
+    ap_str(t, "\nPPid:\t");
+    ap_u32(t, p->parent_pid);
+    ap_str(t, "\nTracerPid:\t");
+    ap_u32(t, p->ptrace ? p->tracer : 0u);
+    ap_ch(t, '\n');
+    ap_ids(t, "Uid", p->ruid, p->euid, p->suid);
+    ap_ids(t, "Gid", p->rgid, p->egid, p->sgid);
+    ap_str(t, "FDSize:\t");
+    ap_u32(t, (uint32_t)fd_table_cap(&p->fds));
+    ap_str(t, "\nGroups:\t");
+    for (i = 0; i < p->ngroups; i++) {
+        ap_u32(t, p->groups[i]);
+        ap_ch(t, ' ');
+    }
+    ap_str(t, "\nNStgid:\t");
+    ap_u32(t, p->tgid);
+    ap_str(t, "\nNSpid:\t");
+    ap_u32(t, p->pid);
+    ap_str(t, "\nNSpgid:\t");
+    ap_u32(t, p->pgid);
+    ap_str(t, "\nNSsid:\t");
+    ap_u32(t, p->sid);
+    ap_ch(t, '\n');
+    if (mm) {
+        uint32_t size = vm_total(&mm->vm);
+        uint32_t rss = mm_resident(mm) * PAGE_SIZE;
+
+        ap_kb(t, "VmPeak", size);
+        ap_kb(t, "VmSize", size);
+        ap_kb(t, "VmLck", 0);
+        ap_kb(t, "VmPin", 0);
+        ap_kb(t, "VmHWM", rss);
+        ap_kb(t, "VmRSS", rss);
+        ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
+        ap_kb(t, "VmStk", mm_bytes(mm, VM_STACK));
+        ap_kb(t, "VmExe", mm_bytes(mm, VM_CODE));
+        ap_kb(t, "VmLib", mm_bytes(mm, VM_FILE));
+        ap_kb(t, "VmSwap", 0);
+    }
+    ap_str(t, "Threads:\t");
+    ap_u32(t, p->tg->live);
+    ap_str(t, "\nSigQ:\t0/");
+    ap_u32(t, KSIG_MAX);
+    ap_ch(t, '\n');
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        if (p->sigacts[sig].handler == KSIG_IGN) {
+            ignored |= KSIG_BIT(sig);
+        } else if (p->sigacts[sig].handler != KSIG_DFL) {
+            caught |= KSIG_BIT(sig);
+        }
+    }
+    ap_set(t, "SigPnd", p->sig_pending);
+    ap_set(t, "ShdPnd", p->tg->pending);
+    ap_set(t, "SigBlk", p->sig_blocked);
+    ap_set(t, "SigIgn", ignored);
+    ap_set(t, "SigCgt", caught);
+    caps = p->euid == 0 ? 0x000001FFFFFFFFFFULL : 0;
+    ap_set(t, "CapInh", 0);
+    ap_set(t, "CapPrm", caps);
+    ap_set(t, "CapEff", caps);
+    ap_set(t, "CapBnd", 0x000001FFFFFFFFFFULL);
+    ap_set(t, "CapAmb", 0);
+    ap_str(t, "NoNewPrivs:\t");
+    ap_u32(t, p->no_new_privs);
+    ap_str(t, "\nSeccomp:\t0\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n");
+    ap_str(t, "voluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n");
+    return t->len;
+}
+
+/** /proc/<pid>/statm: the sizes in pages, total, resident, shared, text,
+ * library, data with stack, and dirty, of which the kernel keeps the first,
+ * second, fourth and sixth. */
+static int procfs_gen_statm(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const struct mm *mm;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    mm = p->mm;
+    if (!mm) {
+        ap_str(t, "0 0 0 0 0 0 0\n");
+        return t->len;
+    }
+    ap_u32(t, vm_total(&mm->vm) / PAGE_SIZE);
+    ap_ch(t, ' ');
+    ap_u32(t, mm_resident(mm));
+    ap_str(t, " 0 ");
+    ap_u32(t, mm_bytes(mm, VM_CODE) / PAGE_SIZE);
+    ap_str(t, " 0 ");
+    ap_u32(t, (mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON) +
+               mm_bytes(mm, VM_STACK)) /
+                  PAGE_SIZE);
+    ap_str(t, " 0\n");
+    return t->len;
+}
+
+/** The name of the /proc/<pid> file of kind `kind`, for a descriptor's link. */
+static const char *procfs_pid_file_name(int kind)
+{
+    switch (kind) {
+    case SYNTH_PROC_CMDLINE:
+        return "cmdline";
+    case SYNTH_PROC_MAPS:
+        return "maps";
+    case SYNTH_PROC_STATUS:
+        return "status";
+    case SYNTH_PROC_STATM:
+        return "statm";
+    case SYNTH_PROC_AUXV:
+        return "auxv";
+    case SYNTH_PROC_ENVIRON:
+        return "environ";
+    case SYNTH_PROC_COMM:
+        return "comm";
+    case SYNTH_PROC_MEM:
+        return "mem";
+    default:
+        return "stat";
+    }
 }
 
 /** Return the fixed path for a global snapshot with a named fd link. */
@@ -567,7 +990,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             ap_str(t, "/proc/");
             ap_int(t, pf->origin_pid);
             ap_ch(t, '/');
-            ap_str(t, pf->origin_file == SYNTH_PROC_CMDLINE ? "cmdline" : "stat");
+            ap_str(t, procfs_pid_file_name(pf->origin_file));
         }
         break;
     }
@@ -1520,6 +1943,112 @@ static void procfs_close(fd_entry_t *e)
 static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procfs_poll,
                                                 procfs_ioctl, procfs_close};
 
+/**
+ * Read or write `count` bytes of /proc/<pid>/mem at the descriptor's offset,
+ * which is the address, through the process's address space, and move the
+ * offset past them, as GDB reads and writes the memory of a tracee with
+ * pread64 and pwrite64. A write reaches read-only program text, as a
+ * tracer's does. The bytes done are returned, -EIO when none could be at an
+ * address no region allows, and 0 once the process has no address space.
+ */
+static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    process_t *p = f ? get_process((uint32_t)f->origin_pid) : NULL;
+    uint32_t addr = (uint32_t)e->ofd->offset;
+    uint32_t done = 0;
+    char buf[256];
+    int rc = 0;
+
+    if (!p || p->state == PROC_UNUSED || !p->mm) {
+        return 0;
+    }
+    while (done < count) {
+        uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
+
+        if (write) {
+            if (copy_from_user(buf, ubuf + done, n) != 0) {
+                rc = -EFAULT;
+                break;
+            }
+            rc = paging_access(p->mm, addr, buf, n, 1);
+        } else {
+            rc = paging_access(p->mm, addr, buf, n, 0);
+            if (rc == 0 && copy_to_user(ubuf + done, buf, n) != 0) {
+                rc = -EFAULT;
+            }
+        }
+        if (rc != 0) {
+            break;
+        }
+        done += n;
+        addr += n;
+    }
+    e->ofd->offset = addr;
+    return done > 0 ? (int32_t)done : rc;
+}
+
+static int32_t procfs_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return procfs_mem_access(e, buf, count, 0);
+}
+
+static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    return procfs_mem_access(e, (char __user *)(uintptr_t)buf, count, 1);
+}
+
+static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write, procfs_poll,
+                                               procfs_ioctl, procfs_close};
+
+/**
+ * Open /proc/<pid>/mem for reading, writing or both: the caller needs
+ * effective user ID 0, or the process's real user ID and a dumpable process,
+ * as a tracer does to attach. The descriptor keeps the process's id and no
+ * text; its offset is an address.
+ */
+static int procfs_open_mem(int pid, int flags)
+{
+    process_t *p = get_process((uint32_t)pid);
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (!p || !p->mm) {
+        return -ENOENT;
+    }
+    if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
+        return -EACCES;
+    }
+    if (current_proc->euid != 0 && (current_proc->ruid != p->ruid || !p->dumpable)) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_pid = pid;
+    f->origin_file = SYNTH_PROC_MEM;
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return -EMFILE;
+    }
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_mem_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /** Append one decimal audio field. */
 static void audio_field(struct procfs_text *t, const char *name, uint32_t value)
 {
@@ -1641,6 +2170,9 @@ int procfs_open(const struct vpath *vp, int flags)
     if (flags & 0200000 /* O_DIRECTORY */) {
         return -ENOTDIR;
     }
+    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
+        return procfs_open_mem(pid, flags);
+    }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
@@ -1700,6 +2232,18 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_nettcp(&text);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_MAPS) {
+        len = procfs_gen_maps(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_STATUS) {
+        len = procfs_gen_status(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_STATM) {
+        len = procfs_gen_statm(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_AUXV) {
+        len = procfs_gen_auxv(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_ENVIRON) {
+        len = procfs_gen_environ(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_COMM) {
+        len = procfs_gen_comm(&text, pid);
     } else {
         len = procfs_gen_cmdline(&text, pid);
     }
