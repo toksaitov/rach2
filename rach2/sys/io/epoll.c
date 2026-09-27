@@ -144,13 +144,16 @@ static void item_reported(struct epitem *it, uint32_t ready, const struct wait_q
     }
 }
 
-/* A wait's view of the set: where the ready events go, and how many fit. */
+/* A wait's view of the set: where the ready events go, and how many fit;
+ * the queues it has records for; and the queues the last scan found, when
+ * they were more, with nothing ready, for the wait to begin again with. */
 struct epoll_scan {
     struct epoll *ep;
     struct epoll_out *out;
     uint32_t max;
     uint32_t n;
     uint32_t queues;
+    uint32_t grow;
 };
 
 static void drop_item(struct epoll *ep, struct epitem **link)
@@ -200,7 +203,10 @@ static void untook(struct epoll *ep, const struct epoll_out *o)
  *
  * A reported registration moves to the end of the list, so a wait with
  * room for fewer events than are ready is followed by one that reports the
- * others, as Linux's waits take the ready descriptors in turn.
+ * others, as Linux's waits take the ready descriptors in turn. A set that
+ * another thread grew while the wait slept has more queues than the wait
+ * has records for; with nothing ready, the scan says so in `grow`, and the
+ * wait begins again with a record for each.
  */
 static int scan_set(void *ctx, struct wait_queue **wqs)
 {
@@ -224,8 +230,9 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
             continue;
         }
         if (q < sc->queues) {
-            wqs[q++] = wq;
+            wqs[q] = wq;
         }
+        q++;
         if (!ready) {
             link = &it->next;
             continue;
@@ -241,6 +248,10 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
         link = &(*link)->next;
     }
     *link = reported;
+    if (sc->n == 0 && q > sc->queues) {
+        sc->grow = q;
+        return 1;
+    }
     return (int)sc->n;
 }
 
@@ -429,14 +440,22 @@ static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_de
         return -EFAULT;
     }
     sc.ep = ep;
-    sc.max = (uint32_t)max < ep->count + 1u ? (uint32_t)max : ep->count + 1u;
-    sc.out = kmalloc(sizeof(struct epoll_out) * sc.max);
-    sc.queues = ep->count + 1u;
-    sc.n = 0;
-    if (!sc.out) {
-        return -ENOMEM;
+    sc.grow = ep->count + 1u;
+    for (;;) {
+        sc.max = (uint32_t)max < ep->count + 1u ? (uint32_t)max : ep->count + 1u;
+        sc.out = kmalloc(sizeof(struct epoll_out) * sc.max);
+        if (!sc.out) {
+            return -ENOMEM;
+        }
+        sc.queues = sc.grow;
+        sc.grow = 0;
+        sc.n = 0;
+        rc = poll_wait(scan_set, &sc, sc.queues, has_deadline, deadline);
+        if (rc <= 0 || sc.grow == 0) {
+            break;
+        }
+        kfree(sc.out);
     }
-    rc = poll_wait(scan_set, &sc, sc.queues, has_deadline, deadline);
     for (i = 0; rc > 0 && i < sc.n; i++) {
         if (copy_to_user((void __user *)(uevents + i * EP_EVENT_SIZE), sc.out[i].user,
                          EP_EVENT_SIZE) != 0) {

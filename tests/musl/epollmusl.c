@@ -12,11 +12,12 @@
  * is removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a
  * regular file is refused with EPERM and a second add with EEXIST. A child's
  * write wakes a parent blocked in epoll_wait. A registration of no events is
- * told of a hangup. Waits with room for one event report two ready descriptors
- * in turn. A one-shot event a wait cannot store, EFAULT, is reported by the
- * next wait. The registration of a closed eventfd does not report the eventfd
- * made next at its number, which can be added. epoll_pwait2 takes a timeout of
- * 2^31 seconds, and refuses negative seconds with EINVAL.
+ * told of a hangup. A pipe added to a set while a wait on it sleeps, then
+ * written, wakes the wait. Waits with room for one event report two ready
+ * descriptors in turn. A one-shot event a wait cannot store, EFAULT, is
+ * reported by the next wait. The registration of a closed eventfd does not
+ * report the eventfd made next at its number, which can be added. epoll_pwait2
+ * takes a timeout of 2^31 seconds, and refuses negative seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -258,6 +259,46 @@ static int sets(void)
     return 0;
 }
 
+/* A wait on an empty set is woken by a pipe added to the set while it
+ * waits and then written: a child shares the set, adds the pipe, lets the
+ * wait look again, and writes. */
+static int added_while_waiting(void)
+{
+    struct epoll_event out;
+    int ep = epoll_create1(0);
+    int p[2], status;
+    pid_t pid;
+
+    if (ep < 0 || pipe(p) != 0) {
+        return fail("setup for an add during a wait");
+    }
+    pid = fork();
+    if (pid == 0) {
+        struct timespec pause = {0, 100000000};
+        struct epoll_event ev;
+
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN;
+        ev.data.u32 = 3;
+        nanosleep(&pause, NULL);
+        if (epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
+            _exit(1);
+        }
+        nanosleep(&pause, NULL);
+        _exit(write(p[1], "a", 1) == 1 ? 0 : 1);
+    }
+    if (wait_one(ep, 5000, &out) != 1 || out.data.u32 != 3) {
+        return fail("a pipe added during a wait did not wake it");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the child that added the pipe");
+    }
+    close(p[0]);
+    close(p[1]);
+    close(ep);
+    return 0;
+}
+
 /* Two descriptors ready, and waits with room for one event: the waits
  * report each in turn. */
 static int in_turn(void)
@@ -402,8 +443,8 @@ static int long_timeout(void)
 
 int main(void)
 {
-    if (counters() || sets() || hangup_no_events() || number_reused() || in_turn() ||
-        failed_copy() || long_timeout()) {
+    if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
+        in_turn() || failed_copy() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");
