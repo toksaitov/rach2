@@ -2196,10 +2196,9 @@ probe threadmusl
 file rach2/kernel.c
 expect killed by signal 9, returning to kernel shell
 old
-        signo = current_proc->tg->exit_code;
-        if ((signo & 0x7F) == 0) {
+        init_end_line(pid, current_proc->tg->exit_code);
 new
-        if ((signo & 0x7F) == 0) {
+        init_end_line(pid, signo);
 end
 
 fault lock-write-on-read-fd
