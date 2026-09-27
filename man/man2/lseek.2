@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt LSEEK 2
 .Os
 .Sh NAME
@@ -65,9 +65,45 @@ and
 .Pa /dev/urandom ,
 are not seekable and return
 .Er ESPIPE .
-Other descriptor types, including sockets, directories, pseudo-terminals,
-the framebuffer, and proc files, return
+Other descriptor types, including sockets, pseudo-terminals and the
+framebuffer, return
 .Er EBADF .
+.Ss Directories and proc files
+The offset of a directory is the place in its listing that
+.Xr getdents64 2
+reads next, which that call reports after each entry as the entry's
+.Va d_off .
+.Dv SEEK_SET
+and
+.Dv SEEK_CUR
+move it, which is how
+.Fn rewinddir
+and
+.Fn seekdir
+work;
+.Dv SEEK_END
+is
+.Er EINVAL ,
+as it is on Linux's tmpfs.
+A directory of
+.Pa /dev
+or
+.Pa /proc
+takes the place of any entry through 2147483647.
+A directory of a file system takes 0 and each place its listing gives,
+which the kernel finds by reading the listing from its start, and no
+other place, since what a place means is the file system's own; Linux
+takes any place and leaves it to the file system.
+A place a listing gave may be refused once entries have been added or
+removed since.
+.Pp
+A
+.Pa /proc
+file seeks the same way, to any place through 4294967295: its offset is
+a byte of the text its open took, or for
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+an address.
+Both seeks read and set the offset under the description's lock.
 .Ss System call interface
 Musl's
 .Vt off_t
@@ -112,7 +148,7 @@ each to report the original file size.
 is invalid, was opened with
 .Dv O_PATH ,
 its type is not supported by the seek handler, or the ordinary file
-description no longer identifies a valid file.
+or directory description no longer identifies a valid file.
 .It Bq Er EFAULT
 The 64-bit result cannot be written to user memory, or a required
 result pointer is null.
@@ -120,6 +156,14 @@ result pointer is null.
 The origin is unsupported, the resulting position would be negative,
 the 64-bit boot-log position exceeds 4294967295, or the file system
 cannot supply the file's attributes.
+The origin is
+.Dv SEEK_END
+on a directory or a
+.Pa /proc
+file, the position is not a place in a directory's listing, or it is
+past 4294967295 on a
+.Pa /proc
+file.
 The devices that always seek to zero do not check the origin.
 .It Bq Er EIO
 The file's metadata could not be read or its device was removed.
@@ -136,6 +180,7 @@ There is no current process.
 .El
 .Sh SEE ALSO
 .Xr dup 2 ,
+.Xr getdents64 2 ,
 .Xr open 2 ,
 .Xr read 2 ,
 .Xr write 2 ,

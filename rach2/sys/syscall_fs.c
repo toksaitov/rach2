@@ -2703,6 +2703,94 @@ static int32_t raw_lseek(fd_entry_t *entry, int32_t offset, int whence)
     return rc != 0 ? rc : (int32_t)resolved;
 }
 
+/** Whether `entry` is a directory or a /proc file, which `seek_listing`
+ * seeks. */
+static int seeks_listing(const fd_entry_t *entry)
+{
+    return entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR ||
+           entry->type == FD_TYPE_PROC;
+}
+
+/**
+ * Whether `target` is a place in the listing of the directory of a file
+ * system that `entry` is open on: 0, the description's own cursor, or a
+ * cursor the type's `readdir` gives after one of its entries, which
+ * getdents64 reports as that entry's d_off. The listing is read from its
+ * start to find it, since a cursor is the type's own and a type need not
+ * read from a place it did not give. Returns 0, -EINVAL for any other place,
+ * or the error reading the listing gave.
+ */
+static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
+{
+    struct vfs_dirent de;
+    uint32_t cursor = 0;
+    int got;
+
+    if (target == 0 || target == entry->ofd->offset) {
+        return 0;
+    }
+    while (cursor != target) {
+        got = vfs_readdir(entry->ofd->vmnt, entry->ofd->fhandle, &cursor, &de);
+        if (got <= 0) {
+            return got < 0 ? got : -EINVAL;
+        }
+    }
+    return 0;
+}
+
+/**
+ * lseek(2) and _llseek(2) on a directory or a /proc file: the offset
+ * `whence` and `off` give, stored in the description under its lock and
+ * returned in `*out`, or a negative errno with the offset unchanged.
+ *
+ * SEEK_SET and SEEK_CUR move the offset; SEEK_END is -EINVAL, as Linux's
+ * /proc files and tmpfs directories answer, since neither has a size to
+ * seek from. A /proc file's offset is a byte of its snapshot or, for
+ * /proc/PID/mem, an address, so it takes any place through 0xFFFFFFFF, the
+ * last address. A directory's offset is the cursor of its listing, which
+ * getdents64 reports after each entry as the entry's d_off: a directory of
+ * /dev or /proc takes the index of any entry through 0x7FFFFFFF, and one of
+ * a file system the places `dir_cursor_valid` finds, so rewinddir, and
+ * seekdir to a place telldir gave, move it, and no type's `readdir` is given
+ * a place it did not give. Any other place is -EINVAL, and one past `limit`,
+ * the largest offset the call can return, -EOVERFLOW.
+ */
+static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t limit,
+                        long long *out)
+{
+    uint64_t most = entry->type == FD_TYPE_SYNTH_DIR ? 0x7FFFFFFFull : 0xFFFFFFFFull;
+    long long at = off;
+    int rc = 0;
+
+    if (!entry->ofd || (entry->type == FD_TYPE_DIR && !entry->ofd->vmnt)) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_DIR && fd_node_check(entry) != 0) {
+        return -EBADF; /* the directory was removed out from under this fd */
+    }
+    fd_ofd_lock(entry->ofd);
+    if (whence == 1) {
+        rc = seek_add(entry->ofd->offset, off, &at);
+    } else if (whence != 0) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (at < 0 || (uint64_t)at > most)) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && entry->type == FD_TYPE_DIR) {
+        rc = dir_cursor_valid(entry, (uint32_t)at);
+    }
+    if (rc == 0 && (uint64_t)at > limit) {
+        rc = -EOVERFLOW;
+    }
+    if (rc == 0) {
+        entry->ofd->offset = (uint64_t)at;
+        *out = at;
+    }
+    fd_ofd_unlock(entry->ofd);
+    return rc;
+}
+
 int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -2761,6 +2849,10 @@ int32_t sys_lseek(isr_params_t *params)
     }
     if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
         return -ESPIPE; /* a terminal/mouse is a valid fd, just not seekable */
+    }
+    if (seeks_listing(entry)) {
+        seek_rc = seek_listing(entry, (long long)offset, whence, 0x7FFFFFFFull, &at);
+        return seek_rc != 0 ? seek_rc : (int32_t)at;
     }
     if (entry->type != FD_TYPE_FILE) {
         return -EBADF;
@@ -6439,6 +6531,27 @@ static int32_t llseek_bootlog(fd_entry_t *entry, uint32_t log_size, long long of
 }
 
 /**
+ * `_llseek` on a directory or a /proc file, by `seek_listing`'s rules, with
+ * the new offset written to the caller's `result`, which must not be NULL.
+ * Returns 0 or a negative errno.
+ */
+static int32_t llseek_listing(fd_entry_t *entry, long long off, int whence,
+                              long long __user *result)
+{
+    long long at;
+    int rc;
+
+    if (!result) {
+        return -EFAULT;
+    }
+    rc = seek_listing(entry, off, whence, 0x7FFFFFFFFFFFFFFFull, &at);
+    if (rc == 0 && copy_to_user(result, &at, sizeof(at)) != 0) {
+        rc = -EFAULT;
+    }
+    return rc;
+}
+
+/**
  * The current size of the file an ordinary descriptor is open on.
  *
  * A `SEEK_END` resolves against this, so the caller reads it inside the
@@ -6486,13 +6599,13 @@ int32_t sys__llseek(isr_params_t *params)
         return -ESRCH;
     }
     entry = fd_get(current_proc->fds, fd);
-    if (entry && (entry->flags & FD_FLAG_PATH)) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    if (entry && entry->type == FD_TYPE_PIPE) {
+    if (entry->type == FD_TYPE_PIPE) {
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
-    if (entry && entry->type == FD_TYPE_DEVICE) {
+    if (entry->type == FD_TYPE_DEVICE) {
         uint64_t raw_size;
         uint32_t log_size;
 
@@ -6537,10 +6650,13 @@ int32_t sys__llseek(isr_params_t *params)
         }
         return -ESPIPE;
     }
-    if (entry && (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE)) {
+    if (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE) {
         return -ESPIPE;
     }
-    if (!entry || entry->type != FD_TYPE_FILE || !entry->ofd) {
+    if (seeks_listing(entry)) {
+        return llseek_listing(entry, off_from(offset_high, offset_low), whence, result);
+    }
+    if (entry->type != FD_TYPE_FILE || !entry->ofd) {
         return -EBADF;
     }
     seek_rc = file_size_now(entry, &size);
@@ -6611,9 +6727,8 @@ int32_t sys__llseek(isr_params_t *params)
  * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
  * mouse, the framebuffer, and a device other than a raw disk window, the log
  * and the three whose seek always lands at 0, /dev/null, /dev/zero and
- * /dev/full. A /proc snapshot is read at an offset, as Linux reads one,
- * though lseek refuses it. Returns 0 with the descriptor in `*out`, or the
- * errno.
+ * /dev/full. A /proc snapshot is read at an offset, as Linux reads one.
+ * Returns 0 with the descriptor in `*out`, or the errno.
  */
 static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_entry_t **out)
 {

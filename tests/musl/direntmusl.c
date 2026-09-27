@@ -10,7 +10,10 @@
  * error from readdir and check at least one entry, and lstat may fail only
  * with ENOENT, only in /proc and /dev/pts, whose entries come and go. A path
  * that names a directory by its end is followed there, by lstat and by the
- * old lstat, and a file named that way is ENOTDIR.
+ * old lstat, and a file named that way is ENOTDIR. The probe's own
+ * directory and /proc/self, read to their end, list as many entries again
+ * after rewinddir, and seekdir to the place telldir gave after the first
+ * entry lists the second next.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -142,6 +145,82 @@ static int dir_ends(const char *file)
     return 0;
 }
 
+/** The entries `d` lists from where it is to its end. */
+static int count_rest(DIR *d)
+{
+    int n = 0;
+
+    while (readdir(d) != NULL) {
+        n++;
+    }
+    return n;
+}
+
+/**
+ * Whether `dir`, read to its end, lists as many entries again after
+ * rewinddir, and whether seekdir to the place telldir gave after its first
+ * entry then lists its second entry: 0, 1 when the rewind differs or the
+ * directory lists fewer than two entries, or 2 when the seek differs. Prints
+ * what differs.
+ */
+static int rewinds(const char *dir)
+{
+    char second[256];
+    struct dirent *de = NULL;
+    DIR *d = opendir(dir);
+    long place = 0;
+    int count = 0;
+    int again = -1;
+
+    if (d && readdir(d)) {
+        place = telldir(d);
+        de = readdir(d);
+        if (de) {
+            snprintf(second, sizeof(second), "%s", de->d_name);
+            count = 2 + count_rest(d);
+            rewinddir(d);
+            again = count_rest(d);
+            seekdir(d, place);
+            de = readdir(d);
+        }
+    }
+    if (d) {
+        closedir(d);
+    }
+    if (count < 2 || again != count) {
+        printf("direntmusl: %s: %d entries, %d after rewinddir\n", dir, count, again);
+        return 1;
+    }
+    if (!de || strcmp(de->d_name, second) != 0) {
+        printf("direntmusl: %s: seekdir did not list %s again\n", dir, second);
+        return 2;
+    }
+    return 0;
+}
+
+/**
+ * The rows that read the probe's own directory beyond the types of its
+ * listing: the path ends of `dir_ends`, and rewinddir and seekdir of it and
+ * of /proc/self (`rewinds`). 0, or 1 once the failure is reported.
+ */
+static int own_dir_rows(void)
+{
+    int seek;
+
+    if (dir_ends(file) != 0) {
+        return 1;
+    }
+    seek = rewinds(base);
+    if (seek != 0) {
+        return fail(seek == 1 ? "rewinddir of the probe's own directory"
+                              : "seekdir of the probe's own directory to a place telldir gave");
+    }
+    if (rewinds("/proc/self") != 0) {
+        return fail("rewinddir and seekdir of /proc/self");
+    }
+    return 0;
+}
+
 /** Remove what the probe made. */
 static void tidy(void)
 {
@@ -178,7 +257,7 @@ int main(int argc, char **argv)
         tidy();
         return fail("the probe's own directory");
     }
-    if (dir_ends(file) != 0) {
+    if (own_dir_rows() != 0) {
         tidy();
         return 1;
     }
