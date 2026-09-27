@@ -135,8 +135,8 @@ rach2/sys/fs/fat32name.c:fat32_name_short complexity 26 a parser over an externa
 
 rach2/sys/fs/fatcommon.c:fat_name_units complexity 29 a parser over an external format, one check per field in the format's order
 
-rach2/sys/fs/krffs.c:krffs_allocate_at lines 107 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/krffs.c:krffs_allocate_at nesting 5 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/krffs.c:krffs_allocate_err lines 112 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/krffs.c:krffs_allocate_err nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at complexity 42 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at lines 130 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over the on-disk format, each step a rule of the format
@@ -151,7 +151,7 @@ rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per com
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_classify lines 171 a dispatcher, one arm per command, read as a table
 
-rach2/sys/fs/vfs.c:resolve_path complexity 75 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/vfs.c:resolve_path complexity 79 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path lines 284 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
@@ -241,7 +241,6 @@ rach2/sys/syscall_net.c:do_sendto lines 144 one system call's contract, its chec
 rach2/sys/syscall_net.c:do_setsockopt complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_proc.c:copy_user_pages nesting 5 a walk over the two levels of the page tables, each page's case inside it
-rach2/sys/syscall_proc.c:deliver_signals complexity 28 a dispatcher, one arm per disposition, read as a table
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
@@ -464,7 +463,7 @@ tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as
 
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
-tests/host/synthfs_hosttest.c:main complexity 33 a test's rows, each a case, read as one table
+tests/host/synthfs_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one table
@@ -546,9 +545,9 @@ tests/musl/authmusl.c:main lines 106 a test's rows, each a case, read as one tab
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table
 
-tests/musl/clockidmusl.c:clocks complexity 31 a test's rows, each a case, read as one table
 tests/musl/clockidmusl.c:sleeps complexity 29 a test's rows, each a case, read as one table
 
+tests/musl/clonemusl.c:main complexity 26 a test's rows, each a case, read as one table
 tests/musl/clonemusl.c:raw params 7 the parameters are the arguments of one call the test makes, passed through
 
 tests/musl/devtest.c:main complexity 30 a test's rows, each a case, read as one table
@@ -556,7 +555,10 @@ tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one tabl
 
 tests/musl/direntmusl.c:main complexity 28 a test's rows, each a case, read as one table
 
-tests/musl/epollmusl.c:sets complexity 39 a test's rows, each a case, read as one table
+tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
+tests/musl/epollmusl.c:sets lines 112 a test's rows, each a case, read as one table
+
+tests/musl/execargmusl.c:child complexity 26 a test's rows, each a case, read as one table
 
 tests/musl/fifomusl.c:main complexity 29 a test's rows, each a case, read as one table
 
@@ -565,7 +567,7 @@ tests/musl/lchownmusl.c:link_rows complexity 32 a test's rows, each a case, read
 tests/musl/loginmusl.c:check_wedges complexity 33 a test's rows, each a case, read as one table
 tests/musl/loginmusl.c:check_wedges lines 160 a test's rows, each a case, read as one table
 
-tests/musl/memfdmusl.c:sealing complexity 29 a test's rows, each a case, read as one table
+tests/musl/memfdmusl.c:sealing complexity 36 a test's rows, each a case, read as one table
 
 tests/musl/opathmusl.c:file_rows complexity 31 a test's rows, each a case, read as one table
 tests/musl/opathmusl.c:synth_rows complexity 36 a test's rows, each a case, read as one table
@@ -580,7 +582,7 @@ tests/musl/permmusl.c:main complexity 32 a test's rows, each a case, read as one
 
 tests/musl/preadmusl.c:file_rows complexity 30 a test's rows, each a case, read as one table
 
-tests/musl/ptracemusl.c:memory_and_registers complexity 29 a test's rows, each a case, read as one table
+tests/musl/ptracemusl.c:memory_and_registers complexity 32 a test's rows, each a case, read as one table
 
 tests/musl/pwauthmusl.c:check_fork complexity 28 a test's rows, each a case, read as one table
 tests/musl/pwauthmusl.c:check_prompt lines 109 a test's rows, each a case, read as one table
@@ -589,7 +591,7 @@ tests/musl/readvmusl.c:check_datagram lines 128 a test's rows, each a case, read
 
 tests/musl/schedmusl.c:scheduling complexity 54 a test's rows, each a case, read as one table
 
-tests/musl/sigframemusl.c:main complexity 29 a test's rows, each a case, read as one table
+tests/musl/sigframemusl.c:main complexity 30 a test's rows, each a case, read as one table
 
 tests/musl/spawnmusl.c:main complexity 36 a test's rows, each a case, read as one table
 tests/musl/spawnmusl.c:main lines 184 a test's rows, each a case, read as one table
@@ -605,13 +607,16 @@ tests/musl/statmusl.c:main lines 168 a test's rows, each a case, read as one tab
 tests/musl/statxmusl.c:kinds complexity 29 a test's rows, each a case, read as one table
 
 tests/musl/threadmusl.c:main complexity 35 a test's rows, each a case, read as one table
-tests/musl/threadmusl.c:sharing complexity 30 a test's rows, each a case, read as one table
+tests/musl/threadmusl.c:sharing complexity 36 a test's rows, each a case, read as one table
 
 tests/musl/tmpfsmusl.c:placed complexity 34 a test's rows, each a case, read as one table
+tests/musl/tmpfsmusl.c:shm complexity 27 a test's rows, each a case, read as one table
 
 tests/musl/truncmusl.c:length_rows complexity 26 a test's rows, each a case, read as one table
 
 tests/musl/unixmusl.c:named complexity 28 a test's rows, each a case, read as one table
+
+tests/musl/vforkmusl.c:main complexity 27 a test's rows, each a case, read as one table
 
 tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, read as one table
 
@@ -671,7 +676,7 @@ tests/system/checkers/wavcheck.c:main lines 147 an inspector's check, one walk o
 
 tests/system/fixtures/runutil_owned.c:main complexity 35 a fixture builder, the volume written in on-disk order
 
-tests/system/fixtures/vfs_unmount.c:main complexity 26 a fixture builder, the volume written in on-disk order
+tests/system/fixtures/vfs_unmount.c:main complexity 30 a fixture builder, the volume written in on-disk order
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order
 
 tests/system/runner/harness.c:main complexity 168 a parser over an external format, one check per field in the format's order
@@ -730,11 +735,11 @@ tools/inspect/elfcheck.c:user_check lines 128 an inspector's check, one walk ove
 
 tools/inspect/setidcheck.c:applet_names complexity 32 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:applet_names lines 102 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:check_image complexity 48 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:check_image lines 175 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:check_image complexity 50 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:check_image lines 180 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_image params 9 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:check_manifest complexity 53 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:check_manifest lines 215 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:check_manifest complexity 54 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:check_manifest lines 218 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_suid_config complexity 33 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:check_suid_config lines 128 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:entry_add_trusted params 7 an inspector's check, one walk over the format it reads
@@ -744,13 +749,13 @@ tools/inspect/setidcheck.c:ext2_push params 9 an inspector's check, one walk ove
 tools/inspect/setidcheck.c:ext2_reach complexity 27 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:parse_manifest complexity 31 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:parse_manifest lines 125 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:read_allow complexity 63 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:read_allow lines 140 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:read_allow complexity 64 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:read_allow lines 141 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:run complexity 69 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:run lines 237 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:selftest lines 695 the checker's own selftest, its cases in one table
-tools/inspect/setidcheck.c:st_ext2_rows complexity 43 an inspector's check, one walk over the format it reads
-tools/inspect/setidcheck.c:st_ext2_rows lines 144 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:selftest lines 700 the checker's own selftest, its cases in one table
+tools/inspect/setidcheck.c:st_ext2_rows complexity 45 an inspector's check, one walk over the format it reads
+tools/inspect/setidcheck.c:st_ext2_rows lines 154 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_image params 8 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:st_manifest params 7 an inspector's check, one walk over the format it reads
 tools/inspect/setidcheck.c:staged_add params 8 an inspector's check, one walk over the format it reads
