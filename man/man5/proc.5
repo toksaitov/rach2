@@ -479,9 +479,10 @@ path reaches nothing, or a file put there since.
 On Linux the link is to the program's file itself: a path through it
 reaches that file wherever it is, and reading the link gives the file's
 present path.
-Reading the link needs a thread of the process, effective user ID 0, or
-the process's real user ID and a process that is not privileged
-.Pq see Xr capget 2 .
+Reading the link needs a thread of the process, a privileged caller,
+one whose effective user ID is 0 and which kept its capabilities
+.Pq see Xr capget 2 ,
+or the process's real user ID and a process that is not privileged.
 .It Pa /proc/PID/task
 A directory with an entry for each thread of the process, named by its
 thread ID, the thread whose ID is the process ID first.
@@ -548,7 +549,7 @@ It,
 .Pa auxv
 and the
 .Pa exe
-link need a thread of the process, effective user ID 0, or the process's
+link need a thread of the process, a privileged caller, or the process's
 real user ID and a process that is not privileged; Linux asks more, the
 process's three user and group IDs and a dumpable process.
 .It Pa /proc/PID/mem
@@ -562,7 +563,7 @@ An address no region allows is
 and a write reaches read-only program text, as a tracer's does.
 A transfer that runs into such an address returns the bytes it did
 before it, as on Linux, and moves the offset past them.
-Opening it needs a thread of the process, effective user ID 0, or the
+Opening it needs a thread of the process, a privileged caller, or the
 process's real user ID and a dumpable process that is not privileged;
 Linux compares the caller's file-system IDs with every user and group ID
 of the process.

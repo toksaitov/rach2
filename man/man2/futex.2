@@ -132,9 +132,12 @@ Another thread's needs a thread of the caller's process, a privileged
 caller
 .Pq see Xr capget 2 ,
 or an effective user ID equal to the thread's real or effective one and
-a thread that is not privileged; Linux asks what a read by
-.Xr ptrace 2
-asks, every ID of the thread and a dumpable process.
+a thread that is not privileged.
+Linux asks for its
+.Dv PTRACE_MODE_READ_REALCREDS
+check at each call: the caller's real user and group IDs equal to the
+thread's three, and a dumpable process, or
+.Dv CAP_SYS_PTRACE .
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;
