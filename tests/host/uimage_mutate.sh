@@ -93,7 +93,7 @@ changes = {
     'esp-align': [('u->esp = (uimage_random_at(u) - words * 4u) & ~15u;',
                    'u->esp = (uimage_random_at(u) - words * 4u) & ~3u;')],
     'clktck': [('aux[11] = 100;', 'aux[11] = 1000;')],
-    'secure': [('aux[13] = secure ? 1u : 0u;', 'aux[13] = 0;')],
+    'secure': [('aux[13] = ids->secure ? 1u : 0u;', 'aux[13] = 0;')],
     'argv-null': [('if (i == argc) {', 'if (i == argc + 1u) {')],
     'envp-null': [('    if (rc == 0) {\n        rc = uimage_put(&out, &at, 0);\n    }\n'
                    '    for (i = 0; i < 2u * UIMAGE_AUXV',
