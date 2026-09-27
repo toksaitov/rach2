@@ -715,15 +715,16 @@ static void ptrace_unpark(process_t *t)
 
 /**
  * PTRACE_ATTACH and PTRACE_SEIZE: make the caller's process `t`'s tracer.
- * The caller needs effective user ID 0, or its real user ID equal to each of
- * `t`'s three and `t` dumpable, as Linux's `__ptrace_may_access` asks when
- * the caller lacks CAP_SYS_PTRACE. Such a caller is also refused a thread
- * inside execve, which chooses the ids of its new image by the tracer the
- * thread has (`exec_ids` in syscall_proc.c); Linux makes the attach wait for
- * the exec instead. A thread of the caller's own process, a thread with no
- * address space, init, and a thread already traced are refused. ATTACH
- * sends the thread SIGSTOP; SEIZE takes the options in `opts` and stops
- * nothing.
+ * The caller needs privilege, or its real user ID equal to each of `t`'s
+ * three, `t` dumpable and `t` not privileged, as Linux's
+ * `__ptrace_may_access` asks when the caller lacks CAP_SYS_PTRACE: a root
+ * thread that gave up its capabilities may not trace one that has them.
+ * Such a caller is also refused a thread inside execve, which chooses the
+ * ids of its new image by the tracer the thread has (`exec_ids` in
+ * syscall_proc.c); Linux makes the attach wait for the exec instead. A
+ * thread of the caller's own process, a thread with no address space, init,
+ * and a thread already traced are refused. ATTACH sends the thread SIGSTOP;
+ * SEIZE takes the options in `opts` and stops nothing.
  */
 static int ptrace_attach(process_t *t, int seize, uint32_t opts)
 {
@@ -738,7 +739,8 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
     if (!proc_privileged(current_proc) &&
         (current_proc->ruid != t->ruid || current_proc->ruid != t->euid ||
          current_proc->ruid != t->suid || current_proc->rgid != t->rgid ||
-         current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable)) {
+         current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable ||
+         proc_privileged(t))) {
         return -EPERM;
     }
     if (seize && (opts & ~PTRACE_O_MASK)) {

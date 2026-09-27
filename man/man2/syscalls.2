@@ -21,8 +21,15 @@ A number not registered in the kernel's dispatch table returns
 including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
+.Pp
+Where a page says that a call needs effective user ID 0, it means a
+privileged thread: one whose effective user ID is 0 and which has not
+given up its capabilities with
+.Xr capset 2 .
+Linux asks for a capability in each such place, and this kernel keeps
+every capability or none.
 .Ss System call numbers
-The kernel registers the following 210 calls.
+The kernel registers the following 212 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -131,6 +138,8 @@ The kernel registers the following 210 calls.
 .It 181 Ta Xr pwrite64 2
 .It 182 Ta Xr chown 2
 .It 183 Ta Xr getcwd 2
+.It 184 Ta Xr capget 2
+.It 185 Ta Xr capset 2
 .It 186 Ta Xr sigaltstack 2
 .It 190 Ta Xr vfork 2
 .It 191 Ta Xr ugetrlimit 2

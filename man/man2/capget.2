@@ -64,8 +64,13 @@ An exec gives a thread that gave up its capabilities every one of them
 again when its user IDs make it root, as on Linux, unless no_new_privs
 is set
 .Pq see Xr prctl 2 ,
-or a tracer or another process that shares the thread's directories is
-not privileged; the thread then has none.
+the thread has a tracer that is not privileged, or another process
+shares its directories; the thread then has none.
+An exec that gives them back leaves the new image not dumpable and
+clears the parent-death signal, as an exec that changes the effective
+user ID does.
+A root thread that gave up its capabilities may not trace, or read the
+memory of, a process that has them.
 .Sh RETURN VALUES
 .Rv -std capget capset
 .Sh ERRORS

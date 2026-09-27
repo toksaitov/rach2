@@ -5581,7 +5581,7 @@ static int32_t do_chmod(const char *name, uint32_t mode)
             pt->mode = (uint16_t)(mode & 0777u);
             return 0;
         }
-        return cred_privileged() ? 0 : -EPERM; /* fixed root-owned metadata */
+        return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
     }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
@@ -5840,8 +5840,8 @@ int32_t sys_fchmod(isr_params_t *params)
         pt->mode = (uint16_t)(mode & 0777u);
         return 0;
     }
-    /* Every other descriptor has fixed root-owned metadata, like its path. */
-    return cred_privileged() ? 0 : -EPERM;
+    /* Every other descriptor has fixed metadata root owns, like its path. */
+    return current_proc->euid == 0 ? 0 : -EPERM;
 }
 
 /** The path form of chown and lchown: EBX = path, ECX = uid, EDX = gid. */

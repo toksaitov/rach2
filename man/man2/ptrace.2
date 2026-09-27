@@ -146,9 +146,12 @@ A thread whose process a stop signal has already stopped is reported to
 the tracer at once in a group stop, as on Linux, and its process stays
 stopped.
 The caller needs effective user ID 0, or a real user and group ID equal to
-each of the target's three and a dumpable target, as Linux asks of a
-tracer without
-.Dv CAP_SYS_PTRACE .
+each of the target's three, a dumpable target and a target that is not
+privileged, as Linux asks of a tracer without
+.Dv CAP_SYS_PTRACE :
+a root thread that gave up its capabilities
+.Pq see Xr capget 2
+cannot trace one that has them.
 Such a caller cannot attach to a thread inside
 .Xr execve 2 ,
 which chooses the IDs of the new image by the tracer the thread has: for

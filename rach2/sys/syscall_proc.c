@@ -902,18 +902,20 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
  * What an exec's credentials change beside the ids, as Linux's exec does:
  * the new image's address space `mm` is dumpable unless the image runs with
  * ids its caller lacks (`secure`), its effective ids moved from `old_euid`
- * and `old_egid`, or an image it loaded is one the caller may not read
- * (`unreadable`), whose bytes a core file or a tracer's attach would give
- * the caller, as Linux's `would_dump` has it. A secure exec or one that
- * moved the effective ids clears the parent-death signal too, as
- * `cred_moved` clears it; a secure exec lowers a soft RLIMIT_STACK above
+ * and `old_egid`, it has the capabilities its caller gave up (`old_nocaps`),
+ * or an image it loaded is one the caller may not read (`unreadable`), whose
+ * bytes a core file or a tracer's attach would give the caller, as Linux's
+ * `would_dump` has it. A secure exec, or one that moved the effective ids or
+ * gave the capabilities back, clears the parent-death signal too, as Linux's
+ * `commit_creds` clears it; a secure exec lowers a soft RLIMIT_STACK above
  * 8 MiB to 8 MiB. The flag is set before the address space is installed, so
  * no other process sees the image dumpable while it runs with new ids.
  */
 static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t old_euid,
-                            uint32_t old_egid)
+                            uint32_t old_egid, uint32_t old_nocaps)
 {
-    int moved = current_proc->euid != old_euid || current_proc->egid != old_egid;
+    int moved = current_proc->euid != old_euid || current_proc->egid != old_egid ||
+                (old_nocaps && !current_proc->nocaps);
 
     mm->dumpable = secure || moved || unreadable ? 0u : 1u;
     if (secure || moved) {
@@ -1227,18 +1229,20 @@ static int exec_fs_shared(void)
  *
  * A thread that gave up its capabilities has them again after the exec, as
  * Linux gives a root image every capability, except in those three cases,
- * where Linux keeps the new permitted set to the old one.
+ * where Linux keeps the new permitted set to the old one; an exec that gives
+ * them back holds off CLONE_FS as one that applies set-id bits does.
  */
 static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
+    int regains = current_proc->nocaps && !current_proc->no_new_privs;
 
-    s->nocaps =
-        current_proc->nocaps && (current_proc->no_new_privs || exec_traced() || exec_fs_shared());
-    if (mode != 0 && !proc_privileged(current_proc)) {
+    s->nocaps = current_proc->nocaps;
+    if ((mode != 0 && !proc_privileged(current_proc)) || regains) {
         if (exec_traced() || exec_fs_shared()) {
             mode = 0;
         } else {
+            s->nocaps = 0;
             s->fs_held = current_proc->fs;
             s->fs_held->in_exec++;
         }
@@ -1510,6 +1514,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     struct mm *old = current_proc->mm;
     uint32_t old_euid = current_proc->euid;
     uint32_t old_egid = current_proc->egid;
+    uint32_t old_nocaps = current_proc->nocaps;
     int sig;
 
     proc_thread_gone(current_proc);
@@ -1523,7 +1528,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
     current_proc->nocaps = s->nocaps;
-    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid);
+    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, old_nocaps);
     proc_set_comm(current_proc, s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         if (current_proc->sigacts[sig].handler != KSIG_DFL &&
@@ -6055,11 +6060,6 @@ int32_t sys_prctl(isr_params_t *params)
  * nine above 31. */
 #define CAP_HIGH_WORD 0x1FFu
 
-struct cap_header {
-    uint32_t version;
-    int32_t pid;
-};
-
 struct cap_data {
     uint32_t effective;
     uint32_t permitted;
@@ -6067,23 +6067,25 @@ struct cap_data {
 };
 
 /**
- * Read the header at `uhdr` into `h`, and the number of words its version
- * gives each set into `*words`. An unknown version is -EINVAL, with the
- * version this kernel prefers written back into the header, as Linux
- * answers a program that asks which version to use.
+ * Read the version at the start of the header at `uhdr` and the number of
+ * words it gives each set into `*words`. An unknown version is -EINVAL,
+ * with the version this kernel prefers written back into the header, as
+ * Linux answers a program that asks which version to use. The pid after it
+ * is read only by a call that needs it (`cap_pid_in`), so a header whose
+ * version ends a page asks for the version as on Linux.
  */
-static int32_t cap_header_in(uint32_t uhdr, struct cap_header *h, uint32_t *words)
+static int32_t cap_version_in(uint32_t uhdr, uint32_t *words)
 {
-    uint32_t preferred = CAP_VERSION_3;
+    uint32_t version, preferred = CAP_VERSION_3;
 
-    if (!uhdr || copy_from_user(h, (const void __user *)uhdr, sizeof(*h)) != 0) {
+    if (!uhdr || copy_from_user(&version, (const void __user *)uhdr, sizeof(version)) != 0) {
         return -EFAULT;
     }
-    if (h->version == CAP_VERSION_1) {
+    if (version == CAP_VERSION_1) {
         *words = 1;
         return 0;
     }
-    if (h->version == CAP_VERSION_2 || h->version == CAP_VERSION_3) {
+    if (version == CAP_VERSION_2 || version == CAP_VERSION_3) {
         *words = 2;
         return 0;
     }
@@ -6091,6 +6093,15 @@ static int32_t cap_header_in(uint32_t uhdr, struct cap_header *h, uint32_t *word
         return -EFAULT;
     }
     return -EINVAL;
+}
+
+/** The pid in the header at `uhdr`, after its version, into `*pid`. */
+static int32_t cap_pid_in(uint32_t uhdr, int32_t *pid)
+{
+    if (copy_from_user(pid, (const void __user *)(uhdr + 4u), sizeof(*pid)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
 }
 
 /**
@@ -6106,20 +6117,24 @@ static int32_t cap_header_in(uint32_t uhdr, struct cap_header *h, uint32_t *word
  */
 int32_t sys_capget(isr_params_t *params)
 {
-    struct cap_header h;
     struct cap_data d[2];
     const process_t *p = current_proc;
     uint32_t words;
-    int32_t rc = cap_header_in(params->ebx, &h, &words);
+    int32_t pid;
+    int32_t rc = cap_version_in(params->ebx, &words);
 
     if (rc != 0 || params->ecx == 0) {
         return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
     }
-    if (h.pid < 0) {
+    rc = cap_pid_in(params->ebx, &pid);
+    if (rc != 0) {
+        return rc;
+    }
+    if (pid < 0) {
         return -EINVAL;
     }
-    if (h.pid != 0) {
-        p = get_process((uint32_t)h.pid);
+    if (pid != 0) {
+        p = get_process((uint32_t)pid);
         if (!p || p->state == PROC_UNUSED) {
             return -ESRCH;
         }
@@ -6150,15 +6165,18 @@ int32_t sys_capget(isr_params_t *params)
  */
 int32_t sys_capset(isr_params_t *params)
 {
-    struct cap_header h;
     struct cap_data d[2];
     uint32_t words, i, any = 0, whole = 1;
-    int32_t rc = cap_header_in(params->ebx, &h, &words);
+    int32_t pid;
+    int32_t rc = cap_version_in(params->ebx, &words);
 
+    if (rc == 0) {
+        rc = cap_pid_in(params->ebx, &pid);
+    }
     if (rc != 0) {
         return rc;
     }
-    if (h.pid != 0 && h.pid != (int32_t)current_proc->pid) {
+    if (pid != 0 && pid != (int32_t)current_proc->pid) {
         return -EPERM;
     }
     k_memset(d, 0, sizeof(d));

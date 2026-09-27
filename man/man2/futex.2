@@ -127,7 +127,9 @@ process ID.
 .Nm get_robust_list ,
 number 312, stores the list's head and 12 for the thread
 .Fa tid ,
-0 for the caller; another's needs effective user ID 0 or one of its IDs.
+0 for the caller; another's needs effective user ID 0, or one of its IDs
+and a thread that is not privileged
+.Pq see Xr capget 2 .
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;

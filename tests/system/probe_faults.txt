@@ -2369,10 +2369,12 @@ probe capmusl
 file rach2/sys/syscall_proc.c
 expect CAPMUSL FAIL (an exec as root did not give the capabilities back)
 old
-    s->nocaps =
-        current_proc->nocaps && (current_proc->no_new_privs || exec_traced() || exec_fs_shared());
+        } else {
+            s->nocaps = 0;
+            s->fs_held = current_proc->fs;
 new
-    s->nocaps = current_proc->nocaps;
+        } else {
+            s->fs_held = current_proc->fs;
 end
 
 fault exec-nnp-gives-caps
@@ -2380,8 +2382,90 @@ probe capmusl
 file rach2/sys/syscall_proc.c
 expect CAPMUSL FAIL (an exec under no_new_privs gave the capabilities back)
 old
-    s->nocaps =
-        current_proc->nocaps && (current_proc->no_new_privs || exec_traced() || exec_fs_shared());
+    int regains = current_proc->nocaps && !current_proc->no_new_privs;
 new
-    s->nocaps = current_proc->nocaps && (exec_traced() || exec_fs_shared());
+    int regains = (int)current_proc->nocaps;
+end
+
+fault exec-regain-ignores-sharer
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (an exec whose directories another process shares gave the capabilities back)
+old
+    if ((mode != 0 && !proc_privileged(current_proc)) || regains) {
+        if (exec_traced() || exec_fs_shared()) {
+new
+    if ((mode != 0 && !proc_privileged(current_proc)) || regains) {
+        if (exec_traced()) {
+end
+
+fault exec-regain-stays-dumpable
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (an exec that gave the capabilities back left the image dumpable)
+old
+    int moved = current_proc->euid != old_euid || current_proc->egid != old_egid ||
+                (old_nocaps && !current_proc->nocaps);
+new
+    int moved = (current_proc->euid != old_euid || current_proc->egid != old_egid) + 0 * old_nocaps;
+end
+
+fault capget-reads-pid-first
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (a header whose version ends a page was not asked the version alone)
+old
+    if (rc != 0 || params->ecx == 0) {
+        return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
+    }
+    rc = cap_pid_in(params->ebx, &pid);
+new
+    if (rc == 0) {
+        rc = cap_pid_in(params->ebx, &pid);
+    }
+    if (rc != 0 || params->ecx == 0) {
+        return (params->ecx == 0 && rc == -EINVAL) ? 0 : rc;
+    }
+end
+
+fault mem-open-ignores-privilege
+probe capmusl
+file rach2/sys/fs/procfs.c
+expect CAPMUSL FAIL (a thread without capabilities opened the memory of a process that has them)
+old
+        (current_proc->ruid != p->ruid || !p->mm->dumpable || proc_privileged(p))) {
+new
+        (current_proc->ruid != p->ruid || !p->mm->dumpable)) {
+end
+
+fault attach-ignores-privilege
+probe capmusl
+file rach2/sys/proc/ptrace.c
+expect CAPMUSL FAIL (a thread without capabilities attached to a process that has them)
+old
+         current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable ||
+         proc_privileged(t))) {
+new
+         current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable)) {
+end
+
+fault robust-list-ignores-privilege
+probe capmusl
+file rach2/sys/proc/futex.c
+expect CAPMUSL FAIL (a thread without capabilities read the robust list of a process that has them)
+old
+            ((current_proc->euid != t->ruid && current_proc->euid != t->euid) ||
+             proc_privileged(t))) {
+new
+            ((current_proc->euid != t->ruid && current_proc->euid != t->euid))) {
+end
+
+fault fixed-mode-needs-privilege
+probe capmusl
+file rach2/sys/syscall_fs.c
+expect CAPMUSL FAIL (a thread without capabilities could not change the mode of a node root owns)
+old
+        return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
+new
+        return cred_privileged() ? 0 : -EPERM; /* fixed metadata root owns */
 end

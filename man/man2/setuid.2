@@ -39,7 +39,9 @@
 These functions change the calling process's real, effective, and saved
 user and group IDs, or its supplementary group list.
 Privilege for every function is determined by effective user ID 0,
-including the group-ID functions.
+including the group-ID functions, for a thread that has not given up its
+capabilities
+.Pq see Xr capget 2 .
 .Pp
 .Fn setuid
 sets all three user IDs to
