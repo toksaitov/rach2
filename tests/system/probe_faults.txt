@@ -2165,7 +2165,7 @@ end
 fault lstat-dot-no-follow
 probe direntmusl
 file rach2/sys/syscall_fs.c
-expect direntmusl: /proc/self/.: d_type 4, lstat type 10
+expect DIRENTMUSL FAIL (lstat of /proc/self/. did not reach the directory)
 old
     if (dir) {
         *dir = path_names_dir(pathbuf, len);
