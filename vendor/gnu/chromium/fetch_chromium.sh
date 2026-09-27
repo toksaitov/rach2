@@ -308,6 +308,19 @@ root_libpath()
     echo "$p"
 }
 
+# Whether the file name $1 is a shared object's: it ends in .so, or in .so and
+# a version of digits and dots, as libfoo.so.1.2 does, and not in the .so.TOC
+# of a table of contents the package ships beside some of them.
+is_so_name()
+{
+    case ${1##*.so} in
+        '') return 0 ;;
+        *[!0-9.]*) return 1 ;;
+        .[0-9]*) return 0 ;;
+    esac
+    return 1
+}
+
 step_check()
 {
     if [ ! -x "$SYSROOT/lib/ld-linux.so.2" ]; then
@@ -320,8 +333,9 @@ step_check()
     fi
     rootlib="$(root_libpath)"
     : > "$WORK/list.txt"
-    for f in "$ROOT/$BROWSER" "$ROOT"/usr/lib/chromium/*.so "$ROOT"/usr/lib/chromium/*.so.[0-9]*; do
+    for f in "$ROOT/$BROWSER" "$ROOT"/usr/lib/chromium/*.so*; do
         [ -e "$f" ] || continue
+        [ "$f" = "$ROOT/$BROWSER" ] || is_so_name "${f##*/}" || continue
         if ! is_elf "$f"; then
             echo "gnu: chromium: ${f#"$ROOT"/} is not an ELF file" >&2
             return 1
