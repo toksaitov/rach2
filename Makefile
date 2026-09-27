@@ -538,8 +538,11 @@ krffs/test_authorized_keys: | krffs/authorized_keys
 
 # The password hashes are minted by the krffs hasher, so a tree with no build
 # directory yet builds the krffs tools before it mints; order-only, since a
-# rebuilt hasher must not remint hashes the images already carry.
-krffs/shadow: | build/krffs/mkfs.krffs
+# rebuilt hasher must not remint hashes the images already carry. The script
+# is a prerequisite, so a change to the lines it writes reaches a tree that
+# has a shadow: it keeps the hashes, brings the other fields up to date and
+# touches the file.
+krffs/shadow: krffs/gen_demo_password.sh | build/krffs/mkfs.krffs
 	sh krffs/gen_demo_password.sh
 
 # `make recovery-key`: put this tree's own key into the recovery system, so a

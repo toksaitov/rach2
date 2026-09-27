@@ -15,7 +15,9 @@
 # ones. The aging fields of each line are empty, as adduser(8) writes them:
 # a last change of day 0 tells a reader of shadow(5) that root forced a
 # change at the next login, which OpenSSH's server enforces. A shadow minted
-# with day 0 keeps its hashes and has those fields emptied.
+# with day 0 keeps its hashes and has those fields emptied. A shadow older
+# than this script, which make then runs it for, is touched once it is up to
+# date, so make does not run it again.
 #
 
 set -e
@@ -30,9 +32,14 @@ day_zero() {
     awk -F: '$3 == "0" { found = 1 } END { exit !found }' shadow
 }
 
-# Already minted, and nobody asked for them to be replaced: the common case, and
-# the fast one, since every image target calls this.
-if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ] && ! day_zero; then
+# Whether this script is newer than krffs/shadow.
+older() {
+    [ -n "$(find gen_demo_password.sh -newer shadow)" ]
+}
+
+# Already minted and up to date, and nobody asked for them to be replaced: the
+# common case, and the fast one.
+if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ] && ! day_zero && ! older; then
     exit 0
 fi
 
@@ -57,6 +64,7 @@ if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
         mv shadow.tmp shadow
         echo "gen_demo_password: emptied the aging fields of krffs/shadow"
     fi
+    touch shadow
     exit 0
 fi
 
