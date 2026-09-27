@@ -15,7 +15,7 @@
  * A message may carry descriptors (SCM_RIGHTS), which the receiver gets as
  * new descriptors of the same open files, and the sender's credentials
  * (SCM_CREDENTIALS), which a receiver with SO_PASSCRED gets with every
- * message. See unix.Readme.md.
+ * message. See Readme.md.
  *
  * A socket is a descriptor of type FD_TYPE_UNIX whose `priv` is the socket;
  * read, write, poll, ioctl and the last close go through its file_ops, and
