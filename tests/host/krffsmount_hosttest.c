@@ -1,7 +1,7 @@
 /**
  * Check mounted KRFFS relocation, writeback errors and clean-flag ordering.
  *
- * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
@@ -127,6 +127,16 @@ void wait_queue_init(wait_queue_t *wq)
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
+}
+
+/** Reject a lock wait, which no row makes. */
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    check(0, "unexpected lock wait");
+    return -1;
 }
 
 #ifndef KRFFS_OPEN_TEST

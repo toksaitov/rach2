@@ -208,7 +208,12 @@ releases
 .Fa fd ,
 including descriptors 0, 1, and 2, for reuse.
 It drops the descriptor's socket reference and its reference to the
-shared open-file description.
+shared open-file description, and the calling process's
+.Xr fcntl 2
+record locks on the file, whichever descriptor took them; the
+description's own locks,
+.Xr flock 2
+locks and open file description locks, go with its last reference.
 A pipe or terminal end is released when its last descriptor closes;
 a mounted file's final close releases its per-open handle, node, and
 mount reference.
@@ -402,6 +407,7 @@ was called without a current process.
 .Sh SEE ALSO
 .Xr dup 2 ,
 .Xr fcntl 2 ,
+.Xr flock 2 ,
 .Xr getdents64 2 ,
 .Xr mknod 2 ,
 .Xr mount 2 ,

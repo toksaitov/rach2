@@ -1,0 +1,106 @@
+.Dd September 27, 2026
+.Dt FLOCK 2
+.Os
+.Sh NAME
+.Nm flock
+.Nd lock a whole file
+.Sh SYNOPSIS
+.In sys/file.h
+.Ft int
+.Fn flock "int fd" "int operation"
+.Sh DESCRIPTION
+.Fn flock
+sets or removes an advisory lock over the whole of what
+.Fa fd
+is open on.
+.Fa operation
+is
+.Dv LOCK_SH
+for a shared lock,
+.Dv LOCK_EX
+for an exclusive one, or
+.Dv LOCK_UN
+to remove the lock, with
+.Dv LOCK_NB
+added for no wait.
+A lock is advisory: it stops another lock, never a read or a write.
+.Pp
+The lock belongs to the open-file description.
+Descriptors made by
+.Xr dup 2
+and
+.Xr fork 2
+share it, so an unlock through any of them removes it, and it goes with
+the description's last reference.
+A second
+.Xr open 2
+of the file makes another description, whose lock is another owner's
+even in the same process.
+.Pp
+An exclusive lock conflicts with every lock of another description, and
+a shared one with an exclusive one.
+A request that conflicts waits until the conflict is gone, or with
+.Dv LOCK_NB
+fails with
+.Er EWOULDBLOCK .
+A signal ends a wait with
+.Er EINTR ,
+which
+.Dv SA_RESTART
+restarts.
+A request for the type the description already has succeeds at once; a
+request for the other type first lets go of the lock the description
+has, so a conversion is not atomic, and a failed one leaves no lock,
+as on Linux.
+.Pp
+.Fn flock
+locks and
+.Xr fcntl 2
+record locks do not conflict with each other.
+A lock is on the file, found as
+.Xr fcntl 2
+finds a record lock's; a descriptor of a pipe, a socket, a device or a
+terminal is locked by the object it is open on.
+.Dv LOCK_MAND ,
+which Linux accepts and ignores, is accepted and ignored.
+.Pp
+The i386 system call number is 143.
+The kernel takes the descriptor in EBX and the operation in ECX.
+.Sh RETURN VALUES
+.Fn flock
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/musl/lockmusl.c
+takes an exclusive lock on one open of a file, requires a second open's
+.Dv LOCK_EX Ns | Ns Dv LOCK_NB
+to fail with
+.Er EWOULDBLOCK ,
+removes the lock through a
+.Xr dup 2
+of the first descriptor, and checks that closing the second open's only
+descriptor lets its lock go.
+.Sh ERRORS
+.Bl -tag -width "[EWOULDBLOCK]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor, or a lock was asked for on one open neither
+for reading nor for writing.
+.It Bq Er EINTR
+A signal ended the wait.
+.It Bq Er EINVAL
+.Fa operation
+is not one of the three.
+.It Bq Er ENOLCK
+The kernel heap has no room for the lock.
+.It Bq Er EWOULDBLOCK
+.Dv LOCK_NB
+was given and another description's lock conflicts.
+.El
+.Sh SEE ALSO
+.Xr close 2 ,
+.Xr dup 2 ,
+.Xr fcntl 2 ,
+.Xr fork 2 ,
+.Xr open 2

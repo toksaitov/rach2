@@ -26,6 +26,7 @@
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
+#include "fs/lock.h"
 #include "fs/pathbuf.h"
 #include "ipc/pipe.h"
 #include "io/poll.h"
@@ -148,6 +149,30 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
 }
 
 /**
+ * The key the locks of what `e` is open on are found by (lock.h): the mount
+ * and the inode number its description recorded at open, for a file of a
+ * mounted type, a FIFO among them; and for any other descriptor the object
+ * it is open on, a pipe, a socket, a device or a terminal, with no mount, so
+ * that two opens of one object share their locks as two opens of a file do.
+ */
+static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
+{
+    key->mnt = NULL;
+    if (e->ofd && e->ofd->vmnt) {
+        key->mnt = e->ofd->vmnt;
+        key->ino = e->ofd->ino;
+    } else if (e->dev) {
+        key->ino = (uintptr_t)e->dev;
+    } else if (e->priv) {
+        key->ino = (uintptr_t)e->priv;
+    } else if (e->sock) {
+        key->ino = (uintptr_t)e->sock;
+    } else {
+        key->ino = (uint64_t)e->type;
+    }
+}
+
+/**
  * Release every backing reference a descriptor holds before its slot is freed.
  *
  * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
@@ -155,6 +180,12 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
  * dup2 replacement of an open target, the execve CLOEXEC sweep, and the
  * process-exit fd-table release) so none can forget a backing kind as new ones
  * are added. It does NOT free the slot; the caller does that with fd_free.
+ *
+ * A close of one of the calling process's own descriptors drops the process's
+ * record locks on what it is open on, as POSIX has every close do. The copy
+ * of an entry a file mapping or a message in flight keeps is released here
+ * too, and is not a descriptor of the process (`fd_in_table`), so its release
+ * drops none.
  *
  * An ops-backed object rides the shared open-file description: dup/dup2/fork
  * copy the ops/priv pointers and bump the OFD refcount, so the object must
@@ -167,6 +198,12 @@ void fd_release_backing(fd_entry_t *e)
 {
     if (!e) {
         return;
+    }
+    if (lock_any() && e->ofd && current_proc && fd_in_table(&current_proc->fds, e)) {
+        struct lock_key key;
+
+        fd_lock_key(e, &key);
+        lock_close(&key);
     }
     /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
      * node no path names) is freed by its LAST holder, and this runs while the
@@ -5678,6 +5715,190 @@ int32_t sys_pwrite64(isr_params_t *params)
     return entry->ops->write(&view, buf, count);
 }
 
+/* fcntl64's lock commands: struct flock, with 32-bit offsets, for the first
+ * three; struct flock64 for the 64-bit forms and the open file description
+ * ones. */
+#define F_GETLK      5
+#define F_SETLK      6
+#define F_SETLKW     7
+#define F_GETLK64    12
+#define F_SETLK64    13
+#define F_SETLKW64   14
+#define F_OFD_GETLK  36
+#define F_OFD_SETLK  37
+#define F_OFD_SETLKW 38
+
+/**
+ * The byte range a struct flock names, into `req`, as Linux reads it: from
+ * the file's start, the description's offset or the file's end by `whence`,
+ * backwards from `start` for a negative length, and to LOCK_EOF, the end
+ * however far the file grows, for a length of 0. Returns 0, -EINVAL for a
+ * `whence` of none of the three or a range before byte 0, or -EOVERFLOW for
+ * one past the largest offset.
+ */
+static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, int64_t len,
+                           struct lock_req *req)
+{
+    const int64_t max = 0x7FFFFFFFFFFFFFFFll;
+    int64_t base = 0;
+    struct vfs_stat st;
+
+    if (whence == 1) {
+        base = (int64_t)entry->ofd->offset;
+    } else if (whence == 2 && entry->ofd->vmnt &&
+               vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st) == 0) {
+        base = (int64_t)st.size;
+    } else if (whence != 0 && whence != 2) {
+        return -EINVAL;
+    }
+    if (start > 0 && base > max - start) {
+        return -EOVERFLOW;
+    }
+    start += base;
+    if (start < 0) {
+        return -EINVAL;
+    }
+    if (len > 0 && len - 1 > max - start) {
+        return -EOVERFLOW;
+    }
+    if (len < 0 && start + len < 0) {
+        return -EINVAL;
+    }
+    req->start = (uint64_t)(len < 0 ? start + len : start);
+    req->end = len > 0 ? (uint64_t)(start + len - 1) : len < 0 ? (uint64_t)(start - 1) : LOCK_EOF;
+    return 0;
+}
+
+/**
+ * The record-lock commands of fcntl64 on `entry`: `cmd` one of the nine,
+ * `arg` the caller's struct flock, 16 bytes with 32-bit offsets for F_GETLK,
+ * F_SETLK and F_SETLKW, or struct flock64, 24 bytes, for the rest.
+ *
+ * A POSIX lock belongs to the process and an open file description lock
+ * (F_OFD_*, whose `l_pid` must be 0) to the description, as lock.Readme.md
+ * describes. Setting a read lock needs a descriptor open for reading and a
+ * write lock one open for writing (EBADF). F_GETLK reports the first lock
+ * that conflicts, with its range from the start of the file, a length of 0
+ * for one to the end, and its owner's pid, -1 for a description's; or
+ * F_UNLCK in `l_type` alone when none does. The 32-bit form answers
+ * EOVERFLOW for a lock it cannot describe.
+ */
+static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
+{
+    int wide = cmd != F_GETLK && cmd != F_SETLK && cmd != F_SETLKW;
+    int by_ofd = cmd == F_OFD_GETLK || cmd == F_OFD_SETLK || cmd == F_OFD_SETLKW;
+    int op = (cmd == F_GETLK || cmd == F_GETLK64 || cmd == F_OFD_GETLK)      ? LOCK_GET
+             : (cmd == F_SETLKW || cmd == F_SETLKW64 || cmd == F_OFD_SETLKW) ? LOCK_WAIT
+                                                                             : LOCK_SET;
+    uint32_t size = wide ? 24u : 16u;
+    uint8_t raw[24];
+    int16_t type, whence;
+    int64_t start, len;
+    int32_t pid, rc;
+    struct lock_req req;
+    struct lock_key key;
+
+    if (!entry->ofd || copy_from_user(raw, (const void __user *)arg, size) != 0) {
+        return entry->ofd ? -EFAULT : -EBADF;
+    }
+    k_memcpy(&type, raw, 2);
+    k_memcpy(&whence, raw + 2, 2);
+    if (wide) {
+        k_memcpy(&start, raw + 4, 8);
+        k_memcpy(&len, raw + 12, 8);
+        k_memcpy(&pid, raw + 20, 4);
+    } else {
+        int32_t s32, l32;
+
+        k_memcpy(&s32, raw + 4, 4);
+        k_memcpy(&l32, raw + 8, 4);
+        k_memcpy(&pid, raw + 12, 4);
+        start = s32;
+        len = l32;
+    }
+    if (by_ofd && pid != 0) {
+        return -EINVAL;
+    }
+    if (op != LOCK_GET && ((type == F_RDLCK && !(entry->flags & FD_FLAG_READ)) ||
+                           (type == F_WRLCK && !(entry->flags & FD_FLAG_WRITE)))) {
+        return -EBADF;
+    }
+    rc = flock_range(entry, whence, start, len, &req);
+    if (rc != 0) {
+        return rc;
+    }
+    req.type = type;
+    req.pid = 0;
+    fd_lock_key(entry, &key);
+    rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
+    if (rc != 0 || op != LOCK_GET) {
+        return rc;
+    }
+    if (req.type != F_UNLCK) {
+        if (!wide && (req.start > 0x7FFFFFFFu || (req.end != LOCK_EOF && req.end > 0x7FFFFFFFu))) {
+            return -EOVERFLOW;
+        }
+        start = (int64_t)req.start;
+        len = req.end == LOCK_EOF ? 0 : (int64_t)(req.end - req.start + 1u);
+        whence = 0;
+        k_memcpy(raw + 2, &whence, 2);
+        if (wide) {
+            k_memcpy(raw + 4, &start, 8);
+            k_memcpy(raw + 12, &len, 8);
+            k_memcpy(raw + 20, &req.pid, 4);
+        } else {
+            int32_t s32 = (int32_t)start, l32 = (int32_t)len;
+
+            k_memcpy(raw + 4, &s32, 4);
+            k_memcpy(raw + 8, &l32, 4);
+            k_memcpy(raw + 12, &req.pid, 4);
+        }
+    }
+    type = (int16_t)req.type;
+    k_memcpy(raw, &type, 2);
+    return copy_to_user((void __user *)arg, raw, size) != 0 ? -EFAULT : 0;
+}
+
+/* flock(2)'s obsolete mandatory-lock bit, which Linux accepts and ignores. */
+#define LOCK_MAND 32
+
+/**
+ * flock(2): EBX = fd, ECX = operation.
+ *
+ * LOCK_SH, LOCK_EX or LOCK_UN, with LOCK_NB for no wait, over the whole of
+ * what `fd` is open on, owned by the open file description, as
+ * lock.Readme.md describes: a dup or a fork shares it, and the last close of
+ * the description lets it go. A lock of the other kind the description holds
+ * is let go first, so a conversion is not atomic, as on Linux. LOCK_MAND is
+ * accepted and ignored, as Linux does. Returns 0; EINVAL for another
+ * operation; EBADF for a descriptor that is not open, or not open for
+ * reading or writing when it asks for a lock; EWOULDBLOCK when LOCK_NB meets
+ * a conflict; EINTR when a signal ends the wait; or ENOLCK.
+ */
+int32_t sys_flock(isr_params_t *params)
+{
+    int op = (int)params->ecx;
+    int kind = op & ~LOCK_NB;
+    fd_entry_t *e;
+    struct lock_key key;
+
+    if (op & LOCK_MAND) {
+        return 0;
+    }
+    if (kind != LOCK_SH && kind != LOCK_EX && kind != LOCK_UN) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    e = fd_get(&current_proc->fds, (int)params->ebx);
+    if (!e || !e->ofd || (kind != LOCK_UN && !(e->flags & (FD_FLAG_READ | FD_FLAG_WRITE)))) {
+        return -EBADF;
+    }
+    fd_lock_key(e, &key);
+    return lock_flock(&key, e->ofd, op);
+}
+
 /**
  * Descriptor control (fcntl64, syscall 221).
  *
@@ -5699,12 +5920,6 @@ int32_t sys_fcntl64(isr_params_t *params)
         F_SETFD = 2,
         F_GETFL = 3,
         F_SETFL = 4,
-        F_GETLK = 5,
-        F_SETLK = 6,
-        F_SETLKW = 7,
-        F_GETLK64 = 12,
-        F_SETLK64 = 13,
-        F_SETLKW64 = 14,
         F_DUPFD_CLOEXEC = 1030
     };
 
@@ -5794,29 +6009,16 @@ int32_t sys_fcntl64(isr_params_t *params)
         }
         return newfd;
     }
+    case F_GETLK:
     case F_SETLK:
     case F_SETLKW:
+    case F_GETLK64:
     case F_SETLK64:
     case F_SETLKW64:
-        /* Advisory POSIX locks. Rach2 is single-user with no competing
-         * locker, so every lock request is granted (documented no-conflict
-         * semantics), because dropbear and musl lock utmp and lastlog
-         * and must not see -EINVAL or -ENOSYS. */
-        return 0;
-    case F_GETLK:
-    case F_GETLK64:
-        /* Report that no lock would conflict: set l_type (the first short
-         * of the struct flock the caller passed) to F_UNLCK (2). */
-        if (!arg) {
-            return -EFAULT;
-        }
-        {
-            short unlck = 2; /* F_UNLCK */
-            if (copy_to_user((void __user *)arg, &unlck, sizeof(unlck)) != 0) {
-                return -EFAULT;
-            }
-        }
-        return 0;
+    case F_OFD_GETLK:
+    case F_OFD_SETLK:
+    case F_OFD_SETLKW:
+        return fcntl_lock(entry, cmd, arg);
     default:
         return -EINVAL;
     }

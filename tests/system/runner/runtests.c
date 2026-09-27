@@ -116,6 +116,9 @@ static const char *const PROBES[] = {
     /* statx, which both libcs call first for every stat, beside
        fstatat64. */
     "musl/statxmusl",
+    /* Record, open file description and flock locks between processes:
+       conflicts, splits, waits, EDEADLK and the closes that drop them. */
+    "musl/lockmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

@@ -1,7 +1,7 @@
 /**
  * Check standard description allocation and locking across relocation.
  *
- * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
@@ -126,6 +126,16 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     check(cond(arg), "description wait ends idle");
     waits++;
     return 0;
+}
+
+/** Reject a lock wait, which no row makes. */
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    check(0, "unexpected lock wait");
+    return -1;
 }
 
 /** Check that a wake follows the description's release. */

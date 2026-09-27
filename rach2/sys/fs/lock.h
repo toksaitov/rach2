@@ -19,13 +19,16 @@
  * Locks of two owners conflict when their ranges overlap and one of them is
  * a write lock. A request that conflicts fails with EAGAIN, or waits until
  * the conflict is gone; a wait for a record lock that would close a cycle of
- * waiting processes fails with EDEADLK. See lock.Readme.md.
+ * waiting processes fails with EDEADLK. lock.Readme.md has the whole
+ * contract.
  */
 
-/* The file a lock is on: its mount and its inode number. */
+/* The file a lock is on: its mount and its inode number. A descriptor that
+ * is not open on a file of a mounted type has the object it is open on in
+ * `ino` and no mount. */
 struct lock_key {
     const void *mnt;
-    uint32_t ino;
+    uint64_t ino;
 };
 
 /* The range sentinel of a lock that runs to the end of the file, however
@@ -49,6 +52,13 @@ struct lock_req {
 #define LOCK_GET  0
 #define LOCK_SET  1
 #define LOCK_WAIT 2
+
+/* flock(2)'s operations, with Linux's values: a shared or an exclusive lock,
+ * no wait, and the unlock. */
+#define LOCK_SH 1
+#define LOCK_EX 2
+#define LOCK_NB 4
+#define LOCK_UN 8
 
 /**
  * A record lock request `cmd` (LOCK_GET, LOCK_SET or LOCK_WAIT) on the file

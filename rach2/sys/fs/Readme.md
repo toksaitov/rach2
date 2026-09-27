@@ -2,7 +2,7 @@
 
 KRFFS is the kernel's own writable file system: the RAM images' and the fallback root's, since the everyday root on a disk is an ext2 partition ([ext2.Readme.md](ext2.Readme.md)). It stores a hierarchical namespace in one contiguous region and uses a first-fit extent allocator. The same code can address a RAM module directly, a RAM module through the page-cache window, or a partition on an ATA or AHCI disk.
 
-`krffs.c` and `krffs.h` implement the format, the allocator, the namespace and the file operations, and `krffsmount.c` is the type `mount(2)` places over a block device; the format, its two backends and the order in which a change reaches the medium are in [krffs.Readme.md](krffs.Readme.md). `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions. The syscall-facing permission, descriptor, and metadata rules are in `../syscall_fs.c`. The mount table and the resolver every path goes through are described in [vfs.Readme.md](vfs.Readme.md), the kernel-generated `/dev` and `/proc` namespaces in [synthfs.Readme.md](synthfs.Readme.md), the FAT32 type, which reads and writes, in [fat32.Readme.md](fat32.Readme.md), and the page cache and disk drivers in `../mm/Readme.md` and `../block/Readme.md`.
+`krffs.c` and `krffs.h` implement the format, the allocator, the namespace and the file operations, and `krffsmount.c` is the type `mount(2)` places over a block device; the format, its two backends and the order in which a change reaches the medium are in [krffs.Readme.md](krffs.Readme.md). `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions, and `lock.c` the advisory locks, record, open file description and flock, as [lock.Readme.md](lock.Readme.md) describes. The syscall-facing permission, descriptor, and metadata rules are in `../syscall_fs.c`. The mount table and the resolver every path goes through are described in [vfs.Readme.md](vfs.Readme.md), the kernel-generated `/dev` and `/proc` namespaces in [synthfs.Readme.md](synthfs.Readme.md), the FAT32 type, which reads and writes, in [fat32.Readme.md](fat32.Readme.md), and the page cache and disk drivers in `../mm/Readme.md` and `../block/Readme.md`.
 
 ## Paths and directories
 
@@ -44,7 +44,7 @@ Setuid and executable setgid files change the effective and saved IDs at exec. A
 
 Creation initializes atime, mtime, and ctime. Data changes advance mtime and ctime; metadata changes advance ctime; directory entry changes advance the containing directory's mtime and ctime. Reads do not advance atime. `utimensat` can set atime and mtime explicitly and advances ctime when it changes them. The root's timestamps are reported but `utimensat` returns success without changing them.
 
-There are no ACLs, quotas, file capabilities, hard-link support, link-count tracking, or journal. The boot root reports one link for every node; a mounted volume reports two for a directory and one for a file. The advisory-lock `fcntl` operations report no conflict and grant every lock request.
+There are no ACLs, quotas, file capabilities, hard-link support, link-count tracking, or journal. The boot root reports one link for every node; a mounted volume reports two for a directory and one for a file. `fcntl(2)`'s record locks and `flock(2)` locks conflict, wait and find deadlocks as on Linux ([lock.Readme.md](lock.Readme.md)).
 
 ## Mounts and durability
 

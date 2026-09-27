@@ -155,6 +155,8 @@ int32_t sys__llseek(isr_params_t *params);
 
 int32_t sys_fcntl64(isr_params_t *params);
 
+int32_t sys_flock(isr_params_t *params);
+
 int32_t sys_stat(isr_params_t *params);
 
 int32_t sys_lstat(isr_params_t *params);

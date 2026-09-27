@@ -52,7 +52,8 @@ run_phase()
         -I utils -I krffs -I "$work/tests/host/compat" \
         -o "$binary" "$work/tests/host/ext2_hosttest.c" \
         "$source" "$work/rach2/sys/fs/bcache.c" "$work/rach2/sys/fs/fatcommon.c" \
-        "$work/rach2/sys/fs/fd.c" "$work/rach2/sys/block/chain.c" "$work/rach2/sys/lib/kstring.c" \
+        "$work/rach2/sys/fs/fd.c" "$work/rach2/sys/fs/lock.c" "$work/rach2/sys/block/chain.c" \
+        "$work/rach2/sys/lib/kstring.c" \
         "$work/rach2/sys/lib/kctypes.c" "$work/tests/host/compat/kheap_host.c" \
         "$work/tests/host/compat/pressure_host.c" \
         >"$binary.compile.log" 2>&1; then

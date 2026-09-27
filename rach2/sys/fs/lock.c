@@ -9,11 +9,6 @@
 #include "../mm/kheap.h"
 #include "../lib/kerrno.h"
 
-#define LOCK_SH 1
-#define LOCK_EX 2
-#define LOCK_NB 4
-#define LOCK_UN 8
-
 /* Policy: the waits followed when looking for a cycle, Linux's
  * MAX_DEADLK_ITERATIONS; a longer cycle is not found. */
 #define DEADLOCK_HOPS 10
@@ -118,14 +113,30 @@ static void merge(struct file_lock *l)
     }
 }
 
+/* A record lock asked for: whose, of what type, over which bytes. */
+struct record_want {
+    const struct lock_key *key;
+    int kind;
+    uintptr_t owner;
+    int type;
+    uint64_t start;
+    uint64_t end;
+};
+
 /**
- * Set the owner's lock of `type` over [start, end], F_UNLCK to remove: its
- * locks there are cut back or removed, and the new one takes their place.
- * The records a split needs are had first, so a refusal changes nothing.
+ * Set the lock `w` asks for, F_UNLCK to remove, taken by `pid`: the owner's
+ * locks over its bytes are cut back or removed, and the new one takes their
+ * place. The records a split needs are had first, so a refusal changes
+ * nothing.
  */
-static int32_t record_apply(const struct lock_key *key, int kind, uintptr_t owner, uint32_t pid,
-                            int type, uint64_t start, uint64_t end)
+static int32_t record_apply(const struct record_want *w, uint32_t pid)
 {
+    const struct lock_key *key = w->key;
+    int kind = w->kind;
+    uintptr_t owner = w->owner;
+    int type = w->type;
+    uint64_t start = w->start;
+    uint64_t end = w->end;
     struct file_lock *spare[2];
     struct file_lock **link = &locks;
     struct file_lock *l;
@@ -222,15 +233,6 @@ static void wait_remove(const struct lock_wait *me)
     }
 }
 
-struct record_want {
-    const struct lock_key *key;
-    int kind;
-    uintptr_t owner;
-    int type;
-    uint64_t start;
-    uint64_t end;
-};
-
 static int record_free(void *arg)
 {
     const struct record_want *w = (const struct record_want *)arg;
@@ -278,8 +280,7 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
                                  : record_conflict(key, want.kind, want.owner, req->type,
                                                    req->start, req->end);
         if (!c) {
-            return record_apply(key, want.kind, want.owner, pid, req->type, req->start,
-                                req->end);
+            return record_apply(&want, pid);
         }
         if (cmd != LOCK_WAIT) {
             return -EAGAIN;

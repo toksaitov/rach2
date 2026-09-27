@@ -40,6 +40,7 @@
 #define SYS_MKNOD           14
 #define SYS_MKNODAT         297
 #define SYS_STATX           383
+#define SYS_FLOCK           143
 #define SYS_UNLINKAT        301
 #define SYS_GETPID          20
 #define SYS_TIMES           43

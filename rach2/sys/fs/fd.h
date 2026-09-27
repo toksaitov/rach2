@@ -236,4 +236,12 @@ int fd_node_busy(struct vfs_mount *mnt, void *node);
 /** 1 if fd is allocated, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);
 
+/**
+ * Whether `e` is one of `table`'s entries, and not a copy of one that a file
+ * mapping or a message in flight keeps: a close of a descriptor of the
+ * process drops the process's record locks, and the release of such a copy
+ * does not.
+ */
+int fd_in_table(const fd_table_t *table, const fd_entry_t *e);
+
 #endif /* _FD_H_ */

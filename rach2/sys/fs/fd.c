@@ -391,6 +391,18 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return &table->entries[fd];
 }
 
+int fd_in_table(const fd_table_t *table, const fd_entry_t *e)
+{
+    int i;
+
+    for (i = 0; table && i < table->cap; i++) {
+        if (&table->entries[i] == e) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int fd_is_valid(fd_table_t *table, int fd)
 {
     if (!table || fd < 0 || fd >= table->cap) {
