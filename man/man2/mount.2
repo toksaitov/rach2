@@ -111,12 +111,15 @@ Require the absolute target path to fit 63 bytes, excluding the null
 byte, or return
 .Er ENAMETOOLONG .
 .It
-Reject the root directory and targets under
+Reject the root directory and a directory of the synthetic
 .Pa /dev
 or
 .Pa /proc
-with
-.Er EINVAL .
+themselves with
+.Er EINVAL ;
+a directory of the tmpfs
+.Pa /dev/shm
+below them is a target like any other.
 .It
 Reject the root of an already placed mount with
 .Er EBUSY .
