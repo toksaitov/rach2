@@ -324,11 +324,14 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
  * Give [start, end) a new protection.
  *
  * Every page of the range must lie in a region: a gap returns -1, as Linux's
- * mprotect answers ENOMEM. The regions the range cuts are split at its two
- * ends, which needs up to two entries, made room for first; then the pieces
- * inside take `prot` and merge with neighbours that now match. Returns 0,
- * -1 for a gap, or -2 when the split has no room; both errors leave the
- * regions as they were.
+ * mprotect answers ENOMEM. Write is refused with -3 when a region of the
+ * range may never be written (VM_PROT_NOWRITE), as Linux answers EACCES; the
+ * range is walked for both before anything changes, and the first in address
+ * order is the answer. The regions the range cuts are split at its two ends,
+ * which needs up to two entries, made room for first; then the pieces inside
+ * take `prot`, each keeping its own VM_PROT_NOWRITE, and merge with
+ * neighbours that now match. Returns 0, -1 for a gap, -2 when the split has
+ * no room, or -3; every error leaves the regions as they were.
  */
 int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
 {
@@ -341,6 +344,9 @@ int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
     for (i = vm_lower(vm, start); i < vm->count && at < end; i++) {
         if (vm->vmas[i].start > at) {
             break;
+        }
+        if ((prot & VM_PROT_WRITE) && (vm->vmas[i].prot & VM_PROT_NOWRITE)) {
+            return -3;
         }
         at = vm->vmas[i].end;
     }
@@ -365,7 +371,7 @@ int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
 
             vm_insert_at(vm, i + 1, &upper);
         }
-        vm->vmas[i].prot = prot;
+        vm->vmas[i].prot = prot | (vm->vmas[i].prot & VM_PROT_NOWRITE);
         i++;
     }
     /* Merge from the top down so each merge leaves the lower indices where

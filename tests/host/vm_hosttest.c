@@ -7,7 +7,8 @@
  * overlap detection, the four munmap cases (full cover, left trim, right
  * trim, middle split), the array's growth past what it starts with, the
  * merging of neighbours, mprotect's splits and merges and its refusal of a
- * gap, the search for a free range, the bytes a range covers, and the file
+ * gap and of write to a region that may never be written, which keeps that
+ * mark, the search for a free range, the bytes a range covers, and the file
  * a region maps: its pages through splits and merges, its references, and
  * its release, which waits for vm_file_reap after the last one goes.
  * Returns the failed-check count (0 == all passed). Run natively under
@@ -287,6 +288,28 @@ int main(void)
         r = vm_find(&p, 0x59000);
         CHECK(r != NULL && r->prot == VM_PROT_READ);
         CHECK(vm_protect(&p, 0x40000, 0x41000, 0) == -1); /* nothing mapped */
+        vm_free(&p);
+    }
+
+    /* A region that may never be written keeps VM_PROT_NOWRITE through
+     * mprotect's splits and merges, and write over a range that reaches it
+     * is refused with nothing changed, as a gap is. */
+    {
+        vm_space_t p = {0};
+        vma_t *r;
+
+        vm_init(&p);
+        CHECK(vm_insert(&p, 0x60000, 0x62000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+        CHECK(vm_insert(&p, 0x62000, 0x66000, VM_PROT_READ | VM_PROT_NOWRITE, VM_SHARED) == 0);
+        CHECK(vm_protect(&p, 0x60000, 0x64000, VM_PROT_READ | VM_PROT_WRITE) == -3);
+        CHECK(p.count == 2 && p.vmas[0].prot == (VM_PROT_READ | VM_PROT_WRITE) &&
+              p.vmas[1].start == 0x62000 && p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
+        CHECK(vm_protect(&p, 0x63000, 0x64000, 0) == 0 && p.count == 4);
+        r = vm_find(&p, 0x63000);
+        CHECK(r != NULL && r->start == 0x63000 && r->end == 0x64000 && r->prot == VM_PROT_NOWRITE);
+        CHECK(vm_protect(&p, 0x63000, 0x64000, VM_PROT_READ) == 0);
+        CHECK(p.count == 2 && p.vmas[1].start == 0x62000 && p.vmas[1].end == 0x66000 &&
+              p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
         vm_free(&p);
     }
 

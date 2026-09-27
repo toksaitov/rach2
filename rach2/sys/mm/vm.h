@@ -41,12 +41,20 @@
 #define VM_MMAP_BASE 0xB0000000u
 
 /* Region protection bits (mirror the PROT_* / page-table permission flags). */
-#define VM_PROT_READ   0x1u
-#define VM_PROT_WRITE  0x2u
-#define VM_PROT_EXEC   0x4u
+#define VM_PROT_READ    0x1u
+#define VM_PROT_WRITE   0x2u
+#define VM_PROT_EXEC    0x4u
 /* Given to paging_protect_range for a shared region, whose pages are shared
  * on purpose: a write goes to the frame they share, never to a copy. */
-#define VM_PROT_SHARED 0x8u
+#define VM_PROT_SHARED  0x8u
+/* Kept in a region's protection beside the three access bits: the region
+ * may never be made writable. A shared mapping of a file opened without
+ * write access has it, and so has a shared mapping of a file on a disk,
+ * which is served as a private one and whose stores would not reach the
+ * file. `vm_protect` keeps the bit and refuses write while it is set, as
+ * Linux's mprotect refuses a mapping without VM_MAYWRITE; splits, merges,
+ * copies and moves carry it with the rest of the protection. */
+#define VM_PROT_NOWRITE 0x10u
 
 /* Region kind; drives both teaching clarity and fault policy. */
 typedef enum {
@@ -118,8 +126,9 @@ vma_t *vm_find(vm_space_t *vm, uint32_t addr);
 /* Return 1 if any existing VMA intersects [start, end), else 0. */
 int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end);
 
-/** Insert a region [start, end) with 'prot'/'type'; 0 ok, -1 on error,
- * which includes the limit reached and a heap with no room to grow. */
+/** Insert a region [start, end) with 'prot'/'type', `prot` being the access
+ * bits and VM_PROT_NOWRITE for a region never to be written; 0 ok, -1 on
+ * error, which includes the limit reached and a heap with no room to grow. */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type);
 
 /** The same, for a region that maps `file` from its page `pgoff`; the region
@@ -146,9 +155,10 @@ void vm_file_reap(void);
  * in which case nothing has changed. */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
 
-/** Give [start, end), which regions must cover without a gap, the protection
- * `prot`; 0 ok, -1 for a gap and -2 when a split has no room, both with
- * nothing changed. */
+/** Give [start, end), which regions must cover without a gap, the access
+ * bits `prot`, each region keeping its VM_PROT_NOWRITE; 0 ok, -1 for a gap,
+ * -2 when a split has no room, and -3 when `prot` has write and a region of
+ * the range has VM_PROT_NOWRITE, all with nothing changed. */
 int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot);
 
 /** Make room for `n` more regions now, so the changes after cannot fail;

@@ -4828,22 +4828,56 @@ struct map_source {
 };
 
 /**
+ * The file half of `mmap_backing`: the file the descriptor `e`, number
+ * `fd`, is open on, mapped shared or not. A private mapping of it is
+ * VM_FILE, and a shared mapping of a file in memory is VM_SHARED, the
+ * file's own pages. A shared mapping of a file on a disk file system is
+ * served as a private one when it is read-only, which reads the same bytes,
+ * and refused with ENODEV when it may be written, since its stores would
+ * not reach the file. A shared mapping that may not be written now, since
+ * the descriptor is not open for writing or the file is on a disk, is
+ * given VM_PROT_NOWRITE, so that mprotect cannot make it writable later. It
+ * may sleep, finding the file's path.
+ */
+static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
+{
+    struct shmem *sh;
+
+    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
+        return -ENODEV;
+    }
+    if (!(e->flags & FD_FLAG_READ) ||
+        (shared && (src->prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
+        return -EACCES;
+    }
+    sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
+    if (shared && !sh && (src->prot & VM_PROT_WRITE)) {
+        return -ENODEV;
+    }
+    if (shared && (!sh || !(e->flags & FD_FLAG_WRITE))) {
+        src->prot |= VM_PROT_NOWRITE;
+    }
+    src->file = sh ? filemap_shared(e, sh) : filemap_new(e);
+    src->type = sh ? VM_SHARED : VM_FILE;
+    if (src->file) {
+        src->file->path = fd_path_copy(fd);
+    }
+    return src->file ? 0 : -ENOMEM;
+}
+
+/**
  * The file or shared memory a new mapping maps, with the region kind it
  * makes, into `src`, whose protection and page offset the caller set from
- * its arguments: a private mapping of a file (VM_FILE), a shared mapping of
- * a file in memory or of shared anonymous memory (VM_SHARED), or NULL for
- * private anonymous memory (VM_ANON). /dev/zero maps as anonymous memory.
- * Anonymous memory has its pages from its own first on, so its offset is
- * set to 0, as Linux ignores it. A shared mapping of a file on a disk file
- * system is served as a private one when it is read-only, which reads the
- * same bytes, and refused with ENODEV when it may be written, since its
- * stores would not reach the file. It may sleep, finding the file's path.
+ * its arguments: a mapping of a file (`mmap_file`), shared anonymous memory
+ * (VM_SHARED), or NULL for private anonymous memory (VM_ANON). /dev/zero
+ * maps as anonymous memory. Anonymous memory has its pages from its own
+ * first on, so its offset is set to 0, as Linux ignores it. It may sleep,
+ * finding a file's path.
  */
 static int32_t mmap_backing(uint32_t flags, int fd, struct map_source *src)
 {
     int shared = (flags & MAP_TYPE) != MAP_PRIVATE;
     fd_entry_t *e;
-    struct shmem *sh;
 
     src->file = NULL;
     src->type = VM_ANON;
@@ -4853,24 +4887,7 @@ static int32_t mmap_backing(uint32_t flags, int fd, struct map_source *src)
             return -EBADF;
         }
         if (devfs_rdev(e) != ((1u << 8) | 5u)) { /* /dev/zero, 1:5, maps as anonymous memory */
-            if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
-                return -ENODEV;
-            }
-            if (!(e->flags & FD_FLAG_READ) ||
-                (shared && (src->prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
-                return -EACCES;
-            }
-            sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode)
-                                                                   : NULL;
-            if (shared && !sh && (src->prot & VM_PROT_WRITE)) {
-                return -ENODEV;
-            }
-            src->file = sh ? filemap_shared(e, sh) : filemap_new(e);
-            src->type = sh ? VM_SHARED : VM_FILE;
-            if (src->file) {
-                src->file->path = fd_path_copy(fd);
-            }
-            return src->file ? 0 : -ENOMEM;
+            return mmap_file(e, fd, shared, src);
         }
     }
     src->pgoff = 0;
@@ -5051,7 +5068,9 @@ static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
  * sys_mprotect - change the protection of a range. Args: EBX=addr (page
  * aligned), ECX=length, EDX=prot. Returns 0, or -errno: EINVAL for an
  * unaligned address or an unknown protection bit, ENOMEM when a page of the
- * range is not mapped or a split finds no room for its region. The regions
+ * range is not mapped or a split finds no room for its region, EACCES for
+ * write asked of a shared mapping that may never be written (the
+ * VM_PROT_NOWRITE `mmap_file` gives), with nothing changed. The regions
  * take the new protection first and the resident pages after, so a fault in
  * between reads the protection the call is setting.
  */
@@ -5081,6 +5100,9 @@ int32_t sys_mprotect(isr_params_t *params)
     rc = vm_protect(&current_proc->mm->vm, addr, end, vmprot);
     if (rc == -1) {
         return -ENOMEM;
+    }
+    if (rc == -3) {
+        return -EACCES;
     }
     if (rc != 0) {
         vma_exhausted("mprotect");

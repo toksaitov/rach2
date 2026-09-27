@@ -7,14 +7,15 @@
  * sees the parent's bytes and its own stores stay its own. A shared
  * anonymous mapping and a shared mapping of a file in /dev/shm carry a
  * child's store to the parent, and a store through the mapping of the file
- * reaches read(2). Shared anonymous memory ignores a raw mmap2's page
- * offset, a file's offset whose last page would not fit in 32 bits is
- * EOVERFLOW, and a page of a file in memory past 1 GiB is never backed.
- * mremap grows a mapping in place or moves it with its bytes, and shrinks
- * one, and refuses an old length that would wrap past the end of memory,
- * leaving the mapping; a fixed mremap that shrinks a mapping is held to
- * RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED) gives a private
- * anonymous mapping zero pages again.
+ * reaches read(2). mprotect will not make a shared mapping of a file opened
+ * read-only writable, and will a private one. Shared anonymous memory
+ * ignores a raw mmap2's page offset, a file's offset whose last page would
+ * not fit in 32 bits is EOVERFLOW, and a page of a file in memory past
+ * 1 GiB is never backed. mremap grows a mapping in place or moves it with
+ * its bytes, and shrinks one, and refuses an old length that would wrap
+ * past the end of memory, leaving the mapping; a fixed mremap that shrinks
+ * a mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
+ * gives a private anonymous mapping zero pages again.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -142,6 +143,42 @@ static int shared(void)
         return fail("a store in a shared mapping did not reach read");
     }
     munmap(m, PAGE);
+    close(fd);
+    unlink(SHM_PATH);
+    return 0;
+}
+
+/* A shared mapping of a file opened read-only may never be written:
+   mprotect refuses write with EACCES, where it once let stores reach the
+   file. A private mapping of the same descriptor may be written, its
+   stores its own. */
+static int readonly_shared(void)
+{
+    char *ro, *priv;
+    int fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+
+    if (fd < 0 || write(fd, "file", 4) != 4) {
+        return fail("a file in /dev/shm for a read-only mapping");
+    }
+    close(fd);
+    fd = open(SHM_PATH, O_RDONLY);
+    ro = mmap(NULL, PAGE, PROT_READ, MAP_SHARED, fd, 0);
+    priv = mmap(NULL, PAGE, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (fd < 0 || ro == MAP_FAILED || priv == MAP_FAILED) {
+        return fail("mmap of a file opened read-only");
+    }
+    if (mprotect(ro, PAGE, PROT_READ | PROT_WRITE) != -1 || errno != EACCES) {
+        return fail("mprotect made a read-only file's shared mapping writable");
+    }
+    if (mprotect(priv, PAGE, PROT_READ | PROT_WRITE) != 0) {
+        return fail("mprotect of a read-only file's private mapping");
+    }
+    priv[0] = 'P';
+    if (ro[0] != 'f') {
+        return fail("a store in a private mapping reached the shared one");
+    }
+    munmap(ro, PAGE);
+    munmap(priv, PAGE);
     close(fd);
     unlink(SHM_PATH);
     return 0;
@@ -294,7 +331,7 @@ static int remap_limit(void)
 
 int main(void)
 {
-    if (private_file() || shared() || offsets() || remaps() || remap_limit()) {
+    if (private_file() || shared() || readonly_shared() || offsets() || remaps() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");

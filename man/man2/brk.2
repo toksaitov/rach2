@@ -231,6 +231,14 @@ A region that is shared stays shared through
 .Fn mprotect :
 write permission is granted on its pages in place, never as copy on
 write.
+A shared mapping of a file whose descriptor was not open for writing,
+and a shared mapping of a file on a disk file system, which is served as
+a private one, may never be made writable:
+.Fn mprotect
+refuses write over a range that reaches one with
+.Er EACCES ,
+as Linux does.
+The whole range is checked before anything changes.
 .Ss Resizing and advice
 .Fn mremap ,
 kernel call 163, resizes the mapping at the page-aligned
@@ -411,7 +419,9 @@ offset that is negative, not page-aligned, or not representable as the
 kernel's page offset.
 .It Er EACCES
 A mapping of a file whose descriptor is not open for reading, or a
-writable shared one whose descriptor is not open for writing.
+writable shared one whose descriptor is not open for writing;
+.Fn mprotect
+asking write of a shared mapping of a file that may never be written.
 .It Er EBADF
 .Fa fd
 is not open, for a mapping without
