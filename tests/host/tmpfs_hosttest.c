@@ -5,24 +5,27 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * Includes both sources and stands a pool of host pages in for the frames.
- * A file's bytes are written across a hole and a page boundary, read back
- * with the hole as zeros, and cut and grown again; the mount option sets the
+ * A file's bytes are written across a hole and a page boundary, read back with
+ * the hole as zeros, and cut and grown again; frames come filled with 0xA5, so
+ * a zero read is one the code wrote. A file whose first pages are a hole reads
+ * a whole page of it as zeros into a buffer that held other bytes, and a write
+ * and a read across a page boundary move every byte. The mount option sets the
  * root's mode. Directories count their subdirectories in their link count and
  * refuse rmdir while they have names; a hard link keeps the bytes after the
  * first name goes; rename moves a name, replaces a file, and refuses to put a
- * directory over a file, a file over a directory, a directory over one that
- * is not empty, or a directory under itself. A symbolic link reads back its
+ * directory over a file, a file over a directory, a directory over one that is
+ * not empty, or a directory under itself. A symbolic link reads back its
  * target, a FIFO keeps its type, a device node keeps its number and does not
- * open, a listing is ".", "..", then the names in the order they were made
- * or renamed, each with its type, and a directory knows its path. A node
- * held after its last name goes stays readable, and a shared mapping's page
- * takes a reference of its own; a page at or past the most a file may have
- * is refused without growing the table, 2^31 and 2^32 - 1 among them, and
- * the last page below it is given; a truncation of mapped memory takes the
- * pages it frees out of the mappings first. A memfd's node has its name and no
- * directory, and goes with its last hold; its seals refuse a shrink, a
- * growth, a write, a change of its execute bits and more seals, and a
- * named file starts sealed against sealing. Returns the failed-check count.
+ * open, a listing is ".", "..", then the names in the order they were made or
+ * renamed, each with its type, and a directory knows its path. A node held
+ * after its last name goes stays readable, and a shared mapping's page takes a
+ * reference of its own; a page at or past the most a file may have is refused
+ * without growing the table, 2^31 and 2^32 - 1 among them, and the last page
+ * below it is given; a truncation of mapped memory takes the pages it frees out
+ * of the mappings first. A memfd's node has its name and no directory, and goes
+ * with its last hold; its seals refuse a shrink, a growth, a write, a change of
+ * its execute bits and more seals, and a named file starts sealed against
+ * sealing. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -76,6 +79,9 @@ static int frame_index(uintptr_t phys)
     return (int)(phys / PAGE_SIZE) - 1;
 }
 
+/* A frame comes filled with 0xA5, as a real one comes with what its last
+ * user left, so a page that reads as zeros was zeroed by the code under
+ * test. */
 uintptr_t alloc_user_frame(void)
 {
     int i;
@@ -83,6 +89,7 @@ uintptr_t alloc_user_frame(void)
     for (i = 0; i < POOL; i++) {
         if (refs[i] == 0) {
             refs[i] = 1;
+            k_memset(pool[i], 0xA5, PAGE_SIZE);
             return (uintptr_t)(i + 1) * PAGE_SIZE;
         }
     }
@@ -218,6 +225,45 @@ static void bytes(void)
     CHECK(tmpfs_truncate(&mnt, f, 10) == 0);
     CHECK(tmpfs_read(&mnt, f, buf, 10, 0) == 10 && k_memcmp(buf, "hel\0\0\0\0\0\0\0", 10) == 0);
     tmpfs_put(&mnt, f);
+}
+
+/* Whether the `n` bytes at `p` are all zero. */
+static int all_zero(const char *p, size_t n)
+{
+    while (n-- > 0) {
+        if (*p++ != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A file whose first pages are a hole reads them as zeros into a buffer that
+ * held something else, and a write and a read across a page boundary move
+ * every byte: the write takes two frames, and the read returns the bytes of
+ * both pages and the hole's zeros after them. */
+static void sparse(void)
+{
+    static char buf[PAGE_SIZE + 16];
+    void *f = make(NULL, "s", 0644);
+    int frames = frames_in_use();
+
+    CHECK(tmpfs_write(&mnt, f, "end", 3, 3 * PAGE_SIZE) == 3);
+    CHECK(frames_in_use() == frames + 1);
+    k_memset(buf, 0x5A, sizeof(buf));
+    CHECK(tmpfs_read(&mnt, f, buf, PAGE_SIZE, PAGE_SIZE) == PAGE_SIZE && all_zero(buf, PAGE_SIZE));
+    CHECK(tmpfs_write(&mnt, f, "abcdefgh", 8, 2 * PAGE_SIZE - 4) == 8);
+    CHECK(frames_in_use() == frames + 3);
+    k_memset(buf, 0x5A, sizeof(buf));
+    CHECK(tmpfs_read(&mnt, f, buf, 16, 2 * PAGE_SIZE - 8) == 16 && all_zero(buf, 4) &&
+          k_memcmp(buf + 4, "abcdefgh", 8) == 0 && all_zero(buf + 12, 4));
+    k_memset(buf, 0x5A, sizeof(buf));
+    CHECK(tmpfs_read(&mnt, f, buf, PAGE_SIZE + 16, 2 * PAGE_SIZE - 4) == PAGE_SIZE + 7 &&
+          k_memcmp(buf, "abcdefgh", 8) == 0 && all_zero(buf + 8, PAGE_SIZE - 4) &&
+          k_memcmp(buf + PAGE_SIZE + 4, "end", 3) == 0);
+    CHECK(tmpfs_unlink(&mnt, NULL, "s") == 0);
+    tmpfs_put(&mnt, f);
+    CHECK(frames_in_use() == frames);
 }
 
 static void directories(void)
@@ -435,6 +481,7 @@ int main(void)
     CHECK(tmpfs_mount(&mnt, NULL, 0, "") == 0);
     CHECK(tmpfs_getattr(&mnt, mnt.root, &st) == 0 && st.mode == (T_IFDIR | 01777u));
     bytes();
+    sparse();
     directories();
     links_and_renames();
     kinds();
