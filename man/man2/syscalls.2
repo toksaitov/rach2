@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 169 calls.
+The kernel registers the following 184 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -191,6 +191,21 @@ The kernel registers the following 169 calls.
 .It 340 Ta Xr prlimit64 2
 .It 353 Ta Xr renameat2 2
 .It 355 Ta Xr getrandom 2
+.It 359 Ta Xr socket 2
+.It 360 Ta Xr socketpair 2
+.It 361 Ta Xr bind 2
+.It 362 Ta Xr connect 2
+.It 363 Ta Xr listen 2
+.It 364 Ta Xr accept4 2
+.It 365 Ta Xr getsockopt 2
+.It 366 Ta Xr setsockopt 2
+.It 367 Ta Xr getsockname 2
+.It 368 Ta Xr getpeername 2
+.It 369 Ta Xr sendto 2
+.It 370 Ta Xr sendmsg 2
+.It 371 Ta Xr recvfrom 2
+.It 372 Ta Xr recvmsg 2
+.It 373 Ta Xr shutdown 2
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2
 .It 441 Ta Xr epoll_pwait2 2

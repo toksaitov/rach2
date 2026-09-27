@@ -131,6 +131,10 @@ void socket_init(void);
 /** Allocate a socket with refcount 1; NULL if the pool is full. */
 struct socket *socket_alloc(int type);
 
+/** An inode number for a socket of either family: rising, nonzero, and not
+ * one a live socket has. */
+uint32_t socket_inode_next(void);
+
 /** Add a reference (fork/dup2 sharing). */
 void socket_ref(struct socket *sock);
 

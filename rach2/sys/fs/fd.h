@@ -48,7 +48,8 @@ typedef enum {
     FD_TYPE_SYNTH_DIR,   /* synthetic directory (/dev, /proc, ...); priv encodes it */
     FD_TYPE_PTM,         /* pty master (/dev/ptmx; file_ops + priv = struct pty) */
     FD_TYPE_PTS,         /* pty slave (/dev/pts/N; file_ops + priv = struct pty) */
-    FD_TYPE_ANON         /* eventfd, epoll, timerfd (file_ops + priv = struct anon_obj ...) */
+    FD_TYPE_ANON,        /* eventfd, epoll, timerfd (file_ops + priv = struct anon_obj ...) */
+    FD_TYPE_UNIX         /* AF_UNIX socket (file_ops + priv = struct unix_sock) */
 } fd_type_t;
 
 /*

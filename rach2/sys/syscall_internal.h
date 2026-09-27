@@ -246,6 +246,36 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
 
 int32_t sys_socketcall(isr_params_t *params);
 
+int32_t sys_socket(isr_params_t *params);
+
+int32_t sys_socketpair(isr_params_t *params);
+
+int32_t sys_bind(isr_params_t *params);
+
+int32_t sys_connect(isr_params_t *params);
+
+int32_t sys_listen(isr_params_t *params);
+
+int32_t sys_accept4(isr_params_t *params);
+
+int32_t sys_getsockopt(isr_params_t *params);
+
+int32_t sys_setsockopt(isr_params_t *params);
+
+int32_t sys_getsockname(isr_params_t *params);
+
+int32_t sys_getpeername(isr_params_t *params);
+
+int32_t sys_sendto(isr_params_t *params);
+
+int32_t sys_sendmsg(isr_params_t *params);
+
+int32_t sys_recvfrom(isr_params_t *params);
+
+int32_t sys_recvmsg(isr_params_t *params);
+
+int32_t sys_shutdown(isr_params_t *params);
+
 int32_t sys_getpid(isr_params_t *params);
 
 int32_t sys_gettid(isr_params_t *params);

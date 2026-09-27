@@ -61,6 +61,7 @@
 #include "network/net.h"
 #include "network/netconf.h" /* net_ip_addr for getsockname */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
+#include "ipc/unix.h"
 #include "syscall_internal.h"
 
 /* Read and write the little-endian words of a caller's own structures (a
@@ -127,7 +128,13 @@
 
 #define SC_GETSOCKOPT 15
 
+#define SC_SOCKETPAIR 8
+
+#define SC_SENDMSG 16
+
 #define SC_RECVMSG 17
+
+#define SC_ACCEPT4 18
 
 /* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
  * used to squat on 15 == Linux getsockopt, which a real server needs).
@@ -500,15 +507,43 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     return 0;
 }
 
+/**
+ * Send `len` bytes at `buf`, of at most one UDP packet, from the datagram
+ * socket of `entry` to the sockaddr at `sa_ptr`, or with none to the address
+ * it is connected to. One send path, so the broadcast permission and the
+ * ephemeral bind are the same for sendto, sendmsg and a write to a connected
+ * socket.
+ */
+static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uint32_t sa_ptr,
+                          int addrlen)
+{
+    uint8_t sa[SOCKADDR_MIN];
+
+    /* A connected datagram socket needs no destination: `send` is `sendto`
+     * with none, which is what musl's send() issues. */
+    if (sa_ptr == 0 || addrlen == 0) {
+        if (!entry->sock->connected) {
+            return -EDESTADDRREQ;
+        }
+        return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port, buf,
+                          (uint16_t)len);
+    }
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL; /* declared sockaddr shorter than the header we read */
+    }
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
+    }
+    return dgram_send(entry->sock, canonical_dst_ip(SC_BE32(sa + 4)), SC_BE16(sa + 2), buf,
+                      (uint16_t)len);
+}
+
 /* sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
  * first. */
 static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
-    uint16_t dst_port;
-    uint32_t dst_ip;
-    uint8_t sa[SOCKADDR_MIN];
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
@@ -622,33 +657,10 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
         return -EMSGSIZE;
     }
 
-    /* A connected datagram socket needs no destination: `send` is `sendto`
-     * with none, which is what musl's send() issues. */
-    if (sa_ptr == 0 || addrlen == 0) {
-        if (!entry->sock->connected) {
-            return -EDESTADDRREQ;
-        }
-        return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port,
-                          (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
-    }
-
-    /* Datagram path: a real destination address is required. */
-    if (addrlen < SOCKADDR_MIN) {
-        return -EINVAL; /* declared sockaddr shorter than the header we read */
-    }
-    /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
-    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
-        return -EFAULT;
-    }
-
-    dst_port = SC_BE16(sa + 2);
-    dst_ip = canonical_dst_ip(SC_BE32(sa + 4));
-
-    /* One send path, so the broadcast permission and the ephemeral bind are
-     * the same here as they are for a write to a connected socket. udp_tx
-     * reads the payload itself; __force strips __user at the boundary. */
-    return dgram_send(entry->sock, dst_ip, dst_port,
-                      (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
+    /* udp_tx reads the payload itself; __force strips __user at the
+     * boundary. */
+    return udp_sendto(entry, (const uint8_t __force *)(const void __user *)buf_ptr, len, sa_ptr,
+                      addrlen);
 }
 
 /* recvfrom(2): a stream socket behaves like recv (no source writeback); a
@@ -1583,6 +1595,173 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
 }
 
 /**
+ * sendmsg(2) on an AF_INET or packet socket: the caller's buffers in order,
+ * as one send. A stream sends them one after another and stops at the first
+ * that goes short; a UDP socket gathers them into one datagram; a raw or
+ * packet socket takes one buffer. Control messages carry nothing here and
+ * are ignored.
+ */
+static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
+{
+    uint8_t hdr[MSGHDR_LEN];
+    struct kernel_iovec iov[8];
+    uint8_t *gathered;
+    fd_entry_t *entry;
+    uint32_t iov_user, iovlen, name_ptr, namelen, i, total = 0;
+    int32_t rc;
+
+    if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
+        return -EFAULT;
+    }
+    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    name_ptr = SC_LE32(hdr + MSGHDR_NAME);
+    namelen = SC_LE32(hdr + MSGHDR_NAMELEN);
+    iov_user = SC_LE32(hdr + MSGHDR_IOV);
+    iovlen = SC_LE32(hdr + MSGHDR_IOVLEN);
+    if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
+        return -EMSGSIZE;
+    }
+    if (entry->sock->type == SOCK_STREAM) {
+        for (i = 0; i < iovlen; i++) {
+            struct kernel_iovec one;
+
+            if (copy_from_user(&one, (const void __user *)(iov_user + i * 8u), sizeof(one)) != 0) {
+                return total ? (int32_t)total : -EFAULT;
+            }
+            if (one.iov_len == 0) {
+                continue;
+            }
+            rc = do_sendto(fd, one.iov_base, (int)one.iov_len, flags, 0, 0);
+            if (rc < 0) {
+                return total ? (int32_t)total : rc;
+            }
+            total += (uint32_t)rc;
+            if ((uint32_t)rc < one.iov_len) {
+                break;
+            }
+        }
+        return (int32_t)total;
+    }
+    if (iovlen > sizeof(iov) / sizeof(iov[0])) {
+        return -EMSGSIZE;
+    }
+    if (copy_from_user(iov, (const void __user *)iov_user, iovlen * sizeof(iov[0])) != 0) {
+        return -EFAULT;
+    }
+    if (iovlen == 1 || entry->sock->type != SOCK_DGRAM || entry->sock->family != AF_INET) {
+        if (iovlen > 1) {
+            return -EOPNOTSUPP;
+        }
+        return do_sendto(fd, iovlen ? iov[0].iov_base : 0u, iovlen ? (int)iov[0].iov_len : 0,
+                         flags, name_ptr, (int)namelen);
+    }
+    for (i = 0; i < iovlen; i++) {
+        if (iov[i].iov_len > 1500u - total) {
+            return -EMSGSIZE;
+        }
+        total += iov[i].iov_len;
+    }
+    gathered = kmalloc(total ? total : 1u);
+    if (!gathered) {
+        return -ENOMEM;
+    }
+    for (i = 0, total = 0; i < iovlen; i++) {
+        if (copy_from_user(gathered + total, (const void __user *)iov[i].iov_base,
+                           iov[i].iov_len) != 0) {
+            kfree(gathered);
+            return -EFAULT;
+        }
+        total += iov[i].iov_len;
+    }
+    rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen);
+    kfree(gathered);
+    return rc;
+}
+
+/* accept4(2) on an AF_INET socket: accept, and SOCK_CLOEXEC and
+ * SOCK_NONBLOCK on the new descriptor. */
+static int32_t do_accept4(int fd, uint32_t sa_ptr, uint32_t salen_ptr, int flags)
+{
+    fd_entry_t *e;
+    int32_t nfd;
+
+    if (flags & ~(02000000 | 04000)) {
+        return -EINVAL;
+    }
+    nfd = do_accept(fd, sa_ptr, salen_ptr);
+    e = nfd >= 0 ? fd_get(&current_proc->fds, nfd) : (fd_entry_t *)0;
+    if (e && (flags & 02000000)) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    if (e && (flags & 04000) && e->ofd) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    return nfd;
+}
+
+/* The calls on an AF_UNIX socket, which ipc/unix.c answers. */
+static int32_t unix_call(int call, fd_entry_t *e, const uint32_t *args)
+{
+    switch (call) {
+    case SC_BIND:
+        return unix_bind(e, args[1], args[2]);
+    case SC_CONNECT:
+        return unix_connect(e, args[1], args[2]);
+    case SC_LISTEN:
+        return unix_listen(e, (int)args[1]);
+    case SC_ACCEPT:
+        return unix_accept(e, args[1], args[2], 0);
+    case SC_ACCEPT4:
+        return unix_accept(e, args[1], args[2], (int)args[3]);
+    case SC_GETSOCKNAME:
+        return unix_getname(e, args[1], args[2], 0);
+    case SC_GETPEERNAME:
+        return unix_getname(e, args[1], args[2], 1);
+    case SC_SEND:
+        return unix_sendto(e, args[1], args[2], (int)args[3], 0, 0);
+    case SC_RECV:
+        return unix_recvfrom(e, args[1], args[2], (int)args[3], 0, 0);
+    case SC_SENDTO:
+        return unix_sendto(e, args[1], args[2], (int)args[3], args[4], args[5]);
+    case SC_RECVFROM:
+        return unix_recvfrom(e, args[1], args[2], (int)args[3], args[4], args[5]);
+    case SC_SHUTDOWN:
+        return unix_shutdown(e, (int)args[1]);
+    case SC_SETSOCKOPT:
+        return unix_setsockopt(e, (int)args[1], (int)args[2], args[3], args[4]);
+    case SC_GETSOCKOPT:
+        return unix_getsockopt(e, (int)args[1], (int)args[2], args[3], args[4]);
+    case SC_SENDMSG:
+        return unix_sendmsg(e, args[1], (int)args[2]);
+    case SC_RECVMSG:
+        return unix_recvmsg(e, args[1], (int)args[2]);
+    default:
+        return -EOPNOTSUPP;
+    }
+}
+
+/* socket(2) and socketpair(2) of AF_UNIX: the type with its SOCK_CLOEXEC and
+ * SOCK_NONBLOCK bits taken off, and any other bit refused. */
+static int32_t unix_make(int call, const uint32_t *args)
+{
+    uint32_t flags = args[1] & (02000000u | 04000u);
+    int type = (int)(args[1] & ~(02000000u | 04000u));
+
+    if (type & ~0xF) {
+        return -EINVAL;
+    }
+    if (call == SC_SOCKETPAIR) {
+        return unix_socketpair(type, (int)args[2], (int)flags, args[3]);
+    }
+    return unix_socket(type, (int)args[2], (int)flags);
+}
+
+static int32_t socket_dispatch(int call, uint32_t *args);
+
+/**
  * Multiplexed socket syscall (socketcall, syscall 102).
  *
  * EBX is the SC_* sub-call number, ECX a user pointer to its argument array.
@@ -1614,7 +1793,12 @@ int32_t sys_socketcall(isr_params_t *params)
         nargs = 3;
         break;
     case SC_RECVMSG:
+    case SC_SENDMSG:
         nargs = 3;
+        break;
+    case SC_SOCKETPAIR:
+    case SC_ACCEPT4:
+        nargs = 4;
         break;
     case SC_SEND:
     case SC_RECV:
@@ -1635,6 +1819,30 @@ int32_t sys_socketcall(isr_params_t *params)
     /* Pull the argument array out of user memory in one fault-checked copy. */
     if (copy_from_user(args, (const void __user *)argp, (uint32_t)nargs * 4) != 0) {
         return -EFAULT;
+    }
+    return socket_dispatch(call, args);
+}
+
+/**
+ * Run socket sub-call `call` with its arguments `args`, for socketcall and
+ * for the direct socket calls. A call on an AF_UNIX socket, or one that
+ * makes one, goes to ipc/unix.c; the rest to the calls above.
+ */
+static int32_t socket_dispatch(int call, uint32_t *args)
+{
+    fd_entry_t *e;
+
+    if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && args[0] == AF_UNIX) {
+        return unix_make(call, args);
+    }
+    if (call == SC_SOCKETPAIR) {
+        return -EOPNOTSUPP;
+    }
+    e = (call != SC_SOCKET && call != SC_PING && current_proc)
+            ? fd_get(&current_proc->fds, (int)args[0])
+            : (fd_entry_t *)0;
+    if (e && e->type == FD_TYPE_UNIX) {
+        return unix_call(call, e, args);
     }
 
     switch (call) {
@@ -1670,7 +1878,102 @@ int32_t sys_socketcall(isr_params_t *params)
         return do_recv((int)args[0], args[1], (int)args[2], (int)args[3]);
     case SC_RECVMSG:
         return do_recvmsg((int)args[0], args[1], (int)args[2]);
+    case SC_SENDMSG:
+        return do_sendmsg((int)args[0], args[1], (int)args[2]);
+    case SC_ACCEPT4:
+        return do_accept4((int)args[0], args[1], args[2], (int)args[3]);
     default:
         return -EINVAL;
     }
+}
+
+/* The direct socket calls, numbers 359 to 373, which a C library built for a
+ * Linux newer than 4.3 makes instead of socketcall: the same sub-calls with
+ * their arguments in registers. */
+static int32_t direct(int call, isr_params_t *params)
+{
+    uint32_t args[6];
+
+    args[0] = params->ebx;
+    args[1] = params->ecx;
+    args[2] = params->edx;
+    args[3] = params->esi;
+    args[4] = params->edi;
+    args[5] = params->ebp;
+    return socket_dispatch(call, args);
+}
+
+int32_t sys_socket(isr_params_t *params)
+{
+    return direct(SC_SOCKET, params);
+}
+
+int32_t sys_socketpair(isr_params_t *params)
+{
+    return direct(SC_SOCKETPAIR, params);
+}
+
+int32_t sys_bind(isr_params_t *params)
+{
+    return direct(SC_BIND, params);
+}
+
+int32_t sys_connect(isr_params_t *params)
+{
+    return direct(SC_CONNECT, params);
+}
+
+int32_t sys_listen(isr_params_t *params)
+{
+    return direct(SC_LISTEN, params);
+}
+
+int32_t sys_accept4(isr_params_t *params)
+{
+    return direct(SC_ACCEPT4, params);
+}
+
+int32_t sys_getsockopt(isr_params_t *params)
+{
+    return direct(SC_GETSOCKOPT, params);
+}
+
+int32_t sys_setsockopt(isr_params_t *params)
+{
+    return direct(SC_SETSOCKOPT, params);
+}
+
+int32_t sys_getsockname(isr_params_t *params)
+{
+    return direct(SC_GETSOCKNAME, params);
+}
+
+int32_t sys_getpeername(isr_params_t *params)
+{
+    return direct(SC_GETPEERNAME, params);
+}
+
+int32_t sys_sendto(isr_params_t *params)
+{
+    return direct(SC_SENDTO, params);
+}
+
+int32_t sys_sendmsg(isr_params_t *params)
+{
+    return direct(SC_SENDMSG, params);
+}
+
+int32_t sys_recvfrom(isr_params_t *params)
+{
+    return direct(SC_RECVFROM, params);
+}
+
+int32_t sys_recvmsg(isr_params_t *params)
+{
+    return direct(SC_RECVMSG, params);
+}
+
+int32_t sys_shutdown(isr_params_t *params)
+{
+    return direct(SC_SHUTDOWN, params);
 }

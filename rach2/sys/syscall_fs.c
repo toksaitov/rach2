@@ -61,6 +61,7 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
+#include "ipc/unix.h"
 #include "syscall_internal.h"
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
@@ -90,7 +91,9 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid)
  * are the count, so there is nothing to keep in step.
  *
  * The tables are a few pointer compares per live process, of kernel memory;
- * it never touches the page-cache window.
+ * it never touches the page-cache window. A descriptor in flight on an
+ * AF_UNIX socket holds the node as a descriptor does, and counts as one
+ * holder more.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
@@ -109,6 +112,9 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
                 held++;
             }
         }
+    }
+    if (unix_inflight_holds(node)) {
+        held++;
     }
     return held;
 }
@@ -3889,6 +3895,12 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = entry->sock ? entry->sock->inode : 0u;
+    } else if (entry->type == FD_TYPE_UNIX) {
+        /* An AF_UNIX socket: S_ISSOCK, and the inode /proc/PID/fd shows. */
+        kst->st_mode = 0140777; /* S_IFSOCK | 0777 */
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        kst->st_ino = entry->priv ? unix_inode(entry) : 0u;
     } else if (entry->type == FD_TYPE_ANON) {
         /* eventfd, epoll, timerfd: Linux's anonymous inode, mode 0600 with
          * no type bits. */
@@ -6997,4 +7009,115 @@ int32_t sys_dup3(isr_params_t *params)
         }
     }
     return r;
+}
+
+/* The file type bits of a socket file. */
+#define S_IFSOCK_BITS 0140000u
+
+/**
+ * The kernel path `path`, relative to the working directory unless it is
+ * absolute, as a canonical absolute path in `buf` of VFS_PATH_MAX bytes.
+ * Returns its length, or -ENOENT, -ENAMETOOLONG.
+ */
+static int kernel_path_cwd(char *buf, const char *path)
+{
+    uint32_t len = (uint32_t)k_strlen(path);
+    int r;
+
+    if (len == 0) {
+        return -ENOENT;
+    }
+    if (len >= VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(buf, path, len + 1u);
+    if (buf[0] != '/') {
+        r = path_prepend(buf, VFS_PATH_MAX, len, proc_cwd(current_proc));
+        if (r < 0) {
+            return r;
+        }
+    }
+    return canonicalize_abs(buf);
+}
+
+/**
+ * Make the socket file an AF_UNIX bind names. The file is made as O_CREAT
+ * with O_EXCL makes one, with the socket type bits; the hold its creation
+ * gave is kept for the socket's life, as a working directory keeps its own,
+ * so the mount counts it and refuses to go while the socket is bound.
+ */
+int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino)
+{
+    char *buf = path_buf_get();
+    struct vfs_stat st;
+    int rc;
+
+    if (!buf) {
+        return -ENOMEM;
+    }
+    rc = kernel_path_cwd(buf, path);
+    if (rc >= 0) {
+        rc = open_create(buf, O_EXCL, S_IFSOCK_BITS | (mode & 07777u), ref);
+        if (rc == 0) {
+            vfs_walk_unlock(ref->mnt);
+            rc = vfs_getattr(ref->mnt, ref->node, &st);
+            if (rc == 0) {
+                *ino = (uint32_t)st.ino;
+                ref->mnt->refs++;
+                vfs_leave(ref->mnt);
+            } else {
+                vfs_ref_release(ref);
+            }
+        } else if (rc == 1 || rc == -EEXIST) {
+            rc = -EADDRINUSE;
+        }
+    }
+    path_buf_put(buf);
+    return rc;
+}
+
+void fs_socket_unbind(struct vfs_ref *ref)
+{
+    struct vfs_mount *mnt = ref->mnt;
+
+    vfs_ref_put(ref);
+    mnt->refs--;
+}
+
+/**
+ * Find the socket file a connect or a send names: its mount and inode
+ * number, after the caller's write permission on it is checked.
+ */
+int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino)
+{
+    char *buf = path_buf_get();
+    struct vfs_ref ref;
+    struct vfs_stat st;
+    int rc;
+
+    if (!buf) {
+        return -ENOMEM;
+    }
+    rc = kernel_path_cwd(buf, path);
+    if (rc >= 0) {
+        rc = vfs_resolve(0, buf, 0, &ref, 0, 0);
+    }
+    path_buf_put(buf);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = vfs_getattr(ref.mnt, ref.node, &st);
+    if (rc == 0 && (st.mode & 0170000u) != S_IFSOCK_BITS) {
+        rc = -ECONNREFUSED;
+    }
+    if (rc == 0) {
+        rc = mnt_is_root(ref.mnt) ? (int)cred_access_node((krffs_node_t *)ref.node, CRED_W, 0)
+                                  : (int)cred_access_ref(&ref, CRED_W, 0);
+    }
+    if (rc == 0) {
+        *mnt = ref.mnt;
+        *ino = (uint32_t)st.ino;
+    }
+    vfs_ref_release(&ref);
+    return rc;
 }

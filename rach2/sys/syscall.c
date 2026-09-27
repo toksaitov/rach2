@@ -2064,6 +2064,21 @@ void init_syscall(void)
     /* musl's exit() issues exit_group(); for a single-threaded process it is
      * exactly _exit(). */
     _syscall_table[SYS_EXIT_GROUP] = sys_exit;
+    _syscall_table[SYS_SOCKET] = sys_socket;
+    _syscall_table[SYS_SOCKETPAIR] = sys_socketpair;
+    _syscall_table[SYS_BIND] = sys_bind;
+    _syscall_table[SYS_CONNECT] = sys_connect;
+    _syscall_table[SYS_LISTEN] = sys_listen;
+    _syscall_table[SYS_ACCEPT4] = sys_accept4;
+    _syscall_table[SYS_GETSOCKOPT] = sys_getsockopt;
+    _syscall_table[SYS_SETSOCKOPT] = sys_setsockopt;
+    _syscall_table[SYS_GETSOCKNAME] = sys_getsockname;
+    _syscall_table[SYS_GETPEERNAME] = sys_getpeername;
+    _syscall_table[SYS_SENDTO] = sys_sendto;
+    _syscall_table[SYS_SENDMSG] = sys_sendmsg;
+    _syscall_table[SYS_RECVFROM] = sys_recvfrom;
+    _syscall_table[SYS_RECVMSG] = sys_recvmsg;
+    _syscall_table[SYS_SHUTDOWN] = sys_shutdown;
     _syscall_table[SYS_EVENTFD] = sys_eventfd;
     _syscall_table[SYS_EVENTFD2] = sys_eventfd2;
     _syscall_table[SYS_EPOLL_CREATE] = sys_epoll_create;

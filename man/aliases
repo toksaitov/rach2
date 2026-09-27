@@ -481,3 +481,6 @@ timerfd_settime 2 timerfd
 timerfd_gettime 2 timerfd
 timerfd_settime64 2 timerfd
 timerfd_gettime64 2 timerfd
+socketpair 2 socket
+accept4 2 accept
+sendmsg 2 send

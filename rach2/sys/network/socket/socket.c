@@ -23,6 +23,7 @@
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"
+#include "../../ipc/unix.h"
 
 /* The live sockets, each allocated from the heap when opened and freed
  * when its last reference goes. An incoming SYN allocates one from the
@@ -41,9 +42,9 @@ static uint32_t next_socket_inode = 1;
  * The next inode to give a socket: rising, nonzero, and not one in use.
  *
  * The number rises, so a socket made later never reads as one that is gone.
- * The counter is 32 bits and wraps, so the live sockets are checked and a
- * number one of them has is stepped over. Zero is skipped because it is
- * what an unset field reads as. Called with net_lock held.
+ * The counter is 32 bits and wraps, so the live sockets of both families
+ * are checked and a number one of them has is stepped over. Zero is skipped
+ * because it is what an unset field reads as. Called with net_lock held.
  */
 static uint32_t socket_next_inode(void)
 {
@@ -56,10 +57,19 @@ static uint32_t socket_next_inode(void)
         }
         for (s = sockets; s && s->inode != candidate; s = s->next) {
         }
-        if (!s) {
+        if (!s && !unix_inode_used(candidate)) {
             return candidate;
         }
     }
+}
+
+uint32_t socket_inode_next(void)
+{
+    uint32_t flags = net_lock();
+    uint32_t ino = socket_next_inode();
+
+    net_unlock(flags);
+    return ino;
 }
 
 /**

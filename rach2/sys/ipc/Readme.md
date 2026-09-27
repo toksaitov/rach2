@@ -1,6 +1,6 @@
-# `ipc/`: anonymous pipes
+# `ipc/`: pipes and AF_UNIX sockets
 
-Rach2 implements anonymous byte pipes through `pipe` and `pipe2`. A pipe has a read end, a write end, and a 4096-byte ring. It preserves byte order but has no message boundaries.
+Rach2 implements anonymous byte pipes through `pipe` and `pipe2`, the pipe behind a FIFO file, and AF_UNIX sockets (`unix.c`). A pipe has a read end, a write end, and a 4096-byte ring. It preserves byte order but has no message boundaries.
 
 ## Creation and lifetime
 
@@ -36,6 +36,14 @@ The ring uses monotonically increasing 32-bit head and tail counters. Occupancy 
 
 The implementation has no pipe resizing, packet mode, `splice`, `tee`, or `vmsplice`.
 
+## FIFOs
+
+A FIFO file is opened as an end of a pipe (`fifo_attach`), one pipe for each FIFO file, found by the file's mount and inode number, made at the first open and freed when no end is open, as in Linux. An open for reading waits for a writer and an open for writing for a reader; with `O_NONBLOCK` a reader does not wait and a writer with no reader fails with `ENXIO`; `O_RDWR` opens both ends and never waits. Each open has a description of its own, and the pipe counts the descriptions open on each end, so the end of input and `SIGPIPE` come when the last of an end's descriptions closes.
+
+## AF_UNIX sockets
+
+An AF_UNIX socket (`unix.c`) is a descriptor of type `FD_TYPE_UNIX` whose `priv` is the socket record. `read`, `write`, `poll`, `ioctl` and the last close go through its `file_ops`, and the socket calls through `syscall_net.c`, which sends every call on such a descriptor to one dispatch here. A stream or sequenced-packet connection is two records that point at each other; a datagram socket may point at the one it is connected to. A message is a record on the receiver's queue with its bytes, the sender's name and credentials, and the descriptors it carries: copies of the sender's descriptor entries, each holding its open file description as a descriptor in a table does, installed in the receiver's table as it takes them. A record counts the descriptors' side, each socket connected to it and an accept queue, and is freed with the last; the last close ends the connection, drops the queue, and so closes the descriptors in flight on it. A path name is a socket file made through the file system (`fs_socket_bind`), which the bound socket holds as a working directory holds its own. [unix(7)](../../../man/man7/unix.7) states the behaviour; a socket sent over itself and never received is not reclaimed.
+
 ## Verification
 
 `make test` runs two pipe-specific freestanding probes:
@@ -44,5 +52,7 @@ The implementation has no pipe resizing, packet mode, `splice`, `tee`, or `vmspl
 * `tests/pollprobe.c` checks `POLLIN` readiness, timeout, `POLLHUP`, `select` translation, and a poller woken by a child writing after a delay.
 
 `tests/run host` runs `tests/host/pipe_ring_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks empty and full rings, bounded partial operations, byte order, and a transfer across the physical end of the array. `tests/host/pipe_copy_hosttest.c` runs the production pipe and user-copy code with a resolver that executes a competing pipe operation before returning a lazy or COW page. It checks byte order, bounded occupancy, peer closure, page faults, partial transfers, waits and wakeups. `sh tests/host/pipe_copy_mutate.sh` removes each early prefault separately in a private source copy; each compiled mutation must fail, and each restored, touched and rebuilt source must pass. This models the scheduling order without running reclaim, disk I/O or a CPU context switch. `tests/host/wait_queue_hosttest.c` checks linked-list insertion and removal, duplicate insertion, wake-all behavior and sixty-four simultaneous waiters; the guest probes above exercise the actual scheduling path.
+
+`tests/musl/unixmusl.c`, in the default suite, checks AF_UNIX stream, datagram and sequenced-packet pairs, `SCM_RIGHTS` to a child, `SO_PEERCRED` and `SCM_CREDENTIALS`, a listener on a path and on an abstract name with the names both ends report, the refusals of a second bind and of a socket file with no listener, datagrams to a name, and `EAGAIN` and `poll` on a nonblocking pair.
 
 `tests/musl/pipemusl.c` is built and staged at `/musl/pipemusl` for a manual libc `pipe`, `fork`, read, write, close, and wait round trip. It is not an entry in the default `make test` runner.

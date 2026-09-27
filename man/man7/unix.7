@@ -1,0 +1,183 @@
+.Dd September 27, 2026
+.Dt UNIX 7
+.Os
+.Sh NAME
+.Nm unix
+.Nd sockets for communication between processes of one machine
+.Sh SYNOPSIS
+.In sys/socket.h
+.In sys/un.h
+.Ft int
+.Fn socket "AF_UNIX" "int type" "0"
+.Ft int
+.Fn socketpair "AF_UNIX" "int type" "0" "int sv[2]"
+.Sh DESCRIPTION
+An
+.Dv AF_UNIX
+socket carries data between processes on this machine.
+.Fa type
+is
+.Dv SOCK_STREAM ,
+a byte stream between two connected ends;
+.Dv SOCK_SEQPACKET ,
+the same connection with the boundaries of messages kept; or
+.Dv SOCK_DGRAM ,
+messages sent to a name, or to the socket connected to.
+.Dv SOCK_RAW
+is taken as
+.Dv SOCK_DGRAM ,
+as in Linux, and
+.Dv SOCK_CLOEXEC
+and
+.Dv SOCK_NONBLOCK
+may be added to the type.
+.Fn socketpair
+makes two sockets connected to each other.
+.Ss Names
+A name is a
+.Vt struct sockaddr_un :
+.Dv AF_UNIX
+and
+.Fa sun_path ,
+108 bytes.
+A path in
+.Fa sun_path ,
+which ends at its first NUL byte or at the end of the address, names a
+socket file:
+.Xr bind 2
+makes it, with the permission bits 0777 less the umask, and fails with
+.Er EADDRINUSE
+when the path exists; a connect or a send to it needs write permission on
+it.
+The file stays after the socket is closed, as in Linux, and a connect to
+it then fails with
+.Er ECONNREFUSED .
+A name whose first byte is NUL is in the abstract namespace: it names no
+file, lasts as long as its socket, and is found only by sockets of the
+same type.
+A bind with an address of the family alone, or a connect or send by a
+socket with
+.Dv SO_PASSCRED
+and no name, gives the socket an abstract name of five hexadecimal
+digits.
+.Xr getsockname 2
+reports a path with its NUL in the length; an accepted socket reports
+its listener's name.
+.Ss Connections
+.Xr listen 2
+makes a bound stream or sequenced-packet socket accept connections; its
+backlog is at most 4096.
+.Xr connect 2
+queues a connection at once, and the connecting socket may send before
+it is accepted; with the queue past the backlog, a connect waits, or
+fails with
+.Er EAGAIN
+when the socket is nonblocking.
+.Xr accept4 2
+takes the oldest queued connection.
+When one end of a connection closes, the other reads the end of input and
+a send there fails with
+.Er EPIPE
+and
+.Dv SIGPIPE ;
+if the closing end left data unread, or was never accepted, the other end
+also gets
+.Er ECONNRESET
+once.
+.Xr shutdown 2
+ends the input or output of one end, and the matching direction of the
+other.
+.Ss Data
+A stream is sent in pieces of at most 64 KiB as the receiver's queue has
+room, at most 212992 bytes; a read returns what is queued, across the
+pieces, and waits only for the first byte, or with
+.Dv MSG_WAITALL
+for all.
+A sequenced-packet or datagram receive takes one message; bytes past the
+buffer are dropped and
+.Dv MSG_TRUNC
+set, and with
+.Dv MSG_TRUNC
+in the flags the call returns the message's whole length.
+A datagram receiver queues at most 10 messages and 212992 bytes, and a
+sender waits for room, or fails with
+.Er EAGAIN .
+A datagram socket may be connected to one peer; a socket connected to
+another refuses the send with
+.Er EPERM .
+.Dv MSG_PEEK ,
+.Dv MSG_DONTWAIT
+and
+.Dv MSG_NOSIGNAL
+behave as in Linux;
+.Dv MSG_OOB
+fails with
+.Er EOPNOTSUPP .
+.Ss Control messages
+A
+.Xr sendmsg 2
+may carry
+.Dv SCM_RIGHTS ,
+up to 253 descriptors, which the receiver gets as new descriptors of the
+same open files, with
+.Dv FD_CLOEXEC
+when it passed
+.Dv MSG_CMSG_CLOEXEC .
+On a stream, the descriptors arrive with the first byte of the send that
+carried them, and a read that takes them ends after that send's bytes.
+Descriptors for which the receiver's control buffer has no room are
+closed, and
+.Dv MSG_CTRUNC
+is set.
+A socket that is itself sent over itself and never received is not
+reclaimed; Linux collects such cycles.
+.Pp
+A receiver with
+.Dv SO_PASSCRED
+gets
+.Dv SCM_CREDENTIALS
+with every message: the sender's process id and real user and group ids,
+or those the sender gave, which must be its own real, effective or saved
+ids unless it is root.
+On a stream with
+.Dv SO_PASSCRED ,
+a read does not join the bytes of two senders.
+.Ss Options
+.Dv SO_PEERCRED
+reports the process id and effective ids of the peer when it connected,
+or of the listener when it began to listen; with no peer, pid 0 and ids
+-1.
+.Dv SO_TYPE ,
+.Dv SO_DOMAIN ,
+.Dv SO_PROTOCOL ,
+.Dv SO_ERROR ,
+.Dv SO_ACCEPTCONN ,
+.Dv SO_SNDBUF
+and
+.Dv SO_RCVBUF
+are reported; a buffer size set is doubled, as in Linux, from 4608 to
+425984 bytes.
+.Dv SO_RCVTIMEO
+and
+.Dv SO_SNDTIMEO
+bound a wait, rounded up to 10 ms ticks, which then fails with
+.Er EAGAIN .
+.Dv SO_REUSEADDR ,
+.Dv SO_KEEPALIVE ,
+.Dv SO_LINGER
+and the low-water marks are accepted and change nothing.
+.Pp
+.Dv FIONREAD
+reports the bytes queued on a stream, or the length of the next message;
+.Dv TIOCOUTQ
+the bytes the peer has not read.
+.Xr fstat 2
+reports
+.Dv S_IFSOCK
+and the socket's inode, the number
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+shows as
+.Dq socket:[inode] .
+.Sh SEE ALSO
+.Xr socket 2 ,
+.Xr socketcall 2

@@ -89,6 +89,7 @@ C_SRC = kernel.c \
         sys/proc/sigframe.c \
         sys/ipc/pipe.c \
         sys/ipc/pipe_ring.c \
+        sys/ipc/unix.c \
         sys/io/poll.c \
         sys/io/poll_select.c \
         sys/io/eventfd.c \

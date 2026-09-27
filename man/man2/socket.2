@@ -2,12 +2,15 @@
 .Dt SOCKET 2
 .Os
 .Sh NAME
-.Nm socket
-.Nd create a socket
+.Nm socket ,
+.Nm socketpair
+.Nd create a socket, or a connected pair of sockets
 .Sh SYNOPSIS
 .In sys/socket.h
 .Ft int
 .Fn socket "int domain" "int type" "int protocol"
+.Ft int
+.Fn socketpair "int domain" "int type" "int protocol" "int sv[2]"
 .Sh DESCRIPTION
 .Fn socket
 creates a socket and returns a descriptor open for reading and writing.
@@ -49,13 +52,40 @@ must contain the Ethernet protocol in network byte order:
 IPv4 (0x0800), ARP (0x0806), or zero.
 Zero leaves the protocol unspecified until
 .Xr bind 2 .
+.It Dv AF_UNIX , SOCK_STREAM , SOCK_DGRAM No or Dv SOCK_SEQPACKET
+A socket between processes of this machine, described in
+.Xr unix 7 .
+.Fa protocol
+must be 0.
+.Dv SOCK_RAW
+is taken as
+.Dv SOCK_DGRAM ,
+as in Linux, and
+.Dv SOCK_CLOEXEC
+and
+.Dv SOCK_NONBLOCK
+in
+.Fa type
+set
+.Dv FD_CLOEXEC
+and
+.Dv O_NONBLOCK
+on the new descriptor.
 .El
 .Pp
 Other address families, including
-.Dv AF_UNIX
-and
 .Dv AF_INET6 ,
 are not supported.
+.Pp
+.Fn socketpair
+makes two
+.Dv AF_UNIX
+sockets of
+.Fa type
+connected to each other and stores their descriptors in
+.Fa sv ;
+another domain fails with
+.Er EOPNOTSUPP .
 .Pp
 Musl accepts
 .Dv SOCK_NONBLOCK
@@ -83,12 +113,15 @@ Descriptor allocation remains subject to the process's descriptor limit.
 .Pp
 The kernel interface is operation 1 of
 .Xr socketcall 2
-(i386 system call 102).
-Its argument block contains
+(i386 system call 102), whose argument block contains
 .Fa domain , type ,
 and
 .Fa protocol
-as three 32-bit words.
+as three 32-bit words, or the direct call, number 359.
+.Fn socketpair
+is operation 8, with
+.Fa sv
+the fourth word, or number 360.
 .Sh RETURN VALUES
 .Fn socket
 returns a nonnegative descriptor on success.
@@ -107,10 +140,11 @@ through
 .Bl -tag -width "[EPROTONOSUPPORT]"
 .It Bq Er EAFNOSUPPORT
 .Fa domain
-is neither
-.Dv AF_INET
-nor
-.Dv AF_PACKET .
+is none of
+.Dv AF_INET ,
+.Dv AF_PACKET
+and
+.Dv AF_UNIX .
 .It Bq Er EFAULT
 The socketcall argument block cannot be read.
 .It Bq Er EINVAL
@@ -125,16 +159,26 @@ The process cannot allocate another descriptor or open-file description.
 The raw ICMP registration and receive queue cannot be allocated.
 .It Bq Er ENOMEM
 The socket object cannot be allocated.
+.It Bq Er EOPNOTSUPP
+.Fn socketpair
+was asked for a domain other than
+.Dv AF_UNIX .
 .It Bq Er EPERM
 A raw IPv4 socket or packet socket was requested without effective user ID 0.
 .It Bq Er EPROTONOSUPPORT
 An IPv4 raw protocol is neither
 .Dv IPPROTO_RAW
 nor
-.Dv IPPROTO_ICMP .
+.Dv IPPROTO_ICMP ,
+or an
+.Dv AF_UNIX
+protocol is not 0.
 .It Bq Er ESOCKTNOSUPPORT
 A privileged caller requested
-.Dv AF_PACKET , SOCK_STREAM .
+.Dv AF_PACKET , SOCK_STREAM ,
+or an
+.Dv AF_UNIX
+type is not one of the three above.
 .El
 .Sh SEE ALSO
 .Xr bind 2 ,
@@ -143,4 +187,5 @@ A privileged caller requested
 .Xr listen 2 ,
 .Xr recv 2 ,
 .Xr send 2 ,
-.Xr socketcall 2
+.Xr socketcall 2 ,
+.Xr unix 7

@@ -2,20 +2,40 @@
 .Dt ACCEPT 2
 .Os
 .Sh NAME
-.Nm accept
+.Nm accept ,
+.Nm accept4
 .Nd accept a queued connection
 .Sh SYNOPSIS
 .In sys/socket.h
 .Ft int
 .Fn accept "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
+.Ft int
+.Fn accept4 "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen" "int flags"
 .Sh DESCRIPTION
 .Fn accept
 removes a completed connection from the accept queue of
 .Fa fd
 and returns a new descriptor for it.
 .Fa fd
-must refer to a listening TCP socket.
+must refer to a listening TCP socket, or a listening
+.Dv AF_UNIX
+stream or sequenced-packet socket, which
+.Xr unix 7
+describes.
 The new descriptor is blocking and has close-on-exec clear.
+.Fn accept4
+sets
+.Dv FD_CLOEXEC
+on it with
+.Dv SOCK_CLOEXEC
+in
+.Fa flags ,
+and
+.Dv O_NONBLOCK
+with
+.Dv SOCK_NONBLOCK ;
+another flag fails with
+.Er EINVAL .
 .Pp
 If the queue is empty, the call waits for a connection.
 On a listener with
@@ -54,7 +74,9 @@ Such a drop produces no error from
 .Pp
 The kernel interface is
 .Xr socketcall 2
-operation 5.
+operation 5, and
+.Fn accept4
+is operation 18 or the direct call, number 364.
 .Sh RETURN VALUES
 On success,
 .Fn accept
@@ -79,7 +101,9 @@ length cannot be read or written as required.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL
-The socket is a datagram or a stream that is not listening.
+The socket is a datagram or a stream that is not listening, or
+.Fn accept4
+was given a flag other than the two above.
 .It Er EMFILE
 No descriptor or open-file description could be allocated for the
 connection.
@@ -97,4 +121,5 @@ refers to a raw socket.
 .Xr listen 2 ,
 .Xr socket 2 ,
 .Xr socketcall 2 ,
-.Xr memory 7
+.Xr memory 7 ,
+.Xr unix 7

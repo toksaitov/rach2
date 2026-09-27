@@ -50,6 +50,18 @@ does not preserve the message,
 does not wait to fill the buffer, and
 .Dv MSG_TRUNC
 does not request the original message length.
+On an
+.Dv AF_UNIX
+socket these flags behave as in Linux, and
+.Fn recvmsg
+returns the control messages, which
+.Xr unix 7
+describes.
+The direct calls
+.Fn recvfrom ,
+number 371, and
+.Fn recvmsg ,
+number 372, take their arguments in registers.
 .Ss Source addresses
 .Fn recvfrom
 reports a datagram's sender when both

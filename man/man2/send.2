@@ -3,7 +3,8 @@
 .Os
 .Sh NAME
 .Nm send ,
-.Nm sendto
+.Nm sendto ,
+.Nm sendmsg
 .Nd send data on a socket
 .Sh SYNOPSIS
 .In sys/socket.h
@@ -11,6 +12,8 @@
 .Fn send "int fd" "const void *buf" "size_t len" "int flags"
 .Ft ssize_t
 .Fn sendto "int fd" "const void *buf" "size_t len" "int flags" "const struct sockaddr *addr" "socklen_t addrlen"
+.Ft ssize_t
+.Fn sendmsg "int fd" "const struct msghdr *msg" "int flags"
 .Sh DESCRIPTION
 These functions send
 .Fa len
@@ -29,6 +32,26 @@ system call 102.
 The separate kernel
 .Nm send
 operation, subcall 9, accepts only stream sockets.
+.Fn sendmsg ,
+subcall 16 or the direct call, number 370, sends the buffers of
+.Fa msg
+in order, to
+.Fa msg_name
+when it is set: a stream sends them one after another and stops at the
+first that goes short; a UDP socket gathers up to eight into one
+datagram; a raw or packet socket takes one buffer, and more fail with
+.Er EOPNOTSUPP .
+Control messages of an IPv4 socket are ignored.
+On an
+.Dv AF_UNIX
+socket all three calls carry what
+.Xr unix 7
+describes, control messages included.
+The direct calls
+.Fn sendto ,
+number 369, and
+.Fn sendmsg
+take their arguments in registers.
 .Ss Streams
 A stream sends to its connected peer.
 .Fn sendto

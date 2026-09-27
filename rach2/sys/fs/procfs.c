@@ -51,6 +51,7 @@
 #include "../proc/sched.h"
 #include "../mm/paging.h"
 #include "../io/anon.h"
+#include "../ipc/unix.h"
 
 #define PROCFS_O_CLOEXEC 02000000
 
@@ -492,6 +493,11 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     case FD_TYPE_SOCKET:
         ap_str(t, "socket:[");
         ap_u32(t, e->sock ? e->sock->inode : 0u);
+        ap_ch(t, ']');
+        break;
+    case FD_TYPE_UNIX:
+        ap_str(t, "socket:[");
+        ap_u32(t, e->priv ? unix_inode(e) : 0u);
         ap_ch(t, ']');
         break;
     case FD_TYPE_ANON:
