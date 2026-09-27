@@ -2032,7 +2032,10 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
- * the si_code and si_status waitid stores, and the child's usage. */
+ * the si_code and si_status waitid stores, and the child's usage; and the
+ * event the wait holds for the caller while the caller copies these out, the
+ * record and what taking it does (`wait_hold`), NULL and WAIT_KEEP for
+ * none. */
 struct wait_report {
     uint32_t pid;
     uint32_t uid;
@@ -2040,7 +2043,25 @@ struct wait_report {
     int32_t code;
     int32_t info_status;
     struct kernel_rusage ru;
+    process_t *p;
+    int take;
 };
+
+/* What taking a held event does (`wait_done`): nothing, since none is held;
+ * reap the zombie process; free the traced thread that ended; take the end
+ * of the process a tracer traces; take the stop or continue report; take the
+ * ptrace stop report. */
+#define WAIT_KEEP 0
+
+#define WAIT_REAP 1
+
+#define WAIT_FREE 2
+
+#define WAIT_SEEN 3
+
+#define WAIT_JOB 4
+
+#define WAIT_TRAP 5
 
 /* Interrupts-off helpers (defined below with the signal code); used here for
  * the lost-wakeup-safe sleep in wait_find. */
@@ -2091,13 +2112,13 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 }
 
 /**
- * Reap zombie `p`, the leader of a process whose threads have all ended: take
- * it off the zombies, so that no other thread's wait reaps it while the
- * release sleeps, add the process's CPU time, with its reaped children's, to
- * the children's totals of the caller's process, which its thread group
- * keeps, and give back its address space, kernel stack and record
- * (`proc_release`). The zombie no longer runs on its kernel stack, and this
- * is the single release point for a per-fork stack.
+ * Reap zombie `p`, the leader of a process whose threads have all ended,
+ * which the wait has taken off the zombies (`wait_hold`), so that no other
+ * thread's wait reaps it while the release sleeps: add the process's CPU
+ * time, with its reaped children's, to the children's totals of the caller's
+ * process, which its thread group keeps, and give back its address space,
+ * kernel stack and record (`proc_release`). The zombie no longer runs on its
+ * kernel stack, and this is the single release point for a per-fork stack.
  */
 static void wait_reap(process_t *p)
 {
@@ -2105,7 +2126,6 @@ static void wait_reap(process_t *p)
     uint32_t user;
     uint32_t sys;
 
-    p->state = PROC_UNUSED;
     proc_cpu_time(p, &user, &sys);
     me->cutime += user + p->tg->cutime;
     me->cstime += sys + p->tg->cstime;
@@ -2150,21 +2170,107 @@ static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t st
 }
 
 /**
+ * Hold the event of `p` that `r` reports for the caller while it copies the
+ * report out, so that no other thread's wait takes the event meanwhile: take
+ * the record off the zombies for a reap or a free, or mark the tracer's view
+ * of the process's end, the stop or continue report, or the ptrace stop
+ * report taken, as `take` says. `wait_done` then finishes the event or gives
+ * it back. WNOWAIT holds nothing, since it leaves every event where it is.
+ */
+static void wait_hold(struct wait_report *r, process_t *p, int take, int options)
+{
+    r->p = NULL;
+    r->take = WAIT_KEEP;
+    if (options & WNOWAIT) {
+        return;
+    }
+    switch (take) {
+    case WAIT_REAP:
+    case WAIT_FREE:
+        p->state = PROC_UNUSED;
+        break;
+    case WAIT_SEEN:
+        p->ptrace_exit_seen = 1;
+        break;
+    case WAIT_JOB:
+        p->jc_status = 0;
+        break;
+    default:
+        p->ptrace_reported = 1;
+        break;
+    }
+    r->p = p;
+    r->take = take;
+}
+
+/**
+ * Take the event the wait holds in `r`, whose report the caller has copied
+ * out: reap the zombie process or free the traced thread that ended, which
+ * no other wait could take meanwhile. The other events were taken when they
+ * were held.
+ */
+static void wait_take(const struct wait_report *r)
+{
+    process_t *p = r->p;
+
+    if (r->take == WAIT_REAP) {
+        wait_reap(p);
+    } else if (r->take == WAIT_FREE) {
+        p->tg->utime += p->utime;
+        p->tg->stime += p->stime;
+        proc_release(p);
+    }
+}
+
+/**
+ * Finish the event the wait holds in `r` (`wait_hold`): take it when the
+ * caller copied the report out, `ok` (`wait_take`), and otherwise give it
+ * back.
+ *
+ * A copy fails when another thread unmapped or protected the caller's buffer
+ * while the wait slept. The event is then given back as if it had not been
+ * reported, and the caller's other waiting threads, which passed it over,
+ * are woken. A report of a record that may have ended meanwhile, a stop, a
+ * continue, a ptrace stop or the end a tracer sees, is given back only when
+ * the record is still there and has no newer report.
+ */
+static void wait_done(struct wait_report *r, int ok)
+{
+    process_t *p = r->p;
+    int there;
+
+    if (p == NULL || ok) {
+        if (p != NULL) {
+            wait_take(r);
+        }
+        return;
+    }
+    there = get_process(r->pid) == p;
+    if (r->take == WAIT_REAP || r->take == WAIT_FREE) {
+        p->state = PROC_ZOMBIE;
+    } else if (r->take == WAIT_SEEN && there) {
+        p->ptrace_exit_seen = 0;
+    } else if (r->take == WAIT_JOB && there && p->jc_status == 0) {
+        p->jc_status = (uint32_t)r->status;
+    } else if (r->take == WAIT_TRAP && there && p->ptrace_status == (uint32_t)r->status) {
+        p->ptrace_reported = 0;
+    }
+    wq_wake_all(&current_proc->tg->chld);
+}
+
+/**
  * What a tracer's wait finds of its tracee `p`: a ptrace stop the wait has
  * not reported, reported once; a thread that ended while traced, which the
- * report takes off the zombies and frees, as no other wait reports it; or the
- * end of a process whose parent the tracer is not, reported once and left for
- * the parent to reap. With WNOWAIT nothing is marked or freed. Returns 1 with
- * `out` filled, or 0.
+ * report frees, as no other wait reports it; or the end of a process whose
+ * parent the tracer is not, reported once and left for the parent to reap.
+ * Returns 1 with `out` filled and the event held (`wait_hold`), or 0.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
     if (p->ptrace_status != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
         wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED,
                   (int32_t)((p->ptrace_status >> 8) & 0xFF));
-        if (!(options & WNOWAIT)) {
-            p->ptrace_reported = 1;
-        }
+        wait_hold(out, p, WAIT_TRAP, options);
         return 1;
     }
     if (p->state != PROC_ZOMBIE || !(options & WEXITED)) {
@@ -2172,29 +2278,48 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
     }
     if (p->pid != p->tgid) {
         wait_fill_exit(out, p, p->exit_code);
-        if (!(options & WNOWAIT)) {
-            p->state = PROC_UNUSED;
-            p->tg->utime += p->utime;
-            p->tg->stime += p->stime;
-            proc_release(p);
-        }
+        wait_hold(out, p, WAIT_FREE, options);
         return 1;
     }
     if (p->tg->live == 0 && p->parent_pid != current_proc->tgid && !p->ptrace_exit_seen) {
         wait_fill_exit(out, p, p->exit_code);
-        if (!(options & WNOWAIT)) {
-            p->ptrace_exit_seen = 1;
-        }
+        wait_hold(out, p, WAIT_SEEN, options);
         return 1;
     }
     return 0;
 }
 
 /**
+ * What a wait finds of its child `p`: its end (WEXITED), once every thread
+ * has ended, which the report reaps; a stop (WUNTRACED), reported once while
+ * the child is stopped; or a continue (WCONTINUED), reported once. Returns 1
+ * with `out` filled and the event held (`wait_hold`), or 0.
+ */
+static int wait_child(process_t *p, int options, struct wait_report *out)
+{
+    if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED)) {
+        wait_fill_exit(out, p, p->exit_code);
+        wait_hold(out, p, WAIT_REAP, options);
+        return 1;
+    }
+    if ((options & WUNTRACED) && p->tg->stop != 0 && (p->jc_status & 0xff) == 0x7f) {
+        wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
+                  (int32_t)((p->jc_status >> 8) & 0xff));
+    } else if ((options & WCONTINUED) && p->jc_status == 0xffff) {
+        wait_fill(out, p, 0xffff, CLD_CONTINUED, SIGCONT);
+    } else {
+        return 0;
+    }
+    wait_hold(out, p, WAIT_JOB, options);
+    return 1;
+}
+
+/**
  * The shared core of waitpid, wait4 and waitid: find a child `idtype` and
  * `id` select that has an event `options` asks for, fill `out` with it and
- * return its pid. The threads the caller's process traces are waited for
- * too, as `wait_tracee` reports them.
+ * return its pid, holding the event for the caller until it has copied the
+ * report out and calls `wait_done`. The threads the caller's process traces
+ * are waited for too, as `wait_tracee` reports them.
  *
  * The events are an exit (WEXITED), which reaps the zombie; a stop
  * (WUNTRACED), reported once, while the child is stopped; and a continue
@@ -2226,32 +2351,11 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
                     return (int32_t)out->pid;
                 }
             }
-            if (!wait_selects(idtype, id, options, p)) {
-                continue;
-            }
-            have_child = 1;
-
-            if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED)) {
-                wait_fill_exit(out, p, p->exit_code);
-                if (!(options & WNOWAIT)) {
-                    wait_reap(p);
+            if (wait_selects(idtype, id, options, p)) {
+                have_child = 1;
+                if (wait_child(p, options, out)) {
+                    return (int32_t)out->pid;
                 }
-                return (int32_t)out->pid;
-            }
-            if ((options & WUNTRACED) && p->tg->stop != 0 && (p->jc_status & 0xff) == 0x7f) {
-                wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
-                          (int32_t)((p->jc_status >> 8) & 0xff));
-                if (!(options & WNOWAIT)) {
-                    p->jc_status = 0;
-                }
-                return (int32_t)out->pid;
-            }
-            if ((options & WCONTINUED) && p->jc_status == 0xffff) {
-                wait_fill(out, p, 0xffff, CLD_CONTINUED, SIGCONT);
-                if (!(options & WNOWAIT)) {
-                    p->jc_status = 0;
-                }
-                return (int32_t)out->pid;
             }
         }
 
@@ -2298,8 +2402,11 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
  * Linux-encoded wait status that sys_exit/terminate already stored in
  * exit_code; `rusage_ptr` (0 for waitpid, may be 0 for wait4) receives the
  * child's CPU time with its reaped children's, for a stop or a continue as
- * for an exit. Both are faulted in for writing before any child is reaped,
- * so a bad address answers -EFAULT instead of losing the zombie.
+ * for an exit. Both are faulted in for writing before the wait, so a bad
+ * address answers -EFAULT at once. A copy that fails after the wait, since
+ * another thread unmapped or protected a buffer while the wait slept,
+ * answers -EFAULT too, and leaves the child's event for a later wait
+ * (`wait_done`): no zombie is lost.
  */
 static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
 {
@@ -2307,6 +2414,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     int idtype = P_PGID;
     uint32_t id;
     int32_t rc;
+    int ok;
 
     if (!current_proc) {
         return -ESRCH;
@@ -2333,13 +2441,10 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     if (rc <= 0) {
         return rc;
     }
-    if (status) {
-        copy_to_user((void __user *)status, &r.status, sizeof(r.status));
-    }
-    if (rusage_ptr) {
-        copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES);
-    }
-    return rc;
+    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
+         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
+    wait_done(&r, ok);
+    return ok ? rc : -EFAULT;
 }
 
 /*
@@ -2391,7 +2496,8 @@ struct kernel_chld_info {
  * Only those six fields are written. -EINVAL for an unknown option or idtype,
  * no event asked for, or an id that does not suit its idtype; -EBADF for a
  * pidfd, since no descriptor is one; -ECHILD, -EINTR; -EFAULT, found before
- * any child is reaped, as `do_wait` finds it.
+ * the wait or after it with the child's event left in place, as `do_wait`
+ * finds it.
  */
 int32_t sys_waitid(isr_params_t *params)
 {
@@ -2404,6 +2510,7 @@ int32_t sys_waitid(isr_params_t *params)
     struct wait_report r;
     uint32_t id = 0;
     int32_t rc;
+    int ok;
 
     if ((uint32_t)options &
         ~(WNOHANG | WNOWAIT | WEXITED | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE)) {
@@ -2449,14 +2556,14 @@ int32_t sys_waitid(isr_params_t *params)
         info.pid = (int32_t)r.pid;
         info.uid = (int32_t)r.uid;
         info.status = r.info_status;
-        if (rusage_ptr) {
-            copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES);
-        }
     }
-    if (uinfo) {
-        copy_to_user((void __user *)uinfo, &info, sizeof(info));
+    ok = (rc == 0 || !rusage_ptr ||
+          copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0) &&
+         (!uinfo || copy_to_user((void __user *)uinfo, &info, sizeof(info)) == 0);
+    if (rc > 0) {
+        wait_done(&r, ok);
     }
-    return 0;
+    return ok ? 0 : -EFAULT;
 }
 
 /* The targets getrusage(2) takes: the caller's process, its reaped

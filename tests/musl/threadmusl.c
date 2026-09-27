@@ -9,13 +9,14 @@
  * while every thread blocks it waits, and is taken by the thread that
  * unblocks it. Of two signals sent to the process at once, the second, which
  * the first one's handler blocks, is taken by another thread while that
- * handler runs. A thread's exit leaves the
- * process running; /proc/self/task lists each live thread, and
- * /proc/self/exe names the program. The threads share the descriptors, the
- * working directory and the umask: what one opens, closes or changes the
- * others see. A descriptor one thread closes while another reads it stays
- * with the read, which returns what is written after the close, and its
- * number is free once the read is over. A child forked by a thread has one
+ * handler runs. A thread's exit leaves the process running; /proc/self/task
+ * lists each live thread, and /proc/self/exe names the program. The threads
+ * share the descriptors, the working directory and the umask: what one
+ * opens, closes or changes the others see. A descriptor one thread closes
+ * while another reads it stays with the read, which returns what is written
+ * after the close, and its number is free once the read is over. A wait
+ * whose status page another thread unmaps while it sleeps fails with EFAULT
+ * and leaves the zombie to a later wait. A child forked by a thread has one
  * thread. A thread that calls execve replaces the whole process, whose other
  * threads end. A thread that calls exit ends them all.
  *
@@ -32,6 +33,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -361,6 +363,62 @@ static int handler_mask_row(void)
     return 0;
 }
 
+static volatile pid_t waiter_tid;
+static int *volatile status_page;
+
+/** The thread of `lost_status_row` that waits for the child `*arg` with its
+ * status in a page the first thread unmaps meanwhile; the errno of the wait,
+ * or 0 when it did not fail. */
+static void *wait_unmapped(void *arg)
+{
+    pid_t child = *(pid_t *)arg;
+
+    waiter_tid = tid();
+    if (waitpid(child, status_page, 0) != -1) {
+        return (void *)0L;
+    }
+    return (void *)(long)errno;
+}
+
+/**
+ * A wait whose status page another thread unmaps while it sleeps: when the
+ * child ends the wait cannot store the status, so it fails with EFAULT and
+ * leaves the zombie, which a second wait reaps with its status.
+ */
+static int lost_status_row(void)
+{
+    pthread_t t;
+    void *result;
+    int p[2], i, status = 0;
+    pid_t child;
+    char c;
+
+    status_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (status_page == MAP_FAILED || pipe(p) != 0) {
+        return fail("the status page and the pipe");
+    }
+    child = fork();
+    if (child == 0) {
+        _exit(read(p[0], &c, 1) == 1 ? 7 : 1);
+    }
+    if (pthread_create(&t, NULL, wait_unmapped, &child) != 0) {
+        return fail("pthread_create for the wait");
+    }
+    for (i = 0; i < 500 && !(waiter_tid && sleeping(waiter_tid)); i++) {
+        usleep(10000);
+    }
+    if (munmap(status_page, 4096) != 0 || write(p[1], "x", 1) != 1 ||
+        pthread_join(t, &result) != 0 || (long)result != EFAULT) {
+        return fail("a wait whose status page went while it slept did not fail with EFAULT");
+    }
+    if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
+        return fail("the zombie a failed wait left was not reaped with its status");
+    }
+    close(p[0]);
+    close(p[1]);
+    return 0;
+}
+
 static void *exec_self(void *arg)
 {
     (void)arg;
@@ -422,7 +480,7 @@ int main(void)
     if (count_tasks() != 2) {
         return fail("/proc/self/task did not list two threads");
     }
-    if (sharing() != 0 || handler_mask_row() != 0) {
+    if (sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0) {
         return 1;
     }
 

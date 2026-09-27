@@ -104,7 +104,13 @@ not keep, are zero.
 Reaping a child adds the same two times to the children's totals of the
 caller's process.
 Nonnull status and resource usage pointers are checked for write
-access before any child is reaped.
+access before the wait.
+The event found is held while its report is copied out, so that no other
+thread's wait takes it: a copy that fails, because another thread unmapped
+or protected the memory while the caller slept, fails the call with
+.Er EFAULT
+and leaves the event, which a later wait reports again, so no zombie is
+lost.
 .Ss waitid
 .Fn waitid
 selects children by
@@ -227,12 +233,9 @@ A pidfd names no child here, since no descriptor is one:
 fails with
 .Er EBADF ,
 as Linux's does for a descriptor that is not a pidfd.
-A
-.Fn waitid
-whose siginfo or resource usage pointer cannot be written fails before
-any child is reaped, as
-.Fn wait4
-does here; Linux reaps the child and then fails.
+A wait whose status, siginfo or resource usage pointer cannot be written
+fails with the child's event left in place, before the wait or after it;
+Linux reaps the child and then fails.
 Linux refuses unknown option bits for
 .Fn waitpid
 and
@@ -291,7 +294,7 @@ and
 .Fa id .
 .It Bq Er EFAULT
 A nonnull status, siginfo or resource usage pointer does not refer to
-writable user memory.
+writable user memory; the child's event is left for a later wait.
 .It Bq Er EINTR
 A signal that is neither blocked nor ignored is pending while the call
 would otherwise block.
