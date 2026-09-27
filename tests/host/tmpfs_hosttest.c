@@ -17,17 +17,17 @@
  * not empty, or a directory under itself, and one the heap cannot serve changes
  * nothing. A symbolic link reads back its target, a FIFO keeps its type, a
  * device node keeps its number and does not open, a listing is ".", "..", then
- * the names in the order they were made or renamed, each with its type, and a
- * directory knows its path. A node held after its last name goes stays
- * readable, a removed directory held after its parent is removed keeps the
- * parent for its "..", and a shared mapping's page takes a reference of its
- * own; a page at or past the most a file may have is refused without growing
- * the table, 2^31 and 2^32 - 1 among them, and the last page below it is given;
- * a truncation of mapped memory takes the pages it frees out of the mappings
- * first. A memfd's node has its name and no directory, and goes with its last
- * hold; its seals refuse a shrink, a growth, a write, a change of its execute
- * bits and more seals, and a named file starts sealed against sealing. Returns
- * the failed-check count.
+ * the names in the order they were made or renamed, each with its type, and
+ * goes on past a name removed during it, and a directory knows its path. A node
+ * held after its last name goes stays readable, a removed directory held after
+ * its parent is removed keeps the parent for its "..", and a shared mapping's
+ * page takes a reference of its own; a page at or past the most a file may have
+ * is refused without growing the table, 2^31 and 2^32 - 1 among them, and the
+ * last page below it is given; a truncation of mapped memory takes the pages it
+ * frees out of the mappings first. A memfd's node has its name and no
+ * directory, and goes with its last hold; its seals refuse a shrink, a growth,
+ * a write, a change of its execute bits and more seals, and a named file starts
+ * sealed against sealing. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -390,6 +390,37 @@ static void listing(void)
     CHECK(tmpfs_readdir(&mnt, root, &cursor, &ent) == 0);
 }
 
+/**
+ * A name removed during a listing moves no other: after ".", ".." and "a",
+ * with "a" removed, the listing goes on with "b" and "c".
+ */
+static void listing_removal(void)
+{
+    static const char *names[] = {"a", "b", "c"};
+    struct vfs_dirent ent;
+    uint32_t cursor = 0;
+    unsigned i;
+    void *d;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "ls", 0755) == 0);
+    d = look(NULL, "ls");
+    for (i = 0; i < 3; i++) {
+        void *f = make(d, names[i], 0644);
+
+        if (f) {
+            tmpfs_put(&mnt, f);
+        }
+    }
+    for (i = 0; i < 3; i++) {
+        CHECK(tmpfs_readdir(&mnt, d, &cursor, &ent) == 1);
+    }
+    CHECK(same(ent.name, "a") && tmpfs_unlink(&mnt, d, "a") == 0);
+    CHECK(tmpfs_readdir(&mnt, d, &cursor, &ent) == 1 && same(ent.name, "b"));
+    CHECK(tmpfs_readdir(&mnt, d, &cursor, &ent) == 1 && same(ent.name, "c"));
+    CHECK(tmpfs_readdir(&mnt, d, &cursor, &ent) == 0);
+    tmpfs_put(&mnt, d);
+}
+
 static void mapping(void)
 {
     const uint32_t most = (uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE);
@@ -553,6 +584,7 @@ int main(void)
     links_and_renames();
     kinds();
     listing();
+    listing_removal();
     mapping();
     truncation();
     seals();

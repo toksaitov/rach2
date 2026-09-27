@@ -32,10 +32,14 @@
 
 struct tmpfs_node;
 
+/* A name in a directory. `off` is its place there, which readdir's cursor
+ * counts: 2 on, rising along the list, and kept while the name is there, so
+ * a name removed during a listing moves no other. */
 struct tmpfs_dirent {
     struct tmpfs_dirent *next;
     struct tmpfs_node *node;
     char *name;
+    uint32_t off;
 };
 
 /*
@@ -49,6 +53,7 @@ struct tmpfs_node {
     struct tmpfs_dirent *entries;
     uint32_t nentries;
     uint32_t subdirs;
+    uint32_t next_off; /* a directory's place for its next name, 0 for 2 */
     uint32_t refs;
     uint32_t links;
     uint32_t mode;
@@ -175,15 +180,40 @@ static struct tmpfs_dirent *new_entry(const char *name)
 }
 
 /**
+ * Give the names of `d` new places, 2 on, in their order, once its places
+ * have run out: a cursor ends at the largest place, so none may be used. A
+ * listing in progress may then see a name twice or miss one, as it may when
+ * names are made or removed during it; that takes four thousand million
+ * names made in one directory.
+ */
+static void renumber(struct tmpfs_node *d)
+{
+    struct tmpfs_dirent *e;
+    uint32_t off = 2;
+
+    for (e = d->entries; e; e = e->next) {
+        e->off = off++;
+    }
+    d->next_off = off;
+}
+
+/**
  * Put the entry `e` for `n` at the end of `d`, so a directory lists its
- * names in the order they were made. A directory takes a hold on `d` as its
- * parent and lets go of the one on the parent it had, which a rename moves
- * it from.
+ * names in the order they were made, at the directory's next place. A
+ * directory takes a hold on `d` as its parent and lets go of the one on the
+ * parent it had, which a rename moves it from.
  */
 static void link_entry(struct tmpfs_node *d, struct tmpfs_dirent *e, struct tmpfs_node *n)
 {
     struct tmpfs_dirent **link = &d->entries;
 
+    if (d->next_off == 0xFFFFFFFFu) {
+        renumber(d);
+    }
+    if (d->next_off < 2) {
+        d->next_off = 2;
+    }
+    e->off = d->next_off++;
     e->node = n;
     while (*link) {
         link = &(*link)->next;
@@ -450,14 +480,17 @@ static int tmpfs_fsync(struct vfs_mount *mnt, void *handle)
     return 0;
 }
 
-/* The cursor counts names: 0 is ".", 1 is "..", and the names follow in
- * order. A name removed during a listing moves the ones after it down. */
+/**
+ * The name at or after `*cursor` in the directory `handle`: 0 is ".", 1 is
+ * "..", and the names follow at their places, which removing a name does not
+ * change, so a program that removes names while it lists them, as `rm -r`
+ * does, misses none. The cursor goes past the place of the name returned.
+ */
 static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                          struct vfs_dirent *ent)
 {
     struct tmpfs_node *d = (struct tmpfs_node *)handle;
     struct tmpfs_dirent *e;
-    uint32_t i;
 
     (void)mnt;
     if (!is_dir(d)) {
@@ -473,9 +506,7 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         (*cursor)++;
         return 1;
     }
-    e = d->entries;
-    for (i = 2; e && i < *cursor; i++) {
-        e = e->next;
+    for (e = d->entries; e && e->off < *cursor; e = e->next) {
     }
     if (!e) {
         return 0;
@@ -484,7 +515,7 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     ent->ino = e->node->ino;
     ent->is_dir = is_dir(e->node);
     ent->type = (int)VFS_DT_OF(e->node->mode);
-    (*cursor)++;
+    *cursor = e->off + 1u;
     return 1;
 }
 
