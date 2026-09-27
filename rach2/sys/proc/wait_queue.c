@@ -37,6 +37,7 @@ void wait_queue_init(wait_queue_t *wq)
 {
     if (wq) {
         wq->head = NULL;
+        wq->wakes = 0;
     }
 }
 
@@ -170,6 +171,7 @@ void wq_wake_all(wait_queue_t *wq)
         }
     }
     wq->head = NULL;
+    wq->wakes++;
     irq_restore(flags);
 }
 

@@ -63,8 +63,12 @@ A registration is level-triggered: a wait reports it while its
 descriptor is ready.
 With
 .Dv EPOLLET
-it is edge-triggered: a wait reports an event when it appears, and not
-again until it has gone and come back.
+it is edge-triggered: a wait reports it when an event appears, or when
+the descriptor has changed since its last report, as a pipe drained and
+filled again between two waits has, and not again until then.
+A change is a wake of the descriptor's wait queue, of whatever kind, so
+an edge may be reported where Linux, which looks at the events of the
+change, reports none.
 With
 .Dv EPOLLONESHOT
 the first report disables it, errors and hangups included, until an

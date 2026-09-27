@@ -27,6 +27,10 @@
  */
 typedef struct wait_queue {
     struct wq_waiter *head;
+    /* The times `wq_wake_all` has woken the queue, whoever was on it, so a
+     * reader can tell that its object changed since it looked, as an
+     * edge-triggered epoll registration does. It wraps. */
+    uint32_t wakes;
 } wait_queue_t;
 
 /*
@@ -66,9 +70,10 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /*
  * Make every process currently blocked on wq runnable, with one preferred
- * selection by the scheduler, and empty the queue. Safe to call from IRQ
- * context (it disables interrupts around the walk); a woken sleeper
- * re-checks its own condition, so a spurious wake is harmless.
+ * selection by the scheduler, empty the queue, and count the wake in
+ * `wakes`. Safe to call from IRQ context (it disables interrupts around the
+ * walk); a woken sleeper re-checks its own condition, so a spurious wake is
+ * harmless.
  */
 void wq_wake_all(wait_queue_t *wq);
 

@@ -10,6 +10,9 @@
  * covered in-guest by waitprobe and by the live httpd accept/recv wake; here we
  * exercise exactly the array bookkeeping wq_wake_all relies on.
  *
+ * A wake is counted in the queue's `wakes`, with waiters or none, which an
+ * edge-triggered epoll registration reads to tell that its object changed.
+ *
  * One row does run the wait: a model `schedule` records the deadline the
  * waiter blocked with and wakes it as `signal_post` does, clearing that
  * deadline. A wait whose condition is still false must arm the caller's
@@ -140,6 +143,13 @@ int main(void)
     CHECK(b.state == PROC_READY);
     CHECK(c.state == PROC_READY);
     CHECK(total_queued(&wq) == 0); /* multi-waiter wake clears all slots */
+
+    /* Each wake is counted, with waiters or none, and init starts over. */
+    CHECK(wq.wakes == 1);
+    wq_wake_all(&wq);
+    CHECK(wq.wakes == 2);
+    wait_queue_init(&wq);
+    CHECK(wq.wakes == 0);
 
     /* A non-BLOCKED waiter is left alone but still dequeued. */
     wait_queue_init(&wq);

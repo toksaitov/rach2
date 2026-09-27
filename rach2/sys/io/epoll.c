@@ -46,8 +46,12 @@ struct epitem {
     uint32_t serial;
     uint32_t events;
     uint32_t data[2];
-    int off;       /* EPOLLONESHOT: reported, and off until EPOLL_CTL_MOD */
-    uint32_t seen; /* EPOLLET: the events reported that have not gone since */
+    int off; /* EPOLLONESHOT: reported, and off until EPOLL_CTL_MOD */
+    /* EPOLLET: the events reported that have not gone since, and the wait
+     * queue of the descriptor at that report with its count of wakes. */
+    uint32_t seen;
+    const struct wait_queue *at;
+    uint32_t wakes;
 };
 
 struct epoll {
@@ -71,11 +75,26 @@ static int item_names(const struct epitem *it, const fd_entry_t *e)
     return e && e->ofd == it->ofd && e->ofd->serial == it->serial;
 }
 
-/* The events of `it` ready now, as a wait reports them, or 0; the wait queue
- * of its descriptor in `*wq`. EPOLLERR and EPOLLHUP are watched whatever
- * the registration asked, none included, and nothing is while a one-shot
- * registration is off. A registration whose number names another open file,
- * or none, is marked for removal with `*gone`. */
+/* Whether the wait queue `wq` of an edge-triggered registration's
+ * descriptor has been woken since `it` was last reported, or is another. */
+static int item_woken(const struct epitem *it, const struct wait_queue *wq)
+{
+    return wq != it->at || (wq && wq->wakes != it->wakes);
+}
+
+/**
+ * The events of `it` a wait would report now, or 0; the wait queue of its
+ * descriptor in `*wq`. EPOLLERR and EPOLLHUP are watched whatever the
+ * registration asked, none included, and nothing is while a one-shot
+ * registration is off. A registration whose number names another open
+ * file, or none, is marked for removal with `*gone`.
+ *
+ * An edge-triggered registration is reported when an event is ready that
+ * was not at its last report, or has gone since, or when its descriptor's
+ * queue has been woken since that report: a pipe drained and filled again
+ * between two waits is ready as it was, and its reader's queue is what
+ * tells the new edge, as Linux's wakeup callback does.
+ */
 static uint32_t item_ready(struct epitem *it, struct wait_queue **wq, int *gone)
 {
     fd_entry_t *e = fd_get(current_proc->fds, it->fd);
@@ -89,12 +108,27 @@ static uint32_t item_ready(struct epitem *it, struct wait_queue **wq, int *gone)
     }
     ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
     if (it->events & EPOLLET) {
-        uint32_t fresh = ready & ~it->seen;
-
-        it->seen = ready;
-        ready = fresh ? ready : 0u;
+        it->seen &= ready;
+        if (!(ready & ~it->seen) && !item_woken(it, *wq)) {
+            ready = 0;
+        }
     }
     return ready;
+}
+
+/* Record the report of `ready` for `it`, whose descriptor's wait queue is
+ * `wq`: what an edge-triggered registration is not reported again for, and
+ * the end of a one-shot one. */
+static void item_reported(struct epitem *it, uint32_t ready, const struct wait_queue *wq)
+{
+    if (it->events & EPOLLET) {
+        it->seen = ready;
+        it->at = wq;
+        it->wakes = wq ? wq->wakes : 0;
+    }
+    if (it->events & EPOLLONESHOT) {
+        it->off = 1;
+    }
 }
 
 /* A wait's view of the set: where the ready events go, and how many fit. */
@@ -142,9 +176,7 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
             sc->out[sc->n].data[0] = it->data[0];
             sc->out[sc->n].data[1] = it->data[1];
             sc->n++;
-            if (it->events & EPOLLONESHOT) {
-                it->off = 1;
-            }
+            item_reported(it, ready, wq);
         }
         link = &it->next;
     }
@@ -299,6 +331,8 @@ int32_t sys_epoll_ctl(struct isr_params *params)
     it->data[1] = ev[2];
     it->off = 0;
     it->seen = 0;
+    it->at = NULL;
+    it->wakes = 0;
     wq_wake_all(&ep->wq);
     return 0;
 }
