@@ -255,7 +255,10 @@ and
 .Dv F_GETFL
 return the requested flags.
 The other supported commands return 0.
-When a set lock command fails, no lock has changed.
+When a set lock command fails, no lock has changed, but for one whose
+descriptor another thread closed during the call: that close drops the
+process's locks on the file, and a POSIX lock the call gained after it
+is let go too.
 On failure,
 .Fn fcntl
 returns -1 and sets
@@ -273,8 +276,9 @@ report of
 .Dv F_GETLK ,
 a split, the close that drops a process's locks, a wait, one
 .Er EDEADLK
-for two processes that wait for each other, and open file description
-locks against a second open and a POSIX lock.
+for two processes that wait for each other, a wait whose descriptor
+another thread closes, and open file description locks against a second
+open and a POSIX lock.
 .Pp
 The default suite's
 .Pa tests/ofdprobe.c
@@ -298,6 +302,9 @@ is not an open descriptor, was opened with
 and the command is not one it takes, or a read lock was asked for on a
 descriptor not open for reading or a write lock on one not open for
 writing.
+A POSIX set lock command also fails with it when another thread closed
+the descriptor while the call waited, after letting go of the lock it
+gained, as on Linux.
 .It Bq Er EDEADLK
 .Dv F_SETLKW
 would wait in a cycle of processes waiting for each other's locks.

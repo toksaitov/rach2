@@ -6,7 +6,9 @@
  * the child's pid and range. The child's unlock of bytes 15 to 19 splits its
  * lock in two, and its close of another descriptor of the file drops what is
  * left. F_SETLKW waits until the holder unlocks. Two processes that each wait
- * for the other's lock: one of the two waits fails with EDEADLK. A flock
+ * for the other's lock: one of the two waits fails with EDEADLK. A thread's
+ * F_SETLKW whose descriptor another thread closes during the wait fails with
+ * EBADF when the holder lets go, and leaves the byte free. A flock
  * LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
  * EWOULDBLOCK, a dup shares the lock, and the last close of a description
  * releases it. An open file description lock conflicts with a second open
@@ -19,6 +21,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
@@ -194,6 +197,84 @@ static int waits(int fd)
     return 0;
 }
 
+static int waiter_fd, waiter_rc, waiter_errno;
+
+/** Wait for a write lock of byte 50 through `waiter_fd`. */
+static void *wait_for_byte(void *arg)
+{
+    (void)arg;
+    waiter_rc = lk(waiter_fd, F_SETLKW, F_WRLCK, 50, 1);
+    waiter_errno = errno;
+    return NULL;
+}
+
+/** Whether a child can take a write lock of byte 50. */
+static int byte_free(void)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        int fd = open(LOCK_PATH, O_RDWR);
+
+        _exit(fd >= 0 && lk(fd, F_SETLK, F_WRLCK, 50, 1) == 0 ? 0 : 1);
+    }
+    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/**
+ * A thread waits in F_SETLKW for a byte a child holds, and the main thread
+ * closes the descriptor it waits through. When the child lets go, the wait
+ * gains the lock, lets it go for the close, and fails with EBADF, and a
+ * second child can take the byte.
+ */
+static int closed_wait(void)
+{
+    int to_child[2], to_parent[2];
+    pthread_t waiter;
+    int status;
+    pid_t pid;
+
+    if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
+        return fail("pipes for the closed wait");
+    }
+    pid = fork();
+    if (pid == 0) {
+        int fd = open(LOCK_PATH, O_RDWR);
+
+        if (fd < 0 || lk(fd, F_SETLK, F_WRLCK, 50, 1) != 0) {
+            _exit(1);
+        }
+        post(to_parent[1]);
+        await(to_child[0]);
+        _exit(0);
+    }
+    await(to_parent[0]);
+    waiter_fd = open(LOCK_PATH, O_RDWR);
+    if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
+        return fail("the waiting thread");
+    }
+    (void)poll(NULL, 0, 200);
+    close(waiter_fd);
+    post(to_child[1]);
+    if (pthread_join(waiter, NULL) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("the waiting thread and the holding child");
+    }
+    if (waiter_rc != -1 || waiter_errno != EBADF) {
+        errno = waiter_errno;
+        return fail("a wait whose descriptor was closed did not fail with EBADF");
+    }
+    if (!byte_free()) {
+        return fail("the lock of a closed wait outlived the close");
+    }
+    close(to_child[0]);
+    close(to_child[1]);
+    close(to_parent[0]);
+    close(to_parent[1]);
+    return 0;
+}
+
 static int flocks(void)
 {
     int a = open(LOCK_PATH, O_RDWR);
@@ -254,7 +335,7 @@ int main(void)
     if (fd < 0 || write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
         return fail("the file");
     }
-    if (records(fd) || waits(fd) || flocks()) {
+    if (records(fd) || waits(fd) || closed_wait() || flocks()) {
         return 1;
     }
     close(fd);

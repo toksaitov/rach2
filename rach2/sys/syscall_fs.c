@@ -6565,6 +6565,14 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
  * for one to the end, and its owner's pid, -1 for a description's; or
  * F_UNLCK in `l_type` alone when none does. The 32-bit form answers
  * EOVERFLOW for a lock it cannot describe.
+ *
+ * A thread that shares the descriptor table may close the descriptor while
+ * this call waits for a lock or reads the caller's structure; the close
+ * drops the process's locks on the file and only marks the descriptor
+ * closing while the call has it. A POSIX lock gained after that is let go
+ * with the process's others on the file and the call answers EBADF, as
+ * Linux's does, so no lock outlives the close that should have dropped it.
+ * An OFD lock belongs to the description, which the call still holds.
  */
 static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
 {
@@ -6597,6 +6605,11 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
     req.pid = 0;
     fd_lock_key(entry, &key);
     rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
+    if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
+        (entry->flags & FD_FLAG_CLOSING)) {
+        lock_close(&key);
+        return -EBADF;
+    }
     if (rc != 0 || op != LOCK_GET) {
         return rc;
     }
