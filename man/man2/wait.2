@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd September 27, 2026
 .Dt WAIT 2
 .Os
 .Sh NAME
@@ -67,10 +67,18 @@ for a continuation.
 performs the same wait and accepts an optional
 .Fa rusage
 pointer.
-When the kernel reaps a child, it zeroes the 72-byte i386 resource usage
-structure;
-per-process resource usage is not tracked.
-Stop and continue reports do not fill this structure.
+For every report, an exit, a stop or a continue, the kernel fills the
+72-byte i386 resource usage structure with the child's CPU time added to
+that of the children the child has reaped:
+.Va ru_utime
+and
+.Va ru_stime
+are the ticks the timer charged in user mode and in the kernel, as
+.Xr times 2
+counts them, and the fourteen counters after them, which the kernel does
+not keep, are zero.
+Reaping a child adds the same two times to the caller's children's
+totals.
 Nonnull status and resource usage pointers are checked for write
 access before any child is reaped.
 .Pp

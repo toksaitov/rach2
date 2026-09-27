@@ -92,7 +92,7 @@ The network files are snapshots taken at open of the entries then in the kernel 
 
 Each live `/proc/<pid>` directory contains `stat`, `cmdline`, and `fd`:
 
-* `stat` emits fields 1 through 24. Pid, program name, parent, process group, and session come from the process table. Running and ready processes use state `R`, blocked processes use `S`, zombies use `Z`, and other states also use `R`. Terminal, fault, CPU-time, start-time, address-space, and resident-size fields that the kernel does not track are fixed values or zero.
+* `stat` emits fields 1 through 24. Pid, program name, parent, process group, and session come from the process table, and so do the user and system times and the reaped children's, in ticks, as `times` reports them. Running and ready processes use state `R`, blocked processes use `S`, zombies use `Z`, and other states also use `R`. Terminal, fault, start-time, address-space, and resident-size fields that the kernel does not track are fixed values or zero.
 * `cmdline` contains one NUL-terminated argument: the stored program basename. The kernel retains no full argument vector. The basename is limited to 15 bytes, is inherited by `fork`, and is replaced by `execve`.
 * `fd` lists the process's open descriptors as magic links. Targets include KRFFS paths, `/dev` paths, pty endpoints, synthetic directories, `pipe:[inode]`, and `socket:[inode]`.
 

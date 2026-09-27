@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -55,16 +55,29 @@ within a tick; these system calls do not expose that finer clock.
 .Fn times
 returns the monotonic tick count in units of 1/100 second, as a signed
 32-bit value that goes negative after about 249 days.
-Per-process CPU time is not tracked.
 If
 .Fa buf
-is nonnull, all four fields,
-.Va tms_utime ,
-.Va tms_stime ,
-.Va tms_cutime ,
+is nonnull, it receives the caller's CPU time in the same units:
+.Va tms_utime
 and
-.Va tms_cstime ,
-are set to zero.
+.Va tms_stime
+are the ticks the timer charged to the caller in user mode and in the
+kernel, and
+.Va tms_cutime
+and
+.Va tms_cstime
+are the same two totals for the children it has reaped with
+.Xr wait 2 ,
+each with the children those children reaped.
+The timer charges each tick to the process it interrupts, as user time
+when that process was in its own code and as system time when it was in
+the kernel, and a tick that finds the processor idle to no process.
+The times are therefore samples: a process that runs between ticks is
+charged nothing for that time, as on Linux without precise accounting.
+They start at zero in a child of
+.Xr fork 2
+and are kept across
+.Xr execve 2 .
 A null
 .Fa buf
 is allowed.
@@ -177,9 +190,12 @@ reads
 .Dv CLOCK_MONOTONIC
 twice and checks that the second result is not earlier than the first.
 .Pa tests/miscprobe.c
-checks that
+checks that no time
 .Fn times
-sets the four process-time fields to zero.
+reports is negative or more than the ticks since boot, and
+.Pa tests/musl/cputimemusl.c
+checks that a loop in user mode gains user time, a loop of reads gains
+system time, and a reaped child's time is added to the children's totals.
 .Sh ERRORS
 The kernel handlers return the following errors:
 .Bl -tag -width "[ENAMETOOLONG]"

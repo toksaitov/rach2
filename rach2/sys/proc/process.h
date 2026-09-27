@@ -185,6 +185,15 @@ struct process {
      * zero, since the child inherits no timer; an exec keeps them. */
     uint32_t alarm_tick;
     uint32_t alarm_interval;
+    /* CPU time in ticks. The timer adds the tick it interrupts to `utime`
+     * when this process was in user mode and to `stime` when it was in the
+     * kernel, and a tick of an idle wait to neither. A reap adds a child's
+     * two, with the children the child reaped, to `cutime` and `cstime`.
+     * A fork starts all four at zero; an exec keeps them. */
+    uint32_t utime;
+    uint32_t stime;
+    uint32_t cutime;
+    uint32_t cstime;
 };
 
 typedef struct process process_t;

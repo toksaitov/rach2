@@ -2,9 +2,10 @@
  * Exercises the misc syscalls busybox needs, from user space.
  *
  * Proves getppid (a child sees the parent's pid), umask (set returns the
- * previous mask, inherited across fork), times (a monotonic tick count plus a
- * zeroed tms), sysinfo (a live-process count, mem_unit 1), and vfork (a fork
- * alias: parent gets a pid, child runs and exits).
+ * previous mask, inherited across fork), times (a monotonic tick count plus
+ * the four CPU times, none negative and none past the ticks since boot),
+ * sysinfo (a live-process count, mem_unit 1), and vfork (a fork alias: parent
+ * gets a pid, child runs and exits).
  *
  * Prints "MISCPROBE OK" / "MISCPROBE FAIL". Freestanding; direct int 0x80.
  */
@@ -120,15 +121,18 @@ void _start(void)
         check(umask(0022) == 0027, "umask() returns the value just set");
     }
 
-    /* times: a tms is zeroed and the return is a positive tick count. */
+    /* times: the return is a positive tick count, and no CPU time in the
+       tms is negative or more than the ticks since boot. */
     {
         int tms[4];
         int t;
         tms[0] = tms[1] = tms[2] = tms[3] = -1;
         t = times(tms);
         check(t > 0, "times() returns a positive tick count");
-        check(tms[0] == 0 && tms[1] == 0 && tms[2] == 0 && tms[3] == 0,
-              "times() zeroes the tms fields");
+        check(tms[0] >= 0 && tms[1] >= 0 && tms[2] >= 0 && tms[3] >= 0,
+              "times() fills the tms fields");
+        check(tms[0] + tms[1] <= t && tms[2] + tms[3] <= t,
+              "times() reports no more CPU time than the ticks since boot");
     }
 
     /* sysinfo: at least this process is counted; mem_unit is 1. */

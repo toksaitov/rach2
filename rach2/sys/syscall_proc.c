@@ -22,6 +22,7 @@
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
+#include "lib/kirq.h"
 #include "lib/ksignal.h"
 #include "fs/fd.h"
 #include "fs/file.h"
@@ -1558,10 +1559,43 @@ fail_built:
 
 #define WCONTINUED 8 /* also report a child that has CONTINUED */
 
-/* Bytes of struct rusage to zero-fill for wait4 (i386: two 8-byte timevals plus
- * 14 longs). We do not track per-process resource usage yet, so it is reported
- * as all zero. */
+/* The i386 struct rusage, 72 bytes: the user and system CPU time as two
+ * timevals of 32-bit seconds and microseconds, then fourteen longs, maxrss
+ * through nivcsw, which this kernel does not count and reports as zero. */
+struct kernel_rusage {
+    int32_t utime_sec;
+    int32_t utime_usec;
+    int32_t stime_sec;
+    int32_t stime_usec;
+    int32_t uncounted[14];
+};
+
 #define RUSAGE_BYTES 72
+
+/** Fill `ru` with `user` and `sys` ticks of CPU time and zero the rest. */
+static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t sys)
+{
+    k_memset(ru, 0, sizeof(*ru));
+    ru->utime_sec = (int32_t)(user / 100u);
+    ru->utime_usec = (int32_t)((user % 100u) * 10000u);
+    ru->stime_sec = (int32_t)(sys / 100u);
+    ru->stime_usec = (int32_t)((sys % 100u) * 10000u);
+}
+
+/**
+ * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
+ * the child's own CPU time with that of the children it has reaped. Read
+ * with interrupts masked, since the tick adds to a live child's.
+ */
+static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
+{
+    uint32_t flags = kirq_save();
+    uint32_t user = p->utime + p->cutime;
+    uint32_t sys = p->stime + p->cstime;
+
+    kirq_restore(flags);
+    rusage_from_ticks(ru, user, sys);
+}
 
 /* Interrupts-off helpers (defined below with the signal code); used here for
  * the lost-wakeup-safe sleep in do_wait. */
@@ -1594,8 +1628,10 @@ static int wait_pid_match(int pid, const process_t *p)
  *
  * `status` (may be NULL) receives the Linux-encoded wait status that
  * sys_exit/terminate already stored in exit_code; `rusage_ptr` (0 for
- * waitpid, may be 0 for wait4) is zero-filled on reap. With WNOHANG, returns
- * 0 instead of blocking when a child exists but has not exited.
+ * waitpid, may be 0 for wait4) receives the child's CPU time with its reaped
+ * children's, for a stop or a continue as for an exit. A reap adds the same
+ * two times to the caller's children's totals. With WNOHANG, returns 0
+ * instead of blocking when a child exists but has not exited.
  */
 static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage_ptr)
 {
@@ -1603,6 +1639,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
     int exit_code;
     process_t *p;
     uint32_t flags;
+    struct kernel_rusage ru;
 
     if (!current_proc) {
         return -ESRCH;
@@ -1638,6 +1675,9 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
             if (p->state == PROC_ZOMBIE) {
                 child_pid = p->pid;
                 exit_code = p->exit_code;
+                rusage_of_child(&ru, p);
+                current_proc->cutime += p->utime + p->cutime;
+                current_proc->cstime += p->stime + p->cstime;
                 if (p->cr3 != 0) {
                     page_dir_t *child_dir = p->page_dir;
                     free_user_pages(child_dir);
@@ -1652,9 +1692,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                     copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
                 }
                 if (rusage_ptr) {
-                    uint8_t zero[RUSAGE_BYTES];
-                    k_memset(zero, 0, sizeof(zero));
-                    copy_to_user((void __user *)rusage_ptr, zero, RUSAGE_BYTES);
+                    copy_to_user((void __user *)rusage_ptr, &ru, RUSAGE_BYTES);
                 }
                 return (int32_t)child_pid;
             }
@@ -1669,6 +1707,10 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                 if (status) {
                     copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
                 }
+                if (rusage_ptr) {
+                    rusage_of_child(&ru, p);
+                    copy_to_user((void __user *)rusage_ptr, &ru, RUSAGE_BYTES);
+                }
                 return (int32_t)p->pid;
             }
             if ((options & WCONTINUED) && p->jc_status == 0xffff) {
@@ -1676,6 +1718,10 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                 p->jc_status = 0;
                 if (status) {
                     copy_to_user((void __user *)status, &exit_code, sizeof(exit_code));
+                }
+                if (rusage_ptr) {
+                    rusage_of_child(&ru, p);
+                    copy_to_user((void __user *)rusage_ptr, &ru, RUSAGE_BYTES);
                 }
                 return (int32_t)p->pid;
             }

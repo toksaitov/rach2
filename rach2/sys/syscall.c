@@ -1177,10 +1177,12 @@ static int32_t sys_set_thread_area(isr_params_t *params)
 /**
  * Process times (times(2)).
  *
- * Per-process CPU time is not tracked, so the four tms fields are reported
- * as zero; the return value is the monotonic tick count (already in CLK_TCK
- * = 100 Hz units). EBX = struct tms * (NULL is allowed: the caller may want
- * only the return value).
+ * EBX = struct tms *, which may be NULL when the caller wants only the
+ * return value. The four fields are the CPU time the timer charged to the
+ * caller in user mode and in the kernel, and the same two for the children
+ * it has reaped, in ticks, which are the 100 Hz CLK_TCK units the structure
+ * uses. They are read with interrupts masked, since the tick adds to them.
+ * The return value is the monotonic tick count.
  */
 static int32_t sys_times(isr_params_t *params)
 {
@@ -1192,10 +1194,13 @@ static int32_t sys_times(isr_params_t *params)
     } t;
 
     if (params->ebx) {
-        t.tms_utime = 0;
-        t.tms_stime = 0;
-        t.tms_cutime = 0;
-        t.tms_cstime = 0;
+        uint32_t flags = kirq_save();
+
+        t.tms_utime = (int32_t)current_proc->utime;
+        t.tms_stime = (int32_t)current_proc->stime;
+        t.tms_cutime = (int32_t)current_proc->cutime;
+        t.tms_cstime = (int32_t)current_proc->cstime;
+        kirq_restore(flags);
         if (copy_to_user((void __user *)params->ebx, &t, sizeof(t)) != 0) {
             return -EFAULT;
         }
