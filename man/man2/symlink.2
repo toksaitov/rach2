@@ -28,7 +28,9 @@ An existing destination, including a dangling symbolic link, is not
 replaced.
 An empty target is refused.
 .Pp
-Only ext2 supports creation of symbolic links.
+ext2 and tmpfs, whose mounts include
+.Pa /dev/shm ,
+support creation of symbolic links.
 The parent directory must permit writing, and path resolution requires
 search permission on ancestor directories.
 A read-only mount or synthetic namespace returns
@@ -51,7 +53,7 @@ does not distinguish an exact fit from truncation.
 The caller must provide its own terminator when using the result as
 a C string.
 .Pp
-Besides ext2 links,
+Besides ext2 and tmpfs links,
 .Fn readlink
 supports
 .Pa /proc/self ,
@@ -96,14 +98,15 @@ prefix and terminating null byte, must fit 4096 bytes.
 .Fn symlink
 and
 .Fn symlinkat
-copy at most 4095 target bytes, and ext2 stores at most a block less
-one byte, 4095 on the volumes this kernel writes.
+copy at most 4095 target bytes; ext2 stores at most a block less one
+byte, 4095 on the volumes this kernel writes, and tmpfs keeps a target
+of any of those lengths in kernel memory.
 A target combined with the remaining path during resolution must also
 fit 4095 bytes, excluding the terminator; Linux has no such bound on the
 combination.
 .Fn readlink
 reads a target into an internal buffer of 4096 bytes, which fits every
-target ext2 stores.
+target ext2 or tmpfs stores.
 .Ss System call interface
 The i386 system call numbers and register arguments are:
 .Bl -tag -width "readlinkat (305)"
