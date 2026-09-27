@@ -154,6 +154,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
 
     if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {
         sp = current_proc->altstack_sp + current_proc->altstack_size;
+        on_alt = 1;
     }
     sp -= FPU_LINUX_SIZE;
     sp &= ~63u;
@@ -162,6 +163,9 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
     sp -= size;
     sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;
     frame_addr = sp;
+    if (on_alt && !sigframe_on_altstack(frame_addr)) {
+        return -1;
+    }
 
     fpu_save(area);
     fpu_to_linux(area, fpstate);

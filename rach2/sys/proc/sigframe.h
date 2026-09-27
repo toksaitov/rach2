@@ -23,7 +23,8 @@
  * restores. The handler starts with the initial floating-point state, its
  * signal number in EAX and, for an rt frame, the siginfo and ucontext
  * addresses in EDX and ECX. Returns 0, or -1 when the stack cannot take the
- * frame, with the process's state unchanged.
+ * frame or the frame would run off the bottom of the alternate stack it goes
+ * on, which Linux refuses too, with the process's state unchanged.
  */
 int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                    const struct k_siginfo *info, uint64_t oldmask);

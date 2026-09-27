@@ -221,6 +221,10 @@ All action flags are stored and returned.
 restarts an interrupted system call as described above, and
 .Dv SA_ONSTACK
 runs the handler on the alternate stack when one is set and not in use.
+A frame that would run off the bottom of the alternate stack is not
+built, and the process ends with
+.Dv SIGSEGV ,
+as on Linux.
 Without
 .Dv SA_RESTORER ,
 the handler returns to code in its own frame that makes the return call.
