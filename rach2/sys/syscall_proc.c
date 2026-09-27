@@ -2267,14 +2267,16 @@ static void wait_done(struct wait_report *r, int ok)
  * not reported, reported once; a thread that ended while traced, which the
  * report frees, as no other wait reports it; or the end of a process whose
  * parent the tracer is not, which the parent's wait passes over until this
- * report lets the process go to the parent (`wait_take`). Returns 1 with
- * `out` filled and the event held (`wait_hold`), or 0.
+ * report lets the process go to the parent (`wait_take`). A stop's si_status
+ * is its wait status shifted right by 8 bits, the signal with the event
+ * above it, as Linux's `wait_task_stopped` gives it, so waitid tells an
+ * event stop from a plain SIGTRAP. Returns 1 with `out` filled and the event
+ * held (`wait_hold`), or 0.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
     if (p->ptrace_status != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
-        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED,
-                  (int32_t)((p->ptrace_status >> 8) & 0xFF));
+        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED, (int32_t)(p->ptrace_status >> 8));
         wait_hold(out, p, WAIT_TRAP, options);
         return 1;
     }

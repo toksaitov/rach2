@@ -181,10 +181,16 @@ or
 .Dv CLD_DUMPED
 where the wait status says a core was dumped, with the signal; a stop,
 .Dv CLD_STOPPED
-with the stop signal; and a continue,
+with the stop signal; a continue,
 .Dv CLD_CONTINUED
 with
-.Dv SIGCONT .
+.Dv SIGCONT ;
+and, for a tracer, a ptrace stop,
+.Dv CLD_TRAPPED
+with the stop's wait status shifted right by 8 bits: its signal, with the
+event of an event stop in bits 8 to 15, as
+.Xr ptrace 2
+describes the status.
 With
 .Dv WNOHANG
 and no event, those five fields and

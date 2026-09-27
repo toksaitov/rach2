@@ -12,7 +12,8 @@
  * the child at the entry and the exit of getpid, with the call's number in
  * orig_eax and its result in eax at the exit, and bit 0x80 on the stop
  * signal with PTRACE_O_TRACESYSGOOD. PTRACE_O_TRACEEXEC stops the child
- * after an execve with the exec event. A debug register set through
+ * after an execve with the exec event, which waitid reports in si_status
+ * above the signal. A debug register set through
  * POKEUSER reads back through PEEKUSER. PTRACE_ATTACH stops a running
  * process, which runs on after PTRACE_DETACH. A signal sent to a process
  * whose first thread its tracer holds stopped wakes the other thread, asleep
@@ -135,6 +136,7 @@ static int syscalls_and_exec(void)
 {
     struct user_regs_struct regs;
     unsigned long dr;
+    siginfo_t si;
     int status;
     pid_t pid = fork();
 
@@ -171,8 +173,13 @@ static int syscalls_and_exec(void)
         regs.eax != pid) {
         return fail("the exit stop of getpid");
     }
-    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
-        !WIFSTOPPED(status) || status >> 8 != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
+        waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOWAIT) != 0 || si.si_code != CLD_TRAPPED ||
+        si.si_status != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
+        return fail("waitid's si_status of the exec event");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) ||
+        status >> 8 != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
         return fail("the exec event");
     }
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
