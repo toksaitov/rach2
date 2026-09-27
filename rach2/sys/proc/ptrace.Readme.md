@@ -11,7 +11,7 @@ A thread's record keeps its tracing state (`process.h`): the `PT_` flags, the tr
 A tracee stops in `ptrace_stop`, in its own context: it sets the status, posts `SIGCHLD` with `CLD_TRAPPED` to the tracer, wakes the tracer's child queue, and parks as `PROC_STOPPED` until the tracer clears the status, or until `SIGKILL`, which `sig_job_control` makes runnable. `SIGCONT` does not end a ptrace stop. The stops are taken where Linux takes them:
 
 * signal-delivery stops in `deliver_signals`, after a signal is taken off the pending sets and before its disposition is read (`ptrace_signal_stop`); the tracer's resume signal replaces it, and a blocked one is posted back;
-* group stops, after the stop signal's own delivery stop, once per stop for each thread (`stop_seen`), after which the tracer may run the thread while its process stays stopped;
+* group stops, after the stop signal's own delivery stop, once per stop for each thread (`stop_seen`), after which the tracer may run the thread while its process stays stopped; a thread already parked in its process's stop when a tracer attaches is made runnable (`ptrace_unpark`), leaves the park (`sig_park`) and makes its group stop then;
 * event stops (`ptrace_event`) in `do_fork`, `exec_run`, `exit_current` and `terminate_current_process`; a child a traced thread makes is attached when the options ask for the event, and starts with `SIGSTOP` pending, or with a `PTRACE_EVENT_STOP` still to come for a seized tracer (`PT_START`);
 * syscall stops in the dispatcher, at the entry and the exit (`ptrace_syscall_stop`).
 

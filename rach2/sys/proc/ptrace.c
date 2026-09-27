@@ -694,6 +694,23 @@ static int ptrace_resume(process_t *t, uint32_t sig, int step, int syscalls)
 }
 
 /**
+ * Let the thread `t`, which a tracer has just attached to, out of the park
+ * its process's stop holds an untraced thread in (`sig_park`): it goes back
+ * through `deliver_signals`, where it makes the stop a ptrace stop, reported
+ * as a group stop is, while its process stays stopped, as Linux's attach
+ * makes a stopped task trap. A thread that is not parked is left.
+ */
+static void ptrace_unpark(process_t *t)
+{
+    uint32_t flags = kirq_save();
+
+    if (t->state == PROC_STOPPED) {
+        t->state = PROC_READY;
+    }
+    kirq_restore(flags);
+}
+
+/**
  * PTRACE_ATTACH and PTRACE_SEIZE: make the caller's process `t`'s tracer.
  * The caller needs effective user ID 0, or its real user ID equal to each of
  * `t`'s three and `t` dumpable, as Linux's `__ptrace_may_access` asks when
@@ -735,6 +752,7 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
         info.uid = current_proc->ruid;
         signal_post_thread(t, SIGSTOP, &info);
     }
+    ptrace_unpark(t);
     return 0;
 }
 

@@ -20,7 +20,8 @@
  * the signal. A debug register set through POKEUSER reads back through
  * PEEKUSER, and DR7 enables a breakpoint on a user address, the last of which a
  * breakpoint may end at, and not on a kernel address. PTRACE_ATTACH stops a
- * running process, which runs on after PTRACE_DETACH. A signal sent to a
+ * running process, which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops
+ * for the tracer one that a stop signal has already stopped. A signal sent to a
  * process whose first thread its tracer holds stopped wakes the other thread,
  * asleep in pause, which takes it. The usage a tracer's wait4 reports for the
  * end of a traced thread that is not the first has the time of the children its
@@ -708,6 +709,38 @@ static int tracer_first(void)
 }
 
 /*
+ * PTRACE_SEIZE of a process a stop signal has stopped, whose stop its
+ * parent has already waited for, stops the thread for the tracer with
+ * PTRACE_EVENT_STOP and the stop signal, and the process runs on after
+ * PTRACE_DETACH and SIGCONT.
+ */
+static int attach_stopped(void)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        raise(SIGSTOP);
+        _exit(0);
+    }
+    if (waitpid(pid, &status, WUNTRACED) != pid || !WIFSTOPPED(status)) {
+        return fail("the child to be seized did not stop");
+    }
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
+        !WIFSTOPPED(status) || status >> 8 != (SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
+        return fail("seizing a stopped process did not stop it for the tracer");
+    }
+    if (ptrace(PTRACE_DETACH, pid, NULL, NULL) != 0) {
+        return fail("PTRACE_DETACH of the seized process");
+    }
+    kill(pid, SIGCONT);
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the seized process did not run on after the detach");
+    }
+    return 0;
+}
+
+/*
  * A tracee that SIGKILL ends tells its tracer, which is its parent here,
  * with a SIGCHLD whose siginfo is CLD_KILLED and the signal, and the wait
  * reports it killed. SIGCHLD is blocked, and the one the stop sent taken,
@@ -752,8 +785,8 @@ static int killed_tracee(void)
 int main(void)
 {
     if (memory_and_registers() || syscalls_and_exec() || syscall_changes() ||
-        restart_cancelled() || attach() || stopped_leader() || traced_thread_usage() ||
-        tracer_first() || killed_tracee()) {
+        restart_cancelled() || attach() || attach_stopped() || stopped_leader() ||
+        traced_thread_usage() || tracer_first() || killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

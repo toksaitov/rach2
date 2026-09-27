@@ -3768,16 +3768,19 @@ static void sig_group_stop(int signo)
 }
 
 /**
- * Park the current thread while its process is stopped and no SIGKILL is
- * pending. The scheduler keeps a STOPPED thread off the processor (it only
- * flips RUNNING to READY); `sig_job_control` makes it READY again. `sti;hlt;
- * cli` from IF=0 is lost-wakeup-safe.
+ * Park the current thread while its process is stopped, no SIGKILL is
+ * pending and no tracer has attached to it. The scheduler keeps a STOPPED
+ * thread off the processor (it only flips RUNNING to READY);
+ * `sig_job_control` makes it READY again, and so does an attach
+ * (`ptrace_unpark`), after which the caller makes the stop the tracer's.
+ * `sti;hlt; cli` from IF=0 is lost-wakeup-safe.
  */
 static void sig_park(void)
 {
     uint32_t flags = sig_irq_save();
 
-    while (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL))) {
+    while (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
+           !(current_proc->ptrace & PT_TRACED)) {
         current_proc->state = PROC_STOPPED;
         schedule();
         if (current_proc->state == PROC_STOPPED) {
@@ -3866,6 +3869,7 @@ void deliver_signals(isr_params_t *tf)
         if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
             !ptrace_group_stop((int)current_proc->tg->stop) && !current_proc->stop_seen) {
             sig_park();
+            continue;
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {

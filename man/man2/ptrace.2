@@ -139,6 +139,9 @@ sends it
 .Dv PTRACE_SEIZE
 stops nothing and takes the options in
 .Fa data .
+A thread whose process a stop signal has stopped leaves that stop for a
+group stop of the tracer's at once, as on Linux, and its process stays
+stopped.
 The caller needs effective user ID 0, or a real user and group ID equal to
 each of the target's three and a dumpable target, as Linux asks of a
 tracer without
@@ -297,7 +300,7 @@ changes one call into another and has another run none at their entry
 stops, cancels the restart of an interrupted read at its exit stop, sets
 and reads a debug register, has a breakpoint on a kernel address
 refused and one ending at the last user address taken, attaches to and
-detaches from a running process, and reads the
+detaches from a running process, seizes a stopped one, and reads the
 .Dv SIGCHLD
 of a tracee
 .Dv SIGKILL
