@@ -1934,6 +1934,7 @@ void init_syscall(void)
     _syscall_table[SYS_SCHED_RR_GET_INTERVAL] = sys_sched_rr_get_interval;
     _syscall_table[SYS_SCHED_SETAFFINITY] = sys_sched_setaffinity;
     _syscall_table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
+    _syscall_table[SYS_PRCTL] = sys_prctl;
     _syscall_table[SYS_SETSID] = sys_setsid;
     _syscall_table[SYS_SETPGID] = sys_setpgid;
     _syscall_table[SYS_GETPGID] = sys_getpgid;

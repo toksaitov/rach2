@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt FORK 2
 .Os
 .Sh NAME
@@ -20,7 +20,10 @@ contents, but a write by either process does not change the other's memory.
 .Pp
 The child inherits the parent's program name, credentials, supplementary
 groups, working directory, file creation mask, resource limits, session,
-and process group.
+process group, nice value, dumpable flag and no_new_privs bit, and not its
+parent-death signal; see
+.Xr prctl 2 .
+Its CPU times start at zero.
 It inherits signal dispositions and the blocked signal mask;
 its pending signal set is empty.
 The inherited program name remains visible in

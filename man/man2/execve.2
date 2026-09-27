@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt EXECVE 2
 .Os
 .Sh NAME
@@ -71,13 +71,17 @@ Set-group-ID changes the effective group ID to the file's group only
 when group execute is also set.
 A mount with
 .Dv MS_NOSUID
-suppresses both changes.
+suppresses both changes, and so does the no_new_privs bit of
+.Xr prctl 2 .
 Script execution applies neither the script's nor the interpreter's
 set-ID bits.
 Real IDs are unchanged; saved IDs become the resulting effective IDs.
 The initial stack's
 .Dv AT_SECURE
 value is set when an effective ID differs from its real ID.
+Such an exec leaves the process not dumpable and clears its parent-death
+signal, as one that changes an effective ID does; any other makes the
+process dumpable again.
 .Pp
 Descriptors marked
 .Dv FD_CLOEXEC

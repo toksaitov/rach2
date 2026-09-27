@@ -197,6 +197,17 @@ struct process {
     /* The nice value `setpriority` keeps, -20 to 19; fork passes it on and
      * exec keeps it. The scheduler does not read it. */
     int32_t nice;
+    /* What prctl keeps. The signal posted to this process when its parent
+     * exits, 0 for none: a fork does not pass it on, and it is cleared when
+     * an exec or an identity call moves the effective ids and by an exec
+     * that runs with ids its caller lacks. Whether the process is dumpable,
+     * 1 from birth: an exec sets it again, 0 where the new ids differ from
+     * the real ones, and a move of the effective ids clears it. Whether the
+     * process and its descendants may gain no privilege, which a fork passes
+     * on and nothing clears, and under which exec ignores set-id bits. */
+    uint32_t pdeath_signal;
+    uint32_t dumpable;
+    uint32_t no_new_privs;
 };
 
 typedef struct process process_t;
@@ -235,9 +246,10 @@ process_t *get_process(uint32_t pid);
 
 /**
  * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
- * reap any child that is already a zombie. Called from the death paths so an
- * exiting process never orphans a child onto a record about to be freed.
- * No-op when there is no init or when init itself is dying.
+ * reap any child that is already a zombie, and post each living child the
+ * parent-death signal it asked for. Called from the death paths so an exiting
+ * process never orphans a child onto a record about to be freed. No child is
+ * adopted when there is no init or when init itself is dying.
  */
 void reparent_children(uint32_t dead_pid);
 

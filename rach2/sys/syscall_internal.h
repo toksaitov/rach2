@@ -315,4 +315,6 @@ int32_t sys_sched_getaffinity(isr_params_t *params);
 
 int32_t sys_sched_setaffinity(isr_params_t *params);
 
+int32_t sys_prctl(isr_params_t *params);
+
 #endif

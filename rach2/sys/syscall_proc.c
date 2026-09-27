@@ -789,6 +789,36 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
 }
 
 /**
+ * What a move of the effective ids undoes, as Linux's `commit_creds` undoes
+ * it: when `p`'s effective uid or gid is no longer `old_euid` or `old_egid`,
+ * the process stops being dumpable and loses its parent-death signal, so the
+ * parent it had cannot signal the identity it now has.
+ */
+static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
+{
+    if (p->euid != old_euid || p->egid != old_egid) {
+        p->dumpable = 0;
+        p->pdeath_signal = 0;
+    }
+}
+
+/**
+ * What an exec's credentials change beside the ids, as Linux's exec does:
+ * the process is dumpable again unless it runs with ids its caller lacks
+ * (`secure`), such an exec clears the parent-death signal, and one that moved
+ * the effective ids from `old_euid` and `old_egid` is treated as
+ * `cred_moved` treats an identity call.
+ */
+static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
+{
+    current_proc->dumpable = secure ? 0u : 1u;
+    if (secure) {
+        current_proc->pdeath_signal = 0;
+    }
+    cred_moved(current_proc, old_euid, old_egid);
+}
+
+/**
  * Replace the current process image with a new program (execve(2)).
  *
  * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
@@ -817,6 +847,8 @@ int32_t sys_execve(isr_params_t *params)
     uint32_t file_uid = 0;
     uint32_t file_gid = 0;
     int secure = 0;
+    uint32_t old_euid;
+    uint32_t old_egid;
 
     struct exec_state *s;
     uint32_t entry_point;
@@ -1192,7 +1224,14 @@ checked:
      * the image runs with authority its invoker lacks, the effective id
      * differing from the real one either way, so libc distrusts the
      * caller-supplied environment; it is the only such signal, since the
-     * stack has no AT_UID/AT_EUID for libc to compare. */
+     * stack has no AT_UID/AT_EUID for libc to compare. A process that set
+     * no_new_privs gains nothing: its bits are read and ignored, as a
+     * nosuid mount's are. */
+    if (current_proc->no_new_privs) {
+        setid_mode = 0;
+    }
+    old_euid = current_proc->euid;
+    old_egid = current_proc->egid;
     if (setid_mode & KRFFS_MODE_SUID) {
         current_proc->euid = file_uid;
     }
@@ -1203,6 +1242,7 @@ checked:
     current_proc->sgid = current_proc->egid;
     secure =
         (current_proc->euid != current_proc->ruid) || (current_proc->egid != current_proc->rgid);
+    exec_privileges(secure, old_euid, old_egid);
 
     /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
     proc_set_comm(current_proc, name);
@@ -1437,6 +1477,8 @@ int32_t sys_fork(isr_params_t *params)
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
     child->nice = parent->nice;
+    child->dumpable = parent->dumpable;
+    child->no_new_privs = parent->no_new_privs;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->fds.limit = parent->fds.limit;
     child->ruid = parent->ruid; /* credentials: the child is who the parent was */
@@ -2944,15 +2986,18 @@ int32_t sys_setuid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t uid = params->ebx;
+    uint32_t old_euid = p->euid;
 
     if (cred_privileged()) {
         p->ruid = uid;
         p->euid = uid;
         p->suid = uid;
+        cred_moved(p, old_euid, p->egid);
         return 0;
     }
     if (uid == p->ruid || uid == p->suid) {
         p->euid = uid;
+        cred_moved(p, old_euid, p->egid);
         return 0;
     }
     return -EPERM;
@@ -2962,15 +3007,18 @@ int32_t sys_setgid(isr_params_t *params)
 {
     process_t *p = current_proc;
     uint32_t gid = params->ebx;
+    uint32_t old_egid = p->egid;
 
     if (cred_privileged()) {
         p->rgid = gid;
         p->egid = gid;
         p->sgid = gid;
+        cred_moved(p, p->euid, old_egid);
         return 0;
     }
     if (gid == p->rgid || gid == p->sgid) {
         p->egid = gid;
+        cred_moved(p, p->euid, old_egid);
         return 0;
     }
     return -EPERM;
@@ -2983,6 +3031,7 @@ int32_t sys_setreuid(isr_params_t *params)
     uint32_t e = params->ecx;
     uint32_t new_r = (r == SC_ID_KEEP) ? p->ruid : r;
     uint32_t new_e = (e == SC_ID_KEEP) ? p->euid : e;
+    uint32_t old_euid = p->euid;
 
     if (!cred_privileged()) {
         if (r != SC_ID_KEEP && new_r != p->ruid && new_r != p->euid) {
@@ -2997,6 +3046,7 @@ int32_t sys_setreuid(isr_params_t *params)
     }
     p->ruid = new_r;
     p->euid = new_e;
+    cred_moved(p, old_euid, p->egid);
     return 0;
 }
 
@@ -3007,6 +3057,7 @@ int32_t sys_setregid(isr_params_t *params)
     uint32_t e = params->ecx;
     uint32_t new_r = (r == SC_ID_KEEP) ? p->rgid : r;
     uint32_t new_e = (e == SC_ID_KEEP) ? p->egid : e;
+    uint32_t old_egid = p->egid;
 
     if (!cred_privileged()) {
         if (r != SC_ID_KEEP && new_r != p->rgid && new_r != p->egid) {
@@ -3021,6 +3072,7 @@ int32_t sys_setregid(isr_params_t *params)
     }
     p->rgid = new_r;
     p->egid = new_e;
+    cred_moved(p, p->euid, old_egid);
     return 0;
 }
 
@@ -3030,6 +3082,7 @@ int32_t sys_setresuid(isr_params_t *params)
     uint32_t r = params->ebx;
     uint32_t e = params->ecx;
     uint32_t s = params->edx;
+    uint32_t old_euid = p->euid;
 
     if (!cred_privileged()) {
         uint32_t v[3];
@@ -3052,6 +3105,7 @@ int32_t sys_setresuid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->suid = s;
     }
+    cred_moved(p, old_euid, p->egid);
     return 0;
 }
 
@@ -3061,6 +3115,7 @@ int32_t sys_setresgid(isr_params_t *params)
     uint32_t r = params->ebx;
     uint32_t e = params->ecx;
     uint32_t s = params->edx;
+    uint32_t old_egid = p->egid;
 
     if (!cred_privileged()) {
         uint32_t v[3];
@@ -3083,6 +3138,7 @@ int32_t sys_setresgid(isr_params_t *params)
     if (s != SC_ID_KEEP) {
         p->sgid = s;
     }
+    cred_moved(p, p->euid, old_egid);
     return 0;
 }
 
@@ -4020,4 +4076,99 @@ int32_t sys_sched_setaffinity(isr_params_t *params)
         return -EPERM;
     }
     return (mask & 1u) ? 0 : -EINVAL;
+}
+
+/* The prctl options this kernel has; every other is EINVAL, as Linux answers
+ * an option it does not know. */
+#define PR_SET_PDEATHSIG 1
+
+#define PR_GET_PDEATHSIG 2
+
+#define PR_GET_DUMPABLE 3
+
+#define PR_SET_DUMPABLE 4
+
+#define PR_SET_NAME 15
+
+#define PR_GET_NAME 16
+
+#define PR_SET_NO_NEW_PRIVS 38
+
+#define PR_GET_NO_NEW_PRIVS 39
+
+/**
+ * Operations on the calling process (prctl(2), syscall 172).
+ *
+ * EBX = option, ECX to EDI = its four arguments, each as Linux takes it:
+ *
+ * PR_SET_PDEATHSIG sets the signal, 1 to 64 or 0 for none, that this
+ * process receives when its parent exits (`reparent_children` posts it), and
+ * PR_GET_PDEATHSIG stores it as an int at the second argument.
+ *
+ * PR_GET_DUMPABLE returns whether the process is dumpable, and
+ * PR_SET_DUMPABLE sets it to 0 or 1. Nothing reads it here, since the kernel
+ * writes no core files and has no tracing.
+ *
+ * PR_SET_NAME sets the program name `/proc/<pid>/stat` and ps show from the
+ * string at the second argument, cut to 15 bytes, and PR_GET_NAME stores the
+ * name's 16 bytes, NUL-padded, at the second argument.
+ *
+ * PR_SET_NO_NEW_PRIVS, with the second argument 1 and the rest 0, sets
+ * no_new_privs for good: fork passes it on and exec then ignores set-id bits.
+ * PR_GET_NO_NEW_PRIVS, with every argument 0, returns it.
+ *
+ * Returns 0 or the value asked for; -EINVAL for any other option, a signal
+ * past 64, a dumpable value other than 0 and 1, or arguments not as above;
+ * -EFAULT for a pointer that cannot be read or written.
+ */
+int32_t sys_prctl(isr_params_t *params)
+{
+    uint32_t arg2 = params->ecx;
+    uint32_t rest = params->edx | params->esi | params->edi;
+    int32_t value;
+    char name[sizeof(current_proc->comm)];
+
+    switch (params->ebx) {
+    case PR_SET_PDEATHSIG:
+        if (arg2 > KSIG_MAX) {
+            return -EINVAL;
+        }
+        current_proc->pdeath_signal = arg2;
+        return 0;
+    case PR_GET_PDEATHSIG:
+        value = (int32_t)current_proc->pdeath_signal;
+        return copy_to_user((void __user *)arg2, &value, sizeof(value)) != 0 ? -EFAULT : 0;
+    case PR_GET_DUMPABLE:
+        return (int32_t)current_proc->dumpable;
+    case PR_SET_DUMPABLE:
+        if (arg2 > 1) {
+            return -EINVAL;
+        }
+        current_proc->dumpable = arg2;
+        return 0;
+    case PR_SET_NAME:
+        k_memset(name, 0, sizeof(name));
+        if (strncpy_from_user(name, (const char __user *)arg2, sizeof(name) - 1) == -EFAULT) {
+            return -EFAULT;
+        }
+        name[sizeof(name) - 1] = '\0';
+        k_memcpy(current_proc->comm, name, sizeof(name));
+        return 0;
+    case PR_GET_NAME:
+        k_memcpy(name, current_proc->comm, sizeof(name));
+        return copy_to_user((void __user *)arg2, name, sizeof(name)) != 0 ? -EFAULT : 0;
+    case PR_SET_NO_NEW_PRIVS:
+        if (arg2 != 1 || rest != 0) {
+            return -EINVAL;
+        }
+        current_proc->no_new_privs = 1;
+        return 0;
+    case PR_GET_NO_NEW_PRIVS:
+        if (arg2 != 0 || rest != 0) {
+            return -EINVAL;
+        }
+        return current_proc->no_new_privs ? 1 : 0;
+    default:
+        return -EINVAL;
+    }
 }

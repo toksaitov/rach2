@@ -88,8 +88,9 @@ static const char *const PROBES[] = {
     "musl/vmamusl",
     /* The process calls static GNU programs make, each group through the
        libc that has them: the CPU time the kernel charges, the clocks, how a
-       process is named and scheduled, and waitid. */
+       process is named and scheduled, waitid, and prctl. */
     "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl",
+    "musl/prctlmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */
