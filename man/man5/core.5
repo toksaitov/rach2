@@ -134,6 +134,18 @@ region has none.
 A page the process never touched is a hole in the file, and reads as
 zeros.
 .Pp
+A process of 65534 regions or more has more program headers than the ELF
+header's 16-bit count holds.
+Its file has
+.Dv PN_XNUM ,
+0xffff, as that count, and one section header, at the end of the file
+and named by
+.Va e_shoff ,
+a null section whose
+.Va sh_info
+has the count of program headers, as ELF's extended numbering has it and
+as Linux writes it.
+.Pp
 The soft
 .Dv RLIMIT_CORE
 bounds the bytes written, holes excepted.

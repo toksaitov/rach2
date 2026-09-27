@@ -29,9 +29,14 @@
 #define FPREGSET_SIZE 108u
 #define PRXFPREG_SIZE 512u
 
-/* The ELF header, a program header and a note header. */
+/* The ELF header, a program header and a section header. A file of PN_XNUM
+ * program headers or more has PN_XNUM as the header's count, and the count
+ * itself in the one section header it then has: ELF's extended numbering,
+ * which Linux's core files use. */
 #define EHDR_SIZE 52u
 #define PHDR_SIZE 32u
+#define SHDR_SIZE 40u
+#define PN_XNUM   0xFFFFu
 
 /* What is being written and how much may be. */
 struct core_out {
@@ -321,31 +326,14 @@ static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
     return regions;
 }
 
-int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
-                   uint32_t limit)
+/**
+ * Write the ELF header of a core file of `phnum` program headers, the first
+ * at the header's end. With PN_XNUM or more, the header's count is PN_XNUM
+ * and the file has one section header, at `shoff`, which has the count.
+ */
+static void ehdr_write(struct core_out *o, uint32_t phnum, uint32_t shoff)
 {
-    struct mm *mm = current_proc->mm;
-    struct core_region *regions;
-    struct core_out o;
     uint8_t ehdr[EHDR_SIZE];
-    uint8_t phdr[PHDR_SIZE];
-    uint32_t count;
-    uint32_t phnum;
-    uint32_t data;
-    uint32_t off;
-    uint32_t i;
-
-    (void)wq_wait_event_nointr(&current_proc->tg->gone, core_quiet, current_proc->tg);
-    regions = regions_take(&mm->vm, &count);
-    if (!regions) {
-        return -ENOMEM;
-    }
-    phnum = count + 1u;
-    o.write = write;
-    o.ctx = ctx;
-    o.done = 0;
-    o.limit = limit;
-    o.err = 0;
 
     k_memset(ehdr, 0, sizeof(ehdr));
     ehdr[EI_MAG0] = ELFMAG0;
@@ -361,39 +349,96 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
     put32(ehdr + 28, EHDR_SIZE);
     put16(ehdr + 40, EHDR_SIZE);
     put16(ehdr + 42, PHDR_SIZE);
-    put16(ehdr + 44, (uint16_t)phnum);
-    (void)out(&o, ehdr, sizeof(ehdr));
+    put16(ehdr + 44, (uint16_t)(phnum < PN_XNUM ? phnum : PN_XNUM));
+    if (phnum >= PN_XNUM) {
+        put32(ehdr + 32, shoff);
+        put16(ehdr + 46, SHDR_SIZE);
+        put16(ehdr + 48, 1);
+    }
+    (void)out(o, ehdr, sizeof(ehdr));
+}
 
+/** Write the program header of the load of region `r`, whose bytes are at
+ * `off` in the file. */
+static void load_write(struct core_out *o, const struct core_region *r, uint32_t off)
+{
+    uint8_t phdr[PHDR_SIZE];
+    uint32_t flags = 0;
+
+    if (r->prot & VM_PROT_READ) {
+        flags |= PF_R;
+    }
+    if (r->prot & VM_PROT_WRITE) {
+        flags |= PF_W;
+    }
+    if (r->prot & VM_PROT_EXEC) {
+        flags |= PF_X;
+    }
+    k_memset(phdr, 0, sizeof(phdr));
+    put32(phdr, PT_LOAD);
+    put32(phdr + 4, off);
+    put32(phdr + 8, r->start);
+    put32(phdr + 16, region_file_size(r));
+    put32(phdr + 20, r->end - r->start);
+    put32(phdr + 24, flags);
+    put32(phdr + 28, PAGE_SIZE);
+    (void)out(o, phdr, sizeof(phdr));
+}
+
+/** Write the one section header of extended numbering: a null section whose
+ * sh_size is the count of section headers, 1, and whose sh_info is the
+ * count of program headers, `phnum`, as Linux's `fill_extnum_info` has it. */
+static void shdr_write(struct core_out *o, uint32_t phnum)
+{
+    uint8_t shdr[SHDR_SIZE];
+
+    k_memset(shdr, 0, sizeof(shdr));
+    put32(shdr + 20, 1);
+    put32(shdr + 28, phnum);
+    (void)out(o, shdr, sizeof(shdr));
+}
+
+int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
+                   uint32_t limit)
+{
+    struct mm *mm = current_proc->mm;
+    struct core_region *regions;
+    struct core_out o;
+    uint8_t phdr[PHDR_SIZE];
+    uint32_t count;
+    uint32_t phnum;
+    uint32_t data;
+    uint32_t end;
+    uint32_t off;
+    uint32_t i;
+
+    (void)wq_wait_event_nointr(&current_proc->tg->gone, core_quiet, current_proc->tg);
+    regions = regions_take(&mm->vm, &count);
+    if (!regions) {
+        return -ENOMEM;
+    }
+    phnum = count + 1u;
+    o.write = write;
+    o.ctx = ctx;
+    o.done = 0;
+    o.limit = limit;
+    o.err = 0;
+    data = (EHDR_SIZE + phnum * PHDR_SIZE + notes_size + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+    end = data;
+    for (i = 0; i < count; i++) {
+        end += region_file_size(&regions[i]);
+    }
+
+    ehdr_write(&o, phnum, end);
     k_memset(phdr, 0, sizeof(phdr));
     put32(phdr, PT_NOTE);
     put32(phdr + 4, EHDR_SIZE + phnum * PHDR_SIZE);
     put32(phdr + 16, notes_size);
     (void)out(&o, phdr, sizeof(phdr));
-    data = (EHDR_SIZE + phnum * PHDR_SIZE + notes_size + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
     off = data;
     for (i = 0; i < count; i++) {
-        const struct core_region *r = &regions[i];
-        uint32_t flags = 0;
-
-        if (r->prot & VM_PROT_READ) {
-            flags |= PF_R;
-        }
-        if (r->prot & VM_PROT_WRITE) {
-            flags |= PF_W;
-        }
-        if (r->prot & VM_PROT_EXEC) {
-            flags |= PF_X;
-        }
-        k_memset(phdr, 0, sizeof(phdr));
-        put32(phdr, PT_LOAD);
-        put32(phdr + 4, off);
-        put32(phdr + 8, r->start);
-        put32(phdr + 16, region_file_size(r));
-        put32(phdr + 20, r->end - r->start);
-        put32(phdr + 24, flags);
-        put32(phdr + 28, PAGE_SIZE);
-        (void)out(&o, phdr, sizeof(phdr));
-        off += region_file_size(r);
+        load_write(&o, &regions[i], off);
+        off += region_file_size(&regions[i]);
     }
     (void)out(&o, notes, notes_size);
     (void)out(&o, NULL, data - (EHDR_SIZE + phnum * PHDR_SIZE + notes_size));
@@ -401,6 +446,9 @@ int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_
         if (region_file_size(&regions[i]) != 0) {
             region_write(&o, mm, &regions[i]);
         }
+    }
+    if (phnum >= PN_XNUM) {
+        shdr_write(&o, phnum);
     }
     kfree(regions);
     return o.err;

@@ -1,6 +1,7 @@
 /**
  * Check the core file's layout against an address space that changes while
- * the file is written, and the wait for the process's other threads.
+ * the file is written, the wait for the process's other threads, and the
+ * count of program headers past what the ELF header's field holds.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -14,6 +15,11 @@
  * judges. The wait for the other threads is a model that ends them: it must
  * come before anything is written, and the regions it leaves are the ones
  * the file records; an execve waiting for the dumping thread ends it at once.
+ *
+ * A process of 65533 inaccessible regions has 65534 program headers, which
+ * the header's 16-bit field holds; one of 65534 or 65535 regions has
+ * PN_XNUM there and its count in the sh_info of the one section header, at
+ * the file's end, as ELF's extended numbering has it.
  */
 #include "proc/coredump.c"
 
@@ -29,7 +35,7 @@ static struct mm space;
 process_t *current_proc = &self;
 process_t *proc_list = &self;
 static uint8_t *file;
-static uint32_t file_len;
+static uint32_t file_len, file_cap;
 static int writes, grow_at, waits, writes_at_wait, grows_at_wait, failures;
 
 #define CHECK(c, detail)                                 \
@@ -133,11 +139,19 @@ static int32_t put(void *ctx, const void *buf, uint32_t len)
     if (++writes == grow_at) {
         regions_grow();
     }
-    more = realloc(file, file_len + len);
-    if (!more) {
-        return -ENOMEM;
+    if (file_len + len > file_cap) {
+        uint32_t cap = file_cap ? file_cap : 4096u;
+
+        while (cap < file_len + len) {
+            cap *= 2u;
+        }
+        more = realloc(file, cap);
+        if (!more) {
+            return -ENOMEM;
+        }
+        file = more;
+        file_cap = cap;
     }
-    file = more;
     if (buf) {
         k_memcpy(file + file_len, buf, len);
     } else {
@@ -187,7 +201,7 @@ static int32_t dump(uint32_t live, int exec, int grow)
 
     free(file);
     file = NULL;
-    file_len = 0;
+    file_len = file_cap = 0;
     writes = waits = 0;
     writes_at_wait = -1;
     grow_at = grow;
@@ -251,6 +265,48 @@ static void threads_end_first(void)
           "an execve waiting for the dumping thread ends the wait at once");
 }
 
+/** Put `count` inaccessible regions of a page each, a page apart, in the
+ * address space's array; the file has no bytes of them. */
+static void regions_none(uint32_t count)
+{
+    uint32_t i;
+
+    free(space.vm.vmas);
+    space.vm.vmas = calloc(count, sizeof(vma_t));
+    space.vm.cap = count;
+    space.vm.count = count;
+    for (i = 0; i < count; i++) {
+        space.vm.vmas[i].start = 0x08048000u + 2u * PAGE_SIZE * i;
+        space.vm.vmas[i].end = space.vm.vmas[i].start + PAGE_SIZE;
+        space.vm.vmas[i].type = VM_ANON;
+    }
+}
+
+/**
+ * The ELF header's count of program headers, its section headers, and the
+ * size of the file, of a process of `count` inaccessible regions: the note's
+ * header and a load's each, the section header at the file's end with the
+ * whole count when there are PN_XNUM or more, and nothing more.
+ */
+static void numbering(uint32_t count)
+{
+    uint32_t phnum = count + 1u;
+    uint32_t data = (52u + 32u * phnum + 20u + 4095u) & ~4095u;
+    int ext = phnum >= 0xFFFFu;
+
+    regions_none(count);
+    CHECK(dump(1, 0, 0) == 0, "a process of many regions leaves its file");
+    CHECK(get16(44) == (ext ? 0xFFFFu : phnum), "the header's count of program headers");
+    CHECK(get32(32) == (ext ? data : 0u) && get16(46) == (ext ? 40u : 0u) &&
+              get16(48) == (ext ? 1u : 0u),
+          "the header has a section header exactly when the count does not fit");
+    CHECK(file_len == data + (ext ? 40u : 0u), "the file ends after the section header it has");
+    if (ext && file_len == data + 40u) {
+        CHECK(get32(data + 4) == 0 && get32(data + 20) == 1 && get32(data + 28) == phnum,
+              "the section header is a null one with the count in sh_info");
+    }
+}
+
 int main(void)
 {
     self.pid = self.tgid = 3;
@@ -261,11 +317,15 @@ int main(void)
     sibling.tg = &group;
     regions_taken_once();
     threads_end_first();
+    numbering(65533);
+    numbering(65534);
+    numbering(65535);
     free(file);
     free(space.vm.vmas);
     if (failures) {
         return 1;
     }
-    printf("coredump-test: pass: the regions taken once and the wait for the threads\n");
+    printf("coredump-test: pass: the regions taken once, the wait for the threads and the "
+           "extended numbering\n");
     return 0;
 }
