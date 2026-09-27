@@ -10,10 +10,12 @@
 # each run bounded on the host and in a directory of the row's own. A row
 # has a port, or a tool built beside the ports, do its main job as a person
 # would ask for it, and compares what it printed or wrote with what it must
-# be. It prints `GNUROW OK NAME` when every comparison holds, and otherwise
-# `GNUROW FAIL NAME: ` with the first that did not. The path has /usr/bin
-# first, so each name finds the GNU program, and bash runs no BusyBox
-# applet for a name.
+# be. A program a row runs as its job, and whose output a crash could follow,
+# must also end with status 0: the programs built by make and by GCC, GDB,
+# the SpiderMonkey shell and the browser. It prints `GNUROW OK NAME` when
+# every comparison holds, and otherwise `GNUROW FAIL NAME: ` with the first
+# that did not. The path has /usr/bin first, so each name finds the GNU
+# program, and bash runs no BusyBox applet for a name.
 #
 
 set -u
@@ -23,6 +25,7 @@ export HOME=/root LC_ALL=C
 ROW=${1:-}
 WORK=/tmp/gnu/$ROW
 FAILED=
+OUT=
 ABC=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 
 # fail WHAT: record WHAT unless an earlier comparison already failed.
@@ -48,6 +51,14 @@ runs() {
     local what=$1
     shift
     "$@" > "$WORK/out" 2>&1 || fail "$what: status $?: $(tail -n 3 "$WORK/out" | tr '\n' ' ')"
+}
+
+# output WHAT COMMAND...: keep what COMMAND prints on both streams in OUT,
+# and require it to exit with status 0, so output a crash follows fails.
+output() {
+    local what=$1
+    shift
+    OUT=$("$@" 2>&1) || fail "$what: status $?: $(printf '%s' "$OUT" | tail -n 3 | tr '\n' ' ')"
 }
 
 # The names the path finds: GNU make and GCC as `make` and `cc`, the GNU
@@ -238,7 +249,8 @@ row_make() {
     printf 'prog: main.o a.o\n\t$(CC) -o $@ main.o a.o\n%%.o: %%.c\n\t$(CC) -O2 -c -o $@ $<\n' \
         > "$WORK/p/Makefile"
     runs "make" make -C "$WORK/p" -j2
-    same "the program" "$("$WORK/p/prog" 2>&1)" "42"
+    output "the program" "$WORK/p/prog"
+    same "the program" "$OUT" "42"
     has "a second make" "$(make -C "$WORK/p" 2>&1)" "is up to date"
 }
 
@@ -262,20 +274,21 @@ int main()
 }
 EOF
     runs "gcc" gcc -O2 -o "$WORK/hello" "$WORK/hello.c"
-    same "the C program" "$("$WORK/hello" 2>&1)" "hello from gcc"
+    output "the C program" "$WORK/hello"
+    same "the C program" "$OUT" "hello from gcc"
     runs "cc" cc -o "$WORK/hello-cc" "$WORK/hello.c"
-    same "the program cc linked" "$("$WORK/hello-cc" 2>&1)" "hello from gcc"
+    output "the program cc linked" "$WORK/hello-cc"
+    same "the program cc linked" "$OUT" "hello from gcc"
     has "cc's version" "$(cc --version | head -n 1)" "16.2.0"
     runs "g++" g++ -O2 -o "$WORK/hello++" "$WORK/hello.cc"
-    same "the C++ program" "$("$WORK/hello++" 2>&1)" "hello from g++ 6"
+    output "the C++ program" "$WORK/hello++"
+    same "the C++ program" "$OUT" "hello from g++ 6"
     has "the C++ program's libraries" "$(ldd "$WORK/hello++")" "libstdc++.so.6"
 }
 
 # GDB runs a program, stops at a breakpoint, steps, prints a variable and
 # a backtrace, and lets it run to its end.
 row_gdb() {
-    local out
-
     cat > "$WORK/g.c" << 'EOF'
 int f(int x)
 {
@@ -289,19 +302,17 @@ int main(void)
 }
 EOF
     runs "gcc -g" gcc -g -O0 -o g g.c
-    out=$(gdb -nx -batch -ex 'break f' -ex run -ex next -ex 'print y' -ex bt -ex continue ./g 2>&1)
-    has "the breakpoint" "$out" "Breakpoint 1, f (x=20)"
-    has "the step" "$out" "return y + 1;"
-    has "the variable" "$out" "\$1 = 40"
-    has "the backtrace" "$out" "in main () at g.c:"
-    has "the end" "$out" "exited normally"
+    output "gdb" gdb -nx -batch -ex 'break f' -ex run -ex next -ex 'print y' -ex bt -ex continue ./g
+    has "the breakpoint" "$OUT" "Breakpoint 1, f (x=20)"
+    has "the step" "$OUT" "return y + 1;"
+    has "the variable" "$OUT" "\$1 = 40"
+    has "the backtrace" "$OUT" "in main () at g.c:"
+    has "the end" "$OUT" "exited normally"
 }
 
 # The script the shell's build ran: a loop the JIT compiles, and the shell's
 # own report that it ran in JIT code and in Ion.
 row_js() {
-    local out
-
     cat > "$WORK/jit.js" << 'EOF'
 function sum(n) {
     let s = 0;
@@ -315,9 +326,9 @@ for (let k = 0; k < 5000; k++)
 print("sum(1000) = " + r[0]);
 print("inJit() = " + r[1] + ", inIon() = " + r[2]);
 EOF
-    out=$(js "$WORK/jit.js" 2>&1)
-    has "the sum" "$out" "sum(1000) = 499500"
-    has "the JIT" "$out" "inJit() = true, inIon() = true"
+    output "js" js "$WORK/jit.js"
+    has "the sum" "$OUT" "sum(1000) = 499500"
+    has "the JIT" "$OUT" "inJit() = true, inIon() = true"
 }
 
 # The browser's libraries are found through the loader's cache, and the
@@ -330,9 +341,10 @@ row_chromium() {
 </body></html>
 EOF
     same "the libraries not found" "$(ldd /usr/lib/chromium/chromium-headless-shell | grep -c 'not found')" "0"
-    has "the dumped DOM" "$(HOME=$WORK chromium-headless-shell --no-sandbox --headless --dump-dom \
-        --user-data-dir="$WORK/profile" "file://$WORK/page.html" 2> "$WORK/chromium.err")" \
-        '<p id="out">script ran: 42</p>'
+    OUT=$(HOME=$WORK chromium-headless-shell --no-sandbox --headless --dump-dom \
+        --user-data-dir="$WORK/profile" "file://$WORK/page.html" 2> "$WORK/chromium.err") ||
+        fail "chromium-headless-shell: status $?: $(tail -n 3 "$WORK/chromium.err" | tr '\n' ' ')"
+    has "the dumped DOM" "$OUT" '<p id="out">script ran: 42</p>'
 }
 
 if ! declare -F "row_$ROW" > /dev/null; then
