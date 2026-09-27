@@ -360,37 +360,33 @@ static void login_case(const char *inherited)
 }
 
 /**
- * Require the SSH server's command line to be `want`, and its program the one
- * named first for OpenSSH and `/bin/dropbearmulti` for Dropbear: OpenSSH's
- * `sshd` started by its absolute path, in the foreground, with its log on
- * standard error and `PermitRootLogin` deciding root's password, and
- * Dropbear's with `-g` unless the policy permits root's password.
+ * Require the SSH server's command line, its words joined by spaces, to be
+ * `want`, and its program to be `/usr/sbin/sshd` for OpenSSH and
+ * `/bin/dropbearmulti` for Dropbear: OpenSSH's `sshd` started by its absolute
+ * path, in the foreground, with its log on standard error and
+ * `PermitRootLogin` deciding root's password, and Dropbear with `-g` unless
+ * the policy permits root's password.
  */
-static void sshd_case(int openssh, int password_login, const char *const *want, const char *name)
+static void sshd_case(int openssh, int password_login, const char *want, const char *name)
 {
     char *argv[8];
+    char line[256];
     const char *program = sshd_command(openssh, password_login, argv);
+    size_t used = 0;
     int i;
 
-    check(strcmp(program, openssh ? "/usr/sbin/sshd" : "/bin/dropbearmulti") == 0, name);
-    for (i = 0; want[i] != NULL && argv[i] != NULL; i++) {
-        check(strcmp(argv[i], want[i]) == 0, name);
+    line[0] = '\0';
+    for (i = 0; argv[i] != NULL && used < sizeof(line); i++) {
+        used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s", i ? " " : "", argv[i]);
     }
-    check(want[i] == NULL && argv[i] == NULL, name);
+    check(strcmp(program, openssh ? "/usr/sbin/sshd" : "/bin/dropbearmulti") == 0, name);
+    check(used < sizeof(line) && strcmp(line, want) == 0, name);
 }
 
 /** Test parser boundaries and every redirection failure. */
 int main(void)
 {
     static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
-    static const char *const openssh_key[] = {
-        "/usr/sbin/sshd", "-D", "-e", "-o", "PermitRootLogin=prohibit-password", NULL};
-    static const char *const openssh_password[] = {"/usr/sbin/sshd", "-D", "-e", "-o",
-                                                   "PermitRootLogin=yes", NULL};
-    static const char *const dropbear_key[] = {"dropbearmulti", "dropbear", "-F", "-R",
-                                               "-g", "-p", "22", NULL};
-    static const char *const dropbear_password[] = {"dropbearmulti", "dropbear", "-F",
-                                                    "-R", "-p", "22", NULL};
     char longline[300];
     int nullfd, logfd, i;
     FILE *log;
@@ -410,10 +406,14 @@ int main(void)
     memset(longline, '#', sizeof(longline));
     memcpy(longline + 127, "root-password-login yes\n", 24);
     policy_case(longline, sizeof(longline), 0, "SSH fragments cannot become lines");
-    sshd_case(1, 0, openssh_key, "OpenSSH bars root's password without the policy");
-    sshd_case(1, 1, openssh_password, "OpenSSH permits root's password with the policy");
-    sshd_case(0, 0, dropbear_key, "Dropbear bars root's password without the policy");
-    sshd_case(0, 1, dropbear_password, "Dropbear permits root's password with the policy");
+    sshd_case(1, 0, "/usr/sbin/sshd -D -e -o PermitRootLogin=prohibit-password",
+              "OpenSSH bars root's password without the policy");
+    sshd_case(1, 1, "/usr/sbin/sshd -D -e -o PermitRootLogin=yes",
+              "OpenSSH permits root's password with the policy");
+    sshd_case(0, 0, "dropbearmulti dropbear -F -R -g -p 22",
+              "Dropbear bars root's password without the policy");
+    sshd_case(0, 1, "dropbearmulti dropbear -F -R -p 22",
+              "Dropbear permits root's password with the policy");
     nullfd = open("/dev/null", O_RDWR);
     log = tmpfile();
     if (nullfd < 0 || !log) {

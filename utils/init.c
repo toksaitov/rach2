@@ -1081,8 +1081,8 @@ static const char *sshd_command(int openssh, int password_login, char **argv)
         argv[n++] = (char *)"-D";
         argv[n++] = (char *)"-e";
         argv[n++] = (char *)"-o";
-        argv[n++] = (char *)(password_login ? "PermitRootLogin=yes"
-                                            : "PermitRootLogin=prohibit-password");
+        argv[n++] =
+            (char *)(password_login ? "PermitRootLogin=yes" : "PermitRootLogin=prohibit-password");
         argv[n] = 0;
         return OPENSSH_PROGRAM;
     }
