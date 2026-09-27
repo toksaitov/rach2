@@ -91,7 +91,7 @@ Only one live listener may hold a port. The `listen` backlog argument is ignored
 
 A socket is an object allocated from the kernel heap when it is opened, on the list of live sockets, and freed when its last reference closes; an incoming SYN allocates one from the interrupt side, which the heap allows since it masks interrupts and never sleeps. There is no fixed count of them. Sockets are `FD_TYPE_SOCKET` descriptors and retain one object across `dup`, `dup2`, and `fork` until the last reference closes.
 
-Linux i386 syscall 102 implements these subcalls: `socket`, `bind`, `connect`, `listen`, `accept`, `getsockname`, `getpeername`, `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`, and `recvmsg`. Private subcall `0x1000` performs ICMP echo. `sendmsg` and `socketpair` are not implemented. Pointer ranges are checked before the protocol layer receives them. `O_NONBLOCK` and `MSG_DONTWAIT` apply to the supported blocking operations.
+Linux i386 syscall 102 implements these subcalls: `socket`, `bind`, `connect`, `listen`, `accept`, `getsockname`, `getpeername`, `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`, `recvmsg`, and `accept4`. Private subcall `0x1000` performs ICMP echo. `sendmsg` and `socketpair` are not implemented. `socket` takes `SOCK_CLOEXEC` and `SOCK_NONBLOCK` above the type's low four bits and `accept4` takes them in its flags, as Linux does: the new descriptor is close-on-exec, and its open-file description is `O_NONBLOCK`; any other such bit is `EINVAL`. Pointer ranges are checked before the protocol layer receives them. `O_NONBLOCK` and `MSG_DONTWAIT` apply to the supported blocking operations.
 
 The supported families and types are:
 

@@ -1,13 +1,16 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt ACCEPT 2
 .Os
 .Sh NAME
-.Nm accept
+.Nm accept ,
+.Nm accept4
 .Nd accept a queued connection
 .Sh SYNOPSIS
 .In sys/socket.h
 .Ft int
 .Fn accept "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen"
+.Ft int
+.Fn accept4 "int fd" "struct sockaddr *restrict addr" "socklen_t *restrict addrlen" "int flags"
 .Sh DESCRIPTION
 .Fn accept
 removes a completed connection from the accept queue of
@@ -15,7 +18,32 @@ removes a completed connection from the accept queue of
 and returns a new descriptor for it.
 .Fa fd
 must refer to a listening TCP socket.
-The new descriptor is blocking and has close-on-exec clear.
+The new descriptor is blocking and has close-on-exec clear, whatever the
+listener's flags.
+.Pp
+.Fn accept4
+is
+.Fn accept
+with
+.Fa flags
+for the new descriptor, as Linux takes them:
+.Dv SOCK_CLOEXEC
+sets its close-on-exec flag, and
+.Dv SOCK_NONBLOCK
+sets
+.Dv O_NONBLOCK
+on its open-file description.
+Any other bit in
+.Fa flags
+gives
+.Er EINVAL
+before the descriptor is looked at.
+.Fn accept
+is
+.Fn accept4
+with
+.Fa flags
+0.
 .Pp
 If the queue is empty, the call waits for a connection.
 On a listener with
@@ -54,11 +82,23 @@ Such a drop produces no error from
 .Pp
 The kernel interface is
 .Xr socketcall 2
-operation 5.
+operation 5 for
+.Fn accept
+and operation 18 for
+.Fn accept4 ,
+whose fourth argument word is
+.Fa flags .
+Musl's
+.Fn accept4
+sets the flags with
+.Xr fcntl 2
+itself when the kernel refuses them.
 .Sh RETURN VALUES
 On success,
 .Fn accept
-returns the new descriptor.
+and
+.Fn accept4
+return the new descriptor.
 On failure it returns -1 and sets
 .Va errno .
 The raw kernel call returns a negative error number on failure.
@@ -69,6 +109,18 @@ binds a TCP listener to port 7200, connects a second socket to
 .Ql 127.0.0.1:7200 ,
 accepts with both address pointers null, and exchanges data through the
 accepted connection.
+.Pa tests/musl/sockflagmusl.c
+calls operation 18 by number on a listener made with
+.Dv SOCK_CLOEXEC
+and
+.Dv SOCK_NONBLOCK :
+it checks that an empty queue gives
+.Er EAGAIN ,
+that an unknown flag gives
+.Er EINVAL ,
+and that connections from
+.Ql 127.0.0.1
+accepted with both flags and with none have exactly those flags.
 .Sh ERRORS
 .Bl -tag -width EOPNOTSUPP
 .It Er EAGAIN
@@ -79,7 +131,12 @@ length cannot be read or written as required.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL
-The socket is a datagram or a stream that is not listening.
+The socket is a datagram or a stream that is not listening, or
+.Fa flags
+has a bit other than
+.Dv SOCK_CLOEXEC
+and
+.Dv SOCK_NONBLOCK .
 .It Er EMFILE
 No descriptor or open-file description could be allocated for the
 connection.
@@ -94,6 +151,7 @@ refers to a raw socket.
 .Sh SEE ALSO
 .Xr bind 2 ,
 .Xr connect 2 ,
+.Xr fcntl 2 ,
 .Xr listen 2 ,
 .Xr socket 2 ,
 .Xr socketcall 2 ,

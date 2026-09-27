@@ -129,6 +129,17 @@
 
 #define SC_RECVMSG 17
 
+#define SC_ACCEPT4 18
+
+/* The creation flags socket(2) takes above the type's low four bits and
+ * accept4(2) takes in its flags: the values of O_CLOEXEC and O_NONBLOCK,
+ * as Linux defines them. */
+#define SOCK_TYPE_MASK 0xf
+
+#define SOCK_CLOEXEC 02000000
+
+#define SOCK_NONBLOCK 04000
+
 /* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
  * used to squat on 15 == Linux getsockopt, which a real server needs).
  * Userspace callers (utils/ping.c, tests/pingtest.c) use the same value. */
@@ -283,6 +294,21 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr, uint16_t p
     return 0;
 }
 
+/**
+ * Give the new descriptor `entry` the creation flags in `flags`: close-on-exec
+ * for SOCK_CLOEXEC, and for SOCK_NONBLOCK an open file whose calls do not
+ * block, as O_CLOEXEC and O_NONBLOCK give an opened file.
+ */
+static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
+{
+    if (flags & SOCK_CLOEXEC) {
+        entry->flags |= FD_FLAG_CLOEXEC;
+    }
+    if (flags & SOCK_NONBLOCK) {
+        entry->ofd->status_flags |= OFD_NONBLOCK;
+    }
+}
+
 /* socket(2): AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
  * ioctl-only descriptor of IPPROTO_RAW), and AF_PACKET with SOCK_DGRAM; the
  * raw and packet forms take effective uid 0. Returns a new socket fd or
@@ -373,6 +399,27 @@ static int32_t do_socket(int domain, int type, int protocol)
     entry->node = NULL;
     entry->ofd->offset = 0;
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    return fd;
+}
+
+/**
+ * The socket operation of socketcall: `do_socket` with the creation flags
+ * Linux takes in the type. SOCK_CLOEXEC and SOCK_NONBLOCK above the type's
+ * low four bits are given to the new descriptor, and any other bit there is
+ * EINVAL before the family is looked at, as in Linux.
+ */
+static int32_t socket_with_flags(int domain, int type, int protocol)
+{
+    uint32_t flags = (uint32_t)type & ~(uint32_t)SOCK_TYPE_MASK;
+    int32_t fd;
+
+    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {
+        return -EINVAL;
+    }
+    fd = do_socket(domain, type & SOCK_TYPE_MASK, protocol);
+    if (fd >= 0) {
+        sock_fd_flags(&current_proc->fds.entries[fd], flags);
+    }
     return fd;
 }
 
@@ -957,11 +1004,13 @@ static int32_t do_listen(int fd, int backlog)
     }
 }
 
-/** accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
- * non-blocking listener), install a new fd for it, and report the peer address.
- * Raw sockets return EOPNOTSUPP; other sockets must be listening streams.
+/** accept(2) and accept4(2): dequeue a completed connection (blocking, or
+ * -EAGAIN on a non-blocking listener), install a new fd for it with the
+ * creation flags `flags`, and report the peer address. A flag other than
+ * SOCK_CLOEXEC and SOCK_NONBLOCK is EINVAL. Raw sockets return EOPNOTSUPP;
+ * other sockets must be listening streams.
  */
-static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t flags)
 {
     fd_entry_t *entry;
     fd_entry_t *new_entry;
@@ -972,6 +1021,9 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     /* The peer-address writeback is validated and truncated to the caller's
      * declared length by copy_sockaddr_to_user below. */
 
+    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {
+        return -EINVAL;
+    }
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
@@ -1015,6 +1067,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     new_entry->node = NULL;
     new_entry->ofd->offset = 0;
     new_entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    sock_fd_flags(new_entry, flags);
 
     /* Report the peer address, truncated to the caller's declared capacity. On
      * a bad user pointer, tear down the descriptor we just installed (releasing
@@ -1618,6 +1671,7 @@ int32_t sys_socketcall(isr_params_t *params)
         break;
     case SC_SEND:
     case SC_RECV:
+    case SC_ACCEPT4:
         nargs = 4;
         break;
     case SC_SETSOCKOPT:
@@ -1639,7 +1693,7 @@ int32_t sys_socketcall(isr_params_t *params)
 
     switch (call) {
     case SC_SOCKET:
-        return do_socket((int)args[0], (int)args[1], (int)args[2]);
+        return socket_with_flags((int)args[0], (int)args[1], (int)args[2]);
     case SC_BIND:
         return do_bind((int)args[0], args[1], (int)args[2]);
     case SC_SENDTO:
@@ -1653,7 +1707,9 @@ int32_t sys_socketcall(isr_params_t *params)
     case SC_LISTEN:
         return do_listen((int)args[0], (int)args[1]);
     case SC_ACCEPT:
-        return do_accept((int)args[0], args[1], args[2]);
+        return do_accept((int)args[0], args[1], args[2], 0);
+    case SC_ACCEPT4:
+        return do_accept((int)args[0], args[1], args[2], args[3]);
     case SC_GETSOCKNAME:
         return do_getsockname((int)args[0], args[1], args[2]);
     case SC_GETPEERNAME:

@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt SOCKET 2
 .Os
 .Sh NAME
@@ -57,20 +57,18 @@ and
 .Dv AF_INET6 ,
 are not supported.
 .Pp
-Musl accepts
-.Dv SOCK_NONBLOCK
-and
+.Fa type
+may carry two creation flags above its low four bits, as Linux takes
+them:
 .Dv SOCK_CLOEXEC
-in
-.Fa type .
-The kernel socket operation rejects these bits.
-Musl retries with the bits removed, then uses
-.Xr fcntl 2
-to set
+sets the new descriptor's close-on-exec flag, and
+.Dv SOCK_NONBLOCK
+sets
 .Dv O_NONBLOCK
-or
-.Dv FD_CLOEXEC .
-These flags are therefore set after creation.
+on its open-file description.
+Any other bit above the low four gives
+.Er EINVAL
+before the family is looked at.
 .Pp
 Socket objects are allocated from the kernel heap, without a fixed pool
 limit, and are freed when their last reference closes.
@@ -103,6 +101,13 @@ creates an
 socket with protocol 0, binds it, and sends and receives a datagram
 through
 .Li 127.0.0.1 .
+.Pa tests/musl/sockflagmusl.c
+creates sockets through operation 1 by number, with
+.Dv SOCK_CLOEXEC
+alone and with both flags, and checks the flags of each descriptor and
+the
+.Er EINVAL
+of an unknown bit.
 .Sh ERRORS
 .Bl -tag -width "[EPROTONOSUPPORT]"
 .It Bq Er EAFNOSUPPORT
@@ -114,8 +119,13 @@ nor
 .It Bq Er EFAULT
 The socketcall argument block cannot be read.
 .It Bq Er EINVAL
-The socket type is not accepted, including a raw kernel request with
-creation flags, or a packet protocol is neither zero, IPv4, nor ARP.
+.Fa type
+has a bit above its low four other than
+.Dv SOCK_CLOEXEC
+and
+.Dv SOCK_NONBLOCK ,
+the socket type is not accepted, or a packet protocol is neither zero,
+IPv4, nor ARP.
 An
 .Dv AF_PACKET , SOCK_RAW
 request also returns this error.

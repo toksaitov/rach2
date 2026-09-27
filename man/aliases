@@ -2,6 +2,7 @@
 # renderer copies TARGET's page under NAME, and mancheck counts NAME as
 # covered. A system call's 32-bit form, a family page's members and an
 # applet of a family page are aliases.
+accept4 2 accept
 add-shell 8 busybox-loginutils
 addgroup 8 busybox-loginutils
 adjtimex 1 busybox-miscutils
