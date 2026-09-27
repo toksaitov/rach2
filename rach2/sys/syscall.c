@@ -1955,6 +1955,7 @@ void init_syscall(void)
     _syscall_table[SYS_STATFS64] = sys_statfs64;
     _syscall_table[SYS_FSTATFS64] = sys_fstatfs64;
     _syscall_table[SYS_FSTATAT64] = sys_fstatat64;
+    _syscall_table[SYS_STATX] = sys_statx;
     _syscall_table[SYS_OPENAT] = sys_openat;
     _syscall_table[SYS_READLINK] = sys_readlink;
     _syscall_table[SYS_READLINKAT] = sys_readlinkat;

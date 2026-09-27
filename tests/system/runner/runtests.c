@@ -113,6 +113,9 @@ static const char *const PROBES[] = {
     /* FIFO files made by mkfifo and mknodat: their opens, waits and
        bytes. */
     "musl/fifomusl",
+    /* statx, which both libcs call first for every stat, beside
+       fstatat64. */
+    "musl/statxmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

@@ -345,6 +345,7 @@ start-stop-daemon 1 busybox-debianutils
 stat 1 busybox-coreutils
 stat64 2 stat
 statfs64 2 statfs
+statx 2 stat
 strings 1 busybox-miscutils
 stty 1 busybox-coreutils
 sum 1 busybox-coreutils

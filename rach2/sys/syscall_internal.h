@@ -121,6 +121,8 @@ int32_t sys_fstat64(isr_params_t *params);
 
 int32_t sys_fstatat64(isr_params_t *params);
 
+int32_t sys_statx(isr_params_t *params);
+
 int32_t sys_access(isr_params_t *params);
 
 int32_t sys_faccessat(isr_params_t *params);

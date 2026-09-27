@@ -9,7 +9,8 @@
 .Nm stat64 ,
 .Nm lstat64 ,
 .Nm fstat64 ,
-.Nm fstatat64
+.Nm fstatat64 ,
+.Nm statx
 .Nd get file attributes
 .Sh SYNOPSIS
 .In sys/stat.h
@@ -21,6 +22,8 @@
 .Fn fstat "int fd" "struct stat *buf"
 .Ft int
 .Fn fstatat "int dirfd" "const char *restrict path" "struct stat *restrict buf" "int flags"
+.Ft int
+.Fn statx "int dirfd" "const char *restrict path" "int flags" "unsigned int mask" "struct statx *restrict buf"
 .Sh DESCRIPTION
 .Fn stat
 reports the attributes of
@@ -94,6 +97,42 @@ which has no effect.
 Other flag bits return
 .Er EINVAL
 before the path is read.
+.Pp
+.Fn statx
+reports what
+.Fn fstatat
+reports for the same
+.Fa dirfd ,
+.Fa path
+and
+.Fa flags ,
+in a
+.Vt struct statx :
+the basic set,
+.Dv STATX_BASIC_STATS ,
+in
+.Va stx_mask
+whatever
+.Fa mask
+asks for, the device numbers split into
+.Va stx_dev_major ,
+.Va stx_dev_minor ,
+.Va stx_rdev_major
+and
+.Va stx_rdev_minor ,
+and the three times as signed 64-bit seconds, read from the same 32-bit
+values the stat64 structure has.
+It reports no birth time, no attributes and no mount id.
+It also accepts
+.Dv AT_STATX_FORCE_SYNC
+and
+.Dv AT_STATX_DONT_SYNC ,
+which change nothing; both at once, any other flag
+.Fn fstatat
+refuses, and the reserved mask bit
+.Dv STATX__RESERVED
+return
+.Er EINVAL .
 .Ss Reported attributes
 .Va st_mode
 contains the file type and permission bits;
@@ -279,28 +318,31 @@ The i386 calls are
 .Nm lstat64
 (196),
 .Nm fstat64
-(197), and
+(197),
 .Nm fstatat64
-(300).
+(300), and
+.Nm statx
+(383).
 Path calls take the path in EBX and result pointer in ECX;
 .Nm fstat64
 takes the descriptor in EBX and result pointer in ECX.
 .Nm fstatat64
 takes directory descriptor, path, result pointer, and flags in EBX,
-ECX, EDX, and ESI.
-.Pp
-Musl tries
+ECX, EDX, and ESI;
 .Nm statx
-and, on
-.Er ENOSYS ,
-uses the 64-bit stat calls.
-It maps
+takes directory descriptor, path, flags, mask and result pointer in
+EBX, ECX, EDX, ESI and EDI.
+.Pp
+Musl and GNU libc implement
 .Fn stat ,
 .Fn lstat ,
 .Fn fstat ,
 and
 .Fn fstatat
-to the corresponding 64-bit kernel interfaces.
+with
+.Nm statx ,
+and use the 64-bit stat calls only when it returns
+.Er ENOSYS .
 With
 .Dv _LARGEFILE64_SOURCE ,
 musl defines
@@ -344,6 +386,17 @@ On failure they return -1 and set
 .Va errno .
 The kernel calls return negative error numbers on failure.
 .Sh EXAMPLES
+.Pa tests/musl/statxmusl.c
+asks
+.Nm statx
+and
+.Nm fstatat64
+about a regular file, a directory, a FIFO,
+.Pa /dev/null ,
+.Pa /proc/self
+followed and not, a pipe and the working directory, requires the two to
+agree field for field, and checks the refusals of the flags and the mask.
+.Pp
 The default suite's
 .Pa tests/vfsprobe.c
 checks that
@@ -383,7 +436,13 @@ or there is no current process.
 .It Bq Er EINVAL
 Unsupported
 .Fn fstatat
-flag bits were supplied, or required attributes cannot be obtained.
+or
+.Fn statx
+flag bits were supplied, both of the
+.Fn statx
+sync flags or
+.Dv STATX__RESERVED
+in its mask were, or required attributes cannot be obtained.
 .It Bq Er EIO
 File-system metadata or I/O failed, or a mount's device was removed.
 .It Bq Er ELOOP

@@ -4230,35 +4230,23 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
 }
 
 /**
- * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI
- * = flags.
+ * The attributes fstatat64 and statx report for `upath` and `flags`, into
+ * `kst`, whose flags the caller has checked.
  *
  * The path resolves as openat's does: absolute, or relative to the working
  * directory for AT_FDCWD or to the directory `dirfd` is open on (see
  * copy_path_at). AT_SYMLINK_NOFOLLOW reports a final symbolic link itself.
- * With AT_EMPTY_PATH an empty path reports the object `dirfd` refers to,
- * whatever it is, as fstat64 does, or the working directory for AT_FDCWD;
- * GNU libc's fstat is this call. AT_NO_AUTOMOUNT is accepted and means
- * nothing here, and any other flag is -EINVAL before the path is read.
+ * With AT_EMPTY_PATH an empty or null path reports the object `dirfd` refers
+ * to, whatever it is, as fstat64 does, or the working directory for
+ * AT_FDCWD. Returns 0 or a negative errno.
  */
-int32_t sys_fstatat64(isr_params_t *params)
+static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct linux_stat64 *kst)
 {
-    int dirfd = (int)params->ebx;
-    const char __user *upath = (const char __user *)params->ecx;
-    struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->edx;
-    int flags = (int)params->esi;
     int follow = !(flags & AT_SYMLINK_NOFOLLOW);
-    struct linux_stat64 kst;
     char *pathbuf;
     int empty = 0;
     int32_t rc;
 
-    if (!current_proc || !st) {
-        return -EFAULT;
-    }
-    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
-        return -EINVAL;
-    }
     if (flags & AT_EMPTY_PATH) {
         empty = user_path_empty(upath);
         if (empty < 0) {
@@ -4268,18 +4256,14 @@ int32_t sys_fstatat64(isr_params_t *params)
     if (empty && dirfd != AT_FDCWD) {
         fd_entry_t *entry = fd_get(&current_proc->fds, dirfd);
 
-        if (!entry) {
-            return -EBADF;
-        }
-        rc = fstat_fill(entry, &kst);
-    } else if (empty) {
+        return entry ? fstat_fill(entry, kst) : -EBADF;
+    }
+    if (empty) {
         pathbuf = path_buf_get();
         if (!pathbuf) {
             return -ENOMEM;
         }
         k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
-        rc = fstatat_path(pathbuf, follow, &kst);
-        path_buf_put(pathbuf);
     } else {
         if (!upath) {
             return -EFAULT;
@@ -4288,13 +4272,157 @@ int32_t sys_fstatat64(isr_params_t *params)
         if (rc != 0) {
             return rc;
         }
-        rc = fstatat_path(pathbuf, follow, &kst);
-        path_buf_put(pathbuf);
     }
+    rc = fstatat_path(pathbuf, follow, kst);
+    path_buf_put(pathbuf);
+    return rc;
+}
+
+/**
+ * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI
+ * = flags.
+ *
+ * The attributes are `stat_at`'s; GNU libc's fstat is this call with
+ * AT_EMPTY_PATH when statx is missing. AT_NO_AUTOMOUNT is accepted and
+ * means nothing here, and any other flag is -EINVAL before the path is read.
+ */
+int32_t sys_fstatat64(isr_params_t *params)
+{
+    struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->edx;
+    int flags = (int)params->esi;
+    struct linux_stat64 kst;
+    int32_t rc;
+
+    if (!current_proc || !st) {
+        return -EFAULT;
+    }
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
+        return -EINVAL;
+    }
+    rc = stat_at((int)params->ebx, (const char __user *)params->ecx, flags, &kst);
     if (rc == 0 && copy_to_user(st, &kst, sizeof(kst)) != 0) {
         rc = -EFAULT;
     }
     return rc;
+}
+
+/* The statx flags that ask how fresh an answer must be; this kernel has one
+ * answer, and both at once are EINVAL. */
+#define AT_STATX_SYNC_TYPE 0x6000
+
+/* The attributes statx reports, and the mask bit reserved for a larger
+ * structure, which is EINVAL. */
+#define STATX_BASIC_STATS 0x7FFu
+#define STATX_RESERVED    0x80000000u
+
+/* struct statx as Linux writes it: 256 bytes, laid out the same on every
+ * architecture, 64-bit fields at multiples of eight. */
+struct linux_statx_time {
+    int64_t tv_sec;
+    uint32_t tv_nsec;
+    int32_t reserved;
+};
+
+struct linux_statx {
+    uint32_t stx_mask;
+    uint32_t stx_blksize;
+    uint64_t stx_attributes;
+    uint32_t stx_nlink;
+    uint32_t stx_uid;
+    uint32_t stx_gid;
+    uint16_t stx_mode;
+    uint16_t spare0;
+    uint64_t stx_ino;
+    uint64_t stx_size;
+    uint64_t stx_blocks;
+    uint64_t stx_attributes_mask;
+    struct linux_statx_time stx_atime;
+    struct linux_statx_time stx_btime;
+    struct linux_statx_time stx_ctime;
+    struct linux_statx_time stx_mtime;
+    uint32_t stx_rdev_major;
+    uint32_t stx_rdev_minor;
+    uint32_t stx_dev_major;
+    uint32_t stx_dev_minor;
+    uint64_t spare[14];
+};
+
+typedef char linux_statx_is_256_bytes[sizeof(struct linux_statx) == 256 ? 1 : -1];
+
+/* The major and minor numbers of a device number in Linux's 32-bit
+ * encoding, which st_dev and st_rdev have. */
+static uint32_t dev_major(uint64_t dev)
+{
+    return (uint32_t)(dev >> 8) & 0xFFFu;
+}
+
+static uint32_t dev_minor(uint64_t dev)
+{
+    return ((uint32_t)dev & 0xFFu) | (((uint32_t)dev >> 12) & 0xFFF00u);
+}
+
+/**
+ * Put the attributes of `st` into `sx` as statx reports them: the basic set,
+ * the device numbers split into their major and minor numbers, and the times
+ * as signed 64-bit seconds, which is how musl reads the 32-bit ones.
+ */
+static void statx_from_stat64(struct linux_statx *sx, const struct linux_stat64 *st)
+{
+    k_memset(sx, 0, sizeof(*sx));
+    sx->stx_mask = STATX_BASIC_STATS;
+    sx->stx_blksize = (uint32_t)st->st_blksize;
+    sx->stx_nlink = st->st_nlink;
+    sx->stx_uid = (uint32_t)st->st_uid;
+    sx->stx_gid = (uint32_t)st->st_gid;
+    sx->stx_mode = (uint16_t)st->st_mode;
+    sx->stx_ino = st->st_ino;
+    sx->stx_size = (uint64_t)st->st_size;
+    sx->stx_blocks = st->st_blocks;
+    sx->stx_atime.tv_sec = (int32_t)st->st_atime;
+    sx->stx_atime.tv_nsec = (uint32_t)st->st_atime_nsec;
+    sx->stx_ctime.tv_sec = (int32_t)st->st_ctime;
+    sx->stx_ctime.tv_nsec = (uint32_t)st->st_ctime_nsec;
+    sx->stx_mtime.tv_sec = (int32_t)st->st_mtime;
+    sx->stx_mtime.tv_nsec = (uint32_t)st->st_mtime_nsec;
+    sx->stx_rdev_major = dev_major(st->st_rdev);
+    sx->stx_rdev_minor = dev_minor(st->st_rdev);
+    sx->stx_dev_major = dev_major(st->st_dev);
+    sx->stx_dev_minor = dev_minor(st->st_dev);
+}
+
+/**
+ * statx (syscall 383): EBX = dirfd, ECX = path, EDX = flags, ESI = mask,
+ * EDI = struct statx buffer.
+ *
+ * The attributes are fstatat64's, found by `stat_at` for the same path and
+ * flags, in struct statx: the basic set of STATX_BASIC_STATS whatever `mask`
+ * asks for, since the kernel may report more than it is asked, with no birth
+ * time, no attributes and no mount id. The two sync flags are accepted and
+ * change nothing; both at once, a flag fstatat64 does not take, or
+ * STATX__RESERVED in `mask` is EINVAL. GNU libc and musl call this first for
+ * every stat and fall back to the stat64 calls on ENOSYS alone.
+ */
+int32_t sys_statx(isr_params_t *params)
+{
+    int flags = (int)params->edx;
+    void __user *out = (void __user *)params->edi;
+    struct linux_stat64 kst;
+    struct linux_statx sx;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE)) ||
+        (flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE || (params->esi & STATX_RESERVED)) {
+        return -EINVAL;
+    }
+    rc = stat_at((int)params->ebx, (const char __user *)params->ecx, flags, &kst);
+    if (rc != 0) {
+        return rc;
+    }
+    statx_from_stat64(&sx, &kst);
+    return copy_to_user(out, &sx, sizeof(sx)) != 0 ? -EFAULT : 0;
 }
 
 /* access(2) mode bits. */
