@@ -16,13 +16,15 @@
  * AT_SECURE 0 and itself dumpable. A child that is uid 1000 execs the
  * execute-only copy, mode 0111 (`/musl/suidmusl.xonly`), with the argument
  * `xonly`, which must find itself not dumpable, since its caller may not
- * read it. The parent relays each status.
+ * read it; a helper that is uid 1000, tracing such a child, must get EIO
+ * from PTRACE_PEEKTEXT at the exec's stop. The parent relays each status.
  *
  * Prints "SUIDMUSL OK" on success, "SUIDMUSL FAIL ..." otherwise. Linked
  * against the ported musl.
  */
 
 #define _GNU_SOURCE /* getresuid, setresuid, setresgid, clone */
+#include <errno.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -178,6 +180,39 @@ static int as_user(int (*row)(void))
     return WEXITSTATUS(status);
 }
 
+/**
+ * The execute-only copy traced by a helper that is uid 1000 itself: at the
+ * exec's stop the helper may not read the image, so PTRACE_PEEKTEXT of the
+ * copy's text, where this program's `exec_copy` is, since the copy is this
+ * program, fails with EIO. 0, or 1.
+ */
+static int xonly_peek_row(void)
+{
+    pid_t pid = fork();
+    int status, ok;
+    long word;
+
+    if (pid < 0) {
+        return 1;
+    }
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
+            _exit(1);
+        }
+        execl(XONLY_COPY, "suidmusl", "xonly", (char *)0);
+        _exit(1);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP) {
+        return 1;
+    }
+    errno = 0;
+    word = ptrace(PTRACE_PEEKTEXT, pid, (void *)exec_copy, NULL);
+    ok = word == -1 && errno == EIO;
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "child") == 0) {
@@ -207,6 +242,10 @@ int main(int argc, char **argv)
     }
     if (exec_copy(XONLY_COPY, "xonly", 0) != 0) {
         printf("SUIDMUSL FAIL (the execute-only copy)\n");
+        return 1;
+    }
+    if (as_user(xonly_peek_row) != 0) {
+        printf("SUIDMUSL FAIL (a uid 1000 tracer read the execute-only copy)\n");
         return 1;
     }
     printf("SUIDMUSL OK\n");

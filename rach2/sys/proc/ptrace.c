@@ -796,13 +796,18 @@ static process_t *ptrace_tracee(uint32_t pid)
  * address space has a reference of the caller's while it is used, since
  * bringing a page in may sleep, and the thread may end and drop its own
  * meanwhile; nothing of `t` is read after the access.
+ *
+ * A caller without effective user ID 0 gets -EIO for an address space that
+ * is not dumpable, which an exec made after the attach: an image the caller
+ * may not read, or one with ids the caller lacks, as Linux's
+ * `ptrace_access_vm` refuses it.
  */
 static int32_t tracee_memory(process_t *t, uint32_t addr, uint32_t *word, int write)
 {
     struct mm *mm = t->mm;
     int32_t rc;
 
-    if (!mm) {
+    if (!mm || (current_proc->euid != 0 && !mm->dumpable)) {
         return -EIO;
     }
     mm_get(mm);
