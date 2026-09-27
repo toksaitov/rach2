@@ -1919,6 +1919,7 @@ void init_syscall(void)
     _syscall_table[SYS_SOCKETCALL] = sys_socketcall;
     _syscall_table[SYS_SET_THREAD_AREA] = sys_set_thread_area;
     _syscall_table[SYS_GETPID] = sys_getpid;
+    _syscall_table[SYS_GETTID] = sys_gettid;
     _syscall_table[SYS_SETSID] = sys_setsid;
     _syscall_table[SYS_SETPGID] = sys_setpgid;
     _syscall_table[SYS_GETPGID] = sys_getpgid;

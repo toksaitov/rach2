@@ -2539,6 +2539,15 @@ int32_t sys_getpid(isr_params_t *params)
 }
 
 /**
+ * The calling thread's id (gettid(2)): the process id, since each process
+ * is one thread, as Linux's is for a process that has made none.
+ */
+int32_t sys_gettid(isr_params_t *params)
+{
+    return sys_getpid(params);
+}
+
+/**
  * Create a new session (setsid(2)).
  *
  * The caller becomes the leader of a new session AND a new process group,

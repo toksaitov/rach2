@@ -226,6 +226,8 @@ int32_t sys_socketcall(isr_params_t *params);
 
 int32_t sys_getpid(isr_params_t *params);
 
+int32_t sys_gettid(isr_params_t *params);
+
 int32_t sys_setsid(isr_params_t *params);
 
 int32_t sys_setpgid(isr_params_t *params);

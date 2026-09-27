@@ -129,6 +129,7 @@ getresuid32 2 getuid
 getrlimit 2 prlimit64
 getsid 2 getpid
 getsockopt 2 setsockopt
+gettid 2 getpid
 getuid32 2 getuid
 grep 1 busybox-findutils
 groups 1 busybox-coreutils

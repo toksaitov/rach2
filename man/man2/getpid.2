@@ -1,19 +1,22 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt GETPID 2
 .Os
 .Sh NAME
 .Nm getpid ,
+.Nm gettid ,
 .Nm getppid ,
 .Nm getpgid ,
 .Nm getpgrp ,
 .Nm setpgid ,
 .Nm getsid ,
 .Nm setsid
-.Nd get or set process, process group, and session IDs
+.Nd get or set process, thread, process group, and session IDs
 .Sh SYNOPSIS
 .In unistd.h
 .Ft pid_t
 .Fn getpid "void"
+.Ft pid_t
+.Fn gettid "void"
 .Ft pid_t
 .Fn getppid "void"
 .Ft pid_t
@@ -29,6 +32,9 @@
 .Sh DESCRIPTION
 .Fn getpid
 returns the calling process's ID.
+.Fn gettid
+returns the calling thread's ID, which is the process ID: each process is
+one thread, as a Linux process is until it starts another.
 .Fn getppid
 returns its parent's ID.
 .Fn getpgid
@@ -73,6 +79,8 @@ The console session and controlling terminal are described in
 .Pp
 The i386 system call numbers are 20 for
 .Fn getpid ,
+224 for
+.Fn gettid ,
 64 for
 .Fn getppid ,
 132 for
@@ -101,6 +109,7 @@ return -1 and set
 .Va errno ;
 musl's
 .Fn getpid ,
+.Fn gettid ,
 .Fn getppid
 and
 .Fn getpgrp
@@ -111,6 +120,10 @@ for no current process is the handler's condition, not one a program
 meets.
 .Sh EXAMPLES
 The default suite's
+.Pa tests/musl/schedmusl.c
+checks that
+.Fn gettid
+returns the process ID, in a forked child too.
 .Pa tests/jobprobe.c
 forks a child, checks that its process group differs from its process ID
 and that two session queries agree, calls

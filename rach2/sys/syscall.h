@@ -78,6 +78,7 @@
 #define SYS_STATFS64        268
 #define SYS_FSTATFS64       269
 #define SYS_FCNTL64         221
+#define SYS_GETTID          224
 #define SYS_OPENAT          295
 #define SYS_FSTATAT64       300
 #define SYS_STAT64          195
