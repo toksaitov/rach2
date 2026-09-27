@@ -4601,7 +4601,53 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
     return what;
 }
 
-static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
+/**
+ * chown of the /dev or /proc node `vp`, for the path forms and for a
+ * descriptor opened with O_PATH on one. A pty slave keeps its owner and group
+ * on the pty, and changing either takes root, since the login server that
+ * chowns a pty is root. Every other node has fixed root ownership: a request
+ * for 0 or -1 in each field succeeds and changes nothing, and any other is
+ * -EPERM.
+ */
+static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
+{
+    if (vp->kind == VNODE_PTS) {
+        struct pty *pt = pty_get(vp->pts_index);
+        int uid_changes;
+        int gid_changes;
+
+        if (!pt) {
+            return -ENOENT;
+        }
+        uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
+        gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
+        if ((uid_changes || gid_changes) && !cred_privileged()) {
+            return -EPERM;
+        }
+        if (uid != (uint32_t)-1) {
+            pt->uid = uid;
+        }
+        if (gid != (uint32_t)-1) {
+            pt->gid = gid;
+        }
+        return 0;
+    }
+    if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
+        return -EPERM;
+    }
+    return 0;
+}
+
+/**
+ * chown core for the path forms: the file at `name`, leading '/' stripped,
+ * through a final symbolic link when `follow`, as chown(2) and fchownat(2)
+ * without AT_SYMLINK_NOFOLLOW go, and the link itself otherwise, as lchown(2)
+ * and fchownat(2) with the flag go. A /dev or /proc node is `chown_synth`'s,
+ * a node of a mounted type follows `vfs_chown_plan`, and a KRFFS node
+ * `krffs_chown_node`; the boot root has no links, so there `follow` changes
+ * nothing.
+ */
+static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow)
 {
     struct vpath vp;
     const struct vpath *svp;
@@ -4609,7 +4655,7 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
     krffs_node_t *node;
     int32_t rc;
 
-    rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+    rc = vfs_resolve(0, name, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
     if (rc != 0) {
         return rc;
     }
@@ -4617,31 +4663,7 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
     if (svp) {
         vp = *svp;
         vfs_ref_release(&ref);
-        if (vp.kind == VNODE_PTS) {
-            struct pty *pt = pty_get(vp.pts_index);
-            int uid_changes;
-            int gid_changes;
-            if (!pt) {
-                return -ENOENT;
-            }
-            uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
-            gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
-            if ((uid_changes || gid_changes) && !cred_privileged()) {
-                return -EPERM; /* the login server that chowns a pty is root */
-            }
-            if (uid != (uint32_t)-1) {
-                pt->uid = uid;
-            }
-            if (gid != (uint32_t)-1) {
-                pt->gid = gid;
-            }
-            return 0;
-        }
-        /* Fixed root-owned metadata: a no-change request succeeds. */
-        if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
-            return -EPERM;
-        }
-        return 0;
+        return chown_synth(&vp, uid, gid);
     }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
@@ -4768,13 +4790,9 @@ int32_t sys_fchmod(isr_params_t *params)
     return cred_privileged() ? 0 : -EPERM;
 }
 
-/* chown/lchown/fchownat share do_chown; both the 16-bit and *32 numbers route
- * here since musl issues the 16-bit chown on i386. */
-int32_t sys_chown(isr_params_t *params)
+/** The path form of chown and lchown: EBX = path, ECX = uid, EDX = gid. */
+static int32_t chown_path(const char __user *upath, uint32_t uid, uint32_t gid, int follow)
 {
-    const char __user *upath = (const char __user *)params->ebx;
-    uint32_t uid = params->ecx;
-    uint32_t gid = params->edx;
     char *path;
     int32_t rc;
 
@@ -4785,28 +4803,81 @@ int32_t sys_chown(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_chown(path_name(path), uid, gid);
+    rc = do_chown(path_name(path), uid, gid, follow);
     path_buf_put(path);
     return rc;
 }
 
+/**
+ * chown(2), 182 and 212: through a final symbolic link. The 16-bit number
+ * takes 32-bit ids here, as its *32 twin does.
+ */
+int32_t sys_chown(isr_params_t *params)
+{
+    return chown_path((const char __user *)params->ebx, params->ecx, params->edx, 1);
+}
+
+/** lchown(2), 16 and 198: a final symbolic link itself, as on Linux. */
+int32_t sys_lchown(isr_params_t *params)
+{
+    return chown_path((const char __user *)params->ebx, params->ecx, params->edx, 0);
+}
+
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
+
+/**
+ * fchownat(2): EBX = dirfd, ECX = path, EDX = uid, ESI = gid, EDI = flags.
+ *
+ * The flags are Linux's two, checked first: AT_SYMLINK_NOFOLLOW changes a
+ * final symbolic link itself, and AT_EMPTY_PATH with an empty path changes
+ * the file `dirfd` is open on, an O_PATH descriptor's included, or the
+ * working directory for AT_FDCWD; any other bit is -EINVAL. An empty path
+ * without AT_EMPTY_PATH is -ENOENT, and a NULL one -EFAULT.
+ */
 int32_t sys_fchownat(isr_params_t *params)
 {
     int dirfd = (int)params->ebx;
     const char __user *upath = (const char __user *)params->ecx;
     uint32_t uid = params->edx;
     uint32_t gid = params->esi;
+    int flags = (int)params->edi;
     char *path;
+    int empty = 0;
     int32_t rc;
 
-    if (!current_proc || !upath) {
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
+    }
+    if (!upath) {
         return -EFAULT;
     }
-    rc = path_from_user(dirfd, upath, &path);
-    if (rc != 0) {
-        return rc;
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
+        }
     }
-    rc = do_chown(path_name(path), uid, gid);
+    if (empty && dirfd != AT_FDCWD) {
+        fd_entry_t *entry = fd_get(&current_proc->fds, dirfd);
+
+        return entry ? chown_fd(entry, uid, gid) : -EBADF;
+    }
+    if (empty) {
+        path = path_buf_get();
+        if (!path) {
+            return -ENOMEM;
+        }
+        k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+    } else {
+        rc = path_from_user(dirfd, upath, &path);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = do_chown(path_name(path), uid, gid, !(flags & AT_SYMLINK_NOFOLLOW));
     path_buf_put(path);
     return rc;
 }
@@ -4817,8 +4888,6 @@ int32_t sys_fchownat(isr_params_t *params)
 int32_t sys_fchown(isr_params_t *params)
 {
     int fd = (int)params->ebx;
-    uint32_t uid = params->ecx;
-    uint32_t gid = params->edx;
     fd_entry_t *entry;
 
     if (!current_proc) {
@@ -4827,6 +4896,21 @@ int32_t sys_fchown(isr_params_t *params)
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
+    }
+    return chown_fd(entry, params->ecx, params->edx);
+}
+
+/**
+ * chown of the file descriptor `entry` refers to, for fchown(2) and for
+ * fchownat(2) with AT_EMPTY_PATH, which takes an O_PATH descriptor too: a
+ * KRFFS node or a node of a mounted type by the rules of the path forms, a
+ * /dev or /proc node opened with O_PATH by `chown_synth`, a pty slave on the
+ * pty, and every other kind with fixed root ownership.
+ */
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
+{
+    if (entry->type == FD_TYPE_SYNTH_PATH) {
+        return entry->priv ? chown_synth((const struct vpath *)entry->priv, uid, gid) : -EBADF;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         return krffs_chown_node(entry->node, uid, gid);

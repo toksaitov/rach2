@@ -38,13 +38,21 @@ and
 resolve
 .Fa path
 relative to the current working directory unless it is absolute.
-On this kernel both use the same resolver and follow symbolic links on
-file systems that implement them.
+.Fn chown
+follows a final symbolic link on a file system that has them, and
 .Fn lchown
-does not select the link itself.
+changes the link itself, as on Linux.
+The KRFFS boot root has no symbolic links, so there the two are the
+same; the
+.Pa /proc
+links have fixed ownership either way.
 .Fn fchown
 uses the open descriptor
-.Fa fd .
+.Fa fd ;
+one opened with
+.Dv O_PATH
+returns
+.Er EBADF .
 .Pp
 .Fn fchownat
 resolves a relative
@@ -57,12 +65,31 @@ is
 .Dv AT_FDCWD .
 An absolute path ignores
 .Fa dirfd .
-The kernel ignores
-.Fa flags ,
-including
-.Dv AT_SYMLINK_NOFOLLOW .
-An empty path fails even with
-.Dv AT_EMPTY_PATH .
+.Fa flags
+may have two bits, and any other returns
+.Er EINVAL
+before the path is read.
+.Dv AT_SYMLINK_NOFOLLOW
+changes a final symbolic link itself, as
+.Fn lchown
+does.
+.Dv AT_EMPTY_PATH
+with an empty path changes the file
+.Fa dirfd
+refers to, one opened with
+.Dv O_PATH
+included, by the rules of
+.Fn fchown ,
+or the current working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD .
+An empty path without
+.Dv AT_EMPTY_PATH
+returns
+.Er ENOENT ,
+and a null one
+.Er EFAULT .
 .Ss Ownership rules
 Changing the owner requires effective user ID 0.
 Changing the group requires effective user ID 0, or ownership of the file
@@ -85,6 +112,18 @@ and
 .Pa /proc ,
 and other descriptor kinds, have fixed root ownership.
 They accept only 0 or -1 for each ID.
+A
+.Pa /dev
+or
+.Pa /proc
+node named by a descriptor opened with
+.Dv O_PATH
+follows the rules of its path.
+On Linux a pipe or a socket has an owner of its own, which
+.Fn fchown
+and
+.Dv AT_EMPTY_PATH
+change; here both have fixed root ownership.
 .Pp
 When either stored ID changes, set-user-ID is cleared on a nondirectory.
 Set-group-ID is also cleared when group execute is set.
@@ -131,6 +170,27 @@ to owner and group 1000, then changes its group to 2000 through the open
 descriptor.
 After dropping privilege, it checks that the owner can change the group
 to supplementary group 3000 and that group 4000 is refused.
+.Pp
+.Pa tests/musl/lchownmusl.c
+changes a file through
+.Fn lchown
+and each form of
+.Fn fchownat ,
+an
+.Dv O_PATH
+descriptor and the working directory among them, and asks for each
+refusal of the flags.
+Given a directory on an ext2 volume, as
+.Ic tests/run ext2
+gives it
+.Pa /tmp
+on an ext2 root, it also requires that
+.Fn lchown
+and
+.Dv AT_SYMLINK_NOFOLLOW
+change a symbolic link and leave its target alone, that
+.Fn chown
+changes the target, and that a dangling link can be changed.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
@@ -139,16 +199,27 @@ Search permission was denied on an ancestor directory.
 .Fa fd
 is invalid, was opened with
 .Dv O_PATH ,
-a pseudo-terminal slave descriptor has no live terminal, or a relative
+or is a pseudo-terminal slave descriptor with no live terminal; a
+relative
 .Fn fchownat
-path uses an invalid or stale directory descriptor.
+path uses an invalid or stale directory descriptor; or
+.Fn fchownat
+with
+.Dv AT_EMPTY_PATH
+and an empty path was given an invalid
+.Fa dirfd .
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EFAULT
 The path cannot be read from user memory.
 The path forms also return this error if there is no current process.
 .It Bq Er EINVAL
-The file system cannot supply the required attributes.
+.Fn fchownat
+was given a flag other than
+.Dv AT_SYMLINK_NOFOLLOW
+and
+.Dv AT_EMPTY_PATH ,
+or the file system cannot supply the required attributes.
 .It Bq Er EIO
 File system metadata could not be read or written, or the device was removed.
 .It Bq Er ELOOP
@@ -159,7 +230,11 @@ symbolic-link expansion is too long.
 The copied path and its directory prefix must fit 4096 bytes,
 including the terminating null byte.
 .It Bq Er ENOENT
-The path is empty or a required path component does not exist.
+The path is empty, without
+.Dv AT_EMPTY_PATH
+for
+.Fn fchownat ,
+or a required path component does not exist.
 .It Bq Er ENOMEM
 The file system could not allocate storage needed to resolve the path.
 .It Bq Er ENOTDIR

@@ -89,9 +89,9 @@ static const char *const PROBES[] = {
     /* The file calls GNU libc makes: paths of PATH_MAX bytes, the
        descriptor forms of the calls that take a path, the namespace
        calls through a directory descriptor, positioned reads and writes,
-       truncation by path, and O_PATH descriptors. */
+       truncation by path, O_PATH descriptors, and lchown. */
     "musl/pathmaxmusl", "musl/fdcallmusl", "musl/atcallmusl", "musl/preadmusl",
-    "musl/truncmusl", "musl/opathmusl",
+    "musl/truncmusl", "musl/opathmusl", "musl/lchownmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

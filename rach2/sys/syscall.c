@@ -1619,8 +1619,8 @@ void init_syscall(void)
     _syscall_table[SYS_FCHMOD] = sys_fchmod;
     _syscall_table[SYS_CHOWN] = sys_chown;
     _syscall_table[SYS_CHOWN32] = sys_chown;
-    _syscall_table[SYS_LCHOWN] = sys_chown;
-    _syscall_table[SYS_LCHOWN32] = sys_chown;
+    _syscall_table[SYS_LCHOWN] = sys_lchown;
+    _syscall_table[SYS_LCHOWN32] = sys_lchown;
     _syscall_table[SYS_FCHOWNAT] = sys_fchownat;
     _syscall_table[SYS_FCHOWN] = sys_fchown;
     _syscall_table[SYS_FCHOWN32] = sys_fchown;
