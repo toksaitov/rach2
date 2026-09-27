@@ -326,6 +326,13 @@ asked about
 .Dv F_UNLCK ;
 or an open file description lock command has a nonzero
 .Va l_pid .
+.It Bq Er EIO
+A lock command's
+.Va l_whence
+is
+.Dv SEEK_END
+and the file's size cannot be read, as on a removed device; no lock has
+changed.
 .It Bq Er EMFILE
 No free descriptor exists at or above the requested minimum and below
 the limit, or the required descriptor storage could not be allocated.

@@ -6418,9 +6418,12 @@ int32_t sys_pwrite64(isr_params_t *params)
  * The byte range a struct flock names, into `req`, as Linux reads it: from
  * the file's start, the description's offset or the file's end by `whence`,
  * backwards from `start` for a negative length, and to LOCK_EOF, the end
- * however far the file grows, for a length of 0. Returns 0, -EINVAL for a
- * `whence` of none of the three or a range before byte 0, or -EOVERFLOW for
- * one past the largest offset.
+ * however far the file grows, for a length of 0. The end of a file of a
+ * mounted type is its size as the file system reports it now, and one of
+ * anything else, a pipe or a device, is 0. Returns 0, -EINVAL for a
+ * `whence` of none of the three or a range before byte 0, -EOVERFLOW for
+ * one past the largest offset, or the error the file system gives for its
+ * size, EIO for a removed device among them.
  */
 static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, int64_t len,
                            struct lock_req *req)
@@ -6428,11 +6431,15 @@ static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, i
     const int64_t max = 0x7FFFFFFFFFFFFFFFll;
     int64_t base = 0;
     struct vfs_stat st;
+    int32_t rc;
 
     if (whence == 1) {
         base = (int64_t)entry->ofd->offset;
-    } else if (whence == 2 && entry->ofd->vmnt &&
-               vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st) == 0) {
+    } else if (whence == 2 && entry->ofd->vmnt) {
+        rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st);
+        if (rc != 0) {
+            return rc;
+        }
         base = (int64_t)st.size;
     } else if (whence != 0 && whence != 2) {
         return -EINVAL;
