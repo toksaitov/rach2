@@ -101,6 +101,15 @@ At level
 .Dv IPPROTO_IP ,
 both calls fail with
 .Er ENOPROTOOPT .
+.It Dv IP_OPTIONS
+At level
+.Dv IPPROTO_IP ,
+.Fn setsockopt
+is accepted without effect, and
+.Fn getsockopt
+returns an empty value, a length of 0, since no socket keeps IP options,
+as Linux reports for a socket that has none.
+OpenSSH's server ends a connection whose socket reports any.
 .It Dv TCP_NODELAY
 At level
 .Dv IPPROTO_TCP ,

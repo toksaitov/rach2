@@ -11,7 +11,8 @@
  * flags has both, and an accept on it with nothing queued is EAGAIN. A
  * connection to it over 127.0.0.1 accepted with both flags gives a descriptor
  * with both, whose read with nothing to read is EAGAIN, and one accepted with
- * no flags has neither.
+ * no flags has neither, and reports no IP options, which OpenSSH's server
+ * reads before it talks to a client and ends a connection that has any.
  *
  * Prints "SOCKFLAGMUSL OK" on success and "SOCKFLAGMUSL FAIL (detail)"
  * otherwise.
@@ -122,6 +123,8 @@ static int listener(void)
 
 int main(void)
 {
+    unsigned char opts[40];
+    socklen_t len = sizeof(opts);
     char c;
     int ds;
     int ls;
@@ -154,6 +157,9 @@ int main(void)
     as = connect_one() < 0 ? -1 : accept_within(ls, 0);
     if (as < 0 || !has(as, 0, 0)) {
         return fail("a connection accepted with no flags has one");
+    }
+    if (getsockopt(as, IPPROTO_IP, IP_OPTIONS, opts, &len) != 0 || len != 0) {
+        return fail("an accepted connection reported IP options");
     }
 
     printf("SOCKFLAGMUSL OK\n");

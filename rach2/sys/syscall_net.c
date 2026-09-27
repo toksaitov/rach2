@@ -228,13 +228,16 @@ static uint8_t raw_send_buf[1500];
 #define IPPROTO_ICMP 1
 
 /* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
- * datagrams leave with, and the option that would hand the caller the header,
- * which this stack does not implement. */
+ * datagrams leave with, the option that would hand the caller the header,
+ * which this stack does not implement, and the IP options a socket's packets
+ * carry, of which it keeps none. */
 #define SOL_IP 0
 
 #define IP_TTL 2
 
 #define IP_HDRINCL 3
+
+#define IP_OPTIONS 4
 
 /* setsockopt levels and the one packet option that is answered. */
 #define SOL_PACKET 263
@@ -1436,9 +1439,11 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
 
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
- * type), SO_REUSEADDR and SO_BROADCAST as stored, and SO_BINDTODEVICE as the
- * interface name. An int result is truncated to the caller's capacity, and
- * the length written is what was copied. */
+ * type), SO_REUSEADDR and SO_BROADCAST as stored, SO_BINDTODEVICE as the
+ * interface name, and IP_OPTIONS as empty, a length of 0, since no socket
+ * keeps IP options: OpenSSH's server ends a connection whose socket reports
+ * any. An int result is truncated to the caller's capacity, and the length
+ * written is what was copied. */
 static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              uint32_t optlen_ptr)
 {
@@ -1491,6 +1496,12 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
         val = (int)entry->sock->ip_ttl;
     } else if (level == SOL_IP && optname == IP_HDRINCL) {
         return -ENOPROTOOPT;
+    } else if (level == SOL_IP && optname == IP_OPTIONS) {
+        olen = 0;
+        if (!optlen_ptr || copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
     } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
         val = entry->sock->broadcast;
     } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
