@@ -94,6 +94,7 @@ static int synth_stat(const struct vpath *p, struct linux_stat64 *s, int f)
 static int vfs_fill_stat64(struct linux_stat64 *s, const struct vfs_ref *r)
 { (void)s; (void)r; return -1; }
 static void stat64_boot_times(struct linux_stat64 *s) { (void)s; }
+static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\0'; }
 ''')
 for name in ['stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
              'stat_times_from_stat64', 'stat_node_times', 'stat_root_times',
