@@ -6,10 +6,11 @@
  * gives: fstat and fstatfs report the file, fchdir enters a directory, the
  * *at calls resolve against one, utimensat with an empty path sets a file's
  * times, the duplications and F_GETFD, F_SETFD and F_GETFL work, and
- * F_GETFL reports O_PATH. Read, write, a zero-byte read, pread, lseek,
- * getdents64, fsync, ftruncate, fchmod, fchown, futimens, ioctl and the
- * other fcntl commands are EBADF, and poll reports POLLNVAL. The other open
- * flags are dropped, so nothing is created or truncated; a file with no
+ * F_GETFL reports O_PATH, on a duplicate made by F_DUPFD or dup too, where
+ * F_SETFL, read and write stay EBADF. Read, write, a zero-byte read, pread,
+ * lseek, getdents64, fsync, ftruncate, fchmod, fchown, futimens, ioctl and
+ * the other fcntl commands are EBADF, and poll reports POLLNVAL. The other
+ * open flags are dropped, so nothing is created or truncated; a file with no
  * permission bits opens for an unprivileged caller; /dev/ptmx allocates no
  * terminal; and O_NOFOLLOW names the /proc/self link itself.
  *
@@ -122,6 +123,18 @@ static int refuses_io(int fd)
            pfd.revents == POLLNVAL && refused(select(fd + 1, &set, NULL, NULL, &tv), EBADF);
 }
 
+/** Whether `fd` is a path descriptor still: F_GETFL reports O_PATH, and
+ * F_SETFL, read and write are EBADF. */
+static int keeps_path(int fd)
+{
+    int flags = fcntl(fd, F_GETFL);
+    char c;
+
+    return flags != -1 && (flags & O_PATH) == O_PATH &&
+           refused(fcntl(fd, F_SETFL, O_NONBLOCK), EBADF) && refused(read(fd, &c, 1), EBADF) &&
+           refused(write(fd, "x", 1), EBADF);
+}
+
 /** A file of the boot root, and the flags O_PATH drops. */
 static int file_rows(void)
 {
@@ -153,12 +166,12 @@ static int file_rows(void)
     }
     dup_fd = fcntl(fd, F_DUPFD, 10);
     if (dup_fd < 10 || fcntl(dup_fd, F_GETFD) != 0 || !same_file(dup_fd, FILE_PATH) ||
-        !refused(read(dup_fd, &flags, 1), EBADF)) {
+        !keeps_path(dup_fd)) {
         return fail("F_DUPFD keeps O_PATH");
     }
     close(dup_fd);
     dup_fd = dup(fd);
-    if (dup_fd < 0 || !refused(write(dup_fd, "x", 1), EBADF)) {
+    if (dup_fd < 0 || !keeps_path(dup_fd)) {
         return fail("dup keeps O_PATH");
     }
     close(dup_fd);
