@@ -81,9 +81,12 @@ to use it directly through musl.
 Musl rejects flags other than
 .Dv AT_EACCESS .
 With that flag and equal real and effective IDs it uses the same call.
-With differing IDs its helper requires the unimplemented
-.Fn clone
-call and fails with
+With differing IDs its helper starts a child with
+.Xr clone 2
+and no flags, which this kernel refuses, since a process it makes must
+have
+.Dv SIGCHLD
+as its exit signal, and the call fails with
 .Er EBUSY .
 .Sh RETURN VALUES
 These functions return 0 when all requested checks succeed.
