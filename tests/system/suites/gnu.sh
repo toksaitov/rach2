@@ -143,13 +143,17 @@ OUT=$(ssh_as test "$TEST_KEY" 'id -u' 2>&1)
 echo "gnu-test: the test account logs in by key: OK"
 
 # ssh_password USER PASSWORD PROMPTS COMMAND: a password login through the
-# pty driver, since ssh reads a password from a terminal; the driver's
-# status and whether a password was asked for are in what it prints. The
+# pty driver, since ssh reads a password from a terminal. The driver does
+# not pass on the status of what it runs, and ends with 0 when its time runs
+# out, printing TIMEDOUT, so ssh runs under a shell that prints ssh's own
+# status as SSHRC=N once ssh has ended; the driver's status, whether a
+# password was asked for and TIMEDOUT are in what the driver prints. The
 # driver scales its own timeout by the run's factor, so it is given the
 # idle host's seconds.
 ssh_password() {
     RACH2_PASSWORD="$2" "$PTYDRIVE" --rows 40 --cols 100 --timeout 120 -- \
-        ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+        sh -c 'ssh "$@"; echo "SSHRC=$?"' ssh \
+        -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 30)" -o PubkeyAuthentication=no \
         -o PreferredAuthentications=password \
         -o "NumberOfPasswordPrompts=$3" -tt -p "$PORT" "$1@127.0.0.1" "$4" 2>&1
@@ -157,18 +161,20 @@ ssh_password() {
 }
 OUT=$(ssh_password test "$TESTPASSWORD" 3 'id -u; echo PASS""LOGIN')
 case "$OUT" in
+    *TIMEDOUT*) fail "the test account's password login did not end within its bound: $OUT" ;;
     *DRIVERRC=0*PROMPTED=1*|*PROMPTED=1*DRIVERRC=0*) ;;
     *) fail "the test account's password login did not run to the end with one prompt: $OUT" ;;
 esac
 case "$OUT" in
-    *1000*PASSLOGIN*) ;;
-    *) fail "the test account's password login did not arrive as uid 1000: $OUT" ;;
+    *1000*PASSLOGIN*SSHRC=0*) ;;
+    *) fail "the test account's password login did not arrive as uid 1000 and end with ssh's status 0: $OUT" ;;
 esac
 echo "gnu-test: the test account logs in by password, checked against /etc/shadow: OK"
 OUT=$(ssh_password root "$PASSWORD" 1 'echo ROOT""PASSWORD')
 case "$OUT" in
+    *TIMEDOUT*) fail "root's password attempt did not end within its bound: $OUT" ;;
     *ROOTPASSWORD*) fail "root logged in by password, which PermitRootLogin must refuse: $OUT" ;;
-    *"Permission denied"*) ;;
+    *"Permission denied"*SSHRC=255*) ;;
     *) fail "root's password attempt did not end in a refusal from the server: $OUT" ;;
 esac
 echo "gnu-test: root's password is refused: OK"
