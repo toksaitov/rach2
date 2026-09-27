@@ -2,7 +2,8 @@
  * How the kernel names and schedules a process, read through musl.
  *
  * `gettid` returns the process id, in the process and in a forked child
- * alike, since each process is one thread.
+ * alike, since each of this probe's processes has one thread; in a process
+ * with several, a thread other than the leader has an id of its own.
  *
  * The nice value starts at 0, is kept as set, clamped to 19, inherited by a
  * child, and read raw as 20 less itself. Set for a process group it reaches

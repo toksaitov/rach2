@@ -9,11 +9,13 @@
  * joined path. The long spellings pad with `./` components, which name the
  * same file, so each call reaches something the image has.
  *
- * The working directory's path lives in the process record up to 63 bytes
- * and in the heap past that. The probe makes a directory whose path is 89
- * bytes long, enters it, reads it back with `getcwd`, forks a child that must
- * read the same, and leaves it for a short one again, so both stores and the
- * copy between them are exercised.
+ * The working directory's path is kept in the process's fs_struct, the
+ * record of its directories and umask that clone with CLONE_FS shares
+ * between threads: in the record itself up to 63 bytes, and in the heap past
+ * that. The probe makes a directory whose path is 89 bytes long, enters it,
+ * reads it back with `getcwd`, forks a child, whose copy of the record must
+ * read the same, and leaves it for a short one again, so both stores and
+ * fork's copy of the long one are exercised.
  *
  * The rest reach the other copies: `execve` of the root's `hello` by a long
  * spelling, `symlink` with a target of 4095 and of 4096 bytes, `readlink` of
