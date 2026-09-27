@@ -122,16 +122,22 @@ With
 .Dv MAP_ANONYMOUS
 and
 .Dv MAP_PRIVATE ,
-or a mapping of
+or a
+.Dv MAP_PRIVATE
+mapping of
 .Pa /dev/zero :
 pages zeroed on first access, copied on write across fork.
 .It Shared anonymous memory
 With
 .Dv MAP_ANONYMOUS
 and
-.Dv MAP_SHARED :
-pages this mapping and the children forked after it share, so a store
-by one is seen by all.
+.Dv MAP_SHARED ,
+or a
+.Dv MAP_SHARED
+mapping of
+.Pa /dev/zero :
+pages zeroed on first access that this mapping and the children forked
+after it share, so a store by one is seen by all.
 .It A private mapping of a file
 The file
 .Fa fd
