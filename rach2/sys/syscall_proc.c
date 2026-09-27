@@ -1239,7 +1239,7 @@ static int exec_alone(void *arg)
  * Give the current thread the place of its process's leader, whose record,
  * that of a thread that has ended, goes: the thread takes the leader's id,
  * which is the process id, with what the process keeps in the leader's
- * record, its reaped children's time and its alarm, as Linux's `de_thread`
+ * record, its alarm and its stop or continue report, as Linux's `de_thread`
  * exchanges the two ids.
  */
 static void exec_take_leader(void)
@@ -1248,8 +1248,6 @@ static void exec_take_leader(void)
     process_t *old = tg->leader;
 
     current_proc->pid = old->pid;
-    current_proc->cutime = old->cutime;
-    current_proc->cstime = old->cstime;
     current_proc->alarm_tick = old->alarm_tick;
     current_proc->alarm_interval = old->alarm_interval;
     current_proc->jc_status = old->jc_status;
@@ -2003,8 +2001,9 @@ static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t 
 
 /**
  * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
- * the CPU time of the child process, every thread's, with that of the
- * children it has reaped, which its leader's record keeps.
+ * the CPU time of the process `p` is a thread of, every thread's, with that
+ * of the children it has reaped, which its thread group keeps. A traced
+ * thread that is not the leader reports its whole process's.
  */
 static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 {
@@ -2012,7 +2011,7 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
     uint32_t sys;
 
     proc_cpu_time(p, &user, &sys);
-    rusage_from_ticks(ru, user + p->cutime, sys + p->cstime);
+    rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -2075,19 +2074,20 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 /**
  * Reap zombie `p`, the leader of a process whose threads have all ended: add
  * the process's CPU time, with its reaped children's, to the children's
- * totals of the caller's process, which its leader keeps, and give back its
- * address space, kernel stack and record. The zombie no longer runs on its
- * kernel stack, and this is the single release point for a per-fork stack.
+ * totals of the caller's process, which its thread group keeps, and give
+ * back its address space, kernel stack and record. The zombie no longer runs
+ * on its kernel stack, and this is the single release point for a per-fork
+ * stack.
  */
 static void wait_reap(process_t *p)
 {
-    process_t *me = current_proc->tg->leader;
+    struct tgroup *me = current_proc->tg;
     uint32_t user;
     uint32_t sys;
 
     proc_cpu_time(p, &user, &sys);
-    me->cutime += user + p->cutime;
-    me->cstime += sys + p->cstime;
+    me->cutime += user + p->tg->cutime;
+    me->cstime += sys + p->tg->cstime;
     mm_drop(p);
     kstack_free(p->kernel_stack);
     free_process(p);
@@ -2472,8 +2472,8 @@ int32_t sys_getrusage(isr_params_t *params)
         proc_cpu_time(current_proc, &user, &sys);
     } else {
         flags = kirq_save();
-        user = who == RUSAGE_CHILDREN ? current_proc->tg->leader->cutime : current_proc->utime;
-        sys = who == RUSAGE_CHILDREN ? current_proc->tg->leader->cstime : current_proc->stime;
+        user = who == RUSAGE_CHILDREN ? current_proc->tg->cutime : current_proc->utime;
+        sys = who == RUSAGE_CHILDREN ? current_proc->tg->cstime : current_proc->stime;
         kirq_restore(flags);
     }
     rusage_from_ticks(&ru, user, sys);

@@ -34,6 +34,12 @@ struct tgroup {
     uint32_t stime;
     wait_queue_t chld; /* threads waiting for a child to change state */
     wait_queue_t gone; /* an execve waiting for the other threads to end */
+    /* The CPU time of the children the process has reaped, each with the
+     * children it reaped, which a reap adds and wait4, times and getrusage
+     * report. The group keeps it, not the leader, since a traced thread's
+     * record, whose end a tracer's wait reports, may outlive the leader's. */
+    uint32_t cutime;
+    uint32_t cstime;
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no

@@ -371,9 +371,9 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     ap_ch(t, ' ');
     ap_u32(t, sys);
     ap_ch(t, ' ');
-    ap_u32(t, p->tg->leader->cutime);
+    ap_u32(t, p->tg->cutime);
     ap_ch(t, ' ');
-    ap_u32(t, p->tg->leader->cstime);
+    ap_u32(t, p->tg->cstime);
     /* 18 priority, which Linux reports as 20 more than the nice value for a
        process of no real-time policy; 19 nice */
     ap_ch(t, ' ');

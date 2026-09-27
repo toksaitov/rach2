@@ -1637,8 +1637,8 @@ static int32_t sys_times(isr_params_t *params)
         proc_cpu_time(current_proc, &user, &sys);
         t.tms_utime = (int32_t)user;
         t.tms_stime = (int32_t)sys;
-        t.tms_cutime = (int32_t)current_proc->tg->leader->cutime;
-        t.tms_cstime = (int32_t)current_proc->tg->leader->cstime;
+        t.tms_cutime = (int32_t)current_proc->tg->cutime;
+        t.tms_cstime = (int32_t)current_proc->tg->cstime;
         if (copy_to_user((void __user *)params->ebx, &t, sizeof(t)) != 0) {
             return -EFAULT;
         }

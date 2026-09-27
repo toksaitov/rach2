@@ -16,7 +16,9 @@
  * POKEUSER reads back through PEEKUSER. PTRACE_ATTACH stops a running
  * process, which runs on after PTRACE_DETACH. A signal sent to a process
  * whose first thread its tracer holds stopped wakes the other thread, asleep
- * in pause, which takes it.
+ * in pause, which takes it. The usage a tracer's wait4 reports for the end
+ * of a traced thread that is not the first has the time of the children its
+ * process reaped.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -33,6 +35,7 @@
 #include <string.h>
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
+#include <sys/times.h>
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -304,9 +307,107 @@ static int stopped_leader(void)
     return 0;
 }
 
+/* The i386 kernel's struct rusage, which the raw wait4 writes: two timevals
+ * of 32-bit seconds and microseconds, then fourteen counters. */
+struct rusage32 {
+    long utime_sec;
+    long utime_usec;
+    long stime_sec;
+    long stime_usec;
+    long counters[14];
+};
+
+static int usage_pipe[2], go_pipe[2];
+
+/** Spend user time until the kernel has charged `ticks` of it to the
+ * process, or for a thousand ticks; the sum the loop computed, returned so
+ * the compiler keeps the loop. */
+static unsigned int spin_ticks(long ticks)
+{
+    volatile unsigned int x = 0;
+    struct tms tm;
+    clock_t start = times(&tm);
+    unsigned int i;
+
+    while ((long)tm.tms_utime < ticks && (long)(times(&tm) - start) < 1000) {
+        for (i = 0; i < 200000u; i++) {
+            x += i;
+        }
+    }
+    return x;
+}
+
+/** The second thread of the child `traced_thread_usage` makes: it writes its
+ * id and its process's reaped children's user time, then ends when told. */
+static void *usage_thread(void *arg)
+{
+    struct tms tm;
+    long out[2];
+    char c;
+
+    (void)arg;
+    times(&tm);
+    out[0] = (long)syscall(SYS_gettid);
+    out[1] = (long)tm.tms_cutime;
+    if (write(usage_pipe[1], out, sizeof(out)) != sizeof(out) || read(go_pipe[0], &c, 1) != 1) {
+        return (void *)1L;
+    }
+    return NULL;
+}
+
+/**
+ * A child reaps a grandchild that spent user time, then starts a second
+ * thread, which the parent attaches to and lets end. The parent's wait4 with
+ * __WALL reports the thread's end with at least the reaped grandchild's time,
+ * which the process keeps, not the thread.
+ */
+static int traced_thread_usage(void)
+{
+    struct rusage32 ru;
+    long got[2];
+    pthread_t t;
+    int status;
+    pid_t pid, g;
+
+    if (pipe(usage_pipe) != 0 || pipe(go_pipe) != 0) {
+        return fail("pipe");
+    }
+    pid = fork();
+    if (pid == 0) {
+        g = fork();
+        if (g == 0) {
+            spin_ticks(20);
+            _exit(0);
+        }
+        if (waitpid(g, &status, 0) != g || pthread_create(&t, NULL, usage_thread, NULL) != 0) {
+            _exit(1);
+        }
+        pthread_join(t, NULL);
+        _exit(0);
+    }
+    if (read(usage_pipe[0], got, sizeof(got)) != sizeof(got) || got[1] < 2) {
+        return fail("the child's thread or its reaped grandchild's time");
+    }
+    if (ptrace(PTRACE_ATTACH, (pid_t)got[0], NULL, NULL) != 0 ||
+        waitpid((pid_t)got[0], &status, __WALL) != (pid_t)got[0] || !WIFSTOPPED(status) ||
+        ptrace(PTRACE_CONT, (pid_t)got[0], NULL, NULL) != 0 || write(go_pipe[1], "g", 1) != 1) {
+        return fail("attaching to the child's second thread");
+    }
+    memset(&ru, 0xFF, sizeof(ru));
+    if (syscall(SYS_wait4, got[0], &status, __WALL, &ru) != got[0] || !WIFEXITED(status) ||
+        ru.utime_sec * 100 + ru.utime_usec / 10000 < got[1]) {
+        return fail("the usage of a traced thread's end lacks its process's reaped children");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the child with the traced thread");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (memory_and_registers() || syscalls_and_exec() || attach() || stopped_leader()) {
+    if (memory_and_registers() || syscalls_and_exec() || attach() || stopped_leader() ||
+        traced_thread_usage()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

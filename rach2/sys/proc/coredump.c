@@ -148,8 +148,8 @@ static void prstatus_fill(uint8_t *d, const process_t *t, int signo)
     put32(d + 36, t->sid);
     put_timeval(d + 40, t->utime);
     put_timeval(d + 48, t->stime);
-    put_timeval(d + 56, t->tg->leader->cutime);
-    put_timeval(d + 64, t->tg->leader->cstime);
+    put_timeval(d + 56, t->tg->cutime);
+    put_timeval(d + 64, t->tg->cstime);
     for (i = 0; i < 17; i++) {
         put32(d + 72 + 4 * i, regs[i]);
     }
