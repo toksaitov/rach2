@@ -17,6 +17,8 @@
 #
 # Usage: memory.sh KERNEL IMAGE HARNESS RECOVERY_KERNEL RECOVERY_IMAGE
 set -u
+# shellcheck source=tests/system/stackoverrun_row.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/stackoverrun_row.sh"
 KERNEL=$1; IMAGE=$2; HARNESS=$3; RKERNEL=$4; RIMAGE=$5
 # What this suite writes under the images directory starts with `memory-test`.
 OUT="$(dirname "$IMAGE")/memory-test"
@@ -104,27 +106,12 @@ LOG="$OUT.strings.log"
 grep -aq "strings: swept" "$LOG" || \
     fail "the sweep of the string routines did not report: $(grep -a 'strings:' "$LOG" | head -1)"
 echo "memory-test: the copies, the fill and the move swept at every length and alignment: OK"
-# A kernel stack that runs out. The page below every kernel stack is left
-# unmapped, so the first store past the stack's base faults, and since the
-# page fault's own frame cannot be pushed there either, the processor raises
-# a double fault, whose task gate runs its handler on a stack of its own.
-# The boot must name the thread whose stack ran out and stop, where a gate
-# on the exhausted stack would have reset the machine. `rach2.stackoverrun`
-# makes the boot descend a stack until it runs out: `fork` a stack from
-# `kstack_alloc`, as a fork's child has one, and `boot` the boot stack,
-# which init and the programs the debug shell starts run on.
+# A kernel stack that runs out, on a stack of each kind: the boot must name
+# the thread whose stack ran out and stop (tests/system/stackoverrun_row.sh,
+# which tests/system/stackoverrun_mutate.sh proves).
 for where in fork boot; do
-    LOG="$OUT.stackoverrun-$where.log"
-    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
-        --append "rach2.rescue rach2.stackoverrun=$where" --timeout 60 \
-        --ok "a kernel stack ran out" --never "Type 'help'" --never "the descent came back" \
-        --log "$LOG" "expect=kstack: overrun: pid" "expect=ran past the end of its kernel stack" \
-        "expect=panic: stopped: .*a kernel stack ran out" > /dev/null 2>&1 \
-        || fail "the $where stack's overrun was not reported: $(grep -a 'kstack:\|kernel exception\|panic' "$LOG" | head -3 | tr -d '\r' | tr '\n' ' ')"
-    pid=$(grep -a 'kstack: overrun: pid' "$LOG" | head -1 | sed -n 's/.*overrun: pid \([0-9]*\) .*/\1/p')
-    if [ -z "$pid" ] || ! grep -aq "pid $pid ran past the end of its kernel stack" "$LOG"; then
-        fail "the $where stack's overrun did not name the thread that descended it"
-    fi
+    row=$(stackoverrun_row "$HARNESS" "$KERNEL" "$IMAGE" "$where" "$OUT.stackoverrun-$where.log") ||
+        fail "$row"
     echo "memory-test: a $where stack that runs out: its thread named and the machine stopped: OK"
 done
 echo "memory-test: PASS"

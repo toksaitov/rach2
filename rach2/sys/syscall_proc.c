@@ -182,8 +182,10 @@ static void kstack_overrun_run(void)
  * stack `kstack_alloc` gives, as a fork's child has one, and
  * `rach2.stackoverrun=boot` descends the boot stack as process 0. The fault
  * is a double fault, since the page fault's own frame cannot be pushed, and
- * its handler reports the thread and stops the machine. Called once, before
- * the first program; without the option it returns at once.
+ * its handler reports the thread and stops the machine. The thread's record
+ * is taken after its stack, so that it lies above the stack, where a descent
+ * that finds no guard cannot write over it. Called once, before the first
+ * program; without the option it returns at once.
  */
 void kstack_overrun_test(void)
 {
@@ -200,8 +202,8 @@ void kstack_overrun_test(void)
     if (!kcmdline_has("rach2.stackoverrun=fork")) {
         return;
     }
-    thread = alloc_process();
     base = kstack_alloc();
+    thread = alloc_process();
     if (!thread || !base) {
         k_panic("kstack: overrun: no record or stack for the thread");
     }
