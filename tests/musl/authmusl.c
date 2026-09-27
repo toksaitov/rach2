@@ -10,7 +10,8 @@
  * a thousand and twenty-four descriptors; gethostname() round-trips with
  * sethostname(); dup3 onto an
  * explicit high fd with O_CLOEXEC dups and sets close-on-exec; an advisory
- * fcntl(F_SETLK) is granted with no conflict (single-user locks); and the
+ * fcntl(F_SETLK) read lock on it is granted, and a write lock refused with
+ * EBADF, since the file is open for reading alone, as in Linux; and the
  * credential walk a login server performs works through libc: the seteuid
  * excursion and return, the real drop (gid first, then uid), and no way back
  * up afterward.
@@ -20,6 +21,7 @@
  */
 
 #define _GNU_SOURCE /* dup3, sethostname */
+#include <errno.h>
 #include <pwd.h>
 #include <shadow.h>
 #include <crypt.h>
@@ -93,12 +95,17 @@ int main(void)
         return 1;
     }
 
-    /* Advisory lock on the dup'd fd. */
+    /* Advisory locks on the dup'd fd, which is open for reading alone. */
     memset(&lk, 0, sizeof(lk));
-    lk.l_type = F_WRLCK;
+    lk.l_type = F_RDLCK;
     lk.l_whence = SEEK_SET;
     if (fcntl(nfd, F_SETLK, &lk) != 0) {
         printf("AUTHMUSL FAIL (F_SETLK)\n");
+        return 1;
+    }
+    lk.l_type = F_WRLCK;
+    if (fcntl(nfd, F_SETLK, &lk) != -1 || errno != EBADF) {
+        printf("AUTHMUSL FAIL (F_SETLK F_WRLCK on a descriptor for reading)\n");
         return 1;
     }
     close(fd);
