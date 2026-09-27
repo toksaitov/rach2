@@ -1903,6 +1903,11 @@ static void syscall_missing(uint32_t syscall_num)
  * Linux's `syscall_trace_enter` lets it: the number is read again after the
  * stop, a number of no call answers -ENOSYS, and -1 runs no call, whose
  * result is then what the tracer left in EAX, -ENOSYS unless it set one.
+ *
+ * Whether `deliver_signals` restarts a call a signal interrupted, on this
+ * return, is recorded in `restart_nr` before the exit stop, so a tracer
+ * there cancels the restart with -1 in orig_eax, and with a result in EAX
+ * other than EINTR.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -1952,22 +1957,24 @@ static void _syscall_handler(isr_params_t *params)
     }
 
     fd_holds_release();
+    if (current_proc) {
+        current_proc->restart_nr = 0;
+        if (!skip && ret == -EINTR && syscall_restartable(syscall_num, params)) {
+            current_proc->restart_nr = syscall_num + 1u;
+        }
+    }
     if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {
         params->eax = (uint32_t)ret;
         ptrace_syscall_stop(params, syscall_num, 1);
         ret = (int32_t)params->eax;
+        if (ret != -EINTR) {
+            current_proc->restart_nr = 0;
+        }
     }
 
     /* Disable interrupts again so the epilogue restores the trapframe (segments
      * and %gs) atomically; iret then restores the caller's IF. */
     __asm__ __volatile__("cli");
-
-    /* deliver_signals, on this return, decides whether an interrupted call
-     * restarts. */
-    if (current_proc) {
-        current_proc->restart_nr =
-            (ret == -EINTR && syscall_restartable(syscall_num, params)) ? syscall_num + 1u : 0;
-    }
 
     if (current_proc) {
         current_proc->in_syscall = 0;

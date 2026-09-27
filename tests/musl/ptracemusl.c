@@ -13,20 +13,21 @@
  * orig_eax and its result in eax at the exit, and bit 0x80 on the stop
  * signal with PTRACE_O_TRACESYSGOOD. At an entry stop the tracer changes the
  * call through orig_eax: getpid made getppid returns the parent's id, and a
- * write made -1 is not run and returns the eax the tracer set.
- * PTRACE_O_TRACEEXEC stops the child after an execve with the exec event, which
- * waitid reports in si_status above the signal. A debug register set through
- * POKEUSER reads back through PEEKUSER, and DR7 enables a breakpoint on a user
- * address, the last of which a breakpoint may end at, and not on a kernel
- * address. PTRACE_ATTACH stops a running process, which runs on after
- * PTRACE_DETACH. A signal sent to a process whose first thread its tracer holds
- * stopped wakes the other thread, asleep in pause, which takes it. The usage a
- * tracer's wait4 reports for the end of a traced thread that is not the first
- * has the time of the children its process reaped. A process another process
- * traces, which ends, is reported to its tracer before its parent may reap it,
- * and then to the parent; the tracer's next wait finds nothing left to wait
- * for. A tracee SIGKILL ends sends its tracer, here its parent, a SIGCHLD of
- * CLD_KILLED with the signal.
+ * write made -1 is not run and returns the eax the tracer set. At the exit stop
+ * of a read a signal interrupted, -1 in orig_eax keeps the read from being
+ * restarted after a handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the child
+ * after an execve with the exec event, which waitid reports in si_status above
+ * the signal. A debug register set through POKEUSER reads back through
+ * PEEKUSER, and DR7 enables a breakpoint on a user address, the last of which a
+ * breakpoint may end at, and not on a kernel address. PTRACE_ATTACH stops a
+ * running process, which runs on after PTRACE_DETACH. A signal sent to a
+ * process whose first thread its tracer holds stopped wakes the other thread,
+ * asleep in pause, which takes it. The usage a tracer's wait4 reports for the
+ * end of a traced thread that is not the first has the time of the children its
+ * process reaped. A process another process traces, which ends, is reported to
+ * its tracer before its parent may reap it, and then to the parent; the
+ * tracer's next wait finds nothing left to wait for. A tracee SIGKILL ends
+ * sends its tracer, here its parent, a SIGCHLD of CLD_KILLED with the signal.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -301,6 +302,65 @@ static int syscall_changes(void)
         return fail("a write changed to -1 was run");
     }
     close(p[0]);
+    return 0;
+}
+
+/** A handler of SIGUSR1 that does nothing, so the signal only interrupts
+ * the call it comes during. */
+static void interrupt_only(int sig)
+{
+    (void)sig;
+}
+
+/*
+ * A tracer's -1 in orig_eax at the exit stop of a read a signal interrupted
+ * keeps the read from being restarted, though the handler that runs has
+ * SA_RESTART: the read returns EINTR, and a byte written after it is not
+ * read.
+ */
+static int restart_cancelled(void)
+{
+    struct user_regs_struct regs;
+    int p[2];
+    int status;
+    pid_t pid;
+
+    if (pipe(p) != 0) {
+        return fail("pipe");
+    }
+    pid = fork();
+    if (pid == 0) {
+        struct sigaction sa;
+        char c;
+
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = interrupt_only;
+        sa.sa_flags = SA_RESTART;
+        sigaction(SIGUSR1, &sa, NULL);
+        close(p[1]);
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(read(p[0], &c, 1) == -1 && errno == EINTR ? 0 : 1);
+    }
+    if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_read, &regs) != 0) {
+        return fail("the entry stop of read");
+    }
+    if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || kill(pid, SIGUSR1) != 0 ||
+        !stopped_by(pid, SIGTRAP) || ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
+        regs.orig_eax != SYS_read || regs.eax != -EINTR) {
+        return fail("the exit stop of the interrupted read");
+    }
+    regs.orig_eax = -1;
+    if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGUSR1) ||
+        ptrace(PTRACE_CONT, pid, NULL, (void *)SIGUSR1) != 0 || write(p[1], "x", 1) != 1) {
+        return fail("the signal of the interrupted read");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("a read whose restart the tracer cancelled was restarted");
+    }
+    close(p[0]);
+    close(p[1]);
     return 0;
 }
 
@@ -691,8 +751,9 @@ static int killed_tracee(void)
 
 int main(void)
 {
-    if (memory_and_registers() || syscalls_and_exec() || syscall_changes() || attach() ||
-        stopped_leader() || traced_thread_usage() || tracer_first() || killed_tracee()) {
+    if (memory_and_registers() || syscalls_and_exec() || syscall_changes() ||
+        restart_cancelled() || attach() || stopped_leader() || traced_thread_usage() ||
+        tracer_first() || killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

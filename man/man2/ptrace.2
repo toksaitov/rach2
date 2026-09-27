@@ -183,7 +183,10 @@ at
 A tracer changes only the flags a program may change; the data segment
 registers take a null selector, the user data selector or the TLS entry's,
 and CS and SS only the ones they have.
-An orig_eax of -1 keeps an interrupted system call from being restarted.
+An orig_eax of -1 keeps an interrupted system call from being restarted,
+set at its exit stop or at the signal-delivery stop that follows; at the
+exit stop so does a result in EAX other than
+.Er -EINTR .
 .It Dv PTRACE_GETFPREGS , PTRACE_SETFPREGS
 The 108-byte
 .Vt user_i387_struct .
@@ -291,7 +294,8 @@ it at a breakpoint in its read-only text and moves it back, stops it at
 the entry and exit of a system call and after an
 .Xr execve 2 ,
 changes one call into another and has another run none at their entry
-stops, sets and reads a debug register, has a breakpoint on a kernel address
+stops, cancels the restart of an interrupted read at its exit stop, sets
+and reads a debug register, has a breakpoint on a kernel address
 refused and one ending at the last user address taken, attaches to and
 detaches from a running process, and reads the
 .Dv SIGCHLD
