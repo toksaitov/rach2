@@ -533,6 +533,12 @@ An address no region allows is
 and a write reaches read-only program text, as a tracer's does.
 Opening it needs effective user ID 0, or the process's real user ID and a
 dumpable process.
+The descriptor reaches the address space the open found: once the
+process runs in another, after an
+.Xr execve 2 ,
+or ends, a read or a write returns 0, as on Linux, so a program the
+process executes later, a set-user-ID one among them, is not reached
+through a descriptor opened before.
 .It Pa /proc/self
 The calling thread's process.
 .Pa /proc

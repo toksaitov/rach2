@@ -17,12 +17,13 @@
  * entry stop of a write writes nothing. At the exit stop of a read a signal
  * interrupted, -1 in orig_eax keeps the read from being restarted after a
  * handler with SA_RESTART. PTRACE_O_TRACEEXEC stops the child after an execve
- * with the exec event, which waitid reports in si_status above the signal. A
- * debug register set through POKEUSER reads back through PEEKUSER, and DR7
- * enables a breakpoint on a user address, the last of which a breakpoint may
- * end at, and not on a kernel address. PTRACE_ATTACH stops a running process,
- * which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the tracer one
- * that a stop signal has already stopped, which stays stopped after
+ * with the exec event, which waitid reports in si_status above the signal, and
+ * a /proc/PID/mem descriptor opened before the execve reads nothing of the new
+ * image. A debug register set through POKEUSER reads back through PEEKUSER, and
+ * DR7 enables a breakpoint on a user address, the last of which a breakpoint
+ * may end at, and not on a kernel address. PTRACE_ATTACH stops a running
+ * process, which runs on after PTRACE_DETACH, and PTRACE_SEIZE stops for the
+ * tracer one that a stop signal has already stopped, which stays stopped after
  * PTRACE_DETACH until SIGCONT. PTRACE_INTERRUPT stops a seized tracee blocked
  * in a read, which is restarted after. A signal sent to a process whose first
  * thread its tracer holds stopped wakes the other thread, asleep in pause,
@@ -190,7 +191,9 @@ static int syscalls_and_exec(void)
 {
     struct user_regs_struct regs;
     unsigned long dr;
-    int status;
+    char path[32];
+    long word;
+    int status, mem;
     pid_t pid = fork();
 
     if (pid == 0) {
@@ -229,12 +232,18 @@ static int syscalls_and_exec(void)
         regs.eax != pid) {
         return fail("the exit stop of getpid");
     }
+    snprintf(path, sizeof(path), "/proc/%d/mem", (int)pid);
+    mem = open(path, O_RDONLY);
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
         return fail("PTRACE_CONT before the exec");
     }
     if (exec_event(pid) != 0) {
         return 1;
     }
+    if (mem < 0 || pread(mem, &word, sizeof(word), (off_t)(uintptr_t)&target) != 0) {
+        return fail("a /proc/PID/mem descriptor opened before the exec");
+    }
+    close(mem);
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 6) {
         return fail("the exec'd program");

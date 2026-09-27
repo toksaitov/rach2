@@ -167,12 +167,14 @@ struct procfs_file {
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
     int origin_task; /* the process whose task/<origin_pid> it came from, or 0 */
+    struct mm *mm;   /* /proc/<pid>/mem: the address space the open allowed */
 };
 
 /**
  * Drop a reference to `mm` that /proc took, loading the kernel's directory
  * first when this is the last reference and its directory is the one in
- * use, as `mm_drop` does for a process's own reference.
+ * use: a process a signal ends drops its own reference before it closes
+ * its descriptors, and its /proc/self/mem descriptor may hold the last one.
  */
 static void procfs_mm_put(struct mm *mm)
 {
@@ -2022,6 +2024,9 @@ static void procfs_close(fd_entry_t *e)
     struct procfs_file *f = (struct procfs_file *)e->priv;
     if (f) {
         e->priv = NULL;
+        if (f->mm) {
+            procfs_mm_put(f->mm);
+        }
         kfree(f->data);
         kfree(f);
     }
@@ -2031,31 +2036,54 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
                                                 procfs_ioctl, procfs_close};
 
 /**
+ * The address space a /proc/<pid>/mem descriptor may reach, with a reference
+ * of the caller's own, or NULL: the one the open allowed, while the process
+ * it was opened for still runs in it. Once the process has another, which
+ * an execve gives it, or none, the descriptor's reference goes, as on Linux,
+ * where the file keeps the address space it was opened on and reads end
+ * when that has no user left; a program the process executes, one of other
+ * ids among them, is never reached through a descriptor opened before.
+ */
+static struct mm *procfs_mem_mm(struct procfs_file *f)
+{
+    struct mm *mm = f->mm;
+    process_t *p = mm ? get_process((uint32_t)f->origin_pid) : NULL;
+
+    if (!mm) {
+        return NULL;
+    }
+    if (!p || p->state == PROC_UNUSED || p->mm != mm) {
+        f->mm = NULL;
+        procfs_mm_put(mm);
+        return NULL;
+    }
+    mm_get(mm);
+    return mm;
+}
+
+/**
  * Read or write `count` bytes of /proc/<pid>/mem at the descriptor's offset,
- * which is the address, through the process's address space, and move the
- * offset past them, as GDB reads and writes the memory of a tracee with
- * pread64 and pwrite64. A write reaches read-only program text, as a
- * tracer's does. The bytes done are returned, -EIO when none could be at an
- * address no region allows, and 0 once the process has no address space.
- * The address space is held for the length of the call, which may sleep
- * bringing a page in while the process ends and is reaped, and the process
- * is not looked at after it.
+ * which is the address, through the address space the open allowed
+ * (`procfs_mem_mm`), and move the offset past them, as GDB reads and writes
+ * the memory of a tracee with pread64 and pwrite64. A write reaches
+ * read-only program text, as a tracer's does. The bytes done are returned,
+ * -EIO when none could be at an address no region allows, and 0 once the
+ * address space is not the process's. The address space is held for the
+ * length of the call, which may sleep bringing a page in while the process
+ * ends.
  */
 static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
-    process_t *p = f ? get_process((uint32_t)f->origin_pid) : NULL;
-    struct mm *mm;
+    struct mm *mm = f ? procfs_mem_mm(f) : NULL;
     uint32_t addr = (uint32_t)e->ofd->offset;
     uint32_t done = 0;
     char buf[256];
     int rc = 0;
 
-    if (!p || p->state == PROC_UNUSED || !p->mm) {
+    if (!mm) {
         return 0;
     }
-    mm = p->mm;
-    mm_get(mm);
     while (done < count) {
         uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
 
@@ -2099,8 +2127,9 @@ static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write
  * Open /proc/<pid>/mem for reading, writing or both: the caller needs
  * effective user ID 0, or the process's real user ID and a dumpable process,
  * as a tracer does to attach. The descriptor keeps the process's id, `pid`
- * as `procfs_resolve_id` gave it for the path `vp`, and no text; its offset
- * is an address.
+ * as `procfs_resolve_id` gave it for the path `vp`, a reference to the
+ * address space those checks allowed, and no text; its offset is an
+ * address.
  */
 static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
 {
@@ -2131,6 +2160,8 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
         kfree(f);
         return -EMFILE;
     }
+    mm_get(p->mm);
+    f->mm = p->mm;
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;
     e->node = NULL;
