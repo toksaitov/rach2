@@ -211,7 +211,7 @@ void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
     sock->last_src_ip = src_ip;
     sock->last_src_port = src_port;
 
-    wq_wake_all(&sock->waiters);
+    wq_wake(&sock->waiters, WQ_DATA);
 }
 
 /* Wait predicate: a datagram waits on a UDP, raw or packet socket. */
@@ -479,7 +479,7 @@ void socket_tcp_writable(struct socket *sock)
     if (!sock)
         return;
 
-    wq_wake_all(&sock->waiters);
+    wq_wake(&sock->waiters, WQ_ROOM);
 }
 
 /* Wait predicate: the send ring has room, or the connection left a sending
@@ -616,7 +616,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     recv_ring_put(tcb, tcb->recv_tail, data, copy_len);
     tcb->recv_tail += copy_len;
 
-    wq_wake_all(&sock->waiters);
+    wq_wake(&sock->waiters, WQ_DATA);
     return (uint16_t)copy_len;
 }
 

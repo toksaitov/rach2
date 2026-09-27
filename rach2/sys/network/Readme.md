@@ -105,6 +105,8 @@ The supported families and types are:
 
 `connect` succeeds when the handshake completes, including when the peer's FIN arrives before the caller resumes and the connection is already in `CLOSE_WAIT`. A read then returns any queued data followed by EOF. A nonblocking connect uses the same completion check before deciding whether to return `EINPROGRESS`.
 
+A socket's waiters and pollers share its wait queue, and each wake names its kind of change for an edge-triggered epoll registration: a datagram or a frame queued for a UDP, raw or packet socket, and data for a TCP connection, are data; an acknowledgement that frees send-ring space is room; a connection that completes or ends, a FIN, a shutdown and a connection queued on a listener are every kind. So data that comes to a socket watched for output alone is no edge, as in Linux.
+
 `recvmsg` supports datagram sockets, including packet sockets, and supplies no ancillary data. `PACKET_AUXDATA` and `IP_HDRINCL` return `ENOPROTOOPT`. `shutdown` applies only to a connected TCP socket. `SHUT_RD` is a no-op; a direction that includes write starts the normal TCP close.
 
 The effective options are `SO_BROADCAST`, `SO_REUSEADDR`, `IP_TTL`, `SO_ERROR`, and `SO_TYPE`. `SO_KEEPALIVE` and `TCP_NODELAY` report off and have no effect. Most other unknown options are accepted and ignored. `SO_ERROR` returns and clears the pending TCP error. `SO_BINDTODEVICE` stores any registered interface's index and reads back its name; an empty name clears it. The setting does not restrict socket traffic. Packet sockets select an interface through `bind` with a `sockaddr_ll`.

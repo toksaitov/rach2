@@ -1,5 +1,7 @@
 #!/bin/sh
-# Compile pipe copies before, during and after each scheduling mutation.
+# Compile pipe copies before, during and after each scheduling mutation, and
+# each mutation of the kind of change a transfer or a close wakes the other
+# end for.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -54,7 +56,7 @@ run_phase()
 
 echo "pipe-copy-mutation: logs: $work"
 run_phase fixed 0 'pipe-copy-hosttest: result: pass:'
-for fault in read write; do
+for fault in read write read-kind write-kind close-kind; do
     python3 - "$work/sys/ipc/pipe.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -62,17 +64,23 @@ import sys
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 calls = {
-    "read": "!vm_prefault_range(addr, page_piece(addr, to_read - done), 1)",
-    "write": "!vm_prefault_range(addr, page_piece(addr, count - done), 0)",
+    "read": ("!vm_prefault_range(addr, page_piece(addr, to_read - done), 1)", "0"),
+    "write": ("!vm_prefault_range(addr, page_piece(addr, count - done), 0)", "0"),
+    "read-kind": ("pipe_wake(p, &p->write_wq, WQ_ROOM);", "pipe_wake(p, &p->write_wq, WQ_ALL);"),
+    "write-kind": ("pipe_wake(p, &p->read_wq, WQ_DATA);", "pipe_wake(p, &p->read_wq, WQ_ALL);"),
+    "close-kind": ("pipe_wake(p, &p->read_wq, WQ_ALL);", "pipe_wake(p, &p->read_wq, WQ_DATA);"),
 }
-old = calls[sys.argv[2]]
+old, new = calls[sys.argv[2]]
 if source.count(old) != 1:
     raise SystemExit("pipe-copy-mutation: source pattern is not unique")
-path.write_text(source.replace(old, "0"))
+path.write_text(source.replace(old, new))
 PY
     case $fault in
         read) message='reader returns remaining bytes' ;;
         write) message='writer preserves peer bytes' ;;
+        read-kind) message='a read wakes the writers for room alone' ;;
+        write-kind) message='a write wakes the readers for data alone' ;;
+        close-kind) message='a close wakes the readers for a hangup' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

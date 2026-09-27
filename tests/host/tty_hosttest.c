@@ -9,6 +9,12 @@
  * timeout or endpoint close to make a missing wake appear successful.
  * User copies fail on a selected chunk; serial input and interrupt flags are
  * substituted. This tests queue transitions, not paging or interrupt delivery.
+ *
+ * Each wake of a pair names its kind of change for an edge-triggered epoll
+ * registration, and the queues count them: input written to the master is data
+ * for the slave, and its echo data for the master, or no change with echo off;
+ * a slave read and an input flush are room for the master, and slave output is
+ * data for it.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -448,6 +454,35 @@ static void latency_read(void)
     CHECK(switches == 1 && irq_enabled, "console read restores interrupt state");
 }
 
+/** Each wake of a pair names the kind of change it is to the pollers of its
+ * queue, and no other. */
+static void wake_kinds(void)
+{
+    char byte;
+
+    setup_pair();
+    current_proc = &producer;
+    CHECK(ptm_write(&master, "a", 1) == 1, "master writes input");
+    CHECK(wq_wakes(&pair.slave.input_wq, WQ_DATA) == 1 &&
+              wq_wakes(&pair.slave.input_wq, WQ_ROOM | WQ_HANGUP) == 0,
+          "input written to the master is data for the slave");
+    CHECK(wq_wakes(&pair.m_read_wq, WQ_ALL) == 0,
+          "input written with echo off is no change for the master");
+    pair.slave.ldisc.tio.c_lflag |= ECHO;
+    CHECK(ptm_write(&master, "b", 1) == 1, "master writes echoed input");
+    CHECK(wq_wakes(&pair.m_read_wq, WQ_DATA) == 1 && wq_wakes(&pair.m_read_wq, WQ_ROOM) == 0,
+          "echo is data for the master");
+    CHECK(pts_read(&slave, &byte, 1) == 1 && byte == 'a', "slave reads input");
+    CHECK(wq_wakes(&pair.m_read_wq, WQ_ROOM) == 1 && wq_wakes(&pair.m_read_wq, WQ_DATA) == 1,
+          "a slave read is room for the master and no data");
+    CHECK(pts_write(&slave, "c", 1) == 1, "slave writes output");
+    CHECK(wq_wakes(&pair.m_read_wq, WQ_DATA) == 2 && wq_wakes(&pair.m_read_wq, WQ_ROOM) == 1,
+          "slave output is data for the master and no room");
+    tty_flush_input(&pair.slave);
+    CHECK(wq_wakes(&pair.m_read_wq, WQ_ROOM) == 2 && wq_wakes(&pair.m_read_wq, WQ_DATA) == 2,
+          "an input flush is room for the master and no data");
+}
+
 /** Run the independent wake and locking regressions. */
 int main(void)
 {
@@ -457,6 +492,7 @@ int main(void)
     partial_wakes_reader(0);
     partial_wakes_reader(1);
     latency_read();
+    wake_kinds();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

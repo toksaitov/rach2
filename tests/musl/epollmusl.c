@@ -28,24 +28,41 @@
  * epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative seconds
  * with EINVAL.
  *
+ * An edge-triggered registration is told only of the kinds of change its
+ * events watch, as in Linux: an AF_UNIX stream end watched for output is not
+ * reported again when a byte comes to it, nor when a read makes room in its
+ * own full queue, while one watched for input is reported for each byte; a
+ * listener is not reported again when an accept leaves a connection queued;
+ * and a datagram, or a TCP segment over the loopback, that comes to a socket
+ * watched for output is no edge.
+ *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+/* The port of the TCP connection over the loopback, which no other probe
+ * listens on. */
+#define EDGE_PORT 7470
 
 static volatile sig_atomic_t alarms;
 
@@ -623,11 +640,202 @@ static int long_timeout(void)
     return 0;
 }
 
+/* An AF_UNIX stream end watched edge-triggered for output alone is not
+ * reported again when a byte comes to it, and one watched for input is
+ * reported for each byte that comes. */
+static int unix_kinds(void)
+{
+    struct epoll_event ev, out;
+    int ep = epoll_create1(0);
+    int ein = epoll_create1(0);
+    int sv[2];
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT | EPOLLET;
+    if (ep < 0 || ein < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &ev) != 0 || wait_one(ep, 0, &out) != 1) {
+        return fail("setup for an AF_UNIX end watched for output");
+    }
+    ev.events = EPOLLIN | EPOLLET;
+    if (epoll_ctl(ein, EPOLL_CTL_ADD, sv[0], &ev) != 0 || write(sv[1], "a", 1) != 1 ||
+        wait_one(ein, 0, &out) != 1) {
+        return fail("setup for an AF_UNIX end watched for input");
+    }
+    if (wait_one(ep, 0, &out) != 0) {
+        return fail("a byte sent to an AF_UNIX end watched for output alone was reported");
+    }
+    if (write(sv[1], "b", 1) != 1 || wait_one(ein, 0, &out) != 1) {
+        return fail("a second byte sent to an AF_UNIX end watched for input was not reported");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    close(ein);
+    close(ep);
+    return 0;
+}
+
+/* A read that makes room in an AF_UNIX stream end's own full queue is room
+ * for the sends of its peer, not its own: an edge-triggered registration of
+ * the end for output is not reported again. */
+static int unix_own_room(void)
+{
+    struct epoll_event ev, out;
+    char buf[4096];
+    int ep = epoll_create1(0);
+    int sv[2];
+
+    if (ep < 0 || socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) != 0) {
+        return fail("setup for an AF_UNIX end with its queue full");
+    }
+    memset(buf, 'f', sizeof(buf));
+    while (write(sv[1], buf, sizeof(buf)) > 0) {
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT | EPOLLET;
+    if (errno != EAGAIN || epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &ev) != 0 ||
+        wait_one(ep, 0, &out) != 1) {
+        return fail("setup for an AF_UNIX end with its queue full");
+    }
+    if (read(sv[0], buf, 1) != 1 || wait_one(ep, 0, &out) != 0) {
+        return fail("room made in an AF_UNIX end's own queue was reported as room to write");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    close(ep);
+    return 0;
+}
+
+/* An AF_UNIX listener watched edge-triggered for input is not reported
+ * again when an accept leaves a second connection queued: no connection
+ * came. */
+static int unix_accept_edge(void)
+{
+    struct sockaddr_un a;
+    struct epoll_event ev, out;
+    socklen_t alen;
+    int ep = epoll_create1(0);
+    int ls = socket(AF_UNIX, SOCK_STREAM, 0);
+    int c1 = socket(AF_UNIX, SOCK_STREAM, 0);
+    int c2 = socket(AF_UNIX, SOCK_STREAM, 0);
+    int as;
+
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    memcpy(a.sun_path + 1, "epollmusl", 9);
+    alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 10);
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLET;
+    if (ep < 0 || ls < 0 || c1 < 0 || c2 < 0 || bind(ls, (struct sockaddr *)&a, alen) != 0 ||
+        listen(ls, 4) != 0 || connect(c1, (struct sockaddr *)&a, alen) != 0 ||
+        connect(c2, (struct sockaddr *)&a, alen) != 0 ||
+        epoll_ctl(ep, EPOLL_CTL_ADD, ls, &ev) != 0 || wait_one(ep, 0, &out) != 1) {
+        return fail("setup for a listener with two connections queued");
+    }
+    as = accept(ls, NULL, NULL);
+    if (as < 0) {
+        return fail("setup for an accept that leaves a connection queued");
+    }
+    if (wait_one(ep, 0, &out) != 0) {
+        return fail("an accept that left a connection queued was reported as a new one");
+    }
+    close(as);
+    close(c1);
+    close(c2);
+    close(ls);
+    close(ep);
+    return 0;
+}
+
+/* A datagram that another socket sends over the loopback to a UDP socket
+ * watched edge-triggered for output, which can always send, is no edge. */
+static int udp_arrival(void)
+{
+    struct sockaddr_in me;
+    struct epoll_event ev, out;
+    struct pollfd pfd;
+    socklen_t len = sizeof(me);
+    int ep = epoll_create1(0);
+    int rx = socket(AF_INET, SOCK_DGRAM, 0);
+    int tx = socket(AF_INET, SOCK_DGRAM, 0);
+
+    memset(&me, 0, sizeof(me));
+    me.sin_family = AF_INET;
+    me.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT | EPOLLET;
+    if (ep < 0 || rx < 0 || tx < 0 || bind(rx, (struct sockaddr *)&me, sizeof(me)) != 0 ||
+        getsockname(rx, (struct sockaddr *)&me, &len) != 0 ||
+        epoll_ctl(ep, EPOLL_CTL_ADD, rx, &ev) != 0 || wait_one(ep, 0, &out) != 1) {
+        return fail("setup for a datagram socket watched for output");
+    }
+    pfd.fd = rx;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (sendto(tx, "u", 1, 0, (struct sockaddr *)&me, sizeof(me)) != 1 ||
+        poll(&pfd, 1, 5000) != 1) {
+        return fail("setup: a datagram sent over the loopback did not arrive");
+    }
+    if (wait_one(ep, 0, &out) != 0) {
+        return fail("a datagram that came to a socket watched for output alone was reported");
+    }
+    close(tx);
+    close(rx);
+    close(ep);
+    return 0;
+}
+
+/* Data that the other end of a TCP connection over the loopback sends to an
+ * end watched edge-triggered for output is no edge. */
+static int tcp_arrival(void)
+{
+    struct sockaddr_in sa;
+    struct epoll_event ev, out;
+    struct pollfd pfd;
+    int ep = epoll_create1(0);
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    int cs = socket(AF_INET, SOCK_STREAM, 0);
+    int as;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(EDGE_PORT);
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (ep < 0 || ls < 0 || cs < 0 || bind(ls, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
+        listen(ls, 1) != 0) {
+        return fail("setup for a TCP listener on the loopback");
+    }
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(cs, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+        return fail("setup for a TCP connection over the loopback");
+    }
+    as = accept(ls, NULL, NULL);
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT | EPOLLET;
+    if (as < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, cs, &ev) != 0 || wait_one(ep, 0, &out) != 1) {
+        return fail("setup for a TCP connection watched for output");
+    }
+    pfd.fd = cs;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (write(as, "t", 1) != 1 || poll(&pfd, 1, 5000) != 1) {
+        return fail("setup: data sent over a TCP connection did not arrive");
+    }
+    if (wait_one(ep, 0, &out) != 0) {
+        return fail("data that came to a TCP connection watched for output alone was reported");
+    }
+    close(as);
+    close(cs);
+    close(ls);
+    close(ep);
+    return 0;
+}
+
 int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
-        long_timeout()) {
+        long_timeout() || unix_kinds() || unix_own_room() || unix_accept_edge() || udp_arrival() ||
+        tcp_arrival()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

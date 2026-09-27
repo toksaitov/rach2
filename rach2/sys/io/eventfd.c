@@ -79,7 +79,7 @@ static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
     }
     value = ev->semaphore ? 1u : ev->count;
     ev->count -= value;
-    wq_wake_all(&ev->wq);
+    wq_wake(&ev->wq, WQ_ROOM);
     if (copy_to_user((void __user *)buf, &value, sizeof(value)) != 0) {
         return -EFAULT;
     }
@@ -111,7 +111,7 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     }
     ev->count += a.value;
     if (a.value != 0) {
-        wq_wake_all(&ev->wq);
+        wq_wake(&ev->wq, WQ_DATA);
     }
     return (int32_t)sizeof(a.value);
 }

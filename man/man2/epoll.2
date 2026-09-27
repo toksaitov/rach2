@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt EPOLL 2
 .Os
 .Sh NAME
@@ -64,11 +64,29 @@ descriptor is ready.
 With
 .Dv EPOLLET
 it is edge-triggered: a wait reports it when an event appears, or when
-the descriptor has changed since its last report, as a pipe drained and
-filled again between two waits has, and not again until then.
-A change is a wake of the descriptor's wait queue, of whatever kind, so
-an edge may be reported where Linux, which looks at the events of the
-change, reports none.
+the descriptor has changed since its last report in a way its events
+watch, as a pipe drained and filled again between two waits has, and not
+again until then.
+A change is data that came, which
+.Dv EPOLLIN ,
+.Dv EPOLLPRI ,
+.Dv EPOLLRDNORM
+and
+.Dv EPOLLRDBAND
+watch; room made to write, which
+.Dv EPOLLOUT ,
+.Dv EPOLLWRNORM
+and
+.Dv EPOLLWRBAND
+watch; or a hangup, an error, a close or a shutdown, which every
+registration watches.
+So a socket watched for
+.Dv EPOLLOUT
+alone is not reported again when data comes to it, and one watched for
+.Dv EPOLLIN
+is reported for each arrival, as in Linux.
+A write to a pipe that is not empty is no change here, where Linux
+wakes the pollers of a pipe at every write and so reports it again.
 With
 .Dv EPOLLONESHOT
 the first report disables it, errors and hangups included, until an

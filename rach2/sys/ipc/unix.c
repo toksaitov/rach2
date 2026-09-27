@@ -504,21 +504,22 @@ static void enqueue(struct unix_sock *s, struct unix_msg *m)
     s->rq_tail = m;
     s->rq_bytes += m->len;
     s->rq_count++;
-    wq_wake_all(&s->wq);
+    wq_wake(&s->wq, WQ_DATA);
 }
 
 /**
  * Wake whoever waits for room in `s`'s queue: a sender to it waits on its
- * queue, and a socket connected to it polls on its own.
+ * queue, where the room changes none of `s`'s own events, and a socket
+ * connected to it polls on its own, where it is room to write.
  */
 static void wake_writers(struct unix_sock *s)
 {
     struct unix_sock *o;
 
-    wq_wake_all(&s->wq);
+    wq_wake(&s->wq, 0);
     for (o = socks; o; o = o->next) {
         if (o->peer == s) {
-            wq_wake_all(&o->wq);
+            wq_wake(&o->wq, WQ_ROOM);
         }
     }
 }
@@ -1297,7 +1298,7 @@ int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
     }
     target->acc_tail = c;
     target->acc_len++;
-    wq_wake_all(&target->wq);
+    wq_wake(&target->wq, WQ_DATA);
     unix_put(target);
     return 0;
 }
@@ -1358,7 +1359,7 @@ int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flag
     }
     c->acc_next = NULL;
     s->acc_len--;
-    wq_wake_all(&s->wq);
+    wq_wake(&s->wq, 0);
     if (addr) {
         rc = put_name(addr, addrlen_ptr, c->peer ? &c->peer->name : &none, 0);
         if (rc != 0) {
@@ -1404,6 +1405,7 @@ int32_t unix_shutdown(fd_entry_t *e, int how)
         s->peer->shut |= ((mode & SHUT_RCV) << 1) | ((mode & SHUT_SEND) >> 1);
         wq_wake_all(&s->peer->wq);
     }
+    wq_wake_all(&s->wq);
     wake_writers(s);
     return 0;
 }

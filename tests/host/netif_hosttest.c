@@ -158,10 +158,21 @@ int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
     return -EINTR;
 }
 
-/** Packet receive has no waiters in this model. */
+static wait_queue_t *woken;
+static uint32_t woken_kinds;
+
+/** Record the queue a receive wakes and the kinds of change it names; no
+ * process waits in this model. */
+void wq_wake(wait_queue_t *q, uint32_t kinds)
+{
+    woken = q;
+    woken_kinds |= kinds;
+}
+
+/** A wake of every kind of change. */
 void wq_wake_all(wait_queue_t *q)
 {
-    (void)q;
+    wq_wake(q, WQ_ALL);
 }
 
 /** No interrupt can enter a native row. */
@@ -283,6 +294,24 @@ static void packet_names(void)
     CHECK(do_getsockname(3, 32, 8) == 0 && SC_LE32(user + 36) == 0, "unbound packet index is zero");
 }
 
+/** A frame queued for a bound packet socket wakes its queue for data alone,
+ * so an edge-triggered epoll registration for output is not told of it. */
+static void packet_wake(void)
+{
+    static uint8_t frame[ETH_HDR_SIZE + 28];
+
+    sock.family = AF_PACKET;
+    sock.protocol = ETH_TYPE_ARP;
+    CHECK(packet_bind(&sock, 0) == 0, "packet bind for a frame");
+    woken = NULL;
+    woken_kinds = 0;
+    packet_rx(&cards[0], ETH_TYPE_ARP, frame, sizeof(frame));
+    CHECK(packet_ready(&sock), "a frame for a bound packet socket is queued");
+    CHECK(woken == &sock.waiters && woken_kinds == WQ_DATA,
+          "a frame wakes its packet socket for data alone");
+    packet_unbind(&sock);
+}
+
 /** A TCP endpoint reports its saved local address, including passive opens. */
 static void inet_names(void)
 {
@@ -399,6 +428,7 @@ int main(void)
     entry.ofd = &description;
     device_option();
     packet_names();
+    packet_wake();
     inet_names();
     invalid_accept();
     socket_flags();

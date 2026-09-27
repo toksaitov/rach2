@@ -6,7 +6,10 @@
  *
  * Pipe, ring and checked-copy code are the kernel's. User addresses refer to
  * model pages; the resolver runs a peer operation before returning a missing
- * or copy-on-write page. Waits, signals and wakeups are recorded substitutes.
+ * or copy-on-write page. Waits, signals and wakeups are recorded substitutes;
+ * a wakeup keeps the kinds of change it names, so a read must wake the writers
+ * for room alone, a write the readers for data alone, and a close the other
+ * end for a hangup.
  */
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
@@ -23,6 +26,7 @@ static struct open_file read_ofd, write_ofd;
 static uint8_t memory[8 * PAGE_SIZE];
 static int pages[8];
 static int failures, waits, read_wakes, write_wakes, signals, resolves;
+static uint32_t read_kinds, write_kinds;
 static void (*resolve_action)(void);
 static void (*wait_action)(void);
 static uint32_t peer_count;
@@ -123,16 +127,25 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** Count readiness notifications without switching processes. */
-void wq_wake_all(wait_queue_t *wq)
+/** Count readiness notifications, and the kinds of change they name,
+ * without switching processes. */
+void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     if (wq == &ring.read_wq) {
         read_wakes++;
+        read_kinds |= kinds;
     } else if (wq == &ring.write_wq) {
         write_wakes++;
+        write_kinds |= kinds;
     } else {
         CHECK(0, "wake uses pipe queue");
     }
+}
+
+/** A notification of every kind of change. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    wq_wake(wq, WQ_ALL);
 }
 
 /** Initialize queues for the unused pipe-creation path. */
@@ -206,6 +219,7 @@ static void setup(uint32_t head)
     }
     k_memset(memory + PEER_PAGE * PAGE_SIZE, 0x22, PAGE_SIZE);
     waits = read_wakes = write_wakes = signals = resolves = 0;
+    read_kinds = write_kinds = 0;
     resolve_action = wait_action = NULL;
     peer_count = 0;
     peer_closes = 0;
@@ -303,6 +317,7 @@ static void state_changes(void)
     peer_closes = 1;
     resolve_action = peer_read;
     CHECK(pipe_read(&reader, user_at(0), 2) == 0, "drained reader observes eof");
+    CHECK(read_kinds & WQ_HANGUP, "a close wakes the readers for a hangup");
 
     setup(0);
     pages[0] = 0;
@@ -317,6 +332,7 @@ static void state_changes(void)
     wait_action = peer_write;
     CHECK(pipe_read(&reader, user_at(0), 8) == 2, "read rechecks after wait");
     CHECK(waits == 2 && write_wakes > 0, "reader waits and wakes writer");
+    CHECK(write_kinds == WQ_ROOM, "a read wakes the writers for room alone");
 
     setup(0);
     write_ofd.status_flags = 0;
@@ -326,6 +342,7 @@ static void state_changes(void)
     wait_action = peer_read;
     CHECK(pipe_write(&writer, user_at(0), 3) == 3, "write rechecks after wait");
     CHECK(waits == 2 && read_wakes == 1, "refill wakes reader");
+    CHECK(read_kinds == WQ_DATA, "a write wakes the readers for data alone");
     CHECK(pipe_ring_get(&ring, bytes, sizeof(bytes)) == 3, "refill count");
 }
 
