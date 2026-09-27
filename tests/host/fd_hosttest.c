@@ -1,5 +1,6 @@
 /**
- * Check standard description allocation and locking across relocation.
+ * Check standard description allocation, locking across relocation, and the
+ * descriptor limit of each process that shares a table.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -288,6 +289,47 @@ static void process_allocations(void)
     check(!proc_list && !proc_tail && !allocations, "process cleanup releases all storage");
 }
 
+/**
+ * Two processes that share one table, as clone with CLONE_FILES makes them,
+ * the second with a soft RLIMIT_NOFILE of 4: the second is held to 4 when it
+ * takes a descriptor, and the first, whose limit is the default, takes one
+ * past it, the second's limit not lowering the first's.
+ */
+static void shared_limits(void)
+{
+    process_t *first = alloc_process();
+    process_t *second = alloc_process();
+    int i;
+
+    check(first && second, "two processes for a shared table");
+    if (!first || !second) {
+        return;
+    }
+    for (i = FD_STDIN; i <= FD_STDERR; i++) {
+        fd_free(second->fds, i);
+    }
+    fd_table_delete(second->fds);
+    check(fd_table_share(first->fds) == 0, "the table is shared");
+    second->fds = first->fds;
+    second->rlim[RLIM_NOFILE].cur = 4;
+    current_proc = second;
+    check(fd_limit(second->fds) == 4 && fd_alloc(second->fds) == 3,
+          "the process with a limit of 4 takes descriptor 3");
+    check(fd_alloc(second->fds) == -1 && !fd_can_alloc(second->fds),
+          "the process with a limit of 4 is held to it in the shared table");
+    current_proc = first;
+    check(fd_limit(first->fds) == FD_TABLE_LIMIT && fd_alloc(first->fds) == 4,
+          "a sharer keeps its own limit and takes descriptor 4");
+    current_proc = 0;
+    fd_free(first->fds, 3);
+    fd_free(first->fds, 4);
+    first->fds->refs--;
+    second->fds = 0;
+    free_process(second);
+    close_process(first);
+    check(!proc_list && !allocations, "the shared table's cleanup releases all storage");
+}
+
 /** Exercise a waiting independent open, a shared open, and other file types. */
 int main(void)
 {
@@ -297,6 +339,7 @@ int main(void)
 
     stdio_allocations();
     process_allocations();
+    shared_limits();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
     }
@@ -336,7 +379,7 @@ int main(void)
     fd_free(&table, fd);
     fd_table_free(&table);
     if (!fails) {
-        printf("fd_hosttest: pass: stdio allocation and description ordering\n");
+        printf("fd_hosttest: pass: stdio allocation, description ordering and shared limits\n");
     }
     return fails != 0;
 }

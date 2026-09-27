@@ -303,6 +303,7 @@ static void truncation(void)
 
     for (mode = 0; mode < 4; mode++) {
         proc.fds = &files;
+        proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
         check(fd_table_init(proc.fds) == 0, "initialize descriptor table");
         proc.euid = 1;
         opens = releases = refs = leaves = dropped = truncates = attrs = relocate = 0;

@@ -3195,7 +3195,7 @@ int32_t sys_dup2(isr_params_t *params)
         return -EBADF;
     }
 
-    if (newfd < 0 || newfd >= current_proc->fds->limit) {
+    if (newfd < 0 || newfd >= fd_limit(current_proc->fds)) {
         return -EBADF;
     }
 
@@ -6769,7 +6769,7 @@ int32_t sys_fcntl64(isr_params_t *params)
          * contract). An arg past the descriptor limit is -EINVAL, since the
          * table grows to it and no higher; no slot at or above
          * it is -EMFILE. */
-        if (arg >= (uint32_t)current_proc->fds->limit) {
+        if (arg >= (uint32_t)fd_limit(current_proc->fds)) {
             return -EINVAL;
         }
         newfd = fd_alloc_from(current_proc->fds, (int)arg);

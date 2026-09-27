@@ -157,12 +157,12 @@ typedef struct fd_entry {
  * processes clone makes with CLONE_FILES share one table, `refs` counting
  * them. A shared table has all FD_TABLE_LIMIT entries, so an entry stays
  * where it is while a call of one sharer sleeps with it and another opens
- * files.
+ * files. The table has no limit of its own below FD_TABLE_LIMIT: each
+ * sharer is held to its own RLIMIT_NOFILE (`fd_limit`).
  */
 typedef struct fd_table {
     fd_entry_t *entries;
     int cap;
-    int limit; /* the process's RLIMIT_NOFILE, at most FD_TABLE_LIMIT */
     int refs;
 } fd_table_t;
 
@@ -201,6 +201,15 @@ int fd_table_share(fd_table_t *table);
 
 /** How many entries the table has now: the bound of a walk over it. */
 int fd_table_cap(const fd_table_t *table);
+
+/**
+ * One more than the highest descriptor the caller may be given in `table`:
+ * the calling process's soft RLIMIT_NOFILE when the table is its own, which
+ * a process that shares the table under CLONE_FILES keeps apart, as Linux
+ * applies the caller's limit at each allocation; FD_TABLE_LIMIT for any
+ * other table, which the kernel fills for nobody's call.
+ */
+int fd_limit(const fd_table_t *table);
 
 /**
  * Grow the table so that `fd` is inside it, for dup2 onto a number past

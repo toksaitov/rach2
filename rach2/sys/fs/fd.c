@@ -175,8 +175,7 @@ void fd_ofd_unref(struct open_file *ofd)
 }
 
 /**
- * Give a fresh table its first FD_TABLE_FIRST entries, all free, and the
- * default limit.
+ * Give a fresh table its first FD_TABLE_FIRST entries, all free.
  *
  * This does not unref any OFDs or free an old array; it is for a fresh table
  * only. A live table is torn down descriptor by descriptor through `fd_free`,
@@ -191,7 +190,6 @@ int fd_table_init(fd_table_t *table)
     }
     table->entries = kzalloc(sizeof(fd_entry_t) * FD_TABLE_FIRST);
     table->cap = table->entries ? FD_TABLE_FIRST : 0;
-    table->limit = FD_TABLE_LIMIT;
     return table->entries ? 0 : -1;
 }
 
@@ -208,6 +206,17 @@ void fd_table_free(fd_table_t *table)
 int fd_table_cap(const fd_table_t *table)
 {
     return table ? table->cap : 0;
+}
+
+int fd_limit(const fd_table_t *table)
+{
+    uint32_t cur;
+
+    if (!current_proc || table != current_proc->fds) {
+        return FD_TABLE_LIMIT;
+    }
+    cur = current_proc->rlim[RLIM_NOFILE].cur;
+    return cur < FD_TABLE_LIMIT ? (int)cur : FD_TABLE_LIMIT;
 }
 
 fd_table_t *fd_table_new(void)
@@ -239,7 +248,6 @@ fd_table_t *fd_table_dup(const fd_table_t *src)
     }
     k_memcpy(table->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
     table->cap = src->cap;
-    table->limit = src->limit;
     table->refs = 1;
     return table;
 }
@@ -275,7 +283,7 @@ static int fd_table_grow(fd_table_t *table, int want)
 {
     int cap = table->cap ? table->cap : FD_TABLE_FIRST;
 
-    if (want > table->limit) {
+    if (want > fd_limit(table)) {
         return -1;
     }
     while (cap < want) {
@@ -301,7 +309,7 @@ int fd_table_reach(fd_table_t *table, int fd)
     if (!table || fd < 0) {
         return -1;
     }
-    if (fd >= table->limit) {
+    if (fd >= fd_limit(table)) {
         return -1;
     }
     if (fd < table->cap) {
@@ -356,17 +364,18 @@ int fd_init_stdio(fd_table_t *table)
  */
 int fd_alloc_from(fd_table_t *table, int minfd)
 {
+    int limit = fd_limit(table);
     int i;
 
-    if (!table || minfd < 0 || minfd >= table->limit) {
+    if (!table || minfd < 0 || minfd >= limit) {
         return -1;
     }
-    for (i = minfd; i < table->cap && i < table->limit; i++) {
+    for (i = minfd; i < table->cap && i < limit; i++) {
         if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
             break;
         }
     }
-    if (i >= table->limit) {
+    if (i >= limit) {
         return -1;
     }
     if (i >= table->cap && fd_table_grow(table, i + 1) != 0) {
@@ -464,12 +473,13 @@ int fd_is_valid(fd_table_t *table, int fd)
 
 int fd_can_alloc(const fd_table_t *table)
 {
+    int limit = fd_limit(table);
     int i;
 
-    for (i = 0; i < table->cap && i < table->limit; i++) {
+    for (i = 0; i < table->cap && i < limit; i++) {
         if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
             return 1;
         }
     }
-    return table->cap < table->limit;
+    return table->cap < limit;
 }

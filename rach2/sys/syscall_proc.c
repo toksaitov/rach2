@@ -4348,9 +4348,11 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
 /**
  * Set a kept limit of `p`'s process, in the record of each of its threads:
  * the soft value at most the hard, the hard raised by root only and lowered
- * by anyone, and RLIMIT_NOFILE never above the table's limit. A limit that
- * is not kept is accepted and not changed. 0, or -EINVAL and -EPERM as POSIX
- * names them.
+ * by anyone, and RLIMIT_NOFILE never above FD_TABLE_LIMIT. A limit that is
+ * not kept is accepted and not changed. RLIMIT_NOFILE is the process's own
+ * even when it shares its descriptor table with another under CLONE_FILES,
+ * since each allocation reads the caller's (`fd_limit`). 0, or -EINVAL and
+ * -EPERM as POSIX names them.
  */
 static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t max)
 {
@@ -4370,14 +4372,10 @@ static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t ma
         return -EPERM;
     }
     for (t = proc_list; t; t = t->next) {
-        if (t->tg != p->tg) {
-            continue;
+        if (t->tg == p->tg) {
+            t->rlim[slot].cur = cur;
+            t->rlim[slot].max = max;
         }
-        if (slot == RLIM_NOFILE && t->fds) {
-            t->fds->limit = (int)cur;
-        }
-        t->rlim[slot].cur = cur;
-        t->rlim[slot].max = max;
     }
     return 0;
 }

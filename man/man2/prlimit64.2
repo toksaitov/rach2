@@ -78,6 +78,13 @@ when no descriptor below the soft limit is free.
 Dup2 returns
 .Er EBADF
 for a destination at or above the soft limit.
+A process that shares its descriptor table with another, as
+.Xr clone 2
+with
+.Dv CLONE_FILES
+makes them, is held to its own limit in it, as on Linux: one sharer's
+lower limit does not bind the others, and a higher one does not free them
+from theirs.
 .It Dv RLIMIT_AS
 The bytes covered by the process's virtual memory regions.
 Growth beyond the soft limit makes mmap return

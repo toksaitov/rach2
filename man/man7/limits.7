@@ -27,7 +27,8 @@ A setuid operation that changes the real user ID moves the thread to the
 new user's count.
 .It Dv RLIMIT_NOFILE
 One greater than the highest descriptor number the process may be given,
-at most 1024.
+at most 1024, in a descriptor table it shares with another process as in
+one of its own.
 Open returns
 .Er EMFILE
 when no descriptor below the soft limit is free.
