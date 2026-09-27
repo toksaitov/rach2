@@ -12,7 +12,10 @@
 # musl implementation, so the guest verifies exactly what this script mints.
 # Everything is generated only when krffs/shadow is absent, so present
 # credentials are left as is (idempotent); delete krffs/shadow to mint fresh
-# ones.
+# ones. The aging fields of each line are empty, as adduser(8) writes them:
+# a last change of day 0 tells a reader of shadow(5) that root forced a
+# change at the next login, which OpenSSH's server enforces. A shadow minted
+# with day 0 keeps its hashes and has those fields emptied.
 #
 
 set -e
@@ -22,15 +25,15 @@ cd "$SCRIPT_DIR"
 
 MKHASH=../build/krffs/mkhash.krffs
 
+# Whether a line of krffs/shadow gives its last change as day 0.
+day_zero() {
+    awk -F: '$3 == "0" { found = 1 } END { exit !found }' shadow
+}
+
 # Already minted, and nobody asked for them to be replaced: the common case, and
 # the fast one, since every image target calls this.
-if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
+if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ] && ! day_zero; then
     exit 0
-fi
-
-if [ ! -x "$MKHASH" ]; then
-    echo "gen_demo_password: no $MKHASH; build the krffs tools first." >&2
-    exit 1
 fi
 
 # One generation at a time: concurrent image targets under make -j must not
@@ -47,7 +50,19 @@ trap 'rmdir .gen_demo_password.lock' EXIT
 # by name, which is what the sealing session does when it gives a machine
 # passwords of its own.
 if [ -f shadow ] && [ -z "${RACH2_REPLACE_PASSWORDS:-}" ]; then
+    if day_zero; then
+        umask 077
+        awk -F: -v OFS=: '$3 == "0" { $3 = $4 = $5 = $6 = $7 = $8 = $9 = "" } { print }' \
+            shadow > shadow.tmp
+        mv shadow.tmp shadow
+        echo "gen_demo_password: emptied the aging fields of krffs/shadow"
+    fi
     exit 0
+fi
+
+if [ ! -x "$MKHASH" ]; then
+    echo "gen_demo_password: no $MKHASH; build the krffs tools first." >&2
+    exit 1
 fi
 if [ -f shadow ]; then
     # The old hashes go before the new plaintext arrives, and not after. The
@@ -104,7 +119,7 @@ mint() {
     umask 077
     rm -f "$file"
     printf '%s\n' "$password" > "$file"
-    printf '%s:%s:0:0:99999:7:::\n' "$user" "$hash" >> shadow.tmp
+    printf '%s:%s:::::::\n' "$user" "$hash" >> shadow.tmp
     echo "gen_demo_password: wrote krffs/$file"
 }
 
