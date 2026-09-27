@@ -346,21 +346,21 @@ int procfs_resolve_id(const struct vpath *vp)
     return vp->tid;
 }
 
-static char proc_state_char(proc_state_t s)
+/** The state letter of `p` in its stat file, which the State line of its
+ * status file spells out: a ptrace stop is 't', a stop of its process 'T',
+ * as in Linux. */
+static char proc_state_char(const process_t *p)
 {
-    switch (s) {
-    case PROC_RUNNING:
-    case PROC_READY:
-        return 'R';
-    case PROC_BLOCKED:
-        return 'S';
-    case PROC_ZOMBIE:
+    if (p->state == PROC_ZOMBIE) {
         return 'Z';
-    case PROC_STOPPED:
-    case PROC_UNUSED:
-    default:
-        return 'R';
     }
+    if (p->ptrace_status != 0) {
+        return 't';
+    }
+    if (p->state == PROC_STOPPED) {
+        return 'T';
+    }
+    return p->state == PROC_BLOCKED ? 'S' : 'R';
 }
 
 /**
@@ -399,7 +399,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
         ap_ch(t, '?');
     }
     ap_str(t, ") ");
-    ap_ch(t, proc_state_char(p->state)); /* 3 state */
+    ap_ch(t, proc_state_char(p)); /* 3 state */
     ap_ch(t, ' ');
     ap_int(t, (int)p->parent_pid); /* 4 ppid */
     ap_ch(t, ' ');

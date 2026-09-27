@@ -409,9 +409,17 @@ State is
 .Ql R
 for running or ready,
 .Ql S
-for blocked, or
+for blocked,
+.Ql T
+for stopped with its process by a stop signal,
+.Ql t
+for stopped by its tracer, or
 .Ql Z
-for zombie.
+for zombie, as the
+.Li State
+line of
+.Pa /proc/PID/status
+says in words and as in Linux.
 The parent, process group, and session IDs are recorded values.
 Fields 14 through 17 are the user and system time of all the process's
 threads and its reaped children's, in 1/100 second ticks, as
