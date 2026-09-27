@@ -104,7 +104,10 @@ on a
 .Pa /dev
 node reports the devfs values, and one on a
 .Pa /proc
-node the proc values.
+node that is not a directory the proc values; one on a
+.Pa /proc
+directory is a synthetic directory descriptor and reports the devfs
+values, as above.
 Ordinary file and directory descriptors report their mount's values,
 those opened with
 .Dv O_PATH
