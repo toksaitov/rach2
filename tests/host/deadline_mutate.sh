@@ -1,11 +1,14 @@
 #!/bin/sh
-# Prove the host rows on wait deadlines and the timer's tick with faults in a
-# private kernel tree.
+# Prove the host rows on wait deadlines, the timer's tick and the kinds of
+# change a wake counts with faults in a private kernel tree.
 #
 # Usage: sh tests/host/deadline_mutate.sh
 #
 # wait_queue_hosttest requires a wait that a wake does not end to arm the
-# caller's deadline again before it blocks again (entry 217);
+# caller's deadline again before it blocks again (entry 217), and a wake to be
+# counted for the kinds of change it names and no others, every kind for
+# wq_wake_all, the count of the kinds asked for to be read back, and a wake
+# that names none to wake its waiters still (entry 246);
 # poll_deadline_hosttest requires the poll, ppoll and select timeouts to end a
 # whole timeout after the tick in progress, seconds to count a hundred ticks
 # and any part of a tick to round up, a zero timeout to end at once, the longest
@@ -153,6 +156,34 @@ run_phase tick-fixed process_timer_hosttest pass ''
 prove wait-unarmed wait_queue_hosttest proc/wait_queue.c \
     '        current_proc->wakeup_tick = deadline;' '' \
     'deadline_at_block[1] == 77'
+prove wake-every-kind wait_queue_hosttest proc/wait_queue.c \
+    '        if (kinds & (1u << k)) {
+            wq->wakes[k]++;' \
+    '        if (k < WQ_KINDS) {
+            wq->wakes[k]++;' \
+    'wq_wakes(&wq, WQ_ROOM) == 1 && wq_wakes(&wq, WQ_HANGUP) == 1|wq_wakes(&wq, WQ_ALL) == 6'
+prove wakes-every-kind wait_queue_hosttest proc/wait_queue.c \
+    '        if (kinds & (1u << k)) {
+            sum += wq->wakes[k];' \
+    '        if (k < WQ_KINDS) {
+            sum += wq->wakes[k];' \
+    'wq_wakes(&wq, WQ_DATA) == 1 && wq_wakes(&wq, WQ_ROOM) == 1'
+prove wake-all-one-kind wait_queue_hosttest proc/wait_queue.c \
+    '    wq_wake(wq, WQ_ALL);' \
+    '    wq_wake(wq, WQ_DATA);' \
+    'wq_wakes(&wq, WQ_HANGUP) == 1 && wq_wakes(&wq, WQ_ALL) == 3'
+prove wake-none-skipped wait_queue_hosttest proc/wait_queue.c \
+    '    if (!wq) {
+        return;
+    }
+    flags = irq_save();
+    for (w = wq->head; w; w = next) {' \
+    '    if (!wq || !kinds) {
+        return;
+    }
+    flags = irq_save();
+    for (w = wq->head; w; w = next) {' \
+    'b.state == PROC_READY && total_queued(&wq) == 0'
 
 prove poll-early poll_deadline_hosttest io/poll.c \
     '    return kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);' \

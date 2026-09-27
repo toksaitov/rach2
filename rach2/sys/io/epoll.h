@@ -12,7 +12,8 @@
  *
  * A registration is level-triggered, reported at every wait while its
  * descriptor is ready, or with EPOLLET edge-triggered, reported when an event
- * appears or its descriptor's wait queue is woken, and not again until then.
+ * appears or its descriptor's wait queue is woken for a kind of change among
+ * its events (data, room, or a hangup), and not again until then.
  * EPOLLONESHOT stops the reports after the first until epoll_ctl changes the
  * registration. A registration ends when its descriptor is closed: the next
  * wait finds the number naming another open file, or none, and drops it. A

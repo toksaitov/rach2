@@ -35,9 +35,13 @@ static void irq_restore(uint32_t flags)
 
 void wait_queue_init(wait_queue_t *wq)
 {
+    int k;
+
     if (wq) {
         wq->head = NULL;
-        wq->wakes = 0;
+        for (k = 0; k < WQ_KINDS; k++) {
+            wq->wakes[k] = 0;
+        }
     }
 }
 
@@ -153,10 +157,11 @@ int wq_active(const wait_queue_t *wq)
     return wq != NULL && wq->head != NULL;
 }
 
-void wq_wake_all(wait_queue_t *wq)
+void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     uint32_t flags;
     struct wq_waiter *w, *next;
+    int k;
 
     if (!wq) {
         return;
@@ -171,8 +176,30 @@ void wq_wake_all(wait_queue_t *wq)
         }
     }
     wq->head = NULL;
-    wq->wakes++;
+    for (k = 0; k < WQ_KINDS; k++) {
+        if (kinds & (1u << k)) {
+            wq->wakes[k]++;
+        }
+    }
     irq_restore(flags);
+}
+
+void wq_wake_all(wait_queue_t *wq)
+{
+    wq_wake(wq, WQ_ALL);
+}
+
+uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds)
+{
+    uint32_t sum = 0;
+    int k;
+
+    for (k = 0; k < WQ_KINDS; k++) {
+        if (kinds & (1u << k)) {
+            sum += wq->wakes[k];
+        }
+    }
+    return sum;
 }
 
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)

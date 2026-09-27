@@ -23,9 +23,15 @@
 #define EPOLL_CTL_MOD 3
 
 #define EPOLLIN        0x001u
+#define EPOLLPRI       0x002u
+#define EPOLLOUT       0x004u
 #define EPOLLERR       0x008u
 #define EPOLLHUP       0x010u
 #define EPOLLRDNORM    0x040u
+#define EPOLLRDBAND    0x080u
+#define EPOLLWRNORM    0x100u
+#define EPOLLWRBAND    0x200u
+#define EPOLLMSG       0x400u
 #define EPOLLEXCLUSIVE (1u << 28)
 #define EPOLLWAKEUP    (1u << 29)
 #define EPOLLONESHOT   (1u << 30)
@@ -57,7 +63,8 @@ struct epitem {
     uint32_t data[2];
     int off; /* EPOLLONESHOT: reported, and off until EPOLL_CTL_MOD */
     /* EPOLLET: the events reported that have not gone since, and the wait
-     * queue of the descriptor at that report with its count of wakes. */
+     * queue of the descriptor at that report with its count of the wakes
+     * of the kinds the registration watches. */
     uint32_t seen;
     const struct wait_queue *at;
     uint32_t wakes;
@@ -70,7 +77,7 @@ struct epoll {
     wait_queue_t wq;
     /* The scan that last looked into the set, from `scan_marks`, and what
      * it found: whether a wait would report an event, and the sum of the
-     * wakes of the queues the set watches, its own among them. */
+     * wakes its registrations watch and of its own queue's. */
     uint32_t mark;
     int ready;
     uint32_t sig;
@@ -130,19 +137,37 @@ static int item_names(const struct epitem *it, const fd_entry_t *e)
 }
 
 /* Whether the descriptor of an edge-triggered registration, whose wait
- * queue is `wq` with `wakes` counted, has changed since `it` was last
- * reported. */
+ * queue is `wq` with `wakes` counted of the kinds it watches, has changed
+ * in a way it watches since `it` was last reported. */
 static int item_woken(const struct epitem *it, const struct wait_queue *wq, uint32_t wakes)
 {
     return wq != it->at || wakes != it->wakes;
 }
 
+/* The kinds of change (`wq_wake`) among the events `want`: data for the
+ * events of input, room for those of output, and a hangup, which every
+ * registration watches with EPOLLERR and EPOLLHUP. */
+static uint32_t kinds_of(uint32_t want)
+{
+    uint32_t kinds = WQ_HANGUP;
+
+    if (want & (EPOLLIN | EPOLLPRI | EPOLLRDNORM | EPOLLRDBAND | EPOLLMSG)) {
+        kinds |= WQ_DATA;
+    }
+    if (want & (EPOLLOUT | EPOLLWRNORM | EPOLLWRBAND)) {
+        kinds |= WQ_ROOM;
+    }
+    return kinds;
+}
+
 /*
  * The events among `want` of the descriptor `e`, its wait queue in `*wq`,
- * and in `*wakes` the wakes the queue has counted, which tell a change. An
- * epoll set, looked into at `depth`, is readable while a wait on it would
- * report an event, and its count is the sum over the queues it watches, so
- * that a change in any of them is one of the set. The queues go on `q`.
+ * and in `*wakes` the wakes the queue has counted of the kinds of change
+ * among `want`, which tell a change a registration watching `want` is told
+ * of. An epoll set, looked into at `depth`, is readable while a wait on it
+ * would report an event, and its count is the sum of the counts of its
+ * registrations and of its own queue, so that a change any of them watches
+ * is one of the set. The queues go on `q`.
  */
 static uint32_t target_poll(fd_entry_t *e, uint32_t want, int depth, struct qlist *q,
                             struct wait_queue **wq, uint32_t *wakes)
@@ -159,7 +184,7 @@ static uint32_t target_poll(fd_entry_t *e, uint32_t want, int depth, struct qlis
     }
     ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
     q_add(q, *wq);
-    *wakes = *wq ? (*wq)->wakes : 0u;
+    *wakes = *wq ? wq_wakes(*wq, kinds_of(want)) : 0u;
     return ready;
 }
 
@@ -174,9 +199,11 @@ static uint32_t target_poll(fd_entry_t *e, uint32_t want, int depth, struct qlis
  *
  * An edge-triggered registration is reported when an event is ready that
  * was not at its last report, or has gone since, or when its descriptor's
- * queue has been woken since that report: a pipe drained and filled again
- * between two waits is ready as it was, and its reader's queue is what
- * tells the new edge, as Linux's wakeup callback does.
+ * queue has been woken since that report for a kind of change among its
+ * events (`kinds_of`): a pipe drained and filled again between two waits is
+ * ready as it was, and its reader's queue is what tells the new edge.
+ * Linux's wakeup callback likewise queues a registration for a wake whose
+ * events it watches.
  */
 static uint32_t item_ready(struct epitem *it, int depth, struct qlist *q, struct wait_queue **wq,
                            uint32_t *wakes, int *gone)
@@ -272,8 +299,8 @@ static void untook(struct epoll *ep, const struct epoll_out *o)
 /**
  * Whether a wait on the set `ep`, looked into at `depth`, would report an
  * event, taking none; the queues a wait on it must be on, its own and
- * those of what it watches, go on `q`, and the sum of their wakes to
- * `ep->sig`.
+ * those of what it watches, go on `q`, and to `ep->sig` the sum of the
+ * wakes of its own queue and those its registrations watch.
  *
  * A scan looks into a set once: a set it meets again, by another path or
  * inside itself, gives what the first look found, or nothing while that
@@ -289,7 +316,7 @@ static int set_ready(struct epoll *ep, int depth, struct qlist *q)
     }
     ep->mark = scan_marks;
     ep->ready = 0;
-    ep->sig = ep->wq.wakes;
+    ep->sig = wq_wakes(&ep->wq, WQ_ALL);
     q_add(q, &ep->wq);
     if (depth > EP_MAX_NESTS) {
         return 0;
