@@ -8423,7 +8423,7 @@ int32_t sys_utimensat(isr_params_t *params)
         }
     }
     rc = vfs_resolve(0, pathbuf,
-                     VFS_WALK_LOCK | ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), &ref,
+                     ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, &ref,
                      0, 0);
     path_buf_put(pathbuf);
     if (rc != 0) {

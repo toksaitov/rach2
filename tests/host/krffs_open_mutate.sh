@@ -50,7 +50,7 @@ groups = [
      "resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
      "vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create"),
     ("syscall_fs.c", "syscall_open.inc", "name_is open_link_target node_make open_create "
-     "open_mounted_node open_install do_open"),
+     "open_mounted_node open_install open_synth_node do_open"),
 ]
 for source, output, names in groups:
     text = (work / "sys" / source).read_text()
