@@ -75,8 +75,13 @@ is set to 16 even if the result was truncated.
 The family is in host byte order; the address and port are in network
 byte order.
 If either pointer is null, no address is returned.
-An address-copy failure closes the new descriptor and discards the
-dequeued connection.
+The new descriptor is reserved before the connection leaves the queue
+and refers to it only once the address has been copied, so another
+thread sharing the descriptor table cannot use or close it before
+.Fn accept
+returns.
+An address-copy failure frees the descriptor and discards the dequeued
+connection.
 .Pp
 The accept queue holds at most 15 completed connections.
 The TCP listener drops an incoming SYN when the free-frame count is at
@@ -146,8 +151,7 @@ and
 .Dv SOCK_NONBLOCK .
 .It Er EMFILE
 No descriptor or open-file description could be allocated for the
-connection.
-The dequeued connection is discarded.
+connection, which stays queued.
 .It Er ENOTSOCK
 .Fa fd
 is invalid or does not refer to a socket.

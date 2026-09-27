@@ -526,18 +526,30 @@ static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint32_t time
     return cond(arg) ? 0 : -EAGAIN;
 }
 
-/* Install `s` on a new descriptor, which takes the reference the caller
- * had. */
-static int install(struct unix_sock *s, int flags)
+/**
+ * Reserve the lowest free descriptor for a socket a call is making: 0 or
+ * more, or -EMFILE.
+ *
+ * A reserved slot has no type yet, so no other thread sharing the table can
+ * look it up, close it or duplicate over it. The call copies the number to
+ * the caller, which may sleep in a page fault, and only then gives the slot
+ * its socket with `publish`; a copy that fails frees the slot with
+ * `fd_free`, and nothing else can have used it.
+ */
+static int reserve(void)
 {
-    fd_entry_t *e;
     int fd = fd_alloc(table());
 
-    if (fd < 0) {
-        return -EMFILE;
-    }
-    e = &table()->entries[fd];
-    e->type = FD_TYPE_UNIX;
+    return fd < 0 ? -EMFILE : fd;
+}
+
+/* Give the reserved descriptor `fd` the socket `s`, which takes the
+ * reference the caller had, with the creation `flags` SOCK_CLOEXEC and
+ * SOCK_NONBLOCK. */
+static void publish(int fd, struct unix_sock *s, int flags)
+{
+    fd_entry_t *e = &table()->entries[fd];
+
     e->node = NULL;
     e->sock = NULL;
     e->ops = &unix_ops;
@@ -549,14 +561,7 @@ static int install(struct unix_sock *s, int flags)
     if (flags & SOCK_NONBLOCK) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
-    return fd;
-}
-
-/* Close a descriptor this file made, when the call that made it fails. */
-static void close_fd(int fd)
-{
-    fd_release_backing(fd_get(table(), fd));
-    fd_free(table(), fd);
+    e->type = FD_TYPE_UNIX;
 }
 
 static int32_t check_type(int *type, int protocol)
@@ -586,10 +591,12 @@ int32_t unix_socket(int type, int protocol, int flags)
     if (!s) {
         return -ENOMEM;
     }
-    fd = install(s, flags);
+    fd = reserve();
     if (fd < 0) {
         unix_put(s);
+        return fd;
     }
+    publish(fd, s, flags);
     return fd;
 }
 
@@ -604,6 +611,11 @@ static void join(struct unix_sock *a, struct unix_sock *b)
     b->state = US_CONNECTED;
 }
 
+/**
+ * socketpair(2). The two descriptors are reserved and their numbers copied
+ * to `sv` before either is published, so a failed copy leaves nothing that
+ * another thread could have used, and both sockets are released.
+ */
 int32_t unix_socketpair(int type, int protocol, int flags, uint32_t sv)
 {
     struct unix_sock *a, *b;
@@ -626,23 +638,25 @@ int32_t unix_socketpair(int type, int protocol, int flags, uint32_t sv)
     b->peercred = a->peercred;
     a->has_peercred = 1;
     b->has_peercred = 1;
-    fds[0] = install(a, flags);
-    if (fds[0] < 0) {
+    fds[0] = reserve();
+    fds[1] = fds[0] >= 0 ? reserve() : -EMFILE;
+    rc = fds[1] < 0 ? fds[1] : 0;
+    if (rc == 0 && copy_to_user((void __user *)sv, fds, sizeof(fds)) != 0) {
+        rc = -EFAULT;
+    }
+    if (rc != 0) {
+        if (fds[1] >= 0) {
+            fd_free(table(), fds[1]);
+        }
+        if (fds[0] >= 0) {
+            fd_free(table(), fds[0]);
+        }
         unix_release(a, 0);
         unix_release(b, 0);
-        return fds[0];
+        return rc;
     }
-    fds[1] = install(b, flags);
-    if (fds[1] < 0) {
-        close_fd(fds[0]);
-        unix_release(b, 0);
-        return fds[1];
-    }
-    if (copy_to_user((void __user *)sv, fds, sizeof(fds)) != 0) {
-        close_fd(fds[0]);
-        close_fd(fds[1]);
-        return -EFAULT;
-    }
+    publish(fds[0], a, flags);
+    publish(fds[1], b, flags);
     return 0;
 }
 
@@ -986,6 +1000,13 @@ static int has_connection(void *arg)
     return l->acc_head != NULL || l->state != US_LISTENING;
 }
 
+/**
+ * accept4(2). The descriptor is reserved before the connection is taken off
+ * the queue, so a caller with none free leaves it queued, and published only
+ * after the peer's name is copied out: a copy that fails frees the slot and
+ * ends the connection as a close of it would, and no other thread can have
+ * used the socket or freed the peer whose name is copied.
+ */
 int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flags)
 {
     static const struct unix_name none;
@@ -1012,8 +1033,9 @@ int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flag
             return rc;
         }
     }
-    if (!fd_can_alloc(table())) {
-        return -EMFILE;
+    fd = reserve();
+    if (fd < 0) {
+        return fd;
     }
     c = s->acc_head;
     s->acc_head = c->acc_next;
@@ -1023,18 +1045,15 @@ int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flag
     c->acc_next = NULL;
     s->acc_len--;
     wq_wake_all(&s->wq);
-    fd = install(c, flags);
-    if (fd < 0) {
-        unix_release(c, 1);
-        return fd;
-    }
     if (addr && addrlen_ptr) {
         rc = put_name(addr, addrlen_ptr, c->peer ? &c->peer->name : &none, 0);
         if (rc != 0) {
-            close_fd(fd);
+            fd_free(table(), fd);
+            unix_release(c, 0);
             return rc;
         }
     }
+    publish(fd, c, flags);
     return fd;
 }
 
@@ -1852,38 +1871,43 @@ static void release_in(struct unix_in *in)
     in->nfds = 0;
 }
 
-/* Install the received descriptors, as many as the `room` of the control
- * buffer takes, and write their numbers after the header at `at`. Those
- * that do not fit are closed and MSG_CTRUNC set, as in Linux. Returns the
- * number given. */
+/**
+ * Install the received descriptors, as many as the `room` of the control
+ * buffer takes, and write their numbers after the header at `at`. Returns
+ * the number given.
+ *
+ * Each descriptor is reserved, its number copied out, and only then given
+ * its open file, as Linux's receive_fd_user does: the copy can sleep, and a
+ * thread sharing the table must find nothing there it could use or close.
+ * Those that do not fit, or whose number cannot be written, are closed and
+ * MSG_CTRUNC set, as in Linux.
+ */
 static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int flags)
 {
     uint32_t given = 0;
-    uint32_t moved = 0;
 
-    while (moved < in->nfds && moved < room) {
+    while (given < in->nfds && given < room) {
         int fd = fd_alloc(table());
         fd_entry_t *slot;
 
         if (fd < 0) {
             break;
         }
+        if (copy_to_user((void __user *)(at + CMSG_HDR + 4u * given), &fd, sizeof(fd)) != 0) {
+            fd_free(table(), fd);
+            break;
+        }
         slot = &table()->entries[fd];
         fd_ofd_unref(slot->ofd);
-        *slot = in->fds[moved++];
+        *slot = in->fds[given++];
         if (flags & MSG_CMSG_CLOEXEC) {
             slot->flags |= FD_FLAG_CLOEXEC;
         }
-        if (copy_to_user((void __user *)(at + CMSG_HDR + 4u * given), &fd, sizeof(fd)) != 0) {
-            close_fd(fd);
-            break;
-        }
-        given++;
     }
     if (given < in->nfds) {
         in->flags |= MSG_CTRUNC;
     }
-    drop_fds(in->fds, moved, in->nfds);
+    drop_fds(in->fds, given, in->nfds);
     in->fds = NULL;
     in->nfds = 0;
     return given;

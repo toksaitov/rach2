@@ -1029,11 +1029,18 @@ static int32_t do_listen(int fd, int backlog)
     }
 }
 
-/** accept(2) and accept4(2): dequeue a completed connection (blocking, or
- * -EAGAIN on a non-blocking listener), install a new fd for it with the
+/**
+ * accept(2) and accept4(2): dequeue a completed connection (blocking, or
+ * -EAGAIN on a non-blocking listener), give a new descriptor for it the
  * creation flags `flags`, and report the peer address. A flag other than
  * SOCK_CLOEXEC and SOCK_NONBLOCK is EINVAL. Raw sockets return EOPNOTSUPP;
  * other sockets must be listening streams.
+ *
+ * The descriptor is reserved before the connection is dequeued, so a caller
+ * with none free leaves it queued, and gets its socket only after the
+ * address is copied out: the copy can sleep, and a thread sharing the table
+ * must find nothing it could use or close. A copy that fails frees the slot
+ * and the connection.
  */
 static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t flags)
 {
@@ -1076,34 +1083,28 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
         }
     }
 
+    new_fd = fd_alloc(current_proc->fds);
+    if (new_fd < 0) {
+        return -EMFILE;
+    }
     conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
     listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
 
     /* The queued socket already holds the reference created when tcp_rx
      * accepted it; the new descriptor takes ownership of that reference. */
-    new_fd = fd_alloc(current_proc->fds);
-    if (new_fd < 0) {
+    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip) !=
+        0) {
+        fd_free(current_proc->fds, new_fd);
         socket_unref(conn_sock);
-        return -EMFILE;
+        return -EFAULT;
     }
     new_entry = &current_proc->fds->entries[new_fd];
-    new_entry->type = FD_TYPE_SOCKET;
     new_entry->sock = conn_sock;
     new_entry->node = NULL;
     new_entry->ofd->offset = 0;
     new_entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
     sock_fd_flags(new_entry, flags);
-
-    /* Report the peer address, truncated to the caller's declared capacity. On
-     * a bad user pointer, tear down the descriptor we just installed (releasing
-     * its socket reference) instead of leaking the accepted fd and its socket.
-     */
-    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip) !=
-        0) {
-        fd_release_backing(new_entry);
-        fd_free(current_proc->fds, new_fd);
-        return -EFAULT;
-    }
+    new_entry->type = FD_TYPE_SOCKET;
     return new_fd;
 }
 
