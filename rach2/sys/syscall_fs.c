@@ -3923,82 +3923,127 @@ int32_t sys_fstat64(isr_params_t *params)
     return 0;
 }
 
-/*
+/**
+ * Whether the user's path is the empty string, which with AT_EMPTY_PATH names
+ * the descriptor a call is given rather than a file below it. A NULL path
+ * counts as empty, as it does on Linux since 6.11. Returns 1, 0 or -EFAULT.
+ */
+static int user_path_empty(const char __user *upath)
+{
+    char c;
+
+    if (!upath) {
+        return 1;
+    }
+    if (copy_from_user(&c, upath, 1) != 0) {
+        return -EFAULT;
+    }
+    return c == '\0';
+}
+
+/**
+ * Fill `kst` for the absolute canonical path `path`, a final symbolic link
+ * followed when `follow`: the path half of fstatat64. The KRFFS root has the
+ * fixed identity `stat` reports for it, and a /proc link is reported as a
+ * link when it is not followed.
+ */
+static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *kst)
+{
+    struct vfs_ref ref;
+    const struct vpath *svp;
+    int32_t rc;
+
+    k_memset(kst, 0, sizeof(*kst));
+    if (path[0] == '/' && path[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+        kst->st_mode = S_IFDIR | 0755;
+        kst->st_ino = kst->__st_ino = 1;
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
+        stat64_root_times(kst);
+        return 0;
+    }
+    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp) {
+        rc = synth_stat(svp, kst, follow);
+    } else if (!mnt_is_root(ref.mnt)) {
+        rc = vfs_fill_stat64(kst, &ref);
+    } else {
+        krffs_fill_stat64(kst, (krffs_node_t *)ref.node);
+    }
+    vfs_ref_release(&ref);
+    return rc;
+}
+
+/**
  * fstatat64 (syscall 300): EBX = dirfd, ECX = path, EDX = stat64 buffer, ESI
- * = flags. The path resolves the same way as openat (absolute, or relative
- * to AT_FDCWD/the dirfd; see copy_path_at). AT_SYMLINK_NOFOLLOW is honored
- * for the /proc magic symlinks; KRFFS has none.
+ * = flags.
+ *
+ * The path resolves as openat's does: absolute, or relative to the working
+ * directory for AT_FDCWD or to the directory `dirfd` is open on (see
+ * copy_path_at). AT_SYMLINK_NOFOLLOW reports a final symbolic link itself.
+ * With AT_EMPTY_PATH an empty path reports the object `dirfd` refers to,
+ * whatever it is, as fstat64 does, or the working directory for AT_FDCWD;
+ * GNU libc's fstat is this call. AT_NO_AUTOMOUNT is accepted and means
+ * nothing here, and any other flag is -EINVAL before the path is read.
  */
 int32_t sys_fstatat64(isr_params_t *params)
 {
     int dirfd = (int)params->ebx;
     const char __user *upath = (const char __user *)params->ecx;
     struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->edx;
+    int flags = (int)params->esi;
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     struct linux_stat64 kst;
     char *pathbuf;
-    krffs_node_t *node;
-    int len;
+    int empty = 0;
+    int32_t rc;
 
-    if (!current_proc || !upath || !st) {
+    if (!current_proc || !st) {
         return -EFAULT;
     }
-    len = path_from_user(dirfd, upath, &pathbuf);
-    if (len != 0) {
-        return len;
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
+        return -EINVAL;
     }
-
-    k_memset(&kst, 0, sizeof(kst));
-    if (pathbuf[0] == '/' && pathbuf[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
-        path_buf_put(pathbuf);
-        kst.st_mode = S_IFDIR | 0755; /* the KRFFS root directory */
-        kst.st_ino = kst.__st_ino = 1;
-        kst.st_nlink = 1;
-        kst.st_blksize = 4096;
-        stat64_root_times(&kst);
-    } else {
-        struct vfs_ref ref;
-        const struct vpath *svp;
-        int32_t rc;
-
-        if ((int)params->esi & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
-            path_buf_put(pathbuf);
-            return -EINVAL;
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
         }
-        rc = vfs_resolve(0, pathbuf,
-                         ((int)params->esi & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0,
-                         0);
+    }
+    if (empty && dirfd != AT_FDCWD) {
+        fd_entry_t *entry = fd_get(&current_proc->fds, dirfd);
+
+        if (!entry) {
+            return -EBADF;
+        }
+        rc = fstat_fill(entry, &kst);
+    } else if (empty) {
+        pathbuf = path_buf_get();
+        if (!pathbuf) {
+            return -ENOMEM;
+        }
+        k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
+        rc = fstatat_path(pathbuf, follow, &kst);
         path_buf_put(pathbuf);
+    } else {
+        if (!upath) {
+            return -EFAULT;
+        }
+        rc = path_from_user(dirfd, upath, &pathbuf);
         if (rc != 0) {
             return rc;
         }
-        svp = vfs_synth_vpath(ref.mnt, ref.node);
-        if (svp) {
-            /* AT_SYMLINK_NOFOLLOW (lstat) reports the magic symlinks;
-             * otherwise they are followed. */
-            int follow = !((int)params->esi & AT_SYMLINK_NOFOLLOW);
-
-            rc = synth_stat(svp, &kst, follow);
-            vfs_ref_release(&ref);
-            if (rc != 0) {
-                return rc;
-            }
-        } else if (!mnt_is_root(ref.mnt)) {
-            rc = vfs_fill_stat64(&kst, &ref);
-            vfs_ref_release(&ref);
-            if (rc != 0) {
-                return rc;
-            }
-        } else {
-            node = ref.node;
-            krffs_fill_stat64(&kst, node);
-            vfs_ref_release(&ref);
-        }
+        rc = fstatat_path(pathbuf, follow, &kst);
+        path_buf_put(pathbuf);
     }
-
-    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-        return -EFAULT;
+    if (rc == 0 && copy_to_user(st, &kst, sizeof(kst)) != 0) {
+        rc = -EFAULT;
     }
-    return 0;
+    return rc;
 }
 
 /* access(2) mode bits. */

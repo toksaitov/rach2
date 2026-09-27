@@ -59,23 +59,41 @@ in
 selects the final symbolic link itself, on ext2 or under
 .Pa /proc .
 Without it the link is followed.
+.Pp
+With
+.Dv AT_EMPTY_PATH
+and an empty
+.Fa path ,
+.Fn fstatat
+reports the object
+.Fa dirfd
+refers to, as
+.Fn fstat
+does, whatever it is: a file, a directory, a pipe, a socket, a
+terminal, a device, or a descriptor opened with
+.Dv O_PATH .
+With
+.Dv AT_FDCWD
+it reports the current working directory.
+A null
+.Fa path
+counts as empty with
+.Dv AT_EMPTY_PATH ,
+as it does on Linux since 6.11.
+GNU libc's
+.Fn fstat
+is this call; musl's calls
+.Nm fstat64 .
+An empty path without
+.Dv AT_EMPTY_PATH
+returns
+.Er ENOENT .
 The kernel also accepts
-.Dv AT_NO_AUTOMOUNT
-and
-.Dv AT_EMPTY_PATH
-as flag bits, but they have no effect.
-An empty path returns
-.Er ENOENT
-at the kernel interface.
-Musl handles an empty path with exactly
-.Dv AT_EMPTY_PATH
-and a nonnegative descriptor through
-.Fn fstat .
+.Dv AT_NO_AUTOMOUNT ,
+which has no effect.
 Other flag bits return
-.Er EINVAL ,
-except when the copied path is
-.Pa /
-on a KRFFS root, where the kernel does not check flags.
+.Er EINVAL
+before the path is read.
 .Ss Reported attributes
 .Va st_mode
 contains the file type and permission bits;
@@ -334,13 +352,25 @@ and a modification time set by
 checks that a socket's
 .Nm fstat64
 inode agrees with its proc descriptor link and TCP listing.
+.Pa tests/musl/fdcallmusl.c
+checks that
+.Nm fstatat64
+with an empty path and
+.Dv AT_EMPTY_PATH
+reports what
+.Nm fstat64
+reports for a file, a directory, a pipe, a socket and a device, and the
+working directory for
+.Dv AT_FDCWD .
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
 Search permission on an ancestor directory was denied.
 .It Bq Er EBADF
-The descriptor is invalid, or a relative path uses a removed directory
-descriptor.
+The descriptor is invalid, including the descriptor an empty path names
+with
+.Dv AT_EMPTY_PATH ,
+or a relative path uses a removed directory descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EFAULT
@@ -358,10 +388,13 @@ Path resolution would follow more than 40 symbolic links.
 A copied or reconstructed path, component, or symbolic-link expansion
 exceeds its buffer.
 .It Bq Er ENOENT
-The path is empty, a required component is absent, or a synthetic entry
-or process no longer exists.
+The path is empty without
+.Dv AT_EMPTY_PATH ,
+a required component is absent, or a synthetic entry or process no
+longer exists.
 .It Bq Er ENOMEM
-A node needed for path resolution cannot be allocated.
+A node needed for path resolution or a page to copy the path into cannot
+be allocated.
 .It Bq Er ENOTDIR
 A path component or relative-path base descriptor is not a directory.
 .El

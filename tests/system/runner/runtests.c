@@ -86,8 +86,9 @@ static const char *const PROBES[] = {
     /* How many mappings a process may hold, which the compiler found too
        few. */
     "musl/vmamusl",
-    /* The file calls GNU libc makes: paths of PATH_MAX bytes. */
-    "musl/pathmaxmusl",
+    /* The file calls GNU libc makes: paths of PATH_MAX bytes, and the
+       descriptor forms of the calls that take a path. */
+    "musl/pathmaxmusl", "musl/fdcallmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */
