@@ -4581,12 +4581,34 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
 }
 
 static const struct vfs_ops ext2_ops = {
-    ext2_lookup,  0, /* lookup_rest */
-    ext2_hold,    ext2_put,   ext2_getattr,         ext2_setattr,       ext2_open,    ext2_release,
-    ext2_read,    ext2_write, ext2_truncate,        ext2_fsync,         ext2_readdir, ext2_create,
-    ext2_unlink,  ext2_mkdir, ext2_rmdir,           ext2_rename,        ext2_link,    ext2_readlink,
-    ext2_statfs,  ext2_sync,  ext2_prepare_unmount, ext2_abort_unmount, /* abort_unmount */
-    ext2_unmount, ext2_path,  ext2_symlink,         ext2_mknod,
+    ext2_lookup,
+    0, /* lookup_rest */
+    ext2_hold,
+    ext2_put,
+    ext2_getattr,
+    ext2_setattr,
+    ext2_open,
+    ext2_release,
+    ext2_read,
+    ext2_write,
+    ext2_truncate,
+    ext2_fsync,
+    ext2_readdir,
+    ext2_create,
+    ext2_unlink,
+    ext2_mkdir,
+    ext2_rmdir,
+    ext2_rename,
+    ext2_link,
+    ext2_readlink,
+    ext2_statfs,
+    ext2_sync,
+    ext2_prepare_unmount,
+    ext2_abort_unmount, /* abort_unmount */
+    ext2_unmount,
+    ext2_path,
+    ext2_symlink,
+    ext2_mknod,
     0, /* pin: a hold keeps a node */
     0, /* unpin */
 };
