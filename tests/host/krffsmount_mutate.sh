@@ -56,7 +56,7 @@ echo "krffsmount-mutation: logs: $work"
 run_phase fixed 0 'krffsmount-hosttest: result: pass:'
 if [ "$#" -eq 0 ]; then
     set -- read-identity write-identity truncate-identity write-repoint truncate-repoint \
-        write-failure truncate-failure flush readonly directory clean-flush
+        write-failure truncate-failure flush readonly directory clean-flush pin
 fi
 for fault in "$@"; do
     python3 - "$work/sys/fs/krffsmount.c" "$fault" <<'PY'
@@ -86,6 +86,10 @@ if fault.endswith("-identity"):
 else:
     changes = {
         "directory": ("dir = follow_moves(handle);", "dir = offset_of(mnt, handle);"),
+        "pin": ("        o->offset = at;\n        o->next = vol->opens;\n"
+                "        vol->opens = o;\n    }\n    o->pins++;",
+                "        o->offset = at + 1;\n        o->next = vol->opens;\n"
+                "        vol->opens = o;\n    }\n    o->pins++;"),
         "write-failure": ("if (at != KRFFS_NO_NODE && at != was) {",
                           "if (written >= 0 && at != KRFFS_NO_NODE && at != was) {"),
         "truncate-failure": ("if (now != KRFFS_NO_NODE && now != was) {",
@@ -119,6 +123,7 @@ PY
         readonly) message='read-only sync reports pending write failure' ;;
         directory) message='directory read resolves its open handle' ;;
         clean-flush) message='write after failed clean-flag flush is refused' ;;
+        pin) message='pinned node keeps its offset' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

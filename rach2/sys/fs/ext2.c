@@ -4587,6 +4587,8 @@ static const struct vfs_ops ext2_ops = {
     ext2_unlink,  ext2_mkdir, ext2_rmdir,           ext2_rename,        ext2_link,    ext2_readlink,
     ext2_statfs,  ext2_sync,  ext2_prepare_unmount, ext2_abort_unmount, /* abort_unmount */
     ext2_unmount, ext2_path,  ext2_symlink,         ext2_mknod,
+    0, /* pin: a hold keeps a node */
+    0, /* unpin */
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0};

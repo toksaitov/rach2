@@ -998,6 +998,8 @@ static const struct vfs_ops tmpfs_ops = {
     tmpfs_path,
     tmpfs_symlink,
     tmpfs_mknod,
+    0, /* pin: a hold keeps a node */
+    0, /* unpin */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1};

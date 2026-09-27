@@ -4361,9 +4361,12 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
  * FD_TYPE_FILE, with FD_FLAG_PATH and neither access flag. The description
  * takes the resolution's hold and a reference on the mount, as an open's
  * does, and no handle, since the type's `open` does not run: a device node
- * of ext2 is not refused, and its last close runs no `release`. O_DIRECTORY
- * on anything but a directory is -ENOTDIR. The reference is released on
- * every error.
+ * of ext2 is not refused, and its last close runs no `release`. On a type
+ * that keeps a node only while it is open, mounted KRFFS, the description
+ * also takes a pin through the type's `pin`, which its last close drops, so
+ * an unlink leaves the node to the descriptor as it would to an open one.
+ * O_DIRECTORY on anything but a directory is -ENOTDIR. The reference is
+ * released on every error, a failed pin's among them.
  */
 static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
 {
@@ -4394,6 +4397,15 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
         return -EMFILE;
     }
     entry = &current_proc->fds->entries[fd];
+    if (!mnt_is_root(ref->mnt) && ref->mnt->type->ops->pin) {
+        int rc = ref->mnt->type->ops->pin(ref->mnt, ref->node, &entry->ofd->pin);
+
+        if (rc != 0) {
+            fd_free(current_proc->fds, fd);
+            vfs_ref_release(ref);
+            return rc;
+        }
+    }
     entry->type = is_dir ? FD_TYPE_DIR : FD_TYPE_FILE;
     entry->node = (mnt_is_root(ref->mnt) && node != krffs_fs->node) ? node : NULL;
     entry->ofd->dirpath[0] = '\0';

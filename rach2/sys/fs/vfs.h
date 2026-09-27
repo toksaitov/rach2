@@ -216,6 +216,15 @@ struct vfs_ops {
      * answers with EPERM. */
     int (*mknod)(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, uint32_t rdev,
                  void **node);
+    /* Keep `node` for a description that opens nothing, an O_PATH one, on a
+     * type that keeps a node only while it is open: an unlink or a rename
+     * over the node then leaves it without a name, and the last `unpin`
+     * frees it, as the last release of an unlinked open file does. `*token`
+     * is what `unpin` takes; it stays valid when the node moves. NULL for a
+     * type whose `hold` keeps a node, and for the KRFFS boot root, whose
+     * descriptors the syscall layer counts. */
+    int (*pin)(struct vfs_mount *mnt, void *node, void **token);
+    void (*unpin)(struct vfs_mount *mnt, void *token);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the

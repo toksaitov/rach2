@@ -70,11 +70,15 @@ These constants are declared in
 removes
 .Fa path
 without following its final symbolic link.
-On the KRFFS boot root, a file with an open descriptor becomes nameless
-and remains accessible through that descriptor until the last close.
+On KRFFS, the boot root and a mounted volume alike, a file that a
+descriptor refers to, an
+.Dv O_PATH
+one included, becomes nameless and remains accessible through that
+descriptor until the last close.
 It is absent from path lookup and directory listings.
-Without an open descriptor, its storage is freed at unlink.
-A file on that root which backs an attached loop device instead returns
+Without a descriptor, its storage is freed at unlink.
+A file on the boot root which backs an attached loop device instead
+returns
 .Er EBUSY .
 On ext2, the loop device retains the inode and the file may be unlinked.
 .Pp

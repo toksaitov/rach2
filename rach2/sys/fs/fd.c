@@ -154,9 +154,9 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 /**
  * Drop one reference to an open-file description.
  *
- * On the last reference, clear the mounted-file fields, close the mounted
- * description, remove the record from the live list and free it. Closing
- * a mounted description may sleep.
+ * On the last reference, clear the mounted-file fields, drop an O_PATH
+ * description's pin, close the mounted description, remove the record from
+ * the live list and free it. Closing a mounted description may sleep.
  */
 void fd_ofd_unref(struct open_file *ofd)
 {
@@ -173,10 +173,15 @@ void fd_ofd_unref(struct open_file *ofd)
                 struct vfs_mount *mnt = ofd->vmnt;
                 void *node = ofd->vnode;
                 void *handle = ofd->fhandle;
+                void *pin = ofd->pin;
 
                 ofd->vmnt = NULL;
                 ofd->vnode = NULL;
                 ofd->fhandle = NULL;
+                ofd->pin = NULL;
+                if (pin) {
+                    mnt->type->ops->unpin(mnt, pin);
+                }
                 vfs_desc_close(mnt, node, handle);
             }
             while (*link && *link != rec) {

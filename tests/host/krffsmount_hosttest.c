@@ -1,6 +1,6 @@
 /**
- * Check mounted KRFFS relocation, writeback errors, clean-flag ordering, and
- * the errno a failed creation answers.
+ * Check mounted KRFFS relocation, O_PATH pins, writeback errors, clean-flag
+ * ordering, and the errno a failed creation answers.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -381,6 +381,39 @@ static void directory(void)
     teardown();
 }
 
+/**
+ * Pin a file for an O_PATH description, which opens nothing, unlink it and
+ * create another: the pinned node keeps its offset and its attributes, and
+ * the last close frees the record and the node.
+ */
+static void pinned(void)
+{
+    struct open_file *ofd;
+    struct vfs_stat st;
+    void *node;
+    int fd;
+
+    setup();
+    fd = open_node(create("kept"));
+    check(kv_write(&mount, table.entries[fd].ofd->fhandle, "K", 1, 0) == 1, "seed pinned file");
+    fd_free(&table, fd);
+    check(kv_lookup(&mount, mount.root, "kept", &node) == 0, "look up pinned file");
+    fd = fd_alloc(&table);
+    ofd = table.entries[fd].ofd;
+    ofd->vmnt = &mount;
+    ofd->vnode = node;
+    vfs_ns_lock(&mount);
+    check(mount.type->ops->pin(&mount, node, &ofd->pin) == 0, "pin the looked-up node");
+    check(kv_unlink(&mount, mount.root, "kept") == 0, "unlink pinned file");
+    vfs_ns_unlock(&mount);
+    check(create("other") != node, "pinned node keeps its offset");
+    check(kv_getattr(&mount, node, &st) == 0 && st.size == 1, "pinned node keeps its attributes");
+    fd_free(&table, fd);
+    check(vol_of(&mount)->opens == NULL, "last pin frees the record");
+    check(create("again") == node, "last pin frees the unlinked node");
+    teardown();
+}
+
 /** Fail the data sync after relocation and require every holder to follow. */
 static void failed_relocation(int truncate)
 {
@@ -553,6 +586,7 @@ int main(void)
     relocation(0);
     relocation(1);
     directory();
+    pinned();
     failed_relocation(0);
     failed_relocation(1);
     durability();

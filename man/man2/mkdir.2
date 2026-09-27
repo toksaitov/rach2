@@ -62,7 +62,9 @@ A nonempty directory returns
 On a mounted KRFFS volume, a missing final entry or a final entry that
 is not a directory also returns
 .Er ENOTEMPTY ;
-an open entry returns
+an entry that a descriptor refers to, an
+.Dv O_PATH
+one included, returns
 .Er EBUSY .
 .Pp
 On the KRFFS boot root, an open directory can be removed.
@@ -70,7 +72,10 @@ Subsequent directory reads and relative
 .Li *at
 calls through its descriptor return
 .Er EBADF .
-A mounted KRFFS volume refuses removal of an open directory.
+A mounted KRFFS volume refuses removal of a directory that a descriptor
+refers to, an
+.Dv O_PATH
+one included.
 ext2, FAT32, and exFAT also refuse removal while an open descriptor or
 working directory refers to the directory.
 .Pp

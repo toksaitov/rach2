@@ -24,12 +24,16 @@
 /* The files a volume has open, one record per open node, allocated at the
  * first open and freed at the last close. A name removed while a file is
  * open takes the name off the node and leaves the node, the way the root
- * does, so whoever holds it keeps reading it; the last close frees it. */
+ * does, so whoever holds it keeps reading it; the last close frees it. An
+ * O_PATH description, which opens nothing, keeps its node by a pin counted
+ * in the same record, and unlink and rename treat a pinned node as an open
+ * one. */
 struct krffs_open {
     struct krffs_open *next;
     uint64_t offset;
     int refs;
     int nameless; /* unlinked while open: freed at the last close */
+    int pins;     /* O_PATH descriptions that keep the node, opening nothing */
 };
 
 /* A mounted volume, allocated at mount and freed at unmount. */
@@ -335,36 +339,87 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 }
 
 /**
- * Release an open record and reap an unlinked file at its last close.
+ * Free a record that no open and no pin keeps, and reap its file when it
+ * was unlinked meanwhile.
  *
  * Remove the record before reaping, which may sleep under the mount lock.
  */
-static void kv_release(struct vfs_mount *mnt, void *handle)
+static void open_drop(struct vfs_mount *mnt, struct krffs_open *o)
 {
     struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = o->offset;
+    int reap = o->nameless;
+    struct krffs_open **link;
+
+    for (link = &vol->opens; *link != o; link = &(*link)->next) {
+    }
+    *link = o->next;
+    kfree(o);
+    if (reap && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+        vfs_ns_lock(mnt);
+        krffs_remove_at(&vol->fs, at);
+        vfs_ns_unlock(mnt);
+    }
+}
+
+/**
+ * Release an open record and reap an unlinked file at its last close, when
+ * no pin keeps the node besides.
+ */
+static void kv_release(struct vfs_mount *mnt, void *handle)
+{
     struct krffs_open *o = handle;
 
     if (!o) {
         return;
     }
-    if (--o->refs > 0) {
+    if (--o->refs > 0 || o->pins > 0) {
         return;
     }
-    {
-        uint64_t at = o->offset;
-        int reap = o->nameless;
-        struct krffs_open **link;
+    open_drop(mnt, o);
+}
 
-        for (link = &vol->opens; *link != o; link = &(*link)->next) {
+/**
+ * Count a pin of `node` for an O_PATH description, which opens nothing, in
+ * the node's open record, made if it has none.
+ *
+ * Unlink and rename leave a pinned node, nameless, as they leave an open
+ * one, and the record follows the node where a write moves it. The caller
+ * holds the mount's lock from the lookup, so the node is the one it found.
+ * `*token` is the record, for `kv_unpin`.
+ */
+static int kv_pin(struct vfs_mount *mnt, void *node, void **token)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = offset_of(mnt, node);
+    struct krffs_open *o = open_at(vol, at);
+
+    if (!o) {
+        o = kzalloc(sizeof(*o));
+        if (!o) {
+            return -ENOMEM;
         }
-        *link = o->next;
-        kfree(o);
-        if (reap && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
-            vfs_ns_lock(mnt);
-            krffs_remove_at(&vol->fs, at);
-            vfs_ns_unlock(mnt);
-        }
+        o->offset = at;
+        o->next = vol->opens;
+        vol->opens = o;
     }
+    o->pins++;
+    *token = o;
+    return 0;
+}
+
+/**
+ * Drop a pin `kv_pin` counted. The last pin of a node that no open keeps
+ * frees the record, and the node too when its name was removed.
+ */
+static void kv_unpin(struct vfs_mount *mnt, void *token)
+{
+    struct krffs_open *o = token;
+
+    if (--o->pins > 0 || o->refs > 0) {
+        return;
+    }
+    open_drop(mnt, o);
 }
 
 /**
@@ -950,6 +1005,8 @@ static const struct vfs_ops krffs_volume_ops = {
     kv_path,
     0, /* symlink */
     kv_mknod,
+    kv_pin,
+    kv_unpin,
 };
 
 /**

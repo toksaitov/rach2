@@ -1775,7 +1775,8 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* unmount */
     0,                           /* path: KRFFS directories do not move */
     0,                           /* symlink */
-    kfs_mknod,
+    kfs_mknod,   0,              /* pin: the syscall layer's holders keep a node */
+    0,                           /* unpin */
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -1977,6 +1978,8 @@ static const struct vfs_ops devfs_vops = {
     0, /* abort_unmount */
     0, /* symlink */
     0, /* mknod */
+    0, /* pin */
+    0, /* unpin */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -1984,6 +1987,8 @@ static const struct vfs_ops procfs_vops = {
     0, 0,           0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
     0,                                                                       /* symlink */
     0,                                                                       /* mknod */
+    0,                                                                       /* pin */
+    0,                                                                       /* unpin */
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,

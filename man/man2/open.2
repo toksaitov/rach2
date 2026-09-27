@@ -374,6 +374,14 @@ among them, is not opened, a
 .Pa /proc
 file takes no snapshot, and a mounted file system counts no open and no
 release for the descriptor.
+The descriptor keeps its file as an open descriptor does.
+A mounted KRFFS volume, which keeps a node only while it is open,
+counts a pin for the descriptor instead: an unlink, or a rename over the
+file, leaves the file without a name until the descriptor's last close,
+and
+.Xr rmdir 2
+of a directory it refers to returns
+.Er EBUSY .
 The special paths
 .Pa /fb
 and

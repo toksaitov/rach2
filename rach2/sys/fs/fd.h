@@ -135,6 +135,10 @@ struct open_file {
      * from a new description the heap gives the same address after its
      * last close; an epoll registration keeps both. */
     uint32_t serial;
+    /* The token of the type's `pin` for an O_PATH description on a type
+     * that keeps a node only while it is open, which the last unref gives
+     * to `unpin`; NULL for every other description. */
+    void *pin;
 };
 
 /*
