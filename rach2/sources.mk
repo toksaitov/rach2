@@ -72,6 +72,7 @@ C_SRC = kernel.c \
         sys/latency.c \
         sys/mm/usercopy.c \
         sys/mm/vm.c \
+        sys/mm/shmem.c \
         sys/mm/frame.c \
         sys/mm/pagecache.c \
         sys/mm/modlayout.c \
@@ -101,6 +102,7 @@ C_SRC = kernel.c \
         sys/fs/krffs.c \
         sys/fs/krffsmount.c \
         sys/fs/fd.c \
+        sys/fs/tmpfs.c \
         sys/fs/devfs.c \
         sys/fs/synthfs.c \
         sys/fs/procfs.c \
