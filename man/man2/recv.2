@@ -115,13 +115,29 @@ Linux waits for all
 messages or the timeout without
 .Dv MSG_WAITFORONE .
 .Pp
+Among IPv4 and packet sockets,
 .Fn recvmsg
-supports
+takes
 .Dv SOCK_DGRAM
-sockets, including packet sockets.
-It rejects stream and
+sockets, packet sockets included, and rejects stream and
 .Dv SOCK_RAW
-sockets.
+sockets; the rest of this section describes those.
+On an
+.Dv AF_UNIX
+socket of any type it receives data, the sender's name and the control
+messages
+.Dv SCM_RIGHTS
+and
+.Dv SCM_CREDENTIALS ,
+and sets
+.Dv MSG_TRUNC
+and
+.Dv MSG_CTRUNC
+in
+.Fa msg Ns ->msg_flags ,
+as
+.Xr unix 7
+describes.
 .Fa msg Ns ->msg_iov
 and
 .Fa msg Ns ->msg_iovlen
@@ -143,12 +159,12 @@ The message header, vector entries, nonempty data buffers, and the
 portion of the address buffer to be written are checked before input
 is consumed.
 .Pp
-No ancillary data is supplied.
-The control buffer is unused and
+An IPv4 or packet socket supplies no ancillary data: the control buffer
+is unused and
 .Fa msg Ns ->msg_controllen
-is set to zero.
+is set to zero, and
 .Fa msg Ns ->msg_flags
-is also set to zero, even when data is truncated.
+is set to zero, even when data is truncated.
 .Ss Kernel interface
 These operations use
 .Xr socketcall 2
@@ -209,7 +225,7 @@ A stream connection was ended by a network configuration change.
 is invalid or does not refer to a socket.
 .It Er EOPNOTSUPP
 A raw socket was passed to kernel operation 10, an ioctl-only socket
-was passed to recvfrom, or a socket other than
+was passed to recvfrom, or an IPv4 socket other than
 .Dv SOCK_DGRAM
 was passed to recvmsg.
 .It Er ENOTCONN
