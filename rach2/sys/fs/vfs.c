@@ -669,6 +669,8 @@ static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char 
     return (*target)[0] == '/';
 }
 
+static int walk_exe(struct vfs_ref *cur, void *found, int locked);
+
 /** Whether `node` on `mnt` is a symbolic link its type can read. */
 static int walk_is_link(struct vfs_mount *mnt, void *node)
 {
@@ -690,7 +692,8 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * caller passed VFS_WALK_NOFOLLOW. Its target replaces the component, an
  * absolute target restarts at the root, and the walk goes on from the
  * directory the link was found in. A mount covers a directory, so a link is
- * never a covered node.
+ * never a covered node. /proc/<pid>/exe is followed to the program's file
+ * itself (`walk_exe`), and no text.
  *
  * The target and the path it is joined to are in two path pages, taken at
  * the first link and given back on every return; a walk that meets no link
@@ -824,6 +827,13 @@ begin:
                 goto out_err;
             }
             if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
+                if (vfs_synth_vpath(cur.mnt, found)->kind == VNODE_PROC_EXE) {
+                    rc = walk_exe(&cur, found, locked);
+                    if (rc != 0) {
+                        goto out_err;
+                    }
+                    break;
+                }
                 rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links);
                 if (rc < 0) {
                     goto out_err;
@@ -1956,8 +1966,10 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
-/* The target of a /proc link the resolver follows: /proc/<pid>/exe, the
- * path of the program the process runs. */
+/* The target of a /proc link as text: /proc/<pid>/exe's, the path of the
+ * program the process runs (`procfs_readlink_exe`). The resolver goes on
+ * from the program's file itself (`walk_exe`), and readlink(2) reads the
+ * text through procfs. */
 static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     const struct synth_node *sn = node;
@@ -1968,6 +1980,44 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
         return -EINVAL;
     }
     return pid < 0 ? -ENOENT : procfs_readlink_exe(pid, buf, (int)cap);
+}
+
+/**
+ * Go on from the file the /proc/<pid>/exe link `found`, on `cur`'s mount,
+ * reaches: the program the process runs, which its address space keeps
+ * (`mm_exe_open`), wherever a rename or a relocation has put the file and
+ * whether a path reaches it still, as Linux's link reaches the file and not a
+ * path. `found` is put. The walk first moves to the root of the file's mount,
+ * taking that mount's lock for a locked walk, and reads the file again there:
+ * the wait for the lock may let the file move or the process run another
+ * program, and nothing sleeps between that read and the walk's hold on the
+ * node. 0, or -ENOENT for a process with no program, -EACCES for a caller
+ * that may not read its memory (`procfs_exe_file`), or -EBUSY.
+ */
+static int walk_exe(struct vfs_ref *cur, void *found, int locked)
+{
+    struct vpath vp = ((struct synth_node *)found)->vp;
+    struct vfs_ref exe;
+    int rc;
+
+    node_put(cur->mnt, found);
+    for (;;) {
+        int pid = procfs_resolve_id(&vp);
+
+        rc = pid < 0 ? -ENOENT : procfs_exe_file(pid, &exe);
+        if (rc != 0 || exe.mnt == cur->mnt) {
+            break;
+        }
+        rc = walk_move(cur, exe.mnt, exe.mnt->root, locked);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (rc == 0) {
+        vfs_ref_hold(&exe);
+        ref_move_node(cur, exe.node);
+    }
+    return rc;
 }
 
 static const struct vfs_ops devfs_vops = {

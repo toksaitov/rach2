@@ -5,6 +5,7 @@
 
 struct vpath;
 struct fd_entry;
+struct vfs_ref;
 
 /*
  * procfs: the synthetic /proc, generated per query from the process table.
@@ -37,11 +38,28 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 
 /**
  * The target of /proc/<pid>/exe, the path of the program `pid` runs, into
- * `buf` of `cap` bytes with no terminator: its length, -ENOENT for no such
- * process or no program, or -EACCES for a caller that may not read the
- * process's memory, as Linux asks a ptrace read check of the reader.
+ * `buf` of `cap` bytes with no terminator: the present path of the program's
+ * file on the KRFFS root, which follows a rename or a relocation of it; the
+ * path its exec found it at, followed by " (deleted)" as Linux names one, for
+ * a file there that has lost its name; and the path its exec found it at on
+ * any other type, whose node has no path of its own to give. Its length,
+ * -ENOENT for no such process or no program, or -EACCES for a caller that may
+ * not read the process's memory, as Linux asks a ptrace read check of the
+ * reader.
  */
 int procfs_readlink_exe(int pid, char *buf, int cap);
+
+/** The same text without the " (deleted)": the name an execve of the link
+ * gives its new image. */
+int procfs_exe_name(int pid, char *buf, int cap);
+
+/**
+ * The file /proc/<pid>/exe reaches, which the resolver goes on from: the
+ * mount and the node of the program's file the process's address space keeps
+ * (`mm_exe_open`), which stay while nothing sleeps. 0, -ENOENT for no such
+ * process or no program, or -EACCES as for the link's text.
+ */
+int procfs_exe_file(int pid, struct vfs_ref *out);
 
 /** PID-directory enumeration: the nth live pid (n >= 0), or -1 past the end. */
 int procfs_nth_pid(int n);

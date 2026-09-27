@@ -1605,14 +1605,16 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 }
 
 /**
- * Replace the canonical path `path`, of VFS_PATH_MAX bytes, by the target
- * of the /proc/<pid>/exe link it names, if it names one: Chromium runs its
- * children by executing /proc/self/exe, and the program they run must have
- * its own path, not the link's, for its /proc/self/exe to name it in turn.
- * A process chroot put in a directory has no /proc, and its path is left for
- * the resolver to refuse. 0, or the link's error.
+ * Replace the canonical path `path`, of VFS_PATH_MAX bytes, by the path of
+ * the program the /proc/<pid>/exe link it names reaches, if it names one,
+ * once `exec_open` has gone on from the link to that program's file: Chromium
+ * runs its children by executing /proc/self/exe, and the program they run is
+ * named by that path, not the link's, in its comm, and in its own link where
+ * its file has no present path to give. A process chroot put in a directory
+ * has no /proc, and its path was left for the resolver to refuse. 0, or the
+ * link's error.
  */
-static int32_t exec_follow_exe(char *path)
+static int32_t exec_link_name(char *path)
 {
     struct vpath vp;
     int pid;
@@ -1622,7 +1624,7 @@ static int32_t exec_follow_exe(char *path)
         return 0;
     }
     pid = procfs_resolve_id(&vp);
-    n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, path, VFS_PATH_MAX - 1);
+    n = pid < 0 ? -ENOENT : procfs_exe_name(pid, path, VFS_PATH_MAX - 1);
     if (n < 0) {
         return n;
     }
@@ -1672,15 +1674,14 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     if (rc < 0) {
         return rc;
     }
-    rc = exec_follow_exe(s->path);
-    if (rc < 0) {
-        return rc;
-    }
     s->mm = mm_new();
     if (s->mm == NULL) {
         return -ENOMEM;
     }
     rc = exec_open(&s->prog, s->path, &s->id, s->mm);
+    if (rc == 0) {
+        rc = exec_link_name(s->path);
+    }
     if (rc == 0) {
         rc = exec_copy_args(s, user_path, (char *const __user *)params->ecx,
                             (char *const __user *)params->edx, &s->argc, &s->envc);

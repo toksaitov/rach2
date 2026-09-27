@@ -63,7 +63,7 @@ faults()
 {
     case $1 in
         devfs) echo ptmx ;;
-        procfs) echo terminator mem-hold mem-live ;;
+        procfs) echo terminator mem-hold mem-live exe-present exe-deleted ;;
     esac
 }
 
@@ -92,10 +92,18 @@ elif fault == 'mem-hold':
     old = '    mm_hold(p->mm);\n    f->mm = p->mm;\n'
     assert source.count(old) == 1
     source = source.replace(old, '    mm_get_live(p->mm);\n    f->mm = p->mm;\n')
-else:
+elif fault == 'mem-live':
     old = '    return f->mm && mm_get_live(f->mm) ? f->mm : NULL;\n'
     assert source.count(old) == 1
     source = source.replace(old, '    if (f->mm) {\n        f->mm->users++;\n    }\n    return f->mm;\n')
+elif fault == 'exe-present':
+    old = '    if (node && !deleted && cap > 0) {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    if (node && !deleted && cap < 0) {\n')
+else:
+    old = '    if (deleted && mark) {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    if (deleted && mark && cap < 0) {\n')
 path.write_text(source)
 PY
         case $fault in
@@ -103,6 +111,8 @@ PY
             terminator) message='runtime error: store to null pointer' ;;
             mem-hold) message='fail: an open of /proc/PID/mem holds the record and is no user of it' ;;
             mem-live) message='fail: a read once the process has ended returns 0 and reaches no memory' ;;
+            exe-present) message="fail: the link reads a renamed program's present path" ;;
+            exe-deleted) message="fail: a program whose name is gone reads as its exec's path, deleted" ;;
         esac
         run_phase "$test" "$fault" 1 "$message"
         cleanup

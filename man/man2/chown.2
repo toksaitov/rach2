@@ -57,8 +57,8 @@ follow a
 .Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
 link, but it follows
 .Pa /proc/ Ns Ar pid Ns Pa /exe
-to the file at the program's path, as it follows a link of a mounted
-type, and changes that file: a privileged
+to the program's file itself, wherever it is now, as Linux does, and
+changes that file: a privileged
 .Fn chown
 of
 .Pa /proc/self/exe

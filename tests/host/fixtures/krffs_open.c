@@ -75,6 +75,17 @@ static void path_buf_put(char *buf)
     free(buf);
 }
 
+/** The resolver's step through /proc/<pid>/exe, which no row's walk takes:
+ * the fixture has no /proc. */
+static int walk_exe(struct vfs_ref *cur, void *found, int locked)
+{
+    (void)cur;
+    (void)found;
+    (void)locked;
+    check(0, "no walk goes through /proc/<pid>/exe");
+    return -ENOENT;
+}
+
 #include "vfs_open.inc"
 
 /** All fixture files use the mounted KRFFS adapter. */

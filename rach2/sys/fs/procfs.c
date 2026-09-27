@@ -470,23 +470,102 @@ static int procfs_may_read_mem(const process_t *p)
                             (current_proc->ruid == p->ruid && !proc_privileged(p)));
 }
 
-int procfs_readlink_exe(int pid, char *buf, int cap)
+int procfs_exe_file(int pid, struct vfs_ref *out)
 {
     process_t *p = procfs_proc(pid);
-    int n;
 
-    if (!p || !p->mm || !p->mm->exe) {
+    if (!p || !p->mm || !p->mm->exe_file) {
         return -ENOENT;
     }
     if (!procfs_may_read_mem(p)) {
         return -EACCES;
     }
-    n = (int)k_strlen(p->mm->exe);
-    if (n > cap) {
-        n = cap;
+    out->mnt = p->mm->exe_file->vmnt;
+    out->node = p->mm->exe_file->vnode;
+    return 0;
+}
+
+/** The node of the program's file `ofd` describes when that is a file of
+ * the KRFFS root, whose node has a path of its own; NULL otherwise. */
+static krffs_node_t *exe_root_node(const struct open_file *ofd)
+{
+    if (!ofd || ofd->vmnt != vfs_root_mount() || ofd->vmnt->type != &vfs_krffs_type ||
+        ofd->vnode == krffs_fs->node) {
+        return NULL;
     }
-    k_memcpy(buf, p->mm->exe, (uint32_t)n);
+    return ofd->vnode;
+}
+
+/** The present path of `node`, a file of the KRFFS root that has a name, in
+ * a buffer from the heap the caller frees; NULL when no path resolves back
+ * to it, or the heap has no room. */
+static char *exe_present_path(krffs_node_t *node)
+{
+    char *path = kmalloc(VFS_PATH_MAX);
+
+    if (path && (krffs_node_path(node, path, VFS_PATH_MAX) != 0 || krffs_resolve(path) != node)) {
+        kfree(path);
+        path = NULL;
+    }
+    return path;
+}
+
+/** Copy the string `s` into `buf` from `n` on, as far as `cap` allows; the
+ * length after. */
+static int exe_put(char *buf, int cap, int n, const char *s)
+{
+    while (*s && n < cap) {
+        buf[n++] = *s++;
+    }
     return n;
+}
+
+/**
+ * The text of process `pid`'s /proc/<pid>/exe into `buf` of `cap` bytes, as
+ * `procfs_readlink_exe` says, with " (deleted)" after the path of a file that
+ * lost its name only when `mark` is set. The record of the address space is
+ * held while its path is read, since reading the node may sleep in the page
+ * cache while the process ends.
+ */
+static int exe_text(int pid, char *buf, int cap, int mark)
+{
+    process_t *p = procfs_proc(pid);
+    krffs_node_t *node;
+    struct mm *mm;
+    char *now = NULL;
+    int deleted;
+    int n;
+
+    if (!p || !p->mm || (!p->mm->exe && !p->mm->exe_file)) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    mm = p->mm;
+    mm_hold(mm);
+    node = exe_root_node(mm->exe_file);
+    deleted = node && node->name[0] == '\0';
+    if (node && !deleted && cap > 0) {
+        now = exe_present_path(node);
+    }
+    n = exe_put(buf, cap, 0, now ? now : mm->exe ? mm->exe : "");
+    if (deleted && mark) {
+        n = exe_put(buf, cap, n, " (deleted)");
+    }
+    kfree(now);
+    mm_unhold(mm);
+    return n;
+}
+
+int procfs_readlink_exe(int pid, char *buf, int cap)
+{
+    return exe_text(pid, buf, cap, 1);
+}
+
+int procfs_exe_name(int pid, char *buf, int cap)
+{
+    return exe_text(pid, buf, cap, 0);
 }
 
 /**

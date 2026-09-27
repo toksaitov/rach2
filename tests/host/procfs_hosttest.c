@@ -2,9 +2,9 @@
  * Check proc stat generation when every text allocation fails, the CPU time
  * of a process's stat and of a thread's, the descriptor links of a process,
  * which a closed descriptor has none of, the ids a path under a process's
- * task directory needs, and the counts a /proc/PID/mem descriptor takes of
- * the address space: a hold on its record, and a user's count for a read
- * only while a user remains.
+ * task directory needs, the counts a /proc/PID/mem descriptor takes of the
+ * address space: a hold on its record, and a user's count for a read only
+ * while a user remains, and the text and the file of /proc/PID/exe.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -14,11 +14,14 @@
 #include "lib/kint.h"
 struct vpath;
 struct fd_entry;
+struct vfs_ref;
 static int procfs_resolve_pid(int pid);
 static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 static int procfs_readlink_exe(int pid, char *buf, int cap);
+static int procfs_exe_name(int pid, char *buf, int cap);
+static int procfs_exe_file(int pid, struct vfs_ref *out);
 static int procfs_nth_pid(int n);
 static uint32_t procfs_ino_dir(void);
 static uint32_t procfs_ino_cmdline(void);
@@ -203,18 +206,37 @@ uint32_t unix_inode(const fd_entry_t *e)
     return 0;
 }
 
+/* The model KRFFS root of the exe rows, another mount, the program's file
+ * and its description, and the path the root gives the program's node now,
+ * NULL for none. */
+krffs_file_system_t *krffs_fs;
+const struct vfs_type vfs_krffs_type = {"krffs", 0, 0, 1, 0};
+static struct vfs_mount root_mount, other_mount;
+static krffs_file_system_t root_fs;
+static krffs_node_t root_dir, program;
+static struct open_file exe_ofd;
+static const char *program_path;
+static char exec_path[] = "/tmp/a";
+
+struct vfs_mount *vfs_root_mount(void)
+{
+    return &root_mount;
+}
+
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
 {
-    (void)node;
-    (void)buf;
-    (void)size;
-    return -1;
+    uint32_t n = program_path ? (uint32_t)k_strlen(program_path) : 0;
+
+    if (node != &program || !program_path || n + 1 > size) {
+        return -1;
+    }
+    k_memcpy(buf, program_path, n + 1);
+    return 0;
 }
 
 krffs_node_t *krffs_resolve(const char *path)
 {
-    (void)path;
-    return NULL;
+    return program_path && __builtin_strcmp(path, program_path) == 0 ? &program : NULL;
 }
 
 const struct vfs_type vfs_tmpfs_type = {0};
@@ -358,6 +380,55 @@ static void mem_descriptor(void)
     process.mm = NULL;
 }
 
+/**
+ * /proc/PID/exe of a process whose address space keeps its program's file:
+ * on the KRFFS root the link reads the file's present path, and once its name
+ * is gone the path the exec found it at with " (deleted)", which the name an
+ * exec of the link gives leaves off; on another type it reads the path the
+ * exec found it at; a short buffer takes the first bytes; and the resolver
+ * goes on from the file itself.
+ */
+static void exe_links(void)
+{
+    struct vfs_ref ref;
+    char buf[64];
+
+    krffs_fs = &root_fs;
+    root_fs.node = &root_dir;
+    root_mount.type = &vfs_krffs_type;
+    k_memset(&space, 0, sizeof(space));
+    space.users = 1;
+    space.holds = 1;
+    space.exe = exec_path;
+    space.exe_file = &exe_ofd;
+    exe_ofd.vmnt = &root_mount;
+    exe_ofd.vnode = &program;
+    k_strncpy((char *)program.name, "b", sizeof(program.name));
+    program_path = "/tmp/b";
+    process.mm = &space;
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 6 &&
+              __builtin_memcmp(buf, "/tmp/b", 6) == 0,
+          "the link reads a renamed program's present path");
+    check(procfs_readlink_exe(7, buf, 3) == 3 && __builtin_memcmp(buf, "/tm", 3) == 0,
+          "a short buffer takes the first bytes");
+    check(procfs_exe_file(7, &ref) == 0 && ref.mnt == &root_mount && ref.node == &program,
+          "the resolver goes on from the program's file itself");
+    program.name[0] = '\0';
+    program_path = NULL;
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 16 &&
+              __builtin_memcmp(buf, "/tmp/a (deleted)", 16) == 0,
+          "a program whose name is gone reads as its exec's path, deleted");
+    check(procfs_exe_name(7, buf, (int)sizeof(buf)) == 6 && __builtin_memcmp(buf, "/tmp/a", 6) == 0,
+          "the name an exec of the link gives has no mark");
+    exe_ofd.vmnt = &other_mount;
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 6 &&
+              __builtin_memcmp(buf, "/tmp/a", 6) == 0,
+          "a program on another type reads as its exec's path");
+    check(space.holds == 1, "each read lets go of the record it held");
+    process.mm = NULL;
+    krffs_fs = NULL;
+}
+
 /** Exercise empty and partially allocated text, then normal generation. */
 int main(void)
 {
@@ -394,9 +465,10 @@ int main(void)
     descriptor_links();
     task_ids();
     mem_descriptor();
+    exe_links();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
-               "links, task ids and the mem descriptor's counts\n");
+               "links, task ids, the mem descriptor's counts and the exe link\n");
     }
     return failures != 0;
 }
