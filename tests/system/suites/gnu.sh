@@ -217,13 +217,15 @@ for row in $ROWS; do
         -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes -o IdentitiesOnly=yes \
         root@127.0.0.1 "/bin/bash /tmp/gnu/rows.sh $name" > "$DISK.$name.log" 2>&1
     status=$?
-    if grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
+    if [ "$status" -eq 0 ] && grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
         echo "gnu-test: $name: OK"
         continue
     fi
     FAILED="$FAILED $name"
     if [ "$status" -eq 124 ]; then
         echo "gnu-test: $name: FAIL: no answer within its bound" >&2
+    elif grep -q "^GNUROW OK $name\$" "$DISK.$name.log"; then
+        echo "gnu-test: $name: FAIL: the row printed its OK, but ssh ended with status $status" >&2
     else
         echo "gnu-test: $name: FAIL: $(grep '^GNUROW FAIL' "$DISK.$name.log" || tail -n 3 "$DISK.$name.log")" >&2
     fi
