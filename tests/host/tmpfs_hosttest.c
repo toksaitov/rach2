@@ -18,14 +18,15 @@
  * target, a FIFO keeps its type, a device node keeps its number and does not
  * open, a listing is ".", "..", then the names in the order they were made or
  * renamed, each with its type, and a directory knows its path. A node held
- * after its last name goes stays readable, and a shared mapping's page takes a
- * reference of its own; a page at or past the most a file may have is refused
- * without growing the table, 2^31 and 2^32 - 1 among them, and the last page
- * below it is given; a truncation of mapped memory takes the pages it frees out
- * of the mappings first. A memfd's node has its name and no directory, and goes
- * with its last hold; its seals refuse a shrink, a growth, a write, a change of
- * its execute bits and more seals, and a named file starts sealed against
- * sealing. Returns the failed-check count.
+ * after its last name goes stays readable, a removed directory held after its
+ * parent is removed keeps the parent for its "..", and a shared mapping's page
+ * takes a reference of its own; a page at or past the most a file may have is
+ * refused without growing the table, 2^31 and 2^32 - 1 among them, and the last
+ * page below it is given; a truncation of mapped memory takes the pages it
+ * frees out of the mappings first. A memfd's node has its name and no
+ * directory, and goes with its last hold; its seals refuse a shrink, a growth,
+ * a write, a change of its execute bits and more seals, and a named file starts
+ * sealed against sealing. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -471,6 +472,31 @@ static void seals(void)
     tmpfs_put(&mnt, f);
 }
 
+/**
+ * A removed directory that is still held keeps its removed parent: its ".."
+ * is listed with the parent's number and walked to the parent, and both go
+ * with the last hold.
+ */
+static void removed_parent(void)
+{
+    struct vfs_dirent ent;
+    struct vfs_stat st;
+    uint32_t cursor = 0;
+    void *p, *c;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "rp", 0755) == 0);
+    p = look(NULL, "rp");
+    CHECK(tmpfs_getattr(&mnt, p, &st) == 0 && tmpfs_mkdir(&mnt, p, "rc", 0755) == 0);
+    c = look(p, "rc");
+    tmpfs_put(&mnt, p);
+    CHECK(tmpfs_rmdir(&mnt, p, "rc") == 0 && tmpfs_rmdir(&mnt, NULL, "rp") == 0);
+    CHECK(tmpfs_readdir(&mnt, c, &cursor, &ent) == 1 &&
+          tmpfs_readdir(&mnt, c, &cursor, &ent) == 1 && same(ent.name, "..") && ent.ino == st.ino);
+    CHECK(look(c, "..") == p);
+    tmpfs_put(&mnt, p);
+    tmpfs_put(&mnt, c);
+}
+
 int main(void)
 {
     struct vfs_stat st;
@@ -489,6 +515,7 @@ int main(void)
     mapping();
     truncation();
     seals();
+    removed_parent();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

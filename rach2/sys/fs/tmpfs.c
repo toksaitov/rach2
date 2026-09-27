@@ -40,11 +40,12 @@ struct tmpfs_dirent {
 
 /*
  * A node. `refs` counts the holds of lookups, descriptions, working
- * directories and mounts; `links` the names that name it. It is freed when
+ * directories and mounts, and for a directory the hold each subdirectory has
+ * on it through `parent`; `links` the names that name it. It is freed when
  * both are gone.
  */
 struct tmpfs_node {
-    struct tmpfs_node *parent; /* a directory's own; the root's is itself */
+    struct tmpfs_node *parent; /* a directory's own, held; the root's is itself */
     struct tmpfs_dirent *entries;
     uint32_t nentries;
     uint32_t subdirs;
@@ -112,14 +113,26 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, uint32_t mode)
     return n;
 }
 
-/* Free a node that nothing holds and no name names. */
+/**
+ * Free a node that nothing holds and no name names, and let go of the hold a
+ * directory has on its parent, which may free the parent in turn. A removed
+ * directory some process still holds keeps its removed parent this way, so
+ * its `..` stays a directory to list and to walk. The climb is a loop, since
+ * a chain of removed directories may be as deep as a tree.
+ */
 static void settle(struct tmpfs_node *n)
 {
-    if (n->refs == 0 && n->links == 0) {
+    while (n && n->refs == 0 && n->links == 0) {
+        struct tmpfs_node *up = is_dir(n) && n->parent != n ? n->parent : NULL;
+
         shmem_free(&n->data);
         kfree(n->target);
         kfree(n->label);
         kfree(n);
+        if (up) {
+            up->refs--;
+        }
+        n = up;
     }
 }
 
@@ -142,8 +155,12 @@ static struct tmpfs_dirent **find(struct tmpfs_node *d, const char *name)
     return NULL;
 }
 
-/* Add the name `name` for `n` at the end of `d`, so a directory lists its
- * names in the order they were made. */
+/**
+ * Add the name `name` for `n` at the end of `d`, so a directory lists its
+ * names in the order they were made. A directory takes a hold on `d` as its
+ * parent and lets go of the one on the parent it had, which a rename moves
+ * it from.
+ */
 static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *n)
 {
     struct tmpfs_dirent **link = &d->entries;
@@ -166,8 +183,15 @@ static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *
     *link = e;
     d->nentries++;
     if (is_dir(n)) {
+        struct tmpfs_node *was = n->parent;
+
         d->subdirs++;
+        d->refs++;
         n->parent = d;
+        if (was) {
+            was->refs--;
+            settle(was);
+        }
     }
     n->links++;
     stamp(d, STAMP_M | STAMP_C);
