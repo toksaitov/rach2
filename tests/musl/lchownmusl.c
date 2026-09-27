@@ -30,7 +30,7 @@
 static char file[256], link_name[256], dangling[256], subdir[256];
 
 /* A second directory there, and in it a second lchown.tmp. */
-static char decoy_dir[256], decoy[256];
+static char decoy_dir[256], decoy[sizeof(decoy_dir) + sizeof("/lchown.tmp")];
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
