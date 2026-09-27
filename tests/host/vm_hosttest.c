@@ -89,6 +89,94 @@ static void count_release(struct vm_file *f)
 
 #define PG 0x1000u
 
+/* A region that may never be written keeps VM_PROT_NOWRITE through
+ * mprotect's splits and merges, and write over a range that reaches it
+ * is refused with nothing changed, as a gap is. */
+static void nowrite_rows(void)
+{
+    vm_space_t p = {0};
+    vma_t *r;
+
+    vm_init(&p);
+    CHECK(vm_insert(&p, 0x60000, 0x62000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+    CHECK(vm_insert(&p, 0x62000, 0x66000, VM_PROT_READ | VM_PROT_NOWRITE, VM_SHARED) == 0);
+    CHECK(vm_protect(&p, 0x60000, 0x64000, VM_PROT_READ | VM_PROT_WRITE) == -3);
+    CHECK(p.count == 2 && p.vmas[0].prot == (VM_PROT_READ | VM_PROT_WRITE) &&
+          p.vmas[1].start == 0x62000 && p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
+    CHECK(vm_protect(&p, 0x63000, 0x64000, 0) == 0 && p.count == 4);
+    r = vm_find(&p, 0x63000);
+    CHECK(r != NULL && r->start == 0x63000 && r->end == 0x64000 && r->prot == VM_PROT_NOWRITE);
+    CHECK(vm_protect(&p, 0x63000, 0x64000, VM_PROT_READ) == 0);
+    CHECK(p.count == 2 && p.vmas[1].start == 0x62000 && p.vmas[1].end == 0x66000 &&
+          p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
+    vm_free(&p);
+}
+
+/* A region that maps a file: a split gives the upper part the file's
+ * later pages and a reference of its own; the pieces join again only
+ * where the pages continue; a copy for fork takes references of its own,
+ * and the file waits for vm_file_reap after its last reference goes. */
+static void file_rows(void)
+{
+    vm_space_t m = {0};
+    vm_space_t c = {0};
+    struct vm_file file = {1, no_fill, NULL, count_release};
+    vma_t *lo, *hi;
+
+    released = 0;
+    CHECK(vm_insert_file(&m, 0x40000, 0x48000, VM_PROT_READ, VM_DATA, &file, 3) == 0);
+    CHECK(file.refs == 2);
+    CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+    CHECK(m.count == 3 && file.refs == 4);
+    lo = vm_find(&m, 0x42000);
+    hi = vm_find(&m, 0x44000);
+    CHECK(lo != NULL && lo->pgoff == 5 && hi != NULL && hi->pgoff == 7);
+    CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ) == 0);
+    CHECK(m.count == 1 && file.refs == 2 && m.vmas[0].pgoff == 3);
+    CHECK(vm_remove(&m, 0x41000, 0x42000) == 0);
+    CHECK(m.count == 2 && file.refs == 3);
+    hi = vm_find(&m, 0x42000);
+    CHECK(hi != NULL && hi->start == 0x42000 && hi->pgoff == 5);
+    CHECK(vm_remove(&m, 0x42000, 0x43000) == 0);
+    hi = vm_find(&m, 0x43000);
+    CHECK(hi != NULL && hi->pgoff == 6);
+    /* The gap is filled from the file's page 4 at 0x41000: page 5 is
+     * gone, so it does not join the region above. */
+    CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
+    CHECK(m.count == 2 && m.vmas[0].end == 0x42000);
+    CHECK(vm_copy(&c, &m) == 0 && file.refs == 5);
+    vm_free(&c);
+    CHECK(file.refs == 3 && released == 0);
+    vm_free(&m);
+    CHECK(file.refs == 1 && released == 0);
+    vm_file_put(&file);
+    CHECK(file.refs == 0 && released == 0);
+    vm_file_reap();
+    CHECK(released == 1);
+}
+
+/* The last region to let go of a file leaves it for vm_file_reap, which
+ * releases each file it finds once: a removal must not sleep in the
+ * release while the regions are half changed. */
+static void reap_rows(void)
+{
+    vm_space_t m = {0};
+    struct vm_file one = {1, no_fill, NULL, count_release};
+    struct vm_file two = {1, no_fill, NULL, count_release};
+
+    released = 0;
+    CHECK(vm_insert_file(&m, 0x40000, 0x42000, VM_PROT_READ, VM_FILE, &one, 0) == 0);
+    CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_FILE, &two, 0) == 0);
+    vm_file_put(&one);
+    vm_file_put(&two);
+    CHECK(vm_remove(&m, 0x40000, 0x43000) == 0 && m.count == 0 && released == 0);
+    vm_file_reap();
+    CHECK(released == 2 && one.refs == 0 && two.refs == 0);
+    vm_file_reap();
+    CHECK(released == 2);
+    vm_free(&m);
+}
+
 int main(void)
 {
     vm_space_t vm = {0};
@@ -291,28 +379,6 @@ int main(void)
         vm_free(&p);
     }
 
-    /* A region that may never be written keeps VM_PROT_NOWRITE through
-     * mprotect's splits and merges, and write over a range that reaches it
-     * is refused with nothing changed, as a gap is. */
-    {
-        vm_space_t p = {0};
-        vma_t *r;
-
-        vm_init(&p);
-        CHECK(vm_insert(&p, 0x60000, 0x62000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
-        CHECK(vm_insert(&p, 0x62000, 0x66000, VM_PROT_READ | VM_PROT_NOWRITE, VM_SHARED) == 0);
-        CHECK(vm_protect(&p, 0x60000, 0x64000, VM_PROT_READ | VM_PROT_WRITE) == -3);
-        CHECK(p.count == 2 && p.vmas[0].prot == (VM_PROT_READ | VM_PROT_WRITE) &&
-              p.vmas[1].start == 0x62000 && p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
-        CHECK(vm_protect(&p, 0x63000, 0x64000, 0) == 0 && p.count == 4);
-        r = vm_find(&p, 0x63000);
-        CHECK(r != NULL && r->start == 0x63000 && r->end == 0x64000 && r->prot == VM_PROT_NOWRITE);
-        CHECK(vm_protect(&p, 0x63000, 0x64000, VM_PROT_READ) == 0);
-        CHECK(p.count == 2 && p.vmas[1].start == 0x62000 && p.vmas[1].end == 0x66000 &&
-              p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
-        vm_free(&p);
-    }
-
     /* The free range: the highest that fits below hi and at or above lo, a
      * hole left by a removal used again, and none when nothing fits. */
     {
@@ -334,68 +400,8 @@ int main(void)
         vm_free(&f);
     }
 
-    /* A region that maps a file: a split gives the upper part the file's
-     * later pages and a reference of its own; the pieces join again only
-     * where the pages continue; the file is released when the last region
-     * that maps it goes, and a copy for fork takes references of its own. */
-    {
-        vm_space_t m = {0};
-        vm_space_t c = {0};
-        struct vm_file file = {1, no_fill, NULL, count_release};
-        vma_t *lo, *hi;
-
-        released = 0;
-        CHECK(vm_insert_file(&m, 0x40000, 0x48000, VM_PROT_READ, VM_DATA, &file, 3) == 0);
-        CHECK(file.refs == 2);
-        CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ | VM_PROT_WRITE) == 0);
-        CHECK(m.count == 3 && file.refs == 4);
-        lo = vm_find(&m, 0x42000);
-        hi = vm_find(&m, 0x44000);
-        CHECK(lo != NULL && lo->pgoff == 5 && hi != NULL && hi->pgoff == 7);
-        CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ) == 0);
-        CHECK(m.count == 1 && file.refs == 2 && m.vmas[0].pgoff == 3);
-        CHECK(vm_remove(&m, 0x41000, 0x42000) == 0);
-        CHECK(m.count == 2 && file.refs == 3);
-        hi = vm_find(&m, 0x42000);
-        CHECK(hi != NULL && hi->start == 0x42000 && hi->pgoff == 5);
-        CHECK(vm_remove(&m, 0x42000, 0x43000) == 0);
-        hi = vm_find(&m, 0x43000);
-        CHECK(hi != NULL && hi->pgoff == 6);
-        /* The gap is filled from the file's page 4 at 0x41000: page 5 is
-         * gone, so it does not join the region above. */
-        CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
-        CHECK(m.count == 2 && m.vmas[0].end == 0x42000);
-        CHECK(vm_copy(&c, &m) == 0 && file.refs == 5);
-        vm_free(&c);
-        CHECK(file.refs == 3 && released == 0);
-        vm_free(&m);
-        CHECK(file.refs == 1 && released == 0);
-        vm_file_put(&file);
-        CHECK(file.refs == 0 && released == 0);
-        vm_file_reap();
-        CHECK(released == 1);
-    }
-
-    /* The last region to let go of a file leaves it for vm_file_reap, which
-     * releases each file it finds once: a removal must not sleep in the
-     * release while the regions are half changed. */
-    {
-        vm_space_t m = {0};
-        struct vm_file one = {1, no_fill, NULL, count_release};
-        struct vm_file two = {1, no_fill, NULL, count_release};
-
-        released = 0;
-        CHECK(vm_insert_file(&m, 0x40000, 0x42000, VM_PROT_READ, VM_FILE, &one, 0) == 0);
-        CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_FILE, &two, 0) == 0);
-        vm_file_put(&one);
-        vm_file_put(&two);
-        CHECK(vm_remove(&m, 0x40000, 0x43000) == 0 && m.count == 0 && released == 0);
-        vm_file_reap();
-        CHECK(released == 2 && one.refs == 0 && two.refs == 0);
-        vm_file_reap();
-        CHECK(released == 2);
-        vm_free(&m);
-    }
-
+    nowrite_rows();
+    file_rows();
+    reap_rows();
     return (fails > 100) ? 100 : fails;
 }
