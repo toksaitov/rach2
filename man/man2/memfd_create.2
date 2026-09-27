@@ -66,7 +66,9 @@ or
 to a smaller size.
 .It Dv F_SEAL_GROW
 Refuse a truncation to a larger size and a write that would pass the
-end; such a write fails whole, with nothing written.
+end; such a write fails whole, with nothing written, and so does a
+.Xr writev 2
+whose elements together would pass the end.
 .It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
 Refuse a
 .Xr write 2 ,
@@ -106,8 +108,9 @@ The kernel interface returns the negative error number.
 makes a memfd that allows sealing, checks its descriptor, its mode, its
 size and its name under
 .Pa /proc/self/fd ,
-then adds each seal in turn and checks the writes and truncations it
-refuses, and makes one without
+then adds each seal in turn and checks the writes, a
+.Xr writev 2
+among them, and the truncations it refuses, and makes one without
 .Dv MFD_ALLOW_SEALING
 and one with
 .Dv MFD_NOEXEC_SEAL .

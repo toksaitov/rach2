@@ -550,18 +550,69 @@ int32_t sys_write(isr_params_t *params)
     return write_fd((int)params->ebx, (const char __user *)params->ecx, params->edx);
 }
 
-int32_t sys_writev(isr_params_t *params)
+/**
+ * Before a writev to `fd` open for writing on a tmpfs file: take the
+ * mount's namespace lock, which every write and size change of the file
+ * takes, to hold across the elements, and refuse with EPERM, with nothing
+ * written, a vector whose elements together would pass the end of a file
+ * sealed against growth, as F_SEAL_GROW refuses one write that would
+ * (tmpfs.h). The elements counted are those the writes would reach, up to
+ * the first the loop refuses, and their bytes are faulted in before the lock
+ * is taken, as one write's are. `*held` is the mount to unlock after the
+ * elements, or NULL for a descriptor of anything else.
+ */
+static int32_t writev_begin(int fd, uint32_t iov_user, int iovcnt, struct vfs_mount **held)
 {
-    int fd = (int)params->ebx;
-    uint32_t iov_user = params->ecx;
-    int iovcnt = (int)params->edx;
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
+    struct kernel_iovec iov;
+    struct open_file *ofd;
+    struct vfs_stat st;
+    uint32_t extent = 0;
+    uint64_t pos;
+    int i;
+
+    *held = NULL;
+    if (!entry || entry->type != FD_TYPE_FILE || !(entry->flags & FD_FLAG_WRITE) || !entry->ofd ||
+        !entry->ofd->vmnt || entry->ofd->vmnt->type != &vfs_tmpfs_type) {
+        return 0;
+    }
+    ofd = entry->ofd;
+    for (i = 0; i < iovcnt; i++) {
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0 ||
+            iov.iov_len > 0x7FFFFFFFu || extent > 0x7FFFFFFFu - iov.iov_len ||
+            (iov.iov_len > 0 && !user_buffer_ok(iov.iov_base, iov.iov_len, 0))) {
+            break;
+        }
+        extent += iov.iov_len;
+    }
+    vfs_ns_lock(ofd->vmnt);
+    *held = ofd->vmnt;
+    if (extent == 0 || !(tmpfs_seals(ofd->vnode) & TMPFS_SEAL_GROW) ||
+        vfs_getattr(ofd->vmnt, ofd->vnode, &st) != 0) {
+        return 0;
+    }
+    pos = (ofd->status_flags & OFD_APPEND) ? st.size : ofd->offset;
+    if (pos + extent > st.size) {
+        vfs_ns_unlock(ofd->vmnt);
+        *held = NULL;
+        return -EPERM;
+    }
+    return 0;
+}
+
+/**
+ * Write the `iovcnt` elements of the vector at `iov_user` to `fd`, one at a
+ * time, and return the bytes written. A fault, a length Linux refuses or a
+ * failed write ends the call: with the error when nothing was written yet,
+ * and otherwise with the bytes before it, as a short write does.
+ */
+static int32_t writev_elements(int fd, uint32_t iov_user, int iovcnt)
+{
     struct kernel_iovec iov;
     int32_t total = 0;
     int i;
-
-    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
-        return -EINVAL;
-    }
 
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
@@ -597,6 +648,36 @@ int32_t sys_writev(isr_params_t *params)
     }
 
     return total;
+}
+
+/**
+ * writev(2): EBX = fd, ECX = the vector, EDX = its count. The elements are
+ * written in order (`writev_elements`); on a tmpfs file the mount's lock is
+ * held across them, and a vector a seal refuses whole is refused before the
+ * first (`writev_begin`).
+ */
+int32_t sys_writev(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    uint32_t iov_user = params->ecx;
+    int iovcnt = (int)params->edx;
+    struct vfs_mount *held;
+    int32_t rc;
+
+    if (iovcnt < 0 || iovcnt > IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    rc = writev_begin(fd, iov_user, iovcnt, &held);
+    if (rc == 0) {
+        rc = writev_elements(fd, iov_user, iovcnt);
+    }
+    if (held) {
+        vfs_ns_unlock(held);
+    }
+    return rc;
 }
 
 /* Linux open flags */

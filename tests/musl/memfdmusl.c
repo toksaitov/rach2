@@ -6,13 +6,14 @@
  * reports, and /proc/self/fd names it "/memfd:NAME (deleted)". Its seals
  * start empty. F_SEAL_SHRINK refuses a smaller ftruncate and takes a larger
  * one; F_SEAL_GROW refuses a write past the end and a larger ftruncate, and
- * takes an overwrite; F_SEAL_FUTURE_WRITE refuses a write; F_SEAL_SEAL
- * refuses more seals; F_GET_SEALS reports each one. A memfd made without
- * MFD_ALLOW_SEALING starts with F_SEAL_SEAL and refuses F_ADD_SEALS with
- * EPERM, and one made with MFD_NOEXEC_SEAL has mode 0666 and F_SEAL_EXEC.
- * F_ADD_SEALS is EINVAL on a KRFFS file and EPERM on a tmpfs file with a
- * name, and on a descriptor not open for writing. A name of 250 bytes,
- * MFD_HUGETLB and an unknown flag are EINVAL.
+ * takes an overwrite, and refuses whole, with nothing written, a writev whose
+ * two elements together pass the end; F_SEAL_FUTURE_WRITE refuses a write;
+ * F_SEAL_SEAL refuses more seals; F_GET_SEALS reports each one. A memfd made
+ * without MFD_ALLOW_SEALING starts with F_SEAL_SEAL and refuses F_ADD_SEALS
+ * with EPERM, and one made with MFD_NOEXEC_SEAL has mode 0666 and
+ * F_SEAL_EXEC. F_ADD_SEALS is EINVAL on a KRFFS file and EPERM on a tmpfs
+ * file with a name, and on a descriptor not open for writing. A name of 250
+ * bytes, MFD_HUGETLB and an unknown flag are EINVAL.
  *
  * Prints "MEMFDMUSL OK" on success and "MEMFDMUSL FAIL (detail)" otherwise.
  */
@@ -24,6 +25,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 /* The flag and the seal of Linux 6.3, which this musl does not name. */
@@ -53,6 +55,8 @@ static int size_is(int fd, off_t size)
 
 static int sealing(void)
 {
+    struct iovec grow[2] = {{(void *)"y", 1}, {(void *)"z", 1}};
+    struct iovec fit[2] = {{(void *)"M", 1}, {(void *)"e", 1}};
     char link[64], path[32], buf[8];
     struct stat st;
     int fd = memfd_create("memfdmusl", MFD_CLOEXEC | MFD_ALLOW_SEALING);
@@ -77,6 +81,11 @@ static int sealing(void)
     if (fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) != 0 || !refused(pwrite(fd, "x", 1, 10), EPERM) ||
         !refused(ftruncate(fd, 11), EPERM) || pwrite(fd, "M", 1, 0) != 1 || !size_is(fd, 10)) {
         return fail("F_SEAL_GROW");
+    }
+    if (lseek(fd, 9, SEEK_SET) != 9 || !refused(writev(fd, grow, 2), EPERM) ||
+        pread(fd, buf, 1, 9) != 1 || buf[0] != '\0' || !size_is(fd, 10) ||
+        lseek(fd, 0, SEEK_SET) != 0 || writev(fd, fit, 2) != 2) {
+        return fail("a writev under F_SEAL_GROW");
     }
     if (fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) != 0 ||
         !refused(pwrite(fd, "m", 1, 0), EPERM) || pread(fd, buf, 6, 0) != 6 ||
