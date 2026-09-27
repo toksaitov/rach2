@@ -106,6 +106,13 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (int)(size_t)"\n", 1);
 }
 
+/** Whether a + b is at most t, for t > 0 and a and b not negative, by a
+ * subtraction that cannot overflow where the sum could. */
+static int sum_within(int a, int b, int t)
+{
+    return t > 0 && a >= 0 && b >= 0 && a <= t && b <= t - a;
+}
+
 static int fails = 0;
 static void check(int cond, const char *msg)
 {
@@ -149,7 +156,7 @@ void _start(void)
         check(t > 0, "times() returns a positive tick count");
         check(tms[0] >= 0 && tms[1] >= 0 && tms[2] >= 0 && tms[3] >= 0,
               "times() fills the tms fields");
-        check(tms[0] + tms[1] <= t && tms[2] + tms[3] <= t,
+        check(sum_within(tms[0], tms[1], t) && sum_within(tms[2], tms[3], t),
               "times() reports no more CPU time than the ticks since boot");
     }
 
