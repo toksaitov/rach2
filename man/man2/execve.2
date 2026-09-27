@@ -307,6 +307,15 @@ until another thread's
 .Fn execve
 waits for it to end, and checks that the held thread ends and the other
 call's program runs.
+.Pp
+.Pa tests/musl/prctlmusl.c
+runs a copy of itself that renames its file, puts a script at the old
+path and executes
+.Pa /proc/self/exe ,
+which must run the copy and not the script; the image that runs removes
+the copy's name, and an open of
+.Pa /proc/self/exe
+must still reach the copy.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG
