@@ -728,7 +728,9 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
 
 /* recvfrom(2): a stream socket behaves like recv (no source writeback); a
  * datagram socket reports the source address, truncated to the caller's
- * capacity. Honors MSG_DONTWAIT and O_NONBLOCK. */
+ * capacity. An address with no length pointer is EFAULT before anything is
+ * taken, so the message stays queued; Linux fails the call only after it
+ * has taken the message. Honors MSG_DONTWAIT and O_NONBLOCK. */
 static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr,
                            uint32_t salen_ptr)
 {
@@ -755,11 +757,11 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
      * receive buffer cannot change it under the writeback. What is checked is
      * what will actually be written: twenty bytes for a packet socket's
      * sockaddr_ll, sixteen for an AF_INET sender. */
-    want_addr = (sa_ptr != 0 && salen_ptr != 0);
+    want_addr = sa_ptr != 0;
     if (want_addr) {
         uint32_t cap = 0;
 
-        if (!user_buffer_ok(salen_ptr, sizeof(cap), 1) ||
+        if (!salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||
             copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {
             return -EFAULT;
         }

@@ -56,7 +56,8 @@ run_phase()
 echo "netif-mutation: logs: $work"
 run_phase fixed 0 'netif-test: pass:'
 for mutation in device-index device-name packet-index packet-mac tcp-address accept \
-    socket-check socket-flags accept-check accept-flags accept-enomem; do
+    socket-check socket-flags accept-check accept-flags accept-enomem recvfrom-length \
+    recvfrom-sender; do
     python3 - "$work/syscall_net.c" "$mutation" <<'PY'
 import pathlib
 import sys
@@ -85,6 +86,10 @@ changes = {
     "accept-flags": ("    sock_fd_flags(new_entry, flags);\n", ""),
     "accept-enomem": ("    if (new_fd < 0) {\n        return new_fd;",
                       "    if (new_fd < 0) {\n        return -EMFILE;"),
+    "recvfrom-length": ("    want_addr = sa_ptr != 0;",
+                        "    want_addr = sa_ptr != 0 && salen_ptr != 0;"),
+    "recvfrom-sender": ("        if (!salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||",
+                        "        if (salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||"),
 }
 old, new = changes[sys.argv[2]]
 source = path.read_text()
@@ -105,6 +110,8 @@ PY
         accept-check) detail='accept4 refuses a flag other than SOCK_CLOEXEC and SOCK_NONBLOCK' ;;
         accept-flags) detail='a connection accepted with both flags has both' ;;
         accept-enomem) detail='an accept the heap has no room for is ENOMEM' ;;
+        recvfrom-length) detail='a recvfrom with an address and no length is EFAULT' ;;
+        recvfrom-sender) detail='a recvfrom with a length pointer takes the datagram' ;;
     esac
     run_phase "$mutation" 1 "netif-test: fail: $detail"
     cleanup

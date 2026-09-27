@@ -1,7 +1,7 @@
 /**
  * Exercise the socket address and option handlers with two interfaces, the
- * creation flags of socket and accept4, and an accept the heap has no room
- * to give a descriptor.
+ * creation flags of socket and accept4, an accept the heap has no room to
+ * give a descriptor, and a recvfrom given an address and no length pointer.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -54,6 +54,7 @@ static uint8_t user[128];
 static int failures;
 static int waits;
 static int alloc_to = -1;
+static int takes;
 static struct socket made;
 static fd_entry_t table[8];
 static struct open_file made_description;
@@ -138,6 +139,52 @@ void fd_release_backing(fd_entry_t *e)
 {
     (void)e;
     CHECK(0, "invalid accept must not release a descriptor");
+}
+
+/** The user range a receive checks: inside the simulated user memory. */
+int user_buffer_ok(uint32_t addr, uint32_t len, int write)
+{
+    (void)write;
+    return addr && addr <= sizeof(user) && len <= sizeof(user) - addr;
+}
+
+/** No row's socket is the query descriptor. */
+int sock_is_query(const struct socket *s)
+{
+    (void)s;
+    return 0;
+}
+
+/** Count the receives that take a datagram or a stream's bytes, each of
+ * which finds one byte. */
+int socket_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port)
+{
+    (void)s;
+    (void)buf;
+    (void)len;
+    *src_ip = net_ip_addr;
+    *src_port = 7;
+    takes++;
+    return 1;
+}
+
+int socket_try_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port)
+{
+    return socket_recv(s, buf, len, src_ip, src_port);
+}
+
+int socket_tcp_recv(struct socket *s, uint8_t *buf, int len)
+{
+    (void)s;
+    (void)buf;
+    (void)len;
+    takes++;
+    return 1;
+}
+
+int socket_tcp_try_recv(struct socket *s, uint8_t *buf, int len)
+{
+    return socket_tcp_recv(s, buf, len);
 }
 
 /** Required by the accept allocation failure path. */
@@ -402,6 +449,28 @@ static void accept_refused(void)
     sock.accept_head = sock.accept_tail;
 }
 
+/** A recvfrom given an address and no length pointer is EFAULT, as on
+ * Linux, and takes nothing, on a stream as on a datagram socket, where Linux
+ * takes the message first; one given a length pointer takes the datagram and
+ * reports its sender. */
+static void recvfrom_no_length(void)
+{
+    int type;
+
+    sock.family = AF_INET;
+    for (type = SOCK_STREAM; type <= SOCK_DGRAM; type++) {
+        sock.type = type;
+        takes = 0;
+        CHECK(do_recvfrom(3, 64, 8, 0, 32, 0) == -EFAULT && takes == 0,
+              "a recvfrom with an address and no length is EFAULT before it takes anything");
+    }
+    takes = 0;
+    SC_WLE32(user + 8, 16);
+    CHECK(do_recvfrom(3, 64, 8, 0, 32, 8) == 1 && takes == 1 && SC_LE32(user + 8) == 16 &&
+              SC_BE16(user + 34) == 7,
+          "a recvfrom with a length pointer takes the datagram and reports its sender");
+}
+
 /** Run the four syscall contracts against distinct addresses and MACs. */
 int main(void)
 {
@@ -424,6 +493,7 @@ int main(void)
     socket_flags();
     accept_flags();
     accept_refused();
+    recvfrom_no_length();
     if (!failures) {
         printf("netif-test: pass: socket interface contracts\n");
     }
