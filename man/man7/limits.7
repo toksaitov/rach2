@@ -1,11 +1,11 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt LIMITS 7
 .Os
 .Sh NAME
 .Nm limits
 .Nd process resource limits
 .Sh DESCRIPTION
-Each process has three resource limits.
+Each process has five resource limits.
 Each has an enforced soft value and a hard value that bounds the soft value.
 .Xr prlimit64 2
 maintains them;
@@ -39,6 +39,12 @@ The bytes covered by the process's virtual memory regions.
 Growth past the soft limit makes mmap return
 .Er ENOMEM
 and leaves the break unchanged when brk fails.
+.It Dv RLIMIT_STACK
+The bytes of the stack an exec gives a program, 8 MiB soft by default.
+.It Dv RLIMIT_CORE
+The bytes of a core file, 0 soft by default, which leaves none, as
+.Xr core 5
+describes.
 .El
 .Ss Initial limits
 Init reads
@@ -86,8 +92,10 @@ Initial soft and hard limits read by init.
 .Pp
 The default test suite's
 .Nm limitprobe
-checks the refusals for all three limits by name.
+checks the refusals of the process, descriptor and address-space limits
+by name.
 .Sh SEE ALSO
 .Xr sh 1 ,
 .Xr prlimit64 2 ,
+.Xr core 5 ,
 .Xr memory 7

@@ -12,7 +12,8 @@
 /** The C entry, from loader.asm, with the Multiboot magic and info. */
 void k_main(multiboot_uint32_t magic, multiboot_info_t *info);
 
-/** Ends the running process as if by `signo` and schedules the next. */
+/** Ends the running process as if by `signo` and schedules the next;
+ * `signo | WCOREFLAG` leaves a core file first where one is allowed. */
 void terminate_current_process(int32_t signo);
 
 /** Halts, reboots or powers the machine off; `how` is the reboot(2) command. */

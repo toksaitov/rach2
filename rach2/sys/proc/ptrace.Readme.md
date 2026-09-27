@@ -29,6 +29,10 @@ A stopped tracee is not running, and its user registers are the trap frame at th
 
 The tracer sets DR0 to DR3 and DR7 through `PTRACE_POKEUSER`, checked by `dr7_valid`; `ptrace_switch_debug`, called by `schedule`, loads them when the thread runs and clears DR7 when the next thread has none. The debug exception reads DR6 into the thread's copy and clears it (`ptrace_debug_status`), and a data breakpoint the kernel's own copy to user memory fires posts `SIGTRAP` and lets the copy go on. The registers are written with byte-coded instructions, since TinyCC's assembler has no mnemonic for them.
 
+## Core files
+
+`coredump.c` writes the core file `core(5)` describes, the form GDB reads: an ELF32 `ET_CORE` file whose `PT_NOTE` segment has each thread's `elf_prstatus`, read from the trap frame at the top of its kernel stack as the requests read it, and its floating-point state, with the process's `elf_prpsinfo` and auxiliary vector, and whose `PT_LOAD` segments have the regions' pages, read through `paging_access`. `core_write` produces the bytes through a writer it is given, and leaves an untouched page to the writer as a hole; `fs_core_file` in `syscall_fs.c` is the writer for the file, which it creates as `core` in the working directory. `terminate_current_process` calls it for a signal whose default action is to dump core, after the other threads are sent `SIGKILL` and before any of the process is released, and sets `WCOREFLAG` in the status when the whole file was written.
+
 ## Tests
 
-`tests/musl/ptracemusl.c` traces a child through memory and register access, a single step, a breakpoint in read-only text, syscall stops, the exec event and a debug register, and attaches to and detaches from a running process.
+`tests/musl/ptracemusl.c` traces a child through memory and register access, a single step, a breakpoint in read-only text, syscall stops, the exec event and a debug register, and attaches to and detaches from a running process. `tests/musl/coremusl.c` reads the notes and the memory of the core file an aborted child leaves, and checks the limit, the dumpable flag and a link at the name.

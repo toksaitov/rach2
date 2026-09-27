@@ -55,7 +55,8 @@ struct rlimit32 {
 #define RLIM_NOFILE     1
 #define RLIM_AS         2
 #define RLIM_STACK      3
-#define RLIM_COUNT      4
+#define RLIM_CORE       4
+#define RLIM_COUNT      5
 #define RLIM_INFINITY32 0xFFFFFFFFu
 
 /* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;

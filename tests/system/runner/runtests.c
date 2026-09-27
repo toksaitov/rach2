@@ -137,6 +137,9 @@ static const char *const PROBES[] = {
     /* sigtimedwait, the memory lock calls, mincore, getcpu, personality,
        sendmmsg and recvmmsg, and clock_gettime64. */
     "musl/callsmusl",
+    /* Core files: their notes and memory, the limit, the dumpable flag,
+       and a link at the name. */
+    "musl/coremusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

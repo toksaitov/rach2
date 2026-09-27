@@ -2358,6 +2358,17 @@ static enum ksig_default ksig_default_action(int signo)
     case SIGTTIN:
     case SIGTTOU:
         return KSIG_DEFAULT_STOP;
+    case SIGQUIT:
+    case SIGILL:
+    case SIGTRAP:
+    case SIGABRT:
+    case SIGBUS:
+    case SIGFPE:
+    case SIGSEGV:
+    case SIGXCPU:
+    case SIGXFSZ:
+    case SIGSYS:
+        return KSIG_DEFAULT_CORE;
     default:
         return KSIG_DEFAULT_TERM;
     }
@@ -2970,7 +2981,7 @@ static int32_t signal_return(isr_params_t *tf, int rt)
         return -ESRCH;
     }
     if (sigframe_restore(tf, rt, &mask) != 0) {
-        terminate_current_process(SIGSEGV);
+        terminate_current_process(SIGSEGV | WCOREFLAG);
         return 0;
     }
     current_proc->sig_blocked = mask & ~KSIG_UNCATCHABLE;
@@ -3320,9 +3331,9 @@ void deliver_signals(isr_params_t *tf)
         }
         if (sa->handler == KSIG_DFL) {
             enum ksig_default def = ksig_default_action(signo);
-            if (def == KSIG_DEFAULT_TERM) {
-                terminate_current_process(signo); /* does not return */
-                return;
+            if (def == KSIG_DEFAULT_TERM || def == KSIG_DEFAULT_CORE) {
+                terminate_current_process(def == KSIG_DEFAULT_CORE ? signo | WCOREFLAG : signo);
+                return; /* not reached */
             }
             if (def == KSIG_DEFAULT_STOP) {
                 sig_group_stop(signo);
@@ -3340,7 +3351,7 @@ void deliver_signals(isr_params_t *tf)
         oldmask = current_proc->sigmask_saved ? current_proc->saved_sigmask
                                               : current_proc->sig_blocked;
         if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {
-            terminate_current_process(SIGSEGV);
+            terminate_current_process(SIGSEGV | WCOREFLAG);
             return;
         }
         current_proc->sigmask_saved = 0;
@@ -3906,9 +3917,11 @@ int32_t sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: four are kept in the record and enforced, and the rest
+/* The resources: five are kept in the record and enforced, and the rest
  * are unlimited. */
 #define RLIMIT_STACK_RES 3
+
+#define RLIMIT_CORE_RES 4
 
 #define RLIMIT_NPROC_RES 6
 
@@ -3930,6 +3943,8 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_AS;
     case RLIMIT_STACK_RES:
         return RLIM_STACK;
+    case RLIMIT_CORE_RES:
+        return RLIM_CORE;
     default:
         return -1;
     }
