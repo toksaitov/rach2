@@ -279,12 +279,13 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSY
 MANIFEST_DEPS_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/test.manifest)
 MANIFEST_DEPS_os_simple := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest)
 MANIFEST_DEPS_os_real := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest)
+MANIFEST_DEPS_os_real_gnu := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real-gnu.manifest)
 MANIFEST_DEPS_rach2_metal := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal.manifest)
 MANIFEST_DEPS_rach2_recovery := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest)
 MANIFEST_DEPS_rach2_metal_disk := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest)
 MANIFEST_DEPS_grub_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
-    $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_rach2_metal) \
+    $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test))
 STAGED_IN_MANIFESTS = $(filter vendor/musl/install/% build/vendor/tcc/%,$(MANIFEST_INPUTS))
 MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter vendor/musl/install/%,$(STAGED_IN_MANIFESTS)))
@@ -1009,6 +1010,7 @@ include mk/host.mk
 include mk/images.mk
 include mk/gnu.mk
 include mk/gnu-extra.mk
+include mk/gnu-image.mk
 include tests/system/suites.mk
 
 # The host programs the build itself needs, for the compilation database

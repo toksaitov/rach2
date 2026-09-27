@@ -1,0 +1,132 @@
+# os-real-gnu.manifest: the os-real system that the GNU system is installed
+# over, on an ext2 root (vendor/gnu/Readme.md).
+#
+# This manifest stages the musl system; vendor/gnu/install_root.sh then
+# installs glibc, the ports, GCC, GDB, the SpiderMonkey shell and Debian's
+# chromium-headless-shell over the staged tree before tools/image/mkext2.sh
+# formats it. It is os-real.manifest with these differences, and a line
+# without a comment here has the reason os-real.manifest gives it:
+#
+# * OpenSSH replaces Dropbear: there is no /bin/dropbearmulti, and /sbin/init
+#   is init-metal, which starts /usr/sbin/sshd at boot where Dropbear's
+#   machine starts Dropbear, and makes its host keys on the first boot.
+# * The accounts have `sshd`, the unprivileged user of the server's
+#   privilege separation, and /var/empty, the empty directory owned by root
+#   that the server's unprivileged child is confined to.
+# * bash is a login shell /etc/shells allows, and the path finds the GNU
+#   programs in /usr/bin before the files of /bin.
+# * glibc's own files: /etc/nsswitch.conf, and /etc/ld.so.conf, from which
+#   install_root.sh writes /etc/ld.so.cache.
+
+dir 0755 /bin
+file 0755 /bin/audiotest build/utils/audiotest
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
+file 0755 /bin/ping build/utils/ping
+file 0755 /bin/dmesg krffs/dmesg.script
+file 0755 /bin/man krffs/man.script
+file 0755 /bin/loopctl build/utils/loopctl
+optional-file 0755 /bin/doom build/ports/doom/doom
+
+# TinyCC and pdpmake keep their places, so the musl self-build of /src works
+# as on os-real. The path finds GCC's `cc` and GNU make first, so these are
+# reached as `tcc` and by their full names, /bin/cc and /bin/make.
+file 0755 /bin/tcc build/vendor/tcc/tcc
+file 0755 /bin/cc build/vendor/tcc/tcc
+file 0755 /bin/make build/vendor/pdpmake/make
+dir 0755 /lib
+dir 0755 /lib/tcc
+file 0644 /lib/tcc/libtcc1.a build/vendor/tcc/libtcc1.a
+tree 0644 /lib/tcc/include build/vendor/tcc/include
+file 0644 /lib/libc.a vendor/musl/install/lib/libc.a
+file 0644 /lib/crt1.o vendor/musl/install/lib/crt1.o
+file 0644 /lib/crti.o vendor/musl/install/lib/crti.o
+file 0644 /lib/crtn.o vendor/musl/install/lib/crtn.o
+tree 0644 /include vendor/musl/install/include
+
+tree 0644 /src/utils utils
+dir 0755 /src
+dir 0755 /src/utils
+dir 0755 /src/rach2
+dir 0755 /src/rach2/sys
+dir 0755 /src/ish
+tree 0644 /src/rach2 rach2
+tree 0644 /src/ish ish
+
+# init-metal: init-login's strict console with the network and a supervised
+# SSH server beside it (utils/init.c), which on this image is OpenSSH's.
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-metal
+file 0755 /bin/update build/utils/update
+
+file 0755 /bin/bootctl build/utils/sbin/bootctl
+
+dir 0755 /demo
+text 0644 /demo/hello.txt hello, world\n
+
+dir 0755 /etc
+text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
+text 0644 /etc/hostname rach2\n
+# The server's privilege separation runs as `sshd`, which has no password
+# and no shell to log in with, and 74, the number Red Hat's systems give it,
+# is below the 100 from which BusyBox's adduser gives out system accounts.
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\nsshd:x:74:74::/var/empty:/usr/bin/false\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\n
+text 0644 /etc/shells /bin/sh\n/bin/bash\n
+dir 0755 /etc/rach2
+text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
+# The path OpenSSH's server gives a session, which finds GCC, GNU make and
+# the rest of the GNU system before the musl programs of /bin. BusyBox's
+# applets are not files on the path; /bin/sh runs them for their names
+# before it searches the path at all.
+text 0644 /etc/profile export PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
+text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
+text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
+# Where glibc looks up accounts and names: the files in /etc, then DNS for
+# a host that /etc/hosts does not have.
+text 0644 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n
+# The directory of Debian's libraries, which glibc's loader searches after
+# /lib and /usr/lib through the cache ldconfig writes from this file.
+text 0644 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n
+
+dir 0755 /etc/network
+text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n
+dir 0755 /etc/network/if-pre-up.d
+dir 0755 /etc/network/if-up.d
+dir 0755 /etc/network/if-down.d
+dir 0755 /etc/network/if-post-down.d
+
+dir 0755 /var
+# The directory the server's unprivileged child is confined to, which the
+# server requires to be root's and writable by nobody else.
+dir 0755 /var/empty
+dir 0755 /var/log
+dir 0755 /var/run
+
+dir 0755 /usr
+dir 0755 /usr/share
+dir 0755 /usr/share/udhcpc
+file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+dir 0755 /usr/share/man
+file 0644 /usr/share/man/aliases man/aliases
+tree 0644 /usr/share/man/cat1 build/man/cat1
+tree 0644 /usr/share/man/cat2 build/man/cat2
+tree 0644 /usr/share/man/cat4 build/man/cat4
+tree 0644 /usr/share/man/cat5 build/man/cat5
+tree 0644 /usr/share/man/cat7 build/man/cat7
+tree 0644 /usr/share/man/cat8 build/man/cat8
+
+dir 0755 /root
+dir 0700 /root/.ssh
+file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
+
+dir 1777 /tmp
+dir 0755 /home
+dir 0700:1000:1000 /home/test
+dir 0700:1000:1000 /home/test/.ssh
+file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
+optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
