@@ -11,7 +11,9 @@
  * program goes on after it. rt_sigpending reports a blocked signal, the old
  * sigprocmask call blocks one, sigsuspend's handler runs under the
  * suspend's mask and the old mask comes back after it, and a child's exit
- * reaches a SIGCHLD handler as CLD_EXITED with its pid and status.
+ * reaches a SIGCHLD handler as CLD_EXITED with its pid and status. A handler
+ * that nests on a small alternate stack until its frames no longer fit ends
+ * the process with SIGSEGV and writes nothing below the stack.
  *
  * Prints "SIGFRAMEMUSL OK" on success and "SIGFRAMEMUSL FAIL (detail)"
  * otherwise.
@@ -101,6 +103,54 @@ static void on_chld(int sig, siginfo_t *info, void *uc)
     chld_code = info->si_code;
     chld_pid = info->si_pid;
     chld_status = info->si_status;
+}
+
+static void nest(int sig)
+{
+    raise(sig);
+}
+
+/** A child whose SIGUSR1 handler raises SIGUSR1 again, SA_NODEFER, on an
+ * alternate stack of MINSIGSTKSZ bytes at the start of a shared page, with
+ * the page below it filled with a mark the kernel must leave. */
+static int overflow(void)
+{
+    char *m = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    int status, i;
+    pid_t pid;
+
+    if (m == MAP_FAILED) {
+        return fail("the pages for the alternate stack");
+    }
+    memset(m, 0x5a, 4096);
+    pid = fork();
+    if (pid == 0) {
+        stack_t ss;
+        struct sigaction sa;
+
+        ss.ss_sp = m + 4096;
+        ss.ss_size = MINSIGSTKSZ;
+        ss.ss_flags = 0;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = nest;
+        sa.sa_flags = SA_ONSTACK | SA_NODEFER;
+        if (sigaltstack(&ss, NULL) != 0 || sigaction(SIGUSR1, &sa, NULL) != 0) {
+            _exit(2);
+        }
+        raise(SIGUSR1);
+        _exit(3);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGSEGV) {
+        return fail("a handler that overflows its alternate stack");
+    }
+    for (i = 0; i < 4096; i++) {
+        if (m[i] != 0x5a) {
+            return fail("a frame written below the alternate stack");
+        }
+    }
+    munmap(m, 8192);
+    return 0;
 }
 
 static int install(int sig, void (*fn)(int, siginfo_t *, void *), int flags)
@@ -257,6 +307,9 @@ int main(void)
     waitpid(pid, NULL, 0);
     if (chld_code != CLD_EXITED || chld_pid != pid || chld_status != 7) {
         return fail("SIGCHLD's siginfo");
+    }
+    if (overflow() != 0) {
+        return 1;
     }
 
     printf("SIGFRAMEMUSL OK\n");
