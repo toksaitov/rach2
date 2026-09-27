@@ -109,8 +109,8 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         return 0;
     }
     for (pr = proc_list; pr; pr = pr->next) {
-        for (i = 0; i < fd_table_cap(&pr->fds); i++) {
-            fd_entry_t *e = &pr->fds.entries[i];
+        for (i = 0; i < fd_table_cap(pr->fds); i++) {
+            fd_entry_t *e = &pr->fds->entries[i];
 
             if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
                 held++;
@@ -187,7 +187,7 @@ static void fd_close_locks(const fd_entry_t *e)
     struct lock_key key;
 
     if (!lock_any() || !e->ofd || (e->flags & FD_FLAG_PATH) || !current_proc ||
-        !fd_in_table(&current_proc->fds, e)) {
+        !fd_in_table(current_proc->fds, e)) {
         return;
     }
     fd_lock_key(e, &key);
@@ -357,7 +357,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         return -ESRCH;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry) {
         return -EBADF;
     }
@@ -490,7 +490,7 @@ static int32_t truncate_fd(int fd, uint64_t length)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_FILE || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -967,7 +967,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
         return r < 0 ? r : canonicalize_abs(pathbuf);
     }
-    entry = fd_get(&current_proc->fds, dirfd);
+    entry = fd_get(current_proc->fds, dirfd);
     if (!entry) {
         return -EBADF;
     }
@@ -1333,12 +1333,12 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if (!sd) {
         return -ENFILE;
     }
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(sd);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_SYNTH_DIR;
     e->node = NULL;
     e->sock = NULL;
@@ -1392,12 +1392,12 @@ static int32_t open_framebuffer(void)
         return -EBUSY; /* Already in use */
     }
 
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
     }
 
-    entry = &current_proc->fds.entries[fd];
+    entry = &current_proc->fds->entries[fd];
     entry->type = FD_TYPE_FRAMEBUFFER;
     entry->node = NULL;
     entry->ofd->offset = 0;
@@ -1423,12 +1423,12 @@ static int32_t open_mouse(void)
         return -ENODEV; /* no mouse of any kind was found */
     }
 
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
     }
 
-    entry = &current_proc->fds.entries[fd];
+    entry = &current_proc->fds->entries[fd];
     entry->type = FD_TYPE_MOUSE;
     entry->node = NULL;
     entry->ofd->offset = 0;
@@ -1607,19 +1607,19 @@ static int32_t open_fifo(struct vfs_ref *ref, uint64_t ino, int flags)
     struct vfs_mount *mnt = ref->mnt;
     fd_entry_t *e;
     int32_t rc;
-    int fd = fd_alloc(&current_proc->fds);
+    int fd = fd_alloc(current_proc->fds);
 
     if (fd < 0) {
         vfs_walk_unlock(mnt);
         vfs_ref_release(ref);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     rc = vfs_open_node(mnt, ref->node, flags, &e->ofd->fhandle);
     if (rc != 0) {
         vfs_walk_unlock(mnt);
         vfs_ref_release(ref);
-        fd_free(&current_proc->fds, fd);
+        fd_free(current_proc->fds, fd);
         return rc;
     }
     e->ofd->vmnt = mnt;
@@ -1630,7 +1630,7 @@ static int32_t open_fifo(struct vfs_ref *ref, uint64_t ino, int flags)
     vfs_leave(mnt);
     rc = fifo_attach(e, mnt, ino, flags);
     if (rc != 0) {
-        fd_free(&current_proc->fds, fd);
+        fd_free(current_proc->fds, fd);
         return rc;
     }
     return fd;
@@ -1862,7 +1862,7 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
     int fd;
     int rc;
 
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         vfs_ref_release(ref);
         return -EMFILE; /* No free fds */
@@ -1875,13 +1875,13 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
      * type keeps `node` NULL: the description's own fields name it, and
      * the KRFFS-only paths (the holder rule, the set-id clear) have nothing
      * to do with it. */
-    entry = &current_proc->fds.entries[fd];
+    entry = &current_proc->fds->entries[fd];
     if (!mnt_is_root(ref->mnt)) {
         struct vfs_stat vst;
 
         rc = vfs_getattr(ref->mnt, node, &vst);
         if (rc != 0) {
-            fd_free(&current_proc->fds, fd);
+            fd_free(current_proc->fds, fd);
             vfs_ref_release(ref);
             return rc;
         }
@@ -1908,7 +1908,7 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
      * mount; its last close gives all of it back through vfs_desc_close. */
     rc = vfs_open_node(ref->mnt, node, flags, &entry->ofd->fhandle);
     if (rc != 0) {
-        fd_free(&current_proc->fds, fd);
+        fd_free(current_proc->fds, fd);
         vfs_ref_release(ref);
         return rc;
     }
@@ -1922,7 +1922,7 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
             vfs_kill_setid(ref->mnt, entry->ofd->vnode);
         }
         if (rc != 0) {
-            fd_free(&current_proc->fds, fd);
+            fd_free(current_proc->fds, fd);
             return rc;
         }
     }
@@ -1986,7 +1986,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     if (name_is(name, "mouse")) {
         return open_mouse();
     }
-    if (!fd_can_alloc(&current_proc->fds)) {
+    if (!fd_can_alloc(current_proc->fds)) {
         return -EMFILE; /* known before anything is created or truncated */
     }
 again:
@@ -2216,28 +2216,85 @@ int32_t sys_openat(isr_params_t *params)
     return rc;
 }
 
-/* close(2): EBX = fd. Returns 0 or -EBADF. */
+/** Whether a call of a thread other than the caller that shares `table`
+ * holds descriptor `fd`: has looked it up since the call began. */
+static int fd_held_elsewhere(const fd_table_t *table, int fd)
+{
+    const process_t *t;
+
+    if (table->refs < 2) {
+        return 0;
+    }
+    for (t = proc_list; t; t = t->next) {
+        if (t != current_proc && t->fds == table && (t->fd_held[fd / 32] & (1u << (fd % 32)))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Close descriptor `fd` of the caller's table: release what it holds and
+ * free its slot, or, while a call of another thread sharing the table holds
+ * it, mark it closing, so that the call ends with what it had and the slot
+ * is released as that call ends (`fd_holds_release`). Linux keeps the file
+ * for such a call through the reference `fdget` takes. 0, or -EBADF.
+ */
+static int32_t close_fd(int fd)
+{
+    fd_table_t *table = current_proc->fds;
+    fd_entry_t *e = fd_get(table, fd);
+
+    if (!e) {
+        return -EBADF;
+    }
+    if (fd_held_elsewhere(table, fd)) {
+        e->flags |= FD_FLAG_CLOSING;
+        return 0;
+    }
+    fd_release_backing(e);
+    fd_free(table, fd);
+    return 0;
+}
+
+void fd_holds_release(void)
+{
+    process_t *p = current_proc;
+    int w;
+
+    if (!p || !p->fd_holding) {
+        return;
+    }
+    p->fd_holding = 0;
+    for (w = 0; w < FD_TABLE_LIMIT / 32; w++) {
+        uint32_t bits = p->fd_held[w];
+        int fd;
+
+        p->fd_held[w] = 0;
+        for (fd = w * 32; bits != 0; fd++, bits >>= 1) {
+            fd_entry_t *e;
+
+            if (!(bits & 1u) || !p->fds || fd >= p->fds->cap) {
+                continue;
+            }
+            e = &p->fds->entries[fd];
+            if ((e->flags & FD_FLAG_CLOSING) && !fd_held_elsewhere(p->fds, fd)) {
+                fd_release_backing(e);
+                fd_free(p->fds, fd);
+            }
+        }
+    }
+}
+
+/* close(2): EBX = fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is legal; a
+ * shell or daemon closes one and opens again onto the freed (lowest)
+ * number to redirect it. */
 int32_t sys_close(isr_params_t *params)
 {
-    int fd = (int)params->ebx;
-    fd_entry_t *entry;
-
     if (!current_proc) {
         return -ESRCH;
     }
-
-    /* Closing stdin/stdout/stderr is legal; a shell or daemon closes fd 0/1/2
-     * and reopens onto the freed (lowest) number to redirect them. */
-
-    /* Release the descriptor's backing (framebuffer/socket/ops object), then
-     * free the slot. fd_free reports a bad/unallocated descriptor with -1;
-     * translate to the close(2) errno. */
-    entry = fd_get(&current_proc->fds, fd);
-    fd_release_backing(entry);
-    if (fd_free(&current_proc->fds, fd) != 0) {
-        return -EBADF;
-    }
-    return 0;
+    return close_fd((int)params->ebx);
 }
 
 /**
@@ -2263,7 +2320,7 @@ int32_t sys_fsync(isr_params_t *params)
         return -ESRCH;
     }
     {
-        fd_entry_t *e = fd_get(&current_proc->fds, fd);
+        fd_entry_t *e = fd_get(current_proc->fds, fd);
 
         if (!e || (e->flags & FD_FLAG_PATH)) {
             return -EBADF;
@@ -2382,7 +2439,7 @@ int32_t sys_lseek(isr_params_t *params)
         return -ESRCH;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -2564,7 +2621,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         return -EFAULT;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -2959,7 +3016,7 @@ int32_t sys_readv(isr_params_t *params)
         return read_fd(fd, (char __user *)0, 0);
     }
 
-    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
         return readv_dgram(entry, iov_user, iovcnt, 0, 0);
     }
@@ -3019,19 +3076,19 @@ int32_t sys_dup(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, oldfd);
+    entry = fd_get(current_proc->fds, oldfd);
     if (!entry) {
         return -EBADF;
     }
 
-    newfd = fd_alloc_from(&current_proc->fds, 0);
+    newfd = fd_alloc_from(current_proc->fds, 0);
     if (newfd < 0) {
         return -EMFILE;
     }
     /* The table may have grown, and its entries moved: the source is looked
      * up again. */
-    entry = fd_get(&current_proc->fds, oldfd);
-    dst = &current_proc->fds.entries[newfd];
+    entry = fd_get(current_proc->fds, oldfd);
+    dst = &current_proc->fds->entries[newfd];
     fd_ofd_unref(dst->ofd); /* drop the fresh OFD; share oldfd's instead */
     dst->type = entry->type;
     dst->node = entry->node;
@@ -3049,6 +3106,30 @@ int32_t sys_dup(isr_params_t *params)
 }
 
 /* dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. */
+/**
+ * Free slot `fd` for dup2 and dup3 to put a copy in, closing the descriptor
+ * there if there is one, with every backing it held. -EBUSY when the slot
+ * cannot be had: an open has reserved it, or a call of another thread
+ * sharing the table holds its descriptor or the descriptor a close left to
+ * such a call, which is when Linux's dup2 answers EBUSY too.
+ */
+static int32_t dup_clear(int fd)
+{
+    fd_table_t *table = current_proc->fds;
+    fd_entry_t *e = &table->entries[fd];
+
+    if (e->type == FD_TYPE_NONE && !e->ofd) {
+        return 0;
+    }
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) ||
+        fd_held_elsewhere(table, fd)) {
+        return -EBUSY;
+    }
+    fd_release_backing(e);
+    fd_free(table, fd);
+    return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
+}
+
 int32_t sys_dup2(isr_params_t *params)
 {
     int oldfd = (int)params->ebx;
@@ -3060,35 +3141,32 @@ int32_t sys_dup2(isr_params_t *params)
         return -ESRCH;
     }
 
-    old_entry = fd_get(&current_proc->fds, oldfd);
+    old_entry = fd_get(current_proc->fds, oldfd);
     if (!old_entry) {
         return -EBADF;
     }
 
-    if (newfd < 0 || newfd >= current_proc->fds.limit) {
+    if (newfd < 0 || newfd >= current_proc->fds->limit) {
         return -EBADF;
     }
 
     if (oldfd == newfd) {
         return newfd;
     }
-    if (fd_table_reach(&current_proc->fds, newfd) != 0) {
+    if (fd_table_reach(current_proc->fds, newfd) != 0) {
         return -EMFILE;
     }
-    old_entry = fd_get(&current_proc->fds, oldfd); /* the entries may have moved */
+    old_entry = fd_get(current_proc->fds, oldfd); /* the entries may have moved */
 
-    /* Close newfd if it's open (ignore errors), releasing every backing it held
-     * (socket reference, ops object, framebuffer ownership). */
-    if (fd_is_valid(&current_proc->fds, newfd)) {
-        fd_release_backing(fd_get(&current_proc->fds, newfd));
-        fd_free(&current_proc->fds, newfd);
+    if (dup_clear(newfd) != 0) {
+        return -EBUSY;
     }
 
     /* Duplicate the descriptor: it SHARES the open-file description (so the
      * seek offset is shared, per POSIX), gaining a reference; a duplicated
      * socket gains another reference too; and dup2 leaves the new fd's CLOEXEC
      * clear. */
-    new_entry = &current_proc->fds.entries[newfd];
+    new_entry = &current_proc->fds->entries[newfd];
     new_entry->type = old_entry->type;
     new_entry->node = old_entry->node;
     new_entry->sock = old_entry->sock;
@@ -3276,7 +3354,7 @@ int32_t sys_fchdir(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, (int)params->ebx);
+    entry = fd_get(current_proc->fds, (int)params->ebx);
     if (!entry) {
         return -EBADF;
     }
@@ -3784,9 +3862,9 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         if (follow) {
             /* A followed stat reports the target descriptor's identity. */
             process_t *p = get_process((uint32_t)rpid);
-            if (p && vp->procfd >= 0 && vp->procfd < fd_table_cap(&p->fds) &&
-                p->fds.entries[vp->procfd].type != FD_TYPE_NONE) {
-                fstat_fill(&p->fds.entries[vp->procfd], kst);
+            if (p && vp->procfd >= 0 && vp->procfd < fd_table_cap(p->fds) &&
+                p->fds->entries[vp->procfd].type != FD_TYPE_NONE) {
+                fstat_fill(&p->fds->entries[vp->procfd], kst);
                 return 0;
             }
             return -ENOENT;
@@ -3857,7 +3935,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     if ((kst.st_mode & S_IFMT) == S_IFDIR) {
         fd = synth_open_dir(vp, flags & O_CLOEXEC);
         if (fd >= 0) {
-            e = &current_proc->fds.entries[fd];
+            e = &current_proc->fds->entries[fd];
             e->flags = (e->flags & FD_FLAG_CLOEXEC) | FD_FLAG_PATH;
         }
         return fd;
@@ -3869,13 +3947,13 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     if (!copy) {
         return -ENOMEM;
     }
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(copy);
         return -EMFILE;
     }
     *copy = *vp;
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_SYNTH_PATH;
     e->node = NULL;
     e->sock = NULL;
@@ -3924,12 +4002,12 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
         vfs_ref_release(ref);
         return -ENOTDIR;
     }
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         vfs_ref_release(ref);
         return -EMFILE;
     }
-    entry = &current_proc->fds.entries[fd];
+    entry = &current_proc->fds->entries[fd];
     entry->type = is_dir ? FD_TYPE_DIR : FD_TYPE_FILE;
     entry->node = (mnt_is_root(ref->mnt) && node != krffs_fs->node) ? node : NULL;
     entry->ofd->dirpath[0] = '\0';
@@ -3970,7 +4048,7 @@ static int32_t open_path(const char *name, int flags)
     if (flags & O_NOFOLLOW) {
         walk |= VFS_WALK_NOFOLLOW;
     }
-    if (!fd_can_alloc(&current_proc->fds)) {
+    if (!fd_can_alloc(current_proc->fds)) {
         return -EMFILE;
     }
     rc = vfs_resolve(0, name, walk, &ref, 0, 0);
@@ -4384,7 +4462,7 @@ int32_t sys_fstatfs64(isr_params_t *params)
     if (!current_proc || !params->edx) {
         return -EFAULT;
     }
-    e = fd_get(&current_proc->fds, (int)params->ebx);
+    e = fd_get(current_proc->fds, (int)params->ebx);
     if (!e) {
         return -EBADF;
     }
@@ -4577,7 +4655,7 @@ int32_t sys_fstat64(isr_params_t *params)
     if (!current_proc || !st) {
         return -EFAULT;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry) {
         return -EBADF;
     }
@@ -4671,7 +4749,7 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct li
         }
     }
     if (empty && dirfd != AT_FDCWD) {
-        fd_entry_t *entry = fd_get(&current_proc->fds, dirfd);
+        fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
 
         return entry ? fstat_fill(entry, kst) : -EBADF;
     }
@@ -5275,7 +5353,7 @@ int32_t sys_fchmod(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -5389,7 +5467,7 @@ int32_t sys_fchownat(isr_params_t *params)
         }
     }
     if (empty && dirfd != AT_FDCWD) {
-        fd_entry_t *entry = fd_get(&current_proc->fds, dirfd);
+        fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
 
         return entry ? chown_fd(entry, uid, gid) : -EBADF;
     }
@@ -5421,7 +5499,7 @@ int32_t sys_fchown(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -5934,7 +6012,7 @@ int32_t sys__llseek(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (entry && (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -6074,7 +6152,7 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -6467,22 +6545,22 @@ int32_t sys_memfd_create(isr_params_t *params)
     } else if (flags & MFD_ALLOW_SEALING) {
         seals = 0;
     }
-    if (!fd_can_alloc(&current_proc->fds)) {
+    if (!fd_can_alloc(current_proc->fds)) {
         return -EMFILE;
     }
     rc = tmpfs_memfd(mnt, name, mode, seals, &node);
     if (rc != 0) {
         return rc;
     }
-    fd = fd_alloc(&current_proc->fds);
-    if (fd < 0 || vfs_open_node(mnt, node, 2, &current_proc->fds.entries[fd].ofd->fhandle) != 0) {
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0 || vfs_open_node(mnt, node, 2, &current_proc->fds->entries[fd].ofd->fhandle) != 0) {
         if (fd >= 0) {
-            fd_free(&current_proc->fds, fd);
+            fd_free(current_proc->fds, fd);
         }
         mnt->type->ops->put(mnt, node);
         return fd < 0 ? -EMFILE : -ENOMEM;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_FILE;
     e->node = NULL;
     e->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & MFD_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
@@ -6526,7 +6604,7 @@ int32_t sys_flock(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    e = fd_get(&current_proc->fds, (int)params->ebx);
+    e = fd_get(current_proc->fds, (int)params->ebx);
     if (!e || !e->ofd || (e->flags & FD_FLAG_PATH) ||
         (kind != LOCK_UN && !(e->flags & (FD_FLAG_READ | FD_FLAG_WRITE)))) {
         return -EBADF;
@@ -6565,7 +6643,7 @@ int32_t sys_fcntl64(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry) {
         return -EBADF;
     }
@@ -6621,15 +6699,15 @@ int32_t sys_fcntl64(isr_params_t *params)
          * contract). An arg past the descriptor limit is -EINVAL, since the
          * table grows to it and no higher; no slot at or above
          * it is -EMFILE. */
-        if (arg >= (uint32_t)current_proc->fds.limit) {
+        if (arg >= (uint32_t)current_proc->fds->limit) {
             return -EINVAL;
         }
-        newfd = fd_alloc_from(&current_proc->fds, (int)arg);
+        newfd = fd_alloc_from(current_proc->fds, (int)arg);
         if (newfd < 0) {
             return -EMFILE;
         }
-        entry = fd_get(&current_proc->fds, fd); /* the entries may have moved */
-        dst = &current_proc->fds.entries[newfd];
+        entry = fd_get(current_proc->fds, fd); /* the entries may have moved */
+        dst = &current_proc->fds->entries[newfd];
         /* The duplicate SHARES oldfd's open-file description (so the seek
          * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
          * OFD; drop it and point dst at oldfd's, taking a reference. A
@@ -7055,7 +7133,7 @@ out:
         kfree(notes);
         return fd;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || !entry->ofd || !entry->ofd->vmnt) {
         rc = -EINVAL;
     } else {
@@ -7070,7 +7148,7 @@ out:
     }
     kfree(notes);
     fd_release_backing(entry);
-    fd_free(&current_proc->fds, fd);
+    fd_free(current_proc->fds, fd);
     return rc;
 }
 
@@ -7826,7 +7904,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kerne
  */
 static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
 {
-    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
     if (!entry || (!empty && (entry->flags & FD_FLAG_PATH))) {
         return -EBADF;
@@ -8130,8 +8208,8 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         if (!pp) {
             return 0;
         }
-        for (i = 0; i < fd_table_cap(&pp->fds); i++) {
-            if (pp->fds.entries[i].type != FD_TYPE_NONE) {
+        for (i = 0; i < fd_table_cap(pp->fds); i++) {
+            if (pp->fds->entries[i].type != FD_TYPE_NONE) {
                 if (c == n) {
                     synth_u32_str(name, (uint32_t)i);
                     *ino = procfs_ino_pid(pid);
@@ -8224,7 +8302,7 @@ int32_t sys_getdents64(isr_params_t *params)
         return -EFAULT;
     }
 
-    entry = fd_get(&current_proc->fds, fd_num);
+    entry = fd_get(current_proc->fds, fd_num);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -8357,7 +8435,7 @@ int32_t sys_dup3(isr_params_t *params)
     }
     r = sys_dup2(params); /* shares EBX=oldfd, ECX=newfd */
     if (r >= 0 && (flags & O_CLOEXEC)) {
-        fd_entry_t *e = fd_get(&current_proc->fds, newfd);
+        fd_entry_t *e = fd_get(current_proc->fds, newfd);
         if (e) {
             e->flags |= FD_FLAG_CLOEXEC;
         }

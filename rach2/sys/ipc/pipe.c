@@ -421,7 +421,7 @@ static const struct file_ops pipe_ops = {pipe_read, pipe_write, pipe_poll, pipe_
 /** Install a pipe end onto a freshly allocated descriptor. */
 static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
 {
-    fd_entry_t *e = &current_proc->fds.entries[fd];
+    fd_entry_t *e = &current_proc->fds->entries[fd];
 
     e->type = FD_TYPE_PIPE;
     e->node = NULL;
@@ -552,16 +552,16 @@ int32_t sys_pipe2(struct isr_params *params)
         return -ENFILE;
     }
 
-    rfd = fd_alloc(&current_proc->fds);
+    rfd = fd_alloc(current_proc->fds);
     if (rfd < 0) {
         pipe_free(pipe);
         return -EMFILE;
     }
     pipe_setup_end(rfd, pipe, FD_FLAG_READ, flags);
 
-    wfd = fd_alloc(&current_proc->fds);
+    wfd = fd_alloc(current_proc->fds);
     if (wfd < 0) {
-        fd_free(&current_proc->fds, rfd);
+        fd_free(current_proc->fds, rfd);
         pipe_free(pipe);
         return -EMFILE;
     }
@@ -572,8 +572,8 @@ int32_t sys_pipe2(struct isr_params *params)
     if (copy_to_user((void __user *)fds_ptr, kfds, sizeof(kfds)) != 0) {
         /* Both ends are fresh: free the pipe and descriptors directly. */
         pipe_free(pipe);
-        fd_free(&current_proc->fds, rfd);
-        fd_free(&current_proc->fds, wfd);
+        fd_free(current_proc->fds, rfd);
+        fd_free(current_proc->fds, wfd);
         return -EFAULT;
     }
     return 0;

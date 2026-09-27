@@ -15,8 +15,8 @@
 .set PROC_REGS_ESP, 48     # offset of regs.esp (pid=4 + state=4 + regs offset 40)
 .set PROC_CR3, 52          # offset of cr3 (page directory physical address)
 .set PROC_KERNEL_STACK, 56 # offset of kernel_stack
-.set PROC_TLS_BASE, 148    # offset of tls_base, after the descriptor table's
-                           # pointer, count and limit, the cwd and in_syscall
+.set PROC_TLS_BASE, 140    # offset of tls_base, after the descriptor table's
+                           # pointer, the cwd and in_syscall
 .set PROC_PAGE_DIR, 800    # offset of page_dir, the directory cr3 names, after
                            # the 512-byte floating-point area at 288
 

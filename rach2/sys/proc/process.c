@@ -18,7 +18,7 @@
 #define PROC_OFF_REGS_ESP     48u
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
-#define PROC_OFF_TLS_BASE     148u
+#define PROC_OFF_TLS_BASE     140u
 #define PROC_OFF_PAGE_DIR     800u
 #if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
 typedef char process_offsets_fit
@@ -171,13 +171,14 @@ process_t *alloc_process(void)
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
 
-    if (fd_table_init(&p->fds) != 0) {
+    p->fds = fd_table_new();
+    if (!p->fds) {
         tgroup_put(p->tg);
         kfree(p);
         return NULL;
     }
-    if (fd_init_stdio(&p->fds) != 0) {
-        fd_table_free(&p->fds);
+    if (fd_init_stdio(p->fds) != 0) {
+        fd_table_delete(p->fds);
         tgroup_put(p->tg);
         kfree(p);
         return NULL;
@@ -219,7 +220,9 @@ void free_process(process_t *proc)
     if (proc == proc_idle) {
         proc_idle = NULL;
     }
-    fd_table_free(&proc->fds);
+    if (proc->fds && --proc->fds->refs == 0) {
+        fd_table_delete(proc->fds);
+    }
     tgroup_put(proc->tg);
     kfree(proc->exec_ws);
     path_bufs_free(proc);

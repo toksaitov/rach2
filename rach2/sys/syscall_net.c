@@ -407,13 +407,13 @@ static int32_t do_socket(int domain, int type, int protocol)
     }
     sock->uid = current_proc->euid;
 
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         socket_unref(sock);
         return -EMFILE;
     }
 
-    entry = &current_proc->fds.entries[fd];
+    entry = &current_proc->fds->entries[fd];
     entry->type = FD_TYPE_SOCKET;
     entry->sock = sock;
     entry->node = NULL;
@@ -438,7 +438,7 @@ static int32_t socket_with_flags(int domain, int type, int protocol)
     }
     fd = do_socket(domain, type & SOCK_TYPE_MASK, protocol);
     if (fd >= 0) {
-        sock_fd_flags(&current_proc->fds.entries[fd], flags);
+        sock_fd_flags(&current_proc->fds->entries[fd], flags);
     }
     return fd;
 }
@@ -463,7 +463,7 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
         return -EFAULT;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -609,7 +609,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
         return -EFAULT;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -741,7 +741,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -879,7 +879,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     /* The descriptor is resolved before its argument is read, so that a call on
      * something that is not a socket says so instead of reporting whatever was
      * wrong with an address it was never going to use. */
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1006,7 +1006,7 @@ static int32_t do_listen(int fd, int backlog)
 
     (void)backlog; /* a fixed-size accept queue is used */
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1049,7 +1049,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
     if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {
         return -EINVAL;
     }
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1081,12 +1081,12 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
 
     /* The queued socket already holds the reference created when tcp_rx
      * accepted it; the new descriptor takes ownership of that reference. */
-    new_fd = fd_alloc(&current_proc->fds);
+    new_fd = fd_alloc(current_proc->fds);
     if (new_fd < 0) {
         socket_unref(conn_sock);
         return -EMFILE;
     }
-    new_entry = &current_proc->fds.entries[new_fd];
+    new_entry = &current_proc->fds->entries[new_fd];
     new_entry->type = FD_TYPE_SOCKET;
     new_entry->sock = conn_sock;
     new_entry->node = NULL;
@@ -1101,7 +1101,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
     if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip) !=
         0) {
         fd_release_backing(new_entry);
-        fd_free(&current_proc->fds, new_fd);
+        fd_free(current_proc->fds, new_fd);
         return -EFAULT;
     }
     return new_fd;
@@ -1118,7 +1118,7 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
         return -EFAULT;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1147,7 +1147,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
         return -EFAULT;
     }
 
-    entry = fd_get(&current_proc->fds, fd);
+    entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1188,7 +1188,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
  */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
-    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
     uint32_t flags, local_ip;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
@@ -1242,7 +1242,7 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
  * or a datagram socket that connect(2) gave a peer). */
 static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
-    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
@@ -1280,7 +1280,7 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 
 static int32_t do_shutdown(int fd, int how)
 {
-    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
@@ -1336,7 +1336,7 @@ static int32_t do_shutdown(int fd, int how)
  * server's startup. */
 static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr, int optlen)
 {
-    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
     int val = 0;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
@@ -1440,7 +1440,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
 static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              uint32_t optlen_ptr)
 {
-    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    fd_entry_t *entry = fd_get(current_proc->fds, fd);
     int val = 0;
     uint32_t olen;
 
@@ -1566,7 +1566,7 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
         return -EFAULT;
     }
-    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1679,7 +1679,7 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
     if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
         return -EFAULT;
     }
-    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
@@ -1922,7 +1922,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
         return mmsg(call, args);
     }
     e = (call != SC_SOCKET && call != SC_PING && current_proc)
-            ? fd_get(&current_proc->fds, (int)args[0])
+            ? fd_get(current_proc->fds, (int)args[0])
             : (fd_entry_t *)0;
     if (e && e->type == FD_TYPE_UNIX) {
         return unix_call(call, e, args);

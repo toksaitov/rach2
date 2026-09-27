@@ -88,7 +88,7 @@ static void batch_limit_rows(void)
 /** Exercise real description references, fork's table copy and final close. */
 static void batch_description_row(void)
 {
-    fd_table_t parent, child;
+    fd_table_t parent, *child;
     struct open_file *ofd;
     void *node, *handle = 0, *second = 0;
     unsigned char data[4096];
@@ -104,7 +104,6 @@ static void batch_description_row(void)
         return;
     }
     memset(&parent, 0, sizeof(parent));
-    memset(&child, 0, sizeof(child));
     check(fd_table_init(&parent) == 0, "the parent descriptor table allocates");
     fd = fd_alloc(&parent);
     check(fd >= 0, "the pending file gets a descriptor");
@@ -116,7 +115,11 @@ static void batch_description_row(void)
     ofd->vmnt = &mnt;
     ofd->vnode = node;
     ofd->fhandle = handle;
-    check(fd_table_copy(&child, &parent) == 0, "fork copies the description pointer");
+    child = fd_table_dup(&parent);
+    check(child != NULL, "fork copies the description pointer");
+    if (!child) {
+        return;
+    }
     fd_ofd_ref(ofd);
     fd_ofd_ref(ofd);
     memset(data, 0x5B, sizeof(data));
@@ -125,7 +128,7 @@ static void batch_description_row(void)
           "the shared description accepts pending bytes");
     fd_free(&parent, fd);
     check(writes_made == before, "the first shared close does not drain");
-    fd_free(&child, fd);
+    fd_free(child, fd);
     check(writes_made == before, "the inherited close leaves the duplicate pending");
     fd_ofd_unref(ofd);
     check(writes_made > before, "the last shared close drains with an independent handle open");
@@ -134,7 +137,7 @@ static void batch_description_row(void)
           "the independent description sees the completed bytes");
     OPS->release(&mnt, second);
     fd_table_free(&parent);
-    fd_table_free(&child);
+    fd_table_delete(child);
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "description release leaves a clean volume");
 }
 

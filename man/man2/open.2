@@ -231,6 +231,14 @@ The same releases occur on descriptor replacement by
 .Xr dup2 2 ,
 close-on-exec, and process exit.
 .Pp
+In a descriptor table that threads share, a close of a descriptor that a
+call of another thread is using, one that looked it up since it began,
+leaves the call what it had, as Linux's reference to the file does: the
+number answers
+.Er EBADF
+at once, and the releases above happen, and the number is free again, as
+that call ends.
+.Pp
 Closing an ordinary descriptor for a file backing a loop device does
 not detach the device.
 The attachment retains its own file and mount references.

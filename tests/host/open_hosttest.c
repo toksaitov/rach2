@@ -17,6 +17,7 @@
 static int fs_node_is_held(const krffs_node_t *node);
 static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
+static void fd_holds_release(void);
 static int32_t sys_ftruncate(isr_params_t *params);
 static int32_t sys_ftruncate64(isr_params_t *params);
 static int32_t sys_write(isr_params_t *params);
@@ -117,6 +118,7 @@ extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
 
 static process_t proc;
+static fd_table_t files;
 process_t *current_proc = &proc;
 krffs_file_system_t *krffs_fs;
 const struct vfs_type vfs_krffs_type = {0};
@@ -292,7 +294,8 @@ static void truncation(void)
     struct vfs_ref ref;
 
     for (mode = 0; mode < 4; mode++) {
-        check(fd_table_init(&proc.fds) == 0, "initialize descriptor table");
+        proc.fds = &files;
+        check(fd_table_init(proc.fds) == 0, "initialize descriptor table");
         proc.euid = 1;
         opens = releases = refs = leaves = dropped = truncates = attrs = relocate = 0;
         open_error = mode == 1 ? -ENOMEM : 0;
@@ -308,7 +311,7 @@ static void truncation(void)
             check(truncates == (mode == 0) && attrs == (mode == 0),
                   "only O_TRUNC truncates and clears set-id bits");
             if (rc >= 0) {
-                fd_free(&proc.fds, rc);
+                fd_free(proc.fds, rc);
             }
         } else {
             check(rc == (mode == 1 ? -ENOMEM : -EIO) && refs == 0 && leaves == (mode == 2) &&
@@ -318,7 +321,7 @@ static void truncation(void)
                   "failed open frees description without changing mode");
         }
         check(opens == releases && refs == 0, "every open handle released");
-        fd_table_free(&proc.fds);
+        fd_table_free(proc.fds);
         check(allocations == 0, "all descriptor storage released");
     }
 }

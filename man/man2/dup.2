@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt DUP 2
 .Os
 .Sh NAME
@@ -38,6 +38,15 @@ onto
 If
 .Fa newfd
 is open, the kernel closes it first; close errors are ignored.
+The destination is busy, and the call fails with
+.Er EBUSY ,
+while an
+.Xr open 2
+in another thread has reserved it, or while a call of another thread
+sharing the descriptor table uses the descriptor there, or the one a
+close left to such a call; Linux gives
+.Er EBUSY
+for the first.
 If both arguments are equal and valid, and below the current descriptor
 limit, the call returns
 .Fa newfd
@@ -108,6 +117,9 @@ that a duplicate remains usable after the original closes.
 is invalid, or
 .Fa newfd
 is negative or at or above the descriptor limit.
+.It Bq Er EBUSY
+.Fa newfd
+is busy, as described above.
 .It Bq Er EINVAL
 .Fn dup3
 was given equal descriptors or flags other than 0 or

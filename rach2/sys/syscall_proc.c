@@ -180,6 +180,50 @@ void release_fd_table(fd_table_t *table)
     }
 }
 
+void proc_files_put(process_t *p)
+{
+    fd_table_t *table = p->fds;
+
+    if (!table) {
+        return;
+    }
+    p->fds = NULL;
+    if (--table->refs == 0) {
+        release_fd_table(table);
+        fd_table_delete(table);
+    }
+}
+
+/**
+ * A copy of the descriptor table `src` for a child that does not share it:
+ * each descriptor names the same open-file description, which gains a
+ * reference, so a seek in one process is seen by the other, as POSIX says,
+ * and a socket gains one too, so that the two release it independently. A
+ * descriptor a sharer closed, which a call of another still holds, is not
+ * copied. NULL when the heap has no room.
+ */
+static fd_table_t *files_copy(const fd_table_t *src)
+{
+    fd_table_t *table = fd_table_dup(src);
+    int fdi;
+
+    for (fdi = 0; table && fdi < table->cap; fdi++) {
+        fd_entry_t *e = &table->entries[fdi];
+
+        if (e->flags & FD_FLAG_CLOSING) {
+            k_memset(e, 0, sizeof(*e));
+        }
+        if (e->type == FD_TYPE_NONE) {
+            continue;
+        }
+        fd_ofd_ref(e->ofd);
+        if (e->type == FD_TYPE_SOCKET && e->sock) {
+            socket_ref(e->sock);
+        }
+    }
+    return table;
+}
+
 /**
  * End every other user process before init returns the machine to the shell.
  *
@@ -522,13 +566,13 @@ static void close_cloexec_fds(void)
 {
     int fd;
 
-    for (fd = 0; fd < fd_table_cap(&current_proc->fds); fd++) {
-        fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    for (fd = 0; fd < fd_table_cap(current_proc->fds); fd++) {
+        fd_entry_t *entry = fd_get(current_proc->fds, fd);
         if (!entry || !(entry->flags & FD_FLAG_CLOEXEC)) {
             continue;
         }
         fd_release_backing(entry);
-        fd_free(&current_proc->fds, fd);
+        fd_free(current_proc->fds, fd);
     }
 }
 
@@ -1304,6 +1348,28 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 }
 
 /**
+ * Give the calling thread a descriptor table of its own when it shares one,
+ * as Linux's execve does before anything else, so that the close-on-exec
+ * descriptors the new image drops are dropped for it alone; the threads the
+ * exec ends keep the shared one until they are gone. 0, or -ENOMEM.
+ */
+static int32_t exec_unshare_files(void)
+{
+    fd_table_t *own;
+
+    if (current_proc->fds->refs == 1) {
+        return 0;
+    }
+    own = files_copy(current_proc->fds);
+    if (!own) {
+        return -ENOMEM;
+    }
+    proc_files_put(current_proc);
+    current_proc->fds = own;
+    return 0;
+}
+
+/**
  * Replace the current process image with a new program, in the workspace
  * `s`; the body of `sys_execve`.
  *
@@ -1321,6 +1387,10 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 
     if (!user_path) {
         return -EFAULT;
+    }
+    rc = exec_unshare_files();
+    if (rc < 0) {
+        return rc;
     }
     rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
     if (rc < 0) {
@@ -1522,12 +1592,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         return -ENOMEM; /* a record the heap could not give */
     }
 
-    /* alloc_process gave the child its own stdio open-file descriptions;
-     * release them now (before any failure path or the fd-table copy below
-     * overwrites the table), or those OFDs would be orphaned and leak the pool
-     * on every fork. */
-    release_fd_table(&child->fds);
-    fd_table_free(&child->fds);
+    /* alloc_process gave the child a table with its own stdio open-file
+     * descriptions; it goes now, before any failure path, since the child
+     * takes a copy of the parent's table or the table itself below. */
+    proc_files_put(child);
 
     child->mm = fork_mm(parent->mm, req->flags);
     if (!child->mm) {
@@ -1560,7 +1628,6 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->dumpable = parent->dumpable;
     child->no_new_privs = parent->no_new_privs;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
-    child->fds.limit = parent->fds.limit;
     child->ruid = parent->ruid; /* credentials: the child is who the parent was */
     child->euid = parent->euid;
     child->suid = parent->suid;
@@ -1606,23 +1673,17 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         child->altstack_on = parent->altstack_on;
     }
 
-    /* Copy file descriptor table. The child shares the parent's open-file
-     * descriptions (so a seek in one is seen by the other, per POSIX), so each
-     * inherited OFD gains a reference; inherited sockets gain one too, so the
-     * parent and child release independently. */
-    if (fd_table_copy(&child->fds, &parent->fds) != 0) {
-        goto fail_built;
-    }
-    {
-        int fdi;
-        for (fdi = 0; fdi < fd_table_cap(&child->fds); fdi++) {
-            if (child->fds.entries[fdi].type == FD_TYPE_NONE) {
-                continue;
-            }
-            fd_ofd_ref(child->fds.entries[fdi].ofd);
-            if (child->fds.entries[fdi].type == FD_TYPE_SOCKET && child->fds.entries[fdi].sock) {
-                socket_ref(child->fds.entries[fdi].sock);
-            }
+    /* The descriptor table: the parent's own under CLONE_FILES, a copy
+     * otherwise. */
+    if (req->flags & CLONE_FILES) {
+        if (fd_table_share(parent->fds) != 0) {
+            goto fail_built;
+        }
+        child->fds = parent->fds;
+    } else {
+        child->fds = files_copy(parent->fds);
+        if (!child->fds) {
+            goto fail_built;
         }
     }
 
@@ -1696,9 +1757,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     return (int32_t)pid;
 
 fail_built:
-    /* Everything built for the child so far goes back: the working
-     * directory's and the root's holds, the kernel stack and the address
-     * space, then the record. */
+    /* Everything built for the child so far goes back: the descriptor table,
+     * the working directory's and the root's holds, the kernel stack and the
+     * address space, then the record. */
+    proc_files_put(child);
     vfs_cwd_clear(child);
     vfs_root_clear(child);
     kstack_free(child->kernel_stack);
@@ -1734,6 +1796,7 @@ int32_t sys_vfork(isr_params_t *params)
  * space itself under CLONE_VM, and with the caller waiting as vfork waits
  * under CLONE_VFORK; or a new thread of the caller's process under
  * CLONE_THREAD, which needs CLONE_SIGHAND, which in turn needs CLONE_VM.
+ * CLONE_FILES shares the caller's descriptor table in place of a copy.
  *
  * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
  * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD
@@ -1751,9 +1814,10 @@ int32_t sys_clone(isr_params_t *params)
     uint32_t flags = params->ebx;
     struct fork_req req;
 
-    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_SIGHAND | CLONE_VFORK | CLONE_PARENT |
-                   CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
-                   CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0 ||
+    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
+                   CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
+                   CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
+                   CLONE_DETACHED)) != 0 ||
         (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
@@ -3998,8 +4062,8 @@ static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t ma
         if (t->tg != p->tg) {
             continue;
         }
-        if (slot == RLIM_NOFILE) {
-            t->fds.limit = (int)cur;
+        if (slot == RLIM_NOFILE && t->fds) {
+            t->fds->limit = (int)cur;
         }
         t->rlim[slot].cur = cur;
         t->rlim[slot].max = max;
@@ -4275,7 +4339,7 @@ static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_fil
     *file = NULL;
     *type = VM_ANON;
     if (!(flags & MAP_ANONYMOUS)) {
-        e = fd_get(&current_proc->fds, fd);
+        e = fd_get(current_proc->fds, fd);
         if (!e) {
             return -EBADF;
         }

@@ -18,6 +18,11 @@ extern volatile uint32_t fb_owner_pid;
 
 void fd_release_backing(fd_entry_t *e);
 
+/** At the end of a system call: let go of the descriptors the call held in
+ * its shared table, and release those another sharer closed meanwhile that
+ * no other call holds. May sleep. */
+void fd_holds_release(void);
+
 void init_kstacks(void);
 
 extern volatile process_t *stdin_waiting_proc;

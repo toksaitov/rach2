@@ -90,6 +90,11 @@ by either is seen by both, and gives the child no alternate signal stack;
 which makes the parent wait as the parent of
 .Fn vfork
 waits;
+.Dv CLONE_FILES ,
+which gives the child the parent's descriptor table itself, so a
+descriptor either opens, closes or duplicates is the other's too, until an
+.Xr execve 2 ,
+which gives the caller a copy of its own;
 .Dv CLONE_THREAD
 with
 .Dv CLONE_SIGHAND ,
@@ -137,11 +142,8 @@ A nonzero
 .Fa stack
 is the stack pointer the child returns to user mode with.
 Every other flag is refused, among them
-.Dv CLONE_FILES
-and
 .Dv CLONE_FS ,
-which share the descriptor table and the working directory: a thread has
-a copy of each.
+which shares the working directory: a thread has a copy of it.
 .Pp
 The i386 system call numbers are 2 for
 .Fn fork ,

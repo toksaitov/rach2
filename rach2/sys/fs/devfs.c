@@ -1409,12 +1409,12 @@ int devfs_open(const char *name, int flags)
         }
     }
 
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
     }
 
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->node = NULL;
     e->sock = NULL;
     e->ofd->offset = 0;

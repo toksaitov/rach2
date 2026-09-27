@@ -99,7 +99,7 @@ struct process {
     uint32_t kernel_stack; /* Top of kernel stack for this process */
     uint32_t parent_pid;   /* Parent process ID */
     int32_t exit_code;     /* Exit status (for zombie) */
-    fd_table_t fds;        /* File descriptor table */
+    fd_table_t *fds;       /* Descriptor table, shared under CLONE_FILES */
     char cwd[CWD_MAX];     /* The working directory's path, unless `cwd_long` has it */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
     /* switch.s reads `regs.esp`, `cr3`, `kernel_stack`, `tls_base` and
@@ -302,6 +302,12 @@ struct process {
      * keeps it. */
     struct vfs_mount *root_mnt;
     void *root_node;
+    /* The descriptors of its shared table the current call has looked up,
+     * one bit each, which a close by another sharer leaves in place until
+     * the call ends (`fd_holds_release`); `fd_holding` says whether any bit
+     * is set. */
+    uint32_t fd_held[FD_TABLE_LIMIT / 32];
+    int fd_holding;
 };
 
 typedef struct process process_t;
@@ -329,8 +335,9 @@ void proc_reclaim_boot_pids(void);
  * room. */
 process_t *alloc_process(void);
 
-/** Take a record off the list and give it back to the heap with its
- * descriptor-table storage and exec workspace; the caller drops the address
+/** Take a record off the list and give it back to the heap with its exec
+ * workspace, and with its descriptor table when this was the table's last
+ * reference and its descriptors were released; the caller drops the address
  * space (`mm_drop`) and frees the kernel stack first. Nothing may refer to
  * the record afterwards. */
 void free_process(process_t *proc);
@@ -373,6 +380,10 @@ void proc_group_exit(int32_t code);
 /** Let the parent a CLONE_VFORK clone made `p` for run again, at `p`'s
  * execve or end; nothing when no parent waits. */
 void proc_vfork_release(process_t *p);
+
+/** Drop `p`'s reference to its descriptor table and leave it none; the last
+ * reference closes every descriptor and frees the table. May sleep. */
+void proc_files_put(process_t *p);
 
 /** Wait, as the parent, until the child `pid` made with CLONE_VFORK calls
  * execve or ends. */

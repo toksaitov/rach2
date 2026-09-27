@@ -125,7 +125,7 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
             fds[i].revents = 0; /* a negative fd is skipped (POSIX) */
             continue;
         }
-        e = fd_get(&current_proc->fds, fds[i].fd);
+        e = fd_get(current_proc->fds, fds[i].fd);
         if (!e || (e->flags & FD_FLAG_PATH)) {
             fds[i].revents = POLLNVAL; /* an invalid or O_PATH fd is reported, not waited on */
             ready++;

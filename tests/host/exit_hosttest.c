@@ -75,9 +75,9 @@ static void wait_for_lock(void)
     CHECK(!wq_active(&lock_wait), "the wait leaves no queued record");
 }
 
-void release_fd_table(fd_table_t *table)
+void proc_files_put(process_t *p)
 {
-    CHECK(table == &child.fds, "cleanup closes the dying process's files");
+    CHECK(p == &child, "cleanup closes the dying process's files");
     CHECK(child.state != PROC_ZOMBIE, "files close before death is published");
     if (fd_wait) {
         wait_for_lock();

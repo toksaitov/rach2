@@ -153,12 +153,12 @@ int32_t sys_eventfd2(struct isr_params *params)
     ev->count = params->ebx;
     ev->semaphore = (flags & EFD_SEMAPHORE) != 0;
     wait_queue_init(&ev->wq);
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(ev);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;
     e->ops = &eventfd_ops;
     e->priv = ev;

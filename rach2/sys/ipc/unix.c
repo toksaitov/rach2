@@ -217,7 +217,7 @@ void unix_init(void)
 
 static fd_table_t *table(void)
 {
-    return &current_proc->fds;
+    return current_proc->fds;
 }
 
 static struct unix_sock *sock_of(const fd_entry_t *e)

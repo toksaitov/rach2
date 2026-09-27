@@ -15,6 +15,23 @@
 static int32_t sys_socketcall(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
+static int32_t sys_accept4(isr_params_t *params);
+static int32_t sys_bind(isr_params_t *params);
+static int32_t sys_connect(isr_params_t *params);
+static int32_t sys_getpeername(isr_params_t *params);
+static int32_t sys_getsockname(isr_params_t *params);
+static int32_t sys_getsockopt(isr_params_t *params);
+static int32_t sys_listen(isr_params_t *params);
+static int32_t sys_recvfrom(isr_params_t *params);
+static int32_t sys_recvmmsg(isr_params_t *params);
+static int32_t sys_recvmsg(isr_params_t *params);
+static int32_t sys_sendmmsg(isr_params_t *params);
+static int32_t sys_sendmsg(isr_params_t *params);
+static int32_t sys_sendto(isr_params_t *params);
+static int32_t sys_setsockopt(isr_params_t *params);
+static int32_t sys_shutdown(isr_params_t *params);
+static int32_t sys_socket(isr_params_t *params);
+static int32_t sys_socketpair(isr_params_t *params);
 #include "syscall_net.c"
 #include "network/socket/packet.c"
 
@@ -23,6 +40,7 @@ extern int dprintf(int fd, const char *format, ...);
 extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 
 static process_t proc;
+static fd_table_t files;
 process_t *current_proc = &proc;
 uint32_t net_ip_addr = 0x0a00020fu;
 uint8_t net_mac[6] = {0x52, 0x54, 0, 0x12, 0x34, 0x56};
@@ -311,7 +329,8 @@ static void invalid_accept(void)
  * any other bit above the type's low four refused before the family. */
 static void socket_flags(void)
 {
-    proc.fds.entries = table;
+    proc.fds = &files;
+    files.entries = table;
     table[4].ofd = &made_description;
     CHECK(socket_with_flags(AF_INET, SOCK_STREAM | 0x10, 0) == -EINVAL,
           "a type bit other than SOCK_CLOEXEC and SOCK_NONBLOCK is refused");
@@ -340,7 +359,8 @@ static void accept_flags(void)
     static struct socket conn[2];
     int i;
 
-    proc.fds.entries = table;
+    proc.fds = &files;
+    files.entries = table;
     table[4].ofd = &made_description;
     sock.type = SOCK_STREAM;
     sock.listening = 1;

@@ -1,4 +1,5 @@
 #include "fd.h"
+#include "../proc/process.h"
 
 #include "vfs.h"
 #include "lock.h"
@@ -209,12 +210,70 @@ int fd_table_cap(const fd_table_t *table)
     return table ? table->cap : 0;
 }
 
-/* The table grown to at least `want` entries by doubling, the new ones
- * free; -1 when `want` is past the limit or the heap has no room. */
+fd_table_t *fd_table_new(void)
+{
+    fd_table_t *table = kzalloc(sizeof(*table));
+
+    if (!table) {
+        return NULL;
+    }
+    if (fd_table_init(table) != 0) {
+        kfree(table);
+        return NULL;
+    }
+    table->refs = 1;
+    return table;
+}
+
+fd_table_t *fd_table_dup(const fd_table_t *src)
+{
+    fd_table_t *table = kzalloc(sizeof(*table));
+
+    if (!table) {
+        return NULL;
+    }
+    table->entries = kzalloc(sizeof(fd_entry_t) * (size_t)src->cap);
+    if (!table->entries) {
+        kfree(table);
+        return NULL;
+    }
+    k_memcpy(table->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
+    table->cap = src->cap;
+    table->limit = src->limit;
+    table->refs = 1;
+    return table;
+}
+
+void fd_table_delete(fd_table_t *table)
+{
+    fd_table_free(table);
+    kfree(table);
+}
+
+/* The entries moved to an array of `cap`, the new ones free; -1 when the
+ * heap has no room. */
+static int fd_table_resize(fd_table_t *table, int cap)
+{
+    fd_entry_t *grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
+
+    if (!grown) {
+        return -1;
+    }
+    if (table->cap) {
+        k_memcpy(grown, table->entries, sizeof(fd_entry_t) * (size_t)table->cap);
+    }
+    kfree(table->entries);
+    table->entries = grown;
+    table->cap = cap;
+    return 0;
+}
+
+/* The table grown to at least `want` entries by doubling; -1 when `want` is
+ * past the limit or the heap has no room. A shared table has every entry
+ * already. */
 static int fd_table_grow(fd_table_t *table, int want)
 {
     int cap = table->cap ? table->cap : FD_TABLE_FIRST;
-    fd_entry_t *grown;
 
     if (want > table->limit) {
         return -1;
@@ -225,16 +284,15 @@ static int fd_table_grow(fd_table_t *table, int want)
     if (cap > FD_TABLE_LIMIT) {
         cap = FD_TABLE_LIMIT;
     }
-    grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
-    if (!grown) {
+    return fd_table_resize(table, cap);
+}
+
+int fd_table_share(fd_table_t *table)
+{
+    if (table->cap < FD_TABLE_LIMIT && fd_table_resize(table, FD_TABLE_LIMIT) != 0) {
         return -1;
     }
-    if (table->cap) {
-        k_memcpy(grown, table->entries, sizeof(fd_entry_t) * (size_t)table->cap);
-    }
-    kfree(table->entries);
-    table->entries = grown;
-    table->cap = cap;
+    table->refs++;
     return 0;
 }
 
@@ -250,19 +308,6 @@ int fd_table_reach(fd_table_t *table, int fd)
         return 0;
     }
     return fd_table_grow(table, fd + 1);
-}
-
-int fd_table_copy(fd_table_t *dst, const fd_table_t *src)
-{
-    dst->entries = kzalloc(sizeof(fd_entry_t) * (size_t)src->cap);
-    if (!dst->entries) {
-        dst->cap = 0;
-        return -1;
-    }
-    k_memcpy(dst->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
-    dst->cap = src->cap;
-    dst->limit = src->limit;
-    return 0;
 }
 
 /**
@@ -380,15 +425,20 @@ int fd_free(fd_table_t *table, int fd)
 
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
+    fd_entry_t *e;
+
     if (!table || fd < 0 || fd >= table->cap) {
         return NULL;
     }
-
-    if (table->entries[fd].type == FD_TYPE_NONE) {
+    e = &table->entries[fd];
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
         return NULL;
     }
-
-    return &table->entries[fd];
+    if (table->refs > 1 && current_proc && table == current_proc->fds) {
+        current_proc->fd_held[fd / 32] |= 1u << (fd % 32);
+        current_proc->fd_holding = 1;
+    }
+    return e;
 }
 
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e)
@@ -409,7 +459,8 @@ int fd_is_valid(fd_table_t *table, int fd)
         return 0;
     }
 
-    return table->entries[fd].type != FD_TYPE_NONE;
+    return table->entries[fd].type != FD_TYPE_NONE &&
+           !(table->entries[fd].flags & FD_FLAG_CLOSING);
 }
 
 int fd_can_alloc(const fd_table_t *table)

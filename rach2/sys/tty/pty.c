@@ -612,12 +612,12 @@ int pty_open_master(int flags)
     if (!p) {
         return -ENFILE;
     }
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         pty_free(p);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PTM;
     e->node = NULL;
     e->sock = NULL;
@@ -650,11 +650,11 @@ int pty_open_slave(int index, int flags)
     if (p->locked) {
         return -EIO; /* not unlocked yet (unlockpt not called) */
     }
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PTS;
     e->node = NULL;
     e->sock = NULL;

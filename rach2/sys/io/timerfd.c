@@ -186,7 +186,7 @@ static const struct file_ops timerfd_ops = {timerfd_read, NULL, timerfd_poll, NU
 
 static struct timerfd *timer_of(int fd)
 {
-    fd_entry_t *e = fd_get(&current_proc->fds, fd);
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
 
     return (e && e->ops == &timerfd_ops) ? (struct timerfd *)e->priv : NULL;
 }
@@ -213,12 +213,12 @@ int32_t sys_timerfd_create(struct isr_params *params)
     t->anon.name = "[timerfd]";
     t->clock = clock;
     wait_queue_init(&t->wq);
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(t);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;
     e->ops = &timerfd_ops;
     e->priv = t;
@@ -350,7 +350,7 @@ static int32_t settime(struct isr_params *params, int wide)
     struct setting now, want;
     int32_t rc;
 
-    if (!fd_get(&current_proc->fds, (int)params->ebx)) {
+    if (!fd_get(current_proc->fds, (int)params->ebx)) {
         return -EBADF;
     }
     if (!t || (flags & ~(TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET))) {
@@ -373,7 +373,7 @@ static int32_t gettime(struct isr_params *params, int wide)
     struct timerfd *t = timer_of((int)params->ebx);
     struct setting now;
 
-    if (!fd_get(&current_proc->fds, (int)params->ebx)) {
+    if (!fd_get(current_proc->fds, (int)params->ebx)) {
         return -EBADF;
     }
     if (!t) {

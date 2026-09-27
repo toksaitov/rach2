@@ -1407,7 +1407,7 @@ static int32_t sys_ioctl(isr_params_t *params)
     /* Validate the fd first, so a bad fd reports -EBADF, not a request-
      * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY).
      * An O_PATH descriptor is -EBADF to every request, as on Linux. */
-    entry = fd_get(&current_proc->fds, fd_num);
+    entry = fd_get(current_proc->fds, fd_num);
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
@@ -1861,7 +1861,9 @@ static int syscall_restartable(uint32_t nr)
  * interrupts on so the PIT/HDA keep ticking during long syscalls. A switch an
  * interrupt asked for during the call is taken at its exit, with interrupts
  * off again and the trapframe whole, so a process that is always inside a
- * call gives way once per call; a call that does not return does not.
+ * call gives way once per call; a call that does not return does not. The
+ * descriptors the call held in a shared table are let go as the body
+ * returns, before a tracer's exit stop (`fd_holds_release`).
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -1927,6 +1929,7 @@ static void _syscall_handler(isr_params_t *params)
         }
     }
 
+    fd_holds_release();
     if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {
         params->eax = (uint32_t)ret;
         ptrace_syscall_stop(params, syscall_num, 1);

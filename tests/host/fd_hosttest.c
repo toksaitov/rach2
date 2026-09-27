@@ -255,7 +255,7 @@ static void close_process(process_t *p)
     int i;
 
     for (i = FD_STDIN; i <= FD_STDERR; i++) {
-        fd_free(&p->fds, i);
+        fd_free(p->fds, i);
     }
     free_process(p);
 }
@@ -268,7 +268,7 @@ static void process_allocations(void)
     uint32_t forks = process_forks_since_boot();
 
     check(keeper != NULL, "initial process allocation");
-    for (fail = 0; fail < 6; fail++) {
+    for (fail = 0; fail < 7; fail++) {
         process_t *p;
 
         fail_after = fail;
@@ -278,7 +278,7 @@ static void process_allocations(void)
         check(proc_list == keeper && proc_tail == keeper && !keeper->next,
               "failed process is not published");
         check(process_forks_since_boot() == forks, "failed process is not counted");
-        check(allocations == 6, "failed process releases every allocation");
+        check(allocations == 7, "failed process releases every allocation");
         if (p) {
             close_process(p);
             forks = process_forks_since_boot();

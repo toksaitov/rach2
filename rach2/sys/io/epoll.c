@@ -65,7 +65,7 @@ static struct epoll *epoll_of(int fd);
  * file, or none, is marked for removal with `*gone`. */
 static uint32_t item_ready(struct epitem *it, struct wait_queue **wq, int *gone)
 {
-    fd_entry_t *e = fd_get(&current_proc->fds, it->fd);
+    fd_entry_t *e = fd_get(current_proc->fds, it->fd);
     uint32_t want = (it->events & EPOLL_EVENTS) | EPOLLERR | EPOLLHUP;
     uint32_t ready;
 
@@ -147,7 +147,7 @@ static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         *wq = &ep->wq;
     }
     for (it = ep->items; it; it = it->next) {
-        fd_entry_t *t = fd_get(&current_proc->fds, it->fd);
+        fd_entry_t *t = fd_get(current_proc->fds, it->fd);
         struct wait_queue *ignored;
         uint32_t want = (it->events & EPOLL_EVENTS) | EPOLLERR | EPOLLHUP;
 
@@ -174,7 +174,7 @@ static const struct file_ops epoll_ops = {NULL, NULL, epoll_poll, NULL, epoll_cl
 
 static struct epoll *epoll_of(int fd)
 {
-    fd_entry_t *e = fd_get(&current_proc->fds, fd);
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
 
     return (e && e->ops == &epoll_ops) ? (struct epoll *)e->priv : NULL;
 }
@@ -194,12 +194,12 @@ static int32_t make_epoll(uint32_t flags)
     }
     ep->anon.name = "[eventpoll]";
     wait_queue_init(&ep->wq);
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(ep);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_ANON;
     e->ops = &epoll_ops;
     e->priv = ep;
@@ -225,12 +225,12 @@ int32_t sys_epoll_ctl(struct isr_params *params)
     struct epoll *ep = epoll_of((int)params->ebx);
     int op = (int)params->ecx;
     int fd = (int)params->edx;
-    fd_entry_t *target = fd_get(&current_proc->fds, fd);
+    fd_entry_t *target = fd_get(current_proc->fds, fd);
     uint32_t ev[3] = {0, 0, 0};
     struct epitem **link;
     struct epitem *it;
 
-    if (!fd_get(&current_proc->fds, (int)params->ebx) || !target) {
+    if (!fd_get(current_proc->fds, (int)params->ebx) || !target) {
         return -EBADF;
     }
     if (!ep || fd == (int)params->ebx) {
@@ -298,7 +298,7 @@ static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_de
     int32_t rc;
     uint32_t i;
 
-    if (!fd_get(&current_proc->fds, epfd)) {
+    if (!fd_get(current_proc->fds, epfd)) {
         return -EBADF;
     }
     if (!ep || max <= 0 || (uint32_t)max > EP_MAX_EVENTS) {

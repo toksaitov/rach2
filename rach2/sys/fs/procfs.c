@@ -721,7 +721,7 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_ids(t, "Uid", p->ruid, p->euid, p->suid);
     ap_ids(t, "Gid", p->rgid, p->egid, p->sgid);
     ap_str(t, "FDSize:\t");
-    ap_u32(t, (uint32_t)fd_table_cap(&p->fds));
+    ap_u32(t, (uint32_t)fd_table_cap(p->fds));
     ap_str(t, "\nGroups:\t");
     for (i = 0; i < p->ngroups; i++) {
         ap_u32(t, p->groups[i]);
@@ -918,10 +918,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     if (!p || p->state == PROC_UNUSED) {
         return -ENOENT;
     }
-    if (fd < 0 || fd >= fd_table_cap(&p->fds)) {
+    if (fd < 0 || fd >= fd_table_cap(p->fds)) {
         return -ENOENT;
     }
-    e = &p->fds.entries[fd];
+    e = &p->fds->entries[fd];
     if (e->type == FD_TYPE_NONE) {
         return -ENOENT;
     }
@@ -2030,12 +2030,12 @@ static int procfs_open_mem(int pid, int flags)
     }
     f->origin_pid = pid;
     f->origin_file = SYNTH_PROC_MEM;
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;
@@ -2299,13 +2299,13 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = vp->procfile;
     }
 
-    fd = fd_alloc(&current_proc->fds);
+    fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f->data);
         kfree(f);
         return -EMFILE;
     }
-    e = &current_proc->fds.entries[fd];
+    e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;
     e->node = NULL;
     e->sock = NULL;

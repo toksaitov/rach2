@@ -43,7 +43,7 @@ int proc_exit_cleanup(int32_t status)
 
     self->in_syscall = 1;
     proc_thread_gone(self);
-    release_fd_table(&self->fds);
+    proc_files_put(self);
     vfs_cwd_clear(self);
     vfs_root_clear(self);
     proc_vfork_release(self);

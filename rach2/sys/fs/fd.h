@@ -60,6 +60,7 @@ typedef enum {
 #define FD_FLAG_WRITE   0x02
 #define FD_FLAG_CLOEXEC 0x08 /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
 #define FD_FLAG_PATH    0x10 /* O_PATH: names a file, reads and writes nothing */
+#define FD_FLAG_CLOSING 0x20 /* closed while another sharer's call uses it */
 /* O_APPEND/O_NONBLOCK are OFD status flags (OFD_* in struct open_file), not
  * per-descriptor flags; they are shared by dup/dup2/fork. */
 
@@ -151,13 +152,18 @@ typedef struct fd_entry {
 } fd_entry_t;
 
 /*
- * File descriptor table in each process's record: `cap` entries in the
- * heap, every one FD_TYPE_NONE unless open.
+ * File descriptor table, which each process's record points to: `cap`
+ * entries in the heap, every one FD_TYPE_NONE unless open. Threads and the
+ * processes clone makes with CLONE_FILES share one table, `refs` counting
+ * them. A shared table has all FD_TABLE_LIMIT entries, so an entry stays
+ * where it is while a call of one sharer sleeps with it and another opens
+ * files.
  */
 typedef struct fd_table {
     fd_entry_t *entries;
     int cap;
     int limit; /* the process's RLIMIT_NOFILE, at most FD_TABLE_LIMIT */
+    int refs;
 } fd_table_t;
 
 /** Close every descriptor's backing object before releasing its slot. */
@@ -169,6 +175,24 @@ int fd_table_init(fd_table_t *table);
 /** Free the entries; the descriptors must have been released first. */
 void fd_table_free(fd_table_t *table);
 
+/** A table from the heap with its first entries and one reference; NULL
+ * when the heap has no room. */
+fd_table_t *fd_table_new(void);
+
+/** A table from the heap with a copy of `src`'s entries and one reference,
+ * for fork; the references the copies share are the caller's to add. NULL
+ * when the heap has no room. */
+fd_table_t *fd_table_dup(const fd_table_t *src);
+
+/** Free a table `fd_table_new` or `fd_table_dup` made, entries and all;
+ * the descriptors must have been released first. */
+void fd_table_delete(fd_table_t *table);
+
+/** Take another reference to `table` for a CLONE_FILES child, first growing
+ * it to FD_TABLE_LIMIT entries if it has fewer; 0, or -1 when the heap has
+ * no room for them. */
+int fd_table_share(fd_table_t *table);
+
 /** How many entries the table has now: the bound of a walk over it. */
 int fd_table_cap(const fd_table_t *table);
 
@@ -178,12 +202,6 @@ int fd_table_cap(const fd_table_t *table);
  * heap has no room.
  */
 int fd_table_reach(fd_table_t *table, int fd);
-
-/**
- * Make `dst`, which has no entries, a copy of `src`'s entries, for fork;
- * the references the copies share are the caller's to add. 0 or -1.
- */
-int fd_table_copy(fd_table_t *dst, const fd_table_t *src);
 
 /** Wire fd 0/1/2 as console stdin/stdout/stderr; call after fd_table_init. */
 int fd_init_stdio(fd_table_t *table);
@@ -204,7 +222,9 @@ int fd_alloc_from(fd_table_t *table, int minfd);
 /** Release a descriptor and its OFD reference; 0 ok, -1 if fd invalid. */
 int fd_free(fd_table_t *table, int fd);
 
-/** The entry for fd, or NULL if fd is out of range or free. */
+/** The entry for fd, or NULL if fd is out of range, free or closing. A
+ * lookup in the calling thread's shared table marks the descriptor held by
+ * the call until it ends. */
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
 /**
