@@ -40,6 +40,17 @@ receives
 and may reap it.
 A tracer that ends lets its tracees go, and the parent of one whose
 process has ended is told of the end the same way.
+The end of a tracee sends the tracer a
+.Dv SIGCHLD
+too, with
+.Dv CLD_EXITED
+and the exit status, or
+.Dv CLD_KILLED
+or
+.Dv CLD_DUMPED
+and the signal, as
+.Xr wait 2
+reports the end.
 The stops are:
 .Bl -tag -width "signal-delivery stop"
 .It signal-delivery stop
@@ -272,8 +283,12 @@ it at a breakpoint in its read-only text and moves it back, stops it at
 the entry and exit of a system call and after an
 .Xr execve 2 ,
 sets and reads a debug register, has a breakpoint on a kernel address
-refused and one ending at the last user address taken, and attaches to
-and detaches from a running process.
+refused and one ending at the last user address taken, attaches to and
+detaches from a running process, and reads the
+.Dv SIGCHLD
+of a tracee
+.Dv SIGKILL
+ends.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT

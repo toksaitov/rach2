@@ -23,7 +23,8 @@
  * first has the time of the children its process reaped. A process another
  * process traces, which ends, is reported to its tracer before its parent
  * may reap it, and then to the parent; the tracer's next wait finds nothing
- * left to wait for.
+ * left to wait for. A tracee SIGKILL ends sends its tracer, here its parent,
+ * a SIGCHLD of CLD_KILLED with the signal.
  *
  * Prints "PTRACEMUSL OK" on success and "PTRACEMUSL FAIL (detail)"
  * otherwise.
@@ -577,10 +578,52 @@ static int tracer_first(void)
     return 0;
 }
 
+/*
+ * A tracee that SIGKILL ends tells its tracer, which is its parent here,
+ * with a SIGCHLD whose siginfo is CLD_KILLED and the signal, and the wait
+ * reports it killed. SIGCHLD is blocked, and the one the stop sent taken,
+ * so the siginfo read is the end's.
+ */
+static int killed_tracee(void)
+{
+    struct timespec now = {0, 0};
+    struct timespec bound = {5, 0};
+    sigset_t chld;
+    siginfo_t si;
+    int status;
+    pid_t pid;
+
+    sigemptyset(&chld);
+    sigaddset(&chld, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &chld, NULL);
+    pid = fork();
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        _exit(0);
+    }
+    if (!stopped_by(pid, SIGSTOP)) {
+        return fail("the tracee to be killed did not stop");
+    }
+    while (sigtimedwait(&chld, &si, &now) == SIGCHLD) {
+    }
+    if (kill(pid, SIGKILL) != 0 || sigtimedwait(&chld, &si, &bound) != SIGCHLD) {
+        return fail("no SIGCHLD came of the killed tracee");
+    }
+    if (si.si_code != CLD_KILLED || si.si_status != SIGKILL || si.si_pid != pid) {
+        return fail("the SIGCHLD of a killed tracee was not CLD_KILLED with SIGKILL");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
+        return fail("the killed tracee was not reported killed by SIGKILL");
+    }
+    sigprocmask(SIG_UNBLOCK, &chld, NULL);
+    return 0;
+}
+
 int main(void)
 {
     if (memory_and_registers() || syscalls_and_exec() || attach() || stopped_leader() ||
-        traced_thread_usage() || tracer_first()) {
+        traced_thread_usage() || tracer_first() || killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

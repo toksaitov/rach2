@@ -78,7 +78,8 @@ void ptrace_exec(uint32_t old_tid);
 
 /** Tell the tracer of `p` of its end, the thread's, or, for a leader whose
  * process has ended, the process's: a SIGCHLD with the siginfo
- * `proc_child_info` gives, and a wake of its wait. */
+ * `proc_child_info` gives, CLD_EXITED with the exit code or CLD_KILLED or
+ * CLD_DUMPED with the signal, and a wake of its wait. */
 void ptrace_exit_notify(process_t *p);
 
 /** The tracer's wait has reported the end of the process `t` leads, whose
