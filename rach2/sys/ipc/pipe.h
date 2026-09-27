@@ -36,14 +36,35 @@ typedef struct pipe {
     uint8_t buf[PIPE_BUF_SIZE];
     uint32_t head;         /* total bytes consumed by the read end */
     uint32_t tail;         /* total bytes produced by the write end */
-    int read_open;         /* a read-end descriptor still references this pipe */
-    int write_open;        /* a write-end descriptor still references this pipe */
+    int read_open;         /* descriptions open on the read end */
+    int write_open;        /* descriptions open on the write end */
     wait_queue_t read_wq;  /* readers blocked waiting for data */
     wait_queue_t write_wq; /* writers blocked waiting for space */
+    /* A FIFO's: the file it is the pipe of, the opens of each end so far,
+     * which an open waiting for the other end watches, and the queue it
+     * waits on. The pipe lasts while an end is open, as in Linux. */
+    int fifo;
+    const void *fifo_mnt;
+    uint32_t fifo_ino;
+    uint32_t read_opens;
+    uint32_t write_opens;
+    wait_queue_t open_wq;
 } pipe_t;
 
 /** Allocate the pipe pool from kernel memory; called once from init. */
 void pipe_init_pool(void);
+
+/**
+ * Make the fresh descriptor `e` an end of the pipe of the FIFO file (`mnt`,
+ * `ino`), as open(2) with `flags` asks, making the pipe at the first open.
+ *
+ * A reader waits for a writer and a writer for a reader, as in Linux: with
+ * O_NONBLOCK a reader does not wait and a writer with no reader fails with
+ * ENXIO; O_RDWR opens both ends and never waits. Returns 0, or -errno with
+ * `e` as it was, for the caller to free.
+ */
+struct fd_entry;
+int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint32_t ino, int flags);
 
 /*
  * sys_pipe2(int pipefd[2], int flags): create a pipe and return its read-end fd

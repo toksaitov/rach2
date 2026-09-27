@@ -390,9 +390,10 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 
 /**
  * Release one end when its last descriptor closes (called from
- * fd_release_backing at OFD refcount 1). Mark the end closed, wake the peer
- * so a blocked reader sees EOF or a blocked writer sees the broken pipe, and
- * free the pipe once both ends are gone.
+ * fd_release_backing at OFD refcount 1). Count the end closed, wake the peer
+ * so a blocked reader sees EOF or a blocked writer sees the broken pipe once
+ * no end of its kind is left, and free the pipe once no end is open. A FIFO
+ * opened for reading and writing is an end of both kinds.
  */
 static void pipe_close(fd_entry_t *e)
 {
@@ -402,10 +403,11 @@ static void pipe_close(fd_entry_t *e)
         return;
     }
     if (e->flags & FD_FLAG_READ) {
-        p->read_open = 0;
+        p->read_open--;
         wq_wake_all(&p->write_wq); /* writers now get SIGPIPE */
-    } else {
-        p->write_open = 0;
+    }
+    if (e->flags & FD_FLAG_WRITE) {
+        p->write_open--;
         wq_wake_all(&p->read_wq); /* readers now get EOF */
     }
     if (!p->read_open && !p->write_open) {
@@ -432,6 +434,100 @@ static void pipe_setup_end(int fd, pipe_t *p, uint32_t access, int flags)
     if ((flags & O_NONBLOCK_FLAG) && e->ofd) {
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
+}
+
+/* An open of a FIFO waiting for the other end: the opens of that end so far
+ * when the wait began. */
+struct fifo_wait {
+    const pipe_t *p;
+    int for_reader;
+    uint32_t seen;
+};
+
+static int fifo_partner_came(void *arg)
+{
+    const struct fifo_wait *w = (const struct fifo_wait *)arg;
+
+    return (w->for_reader ? w->p->read_opens : w->p->write_opens) != w->seen;
+}
+
+static pipe_t *fifo_find(const void *mnt, uint32_t ino)
+{
+    pipe_t *p;
+
+    for (p = pipes; p && !(p->fifo && p->fifo_mnt == mnt && p->fifo_ino == ino); p = p->next) {
+    }
+    return p;
+}
+
+/* Take back an open of `reads` and `writes` that did not finish, and free a
+ * pipe with no end left. */
+static void fifo_unopen(pipe_t *p, int reads, int writes)
+{
+    p->read_open -= reads;
+    p->write_open -= writes;
+    if (!p->read_open && !p->write_open) {
+        pipe_free(p);
+    }
+}
+
+int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint32_t ino, int flags)
+{
+    int acc = flags & 3;
+    int nonblock = (flags & O_NONBLOCK_FLAG) != 0;
+    int reads = acc != 1;
+    int writes = acc != 0;
+    pipe_t *p;
+
+    if (acc == 3) {
+        return -EINVAL;
+    }
+    p = fifo_find(mnt, ino);
+    if (!p) {
+        p = pipe_alloc();
+        if (!p) {
+            return -ENFILE;
+        }
+        p->read_open = 0;
+        p->write_open = 0;
+        p->fifo = 1;
+        p->fifo_mnt = mnt;
+        p->fifo_ino = ino;
+        wait_queue_init(&p->open_wq);
+    }
+    p->read_open += reads;
+    p->write_open += writes;
+    if (acc == 1 && nonblock && p->read_open == 0) {
+        fifo_unopen(p, reads, writes);
+        return -ENXIO;
+    }
+    p->read_opens += (uint32_t)reads;
+    p->write_opens += (uint32_t)writes;
+    wq_wake_all(&p->open_wq);
+    if (!nonblock && acc != 2 && (acc == 0 ? !p->write_open : !p->read_open)) {
+        struct fifo_wait w;
+
+        w.p = p;
+        w.for_reader = acc == 1;
+        w.seen = w.for_reader ? p->read_opens : p->write_opens;
+        if (wq_wait_event(&p->open_wq, fifo_partner_came, &w) < 0) {
+            fifo_unopen(p, reads, writes);
+            return -EINTR;
+        }
+    }
+    e->type = FD_TYPE_PIPE;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &pipe_ops;
+    e->priv = p;
+    e->flags = (reads ? FD_FLAG_READ : 0u) | (writes ? FD_FLAG_WRITE : 0u);
+    if (flags & O_CLOEXEC_FLAG) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    if (nonblock && e->ofd) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    return 0;
 }
 
 int32_t sys_pipe2(struct isr_params *params)
