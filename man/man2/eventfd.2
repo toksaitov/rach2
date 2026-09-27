@@ -37,6 +37,11 @@ of eight bytes takes the counter and sets it to zero, or with
 .Dv EFD_SEMAPHORE
 returns 1 and takes 1; a read of a zero counter waits, or fails with
 .Er EAGAIN .
+The value is taken before it is copied to the caller, as in Linux, so two
+readers never return the same value, and a read whose buffer cannot be
+written fails with
+.Er EFAULT
+and loses what it took.
 .Xr poll 2
 and
 .Xr epoll 2

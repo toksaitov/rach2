@@ -54,6 +54,13 @@ static int fits(void *arg)
     return a->value <= EFD_MAX - a->ev->count;
 }
 
+/**
+ * read(2) of an eventfd: the counter, or 1 with EFD_SEMAPHORE, taken off
+ * the counter as it is read, and the writers woken, before the copy to the
+ * caller, as Linux takes it. The copy can sleep in a page fault, and another
+ * reader must not find the same value meanwhile; a copy that fails loses
+ * the value, as in Linux.
+ */
 static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
@@ -71,11 +78,11 @@ static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
     }
     value = ev->semaphore ? 1u : ev->count;
+    ev->count -= value;
+    wq_wake_all(&ev->wq);
     if (copy_to_user((void __user *)buf, &value, sizeof(value)) != 0) {
         return -EFAULT;
     }
-    ev->count -= value;
-    wq_wake_all(&ev->wq);
     return (int32_t)sizeof(value);
 }
 
