@@ -46,6 +46,7 @@ fetch_one()
         echo "fetch: $1: not in sources.txt or sources-extra.txt" >&2
         return 1
     fi
+    # shellcheck disable=SC2086 # a line of either list is four words
     set -- $line
     url="$3"
     want="$4"
@@ -74,6 +75,7 @@ if [ "$1" = "--path" ]; then
     exit
 fi
 if [ $# -eq 0 ]; then
+    # shellcheck disable=SC2046 # a tarball's name is one word
     set -- $(awk '$1 !~ /^#/ && NF { print $1 }' "$DIR/sources.txt" "$DIR/sources-extra.txt")
 fi
 for name in "$@"; do

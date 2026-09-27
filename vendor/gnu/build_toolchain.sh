@@ -15,6 +15,7 @@
 # the caller's jobs; run alone, the script uses every processor.
 #
 
+# shellcheck disable=SC2086 # JOBS and GCC_COMMON are lists of words
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
