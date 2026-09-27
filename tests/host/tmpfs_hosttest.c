@@ -14,19 +14,20 @@
  * refuse rmdir while they have names; a hard link keeps the bytes after the
  * first name goes; rename moves a name, replaces a file, and refuses to put a
  * directory over a file, a file over a directory, a directory over one that is
- * not empty, or a directory under itself. A symbolic link reads back its
- * target, a FIFO keeps its type, a device node keeps its number and does not
- * open, a listing is ".", "..", then the names in the order they were made or
- * renamed, each with its type, and a directory knows its path. A node held
- * after its last name goes stays readable, a removed directory held after its
- * parent is removed keeps the parent for its "..", and a shared mapping's page
- * takes a reference of its own; a page at or past the most a file may have is
- * refused without growing the table, 2^31 and 2^32 - 1 among them, and the last
- * page below it is given; a truncation of mapped memory takes the pages it
- * frees out of the mappings first. A memfd's node has its name and no
- * directory, and goes with its last hold; its seals refuse a shrink, a growth,
- * a write, a change of its execute bits and more seals, and a named file starts
- * sealed against sealing. Returns the failed-check count.
+ * not empty, or a directory under itself, and one the heap cannot serve changes
+ * nothing. A symbolic link reads back its target, a FIFO keeps its type, a
+ * device node keeps its number and does not open, a listing is ".", "..", then
+ * the names in the order they were made or renamed, each with its type, and a
+ * directory knows its path. A node held after its last name goes stays
+ * readable, a removed directory held after its parent is removed keeps the
+ * parent for its "..", and a shared mapping's page takes a reference of its
+ * own; a page at or past the most a file may have is refused without growing
+ * the table, 2^31 and 2^32 - 1 among them, and the last page below it is given;
+ * a truncation of mapped memory takes the pages it frees out of the mappings
+ * first. A memfd's node has its name and no directory, and goes with its last
+ * hold; its seals refuse a shrink, a growth, a write, a change of its execute
+ * bits and more seals, and a named file starts sealed against sealing. Returns
+ * the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -50,14 +51,22 @@ static int fails;
 static process_t process;
 process_t *current_proc = &process;
 
+/* When positive, the allocation that counts it down to zero is refused. */
+static int heap_fails_in;
+
+static int heap_refuses(void)
+{
+    return heap_fails_in > 0 && --heap_fails_in == 0;
+}
+
 void *kmalloc(size_t n)
 {
-    return malloc(n);
+    return heap_refuses() ? NULL : malloc(n);
 }
 
 void *kzalloc(size_t n)
 {
-    return calloc(1, n);
+    return heap_refuses() ? NULL : calloc(1, n);
 }
 
 void kfree(void *p)
@@ -497,6 +506,38 @@ static void removed_parent(void)
     tmpfs_put(&mnt, c);
 }
 
+/**
+ * A rename the heap cannot serve changes nothing, whether its entry or its
+ * name is refused: a directory with a file in it keeps its old name and the
+ * file, and the new name is not made.
+ */
+static void rename_refused(void)
+{
+    void *d, *f, *again;
+
+    CHECK(tmpfs_mkdir(&mnt, NULL, "old", 0755) == 0);
+    d = look(NULL, "old");
+    f = make(d, "inside", 0644);
+    heap_fails_in = 1;
+    CHECK(tmpfs_rename(&mnt, NULL, "old", NULL, "a-longer-name") == -ENOSPC);
+    heap_fails_in = 2;
+    CHECK(tmpfs_rename(&mnt, NULL, "old", NULL, "a-longer-name") == -ENOSPC);
+    heap_fails_in = 0;
+    CHECK(look(NULL, "a-longer-name") == NULL);
+    again = look(NULL, "old");
+    CHECK(again == d);
+    if (again) {
+        tmpfs_put(&mnt, again);
+    }
+    again = look(d, "inside");
+    CHECK(again == f);
+    if (again) {
+        tmpfs_put(&mnt, again);
+    }
+    tmpfs_put(&mnt, f);
+    tmpfs_put(&mnt, d);
+}
+
 int main(void)
 {
     struct vfs_stat st;
@@ -516,6 +557,7 @@ int main(void)
     truncation();
     seals();
     removed_parent();
+    rename_refused();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

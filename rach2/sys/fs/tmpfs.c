@@ -155,27 +155,35 @@ static struct tmpfs_dirent **find(struct tmpfs_node *d, const char *name)
     return NULL;
 }
 
-/**
- * Add the name `name` for `n` at the end of `d`, so a directory lists its
- * names in the order they were made. A directory takes a hold on `d` as its
- * parent and lets go of the one on the parent it had, which a rename moves
- * it from.
- */
-static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *n)
+/* An entry for the name `name`, from the heap and in no directory yet; NULL
+ * when the heap has no room for it. */
+static struct tmpfs_dirent *new_entry(const char *name)
 {
-    struct tmpfs_dirent **link = &d->entries;
     struct tmpfs_dirent *e = kzalloc(sizeof(*e));
     uint32_t len = (uint32_t)k_strlen(name);
 
     if (!e) {
-        return -ENOSPC;
+        return NULL;
     }
     e->name = kmalloc(len + 1u);
     if (!e->name) {
         kfree(e);
-        return -ENOSPC;
+        return NULL;
     }
     k_memcpy(e->name, name, len + 1u);
+    return e;
+}
+
+/**
+ * Put the entry `e` for `n` at the end of `d`, so a directory lists its
+ * names in the order they were made. A directory takes a hold on `d` as its
+ * parent and lets go of the one on the parent it had, which a rename moves
+ * it from.
+ */
+static void link_entry(struct tmpfs_node *d, struct tmpfs_dirent *e, struct tmpfs_node *n)
+{
+    struct tmpfs_dirent **link = &d->entries;
+
     e->node = n;
     while (*link) {
         link = &(*link)->next;
@@ -195,6 +203,18 @@ static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *
     }
     n->links++;
     stamp(d, STAMP_M | STAMP_C);
+}
+
+/* Add the name `name` for `n` at the end of `d`: 0, or -ENOSPC when the heap
+ * has no room for the entry. */
+static int add_entry(struct tmpfs_node *d, const char *name, struct tmpfs_node *n)
+{
+    struct tmpfs_dirent *e = new_entry(name);
+
+    if (!e) {
+        return -ENOSPC;
+    }
+    link_entry(d, e, n);
     return 0;
 }
 
@@ -589,6 +609,12 @@ static int is_above(const struct tmpfs_node *a, const struct tmpfs_node *d)
     }
 }
 
+/**
+ * Move the name `oldname` in `olddir` to `newname` in `newdir`, replacing a
+ * file or an empty directory there. The new name's entry is had from the
+ * heap before either directory changes, so a rename the heap cannot serve
+ * answers -ENOSPC with both names as they were.
+ */
 static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                         const char *newname)
 {
@@ -596,8 +622,8 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     struct tmpfs_node *nd = dir_of(mnt, newdir);
     struct tmpfs_dirent **from = find(od, oldname);
     struct tmpfs_dirent **to = find(nd, newname);
+    struct tmpfs_dirent *e;
     struct tmpfs_node *n;
-    int rc;
 
     if (!from) {
         return -ENOENT;
@@ -622,18 +648,17 @@ static int tmpfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname
     if (is_dir(n) && is_above(n, nd)) {
         return -EINVAL;
     }
-    n->refs++; /* kept while it has no name */
+    e = new_entry(newname);
+    if (!e) {
+        return -ENOSPC;
+    }
     remove_entry(od, find(od, oldname));
     to = find(nd, newname);
     if (to) {
         settle(remove_entry(nd, to));
     }
-    rc = add_entry(nd, newname, n);
-    n->refs--;
-    if (rc != 0) {
-        settle(n);
-    }
-    return rc;
+    link_entry(nd, e, n);
+    return 0;
 }
 
 static int tmpfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
