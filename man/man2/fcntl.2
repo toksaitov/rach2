@@ -61,6 +61,12 @@ combined with the stored
 and
 .Dv O_NONBLOCK
 flags.
+A descriptor opened with
+.Dv O_PATH
+reports
+.Dv O_RDONLY
+and
+.Dv O_PATH .
 .It Dv F_SETFL
 Replace the open-file description's
 .Dv O_APPEND
@@ -124,6 +130,32 @@ is open on.
 .Pp
 Every other command is refused with
 .Er EINVAL .
+A descriptor opened with
+.Dv O_PATH
+takes
+.Dv F_DUPFD ,
+.Dv F_DUPFD_CLOEXEC ,
+.Dv F_GETFD ,
+.Dv F_SETFD
+and
+.Dv F_GETFL
+and returns
+.Er EBADF
+for every other command, as on Linux.
+.Pp
+.Dv FD_CLOEXEC
+belongs to one descriptor and causes it to close during
+.Xr execve 2 .
+The file offset and status flags belong to the shared open-file
+description, so changes are visible through descriptors duplicated by
+.Xr dup 2
+or inherited by
+.Xr fork 2 .
+.Dv O_APPEND
+selects the file end for regular-file writes.
+.Dv O_NONBLOCK
+affects operations that implement nonblocking I/O, including socket
+connection and receive operations.
 .Ss Record locks
 A lock is advisory: it stops another lock, never a read or a write.
 .Va l_whence
@@ -211,20 +243,6 @@ and
 are the 64-bit forms on i386.
 The deadlock search follows ten waits, Linux's bound, so a longer cycle
 is not found; it is made only for POSIX locks, as on Linux.
-.Pp
-.Dv FD_CLOEXEC
-belongs to one descriptor and causes it to close during
-.Xr execve 2 .
-The file offset and status flags belong to the shared open-file
-description, so changes are visible through descriptors duplicated by
-.Xr dup 2
-or inherited by
-.Xr fork 2 .
-.Dv O_APPEND
-selects the file end for regular-file writes.
-.Dv O_NONBLOCK
-affects operations that implement nonblocking I/O, including socket
-connection and receive operations.
 .Sh RETURN VALUES
 The duplication commands return a new descriptor.
 .Dv F_GETFD
@@ -270,8 +288,11 @@ and checks that the new descriptor's flag is clear.
 A set lock command met a conflicting lock.
 .It Bq Er EBADF
 .Fa fd
-is not an open descriptor, or a read lock was asked for on a descriptor
-not open for reading or a write lock on one not open for writing.
+is not an open descriptor, was opened with
+.Dv O_PATH
+and the command is not one it takes, or a read lock was asked for on a
+descriptor not open for reading or a write lock on one not open for
+writing.
 .It Bq Er EDEADLK
 .Dv F_SETLKW
 would wait in a cycle of processes waiting for each other's locks.

@@ -69,6 +69,7 @@ static void filemap_release(struct vm_file *f)
     if (m->sh == &m->own) {
         shmem_free(&m->own);
     }
+    kfree(m->vf.path);
     kfree(m);
 }
 

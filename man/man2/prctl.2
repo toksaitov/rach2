@@ -2,12 +2,16 @@
 .Dt PRCTL 2
 .Os
 .Sh NAME
-.Nm prctl
+.Nm prctl ,
+.Nm personality
 .Nd operations on the calling process
 .Sh SYNOPSIS
 .In sys/prctl.h
 .Ft int
 .Fn prctl "int option" "..."
+.In sys/personality.h
+.Ft int
+.Fn personality "unsigned long persona"
 .Sh DESCRIPTION
 .Fn prctl
 reads or changes an attribute of the calling process, named by
@@ -59,8 +63,32 @@ Under no_new_privs,
 ignores the set-user-ID and set-group-ID bits of the program, as it
 ignores them on a nosuid mount.
 .Pp
-The dumpable flag is kept and reported, and nothing else reads it: the
-kernel writes no core files and has no tracing.
+The dumpable flag decides whether a tracer without effective user ID 0
+may attach to the process, as
+.Xr ptrace 2
+describes; the kernel writes no core files.
+.Ss personality
+.Fn personality ,
+number 136, sets the caller's execution domain to
+.Fa persona
+and returns the old value, or with
+.Fa persona
+0xFFFFFFFF returns it alone.
+The domain, the low byte, must be
+.Dv PER_LINUX
+(0) or
+.Dv PER_LINUX32
+(8), else the call fails with
+.Er EINVAL .
+The flag bits above it are kept and change nothing: there is no address
+randomization for
+.Dv ADDR_NO_RANDOMIZE ,
+which GDB sets, to turn off.
+A child of
+.Xr fork 2
+inherits the value, and
+.Xr execve 2
+keeps it.
 .Ss System call interface
 The i386 system call number is 172.
 EBX contains

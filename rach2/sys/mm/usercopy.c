@@ -124,3 +124,42 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     }
     return -ENAMETOOLONG; /* no NUL within n bytes */
 }
+
+/**
+ * The length of the NUL-terminated string at user address `src`, not counting
+ * the NUL, when the NUL is among the first `n` bytes.
+ *
+ * The bytes are checked and their pages backed as `strncpy_from_user` checks
+ * and backs them, one page at a time as the scan reaches it, so a string that
+ * ends before an unmapped page is measured. What it measures can change
+ * before the caller reads it again; a caller that copies it after bounds the
+ * copy by this length.
+ *
+ * Returns the length; -EINVAL for `n` of 0; -EFAULT if a byte lies outside
+ * user space or backs no VMA; -ENAMETOOLONG if no NUL is among the first `n`
+ * bytes.
+ */
+int strnlen_user(const char __user *src, uint32_t n)
+{
+    uint32_t addr = (uint32_t)(__force uintptr_t)src;
+    const char *s = (const char __force *)src;
+    uint32_t i;
+
+    if (n == 0) {
+        return -EINVAL;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t a = addr + i;
+
+        if (!user_range_ok(a, 1)) {
+            return -EFAULT;
+        }
+        if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_range(a, 1, 0)) {
+            return -EFAULT;
+        }
+        if (s[i] == '\0') {
+            return (int)i;
+        }
+    }
+    return -ENAMETOOLONG;
+}

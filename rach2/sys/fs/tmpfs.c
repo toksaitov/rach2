@@ -425,7 +425,7 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         ent->name[1] = *cursor == 1 ? '.' : '\0';
         ent->ino = *cursor == 0 ? d->ino : d->parent->ino;
         ent->is_dir = 1;
-        ent->type = T_IFDIR;
+        ent->type = VFS_DT_DIR;
         (*cursor)++;
         return 1;
     }
@@ -437,7 +437,7 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     k_strncpy(ent->name, e->name, VFS_NAME_MAX);
     ent->ino = e->node->ino;
     ent->is_dir = is_dir(e->node);
-    ent->type = e->node->mode & T_IFMT;
+    ent->type = (int)VFS_DT_OF(e->node->mode);
     (*cursor)++;
     return 1;
 }

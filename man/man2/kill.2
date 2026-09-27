@@ -1,11 +1,11 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt KILL 2
 .Os
 .Sh NAME
 .Nm kill ,
 .Nm tkill ,
 .Nm tgkill
-.Nd send a signal to a process or process group
+.Nd send a signal to a process, process group or thread
 .Sh SYNOPSIS
 .In signal.h
 .Ft int
@@ -20,7 +20,8 @@ Signals 1 through 64 are accepted.
 Signal 0 checks existence and permission without posting a signal.
 .Bl -tag -width "pid < -1"
 .It Fa pid No > 0
-Select the process with this process ID.
+Select the process with this process ID, or the process of the thread
+with this thread ID.
 .It Fa pid No = 0
 Select the caller's process group.
 .It Fa pid No < -1
@@ -31,7 +32,10 @@ Broadcast to all processes is not implemented and returns
 .Er ESRCH .
 .El
 .Pp
-Zombie processes are not targets.
+A signal to a process is pending for the process as a whole, and any of
+its threads that does not block it takes it: the kernel wakes the first
+such thread, the one the ID names if it qualifies.
+Processes whose threads have all ended are not targets.
 A group request posts the signal to every member the caller may signal.
 It succeeds if at least one member is permitted, returns
 .Er EPERM
@@ -47,17 +51,20 @@ For
 only, membership in the target's session also permits the call.
 This session exception does not apply to signal 0.
 .Ss Thread signal calls
-Rach2 has no threads.
-The kernel calls
 .Nm tkill
 and
 .Nm tgkill
-address a process by its process ID.
+post the signal to one thread, which alone may take it; musl's and GNU
+libc's
+.Fn raise
+and
+.Fn pthread_kill
+use them.
 .Nm tkill
 takes a positive thread ID and a signal.
 .Nm tgkill
-takes a positive thread group ID, a positive thread ID, and a signal;
-both IDs must identify the same process.
+takes a positive thread group ID, which is a process ID, a positive
+thread ID, and a signal; the thread must belong to that process.
 Zero and negative IDs are errors in these calls, never group selectors.
 Their permission and signal rules are those of
 .Fn kill .
@@ -74,15 +81,9 @@ EBX is the thread ID and ECX the signal.
 For
 .Nm tgkill ,
 EBX is the thread group ID, ECX the thread ID, and EDX the signal.
-Musl declares neither function.
-Its
-.Fn raise
-uses
-.Nm tkill
-to signal the caller; a direct
+Musl declares neither function; a direct
 .Fn syscall
-is needed to issue
-.Nm tgkill .
+is needed to issue either.
 .Sh RETURN VALUES
 .Fn kill
 returns 0 on success, or -1 on failure and sets
@@ -110,9 +111,9 @@ The caller may not signal the target, or may not signal any live member
 of the selected group.
 .It Bq Er ESRCH
 No selected live process exists, the selected group has no live members,
-or
+the thread has ended, or
 .Nm tgkill
-was given IDs that do not identify the same process.
+was given a thread that does not belong to the process.
 .Fn kill
 also returns this error for
 .Fa pid

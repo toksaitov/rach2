@@ -109,7 +109,21 @@
 #define SYS_GETDENTS64      220
 #define SYS_SET_THREAD_AREA 243
 #define SYS_EXIT_GROUP      252
+#define SYS_PTRACE          26
+#define SYS_PERSONALITY     136
+#define SYS_GETCPU          318
+#define SYS_MLOCK           150
+#define SYS_MUNLOCK         151
+#define SYS_MLOCKALL        152
+#define SYS_MUNLOCKALL      153
+#define SYS_RT_SIGTIMEDWAIT 177
+#define SYS_MINCORE         218
+#define SYS_MLOCK2          376
+#define SYS_CLOCK_GETTIME64 403
+#define SYS_CLOCK_GETRES64  406
 #define SYS_SET_TID_ADDRESS 258
+#define SYS_SET_ROBUST_LIST 311
+#define SYS_GET_ROBUST_LIST 312
 #define SYS_WAITID          284
 #define SYS_UTIMENSAT       320
 #define SYS_NANOSLEEP       162
@@ -211,6 +225,8 @@
 #define SYS_RECVFROM        371
 #define SYS_RECVMSG         372
 #define SYS_SHUTDOWN        373
+#define SYS_RECVMMSG        337
+#define SYS_SENDMMSG        345
 
 /* eventfd, epoll and timerfd (io/eventfd.c, io/epoll.c, io/timerfd.c). */
 #define SYS_EPOLL_CREATE     254

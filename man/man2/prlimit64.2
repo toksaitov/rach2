@@ -41,7 +41,9 @@ and defines
 .Nm prlimit64
 as a macro for it.
 .Fa pid
-selects the process; zero selects the caller.
+selects the process, by its ID or that of any of its threads; zero
+selects the caller's.
+The limits are the process's, and a change applies to all its threads.
 Another process may be selected by a caller with effective user ID 0
 or the same real user ID as that process.
 If
@@ -83,6 +85,10 @@ size in whole pages, and no further than
 .Ad 0xB0000000 ,
 below which anonymous mappings are placed; a fault past that is
 .Dv SIGSEGV .
+The stack always reaches as far as the pages its arguments took.
+A quarter of the soft limit, between 128 KiB and 6 MiB, is what
+.Xr execve 2
+lets the arguments and the environment take.
 A change applies at the next
 .Xr execve 2 .
 An exec that runs with an effective ID its caller lacks lowers a soft

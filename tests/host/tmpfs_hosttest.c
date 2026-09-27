@@ -304,7 +304,7 @@ static void listing(void)
 
     for (i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
         CHECK(tmpfs_readdir(&mnt, root, &cursor, &ent) == 1 && same(ent.name, want[i]) &&
-              ent.type == types[i]);
+              ent.type == (int)VFS_DT_OF(types[i]));
     }
     CHECK(tmpfs_readdir(&mnt, root, &cursor, &ent) == 0);
 }

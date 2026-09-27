@@ -120,8 +120,8 @@ uint16_t elf_program_header_count(const void *data)
  * header table is not bounded against the file, and the entry point is not
  * checked. `elf_load_image`, which reads the rest of the file on demand,
  * fails a short read of the table and checks the entry against the user
- * image window; `sys_execve` uses this to tell an executable from a script
- * before it destroys the old image.
+ * image window; `sys_execve` uses this to tell an executable from a
+ * script.
  */
 bool elf_valid_exec(const void *ehdr, uint32_t len)
 {

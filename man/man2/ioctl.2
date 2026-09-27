@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -294,7 +294,8 @@ terminal detached by
 .Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EBADF
 .Fa fd
-is invalid.
+is invalid or was opened with
+.Dv O_PATH .
 .It Bq Er EBUSY
 .Dv BLKRRPART
 found another descriptor open on the disk or a claim on its partitions.

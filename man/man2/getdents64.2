@@ -63,7 +63,8 @@ Null-terminated name beginning at byte offset 19.
 The record length is rounded up to a multiple of eight bytes.
 Padding bytes are zero.
 .Va d_type
-is the entry's type as Linux numbers it:
+is the entry's file type, the type bits of its mode shifted right by
+twelve, as on Linux:
 .Dv DT_FIFO
 (1),
 .Dv DT_CHR
@@ -77,23 +78,38 @@ is the entry's type as Linux numbers it:
 .Dv DT_LNK
 (10) or
 .Dv DT_SOCK
-(12).
-ext2 takes it from the entry's type byte, or from the inode on a volume
-without the
-.Ql filetype
-feature; tmpfs and KRFFS from the node.
-FAT32 and exFAT report
-.Dv DT_DIR
-for a directory and
+(12), or
+.Dv DT_UNKNOWN
+(0) where the file system cannot tell.
+It is never
 .Dv DT_REG
-for every other entry.
+for anything but a regular file.
+FAT32 and exFAT have only directories and regular files.
+tmpfs and KRFFS take the type from the node's mode.
+ext2 takes the type from the entry's file-type byte when the volume has
+the
+.Li filetype
+feature, and a byte of 0 or past 7 is
+.Dv DT_UNKNOWN ;
+without the feature it takes it from the inode's mode, where Linux
+reports
+.Dv DT_UNKNOWN .
 Synthetic directories report
-.Dv DT_CHR
-for character devices,
-.Dv DT_BLK
-for the disk nodes, and
+.Dv DT_DIR
+for directories,
+.Dv DT_REG
+for
+.Pa /proc
+files,
 .Dv DT_LNK
-for links.
+for
+.Pa /proc/self
+and the descriptor links,
+.Dv DT_CHR
+for a character device and
+.Dv DT_BLK
+for a disk node under
+.Pa /dev .
 .Ss File systems
 KRFFS lists named children stored in the directory.
 It omits unlinked files still held open and does not synthesize
@@ -140,8 +156,9 @@ lists
 .Pa self ,
 .Pa usb ,
 .Pa loop ,
-and
 .Pa console ,
+and
+.Pa audio ,
 followed by process directories.
 .Pa /proc/net
 lists
@@ -184,12 +201,36 @@ and requires exactly the two names on KRFFS, with one
 and one
 .Ql ..
 as well on ext2.
+.Pp
+.Pa tests/musl/direntmusl.c
+requires every entry of
+.Pa /dev ,
+.Pa /proc ,
+.Pa /proc/self ,
+.Pa /proc/self/fd
+and a directory of its own to report the type
+.Xr lstat 2
+gives, or
+.Dv DT_UNKNOWN .
+Given a directory on an ext2 volume, as
+.Ic tests/run ext2
+gives it
+.Pa /tmp
+on an ext2 root, it requires a symbolic link to be
+.Dv DT_LNK
+and checks
+.Pa /
+and
+.Pa /bin
+too.
 .Sh ERRORS
 .Bl -tag -width "[ENOTDIR]"
 .It Bq Er EBADF
 .Fa fd
-is invalid, its directory has been removed from the KRFFS boot root,
-or its open-file description has no mount.
+is invalid, was opened with
+.Dv O_PATH ,
+its directory has been removed from the KRFFS boot root, or its
+open-file description has no mount.
 .It Bq Er EFAULT
 There is no current process,
 .Fa dirp

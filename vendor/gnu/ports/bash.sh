@@ -1,3 +1,4 @@
+# shellcheck shell=sh disable=SC2034 # build_port.sh reads the variables
 # GNU bash with the official patches. The bundled termcap and readline are
 # used, and bash's own malloc is not.
 VERSION=5.3

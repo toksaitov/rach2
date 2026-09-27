@@ -26,18 +26,18 @@
 #define AT_PHENT  4 /* Size in bytes of one program header    (populated) */
 #define AT_PHNUM  5 /* Number of program headers              (populated) */
 #define AT_PAGESZ 6 /* System page size                       (populated) */
-#define AT_BASE   7
+#define AT_BASE   7 /* Where the interpreter was loaded, or 0 (populated) */
 #define AT_FLAGS  8
 #define AT_ENTRY  9 /* Program entry point                    (populated) */
 #define AT_NOTELF 10
-#define AT_UID    11
-#define AT_EUID   12
-#define AT_GID    13
-#define AT_EGID   14
+#define AT_UID    11 /* Real user id                           (populated) */
+#define AT_EUID   12 /* Effective user id                      (populated) */
+#define AT_GID    13 /* Real group id                          (populated) */
+#define AT_EGID   14 /* Effective group id                     (populated) */
 #define AT_CLKTCK 17 /* Clock ticks per second (our PIT: 100)  (populated) */
 #define AT_SECURE 23 /* 1 when euid != ruid or egid != rgid    (populated) */
 #define AT_RANDOM 25 /* Address of 16 random bytes             (populated) */
-#define AT_EXECFN 31
+#define AT_EXECFN 31 /* Address of the program's path          (populated) */
 
 /*
  * One auxv entry: a {type, value} pair of machine words (32-bit on i386). The

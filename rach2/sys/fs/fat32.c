@@ -1442,6 +1442,7 @@ static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     k_strncpy(ent->name, sc.name, sizeof(ent->name));
     ent->name[sizeof(ent->name) - 1] = '\0';
     ent->is_dir = (sc.ent.raw[11] & ATTR_DIRECTORY) ? 1 : 0;
+    ent->type = ent->is_dir ? VFS_DT_DIR : VFS_DT_REG;
     {
         uint32_t first = entry_first(sc.ent.raw);
 

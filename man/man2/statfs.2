@@ -1,4 +1,4 @@
-.Dd September 21, 2026
+.Dd September 27, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -98,7 +98,17 @@ Device, console, pseudo-terminal master, and synthetic directory
 descriptors report the devfs values.
 This includes synthetic directory descriptors under
 .Pa /proc .
-Ordinary file and directory descriptors report their mount's values.
+A descriptor opened with
+.Dv O_PATH
+on a
+.Pa /dev
+node reports the devfs values, and one on a
+.Pa /proc
+node the proc values.
+Ordinary file and directory descriptors report their mount's values,
+those opened with
+.Dv O_PATH
+included.
 Other descriptor types, including pipes, sockets, and pseudo-terminal
 slaves, return
 .Er ENOSYS .

@@ -59,8 +59,8 @@ together, as
 counts it.
 .It Dv CLOCK_THREAD_CPUTIME_ID
 ID 3.
-The caller's own CPU time: each process is one thread, so this clock reads
-what ID 2 reads.
+The calling thread's own CPU time; ID 2 reads that of all the process's
+threads, those that have ended included.
 .It Dv CLOCK_MONOTONIC_RAW , CLOCK_MONOTONIC_COARSE , CLOCK_BOOTTIME
 IDs 4, 6 and 7.
 The same time since boot as
@@ -82,8 +82,8 @@ returns: the bitwise complement of the ID shifted left three places, bit 2
 set for a thread, and in the low two bits the time read, 1 for user time
 alone and 0 or 2 for user and system time together.
 An ID of 0 in it names the caller.
-A process clock may name any process that has not been reaped, a thread
-clock only the caller's own thread.
+A process clock may name any process that has not been reaped, by its
+process ID; a thread clock may name any thread of the caller's process.
 .Pp
 .Fn clock_getres
 stores a clock's resolution in
@@ -98,21 +98,22 @@ returns the monotonic tick count in units of 1/100 second, as a signed
 32-bit value that goes negative after about 249 days.
 If
 .Fa buf
-is nonnull, it receives the caller's CPU time in the same units:
+is nonnull, it receives the CPU time of the caller's process, all its
+threads', in the same units:
 .Va tms_utime
 and
 .Va tms_stime
-are the ticks the timer charged to the caller in user mode and in the
+are the ticks the timer charged to its threads in user mode and in the
 kernel, and
 .Va tms_cutime
 and
 .Va tms_cstime
-are the same two totals for the children it has reaped with
+are the same two totals for the children the process has reaped with
 .Xr wait 2 ,
 each with the children those children reaped.
-The timer charges each tick to the process it interrupts, as user time
-when that process was in its own code and as system time when it was in
-the kernel, and a tick that finds the processor idle to no process.
+The timer charges each tick to the thread it interrupts, as user time
+when that thread was in its own code and as system time when it was in
+the kernel, and a tick that finds the processor idle to no thread.
 The times are therefore samples: a process that runs only between ticks
 is charged nothing for that time, as on a Linux kernel built with tick-based
 accounting.
@@ -232,8 +233,10 @@ about 68 years since boot for monotonic time.
 musl and glibc first try
 .Fn clock_gettime64
 .Pq system call 403 ,
-which the kernel does not implement, then convert the result of the
-32-bit call into their public timespec.
+which reads the same clock into a timespec with 64-bit fields, as
+.Fn clock_getres_time64
+.Pq system call 406
+reads the resolution; their seconds are those of the 32-bit calls.
 musl calls system call 266 for
 .Fn clock_getres
 directly.
@@ -302,7 +305,9 @@ was given an invalid directory descriptor for a relative path, or the
 descriptor refers to a removed KRFFS boot-root directory; or, with a null
 path or an empty one and
 .Dv AT_EMPTY_PATH ,
-the descriptor is invalid or refers to a KRFFS boot-root file that is gone.
+the descriptor is invalid or refers to a KRFFS boot-root file that is gone;
+or, with a null path, the descriptor was opened with
+.Dv O_PATH .
 .It Bq Er EBUSY
 The
 .Fn utimensat
@@ -326,7 +331,8 @@ or there is no current process.
 is 8 or greater, including Linux's alarm clocks and
 .Dv CLOCK_TAI ,
 a clock of a descriptor, a CPU clock of no process that has not been
-reaped, or a thread CPU clock of another process; or
+reaped, a process CPU clock named by an ID that is not a process ID, or a
+thread CPU clock of another process; or
 .Fn utimensat
 has flag bits other than
 .Dv AT_SYMLINK_NOFOLLOW

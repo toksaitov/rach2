@@ -56,15 +56,17 @@ VOL2="$ROOT.p2"
 PASSWORD=$(cat "$REPO/krffs/rach2_demo_password")
 sh "$REPO/tools/image/mkext2.sh" "$REPO/krffs/manifests/os-real.manifest" "$VOL" 96 > /dev/null 2>&1 \
     || fail "the os-real ext2 volume"
-# The set-id probe and the helper it execs are test programs and are not in the
-# shipped image, so they are put into this volume here rather than into the
-# manifest. `write` stores a file with the mode of the host's copy, which is
-# not what these two need, so each mode is set after it.
-for prog in modeprobe suidhelper zombieprobe; do
-    debugfs -w -R "write $REPO/build/tests/$prog $prog" "$VOL" > /dev/null 2>&1 \
-        || fail "staging $prog in the ext2 volume"
-    debugfs -w -R "sif $prog mode 0100755" "$VOL" > /dev/null 2>&1 \
-        || fail "the mode of $prog in the ext2 volume"
+# The set-id probe, the helper it execs and the probes run beside it are test
+# programs and are not in the shipped image, so they are put into this volume
+# here rather than into the manifest, each at the root under its own name.
+# `write` stores a file with the mode of the host's copy, which is not what
+# these need, so each mode is set after it.
+for prog in modeprobe suidhelper zombieprobe musl/lchownmusl musl/direntmusl; do
+    name=$(basename "$prog")
+    debugfs -w -R "write $REPO/build/tests/$prog $name" "$VOL" > /dev/null 2>&1 \
+        || fail "staging $name in the ext2 volume"
+    debugfs -w -R "sif $name mode 0100755" "$VOL" > /dev/null 2>&1 \
+        || fail "the mode of $name in the ext2 volume"
 done
 rm -f "$VOL2"; : > "$VOL2"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
@@ -161,6 +163,23 @@ echo "ext2-test: a 4 KiB append costs the disk no more than eleven commands ($AP
 boot_root "$ROOT.mode.log" --ok "MODEPROBE OK" \
     "send=/modeprobe /tmp" "expect=MODEPROBE OK" || fail "the set-id rules on the ext2 root"
 echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
+
+# ---- 2d': lchown and fchownat's AT_SYMLINK_NOFOLLOW on a file system that has
+#      symbolic links. The probe runs in the default suite too, on the KRFFS
+#      root, which has none; here its link rows are required: the link changes
+#      and its target does not, chown changes the target, an O_PATH descriptor
+#      opened with O_NOFOLLOW names the link, and a dangling link changes.
+boot_root "$ROOT.lchown.log" --ok "LCHOWNMUSL OK (links)" \
+    "send=/lchownmusl /tmp" "expect=LCHOWNMUSL OK (links)" || fail "lchown on the ext2 root"
+echo "ext2-test: lchown and AT_SYMLINK_NOFOLLOW change a link and chown its target: OK"
+
+# ---- 2d'': the entry types getdents64 reports from ext2's file-type bytes. The
+#       probe runs in the default suite too; here a symbolic link must be
+#       DT_LNK, and every entry of / and /bin of this root must have the type
+#       lstat gives it.
+boot_root "$ROOT.dirent.log" --ok "DIRENTMUSL OK (links)" \
+    "send=/direntmusl /tmp" "expect=DIRENTMUSL OK (links)" || fail "d_type on the ext2 root"
+echo "ext2-test: getdents64 reports each entry's type, a link as DT_LNK: OK"
 
 # ---- 2e: signal teardown beside a writer on an ext2 root. This stress row
 # does not force lock contention; exit_hosttest proves the cleanup ordering.

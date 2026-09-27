@@ -13,10 +13,54 @@
 replaces the calling process's image with the program at
 .Fa path .
 A relative path is resolved from the current working directory.
-The loader supports static, little-endian ELF32 executables for i386
-with type
-.Dv ET_EXEC .
-There is no dynamic linker.
+The loader supports little-endian ELF32 executables for i386 of type
+.Dv ET_EXEC ,
+at the addresses their segments name, and position-independent ones of
+type
+.Dv ET_DYN ,
+which it places at
+.Ad 0x08000000 .
+A program with a
+.Dv PT_INTERP
+segment names its interpreter, the dynamic linker, by absolute path.
+The kernel loads the interpreter too, a position-independent one just
+below
+.Ad 0xB0000000 ,
+the top of the range
+.Xr mmap 2
+places mappings in, and starts the new image at the interpreter's entry.
+The interpreter needs execute permission as the program does, and its
+own
+.Dv PT_INTERP
+is ignored.
+.Pp
+The auxiliary vector on the initial stack has
+.Dv AT_PHDR ,
+.Dv AT_PHENT ,
+.Dv AT_PHNUM
+and
+.Dv AT_ENTRY
+of the program,
+.Dv AT_BASE ,
+the distance the interpreter was moved by, 0 without one,
+.Dv AT_PAGESZ ,
+.Dv AT_CLKTCK
+100,
+.Dv AT_UID ,
+.Dv AT_EUID ,
+.Dv AT_GID ,
+.Dv AT_EGID ,
+.Dv AT_SECURE ,
+.Dv AT_RANDOM
+and
+.Dv AT_EXECFN ,
+the address of the path as the caller passed it.
+There is no vDSO, so there is no
+.Dv AT_SYSINFO
+or
+.Dv AT_SYSINFO_EHDR ,
+and a C library makes its system calls with
+.Li int $0x80 .
 .Pp
 .Fa argv
 and
@@ -25,9 +69,34 @@ are null-terminated arrays of pointers to null-terminated strings.
 They become the new program's arguments and environment on a System V
 i386 initial stack.
 A null pointer for either array supplies an empty vector.
-Each vector may contain at most 63 strings.
-Together their strings may occupy at most 3072 bytes, counting each
-terminating null byte.
+An empty
+.Fa argv
+is given one empty string, so the new program sees
+.Va argc
+1 and an empty
+.Fa argv Ns [0] ,
+as Linux gives it.
+.Pp
+The limits are Linux's.
+The strings of both vectors, the
+.Fa path
+string as passed, and a 4-byte pointer for each vector entry may take a
+quarter of the soft
+.Dv RLIMIT_STACK
+limit, but no more than 6 MiB and no less than 128 KiB.
+An empty
+.Fa argv
+counts one pointer.
+Each string may be at most 131072 bytes, its null terminator included.
+The default soft limit of 8 MiB allows 2 MiB.
+A vector is read only as far as the pointers fit that budget, and one
+longer is refused there; Linux reads a vector to its end first, and
+reports
+.Er EFAULT
+for a pointer it cannot read past the budget.
+The initial stack spans as many pages below
+.Ad 0xC0000000
+as the strings and the pointers need.
 The copied path, including any current-directory prefix and its null
 terminator, must fit 4096 bytes.
 .Pp
@@ -57,7 +126,8 @@ The original
 .Fa argv Ns [0]
 is omitted; the supplied script path, made absolute with repeated slashes
 and dot components removed, is inserted instead.
-The expanded argument vector must still fit 63 entries.
+The strings added count against the same limits as the caller's.
+Linux inserts the script path as the caller passed it.
 Only one interpreter level is supported: an interpreter that is itself
 a script is refused.
 A first line that fills the 128-byte read buffer without a newline is
@@ -85,27 +155,39 @@ process dumpable again.
 .Pp
 Descriptors marked
 .Dv FD_CLOEXEC
-are closed once the executable header has been accepted, before the
-old address space is freed.
+are closed once the new image has been built, as the process takes it.
 This includes descriptors 0, 1, and 2 if marked.
 Other open descriptors remain available to the new image.
 .Ss Failure
-The path, arguments, and environment are copied into a workspace
-belonging to the current process.
-The executable header and access permissions are checked before the
-old image is destroyed.
-A failure at this stage returns to the caller without replacing its
-image, changing its credentials, or closing its marked descriptors.
-.Pp
-Program segments and the initial stack are loaded after the old user
-pages are freed.
-A failure then terminates the process; it cannot return to the caller.
-This includes malformed program segments, allocation or load failures,
-and an image whose address-space regions exceed
+The path is resolved and its permissions checked first, as Linux opens
+the program before it copies the vectors.
+The strings are then copied, the path's at the top, then the environment
+and then the arguments, each vector from its last string, onto pages
+taken for the new stack.
+The program and its interpreter are then loaded, the regions made and
+the initial stack written, all in a new address space while the old one
+still runs.
+A failure at any of these stages returns to the caller without replacing
+its image, changing its credentials, or closing its marked descriptors:
+a malformed segment, an interpreter that cannot be loaded, an allocation
+that fails, and an image whose address-space regions, the initial stack's
+pages among them, exceed
 .Dv RLIMIT_AS .
-The parent receives a wait status indicating
-.Dv SIGKILL .
-If the process is the normal system init, its death panics the kernel.
+On Linux a failure past the point where the old image is released kills
+the process instead.
+.Pp
+Only then does the process take the new address space.
+First every other thread of the process is sent
+.Dv SIGKILL ,
+and the call waits until they have ended; a thread other than the one
+that began the process then takes that thread's ID, which is the process
+ID, as on Linux.
+The robust futexes the thread holds are released, as
+.Xr futex 2
+describes.
+The old address space is freed, unless the parent of a
+.Xr vfork 2
+child still has it; that parent then runs again.
 .Pp
 The i386 system call number is 11.
 EBX contains the path pointer, ECX the argument-vector pointer, and
@@ -113,16 +195,20 @@ EDX the environment-vector pointer.
 .Sh RETURN VALUES
 .Fn execve
 does not return on success.
-A failure before destruction of the old image returns -1 and sets
+A failure returns -1 and sets
 .Va errno .
 The kernel interface returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/musl/execargmusl.c
-executes itself with vectors at the 63-entry and 3072-byte limits: the
-63-argument case checks the count and the last argument the new image
-received, and the other cases check that the execution succeeded.
-It also exceeds each limit and checks that
+executes itself with 5000 arguments and then 5000 environment strings,
+which the new image checks one by one; with one string of 131072 bytes;
+with strings and pointers that fill the 256 KiB a stack limit of 1 MiB
+allows, split across both vectors; and with an empty
+.Fa argv ,
+for which the new image checks its one empty argument.
+It also passes a string one byte longer, the budget one byte over, and
+32768 pointers under a 128 KiB budget, and checks that
 .Fn execve
 returns -1 with
 .Va errno
@@ -132,8 +218,10 @@ and the caller still running.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG
-An argument or environment vector exceeds 63 entries, the strings exceed
-their shared 3072-byte budget, or script expansion exceeds the entry limit.
+The pointers, or the strings with them, exceed a quarter of the soft
+.Dv RLIMIT_STACK
+limit as described above, a string exceeds 131072 bytes, or the strings a
+script adds do not fit.
 .It Bq Er EACCES
 Search or execute permission was denied, the program or interpreter is
 on a noexec mount, or its path resolves into a synthetic mount.
@@ -147,22 +235,36 @@ The file system cannot supply a required attribute or read operation.
 Reading the program or file system metadata failed, or the device was removed.
 .It Bq Er EISDIR
 Reading the executable failed because the file system reported a directory.
+.It Bq Er ELIBBAD
+The interpreter a
+.Dv PT_INTERP
+names is not an ELF image this kernel loads.
 .It Bq Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
 The path, its current-directory prefix, a component, or a symbolic-link
 expansion exceeds its buffer.
 .It Bq Er ENOENT
-The path is empty, or a component of the program or interpreter path
-does not exist.
+The path is empty, or a component of the program's path, a script's
+interpreter path or a
+.Dv PT_INTERP
+path does not exist.
 .It Bq Er ENOEXEC
 The executable header is invalid and no valid interpreter line is present,
 the interpreter path is empty or relative, the first line fills the
-128-byte buffer without a newline, or the interpreter is not a valid
-ELF executable.
+128-byte buffer without a newline, the script's interpreter is not a valid
+ELF executable, or a segment is malformed or lies outside the addresses
+from
+.Ad 0x02000000
+to
+.Ad 0xBFFFF000
+a user image may take.
 .It Bq Er ENOMEM
-The exec workspace or storage needed to resolve or open the program
-could not be allocated.
+The exec workspace, the new address space, a page of the new image or its
+stack, a region record, or storage needed to resolve or open the program
+could not be allocated; the interpreter would cover the program; or the
+image's regions exceed
+.Dv RLIMIT_AS .
 .It Bq Er ENOTDIR
 A path component used as a directory is not a directory.
 .It Bq Er ESRCH

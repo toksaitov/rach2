@@ -1,0 +1,24 @@
+# The pinned sources of the programs that the scripts under native/,
+# spidermonkey/ and chromium/ build: name, version, URL and SHA-256, in the
+# format of sources.txt. fetch.sh reads both lists and checks both alike.
+# GDB's tarball is pinned in sources.txt, with the ports.
+#
+# Each digest was recorded after the upstream signature verified: Mozilla's
+# release key, 14F26682D0916CDD81E37B6D61B7B526D98F0353, for Firefox's
+# source, whose signed SHA256SUMS lists the same digest; and the Rust release
+# key, 108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE, for the Rust components. cbindgen's
+# crate has no signature: its digest is the one the crates.io index lists,
+# and the crate records the git revision from which Firefox's automation
+# builds cbindgen. The Debian archive keys have the fingerprints ftp-master
+# publishes, and Ubuntu's debian-archive-keyring package has the same ones.
+firefox 140.16.0esr https://archive.mozilla.org/pub/firefox/releases/140.16.0esr/source/firefox-140.16.0esr.source.tar.xz 15d2d359b8571ecd0898faa6e05aa902b0de7cb34aadfc4d94adf6c8428f84df
+rustc 1.86.0 https://static.rust-lang.org/dist/rustc-1.86.0-x86_64-unknown-linux-gnu.tar.xz 4438b809ce4a083af31ed17aeeedcc8fc60ccffc0625bef1926620751b6989d7
+cargo 1.86.0 https://static.rust-lang.org/dist/cargo-1.86.0-x86_64-unknown-linux-gnu.tar.xz c5c1590f7e9246ad9f4f97cfe26ffa92707b52a769726596a9ef81565ebd908b
+rust-std 1.86.0 https://static.rust-lang.org/dist/rust-std-1.86.0-x86_64-unknown-linux-gnu.tar.xz 67be7184ea388d8ce0feaf7fdea46f1775cfc2970930264343b3089898501d37
+rust-std-i686 1.86.0 https://static.rust-lang.org/dist/rust-std-1.86.0-i686-unknown-linux-gnu.tar.xz ce9f0fa4b0760730e26bf315cebe099f0b883436e095c5fc4b94ba20bd9f121a
+cbindgen 0.28.0 https://static.crates.io/crates/cbindgen/cbindgen-0.28.0.crate eadd868a2ce9ca38de7eeafdcec9c7065ef89b42b32f0839278d55f35c54d1ff
+debian-archive-key-12 12 https://ftp-master.debian.org/keys/archive-key-12.asc c2a9a16fde95e037bafd0fa6b7e31f41b4ff1e85851de5558f19a2a2f0e955e2
+debian-archive-key-13 13 https://ftp-master.debian.org/keys/archive-key-13.asc 6f1d277429dd7ffedcc6f8688a7ad9a458859b1139ffa026d1eeaadcbffb0da7
+debian-release-key-13 13 https://ftp-master.debian.org/keys/release-13.asc 4d097bb93f83d731f475c5b92a0c2fcf108cfce1d4932792fca72d00b48d198b
+debian-security-key-12 12 https://ftp-master.debian.org/keys/archive-key-12-security.asc 74f81645b4e3156d1e9a88c8dd9259271b89c7099d64af89a2a6996b592faa1f
+debian-security-key-13 13 https://ftp-master.debian.org/keys/archive-key-13-security.asc 844c07d242db37f283afab9d5531270a0550841e90f9f1a9c3bd599722b808b7

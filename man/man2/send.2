@@ -1,10 +1,11 @@
-.Dd September 24, 2026
+.Dd September 27, 2026
 .Dt SEND 2
 .Os
 .Sh NAME
 .Nm send ,
 .Nm sendto ,
-.Nm sendmsg
+.Nm sendmsg ,
+.Nm sendmmsg
 .Nd send data on a socket
 .Sh SYNOPSIS
 .In sys/socket.h
@@ -14,6 +15,8 @@
 .Fn sendto "int fd" "const void *buf" "size_t len" "int flags" "const struct sockaddr *addr" "socklen_t addrlen"
 .Ft ssize_t
 .Fn sendmsg "int fd" "const struct msghdr *msg" "int flags"
+.Ft int
+.Fn sendmmsg "int fd" "struct mmsghdr *msgvec" "unsigned int vlen" "int flags"
 .Sh DESCRIPTION
 These functions send
 .Fa len
@@ -52,6 +55,21 @@ The direct calls
 number 369, and
 .Fn sendmsg
 take their arguments in registers.
+.Pp
+.Fn sendmmsg ,
+subcall 20 and the direct call 345, sends each of the
+.Fa vlen
+messages
+.Fa msgvec
+describes, at most 1024, as
+.Fn sendmsg
+sends one, and stores each message's count in its
+.Va msg_len .
+It returns the number of messages sent, or the first error when none was;
+GNU libc's resolver sends its two queries with it.
+.Pa tests/musl/callsmusl.c
+sends two datagrams in one call and receives them in one
+.Xr recvmmsg 2 .
 .Ss Streams
 A stream sends to its connected peer.
 .Fn sendto

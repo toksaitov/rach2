@@ -37,6 +37,11 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
  */
 int sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask);
 
+/** Write the 128-byte i386 `siginfo_t` of `signo` with `info` into `out`:
+ * signo, errno and code, then the fault's address, or the sender's pid and
+ * uid and a child's status. */
+void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
+
 /**
  * Whether the user stack pointer `sp` lies on the current process's
  * alternate signal stack.

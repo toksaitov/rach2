@@ -1,7 +1,7 @@
 /**
  * Check standard description allocation and locking across relocation.
  *
- * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
@@ -103,6 +103,34 @@ void signal_post(process_t *p, int signo)
     check(0, "unexpected signal");
 }
 
+void signal_post_info(process_t *p, int signo, const struct k_siginfo *info)
+{
+    (void)info;
+    signal_post(p, signo);
+}
+
+/** The CPU time no row reads is summed without an interrupt to mask. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** No row takes a lock. */
+int lock_any(void)
+{
+    return 0;
+}
+
+void lock_ofd_gone(const struct open_file *ofd)
+{
+    (void)ofd;
+}
+
 /** Stop on any architecture check reached by mistake. */
 void k_panic(const char *message)
 {
@@ -126,16 +154,6 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     check(cond(arg), "description wait ends idle");
     waits++;
     return 0;
-}
-
-/** Reject a lock wait, which no row makes. */
-int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
-{
-    (void)wq;
-    (void)cond;
-    (void)arg;
-    check(0, "unexpected lock wait");
-    return -1;
 }
 
 /** Check that a wake follows the description's release. */
@@ -250,7 +268,7 @@ static void process_allocations(void)
     uint32_t forks = process_forks_since_boot();
 
     check(keeper != NULL, "initial process allocation");
-    for (fail = 0; fail < 5; fail++) {
+    for (fail = 0; fail < 6; fail++) {
         process_t *p;
 
         fail_after = fail;
@@ -260,7 +278,7 @@ static void process_allocations(void)
         check(proc_list == keeper && proc_tail == keeper && !keeper->next,
               "failed process is not published");
         check(process_forks_since_boot() == forks, "failed process is not counted");
-        check(allocations == 5, "failed process releases every allocation");
+        check(allocations == 6, "failed process releases every allocation");
         if (p) {
             close_process(p);
             forks = process_forks_since_boot();

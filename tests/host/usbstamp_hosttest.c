@@ -79,6 +79,13 @@ void fpu_restore(const void *area)
     (void)area;
 }
 
+/** No debug register is set in the host switch model. */
+void ptrace_switch_debug(const process_t *old, const process_t *next)
+{
+    (void)old;
+    (void)next;
+}
+
 /** Check publication while leaving the host on its own stack. */
 void switch_context(process_t *old, process_t *next)
 {

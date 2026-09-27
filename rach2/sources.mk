@@ -72,6 +72,7 @@ C_SRC = kernel.c \
         sys/latency.c \
         sys/mm/usercopy.c \
         sys/mm/vm.c \
+        sys/mm/mm.c \
         sys/mm/filemap.c \
         sys/mm/shmem.c \
         sys/mm/frame.c \
@@ -88,6 +89,7 @@ C_SRC = kernel.c \
         sys/proc/wait_queue.c \
         sys/proc/futex.c \
         sys/proc/sigframe.c \
+        sys/proc/ptrace.c \
         sys/ipc/pipe.c \
         sys/ipc/pipe_ring.c \
         sys/ipc/unix.c \

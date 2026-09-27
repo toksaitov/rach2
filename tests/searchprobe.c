@@ -23,9 +23,10 @@
  * The denied child then runs with `/sp_denied` at 0666 root and asserts exact
  * errnos, one level down and two, across open, stat, access, chdir, execve,
  * unlink, chmod, chown, utimensat, link, O_CREAT, creat, mkdir, rmdir and
- * rename in both directions, plus the *at forms this tree implements
- * (openat, fstatat64, faccessat, fchmodat, fchownat, utimensat, linkat; there
- * is no unlinkat, renameat, or mkdirat here). A name that does not exist under
+ * rename in both directions, plus the *at forms openat, fstatat64,
+ * faccessat, fchmodat, fchownat, utimensat and linkat; unlinkat, renameat
+ * and mkdirat reach the same cores as unlink, rename and mkdir, and are not
+ * asked here. A name that does not exist under
  * the denied directory must answer -EACCES and not -ENOENT, or a caller probes
  * for existence through a directory it may not search. An openat through a
  * dirfd opened while the ancestor was still searchable must be refused too: a

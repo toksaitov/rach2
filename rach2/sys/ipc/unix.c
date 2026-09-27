@@ -271,7 +271,7 @@ static struct unix_sock *unix_alloc(int type)
  * real ids a message carries unless the sender names others. */
 static void own_cred(struct unix_cred *c, int effective)
 {
-    c->pid = current_proc->pid;
+    c->pid = current_proc->tgid;
     c->uid = effective ? current_proc->euid : current_proc->ruid;
     c->gid = effective ? current_proc->egid : current_proc->rgid;
 }
@@ -1436,7 +1436,7 @@ static void broken_pipe(int flags)
     }
     k_memset(&info, 0, sizeof(info));
     info.code = SI_USER;
-    info.pid = current_proc->pid;
+    info.pid = current_proc->tgid;
     info.uid = current_proc->ruid;
     signal_post_info(current_proc, SIGPIPE, &info);
 }

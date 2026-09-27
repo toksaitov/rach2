@@ -39,6 +39,7 @@ extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 
 static process_t process;
+static struct tgroup group;
 static int refuse, allocations, failures;
 
 /** Record a failed invariant. */
@@ -54,6 +55,13 @@ static void check(int ok, const char *what)
 process_t *get_process(uint32_t pid)
 {
     return pid == 7 ? &process : NULL;
+}
+
+/** The one thread's time is its process's. */
+void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
+{
+    *user = p->utime;
+    *sys = p->stime;
 }
 
 /** Fail every text allocation when requested. */
@@ -76,6 +84,9 @@ int main(void)
     int len;
 
     process.state = PROC_READY;
+    process.tg = &group;
+    group.leader = &process;
+    group.live = 1;
     k_memcpy(process.comm, "test", 5);
     procfs_text_init(&text);
     refuse = 1;

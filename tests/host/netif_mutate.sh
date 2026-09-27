@@ -55,7 +55,8 @@ run_phase()
 
 echo "netif-mutation: logs: $work"
 run_phase fixed 0 'netif-test: pass:'
-for mutation in device-index device-name packet-index packet-mac tcp-address accept; do
+for mutation in device-index device-name packet-index packet-mac tcp-address accept \
+    socket-check socket-flags accept-check accept-flags; do
     python3 - "$work/syscall_net.c" "$mutation" <<'PY'
 import pathlib
 import sys
@@ -74,6 +75,14 @@ changes = {
                     "net_ip_addr"),
     "accept": ("if (listen_sock->type != SOCK_STREAM || !listen_sock->listening) {",
                "if (0) {"),
+    "socket-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
+                     "        return -EINVAL;\n    }\n    fd = do_socket(",
+                     "    fd = do_socket("),
+    "socket-flags": ("        sock_fd_flags(&current_proc->fds.entries[fd], flags);\n", ""),
+    "accept-check": ("    if (flags & ~(uint32_t)(SOCK_CLOEXEC | SOCK_NONBLOCK)) {\n"
+                     "        return -EINVAL;\n    }\n    entry = fd_get(",
+                     "    entry = fd_get("),
+    "accept-flags": ("    sock_fd_flags(new_entry, flags);\n", ""),
 }
 old, new = changes[sys.argv[2]]
 source = path.read_text()
@@ -89,6 +98,10 @@ PY
         packet-mac) detail='packet interface mac' ;;
         tcp-address) detail='tcp local address' ;;
         accept) detail='invalid accept never waits' ;;
+        socket-check) detail='a type bit other than SOCK_CLOEXEC and SOCK_NONBLOCK is refused' ;;
+        socket-flags) detail='SOCK_CLOEXEC and SOCK_NONBLOCK reach the descriptor' ;;
+        accept-check) detail='accept4 refuses a flag other than SOCK_CLOEXEC and SOCK_NONBLOCK' ;;
+        accept-flags) detail='a connection accepted with both flags has both' ;;
     esac
     run_phase "$mutation" 1 "netif-test: fail: $detail"
     cleanup

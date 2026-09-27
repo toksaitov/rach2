@@ -49,7 +49,8 @@ typedef enum {
     FD_TYPE_PTM,         /* pty master (/dev/ptmx; file_ops + priv = struct pty) */
     FD_TYPE_PTS,         /* pty slave (/dev/pts/N; file_ops + priv = struct pty) */
     FD_TYPE_ANON,        /* eventfd, epoll, timerfd (file_ops + priv = struct anon_obj ...) */
-    FD_TYPE_UNIX         /* AF_UNIX socket (file_ops + priv = struct unix_sock) */
+    FD_TYPE_UNIX,        /* AF_UNIX socket (file_ops + priv = struct unix_sock) */
+    FD_TYPE_SYNTH_PATH   /* O_PATH on a /dev or /proc leaf; priv = struct vpath */
 } fd_type_t;
 
 /*
@@ -58,6 +59,7 @@ typedef enum {
 #define FD_FLAG_READ    0x01
 #define FD_FLAG_WRITE   0x02
 #define FD_FLAG_CLOEXEC 0x08 /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
+#define FD_FLAG_PATH    0x10 /* O_PATH: names a file, reads and writes nothing */
 /* O_APPEND/O_NONBLOCK are OFD status flags (OFD_* in struct open_file), not
  * per-descriptor flags; they are shared by dup/dup2/fork. */
 

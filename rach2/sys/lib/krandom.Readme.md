@@ -38,7 +38,7 @@ System call 355, `getrandom`, normally requires a trusted source. Without one it
 
 * `rach2/sys/lib/krandom.c` implements ChaCha20, seed selection, source tracking, and the byte stream; `rach2/sys/lib/krandom.h` declares the interface.
 * `rach2/kernel.c` seeds the generator and prints its source.
-* `rach2/sys/proc/uimage.c` places caller-supplied random bytes in `AT_RANDOM`; `rach2/kernel.c` and `rach2/sys/syscall.c` draw those bytes for new images.
+* `rach2/sys/proc/uimage.c` places caller-supplied random bytes in `AT_RANDOM`; `rach2/kernel.c` and `rach2/sys/syscall_proc.c` draw those bytes for new images.
 * `rach2/sys/syscall.c` implements `getrandom`; `rach2/sys/fs/devfs.c` implements the two random device nodes.
 * `rach2/sys/network/netconsole.c` draws the netconsole boot identifier; `rach2/sys/diag.c` reports the trust state.
 

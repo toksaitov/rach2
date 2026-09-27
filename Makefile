@@ -1008,6 +1008,7 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 include mk/host.mk
 include mk/images.mk
 include mk/gnu.mk
+include mk/gnu-extra.mk
 include tests/system/suites.mk
 
 # The host programs the build itself needs, for the compilation database

@@ -1,5 +1,6 @@
 /**
- * Exercise the socket address and option handlers with two interfaces.
+ * Exercise the socket address and option handlers with two interfaces, and
+ * the creation flags of socket and accept4.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -33,6 +34,10 @@ static struct open_file description;
 static uint8_t user[128];
 static int failures;
 static int waits;
+static int alloc_to = -1;
+static struct socket made;
+static fd_entry_t table[8];
+static struct open_file made_description;
 
 #define CHECK(condition, detail)                          \
     do {                                                  \
@@ -73,12 +78,30 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
     return fd == 3 ? &entry : NULL;
 }
 
-/** No row dequeues a connection. */
-int fd_alloc(fd_table_t *table)
+/** Descriptor 4 for the socket rows that create one; no accept row may
+ * allocate. */
+int fd_alloc(fd_table_t *fds)
 {
-    (void)table;
-    CHECK(0, "invalid accept must not allocate a descriptor");
-    return -1;
+    (void)fds;
+    CHECK(alloc_to >= 0, "invalid accept must not allocate a descriptor");
+    return alloc_to;
+}
+
+/** The one socket record the creating rows make. */
+struct socket *socket_alloc(int type)
+{
+    k_memset(&made, 0, sizeof(made));
+    made.type = type;
+    return &made;
+}
+
+/** No row makes a raw ICMP socket. */
+int raw_register(struct socket *s, uint8_t proto)
+{
+    (void)s;
+    (void)proto;
+    CHECK(0, "no row registers a raw socket");
+    return -ENOBUFS;
 }
 
 /** Required by the accept error path, which these rows must not reach. */
@@ -104,12 +127,15 @@ void socket_unref(struct socket *s)
     CHECK(0, "invalid accept must not release a socket");
 }
 
-/** A wait returns EINTR so a missing accept check fails without hanging. */
+/** A wait for a condition already true returns at once, as the real one
+ * does; any other returns EINTR, so a missing accept check fails without
+ * hanging. */
 int wq_wait_event(wait_queue_t *q, int (*ready)(void *), void *arg)
 {
     (void)q;
-    (void)ready;
-    (void)arg;
+    if (ready(arg)) {
+        return 0;
+    }
     waits++;
     return -EINTR;
 }
@@ -265,16 +291,75 @@ static void invalid_accept(void)
     for (nonblock = 0; nonblock <= 1; nonblock++) {
         description.status_flags = nonblock ? OFD_NONBLOCK : 0;
         sock.type = SOCK_DGRAM;
-        CHECK(do_accept(3, 0, 0) == -EINVAL, "datagram accept returns einval");
+        CHECK(do_accept(3, 0, 0, 0) == -EINVAL, "datagram accept returns einval");
         sock.type = SOCK_STREAM;
-        CHECK(do_accept(3, 0, 0) == -EINVAL, "nonlistener accept returns einval");
+        CHECK(do_accept(3, 0, 0, 0) == -EINVAL, "nonlistener accept returns einval");
         sock.type = SOCK_RAW;
-        CHECK(do_accept(3, 0, 0) == -EOPNOTSUPP, "raw accept remains unsupported");
+        CHECK(do_accept(3, 0, 0, 0) == -EOPNOTSUPP, "raw accept remains unsupported");
     }
+    CHECK(do_accept(3, 0, 0, 0x1) == -EINVAL,
+          "accept4 refuses a flag other than SOCK_CLOEXEC and SOCK_NONBLOCK");
     CHECK(waits == 0, "invalid accept never waits");
     sock.type = SOCK_STREAM;
     sock.listening = 1;
-    CHECK(do_accept(3, 0, 0) == -EAGAIN, "empty nonblocking listener still returns eagain");
+    CHECK(do_accept(3, 0, 0, 0) == -EAGAIN, "empty nonblocking listener still returns eagain");
+    CHECK(do_accept(3, 0, 0, SOCK_CLOEXEC | SOCK_NONBLOCK) == -EAGAIN,
+          "accept4 takes SOCK_CLOEXEC and SOCK_NONBLOCK");
+}
+
+/** The creation flags in a socket's type: taken onto the new descriptor, and
+ * any other bit above the type's low four refused before the family. */
+static void socket_flags(void)
+{
+    proc.fds.entries = table;
+    table[4].ofd = &made_description;
+    CHECK(socket_with_flags(AF_INET, SOCK_STREAM | 0x10, 0) == -EINVAL,
+          "a type bit other than SOCK_CLOEXEC and SOCK_NONBLOCK is refused");
+    CHECK(socket_with_flags(1, SOCK_STREAM | 0x100000, 0) == -EINVAL,
+          "a bad type bit is refused before the family");
+    CHECK(socket_with_flags(1, SOCK_STREAM | SOCK_CLOEXEC, 0) == -EAFNOSUPPORT,
+          "the creation flags leave the family's check as it was");
+    alloc_to = 4;
+    CHECK(socket_with_flags(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0) == 4 &&
+              made.type == SOCK_STREAM,
+          "a stream socket is made with both creation flags");
+    CHECK((table[4].flags & FD_FLAG_CLOEXEC) && (made_description.status_flags & OFD_NONBLOCK),
+          "SOCK_CLOEXEC and SOCK_NONBLOCK reach the descriptor");
+    made_description.status_flags = 0;
+    CHECK(socket_with_flags(AF_INET, SOCK_DGRAM, 0) == 4 && made.type == SOCK_DGRAM,
+          "a datagram socket is made without creation flags");
+    CHECK(!(table[4].flags & FD_FLAG_CLOEXEC) && !(made_description.status_flags & OFD_NONBLOCK),
+          "a socket made without the flags has neither");
+    alloc_to = -1;
+}
+
+/** A queued connection accepted with both creation flags gets both, and one
+ * accepted with none gets neither. */
+static void accept_flags(void)
+{
+    static struct socket conn[2];
+    int i;
+
+    proc.fds.entries = table;
+    table[4].ofd = &made_description;
+    sock.type = SOCK_STREAM;
+    sock.listening = 1;
+    alloc_to = 4;
+    for (i = 0; i < 2; i++) {
+        sock.accept_queue[sock.accept_tail] = &conn[i];
+        sock.accept_tail = (sock.accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+    }
+    made_description.status_flags = 0;
+    CHECK(do_accept(3, 0, 0, SOCK_CLOEXEC | SOCK_NONBLOCK) == 4 && table[4].sock == &conn[0],
+          "accept4 with both flags takes the first queued connection");
+    CHECK((table[4].flags & FD_FLAG_CLOEXEC) && (made_description.status_flags & OFD_NONBLOCK),
+          "a connection accepted with both flags has both");
+    made_description.status_flags = 0;
+    CHECK(do_accept(3, 0, 0, 0) == 4 && table[4].sock == &conn[1],
+          "accept takes the second queued connection");
+    CHECK(!(table[4].flags & FD_FLAG_CLOEXEC) && !(made_description.status_flags & OFD_NONBLOCK),
+          "a connection accepted with no flags has neither");
+    alloc_to = -1;
 }
 
 /** Run the four syscall contracts against distinct addresses and MACs. */
@@ -296,6 +381,8 @@ int main(void)
     packet_names();
     inet_names();
     invalid_accept();
+    socket_flags();
+    accept_flags();
     if (!failures) {
         printf("netif-test: pass: socket interface contracts\n");
     }

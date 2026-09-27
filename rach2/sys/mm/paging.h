@@ -273,6 +273,23 @@ void free_frame(uintptr_t phys);
  * directory, or 0 when nothing is mapped there. */
 uintptr_t paging_virt_to_phys(uintptr_t va);
 
+/** The physical address `dir` maps the user address `va` to, or 0 when the
+ * page is not present. */
+uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va);
+
+struct mm;
+
+/**
+ * Read or write `len` bytes at `addr` of the address space `mm`, which need
+ * not be the one in use, for ptrace and /proc/PID/mem: missing pages are
+ * brought in as a fault would bring them, and a write reaches a read-only
+ * private page, a breakpoint in the program's text, through a copy of its
+ * own, as Linux's FOLL_FORCE does. A page of no region, of a PROT_NONE one,
+ * or of a read-only shared one for a write, is -EIO; 0, or -EIO, or -ENOMEM
+ * when no temporary mapping was free.
+ */
+int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write);
+
 /**
  * Test switch: with `rach2.framefail` on the boot line, `/dev/framefail`
  * takes a count, and the count-th frame allocation made inside a system

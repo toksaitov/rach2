@@ -75,6 +75,8 @@ struct rlimit32 {
 #define NGROUPS_MAX 8
 
 struct vfs_mount;
+struct mm;
+struct tgroup;
 
 /* A sleeper's record on a wait queue: one is in every process record, for
  * the one queue a process sleeps on, and `poll` supplies one per watched
@@ -104,11 +106,12 @@ struct process {
      * record. process.c has the same offsets and checks them against the
      * compiler's, at build time where the compiler can and at boot. */
     uint32_t tls_base;    /* Per-process %gs TLS base (set_thread_area) */
-    vm_space_t vm;        /* Address-space map (VMAs + brk + stack limit) */
+    struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
     uint32_t wakeup_tick; /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
-    /* Signal state: per-signal disposition (sigacts[signo], index 0 unused)
-     * plus 64-bit pending and blocked masks (bit signo-1). */
-    struct k_sigaction sigacts[KSIG_MAX + 1];
+    /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
+     * which are the thread group's (`tg->action`), and this thread's 64-bit
+     * pending and blocked masks (bit signo-1). */
+    struct k_sigaction *sigacts;
     uint64_t sig_pending;
     uint64_t sig_blocked;
     /* Program name (basename of the execve'd path, NUL-terminated, truncated):
@@ -167,8 +170,8 @@ struct process {
     struct process *prev;
     /* The record this process sleeps with, see `struct wq_waiter`. */
     struct wq_waiter waiter;
-    /* The `execve` workspace, allocated at the first exec and kept for the
-     * record's life; `syscall.c` owns its type. */
+    /* The workspace of the `execve` in progress, NULL outside one;
+     * `syscall_proc.c` owns its type and gives it back when the call ends. */
     void *exec_ws;
     /* Interrupt handlers entered and not left on this process's stack;
      * kept in the record and not in one global, since a handler that
@@ -196,8 +199,8 @@ struct process {
     uint32_t alarm_tick;
     uint32_t alarm_interval;
     /* The user address set_tid_address and CLONE_CHILD_CLEARTID name, whose
-     * word is cleared and woken when the thread ends; 0 for none. Kept, not
-     * used, while every address space has one thread. */
+     * word is cleared and woken when the thread ends and another thread
+     * shares the address space; 0 for none. */
     uint32_t clear_child_tid;
     /* The siginfo of each pending signal, kept with its pending bit. */
     struct k_siginfo sig_info[KSIG_MAX + 1];
@@ -254,6 +257,44 @@ struct process {
     uint32_t pdeath_signal;
     uint32_t dumpable;
     uint32_t no_new_privs;
+    /* Set while a parent that made this process with CLONE_VFORK waits for
+     * it to call execve or end; cleared, and the parent woken, at the one or
+     * the other (`proc_vfork_release`). */
+    uint32_t vfork_waiting;
+    /* The thread group (tgroup.h) and its id, the leader's `pid`, which is
+     * the process id getpid reports; `pid` is this thread's id. */
+    struct tgroup *tg;
+    uint32_t tgid;
+    /* The robust futex list set_robust_list names, walked at the thread's
+     * end, and its length; 0 for none. */
+    uint32_t robust_list;
+    uint32_t robust_len;
+    /* Set once this thread has been through the stop in effect in its
+     * process, which a tracer may then have resumed it from; cleared when
+     * the process continues. */
+    uint32_t stop_seen;
+    /* ptrace (ptrace.h): the PT_ flags; the tracer's process id; the options
+     * PTRACE_SETOPTIONS set; the wait status of the ptrace stop the thread is
+     * in, 0 when it is in none; whether the tracer's wait reported that
+     * stop; the signal the tracer resumes it with; the message
+     * PTRACE_GETEVENTMSG reads; the siginfo of the stop; the system call a
+     * stop is in, -1 for none; whether the tracer has seen the process end;
+     * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
+     * last debug exception left it. */
+    uint32_t ptrace;
+    uint32_t tracer;
+    uint32_t ptrace_opts;
+    uint32_t ptrace_status;
+    uint32_t ptrace_reported;
+    int32_t ptrace_signo;
+    uint32_t ptrace_msg;
+    struct k_siginfo ptrace_info;
+    int32_t orig_eax;
+    uint32_t ptrace_exit_seen;
+    uint32_t debugreg[8];
+    /* The execution domain and its flags personality(2) keeps; fork passes
+     * it on and exec keeps it. */
+    uint32_t persona;
 };
 
 typedef struct process process_t;
@@ -282,13 +323,26 @@ void proc_reclaim_boot_pids(void);
 process_t *alloc_process(void);
 
 /** Take a record off the list and give it back to the heap with its
- * descriptor-table storage, region array and exec workspace; the caller
- * frees the user pages, the page directory and the kernel stack first.
- * Nothing may refer to the record afterwards. */
+ * descriptor-table storage and exec workspace; the caller drops the address
+ * space (`mm_drop`) and frees the kernel stack first. Nothing may refer to
+ * the record afterwards. */
 void free_process(process_t *proc);
 
 /** Get process by PID; returns the record, or NULL if not found. */
 process_t *get_process(uint32_t pid);
+
+/** The CPU time in ticks of the whole process `p` is a thread of: every
+ * thread's, those that have ended included, user and system. */
+void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys);
+
+/* The records of ended threads that are not leaders, which no wait reaps;
+ * the next return to user mode frees them (`deliver_signals`). */
+extern uint32_t proc_dead_threads;
+
+/** Clear the word CLONE_CHILD_CLEARTID names and wake a futex waiter on it,
+ * when another thread shares the address space, and release the robust
+ * futexes the thread held; the start of a thread's end. */
+void proc_thread_gone(process_t *p);
 
 /**
  * Reparent every child of `dead_pid` onto init (`init_pid`), waking init to
@@ -299,9 +353,23 @@ process_t *get_process(uint32_t pid);
  */
 void reparent_children(uint32_t dead_pid);
 
-/** Release files, reparent the children onto init, publish the encoded exit
- * status, and wake the parent; see exit.c. */
-void proc_exit_cleanup(int32_t status);
+/** End the current thread: release its files and, with the process's last
+ * thread, reparent the children onto init, publish the encoded exit status
+ * and wake the parent; nonzero when the process ended. See exit.c. */
+int proc_exit_cleanup(int32_t status);
+
+/** Begin the end of the current process: send every other thread SIGKILL,
+ * and have the process end with the encoded wait status `code` whichever
+ * thread ends last. A process already ending keeps its status. */
+void proc_group_exit(int32_t code);
+
+/** Let the parent a CLONE_VFORK clone made `p` for run again, at `p`'s
+ * execve or end; nothing when no parent waits. */
+void proc_vfork_release(process_t *p);
+
+/** Wait, as the parent, until the child `pid` made with CLONE_VFORK calls
+ * execve or ends. */
+void proc_vfork_wait(uint32_t pid);
 
 /** Set a process's `comm` name from the final component of `path`. */
 void proc_set_comm(process_t *p, const char *path);
@@ -322,6 +390,10 @@ void signal_post(process_t *target, int signo);
 
 /* Post `signo` with the siginfo `info` records for its handler. */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info);
+
+/** Post signal `signo` to the thread `t` alone, as tkill and tgkill do,
+ * with the siginfo `info`, and wake it. */
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info);
 
 /* Post a signal a processor exception raised: a handler that is blocked or
  * ignored cannot run, so the disposition goes back to default and the signal

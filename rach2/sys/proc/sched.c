@@ -1,4 +1,5 @@
 #include "sched.h"
+#include "ptrace.h"
 
 #include "../lib/kirq.h"
 #include "../usb/usb.h"
@@ -153,6 +154,7 @@ void schedule(void)
 
     fpu_save(old->fpu);
     fpu_restore(next->fpu);
+    ptrace_switch_debug(old, next);
     current_proc = next;
 
     switch_context(old, next);

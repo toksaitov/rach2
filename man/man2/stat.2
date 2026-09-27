@@ -256,6 +256,13 @@ Proc text files report zero size even when reading them returns data.
 Unfollowed proc links report symbolic-link type and mode 0777.
 .Pp
 A socket or pipe descriptor reports the object's own inode.
+A descriptor opened with
+.Dv O_PATH
+reports what a path to its file reports, and under
+.Dv O_NOFOLLOW
+the link itself; one on a
+.Pa /proc
+file whose process has exited reports a bare regular file.
 A followed
 .Pa /proc/<pid>/fd/<n>
 link reports the target descriptor's attributes, so its inode agrees

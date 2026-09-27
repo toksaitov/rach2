@@ -4,7 +4,9 @@
 #include "../fs/pathbuf.h"
 #include "../panic.h"
 #include "../mm/kheap.h"
+#include "../lib/kirq.h"
 #include "sched.h"
+#include "tgroup.h"
 
 /* The offsets switch.s reads from the process record, as `.set` values
  * there and as numbers here; a field added before one of them stops the
@@ -17,7 +19,7 @@
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
 #define PROC_OFF_TLS_BASE     148u
-#define PROC_OFF_PAGE_DIR     2112u
+#define PROC_OFF_PAGE_DIR     800u
 #if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
 typedef char process_offsets_fit
     [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
@@ -35,6 +37,8 @@ process_t *proc_idle;
 static process_t *proc_tail;
 
 process_t *current_proc = NULL;
+
+uint32_t proc_dead_threads;
 
 /**
  * Whether this processor is inside a user process's system call.
@@ -138,6 +142,12 @@ process_t *alloc_process(void)
         return NULL;
     }
     k_memset(p, 0, sizeof(*p));
+    p->tg = tgroup_new(p);
+    if (!p->tg) {
+        kfree(p);
+        return NULL;
+    }
+    p->sigacts = p->tg->action;
     do {
         if (next_pid >= 2000000000u) {
             next_pid = 1;
@@ -145,6 +155,7 @@ process_t *alloc_process(void)
         candidate = next_pid++;
     } while (get_process(candidate) != NULL);
     p->pid = candidate;
+    p->tgid = candidate;
     p->state = PROC_READY;
     p->sid = candidate;
     p->pgid = candidate;
@@ -159,11 +170,13 @@ process_t *alloc_process(void)
     p->waiter.proc = p;
 
     if (fd_table_init(&p->fds) != 0) {
+        tgroup_put(p->tg);
         kfree(p);
         return NULL;
     }
     if (fd_init_stdio(&p->fds) != 0) {
         fd_table_free(&p->fds);
+        tgroup_put(p->tg);
         kfree(p);
         return NULL;
     }
@@ -205,7 +218,7 @@ void free_process(process_t *proc)
         proc_idle = NULL;
     }
     fd_table_free(&proc->fds);
-    vm_free(&proc->vm);
+    tgroup_put(proc->tg);
     kfree(proc->exec_ws);
     path_bufs_free(proc);
     kfree(proc);
@@ -253,6 +266,44 @@ uint32_t proc_alarm_at(uint32_t now, uint32_t ticks)
     return at != 0 ? at : 1u;
 }
 
+struct tgroup *tgroup_new(struct process *leader)
+{
+    struct tgroup *tg = kzalloc(sizeof(*tg));
+
+    if (tg) {
+        tg->refs = 1;
+        tg->live = 1;
+        tg->leader = leader;
+        wait_queue_init(&tg->chld);
+        wait_queue_init(&tg->gone);
+    }
+    return tg;
+}
+
+void tgroup_put(struct tgroup *tg)
+{
+    if (tg && --tg->refs == 0) {
+        kfree(tg);
+    }
+}
+
+void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
+{
+    const struct tgroup *tg = p->tg;
+    const process_t *t;
+    uint32_t flags = kirq_save();
+
+    *user = tg->utime;
+    *sys = tg->stime;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg) {
+            *user += t->utime;
+            *sys += t->stime;
+        }
+    }
+    kirq_restore(flags);
+}
+
 process_t *get_process(uint32_t pid)
 {
     process_t *p;
@@ -271,10 +322,10 @@ process_t *get_process(uint32_t pid)
  *
  * Called from a process's death path before its record is reclaimed: a
  * child left with a dead parent's pid would never be matched in `do_wait`,
- * and its frames, page directory and record would leak. A child that is
- * already a zombie has no future exit event to wake init, so init is
- * signalled now to reap it; `signal_post` makes a blocked init ready
- * itself. No child is adopted when there is no init yet (`init_pid == 0`,
+ * and its frames, page directory and record would leak. A child whose
+ * threads have all ended has no future exit event to wake init, so init is
+ * signalled now to reap it and a wait init is in is woken. No child is
+ * adopted when there is no init yet (`init_pid == 0`,
  * the debug-shell-only boot) or when init itself is the one dying, since no
  * other init is left to adopt them; the parent-death signals are posted
  * either way, after the adoption, so a handler that asks for its parent
@@ -294,11 +345,12 @@ void reparent_children(uint32_t dead_pid)
         }
         if (init != NULL) {
             p->parent_pid = init_pid;
-            if (p->state == PROC_ZOMBIE) {
+            if (p->state == PROC_ZOMBIE && p->pid == p->tgid && p->tg->live == 0) {
                 struct k_siginfo info;
 
                 proc_child_info(p, &info);
                 signal_post_info(init, SIGCHLD, &info);
+                wq_wake_all(&init->tg->chld);
             }
         }
         if (p->pdeath_signal != 0 && p->state != PROC_ZOMBIE) {

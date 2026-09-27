@@ -10,12 +10,16 @@
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
 #include "proc/exit.c"
+#include "proc/tgroup.h"
 
 extern int printf(const char *format, ...);
 
 static process_t child;
 static process_t parent;
+static struct tgroup child_group;
+static struct tgroup parent_group;
 process_t *current_proc;
+uint32_t proc_dead_threads;
 static wait_queue_t lock_wait;
 static int lock_free;
 static int fd_wait;
@@ -90,6 +94,33 @@ void vfs_cwd_clear(process_t *p)
     cwd_released = 1;
 }
 
+static int vfork_released;
+static int thread_released;
+
+/** No row traces the child or has it trace another. */
+void ptrace_exit_notify(process_t *p)
+{
+    (void)p;
+    CHECK(0, "an untraced thread tells no tracer");
+}
+
+void ptrace_tracer_gone(uint32_t tgid)
+{
+    CHECK(tgid == child.tgid, "the process's own tracees are let go at its end");
+}
+
+void proc_thread_gone(process_t *p)
+{
+    CHECK(p == &child && !closed, "the thread's futexes go before its files");
+    thread_released++;
+}
+
+void proc_vfork_release(process_t *p)
+{
+    CHECK(p == &child && closed && cwd_released, "a vfork parent runs after the files go");
+    vfork_released++;
+}
+
 void reparent_children(uint32_t pid)
 {
     CHECK(pid == child.pid && closed && cwd_released, "children are adopted after cleanup");
@@ -102,8 +133,15 @@ process_t *get_process(uint32_t pid)
     return with_parent ? &parent : 0;
 }
 
-void signal_post(process_t *target, int signo)
+void proc_child_info(const process_t *p, struct k_siginfo *info)
 {
+    (void)p;
+    (void)info;
+}
+
+void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
+{
+    (void)info;
     CHECK(target == &parent && signo == SIGCHLD, "the parent receives sigchld");
     CHECK(closed && cwd_released && adopted, "notification follows all cleanup");
     CHECK(child.state == PROC_ZOMBIE, "notification exposes a completed zombie");
@@ -115,8 +153,15 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     fd_wait = files;
     cwd_wait = directory;
     with_parent = has_parent;
-    closed = cwd_released = adopted = notified = switches = 0;
+    closed = cwd_released = adopted = notified = switches = vfork_released = 0;
+    thread_released = 0;
     child.pid = 42;
+    child.tgid = 42;
+    child.tg = &child_group;
+    child_group.leader = &child;
+    child_group.live = 1;
+    child_group.exiting = 0;
+    parent.tg = &parent_group;
     child.parent_pid = 7;
     child.state = PROC_RUNNING;
     child.in_syscall = 0;
@@ -127,13 +172,16 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     current_proc = &child;
     wait_queue_init(&lock_wait);
 
-    proc_exit_cleanup(status);
+    CHECK(proc_exit_cleanup(status) == 1, "the only thread's end is the process's");
 
     CHECK(switches == files + directory, "every requested wait was reached");
+    CHECK(thread_released == 1, "the thread's futexes are released once");
+    CHECK(child_group.live == 0, "the process has no thread left");
     CHECK(child.state == PROC_ZOMBIE, "cleanup ends as a zombie");
     CHECK(child.exit_code == status, "the encoded wait status is preserved");
     CHECK(child.in_syscall, "remaining teardown cannot be preempted");
     CHECK(notified == has_parent, "the parent is notified once");
+    CHECK(vfork_released == 1, "a vfork parent is let go once");
     CHECK(parent.state == (has_parent ? PROC_READY : PROC_BLOCKED),
           "a blocked parent becomes ready");
     CHECK(!wq_active(&lock_wait), "cleanup leaves no waiter");

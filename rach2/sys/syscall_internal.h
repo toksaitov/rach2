@@ -9,8 +9,9 @@
  * milestone 53 divided it along its arms; the bodies did not change.
  */
 
-/* The initial user stack's lowest address: one page is mapped here, and
-   `build_user_stack` fills it downward from the page's end. */
+/* The highest user page, the top page of a new image's stack. execve lays
+   the strings down from the page's end (`proc/uimage.c`), taking as many
+   pages below it as they need. */
 #define USER_STACK_BASE 0xBFFFF000
 
 extern volatile uint32_t fb_owner_pid;
@@ -135,6 +136,8 @@ int32_t sys_fchmod(isr_params_t *params);
 
 int32_t sys_chown(isr_params_t *params);
 
+int32_t sys_lchown(isr_params_t *params);
+
 int32_t sys_fchownat(isr_params_t *params);
 
 int32_t sys_fchown(isr_params_t *params);
@@ -166,6 +169,28 @@ int32_t sys_lstat(isr_params_t *params);
 int32_t sys_execve(isr_params_t *params);
 
 int32_t sys_fork(isr_params_t *params);
+
+int32_t sys_vfork(isr_params_t *params);
+
+int32_t sys_exit_group(isr_params_t *params);
+
+int32_t sys_getcpu(isr_params_t *params);
+
+int32_t sys_rt_sigtimedwait(isr_params_t *params);
+
+int32_t sys_mlock(isr_params_t *params);
+
+int32_t sys_munlock(isr_params_t *params);
+
+int32_t sys_mlock2(isr_params_t *params);
+
+int32_t sys_mlockall(isr_params_t *params);
+
+int32_t sys_munlockall(isr_params_t *params);
+
+int32_t sys_mincore(isr_params_t *params);
+
+int32_t sys_personality(isr_params_t *params);
 
 int32_t sys_waitpid(isr_params_t *params);
 
@@ -285,6 +310,10 @@ int32_t sys_recvfrom(isr_params_t *params);
 int32_t sys_recvmsg(isr_params_t *params);
 
 int32_t sys_shutdown(isr_params_t *params);
+
+int32_t sys_recvmmsg(isr_params_t *params);
+
+int32_t sys_sendmmsg(isr_params_t *params);
 
 int32_t sys_getpid(isr_params_t *params);
 

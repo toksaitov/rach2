@@ -74,6 +74,7 @@ struct vm_file {
     int (*fill)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
     uintptr_t (*share)(struct vm_file *f, uint32_t pgoff);
     void (*release)(struct vm_file *f);
+    char *path; /* the file's path, which /proc/PID/maps names; or NULL */
 };
 
 /* A single virtual memory area: [start, end) page-aligned. A region that

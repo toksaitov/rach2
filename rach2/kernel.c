@@ -15,6 +15,9 @@
 #include "sys/isr.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
+#include "sys/mm/mm.h"
+#include "sys/proc/tgroup.h"
+#include "sys/proc/ptrace.h"
 #include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
@@ -205,8 +208,9 @@ static void test_switch(void);
 static void test_preempt(void);
 static void exec_program(int argc, char *argv[]);
 
-/* The page the first user stack is built in. The stack starts at its end,
-   a page higher, and grows down from there. */
+/* The highest user page, the top page of a program's first stack. The
+   stack's strings start at the page's end, a page higher, and take as many
+   pages below it as they need; the stack grows down from there. */
 #define USER_STACK_BASE 0xBFFFF000
 
 /**
@@ -275,10 +279,12 @@ static void timer_handler(isr_params_t *params)
  * handler and the page-fault segfault path both route here. The process dies by
  * signal `signo` (SIGSEGV for a fault, SIGINT for CTRL+C); the exit code stores
  * the Linux wait-status encoding of a signal death (low 7 bits = the signal),
- * so the parent's waitpid sees WIFSIGNALED/WTERMSIG. Posts SIGCHLD and wakes a
- * parent blocked in waitpid, releases the descriptor table, frees the user
- * pages, and switches off the dying address space before freeing its page
- * directory. A dying init panics through panic_init_died, unless the debug
+ * so the parent's waitpid sees WIFSIGNALED/WTERMSIG. The whole process dies:
+ * its other threads are sent SIGKILL, and the last thread to end publishes
+ * the death. This thread releases the descriptor table and its reference to
+ * the address space, switching off it before its page directory can be
+ * freed; the last thread then posts SIGCHLD and wakes a parent blocked in
+ * waitpid. A dying init panics through panic_init_died, unless the debug
  * shell is the supervisor, in which case the shell's input state is reset and
  * this jumps back into shell_loop on a fresh kernel stack. Any other process
  * stays a zombie for the parent's waitpid to collect, and the now-READY parent
@@ -291,43 +297,59 @@ void terminate_current_process(int32_t signo)
 {
     bool is_init;
     uint32_t pid;
+    int alone;
+    int last;
 
-    /* Only user processes have their own page directory; ignore the kernel
+    /* Only user processes have an address space; ignore the kernel
      * idle/shell context. */
-    if (!current_proc || current_proc->cr3 == 0) {
+    if (!current_proc || current_proc->mm == NULL) {
         return;
     }
 
-    pid = current_proc->pid;
+    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
+    pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
+
+    /* The signal ends the whole process: the other threads are sent SIGKILL,
+     * and the process ends with this signal whichever thread ends last. */
+    proc_group_exit(signo & 0x7F);
+    alone = current_proc->tg->live == 1;
 
     /* If the console-owning session leader is dying (init, or a later TIOCSCTTY
      * leader, not only init), release the controlling terminal before
      * zombifying so the timer-IRQ serial drain does not target this vanishing
      * session during teardown. shell_reset_input on the is_init path below
      * releases again, which is idempotent. */
-    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
-        tty_set_session(&console_tty, 0, 0);
+    if (alone) {
+        if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
+            tty_set_session(&console_tty, 0, 0);
+        }
+        pty_release_leader((int)current_proc->sid, (int)pid);
+        fb_release_if_owner(pid);
     }
-    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
-    fb_release_if_owner(pid);
+    last = proc_exit_cleanup(signo & 0x7F);
 
-    proc_exit_cleanup(signo & 0x7F);
+    /* The address space goes now, not at the reap; `mm_drop` switches off
+     * it first when this was its last user, since free_page_directory
+     * refuses the directory in CR3. One another thread or a vfork parent
+     * shares stays. */
+    mm_drop(current_proc);
+    switch_page_directory(_kernel_dir);
 
-    /* Switch off the dying address space BEFORE freeing its page directory:
-     * free_page_directory refuses to free whatever is currently loaded in CR3,
-     * so freeing while still on this directory would silently leak it and all
-     * its private page tables. */
-    if (current_proc->cr3 != 0) {
-        page_dir_t *dir;
-        dir = current_proc->page_dir;
-        free_user_pages(dir);
-        switch_page_directory(_kernel_dir);
-        free_page_directory(dir);
-        current_proc->cr3 = 0;
-    } else {
-        switch_page_directory(_kernel_dir);
+    if (!last) {
+        for (;;) {
+            __asm__ __volatile__("cli");
+            schedule();
+            idle_wait_irq_off();
+        }
+    }
+    if (!alone) {
+        if (tty_console_owned_by_leader((int)current_proc->sid, (int)pid)) {
+            tty_set_session(&console_tty, 0, 0);
+        }
+        pty_release_leader((int)current_proc->sid, (int)pid);
+        fb_release_if_owner(pid);
     }
 
     if (is_init) {
@@ -1068,6 +1090,59 @@ static void boot_exec_done(void)
 }
 
 /**
+ * Build the initial stack of the program `exec_program` starts, in `mm`:
+ * its path, the environment `envp` and the `argc` strings of `argv`, laid
+ * down as execve lays them (`proc/uimage.c`) under the default stack limit,
+ * and keep in `mm` where the strings are and the auxiliary vector, for
+ * /proc.
+ *
+ * @return the entry stack pointer, with the lowest page the stack took in
+ *         `*bottom`; 0 when the strings do not fit or the pages or their
+ *         mappings could not be had.
+ */
+static uint32_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
+                           const elf_image_t *img, uint32_t *bottom)
+{
+    struct uimage u;
+    static const struct uimage_aux root = {0, 0, 0, 0, 0, 0};
+    uint8_t random16[16];
+    uint32_t envc = 0;
+    uint32_t esp = 0;
+    int rc;
+    int i;
+
+    while (envp[envc] != 0) {
+        envc++;
+    }
+    rc = uimage_start(&u, USER_STACK_BASE + PAGE_SIZE, RLIM_STACK_DEFAULT, (uint32_t)argc, envc);
+    if (rc == 0) {
+        rc = uimage_push(&u, argv[0]);
+    }
+    for (i = (int)envc - 1; i >= 0 && rc == 0; i--) {
+        rc = uimage_push(&u, envp[i]);
+    }
+    for (i = argc - 1; i >= 0 && rc == 0; i--) {
+        rc = uimage_push(&u, argv[i]);
+    }
+    if (rc == 0) {
+        rc = uimage_place(&u, (uint32_t)argc, envc);
+    }
+    krandom_bytes(random16, 16);
+    if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, &root) == 0 &&
+        uimage_map(&u, mm->dir) == 0) {
+        esp = u.esp;
+        *bottom = uimage_bottom(&u);
+        mm->arg_start = u.arg_start;
+        mm->arg_end = u.env_start;
+        mm->env_start = u.env_start;
+        mm->env_end = u.env_end;
+        k_memcpy(mm->auxv, u.auxv, sizeof(u.auxv));
+    }
+    uimage_release(&u);
+    return esp;
+}
+
+/**
  * Load and run an ELF program, entering ring 3 at its entry point.
  *
  * The program comes from the KRFFS root, or through the mounted root's file
@@ -1091,13 +1166,10 @@ static void exec_program(int argc, char *argv[])
     const char *path;
     uint32_t entry_point;
     elf_image_t img;
-    page_dir_t *user_dir;
+    struct mm *mm;
     process_t *user_proc;
-    uintptr_t user_stack_phys;
-    void *user_stack_page;
-    uint32_t user_stack_vaddr;
     uint32_t user_esp;
-    uint8_t random16[16];
+    uint32_t stack_bottom = USER_STACK_BASE;
     int init_is_starting;
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
@@ -1139,8 +1211,8 @@ static void exec_program(int argc, char *argv[])
         }
     }
 
-    user_dir = clone_page_directory();
-    if (!user_dir) {
+    mm = mm_new();
+    if (!mm) {
         boot_exec_done();
         console_puts("exec: Failed to clone page directory");
         return;
@@ -1150,51 +1222,36 @@ static void exec_program(int argc, char *argv[])
      * the binary size is unbounded); img records entry and auxv metadata. */
     kctx.name = path;
     if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, user_dir, &img) != 0) {
+                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, &img) != 0) {
         boot_exec_done();
+        mm_put(mm);
         console_puts("exec: Failed to load ELF segments");
         return;
     }
     boot_exec_done();
     entry_point = img.entry;
 
-    user_stack_vaddr = USER_STACK_BASE;
-    user_stack_phys = alloc_user_page(user_dir, user_stack_vaddr);
-    if (user_stack_phys == 0) {
-        console_puts("exec: Failed to allocate user stack");
-        return;
-    }
-
-    user_stack_page = kmap_temp(user_stack_phys);
-    if (!user_stack_page) {
-        console_puts("exec: no temporary mapping for the user stack");
-        return;
-    }
-    k_memset(user_stack_page, 0, PAGE_SIZE);
-
-    /* build_user_stack copies the strings in and lays out the argv/envp pointer
-     * arrays and the AT_NULL-terminated auxv, 16-byte-aligning the entry ESP.
-     * The layout is verified host-side (tests/host/uimage_hosttest.c). */
-    krandom_bytes(random16, 16);
-    user_esp = build_user_stack(user_stack_page, user_stack_vaddr, PAGE_SIZE, argc, argv,
-                                default_envp, &img, random16, 0);
-    kunmap_temp(user_stack_page);
+    user_esp = boot_stack(mm, argc, argv, default_envp, &img, &stack_bottom);
     if (user_esp == 0) {
-        console_puts("exec: argv/env too large for the initial stack");
+        mm_put(mm);
+        console_puts("exec: the initial stack could not be built");
         return;
     }
 
     user_proc = alloc_process();
     if (!user_proc) {
+        mm_put(mm);
         console_puts("exec: Failed to allocate process");
         return;
     }
 
     user_proc->state = PROC_RUNNING;
-    user_proc->cr3 = get_page_dir_phys(user_dir);
-    user_proc->page_dir = user_dir;
+    mm_set_exe(mm, path);
+    user_proc->mm = mm;
+    user_proc->cr3 = mm->cr3;
+    user_proc->page_dir = mm->dir;
     user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
-    user_proc->parent_pid = current_proc ? current_proc->pid : 0;
+    user_proc->parent_pid = current_proc ? current_proc->tgid : 0;
     proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
     current_proc = user_proc;
     /* Entered without a switch, so the registers are loaded here: the
@@ -1203,7 +1260,8 @@ static void exec_program(int argc, char *argv[])
 
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
-    if (elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0) {
+    if (elf_setup_vmas(&mm->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
+        (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY32))) {
         k_panic("boot: no memory for the first process's regions");
     }
 
@@ -1236,7 +1294,7 @@ static void exec_program(int argc, char *argv[])
         tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
     }
 
-    switch_page_directory(user_dir);
+    switch_page_directory(mm->dir);
 
     /* fork/waitpid need the scheduler running. */
     sched_enable();
@@ -3144,7 +3202,7 @@ static void process_command(const char *cmd)
  * read, and releases the console controlling terminal so the timer-IRQ drain
  * does not steal the input the debug shell polls itself.
  *
- * The exit paths (sys_exit, terminate, exec_fail_destroyed) call this with
+ * The exit paths (sys_exit, terminate_current_process) call this with
  * interrupts off, before they enable them and jump here, so a keyboard IRQ in
  * the jump window cannot observe stale state; shell_loop calls it again on
  * entry as the catch-all for boot and any path that did not.

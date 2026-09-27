@@ -8,6 +8,7 @@
 #include "lib/ksignal.h"
 #include "lib/kstring.h"
 #include "proc/process.h"
+#include "proc/ptrace.h"
 
 /*
  * Kill the faulting process with `signo` and schedule another; defined in the
@@ -134,8 +135,11 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
         info->code = FPE_INTDIV;
         info->addr = params->eip;
         return SIGFPE;
-    case 1: /* debug */
-        info->code = TRAP_TRACE;
+    case 1: /* debug: DR6 says whether a step or a breakpoint */
+        info->code = ptrace_debug_status();
+        if (info->code == 0) {
+            info->code = TRAP_TRACE;
+        }
         info->addr = params->eip;
         return SIGTRAP;
     case 3: /* breakpoint */
@@ -181,6 +185,22 @@ static int _exception_signal(const isr_params_t *params, struct k_siginfo *info)
 static void _exception_handler(isr_params_t *params)
 {
     const char *name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
+
+    /* A data breakpoint a tracer set on a user address fires when the
+     * kernel touches it too, in a copy to or from the process: the thread
+     * gets its SIGTRAP on the way back to user mode, and the access goes
+     * on, since a data breakpoint traps after it. */
+    if (params->vector == 1 && (params->cs & 3) != 3 && current_proc) {
+        struct k_siginfo info;
+
+        k_memset(&info, 0, sizeof(info));
+        info.code = ptrace_debug_status();
+        params->eflags &= ~0x100u;
+        if (info.code == TRAP_HWBKPT) {
+            signal_post_thread(current_proc, SIGTRAP, &info);
+        }
+        return;
+    }
 
     if ((params->cs & 3) == 3) {
         struct k_siginfo info;

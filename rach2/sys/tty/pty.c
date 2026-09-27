@@ -436,7 +436,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (want > sizeof(kbuf)) {
         want = sizeof(kbuf);
     }
-    if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
+    if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->tgid) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
     if (tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {

@@ -16,6 +16,9 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/wait_queue.h"
+#include "proc/tgroup.h"
+#include "proc/ptrace.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
@@ -65,6 +68,7 @@
 #include "network/netconf.h" /* net_ip_addr for getsockname */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 #include "mm/filemap.h"
+#include "mm/mm.h"
 #include "fs/tmpfs.h"
 #include "fs/devfs.h"
 #include "syscall_internal.h"
@@ -202,10 +206,11 @@ static void proc_end_others(void)
                 continue;
             }
             if (p->state == PROC_ZOMBIE) {
-                if (p->cr3 != 0) {
-                    free_user_pages(p->page_dir);
-                    free_page_directory(p->page_dir);
+                if (p->pid == p->tgid && p->tg->live != 0) {
+                    alive++; /* a leader waits for the rest of its threads */
+                    continue;
                 }
+                mm_drop(p);
                 kstack_free(p->kernel_stack);
                 free_process(p);
                 continue;
@@ -224,13 +229,68 @@ static void proc_end_others(void)
 }
 
 /**
- * Terminate the current process (exit(2)/exit_group(2)). Does not return.
+ * What a process's end releases beyond its threads: the framebuffer it owns,
+ * the console its session leads, and the pty slaves that session controls,
+ * so a later session can claim them. The console goes before the process is
+ * published as a zombie while the teardown runs with interrupts on;
+ * otherwise the timer-IRQ serial drain (tty_console_poll) keeps draining
+ * COM1 against the vanishing session, dropping a ^C/^Z and stealing bytes
+ * the kernel debug shell should read. shell_reset_input on the init path
+ * releases the console again, which changes nothing.
+ */
+static void exit_release_session(void)
+{
+    fb_release_if_owner(current_proc->tgid);
+    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->tgid)) {
+        tty_set_session(&console_tty, 0, 0);
+    }
+    pty_release_leader((int)current_proc->sid, (int)current_proc->tgid);
+}
+
+/**
+ * Leave the processor for good: the record of a thread that has ended is
+ * never selected again, and a thread that is not its process's last is
+ * freed by another's return to user mode.
+ */
+static void __attribute__((noreturn)) exit_schedule_away(void)
+{
+    for (;;) {
+        __asm__ __volatile__("cli");
+        schedule();
+        idle_wait_irq_off();
+    }
+}
+
+void proc_group_exit(int32_t code)
+{
+    struct tgroup *tg = current_proc->tg;
+    struct k_siginfo info;
+    process_t *t;
+
+    if (tg->exiting || tg->exec_task) {
+        return;
+    }
+    tg->exiting = 1;
+    tg->exit_code = code;
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_KERNEL;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
+            signal_post_thread(t, SIGKILL, &info);
+        }
+    }
+}
+
+/**
+ * End the calling thread with the encoded wait status `code`, and with the
+ * last thread the process. Does not return.
  *
- * EBX has the exit status. Releases files and cwd, reparents children to init,
- * publishes the zombie and wakes its parent, then reschedules. A normal child
- * leaves its mappings, descriptor-table storage, record and stack to do_wait.
- * A real init's exit is fatal (panic_init_died); an init exiting under the
- * debug shell returns to it.
+ * A thread that is not its process's last only releases what it holds and
+ * leaves. The last one releases the process's session, reparents the
+ * children to init, publishes the zombie and wakes its parent, then
+ * reschedules. A normal child leaves its mappings, descriptor-table storage,
+ * record and stack to do_wait. A real init's exit is fatal
+ * (panic_init_died); an init exiting under the debug shell returns to it.
  *
  * The plain status line goes out only where the debug shell is the supervisor.
  * There it is how a person, and the harness in its no-token mode, read a
@@ -249,48 +309,36 @@ static void proc_end_others(void)
  * because the timer's preemption is deferred inside a call. A halt there
  * kept the machine forever.
  */
-int32_t sys_exit(isr_params_t *params)
+static int32_t exit_current(int32_t code)
 {
-    int status = (int)params->ebx;
-    bool is_init = false;
+    int status = (code >> 8) & 0xFF;
+    bool is_init;
+    int alone;
     uint32_t exiting_pid;
-
-    if (current_proc && fb_owner_pid == current_proc->pid) {
-        vga_mode13h_exit();
-        fb_owner_pid = 0;
-    }
-
-    if (debug_shell_is_home) {
-        klog(KLOG_INFO, "process", "exited with status %d", status);
-    }
 
     if (!current_proc) {
         __asm__ __volatile__("cli; hlt");
         return 0;
     }
-
-    exiting_pid = current_proc->pid;
+    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)code);
+    exiting_pid = current_proc->tgid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
-
-    /* If the dying process is the console-owning session leader (init, or a
-     * later leader that claimed the console via TIOCSCTTY, NOT only init),
-     * release the controlling terminal NOW, before it zombifies and the
-     * teardown below runs with interrupts on. Otherwise the timer-IRQ serial
-     * drain (tty_console_poll) keeps draining COM1 against this vanishing
-     * session, dropping a ^C/^Z and stealing bytes the kernel debug shell
-     * should read. shell_reset_input on the is_init path releases again
-     * (idempotent). */
-    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
-        tty_set_session(&console_tty, 0, 0);
+    alone = current_proc->tg->live == 1;
+    if (alone) {
+        exit_release_session();
+        if (is_init && debug_shell_is_home) {
+            proc_end_others();
+        }
     }
-    /* A dying session leader also disassociates any pty slave it controlled, so
-     * a later session can claim the same /dev/pts/N. */
-    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
-
-    if (is_init && debug_shell_is_home) {
-        proc_end_others();
+    if (!proc_exit_cleanup(code)) {
+        exit_schedule_away();
     }
-    proc_exit_cleanup((status & 0xFF) << 8);
+    if (!alone) {
+        exit_release_session();
+    }
+    if (debug_shell_is_home) {
+        klog(KLOG_INFO, "process", "exited with status %d", status);
+    }
 
 #ifdef RACH2_HARNESS
     /* Harness build: the instant the probe (run as init) exits, report its
@@ -312,67 +360,76 @@ int32_t sys_exit(isr_params_t *params)
     }
 
     if (!is_init) {
-        schedule();
+        exit_schedule_away();
     }
 
-    if (is_init) {
-        klog(KLOG_INFO, "sys_exit",
-             "init process %d exited with status %d, returning to kernel shell", exiting_pid,
-             status);
-        console_puts("Init process exited. Returning to kernel debug shell.");
+    klog(KLOG_INFO, "sys_exit", "init process %d exited with status %d, returning to kernel shell",
+         exiting_pid, status);
+    console_puts("Init process exited. Returning to kernel debug shell.");
 
-        /* Clean up the init process resources. Switch off its address space
-         * BEFORE freeing the page directory: free_page_directory refuses to
-         * free whatever CR3 currently points at, so freeing while still loaded
-         * would leak the directory and its private page tables. */
-        if (current_proc->cr3 != 0) {
-            page_dir_t *init_dir;
-            init_dir = current_proc->page_dir;
-            free_user_pages(init_dir);
-            switch_page_directory(_kernel_dir);
-            free_page_directory(init_dir);
-        } else {
-            switch_page_directory(_kernel_dir);
-        }
-        /* Freed and replaced with interrupts off: a handler between the two
-         * would count its entry in the record just freed. */
-        __asm__ __volatile__("cli");
-        free_process(current_proc);
+    /* Clean up the init process resources; `mm_drop` switches off the
+     * address space first, since free_page_directory refuses the directory
+     * in CR3. */
+    mm_drop(current_proc);
+    switch_page_directory(_kernel_dir);
+    /* Freed and replaced with interrupts off: a handler between the two
+     * would count its entry in the record just freed. */
+    __asm__ __volatile__("cli");
+    free_process(current_proc);
 
-        init_pid = 0;
+    init_pid = 0;
 
-        current_proc = proc_idle;
-        current_proc->state = PROC_RUNNING;
+    current_proc = proc_idle;
+    current_proc->state = PROC_RUNNING;
 
-        /* Clear the shell's command line and stdin-wait state while interrupts
-         * are still off, so a keyboard IRQ cannot append to a stale command
-         * buffer or see a dangling stdin waiter. shell_loop resets again on
-         * entry as the catch-all. */
-        shell_reset_input();
-        __asm__ __volatile__("sti");
+    /* Clear the shell's command line and stdin-wait state while interrupts
+     * are still off, so a keyboard IRQ cannot append to a stale command
+     * buffer or see a dangling stdin waiter. shell_loop resets again on
+     * entry as the catch-all. */
+    shell_reset_input();
+    __asm__ __volatile__("sti");
 
-        sched_disable();
+    sched_disable();
 
-        /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe
-         * because we are in kernel mode and init has been torn down. */
-        __asm__ __volatile__("movl %0, %%esp\n\t"
-                             "sti\n\t"
-                             "jmp *%1\n\t"
-                             :
-                             : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
-                               "r"((uint32_t)shell_loop)
-                             : "memory");
-    }
-
-    for (;;) {
-        __asm__ __volatile__("cli");
-        schedule();
-        idle_wait_irq_off();
-    }
+    /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe because
+     * we are in kernel mode and init has been torn down. */
+    __asm__ __volatile__("movl %0, %%esp\n\t"
+                         "sti\n\t"
+                         "jmp *%1\n\t"
+                         :
+                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL), "r"((uint32_t)shell_loop)
+                         : "memory");
+    exit_schedule_away();
 }
 
 /**
- * Duplicate the parent's user address space into the child, copy-on-write.
+ * exit (1): end the calling thread with the status in EBX; the process ends
+ * with its last thread. A thread's return from its start function makes
+ * this call through glibc's and musl's thread code; exit(3) and _exit(2)
+ * make exit_group.
+ */
+int32_t sys_exit(isr_params_t *params)
+{
+    return exit_current((int32_t)((params->ebx & 0xFFu) << 8));
+}
+
+/**
+ * exit_group (252): end every thread of the process, the process with the
+ * status in EBX.
+ */
+int32_t sys_exit_group(isr_params_t *params)
+{
+    int32_t code = (int32_t)((params->ebx & 0xFFu) << 8);
+
+    if (current_proc) {
+        proc_group_exit(code);
+    }
+    return exit_current(code);
+}
+
+/**
+ * Duplicate the parent's user address space `from`, the one in use, into
+ * the child's directory, copy-on-write.
  *
  * Iterates the parent's page directory and, for each present user page, maps
  * the SAME physical frame into the child (bumping the frame refcount) rather
@@ -380,22 +437,11 @@ int32_t sys_exit(isr_params_t *params)
  * both directories so the first write faults into cow_fault for a private
  * copy. Returns 0 on success, -1 on failure.
  */
-static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
+static int copy_user_pages(struct mm *from, page_dir_t *child_dir)
 {
-    page_dir_t *parent_dir;
+    page_dir_t *parent_dir = from->dir;
     uint32_t dir_idx, page_idx;
     page_table_t *parent_table;
-
-    if (parent->cr3 == 0) {
-        parent_dir = _kernel_dir;
-    } else {
-        /* The directory's record is kept beside cr3, since a directory
-         * lives in the heap and its physical address says nothing about
-         * where the kernel reads it. The layout is
-         * logical_page_tables[1024] then phys_page_tables[1024], so the offset
-         * is 1024 * sizeof(page_table_t*) = 4096 bytes. */
-        parent_dir = parent->page_dir;
-    }
 
     for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
         parent_table = parent_dir->logical_page_tables[dir_idx];
@@ -424,7 +470,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             /* A page of a shared region is the same frame in the child, with
              * the same rights: a store on either side is seen by both. */
             {
-                vma_t *r = vm_find(&parent->vm, virt_addr);
+                vma_t *r = vm_find(&from->vm, virt_addr);
 
                 if (r && r->type == VM_SHARED) {
                     if (map_user_frame(child_dir, virt_addr, parent_phys, pte & 0xFFFu) != 0) {
@@ -486,196 +532,114 @@ static void close_cloexec_fds(void)
     }
 }
 
-/* elf_read_fn over a KRFFS file (ctx is the path): lets the segment loader pull
- * the ELF header, program headers, and each PT_LOAD straight from the file. */
-static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
-{
-    const struct exec_krffs_ctx *c = ctx;
-
-    return krffs_read(c->name, (char *)dst, count, off);
-}
-
-/* A program on a mount that is not the root is read through the mount: the
- * node held from the resolution, opened once for the load and released
- * after it. It lives in the caller's own exec workspace below, because a
- * read of a mounted volume sleeps and a second exec runs while it does. */
-struct exec_vfs_ctx {
-    struct vfs_ref ref;
+/*
+ * A file execve reads: the program, a script's interpreter, or the dynamic
+ * linker a PT_INTERP names. One on the KRFFS root is read by its path; one
+ * on another mount through a handle on the node its resolution held, opened
+ * once and released after the load. It lives in the caller's own exec
+ * workspace below, because a read of a mounted volume sleeps and a second
+ * exec runs while it does.
+ */
+struct exec_file {
+    const char *path;   /* the path on the KRFFS root */
+    struct vfs_ref ref; /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
     int32_t err; /* the last failed read's errno, reported instead of ENOEXEC */
 };
 
-static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
-{
-    struct exec_vfs_ctx *c = ctx;
-    int32_t got = vfs_read(c->ref.mnt, c->handle, dst, count, off);
+/* What a program's set-id bits would do: the bits that apply, and the file
+ * owner's ids they would give. */
+struct exec_setid {
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+};
 
+/** An `elf_read_fn` over an `exec_file`. */
+static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    struct exec_file *f = ctx;
+    int32_t got;
+
+    if (f->ref.mnt == NULL) {
+        return krffs_read(f->path, (char *)dst, count, off);
+    }
+    got = vfs_read(f->ref.mnt, f->handle, dst, count, off);
     if (got < 0) {
-        c->err = got;
+        f->err = got;
         return -1;
     }
     return (int)got;
 }
 
-static void exec_vfs_done(struct exec_vfs_ctx *c)
+/** Release the handle and the node `f` holds on another mount, if any. */
+static void exec_file_close(struct exec_file *f)
 {
-    if (c->ref.mnt) {
-        vfs_release(c->ref.mnt, c->handle);
-        vfs_ref_release(&c->ref);
-        c->ref.mnt = NULL;
-        c->handle = NULL;
+    if (f->ref.mnt) {
+        vfs_release(f->ref.mnt, f->handle);
+        vfs_ref_release(&f->ref);
+        f->ref.mnt = NULL;
+        f->handle = NULL;
     }
 }
 
 /*
- * Where execve has the new image's arguments while it destroys the old one.
+ * Where execve has the program's path, the new image's arguments and the
+ * new image itself until it commits.
  *
- * One workspace per process, and not one for the machine: a program on a
- * mounted volume is read through the buffer cache, which sleeps, so a second
- * execve runs while the first is inside a read. Sharing one set of buffers
- * meant the second overwrote the first's arguments, its open file and the
- * reference its resolution held, and the mount that reference belongs to
- * could never be unmounted afterwards. `in_syscall` stops the timer from
- * scheduling; it does not stop a call that gives the processor up.
+ * Each call has a workspace of its own in the heap, which the caller's record
+ * points at until the call ends, so a record freed during one gives it back
+ * too. It is not one for the machine: a program on a mounted volume is read
+ * through the buffer cache, which sleeps, so a second execve runs while the
+ * first is inside a read, and a shared workspace let the second overwrite the
+ * first's arguments, its open file and the reference its resolution held.
+ * `in_syscall` stops the timer from scheduling; it does not stop a call that
+ * gives the processor up.
  *
- * They cannot be on the stack (the kernel stack is 16 KB and this is about
- * seven of them) and cannot be in the caller's address space (that is what
- * is being torn down).
- *
- * The sizes come from the page these end up in, not from a round number.
- * `build_user_stack` lays the strings, both pointer arrays, the argc word, a
- * nine-entry auxv and 16 bytes of AT_RANDOM into ONE 4096-byte page, and it
- * runs AFTER the old image is freed, so a vector that fits here and not there
- * kills the caller instead of failing it. For 63 entries in each vector the
- * fixed part is 147 words of info block, 16 bytes of AT_RANDOM and up to 15
- * bytes of alignment, about 640 bytes; the remaining space is shared by the
- * strings of BOTH vectors, which is why the budget below is one number for the
- * two of them and not one each. 3072 leaves room for an auxv entry somebody
- * adds later.
- *
- * The old limits were 15 entries and 512 bytes each, which a link line
- * passes without trying: a compiler, `-static`, `-o`, an output name and a
- * dozen objects is over both.
+ * The strings are in `args`, the pages of the new stack (`proc/uimage.h`),
+ * and the image is built in `mm`, an address space of its own, so every
+ * limit and every failure of the load is found while there is still a
+ * caller to return an error to.
  */
-#define EXEC_MAX_ENTRIES 63
 
-#define EXEC_MAX_STRINGS 3072
-
-/* A script's first line, and the script's own path, which becomes an argument
- * to its interpreter. Both in the workspace, because the argv pointers handed
- * on point into them and the caller's memory is gone by the time they are
- * read. */
+/* A script's first line, read here to be parsed. */
 #define EXEC_SHEBANG_MAX 128
 
 struct exec_state {
-    struct exec_vfs_ctx vfs;
+    struct exec_file prog; /* the file being read */
+    struct exec_setid id;
+    struct uimage args;
+    struct mm *mm; /* the new image's address space until it commits */
+    uint32_t argc;
+    uint32_t envc;
+    uint32_t euid; /* the ids the new image runs with */
+    uint32_t egid;
+    int secure;     /* AT_SECURE */
+    uint32_t entry; /* where the new image starts */
+    elf_layout_t layout;
+    elf_layout_t ilayout; /* the interpreter's */
+    elf_image_t img;
+    elf_image_t iimg; /* the interpreter's */
     char path[VFS_PATH_MAX];
-    char argv_storage[EXEC_MAX_STRINGS];
-    char *argv_bufs[EXEC_MAX_ENTRIES + 1];
-    char envp_storage[EXEC_MAX_STRINGS];
-    char *envp_bufs[EXEC_MAX_ENTRIES + 1];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
-    char script_path[VFS_PATH_MAX];
 };
 
-/* A process's workspace is allocated at its first exec and kept in its
- * record for the record's life, since a program that execs once execs
- * again; `free_process` gives it back. */
-static struct exec_state *exec_state_of(process_t *proc)
+/** Give back the current process's exec workspace, if it has one: the
+ * file held open, the frames of a stack no page directory took, the
+ * address space of an image that did not commit, and the workspace
+ * itself. */
+static void exec_release(void)
 {
-    if (!proc->exec_ws) {
-        proc->exec_ws = kzalloc(sizeof(struct exec_state));
-    }
-    return proc->exec_ws;
-}
+    struct exec_state *s = current_proc->exec_ws;
 
-/**
- * Kill the current process after exec has destroyed its old address space.
- *
- * Past free_user_pages there is no image to return to, so a load/stack failure
- * cannot continue. Mark the process a zombie, wake any parent waiting on it (so
- * the scheduler has a target), switch away, and never iret back into the
- * destroyed space.
- */
-static void __attribute__((noreturn)) exec_fail_destroyed(int where)
-{
-    /* The process cannot report this itself: its image is gone and its
-     * parent sees only a death by signal. The record says which step of
-     * the load failed, so a machine that dies here says why. */
-    page_dir_t *dir;
-    int was_init = (current_proc->pid == init_pid && init_pid != 0);
-
-    klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
-         (int)current_proc->pid, where);
-
-    /* If the console-owning session leader is the one whose exec failed,
-     * release the controlling terminal before zombifying so the timer-IRQ
-     * serial drain does not target this dead session during the teardown window
-     * (mirrors sys_exit; usually a no-op here because sys_execve already
-     * released before free_user_pages; kept as a defensive backstop). */
-    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
-        tty_set_session(&console_tty, 0, 0);
+    if (s == NULL) {
+        return;
     }
-    /* A dying session leader also disassociates any pty slave it controlled, so
-     * a later session can claim the same /dev/pts/N. */
-    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
-
-    proc_exit_cleanup(SIGKILL & 0x7F);
-
-    /* A real /sbin/init whose exec failed is a fatal init death; halt BEFORE
-     * schedule(), or a still-READY process would mask the panic and run on with
-     * a dead PID 1. Only when the debug shell is the supervisor does it return
-     * to the shell, below. */
-    if (was_init && !debug_shell_is_home) {
-        panic_init_died(current_proc->pid); /* never returns */
-    }
-
-    schedule();
-
-    /* schedule() returned -> nothing else is runnable. Reparenting guarantees
-     * every process has a live parent (init at worst), and a blocked parent was
-     * woken above, so the scheduler always has the parent as a target: this
-     * point is reached only for the init-role process itself, under the debug
-     * shell. */
-    if (current_proc->pid == init_pid) {
-        init_pid = 0;
-    }
-    /* Switch to the kernel directory BEFORE freeing the dead one, otherwise
-     * free_page_directory() refuses the still-active directory and leaks it. */
-    sched_disable();
-    switch_page_directory(_kernel_dir);
-    if (current_proc->cr3 != 0) {
-        dir = current_proc->page_dir;
-        free_user_pages(dir);
-        free_page_directory(dir);
-    }
-    /* Freed with interrupts off until the record is replaced below: a
-     * handler between the two would count its entry in the freed record. */
-    __asm__ __volatile__("cli");
-    free_process(current_proc);
-    current_proc = proc_idle;
-    current_proc->state = PROC_RUNNING;
-    /* Fresh command line + drop stdin-wait state before re-enabling IRQs. */
-    shell_reset_input();
-    /* Return to the debug shell only when it is the supervisor; on a normal
-     * boot (which the reasoning above makes unreachable here) halt rather than
-     * expose the shell. */
-    if (!debug_shell_is_home) {
-        for (;;) {
-            __asm__ __volatile__("cli; hlt");
-        }
-    }
-    __asm__ __volatile__("movl %0, %%esp\n\t"
-                         "sti\n\t"
-                         "jmp *%1\n\t"
-                         :
-                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL), "r"((uint32_t)shell_loop)
-                         : "memory");
-    /* The jmp above never falls through; this loop makes the noreturn
-     * contract visible to the compiler, which cannot know that. */
-    for (;;) {
-        __asm__ __volatile__("cli; hlt");
-    }
+    exec_file_close(&s->prog);
+    uimage_release(&s->args);
+    mm_put(s->mm);
+    kfree(s);
+    current_proc->exec_ws = NULL;
 }
 
 /**
@@ -693,15 +657,19 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
  * not followed, because a chain of them is a loop nobody can see the
  * end of, and nothing here needs one.
  *
- * The caller's `path` and `argv_bufs` are rewritten in place on success.
- * The script is read through `read` over `ctx`: the root's reader by path,
- * or the mount's over an open handle.
+ * The arguments on the new stack are rewritten as Linux's `load_script`
+ * rewrites them: argv[0] is taken away, and the script's path, the argument
+ * and the interpreter are put below the rest, under the limits the caller's
+ * strings met. The caller's `path` becomes the interpreter's. The script is
+ * read through `read` over `ctx`: the root's reader by path, or the mount's
+ * over an open handle.
  *
  * @param argc the argument count, updated when the vector grows.
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
- *         errno for one whose first line names nothing.
+ *         errno for one whose first line names nothing or whose arguments no
+ *         longer fit.
  */
-static int32_t exec_shebang(struct exec_state *s, int *argc,
+static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
                             int (*read)(void *, void *, uint32_t, uint32_t), void *ctx)
 {
     char *interp;
@@ -709,9 +677,7 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
     char *p;
     int n;
     int i;
-    int extra;
-    int count;
-    char *rebuilt[EXEC_MAX_ENTRIES + 1];
+    int32_t rc;
 
     n = read(ctx, s->shebang_line, EXEC_SHEBANG_MAX, 0);
     if (n < 3 || s->shebang_line[0] != '#' || s->shebang_line[1] != '!') {
@@ -766,33 +732,21 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
         return -ENOEXEC; /* an interpreter is named by an absolute path */
     }
 
-    /* The script's own path becomes an argument, so it must outlive the buffer
-       the interpreter's path is about to be written into. The two buffers are
-       the same size, so this is a copy and never a truncation: handing the
-       interpreter a shortened name would run a different file from the one
-       whose permissions were just checked. */
-    k_strncpy(s->script_path, s->path, sizeof(s->script_path) - 1);
-    s->script_path[sizeof(s->script_path) - 1] = '\0';
-
-    extra = arg ? 2 : 1;
-    count = extra + (*argc > 0 ? *argc - 1 : 0);
-    if (count >= EXEC_MAX_ENTRIES) {
-        return -E2BIG;
+    rc = uimage_drop_first(&s->args);
+    if (rc == 0) {
+        rc = uimage_push(&s->args, s->path);
     }
-    rebuilt[0] = interp;
-    i = 1;
-    if (arg) {
-        rebuilt[i++] = arg;
+    if (rc == 0 && arg != NULL) {
+        rc = uimage_push(&s->args, arg);
+        (*argc)++;
     }
-    rebuilt[i++] = s->script_path;
-    for (n = 1; n < *argc; n++) {
-        rebuilt[i++] = s->argv_bufs[n];
+    if (rc == 0) {
+        rc = uimage_push(&s->args, interp);
     }
-    rebuilt[i] = NULL;
-    for (n = 0; n <= i; n++) {
-        s->argv_bufs[n] = rebuilt[n];
+    if (rc != 0) {
+        return rc;
     }
-    *argc = i;
+    (*argc)++;
 
     k_strncpy(s->path, interp, sizeof(s->path) - 1);
     s->path[sizeof(s->path) - 1] = '\0';
@@ -841,620 +795,699 @@ static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
 }
 
 /**
- * How far below its first page the stack of a new image may grow: the soft
- * RLIMIT_STACK in force at the exec, which bounds the whole stack as Linux's
- * does, in whole pages, less the page it starts with, and never into the
- * range below VM_MMAP_BASE where anonymous mappings are placed. A limit
+ * How far below its top page the stack of a new image may grow, when the
+ * pages its arguments took start at `bottom`: to `limit`, the soft
+ * RLIMIT_STACK in force at the exec, in whole pages, which bounds the whole
+ * stack as Linux's does, but never into the range below VM_MMAP_BASE where
+ * anonymous mappings are placed, and always as far as `bottom`. A limit
  * changed later applies at the next exec.
  */
-static uint32_t exec_stack_window(void)
+static uint32_t exec_stack_window(uint32_t bottom, uint32_t limit)
 {
-    uint32_t limit = current_proc->rlim[RLIM_STACK].cur & ~(uint32_t)(PAGE_SIZE - 1);
-    uint32_t room = USER_STACK_BASE - VM_MMAP_BASE;
+    uint32_t size = limit & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t floor;
 
-    if (limit <= PAGE_SIZE) {
-        return 0;
+    if (size > USER_ADDR_MAX - VM_MMAP_BASE) {
+        size = USER_ADDR_MAX - VM_MMAP_BASE;
     }
-    limit -= PAGE_SIZE;
-    return limit < room ? limit : room;
+    floor = USER_ADDR_MAX - size;
+    if (floor > bottom) {
+        floor = bottom;
+    }
+    return USER_STACK_BASE - floor;
 }
 
 /**
- * Replace the current process image with a new program (execve(2)).
- *
- * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
- * the path, argv, and envp into the process's exec workspace, allocated at
- * its first exec, resolves a `#!` script to its interpreter, and validates
- * the ELF header BEFORE tearing the old image down (so a format the loader
- * does not take leaves the caller intact), then frees the old user pages,
- * streams the new program in, builds the SysV/i386
- * initial stack, and redirects the iret frame to the entry point. A failure
- * after the old image is gone, a segment that does not load, routes to
- * exec_fail_destroyed, which ends the process.
+ * Count the pointers of the user vector `vec` before its NULL into `*n`, as
+ * Linux's `count` counts them; a NULL `vec` has none. More than `max` is
+ * -E2BIG, found without reading on to the end, and a pointer that cannot be
+ * read is -EFAULT.
  */
-int32_t sys_execve(isr_params_t *params)
+static int32_t exec_count(char *const __user *vec, uint32_t max, uint32_t *n)
 {
-    const char __user *user_path = (const char __user *)params->ebx;
-    char *const __user *user_argv = (char *const __user *)params->ecx;
-    char *const __user *user_envp = (char *const __user *)params->edx;
-    struct exec_krffs_ctx kctx;
+    uint32_t i;
 
-    int argc = 0;
-    int envc = 0;
-    uint32_t argv_offset = 0;
-    uint32_t envp_offset = 0;
-    int owned_console = 0;
-    uint32_t setid_mode = 0;
-    uint32_t file_uid = 0;
-    uint32_t file_gid = 0;
-    int secure = 0;
-    uint32_t old_euid;
-    uint32_t old_egid;
-
-    struct exec_state *s;
-    uint32_t entry_point;
-
-    elf_image_t img;
-    uint8_t random16[16];
-    page_dir_t *proc_dir;
-    uintptr_t stack_phys;
-    void *stack_page;
-    const char *name;
-    int len;
-
-    mem_balance();
-    if (!current_proc) {
-        return -ESRCH;
+    *n = 0;
+    if (vec == NULL) {
+        return 0;
     }
-    /* This caller's workspace, by its place in the process table: what it
-     * puts there is read again after a sleep, and another exec must not be
-     * able to reach it. */
-    s = exec_state_of(current_proc);
-    if (!s) {
-        return -ENOMEM;
-    }
-    k_memset(s, 0, sizeof(*s));
+    for (i = 0;; i++) {
+        uint32_t ptr;
 
-    /* Resolve the program path (relative names against the cwd) into that
-     * workspace. A bad user pointer, an over-long path, or an empty path is
-     * rejected by the return value, so a kernel-range pointer cannot leak
-     * kernel memory. The buffer is VFS_PATH_MAX bytes (NUL included). */
-    if (!user_path) {
-        return -EFAULT;
-    }
-    len = copy_path_cwd(s->path, sizeof(s->path), user_path);
-    if (len < 0) {
-        return len;
-    }
-
-    /* Copy argv from user space, range-checking every user pointer and bounding
-     * the cumulative offset so s->argv_storage cannot overflow. An argument
-     * that does not fit fails the exec instead of being silently truncated.
-     * The pointer array and each string are read through the copy helpers,
-     * which fault-check each access.
-     *
-     * The two vectors share one string budget, which is checked after both are
-     * in: the page they are laid into is one page whichever of them fills it,
-     * and the check that would otherwise catch it runs after the old image is
-     * gone, where the only way to fail is to kill the caller. */
-    if (user_argv) {
-        for (argc = 0; argc < EXEC_MAX_ENTRIES; argc++) {
-            uint32_t arg_ptr = 0;
-            int r;
-
-            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc], sizeof(arg_ptr)) !=
-                0) {
-                return -EFAULT;
-            }
-            if (arg_ptr == 0) {
-                break; /* NULL terminator */
-            }
-            /* The storage is exactly full and another argument is waiting:
-             * that is a size limit reached, not a bad address. */
-            if (argv_offset >= sizeof(s->argv_storage)) {
-                return -E2BIG;
-            }
-            s->argv_bufs[argc] = &s->argv_storage[argv_offset];
-            r = strncpy_from_user(&s->argv_storage[argv_offset], (const char __user *)arg_ptr,
-                                  sizeof(s->argv_storage) - argv_offset);
-            if (r == -EFAULT) {
-                return -EFAULT;
-            }
-            if (r < 0) {
-                return -E2BIG; /* did not fit */
-            }
-            argv_offset += (uint32_t)r + 1;
+        if (copy_from_user(&ptr, (const void __user *)&vec[i], sizeof(ptr)) != 0) {
+            return -EFAULT;
         }
-        /* The bufs array has EXEC_MAX_ENTRIES args plus a NULL terminator;
-         * one more non-NULL pointer is too many args, not a silent truncation.
-         */
-        if (argc == EXEC_MAX_ENTRIES) {
-            uint32_t arg_ptr = 0;
-            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[EXEC_MAX_ENTRIES],
-                               sizeof(arg_ptr)) != 0) {
-                return -EFAULT;
-            }
-            if (arg_ptr != 0) {
-                return -E2BIG;
-            }
+        if (ptr == 0) {
+            *n = i;
+            return 0;
+        }
+        if (i == max) {
+            return -E2BIG;
+        }
+        if ((i & 1023u) == 1023u) {
+            sched_service_point();
         }
     }
-    s->argv_bufs[argc] = NULL;
+}
 
-    if (user_envp) {
-        for (envc = 0; envc < EXEC_MAX_ENTRIES; envc++) {
-            uint32_t env_ptr = 0;
-            int r;
-
-            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[envc], sizeof(env_ptr)) !=
-                0) {
-                return -EFAULT;
-            }
-            if (env_ptr == 0) {
-                break; /* NULL terminator */
-            }
-            if (envp_offset >= sizeof(s->envp_storage)) {
-                return -E2BIG;
-            }
-            s->envp_bufs[envc] = &s->envp_storage[envp_offset];
-            r = strncpy_from_user(&s->envp_storage[envp_offset], (const char __user *)env_ptr,
-                                  sizeof(s->envp_storage) - envp_offset);
-            if (r == -EFAULT) {
-                return -EFAULT;
-            }
-            if (r < 0) {
-                return -E2BIG; /* did not fit */
-            }
-            envp_offset += (uint32_t)r + 1;
-        }
-        /* As with argv: one more non-NULL envp pointer overflows the bufs
-         * array; fail, not silently drop the tail of the environment. */
-        if (envc == EXEC_MAX_ENTRIES) {
-            uint32_t env_ptr = 0;
-            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[EXEC_MAX_ENTRIES],
-                               sizeof(env_ptr)) != 0) {
-                return -EFAULT;
-            }
-            if (env_ptr != 0) {
-                return -E2BIG;
-            }
-        }
-    }
-    s->envp_bufs[envc] = NULL;
-
-    /* The two vectors share the page they are laid into, so they share a
-     * budget, and it is checked HERE: `build_user_stack` would catch it, but it
-     * runs after `free_user_pages`, where there is no image left to return an
-     * error to and the caller is killed instead. */
-    if (argv_offset + envp_offset > EXEC_MAX_STRINGS) {
-        return -E2BIG;
-    }
-
-    name = s->path;
-
-    kctx.name = name;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    /* The synthetic /dev and /proc mounts hold no executables: the walk
-     * arriving on one is refused, so execve sees the same mount boundary as
-     * open and cannot reach a file a hostile image placed below the
-     * synthetic prefix. */
-    {
-        struct vfs_ref xref;
-        krffs_node_t *prog;
+/**
+ * Copy the `n` strings of the user vector `vec` onto the new stack `u`, the
+ * last first, as Linux's `copy_strings` copies them: each pointer is read
+ * again, and a string that cannot be read is -EFAULT, one past the length
+ * limit or the budget -E2BIG.
+ */
+static int32_t exec_copy_strings(struct uimage *u, char *const __user *vec, uint32_t n)
+{
+    while (n > 0) {
+        uint32_t ptr;
         int32_t rc;
 
-        rc = vfs_resolve(0, name, VFS_WALK_LOCK, &xref, 0, 0);
+        n--;
+        if (copy_from_user(&ptr, (const void __user *)&vec[n], sizeof(ptr)) != 0) {
+            return -EFAULT;
+        }
+        rc = uimage_push_user(u, (const char __user *)ptr);
         if (rc != 0) {
-            return rc; /* missing, not-a-dir, or a denied ancestor */
+            return rc;
         }
-        if (vfs_synth_vpath(xref.mnt, xref.node)) {
-            vfs_walk_unlock(xref.mnt);
-            vfs_ref_release(&xref);
-            return -EACCES;
-        }
-        /* MS_NOEXEC is enforced here. */
-        if (xref.mnt->flags & VFS_MS_NOEXEC) {
-            vfs_walk_unlock(xref.mnt);
-            vfs_ref_release(&xref);
-            return -EACCES;
-        }
-        if (!mnt_is_root(xref.mnt)) {
-            /* A program on another type: its attributes decide the execute
-             * right and the set-id facts; the image is read through the
-             * mount below. */
-            struct vfs_stat vst;
-
-            rc = (int)cred_access_ref(&xref, CRED_X, 0);
-            if (rc == 0) {
-                rc = vfs_getattr(xref.mnt, xref.node, &vst);
-            }
-            if (rc != 0) {
-                vfs_walk_unlock(xref.mnt);
-                vfs_ref_release(&xref);
-                return rc;
-            }
-            setid_mode = vst.mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID);
-            if (!(vst.mode & 010u)) {
-                setid_mode &=
-                    ~KRFFS_MODE_SGID; /* set-gid without group execute is mandatory locking */
-            }
-            if (xref.mnt->flags & VFS_MS_NOSUID) {
-                setid_mode = 0;
-            }
-            file_uid = vst.uid;
-            file_gid = vst.gid;
-            s->vfs.ref = xref; /* held until the image is loaded or refused */
-            s->vfs.err = 0;
-            rc = vfs_open_node(xref.mnt, xref.node, 0, &s->vfs.handle);
-            vfs_walk_unlock(xref.mnt);
-            if (rc != 0) {
-                vfs_ref_release(&s->vfs.ref);
-                s->vfs.ref.mnt = NULL;
-                return rc;
-            }
-            goto checked;
-        }
-        prog = xref.node;
-        rc = cred_access_node(prog, CRED_X, 0);
-        if (rc != 0) {
-            vfs_walk_unlock(xref.mnt);
-            vfs_ref_release(&xref);
-            return rc; /* the execute bit, for root too */
-        }
-        /* Capture the set-id facts while the node is at hand; they apply only
-         * once the exec commits, so a rejected image changes nothing. The
-         * root node cannot reach here (a directory fails the execute check),
-         * so the dirty flag can never read as a set-id bit.
-         *
-         * Setgid is honored only when the group-execute bit is set with it,
-         * which is Linux's rule. Without that condition a 02700 file owned
-         * 1000:0 passes the execute check on its OWNER bits, since the access
-         * check judges one identity class and the owner's first, and then hands
-         * its executor egid 0. The mode needs no write to appear either: an
-         * owner may chmod any 07777 onto their own file. Setgid without
-         * group-execute means something else in Unix (the mandatory-locking
-         * mark), and nothing here implements that: the lock family is advisory
-         * and always granted. */
-        setid_mode = (uint32_t)(prog->mode & KRFFS_MODE_SUID);
-        if ((prog->mode & KRFFS_MODE_SGID) && (prog->mode & 0010u)) {
-            setid_mode |= KRFFS_MODE_SGID;
-        }
-        /* MS_NOSUID: the bits are read and then ignored. */
-        if (xref.mnt->flags & VFS_MS_NOSUID) {
-            setid_mode = 0;
-        }
-        file_uid = prog->uid;
-        file_gid = prog->gid;
-        vfs_walk_unlock(xref.mnt);
-        vfs_ref_release(&xref);
     }
-checked:
+    return 0;
+}
 
-    if (current_proc->cr3 == 0) {
-        proc_dir = _kernel_dir;
+/**
+ * Copy the program's path and the caller's vectors onto the new stack in
+ * `s`, and count them into `*argc` and `*envc`, as Linux's
+ * `do_execveat_common` does.
+ *
+ * Both vectors are counted first, and their pointers are measured against
+ * the budget `uimage_start` sets from the soft RLIMIT_STACK. The strings
+ * follow, the path the caller passed at the top, then the environment and
+ * then the arguments, each vector last string first. An empty argv gets one
+ * empty string, so a program that starts reading at argv[1] does not read
+ * the environment. 0, -E2BIG, -EFAULT or -ENOMEM.
+ */
+static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path,
+                              char *const __user *user_argv, char *const __user *user_envp,
+                              uint32_t *argc, uint32_t *envc)
+{
+    uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
+    uint32_t max = uimage_budget(limit) / 4u;
+    int32_t rc;
+
+    rc = exec_count(user_argv, max, argc);
+    if (rc == 0) {
+        rc = exec_count(user_envp, max, envc);
+    }
+    if (rc == 0) {
+        rc = uimage_start(&s->args, USER_ADDR_MAX, limit, *argc, *envc);
+    }
+    if (rc == 0) {
+        rc = uimage_push_user(&s->args, user_path);
+    }
+    if (rc == 0) {
+        rc = exec_copy_strings(&s->args, user_envp, *envc);
+    }
+    if (rc == 0) {
+        rc = exec_copy_strings(&s->args, user_argv, *argc);
+    }
+    if (rc == 0 && *argc == 0) {
+        rc = uimage_push(&s->args, "");
+        *argc = 1;
+    }
+    return rc;
+}
+
+/**
+ * Open the file at the absolute, canonical `path` into `f` for execve to
+ * read, and when `id` is not NULL, say in it what the file's set-id bits
+ * would do.
+ *
+ * The walk may not arrive on the synthetic /dev and /proc mounts, which
+ * hold no programs, so execve sees the mount boundary open sees and cannot
+ * reach a file a hostile image placed below the synthetic prefix; a mount
+ * with MS_NOEXEC holds none either. The caller needs the execute right,
+ * root too. The set-id facts are taken while the node is at hand and apply
+ * only once the exec commits. Setgid counts only with the group-execute
+ * bit beside it, which is Linux's rule: without it a 02700 file owned
+ * 1000:0 passes the execute check on its owner bits, since the check judges
+ * one identity class and the owner's first, and would hand its executor
+ * egid 0. Setgid without group-execute is the mark of mandatory locking in
+ * Unix, which nothing here implements. On a mount with MS_NOSUID the bits
+ * are read and ignored. 0 or a negative errno.
+ */
+static int32_t exec_open(struct exec_file *f, const char *path, struct exec_setid *id)
+{
+    struct vfs_ref ref;
+    struct vfs_stat vst;
+    int nosuid;
+    int32_t rc;
+
+    f->path = path;
+    f->ref.mnt = NULL;
+    f->handle = NULL;
+    f->err = 0;
+    rc = vfs_resolve(0, path + (path[0] == '/'), VFS_WALK_LOCK, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
+    if (vfs_synth_vpath(ref.mnt, ref.node) || (ref.mnt->flags & VFS_MS_NOEXEC)) {
+        rc = -EACCES;
+    } else if (mnt_is_root(ref.mnt)) {
+        const krffs_node_t *node = ref.node;
+
+        rc = cred_access_node(node, CRED_X, 0);
+        vst.mode = node->mode;
+        vst.uid = node->uid;
+        vst.gid = node->gid;
     } else {
-        proc_dir = current_proc->page_dir;
-    }
-
-    /* The ELF header is validated before the old image is torn down, so the
-     * common "not a valid executable" failure leaves the calling process
-     * intact. A file that is not an ELF may still be a script naming its
-     * interpreter, which is checked here as the script was. */
-    {
-        Elf32_Ehdr ehdr;
-
-        int script = 0;
-
-        if (s->vfs.ref.mnt) {
-            /* On another type the image is read through its mount; a
-             * script there is read the same way, and its interpreter is
-             * resolved below as any program is. */
-            if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                int32_t sb =
-                    s->vfs.err ? s->vfs.err : exec_shebang(s, &argc, exec_vfs_read, &s->vfs);
-
-                exec_vfs_done(&s->vfs);
-                if (sb < 0) {
-                    return sb;
-                }
-                if (sb == 0) {
-                    return -ENOEXEC;
-                }
-                script = 1;
-            }
-        } else if (exec_krffs_read(&kctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                   !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-            struct exec_krffs_ctx sctx;
-            int32_t sb;
-
-            sctx.name = s->path + (s->path[0] == '/' ? 1 : 0);
-            sb = exec_shebang(s, &argc, exec_krffs_read, &sctx);
-
-            if (sb < 0) {
-                return sb;
-            }
-            if (sb == 0) {
-                return -ENOEXEC;
-            }
-            script = 1;
+        rc = cred_access_ref(&ref, CRED_X, 0);
+        if (rc == 0) {
+            rc = vfs_getattr(ref.mnt, ref.node, &vst);
         }
-        if (script) {
-            /* A set-id script runs as its invoker. The interpreter is what
-             * actually runs, it is not set-id, and honouring the script's bits
-             * is a hole Unix closed long ago: the interpreter can be made to
-             * read a different file than the one whose bits were checked. */
-            setid_mode = 0;
-            file_uid = 0;
-            file_gid = 0;
-
-            name = s->path;
-
-            kctx.name = name;
-            if (name[0] == '/') {
-                name++;
-            }
-            {
-                struct vfs_ref iref;
-                int32_t rc;
-
-                rc = vfs_resolve(0, name, VFS_WALK_LOCK, &iref, 0, 0);
-                if (rc != 0) {
-                    return rc;
-                }
-                if (vfs_synth_vpath(iref.mnt, iref.node) || (iref.mnt->flags & VFS_MS_NOEXEC)) {
-                    vfs_walk_unlock(iref.mnt);
-                    vfs_ref_release(&iref);
-                    return -EACCES;
-                }
-                if (!mnt_is_root(iref.mnt)) {
-                    /* An interpreter on another type loads through its
-                     * mount, as a program there does. */
-                    rc = cred_access_ref(&iref, CRED_X, 0);
-                    if (rc != 0) {
-                        vfs_walk_unlock(iref.mnt);
-                        vfs_ref_release(&iref);
-                        return rc;
-                    }
-                    s->vfs.ref = iref;
-                    s->vfs.err = 0;
-                    rc = vfs_open_node(iref.mnt, iref.node, 0, &s->vfs.handle);
-                    vfs_walk_unlock(iref.mnt);
-                    if (rc != 0) {
-                        vfs_ref_release(&s->vfs.ref);
-                        s->vfs.ref.mnt = NULL;
-                        return rc;
-                    }
-                    if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                        !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                        int32_t why = s->vfs.err ? s->vfs.err : -ENOEXEC;
-
-                        exec_vfs_done(&s->vfs);
-                        return why; /* one level only: an interpreter that is a script */
-                    }
-                    goto interpreter_checked;
-                }
-                rc = cred_access_node((krffs_node_t *)iref.node, CRED_X, 0);
-                vfs_walk_unlock(iref.mnt);
-                vfs_ref_release(&iref);
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-            if (exec_krffs_read(&kctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                /* One level only: an interpreter that is itself a script. */
-                return -ENOEXEC;
-            }
-        interpreter_checked:;
+        if (rc == 0) {
+            rc = vfs_open_node(ref.mnt, ref.node, 0, &f->handle);
+        }
+        if (rc == 0) {
+            f->ref = ref; /* held until exec_file_close */
         }
     }
+    vfs_walk_unlock(ref.mnt);
+    if (f->ref.mnt == NULL) {
+        vfs_ref_release(&ref);
+    }
+    if (rc == 0 && id != NULL) {
+        id->mode = vst.mode & KRFFS_MODE_SUID;
+        if ((vst.mode & KRFFS_MODE_SGID) && (vst.mode & 010u)) {
+            id->mode |= KRFFS_MODE_SGID;
+        }
+        if (nosuid) {
+            id->mode = 0;
+        }
+        id->uid = vst.uid;
+        id->gid = vst.gid;
+    }
+    return rc;
+}
 
-    /* The exec is now committed (the image is valid). Drop close-on-exec
-     * descriptors before the old address space goes away. */
+/**
+ * Turn an exec of a script into an exec of its interpreter, when the file
+ * `s` has open is not an ELF image: `exec_shebang` rewrites the arguments,
+ * and the interpreter is opened in the script's place. A set-id script runs
+ * as its invoker: the interpreter is what runs, it is not set-id, and
+ * honouring the script's bits is a hole Unix closed long ago, since the
+ * interpreter can be made to read a different file than the one whose bits
+ * were checked. One level only: an interpreter that is itself a script is
+ * refused. 0, -ENOEXEC, or an error of the open or the read.
+ */
+static int32_t exec_script(struct exec_state *s)
+{
+    Elf32_Ehdr ehdr;
+    int32_t rc;
+
+    if (exec_file_read(&s->prog, &ehdr, sizeof(ehdr), 0) == (int)sizeof(ehdr) &&
+        elf_valid_exec(&ehdr, sizeof(ehdr))) {
+        return 0;
+    }
+    if (s->prog.err) {
+        return s->prog.err;
+    }
+    rc = exec_shebang(s, &s->argc, exec_file_read, &s->prog);
+    exec_file_close(&s->prog);
+    if (rc <= 0) {
+        return rc < 0 ? rc : -ENOEXEC;
+    }
+    s->id.mode = 0;
+    rc = exec_open(&s->prog, s->path, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    if (exec_file_read(&s->prog, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+        !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+        return s->prog.err ? s->prog.err : -ENOEXEC;
+    }
+    return 0;
+}
+
+/**
+ * The ids the new image runs with, into `s`: the file owner's where a
+ * set-id bit applies, the way privilege is regained, and the caller's
+ * effective ids otherwise. A process that set no_new_privs gains nothing:
+ * its bits are read and ignored, as a nosuid mount's are. `secure`, which
+ * is AT_SECURE, says whether the image runs with authority its invoker
+ * lacks, the effective id differing from the real one either way, so libc
+ * distrusts the environment the caller gave it.
+ */
+static void exec_ids(struct exec_state *s)
+{
+    uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
+
+    s->euid = (mode & KRFFS_MODE_SUID) ? s->id.uid : current_proc->euid;
+    s->egid = (mode & KRFFS_MODE_SGID) ? s->id.gid : current_proc->egid;
+    s->secure = s->euid != current_proc->ruid || s->egid != current_proc->rgid;
+}
+
+/**
+ * Load the interpreter the program's PT_INTERP names into the new address
+ * space, as Linux's `load_elf_interp` loads it: a position-independent one,
+ * which every dynamic linker is, at the top of the range mmap places
+ * mappings in, just below VM_MMAP_BASE, and one with fixed addresses at
+ * those. Its own PT_INTERP is ignored. The new image starts at its entry,
+ * and `*base`, AT_BASE, is the distance it was moved by. 0, -ENOENT,
+ * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel
+ * loads, -ENOMEM for one that would cover the program, or an error of the
+ * read.
+ */
+static int32_t exec_interp(struct exec_state *s, uint32_t *base)
+{
+    uint32_t bias = 0;
+    int32_t rc;
+
+    if (canonicalize_abs(s->layout.interp) < 0) {
+        return -ENOENT;
+    }
+    rc = exec_open(&s->prog, s->layout.interp, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    if (elf_read_layout(exec_file_read, &s->prog, &s->ilayout) != 0) {
+        return s->prog.err ? s->prog.err : -ELIBBAD;
+    }
+    if (s->ilayout.type == ET_DYN) {
+        bias = VM_MMAP_BASE - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
+    }
+    if (s->ilayout.lo + bias < s->img.image_end && s->ilayout.hi + bias > s->img.segs[0].start) {
+        return -ENOMEM;
+    }
+    if (elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->iimg) != 0) {
+        return s->prog.err ? s->prog.err : -ELIBBAD;
+    }
+    exec_file_close(&s->prog);
+    s->entry = s->iimg.entry;
+    *base = bias;
+    return 0;
+}
+
+/**
+ * Build the new image in an address space of its own while the caller's
+ * still runs, as Linux's `load_elf_binary` builds one: the program, at
+ * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
+ * PT_INTERP names; the regions; and the stack, with the pointers and the
+ * auxiliary vector below its strings. The stack may grow to the soft
+ * RLIMIT_STACK, lowered to 8 MiB for an image that runs with ids its
+ * caller lacks, and the regions may cover no more than RLIMIT_AS. The
+ * caller's image is untouched, so every failure is an error execve
+ * returns. 0, -ENOEXEC, -ENOMEM, or an error of `exec_interp` or of a read.
+ */
+static int32_t exec_build(struct exec_state *s)
+{
+    struct uimage_aux aux;
+    uint32_t bias = 0;
+    uint32_t bottom = uimage_bottom(&s->args);
+    uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
+    uint8_t random16[16];
+    int32_t rc;
+
+    if (elf_read_layout(exec_file_read, &s->prog, &s->layout) != 0) {
+        return s->prog.err ? s->prog.err : -ENOEXEC;
+    }
+    if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
+        bias = ELF_ET_DYN_BASE - s->layout.lo;
+    }
+    s->mm = mm_new();
+    if (s->mm == NULL) {
+        return -ENOMEM;
+    }
+    if (elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->img) != 0) {
+        return s->prog.err ? s->prog.err : -ENOEXEC;
+    }
+    exec_file_close(&s->prog);
+    s->entry = s->img.entry;
+    aux.base = 0;
+    if (s->layout.interp[0] != '\0') {
+        rc = exec_interp(s, &aux.base);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (s->secure && limit > RLIM_STACK_DEFAULT) {
+        limit = RLIM_STACK_DEFAULT;
+    }
+    if (elf_setup_vmas(&s->mm->vm, &s->img, USER_STACK_BASE, exec_stack_window(bottom, limit)) !=
+            0 ||
+        (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
+        (bottom < USER_STACK_BASE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY32)) ||
+        vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
+        return -ENOMEM;
+    }
+    aux.uid = current_proc->ruid;
+    aux.euid = s->euid;
+    aux.gid = current_proc->rgid;
+    aux.egid = s->egid;
+    aux.secure = s->secure;
+    krandom_bytes(random16, 16);
+    if (uimage_write(&s->args, s->argc, s->envc, &s->img, random16, &aux) != 0 ||
+        uimage_map(&s->args, s->mm->dir) != 0) {
+        return -ENOMEM;
+    }
+    s->mm->arg_start = s->args.arg_start;
+    s->mm->arg_end = s->args.env_start;
+    s->mm->env_start = s->args.env_start;
+    s->mm->env_end = s->args.env_end;
+    k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
+    mm_set_exe(s->mm, s->path);
+    return 0;
+}
+
+/** Whether the execve in the group `arg` is the group's only live
+ * thread. */
+static int exec_alone(void *arg)
+{
+    return ((const struct tgroup *)arg)->live == 1;
+}
+
+/**
+ * Give the current thread the place of its process's leader, whose record,
+ * that of a thread that has ended, goes: the thread takes the leader's id,
+ * which is the process id, with what the process keeps in the leader's
+ * record, its reaped children's time and its alarm, as Linux's `de_thread`
+ * exchanges the two ids.
+ */
+static void exec_take_leader(void)
+{
+    struct tgroup *tg = current_proc->tg;
+    process_t *old = tg->leader;
+
+    current_proc->pid = old->pid;
+    current_proc->cutime = old->cutime;
+    current_proc->cstime = old->cstime;
+    current_proc->alarm_tick = old->alarm_tick;
+    current_proc->alarm_interval = old->alarm_interval;
+    current_proc->jc_status = old->jc_status;
+    tg->utime += old->utime;
+    tg->stime += old->stime;
+    tg->leader = current_proc;
+    mm_drop(old);
+    kstack_free(old->kernel_stack);
+    free_process(old);
+}
+
+/**
+ * Make the current thread its process's only one before execve replaces the
+ * image, as Linux's `de_thread` does: every other thread is sent SIGKILL and
+ * the caller waits, whatever it is sent, until they have ended; a caller
+ * that is not the leader then takes the leader's place. While `exec_task`
+ * is set, a thread the SIGKILL ends ends alone and does not make the
+ * process end.
+ */
+static void exec_one_thread(void)
+{
+    struct tgroup *tg = current_proc->tg;
+    struct k_siginfo info;
+    process_t *t;
+
+    if (tg->live > 1) {
+        tg->exec_task = current_proc;
+        k_memset(&info, 0, sizeof(info));
+        info.code = SI_KERNEL;
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg == tg && t != current_proc && t->state != PROC_ZOMBIE) {
+                signal_post_thread(t, SIGKILL, &info);
+            }
+        }
+        (void)wq_wait_event_nointr(&tg->gone, exec_alone, tg);
+        tg->exec_task = NULL;
+    }
+    if (current_proc != tg->leader) {
+        exec_take_leader();
+    }
+}
+
+/**
+ * Make the image `s` built the process's; past here execve cannot fail.
+ *
+ * Ends the process's other threads first, and releases the robust futexes
+ * the thread holds and clears the word CLONE_CHILD_CLEARTID names while the
+ * old image is still there to hold them. Drops the close-on-exec
+ * descriptors; takes the new ids, the saved ids becoming the new effective
+ * ones, which is the POSIX rule for every exec and what lets an image shed
+ * acquired authority and take it back; resets what pointed into the old
+ * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
+ * signals are kept, as POSIX says), the alternate signal stack, the TLS base
+ * and the floating-point state. Then it switches to the new address space
+ * and puts the old one, which the parent of a vfork child keeps, lets that
+ * parent go, and points the return frame at the entry with the stack
+ * pointer at argc. A fresh image has no TLS until its libc calls
+ * set_thread_area, so the segment registers get the plain user-data
+ * selector, as a new process gets it, in place of the old image's TLS one.
+ * The general registers are cleared, since the SysV i386 entry has argc on
+ * the stack and %edx an atexit hook or zero, and %ebp 0 marks the
+ * outermost frame.
+ */
+static void exec_commit(isr_params_t *params, struct exec_state *s)
+{
+    struct mm *old = current_proc->mm;
+    uint32_t old_euid = current_proc->euid;
+    uint32_t old_egid = current_proc->egid;
+    int sig;
+
+    exec_one_thread();
+    proc_thread_gone(current_proc);
     close_cloexec_fds();
-
-    /* The set-id bits, the way privilege is regained: the new image runs with
-     * the file owner's effective ids while the real ids still say who is
-     * asking. Then the POSIX exec rule for every exec, set-id or not: the
-     * saved ids take the new effective ids, which is what lets the image shed
-     * the acquired authority and take it back. AT_SECURE then reports whether
-     * the image runs with authority its invoker lacks, the effective id
-     * differing from the real one either way, so libc distrusts the
-     * caller-supplied environment; it is the only such signal, since the
-     * stack has no AT_UID/AT_EUID for libc to compare. A process that set
-     * no_new_privs gains nothing: its bits are read and ignored, as a
-     * nosuid mount's are. An exec that runs with ids its caller lacks also
-     * lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB, as Linux's does. */
-    if (current_proc->no_new_privs) {
-        setid_mode = 0;
-    }
-    old_euid = current_proc->euid;
-    old_egid = current_proc->egid;
-    if (setid_mode & KRFFS_MODE_SUID) {
-        current_proc->euid = file_uid;
-    }
-    if (setid_mode & KRFFS_MODE_SGID) {
-        current_proc->egid = file_gid;
-    }
-    current_proc->suid = current_proc->euid;
-    current_proc->sgid = current_proc->egid;
-    secure =
-        (current_proc->euid != current_proc->ruid) || (current_proc->egid != current_proc->rgid);
-    exec_privileges(secure, old_euid, old_egid);
-
-    /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
-    proc_set_comm(current_proc, name);
-
-    /* Reset caught signal dispositions to default: their handler addresses
-     * point into the OLD image that is about to be replaced. SIG_IGN
-     * dispositions, the blocked mask and the pending signals are preserved
-     * (POSIX exec semantics). The new image has named no address for its
-     * thread's end yet.
-     */
-    {
-        int sig;
-        for (sig = 1; sig <= KSIG_MAX; sig++) {
-            if (current_proc->sigacts[sig].handler != KSIG_DFL &&
-                current_proc->sigacts[sig].handler != KSIG_IGN) {
-                k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
-            }
+    current_proc->euid = s->euid;
+    current_proc->egid = s->egid;
+    current_proc->suid = s->euid;
+    current_proc->sgid = s->egid;
+    exec_privileges(s->secure, old_euid, old_egid);
+    proc_set_comm(current_proc, s->path);
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        if (current_proc->sigacts[sig].handler != KSIG_DFL &&
+            current_proc->sigacts[sig].handler != KSIG_IGN) {
+            k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
         }
     }
     current_proc->clear_child_tid = 0;
     current_proc->altstack_on = 0;
     current_proc->altstack_sp = 0;
     current_proc->altstack_size = 0;
+    current_proc->vma_reported = 0;
 
-    /* If this process owns the console, release the controlling terminal across
-     * the destructive load below: once free_user_pages runs the old image is
-     * gone and a load/stack failure routes to exec_fail_destroyed (death), so
-     * leaving sid set would let the timer-IRQ serial drain target a destroyed
-     * image in that window (the same class as the sys_exit teardown bug). On
-     * success it is re-published with the unchanged session/group before
-     * returning to userspace, preserving exec's keep-the-controlling-terminal
-     * semantics; on failure exec_fail_destroyed releases again (idempotent). */
-    owned_console = tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid);
-    if (owned_console) {
-        tty_set_session(&console_tty, 0, 0);
-    }
+    current_proc->mm = s->mm;
+    current_proc->cr3 = s->mm->cr3;
+    current_proc->page_dir = s->mm->dir;
+    s->mm = NULL;
+    switch_page_directory(current_proc->page_dir);
+    mm_put(old);
+    proc_vfork_release(current_proc);
 
-    /* Free old user pages, then stream the new program in (header + program
-     * headers + each PT_LOAD; no 512 KB whole-file buffer). Past this point the
-     * old image is gone, so any failure terminates the process rather than
-     * returning into a destroyed address space. */
-    free_user_pages(proc_dir);
-
-    if (elf_load_image(s->vfs.ref.mnt ? exec_vfs_read : exec_krffs_read,
-                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)&kctx, proc_dir, &img) != 0) {
-        exec_vfs_done(&s->vfs);
-        exec_fail_destroyed(1);
-    }
-    exec_vfs_done(&s->vfs);
-    entry_point = img.entry;
-
-    stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
-    if (stack_phys == 0) {
-        exec_fail_destroyed(2);
-    }
-
-    stack_page = kmap_temp(stack_phys);
-    if (!stack_page) {
-        exec_fail_destroyed(3); /* the old image is gone; nothing to return to */
-    }
-    k_memset(stack_page, 0, PAGE_SIZE);
-
-    /* Build the SysV/i386 initial stack (argc, the argv and real envp pointer
-     * arrays, and the auxv) in the freshly zeroed page. build_user_stack copies
-     * the strings in and 16-byte-aligns the entry ESP; the layout is verified
-     * host-side (tests/host/uimage_hosttest.c). */
-    krandom_bytes(random16, 16);
-    {
-        uint32_t user_esp = build_user_stack(stack_page, USER_STACK_BASE, PAGE_SIZE, argc,
-                                             s->argv_bufs, s->envp_bufs, &img, random16, secure);
-
-        kunmap_temp(stack_page);
-
-        if (user_esp == 0) {
-            exec_fail_destroyed(4);
-        }
-
-        /* Modify the ISR return frame so iret resumes at the new program's
-         * entry point on its fresh stack. */
-        params->eip = entry_point;
-        params->user_esp = user_esp;
-
-        /* SysV i386 process entry gives argc/argv on the stack and %edx as an
-         * atexit hook or zero. %ebp marks the outermost frame. Clear the GP
-         * registers inherited across exec so startup code cannot read stale
-         * state from the old image. */
-        params->ebp = 0;
-        params->edx = 0;
-        params->ebx = 0;
-        params->ecx = 0;
-        params->esi = 0;
-        params->edi = 0;
-
-        /* Reset thread-local storage for the new image. exec replaces the
-         * program in place, so the trapframe still has the old program's
-         * segment selectors (its %gs may be the 0x33 TLS selector) and the PCB
-         * still has its TLS base. A fresh image has no TLS until its libc
-         * calls set_thread_area, so restore the plain user-data selector (0x23,
-         * as enter_usermode does for a brand-new process) in all four slots and
-         * clear the base in both the PCB and the live GDT descriptor. */
-        params->gs = 0x23;
-        params->fs = 0x23;
-        params->es = 0x23;
-        params->ds = 0x23;
-        current_proc->tls_base = 0;
-        gdt_set_tls(0);
-        /* A fresh image starts with the initial floating-point state, in the
-         * registers now and in the record for the next switch. */
-        fpu_init_area(current_proc->fpu);
-        fpu_restore(current_proc->fpu);
-
-        /* Build the address-space map (VMAs) for the new image so the
-         * page-fault handler can demand-page, grow the stack, or segfault. The
-         * ELF code/data pages themselves are still eagerly loaded above. */
-        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, exec_stack_window()) != 0) {
-            exec_fail_destroyed(5); /* the regions could not be made */
-        }
-        /* RLIMIT_AS: an image whose regions cover more than the limit does
-         * not run; the old image is gone by now, so the process ends. */
-        if (vm_total(&current_proc->vm) > current_proc->rlim[RLIM_AS].cur) {
-            klog(KLOG_WARN, "exec", "refused: the image is past RLIMIT_AS, pid %d",
-                 (int)current_proc->pid);
-            exec_fail_destroyed(6);
-        }
-        /* The new image may report a full descriptor table once of its own. */
-        current_proc->vma_reported = 0;
-    }
-
-    /* Reload CR3 to flush the whole TLB: after freeing the old user pages and
-     * mapping new stack/code pages, the TLB may hold stale entries from the
-     * replaced image. */
-    __asm__ __volatile__("movl %%cr3, %%eax\n\t"
-                         "movl %%eax, %%cr3" ::
-                             : "eax", "memory");
-
-    /* Exec succeeded: re-publish the controlling terminal we released above,
-     * with the unchanged session/group (exec keeps the controlling terminal),
-     * so the new image owns the console exactly as the old one did. */
-    if (owned_console) {
-        tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
-    }
-
-    return 0; /* unused: iret resumes at the new entry point */
+    params->eip = s->entry;
+    params->user_esp = s->args.esp;
+    params->ebp = 0;
+    params->edx = 0;
+    params->ebx = 0;
+    params->ecx = 0;
+    params->esi = 0;
+    params->edi = 0;
+    params->gs = 0x23;
+    params->fs = 0x23;
+    params->es = 0x23;
+    params->ds = 0x23;
+    current_proc->tls_base = 0;
+    gdt_set_tls(0);
+    fpu_init_area(current_proc->fpu);
+    fpu_restore(current_proc->fpu);
 }
 
 /**
- * Create a child process: fork(2), and the part of clone(2) this kernel has.
+ * Replace the current process image with a new program, in the workspace
+ * `s`; the body of `sys_execve`.
  *
- * Clones the current process: PCB, page directory (copy-on-write user
- * pages), and fd table. The child is set up to return from fork with value
- * 0; the parent gets the child's PID. Returns -errno on failure. A nonzero
- * `newsp` is the stack pointer the child starts with. A nonzero
- * `child_settid` is an address of the child's memory that gets the child's
- * id before it runs (CLONE_CHILD_SETTID), and `child_cleartid` the address
- * its thread end clears (CLONE_CHILD_CLEARTID).
+ * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success.
+ * Resolves the path and checks the execute right, copies the path, argv and
+ * envp onto the new stack's pages, resolves a `#!` script to its
+ * interpreter, builds the new image, with the dynamic linker it names, in
+ * an address space of its own, and only then commits, so every refusal and
+ * every failure of the load returns to the caller with its image intact.
+ */
+static int32_t exec_run(isr_params_t *params, struct exec_state *s)
+{
+    const char __user *user_path = (const char __user *)params->ebx;
+    int32_t rc;
+
+    if (!user_path) {
+        return -EFAULT;
+    }
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
+    if (rc < 0) {
+        return rc;
+    }
+    rc = exec_open(&s->prog, s->path, &s->id);
+    if (rc == 0) {
+        rc = exec_copy_args(s, user_path, (char *const __user *)params->ecx,
+                            (char *const __user *)params->edx, &s->argc, &s->envc);
+    }
+    if (rc == 0) {
+        rc = exec_script(s);
+    }
+    if (rc == 0) {
+        rc = uimage_place(&s->args, s->argc, s->envc);
+    }
+    if (rc == 0) {
+        exec_ids(s);
+        rc = exec_build(s);
+    }
+    if (rc == 0) {
+        uint32_t tid = current_proc->pid;
+
+        exec_commit(params, s);
+        ptrace_exec(tid);
+    }
+    return rc;
+}
+
+/**
+ * Replace the current process image with a new program (execve(2)).
+ *
+ * Gives the call a workspace of its own, which `exec_run` does the work in,
+ * and gives it back when that returns, whether the exec failed or the new
+ * image is about to be entered.
+ */
+int32_t sys_execve(isr_params_t *params)
+{
+    struct exec_state *s;
+    int32_t rc;
+
+    mem_balance();
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    s = kzalloc(sizeof(*s));
+    if (!s) {
+        return -ENOMEM;
+    }
+    current_proc->exec_ws = s;
+    rc = exec_run(params, s);
+    exec_release();
+    return rc;
+}
+
+/* clone(2) flags; the low byte is the signal the parent gets at the child's
+ * exit. */
+#define CSIGNAL              0x000000FFu
+#define CLONE_VM             0x00000100u
+#define CLONE_FS             0x00000200u
+#define CLONE_FILES          0x00000400u
+#define CLONE_SIGHAND        0x00000800u
+#define CLONE_VFORK          0x00004000u
+#define CLONE_PARENT         0x00008000u
+#define CLONE_THREAD         0x00010000u
+#define CLONE_SYSVSEM        0x00040000u
+#define CLONE_SETTLS         0x00080000u
+#define CLONE_PARENT_SETTID  0x00100000u
+#define CLONE_CHILD_CLEARTID 0x00200000u
+#define CLONE_DETACHED       0x00400000u
+#define CLONE_CHILD_SETTID   0x01000000u
+
+/* What a fork or a clone asks of `do_fork`: the clone flags, the stack
+ * pointer the child starts with or 0 for the parent's, the parent's address
+ * CLONE_PARENT_SETTID names, the child's addresses CLONE_CHILD_SETTID and
+ * CLONE_CHILD_CLEARTID name, each 0 for none, and the TLS base
+ * CLONE_SETTLS gives the child. */
+struct fork_req {
+    uint32_t flags;
+    uint32_t newsp;
+    uint32_t ptid;
+    uint32_t settid;
+    uint32_t cleartid;
+    uint32_t tls;
+};
+
+/* The parents that wait in vfork until their child calls execve or ends. */
+static wait_queue_t vfork_wq;
+
+/** Whether the vfork wait for the child `*arg` is over: the child has let
+ * its parent go or is gone, or the parent has SIGKILL pending. */
+static int vfork_done(void *arg)
+{
+    const process_t *child = get_process(*(const uint32_t *)arg);
+
+    return child == NULL || !child->vfork_waiting ||
+           ((current_proc->sig_pending | current_proc->tg->pending) & KSIG_BIT(SIGKILL)) != 0;
+}
+
+/**
+ * Wait, as the parent, until the child `pid` made with CLONE_VFORK lets the
+ * parent go. The child runs on the parent's memory, its stack included,
+ * until it calls execve or ends, so the parent must not run before. Other
+ * signals wait for the end as well; only SIGKILL cuts it short, as Linux's
+ * killable wait does, and the parent then dies on the way out.
+ */
+void proc_vfork_wait(uint32_t pid)
+{
+    (void)wq_wait_event_nointr(&vfork_wq, vfork_done, &pid);
+}
+
+void proc_vfork_release(process_t *p)
+{
+    if (p->vfork_waiting) {
+        p->vfork_waiting = 0;
+        wq_wake_all(&vfork_wq);
+    }
+}
+
+/**
+ * The address space of the child `do_fork` makes: `mm` itself, with one
+ * more reference, under CLONE_VM, and otherwise a copy-on-write copy of its
+ * pages and regions; an empty one for a kernel thread's child. NULL when no
+ * memory was left for a copy.
+ */
+static struct mm *fork_mm(struct mm *mm, uint32_t flags)
+{
+    struct mm *copy;
+
+    if ((flags & CLONE_VM) && mm) {
+        mm_get(mm);
+        return mm;
+    }
+    copy = mm_new();
+    if (copy && mm && (copy_user_pages(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
+        mm_put(copy);
+        return NULL;
+    }
+    if (copy && mm) {
+        mm_copy_info(copy, mm);
+    }
+    return copy;
+}
+
+/**
+ * Create a child process: fork(2), vfork(2), and the part of clone(2) this
+ * kernel has.
+ *
+ * Clones the current process: PCB, address space, and fd table. The address
+ * space is a copy-on-write copy, or under CLONE_VM the parent's own,
+ * shared. The child is set up to return from fork with value 0; the parent
+ * gets the child's PID, after the child has called execve or ended when
+ * `req` has CLONE_VFORK. Returns -errno on failure. `req` has the stack
+ * pointer the child starts with and the addresses of the ids clone stores:
+ * the parent's CLONE_PARENT_SETTID word, stored before the child runs, and
+ * the child's CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address
+ * its thread end clears.
  *
  * Among what the child inherits is the program name, which `execve` sets and a
  * child that never execs would otherwise never have: a daemon that forks
  * itself into the background is exactly such a child, and without this it
  * shows in `ps` and in /proc/<pid>/stat with no name for as long as it runs.
  */
-static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_settid,
-                       uint32_t child_cleartid)
+static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
     process_t *parent = current_proc;
     process_t *child;
-    page_dir_t *child_dir;
+    uint32_t pid;
     uintptr_t child_kstack_base;
     uint32_t *child_sp;
     isr_params_t *child_frame;
+    int event;
 
     if (!parent) {
         return -ESRCH;
@@ -1491,36 +1524,25 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     release_fd_table(&child->fds);
     fd_table_free(&child->fds);
 
-    child_dir = clone_page_directory();
-    if (!child_dir) {
+    child->mm = fork_mm(parent->mm, req->flags);
+    if (!child->mm) {
         free_process(child);
         return -ENOMEM;
     }
-
-    /* Copy user pages from parent to child. On failure, release the frames
-     * copy_user_pages already allocated and the cloned directory (not just the
-     * PCB) or each failed fork leaks a directory and its private page tables.
-     * child_dir is never the running (parent) directory, so it frees cleanly.
-     */
-    if (copy_user_pages(parent, child_dir) != 0) {
-        free_user_pages(child_dir);
-        free_page_directory(child_dir);
-        free_process(child);
-        return -ENOMEM;
-    }
+    child->cr3 = child->mm->cr3;
+    child->page_dir = child->mm->dir;
 
     child_kstack_base = kstack_alloc();
     if (!child_kstack_base) {
-        free_user_pages(child_dir);
-        free_page_directory(child_dir);
+        mm_drop(child);
         free_process(child);
         return -ENOMEM;
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
-
-    child->cr3 = get_page_dir_phys(child_dir);
-    child->page_dir = child_dir;
-    child->parent_pid = parent->pid;
+    /* A thread's parent, and that of a CLONE_PARENT child, is the caller's
+     * process's parent. */
+    child->parent_pid =
+        (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
 
     /* Inherit the parent's session and process group: a forked child stays in
      * the parent's job-control group until it (or the parent) calls
@@ -1529,6 +1551,7 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
     child->nice = parent->nice;
+    child->persona = parent->persona;
     child->dumpable = parent->dumpable;
     child->no_new_privs = parent->no_new_privs;
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
@@ -1553,19 +1576,10 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
      * switch would reprogram the TLS descriptor to 0 for the child and its
      * %gs-relative reads (errno, the stack canary) would fault or read garbage.
      */
-    child->tls_base = parent->tls_base;
+    child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : parent->tls_base;
     /* The floating-point registers as they are now, since the parent's record
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
-
-    /* The child's address space is a copy of the parent's at the same virtual
-     * addresses (copy_user_pages duplicated the pages), so copy the VMA map too
-     * otherwise the child would have no regions and the first heap/stack
-     * fault would segfault it. (k_memcpy, not struct assignment, so the
-     * freestanding kernel does not need a compiler-emitted memcpy.) */
-    if (vm_copy(&child->vm, &parent->vm) != 0) {
-        goto fail_built;
-    }
 
     /* The child inherits the parent's current working directory. */
     if (proc_cwd_copy(child, parent) != 0) {
@@ -1574,12 +1588,16 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
 
     /* Signals: the child inherits the dispositions and the blocked mask, but
      * its pending set starts empty (POSIX fork semantics). */
-    k_memcpy(child->sigacts, parent->sigacts, sizeof(child->sigacts));
+    k_memcpy(child->tg->action, parent->tg->action, sizeof(child->tg->action));
     child->sig_blocked = parent->sig_blocked;
     child->sig_pending = 0;
-    child->altstack_sp = parent->altstack_sp;
-    child->altstack_size = parent->altstack_size;
-    child->altstack_on = parent->altstack_on;
+    /* A child that shares the memory and runs beside the parent does not
+     * share its alternate stack, as Linux's does not. */
+    if ((req->flags & (CLONE_VM | CLONE_VFORK)) != CLONE_VM) {
+        child->altstack_sp = parent->altstack_sp;
+        child->altstack_size = parent->altstack_size;
+        child->altstack_on = parent->altstack_on;
+    }
 
     /* Copy file descriptor table. The child shares the parent's open-file
      * descriptions (so a seek in one is seen by the other, per POSIX), so each
@@ -1622,14 +1640,18 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     child_frame = (isr_params_t *)child_sp;
     k_memcpy(child_frame, params, sizeof(isr_params_t));
     child_frame->eax = 0;
-    if (newsp) {
-        child_frame->user_esp = newsp;
+    if (req->newsp) {
+        child_frame->user_esp = req->newsp;
     }
     /* A failed store leaves the word as the parent had it, as Linux's does. */
-    if (child_settid) {
-        (void)paging_store_u32(child_dir, &child->vm, child_settid, child->pid);
+    if (req->settid) {
+        (void)paging_store_u32(child->mm->dir, &child->mm->vm, req->settid, child->pid);
     }
-    child->clear_child_tid = child_cleartid;
+    child->clear_child_tid = req->cleartid;
+    pid = child->pid;
+    if (req->ptid) {
+        (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
+    }
 
     /* The switch_context return address, then its saved EBP/EBX/ESI/EDI. */
     --child_sp;
@@ -1644,66 +1666,109 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     *child_sp = 0; /* EDI */
 
     child->regs.esp = (uint32_t)child_sp;
+    if (req->flags & CLONE_THREAD) {
+        tgroup_put(child->tg);
+        child->tg = parent->tg;
+        child->tg->refs++;
+        child->tg->live++;
+        child->tgid = parent->tgid;
+        child->sigacts = child->tg->action;
+    }
+    if (req->flags & CLONE_VFORK) {
+        child->vfork_waiting = 1;
+    }
+    event = ptrace_fork_attach(child, req->flags);
     child->state = PROC_READY;
-
-    return (int32_t)child->pid;
+    if (event) {
+        ptrace_event(event, pid);
+    }
+    if (req->flags & CLONE_VFORK) {
+        proc_vfork_wait(pid);
+        ptrace_event(PTRACE_EVENT_VFORK_DONE, pid);
+    }
+    return (int32_t)pid;
 
 fail_built:
     /* Everything built for the child so far goes back: the working
-     * directory's hold, the kernel stack, the copied pages and the
-     * directory, then the record. */
+     * directory's hold, the kernel stack and the address space, then the
+     * record. */
     vfs_cwd_clear(child);
     kstack_free(child->kernel_stack);
-    free_user_pages(child_dir);
-    free_page_directory(child_dir);
+    mm_drop(child);
     free_process(child);
     return -ENOMEM;
 }
 
 int32_t sys_fork(isr_params_t *params)
 {
-    return do_fork(params, 0, 0, 0);
+    struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0};
+
+    return do_fork(params, &req);
 }
 
-/* clone(2) flags; the low byte is the signal the parent gets at the child's
- * exit. */
-#define CSIGNAL              0x000000FFu
-#define CLONE_PARENT_SETTID  0x00100000u
-#define CLONE_CHILD_CLEARTID 0x00200000u
-#define CLONE_DETACHED       0x00400000u
-#define CLONE_CHILD_SETTID   0x01000000u
+/**
+ * vfork (190): a child that runs on the parent's memory while the parent
+ * waits, until the child calls execve or ends. musl's vfork and glibc's call
+ * it; the child must do nothing else before one of the two, since every
+ * store it makes is the parent's.
+ */
+int32_t sys_vfork(isr_params_t *params)
+{
+    struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0};
+
+    return do_fork(params, &req);
+}
 
 /**
- * clone (120), in the form glibc's fork uses: a new process with its own copy
- * of the address space, files and signal handlers, as fork makes one.
+ * clone (120), in the forms glibc's and musl's fork, posix_spawn and
+ * pthread_create use: a new process with its own copy of the address space,
+ * files and signal handlers, as fork makes one; with the caller's address
+ * space itself under CLONE_VM, and with the caller waiting as vfork waits
+ * under CLONE_VFORK; or a new thread of the caller's process under
+ * CLONE_THREAD, which needs CLONE_SIGHAND, which in turn needs CLONE_VM.
  *
  * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
- * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD,
- * and the flags other than CLONE_PARENT_SETTID, CLONE_CHILD_SETTID,
- * CLONE_CHILD_CLEARTID and CLONE_DETACHED, which Linux ignores, are refused
- * with EINVAL: sharing memory, files or handlers is a later phase's work.
- * CLONE_PARENT_SETTID stores the child's id in the parent's memory, and a
- * failed store is ignored, as Linux ignores it.
+ * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD
+ * for a process; a thread sends none, whatever the low byte says.
+ * CLONE_SETTLS gives the child the TLS base of the user_desc at ESI, which
+ * set_thread_area would take. CLONE_PARENT makes the child a child of the
+ * caller's parent. CLONE_PARENT_SETTID stores the child's id in the
+ * parent's memory before the child runs, and a failed store is ignored, as
+ * Linux ignores it. CLONE_SYSVSEM and CLONE_DETACHED are ignored, as there
+ * are no System V semaphores and Linux ignores the second. Any other flag is
+ * refused with EINVAL.
  */
 int32_t sys_clone(isr_params_t *params)
 {
     uint32_t flags = params->ebx;
-    uint32_t newsp = params->ecx;
-    int32_t __user *ptid = (int32_t __user *)params->edx;
-    uint32_t ctid = params->edi;
-    int32_t pid;
+    struct fork_req req;
 
-    if ((flags & CSIGNAL) != SIGCHLD ||
-        (flags & ~(CSIGNAL | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
-                   CLONE_DETACHED)) != 0) {
+    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_SIGHAND | CLONE_VFORK | CLONE_PARENT |
+                   CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
+                   CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0 ||
+        (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
+        ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
+        ((flags & CLONE_SIGHAND) && !(flags & CLONE_THREAD))) {
         return -EINVAL;
     }
-    pid = do_fork(params, newsp, (flags & CLONE_CHILD_SETTID) ? ctid : 0,
-                  (flags & CLONE_CHILD_CLEARTID) ? ctid : 0);
-    if (pid > 0 && (flags & CLONE_PARENT_SETTID) && ptid) {
-        (void)copy_to_user(ptid, &pid, sizeof(pid));
+    req.tls = 0;
+    if (flags & CLONE_SETTLS) {
+        user_desc_t desc;
+
+        if (copy_from_user(&desc, (const void __user *)params->esi, sizeof(desc)) != 0) {
+            return -EFAULT;
+        }
+        if (tls_resolve_base(&desc, &req.tls) != 0) {
+            return -EINVAL;
+        }
     }
-    return pid;
+    req.flags = flags;
+    req.newsp = params->ecx;
+    req.ptid = (flags & CLONE_PARENT_SETTID) ? params->edx : 0;
+    req.settid = (flags & CLONE_CHILD_SETTID) ? params->edi : 0;
+    req.cleartid = (flags & CLONE_CHILD_CLEARTID) ? params->edi : 0;
+    return do_fork(params, &req);
 }
 
 /* The options of waitpid, wait4 and waitid. */
@@ -1770,17 +1835,16 @@ static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t 
 
 /**
  * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
- * the child's own CPU time with that of the children it has reaped. Read
- * with interrupts masked, since the tick adds to a live child's.
+ * the CPU time of the child process, every thread's, with that of the
+ * children it has reaped, which its leader's record keeps.
  */
 static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 {
-    uint32_t flags = kirq_save();
-    uint32_t user = p->utime + p->cutime;
-    uint32_t sys = p->stime + p->cstime;
+    uint32_t user;
+    uint32_t sys;
 
-    kirq_restore(flags);
-    rusage_from_ticks(ru, user, sys);
+    proc_cpu_time(p, &user, &sys);
+    rusage_from_ticks(ru, user + p->cutime, sys + p->cstime);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -1801,7 +1865,9 @@ static uint32_t sig_irq_save(void);
 static void sig_irq_restore(uint32_t flags);
 
 /**
- * Whether `p` is a child of the caller that `idtype` and `id` select.
+ * Whether `p` is a child of the caller's process that `idtype` and `id`
+ * select: the leader of a process whose parent is any thread of the
+ * caller's, since the children of a process are all its threads'.
  *
  * Linux's __WCLONE asks for the children that report their end with a signal
  * other than SIGCHLD, unless __WALL is beside it, and every child here
@@ -1809,7 +1875,7 @@ static void sig_irq_restore(uint32_t flags);
  */
 static int wait_selects(int idtype, uint32_t id, int options, const process_t *p)
 {
-    if (p->parent_pid != current_proc->pid) {
+    if (p->parent_pid != current_proc->tgid || p->pid != p->tgid) {
         return 0;
     }
     if (((uint32_t)options & W_CLONE) && !(options & W_ALL)) {
@@ -1839,28 +1905,105 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 }
 
 /**
- * Reap zombie `p`: add its CPU time, with its reaped children's, to the
- * caller's children's totals, and give back its pages, page directory,
- * kernel stack and record. The zombie no longer runs on its kernel stack,
- * and this is the single release point for a per-fork stack.
+ * Reap zombie `p`, the leader of a process whose threads have all ended: add
+ * the process's CPU time, with its reaped children's, to the children's
+ * totals of the caller's process, which its leader keeps, and give back its
+ * address space, kernel stack and record. The zombie no longer runs on its
+ * kernel stack, and this is the single release point for a per-fork stack.
  */
 static void wait_reap(process_t *p)
 {
-    current_proc->cutime += p->utime + p->cutime;
-    current_proc->cstime += p->stime + p->cstime;
-    if (p->cr3 != 0) {
-        page_dir_t *child_dir = p->page_dir;
-        free_user_pages(child_dir);
-        free_page_directory(child_dir);
-    }
+    process_t *me = current_proc->tg->leader;
+    uint32_t user;
+    uint32_t sys;
+
+    proc_cpu_time(p, &user, &sys);
+    me->cutime += user + p->cutime;
+    me->cstime += sys + p->cstime;
+    mm_drop(p);
     kstack_free(p->kernel_stack);
     free_process(p);
 }
 
 /**
+ * Whether the thread `p`, which the caller's process traces, is one `idtype`
+ * and `id` select. A thread that is not its process's leader ends with no
+ * signal to its tracer, so, as Linux's __WCLONE and __WALL have it, it is
+ * waited for with __WCLONE or __WALL, and a leader without __WCLONE.
+ */
+static int wait_selects_tracee(int idtype, uint32_t id, int options, const process_t *p)
+{
+    int clone = p->pid != p->tgid;
+
+    if (!(options & W_ALL) && clone != (((uint32_t)options & W_CLONE) != 0)) {
+        return 0;
+    }
+    switch (idtype) {
+    case P_PID:
+        return p->pid == id;
+    case P_PGID:
+        return p->pgid == id;
+    default:
+        return 1;
+    }
+}
+
+/** Fill `r` with the end of `p`, from the encoded status `status`. */
+static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t status)
+{
+    if ((status & 0x7f) == 0) {
+        wait_fill(r, p, status, CLD_EXITED, (status >> 8) & 0xff);
+    } else {
+        wait_fill(r, p, status, (status & 0x80) ? CLD_DUMPED : CLD_KILLED, status & 0x7f);
+    }
+}
+
+/**
+ * What a tracer's wait finds of its tracee `p`: a ptrace stop the wait has
+ * not reported, reported once; a thread that ended while traced, which the
+ * report frees, as no other wait reports it; or the end of a process whose
+ * parent the tracer is not, reported once and left for the parent to reap.
+ * With WNOWAIT nothing is marked or freed. Returns 1 with `out` filled, or 0.
+ */
+static int wait_tracee(process_t *p, int options, struct wait_report *out)
+{
+    if (p->ptrace_status != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
+        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED,
+                  (int32_t)((p->ptrace_status >> 8) & 0xFF));
+        if (!(options & WNOWAIT)) {
+            p->ptrace_reported = 1;
+        }
+        return 1;
+    }
+    if (p->state != PROC_ZOMBIE || !(options & WEXITED)) {
+        return 0;
+    }
+    if (p->pid != p->tgid) {
+        wait_fill_exit(out, p, p->exit_code);
+        if (!(options & WNOWAIT)) {
+            p->tg->utime += p->utime;
+            p->tg->stime += p->stime;
+            mm_drop(p);
+            kstack_free(p->kernel_stack);
+            free_process(p);
+        }
+        return 1;
+    }
+    if (p->tg->live == 0 && p->parent_pid != current_proc->tgid && !p->ptrace_exit_seen) {
+        wait_fill_exit(out, p, p->exit_code);
+        if (!(options & WNOWAIT)) {
+            p->ptrace_exit_seen = 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * The shared core of waitpid, wait4 and waitid: find a child `idtype` and
  * `id` select that has an event `options` asks for, fill `out` with it and
- * return its pid.
+ * return its pid. The threads the caller's process traces are waited for
+ * too, as `wait_tracee` reports them.
  *
  * The events are an exit (WEXITED), which reaps the zombie; a stop
  * (WUNTRACED), reported once, while the child is stopped; and a continue
@@ -1886,27 +2029,26 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         /* Scan ALL selected children for a reportable event (a zombie to
          * reap, or a stop/continue to report), not just the first. */
         for (p = proc_list; p; p = p->next) {
+            if ((p->ptrace & PT_TRACED) && p->tracer == current_proc->tgid &&
+                wait_selects_tracee(idtype, id, options, p)) {
+                have_child = 1;
+                if (wait_tracee(p, options, out)) {
+                    return (int32_t)out->pid;
+                }
+            }
             if (!wait_selects(idtype, id, options, p)) {
                 continue;
             }
             have_child = 1;
 
-            if (p->state == PROC_ZOMBIE && (options & WEXITED)) {
-                int32_t status = p->exit_code;
-
-                if ((status & 0x7f) == 0) {
-                    wait_fill(out, p, status, CLD_EXITED, (status >> 8) & 0xff);
-                } else {
-                    wait_fill(out, p, status, (status & 0x80) ? CLD_DUMPED : CLD_KILLED,
-                              status & 0x7f);
-                }
+            if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED)) {
+                wait_fill_exit(out, p, p->exit_code);
                 if (!(options & WNOWAIT)) {
                     wait_reap(p);
                 }
                 return (int32_t)out->pid;
             }
-            if ((options & WUNTRACED) && p->state == PROC_STOPPED &&
-                (p->jc_status & 0xff) == 0x7f) {
+            if ((options & WUNTRACED) && p->tg->stop != 0 && (p->jc_status & 0xff) == 0x7f) {
                 wait_fill(out, p, (int32_t)p->jc_status, CLD_STOPPED,
                           (int32_t)((p->jc_status >> 8) & 0xff));
                 if (!(options & WNOWAIT)) {
@@ -1927,11 +2069,12 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             return -ECHILD;
         }
         /* A child exists but has no reportable event. WNOHANG returns 0;
-         * otherwise block until a child changes state (exit/stop/continue wakes
-         * us) or a signal interrupts. Lost-wakeup-safe: the signal_pending
-         * check and the PROC_BLOCKED transition are one interrupts-off step, so
-         * a signal posted from an IRQ either is seen here or finds us BLOCKED
-         * and wakes us. */
+         * otherwise block on the process's child queue until a child changes
+         * state (an exit, stop or continue wakes the queue) or a signal
+         * interrupts. Lost-wakeup-safe: the signal_pending check, joining the
+         * queue and the PROC_BLOCKED transition are one interrupts-off step,
+         * so a wake or a signal posted from an IRQ either is seen here or
+         * finds us BLOCKED and wakes us. */
         if (options & WNOHANG) {
             return 0;
         }
@@ -1940,6 +2083,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
             sig_irq_restore(flags);
             return -EINTR;
         }
+        wq_poll_add(&current_proc->tg->chld, &current_proc->waiter);
         current_proc->state = PROC_BLOCKED;
         sig_irq_restore(flags);
         schedule();
@@ -1947,6 +2091,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off(); /* idle until a waker, then re-scan */
         }
+        wq_poll_remove(&current_proc->tg->chld, &current_proc->waiter);
         current_proc->state = PROC_RUNNING;
         sig_irq_restore(flags);
     }
@@ -2124,8 +2269,8 @@ int32_t sys_waitid(isr_params_t *params)
     return 0;
 }
 
-/* The targets getrusage(2) takes: the caller, its reaped children, and the
- * calling thread, which is the caller while each process is one thread. */
+/* The targets getrusage(2) takes: the caller's process, its reaped
+ * children, and the calling thread. */
 #define RUSAGE_SELF 0
 
 #define RUSAGE_CHILDREN (-1)
@@ -2136,9 +2281,10 @@ int32_t sys_waitid(isr_params_t *params)
  * Resource usage (getrusage(2), syscall 77).
  *
  * EBX = who, ECX = the 72-byte i386 struct rusage. `ru_utime` and `ru_stime`
- * are the caller's user and system time for RUSAGE_SELF and RUSAGE_THREAD,
- * and the totals of the children it has reaped, each with the children those
- * reaped, for RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
+ * are the user and system time of the caller's process, every thread's, for
+ * RUSAGE_SELF, the calling thread's for RUSAGE_THREAD, and the totals of the
+ * children the process has reaped, each with the children those reaped, for
+ * RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
  * fourteen counters after them, maximum resident size through context
  * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
  * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
@@ -2154,10 +2300,14 @@ int32_t sys_getrusage(isr_params_t *params)
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
         return -EINVAL;
     }
-    flags = kirq_save();
-    user = who == RUSAGE_CHILDREN ? current_proc->cutime : current_proc->utime;
-    sys = who == RUSAGE_CHILDREN ? current_proc->cstime : current_proc->stime;
-    kirq_restore(flags);
+    if (who == RUSAGE_SELF) {
+        proc_cpu_time(current_proc, &user, &sys);
+    } else {
+        flags = kirq_save();
+        user = who == RUSAGE_CHILDREN ? current_proc->tg->leader->cutime : current_proc->utime;
+        sys = who == RUSAGE_CHILDREN ? current_proc->tg->leader->cstime : current_proc->stime;
+        kirq_restore(flags);
+    }
     rusage_from_ticks(&ru, user, sys);
     if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
         return -EFAULT;
@@ -2240,67 +2390,155 @@ static void sig_irq_restore(uint32_t flags)
     }
 }
 
-/*
- * Post signal `signo` to `target` with the siginfo `info`: set its pending
- * bit, and keep `info` when the signal was not already pending. If the target
- * is blocked in the scheduler (sleeping/waiting), make it runnable and clear
- * its timed wake, whatever the signal's disposition and mask: an
+/* The stop signals, which SIGCONT cancels and which cancel SIGCONT. */
+#define SIG_STOPS (KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU))
+
+/** Make `t` runnable if it sleeps, clearing its timed wake: an
  * interruptible wait then asks `signal_pending` whether to end with -EINTR,
- * and any wait that goes on arms its own deadline again. SIGKILL/SIGSTOP
- * cannot be caught, so a pending SIGKILL is honored even before delivery by
- * leaving it pending for the default path.
+ * and any wait that goes on arms its own deadline again. */
+static void sig_wake(process_t *t)
+{
+    if (t && t->state == PROC_BLOCKED) {
+        t->wakeup_tick = 0;
+        t->state = PROC_READY;
+    }
+}
+
+/** Clear the signals `bits` from the process of `target` and from each of
+ * its threads. */
+static void sig_discard(process_t *target, uint64_t bits)
+{
+    process_t *t;
+
+    target->tg->pending &= ~bits;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == target->tg) {
+            t->sig_pending &= ~bits;
+        }
+    }
+}
+
+/**
+ * What a signal to the process of `target` does before any thread takes it,
+ * with interrupts off. SIGCONT cancels the pending stops and ends a stop in
+ * effect: every stopped thread runs again, and the parent learns of it from
+ * wait4(WCONTINUED) and a SIGCHLD. SIGKILL makes a stopped thread runnable,
+ * so it can take its lethal default. A stop signal cancels a pending
+ * SIGCONT. Every other signal stays pending while the process is stopped.
+ */
+static void sig_job_control(process_t *target, int signo)
+{
+    struct tgroup *tg = target->tg;
+    process_t *t;
+
+    if (signo == SIGCONT) {
+        sig_discard(target, SIG_STOPS);
+        if (tg->stop) {
+            struct k_siginfo child;
+            process_t *parent = get_process(tg->leader->parent_pid);
+
+            tg->stop = 0;
+            for (t = proc_list; t; t = t->next) {
+                if (t->tg != tg) {
+                    continue;
+                }
+                t->stop_seen = 0;
+                if (t->state == PROC_STOPPED && t->ptrace_status == 0) {
+                    t->state = PROC_READY;
+                }
+            }
+            tg->leader->jc_status = 0xffff; /* WIFCONTINUED */
+            if (parent) {
+                k_memset(&child, 0, sizeof(child));
+                child.code = CLD_CONTINUED;
+                child.pid = tg->leader->pid;
+                child.uid = tg->leader->ruid;
+                child.status = SIGCONT;
+                signal_post_info(parent, SIGCHLD, &child);
+                wq_wake_all(&parent->tg->chld);
+            }
+        }
+    } else if (signo == SIGKILL) {
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg == tg && t->state == PROC_STOPPED) {
+                t->state = PROC_READY;
+            }
+        }
+    } else if (KSIG_BIT(signo) & SIG_STOPS) {
+        sig_discard(target, KSIG_BIT(SIGCONT));
+    }
+}
+
+/**
+ * The thread of `target`'s process to wake for `signo`, as Linux's
+ * `complete_signal` chooses it: `target` when it does not block the signal,
+ * or else the first thread that does not; `target` itself when every thread
+ * blocks it, and nothing when `target` has ended.
+ */
+static process_t *sig_taker(process_t *target, int signo)
+{
+    process_t *t;
+
+    if (target->state != PROC_ZOMBIE && !(target->sig_blocked & KSIG_BIT(signo))) {
+        return target;
+    }
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == target->tg && t->state != PROC_ZOMBIE && t->state != PROC_UNUSED &&
+            !(t->sig_blocked & KSIG_BIT(signo))) {
+            return t;
+        }
+    }
+    return target->state != PROC_ZOMBIE ? target : NULL;
+}
+
+/*
+ * Post signal `signo` to the process `target` is a thread of, with the
+ * siginfo `info`: set the process's pending bit, keeping `info` when the
+ * signal was not already pending, and wake the thread `sig_taker` chooses,
+ * whatever the signal's disposition and mask. Any thread that does not
+ * block the signal may take it. A process whose threads have all ended
+ * takes nothing. SIGKILL and SIGSTOP cannot be caught, so a pending SIGKILL
+ * is honored even before delivery by leaving it pending for the default
+ * path.
  */
 void signal_post_info(process_t *target, int signo, const struct k_siginfo *info)
 {
-    if (!target || signo < 1 || signo > KSIG_MAX) {
+    struct tgroup *tg;
+    uint32_t f;
+
+    if (!target || signo < 1 || signo > KSIG_MAX || target->state == PROC_UNUSED) {
         return;
     }
-    if (target->state == PROC_ZOMBIE || target->state == PROC_UNUSED) {
+    tg = target->tg;
+    if (tg->live == 0) {
         return;
     }
-    {
-        uint32_t f = sig_irq_save();
-        if (!(target->sig_pending & KSIG_BIT(signo))) {
-            target->sig_info[signo] = *info;
-        }
-        target->sig_pending |= KSIG_BIT(signo);
-        if (target->state == PROC_BLOCKED) {
-            target->wakeup_tick = 0;
-            target->state = PROC_READY;
-        }
-        /* Job control: SIGCONT cancels any pending stop and resumes a stopped
-         * process (its parent learns via wait4(WCONTINUED)); SIGKILL wakes a
-         * stopped process so it can take its lethal default. Every other signal
-         * stays pending on a stopped process until it is continued. */
-        if (signo == SIGCONT) {
-            target->sig_pending &=
-                ~(KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU));
-            if (target->state == PROC_STOPPED) {
-                process_t *parent = get_process(target->parent_pid);
-                target->state = PROC_READY;
-                target->jc_status = 0xffff; /* WIFCONTINUED */
-                if (parent) {
-                    if (!(parent->sig_pending & KSIG_BIT(SIGCHLD))) {
-                        parent->sig_info[SIGCHLD].code = CLD_CONTINUED;
-                        parent->sig_info[SIGCHLD].pid = target->pid;
-                        parent->sig_info[SIGCHLD].uid = target->ruid;
-                        parent->sig_info[SIGCHLD].status = SIGCONT;
-                        parent->sig_info[SIGCHLD].addr = 0;
-                    }
-                    parent->sig_pending |= KSIG_BIT(SIGCHLD);
-                    if (parent->state == PROC_BLOCKED) {
-                        parent->wakeup_tick = 0;
-                        parent->state = PROC_READY;
-                    }
-                }
-            }
-        } else if (signo == SIGKILL && target->state == PROC_STOPPED) {
-            target->state = PROC_READY;
-        } else if ((signo == SIGSTOP || signo == SIGTSTP || signo == SIGTTIN || signo == SIGTTOU)) {
-            target->sig_pending &= ~KSIG_BIT(SIGCONT); /* a stop cancels pending cont */
-        }
-        sig_irq_restore(f);
+    f = sig_irq_save();
+    if (!(tg->pending & KSIG_BIT(signo))) {
+        tg->info[signo] = *info;
     }
+    tg->pending |= KSIG_BIT(signo);
+    sig_job_control(target, signo);
+    sig_wake(sig_taker(target, signo));
+    sig_irq_restore(f);
+}
+
+void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
+{
+    uint32_t f;
+
+    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE ||
+        t->state == PROC_UNUSED) {
+        return;
+    }
+    f = sig_irq_save();
+    if (!(t->sig_pending & KSIG_BIT(signo))) {
+        t->sig_info[signo] = *info;
+    }
+    t->sig_pending |= KSIG_BIT(signo);
+    sig_job_control(t, signo);
+    sig_wake(t);
+    sig_irq_restore(f);
 }
 
 void signal_post(process_t *target, int signo)
@@ -2322,7 +2560,18 @@ void signal_force(process_t *target, int signo, const struct k_siginfo *info)
         target->sig_blocked &= ~KSIG_BIT(signo);
     }
     sig_irq_restore(f);
-    signal_post_info(target, signo, info);
+    signal_post_thread(target, signo, info);
+}
+
+/** The signals pending for the current thread: its own and its process's.
+ * Read with interrupts off, since a 64-bit read is two loads. */
+static uint64_t sig_pending_now(void)
+{
+    uint32_t flags = sig_irq_save();
+    uint64_t set = current_proc->sig_pending | current_proc->tg->pending;
+
+    sig_irq_restore(flags);
+    return set;
 }
 
 /* The siginfo of a signal a process sends: `code` SI_USER for kill and
@@ -2331,7 +2580,7 @@ static void sender_info(struct k_siginfo *info, int32_t code)
 {
     k_memset(info, 0, sizeof(*info));
     info->code = code;
-    info->pid = current_proc ? current_proc->pid : 0;
+    info->pid = current_proc ? current_proc->tgid : 0;
     info->uid = current_proc ? current_proc->ruid : 0;
 }
 
@@ -2353,7 +2602,7 @@ int signal_pending(void)
      * 32-bit loads, and a signal posted from an IRQ in between could tear it.
      */
     flags = sig_irq_save();
-    deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
+    deliverable = (current_proc->sig_pending | current_proc->tg->pending) & ~current_proc->sig_blocked;
     sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler, a
      * default terminate or a default stop. A pending signal that is ignored
@@ -2449,11 +2698,11 @@ static int32_t kill_group(int pgid, int signo)
     return allowed ? 0 : -EPERM;
 }
 
-/* kill(2): pid > 0 a single process; pid == 0 the caller's process group; pid <
- * -1 the group (-pid). (pid == -1 "all processes" is not supported here.) signo
- * 0 just probes existence and permission. `code` is the siginfo's si_code: a
- * single target gets it, a group SI_USER. */
-static int32_t do_kill(int pid, int signo, int32_t code)
+/* kill(2): pid > 0 a single process, which the id of any of its threads
+ * names; pid == 0 the caller's process group; pid < -1 the group (-pid).
+ * (pid == -1 "all processes" is not supported here.) signo 0 just probes
+ * existence and permission. */
+static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
     struct k_siginfo info;
@@ -2474,7 +2723,7 @@ static int32_t do_kill(int pid, int signo, int32_t code)
         return -ESRCH; /* broadcast-to-all is not supported */
     }
     target = get_process((uint32_t)pid);
-    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE) {
+    if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
     if (!cred_may_signal(target, signo)) {
@@ -2483,47 +2732,59 @@ static int32_t do_kill(int pid, int signo, int32_t code)
     if (signo == 0) {
         return 0; /* existence and permission check only */
     }
-    sender_info(&info, code);
+    sender_info(&info, SI_USER);
     signal_post_info(target, signo, &info);
+    return 0;
+}
+
+/**
+ * tkill and tgkill: send `signo` to the thread `tid` alone, which must be a
+ * thread of the process `tgid` unless `tgid` is 0. Both ids are positive: a
+ * thread id is never a kill(2) group selector, so a zero or negative one is
+ * -EINVAL, not a group.
+ */
+static int32_t do_tkill(int tgid, int tid, int signo)
+{
+    process_t *t;
+    struct k_siginfo info;
+
+    if (tid <= 0 || tgid < 0 || signo < 0 || signo > KSIG_MAX) {
+        return -EINVAL;
+    }
+    t = get_process((uint32_t)tid);
+    if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
+        (tgid != 0 && t->tgid != (uint32_t)tgid)) {
+        return -ESRCH;
+    }
+    if (!cred_may_signal(t, signo)) {
+        return -EPERM;
+    }
+    if (signo == 0) {
+        return 0;
+    }
+    sender_info(&info, SI_TKILL);
+    signal_post_thread(t, signo, &info);
     return 0;
 }
 
 int32_t sys_kill(isr_params_t *params)
 {
-    return do_kill((int)params->ebx, (int)params->ecx, SI_USER);
+    return do_kill((int)params->ebx, (int)params->ecx);
 }
 
+/** tkill (238): EBX=tid, ECX=signal. */
 int32_t sys_tkill(isr_params_t *params)
 {
-    /* tkill(tid, sig): tid == pid here. A tid must be a positive thread id;
-     * unlike kill(2), a zero or negative value is an error, not a group
-     * selector, so reject it before do_kill would read it as one. */
+    return do_tkill(0, (int)params->ebx, (int)params->ecx);
+}
+
+/** tgkill (270): EBX=tgid, ECX=tid, EDX=signal; a tgid of 0 is -EINVAL. */
+int32_t sys_tgkill(isr_params_t *params)
+{
     if ((int)params->ebx <= 0) {
         return -EINVAL;
     }
-    return do_kill((int)params->ebx, (int)params->ecx, SI_TKILL);
-}
-
-int32_t sys_tgkill(isr_params_t *params)
-{
-    int tgid = (int)params->ebx;
-    int tid = (int)params->ecx;
-    int sig = (int)params->edx;
-    process_t *target;
-
-    /* tgkill(tgid, tid, sig): both ids must be positive (a tid is never a
-     * kill(2) group selector, so a zero or negative one is an error, not a
-     * group), and the tgid must name the same single process as the tid, one
-     * thread per process here. */
-    if (tgid <= 0 || tid <= 0) {
-        return -EINVAL;
-    }
-    target = get_process((uint32_t)tid);
-    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE ||
-        (uint32_t)tgid != target->pid) {
-        return -ESRCH;
-    }
-    return do_kill(tid, sig, SI_TKILL);
+    return do_tkill((int)params->ebx, (int)params->ecx, (int)params->edx);
 }
 
 /* Block until a deliverable signal is pending. Lost-wakeup-safe: the pending
@@ -2630,11 +2891,12 @@ int32_t sys_rt_sigaction(isr_params_t *params)
             return -EFAULT;
         }
         current_proc->sigacts[signo] = act;
-        /* Installing SIG_IGN drops any already-pending instance the way Linux
-         * does. Guard the pending RMW against a concurrent IRQ signal_post. */
+        /* Installing SIG_IGN drops any already-pending instance, the
+         * process's and each thread's, the way Linux does. Guard the pending
+         * RMW against a concurrent IRQ signal_post. */
         if (act.handler == KSIG_IGN) {
             uint32_t f = sig_irq_save();
-            current_proc->sig_pending &= ~KSIG_BIT(signo);
+            sig_discard(current_proc, KSIG_BIT(signo));
             sig_irq_restore(f);
         }
     }
@@ -2819,7 +3081,7 @@ int32_t sys_rt_sigpending(isr_params_t *params)
         return -EINVAL;
     }
     flags = sig_irq_save();
-    set = current_proc->sig_pending & current_proc->sig_blocked;
+    set = (current_proc->sig_pending | current_proc->tg->pending) & current_proc->sig_blocked;
     sig_irq_restore(flags);
     words[0] = (uint32_t)set;
     words[1] = (uint32_t)(set >> 32);
@@ -2882,13 +3144,120 @@ static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
 }
 
 /**
+ * Free the records of the threads that have ended and are not leaders,
+ * which no wait reaps: their CPU time goes to their process, and their
+ * address space reference, kernel stack and record go back. A record the
+ * current process is not is never running, so its stack is free to take.
+ */
+static void reap_threads(void)
+{
+    process_t *p, *next;
+
+    for (p = proc_list; p && proc_dead_threads != 0; p = next) {
+        next = p->next;
+        if (p != current_proc && p->state == PROC_ZOMBIE && p->pid != p->tgid) {
+            p->tg->utime += p->utime;
+            p->tg->stime += p->stime;
+            mm_drop(p);
+            kstack_free(p->kernel_stack);
+            free_process(p);
+            proc_dead_threads--;
+        }
+    }
+}
+
+/**
+ * Stop the current thread, and with it its process, for the stop signal
+ * `signo`: the first thread to stop records the stop for the parent's
+ * wait4(WUNTRACED) and sends it SIGCHLD, and every thread parks as it next
+ * returns to user mode, until a SIGCONT, or a SIGKILL to die, makes it
+ * runnable. The real init (PID 1) is unstoppable, like Unix init: stopping
+ * it would freeze the system with no reaper and no way back, so a
+ * job-control stop aimed at it is dropped.
+ */
+static void sig_group_stop(int signo)
+{
+    struct tgroup *tg = current_proc->tg;
+    process_t *parent;
+
+    if (current_proc->tgid == init_pid && !debug_shell_is_home) {
+        return;
+    }
+    if (tg->stop) {
+        return;
+    }
+    tg->stop = (uint32_t)signo;
+    tg->leader->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
+    parent = get_process(tg->leader->parent_pid);
+    if (parent) {
+        struct k_siginfo child;
+
+        k_memset(&child, 0, sizeof(child));
+        child.code = CLD_STOPPED;
+        child.pid = tg->leader->pid;
+        child.uid = tg->leader->ruid;
+        child.status = signo;
+        signal_post_info(parent, SIGCHLD, &child);
+        wq_wake_all(&parent->tg->chld);
+    }
+}
+
+/**
+ * Park the current thread while its process is stopped and no SIGKILL is
+ * pending. The scheduler keeps a STOPPED thread off the processor (it only
+ * flips RUNNING to READY); `sig_job_control` makes it READY again. `sti;hlt;
+ * cli` from IF=0 is lost-wakeup-safe.
+ */
+static void sig_park(void)
+{
+    uint32_t flags = sig_irq_save();
+
+    while (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL))) {
+        current_proc->state = PROC_STOPPED;
+        schedule();
+        if (current_proc->state == PROC_STOPPED) {
+            idle_wait_irq_off();
+        }
+    }
+    current_proc->state = PROC_RUNNING;
+    sig_irq_restore(flags);
+}
+
+/** Take the lowest signal of `deliverable` off the current thread's pending
+ * set, or else off its process's, into `*info`; the signal. */
+static int sig_dequeue(uint64_t deliverable, struct k_siginfo *info)
+{
+    uint32_t flags;
+    int signo;
+
+    for (signo = 1; signo < KSIG_MAX; signo++) {
+        if (deliverable & KSIG_BIT(signo)) {
+            break;
+        }
+    }
+    flags = sig_irq_save();
+    if (current_proc->sig_pending & KSIG_BIT(signo)) {
+        current_proc->sig_pending &= ~KSIG_BIT(signo);
+        *info = current_proc->sig_info[signo];
+    } else {
+        current_proc->tg->pending &= ~KSIG_BIT(signo);
+        *info = current_proc->tg->info[signo];
+    }
+    sig_irq_restore(flags);
+    return signo;
+}
+
+/**
  * Act on a pending signal at the return-to-user boundary.
  *
  * Called from the ISR/IRQ return path just before iret, with the trapframe
- * about to be restored. If the current process is returning to USER mode and
- * has a deliverable (pending, not blocked) signal, act on the
- * lowest-numbered one: ignore it, terminate (default), stop, or build a
- * handler frame.
+ * about to be restored. If the current thread is returning to USER mode and
+ * has a deliverable signal, one pending for it or for its process and not
+ * blocked, act on the lowest-numbered one, the thread's own first: ignore it,
+ * end the process (a default that terminates), stop the process, or build a
+ * handler frame. A thread whose process is stopped parks here first. The
+ * records of ended threads are freed here too, a point every running process
+ * passes where none of them is in use.
  *
  * A system call the dispatcher found interrupted and restartable is
  * restarted when no handler runs, and when the handler that runs has
@@ -2906,30 +3275,44 @@ void deliver_signals(isr_params_t *tf)
     if ((tf->cs & 3) != 3) {
         return; /* not returning to user mode */
     }
+    if (proc_dead_threads != 0) {
+        reap_threads();
+    }
+    if (current_proc->ptrace) {
+        ptrace_return_stops();
+    }
     restart_nr = current_proc->restart_nr;
     current_proc->restart_nr = 0;
 
     for (;;) {
-        uint64_t deliverable = current_proc->sig_pending & ~current_proc->sig_blocked;
+        uint64_t deliverable;
         struct k_sigaction *sa;
         struct k_siginfo info;
         uint64_t oldmask, newblock;
         uint32_t handler_flags;
         int signo;
 
+        if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
+            !ptrace_group_stop((int)current_proc->tg->stop) && !current_proc->stop_seen) {
+            sig_park();
+        }
+        deliverable = sig_pending_now() & ~current_proc->sig_blocked;
         if (deliverable == 0) {
             break;
         }
-        for (signo = 1; signo <= KSIG_MAX; signo++) {
-            if (deliverable & KSIG_BIT(signo)) {
-                break;
+        signo = sig_dequeue(deliverable, &info);
+        if (current_proc->ptrace) {
+            /* The tracer sees the stop's system call, and may cancel its
+             * restart through orig_eax. */
+            current_proc->restart_nr = restart_nr;
+            current_proc->orig_eax = restart_nr ? (int32_t)restart_nr - 1 : -1;
+            signo = ptrace_signal_stop(signo, &info);
+            restart_nr = current_proc->restart_nr;
+            current_proc->restart_nr = 0;
+            if (signo == 0) {
+                continue;
             }
         }
-        if (signo > KSIG_MAX) {
-            break; /* unreachable (deliverable != 0); keeps the shift bounded */
-        }
-        current_proc->sig_pending &= ~KSIG_BIT(signo);
-        info = current_proc->sig_info[signo];
         sa = &current_proc->sigacts[signo];
 
         if (sa->handler == KSIG_IGN) {
@@ -2942,39 +3325,8 @@ void deliver_signals(isr_params_t *tf)
                 return;
             }
             if (def == KSIG_DEFAULT_STOP) {
-                process_t *parent;
-                /* The real init (PID 1) is unstoppable, like Unix init:
-                 * stopping it would freeze the system with no reaper and no way
-                 * back. Drop a job-control stop aimed at it. */
-                if (current_proc->pid == init_pid && !debug_shell_is_home) {
-                    continue;
-                }
-                /* Job-control stop: park as PROC_STOPPED until a SIGCONT (or a
-                 * SIGKILL, to die) flips us back to READY. Record the stop for
-                 * the parent's wait4(WUNTRACED) and nudge it with SIGCHLD. */
-                parent = get_process(current_proc->parent_pid);
-                current_proc->jc_status = (uint32_t)(((signo & 0xff) << 8) | 0x7f);
-                current_proc->state = PROC_STOPPED;
-                if (parent) {
-                    struct k_siginfo child;
-
-                    k_memset(&child, 0, sizeof(child));
-                    child.code = CLD_STOPPED;
-                    child.pid = current_proc->pid;
-                    child.uid = current_proc->ruid;
-                    child.status = signo;
-                    signal_post_info(parent, SIGCHLD, &child);
-                }
-                /* Yield to others; if none are runnable, idle. The scheduler
-                 * keeps us STOPPED (it only flips RUNNING->READY); signal_post
-                 * resumes us. `sti;hlt;cli` from IF=0 is lost-wakeup-safe. */
-                while (current_proc->state == PROC_STOPPED) {
-                    schedule();
-                    if (current_proc->state == PROC_STOPPED) {
-                        idle_wait_irq_off();
-                    }
-                }
-                continue; /* resumed: re-check pending signals */
+                sig_group_stop(signo);
+                continue; /* parks at the top, then re-checks pending signals */
             }
             continue; /* default ignore (SIGCHLD/SIGCONT/SIGURG/SIGWINCH) */
         }
@@ -3016,10 +3368,124 @@ void deliver_signals(isr_params_t *tf)
     }
 }
 
+/**
+ * Wait, as rt_sigtimedwait does, for a signal of `set` to be pending for the
+ * current thread or its process until the tick `deadline` when `timed`, and
+ * take it: its siginfo goes to `uinfo` unless null, and its number is
+ * returned. -EINTR for another signal the thread acts on, -EAGAIN at the
+ * deadline, -EFAULT.
+ */
+static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __user *uinfo)
+{
+    uint32_t flags = sig_irq_save();
+
+    for (;;) {
+        uint64_t hit = sig_pending_now() & set;
+
+        if (hit) {
+            struct k_siginfo info;
+            uint8_t buf[128];
+            int signo = sig_dequeue(hit, &info);
+
+            current_proc->wakeup_tick = 0;
+            sig_irq_restore(flags);
+            if (uinfo) {
+                sigframe_fill_siginfo(buf, signo, &info);
+                if (copy_to_user(uinfo, buf, sizeof(buf)) != 0) {
+                    return -EFAULT;
+                }
+            }
+            return signo;
+        }
+        if (signal_pending() || (timed && (int32_t)(kernel_ticks - deadline) >= 0)) {
+            current_proc->wakeup_tick = 0;
+            sig_irq_restore(flags);
+            return signal_pending() ? -EINTR : -EAGAIN;
+        }
+        current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
+        current_proc->state = PROC_BLOCKED;
+        sig_irq_restore(flags);
+        schedule();
+        flags = sig_irq_save();
+        if (current_proc->state == PROC_BLOCKED) {
+            idle_wait_irq_off();
+        }
+        current_proc->state = PROC_RUNNING;
+    }
+}
+
+/**
+ * Wait for a signal of a set and take it (rt_sigtimedwait(2), syscall 177),
+ * which sigwait, sigwaitinfo and sigtimedwait make.
+ *
+ * EBX = const sigset_t *set, ECX = siginfo_t *info or NULL, EDX = const
+ * struct timespec *timeout or NULL, ESI = sigsetsize, which must be 8. The
+ * first signal of `set` pending for the thread or its process, lowest first
+ * and the thread's own before the process's, is taken off its pending set
+ * without its handler running. While the call waits the signals of `set`
+ * count as unblocked, as Linux counts them, so a signal sent to the process
+ * wakes this thread. The timeout is rounded up to whole 10 ms ticks, and one
+ * of zero polls; SIGKILL and SIGSTOP cannot be waited for.
+ */
+int32_t sys_rt_sigtimedwait(isr_params_t *params)
+{
+    struct kernel_timespec ts;
+    uint64_t set;
+    uint64_t saved;
+    uint32_t deadline = 0;
+    int timed = 0;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (params->esi != sizeof(uint64_t)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&set, (const void __user *)params->ebx, sizeof(set)) != 0) {
+        return -EFAULT;
+    }
+    if (params->edx) {
+        uint32_t ticks;
+
+        if (copy_from_user(&ts, (const void __user *)params->edx, sizeof(ts)) != 0) {
+            return -EFAULT;
+        }
+        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
+            return -EINVAL;
+        }
+        ticks = (uint32_t)(ts.tv_sec > 21474836 ? 21474836 : ts.tv_sec) * 100u +
+                ((uint32_t)ts.tv_nsec + 9999999u) / 10000000u;
+        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+        timed = 1;
+    }
+    set &= ~(uint64_t)KSIG_UNCATCHABLE;
+    saved = current_proc->sig_blocked;
+    current_proc->sig_blocked &= ~set;
+    rc = sigwait_set(set, timed, deadline, (void __user *)params->ecx);
+    current_proc->sig_blocked = saved;
+    return rc;
+}
+
 /*
- * sys_getpid - return the calling process's PID (getpid(2)).
+ * sys_getpid - return the calling process's PID (getpid(2)), which is its
+ * thread group's id.
  */
 int32_t sys_getpid(isr_params_t *params)
+{
+    (void)params;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    return (int32_t)current_proc->tgid;
+}
+
+/**
+ * The calling thread's id (gettid(2)); the process id for the thread that
+ * began the process.
+ */
+int32_t sys_gettid(isr_params_t *params)
 {
     (void)params;
 
@@ -3029,13 +3495,18 @@ int32_t sys_getpid(isr_params_t *params)
     return (int32_t)current_proc->pid;
 }
 
-/**
- * The calling thread's id (gettid(2)): the process id, since each process
- * is one thread, as Linux's is for a process that has made none.
- */
-int32_t sys_gettid(isr_params_t *params)
+/** Give every thread of the process of `p` the session `sid` and the
+ * process group `pgid`, which are the process's. */
+static void group_set_ids(const process_t *p, uint32_t sid, uint32_t pgid)
 {
-    return sys_getpid(params);
+    process_t *t;
+
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == p->tg) {
+            t->sid = sid;
+            t->pgid = pgid;
+        }
+    }
 }
 
 /**
@@ -3053,12 +3524,11 @@ int32_t sys_setsid(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (current_proc->pgid == current_proc->pid) {
+    if (current_proc->pgid == current_proc->tgid) {
         return -EPERM; /* already a process-group leader */
     }
-    current_proc->sid = current_proc->pid;
-    current_proc->pgid = current_proc->pid;
-    return (int32_t)current_proc->pid;
+    group_set_ids(current_proc, current_proc->tgid, current_proc->tgid);
+    return (int32_t)current_proc->tgid;
 }
 
 /**
@@ -3082,28 +3552,28 @@ int32_t sys_setpgid(isr_params_t *params)
         return -EINVAL;
     }
     target = (pid == 0) ? current_proc : get_process((uint32_t)pid);
-    if (!target || target->state == PROC_UNUSED || target->state == PROC_ZOMBIE) {
+    if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
         return -ESRCH;
     }
-    /* Only the caller or one of its children may be moved. */
-    if (target != current_proc && target->parent_pid != current_proc->pid) {
+    /* Only the caller's process or one of its children may be moved. */
+    if (target->tg != current_proc->tg && target->parent_pid != current_proc->tgid) {
         return -ESRCH;
     }
     /* A session leader's group is fixed (it anchors the session). */
-    if (target->sid == target->pid) {
+    if (target->sid == target->tgid) {
         return -EPERM;
     }
     if (pgid == 0) {
-        pgid = (int)target->pid; /* create/lead the group named by the target */
+        pgid = (int)target->tgid; /* create/lead the group named by the target */
     }
     /* The destination group must be in the target's session: either the target
      * creates its own group, or a process is ALREADY in group `pgid` within the
      * same session (an existing group, regardless of whether its leader is
      * still alive, not merely "a process whose pid == pgid"). */
-    if ((uint32_t)pgid != target->pid && !pgrp_in_session(pgid, (int)target->sid)) {
+    if ((uint32_t)pgid != target->tgid && !pgrp_in_session(pgid, (int)target->sid)) {
         return -EPERM;
     }
-    target->pgid = (uint32_t)pgid;
+    group_set_ids(target, target->sid, (uint32_t)pgid);
     return 0;
 }
 
@@ -3478,14 +3948,16 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
 }
 
 /**
- * Set a kept limit of `p`: the soft value at most the hard, the hard raised
- * by root only and lowered by anyone, and RLIMIT_NOFILE never above the
- * table's limit. A limit that is not kept is accepted and not changed.
- * 0, or -EINVAL and -EPERM as POSIX names them.
+ * Set a kept limit of `p`'s process, in the record of each of its threads:
+ * the soft value at most the hard, the hard raised by root only and lowered
+ * by anyone, and RLIMIT_NOFILE never above the table's limit. A limit that
+ * is not kept is accepted and not changed. 0, or -EINVAL and -EPERM as POSIX
+ * names them.
  */
 static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t max)
 {
     int slot = rlimit_slot(resource);
+    process_t *t;
 
     if (slot < 0) {
         return 0;
@@ -3496,14 +3968,19 @@ static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t ma
     if (max > p->rlim[slot].max && current_proc->euid != 0) {
         return -EPERM;
     }
-    if (slot == RLIM_NOFILE) {
-        if (max > FD_TABLE_LIMIT) {
-            return -EPERM;
-        }
-        p->fds.limit = (int)cur;
+    if (slot == RLIM_NOFILE && max > FD_TABLE_LIMIT) {
+        return -EPERM;
     }
-    p->rlim[slot].cur = cur;
-    p->rlim[slot].max = max;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg != p->tg) {
+            continue;
+        }
+        if (slot == RLIM_NOFILE) {
+            t->fds.limit = (int)cur;
+        }
+        t->rlim[slot].cur = cur;
+        t->rlim[slot].max = max;
+    }
     return 0;
 }
 
@@ -3515,11 +3992,11 @@ static process_t *rlimit_target(uint32_t pid)
 {
     process_t *p;
 
-    if (pid == 0 || pid == current_proc->pid) {
+    if (pid == 0 || pid == current_proc->tgid) {
         return current_proc;
     }
     p = get_process(pid);
-    if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) {
+    if (!p || p->state == PROC_UNUSED || p->tg->live == 0) {
         return NULL;
     }
     if (current_proc->euid != 0 && p->ruid != current_proc->ruid) {
@@ -3654,11 +4131,11 @@ int32_t sys_brk(isr_params_t *params)
     vm_space_t *vm;
     uint32_t old_top, new_top;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     mem_balance();
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
 
     /* brk(0) queries the break; below the heap base or into the stack window is
      * refused with the break left unchanged. */
@@ -3741,6 +4218,30 @@ static uint32_t vm_prot_of(uint32_t prot)
  * it is read-only, which reads the same bytes, and refused with ENODEV when
  * it may be written, since its stores would not reach the file.
  */
+/** A copy in the heap of the path /proc/PID/fd would give the current
+ * process's descriptor `fd`, for /proc/PID/maps to name the file a region
+ * maps; NULL when there is no room or no path. */
+static char *fd_path_copy(int fd)
+{
+    char *buf = kmalloc(VFS_PATH_MAX);
+    char *copy = NULL;
+    int n;
+
+    if (!buf) {
+        return NULL;
+    }
+    n = procfs_readlink_fd((int)current_proc->tgid, fd, buf, VFS_PATH_MAX - 1);
+    if (n > 0) {
+        copy = kmalloc((uint32_t)n + 1u);
+        if (copy) {
+            k_memcpy(copy, buf, (uint32_t)n);
+            copy[n] = '\0';
+        }
+    }
+    kfree(buf);
+    return copy;
+}
+
 static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_file **file,
                             vm_type_t *type)
 {
@@ -3772,6 +4273,9 @@ static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_fil
             }
             *file = sh ? filemap_shared(e, sh) : filemap_new(e);
             *type = sh ? VM_SHARED : VM_FILE;
+            if (*file) {
+                (*file)->path = fd_path_copy(fd);
+            }
             return *file ? 0 : -ENOMEM;
         }
     }
@@ -3807,11 +4311,11 @@ int32_t sys_mmap2(isr_params_t *params)
     vm_type_t type;
     int32_t rc;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     mem_balance();
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
 
     if (length == 0 || (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
         return -EINVAL;
@@ -3893,10 +4397,10 @@ int32_t sys_munmap(isr_params_t *params)
     vm_space_t *vm;
     uint32_t start, end;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
 
     if (length == 0 || (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
@@ -3923,7 +4427,7 @@ int32_t sys_munmap(isr_params_t *params)
 static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
 {
     while (start < end) {
-        vma_t *r = vm_find(&current_proc->vm, start);
+        vma_t *r = vm_find(&current_proc->mm->vm, start);
         uint32_t stop = (r && r->end < end) ? r->end : end;
 
         paging_protect_range(_curr_dir, start, stop,
@@ -3948,7 +4452,7 @@ int32_t sys_mprotect(isr_params_t *params)
     uint32_t end, vmprot;
     int rc;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 ||
@@ -3963,7 +4467,7 @@ int32_t sys_mprotect(isr_params_t *params)
     }
     end = PAGE_UP(addr + length);
     vmprot = vm_prot_of(prot);
-    rc = vm_protect(&current_proc->vm, addr, end, vmprot);
+    rc = vm_protect(&current_proc->mm->vm, addr, end, vmprot);
     if (rc == -1) {
         return -ENOMEM;
     }
@@ -4032,10 +4536,10 @@ int32_t sys_mremap(isr_params_t *params)
     vm_space_t *vm;
     vma_t *r;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
     if ((addr & (PAGE_SIZE - 1)) != 0 || new_len == 0 || old_len == 0 ||
         (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) != 0 ||
         ((flags & MREMAP_FIXED) && !(flags & MREMAP_MAYMOVE))) {
@@ -4116,7 +4620,7 @@ int32_t sys_madvise(isr_params_t *params)
     uint32_t len = PAGE_UP(params->ecx);
     uint32_t advice = params->edx;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX - len || advice == MADV_REMOVE ||
@@ -4126,7 +4630,7 @@ int32_t sys_madvise(isr_params_t *params)
     if (len == 0) {
         return 0;
     }
-    if (vm_covered(&current_proc->vm, addr, addr + len) != len) {
+    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
     if (advice == MADV_DONTNEED || advice == MADV_FREE) {
@@ -4148,14 +4652,14 @@ int32_t sys_msync(isr_params_t *params)
     uint32_t len = PAGE_UP(params->ecx);
     uint32_t flags = params->edx;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
         addr > USER_ADDR_MAX - len) {
         return -EINVAL;
     }
-    if (vm_covered(&current_proc->vm, addr, addr + len) != len) {
+    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
     return 0;
@@ -4523,6 +5027,148 @@ int32_t sys_sched_getaffinity(isr_params_t *params)
         return -EFAULT;
     }
     return (int32_t)CPU_MASK_BYTES;
+}
+
+/** Whether [`addr`, `addr` + `len`) is a range the current process's
+ * regions cover without a gap, as mlock asks: -EINVAL for an address past
+ * the end of the address space, -ENOMEM for a gap, 0. */
+static int32_t lock_range(uint32_t addr, uint32_t len)
+{
+    uint32_t start = addr & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t end = addr + len;
+
+    if (end < addr) {
+        return -EINVAL;
+    }
+    end = (end + PAGE_SIZE - 1) & ~(uint32_t)(PAGE_SIZE - 1);
+    if (end < start) {
+        return -EINVAL;
+    }
+    return vm_covered(&current_proc->mm->vm, start, end) == end - start ? 0 : -ENOMEM;
+}
+
+/**
+ * mlock (150), munlock (151) and mlock2 (376): lock or unlock the pages of a
+ * range, which must be mapped without a gap. There is no swap, so every page
+ * already stays in memory; the calls check the range, and mlock2 its flags,
+ * 0 or MLOCK_ONFAULT, and change nothing. RLIMIT_MEMLOCK is not kept.
+ */
+int32_t sys_mlock(isr_params_t *params)
+{
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    return lock_range(params->ebx, params->ecx);
+}
+
+int32_t sys_munlock(isr_params_t *params)
+{
+    return sys_mlock(params);
+}
+
+int32_t sys_mlock2(isr_params_t *params)
+{
+    if (params->edx & ~1u) {
+        return -EINVAL;
+    }
+    return sys_mlock(params);
+}
+
+/**
+ * mlockall (152) and munlockall (153): lock or unlock every page, which the
+ * machine keeps in memory anyway; mlockall's flags must be MCL_CURRENT,
+ * MCL_FUTURE and MCL_ONFAULT, not MCL_ONFAULT alone, and not none.
+ */
+int32_t sys_mlockall(isr_params_t *params)
+{
+    uint32_t flags = params->ebx;
+
+    if (flags == 0 || (flags & ~7u) || flags == 4u) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int32_t sys_munlockall(isr_params_t *params)
+{
+    (void)params;
+    return 0;
+}
+
+/**
+ * mincore (218): EBX = a page-aligned address, ECX = a length, EDX = a byte
+ * for each page, which gets 1 when the page is in memory and 0 when it has
+ * not been brought in yet. -EINVAL for an address not page-aligned, -ENOMEM
+ * for a range with a gap, -EFAULT.
+ */
+int32_t sys_mincore(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t pages;
+    uint32_t i;
+    int32_t rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    if (addr & (PAGE_SIZE - 1)) {
+        return -EINVAL;
+    }
+    rc = lock_range(addr, params->ecx);
+    if (rc != 0) {
+        return rc;
+    }
+    pages = (params->ecx + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (i = 0; i < pages; i++) {
+        uint8_t in = paging_user_phys(current_proc->page_dir, addr + i * PAGE_SIZE) != 0;
+
+        if (copy_to_user((void __user *)(params->edx + i), &in, 1) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
+}
+
+/**
+ * The CPU and NUMA node the caller runs on (getcpu(2), syscall 318): 0 and 0,
+ * stored where EBX and ECX point unless either is null. EDX, the old cache
+ * argument, is ignored, as Linux ignores it. -EFAULT for a word that cannot
+ * be written.
+ */
+int32_t sys_getcpu(isr_params_t *params)
+{
+    uint32_t zero = 0;
+
+    if ((params->ebx && copy_to_user((void __user *)params->ebx, &zero, sizeof(zero)) != 0) ||
+        (params->ecx && copy_to_user((void __user *)params->ecx, &zero, sizeof(zero)) != 0)) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
+ * The execution domain (personality(2), syscall 136): EBX is the new value,
+ * or 0xFFFFFFFF to read it, and the old value is returned. The domain, the
+ * low byte, must be PER_LINUX (0) or PER_LINUX32 (8), the two a Linux i386
+ * program runs in, else -EINVAL; the flag bits above it are kept and change
+ * nothing, since this kernel has no address randomization for
+ * ADDR_NO_RANDOMIZE, which GDB sets, to turn off, and no other domain.
+ */
+int32_t sys_personality(isr_params_t *params)
+{
+    uint32_t old;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    old = current_proc->persona;
+    if (params->ebx != 0xFFFFFFFFu) {
+        if ((params->ebx & 0xFFu) != 0 && (params->ebx & 0xFFu) != 8u) {
+            return -EINVAL;
+        }
+        current_proc->persona = params->ebx;
+    }
+    return (int32_t)old;
 }
 
 /**

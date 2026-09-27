@@ -18,9 +18,10 @@
 .Sh DESCRIPTION
 Each process has one interval timer,
 .Dv ITIMER_REAL ,
-which counts real time and posts
+which its threads share, which counts real time and posts
 .Dv SIGALRM
-to the process when it expires.
+to the process when it expires; any thread that does not block the signal
+may take it.
 .Pp
 .Fn setitimer
 arms it:
