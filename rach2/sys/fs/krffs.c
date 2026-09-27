@@ -919,14 +919,17 @@ static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint6
  * `original` is a node, its metadata and data are copied into the new one, as
  * the relocation half of a grow, and the new node keeps the original's data
  * length until the caller writes the rest. Answers the new node's offset, or
- * KRFFS_NO_NODE if no block fits.
+ * KRFFS_NO_NODE with `*err` set: KRFFS_ENOSPACE when the whole ring was
+ * walked and no free node fits, and KRFFS_EIO when the medium refused a read,
+ * a write or a sync on the way, or a write the order of writes forbids was
+ * refused, or the walk did not come back around.
  *
  * The split writes the tail's header before the size that reveals it, and the
  * node is published by its type, written last, so an interrupted allocation
  * leaves a chain a mount can walk. A node published without a name is one no
  * path reaches, and the check reclaims it; every caller names it next.
  */
-uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t original)
+static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, uint64_t original, int *err)
 {
     uint64_t size_with_header = sizeof(krffs_node_t) + size;
     uint64_t offset = 0;
@@ -937,9 +940,11 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
     /* Bounded before the addition above can matter: nothing larger than the
      * region can be allocated, and a size near the top of the range would
      * otherwise wrap into a small one. */
+    *err = KRFFS_ENOSPACE;
     if (size > mount->size) {
         return KRFFS_NO_NODE;
     }
+    *err = KRFFS_EIO;
 
     do {
         if (krffs_brief(mount, offset, &brief) != 0) {
@@ -1034,7 +1039,18 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t origina
         offset = krffs_step(mount, offset, brief.size);
     } while (offset != 0 && ++steps < bound);
 
+    if (offset == 0) {
+        *err = KRFFS_ENOSPACE;
+    }
     return KRFFS_NO_NODE;
+}
+
+/** `krffs_allocate_err` for a caller that needs no reason. */
+uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t original)
+{
+    int err;
+
+    return krffs_allocate_err(mount, size, original, &err);
 }
 
 /**
@@ -1333,8 +1349,8 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
  * Create an empty regular file at `path`, mode 0644.
  *
  * Idempotent like creat: an existing name (file or directory) returns success.
- * The parent directory must already exist. Returns 0 on success, -1 if the
- * parent is missing or no node could be allocated.
+ * The parent directory must already exist. Returns what `krffs_create_node_at`
+ * does.
  */
 int krffs_create_at(krffs_mount_t *mount, const char *path)
 {
@@ -1355,8 +1371,12 @@ uint32_t krffs_mode_type(uint16_t mode)
  * Create an empty node at `path` with `mode`, which has the type bits of a
  * FIFO or a socket, or none for a regular file.
  *
- * The mode is on the medium before the name, as every field is; the rest of
- * the contract is `krffs_create_at`'s.
+ * The mode is on the medium before the name, as every field is. An existing
+ * name returns success, as `krffs_create_at` says. Returns 0; KRFFS_EBAD for
+ * a path with no last name or whose directory is not found; KRFFS_ENOSPACE
+ * when no free node can hold the node; or KRFFS_EIO when the medium refused a
+ * read, a write or a sync the creation needed, which a device removed on the
+ * way does, so a caller can tell a full volume from a failing one.
  */
 int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode)
 {
@@ -1374,17 +1394,18 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode)
 
     krffs_split_path(path, dir, base);
     if (base[0] == '\0') {
-        return -1;
+        return KRFFS_EBAD;
     }
     parent_id = krffs_resolve_dir_id(mount, dir);
     if (parent_id == (uint64_t)-1) {
-        return -1;
+        return KRFFS_EBAD;
     }
 
-    node = krffs_allocate_at(mount, 0, KRFFS_NO_NODE);
+    node = krffs_allocate_err(mount, 0, KRFFS_NO_NODE, &rc);
     if (node == KRFFS_NO_NODE) {
-        return -1;
+        return rc;
     }
+    rc = 0;
 
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
@@ -1409,7 +1430,7 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode)
     if (rc != 0 || krffs_sync_point(mount) != 0 ||
         krffs_put(mount, node, KRFFS_FIELD_NAME, name, KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
         krffs_sync_point(mount) != 0) {
-        return -1;
+        return KRFFS_EIO;
     }
 
     /* And the directory it appeared in changed, which is what a program
@@ -1677,6 +1698,13 @@ static int krffs_id_taken(krffs_mount_t *mount, uint64_t id)
     return 0;
 }
 
+/**
+ * Make an empty directory at `path`, mode 0755.
+ *
+ * Returns 0; KRFFS_EBAD for a name that is taken, a directory id another
+ * directory has, or a path with no last name or whose directory is not
+ * found; or KRFFS_ENOSPACE or KRFFS_EIO as `krffs_create_node_at` does.
+ */
 int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
 {
     uint64_t node;
@@ -1688,26 +1716,27 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
     int rc = 0;
 
     if (krffs_walk(mount, path) != KRFFS_NO_NODE) {
-        return -1;
+        return KRFFS_EBAD;
     }
 
     krffs_split_path(path, dir, base);
     if (base[0] == '\0') {
-        return -1;
+        return KRFFS_EBAD;
     }
     parent_id = krffs_resolve_dir_id(mount, dir);
     if (parent_id == (uint64_t)-1) {
-        return -1;
+        return KRFFS_EBAD;
     }
 
     if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {
-        return -1;
+        return KRFFS_EBAD;
     }
 
-    node = krffs_allocate_at(mount, 0, KRFFS_NO_NODE);
+    node = krffs_allocate_err(mount, 0, KRFFS_NO_NODE, &rc);
     if (node == KRFFS_NO_NODE) {
-        return -1;
+        return rc;
     }
+    rc = 0;
 
     /* A directory has its name, the S_IFDIR mode, an empty body, and an id
      * (the mix of parent and name, checked free above) that its children
@@ -1727,7 +1756,7 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
     if (rc != 0 || krffs_sync_point(mount) != 0 ||
         krffs_put(mount, node, KRFFS_FIELD_NAME, name, KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
         krffs_sync_point(mount) != 0) {
-        return -1;
+        return KRFFS_EIO;
     }
     krffs_stamp_at(mount, krffs_parent_offset(mount, node), KRFFS_STAMP_DATA);
     return 0;

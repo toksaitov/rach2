@@ -1,5 +1,6 @@
 /**
- * Check mounted KRFFS relocation, writeback errors and clean-flag ordering.
+ * Check mounted KRFFS relocation, writeback errors, clean-flag ordering, and
+ * the errno a failed creation answers.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -488,6 +489,34 @@ static void failed_clean_flush(void)
     teardown();
 }
 
+/**
+ * A creation tells a failing volume from a full one: a sync the medium
+ * refuses makes it EIO, and a volume a file has grown to fill makes it
+ * ENOSPC.
+ */
+static void creation_errors(void)
+{
+    void *node = NULL;
+    int fd;
+
+    setup();
+    sync_error = 1;
+    vfs_ns_lock(&mount);
+    check(kv_mknod(&mount, mount.root, "fifo", KRFFS_S_IFIFO | 0600, 0, &node) == -EIO,
+          "a creation whose sync the medium refuses is EIO");
+    vfs_ns_unlock(&mount);
+    sync_error = 0;
+    fd = open_node(create("big"));
+    check(kv_truncate(&mount, table.entries[fd].ofd->fhandle,
+                      IMAGE_BYTES - 2 * sizeof(krffs_node_t) - 100) == 0,
+          "a file grows to fill the volume");
+    vfs_ns_lock(&mount);
+    check(kv_create(&mount, mount.root, "more", 0644, &node) == -ENOSPC,
+          "a creation on a full volume is ENOSPC");
+    vfs_ns_unlock(&mount);
+    teardown();
+}
+
 /** Exercise both relocating operations and the unmount write order. */
 int main(void)
 {
@@ -498,6 +527,7 @@ int main(void)
     failed_relocation(1);
     durability();
     failed_clean_flush();
+    creation_errors();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }

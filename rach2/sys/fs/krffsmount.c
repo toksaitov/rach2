@@ -546,6 +546,18 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
 }
 
 /**
+ * The errno of a creation the core refused: -ENOSPC for a volume with no
+ * room, and -EIO for a medium that refused a read, a write or a sync, which a
+ * device removed during the creation does. A path the core could not use is
+ * -EIO too: the directory the name goes in is held, so only a failed read
+ * loses it.
+ */
+static int made_errno(int rc)
+{
+    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;
+}
+
+/**
  * The mode and the owner a creation asks for, put on the node the core made.
  *
  * The core stamps every new node with the format's defaults, which are root's
@@ -589,7 +601,7 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     }
     rc = krffs_create_at(&vol->fs, path);
     if (rc != 0) {
-        return -ENOSPC;
+        return made_errno(rc);
     }
     made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
     if (made == KRFFS_NO_NODE) {
@@ -628,8 +640,9 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
         return -EEXIST;
     }
-    if (krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u))) != 0) {
-        return -ENOSPC;
+    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u)));
+    if (rc != 0) {
+        return made_errno(rc);
     }
     made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
     if (made == KRFFS_NO_NODE) {
@@ -698,8 +711,9 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (rc != 0) {
         return rc;
     }
-    if (krffs_mkdir_at(&vol->fs, path) != 0) {
-        return -ENOSPC;
+    rc = krffs_mkdir_at(&vol->fs, path);
+    if (rc != 0) {
+        return made_errno(rc);
     }
     {
         uint64_t made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
