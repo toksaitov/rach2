@@ -66,7 +66,9 @@ for name, text in [('linux_stat', s), ('linux_stat64', s), ('vfs_stat', vh)]:
 parts.append('''
 #define __user
 #define EFAULT 14
+#define S_IFMT 0170000
 #define S_IFDIR 0040000
+#define ENOTDIR 20
 #define S_IFREG 0100000
 #define VFS_S_IFDIR S_IFDIR
 #define VFS_S_IFREG S_IFREG
@@ -101,7 +103,7 @@ static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\\0';
 ''')
 for name in ['path_names_dir', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
              'stat_times_from_stat64', 'stat_node_times', 'stat_root_times',
-             'do_stat64', 'do_old_stat']:
+             'do_stat64', 'old_stat_put', 'do_old_stat']:
     parts.append(function(s, name))
 parts.append(function(v, 'kfs_getattr'))
 parts.append('''
