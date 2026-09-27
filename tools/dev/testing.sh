@@ -17,9 +17,11 @@
 # syncs and then runs COMMAND in the copy; the command is passed to the remote
 # shell as one string, so quote it as that shell will see it. `get` copies
 # each PATH, relative to the copy, from the host to the same path here,
-# compressed on the wire and with a sparse file kept sparse, which is how a
-# product that only the Linux host builds, such as the GNU system's ext2
-# root, reaches this machine. `sh` opens an interactive shell in the copy.
+# compressed on the wire, which is how a product that only the Linux host
+# builds, such as the GNU system's ext2 root, reaches this machine. Its runs
+# of zeros are written as holes, which the Mac's APFS keeps only for a long
+# run, so an image that is sparse on the host is not sparse here. `sh` opens
+# an interactive shell in the copy.
 #
 # The host is reached as `ssh testing`. Its ssh server answers in an MSYS
 # shell on Windows; the copy lives in the WSL distribution, so the receiving
