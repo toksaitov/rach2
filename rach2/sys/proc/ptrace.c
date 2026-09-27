@@ -266,6 +266,9 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving)
         tf->eax = (uint32_t)-ENOSYS;
     }
     sig = ptrace_stop((signo << 8) | 0x7F, NULL);
+    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {
+        self->orig_eax = -1;
+    }
     if (sig > 0 && sig <= KSIG_MAX) {
         k_memset(&info, 0, sizeof(info));
         info.code = SI_USER;

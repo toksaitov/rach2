@@ -66,7 +66,8 @@ void ptrace_event(int event, uint32_t msg);
  * is its trap frame, and orig_eax is `nr` during the stop. At the entry EAX
  * is -ENOSYS during the stop, as on Linux, and both stay as the tracer
  * leaves them: the dispatcher runs the call orig_eax then names, or none for
- * -1, with EAX its result.
+ * -1, with EAX its result. A thread SIGKILL was sent during the entry stop
+ * gets -1, so the call does not run, as Linux skips it.
  */
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 

@@ -123,6 +123,9 @@ A tracer that changes orig_eax at the entry changes the call, as on
 Linux: the number it leaves there is the call run, one of no call returns
 .Er ENOSYS ,
 and -1 runs none, the call returning what the tracer left in EAX.
+A tracee
+.Dv SIGKILL
+reaches during the entry stop runs no call, as on Linux.
 The arguments are the registers as the tracer leaves them.
 .El
 .Pp
