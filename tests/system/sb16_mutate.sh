@@ -1,5 +1,7 @@
 #!/bin/sh
-# Compile private kernels and judge the scale from QEMU's PCM recording.
+# Compile private kernels and judge the scale from QEMU's PCM recording, made
+# under an instruction clock, as the audio suite's row is, so that the notes'
+# lengths do not depend on the host.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -44,9 +46,10 @@ run_phase()
         exit 1
     fi
     cp "$work/build/rach2/kernel" "$base.kernel"
-    build/tests/system/harness --kernel "$base.kernel" \
+    RACH2_QEMU_ACCEL=tcg build/tests/system/harness --kernel "$base.kernel" \
         --append 'rach2.rescue rach2.nonet' --net hubport,id=net0,hubid=0 \
         --qemu-arg=-cpu --qemu-arg=max \
+        --qemu-arg=-icount --qemu-arg=shift=3,sleep=off \
         --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
         --qemu-arg=-audiodev --qemu-arg="wav,id=au0,timer-period=500,path=$base.wav" \
         --log "$base.console.log" --timeout 120 \
