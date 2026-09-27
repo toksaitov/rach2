@@ -114,7 +114,8 @@ static void nowrite_rows(void)
 
 /* A region that maps a file: a split gives the upper part the file's
  * later pages and a reference of its own; the pieces join again only
- * where the pages continue; a copy for fork takes references of its own,
+ * where the pages continue, and regions that meet in the address space
+ * with pages that do not continue stay apart; a copy for fork takes references of its own,
  * and the file waits for vm_file_reap after its last reference goes. */
 static void file_rows(void)
 {
@@ -144,6 +145,13 @@ static void file_rows(void)
      * gone, so it does not join the region above. */
     CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
     CHECK(m.count == 2 && m.vmas[0].end == 0x42000);
+    /* The file's page 9 at 0x42000 meets the region below in the address
+     * space but does not follow its page 4, nor lead to the page 6 above,
+     * so it stays a region of its own with a reference of its own. */
+    CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_DATA, &file, 9) == 0);
+    CHECK(m.count == 3 && m.vmas[1].start == 0x42000 && m.vmas[1].end == 0x43000 &&
+          m.vmas[1].pgoff == 9 && file.refs == 4);
+    CHECK(vm_remove(&m, 0x42000, 0x43000) == 0 && m.count == 2 && file.refs == 3);
     CHECK(vm_copy(&c, &m) == 0 && file.refs == 5);
     vm_free(&c);
     CHECK(file.refs == 3 && released == 0);
