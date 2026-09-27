@@ -10,7 +10,8 @@
  * after the first, a path costs no frame, and a count of frame allocations,
  * which `rach2.framefail` keeps, does not move with the paths a program
  * names. The working directory's path is here too: a short one is kept in
- * the record, and a longer one comes from the heap.
+ * the `fs_struct` the record points to, and a longer one comes from the
+ * heap.
  */
 
 struct process;
@@ -38,7 +39,9 @@ int proc_cwd_set(struct process *p, const char *path);
 /** Give `to` the working directory path of `from`, for fork: 0 or -ENOMEM. */
 int proc_cwd_copy(struct process *to, const struct process *from);
 
-/** Free a record's path pages and its long working directory path. */
+/** Free a record's path pages. The working directory's path, a long one in
+ * the heap included, belongs to the `fs_struct` and is freed with it when
+ * its last reference goes (`proc_fs_put`). */
 void path_bufs_free(struct process *p);
 
 #endif /* _PATHBUF_H_ */
