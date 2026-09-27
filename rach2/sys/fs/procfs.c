@@ -2066,11 +2066,13 @@ static struct mm *procfs_mem_mm(struct procfs_file *f)
  * which is the address, through the address space the open allowed
  * (`procfs_mem_mm`), and move the offset past them, as GDB reads and writes
  * the memory of a tracee with pread64 and pwrite64. A write reaches
- * read-only program text, as a tracer's does. The bytes done are returned,
- * -EIO when none could be at an address no region allows, and 0 once the
- * address space is not the process's. The address space is held for the
- * length of the call, which may sleep bringing a page in while the process
- * ends.
+ * read-only program text, as a tracer's does. A transfer goes no further
+ * than a page at a time, and all of a page or none of it is done, so one
+ * that meets an address no region allows has done every byte before it:
+ * those are returned and the offset moves past them. -EIO when none could
+ * be, and 0 once the address space is not the process's. The address space
+ * is held for the length of the call, which may sleep bringing a page in
+ * while the process ends.
  */
 static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
 {
@@ -2087,6 +2089,9 @@ static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t coun
     while (done < count) {
         uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
 
+        if (n > PAGE_SIZE - (addr & (PAGE_SIZE - 1u))) {
+            n = PAGE_SIZE - (addr & (PAGE_SIZE - 1u));
+        }
         if (write) {
             if (copy_from_user(buf, ubuf + done, n) != 0) {
                 rc = -EFAULT;

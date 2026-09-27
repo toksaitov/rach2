@@ -3,14 +3,15 @@
  *
  * A child that calls PTRACE_TRACEME and stops itself is reported stopped to its
  * parent. The parent reads and changes a word of the child's memory with
- * PEEKDATA and POKEDATA, and through /proc/PID/mem; reads the registers with
- * GETREGS and the floating-point state with GETFPXREGS; steps one instruction
- * with SINGLESTEP, which moves the instruction pointer; plants a breakpoint
- * with POKETEXT on a read-only text page, continues to it, finds the child
- * stopped by SIGTRAP just past it, puts the text back, moves the instruction
- * pointer back with SETREGS and continues. PTRACE_SYSCALL stops the child at
- * the entry and the exit of getpid, with the call's number in orig_eax and its
- * result in eax at the exit, and bit 0x80 on the stop signal with
+ * PEEKDATA and POKEDATA, and through /proc/PID/mem, where a read and a write
+ * that run from a page into a hole do the bytes before the hole; reads the
+ * registers with GETREGS and the floating-point state with GETFPXREGS; steps
+ * one instruction with SINGLESTEP, which moves the instruction pointer; plants
+ * a breakpoint with POKETEXT on a read-only text page, continues to it, finds
+ * the child stopped by SIGTRAP just past it, puts the text back, moves the
+ * instruction pointer back with SETREGS and continues. PTRACE_SYSCALL stops the
+ * child at the entry and the exit of getpid, with the call's number in orig_eax
+ * and its result in eax at the exit, and bit 0x80 on the stop signal with
  * PTRACE_O_TRACESYSGOOD. At an entry stop the tracer changes the call through
  * orig_eax: getpid made getppid returns the parent's id, and a write made -1 is
  * not run and returns the eax the tracer set. A tracee SIGKILL reaches at the
@@ -47,6 +48,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/times.h>
@@ -75,6 +77,28 @@ static int stopped_by(pid_t pid, int sig)
     return waitpid(pid, &status, 0) == pid && WIFSTOPPED(status) && WSTOPSIG(status) == sig;
 }
 
+/**
+ * A write and a read of 256 bytes through `path`, /proc/PID/mem of a child
+ * that has the page `page` and a hole after it, from 128 bytes before the
+ * hole: each does the 128 before the hole.
+ */
+static int into_hole(const char *path, char *page)
+{
+    char out[256], in[256];
+    off_t at = (off_t)(uintptr_t)(page + 4096 - 128);
+    int fd = open(path, O_RDWR);
+    int ok;
+
+    memset(out, 'b', sizeof(out));
+    memset(in, 0, sizeof(in));
+    ok = fd >= 0 && pwrite(fd, out, sizeof(out), at) == 128 &&
+         pread(fd, in, sizeof(in), at) == 128 && memcmp(in, out, 128) == 0;
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : fail("a transfer through /proc/PID/mem that runs into a hole");
+}
+
 static int memory_and_registers(void)
 {
     struct user_regs_struct regs, after;
@@ -82,7 +106,14 @@ static int memory_and_registers(void)
     char path[32];
     long word;
     int status, fd;
-    pid_t pid = fork();
+    char *page = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    pid_t pid;
+
+    if (page == MAP_FAILED || munmap(page + 4096, 4096) != 0) {
+        return fail("a page with a hole after it");
+    }
+    memset(page, 'a', 4096);
+    pid = fork();
 
     if (pid == 0) {
         ptrace(PTRACE_TRACEME, 0, NULL, NULL);
@@ -107,6 +138,9 @@ static int memory_and_registers(void)
         return fail("/proc/PID/mem");
     }
     close(fd);
+    if (into_hole(path, page) != 0) {
+        return 1;
+    }
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || regs.xcs != 0x1b) {
         return fail("GETREGS");
     }
