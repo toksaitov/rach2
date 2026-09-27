@@ -133,11 +133,13 @@ caller
 .Pq see Xr capget 2 ,
 or an effective user ID equal to the thread's real or effective one and
 a thread that is not privileged.
-Linux asks for its
-.Dv PTRACE_MODE_READ_REALCREDS
-check at each call: the caller's real user and group IDs equal to the
-thread's three, and a dumpable process, or
-.Dv CAP_SYS_PTRACE .
+Linux applies its
+.Xr ptrace 2
+access check with the caller's real IDs
+.Pq Dv PTRACE_MODE_READ_REALCREDS ,
+which compares them with every ID of the thread and asks for a dumpable
+process, where this kernel compares the effective user ID alone and
+does not.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;
