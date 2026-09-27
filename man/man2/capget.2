@@ -13,9 +13,7 @@
 .Ft long
 .Fn syscall SYS_capset "void *hdrp" "const void *datap"
 .Pp
-musl has no wrappers for the two calls; GNU libc declares them in
-.In sys/capability.h
-of libcap.
+musl has no wrappers for the two calls.
 .Sh DESCRIPTION
 Capabilities are the privileges Linux divides the power of user ID 0
 into.
