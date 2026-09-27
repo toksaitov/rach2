@@ -2,23 +2,21 @@
  * eventfd and epoll.
  *
  * An eventfd's read takes the whole counter and leaves it empty; with
- * EFD_SEMAPHORE each read takes one, and a counter of 3 is empty after three.
- * A nonblocking read of zero fails with EAGAIN, and a read of zero bytes and a
+ * EFD_SEMAPHORE each read takes one, and a counter of 3 is empty after three. A
+ * nonblocking read of zero fails with EAGAIN, and a read of zero bytes and a
  * write of the all-ones value with EINVAL. poll reports it readable once
- * written.
- * An epoll set reports a pipe with data, level-triggered, at every wait
- * while the data is there; edge-triggered only once until more arrives;
+ * written. An epoll set reports a pipe with data, level-triggered, at every
+ * wait while the data is there; edge-triggered only once until more arrives;
  * with EPOLLONESHOT once until EPOLL_CTL_MOD. Its data word comes back as it
- * was given. A wait on nothing ready ends at its timeout with 0; a
- * registration is removed by EPOLL_CTL_DEL and dropped when its descriptor
- * is closed; a regular file is refused with EPERM and a second add with
- * EEXIST. A child's write wakes a parent the child has seen asleep in an
- * epoll_wait with no timeout. The child stays alive until the parent answers,
- * so that only the write can end the wait, and an alarm bounds it. The
- * registration of a closed eventfd does not report the eventfd made next at its
- * number, which can be added. epoll_pwait2 takes a timeout of 2^31 seconds, and
- * refuses negative
- * seconds with EINVAL.
+ * was given. A wait on nothing ready ends at its timeout with 0; a registration
+ * is removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a
+ * regular file is refused with EPERM and a second add with EEXIST. A child's
+ * write wakes a parent the child has seen asleep in an epoll_wait with no
+ * timeout. The child stays alive until the parent answers, so that only the
+ * write can end the wait, and an alarm bounds it. A registration of no events
+ * is told of a hangup. The registration of a closed eventfd does not report the
+ * eventfd made next at its number, which can be added. epoll_pwait2 takes a
+ * timeout of 2^31 seconds, and refuses negative seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -259,6 +257,29 @@ static int sets(void)
     return 0;
 }
 
+/* A registration of no events is still told of a hangup. */
+static int hangup_no_events(void)
+{
+    struct epoll_event ev, out;
+    int ep = epoll_create1(0);
+    int p[2];
+
+    memset(&ev, 0, sizeof(ev));
+    if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
+        return fail("setup for a registration of no events");
+    }
+    if (wait_one(ep, 0, &out) != 0) {
+        return fail("a registration of no events was reported");
+    }
+    close(p[1]);
+    if (wait_one(ep, 0, &out) != 1 || !(out.events & EPOLLHUP)) {
+        return fail("a registration of no events was not told of the hangup");
+    }
+    close(p[0]);
+    close(ep);
+    return 0;
+}
+
 /* A registration of a closed eventfd is not the eventfd made next at its
  * number, whose description the kernel may put at the same address: a wait
  * does not report the new one for it, and the new one can be added. */
@@ -323,7 +344,7 @@ static int long_timeout(void)
 
 int main(void)
 {
-    if (counters() || sets() || number_reused() || long_timeout()) {
+    if (counters() || sets() || hangup_no_events() || number_reused() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

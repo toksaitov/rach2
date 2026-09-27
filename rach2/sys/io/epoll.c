@@ -46,6 +46,7 @@ struct epitem {
     uint32_t serial;
     uint32_t events;
     uint32_t data[2];
+    int off;       /* EPOLLONESHOT: reported, and off until EPOLL_CTL_MOD */
     uint32_t seen; /* EPOLLET: the events reported that have not gone since */
 };
 
@@ -71,8 +72,10 @@ static int item_names(const struct epitem *it, const fd_entry_t *e)
 }
 
 /* The events of `it` ready now, as a wait reports them, or 0; the wait queue
- * of its descriptor in `*wq`. A registration whose number names another open
- * file, or none, is marked for removal with `*gone`. */
+ * of its descriptor in `*wq`. EPOLLERR and EPOLLHUP are watched whatever
+ * the registration asked, none included, and nothing is while a one-shot
+ * registration is off. A registration whose number names another open file,
+ * or none, is marked for removal with `*gone`. */
 static uint32_t item_ready(struct epitem *it, struct wait_queue **wq, int *gone)
 {
     fd_entry_t *e = fd_get(current_proc->fds, it->fd);
@@ -81,7 +84,7 @@ static uint32_t item_ready(struct epitem *it, struct wait_queue **wq, int *gone)
 
     *wq = NULL;
     *gone = !item_names(it, e);
-    if (*gone || (it->events & EPOLL_EVENTS) == 0) {
+    if (*gone || it->off) {
         return 0;
     }
     ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;
@@ -140,7 +143,7 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
             sc->out[sc->n].data[1] = it->data[1];
             sc->n++;
             if (it->events & EPOLLONESHOT) {
-                it->events &= ~EPOLL_EVENTS;
+                it->off = 1;
             }
         }
         link = &it->next;
@@ -161,7 +164,7 @@ static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         struct wait_queue *ignored;
         uint32_t want = (it->events & EPOLL_EVENTS) | EPOLLERR | EPOLLHUP;
 
-        if (item_names(it, t) && t->ops != e->ops && (it->events & EPOLL_EVENTS) &&
+        if (item_names(it, t) && t->ops != e->ops && !it->off &&
             ((uint32_t)(uint16_t)poll_fd(t, (short)want, &ignored) & want)) {
             return (short)(events & 0x001);
         }
@@ -294,6 +297,7 @@ int32_t sys_epoll_ctl(struct isr_params *params)
     it->events = ev[0] & ~EPOLLWAKEUP;
     it->data[0] = ev[1];
     it->data[1] = ev[2];
+    it->off = 0;
     it->seen = 0;
     wq_wake_all(&ep->wq);
     return 0;

@@ -58,7 +58,7 @@ and the rest;
 .Dv EPOLLERR
 and
 .Dv EPOLLHUP
-are always reported.
+are always reported, for a registration of no events too.
 A registration is level-triggered: a wait reports it while its
 descriptor is ready.
 With
@@ -67,7 +67,7 @@ it is edge-triggered: a wait reports an event when it appears, and not
 again until it has gone and come back.
 With
 .Dv EPOLLONESHOT
-the first report disables it until an
+the first report disables it, errors and hangups included, until an
 .Dv EPOLL_CTL_MOD .
 .Dv EPOLLEXCLUSIVE
 is accepted at
