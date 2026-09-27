@@ -2,20 +2,20 @@
  * prctl(2)'s attributes of a process, read through musl.
  *
  * The program name starts as the exec's basename, is set cut to 15 bytes
- * and read back as 16 NUL-padded bytes, and shows in /proc/self/stat; an
- * exec after a longer name gives a shorter one padded with NULs. The
- * dumpable flag starts at 1 and takes 0 and 1 and nothing else, and a thread
- * that was already running sees the value another thread set. The
- * parent-death signal is kept and read back, a signal past 64 is refused, a
- * fork does not pass it on, and a grandchild that set it receives it when its
- * parent exits. In a dumpable child with the signal set, a change of the
- * effective uid alone clears the signal and the dumpable flag, and so does
- * a change of the effective gid alone in another such child. no_new_privs
- * takes 1 with its other arguments 0 and nothing else, a fork passes it on,
- * and under it the set-user-ID `/suidhelper.suid` runs as a plain program,
- * which that helper's `plain` mode checks: every id of its caller, user 1000,
- * and AT_SECURE 0. An option this kernel does not have is EINVAL, never
- * ENOSYS.
+ * and read back with its NUL, and shows in /proc/self/stat. A shorter name
+ * set after the long one, and the name an exec after it gives, read back as
+ * all 16 bytes, the name padded with NULs. The dumpable flag starts at 1 and
+ * takes 0 and 1 and nothing else, and a thread that was already running sees
+ * the value another thread set. The parent-death signal is kept and read back,
+ * a signal past 64 is refused, a fork does not pass it on, and a grandchild
+ * that set it receives it when its parent exits. In a dumpable child with the
+ * signal set, a change of the effective uid alone clears the signal and the
+ * dumpable flag, and so does a change of the effective gid alone in another
+ * such child. no_new_privs takes 1 with its other arguments 0 and nothing
+ * else, a fork passes it on, and under it the set-user-ID `/suidhelper.suid`
+ * runs as a plain program, which that helper's `plain` mode checks: every id
+ * of its caller, user 1000, and AT_SECURE 0. An option this kernel does not
+ * have is EINVAL, never ENOSYS.
  *
  * Prints "PRCTLMUSL OK" on success and "PRCTLMUSL FAIL (detail)" otherwise.
  */
@@ -61,8 +61,12 @@ static int in_child(int (*test)(void))
     return WEXITSTATUS(status);
 }
 
-/** The image `exec_name` runs: its name is its basename padded with NULs,
- * with nothing of the longer name its caller had left behind it. */
+/**
+ * Whether the program name reads back as "prctlmusl" padded with NULs to all
+ * 16 bytes, with nothing left of a longer name before it: 0, or 1. `names`
+ * checks with it the name it sets back after a longer one, and the image
+ * `exec_name` runs checks the name its exec gave it.
+ */
 static int padded_name(void)
 {
     static const char want[16] = "prctlmusl";
@@ -116,6 +120,9 @@ static int names(void)
     }
     if (prctl(PR_SET_NAME, "prctlmusl", 0, 0, 0) != 0) {
         return fail("the name could not be set back");
+    }
+    if (padded_name() != 0) {
+        return fail("a short name set after a longer one was not read back padded with NULs");
     }
     if (in_child(exec_name) != 0) {
         return fail("an exec left the end of a longer name after the program name");
