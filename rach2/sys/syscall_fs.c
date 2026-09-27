@@ -4005,6 +4005,36 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
  * /proc/<pid>/fd/<n> symlinks can stat their target when followed). */
 static int32_t fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
 
+/**
+ * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
+ * of process `pid`, when it is open and not closed; -ENOENT otherwise. The
+ * entry is copied, and a description of a file or a directory on a mount is
+ * held for the length of the stat, whose getattr may sleep while the
+ * process closes the descriptor and its release puts the node. The other
+ * kinds are read without a sleep.
+ */
+static int32_t synth_fd_stat(int pid, int fd, struct linux_stat64 *kst)
+{
+    process_t *p = get_process((uint32_t)pid);
+    fd_entry_t e;
+    int held;
+
+    if (!p || fd < 0 || fd >= fd_table_cap(p->fds) || p->fds->entries[fd].type == FD_TYPE_NONE ||
+        (p->fds->entries[fd].flags & FD_FLAG_CLOSING)) {
+        return -ENOENT;
+    }
+    e = p->fds->entries[fd];
+    held = (e.type == FD_TYPE_FILE || e.type == FD_TYPE_DIR) && e.ofd && e.ofd->vmnt;
+    if (held) {
+        fd_ofd_ref(e.ofd);
+    }
+    fstat_fill(&e, kst);
+    if (held) {
+        fd_ofd_unref(e.ofd);
+    }
+    return 0;
+}
+
 /* Stable /dev/pts inodes (distinct from devfs's): the directory, then one per
  * slave (so a slave's (st_dev, st_ino) identity is consistent for ttyname). */
 #define PTS_INO_DIR 3u
@@ -4169,14 +4199,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             return -ENOENT;
         }
         if (follow) {
-            /* A followed stat reports the target descriptor's identity. */
-            process_t *p = get_process((uint32_t)rpid);
-            if (p && vp->procfd >= 0 && vp->procfd < fd_table_cap(p->fds) &&
-                p->fds->entries[vp->procfd].type != FD_TYPE_NONE) {
-                fstat_fill(&p->fds->entries[vp->procfd], kst);
-                return 0;
-            }
-            return -ENOENT;
+            return synth_fd_stat(rpid, vp->procfd, kst);
         }
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */

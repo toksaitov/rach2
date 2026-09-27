@@ -445,6 +445,8 @@ as
 .Ql /memfd: Ns Ar NAME Ns Ql " (deleted)" ,
 as Linux names each.
 A followed link reports the descriptor's attributes.
+A descriptor that is closed has no link, also while its release waits
+for a call of another thread that is using it.
 .It Pa /proc/PID/exe
 A symbolic link to the program the process runs, by the path its
 .Xr execve 2

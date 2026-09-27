@@ -1,5 +1,6 @@
 /**
- * Check proc stat generation when every text allocation fails.
+ * Check proc stat generation when every text allocation fails, and the
+ * descriptor links of a process, which a closed descriptor has none of.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -41,6 +42,8 @@ extern void free(void *ptr);
 
 static process_t process;
 static struct tgroup group;
+static fd_table_t table;
+static fd_entry_t entries[1];
 static int refuse, allocations, failures;
 
 /** Record a failed invariant. */
@@ -78,6 +81,85 @@ void kfree(void *ptr)
     free(ptr);
 }
 
+/** The descriptor table's size, as fd.c reports it. */
+int fd_table_cap(const fd_table_t *t)
+{
+    return t ? t->cap : 0;
+}
+
+/** The link rows use a pipe end, which names no device, terminal, socket,
+ * file or directory. */
+const char *devfs_fd_name(struct fd_entry *e)
+{
+    (void)e;
+    return "null";
+}
+
+int pty_slave_index(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+uint32_t unix_inode(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
+int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
+{
+    (void)node;
+    (void)buf;
+    (void)size;
+    return -1;
+}
+
+krffs_node_t *krffs_resolve(const char *path)
+{
+    (void)path;
+    return NULL;
+}
+
+const struct vfs_type vfs_tmpfs_type = {0};
+
+const char *tmpfs_label(void *node)
+{
+    (void)node;
+    return NULL;
+}
+
+void synth_dir_path(int kind, int pid, char *out, int cap)
+{
+    (void)kind;
+    (void)pid;
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+}
+
+/** An open descriptor has its link, and one a close has marked, whose
+ * release waits for another thread's call or is under way, has none. */
+static void descriptor_links(void)
+{
+    char buf[32];
+
+    process.fds = &table;
+    table.entries = entries;
+    table.cap = 1;
+    entries[0].type = FD_TYPE_PIPE;
+    entries[0].flags = FD_FLAG_READ;
+    check(procfs_readlink_fd(7, 0, buf, (int)sizeof(buf)) == 8 &&
+              __builtin_memcmp(buf, "pipe:[0]", 8) == 0,
+          "an open descriptor has its link");
+    entries[0].flags |= FD_FLAG_CLOSING;
+    check(procfs_readlink_fd(7, 0, buf, (int)sizeof(buf)) == -ENOENT,
+          "a closed descriptor has no link");
+    entries[0].flags |= FD_FLAG_RELEASING;
+    check(procfs_readlink_fd(7, 0, buf, (int)sizeof(buf)) == -ENOENT,
+          "a descriptor being released has no link");
+}
+
 /** Exercise empty and partially allocated text, then normal generation. */
 int main(void)
 {
@@ -110,8 +192,9 @@ int main(void)
           "stat success terminates the complete snapshot");
     check(__builtin_memcmp(text.buf, "7 (test) R ", 11) == 0, "stat fields retain their order");
     kfree(text.buf);
+    descriptor_links();
     if (!failures) {
-        printf("procfs-hosttest: result: pass: stat allocation failure\n");
+        printf("procfs-hosttest: result: pass: stat allocation failure and descriptor links\n");
     }
     return failures != 0;
 }

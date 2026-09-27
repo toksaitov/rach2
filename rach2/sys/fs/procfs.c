@@ -921,7 +921,9 @@ static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
  * /dev/pts/N, /dev/ptmx, and the pipe:[N]/socket:[N]/anon_inode forms. musl
  * ttyname_r relies on the /dev/pts/N spelling. A socket names its own inode,
  * the same number `/proc/net/tcp` and `fstat` report, so one socket is one
- * thing to a program reading all three.
+ * thing to a program reading all three. A descriptor that is closed, whose
+ * release waits for another thread's call or is under way, has no link, as
+ * it has no entry in the directory's listing and no lookup finds it.
  *
  * @return the length written, -ENOENT, or -ENOMEM.
  */
@@ -943,7 +945,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         return -ENOENT;
     }
     e = &p->fds->entries[fd];
-    if (e->type == FD_TYPE_NONE) {
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING)) {
         return -ENOENT;
     }
 
