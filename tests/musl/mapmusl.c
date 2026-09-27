@@ -12,10 +12,13 @@
  * file opened read-only writable, and will a private one. Shared anonymous
  * memory ignores a raw mmap2's page offset, a file's offset whose last page
  * would not fit in 32 bits is EOVERFLOW, and a page of a file in memory
- * past 1 GiB is never backed. mremap grows a mapping in place or moves it
- * with its bytes, and shrinks one, and refuses an old length that would
- * wrap past the end of memory, leaving the mapping; a fixed mremap that
- * shrinks a mapping is held to RLIMIT_AS by what it leaves;
+ * past 1 GiB is never backed. mremap without MREMAP_MAYMOVE does not grow a
+ * mapping into the one after it, and with the flag moves the mapping with
+ * its bytes. A shrink in place keeps the bytes of the page it keeps and
+ * frees the two pages it cuts: MAP_FIXED_NOREPLACE maps them again, and the
+ * byte stored in them before reads as zero. mremap refuses an old length
+ * that would wrap past the end of memory, leaving the mapping; a fixed
+ * mremap that shrinks a mapping is held to RLIMIT_AS by what it leaves;
  * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages
  * again, and madvise and msync refuse a length that would round up to 0. A
  * write through /proc/self/mem to a read-only page a fork shared leaves the
@@ -263,7 +266,7 @@ static int offsets(void)
 static int remaps(void)
 {
     char *m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    char *blocker, *moved;
+    char *blocker, *moved, *cut;
 
     if (m == MAP_FAILED) {
         return fail("mmap for mremap");
@@ -285,6 +288,15 @@ static int remaps(void)
     if (mremap(moved, 3 * PAGE, PAGE, 0) != moved) {
         return fail("mremap did not shrink in place");
     }
+    if (moved[0] != 'r') {
+        return fail("the page a shrink kept lost its bytes");
+    }
+    cut = mmap(moved + PAGE, 2 * PAGE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
+               -1, 0);
+    if (cut != moved + PAGE || cut[2 * PAGE - 1] != 0) {
+        return fail("the pages a shrink cut were still mapped");
+    }
+    munmap(cut, 2 * PAGE);
     if (mremap(moved, 0xFFFFF000u, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, moved) != MAP_FAILED ||
         errno != EINVAL || moved[0] != 'r') {
         return fail("mremap took an old length that wraps past the end of memory");
