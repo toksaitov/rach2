@@ -63,7 +63,8 @@ echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
     rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked \
-    stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked; do
+    stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked \
+    utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -112,6 +113,27 @@ changes = {
                               "    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"),
     "access-walk-unlocked": ("vfs_resolve(0, name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, &ref, 0, 0);",
                              "vfs_resolve(0, name, VFS_WALK_REAL_IDS, &ref, 0, 0);"),
+    "utimensat-walk-unlocked": ("((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, &ref,",
+                                "((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), &ref,"),
+    "utimensat-fd-node-unlocked": ("    mnt = entry->ofd->vmnt;\n    vfs_ns_lock(mnt);\n"
+                                   "    if (entry->node && fd_node_check(entry) != 0) {\n"
+                                   "        rc = -EBADF;\n    } else {\n"
+                                   "        rc = utimes_node(mnt, entry->ofd->vnode, times);\n    }\n"
+                                   "    vfs_ns_unlock(mnt);\n    return rc;",
+                                   "    (void)mnt;\n    (void)rc;\n"
+                                   "    if (entry->node && fd_node_check(entry) != 0) {\n"
+                                   "        return -EBADF;\n    }\n"
+                                   "    return utimes_node(entry->ofd->vmnt, entry->ofd->vnode, times);"),
+    "open-reserves-after-walk": [
+        ("    fd = fd_alloc(current_proc->fds);\n    if (fd < 0) {\n        return -EMFILE;\n    }\nagain:\n",
+         "    if (!fd_can_alloc(current_proc->fds)) {\n        return -EMFILE;\n    }\n    fd = -1;\nagain:\n"),
+        ("                     &ref, 0, 0);\n    if (rc == -ENOENT && (flags & O_CREAT)) {",
+         "                     &ref, 0, 0);\n    if (rc == 0 && fd < 0) {\n"
+         "        fd = fd_alloc(current_proc->fds);\n        if (fd < 0) {\n"
+         "            vfs_walk_unlock(ref.mnt);\n            vfs_ref_release(&ref);\n"
+         "            return -EMFILE;\n        }\n    }\n"
+         "    if (rc == -ENOENT && (flags & O_CREAT)) {"),
+    ],
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
@@ -135,7 +157,9 @@ PY
         rename-locked-walk) message='a walk starts with no namespace lock held' ;;
         rename-relocked) message='the lookups, the count and the change run under one hold of the root' ;;
         chmod-walk-unlocked | chown-walk-unlocked | stat64-walk-unlocked | old-stat-walk-unlocked | \
-            fstatat-walk-unlocked | access-walk-unlocked) message='attributes use node identity' ;;
+            fstatat-walk-unlocked | access-walk-unlocked | utimensat-walk-unlocked | \
+            utimensat-fd-node-unlocked) message='attributes use node identity' ;;
+        open-reserves-after-walk) message='an open that truncates keeps the slot it reserved before its walk' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

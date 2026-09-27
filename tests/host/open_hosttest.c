@@ -265,6 +265,65 @@ int64_t rtc_boot_time(void)
     return 0;
 }
 
+/** No row opens a FIFO, a device node or a terminal, or checks a node of
+ * the KRFFS root by its path. */
+int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags)
+{
+    (void)e;
+    (void)mnt;
+    (void)ino;
+    (void)flags;
+    check(0, "unexpected FIFO open");
+    return -ENXIO;
+}
+
+const char *devfs_name_of(int block, uint32_t rdev)
+{
+    (void)block;
+    (void)rdev;
+    check(0, "unexpected device node open");
+    return 0;
+}
+
+int devfs_open(const char *name, int flags)
+{
+    (void)name;
+    (void)flags;
+    check(0, "unexpected device open");
+    return -ENXIO;
+}
+
+struct pty *pty_get(int index)
+{
+    (void)index;
+    check(0, "unexpected terminal lookup");
+    return 0;
+}
+
+int pty_open_slave(int index, int flags)
+{
+    (void)index;
+    (void)flags;
+    check(0, "unexpected terminal open");
+    return -ENXIO;
+}
+
+int krffs_node_path(krffs_node_t *n, char *buf, uint32_t size)
+{
+    (void)n;
+    (void)buf;
+    (void)size;
+    check(0, "unexpected root node path");
+    return -1;
+}
+
+krffs_node_t *krffs_resolve(const char *path)
+{
+    (void)path;
+    check(0, "unexpected root path resolution");
+    return 0;
+}
+
 /** A KRFFS node's inode number, which no row reads. */
 uint64_t krffs_node_ino(const krffs_node_t *node)
 {
@@ -891,6 +950,92 @@ static int model_open(void)
     return fd < 0 ? fd : open_install(&ref, fd, "target", 2);
 }
 
+/**
+ * A utimensat by path and one by descriptor of a file on a mounted type
+ * whose uses are serialised, which a write holding the mount's lock moves
+ * while the call waits for that lock: the path's walk takes the lock, and
+ * the descriptor's node is read once the lock is held, so each sets the
+ * times of the node the file is at.
+ */
+static void times_after_move(void)
+{
+    int round;
+    int rc;
+
+    for (round = 0; round < 2; round++) {
+        row_begin();
+        proc.euid = 0;
+        mount.type = &locked_type;
+        attr_row = 1;
+        if (round == 0) {
+            waiting = write_moves;
+            rc = utimes_path("/f", 0, NULL);
+        } else {
+            int fd = model_open();
+
+            waiting = write_moves;
+            rc = fd < 0 ? fd : utimes_fd(fd, NULL, 0);
+        }
+        check(rc == 0, "a utimensat of a file a write moves");
+        check(attrs == 1 && ns_depth == 0 && !waiting,
+              "the times are set once, with the mount's lock given back");
+        attr_row = 0;
+        waiting = 0;
+        ns_depth = 0;
+        mount.type = &mounted_type;
+        row_end();
+    }
+}
+
+/* The descriptor the other thread of `open_last_slot` was given, or -1. */
+static int other_slot;
+
+/** Another thread that shares the table asks for a descriptor while the
+ * open waits for the mount's lock in its walk. */
+static void other_takes_slot(void)
+{
+    current_proc = &other;
+    other_slot = fd_alloc(other.fds);
+    current_proc = &proc;
+}
+
+/**
+ * An open that truncates, in a table with one free slot, while another
+ * thread sharing the table asks for a descriptor as the open's walk waits
+ * for the mount's lock: the open reserved the slot before its walk, so the
+ * other thread finds the table full, and the open ends with that slot and
+ * the file truncated.
+ */
+static void open_last_slot(void)
+{
+    int fd;
+
+    row_begin();
+    proc.euid = 0;
+    proc.rlim[RLIM_NOFILE].cur = 4;
+    other.rlim[RLIM_NOFILE].cur = 4;
+    files.refs = 2;
+    other.fds = &files;
+    for (fd = 0; fd < 3; fd++) {
+        check(fd_alloc(proc.fds) == fd, "the table is full but for its last slot");
+        proc.fds->entries[fd].type = FD_TYPE_FILE;
+    }
+    mount.type = &locked_type;
+    installing = 3;
+    other_slot = -2;
+    waiting = other_takes_slot;
+    fd = do_open("f", 2 | O_TRUNC, 0);
+    check(other_slot == -1 && fd == 3 && truncates == 1,
+          "an open that truncates keeps the slot it reserved before its walk");
+    check(ns_depth == 0 && !waiting, "the open gives the mount's lock back");
+    installing = -1;
+    waiting = 0;
+    ns_depth = 0;
+    mount.type = &mounted_type;
+    proc.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    row_end();
+}
+
 /** While a close's release sleeps, its descriptor is closed to a lookup and
  * to a dup2 onto it. */
 static void release_closed(void)
@@ -1051,6 +1196,8 @@ int main(void)
     rename_over_installing();
     attrs_after_move();
     stats_after_move();
+    times_after_move();
+    open_last_slot();
     loop_handles();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");

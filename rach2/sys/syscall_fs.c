@@ -8500,6 +8500,30 @@ static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
 }
 
 /**
+ * utimensat on the file the absolute canonical path `path` names, a final
+ * symbolic link's own times under AT_SYMLINK_NOFOLLOW in `flags`, by the
+ * rules of `utimes_node`. A type that serialises its uses keeps the final
+ * mount's namespace lock from the resolution to the store, so a KRFFS write
+ * cannot move the file between the two.
+ */
+static int32_t utimes_path(const char *path, int flags, const struct kernel_timespec *times)
+{
+    struct vfs_ref ref;
+    int32_t rc;
+
+    rc = vfs_resolve(0, path,
+                     ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, &ref,
+                     0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = utimes_node(ref.mnt, ref.node, times);
+    vfs_walk_unlock(ref.mnt);
+    vfs_ref_release(&ref);
+    return rc;
+}
+
+/**
  * Update a file's access and modification timestamps (utimensat(2)).
  *
  * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is the pair
@@ -8509,10 +8533,8 @@ static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
  * (-EINVAL otherwise); with AT_FDCWD it is -EFAULT. Otherwise the path
  * resolves as openat's does, AT_SYMLINK_NOFOLLOW sets a final symbolic link's
  * own times, and with AT_EMPTY_PATH an empty path names the file `dirfd`
- * refers to, or the working directory for AT_FDCWD. A type that serialises
- * its uses keeps the final mount's namespace lock from the resolution to
- * the store, so a KRFFS write cannot move the file between the two. Returns
- * 0 or -errno.
+ * refers to, or the working directory for AT_FDCWD; `utimes_path` sets the
+ * times. Returns 0 or -errno.
  */
 int32_t sys_utimensat(isr_params_t *params)
 {
@@ -8522,7 +8544,6 @@ int32_t sys_utimensat(isr_params_t *params)
     int flags = (int)params->esi;
     struct kernel_timespec ktimes[2];
     const struct kernel_timespec *times = NULL;
-    struct vfs_ref ref;
     char *pathbuf;
     int empty = 0;
     int32_t rc;
@@ -8569,16 +8590,8 @@ int32_t sys_utimensat(isr_params_t *params)
             return rc;
         }
     }
-    rc = vfs_resolve(0, pathbuf,
-                     ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, &ref,
-                     0, 0);
+    rc = utimes_path(pathbuf, flags, times);
     path_buf_put(pathbuf);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = utimes_node(ref.mnt, ref.node, times);
-    vfs_walk_unlock(ref.mnt);
-    vfs_ref_release(&ref);
     return rc;
 }
 
