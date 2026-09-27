@@ -4,7 +4,7 @@ This directory builds the GNU system of milestone 54 (`dev-log/54-gnu/plan.md`):
 
 ## Sources
 
-`sources.txt` lists every tarball of the layer with its version, URL and SHA-256. Each digest was recorded after the upstream signature verified. The tarballs are not committed: GCC's is larger than GitHub accepts for one file, and together they are about twice the rest of the repository. `fetch.sh` downloads a tarball into `downloads/`, which Git ignores, once, and checks its digest every time it is used; a file with another digest is removed and refused. `fetch.sh` with no arguments fetches everything, and `fetch.sh --path NAME` prints one tarball's path.
+`sources.txt` lists every tarball of the layer with its version, URL and SHA-256, and its header says how each digest was verified: with gpgv, against an upstream signature that covers the release. For most projects that is the release's own signature; for Perl it is the signed CPAN checksum file of the uploader's directory, and for Vim, whose tag archive is not signed, the signed git tag. The tarballs are not committed: GCC's is larger than GitHub accepts for one file, and together they are about twice the rest of the repository. `fetch.sh` downloads a tarball into `downloads/`, which Git ignores, once, and checks its digest every time it is used; a file with another digest is removed and refused. `fetch.sh` with no arguments fetches everything, and `fetch.sh --path NAME` prints one tarball's path. GDB 18.1 is pinned for the phase that builds it.
 
 ## The toolchain
 
