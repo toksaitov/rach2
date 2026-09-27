@@ -202,6 +202,7 @@ modinfo 8 busybox-modutils
 modprobe 8 busybox-modutils
 more 1 busybox-util-linux
 mountpoint 1 busybox-util-linux
+mprotect 2 brk
 mpstat 1 busybox-procps
 mt 1 busybox-miscutils
 munmap 2 brk

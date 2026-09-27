@@ -11,8 +11,8 @@
  * Reset an address space to empty.
  *
  * The count goes to zero, the array it has is kept for reuse, and the heap,
- * brk, stack limit, and mmap cursor are zeroed. The space owns no mappings
- * until vm_insert adds them.
+ * brk and stack limit are zeroed. The space owns no mappings until vm_insert
+ * adds them.
  */
 void vm_init(vm_space_t *vm)
 {
@@ -20,7 +20,6 @@ void vm_init(vm_space_t *vm)
     vm->heap_start = 0;
     vm->brk = 0;
     vm->stack_limit = 0;
-    vm->mmap_top = 0;
 }
 
 void vm_free(vm_space_t *vm)
@@ -49,20 +48,24 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
     return 0;
 }
 
-/* Room for one more region, the array doubled when full; -1 at the limit
- * or with no memory. */
-static int vm_room(vm_space_t *vm)
+int vm_reserve(vm_space_t *vm, uint32_t n)
 {
     uint32_t cap;
     vma_t *grown;
 
-    if (vm->count < vm->cap) {
+    if (vm->cap - vm->count >= n) {
         return 0;
     }
-    if (vm->cap >= VMA_LIMIT) {
+    if (vm->count + n > VMA_LIMIT) {
         return -1;
     }
-    cap = vm->cap ? vm->cap * 2 : VMA_FIRST;
+    cap = vm->cap ? vm->cap : VMA_FIRST;
+    while (cap < vm->count + n) {
+        cap *= 2;
+    }
+    if (cap > VMA_LIMIT) {
+        cap = VMA_LIMIT;
+    }
     grown = kmalloc(sizeof(vma_t) * cap);
     if (!grown) {
         return -1;
@@ -76,6 +79,61 @@ static int vm_room(vm_space_t *vm)
     return 0;
 }
 
+/* The index of the first region that ends above addr: the region holding
+ * addr if there is one, else the first region above it, else count. */
+static uint32_t vm_lower(const vm_space_t *vm, uint32_t addr)
+{
+    uint32_t lo = 0;
+    uint32_t hi = vm->count;
+
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+
+        if (vm->vmas[mid].end <= addr) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/* Put r at index i, moving the regions from i up; the caller made room. */
+static void vm_insert_at(vm_space_t *vm, uint32_t i, const vma_t *r)
+{
+    if (i < vm->count) {
+        k_memmove(&vm->vmas[i + 1], &vm->vmas[i], sizeof(vma_t) * (vm->count - i));
+    }
+    vm->vmas[i] = *r;
+    vm->count++;
+}
+
+static void vm_delete_at(vm_space_t *vm, uint32_t i)
+{
+    if (i + 1 < vm->count) {
+        k_memmove(&vm->vmas[i], &vm->vmas[i + 1], sizeof(vma_t) * (vm->count - i - 1));
+    }
+    vm->count--;
+}
+
+/* Merge region i into its left neighbour when they touch and agree in kind
+ * and protection. */
+static void vm_merge_left(vm_space_t *vm, uint32_t i)
+{
+    vma_t *l;
+    vma_t *r;
+
+    if (i == 0 || i >= vm->count) {
+        return;
+    }
+    l = &vm->vmas[i - 1];
+    r = &vm->vmas[i];
+    if (l->end == r->start && l->prot == r->prot && l->type == r->type) {
+        l->end = r->end;
+        vm_delete_at(vm, i);
+    }
+}
+
 /**
  * Return the VMA containing addr, or NULL if none does.
  *
@@ -83,12 +141,10 @@ static int vm_room(vm_space_t *vm)
  */
 vma_t *vm_find(vm_space_t *vm, uint32_t addr)
 {
-    uint32_t i;
+    uint32_t i = vm_lower(vm, addr);
 
-    for (i = 0; i < vm->count; i++) {
-        if (addr >= vm->vmas[i].start && addr < vm->vmas[i].end) {
-            return &vm->vmas[i];
-        }
+    if (i < vm->count && vm->vmas[i].start <= addr) {
+        return &vm->vmas[i];
     }
     return NULL;
 }
@@ -98,16 +154,9 @@ vma_t *vm_find(vm_space_t *vm, uint32_t addr)
  */
 int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
 {
-    uint32_t i;
+    uint32_t i = vm_lower(vm, start);
 
-    for (i = 0; i < vm->count; i++) {
-        /* Two half-open ranges intersect unless one is entirely below the
-         * other. */
-        if (start < vm->vmas[i].end && end > vm->vmas[i].start) {
-            return 1;
-        }
-    }
-    return 0;
+    return i < vm->count && vm->vmas[i].start < end;
 }
 
 /**
@@ -115,11 +164,14 @@ int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end)
  *
  * The range must be non-empty, page-aligned at both ends, and clear of every
  * existing region, and the array must have room or be able to grow below
- * `VMA_LIMIT`. Returns 0 on success or -1 if any of those conditions fails.
+ * `VMA_LIMIT`. The region is merged with a neighbour it touches that has the
+ * same kind and protection. Returns 0 on success or -1 if any of those
+ * conditions fails.
  */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type)
 {
-    vma_t *slot;
+    vma_t r;
+    uint32_t i;
 
     if (start >= end) {
         return -1; /* empty or inverted range */
@@ -130,16 +182,18 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
     if (vm_overlaps(vm, start, end)) {
         return -1; /* would overlap an existing region */
     }
-    if (vm_room(vm) != 0) {
+    if (vm_reserve(vm, 1) != 0) {
         return -1; /* the limit, or no memory */
     }
 
-    slot = &vm->vmas[vm->count];
-    slot->start = start;
-    slot->end = end;
-    slot->prot = prot;
-    slot->type = type;
-    vm->count++;
+    r.start = start;
+    r.end = end;
+    r.prot = prot;
+    r.type = type;
+    i = vm_lower(vm, start);
+    vm_insert_at(vm, i, &r);
+    vm_merge_left(vm, i + 1);
+    vm_merge_left(vm, i);
     return 0;
 }
 
@@ -147,10 +201,9 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
  * Remove the span [start, end) from every region it touches.
  *
  * A fully covered region is dropped, a region clipped at one end is trimmed,
- * and a region straddling the span is split in two. VMA order is irrelevant,
- * so a dropped region's slot is filled from the end of the array. Returns 0,
- * or -1 if a split needs room and the array cannot grow; the regions handled
- * before it are already changed then.
+ * and a region straddling the span is split in two. Only the split needs a
+ * new entry, and it is made room for before anything changes, so a -1 leaves
+ * the regions as they were.
  */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
 {
@@ -160,47 +213,142 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
         return 0; /* nothing to remove */
     }
 
-    i = 0;
-    while (i < vm->count) {
+    i = vm_lower(vm, start);
+    if (i < vm->count && vm->vmas[i].start < start && vm->vmas[i].end > end) {
+        vma_t upper;
+
+        if (vm_reserve(vm, 1) != 0) {
+            return -1; /* no room for the upper half */
+        }
+        upper = vm->vmas[i];
+        upper.start = end;
+        vm->vmas[i].end = start;
+        vm_insert_at(vm, i + 1, &upper);
+        return 0;
+    }
+
+    while (i < vm->count && vm->vmas[i].start < end) {
         vma_t *r = &vm->vmas[i];
 
-        /* Skip regions that do not overlap [start, end). */
-        if (start >= r->end || end <= r->start) {
-            i++;
-            continue;
-        }
-
         if (start <= r->start && end >= r->end) {
-            /* Fully covered: drop it by swapping the last region into its slot
-             * (VMA order is irrelevant) and re-check that slot. */
-            *r = vm->vmas[vm->count - 1];
-            vm->count--;
-            continue;
-        }
-        if (start > r->start && end < r->end) {
-            /* Punched out of the middle: split into [r->start, start) and
-             * [end, r->end). */
-            if (vm_room(vm) != 0) {
-                return -1; /* no room for the upper half */
-            }
-            r = &vm->vmas[i]; /* the array may have moved */
-            vm->vmas[vm->count].start = end;
-            vm->vmas[vm->count].end = r->end;
-            vm->vmas[vm->count].prot = r->prot;
-            vm->vmas[vm->count].type = r->type;
-            vm->count++;
-            r->end = start;
-            i++;
-            continue;
-        }
-        if (start <= r->start) {
-            r->start = end; /* trim the low end */
+            vm_delete_at(vm, i);
+        } else if (start <= r->start) {
+            r->start = end; /* the low end goes; nothing above reaches back */
+            break;
         } else {
-            r->end = start; /* trim the high end */
+            r->end = start; /* the high end goes */
+            i++;
         }
-        i++;
     }
     return 0;
+}
+
+/**
+ * Give [start, end) a new protection.
+ *
+ * Every page of the range must lie in a region: a gap returns -1, as Linux's
+ * mprotect answers ENOMEM. The regions the range cuts are split at its two
+ * ends, which needs up to two entries, made room for first; then the pieces
+ * inside take `prot` and merge with neighbours that now match. Returns 0,
+ * -1 for a gap, or -2 when the split has no room; both errors leave the
+ * regions as they were.
+ */
+int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot)
+{
+    uint32_t i, at;
+
+    if (start >= end) {
+        return 0;
+    }
+    at = start;
+    for (i = vm_lower(vm, start); i < vm->count && at < end; i++) {
+        if (vm->vmas[i].start > at) {
+            break;
+        }
+        at = vm->vmas[i].end;
+    }
+    if (at < end) {
+        return -1;
+    }
+    if (vm_reserve(vm, 2) != 0) {
+        return -2;
+    }
+
+    i = vm_lower(vm, start);
+    if (vm->vmas[i].start < start) {
+        vma_t upper = vm->vmas[i];
+
+        upper.start = start;
+        vm->vmas[i].end = start;
+        vm_insert_at(vm, i + 1, &upper);
+        i++;
+    }
+    at = i;
+    while (i < vm->count && vm->vmas[i].start < end) {
+        if (vm->vmas[i].end > end) {
+            vma_t upper = vm->vmas[i];
+
+            upper.start = end;
+            vm->vmas[i].end = end;
+            vm_insert_at(vm, i + 1, &upper);
+        }
+        vm->vmas[i].prot = prot;
+        i++;
+    }
+    /* Merge from the top down so each merge leaves the lower indices where
+     * they were. */
+    if (i < vm->count) {
+        vm_merge_left(vm, i);
+    }
+    while (i > at) {
+        i--;
+        vm_merge_left(vm, i);
+    }
+    return 0;
+}
+
+uint32_t vm_find_free(const vm_space_t *vm, uint32_t len, uint32_t lo, uint32_t hi)
+{
+    uint32_t i, top, bottom;
+
+    if (len == 0 || hi <= lo || hi - lo < len) {
+        return 0;
+    }
+    i = vm_lower(vm, hi);
+    top = hi;
+    if (i < vm->count && vm->vmas[i].start < top) {
+        top = vm->vmas[i].start;
+    }
+    for (;;) {
+        bottom = lo;
+        if (i > 0 && vm->vmas[i - 1].end > bottom) {
+            bottom = vm->vmas[i - 1].end;
+        }
+        if (top > bottom && top - bottom >= len) {
+            return top - len;
+        }
+        if (i == 0) {
+            return 0;
+        }
+        i--;
+        if (vm->vmas[i].start <= lo) {
+            return 0;
+        }
+        top = vm->vmas[i].start;
+    }
+}
+
+uint32_t vm_covered(const vm_space_t *vm, uint32_t start, uint32_t end)
+{
+    uint32_t i, total = 0;
+
+    for (i = vm_lower(vm, start); i < vm->count && vm->vmas[i].start < end; i++) {
+        uint32_t s = vm->vmas[i].start > start ? vm->vmas[i].start : start;
+        uint32_t e = vm->vmas[i].end < end ? vm->vmas[i].end : end;
+
+        total += e - s;
+    }
+    return total;
 }
 
 /** Bytes the regions cover together, what RLIMIT_AS is measured against. */

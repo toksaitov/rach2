@@ -14,7 +14,7 @@ Before reserving module memory, `modlayout.c` rejects an empty or backwards rang
 
 `alloc_frame` and `alloc_user_page` search above the 32 MiB identity-mapped window first, then below it only while more than sixty-four frames remain free there. The last sixty-four are kept for block requests and the page cache, which use `alloc_kernel_frame` to take frames from the window's top downward; devices need buffers whose physical addresses the kernel can use directly. The allocator maintains free-frame counts as frames are taken and returned. For a process whose effective uid is not 0, `alloc_frame` and `alloc_user_page` refuse a frame when the total free count is at or below the reserve, one thirty-second of managed memory. A user-page refusal reports `user page: refused: the free frames are the reserve's`, followed by the pid. Root, hardware interrupt handlers, and the kernel outside any process may allocate from the reserve. When no eligible frame remains, the user-page allocator reports the boot reservations, kernel and user frame counts, shared frames, and the requesting pid; this report can occur while the last sixty-four window frames are still free. User frames return to the pool when their reference count reaches zero; page directories and private page tables return to the kernel heap.
 
-`mem_cache_target` defines a combined cache target of one quarter of managed memory. The buffer cache uses half that target as its capacity, with a minimum of sixteen buffers, and allocates each buffer's data frame when needed. The page cache also uses half the target as its capacity, with a minimum of one frame and a maximum of its 2048 slots, and allocates frames on demand. When the free count falls below one sixteenth of managed memory, `mem_balance` calls `mem_reclaim`, which reclaims buffers first and page-cache frames second until the free count reaches one eighth or neither cache can release more. Each cache reclaims empty or clean entries before writing dirty entries back; entries in use or whose writeback fails remain cached. Reclaim may sleep, so it runs from `fork`, `execve`, `mmap`, `brk`, and resolution of a missing user page, including a kernel prefault. It does not run from hardware interrupt handlers or the frame allocators, and the copy-on-write fault path does not call it. A failed allocation in `fork` returns `ENOMEM`. `mmap` returns `ENOMEM` when it cannot establish a region, and a failed `brk` leaves the break unchanged; both allocate user frames later, so success does not guarantee that a later page fault can be backed. An unresolved user-mode fault terminates the process with `SIGSEGV`; failure to prefault a user buffer returns `EFAULT`. There is no swap.
+`mem_cache_target` defines a combined cache target of one quarter of managed memory. The buffer cache uses half that target as its capacity, with a minimum of sixteen buffers, and allocates each buffer's data frame when needed. The page cache also uses half the target as its capacity, with a minimum of one frame and a maximum of its 2048 slots, and allocates frames on demand. When the free count falls below one sixteenth of managed memory, `mem_balance` calls `mem_reclaim`, which reclaims buffers first and page-cache frames second until the free count reaches one eighth or neither cache can release more. Each cache reclaims empty or clean entries before writing dirty entries back; entries in use or whose writeback fails remain cached. Reclaim may sleep, so it runs from `fork`, `execve`, `mmap`, `brk`, and resolution of a missing user page, including a kernel prefault. The copy-on-write fault path calls it before it copies a page. It does not run from hardware interrupt handlers or the frame allocators. A failed allocation in `fork` returns `ENOMEM`. `mmap` returns `ENOMEM` when it cannot establish a region, and a failed `brk` leaves the break unchanged; both allocate user frames later, so success does not guarantee that a later page fault can be backed. An unresolved user-mode fault terminates the process with `SIGSEGV`; failure to prefault a user buffer returns `EFAULT`. There is no swap.
 
 ## Page tables and address spaces
 
@@ -26,20 +26,21 @@ User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not includin
 
 ## Virtual memory areas
 
-Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The array starts with 16 entries and doubles as it fills, up to 65536. This limit serves the same purpose as Linux's `max_map_count`: a mapping that needs another VMA is refused. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
+Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The array starts with 16 entries and doubles as it fills, up to 65536. It is kept sorted by address, a lookup is a binary search, and neighbours of the same type and protection merge. This limit serves the same purpose as Linux's `max_map_count`: a mapping that needs another VMA is refused. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
 
 * `VM_CODE` and `VM_DATA` describe loaded ELF segments.
-* `VM_HEAP` describes the non-empty part of the `brk` heap.
+* `VM_HEAP` describes the non-empty part of the `brk` heap, one VMA or several when `mprotect` has divided it.
 * `VM_STACK` starts with one page and may grow downward by at most 8 MiB.
 * `VM_ANON` describes an anonymous `mmap2` allocation.
 
-`execve` loads ELF pages eagerly, then creates one VMA per loadable segment with the segment's permissions. It records an empty heap at the image end, places the initial stack at `0xBFFFF000`, and starts anonymous allocation below `VM_MMAP_BASE` (`0xB0000000`). The heap receives a VMA on its first non-empty growth. `fork` copies the complete `vm_space_t`.
+`execve` loads ELF pages eagerly, then creates one VMA per loadable segment with the segment's permissions. It records an empty heap at the image end, places the initial stack at `0xBFFFF000`, and places anonymous mappings below `VM_MMAP_BASE` (`0xB0000000`). The heap receives a VMA on its first non-empty growth. `fork` copies the complete `vm_space_t`.
 
 The syscall contracts are:
 
-* `brk` (45) grows or shrinks one heap range. Growth reserves virtual addresses only; pages are allocated on first access. Shrinking releases present frames. A collision or out-of-range request returns the old break.
-* `mmap2` (192) requires `MAP_ANONYMOUS`, rejects `MAP_FIXED`, ignores the address hint, file descriptor, and page offset, and allocates downward from `mmap_top`. File-backed mappings return `-ENOSYS`. The implementation does not validate `MAP_PRIVATE` against `MAP_SHARED`; every accepted mapping receives the private copy-on-write behavior used by fork.
+* `brk` (45) grows or shrinks the heap range. Growth adds a read-write `VM_HEAP` region above the old top, which merges with a read-write top piece, and reserves virtual addresses only; pages are allocated on first access. Shrinking removes the range above the new top and releases its present frames. A collision or out-of-range request returns the old break.
+* `mmap2` (192) requires `MAP_ANONYMOUS` and one of `MAP_SHARED`, `MAP_PRIVATE` and `MAP_SHARED_VALIDATE`, and ignores the file descriptor and page offset; file-backed mappings return `-ENOSYS`. Every accepted mapping receives the private copy-on-write behavior used by fork, a shared one included. `MAP_FIXED` replaces what its range held, after making room for the entries the change needs, so a refusal leaves the old mapping; `MAP_FIXED_NOREPLACE` refuses a range in use with `EEXIST`. Otherwise a page-aligned hint whose range is free below the stack limit is used, and without one `vm_find_free` takes the highest free range below `VM_MMAP_BASE` and above the heap's top, so a range `munmap` freed is used again.
 * `munmap` (91) removes full VMAs, trims either end, or splits a VMA, then releases every present frame in the range. A never-faulted page has no frame to release.
+* `mprotect` (125) requires a page-aligned address and a range that VMAs cover without a gap (`ENOMEM` otherwise). `vm_protect` splits the VMAs at the range's ends, sets the new protection and merges the pieces with matching neighbours; `paging_protect_range` then changes the resident pages. A page made inaccessible stays present with its frame, supervisor-only and marked `PTE_NONE`, so fork and teardown still own it. A page made writable gets the write bit only when this process alone holds its frame, and becomes copy-on-write otherwise.
 
 VMA allocation does not reserve physical frames. If a later user fault cannot allocate a frame, the unresolved fault terminates that process with `SIGSEGV`. A kernel prefault reports failure to its caller instead.
 
@@ -47,19 +48,18 @@ VMA allocation does not reserve physical frames. If a later user fault cannot al
 
 The vector 14 handler reads CR2 and the x86 error code, then handles these cases in order:
 
-1. A write protection fault on a present user COW page calls `cow_fault`.
-2. A user-range fault for a live process calls `vm_resolve` for an existing VMA or legal stack growth.
-3. A supervisor fault inside the backed page-cache window calls `pc_fault`.
-4. Any remaining user-mode fault terminates the process with `SIGSEGV`; a real init death halts the kernel.
-5. Any remaining supervisor fault panics the kernel.
+1. A user-range fault for a live process calls `vm_resolve` for an existing VMA or legal stack growth.
+2. A supervisor fault inside the backed page-cache window calls `pc_fault`.
+3. Any remaining user-mode fault terminates the process with `SIGSEGV`; a real init death halts the kernel.
+4. Any remaining supervisor fault panics the kernel.
 
-`vm_resolve` checks the VMA permissions. A new heap, stack, or anonymous page receives a zeroed frame. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
+`vm_resolve` checks the VMA permissions first, so a write to a present copy-on-write page reaches `cow_fault` only when its VMA is writable; a VMA `mprotect` made read-only keeps its shared pages read-only. A new heap, stack, or anonymous page receives a zeroed frame. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
 
 Stack growth extends the stack VMA down to the faulting page when the page is at or above `stack_limit`. Growth fails if it would cross another VMA. Pages between the old and new start remain unallocated until touched.
 
 ## Copy-on-write fork
 
-`fork` maps each present user frame into the child. Writable pages become read-only and receive `PTE_COW` in both processes; the frame reference count increases. Genuine read-only pages keep their existing flags and are not marked COW.
+`fork` maps each present user frame into the child. Writable pages become read-only and receive `PTE_COW` in both processes; the frame reference count increases. Genuine read-only pages, and the `PTE_NONE` pages of an inaccessible range, keep their existing flags and are not marked COW.
 
 On the first write, `cow_fault` allocates and copies a frame when another process still references the old one. If the writer is the sole owner, it removes `PTE_COW` and restores write permission without copying. Exit, `execve`, `munmap`, and failed-fork cleanup decrement the same reference counts.
 
@@ -87,7 +87,7 @@ Clock eviction writes a dirty victim before reuse. Writeback pins the slot and f
 * `heap.*` implements the boot-time physical allocator.
 * `modlayout.*` validates Multiboot module placement.
 * `paging.*` owns page tables, frame references, faults, demand paging, COW, and kernel mappings.
-* `vm.*` implements VMA lookup, insertion, removal, overlap checks, and stack growth.
+* `vm.*` implements VMA lookup, insertion, removal, protection changes, the free-range search, overlap checks, and stack growth.
 * `usercopy.*` implements the user-pointer boundary.
 * `pagecache.*` implements the disk window, residency, eviction, and writeback.
 

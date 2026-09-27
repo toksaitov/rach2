@@ -5,7 +5,9 @@
  *
  * Exercises insert with overlap and alignment rejection, find by address,
  * overlap detection, the four munmap cases (full cover, left trim, right
- * trim, middle split), and the array's growth past what it starts with.
+ * trim, middle split), the array's growth past what it starts with, the
+ * merging of neighbours, mprotect's splits and merges and its refusal of a
+ * gap, the search for a free range, and the bytes a range covers.
  * Returns the failed-check count (0 == all passed). Run natively under
  * AddressSanitizer/UBSan.
  */
@@ -35,6 +37,23 @@ void *k_memcpy(void *dest, const void *src, size_t n)
 
     while (n-- > 0) {
         *d++ = *s++;
+    }
+    return dest;
+}
+
+void *k_memmove(void *dest, const void *src, size_t n)
+{
+    unsigned char *d = dest;
+    const unsigned char *s = src;
+
+    if (d < s) {
+        while (n-- > 0) {
+            *d++ = *s++;
+        }
+    } else {
+        while (n-- > 0) {
+            d[n] = s[n];
+        }
     }
     return dest;
 }
@@ -206,6 +225,72 @@ int main(void)
         vm_free(&g);
     }
     vm_free(&vm);
+
+    /* Neighbours of one kind and protection merge; the array stays sorted. */
+    {
+        vm_space_t m = {0};
+
+        vm_init(&m);
+        CHECK(vm_insert(&m, 0x30000, 0x31000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&m, 0x32000, 0x33000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&m, 0x31000, 0x32000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(m.count == 1 && m.vmas[0].start == 0x30000 && m.vmas[0].end == 0x33000);
+        CHECK(vm_insert(&m, 0x33000, 0x34000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+        CHECK(vm_insert(&m, 0x20000, 0x21000, VM_PROT_READ, VM_HEAP) == 0);
+        CHECK(m.count == 3 && m.vmas[0].start == 0x20000 && m.vmas[2].start == 0x33000);
+        vm_free(&m);
+    }
+
+    /* mprotect: a cut in the middle makes three regions, a cut back merges
+     * them, a range across two regions changes both, and a gap is refused
+     * with nothing changed. */
+    {
+        vm_space_t p = {0};
+        vma_t *r;
+
+        vm_init(&p);
+        CHECK(vm_insert(&p, 0x50000, 0x58000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
+        CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ) == 0);
+        CHECK(p.count == 3);
+        r = vm_find(&p, 0x52000);
+        CHECK(r != NULL && r->start == 0x52000 && r->end == 0x54000 && r->prot == VM_PROT_READ);
+        r = vm_find(&p, 0x54000);
+        CHECK(r != NULL && r->start == 0x54000 && r->prot == (VM_PROT_READ | VM_PROT_WRITE));
+        CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+        CHECK(p.count == 1 && p.vmas[0].start == 0x50000 && p.vmas[0].end == 0x58000);
+        CHECK(vm_protect(&p, 0x57000, 0x58000, 0) == 0);
+        CHECK(vm_insert(&p, 0x58000, 0x5A000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_protect(&p, 0x56000, 0x59000, VM_PROT_READ) == 0);
+        r = vm_find(&p, 0x56000);
+        CHECK(r != NULL && r->start == 0x56000 && r->end == 0x5A000 && r->prot == VM_PROT_READ);
+        CHECK(vm_insert(&p, 0x5B000, 0x5C000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_protect(&p, 0x59000, 0x5C000, 0) == -1); /* 0x5A000 is a gap */
+        r = vm_find(&p, 0x59000);
+        CHECK(r != NULL && r->prot == VM_PROT_READ);
+        CHECK(vm_protect(&p, 0x40000, 0x41000, 0) == -1); /* nothing mapped */
+        vm_free(&p);
+    }
+
+    /* The free range: the highest that fits below hi and at or above lo, a
+     * hole left by a removal used again, and none when nothing fits. */
+    {
+        vm_space_t f = {0};
+
+        vm_init(&f);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1E000);
+        CHECK(vm_insert(&f, 0x1C000, 0x20000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_insert(&f, 0x14000, 0x18000, VM_PROT_READ, VM_HEAP) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x20000) == 0x1A000);
+        CHECK(vm_find_free(&f, 5 * PG, 0x10000, 0x20000) == 0);
+        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x18000);
+        CHECK(vm_insert(&f, 0x18000, 0x19000, VM_PROT_READ, VM_ANON) == 0);
+        CHECK(vm_find_free(&f, 4 * PG, 0x10000, 0x20000) == 0x10000);
+        CHECK(vm_remove(&f, 0x18000, 0x19000) == 0);
+        CHECK(vm_remove(&f, 0x1D000, 0x1F000) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x19000, 0x20000) == 0x1D000);
+        CHECK(vm_covered(&f, 0x13000, 0x1E000) == 4 * PG + PG);
+        vm_free(&f);
+    }
 
     return (fails > 100) ? 100 : fails;
 }

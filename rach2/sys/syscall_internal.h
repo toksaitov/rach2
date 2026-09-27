@@ -283,4 +283,6 @@ int32_t sys_mmap2(isr_params_t *params);
 
 int32_t sys_munmap(isr_params_t *params);
 
+int32_t sys_mprotect(isr_params_t *params);
+
 #endif

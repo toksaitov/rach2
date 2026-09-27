@@ -13,6 +13,10 @@
  * demand-paging fault handler consults it to decide whether a fault is a page
  * to lazily allocate, a stack to grow, or a segfault. See the Readme.
  *
+ * The array is kept sorted by address and neighbours of the same kind and
+ * protection are merged, so a lookup is a binary search and the free ranges
+ * are the gaps between consecutive entries.
+ *
  * vm.c is pure logic (no kernel globals), so the host test exercises the
  * find/insert/remove/overlap operations directly.
  */
@@ -32,8 +36,8 @@
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u
 
-/* Anonymous mmap regions are placed by bumping down from here (well below the
- * stack-growth window, well above the heap), mirroring a Linux mmap_base. */
+/* A mapping without a usable hint goes in the highest free range below here
+ * and above the heap, as a Linux mmap_base places it. */
 #define VM_MMAP_BASE 0xB0000000u
 
 /* Region protection bits (mirror the PROT_* / page-table permission flags). */
@@ -67,7 +71,6 @@ typedef struct vm_space {
     uint32_t heap_start;  /* initial program break (base of the heap VMA) */
     uint32_t brk;         /* current program break (top of the heap VMA)  */
     uint32_t stack_limit; /* lowest address the stack VMA may grow down to */
-    uint32_t mmap_top;    /* next anonymous mmap is placed just below here */
 } vm_space_t;
 
 /* Reset an address space to empty; the array it has, if any, is kept. */
@@ -89,8 +92,25 @@ int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end);
  * which includes the limit reached and a heap with no room to grow. */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type);
 
-/** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room. */
+/** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room,
+ * in which case nothing has changed. */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
+
+/** Give [start, end), which regions must cover without a gap, the protection
+ * `prot`; 0 ok, -1 for a gap and -2 when a split has no room, both with
+ * nothing changed. */
+int vm_protect(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot);
+
+/** Make room for `n` more regions now, so the changes after cannot fail;
+ * 0 ok, -1 at the limit or with no memory. */
+int vm_reserve(vm_space_t *vm, uint32_t n);
+
+/** The start of the highest free range of `len` bytes inside [lo, hi), or 0
+ * when there is none. */
+uint32_t vm_find_free(const vm_space_t *vm, uint32_t len, uint32_t lo, uint32_t hi);
+
+/** Bytes of [start, end) that regions cover. */
+uint32_t vm_covered(const vm_space_t *vm, uint32_t start, uint32_t end);
 
 /** Bytes the regions cover together: what RLIMIT_AS is measured against. */
 uint32_t vm_total(const vm_space_t *vm);

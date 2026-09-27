@@ -410,10 +410,6 @@ int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_t
     vm->heap_start = img->image_end;
     vm->brk = img->image_end;
 
-    /* Anonymous mmaps are bumped down from a fixed base between heap and
-     * stack. */
-    vm->mmap_top = VM_MMAP_BASE;
-
     /* The stack: one page mapped at the top, growable downward to
      * stack_limit. */
     vm->stack_limit = stack_top - stack_growth;

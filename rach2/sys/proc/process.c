@@ -16,7 +16,7 @@
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
 #define PROC_OFF_TLS_BASE     148u
-#define PROC_OFF_PAGE_DIR     2128u
+#define PROC_OFF_PAGE_DIR     2112u
 #if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
 typedef char process_offsets_fit
     [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==

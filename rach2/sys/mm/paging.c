@@ -604,11 +604,12 @@ static int cow_fault(uint32_t addr)
 /**
  * Resolve a page fault, or end what caused it.
  *
- * Tried in order. A write that faulted on a present page in user space of a
- * live user process may be a page shared by a fork, and goes to `cow_fault`.
- * Any fault at a user-space address of a live user process goes to
- * `vm_resolve`, keyed on the address and not on the processor's mode, so a
- * kernel touch of a lazy user page resolves too. A supervisor fault inside
+ * Tried in order. Any fault at a user-space address of a live user process
+ * goes to `vm_resolve`, keyed on the address and not on the processor's mode,
+ * so a kernel touch of a lazy user page resolves too. A write to a page shared
+ * by a fork reaches `cow_fault` through it, and only once the region's
+ * protection allows the write: a region mprotect made read-only keeps its
+ * copy-on-write pages read-only. A supervisor fault inside
  * the page-cache window is filled by `pc_fault`, whose polled read is safe
  * with interrupts off; a fault past the backed size, or one the fill cannot
  * serve, panics. The window is a kernel-only mapping, so a user-mode fault
@@ -635,12 +636,6 @@ static void _page_fault_handler(isr_params_t *params)
     user_mode = (params->error_code & PF_ERR_USER) != 0;
     have_user_proc = (current_proc != NULL && current_proc->cr3 != 0);
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
-
-    if (have_user_proc && write && in_user_range && (params->error_code & PF_ERR_PRESENT)) {
-        if (cow_fault(fault_address)) {
-            return; /* page is now private + writable; retry the instruction */
-        }
-    }
 
     if (have_user_proc && in_user_range) {
         if (vm_resolve(fault_address, write)) {
@@ -1392,8 +1387,9 @@ void free_user_pages(page_dir_t *dir)
             uint32_t virt_addr;
             uint32_t phys_addr;
 
-            /* Present is bit 0 (0x1), U/S is bit 2 (0x4). */
-            if (!(pte & 0x1) || !(pte & 0x4)) {
+            /* Present is bit 0 (0x1), U/S is bit 2 (0x4); a PROT_NONE page
+               is a user page without U/S. */
+            if (!(pte & 0x1) || !(pte & (0x4 | PTE_NONE))) {
                 continue;
             }
 
@@ -1463,6 +1459,50 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
         phys = pte & ~0xFFF;
         frame_unref(phys);
         table->pages[page_index] = 0;
+        if (dir == _curr_dir) {
+            paging_flush_tlb(addr);
+        }
+    }
+}
+
+void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot)
+{
+    uint32_t addr;
+
+    for (addr = start; addr < end; addr += PAGE_SIZE) {
+        uint32_t page_num = addr / PAGE_SIZE;
+        uint32_t table_index = page_num / 1024;
+        uint32_t page_index = page_num % 1024;
+        page_table_t *table;
+        uint32_t pte, frame;
+
+        if (table_index >= 1024) {
+            break;
+        }
+        table = dir->logical_page_tables[table_index];
+        if (!table || table == _kernel_dir->logical_page_tables[table_index]) {
+            continue;
+        }
+        pte = table->pages[page_index];
+        if (!(pte & 0x1)) {
+            continue; /* not resident: the fault reads the region's protection */
+        }
+        if (!(prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
+            pte = (pte & ~0x6u) | PTE_NONE;
+        } else {
+            pte = (pte & ~PTE_NONE) | 0x4u;
+            frame = (pte & ~0xFFFu) / PAGE_SIZE;
+            if (!(prot & VM_PROT_WRITE)) {
+                pte &= ~0x2u;
+            } else if (pte & PTE_COW) {
+                /* Still shared: the first write copies or takes it. */
+            } else if (frame < _frames_number && _frames[frame] > 1) {
+                pte = (pte & ~0x2u) | PTE_COW;
+            } else {
+                pte |= 0x2u;
+            }
+        }
+        table->pages[page_index] = pte;
         if (dir == _curr_dir) {
             paging_flush_tlb(addr);
         }

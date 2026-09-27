@@ -1,11 +1,12 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
 .Nm brk ,
 .Nm mmap2 ,
-.Nm munmap
-.Nd change the heap and anonymous memory mappings
+.Nm munmap ,
+.Nm mprotect
+.Nd change the heap, anonymous memory mappings and their protection
 .Sh SYNOPSIS
 .Fd "#define _BSD_SOURCE"
 .In unistd.h
@@ -19,6 +20,8 @@
 .Fn mmap "void *addr" "size_t length" "int prot" "int flags" "int fd" "off_t offset"
 .Ft int
 .Fn munmap "void *addr" "size_t length"
+.Ft int
+.Fn mprotect "void *addr" "size_t length" "int prot"
 .Sh DESCRIPTION
 These kernel calls change the process's virtual memory areas (VMAs).
 Pages are 4096 bytes.
@@ -33,10 +36,14 @@ The raw
 call, number 45, takes the requested break in EBX and returns the
 resulting break.
 A zero request queries the current break.
-The heap occupies one writable VMA from the heap base to the break
-rounded up to a page boundary.
-Growth extends that area; shrinkage releases the pages above the new
-rounded boundary.
+The heap is the range from the heap base to the break rounded up to a
+page boundary.
+Growth adds a read-write VMA above the old top, which merges with a
+read-write VMA below it; shrinkage removes the range above the new
+rounded boundary and releases its pages.
+.Fn mprotect
+may divide the heap into VMAs of different protection; growth and
+shrinkage work on the range all the same.
 .Pp
 A request below the heap base, above the stack limit, overlapping
 another area, exceeding
@@ -72,23 +79,37 @@ The offset in the public
 interface is in bytes; musl divides it by 4096.
 .Pp
 The kernel requires
-.Dv MAP_ANONYMOUS
-and rejects
-.Dv MAP_FIXED .
-File mappings are not implemented.
-The address hint, file descriptor and page offset are ignored.
+.Dv MAP_ANONYMOUS ;
+file mappings are not implemented, and the file descriptor and page
+offset are ignored.
+The mapping type in the low four bits must be
+.Dv MAP_SHARED ,
 .Dv MAP_PRIVATE
-and
+or
+.Dv MAP_SHARED_VALIDATE .
+Every accepted mapping has private copy-on-write behavior across fork,
 .Dv MAP_SHARED
-are not checked; every accepted mapping has private copy-on-write
-behavior across fork.
+included.
 Other flag bits are ignored.
 .Pp
 .Fa length
 is rounded up to a page boundary.
-The kernel allocates downward from the process's mapping top, refusing
-to cross the heap or overlap another area.
-Unmapping does not raise that allocation top.
+With
+.Dv MAP_FIXED ,
+the mapping is placed at the page-aligned
+.Fa addr
+and replaces whatever that range held; with
+.Dv MAP_FIXED_NOREPLACE ,
+a range already in use is refused.
+Otherwise a page-aligned
+.Fa addr
+whose range is free and ends below the stack's growth limit is used as
+it is, and without such a hint the kernel takes the highest free range
+below
+.Ql 0xB0000000
+and above the heap's top, so the ranges
+.Fn munmap
+frees are used again.
 .Pp
 .Fa prot
 uses
@@ -99,9 +120,9 @@ and
 Write permission also grants read permission on this i386 kernel.
 .Dv PROT_NONE
 (zero) denies access.
-Execute permission is recorded but is not checked separately from
-read permission on a fault.
-Other protection bits are ignored.
+Execute permission also grants read permission and is not checked
+separately from it on a fault.
+Other protection bits are refused.
 .Ss Unmapping
 .Fn munmap ,
 kernel call 91, removes the range beginning at the page-aligned
@@ -113,6 +134,27 @@ The range must not wrap or extend beyond
 The call removes, trims or splits overlapping VMAs and frees their
 resident frames in the range.
 Unmapped pages and pages never accessed require no frame release.
+.Ss Protection
+.Fn mprotect ,
+kernel call 125, gives the range beginning at the page-aligned
+.Fa addr
+the protection
+.Fa prot ,
+with the bits and meanings
+.Fn mmap
+uses.
+The end is rounded up to a page boundary, and a zero
+.Fa length
+changes nothing.
+Every page of the range must belong to a VMA.
+The call splits the VMAs at the ends of the range, sets the protection
+of the pieces inside, merges pieces that now match their neighbors,
+and then changes the pages already resident.
+A page made inaccessible keeps its frame and contents.
+Write permission is granted in place on a page the process alone
+holds; a page it shares with a forked relative becomes copy-on-write,
+so the first write copies it.
+A read-only VMA refuses writes even to such a page.
 .Ss Limits
 The soft
 .Dv RLIMIT_AS
@@ -122,7 +164,9 @@ The VMA array grows as needed to at most
 (65536) entries, including the program, heap and stack areas.
 Splitting an area for
 .Fn munmap
-can require an additional entry.
+can require an additional entry, and
+.Fn mprotect
+up to two.
 .Sh RETURN VALUES
 The raw
 .Fn brk
@@ -141,7 +185,9 @@ returns the mapped address, or
 and sets
 .Va errno .
 .Fn munmap
-returns 0, or -1 and sets
+and
+.Fn mprotect
+return 0, or -1 and set
 .Va errno .
 The raw mapping calls return negative error numbers on failure.
 .Sh EXAMPLES
@@ -156,17 +202,38 @@ An unsuccessful VMA insertion by
 .Nm mmap2
 or split by
 .Fn munmap
+or
+.Fn mprotect
 reports once per process:
 .Dl vm: OPERATION: pid PID (NAME) has used all N of its mappings
 This message can also result from failure to allocate VMA storage,
 rather than reaching the count limit.
 .Sh ERRORS
 .Bl -tag -width ENOMEM
+.It Er EEXIST
+.Dv MAP_FIXED_NOREPLACE
+names a range in use.
 .It Er EINVAL
+For
+.Fn mmap ,
 .Fa length
-is zero.
+is zero, the mapping type is not one of the three above, or
+.Fa prot
+has an unknown bit;
+with
+.Dv MAP_FIXED ,
+.Fa addr
+is not page-aligned.
+For
+.Fn mprotect ,
+.Fa addr
+is not page-aligned or
+.Fa prot
+has an unknown bit.
 For
 .Fn munmap ,
+.Fa length
+is zero,
 the address is not page-aligned, is at or above
 .Ql 0xC0000000 ,
 or the range extends past that address.
@@ -177,8 +244,13 @@ kernel's page offset.
 .It Er ENOMEM
 An anonymous mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,
-or cannot obtain a VMA entry.
+or cannot obtain a VMA entry, or a fixed mapping lies outside user
+space.
 Unmapping cannot obtain an entry needed to split an area.
+A page of an
+.Fn mprotect
+range belongs to no VMA, or the range lies outside user space, or the
+split cannot obtain its entries.
 Musl also rejects mapping lengths at least
 .Dv PTRDIFF_MAX
 and every public
@@ -186,9 +258,7 @@ and every public
 request.
 .It Er ENOSYS
 A mapping lacks
-.Dv MAP_ANONYMOUS
-or requests
-.Dv MAP_FIXED .
+.Dv MAP_ANONYMOUS .
 .It Er ESRCH
 The kernel has no current process.
 .El

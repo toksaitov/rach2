@@ -59,6 +59,14 @@
  */
 #define PTE_COW 0x200u
 
+/*
+ * Software-available PTE bit 10: a resident page of a PROT_NONE region. The
+ * page stays present, with its frame and contents, but supervisor-only and
+ * read-only, so any user access faults; fork and teardown own it as a user
+ * page by this bit, and mprotect makes it a user page again.
+ */
+#define PTE_NONE 0x400u
+
 struct pde {
     uint32_t present : 1;
     uint32_t rw : 1;
@@ -186,6 +194,12 @@ void free_user_pages(page_dir_t *dir);
  * and by brk when the heap shrinks. start/end should be page-aligned.
  */
 void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
+
+/* Bring the resident pages of [start, end) in `dir` to the VMA protection
+ * `prot` (VM_PROT_*): no access makes them PTE_NONE, read-only clears the
+ * write bit, and write sets it only on a page this process alone holds; a
+ * shared page becomes copy-on-write instead. */
+void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot);
 
 /** Free a page directory and its private page tables; call after
  * free_user_pages(). */

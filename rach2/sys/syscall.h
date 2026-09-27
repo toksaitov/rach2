@@ -54,6 +54,7 @@
 #define SYS_MUNMAP          91
 #define SYS_WAIT4           114
 #define SYS_MMAP2           192
+#define SYS_MPROTECT        125
 #define SYS_SOCKETCALL      102
 #define SYS_IOCTL           54
 #define SYS_DUP             41

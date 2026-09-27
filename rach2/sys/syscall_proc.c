@@ -402,8 +402,8 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             uint32_t virt_addr;
             uint32_t parent_phys;
 
-            if (!(pte & 0x1) || !(pte & 0x4)) {
-                continue; /* present (0x1) + user (0x4) only */
+            if (!(pte & 0x1) || !(pte & (0x4 | PTE_NONE))) {
+                continue; /* present (0x1), and user (0x4) or PROT_NONE */
             }
 
             virt_addr = (dir_idx << 22) | (page_idx << 12);
@@ -3048,9 +3048,9 @@ int32_t sys_prlimit64(isr_params_t *params)
 }
 
 /*
- * mmap2 protection bits and flags (Linux i386 ABI). We support PROT_* as VMA
- * permissions and only anonymous private mappings; file-backed mmap would need
- * a page cache.
+ * mmap2 and mprotect protection bits and flags (Linux i386 ABI). The PROT_*
+ * bits become VMA permissions; only anonymous mappings exist, since a mapping
+ * of a file needs pages the file's cache holds.
  */
 #define PROT_READ 0x1
 
@@ -3058,11 +3058,19 @@ int32_t sys_prlimit64(isr_params_t *params)
 
 #define PROT_EXEC 0x4
 
+#define MAP_SHARED 0x01
+
 #define MAP_PRIVATE 0x02
+
+#define MAP_SHARED_VALIDATE 0x03
+
+#define MAP_TYPE 0x0F
 
 #define MAP_FIXED 0x10
 
 #define MAP_ANONYMOUS 0x20
+
+#define MAP_FIXED_NOREPLACE 0x100000
 
 /* Round 'v' up to the next page boundary. */
 #define PAGE_UP(v) (((v) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
@@ -3072,16 +3080,17 @@ int32_t sys_prlimit64(isr_params_t *params)
  * Returns the resulting break: the new value on success, or the unchanged
  * current break if the request is out of range. This is the contract musl's
  * allocator relies on when it issues SYS_brk (it compares the return to its
- * request; musl's public brk() never issues the call). The heap is a single
- * demand-paged VMA [heap_start, page_up(brk)); growing only extends the
- * region (pages fault in lazily), shrinking frees the pages above.
+ * request; musl's public brk() never issues the call). The heap is the
+ * demand-paged range [heap_start, page_up(brk)), which mprotect may have cut
+ * into regions of different protection: growing adds a read-write region at
+ * the top, which merges with a read-write top piece, and shrinking removes
+ * the range above the new top and frees its pages.
  */
 int32_t sys_brk(isr_params_t *params)
 {
     uint32_t req = params->ebx;
     vm_space_t *vm;
-    vma_t *heap;
-    uint32_t i, old_top, new_top;
+    uint32_t old_top, new_top;
 
     if (!current_proc) {
         return -ESRCH;
@@ -3098,44 +3107,23 @@ int32_t sys_brk(isr_params_t *params)
     old_top = PAGE_UP(vm->brk);
     new_top = PAGE_UP(req);
 
-    /* Find the heap region, if the heap has ever grown above its base. */
-    heap = NULL;
-    for (i = 0; i < vm->count; i++) {
-        if (vm->vmas[i].type == VM_HEAP) {
-            heap = &vm->vmas[i];
-            break;
-        }
-    }
-
     if (new_top > old_top) {
         /* Grow: the new pages [old_top, new_top) must not collide with mmap or
-         * any other region. The heap's own [heap_start, old_top) abuts that
-         * span without overlapping, so vm_overlaps tests only the *other*
-         * regions. */
+         * any other region. */
         if (vm_overlaps(vm, old_top, new_top)) {
             return (int32_t)vm->brk;
         }
         if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
             return (int32_t)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
         }
-        /* Extend the region, or create it on the first non-empty break. */
-        if (heap) {
-            heap->end = new_top;
-        } else if (vm_insert(vm, vm->heap_start, new_top, VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) !=
-                   0) {
+        if (vm_insert(vm, old_top, new_top, VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) != 0) {
             return (int32_t)vm->brk;
         }
     } else if (new_top < old_top) {
-        /* Shrink: free the pages above the new top, then trim or drop the
-         * VMA. */
-        unmap_user_range(_curr_dir, new_top, old_top);
-        if (heap) {
-            if (new_top <= vm->heap_start) {
-                vm_remove(vm, heap->start, heap->end);
-            } else {
-                heap->end = new_top;
-            }
+        if (vm_remove(vm, new_top, old_top) != 0) {
+            return (int32_t)vm->brk;
         }
+        unmap_user_range(_curr_dir, new_top, old_top);
     }
 
     vm->brk = req;
@@ -3164,21 +3152,43 @@ static void vma_exhausted(const char *what)
          (int)current_proc->pid, current_proc->comm, VMA_LIMIT);
 }
 
+/* The VMA protection of an mmap or mprotect `prot`. Write and execute each
+ * grant read, which this i386 paging cannot withhold from them. */
+static uint32_t vm_prot_of(uint32_t prot)
+{
+    uint32_t vmprot = 0;
+
+    if (prot & PROT_READ) {
+        vmprot |= VM_PROT_READ;
+    }
+    if (prot & PROT_WRITE) {
+        vmprot |= VM_PROT_WRITE | VM_PROT_READ;
+    }
+    if (prot & PROT_EXEC) {
+        vmprot |= VM_PROT_EXEC | VM_PROT_READ;
+    }
+    return vmprot;
+}
+
 /*
- * sys_mmap2 - map anonymous memory. Args: EBX=addr (hint, ignored),
- * ECX=length, EDX=prot, ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped
- * base address, or -errno. MAP_ANONYMOUS is required and MAP_FIXED refused;
- * MAP_PRIVATE and MAP_SHARED are not checked, and every mapping is private
- * (what musl's allocator uses); the region is placed by bumping mmap_top
- * down and is demand-paged + zero-filled on touch.
+ * sys_mmap2 - map anonymous memory. Args: EBX=addr, ECX=length, EDX=prot,
+ * ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped base address, or
+ * -errno. MAP_ANONYMOUS is required; every mapping is private and
+ * copy-on-write across fork, MAP_SHARED included. MAP_FIXED replaces whatever
+ * the range held, and MAP_FIXED_NOREPLACE refuses a range in use with EEXIST.
+ * Otherwise a page-aligned hint that is free below the stack's growth window
+ * is taken as it is, and without one the highest free range below
+ * VM_MMAP_BASE and above the heap's top is used, so the ranges munmap frees
+ * are used again. Pages are demand-paged and zero-filled on touch.
  */
 int32_t sys_mmap2(isr_params_t *params)
 {
+    uint32_t addr = params->ebx;
     uint32_t length = params->ecx;
     uint32_t prot = params->edx;
     uint32_t flags = params->esi;
     vm_space_t *vm;
-    uint32_t len, base, vmprot;
+    uint32_t len, base, limit;
 
     if (!current_proc) {
         return -ESRCH;
@@ -3186,52 +3196,62 @@ int32_t sys_mmap2(isr_params_t *params)
     mem_balance();
     vm = &current_proc->vm;
 
-    if (length == 0) {
+    if (length == 0 || (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
+        return -EINVAL;
+    }
+    if ((flags & MAP_TYPE) != MAP_SHARED && (flags & MAP_TYPE) != MAP_PRIVATE &&
+        (flags & MAP_TYPE) != MAP_SHARED_VALIDATE) {
         return -EINVAL;
     }
     if (!(flags & MAP_ANONYMOUS)) {
         return -ENOSYS; /* file-backed mmap is not implemented */
     }
-    if (flags & MAP_FIXED) {
-        /* We choose the address ourselves; honoring a fixed hint would need
-         * overlap/replace handling we do not have. Reject, not silently
-         * return a different address the caller would then fault on. */
-        return -ENOSYS;
-    }
-
-    len = PAGE_UP(length);
-
-    vmprot = 0;
-    if (prot & PROT_READ) {
-        vmprot |= VM_PROT_READ;
-    }
-    if (prot & PROT_WRITE) {
-        /* On i386 a present page is always readable (there is no write-only
-         * PTE) so writable implies readable. Record that in the VMA prot so the
-         * fault check agrees with the hardware (a read of a PROT_WRITE page
-         * does not wrongly segfault). */
-        vmprot |= VM_PROT_WRITE | VM_PROT_READ;
-    }
-    if (prot & PROT_EXEC) {
-        vmprot |= VM_PROT_EXEC;
-    }
-
-    /* Bump down from mmap_top; refuse if it would underflow or hit the heap.
-     * The addr hint is ignored (no MAP_FIXED support), which suits musl's
-     * malloc. */
-    if (len > vm->mmap_top || vm->mmap_top - len < PAGE_UP(vm->brk)) {
+    if (length > USER_ADDR_MAX - USER_ADDR_MIN) {
         return -ENOMEM;
     }
-    base = vm->mmap_top - len;
+    len = PAGE_UP(length);
+    limit = current_proc->rlim[RLIM_AS].cur;
 
-    if (vm_total(vm) + len > current_proc->rlim[RLIM_AS].cur) {
-        return -ENOMEM; /* RLIMIT_AS */
+    if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
+        if ((addr & (PAGE_SIZE - 1)) != 0) {
+            return -EINVAL;
+        }
+        if (addr < USER_ADDR_MIN || addr > USER_ADDR_MAX - len) {
+            return -ENOMEM;
+        }
+        if ((flags & MAP_FIXED_NOREPLACE) && vm_overlaps(vm, addr, addr + len)) {
+            return -EEXIST;
+        }
+        if (vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit) {
+            return -ENOMEM; /* RLIMIT_AS, the replaced bytes not counted twice */
+        }
+        /* A split in the removal and the new region take two entries, found
+           before the old mapping goes. */
+        if (vm_reserve(vm, 2) != 0) {
+            vma_exhausted("mmap");
+            return -ENOMEM;
+        }
+        vm_remove(vm, addr, addr + len);
+        unmap_user_range(_curr_dir, addr, addr + len);
+        base = addr;
+    } else {
+        base = 0;
+        if (addr != 0 && (addr & (PAGE_SIZE - 1)) == 0 && addr >= USER_ADDR_MIN &&
+            len <= vm->stack_limit && addr <= vm->stack_limit - len &&
+            !vm_overlaps(vm, addr, addr + len)) {
+            base = addr;
+        }
+        if (base == 0) {
+            base = vm_find_free(vm, len, PAGE_UP(vm->brk), VM_MMAP_BASE);
+        }
+        if (base == 0 || vm_total(vm) + len > limit) {
+            return -ENOMEM;
+        }
     }
-    if (vm_insert(vm, base, base + len, vmprot, VM_ANON) != 0) {
+    if (vm_insert(vm, base, base + len, vm_prot_of(prot), VM_ANON) != 0) {
         vma_exhausted("mmap");
         return -ENOMEM;
     }
-    vm->mmap_top = base;
     return (int32_t)base;
 }
 
@@ -3270,5 +3290,48 @@ int32_t sys_munmap(isr_params_t *params)
         return -ENOMEM;
     }
     unmap_user_range(_curr_dir, start, end);
+    return 0;
+}
+
+/*
+ * sys_mprotect - change the protection of a range. Args: EBX=addr (page
+ * aligned), ECX=length, EDX=prot. Returns 0, or -errno: EINVAL for an
+ * unaligned address or an unknown protection bit, ENOMEM when a page of the
+ * range is not mapped or a split finds no room for its region. The regions
+ * take the new protection first and the resident pages after, so a fault in
+ * between reads the protection the call is setting.
+ */
+int32_t sys_mprotect(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t length = params->ecx;
+    uint32_t prot = params->edx;
+    uint32_t end, vmprot;
+    int rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if ((addr & (PAGE_SIZE - 1)) != 0 ||
+        (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
+        return -EINVAL;
+    }
+    if (length == 0) {
+        return 0;
+    }
+    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || length > USER_ADDR_MAX - addr) {
+        return -ENOMEM;
+    }
+    end = PAGE_UP(addr + length);
+    vmprot = vm_prot_of(prot);
+    rc = vm_protect(&current_proc->vm, addr, end, vmprot);
+    if (rc == -1) {
+        return -ENOMEM;
+    }
+    if (rc != 0) {
+        vma_exhausted("mprotect");
+        return -ENOMEM;
+    }
+    paging_protect_range(_curr_dir, addr, end, vmprot);
     return 0;
 }

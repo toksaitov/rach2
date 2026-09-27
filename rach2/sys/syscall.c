@@ -1502,6 +1502,7 @@ void init_syscall(void)
     _syscall_table[SYS_BRK] = sys_brk;
     _syscall_table[SYS_MMAP2] = sys_mmap2;
     _syscall_table[SYS_MUNMAP] = sys_munmap;
+    _syscall_table[SYS_MPROTECT] = sys_mprotect;
     _syscall_table[SYS_LSEEK] = sys_lseek;
     _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_IOCTL] = sys_ioctl;
