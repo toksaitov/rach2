@@ -53,7 +53,7 @@ void fpu_init_area(void *area);
 void fpu_reset(void);
 
 /** The bytes of Linux's i386 `struct _fpstate_32`, the floating-point state
- * a signal frame carries: the x87 environment and registers in the 108-byte
+ * in a signal frame: the x87 environment and registers in the 108-byte
  * `fnsave` layout, the status word, a magic word, and then the 512-byte
  * `fxsave` image. */
 #define FPU_LINUX_SIZE 624
@@ -61,10 +61,12 @@ void fpu_reset(void);
 /**
  * Write the state in `area` as Linux's `_fpstate_32` into `out`.
  *
- * In the FXSR format the first 108 bytes are the x87 part converted from the
- * `fxsave` image, as Linux's `convert_from_fxsr` makes it, the magic word is
- * 0, and the image follows at byte 112. In the x87 format the first 108 bytes
- * are the `fnsave` image, the magic word is 0xFFFF, and the rest is zero.
+ * In both formats bytes 108 and 109 are the x87 status word. In the FXSR
+ * format the first 108 bytes are the x87 part converted from the `fxsave`
+ * image, as Linux's `convert_from_fxsr` makes it, the magic word is 0, and
+ * the image follows at byte 112. In the x87 format the first 108 bytes are
+ * the `fnsave` image, the magic word is 0xFFFF, and bytes 112 to 623 are
+ * zero.
  */
 void fpu_to_linux(const void *area, uint8_t *out);
 
