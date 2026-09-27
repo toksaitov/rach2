@@ -295,22 +295,22 @@ static long stat_ticks(const char *path)
  */
 static int thread_times(pid_t t)
 {
-    char mine[64], other[64];
+    char own_stat[64], other[64];
     struct tms tms;
     long start, now, rested, deadline;
     volatile unsigned long spin = 0;
     int i;
 
-    snprintf(mine, sizeof(mine), "/proc/self/task/%d/stat", (int)tid());
+    snprintf(own_stat, sizeof(own_stat), "/proc/self/task/%d/stat", (int)tid());
     snprintf(other, sizeof(other), "/proc/self/task/%d/stat", (int)t);
-    start = stat_ticks(mine);
+    start = stat_ticks(own_stat);
     rested = stat_ticks(other);
     deadline = (long)times(&tms) + 1000;
     do {
         for (i = 0; i < 1000000; i++) {
             spin++;
         }
-        now = stat_ticks(mine);
+        now = stat_ticks(own_stat);
     } while (start >= 0 && now >= 0 && now < start + 5 && (long)times(&tms) < deadline);
     if (start < 0 || now < start + 5) {
         return fail("a busy thread's own time");
@@ -479,6 +479,7 @@ static int sharing(void)
 }
 
 static volatile pid_t takers[2];
+static int slots[2] = {0, 1}; /* each taker's index in `takers` */
 static volatile pid_t usr1_by, usr2_by;
 
 /** SIGUSR1's handler in `handler_mask`: its mask blocks SIGUSR2, and it
@@ -506,7 +507,7 @@ static void *take_signals(void *arg)
 {
     sigset_t none;
 
-    takers[(long)arg] = tid();
+    takers[*(const int *)arg] = tid();
     sigemptyset(&none);
     pthread_sigmask(SIG_SETMASK, &none, NULL);
     while (!usr1_by || !usr2_by) {
@@ -541,8 +542,8 @@ static int handler_mask(void)
     sigaddset(&both, SIGUSR1);
     sigaddset(&both, SIGUSR2);
     pthread_sigmask(SIG_BLOCK, &both, NULL);
-    if (pthread_create(&a, NULL, take_signals, (void *)0L) != 0 ||
-        pthread_create(&b, NULL, take_signals, (void *)1L) != 0) {
+    if (pthread_create(&a, NULL, take_signals, &slots[0]) != 0 ||
+        pthread_create(&b, NULL, take_signals, &slots[1]) != 0) {
         return 1;
     }
     for (i = 0; i < 500 && !(takers[0] && sleeping(takers[0]) && takers[1] && sleeping(takers[1]));

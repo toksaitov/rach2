@@ -47,6 +47,11 @@ duplicateExpression:*sys/lib/krandom.c
 unusedStructMember:*tests/musl/statmusl.c
 unusedStructMember:*tests/musl/stampmusl.c
 
+# `struct rusage32` in the ptrace probe is the i386 kernel's rusage, which the
+# raw wait4 writes whole; the probe reads the user time alone, and the members
+# after it are the layout.
+unusedStructMember:*tests/musl/ptracemusl.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 signal frame, statx, the rusage and the siginfo a wait fills are

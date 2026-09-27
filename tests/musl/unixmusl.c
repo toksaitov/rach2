@@ -368,7 +368,7 @@ static int thread_creds(void)
 
     if (pid == 0) {
         pthread_t t;
-        void *res = (void *)1;
+        void *res = &res;
         int sv[2];
 
         if (getuid() == 0 && (setgid(65534) != 0 || setuid(65534) != 0)) {

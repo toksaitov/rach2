@@ -550,10 +550,7 @@ static int number_reused(void)
  * and with a descriptor ready the wait returns at once. */
 static int long_timeout(void)
 {
-    struct {
-        long long sec;
-        long long nsec;
-    } ts = {2147483648LL, 0};
+    long long ts[2] = {2147483648LL, 0}; /* the kernel's 64-bit timespec */
     struct epoll_event ev, out;
     uint64_t v = 1;
     int ep = epoll_create1(0);
@@ -565,11 +562,11 @@ static int long_timeout(void)
         epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
         return fail("setup for epoll_pwait2");
     }
-    if (syscall(441, ep, &out, 1, &ts, NULL, 8) != 1) {
+    if (syscall(441, ep, &out, 1, ts, NULL, 8) != 1) {
         return fail("epoll_pwait2 of 2^31 seconds with a descriptor ready");
     }
-    ts.sec = -1;
-    if (syscall(441, ep, &out, 1, &ts, NULL, 8) != -1 || errno != EINVAL) {
+    ts[0] = -1;
+    if (syscall(441, ep, &out, 1, ts, NULL, 8) != -1 || errno != EINVAL) {
         return fail("epoll_pwait2 of negative seconds was not EINVAL");
     }
     close(e);
