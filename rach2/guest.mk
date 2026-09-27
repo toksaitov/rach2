@@ -3,8 +3,9 @@
 # This is the POSIX makefile pdpmake reads in the guest, driving the staged
 # tcc through its /bin/cc name, spelt out because a system with GCC, the GNU
 # root among them, has another cc first on its path; the GNU Makefile beside
-# it stays the host build and pdpmake cannot read it. Both include sources.mk, so one file
-# lists the kernel sources for the two builds and they cannot drift apart.
+# it stays the host build and pdpmake cannot read it. Both include
+# sources.mk, so one file lists the kernel sources for the two builds and
+# they cannot drift apart.
 #
 # The link reads the object list from kernel.objs, a response file, because
 # naming every object on one command line would exceed the machine's
