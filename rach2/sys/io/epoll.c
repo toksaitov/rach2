@@ -317,8 +317,8 @@ static int32_t epoll_wait_common(int epfd, uint32_t uevents, int max, int has_de
     }
     rc = poll_wait(scan_set, &sc, sc.queues, has_deadline, deadline);
     for (i = 0; rc > 0 && i < sc.n; i++) {
-        if (copy_to_user((void __user *)(uevents + i * EP_EVENT_SIZE), &sc.out[i],
-                         EP_EVENT_SIZE) != 0) {
+        if (copy_to_user((void __user *)(uevents + i * EP_EVENT_SIZE), &sc.out[i], EP_EVENT_SIZE) !=
+            0) {
             rc = -EFAULT;
         }
     }
@@ -344,8 +344,8 @@ int32_t sys_epoll_pwait(struct isr_params *params)
     if (rc != 0) {
         return rc;
     }
-    return poll_mask_done(epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx,
-                                            has_deadline, deadline));
+    return poll_mask_done(
+        epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx, has_deadline, deadline));
 }
 
 int32_t sys_epoll_pwait2(struct isr_params *params)
@@ -374,6 +374,6 @@ int32_t sys_epoll_pwait2(struct isr_params *params)
     if (rc != 0) {
         return rc;
     }
-    return poll_mask_done(epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx,
-                                            has_deadline, deadline));
+    return poll_mask_done(
+        epoll_wait_common((int)params->ebx, params->ecx, (int)params->edx, has_deadline, deadline));
 }

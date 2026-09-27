@@ -175,8 +175,8 @@ static int synth_pid_file(struct comp name)
     static const struct {
         const char *name;
         int kind;
-    } files[] = {{"maps", SYNTH_PROC_MAPS},   {"status", SYNTH_PROC_STATUS},
-                 {"statm", SYNTH_PROC_STATM}, {"auxv", SYNTH_PROC_AUXV},
+    } files[] = {{"maps", SYNTH_PROC_MAPS},       {"status", SYNTH_PROC_STATUS},
+                 {"statm", SYNTH_PROC_STATM},     {"auxv", SYNTH_PROC_AUXV},
                  {"environ", SYNTH_PROC_ENVIRON}, {"comm", SYNTH_PROC_COMM},
                  {"mem", SYNTH_PROC_MEM}};
     uint32_t i;

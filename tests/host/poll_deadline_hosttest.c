@@ -50,7 +50,8 @@ int main(void)
     int has = -1;
 
     kernel_ticks = 1000;
-    CHECK(poll_ms_deadline(30, &has) == 1004 && has == 1, "a poll of 30 ms from tick 1000 ends at 1004");
+    CHECK(poll_ms_deadline(30, &has) == 1004 && has == 1,
+          "a poll of 30 ms from tick 1000 ends at 1004");
     CHECK(poll_ms_deadline(1, &has) == 1002, "a poll of 1 ms from tick 1000 ends at 1002");
     CHECK(poll_ms_deadline(21, &has) == 1004, "a poll of 21 ms rounds up to three ticks");
     CHECK(poll_ms_deadline(0, &has) == 1000 && has == 1, "a zero poll timeout ends at once");

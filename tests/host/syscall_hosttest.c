@@ -944,13 +944,11 @@ static void clock_ids(void)
           "the process CPU clock reads user and system time");
     CHECK(read_clock(3, &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
           "the thread CPU clock reads the process's time");
-    CHECK(read_clock(cpu_clock_id(9, 0, 2), &ts) == 0 && ts.tv_sec == 0 &&
-              ts.tv_nsec == 80000000,
+    CHECK(read_clock(cpu_clock_id(9, 0, 2), &ts) == 0 && ts.tv_sec == 0 && ts.tv_nsec == 80000000,
           "a CPU clock by pid reads that process's time");
     CHECK(read_clock(cpu_clock_id(9, 0, 1), &ts) == 0 && ts.tv_nsec == 70000000,
           "a CPU clock of user time reads user time alone");
-    CHECK(read_clock(cpu_clock_id(0, 0, 0), &ts) == 0 && ts.tv_sec == 3 &&
-              ts.tv_nsec == 700000000,
+    CHECK(read_clock(cpu_clock_id(0, 0, 0), &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
           "a CPU clock of pid 0 reads the caller's time");
     CHECK(read_clock(cpu_clock_id(3, 1, 2), &ts) == 0 && ts.tv_sec == 3,
           "the caller's own thread clock by id is read");
@@ -974,8 +972,7 @@ static void clock_ids(void)
 
 /** Put a clock_nanosleep of `sec` s and `nsec` ns on clock `clk` with
  * `flags` where the call reads it. */
-static void ask_clock_sleep(isr_params_t *p, int32_t clk, uint32_t flags, int32_t sec,
-                            int32_t nsec)
+static void ask_clock_sleep(isr_params_t *p, int32_t clk, uint32_t flags, int32_t sec, int32_t nsec)
 {
     ask_sleep(p, sec, nsec);
     p->ebx = (uint32_t)clk;

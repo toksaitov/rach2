@@ -275,8 +275,7 @@ static int scheduling(void)
     if (sched_get_priority_max(42) != -1 || errno != EINVAL) {
         return fail("the range of an unknown policy was not refused with EINVAL");
     }
-    if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 ||
-        slice.tv_nsec != 10000000L) {
+    if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 10000000L) {
         return fail("the time slice is not one 10 ms tick");
     }
     memset(&set, 0xFF, sizeof(set));

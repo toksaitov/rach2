@@ -381,9 +381,9 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     ap_ch(t, ' ');
     ap_int(t, (int)p->nice);
     ap_ch(t, ' ');
-    ap_u32(t, p->tg->live);  /* 20 num_threads */
-    ap_str(t, " 0 0");       /* 21 itrealvalue, 22 starttime */
-    ap_str(t, " 0 0");   /* 23 vsize, 24 rss */
+    ap_u32(t, p->tg->live); /* 20 num_threads */
+    ap_str(t, " 0 0");      /* 21 itrealvalue, 22 starttime */
+    ap_str(t, " 0 0");      /* 23 vsize, 24 rss */
     ap_ch(t, '\n');
     if (!t->nomem) {
         t->buf[t->len] = '\0';

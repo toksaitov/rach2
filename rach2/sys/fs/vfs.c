@@ -1922,14 +1922,10 @@ static const struct vfs_ops devfs_vops = {
 };
 
 static const struct vfs_ops procfs_vops = {
-    0, procfs_rest, synth_hold, synth_put, synth_getattr,
-    0, 0,           0,          0,         0,
-    0, 0,           0,          0,         0,
-    0, 0,           0,          0,         synth_readlink,
-    0, 0,           0,          0,         0,
-    0, /* abort_unmount */
-    0, /* symlink */
-    0, /* mknod */
+    0, procfs_rest, synth_hold, synth_put, synth_getattr,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0,           0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
+    0,                                                                       /* symlink */
+    0,                                                                       /* mknod */
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,

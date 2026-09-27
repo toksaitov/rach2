@@ -74,7 +74,8 @@ static const uint8_t plain_retcode[8] = {0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xC
 
 int sigframe_on_altstack(uint32_t sp)
 {
-    return current_proc->altstack_on && sp - current_proc->altstack_sp < current_proc->altstack_size;
+    return current_proc->altstack_on &&
+           sp - current_proc->altstack_sp < current_proc->altstack_size;
 }
 
 /* One of the two data selectors this kernel has: flat user data or the TLS
@@ -177,8 +178,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         sigframe_fill_siginfo(frame.rt.info, signo, info);
         frame.rt.uc.ss_sp = current_proc->altstack_sp;
         frame.rt.uc.ss_size = current_proc->altstack_size;
-        frame.rt.uc.ss_flags =
-            !current_proc->altstack_on ? SS_DISABLE : (on_alt ? SS_ONSTACK : 0u);
+        frame.rt.uc.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on_alt ? SS_ONSTACK : 0u);
         fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);
         frame.rt.uc.sigmask[0] = (uint32_t)oldmask;
         frame.rt.uc.sigmask[1] = (uint32_t)(oldmask >> 32);

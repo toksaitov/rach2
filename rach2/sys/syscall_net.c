@@ -1721,8 +1721,8 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
         if (iovlen > 1) {
             return -EOPNOTSUPP;
         }
-        return do_sendto(fd, iovlen ? iov[0].iov_base : 0u, iovlen ? (int)iov[0].iov_len : 0,
-                         flags, name_ptr, (int)namelen);
+        return do_sendto(fd, iovlen ? iov[0].iov_base : 0u, iovlen ? (int)iov[0].iov_len : 0, flags,
+                         name_ptr, (int)namelen);
     }
     for (i = 0; i < iovlen; i++) {
         if (iov[i].iov_len > 1500u - total) {

@@ -459,8 +459,7 @@ int fd_is_valid(fd_table_t *table, int fd)
         return 0;
     }
 
-    return table->entries[fd].type != FD_TYPE_NONE &&
-           !(table->entries[fd].flags & FD_FLAG_CLOSING);
+    return table->entries[fd].type != FD_TYPE_NONE && !(table->entries[fd].flags & FD_FLAG_CLOSING);
 }
 
 int fd_can_alloc(const fd_table_t *table)

@@ -181,8 +181,7 @@ static void prpsinfo_fill(uint8_t *d)
     if (len > 79u) {
         len = 79u;
     }
-    if (mm->arg_end > mm->arg_start &&
-        paging_access(mm, mm->arg_start, d + 44, len, 0) == 0) {
+    if (mm->arg_end > mm->arg_start && paging_access(mm, mm->arg_start, d + 44, len, 0) == 0) {
         for (i = 0; i + 1u < len; i++) {
             if (d[44 + i] == 0) {
                 d[44 + i] = ' ';
@@ -211,8 +210,8 @@ uint8_t *core_notes(int signo, uint32_t *size)
     uint8_t info[PRPSINFO_SIZE];
     uint8_t fp[FPU_LINUX_SIZE];
     uint32_t threads = 0;
-    uint32_t each = note_bytes(PRSTATUS_SIZE) + note_bytes(FPREGSET_SIZE) +
-                    note_bytes(PRXFPREG_SIZE);
+    uint32_t each =
+        note_bytes(PRSTATUS_SIZE) + note_bytes(FPREGSET_SIZE) + note_bytes(PRXFPREG_SIZE);
     uint8_t *buf;
     uint8_t *p;
     process_t *t;

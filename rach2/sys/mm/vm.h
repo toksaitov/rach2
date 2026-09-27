@@ -41,9 +41,9 @@
 #define VM_MMAP_BASE 0xB0000000u
 
 /* Region protection bits (mirror the PROT_* / page-table permission flags). */
-#define VM_PROT_READ  0x1u
-#define VM_PROT_WRITE 0x2u
-#define VM_PROT_EXEC  0x4u
+#define VM_PROT_READ   0x1u
+#define VM_PROT_WRITE  0x2u
+#define VM_PROT_EXEC   0x4u
 /* Given to paging_protect_range for a shared region, whose pages are shared
  * on purpose: a write goes to the frame they share, never to a copy. */
 #define VM_PROT_SHARED 0x8u

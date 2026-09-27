@@ -205,8 +205,7 @@ static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg);
 static void unix_close(fd_entry_t *e);
 
-static const struct file_ops unix_ops = {unix_read, unix_write, unix_poll, unix_ioctl,
-                                         unix_close};
+static const struct file_ops unix_ops = {unix_read, unix_write, unix_poll, unix_ioctl, unix_close};
 
 static struct unix_sock *socks;
 
@@ -1269,8 +1268,7 @@ static int iov_copy(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t sk
  * and writable, so that the copy after it does not sleep; a sleep here may
  * change the queue, which the caller then looks at again. 0, or -EFAULT.
  */
-static int iov_prefault(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t skip,
-                        uint32_t n)
+static int iov_prefault(const struct kernel_iovec *iov, uint32_t iovlen, uint32_t skip, uint32_t n)
 {
     uint32_t i;
 
@@ -1896,8 +1894,7 @@ static uint32_t put_rights(uint32_t at, uint32_t room, struct unix_in *in, int f
  * credentials, and the descriptors, each installed as a new descriptor.
  * Returns the bytes of the buffer used.
  */
-static uint32_t put_control(uint32_t control, uint32_t controllen, struct unix_in *in,
-                            int flags)
+static uint32_t put_control(uint32_t control, uint32_t controllen, struct unix_in *in, int flags)
 {
     uint32_t used = 0;
     uint32_t hdr[3];
@@ -1918,11 +1915,10 @@ static uint32_t put_control(uint32_t control, uint32_t controllen, struct unix_i
     if (in->nfds == 0) {
         return used;
     }
-    given = put_rights(control + used,
-                       (control && controllen > used + CMSG_HDR)
-                           ? (controllen - used - CMSG_HDR) / 4u
-                           : 0u,
-                       in, flags);
+    given = put_rights(
+        control + used,
+        (control && controllen > used + CMSG_HDR) ? (controllen - used - CMSG_HDR) / 4u : 0u, in,
+        flags);
     if (given > 0) {
         hdr[0] = CMSG_HDR + 4u * given;
         hdr[1] = SOL_SOCKET;

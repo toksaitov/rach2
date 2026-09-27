@@ -23,12 +23,12 @@ extern void free(void *ptr);
 
 static int fails;
 
-#define CHECK(cond)                                                    \
-    do {                                                               \
-        if (!(cond)) {                                                 \
+#define CHECK(cond)                                                        \
+    do {                                                                   \
+        if (!(cond)) {                                                     \
             printf("lock-hosttest: fail: line %d: %s\n", __LINE__, #cond); \
-            fails++;                                                   \
-        }                                                              \
+            fails++;                                                       \
+        }                                                                  \
     } while (0)
 
 static process_t process;

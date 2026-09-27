@@ -161,8 +161,7 @@ int strnlen_user(const char *src, uint32_t n)
 }
 
 void sched_service_point(void)
-{
-}
+{}
 
 /** The byte at user address `va` through the directory, or NULL when no
  * page is mapped there. */

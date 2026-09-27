@@ -96,14 +96,14 @@ static const char *const PROBES[] = {
        calls through a directory descriptor, positioned reads and writes,
        truncation by path, O_PATH descriptors, lchown, and the entry types
        getdents64 reports. */
-    "musl/pathmaxmusl", "musl/fdcallmusl", "musl/atcallmusl", "musl/preadmusl",
-    "musl/truncmusl", "musl/opathmusl", "musl/lchownmusl", "musl/direntmusl",
+    "musl/pathmaxmusl", "musl/fdcallmusl", "musl/atcallmusl", "musl/preadmusl", "musl/truncmusl",
+    "musl/opathmusl", "musl/lchownmusl", "musl/direntmusl",
     /* The process calls static GNU programs make, each group through the
        libc that has them: the CPU time the kernel charges, the clocks, how a
        process is named and scheduled, waitid, prctl, the stack limit, and the
        flags a socket is made with. */
-    "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl",
-    "musl/prctlmusl", "musl/stackmusl", "musl/sockflagmusl",
+    "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl", "musl/prctlmusl",
+    "musl/stackmusl", "musl/sockflagmusl",
     /* eventfd, and epoll's level-triggered, edge-triggered and one-shot
        reports; timerfd's expirations, alone and through epoll. */
     "musl/epollmusl", "musl/timerfdmusl",

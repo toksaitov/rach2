@@ -1878,10 +1878,10 @@ int32_t sys_clone(isr_params_t *params)
     uint32_t flags = params->ebx;
     struct fork_req req;
 
-    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
-                   CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
-                   CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
-                   CLONE_DETACHED)) != 0 ||
+    if ((flags &
+         ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
+           CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS | CLONE_PARENT_SETTID |
+           CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0 ||
         (!(flags & CLONE_THREAD) && (flags & CSIGNAL) != SIGCHLD) ||
         ((flags & CLONE_SIGHAND) && !(flags & CLONE_VM)) ||
         ((flags & CLONE_THREAD) && !(flags & CLONE_SIGHAND)) ||
@@ -2351,8 +2351,8 @@ int32_t sys_waitid(isr_params_t *params)
     uint32_t id = 0;
     int32_t rc;
 
-    if ((uint32_t)options & ~(WNOHANG | WNOWAIT | WEXITED | WUNTRACED | WCONTINUED | W_NOTHREAD |
-                              W_ALL | W_CLONE)) {
+    if ((uint32_t)options &
+        ~(WNOHANG | WNOWAIT | WEXITED | WUNTRACED | WCONTINUED | W_NOTHREAD | W_ALL | W_CLONE)) {
         return -EINVAL;
     }
     if (!(options & (WEXITED | WUNTRACED | WCONTINUED))) {
@@ -2674,8 +2674,7 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 {
     uint32_t f;
 
-    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE ||
-        t->state == PROC_UNUSED) {
+    if (!t || signo < 1 || signo > KSIG_MAX || t->state == PROC_ZOMBIE || t->state == PROC_UNUSED) {
         return;
     }
     f = sig_irq_save();
@@ -2749,7 +2748,8 @@ int signal_pending(void)
      * 32-bit loads, and a signal posted from an IRQ in between could tear it.
      */
     flags = sig_irq_save();
-    deliverable = (current_proc->sig_pending | current_proc->tg->pending) & ~current_proc->sig_blocked;
+    deliverable =
+        (current_proc->sig_pending | current_proc->tg->pending) & ~current_proc->sig_blocked;
     sig_irq_restore(flags);
     /* Only a signal that would ACT interrupts a wait: a caught handler, a
      * default terminate or a default stop. A pending signal that is ignored
@@ -3484,8 +3484,8 @@ void deliver_signals(isr_params_t *tf)
         if (restart_nr != 0 && (handler_flags & SA_RESTART)) {
             restart_syscall(tf, restart_nr);
         }
-        oldmask = current_proc->sigmask_saved ? current_proc->saved_sigmask
-                                              : current_proc->sig_blocked;
+        oldmask =
+            current_proc->sigmask_saved ? current_proc->saved_sigmask : current_proc->sig_blocked;
         if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {
             terminate_current_process(SIGSEGV | WCOREFLAG);
             return;
@@ -4706,7 +4706,8 @@ int32_t sys_mremap(isr_params_t *params)
             (to < addr + old_len && addr < to + new_len)) {
             return -EINVAL;
         }
-        if (vm_total(vm) - vm_covered(vm, to, to + new_len) + (new_len > old_len ? new_len - old_len : 0) >
+        if (vm_total(vm) - vm_covered(vm, to, to + new_len) +
+                (new_len > old_len ? new_len - old_len : 0) >
             current_proc->rlim[RLIM_AS].cur) {
             return -ENOMEM;
         }
@@ -4906,8 +4907,7 @@ int32_t sys_setpriority(isr_params_t *params)
         if (!prio_target(p, which, params->ecx)) {
             continue;
         }
-        if (!cred_privileged() && current_proc->euid != p->ruid &&
-            current_proc->euid != p->euid) {
+        if (!cred_privileged() && current_proc->euid != p->ruid && current_proc->euid != p->euid) {
             rc = -EPERM;
             continue;
         }

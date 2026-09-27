@@ -44,8 +44,8 @@ struct uimage {
     uint32_t env_start;
     uint32_t env_end;
     uint32_t auxv[2 * UIMAGE_AUXV];
-    uint32_t room;    /* bytes the strings may take */
-    uint32_t esp;     /* the entry stack pointer, once placed */
+    uint32_t room; /* bytes the strings may take */
+    uint32_t esp;  /* the entry stack pointer, once placed */
 };
 
 /** The bytes the strings and their pointers may take under a soft

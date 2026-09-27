@@ -3160,8 +3160,7 @@ static int32_t dup_clear(int fd)
     if (e->type == FD_TYPE_NONE && !e->ofd) {
         return 0;
     }
-    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) ||
-        fd_held_elsewhere(table, fd)) {
+    if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
         return -EBUSY;
     }
     fd_release_backing(e);
@@ -3472,7 +3471,8 @@ static int32_t cwd_global(char *buf)
     int32_t rc;
 
     if (current_proc->fs->root_mnt) {
-        rc = vfs_node_path(current_proc->fs->root_mnt, current_proc->fs->root_node, buf, VFS_PATH_MAX);
+        rc = vfs_node_path(current_proc->fs->root_mnt, current_proc->fs->root_node, buf,
+                           VFS_PATH_MAX);
         if (rc != 0) {
             return rc;
         }
@@ -7258,7 +7258,8 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
             rc = cred_access_ref(&parent, CRED_W, 0);
             if (rc == 0) {
                 vfs_ns_lock(parent.mnt);
-                rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode & 07777u & ~current_proc->fs->umask);
+                rc = vfs_mkdir(parent.mnt, parent.node, leaf,
+                               mode & 07777u & ~current_proc->fs->umask);
                 vfs_ns_unlock(parent.mnt);
             }
             vfs_ref_release(&parent);
@@ -8246,9 +8247,10 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         static const struct {
             const char *name;
             uint8_t type;
-        } files[12] = {{"stat", DT_REG},  {"cmdline", DT_REG}, {"fd", DT_DIR},      {"maps", DT_REG},
-                       {"status", DT_REG}, {"statm", DT_REG},  {"auxv", DT_REG},    {"environ", DT_REG},
-                       {"comm", DT_REG},  {"mem", DT_REG},     {"exe", DT_LNK},     {"task", DT_DIR}};
+        } files[12] = {{"stat", DT_REG}, {"cmdline", DT_REG}, {"fd", DT_DIR},
+                       {"maps", DT_REG}, {"status", DT_REG},  {"statm", DT_REG},
+                       {"auxv", DT_REG}, {"environ", DT_REG}, {"comm", DT_REG},
+                       {"mem", DT_REG},  {"exe", DT_LNK},     {"task", DT_DIR}};
         process_t *pp = get_process((uint32_t)pid);
         int i;
         if (!pp || pp->state == PROC_UNUSED) {

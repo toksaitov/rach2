@@ -93,8 +93,7 @@ uint32_t uimage_budget(uint32_t stack_limit)
  * @return 0; -E2BIG when the pointers alone take the budget; -ENOMEM when
  *         the array could not be had.
  */
-int uimage_start(struct uimage *u, uint32_t top, uint32_t stack_limit, uint32_t argc,
-                 uint32_t envc)
+int uimage_start(struct uimage *u, uint32_t top, uint32_t stack_limit, uint32_t argc, uint32_t envc)
 {
     uint32_t limit = uimage_budget(stack_limit);
     uint32_t pointers;
@@ -155,8 +154,7 @@ static int uimage_grow(struct uimage *u, uint32_t bytes)
  * @return 0; -E2BIG for a string past UIMAGE_STRING_MAX or past the room
  *         left; -EFAULT; -ENOMEM.
  */
-static int uimage_copy(struct uimage *u, const char __user *user, const char *kernel,
-                       uint32_t len)
+static int uimage_copy(struct uimage *u, const char __user *user, const char *kernel, uint32_t len)
 {
     struct uwin w;
     uint32_t start;

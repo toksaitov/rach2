@@ -227,8 +227,8 @@ static int sharing(void)
         return fail("a descriptor a thread closed");
     }
     if (pthread_create(&t, NULL, change_dir, NULL) != 0 || pthread_join(t, &result) != 0 ||
-        result != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/tmp") != 0 ||
-        umask(022) != 077 || chdir("/") != 0) {
+        result != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/tmp") != 0 || umask(022) != 077 ||
+        chdir("/") != 0) {
         return fail("the directory and umask a thread changed");
     }
     n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);

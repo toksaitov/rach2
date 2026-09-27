@@ -83,8 +83,8 @@ static int file_rows(const char *dir)
         return fail("fchownat through a directory descriptor");
     }
     pfd = open(file, O_PATH);
-    if (pfd < 0 || fchownat(pfd, "", 1400, 1400, AT_EMPTY_PATH) != 0 ||
-        !owner_is(file, 1, 1400) || !refused(syscall(SYS_fchown32, pfd, 0, 0), EBADF)) {
+    if (pfd < 0 || fchownat(pfd, "", 1400, 1400, AT_EMPTY_PATH) != 0 || !owner_is(file, 1, 1400) ||
+        !refused(syscall(SYS_fchown32, pfd, 0, 0), EBADF)) {
         return fail("AT_EMPTY_PATH on an O_PATH descriptor");
     }
     close(pfd);

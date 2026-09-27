@@ -143,15 +143,15 @@ static int syscalls_and_exec(void)
         return fail("PTRACE_SETOPTIONS");
     }
     dr = 0x1000;
-    if (ptrace(PTRACE_POKEUSER, pid, (void *)offsetof(struct user, u_debugreg[0]),
-               (void *)dr) != 0 ||
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), (void *)dr) !=
+            0 ||
         ptrace(PTRACE_PEEKUSER, pid, (void *)offsetof(struct user, u_debugreg[0]), NULL) !=
             0x1000) {
         return fail("a debug register through POKEUSER and PEEKUSER");
     }
     for (;;) {
-        if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 ||
-            !stopped_by(pid, SIGTRAP | 0x80) || ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
+        if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
+            ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
             return fail("a syscall stop");
         }
         if (regs.orig_eax == SYS_getpid) {

@@ -363,8 +363,7 @@ static void dynamic_images(void)
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == -1 &&
-          alloc_reached == 0);
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == -1 && alloc_reached == 0);
 }
 
 int main(void)

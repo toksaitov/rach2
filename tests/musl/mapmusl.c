@@ -147,8 +147,8 @@ static int remaps(void)
         return fail("mmap for mremap");
     }
     m[0] = 'r';
-    blocker = mmap(m + PAGE, PAGE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
-                   -1, 0);
+    blocker =
+        mmap(m + PAGE, PAGE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (blocker == MAP_FAILED) {
         return fail("the mapping that blocks growth in place");
     }

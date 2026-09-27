@@ -276,9 +276,9 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
         struct lock_wait me;
         int rc;
 
-        c = req->type == F_UNLCK ? NULL
-                                 : record_conflict(key, want.kind, want.owner, req->type,
-                                                   req->start, req->end);
+        c = req->type == F_UNLCK
+                ? NULL
+                : record_conflict(key, want.kind, want.owner, req->type, req->start, req->end);
         if (!c) {
             return record_apply(&want, pid);
         }

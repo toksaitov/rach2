@@ -875,12 +875,34 @@ const char *tmpfs_label(void *node)
 }
 
 static const struct vfs_ops tmpfs_ops = {
-    tmpfs_lookup,  0, /* lookup_rest */
-    tmpfs_hold,    tmpfs_put,   tmpfs_getattr,         tmpfs_setattr, tmpfs_open,    tmpfs_release,
-    tmpfs_read,    tmpfs_write, tmpfs_truncate,        tmpfs_fsync,   tmpfs_readdir, tmpfs_create,
-    tmpfs_unlink,  tmpfs_mkdir, tmpfs_rmdir,           tmpfs_rename,  tmpfs_link,    tmpfs_readlink,
-    tmpfs_statfs,  tmpfs_sync,  tmpfs_prepare_unmount, 0, /* abort_unmount */
-    tmpfs_unmount, tmpfs_path,  tmpfs_symlink,         tmpfs_mknod,
+    tmpfs_lookup,
+    0, /* lookup_rest */
+    tmpfs_hold,
+    tmpfs_put,
+    tmpfs_getattr,
+    tmpfs_setattr,
+    tmpfs_open,
+    tmpfs_release,
+    tmpfs_read,
+    tmpfs_write,
+    tmpfs_truncate,
+    tmpfs_fsync,
+    tmpfs_readdir,
+    tmpfs_create,
+    tmpfs_unlink,
+    tmpfs_mkdir,
+    tmpfs_rmdir,
+    tmpfs_rename,
+    tmpfs_link,
+    tmpfs_readlink,
+    tmpfs_statfs,
+    tmpfs_sync,
+    tmpfs_prepare_unmount,
+    0, /* abort_unmount */
+    tmpfs_unmount,
+    tmpfs_path,
+    tmpfs_symlink,
+    tmpfs_mknod,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1};

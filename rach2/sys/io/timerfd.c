@@ -35,7 +35,7 @@
 #define NS_PER_TICK   10000000
 #define NS_PER_SEC    1000000000
 /* Policy: the longest wait, in ticks, a timer is armed for. */
-#define TICKS_MAX 0x3FFFFFFFu
+#define TICKS_MAX     0x3FFFFFFFu
 
 extern volatile uint32_t kernel_ticks;
 

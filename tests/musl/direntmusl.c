@@ -124,9 +124,8 @@ int main(int argc, char **argv)
         return fail("/dev");
     }
     if (type_of("/proc", "self") != DT_LNK || type_of("/proc", "meminfo") != DT_REG ||
-        type_of("/proc", "net") != DT_DIR || !types_agree("/proc") ||
-        !types_agree("/proc/self") || !types_agree("/proc/self/fd") ||
-        !types_agree("/proc/net")) {
+        type_of("/proc", "net") != DT_DIR || !types_agree("/proc") || !types_agree("/proc/self") ||
+        !types_agree("/proc/self/fd") || !types_agree("/proc/net")) {
         return fail("/proc");
     }
     if (argc > 1 && (!types_agree("/") || !types_agree("/bin"))) {

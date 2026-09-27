@@ -118,9 +118,8 @@ static int refuses_io(int fd)
            refused(syscall(SYS_fchown32, fd, 0, 0), EBADF) && refused(futimens(fd, ts), EBADF) &&
            refused(ioctl(fd, FIONREAD, &avail), EBADF) &&
            refused(fcntl(fd, F_SETFL, O_NONBLOCK), EBADF) &&
-           refused(syscall(SYS_getdents64, fd, buf, sizeof(buf)), EBADF) &&
-           poll(&pfd, 1, 0) == 1 && pfd.revents == POLLNVAL &&
-           refused(select(fd + 1, &set, NULL, NULL, &tv), EBADF);
+           refused(syscall(SYS_getdents64, fd, buf, sizeof(buf)), EBADF) && poll(&pfd, 1, 0) == 1 &&
+           pfd.revents == POLLNVAL && refused(select(fd + 1, &set, NULL, NULL, &tv), EBADF);
 }
 
 /** A file of the boot root, and the flags O_PATH drops. */
@@ -278,9 +277,9 @@ static int synth_rows(void)
     }
     close(fd);
     fd = open("/dev", O_PATH | O_DIRECTORY);
-    if (fd < 0 || !same_file(fd, "/dev") || !refuses_io(fd) ||
-        fstatat(fd, "null", &st, 0) != 0 || !S_ISCHR(st.st_mode) || fchdir(fd) != 0 ||
-        !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/dev") != 0 || chdir("/") != 0) {
+    if (fd < 0 || !same_file(fd, "/dev") || !refuses_io(fd) || fstatat(fd, "null", &st, 0) != 0 ||
+        !S_ISCHR(st.st_mode) || fchdir(fd) != 0 || !getcwd(cwd, sizeof(cwd)) ||
+        strcmp(cwd, "/dev") != 0 || chdir("/") != 0) {
         return fail("/dev");
     }
     close(fd);

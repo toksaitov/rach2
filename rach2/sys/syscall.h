@@ -215,38 +215,38 @@
 
 /* The direct socket calls (syscall_net.c), socketcall's sub-calls by
  * number. */
-#define SYS_SOCKET          359
-#define SYS_SOCKETPAIR      360
-#define SYS_BIND            361
-#define SYS_CONNECT         362
-#define SYS_LISTEN          363
-#define SYS_ACCEPT4         364
-#define SYS_GETSOCKOPT      365
-#define SYS_SETSOCKOPT      366
-#define SYS_GETSOCKNAME     367
-#define SYS_GETPEERNAME     368
-#define SYS_SENDTO          369
-#define SYS_SENDMSG         370
-#define SYS_RECVFROM        371
-#define SYS_RECVMSG         372
-#define SYS_SHUTDOWN        373
-#define SYS_RECVMMSG        337
-#define SYS_SENDMMSG        345
+#define SYS_SOCKET      359
+#define SYS_SOCKETPAIR  360
+#define SYS_BIND        361
+#define SYS_CONNECT     362
+#define SYS_LISTEN      363
+#define SYS_ACCEPT4     364
+#define SYS_GETSOCKOPT  365
+#define SYS_SETSOCKOPT  366
+#define SYS_GETSOCKNAME 367
+#define SYS_GETPEERNAME 368
+#define SYS_SENDTO      369
+#define SYS_SENDMSG     370
+#define SYS_RECVFROM    371
+#define SYS_RECVMSG     372
+#define SYS_SHUTDOWN    373
+#define SYS_RECVMMSG    337
+#define SYS_SENDMMSG    345
 
 /* eventfd, epoll and timerfd (io/eventfd.c, io/epoll.c, io/timerfd.c). */
-#define SYS_EPOLL_CREATE     254
-#define SYS_EPOLL_CTL        255
-#define SYS_EPOLL_WAIT       256
-#define SYS_EPOLL_PWAIT      319
-#define SYS_TIMERFD_CREATE   322
-#define SYS_EVENTFD          323
-#define SYS_TIMERFD_SETTIME  325
-#define SYS_TIMERFD_GETTIME  326
-#define SYS_EVENTFD2         328
-#define SYS_EPOLL_CREATE1    329
+#define SYS_EPOLL_CREATE      254
+#define SYS_EPOLL_CTL         255
+#define SYS_EPOLL_WAIT        256
+#define SYS_EPOLL_PWAIT       319
+#define SYS_TIMERFD_CREATE    322
+#define SYS_EVENTFD           323
+#define SYS_TIMERFD_SETTIME   325
+#define SYS_TIMERFD_GETTIME   326
+#define SYS_EVENTFD2          328
+#define SYS_EPOLL_CREATE1     329
 #define SYS_TIMERFD_GETTIME64 410
 #define SYS_TIMERFD_SETTIME64 411
-#define SYS_EPOLL_PWAIT2     441
+#define SYS_EPOLL_PWAIT2      441
 
 /*
  * Size of the syscall dispatch table: the highest number Linux i386 has,

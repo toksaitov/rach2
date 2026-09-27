@@ -104,14 +104,14 @@ enum {
  * them. `mov %drN, %eax` is 0F 21 /r and `mov %eax, %drN` 0F 23 /r, with
  * the register N in the ModRM byte's reg field and %eax in its r/m field.
  */
-#define DR_READ(n, v)   __asm__ __volatile__(".byte 0x0f, 0x21, " n : "=a"(v))
-#define DR_WRITE(n, v)  __asm__ __volatile__(".byte 0x0f, 0x23, " n : : "a"(v) : "memory")
-#define DR0_MODRM       "0xc0"
-#define DR1_MODRM       "0xc8"
-#define DR2_MODRM       "0xd0"
-#define DR3_MODRM       "0xd8"
-#define DR6_MODRM       "0xf0"
-#define DR7_MODRM       "0xf8"
+#define DR_READ(n, v)  __asm__ __volatile__(".byte 0x0f, 0x21, " n : "=a"(v))
+#define DR_WRITE(n, v) __asm__ __volatile__(".byte 0x0f, 0x23, " n : : "a"(v) : "memory")
+#define DR0_MODRM      "0xc0"
+#define DR1_MODRM      "0xc8"
+#define DR2_MODRM      "0xd0"
+#define DR3_MODRM      "0xd8"
+#define DR6_MODRM      "0xf0"
+#define DR7_MODRM      "0xf8"
 
 /** The user-mode registers of the thread `t`, which is not running: the frame
  * its entry to the kernel pushed at the top of its kernel stack. */

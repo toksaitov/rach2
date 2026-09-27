@@ -1290,7 +1290,8 @@ static void exec_program(int argc, char *argv[])
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
     if (elf_setup_vmas(&mm->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
-        (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY32))) {
+        (stack_bottom < USER_STACK_BASE &&
+         !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY32))) {
         k_panic("boot: no memory for the first process's regions");
     }
 

@@ -44,7 +44,6 @@ typedef unsigned int size_t;
 #define SA_SIGINFO  0x00000004u
 #define SA_RESTORER 0x04000000u
 
-
 struct k_sigaction {
     void (*handler)(int);
     unsigned long flags;
