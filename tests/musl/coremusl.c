@@ -462,6 +462,23 @@ static int hole_row(void)
     return 0;
 }
 
+/** The children that leave no core file: one whose limit is 0 and one that
+ * is not dumpable. */
+static int no_core_rows(void)
+{
+    int status;
+    pid_t child = abort_child(0, 1, &status);
+
+    if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || access(CORE_PATH, F_OK) == 0) {
+        return fail("a core with the limit 0");
+    }
+    child = abort_child(RLIM_INFINITY, 0, &status);
+    if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || access(CORE_PATH, F_OK) == 0) {
+        return fail("a core from a process that is not dumpable");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     struct stat st;
@@ -496,15 +513,7 @@ int main(int argc, char **argv)
         return 1;
     }
     unlink(CORE_PATH);
-    child = abort_child(0, 1, &status);
-    if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || access(CORE_PATH, F_OK) == 0) {
-        return fail("a core with the limit 0");
-    }
-    child = abort_child(RLIM_INFINITY, 0, &status);
-    if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || access(CORE_PATH, F_OK) == 0) {
-        return fail("a core from a process that is not dumpable");
-    }
-    if (hole_row() != 0) {
+    if (no_core_rows() != 0 || hole_row() != 0) {
         return 1;
     }
     rmdir(DIR_PATH);
