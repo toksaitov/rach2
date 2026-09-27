@@ -19,7 +19,10 @@
  * status page another thread unmaps while it sleeps fails with EFAULT and
  * leaves the zombie to a later wait. A child forked by a thread has one
  * thread. A thread that calls execve replaces the whole process, whose other
- * threads end. A thread that calls exit ends them all.
+ * threads end. Of two threads in execve at once, the one whose call first
+ * waits for the other threads to end replaces the process, and the other
+ * ends: the probe traces the second and holds it at the entry of its call
+ * until the first waits for it. A thread that calls exit ends them all.
  *
  * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
  * otherwise.
@@ -35,6 +38,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -461,6 +465,79 @@ static void *exit_all(void *arg)
     exit(8);
 }
 
+static int tid_pipe[2];
+
+/** The second exec of the two: the thread makes the probe its tracer, says
+ * its id, stops, and then calls execve. */
+static void *exec_second(void *arg)
+{
+    pid_t self = tid();
+
+    (void)arg;
+    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0 ||
+        write(tid_pipe[1], &self, sizeof(self)) != sizeof(self)) {
+        _exit(2);
+    }
+    syscall(SYS_tgkill, getpid(), self, SIGSTOP);
+    execl("/bin/sh", "sh", "-c", "exit 7", (char *)0);
+    _exit(3);
+}
+
+static void on_alarm(int sig)
+{
+    (void)sig;
+}
+
+/**
+ * Two execs at once. The child's second thread stops at the entry of its
+ * execve under the probe's PTRACE_SYSCALL, and only then does the first
+ * thread call execve, which sends it SIGKILL and waits for it to end. The
+ * SIGKILL ends the stop, and the second call must give up and let its
+ * thread end rather than wait for the first: the child then runs the first
+ * one's program. An alarm bounds the waits, since two calls that each
+ * waited for the other would never end.
+ */
+static int two_execs(void)
+{
+    struct sigaction sa;
+    int go[2], status, ok;
+    pid_t pid, second;
+    char c;
+
+    if (pipe(go) != 0 || pipe(tid_pipe) != 0) {
+        return fail("the pipes of the two execs");
+    }
+    pid = fork();
+    if (pid == 0) {
+        pthread_t t;
+
+        close(go[1]);
+        if (pthread_create(&t, NULL, exec_second, NULL) != 0 || read(go[0], &c, 1) != 1) {
+            _exit(4);
+        }
+        execl("/bin/sh", "sh", "-c", "exit 9", (char *)0);
+        _exit(5);
+    }
+    close(go[0]);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_alarm;
+    sigaction(SIGALRM, &sa, NULL);
+    alarm(20);
+    ok = read(tid_pipe[0], &second, sizeof(second)) == sizeof(second) &&
+         waitpid(second, &status, __WALL) == second && WIFSTOPPED(status) &&
+         WSTOPSIG(status) == SIGSTOP && ptrace(PTRACE_SYSCALL, second, NULL, NULL) == 0 &&
+         waitpid(second, &status, __WALL) == second && WIFSTOPPED(status) &&
+         WSTOPSIG(status) == SIGTRAP && write(go[1], "g", 1) == 1 &&
+         waitpid(second, &status, __WALL) == second && WIFSIGNALED(status) &&
+         WTERMSIG(status) == SIGKILL && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+         WEXITSTATUS(status) == 9;
+    alarm(0);
+    close(go[1]);
+    close(tid_pipe[0]);
+    close(tid_pipe[1]);
+    return ok ? 0 : fail("two execs at once");
+}
+
 int main(void)
 {
     pthread_t t[THREADS], r, w, spare;
@@ -545,6 +622,9 @@ int main(void)
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
         return fail("execve from a thread");
+    }
+    if (two_execs() != 0) {
+        return 1;
     }
 
     pid = fork();

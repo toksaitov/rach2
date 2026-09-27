@@ -191,9 +191,17 @@ the process instead.
 Only then does the process take the new address space.
 First every other thread of the process is sent
 .Dv SIGKILL ,
-and the call waits until they have ended; a thread other than the one
-that began the process then takes that thread's ID, which is the process
-ID, as on Linux.
+and the call waits until they have ended.
+A process that is ending, or one in which another thread's
+.Fn execve
+has begun that wait, has sent the caller
+.Dv SIGKILL
+as well: the call then fails with
+.Er EAGAIN
+and sends nothing, and the thread ends before it returns to user mode, as
+on Linux.
+A thread other than the one that began the process then takes that
+thread's ID, which is the process ID, as on Linux.
 The robust futexes the thread holds are released, as
 .Xr futex 2
 describes.
@@ -227,6 +235,16 @@ returns -1 with
 set to
 .Er E2BIG
 and the caller still running.
+.Pp
+.Pa tests/musl/threadmusl.c
+holds one thread at the entry of its
+.Fn execve
+under
+.Dv PTRACE_SYSCALL
+until another thread's
+.Fn execve
+waits for it to end, and checks that the held thread ends and the other
+call's program runs.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG
@@ -237,6 +255,12 @@ script adds do not fit.
 .It Bq Er EACCES
 Search or execute permission was denied, the program or interpreter is
 on a noexec mount, or its path resolves into a synthetic mount.
+.It Bq Er EAGAIN
+The process is ending, or another thread's
+.Fn execve
+is waiting for the process's other threads to end; the caller has
+.Dv SIGKILL
+pending and ends before it returns to user mode.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EFAULT

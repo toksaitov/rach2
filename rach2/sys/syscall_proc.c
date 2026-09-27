@@ -1319,17 +1319,26 @@ static void exec_take_leader(void)
 /**
  * Make the current thread its process's only one before execve replaces the
  * image, as Linux's `de_thread` does: every other thread is sent SIGKILL and
- * the caller waits, whatever it is sent, until they have ended; a caller
- * that is not the leader then takes the leader's place. While `exec_task`
- * is set, a thread the SIGKILL ends ends alone and does not make the
- * process end.
+ * the caller waits, whatever it is sent, until they have ended. While
+ * `exec_task` is set, a thread the SIGKILL ends ends alone and does not make
+ * the process end.
+ *
+ * A process that is ending, or one another of whose threads is in this wait
+ * already, has sent the caller SIGKILL too. The caller then sends nothing
+ * and leaves `exec_task` to its owner: the exec returns -EAGAIN, and the
+ * thread ends on its way back to user mode, as Linux's `de_thread` has its
+ * exec give up. Two execs that both waited would each wait for the other,
+ * since neither wait acts on a signal. 0 or -EAGAIN.
  */
-static void exec_one_thread(void)
+static int32_t exec_one_thread(void)
 {
     struct tgroup *tg = current_proc->tg;
     struct k_siginfo info;
     process_t *t;
 
+    if (tg->exiting || tg->exec_task != NULL) {
+        return -EAGAIN;
+    }
     if (tg->live > 1) {
         tg->exec_task = current_proc;
         k_memset(&info, 0, sizeof(info));
@@ -1342,9 +1351,7 @@ static void exec_one_thread(void)
         (void)wq_wait_event_nointr(&tg->gone, exec_alone, tg);
         tg->exec_task = NULL;
     }
-    if (current_proc != tg->leader) {
-        exec_take_leader();
-    }
+    return 0;
 }
 
 /**
@@ -1391,26 +1398,27 @@ static void exec_files(struct exec_state *s)
 }
 
 /**
- * Make the image `s` built the process's; past here execve cannot fail.
+ * Make the image `s` built the process's, once `exec_one_thread` has ended
+ * the process's other threads; past here execve cannot fail.
  *
- * Ends the process's other threads first, and releases the robust futexes
- * the thread holds and clears the word CLONE_CHILD_CLEARTID names while the
- * old image is still there to hold them. Gives a caller that shares its
- * descriptor table one of its own (`exec_files`) and drops the close-on-exec
- * descriptors; takes the new ids, the saved ids becoming the new effective
- * ones, which is the POSIX rule for every exec and what lets an image shed
- * acquired authority and take it back; resets what pointed into the old
- * image: caught signals' handlers (SIG_IGN, the blocked mask and the pending
- * signals are kept, as POSIX says), the alternate signal stack, the TLS base
- * and the floating-point state. Then it switches to the new address space
- * and puts the old one, which the parent of a vfork child keeps, lets that
- * parent go, and points the return frame at the entry with the stack
- * pointer at argc. A fresh image has no TLS until its libc calls
- * set_thread_area, so the segment registers get the plain user-data
- * selector, as a new process gets it, in place of the old image's TLS one.
- * The general registers are cleared, since the SysV i386 entry has argc on
- * the stack and %edx an atexit hook or zero, and %ebp 0 marks the
- * outermost frame.
+ * A thread that is not the leader takes the leader's place first, and the
+ * thread releases the robust futexes it holds and clears the word
+ * CLONE_CHILD_CLEARTID names while the old image is still there to hold
+ * them. Gives a caller that shares its descriptor table one of its own
+ * (`exec_files`) and drops the close-on-exec descriptors; takes the new
+ * ids, the saved ids becoming the new effective ones, which is the POSIX
+ * rule for every exec and what lets an image shed acquired authority and
+ * take it back; resets what pointed into the old image: caught signals'
+ * handlers (SIG_IGN, the blocked mask and the pending signals are kept, as
+ * POSIX says), the alternate signal stack, the TLS base and the
+ * floating-point state. Then it switches to the new address space and puts
+ * the old one, which the parent of a vfork child keeps, lets that parent
+ * go, and points the return frame at the entry with the stack pointer at
+ * argc. A fresh image has no TLS until its libc calls set_thread_area, so
+ * the segment registers get the plain user-data selector, as a new process
+ * gets it, in place of the old image's TLS one. The general registers are
+ * cleared, since the SysV i386 entry has argc on the stack and %edx an
+ * atexit hook or zero, and %ebp 0 marks the outermost frame.
  */
 static void exec_commit(isr_params_t *params, struct exec_state *s)
 {
@@ -1419,7 +1427,9 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     uint32_t old_egid = current_proc->egid;
     int sig;
 
-    exec_one_thread();
+    if (current_proc != current_proc->tg->leader) {
+        exec_take_leader();
+    }
     proc_thread_gone(current_proc);
     exec_files(s);
     close_cloexec_fds();
@@ -1518,9 +1528,9 @@ int32_t proc_files_unshare(void)
  * envp onto the new stack's pages, resolves a `#!` script to its
  * interpreter, builds the new image, with the dynamic linker it names, in
  * an address space of its own, sets aside the storage of a descriptor table
- * of the caller's own, and only then commits, so every refusal and every
- * failure of the load returns to the caller with its image and its
- * descriptor table intact.
+ * of the caller's own, ends the process's other threads, and only then
+ * commits, so every refusal and every failure of the load returns to the
+ * caller with its image and its descriptor table intact.
  */
 static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 {
@@ -1555,6 +1565,9 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     }
     if (rc == 0) {
         rc = exec_files_stage(s);
+    }
+    if (rc == 0) {
+        rc = exec_one_thread();
     }
     if (rc == 0) {
         uint32_t tid = current_proc->pid;
