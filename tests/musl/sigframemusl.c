@@ -8,12 +8,13 @@
  * restarted after a handler with SA_RESTART and ends with EINTR after one
  * without. A handler with SA_ONSTACK runs on the alternate stack, where
  * sigaltstack reports SS_ONSTACK. `int3` reaches a SIGTRAP handler and the
- * program goes on after it. rt_sigpending reports a blocked signal, the old
- * sigprocmask call blocks one, sigsuspend's handler runs under the
- * suspend's mask and the old mask comes back after it, and a child's exit
- * reaches a SIGCHLD handler as CLD_EXITED with its pid and status. A handler
- * that nests on a small alternate stack until its frames no longer fit ends
- * the process with SIGSEGV and writes nothing below the stack.
+ * program goes on after it. rt_sigpending reports a blocked signal, and the
+ * old sigprocmask call blocks one. sigsuspend returns -1 with EINTR once the
+ * pending signal's handler has run under the suspend's mask, and the old mask
+ * comes back after it. A child's exit reaches a SIGCHLD handler as CLD_EXITED
+ * with its pid and status. A handler that nests on a small alternate stack
+ * until its frames no longer fit ends the process with SIGSEGV and writes
+ * nothing below the stack.
  *
  * Prints "SIGFRAMEMUSL OK" on success and "SIGFRAMEMUSL FAIL (detail)"
  * otherwise.
@@ -94,6 +95,31 @@ static void on_usr2(int sig, siginfo_t *info, void *context)
     (void)context;
     sigprocmask(SIG_BLOCK, NULL, &now);
     handler_mask_had_usr1 = sigismember(&now, SIGUSR1);
+}
+
+/**
+ * sigsuspend with an empty mask while SIGUSR1 is blocked and SIGUSR2 blocked
+ * and pending: it must return -1 with EINTR once `on_usr2` has run, under
+ * the suspend's mask, which lacks SIGUSR1. The handler's report starts at -1,
+ * which only the handler overwrites. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int suspend_row(void)
+{
+    sigset_t empty;
+
+    sigemptyset(&empty);
+    handler_mask_had_usr1 = -1;
+    if (sigsuspend(&empty) != -1 || errno != EINTR) {
+        return fail("sigsuspend did not return -1 with EINTR");
+    }
+    if (handler_mask_had_usr1 == -1) {
+        return fail("sigsuspend's handler did not run");
+    }
+    if (handler_mask_had_usr1 != 0) {
+        return fail("the handler did not run under the suspend's mask");
+    }
+    return 0;
 }
 
 static void on_chld(int sig, siginfo_t *info, void *uc)
@@ -213,7 +239,7 @@ static int interrupted_read(int restart)
 int main(void)
 {
     struct sigaction sa;
-    sigset_t block, pending, empty, now;
+    sigset_t block, pending, now;
     stack_t st;
     volatile char *unmapped = (volatile char *)0x00001000;
     uint32_t old = 0;
@@ -287,10 +313,8 @@ int main(void)
     if (!sigismember(&now, SIGUSR1)) {
         return fail("the old sigprocmask call did not block the signal");
     }
-    sigemptyset(&empty);
-    sigsuspend(&empty);
-    if (handler_mask_had_usr1 != 0) {
-        return fail("the handler did not run under the suspend's mask");
+    if (suspend_row() != 0) {
+        return 1;
     }
     sigprocmask(SIG_BLOCK, NULL, &now);
     if (!sigismember(&now, SIGUSR1) || !sigismember(&now, SIGUSR2)) {
