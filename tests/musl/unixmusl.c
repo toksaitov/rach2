@@ -27,7 +27,9 @@
  * connects elsewhere or disconnects drops its queued messages, and the peer it
  * left gets ECONNRESET. A chain of a thousand datagram pairs, each queued in
  * the pair before, closes from its head. A datagram send waiting for room fails
- * with EPIPE when the receiver shuts down reading.
+ * with EPIPE when the receiver shuts down reading. A stream whose peer's queue
+ * is full polls writable once it is shut down for writing, and the write then
+ * fails with EPIPE.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -670,12 +672,45 @@ static int waiting(void)
     return 0;
 }
 
+/* A stream socket whose peer's queue is full polls writable once it is
+ * shut down for writing, so the caller can learn of the EPIPE. */
+static int shut_writable(void)
+{
+    static char block[65536];
+    struct pollfd pfd;
+    int sv[2];
+
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) != 0) {
+        return fail("a stream pair to fill");
+    }
+    while (write(sv[0], block, sizeof(block)) > 0) {
+    }
+    if (errno != EAGAIN) {
+        return fail("a full stream was not EAGAIN");
+    }
+    pfd.fd = sv[0];
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 0) != 0) {
+        return fail("a full stream polled writable");
+    }
+    if (shutdown(sv[0], SHUT_WR) != 0 || poll(&pfd, 1, 1000) != 1 || !(pfd.revents & POLLOUT)) {
+        return fail("a stream shut down for writing did not poll writable");
+    }
+    if (write(sv[0], "x", 1) != -1 || errno != EPIPE) {
+        return fail("a write after SHUT_WR was not EPIPE");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
         backlog_growth() || datagram_peers() || full_receiver_shut() || chain_close() ||
-        datagram_names() || waiting()) {
+        datagram_names() || waiting() || shut_writable()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");

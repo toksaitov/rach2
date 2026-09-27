@@ -126,6 +126,12 @@ behave as in Linux;
 .Dv MSG_OOB
 fails with
 .Er EOPNOTSUPP .
+.Pp
+.Xr poll 2
+reports a socket readable with a message or a connection queued, or its
+input ended, and writable when a send would not wait: the peer's queue
+has room, or the send fails at once, the peer being gone or the
+connection shut down in the send's direction.
 .Ss Control messages
 A
 .Xr sendmsg 2

@@ -1325,6 +1325,12 @@ int32_t unix_getname(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int pee
     return put_name(addr, addrlen_ptr, &s->peer->name, 0);
 }
 
+/**
+ * shutdown(2). A connection's other end has the matching direction shut
+ * too. Whoever waits on either socket is woken, and so are the sockets
+ * connected to `s`, whose sends to it now fail and which poll therefore
+ * reports writable.
+ */
 int32_t unix_shutdown(fd_entry_t *e, int how)
 {
     struct unix_sock *s = sock_of(e);
@@ -1339,7 +1345,7 @@ int32_t unix_shutdown(fd_entry_t *e, int how)
         s->peer->shut |= ((mode & SHUT_RCV) << 1) | ((mode & SHUT_SEND) >> 1);
         wq_wake_all(&s->peer->wq);
     }
-    wq_wake_all(&s->wq);
+    wake_writers(s);
     return 0;
 }
 
@@ -2379,10 +2385,12 @@ static int32_t unix_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return unix_sendto(e, (uint32_t)(__force uintptr_t)buf, count, 0, 0, 0);
 }
 
-/* Whether a send would find room: a connected socket's peer has room in its
- * queue, or is gone, when the send fails at once. A datagram socket that
- * names its receiver in each send cannot tell and says yes, as Linux does;
- * so does a stream socket that is not connected, whose send fails at once. */
+/* Whether a send would not wait: a connected socket's peer has room in its
+ * queue, or the send fails at once, the peer being gone or the connection
+ * shut down in the send's direction, which the send then reports. A
+ * datagram socket that names its receiver in each send cannot tell and says
+ * yes, as Linux does; so does a stream socket that is not connected, whose
+ * send fails at once. */
 static int writable(const struct unix_sock *s)
 {
     const struct unix_sock *p = s->peer;
@@ -2390,7 +2398,7 @@ static int writable(const struct unix_sock *s)
     if (s->state == US_LISTENING) {
         return 0;
     }
-    if (!p || p->closed) {
+    if (!p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV)) {
         return 1;
     }
     return !queue_full(p);
