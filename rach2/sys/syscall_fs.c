@@ -5553,6 +5553,12 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
  * /proc object has fixed root-owned metadata: root's request succeeds
  * without a change, anyone else's is refused. `name` is absolute with the
  * leading '/' stripped, matching do_access.
+ *
+ * The walk takes the lock of the mount it ends on, where the type asks for
+ * one, and the lookup, the check and the store are one hold of it: a node of
+ * a mounted KRFFS volume is its offset, which a growing write that held the
+ * lock would move, and a store made at the offset the walk found would
+ * change whatever the volume put there since.
  */
 static int32_t do_chmod(const char *name, uint32_t mode)
 {
@@ -5562,13 +5568,14 @@ static int32_t do_chmod(const char *name, uint32_t mode)
     krffs_node_t *node;
     int32_t rc;
 
-    rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+    rc = vfs_resolve(0, name, VFS_WALK_LOCK, &ref, 0, 0);
     if (rc != 0) {
         return rc;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (svp) {
         vp = *svp;
+        vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         if (vp.kind == VNODE_PTS) {
             struct pty *pt = pty_get(vp.pts_index);
@@ -5599,11 +5606,13 @@ static int32_t do_chmod(const char *name, uint32_t mode)
             rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
         }
         vfs_ns_unlock(ref.mnt);
+        vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return rc;
     }
     node = ref.node;
     rc = krffs_chmod_node(node, mode);
+    vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
     return rc;
 }
@@ -5699,7 +5708,8 @@ static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
  * and fchownat(2) with the flag go. A /dev or /proc node is `chown_synth`'s,
  * a node of a mounted type follows `vfs_chown_plan`, and a KRFFS node
  * `krffs_chown_node`; the boot root has no links, so there `follow` changes
- * nothing.
+ * nothing. The walk keeps its mount's lock through the store, as
+ * `do_chmod`'s does, and for the same reason.
  */
 static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow)
 {
@@ -5709,13 +5719,14 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
     krffs_node_t *node;
     int32_t rc;
 
-    rc = vfs_resolve(0, name, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
+    rc = vfs_resolve(0, name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, &ref, 0, 0);
     if (rc != 0) {
         return rc;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (svp) {
         vp = *svp;
+        vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return chown_synth(&vp, uid, gid);
     }
@@ -5738,11 +5749,13 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
             rc = what < 0 ? what : (what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0);
         }
         vfs_ns_unlock(ref.mnt);
+        vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return rc;
     }
     node = ref.node;
     rc = krffs_chown_node(node, uid, gid);
+    vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
     return rc;
 }

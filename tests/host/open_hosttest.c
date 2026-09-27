@@ -1,8 +1,8 @@
 /**
  * Check mounted open truncation, cleanup and loop handle relocation, the
  * close of a descriptor whose release sleeps, by one thread or by the end of
- * another thread's call, and an unlink and a rename on the KRFFS root of a
- * file an open is installing.
+ * another thread's call, an unlink and a rename on the KRFFS root of a file
+ * an open is installing, and a chmod and a chown of a file a write moves.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -131,6 +131,9 @@ static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 static const struct vfs_ops root_ops = {.lookup = root_lookup};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
 static const struct vfs_type mounted_type = {0};
+/* A mounted type whose uses are serialised under its namespace lock, as
+ * KRFFS volumes and ext2 are, for the attribute rows. */
+static const struct vfs_type locked_type = {"locked", 0, 0, 1, 0};
 static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
@@ -156,6 +159,8 @@ static int removals, keeps;
  * number at the row's first lookup in the root. */
 static void (*waiting)(void);
 static int ns_depth, ns_takes, lookup_take;
+/* Set in the rows of chmod and chown on a mounted type. */
+static int attr_row;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -226,11 +231,12 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
     return 0;
 }
 
-/** Require set-id removal after successful truncation. */
+/** Require the node the file is at, and, but in the attribute rows,
+ * set-id removal after successful truncation. */
 int vfs_setattr(struct vfs_mount *mnt, void *at, int what, const struct vfs_stat *st)
 {
-    check(mnt == &mount && at == (relocate ? &moved : &node) && what == VFS_SET_MODE &&
-              !(st->mode & 06000),
+    check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
+    check(attr_row || (what == VFS_SET_MODE && !(st->mode & 06000)),
           "successful truncation clears set-id bits");
     attrs++;
     return 0;
@@ -439,6 +445,16 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
 
     (void)start;
     check(ns_depth == 0, "a walk starts with no namespace lock held");
+    if (!(flags & VFS_WALK_PARENT)) {
+        /* The attribute rows' file, found under the lock a locked walk
+         * takes, as the resolver takes it before each lookup. */
+        if ((flags & VFS_WALK_LOCK) && mount.type->ns_serialised) {
+            vfs_ns_lock(&mount);
+        }
+        out->mnt = &mount;
+        out->node = relocate ? &moved : &node;
+        return 0;
+    }
     for (p = path; *p; p++) {
         if (*p == '/') {
             name = p + 1;
@@ -509,6 +525,15 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
         removals++;
     }
     return 0;
+}
+
+/** No row stamps a node of the KRFFS root: the attribute rows' file is on
+ * a mounted type. */
+void krffs_stamp(krffs_node_t *n, int what)
+{
+    (void)n;
+    (void)what;
+    check(0, "unexpected root node stamp");
 }
 
 /** Take the name off a node a descriptor holds, keeping the node. */
@@ -683,6 +708,41 @@ static void rename_over_installing(void)
     root_row_end();
 }
 
+/** The write a row's call waits for: it holds the mount's lock and moves
+ * the file, as a growing write on a mounted KRFFS volume does. */
+static void write_moves(void)
+{
+    relocate = 1;
+}
+
+/**
+ * A chmod and a chown by path of a file on a mounted type whose uses are
+ * serialised, which a write holding the mount's lock moves: each must read
+ * and change the node the file is at once it has the lock, since its walk
+ * takes that lock and keeps it through the store.
+ */
+static void attrs_after_move(void)
+{
+    int round;
+
+    for (round = 0; round < 2; round++) {
+        row_begin();
+        proc.euid = 0;
+        mount.type = &locked_type;
+        attr_row = 1;
+        waiting = write_moves;
+        check((round == 0 ? do_chmod("f", 0600) : do_chown("f", 5, (uint32_t)-1, 1)) == 0,
+              "a chmod or chown of a file a write moves");
+        check(attrs == 1 && ns_depth == 0 && !waiting,
+              "the change is made once, with the mount's lock given back");
+        attr_row = 0;
+        waiting = 0;
+        ns_depth = 0;
+        mount.type = &mounted_type;
+        row_end();
+    }
+}
+
 /** A descriptor on the model file, open for reading and writing. */
 static int model_open(void)
 {
@@ -853,6 +913,7 @@ int main(void)
     dup2_source_closed();
     unlink_installing();
     rename_over_installing();
+    attrs_after_move();
     loop_handles();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
