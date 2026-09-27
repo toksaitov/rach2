@@ -12,7 +12,11 @@
 # `setid` declares a privileged path with its mode, owner and the host file
 # it is staged from. `trusted` names a file that must be present,
 # unprivileged, and exactly as declared: a program root runs, or a file
-# root reads to decide who somebody is. `sentinel` names one ordinary node
+# root reads to decide who somebody is. `trusted overlay` names one that a
+# manifest's overlay program installs over the staged tree, with the host
+# file it comes from: the manifest check passes it over, and the check of
+# the finished image requires a regular file with the declared mode and
+# owner under directories nobody but root may write. `sentinel` names one ordinary node
 # the image inventory must find when an entry declares no set-id path, so a
 # misparsed image cannot read as clean. `init` names which init artifact
 # the manifest must stage (`none` forbids one). `sysroot` marks the image
@@ -97,9 +101,10 @@ init init-metal
 # path that go with it, the metal init that starts OpenSSH's server, and
 # the two files by which glibc decides whose account a name is and which
 # libraries a program of root's loads. What vendor/gnu/install_root.sh adds
-# over the staged tree is not in the manifest and cannot be declared, so
-# none of it may be set-id: OpenSSH's ssh-keysign is installed without its
-# bit.
+# over the staged tree is not in the manifest, and none of it may be set-id:
+# OpenSSH's ssh-keysign is installed without its bit. The programs of it
+# that root runs, the SSH server and ssh-keygen, which init starts, and the
+# two helpers the server starts as root, are declared as overlay files.
 manifest os-real-gnu
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
@@ -113,6 +118,10 @@ trusted text 0644:0:0 /etc/shells /bin/sh\n/bin/bash\n
 trusted text 0644:0:0 /etc/profile export PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 trusted text 0644:0:0 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n
 trusted text 0644:0:0 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n
+trusted overlay 0755:0:0 /usr/sbin/sshd build/vendor/gnu/root/usr/sbin/sshd
+trusted overlay 0755:0:0 /usr/bin/ssh-keygen build/vendor/gnu/root/usr/bin/ssh-keygen
+trusted overlay 0755:0:0 /usr/libexec/sshd-session build/vendor/gnu/root/usr/libexec/sshd-session
+trusted overlay 0755:0:0 /usr/libexec/sshd-auth build/vendor/gnu/root/usr/libexec/sshd-auth
 trusted file 0600:0:0 /root/.ssh/authorized_keys krffs/authorized_keys
 trusted file 0755:0:0 /bin/bootctl build/utils/sbin/bootctl
 trusted file 0644:0:0 /src/rach2/guest.mk rach2/guest.mk

@@ -520,7 +520,8 @@ static struct allow *read_allow(const char *path)
                the difference between an image somebody can reach and one
                nobody can. Every other declaration must be staged. */
             if (n != 5 || !parse_mode(fields[2], &mode, &uid, &gid) ||
-                (strcmp(fields[1], "file") != 0 && strcmp(fields[1], "optional-file") != 0))
+                (strcmp(fields[1], "file") != 0 && strcmp(fields[1], "optional-file") != 0 &&
+                 strcmp(fields[1], "overlay") != 0))
                 allow_fail(path, lineno, "malformed trusted line");
             entry_add_trusted(cur, fields[3], mode, uid, gid, fields[1], fields[4]);
         } else if (strcmp(fields[0], "sentinel") == 0) {
@@ -821,9 +822,11 @@ static void check_init_line(const char *name, const struct manifest *m, const ch
 }
 
 /* Every path an allowlist entry says root runs or trusts, sorted setid
-   first, then sorted trusted, then /sbin/init when one is declared. The
-   result is a list of borrowed pointers. */
-static void declared_paths(const struct entry *e, struct list *out)
+   first, then sorted trusted, then /sbin/init when one is declared; the
+   trusted `overlay` paths only with `overlays`, since a manifest does not
+   stage them or their directories. The result is a list of borrowed
+   pointers. */
+static void declared_paths(const struct entry *e, int overlays, struct list *out)
 {
     struct list tmp = {NULL, 0, 0};
     int i;
@@ -835,7 +838,8 @@ static void declared_paths(const struct entry *e, struct list *out)
         list_push(out, tmp.items[i]);
     tmp.n = 0;
     for (i = 0; i < e->n_trusted; i++)
-        list_push(&tmp, e->trusted[i].path);
+        if (overlays || strcmp(e->trusted[i].verb, "overlay") != 0)
+            list_push(&tmp, e->trusted[i].path);
     list_sort(&tmp);
     for (i = 0; i < tmp.n; i++)
         list_push(out, tmp.items[i]);
@@ -844,22 +848,22 @@ static void declared_paths(const struct entry *e, struct list *out)
         list_push(out, (char *)"/sbin/init");
 }
 
-/* Check the directories above every declared path: each must be staged,
-   owned by root, and writable by nobody else, because `unlink` and
-   `rename` are decided on the parent directory's write permission. `look`
-   answers a directory path with its mode and owner, or nonzero for "not
-   staged". */
+/* Check the directories above every declared path, the `overlay` ones
+   with `overlays`: each must be staged, owned by root, and writable by
+   nobody else, because `unlink` and `rename` are decided on the parent
+   directory's write permission. `look` answers a directory path with its
+   mode and owner, or nonzero for "not staged". */
 typedef int (*dir_look)(void *ctx, const char *path, unsigned long *mode, unsigned long *uid,
                         unsigned long *gid);
 
-static void check_ancestors(const char *where, const struct entry *e, dir_look look, void *ctx,
-                            struct list *problems)
+static void check_ancestors(const char *where, const struct entry *e, int overlays, dir_look look,
+                            void *ctx, struct list *problems)
 {
     struct list paths = {NULL, 0, 0};
     struct list seen = {NULL, 0, 0};
     int i;
 
-    declared_paths(e, &paths);
+    declared_paths(e, overlays, &paths);
     for (i = 0; i < paths.n; i++) {
         const char *guest = paths.items[i];
         const char *p = guest + 1;
@@ -1143,7 +1147,7 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
     sorted.n = 0;
 
     dctx.m = &m;
-    check_ancestors(name, e, manifest_dir_look, &dctx, problems);
+    check_ancestors(name, e, 0, manifest_dir_look, &dctx, problems);
 
     for (i = 0; i < e->n_trusted; i++)
         list_push(&sorted, e->trusted[i].path);
@@ -1159,6 +1163,9 @@ static void check_manifest(const char *path, const struct allow *allow, struct l
         if (t == NULL) {
             fprintf(stderr, "check-setid: %s is sorted but not declared\n", sorted.items[i]);
             exit(2);
+        }
+        if (strcmp(t->verb, "overlay") == 0) {
+            continue; /* installed over the staged tree; the image check has it */
         }
         s = staged_find(&staged, t->path);
         if (s == NULL && strcmp(t->verb, "optional-file") == 0) {
@@ -2300,7 +2307,7 @@ static void check_image(const char *image, const char *manifest, long offset, lo
                  iname, decl->path, fmt_entry(decl->mode, decl->uid, decl->gid));
     }
 
-    check_ancestors(iname, e, image_dir_look, (void *)&im, problems);
+    check_ancestors(iname, e, 1, image_dir_look, (void *)&im, problems);
 
     sorted.n = 0;
     for (i = 0; i < e->n_trusted; i++)
@@ -2331,6 +2338,11 @@ static void check_image(const char *image, const char *manifest, long offset, lo
                  "%s: %s is staged set-id (%s); it must stay "
                  "trusted",
                  iname, t->path, fmt_entry(tn->mode & PERMBITS, tn->uid, tn->gid));
+        else if (strcmp(t->verb, "overlay") == 0 && (tn->mode & 0170000u) != 0100000u)
+            addf(problems,
+                 "%s: %s is declared a file the overlay installs but is "
+                 "not a regular file (type 0%lo)",
+                 iname, t->path, (unsigned long)(tn->mode & 0170000u));
         else if (strcmp(t->verb, "text") == 0 && trusted_text_matches(&im, t->path, t->value) == 0)
             addf(problems,
                  "%s: %s does not hold the text the allowlist "
@@ -3894,15 +3906,22 @@ static unsigned long st_ext2_inode_of(const char *image, const char *path)
     return ino;
 }
 
-static void st_ext2_case(const struct allow *img_allow, const char *name, const char *image,
-                         int want_ok, const char *fragment)
+/* An ext2 row judged by the entry `stem` of the fixture allowlist. */
+static void st_ext2_case_as(const struct allow *img_allow, const char *stem, const char *name,
+                            const char *image, int want_ok, const char *fragment)
 {
     char manifest[512], summary[256];
     struct list got = {NULL, 0, 0};
 
-    snprintf(manifest, sizeof(manifest), "%s/img-fixture.manifest", st_tmp);
+    snprintf(manifest, sizeof(manifest), "%s/%s.manifest", st_tmp, stem);
     check_image(image, manifest, 0, 0, 1, img_allow, &got, summary, sizeof(summary));
     st_case(name, &got, want_ok, fragment);
+}
+
+static void st_ext2_case(const struct allow *img_allow, const char *name, const char *image,
+                         int want_ok, const char *fragment)
+{
+    st_ext2_case_as(img_allow, "img-fixture", name, image, want_ok, fragment);
 }
 
 static void st_ext2_rows(const struct allow *img_allow)
@@ -3953,6 +3972,16 @@ static void st_ext2_rows(const struct allow *img_allow)
         image_free(&im);
     }
     st_ext2_case(img_allow, "a clean ext2 fixture", clean, 1, "");
+
+    /* The same image with /bin/busybox declared a file an overlay installs:
+       as the image has it, anyone may write it, and a link in its place. */
+    st_ext2_case_as(img_allow, "img-overlay", "ext2: an overlay file as declared", clean, 1, "");
+    if (st_ext2_copy(clean, mut, "set_inode_field /bin/busybox mode 0100777") == 0)
+        st_ext2_case_as(img_allow, "img-overlay", "ext2: an overlay file anyone may write", mut, 0,
+                        "trust boundaries too");
+    if (st_ext2_copy(clean, mut, "rm /bin/busybox\nsymlink /bin/busybox su") == 0)
+        st_ext2_case_as(img_allow, "img-overlay", "ext2: a link where an overlay file is declared",
+                        mut, 0, "not a regular file");
 
     /* The policy rows, each a debugfs edit of a copy. */
     if (st_ext2_copy(clean, mut, "set_inode_field /bin/su uid 5") == 0)
@@ -4629,6 +4658,11 @@ static int selftest(struct allow *allow)
     fe = add_entry(&img_allow, "img-fixture");
     entry_add_setid(fe, "/bin/su", 04755, 0, 0, "build/utils/sbin/su");
     entry_add_trusted(fe, "/bin/busybox", 0755, 0, 0, "file", "build/vendor/busybox/busybox");
+    fe->sentinel_path = xstrdup("/hello.txt");
+    fe->sentinel_mode = 0644;
+    fe = add_entry(&img_allow, "img-overlay");
+    entry_add_setid(fe, "/bin/su", 04755, 0, 0, "build/utils/sbin/su");
+    entry_add_trusted(fe, "/bin/busybox", 0755, 0, 0, "overlay", "build/vendor/busybox/busybox");
     fe->sentinel_path = xstrdup("/hello.txt");
     fe->sentinel_mode = 0644;
     add_entry(&img_allow, "img-blind");
