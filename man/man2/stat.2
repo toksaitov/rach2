@@ -83,9 +83,17 @@ A null
 counts as empty with
 .Dv AT_EMPTY_PATH ,
 as it does on Linux since 6.11.
+Both C libraries implement
+.Fn fstat
+with
+.Nm statx ,
+as
+.Sx System call interface
+says; when that returns
+.Er ENOSYS ,
 GNU libc's
 .Fn fstat
-is this call; musl's calls
+falls back to this call and musl's to
 .Nm fstat64 .
 An empty path without
 .Dv AT_EMPTY_PATH
