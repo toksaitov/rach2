@@ -8,12 +8,14 @@
  * that was already running sees the value another thread set. The
  * parent-death signal is kept and read back, a signal past 64 is refused, a
  * fork does not pass it on, and a grandchild that set it receives it when its
- * parent exits. A change of the effective uid clears the signal and the
- * dumpable flag. no_new_privs takes 1 with its other arguments 0 and nothing
- * else, a fork passes it on, and under it the set-user-ID `/suidhelper.suid`
- * runs as a plain program, which that helper's `plain` mode checks: every id
- * of its caller, user 1000, and AT_SECURE 0. An option this kernel does not
- * have is EINVAL, never ENOSYS.
+ * parent exits. In a dumpable child with the signal set, a change of the
+ * effective uid alone clears the signal and the dumpable flag, and so does
+ * a change of the effective gid alone in another such child. no_new_privs
+ * takes 1 with its other arguments 0 and nothing else, a fork passes it on,
+ * and under it the set-user-ID `/suidhelper.suid` runs as a plain program,
+ * which that helper's `plain` mode checks: every id of its caller, user 1000,
+ * and AT_SECURE 0. An option this kernel does not have is EINVAL, never
+ * ENOSYS.
  *
  * Prints "PRCTLMUSL OK" on success and "PRCTLMUSL FAIL (detail)" otherwise.
  */
@@ -216,22 +218,38 @@ static int parent_that_dies(void)
     return 0;
 }
 
-/** A child of root that sets the signal and becomes user 1000 loses the
- * signal and the dumpable flag. */
-static int moved_ids(void)
+/**
+ * A dumpable child of root that sets the signal and then moves its effective
+ * uid (`uid`) or its effective gid alone to 1000 loses the signal and the
+ * dumpable flag. 0, or the step that failed.
+ */
+static int moved_id(int uid)
 {
     int sig = -1;
 
-    if (prctl(PR_SET_PDEATHSIG, SIGUSR2, 0, 0, 0) != 0) {
+    if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1 || prctl(PR_SET_PDEATHSIG, SIGUSR2, 0, 0, 0) != 0 ||
+        prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) != 0 || sig != SIGUSR2) {
         return 1;
     }
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if ((uid ? setresuid(1000, 1000, 1000) : setresgid(1000, 1000, 1000)) != 0) {
         return 2;
     }
     if (prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) != 0 || sig != 0) {
         return 3;
     }
     return prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0 ? 0 : 4;
+}
+
+/** `moved_id` with the effective uid. */
+static int moved_uid(void)
+{
+    return moved_id(1);
+}
+
+/** `moved_id` with the effective gid. */
+static int moved_gid(void)
+{
+    return moved_id(0);
 }
 
 /** The parent-death signal: kept, refused past 64, not inherited,
@@ -257,8 +275,11 @@ static int parent_death(void)
         return fail("a child inherited the parent-death signal");
     }
     prctl(PR_SET_PDEATHSIG, 0, 0, 0, 0);
-    if (in_child(moved_ids) != 0) {
-        return fail("a move of the effective uid did not clear the signal and the dumpable flag");
+    if (in_child(moved_uid) != 0) {
+        return fail("a move of the effective uid alone kept the signal or the dumpable flag");
+    }
+    if (in_child(moved_gid) != 0) {
+        return fail("a move of the effective gid alone kept the signal or the dumpable flag");
     }
     if (pipe(report) != 0) {
         return fail("pipe failed");
