@@ -1959,7 +1959,7 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     const struct synth_node *sn = node;
-    int pid = procfs_resolve_pid(sn->vp.pid);
+    int pid = procfs_resolve_id(&sn->vp);
 
     (void)mnt;
     if (sn->vp.kind != VNODE_PROC_EXE) {

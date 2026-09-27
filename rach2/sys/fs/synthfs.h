@@ -85,7 +85,7 @@ enum vnode_kind {
 
 /*
  * The classified path. `name` is a NUL-terminated copy of the device leaf (for
- * VNODE_DEV); pid/procfd/procfile carry the /proc coordinates.
+ * VNODE_DEV); pid/procfd/procfile/tid carry the /proc coordinates.
  */
 struct vpath {
     int kind;
@@ -94,25 +94,29 @@ struct vpath {
     int procfd;    /* VNODE_PROC_FD_LINK: the linked descriptor number */
     int procfile;  /* VNODE_PROC_FILE: SYNTH_PROC_* */
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
+    int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
 };
 
 /** Classify a leading-'/'-stripped path; fills *vp and returns its kind. */
 int synth_classify(const char *path, struct vpath *vp);
 
 /*
- * A synthetic directory fd's identity (kind + full pid). It does not fit
- * packed in the fd's priv pointer, so it lives in a pool (in syscall.c) and
- * priv points at the slot; defined here so /proc/<pid>/fd readlink can
- * render it.
+ * A synthetic directory fd's identity: its kind, the process's pid, and
+ * for a thread's directory under /proc/<pid>/task the thread's id, 0 for
+ * any other. It does not fit packed in the fd's priv pointer, so it is a
+ * record from the heap that priv points at; defined here so /proc/<pid>/fd
+ * readlink can render it.
  */
 struct synth_dir {
     int kind;
     int pid;
     int used;
+    int tid;
 };
 
-/** Render a synthetic directory's absolute path from its kind/pid into out. */
-void synth_dir_path(int kind, int pid, char *out, int cap);
+/** Render a synthetic directory's absolute path from its kind, pid and, for
+ * a thread's directory, tid (0 for none) into out. */
+void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 
 /* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
 #define VNODE_IS_SYNTH(kind) ((kind) != VNODE_KRFFS)

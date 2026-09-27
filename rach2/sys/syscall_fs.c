@@ -71,19 +71,30 @@
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
  * packed in the fd's priv pointer alongside the kind without truncation, so the
- * (kind, pid) live here (struct synth_dir is in synthfs.h); priv points at a
- * record from the heap, freed when the last descriptor referencing it closes
+ * (kind, pid, tid) live here (struct synth_dir is in synthfs.h); priv points at
+ * a record from the heap, freed when the last descriptor referencing it closes
  * (see fd_release_backing). */
-static struct synth_dir *synth_dir_alloc(int kind, int pid)
+static struct synth_dir *synth_dir_alloc(int kind, int pid, int tid)
 {
     struct synth_dir *sd = kzalloc(sizeof(*sd));
 
     if (sd) {
         sd->kind = kind;
         sd->pid = pid;
+        sd->tid = tid;
         sd->used = 1;
     }
     return sd;
+}
+
+/** The classified path of the synthetic directory a descriptor's record `sd`
+ * is of, or of no entry for a descriptor with no record. */
+static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
+{
+    k_memset(vp, 0, sizeof(*vp));
+    vp->kind = sd ? sd->kind : VNODE_ENOENT;
+    vp->pid = sd ? sd->pid : 0;
+    vp->tid = sd ? sd->tid : 0;
 }
 
 /**
@@ -1015,7 +1026,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
         if (!sd) {
             return -EBADF;
         }
-        synth_dir_path(sd->kind, sd->pid, out, (int)cap);
+        synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
         return path_in_root(out);
     }
     if (entry->type != FD_TYPE_DIR) {
@@ -1414,9 +1425,11 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     }
 }
 
-/* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd). The
- * descriptor keeps a record of its own, taken from the heap and freed at the
- * last close. */
+/* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd, and
+ * a thread's under /proc/<pid>/task). The descriptor keeps a record of its
+ * own, taken from the heap and freed at the last close, with the process's
+ * pid and, for a thread's directory, the thread's id, so its listing, its
+ * /proc/PID/fd link and the names relative to it stay the thread's. */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
 {
     fd_entry_t *e;
@@ -1427,10 +1440,10 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 
     if (vp->kind == VNODE_PROC_PID || vp->kind == VNODE_PROC_FD_DIR ||
         vp->kind == VNODE_PROC_TASK_DIR) {
-        pid = procfs_resolve_pid(vp->pid);
-        if (pid < 0) {
+        if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
+        pid = procfs_resolve_pid(vp->pid);
     }
     /* The directory exists, so honour flags that contradict that. An exclusive
      * create of an existing object is -EEXIST regardless of access mode (the
@@ -1442,7 +1455,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if ((flags & 3) != 0) {
         return -EISDIR;
     }
-    sd = synth_dir_alloc(vp->kind, pid);
+    sd = synth_dir_alloc(vp->kind, pid, vp->tid);
     if (!sd) {
         return -ENFILE;
     }
@@ -3468,15 +3481,15 @@ static int32_t do_chdir(char *path)
         vfs_ref_release(&ref);
         if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR ||
             vp.kind == VNODE_PROC_TASK_DIR) {
-            rpid = procfs_resolve_pid(vp.pid);
-            if (rpid < 0) {
+            if (procfs_resolve_id(&vp) < 0) {
                 return -ENOENT;
             }
+            rpid = procfs_resolve_pid(vp.pid);
         }
         if (!synth_kind_is_dir(vp.kind)) {
             return -ENOTDIR;
         }
-        synth_dir_path(vp.kind, rpid, path, VFS_PATH_MAX);
+        synth_dir_path(vp.kind, rpid, vp.tid, path, VFS_PATH_MAX);
         return cwd_enter(path, NULL, NULL);
     }
     node = ref.node;
@@ -4148,7 +4161,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return 0;
     case VNODE_PROC_EXE: {
         char scratch[1];
-        int rpid = procfs_resolve_pid(vp->pid);
+        int rpid = procfs_resolve_id(vp);
 
         /* The resolver follows the link to the program itself, so only an
          * un-followed stat, or one of a process with no program, is here. */
@@ -4163,13 +4176,13 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
     case VNODE_PROC_TASK_DIR:
-        if (procfs_resolve_pid(vp->pid) < 0) {
+        if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
         /* /proc/self is a symlink: an un-followed stat (lstat) sees the
          * link, a followed one resolves to the pid directory.
          * /proc/<numeric> and /proc/<pid>/fd are real directories. */
-        if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && !follow) {
+        if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && vp->tid == 0 && !follow) {
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = 0120777; /* S_IFLNK | 0777 */
             kst->st_ino = procfs_ino_dir();
@@ -4177,19 +4190,19 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         }
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;
-        kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
+        kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         return 0;
     case VNODE_PROC_FILE:
-        if (procfs_resolve_pid(vp->pid) < 0) {
+        if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFREG | 0444;
-        kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
+        kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
         return 0;
     case VNODE_PROC_FD_LINK: {
         char scratch[16];
-        int rpid = procfs_resolve_pid(vp->pid);
+        int rpid = procfs_resolve_id(vp);
         if (rpid < 0) {
             return -ENOENT;
         }
@@ -4445,7 +4458,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
     vfs_ref_release(&ref);
     kind = vp.kind;
 
-    if (kind == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF) {
+    if (kind == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF && vp.tid == 0) {
         /* /proc/self is a symlink to the caller's numeric pid. */
         uint32_t uv;
         char t[12];
@@ -4467,10 +4480,10 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
             }
         }
     } else if (kind == VNODE_PROC_FD_LINK) {
-        pid = procfs_resolve_pid(vp.pid);
+        pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_fd(pid, vp.procfd, link, VFS_PATH_MAX);
     } else if (kind == VNODE_PROC_EXE) {
-        pid = procfs_resolve_pid(vp.pid);
+        pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, link, VFS_PATH_MAX);
     } else {
         n = -EINVAL; /* not a symlink */
@@ -4923,12 +4936,10 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
     } else if (entry->type == FD_TYPE_SYNTH_DIR) {
         /* A /dev or /proc directory fd: report the SAME identity its path stat
          * would (so fstat and stat agree on the directory), reconstructed from
-         * the fd's pooled kind/pid. */
+         * the fd's record of its kind, pid and tid. */
         struct vpath vp;
-        struct synth_dir *sd = (struct synth_dir *)entry->priv;
-        k_memset(&vp, 0, sizeof(vp));
-        vp.kind = sd ? sd->kind : VNODE_ENOENT;
-        vp.pid = sd ? sd->pid : 0;
+
+        synth_dir_vpath((const struct synth_dir *)entry->priv, &vp);
         if (synth_stat(&vp, kst, 1) != 0) {
             kst->st_mode = S_IFDIR | 0555; /* the process exited: a bare directory */
             kst->st_nlink = 1;
@@ -8474,13 +8485,86 @@ static void synth_u32_str(char *out, uint32_t v)
     out[i] = '\0';
 }
 
-/*
- * The n-th entry of a synthetic directory (kind/pid from the dir fd's
- * cookie): fills name/ino/dtype and returns 1, or 0 past the end. "." and
- * ".." are entries 0 and 1 of every directory.
+/**
+ * The n-th entry, "." and ".." counted off, of a process's directory, its
+ * task directory or its fd directory, from the directory descriptor's
+ * record `sd`: fills name/ino/dtype and returns 1, or 0 past the end or
+ * once the process, or the thread a thread's directory is of, is gone. A
+ * thread's directory has the files of the thread with no `task` among
+ * them, and its fd directory the thread's descriptors.
  */
-static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, uint8_t *dtype)
+static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
+                             uint8_t *dtype)
 {
+    static const struct {
+        const char *name;
+        uint8_t type;
+    } files[12] = {{"stat", DT_REG},   {"cmdline", DT_REG}, {"fd", DT_DIR},   {"maps", DT_REG},
+                   {"status", DT_REG}, {"statm", DT_REG},   {"auxv", DT_REG}, {"environ", DT_REG},
+                   {"comm", DT_REG},   {"mem", DT_REG},     {"exe", DT_LNK},  {"task", DT_DIR}};
+    struct vpath vp;
+    process_t *pp;
+    int id, i, c = 0;
+
+    synth_dir_vpath(sd, &vp);
+    id = procfs_resolve_id(&vp);
+    pp = id < 0 ? NULL : get_process((uint32_t)id);
+    if (!pp) {
+        return 0; /* the process exited: an empty directory (just . and ..) */
+    }
+    if (sd->kind == VNODE_PROC_PID) {
+        if (n >= (sd->tid != 0 ? 11 : 12)) {
+            return 0;
+        }
+        for (i = 0; files[n].name[i]; i++) {
+            name[i] = files[n].name[i];
+        }
+        name[i] = '\0';
+        *ino = procfs_ino_pid(id);
+        *dtype = files[n].type;
+        return 1;
+    }
+    if (sd->kind == VNODE_PROC_TASK_DIR) {
+        /* The process's threads, the leader first, which a thread whose end
+         * is still to be reaped is not among unless it is the leader. */
+        process_t *t;
+
+        for (t = proc_list; t; t = t->next) {
+            if (t->tg != pp->tg || t->state == PROC_UNUSED ||
+                (t->state == PROC_ZOMBIE && t != pp->tg->leader)) {
+                continue;
+            }
+            if (c++ == n) {
+                synth_u32_str(name, t->pid);
+                *ino = procfs_ino_pid((int)t->pid);
+                *dtype = DT_DIR;
+                return 1;
+            }
+        }
+        return 0;
+    }
+    for (i = 0; i < fd_table_cap(pp->fds); i++) {
+        if (pp->fds->entries[i].type != FD_TYPE_NONE &&
+            !(pp->fds->entries[i].flags & FD_FLAG_CLOSING) && c++ == n) {
+            synth_u32_str(name, (uint32_t)i);
+            *ino = procfs_ino_pid(id);
+            *dtype = DT_LNK;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * The n-th entry of a synthetic directory (its kind, pid and tid from the
+ * dir fd's record `sd`): fills name/ino/dtype and returns 1, or 0 past the
+ * end. "." and ".." are entries 0 and 1 of every directory.
+ */
+static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
+                           uint8_t *dtype)
+{
+    int kind = sd->kind;
+
     if (n == 0) {
         name[0] = '.';
         name[1] = '\0';
@@ -8612,73 +8696,8 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             return 1;
         }
     }
-    if (kind == VNODE_PROC_PID) {
-        static const struct {
-            const char *name;
-            uint8_t type;
-        } files[12] = {{"stat", DT_REG}, {"cmdline", DT_REG}, {"fd", DT_DIR},
-                       {"maps", DT_REG}, {"status", DT_REG},  {"statm", DT_REG},
-                       {"auxv", DT_REG}, {"environ", DT_REG}, {"comm", DT_REG},
-                       {"mem", DT_REG},  {"exe", DT_LNK},     {"task", DT_DIR}};
-        process_t *pp = get_process((uint32_t)pid);
-        int i;
-        if (!pp || pp->state == PROC_UNUSED) {
-            return 0; /* the process exited: an empty directory (just . and ..) */
-        }
-        if (n >= 12) {
-            return 0;
-        }
-        for (i = 0; files[n].name[i]; i++) {
-            name[i] = files[n].name[i];
-        }
-        name[i] = '\0';
-        *ino = procfs_ino_pid(pid);
-        *dtype = files[n].type;
-        return 1;
-    }
-    if (kind == VNODE_PROC_TASK_DIR) {
-        /* The process's threads, the leader first, which a thread whose end
-         * is still to be reaped is not among unless it is the leader. */
-        process_t *pp = get_process((uint32_t)pid);
-        process_t *t;
-        int c = 0;
-
-        if (!pp || pp->state == PROC_UNUSED) {
-            return 0;
-        }
-        for (t = proc_list; t; t = t->next) {
-            if (t->tg != pp->tg || t->state == PROC_UNUSED ||
-                (t->state == PROC_ZOMBIE && t != pp->tg->leader)) {
-                continue;
-            }
-            if (c++ == n) {
-                synth_u32_str(name, t->pid);
-                *ino = procfs_ino_pid((int)t->pid);
-                *dtype = DT_DIR;
-                return 1;
-            }
-        }
-        return 0;
-    }
-    if (kind == VNODE_PROC_FD_DIR) {
-        process_t *pp = get_process((uint32_t)pid);
-        int i, c = 0;
-        if (!pp) {
-            return 0;
-        }
-        for (i = 0; i < fd_table_cap(pp->fds); i++) {
-            if (pp->fds->entries[i].type != FD_TYPE_NONE &&
-                !(pp->fds->entries[i].flags & FD_FLAG_CLOSING)) {
-                if (c == n) {
-                    synth_u32_str(name, (uint32_t)i);
-                    *ino = procfs_ino_pid(pid);
-                    *dtype = DT_LNK;
-                    return 1;
-                }
-                c++;
-            }
-        }
-        return 0;
+    if (kind == VNODE_PROC_PID || kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_FD_DIR) {
+        return synth_proc_dirent(sd, n, name, ino, dtype);
     }
     return 0;
 }
@@ -8687,16 +8706,15 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
  * advancing the fd's offset cursor (same record layout as the KRFFS path). */
 static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
 {
-    struct synth_dir *sd = (struct synth_dir *)e->priv;
-    int kind = sd ? sd->kind : VNODE_ENOENT;
-    int pid = sd ? sd->pid : 0;
+    static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0};
+    const struct synth_dir *sd = e->priv ? (const struct synth_dir *)e->priv : &none;
     uint32_t written = 0;
     uint32_t idx = (uint32_t)e->ofd->offset;
     char name[32];
     uint64_t ino;
     uint8_t dtype;
 
-    while (synth_dirent_at(kind, pid, (int)idx, name, &ino, &dtype)) {
+    while (synth_dirent_at(sd, (int)idx, name, &ino, &dtype)) {
         union {
             struct linux_dirent64 rec;
             uint8_t bytes[64];

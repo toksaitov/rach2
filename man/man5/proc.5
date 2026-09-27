@@ -467,11 +467,16 @@ ID.
 A directory with an entry for each thread of the process, named by its
 thread ID, the thread whose ID is the process ID first.
 .Pa /proc/PID/task/TID
+names nothing unless TID is one of the threads the directory lists, and
 has the files of
 .Pa /proc/TID ,
 which are the thread's own where a thread has any, and no
 .Pa task
 directory of its own.
+A descriptor open on it, or on its
+.Pa fd ,
+keeps both IDs: its link names that path, and a name relative to it is
+found under it.
 .It Pa /proc/PID/comm
 The program name and a newline.
 .It Pa /proc/PID/maps

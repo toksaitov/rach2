@@ -53,7 +53,8 @@ static void bounds(void)
     /* The deepest path, a thread's descriptor link, is whole, and a path
      * deeper than any is refused rather than cut to a shorter one. */
     CHECK(synth_classify("proc/7/task/9/fd", &vp) == VNODE_PROC_FD_DIR);
-    CHECK(synth_classify("proc/7/task/9/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 0);
+    CHECK(synth_classify("proc/7/task/9/fd/0", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 0 &&
+          vp.pid == 7 && vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/fd/12", &vp) == VNODE_PROC_FD_LINK && vp.procfd == 12);
     CHECK(synth_classify("proc/7/task/9/stat/junk", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/task/9/fd/0/x", &vp) == VNODE_ENOENT);
@@ -61,6 +62,22 @@ static void bounds(void)
     CHECK(synth_classify("proc/7/fd/0/a/b/c/d", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/cmdline/a/b/c/d/e/f", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("dev/pts/1/a/b/c/d", &vp) == VNODE_ENOENT);
+}
+
+/** A directory's path, a thread's under a process's task directory
+ * among them. */
+static void paths(void)
+{
+    char out[64];
+
+    synth_dir_path(VNODE_PROC_PID, 7, 0, out, (int)sizeof(out));
+    CHECK(eq(out, "/proc/7"));
+    synth_dir_path(VNODE_PROC_PID, 7, 9, out, (int)sizeof(out));
+    CHECK(eq(out, "/proc/7/task/9"));
+    synth_dir_path(VNODE_PROC_FD_DIR, 7, 9, out, (int)sizeof(out));
+    CHECK(eq(out, "/proc/7/task/9/fd"));
+    synth_dir_path(VNODE_PROC_TASK_DIR, 7, 0, out, (int)sizeof(out));
+    CHECK(eq(out, "/proc/7/task"));
 }
 
 int main(void)
@@ -115,18 +132,20 @@ int main(void)
           vp.procfd == 3);
 
     /* The program's link, and the threads' directory, each thread's entry
-     * being the thread's own /proc/<tid> with no task directory in it. */
+     * keeping the process's id and the thread's, with no task directory in
+     * it; no thread has id 0. */
     CHECK(synth_classify("proc/self/exe", &vp) == VNODE_PROC_EXE && vp.pid == SYNTH_PID_SELF);
     CHECK(synth_classify("proc/7/exe/x", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("proc/7/task", &vp) == VNODE_PROC_TASK_DIR && vp.pid == 7);
-    CHECK(synth_classify("proc/7/task/9", &vp) == VNODE_PROC_PID && vp.pid == 9);
+    CHECK(synth_classify("proc/7/task", &vp) == VNODE_PROC_TASK_DIR && vp.pid == 7 && !vp.tid);
+    CHECK(synth_classify("proc/7/task/9", &vp) == VNODE_PROC_PID && vp.pid == 7 && vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/stat", &vp) == VNODE_PROC_FILE &&
-          vp.procfile == SYNTH_PROC_STAT && vp.pid == 9);
+          vp.procfile == SYNTH_PROC_STAT && vp.pid == 7 && vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/comm", &vp) == VNODE_PROC_FILE &&
-          vp.procfile == SYNTH_PROC_COMM && vp.pid == 9);
-    CHECK(synth_classify("proc/7/task/9/exe", &vp) == VNODE_PROC_EXE && vp.pid == 9);
+          vp.procfile == SYNTH_PROC_COMM && vp.pid == 7 && vp.tid == 9);
+    CHECK(synth_classify("proc/7/task/9/exe", &vp) == VNODE_PROC_EXE && vp.pid == 7 && vp.tid == 9);
     CHECK(synth_classify("proc/7/task/9/task", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/task/x", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/7/task/0", &vp) == VNODE_ENOENT);
 
     /* Bad /proc entries are ENOENT, never KRFFS (so they don't
      * shadow-resolve). */
@@ -154,5 +173,6 @@ int main(void)
     CHECK(synth_classify("dev/./null", &vp) == VNODE_ENOENT);
 
     bounds();
+    paths();
     return fails > 255 ? 255 : fails;
 }

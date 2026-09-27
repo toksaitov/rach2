@@ -1572,7 +1572,7 @@ static int32_t exec_follow_exe(char *path)
     if (current_proc->fs->root_mnt || synth_classify(path, &vp) != VNODE_PROC_EXE) {
         return 0;
     }
-    pid = procfs_resolve_pid(vp.pid);
+    pid = procfs_resolve_id(&vp);
     n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, path, VFS_PATH_MAX - 1);
     if (n < 0) {
         return n;

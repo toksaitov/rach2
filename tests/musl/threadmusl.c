@@ -6,26 +6,27 @@
  * to 40000 under one mutex in memory they share. A condition variable
  * passes a value to a waiter seen asleep. pthread_kill reaches the thread
  * it names, which alone runs the handler. A signal sent to the process
- * while every thread blocks it waits, as sigpending reports, with no
- * handler run, and a thread made after it takes it once it unblocks it.
- * Of two signals sent to the process at once, the second, which
- * the first one's handler blocks, is taken by another thread while that
- * handler runs. A thread's exit leaves the process running; /proc/self/task
- * lists each live thread, and /proc/self/exe names the program. The threads
- * share the descriptors, the working directory and the umask: what one
- * opens, closes or changes the others see, and an execve that fails leaves
- * its thread in the shared table. A descriptor one thread closes while
- * another reads it stays with the read, which returns what is written after
- * the close, and its number is free once the read is over. A wait whose
- * status page another thread unmaps while it sleeps fails with EFAULT and
- * leaves the zombie to a later wait. A child forked by a thread has one
- * thread. A thread that calls execve replaces the whole process, whose other
- * threads end. Of two threads in execve at once, the one whose call first
- * waits for the other threads to end replaces the process, and the other
- * ends: the probe traces the second and holds it at the entry of its call
- * until the first waits for it. A robust mutex a thread other than the
- * first holds when it calls execve is released, and its next locker gets
- * EOWNERDEAD. A thread that calls exit ends them all.
+ * while every thread blocks it waits, as sigpending reports, with no handler
+ * run, and a thread made after it takes it once it unblocks it. Of two signals
+ * sent to the process at once, the second, which the first one's handler
+ * blocks, is taken by another thread while that handler runs. A thread's exit
+ * leaves the process running; /proc/self/task lists each live thread, a
+ * thread's directory there has no task directory and keeps its path in a
+ * descriptor, down to the thread's descriptor links, a task path names only a
+ * thread of its process, and /proc/self/exe names the program. The threads
+ * share the descriptors, the working directory and the umask: what one opens,
+ * closes or changes the others see, and an execve that fails leaves its thread
+ * in the shared table. A descriptor one thread closes while another reads it
+ * stays with the read, which returns what is written after the close, and its
+ * number is free once the read is over. A wait whose status page another thread
+ * unmaps while it sleeps fails with EFAULT and leaves the zombie to a later
+ * wait. A child forked by a thread has one thread. A thread that calls execve
+ * replaces the whole process, whose other threads end. Of two threads in execve
+ * at once, the one whose call first waits for the other threads to end replaces
+ * the process, and the other ends: the probe traces the second and holds it at
+ * the entry of its call until the first waits for it. A robust mutex a thread
+ * other than the first holds when it calls execve is released, and its next
+ * locker gets EOWNERDEAD. A thread that calls exit ends them all.
  *
  * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
  * otherwise.
@@ -201,6 +202,61 @@ static int count_tasks(void)
     }
     closedir(d);
     return n;
+}
+
+/**
+ * The paths of thread `t` under this process's task directory: its
+ * directory lists no task directory of its own, a descriptor on it keeps
+ * its path, for its link and for a name relative to it, the thread's
+ * descriptor links are there six components deep, and a task path under a
+ * process the thread is not of, or under none, names nothing.
+ */
+static int task_paths(pid_t t)
+{
+    char dir[64], path[96], link[96];
+    struct dirent *e;
+    struct stat st;
+    DIR *d;
+    int dirfd, fd, task = 0;
+    long n;
+
+    snprintf(dir, sizeof(dir), "/proc/%d/task/%d", (int)getpid(), (int)t);
+    d = opendir(dir);
+    if (!d) {
+        return fail("a thread's directory");
+    }
+    while ((e = readdir(d)) != NULL) {
+        task |= strcmp(e->d_name, "task") == 0;
+    }
+    closedir(d);
+    if (task) {
+        return fail("a thread's directory lists a task directory");
+    }
+    dirfd = open(dir, O_RDONLY | O_DIRECTORY);
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", dirfd);
+    n = readlink(path, link, sizeof(link) - 1);
+    if (dirfd < 0 || n <= 0 || (link[n] = '\0', strcmp(link, dir) != 0)) {
+        return fail("the link of a thread's directory");
+    }
+    fd = openat(dirfd, "stat", O_RDONLY);
+    close(dirfd);
+    if (fd < 0) {
+        return fail("a name relative to a thread's directory");
+    }
+    close(fd);
+    snprintf(path, sizeof(path), "%s/fd/0", dir);
+    if (lstat(path, &st) != 0 || !S_ISLNK(st.st_mode)) {
+        return fail("a thread's descriptor link");
+    }
+    snprintf(path, sizeof(path), "/proc/1/task/%d/status", (int)t);
+    if (open(path, O_RDONLY) != -1 || errno != ENOENT) {
+        return fail("a thread under another process's task directory");
+    }
+    snprintf(path, sizeof(path), "/proc/999999/task/%d/status", (int)t);
+    if (open(path, O_RDONLY) != -1 || errno != ENOENT) {
+        return fail("a task path under no process");
+    }
+    return 0;
 }
 
 static int shared_fd = -1;
@@ -711,7 +767,7 @@ int main(void)
     if (count_tasks() != 2) {
         return fail("/proc/self/task did not list two threads");
     }
-    if (later_rows() != 0) {
+    if (task_paths((pid_t)handled_by) != 0 || later_rows() != 0) {
         return 1;
     }
 

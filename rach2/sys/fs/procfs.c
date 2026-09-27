@@ -166,6 +166,7 @@ struct procfs_file {
     int len;
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
+    int origin_task; /* the process whose task/<origin_pid> it came from, or 0 */
 };
 
 /*
@@ -303,6 +304,31 @@ int procfs_resolve_pid(int pid)
         return -1;
     }
     return pid;
+}
+
+/**
+ * Resolve the ids of the /proc path `vp` to the process or thread whose
+ * files it shows, or -1. A path under /proc/<pid>/task/<tid> names both,
+ * and needs both: the process <pid>, and the thread <tid> among the threads
+ * its task directory lists, which is what the path shows. Any other path
+ * is its pid's (`procfs_resolve_pid`).
+ */
+int procfs_resolve_id(const struct vpath *vp)
+{
+    int pid = procfs_resolve_pid(vp->pid);
+    process_t *p;
+    process_t *t;
+
+    if (pid < 0 || vp->tid == 0) {
+        return pid;
+    }
+    p = get_process((uint32_t)pid);
+    t = get_process((uint32_t)vp->tid);
+    if (!p || !t || t->state == PROC_UNUSED || t->tg != p->tg ||
+        (t->state == PROC_ZOMBIE && t != t->tg->leader)) {
+        return -1;
+    }
+    return vp->tid;
 }
 
 static char proc_state_char(proc_state_t s)
@@ -995,7 +1021,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         struct synth_dir *sd = (struct synth_dir *)e->priv;
         char path[64];
         if (sd) {
-            synth_dir_path(sd->kind, sd->pid, path, (int)sizeof(path));
+            synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
             ap_str(t, path);
         }
         break;
@@ -1011,6 +1037,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                 break;
             }
             ap_str(t, "/proc/");
+            if (pf->origin_task != 0) {
+                ap_int(t, pf->origin_task);
+                ap_str(t, "/task/");
+            }
             ap_int(t, pf->origin_pid);
             ap_ch(t, '/');
             ap_str(t, procfs_pid_file_name(pf->origin_file));
@@ -2026,10 +2056,11 @@ static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write
 /**
  * Open /proc/<pid>/mem for reading, writing or both: the caller needs
  * effective user ID 0, or the process's real user ID and a dumpable process,
- * as a tracer does to attach. The descriptor keeps the process's id and no
- * text; its offset is an address.
+ * as a tracer does to attach. The descriptor keeps the process's id, `pid`
+ * as `procfs_resolve_id` gave it for the path `vp`, and no text; its offset
+ * is an address.
  */
-static int procfs_open_mem(int pid, int flags)
+static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
 {
     process_t *p = get_process((uint32_t)pid);
     struct procfs_file *f;
@@ -2052,6 +2083,7 @@ static int procfs_open_mem(int pid, int flags)
     }
     f->origin_pid = pid;
     f->origin_file = SYNTH_PROC_MEM;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
@@ -2181,7 +2213,7 @@ int procfs_open(const struct vpath *vp, int flags)
     int fd, len;
 
     if (procfs_needs_pid(vp->kind)) {
-        pid = procfs_resolve_pid(vp->pid);
+        pid = procfs_resolve_id(vp);
         if (pid < 0) {
             return -ENOENT;
         }
@@ -2193,7 +2225,7 @@ int procfs_open(const struct vpath *vp, int flags)
         return -ENOTDIR;
     }
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
-        return procfs_open_mem(pid, flags);
+        return procfs_open_mem(vp, pid, flags);
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
@@ -2203,7 +2235,6 @@ int procfs_open(const struct vpath *vp, int flags)
     if (!f) {
         return -ENOMEM;
     }
-
     procfs_text_init(&text);
     if (vp->kind == VNODE_PROC_CMDLINE) {
         /* The captured boot line and a newline, the Linux shape. */
@@ -2285,6 +2316,7 @@ int procfs_open(const struct vpath *vp, int flags)
     f->data = text.buf;
     f->len = len;
     f->origin_pid = pid;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
     if (vp->kind == VNODE_PROC_CMDLINE) {
         f->origin_file = SYNTH_PROC_BOOTLINE;
     } else if (vp->kind == VNODE_PROC_DISK) {

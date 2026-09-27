@@ -1,6 +1,7 @@
 /**
- * Check proc stat generation when every text allocation fails, and the
- * descriptor links of a process, which a closed descriptor has none of.
+ * Check proc stat generation when every text allocation fails, the
+ * descriptor links of a process, which a closed descriptor has none of, and
+ * the ids a path under a process's task directory needs.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
@@ -10,6 +11,7 @@
 struct vpath;
 struct fd_entry;
 static int procfs_resolve_pid(int pid);
+static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 static int procfs_readlink_exe(int pid, char *buf, int cap);
@@ -40,8 +42,9 @@ extern int printf(const char *format, ...);
 extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 
-static process_t process;
-static struct tgroup group;
+static process_t process, thread, stranger;
+static struct tgroup group, other_group;
+process_t *current_proc = &process;
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;
@@ -55,9 +58,16 @@ static void check(int ok, const char *what)
     }
 }
 
-/** Return the one process whose stat file is generated. */
+/** Return the process whose stat file is generated, 7, a thread of it, 9,
+ * and a process of another group, 11. */
 process_t *get_process(uint32_t pid)
 {
+    if (pid == 9) {
+        return &thread;
+    }
+    if (pid == 11) {
+        return &stranger;
+    }
     return pid == 7 ? &process : NULL;
 }
 
@@ -129,13 +139,40 @@ const char *tmpfs_label(void *node)
     return NULL;
 }
 
-void synth_dir_path(int kind, int pid, char *out, int cap)
+void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     (void)kind;
     (void)pid;
+    (void)tid;
     if (cap > 0) {
         out[0] = '\0';
     }
+}
+
+/** A path under a task directory needs its process and a thread of it,
+ * which is what the path shows. */
+static void task_ids(void)
+{
+    struct vpath vp;
+
+    thread.state = PROC_READY;
+    thread.tg = &group;
+    stranger.state = PROC_READY;
+    stranger.tg = &other_group;
+    k_memset(&vp, 0, sizeof(vp));
+    vp.pid = 7;
+    check(procfs_resolve_id(&vp) == 7, "a process's own path is the process's");
+    vp.tid = 9;
+    check(procfs_resolve_id(&vp) == 9, "a thread's path under its process is the thread's");
+    vp.tid = 11;
+    check(procfs_resolve_id(&vp) == -1, "another process's thread is no task of this one");
+    vp.pid = 99;
+    vp.tid = 9;
+    check(procfs_resolve_id(&vp) == -1, "a task path under no process names nothing");
+    vp.pid = 7;
+    thread.state = PROC_ZOMBIE;
+    check(procfs_resolve_id(&vp) == -1, "an ended thread other than the leader is no task");
+    thread.state = PROC_READY;
 }
 
 /** An open descriptor has its link, and one a close has marked, whose
@@ -193,8 +230,10 @@ int main(void)
     check(__builtin_memcmp(text.buf, "7 (test) R ", 11) == 0, "stat fields retain their order");
     kfree(text.buf);
     descriptor_links();
+    task_ids();
     if (!failures) {
-        printf("procfs-hosttest: result: pass: stat allocation failure and descriptor links\n");
+        printf("procfs-hosttest: result: pass: stat allocation failure, descriptor links and task "
+               "ids\n");
     }
     return failures != 0;
 }

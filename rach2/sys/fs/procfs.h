@@ -19,6 +19,11 @@ struct fd_entry;
 /** Resolve a vpath pid (SYNTH_PID_SELF is the caller) to a live pid, or -1. */
 int procfs_resolve_pid(int pid);
 
+/** The id of the process, or of the thread for a path under
+ * /proc/<pid>/task/<tid>, whose files the path `vp` shows; -1 when the
+ * process is gone or the thread is not one of its threads. */
+int procfs_resolve_id(const struct vpath *vp);
+
 /** Open a /proc/<pid>/{stat,cmdline} file; returns the fd or -errno. */
 int procfs_open(const struct vpath *vp, int flags);
 

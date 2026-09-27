@@ -131,16 +131,30 @@ static void synth_put_uint(char *out, int cap, int *pos, unsigned int v)
     }
 }
 
+/** Append /proc/<pid>, or /proc/<pid>/task/<tid> for a thread's directory,
+ * to out at *pos, bounded by cap. */
+static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
+{
+    synth_put(out, cap, pos, "/proc/");
+    synth_put_uint(out, cap, pos, (unsigned int)pid);
+    if (tid != 0) {
+        synth_put(out, cap, pos, "/task/");
+        synth_put_uint(out, cap, pos, (unsigned int)tid);
+    }
+}
+
 /**
  * Render the canonical directory path for a synthetic vnode kind into `out`.
  *
  * The inverse of `synth_classify` for the directory kinds: it writes the
  * path a directory or symlink target should report (for example
- * `/proc/<pid>/fd`). `pid` is used only for the per-process kinds. When
- * `cap` is positive the result is NUL-terminated and never exceeds `cap`
- * bytes; otherwise nothing is written. An unrecognized kind yields "/".
+ * `/proc/<pid>/fd`). `pid` is used only for the per-process kinds, and
+ * `tid`, when it is not 0, makes one a thread's, `/proc/<pid>/task/<tid>`
+ * and its `fd`. When `cap` is positive the result is NUL-terminated and
+ * never exceeds `cap` bytes; otherwise nothing is written. An unrecognized
+ * kind yields "/".
  */
-void synth_dir_path(int kind, int pid, char *out, int cap)
+void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
 {
     int pos = 0;
 
@@ -156,11 +170,9 @@ void synth_dir_path(int kind, int pid, char *out, int cap)
     } else if (kind == VNODE_PROC_NET_DIR) {
         synth_put(out, cap, &pos, "/proc/net");
     } else if (kind == VNODE_PROC_PID) {
-        synth_put(out, cap, &pos, "/proc/");
-        synth_put_uint(out, cap, &pos, (unsigned int)pid);
+        synth_put_proc(out, cap, &pos, pid, tid);
     } else if (kind == VNODE_PROC_FD_DIR) {
-        synth_put(out, cap, &pos, "/proc/");
-        synth_put_uint(out, cap, &pos, (unsigned int)pid);
+        synth_put_proc(out, cap, &pos, pid, tid);
         synth_put(out, cap, &pos, "/fd");
     } else if (kind == VNODE_PROC_TASK_DIR) {
         synth_put(out, cap, &pos, "/proc/");
@@ -195,9 +207,10 @@ static int synth_pid_file(struct comp name)
 /**
  * Classify the part of a /proc path from its pid component on: `c[0]` is
  * the pid, already in `vp->pid`, and `n` counts the components from it. A
- * thread's directory under `task` is classified as the thread's own
- * /proc/<tid>, which has the same files, and holds no `task` of its own
- * (`task` is 0 then).
+ * thread's directory under `task` is classified as the process's directory
+ * with the thread's id in `vp->tid`: it has the files of /proc/<tid>, the
+ * thread's own where a thread has any, and no `task` of its own (`task` is
+ * 0 then). No thread has id 0, which is the kernel's idle context.
  */
 static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int task)
 {
@@ -250,11 +263,11 @@ static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int
             return vp->kind;
         }
         tid = comp_uint(c[2]);
-        if (tid < 0) {
+        if (tid <= 0) {
             vp->kind = VNODE_ENOENT;
             return vp->kind;
         }
-        vp->pid = tid;
+        vp->tid = tid;
         return synth_classify_pid(c + 2, n - 2, vp, 0);
     }
     vp->kind = VNODE_ENOENT; /* unrecognised /proc entry */
@@ -304,6 +317,7 @@ int synth_classify(const char *path, struct vpath *vp)
 
     vp->name[0] = '\0';
     vp->pid = 0;
+    vp->tid = 0;
     vp->procfd = -1;
     vp->procfile = 0;
     vp->pts_index = -1;

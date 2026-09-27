@@ -7,6 +7,7 @@
 struct vpath;
 struct fd_entry;
 static int procfs_resolve_pid(int pid);
+static int procfs_resolve_id(const struct vpath *vp);
 static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 static int procfs_readlink_exe(int pid, char *buf, int cap);
