@@ -213,9 +213,18 @@ static const struct file_ops unix_ops = {unix_read, unix_write, unix_poll, unix_
 
 static struct unix_sock *socks;
 
+/* The messages whose descriptors are being closed, first to last, and
+ * whether a call is closing them now (`msg_free`). */
+static struct unix_msg *reap_head;
+static struct unix_msg *reap_tail;
+static int reaping;
+
 void unix_init(void)
 {
     socks = NULL;
+    reap_head = NULL;
+    reap_tail = NULL;
+    reaping = 0;
 }
 
 static fd_table_t *table(void)
@@ -320,28 +329,81 @@ static struct unix_msg *msg_alloc(uint32_t len)
     return m;
 }
 
+/**
+ * Free the message `m` and close the descriptors it carries.
+ *
+ * Closing a descriptor in flight can close an AF_UNIX socket, whose queue
+ * can carry the only descriptor of another, and so on down a chain as long
+ * as its senders made it. Freeing each queue inside the close of the socket
+ * before it would take kernel stack for every socket in the chain, so a
+ * message with descriptors goes on the reap list instead, and the outermost
+ * call closes them one at a time, from the list, while the closes it makes
+ * add to the list and return. A close can sleep; a call that frees a
+ * message meanwhile only adds it to the list, for the call at work to
+ * close. A message stays on the list, and its descriptors not yet closed
+ * stay where `unix_inflight_holds` finds them, until the last is closed.
+ */
 static void msg_free(struct unix_msg *m)
 {
-    drop_fds(m->fds, 0, m->nfds);
-    kfree(m);
+    if (m->nfds == 0) {
+        kfree(m->fds);
+        kfree(m);
+        return;
+    }
+    m->next = NULL;
+    if (reap_tail) {
+        reap_tail->next = m;
+    } else {
+        reap_head = m;
+    }
+    reap_tail = m;
+    if (reaping) {
+        return;
+    }
+    reaping = 1;
+    while (reap_head) {
+        m = reap_head;
+        if (m->nfds > 0) {
+            m->nfds--;
+            flight_drop(&m->fds[m->nfds]);
+            continue;
+        }
+        reap_head = m->next;
+        if (!reap_head) {
+            reap_tail = NULL;
+        }
+        kfree(m->fds);
+        kfree(m);
+    }
+    reaping = 0;
+}
+
+/* Whether a message of the chain from `m` carries a descriptor of the KRFFS
+ * file `node`. */
+static int chain_holds(const struct unix_msg *m, const void *node)
+{
+    uint32_t i;
+
+    for (; m; m = m->next) {
+        for (i = 0; i < m->nfds; i++) {
+            if (m->fds[i].type == FD_TYPE_FILE && m->fds[i].node == node) {
+                return 1;
+            }
+        }
+    }
+    return 0;
 }
 
 int unix_inflight_holds(const void *node)
 {
     const struct unix_sock *s;
-    const struct unix_msg *m;
-    uint32_t i;
 
     for (s = socks; s; s = s->next) {
-        for (m = s->rq_head; m; m = m->next) {
-            for (i = 0; i < m->nfds; i++) {
-                if (m->fds[i].type == FD_TYPE_FILE && m->fds[i].node == node) {
-                    return 1;
-                }
-            }
+        if (chain_holds(s->rq_head, node)) {
+            return 1;
         }
     }
-    return 0;
+    return chain_holds(reap_head, node);
 }
 
 static int queue_full(const struct unix_sock *s)

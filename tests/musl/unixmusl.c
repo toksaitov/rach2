@@ -25,7 +25,8 @@
  * connect with EPERM while it is connected to another. A datagram socket
  * refuses a connect with EPERM while it is connected to another; one that
  * connects elsewhere or disconnects drops its queued messages, and the peer it
- * left gets ECONNRESET.
+ * left gets ECONNRESET. A chain of a thousand datagram pairs, each queued in
+ * the pair before, closes from its head.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -543,6 +544,39 @@ static int datagram_peers(void)
     return 0;
 }
 
+/* A chain of datagram pairs, each pair's two sockets queued in the pair
+ * before and closed in the caller, closes from its head; a kernel that
+ * nested a close for each pair would run off its stack. */
+static int chain_close(void)
+{
+    int next[2] = {-1, -1};
+    int sv[2];
+    int i;
+
+    for (i = 0; i < 1000; i++) {
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+            return fail("a pair for the chain");
+        }
+        if (next[0] >= 0) {
+            if (send_fd(sv[0], next[0]) != 0 || send_fd(sv[0], next[1]) != 0) {
+                return fail("a pair sent down the chain");
+            }
+            close(next[0]);
+            close(next[1]);
+        }
+        next[0] = sv[0];
+        next[1] = sv[1];
+    }
+    close(next[0]);
+    close(next[1]);
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        return fail("a pair after the chain closed");
+    }
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
 static int datagram_names(void)
 {
     struct sockaddr_un to, from, got;
@@ -605,7 +639,7 @@ int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
-        backlog_growth() || datagram_peers() || datagram_names() || waiting()) {
+        backlog_growth() || datagram_peers() || chain_close() || datagram_names() || waiting()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");
