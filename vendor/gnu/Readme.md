@@ -1,6 +1,6 @@
 # The GNU layer
 
-This directory builds the GNU system of milestone 54 (`dev-log/54-gnu/plan.md`): an i686-linux-gnu cross toolchain first, and the programs it builds after. The layer builds on a Linux host only and is not part of `make` or `make all`.
+This directory builds the GNU system of milestone 54 (`dev-log/54-gnu/plan.md`): an i686-linux-gnu cross toolchain, and with it the programs of a root that the GNU system is installed from. The layer builds on a Linux host only and is not part of `make` or `make all`; `make gnu-toolchain` and `make gnu-ports` build it (`mk/gnu.mk`).
 
 ## Sources
 
@@ -15,8 +15,35 @@ This directory builds the GNU system of milestone 54 (`dev-log/54-gnu/plan.md`):
 
 The order is binutils, the headers, a first GCC for C without a C library, glibc, the final GCC, and libxcrypt. glibc keeps its default minimum kernel, 3.2.0, so it falls back from the newer system calls to the older ones Rach2 has. The script takes step names (`binutils`, `headers`, `gcc1`, `glibc`, `gcc2`, `libxcrypt`) to run only those over an earlier build; with none, it starts from nothing. Under make its sub-makes share the caller's jobs, so `make -j32 gnu-toolchain` built it in ten minutes on the testing host.
 
-The host needs a C and C++ compiler, GNU make 4, gawk, bison, flex, m4, Python 3, texinfo, xz, patch, and curl or wget.
+The host needs a C and C++ compiler, GNU make 4, gawk, bison, flex, m4, Perl, Python 3, texinfo, xz, patch, and curl or wget. A pkg-config, where the host has one, is used by the ports' configure scripts and reads only the root's files; none of the ports needs it.
+
+## The runtime
+
+The first port in the root, `build/vendor/gnu/root`, is the runtime, `ports/runtime.sh`, which has no tarball. It installs the toolchain's sysroot: glibc 2.44 with its dynamic loader as `/lib/ld-linux.so.2` and its shared libraries in `/lib`, as an i386 GNU system without multiarch directories has them; glibc's headers, start files and static libraries and the Linux headers in `/usr`; and libxcrypt's `libcrypt.so.1` in `/usr/lib`. To these it adds GCC's shared libraries, `libgcc_s.so.1` in `/lib` and `libstdc++.so.6` in `/usr/lib`, and a locale archive, `/usr/lib/locale/locale-archive`, with `C.UTF-8` and `en_US.UTF-8`, which the target's own `localedef` writes, run on the build host through the staged loader. libxcrypt's soname is `libcrypt.so.1` because the toolchain builds it with the glibc-compatible interface (`--enable-obsolete-api=glibc`); Debian's i386 packages ask for the same name. With the headers and libraries in it, the root is a sysroot as well as a system.
 
 ## The ports
 
-`build_port.sh NAME...` builds programs with that toolchain. Each program has a recipe in `ports/`, a shell fragment that sets its version, its configure arguments, the configure answers a cross build cannot find out for itself, and the pinned patches applied after the extract. The program is configured for i686-linux-gnu with `--prefix=/usr`, compiled with the toolchain's GCC named by its full path, and installed with its manual pages into `build/vendor/gnu/root`, the tree the GNU system is staged from. It is linked statically unless `GNU_LINK=shared`, since the kernel loads no shared libraries yet. The recipes so far are coreutils 9.12, GNU make 4.4.1 and bash 5.3 with its twenty official patches.
+`build_port.sh NAME...` builds ports with the toolchain; `build_port.sh --all`, which `make gnu-ports` runs, builds every recipe into an empty root. Each port has a recipe in `ports/`: a shell fragment that sets its version, the ports it depends on, its configure arguments, the configure answers a cross build cannot find out for itself, and the pinned patches applied after the extract. A port that autoconf does not configure has its own build and install steps, and its recipe's comment says how and why.
+
+* The compilers run through wrappers in `build/vendor/gnu/wrap/` that give them the root as their sysroot, so a port finds the headers and libraries of the ports before it where the target has them.
+* A port's dependencies are built first when the root does not have them, and every port depends on the runtime.
+* A port installs into `build/vendor/gnu/stage/NAME`. There the target's `strip` removes the debugging information from its ELF files, which keep their symbol tables, and its libtool archives and Info index are removed; the rest is copied into the root and listed in `stage/NAME.files`.
+* Programs link with the shared glibc and ask for `/lib/ld-linux.so.2`. `GNU_LINK=static` links the ports that autoconf configures statically instead.
+
+A program in the root runs on the build host through the root's own loader, which loads the root's glibc rather than the host's i386 one:
+
+    R=build/vendor/gnu/root
+    $R/lib/ld-linux.so.2 --library-path $R/lib:$R/usr/lib $R/usr/bin/git --version
+
+The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping.
+
+| Port      | Version    | Time  | Size    |
+| --------- | ---------- | ----- | ------- |
+| runtime   | glibc 2.44 | 1 s   | 65.0 MB |
+| coreutils | 9.12       | 46 s  | 12.4 MB |
+| bash      | 5.3        | 24 s  | 5.8 MB  |
+| make      | 4.4.1      | 7 s   | 0.9 MB  |
+
+These notes say what some ports provide and what they leave to the system they are installed on.
+
+* coreutils and make start their children with `vfork` (gnulib's `posix_spawn`, and make's jobs) until `clone` can share an address space.
