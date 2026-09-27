@@ -685,6 +685,12 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
  * the first link and given back on every return; a walk that meets no link
  * takes none.
  *
+ * `..` at the root of a mount over a directory runs again at the covered
+ * directory, in the parent mount, since the mount stands in for it. A
+ * nameless mount stands by name in its parent's root directory, as /dev/shm
+ * does in /dev's, so `..` at its root is that directory and is used up
+ * there: run again, the synthetic type would climb once more.
+ *
  * The walk keeps the root it starts from: `..` stops there, and at the root
  * of the root mount whatever the root, and an absolute link's target starts
  * there. A thread that shares the root may chroot while the walk sleeps; at
@@ -851,13 +857,16 @@ begin:
             if (dotdot_stays(&cur, &root)) {
                 continue; /* a root is its own parent */
             }
-            if (cur.node == cur.mnt->root) {
-                /* At a mount root: continue at the covered node (the two
-                 * nameless mounts hang off the root directory itself), and
-                 * re-run this same `..` there. */
+            if (cur.node == cur.mnt->root && cur.mnt->covered) {
                 p -= 2;
-                rc = walk_move(&cur, cur.mnt->parent,
-                               cur.mnt->covered ? cur.mnt->covered : cur.mnt->parent->root, locked);
+                rc = walk_move(&cur, cur.mnt->parent, cur.mnt->covered, locked);
+                if (rc != 0) {
+                    goto out_err;
+                }
+                continue;
+            }
+            if (cur.node == cur.mnt->root) {
+                rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
                 if (rc != 0) {
                     goto out_err;
                 }

@@ -22,10 +22,11 @@
  * Every path-taking syscall resolves through `vfs_resolve`, which walks one
  * component at a time: a lookup of one name in one directory on one mount,
  * after the caller's search permission on that directory has been checked
- * here, once, for every file system. `..` is physical: at a mount root it
- * continues at the parent's covered node, at the root of the root mount it
- * stays, and anywhere else it is a `lookup` of "..". A path that names a
- * missing or unsearchable directory before its `..` fails.
+ * here, once, for every file system. `..` is physical: at the root of a
+ * mount over a directory it continues at the parent's covered node, at the
+ * root of a nameless mount it is the parent's root directory, at the root
+ * of the root mount it stays, and anywhere else it is a `lookup` of "..". A
+ * path that names a missing or unsearchable directory before its `..` fails.
  *
  * The two synthetic types are the one exception: a type whose ops set
  * `lookup_rest` instead of `lookup` is handed the remainder of the path in
