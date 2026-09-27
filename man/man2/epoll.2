@@ -87,7 +87,9 @@ milliseconds pass, a negative
 waiting without a limit, and stores at most
 .Fa maxevents
 events and their data in
-.Fa events .
+.Fa events ;
+with more ready than that, the next waits report the others first, so
+each ready descriptor is reported in turn, as in Linux.
 .Fn epoll_pwait ,
 number 319, waits with the signal mask
 .Fa sigmask

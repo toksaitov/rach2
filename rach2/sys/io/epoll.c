@@ -193,10 +193,21 @@ static void untook(struct epoll *ep, const struct epoll_out *o)
     }
 }
 
+/*
+ * The scan of a wait: the events of the set's registrations into the wait's
+ * array, at most `max`, each taken as it is reported, and the queues to wait
+ * on while there are none.
+ *
+ * A reported registration moves to the end of the list, so a wait with
+ * room for fewer events than are ready is followed by one that reports the
+ * others, as Linux's waits take the ready descriptors in turn.
+ */
 static int scan_set(void *ctx, struct wait_queue **wqs)
 {
     struct epoll_scan *sc = (struct epoll_scan *)ctx;
     struct epitem **link = &sc->ep->items;
+    struct epitem *reported = NULL;
+    struct epitem **tail = &reported;
     struct epitem *it;
     uint32_t q = 1;
 
@@ -215,12 +226,21 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
         if (q < sc->queues) {
             wqs[q++] = wq;
         }
-        if (ready) {
-            took(&sc->out[sc->n++], it, ready);
-            item_reported(it, ready, wq);
+        if (!ready) {
+            link = &it->next;
+            continue;
         }
-        link = &it->next;
+        took(&sc->out[sc->n++], it, ready);
+        item_reported(it, ready, wq);
+        *link = it->next;
+        it->next = NULL;
+        *tail = it;
+        tail = &it->next;
     }
+    while (*link) {
+        link = &(*link)->next;
+    }
+    *link = reported;
     return (int)sc->n;
 }
 
@@ -465,7 +485,8 @@ int32_t sys_epoll_pwait2(struct isr_params *params)
     int32_t rc;
 
     if (params->esi) {
-        uint32_t ts[4]; /* struct __kernel_timespec: 64-bit seconds and nanoseconds */
+        /* struct __kernel_timespec: 64-bit seconds and nanoseconds. */
+        uint32_t ts[4];
         int64_t sec;
         uint64_t ms;
 

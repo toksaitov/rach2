@@ -12,10 +12,11 @@
  * is removed by EPOLL_CTL_DEL and dropped when its descriptor is closed; a
  * regular file is refused with EPERM and a second add with EEXIST. A child's
  * write wakes a parent blocked in epoll_wait. A registration of no events is
- * told of a hangup. A one-shot event a wait cannot store, EFAULT, is reported
- * by the next wait. The registration of a closed eventfd does not report the
- * eventfd made next at its number, which can be added. epoll_pwait2 takes a
- * timeout of 2^31 seconds, and refuses negative seconds with EINVAL.
+ * told of a hangup. Waits with room for one event report two ready descriptors
+ * in turn. A one-shot event a wait cannot store, EFAULT, is reported by the
+ * next wait. The registration of a closed eventfd does not report the eventfd
+ * made next at its number, which can be added. epoll_pwait2 takes a timeout of
+ * 2^31 seconds, and refuses negative seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -257,6 +258,35 @@ static int sets(void)
     return 0;
 }
 
+/* Two descriptors ready, and waits with room for one event: the waits
+ * report each in turn. */
+static int in_turn(void)
+{
+    struct epoll_event ev, first, second;
+    int ep = epoll_create1(0);
+    int a = eventfd(0, 0);
+    int b = eventfd(0, 0);
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT;
+    ev.data.u32 = 1;
+    if (ep < 0 || a < 0 || b < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, a, &ev) != 0) {
+        return fail("setup for waits in turn");
+    }
+    ev.data.u32 = 2;
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, b, &ev) != 0) {
+        return fail("setup for waits in turn");
+    }
+    if (wait_one(ep, 0, &first) != 1 || wait_one(ep, 0, &second) != 1 ||
+        first.data.u32 == second.data.u32) {
+        return fail("two waits for one event reported the same descriptor");
+    }
+    close(a);
+    close(b);
+    close(ep);
+    return 0;
+}
+
 /* A one-shot event a wait cannot store in a read-only buffer, EFAULT, is
  * reported by the next wait. */
 static int failed_copy(void)
@@ -372,8 +402,8 @@ static int long_timeout(void)
 
 int main(void)
 {
-    if (counters() || sets() || hangup_no_events() || number_reused() || failed_copy() ||
-        long_timeout()) {
+    if (counters() || sets() || hangup_no_events() || number_reused() || in_turn() ||
+        failed_copy() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");
