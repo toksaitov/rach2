@@ -72,7 +72,7 @@ changes = {
     "registration": ("    entry->ofd->vnode = node;", "    entry->ofd->vnode = NULL;"),
     "node": ("vfs_truncate(ref->mnt, entry->ofd->fhandle, 0)",
              "vfs_truncate(ref->mnt, node, 0)"),
-    "release": ("            fd_free(&current_proc->fds, fd);\n            return rc;",
+    "release": ("            fd_free(current_proc->fds, fd);\n            return rc;",
                 "            return rc;"),
     "truncate": ("if (!mnt_is_root(ref->mnt) && (flags & O_TRUNC)) {",
                  "if (0) {"),
