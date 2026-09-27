@@ -36,10 +36,13 @@ and
 .Ql krffs .
 .Dv MS_RDONLY ,
 .Dv MS_NOSUID ,
+.Dv MS_NOEXEC ,
 and
-.Dv MS_NOEXEC
-are enforced.
-.Dv MS_NODEV ,
+.Dv MS_NODEV
+are enforced;
+.Dv MS_NODEV
+makes an open of a device node on the mount return
+.Er EACCES .
 .Dv MS_NOATIME ,
 .Dv MS_NODIRATIME ,
 .Dv MS_RELATIME ,

@@ -3087,6 +3087,7 @@ static const struct vfs_ops vfat_ops = {
     fat_statfs,  fat_sync,    fat_prepare_unmount,
     0,                           /* abort_unmount */
     fat_unmount, fat_path,    0, /* symlink */
+    0,                           /* mknod */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0};

@@ -110,6 +110,9 @@ static const char *const PROBES[] = {
     "musl/unixmusl",
     /* File mappings, shared memory, mremap and madvise. */
     "musl/mapmusl",
+    /* FIFO files made by mkfifo and mknodat: their opens, waits and
+       bytes. */
+    "musl/fifomusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

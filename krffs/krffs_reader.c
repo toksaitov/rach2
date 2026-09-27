@@ -7,8 +7,13 @@
 #include "krffs_file_system.h"
 #include "krffs_node.h"
 
-/** A directory's type bit in a node's mode (matches the kernel's S_IFDIR). */
+/** The type field of a node's mode and two of its values (the kernel's
+ * S_IFMT, S_IFDIR and S_IFREG). A regular file's mode may have no type bits;
+ * a FIFO and a socket have their own, and the socket's include S_IFDIR's
+ * bit, so the field is compared whole. */
+#define READER_S_IFMT  0170000u
 #define READER_S_IFDIR 0040000u
+#define READER_S_IFREG 0100000u
 
 /**
  * Validate that `node` lies whole inside the region and describes itself
@@ -136,8 +141,12 @@ int krffs_read_regular(struct krffs_file_system *file_system, const char *path, 
         snprintf(errbuf, errlen, "the path must be absolute and name a file");
         return -1;
     }
-    if (node->mode & READER_S_IFDIR) {
+    if ((node->mode & READER_S_IFMT) == READER_S_IFDIR) {
         snprintf(errbuf, errlen, "'%s' is a directory", path);
+        return -1;
+    }
+    if ((node->mode & READER_S_IFMT) != 0 && (node->mode & READER_S_IFMT) != READER_S_IFREG) {
+        snprintf(errbuf, errlen, "'%s' is not a regular file", path);
         return -1;
     }
     if (node->data_size > node->size - sizeof(*node)) {

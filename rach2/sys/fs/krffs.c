@@ -1330,13 +1330,35 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uin
 }
 
 /**
- * Create an empty regular file at `path`.
+ * Create an empty regular file at `path`, mode 0644.
  *
  * Idempotent like creat: an existing name (file or directory) returns success.
  * The parent directory must already exist. Returns 0 on success, -1 if the
  * parent is missing or no node could be allocated.
  */
 int krffs_create_at(krffs_mount_t *mount, const char *path)
+{
+    return krffs_create_node_at(mount, path, 0644);
+}
+
+uint32_t krffs_mode_type(uint16_t mode)
+{
+    uint32_t type = (uint32_t)mode & KRFFS_S_IFMT;
+
+    if (type == KRFFS_S_IFDIR || type == KRFFS_S_IFIFO || type == KRFFS_S_IFSOCK) {
+        return type;
+    }
+    return KRFFS_S_IFREG;
+}
+
+/**
+ * Create an empty node at `path` with `mode`, which has the type bits of a
+ * FIFO or a socket, or none for a regular file.
+ *
+ * The mode is on the medium before the name, as every field is; the rest of
+ * the contract is `krffs_create_at`'s.
+ */
+int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode)
 {
     uint64_t node;
     uint64_t parent_id;
@@ -1368,7 +1390,7 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, krffs_calculate_djb_hash(name));
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
-    rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, 0644); /* rw-r--r-- */
+    rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, mode);
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_GID, 0);
 
@@ -2576,6 +2598,14 @@ int krffs_create(const char *path)
         return -1;
     }
     return krffs_create_at(&krffs_root_mount, path);
+}
+
+int krffs_create_node(const char *path, uint16_t mode)
+{
+    if (!krffs_fs) {
+        return -1;
+    }
+    return krffs_create_node_at(&krffs_root_mount, path, mode);
 }
 
 int krffs_unlink(const char *path)

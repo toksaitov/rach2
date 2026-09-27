@@ -32,6 +32,14 @@ int devfs_open(const char *name, int flags);
  * leaf. */
 int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino);
 
+/**
+ * The name of the device present now whose number, packed as `devfs_stat`
+ * reports it, is `rdev`: a block device's when `block` is nonzero and a
+ * character device's otherwise; NULL when there is none. This is what a
+ * device node on a disk file system opens.
+ */
+const char *devfs_name_of(int block, uint32_t rdev);
+
 /*
  * The encoded rdev (major<<8 | minor) and the stable inode of an open
  * FD_TYPE_DEVICE descriptor, for fstat64. Both return 0 if e is not a device.

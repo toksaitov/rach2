@@ -1,0 +1,197 @@
+.Dd September 27, 2026
+.Dt MKNOD 2
+.Os
+.Sh NAME
+.Nm mknod ,
+.Nm mknodat
+.Nd make a FIFO, a socket, a device node or an empty file
+.Sh SYNOPSIS
+.In sys/stat.h
+.Ft int
+.Fn mknod "const char *path" "mode_t mode" "dev_t dev"
+.Ft int
+.Fn mknodat "int dirfd" "const char *path" "mode_t mode" "dev_t dev"
+.Sh DESCRIPTION
+.Fn mknod
+makes the node
+.Fa path
+of the kind the file type bits of
+.Fa mode
+give:
+.Dv S_IFIFO
+a FIFO,
+.Dv S_IFSOCK
+a socket file,
+.Dv S_IFCHR
+and
+.Dv S_IFBLK
+a character or block device node with the number
+.Fa dev ,
+and
+.Dv S_IFREG
+or no type bits an empty regular file.
+.Fa dev
+is ignored for the other kinds.
+.Fn mknodat
+does the same with a relative
+.Fa path
+resolved from the directory
+.Fa dirfd
+is open on, or from the current working directory for
+.Dv AT_FDCWD ;
+an absolute path ignores
+.Fa dirfd .
+Musl's
+.Fn mkfifo
+is
+.Fn mknod
+with
+.Dv S_IFIFO .
+.Pp
+The node receives the caller's effective user and group IDs and the
+permission bits
+.Li "mode & 07777 & ~umask" .
+Its parent must exist, the caller needs search permission on the
+ancestors and write permission on the parent, and the final name must
+not exist, whether as a file, a directory, a symbolic link or a mount
+point.
+A device node needs effective user ID 0.
+.Pp
+.Fa dev
+is Linux's 32-bit encoding, which musl's
+.Fn makedev
+produces in its low word: a major number up to 4095 and a minor number
+up to 1048575.
+.Xr stat 2
+reports it as
+.Va st_rdev .
+.Pp
+A FIFO is opened as an end of a pipe shared by every open of the file,
+as
+.Xr open 2
+describes.
+A socket file is made by
+.Xr bind 2
+on an
+.Dv AF_UNIX
+socket; one made by
+.Fn mknod
+has no socket bound to it, and
+.Xr connect 2
+to it is refused.
+An open of a socket file fails with
+.Er ENXIO .
+An open of a device node opens the
+.Pa /dev
+device with the same number and kind, as
+.Xr open 2
+describes.
+.Ss File systems
+ext2 keeps every kind.
+It writes the inode before the directory entry that names it, and keeps
+a device's number where Linux does: the major and minor numbers a byte
+each in the first block pointer word when both are below 256, and the
+32-bit encoding in the second word, with the first zero, otherwise.
+The entry's type byte names the kind.
+.Pp
+tmpfs keeps every kind in memory.
+.Pp
+KRFFS, the boot root and a mounted volume alike, keeps FIFOs and sockets:
+the node's stored mode has their type bits, written before its name.
+A KRFFS node has no field for a device's number, so a device node there
+is refused with
+.Er EPERM .
+.Pp
+FAT32 and exFAT have no such nodes and refuse every kind but a regular
+file with
+.Er EPERM .
+Nothing is made under
+.Pa /dev
+or
+.Pa /proc ,
+which answer
+.Er EROFS .
+.Pp
+The i386 system call numbers are 14 for
+.Fn mknod
+and 297 for
+.Fn mknodat .
+.Fn mknod
+takes the path, the mode and the device number in EBX, ECX and EDX;
+.Fn mknodat
+takes the directory descriptor, the path, the mode and the device
+number in EBX, ECX, EDX and ESI.
+.Sh RETURN VALUES
+These functions return 0 on success, or -1 on failure and set
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/musl/fifomusl.c
+makes a FIFO in
+.Pa /tmp
+with
+.Fn mkfifo
+and another with
+.Fn mknodat ,
+and checks that
+.Xr stat 2
+reports each as one.
+.Sh ERRORS
+The errors are checked in this order: the kind, the path, the name's
+existence, a read-only mount, the parent's write permission, and a
+device node's privilege.
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EACCES
+Search permission on an ancestor or write permission on the parent
+was denied.
+.It Bq Er EBADF
+.Fn mknodat
+was given a relative path and a
+.Fa dirfd
+that is not open.
+.It Bq Er EBUSY
+Path resolution entered a mount being mounted or unmounted.
+.It Bq Er EEXIST
+The name exists, as any kind of node or as a mount point.
+.It Bq Er EFAULT
+The path is null or cannot be read from user memory, or there is no
+current process.
+.It Bq Er EINVAL
+The type bits of
+.Fa mode
+are none of the five kinds and not a directory's.
+.It Bq Er EIO
+The backing device was removed, or file system metadata could not be
+read or written.
+.It Bq Er ELOOP
+Path resolution would follow more than 40 symbolic links.
+.It Bq Er ENAMETOOLONG
+A path, component or symbolic-link expansion is too long.
+.It Bq Er ENOENT
+The path is empty or an ancestor is missing.
+.It Bq Er ENOSPC
+There is no space for the node or its directory entry.
+.It Bq Er ENOTDIR
+An ancestor is not a directory, or
+.Fn mknodat
+was given a relative path and a
+.Fa dirfd
+that is not open on a directory.
+.It Bq Er EPERM
+.Fa mode
+has the type bits of a directory, a device node was asked for by a
+caller whose effective user ID is not 0, or the file system cannot
+keep the kind: a device node on KRFFS, any kind but a regular file on
+FAT32 and exFAT.
+.It Bq Er EROFS
+The mount is read-only, or the parent is under
+.Pa /dev
+or
+.Pa /proc .
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr mkdir 2 ,
+.Xr open 2 ,
+.Xr stat 2 ,
+.Xr umask 2

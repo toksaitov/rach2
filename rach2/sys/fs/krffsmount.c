@@ -255,7 +255,7 @@ static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         st->mode = KRFFS_S_IFDIR | 0755u;
         st->nlink = 2;
     } else {
-        st->mode = KRFFS_IS_DIR(head.mode) ? head.mode : (KRFFS_S_IFREG | (head.mode & 07777u));
+        st->mode = krffs_mode_type(head.mode) | (head.mode & 07777u);
         st->nlink = KRFFS_IS_DIR(head.mode) ? 2 : 1;
     }
     st->uid = head.uid;
@@ -439,6 +439,7 @@ static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
             ent->name[i] = '\0';
             ent->ino = scan + 1;
             ent->is_dir = KRFFS_IS_DIR(head.mode) ? 1 : 0;
+            ent->type = krffs_mode_type(head.mode);
             *cursor = next == 0 ? KRFFS_DIR_END : (uint32_t)next;
             vfs_ns_unlock(mnt);
             return 1;
@@ -588,6 +589,46 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     }
     rc = krffs_create_at(&vol->fs, path);
     if (rc != 0) {
+        return -ENOSPC;
+    }
+    made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+    if (made == KRFFS_NO_NODE) {
+        return -EIO;
+    }
+    stamp_made(vol, made, mode);
+    *node = handle_of(made);
+    return 0;
+}
+
+/**
+ * A FIFO or a socket `name` in `dir`, made as `kv_create` makes a file, with
+ * its type and permission bits on the medium before its name. A device node
+ * has a number the format has no field for, and is refused with EPERM.
+ */
+static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                    uint32_t rdev, void **node)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint32_t type = mode & KRFFS_S_IFMT;
+    char path[256];
+    uint64_t made;
+    int rc;
+
+    (void)rdev;
+    if (type != KRFFS_S_IFIFO && type != KRFFS_S_IFSOCK) {
+        return -EPERM;
+    }
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    rc = join(mnt, dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
+        return -EEXIST;
+    }
+    if (krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u))) != 0) {
         return -ENOSPC;
     }
     made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
@@ -907,6 +948,7 @@ static const struct vfs_ops krffs_volume_ops = {
     kv_unmount,
     kv_path,
     0, /* symlink */
+    kv_mknod,
 };
 
 /**

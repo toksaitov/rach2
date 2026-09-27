@@ -200,6 +200,7 @@ mkdirat 2 mkdir
 mkfifo 1 busybox-coreutils
 mkfs.minix 1 busybox-util-linux
 mknod 1 busybox-coreutils
+mknodat 2 mknod
 mkpasswd 8 busybox-loginutils
 mkswap 1 busybox-util-linux
 mktemp 1 busybox-coreutils

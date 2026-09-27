@@ -51,12 +51,14 @@
 #define EXT2_VALID_FS 0x0001u
 #define EXT2_ERROR_FS 0x0002u
 
-#define S_IFMT_  0170000u
-#define S_IFREG_ 0100000u
-#define S_IFDIR_ 0040000u
-#define S_IFLNK_ 0120000u
-#define S_IFCHR_ 0020000u
-#define S_IFBLK_ 0060000u
+#define S_IFMT_   0170000u
+#define S_IFREG_  0100000u
+#define S_IFDIR_  0040000u
+#define S_IFLNK_  0120000u
+#define S_IFCHR_  0020000u
+#define S_IFBLK_  0060000u
+#define S_IFIFO_  0010000u
+#define S_IFSOCK_ 0140000u
 
 #define EXT2_FT_DIR 2u
 #define EXT2_FT_MAX 7u
@@ -778,6 +780,16 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     return (int32_t)count;
 }
 
+/* The S_IF type bits an entry's type byte names, 0 for the unknown type 0
+ * and for a byte past the seven the format defines. */
+static uint32_t type_of_ftype(uint32_t ftype)
+{
+    static const uint32_t types[] = {0,        S_IFREG_, S_IFDIR_,  S_IFCHR_,
+                                     S_IFBLK_, S_IFIFO_, S_IFSOCK_, S_IFLNK_};
+
+    return ftype < sizeof(types) / sizeof(types[0]) ? types[ftype] : 0;
+}
+
 static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                         struct vfs_dirent *ent)
 {
@@ -802,6 +814,7 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         ent->ino = sc.ino;
         if (em->incompat & EXT2_INCOMPAT_FILETYPE) {
             ent->is_dir = sc.type == EXT2_FT_DIR;
+            ent->type = type_of_ftype(sc.type);
         } else {
             struct ext2_node probe;
             int rc = inode_load(em, sc.ino, &probe);
@@ -810,6 +823,7 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                 return rc;
             }
             ent->is_dir = (probe.mode & S_IFMT_) == S_IFDIR_;
+            ent->type = probe.mode & S_IFMT_;
         }
         return 1;
     }
@@ -2358,6 +2372,10 @@ static uint32_t ftype_of(uint32_t mode)
         return 3;
     case S_IFBLK_:
         return 4;
+    case S_IFIFO_:
+        return 5;
+    case S_IFSOCK_:
+        return 6;
     case S_IFLNK_:
         return 7;
     default:
@@ -3106,6 +3124,75 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
         return rc;
     }
     rc = dir_add(em, d, name, n->ino, 1);
+    if (rc != 0) {
+        n->nlink = 0;
+        release_inode(em, n);
+        node_drop(em, n);
+        return rc;
+    }
+    d->mtime = d->ctime = now_seconds();
+    rc = inode_store(em, d);
+    if (rc != 0) {
+        mark_error(em); /* the entry is there; the times are what is missing */
+    }
+    *node = n;
+    return 0;
+}
+
+/**
+ * A FIFO, a socket or a device node `name` in `dir`, in the order `create`
+ * keeps: the inode's bit, then the inode written whole, then the entry that
+ * names it. A device's number is where Linux keeps it: the old encoding, a
+ * byte each of major and minor, in the first pointer word when both fit,
+ * and the new encoding in the second word otherwise, with the first zero.
+ */
+static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                      uint32_t rdev, void **node)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n;
+    struct ext2_scan sc;
+    uint32_t type = mode & S_IFMT_;
+    uint32_t at, prev;
+    int rc;
+
+    if (type != S_IFIFO_ && type != S_IFSOCK_ && type != S_IFCHR_ && type != S_IFBLK_) {
+        return -EINVAL;
+    }
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if (k_strlen(name) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    rc = inode_new(em, d->ino, type | (mode & 07777u), 0, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    if (type == S_IFCHR_ || type == S_IFBLK_) {
+        uint32_t major = (rdev >> 8) & 0xFFFu;
+        uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
+
+        if (major < 256 && minor < 256) {
+            n->block[0] = (major << 8) | minor;
+        } else {
+            n->block[1] = (minor & 0xFFu) | (major << 8) | ((minor & 0xFFF00u) << 12);
+        }
+    }
+    rc = inode_store(em, n);
+    if (rc == 0) {
+        rc = dir_add(em, d, name, n->ino, ftype_of(n->mode));
+    }
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
@@ -4490,7 +4577,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_read,    ext2_write, ext2_truncate,        ext2_fsync,         ext2_readdir, ext2_create,
     ext2_unlink,  ext2_mkdir, ext2_rmdir,           ext2_rename,        ext2_link,    ext2_readlink,
     ext2_statfs,  ext2_sync,  ext2_prepare_unmount, ext2_abort_unmount, /* abort_unmount */
-    ext2_unmount, ext2_path,  ext2_symlink,
+    ext2_unmount, ext2_path,  ext2_symlink,         ext2_mknod,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1};

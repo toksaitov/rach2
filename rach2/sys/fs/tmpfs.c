@@ -53,6 +53,7 @@ struct tmpfs_node {
     uint32_t mode;
     uint32_t uid;
     uint32_t gid;
+    uint32_t rdev; /* a device node's number, in the kernel's encoding */
     uint64_t ino;
     int64_t atime, atime_ns, mtime, mtime_ns, ctime, ctime_ns;
     struct shmem data;
@@ -244,6 +245,7 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->gid = n->gid;
     st->nlink = is_dir(n) ? 2u + n->subdirs : n->links;
     st->ino = n->ino;
+    st->rdev = n->rdev;
     if (is_dir(n)) {
         st->size = (uint64_t)(n->nentries + 2u) * DIRENT_BYTES;
     } else if (n->target) {
@@ -390,6 +392,7 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         ent->name[1] = *cursor == 1 ? '.' : '\0';
         ent->ino = *cursor == 0 ? d->ino : d->parent->ino;
         ent->is_dir = 1;
+        ent->type = T_IFDIR;
         (*cursor)++;
         return 1;
     }
@@ -401,12 +404,19 @@ static int tmpfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     k_strncpy(ent->name, e->name, VFS_NAME_MAX);
     ent->ino = e->node->ino;
     ent->is_dir = is_dir(e->node);
+    ent->type = e->node->mode & T_IFMT;
     (*cursor)++;
     return 1;
 }
 
-static int tmpfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
-                        void **node)
+/**
+ * Make `name` in `dir` a node of the type the S_IF bits of `mode` give, a
+ * regular file for none, with the device number `rdev` for a device. The
+ * node comes back held. A directory and a symbolic link have operations of
+ * their own and are EINVAL here.
+ */
+static int make_node(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                     uint32_t rdev, void **node)
 {
     struct tmpfs_node *d = dir_of(mnt, dir);
     struct tmpfs_node *n;
@@ -426,6 +436,9 @@ static int tmpfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint
     if (!n) {
         return -ENOSPC;
     }
+    if (type == T_IFCHR || type == T_IFBLK) {
+        n->rdev = rdev;
+    }
     rc = add_entry(d, name, n);
     if (rc != 0) {
         kfree(n);
@@ -434,6 +447,18 @@ static int tmpfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint
     n->refs = 1;
     *node = n;
     return 0;
+}
+
+static int tmpfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                        void **node)
+{
+    return make_node(mnt, dir, name, mode, 0, node);
+}
+
+static int tmpfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                       uint32_t rdev, void **node)
+{
+    return make_node(mnt, dir, name, mode, rdev, node);
 }
 
 static int tmpfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
@@ -773,7 +798,7 @@ static const struct vfs_ops tmpfs_ops = {
     tmpfs_read,    tmpfs_write, tmpfs_truncate,        tmpfs_fsync,   tmpfs_readdir, tmpfs_create,
     tmpfs_unlink,  tmpfs_mkdir, tmpfs_rmdir,           tmpfs_rename,  tmpfs_link,    tmpfs_readlink,
     tmpfs_statfs,  tmpfs_sync,  tmpfs_prepare_unmount, 0, /* abort_unmount */
-    tmpfs_unmount, tmpfs_path,  tmpfs_symlink,
+    tmpfs_unmount, tmpfs_path,  tmpfs_symlink,         tmpfs_mknod,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1};

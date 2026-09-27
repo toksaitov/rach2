@@ -179,6 +179,10 @@ int32_t sys_mkdir(isr_params_t *params);
 
 int32_t sys_mkdirat(isr_params_t *params);
 
+int32_t sys_mknod(isr_params_t *params);
+
+int32_t sys_mknodat(isr_params_t *params);
+
 int32_t sys_rmdir(isr_params_t *params);
 
 int32_t sys_rename(isr_params_t *params);

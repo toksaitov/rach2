@@ -37,6 +37,8 @@
 #define SYS_MKDIR           39
 #define SYS_RMDIR           40
 #define SYS_MKDIRAT         296
+#define SYS_MKNOD           14
+#define SYS_MKNODAT         297
 #define SYS_UNLINKAT        301
 #define SYS_GETPID          20
 #define SYS_TIMES           43

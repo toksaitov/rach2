@@ -45,7 +45,7 @@ typedef struct pipe {
      * waits on. The pipe lasts while an end is open, as in Linux. */
     int fifo;
     const void *fifo_mnt;
-    uint32_t fifo_ino;
+    uint64_t fifo_ino;
     uint32_t read_opens;
     uint32_t write_opens;
     wait_queue_t open_wq;
@@ -64,7 +64,7 @@ void pipe_init_pool(void);
  * `e` as it was, for the caller to free.
  */
 struct fd_entry;
-int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint32_t ino, int flags);
+int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags);
 
 /*
  * sys_pipe2(int pipefd[2], int flags): create a pipe and return its read-end fd

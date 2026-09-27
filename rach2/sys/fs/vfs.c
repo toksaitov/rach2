@@ -1025,6 +1025,7 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
     if (!mnt->type->ops->readdir) {
         return -EINVAL;
     }
+    k_memset(ent, 0, sizeof(*ent));
     return mnt->type->ops->readdir(mnt, handle, cursor, ent);
 }
 
@@ -1112,6 +1113,21 @@ int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *
     return mnt->type->ops->symlink(mnt, dir, name, target);
 }
 
+int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, uint32_t rdev,
+              void **node)
+{
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
+    if (mnt->flags & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
+    if (!mnt->type->ops->mknod) {
+        return -EPERM; /* a file system with no such nodes */
+    }
+    return mnt->type->ops->mknod(mnt, dir, name, mode, rdev, node);
+}
+
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     if (vfs_mount_gone(mnt)) {
@@ -1165,8 +1181,7 @@ static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         st->ino = 1;
         return 0;
     }
-    st->mode = KRFFS_IS_DIR(n->mode) ? (VFS_S_IFDIR | (uint32_t)(n->mode & 07777u))
-                                     : (VFS_S_IFREG | (uint32_t)(n->mode & 07777u));
+    st->mode = krffs_mode_type(n->mode) | (uint32_t)(n->mode & 07777u);
     st->uid = n->uid;
     st->gid = n->gid;
     st->nlink = 1;
@@ -1291,6 +1306,7 @@ static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cur
             ent->name[nlen] = '\0';
             ent->ino = krffs_node_ino(node);
             ent->is_dir = KRFFS_IS_DIR(node->mode) ? 1 : 0;
+            ent->type = krffs_mode_type(node->mode);
             *cursor = node_off + 1;
             return 1;
         }
@@ -1407,6 +1423,44 @@ static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     return 0;
 }
 
+/**
+ * A FIFO or a socket, made as `kfs_create` makes a file, with its type bits
+ * on the medium before its name. A device node has a number KRFFS has no
+ * field for, and is refused with EPERM. A name already there is EEXIST: the
+ * core's create answers success for one, which would make this somebody
+ * else's node.
+ */
+static int kfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                     uint32_t rdev, void **node)
+{
+    uint32_t type = mode & KRFFS_S_IFMT;
+    char path[256];
+    krffs_node_t *n;
+    int rc;
+
+    (void)mnt;
+    (void)rdev;
+    if (type != KRFFS_S_IFIFO && type != KRFFS_S_IFSOCK) {
+        return -EPERM;
+    }
+    if (krffs_child(dir ? dir : krffs_fs->node, name)) {
+        return -EEXIST;
+    }
+    rc = kfs_join(dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    if (krffs_create_node(path + (path[0] == '/'), (uint16_t)(type | (mode & 07777u))) != 0) {
+        return -ENOSPC;
+    }
+    n = krffs_child(dir ? dir : krffs_fs->node, name);
+    if (!n) {
+        return -EIO;
+    }
+    *node = n;
+    return 0;
+}
+
 /*
  * The data operations, under the mount's lock. The namespace operations
  * arrive locked from the common layer; these take the lock themselves. The
@@ -1487,6 +1541,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* unmount */
     0,                           /* path: KRFFS directories do not move */
     0,                           /* symlink */
+    kfs_mknod,
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -1663,6 +1718,7 @@ static const struct vfs_ops devfs_vops = {
     0, 0,          0,          0,         0,
     0, /* abort_unmount */
     0, /* symlink */
+    0, /* mknod */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -1673,6 +1729,7 @@ static const struct vfs_ops procfs_vops = {
     0, 0,           0,          0,         0,
     0, /* abort_unmount */
     0, /* symlink */
+    0, /* mknod */
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,

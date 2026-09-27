@@ -1335,6 +1335,17 @@ static int reader_walks(const char *img)
     return system(cmd) == 0;
 }
 
+/* Whether debugfs's answer to `request` has the text `text`. */
+static int debugfs_says(const char *img, const char *request, const char *text)
+{
+    char cmd[600];
+
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null | grep -qF '%s'",
+             request, img, text);
+    return system(cmd) == 0;
+}
+
 static int debugfs_lists(const char *img, const char *dir, const char *name)
 {
     char cmd[600];
@@ -1654,6 +1665,55 @@ static int seq_many(void)
     return rc;
 }
 
+/* A device number of major 300 and minor 70000, which needs Linux's new
+   encoding, and /dev/null's, which fits the old. */
+#define WIDE_RDEV ((70000u & 0xFFu) | (300u << 8) | ((70000u & 0xFFF00u) << 12))
+#define NULL_RDEV ((1u << 8) | 3u)
+
+/* A FIFO, a socket, and two device nodes, one number in each encoding. */
+static int seq_nodes(void)
+{
+    void *n = 0;
+    int rc = OPS->mknod(&mnt, mnt.root, "fifo", 0010644, 0, &n);
+
+    if (rc == 0) {
+        OPS->put(&mnt, n);
+        op_mark = writes_made; /* the name is committed: it stays at every stop after */
+        rc = OPS->mknod(&mnt, mnt.root, "sock", 0140755, 0, &n);
+    }
+    if (rc == 0) {
+        OPS->put(&mnt, n);
+        rc = OPS->mknod(&mnt, mnt.root, "null", 0020666, NULL_RDEV, &n);
+    }
+    if (rc == 0) {
+        OPS->put(&mnt, n);
+        rc = OPS->mknod(&mnt, mnt.root, "wide", 0060600, WIDE_RDEV, &n);
+    }
+    if (rc == 0) {
+        OPS->put(&mnt, n);
+        rc = OPS->mknod(&mnt, mnt.root, "fifo", 0010644, 0, &n) == -EEXIST ? 0 : -1;
+    }
+    return rc;
+}
+
+/* The node at `path` has the mode `mode` and the device number `rdev`. */
+static int node_is(const char *path, uint32_t mode, uint32_t rdev)
+{
+    struct vfs_stat st;
+    int err, ok;
+    void *n = walk(path, &err);
+
+    if (!n) {
+        return 0;
+    }
+    ok = OPS->getattr(&mnt, n, &st) == 0 && st.mode == mode && st.rdev == rdev && st.size == 0;
+    if (!ok) {
+        printf("  %s: mode 0%o rdev 0x%x\n", path, (unsigned)st.mode, (unsigned)st.rdev);
+    }
+    OPS->put(&mnt, n);
+    return ok;
+}
+
 /* `counts` marks a sequence whose order writes a link count apart from the
    entry it counts: only there may a stop leave a count wrong. */
 struct sequence {
@@ -1676,6 +1736,7 @@ static const struct sequence sequences[] = {
     {"symlink", seq_symlink, 0},
     {"an open unlinked file", seq_open_unlinked, 0},
     {"many files", seq_many, 0},
+    {"a FIFO, a socket and device nodes", seq_nodes, 0},
 };
 
 /* What each finished sequence leaves: the files it made with their bytes,
@@ -1769,6 +1830,9 @@ static int oracle_after(int i)
     case 12:
         return file_is("/m1.txt", pattern, 10) && file_is("/m299.txt", pattern, 10) &&
                walk("/m0.txt", &err) == 0 && walk("/m298.txt", &err) == 0;
+    case 13:
+        return node_is("/fifo", 0010644, 0) && node_is("/sock", 0140755, 0) &&
+               node_is("/null", 0020666, NULL_RDEV) && node_is("/wide", 0060600, WIDE_RDEV);
     default:
         return 0;
     }
@@ -2669,6 +2733,19 @@ static void write_rows(void)
                   debugfs_lists(wimg, "/", "quick"),
               "debugfs lists the file, the directory and the link this driver wrote");
     }
+
+    /* debugfs reads the kinds and the numbers where Linux keeps them. */
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (mount_rw() == 0) {
+        seq_nodes();
+        unmount_rw();
+        check(debugfs_says(wimg, "stat /fifo", "Type: FIFO") &&
+                  debugfs_says(wimg, "stat /sock", "Type: socket") &&
+                  debugfs_says(wimg, "stat /null", "number: 01:03") &&
+                  debugfs_says(wimg, "stat /wide", "number: 300:70000"),
+              "debugfs reads the FIFO, the socket and both device numbers this driver wrote");
+    }
 }
 
 /* The refusals the writer must decide before it writes anything: a name
@@ -3069,6 +3146,8 @@ static int names_present(int i)
         return walk("/newdir", &err) != 0;
     case 10:
         return walk("/quick", &err) != 0;
+    case 13:
+        return walk("/fifo", &err) != 0;
     case 6:
         return walk("/from.txt", &err) || walk("/to.txt", &err) || walk("/dir/moved.txt", &err);
     case 7:

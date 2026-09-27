@@ -36,8 +36,9 @@
  *
  * An operation a file system does not implement is a NULL pointer, and the
  * common layer answers the standard error for it: EROFS for a write-side
- * operation, EPERM for `link` on a writable mount whose type has no links,
- * EINVAL for `readlink` on something that is not a link.
+ * operation, EPERM for `link`, `symlink` and `mknod` on a writable mount
+ * whose type has none, EINVAL for `readlink` on something that is not a
+ * link.
  *
  * Lock order, fixed and checked: the mount table, then a mount's namespace
  * lock, then a description, then cache buffers in ascending block order.
@@ -55,10 +56,10 @@
 #define VFS_UNMOUNTING 3
 
 /* The mount(2) flags this kernel honours or records, with Linux's values.
- * MS_RDONLY, MS_NOSUID and MS_NOEXEC are enforced in the common layer;
- * MS_NODEV is recorded and not enforced, since no type here has device
- * nodes; the atime group and MS_SILENT are recorded because nothing here
- * updates access times. Any other flag answers EINVAL. */
+ * MS_RDONLY, MS_NOSUID, MS_NOEXEC and MS_NODEV are enforced in the common
+ * layer, the last by refusing an open of a device node with EACCES; the
+ * atime group and MS_SILENT are recorded because nothing here updates
+ * access times. Any other flag answers EINVAL. */
 #define VFS_MS_RDONLY     0x0001u
 #define VFS_MS_NOSUID     0x0002u
 #define VFS_MS_NODEV      0x0004u
@@ -99,11 +100,14 @@ struct vfs_stat {
 #define VFS_SET_MTIME 0x10
 #define VFS_SET_SIZE  0x20
 
-/* One directory entry, as readdir fills it. */
+/* One directory entry, as readdir fills it. `type` is the entry's S_IF type
+ * bits, or 0 for a type that reports only `is_dir`; `vfs_readdir` zeroes the
+ * record before the type fills it. */
 struct vfs_dirent {
     char name[VFS_NAME_MAX + 1];
     uint64_t ino;
     int is_dir;
+    uint32_t type;
 };
 
 /* What statfs reports; the syscall layer shapes it into linux_statfs64. */
@@ -186,6 +190,13 @@ struct vfs_ops {
     /* A symbolic link `name` in `dir` to `target`; NULL on a type without
      * them, which the common layer answers with EPERM. */
     int (*symlink)(struct vfs_mount *mnt, void *dir, const char *name, const char *target);
+    /* A FIFO, a socket or a device node `name` in `dir`, by the S_IF type
+     * bits of `mode`, with the device number `rdev` for a device. The node
+     * comes back held, as `create` returns one. A type answers EPERM for a
+     * kind it cannot keep; NULL on a type with none, which the common layer
+     * answers with EPERM. */
+    int (*mknod)(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, uint32_t rdev,
+                 void **node);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the
@@ -444,6 +455,10 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node);
 /** A symbolic link `name` in `dir` to `target`: EROFS on a read-only mount,
  * EPERM on a type without the operation. */
 int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target);
+/** A FIFO, a socket or a device node, as the `mknod` operation makes one:
+ * EROFS on a read-only mount, EPERM on a type without the operation. */
+int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, uint32_t rdev,
+              void **node);
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
 
 /**

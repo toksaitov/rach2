@@ -32,9 +32,11 @@
  * node's own id is mix(parent_id, name), unique because sibling names are
  * unique, so parent_id references are unambiguous and survive node moves.
  */
-#define KRFFS_S_IFMT  0170000u /* file-type mask within mode */
-#define KRFFS_S_IFDIR 0040000u /* directory */
-#define KRFFS_S_IFREG 0100000u /* regular file */
+#define KRFFS_S_IFMT   0170000u /* file-type mask within mode */
+#define KRFFS_S_IFDIR  0040000u /* directory */
+#define KRFFS_S_IFREG  0100000u /* regular file */
+#define KRFFS_S_IFIFO  0010000u /* FIFO: a node with no data */
+#define KRFFS_S_IFSOCK 0140000u /* socket file: a node with no data */
 
 /* Reserved bit in the root node's mode flagging a possibly-unclean mount. Set
  * write-through when a disk file system is mounted for writing, and cleared by
@@ -71,8 +73,16 @@
 
 /* A directory's mode is S_IFDIR | 0755; a regular file is just its perm bits
  * (S_IFREG is implied when no type bits are set, for backward compatibility
- * with v1 images that stored bare permission modes). */
+ * with v1 images that stored bare permission modes). A FIFO and a socket
+ * have their own type bits and no data. */
 #define KRFFS_IS_DIR(mode) (((mode) & KRFFS_S_IFMT) == KRFFS_S_IFDIR)
+
+/**
+ * The S_IF type bits a node's `mode` stands for: a directory's, a FIFO's or
+ * a socket's own, and S_IFREG for a mode with none. The root's stored mode
+ * has no type bits, so a caller answers for the root by identity.
+ */
+uint32_t krffs_mode_type(uint16_t mode);
 
 /* Node types in the file system. */
 typedef enum {
@@ -243,6 +253,7 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t si
 int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
                    uint32_t at);
 int krffs_create_at(krffs_mount_t *mount, const char *path);
+int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode);
 int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
                            uint64_t *node_out);
 int krffs_truncate_at(krffs_mount_t *mount, const char *path, uint32_t new_size,
@@ -317,6 +328,7 @@ void krffs_stamp(krffs_node_t *node, int what);
 krffs_node_t *krffs_parent_node(krffs_node_t *node);
 
 int krffs_create(const char *path);
+int krffs_create_node(const char *path, uint16_t mode);
 int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t offset);
 int krffs_truncate(const char *path, uint32_t new_size);
 int krffs_unlink(const char *path);

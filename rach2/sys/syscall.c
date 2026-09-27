@@ -1916,6 +1916,8 @@ void init_syscall(void)
     _syscall_table[SYS_UNLINKAT] = sys_unlinkat;
     _syscall_table[SYS_MKDIR] = sys_mkdir;
     _syscall_table[SYS_MKDIRAT] = sys_mkdirat;
+    _syscall_table[SYS_MKNOD] = sys_mknod;
+    _syscall_table[SYS_MKNODAT] = sys_mknodat;
     _syscall_table[SYS_RMDIR] = sys_rmdir;
     _syscall_table[SYS_EXECVE] = sys_execve;
     _syscall_table[SYS_CHDIR] = sys_chdir;

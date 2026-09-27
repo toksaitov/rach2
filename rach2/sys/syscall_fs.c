@@ -563,6 +563,15 @@ int32_t sys_writev(isr_params_t *params)
 
 #define AT_NO_AUTOMOUNT 0x800 /* fstatat: accepted and meaningless here */
 
+/* The file type bits of a mode, as st_mode has them. */
+#define S_IFMT   0170000
+#define S_IFSOCK 0140000
+#define S_IFREG  0100000
+#define S_IFBLK  0060000
+#define S_IFDIR  0040000
+#define S_IFCHR  0020000
+#define S_IFIFO  0010000
+
 /**
  * Put `base` and a slash in front of the relative path of `len` bytes in
  * `buf`, in place: the join of a directory and a name below it.
@@ -1396,13 +1405,41 @@ static int open_link_target(const char *name, char *through, uint32_t through_si
 }
 
 /**
+ * Make `leaf` in the held directory `parent`, whose namespace lock the
+ * caller holds: a regular file for a `mode` with no type bits or S_IFREG's,
+ * and a FIFO, a socket or a device node with the number `rdev` for theirs.
+ * The permission bits are masked by the umask and the owner is the caller;
+ * the KRFFS root takes both from the stamp after the node is made. Returns
+ * 0 with the new node held in `*made`, or the type's errno.
+ */
+static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mode, uint32_t rdev,
+                     void **made)
+{
+    uint32_t type = mode & S_IFMT;
+    uint32_t perm =
+        mnt_is_root(parent->mnt) ? (mode & 07777u) : (mode & 07777u & ~current_proc->umask);
+    int rc;
+
+    if (type == 0 || type == S_IFREG) {
+        rc = vfs_create(parent->mnt, parent->node, leaf, perm, made);
+    } else {
+        rc = vfs_mknod(parent->mnt, parent->node, leaf, type | perm, rdev, made);
+    }
+    if (rc == 0 && mnt_is_root(parent->mnt)) {
+        krffs_stamp_new_node((krffs_node_t *)*made, mode);
+    }
+    return rc;
+}
+
+/**
  * The missing-file half of O_CREAT: hold the parent of `name`, check its
- * write bit, create under the namespace lock, and stamp the new node with
- * the caller's identity and masked mode. Returns 0 with `ref` on the new
- * node, held by its creation; 1 when another creator held the lock first,
- * so the caller opens what it made; or a negative errno. On a type that
- * sets `ns_serialised`, success retains the namespace lock through
- * open-handle registration; another type's lock is not taken.
+ * write bit, and make the node under the namespace lock with `node_make`,
+ * of the kind the type bits of `mode` give, which an open passes none of.
+ * Returns 0 with `ref` on the new node, held by its creation; 1 when another
+ * creator held the lock first, so the caller opens what it made; or a
+ * negative errno. On a type that sets `ns_serialised`, success retains the
+ * namespace lock through open-handle registration; another type's lock is
+ * not taken.
  */
 static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref)
 {
@@ -1440,8 +1477,7 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
     if (!held) {
         vfs_ns_lock(parent.mnt);
     }
-    rc = vfs_create(parent.mnt, parent.node, leafname,
-                    mnt_is_root(parent.mnt) ? mode : (mode & 07777u & ~current_proc->umask), &made);
+    rc = node_make(&parent, leafname, mode, 0, &made);
     if (!held) {
         vfs_ns_unlock(parent.mnt);
     }
@@ -1457,15 +1493,141 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         vfs_ref_release(&parent);
         return rc;
     }
-    if (mnt_is_root(parent.mnt)) {
-        krffs_stamp_new_node((krffs_node_t *)made, mode);
-    }
     ref->mnt = parent.mnt;
     ref->node = made; /* held by creation; the parent's hold goes back */
     if (parent.mnt->type->ops->put) {
         parent.mnt->type->ops->put(parent.mnt, parent.node);
     }
     return 0;
+}
+
+/**
+ * The FIFO half of `open_special`: a descriptor whose description holds the
+ * file and its mount, as a regular file's does, made an end of the file's
+ * pipe. The walk's lock goes before `fifo_attach`, which may wait for the
+ * other end. Returns the descriptor or a negative errno, with `ref`
+ * released either way.
+ */
+static int32_t open_fifo(struct vfs_ref *ref, uint64_t ino, int flags)
+{
+    struct vfs_mount *mnt = ref->mnt;
+    fd_entry_t *e;
+    int32_t rc;
+    int fd = fd_alloc(&current_proc->fds);
+
+    if (fd < 0) {
+        vfs_walk_unlock(mnt);
+        vfs_ref_release(ref);
+        return -EMFILE;
+    }
+    e = &current_proc->fds.entries[fd];
+    rc = vfs_open_node(mnt, ref->node, flags, &e->ofd->fhandle);
+    if (rc != 0) {
+        vfs_walk_unlock(mnt);
+        vfs_ref_release(ref);
+        fd_free(&current_proc->fds, fd);
+        return rc;
+    }
+    e->ofd->vmnt = mnt;
+    e->ofd->vnode = ref->node;
+    e->ofd->ino = ino;
+    vfs_desc_open(mnt);
+    vfs_walk_unlock(mnt);
+    vfs_leave(mnt);
+    rc = fifo_attach(e, mnt, ino, flags);
+    if (rc != 0) {
+        fd_free(&current_proc->fds, fd);
+        return rc;
+    }
+    return fd;
+}
+
+/**
+ * The device half of `open_special`: the /dev device a device node's number
+ * and kind name, opened as an open of its /dev path opens it, without the
+ * permission check the node's own mode has already made. A pseudo-terminal
+ * slave is major 136 and its index. A number no device present has is
+ * ENXIO.
+ */
+static int32_t open_device(int block, uint32_t rdev, int flags)
+{
+    uint32_t major = (rdev >> 8) & 0xFFFu;
+    uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
+    const char *name;
+
+    if (!block && major == 136) {
+        return pty_get((int)minor) ? pty_open_slave((int)minor, flags) : -ENXIO;
+    }
+    name = devfs_name_of(block, rdev);
+    return name ? devfs_open(name, flags) : -ENXIO;
+}
+
+/**
+ * Open the FIFO, the socket file or the device node at `ref`, which name no
+ * bytes of their own: 1 with the descriptor or the errno in `*result`, and
+ * `ref` and the walk's lock released; 0, with both as they were, for any
+ * other node, which the ordinary open takes.
+ *
+ * The checks are open's, in its order: O_CREAT|O_EXCL is EEXIST,
+ * O_DIRECTORY is ENOTDIR, then the permission the access mode asks for; a
+ * device node on a mount with MS_NODEV is EACCES, as on Linux. O_TRUNC is
+ * ignored, and a read-only mount does not refuse an open for writing, since
+ * nothing is written to the file. A socket file is ENXIO, as it is on Linux,
+ * whose sockets are reached by connect(2).
+ */
+static int open_special(struct vfs_ref *ref, int flags, int32_t *result)
+{
+    struct vfs_mount *mnt = ref->mnt;
+    unsigned acc = (unsigned)flags & 3u;
+    int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
+    uint32_t type, rdev = 0;
+    uint64_t ino;
+    int32_t rc;
+
+    if (mnt_is_root(mnt)) {
+        krffs_node_t *node = ref->node;
+
+        if (node == krffs_fs->node) {
+            return 0;
+        }
+        type = krffs_mode_type(node->mode);
+        ino = krffs_node_ino(node);
+    } else {
+        struct vfs_stat st;
+
+        if (vfs_getattr(mnt, ref->node, &st) != 0) {
+            return 0; /* the ordinary open reports the error */
+        }
+        type = st.mode & S_IFMT;
+        rdev = st.rdev;
+        ino = st.ino;
+    }
+    if (type != S_IFIFO && type != S_IFSOCK && type != S_IFCHR && type != S_IFBLK) {
+        return 0;
+    }
+    if ((flags & O_CREAT) && (flags & O_EXCL)) {
+        rc = -EEXIST;
+    } else if (flags & O_DIRECTORY) {
+        rc = -ENOTDIR;
+    } else if (mnt_is_root(mnt)) {
+        rc = cred_access_node((krffs_node_t *)ref->node, want, 0);
+    } else {
+        rc = cred_access_ref(ref, want, 0);
+    }
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && (mnt->flags & VFS_MS_NODEV)) {
+        rc = -EACCES;
+    }
+    if (rc == 0 && type == S_IFIFO) {
+        *result = open_fifo(ref, ino, flags);
+        return 1;
+    }
+    vfs_walk_unlock(mnt);
+    vfs_ref_release(ref);
+    if (rc == 0) {
+        rc = type == S_IFSOCK ? -ENXIO : open_device(type == S_IFBLK, rdev, flags);
+    }
+    *result = rc;
+    return 1;
 }
 
 /**
@@ -1631,6 +1793,7 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
         }
         entry->type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->node = NULL;
+        entry->ofd->ino = vst.ino;
         entry->ofd->dirpath[0] = '\0';
         if (k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
             entry->ofd->dirpath[0] = '/';
@@ -1639,9 +1802,11 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
     } else if (node == krffs_fs->node) {
         entry->type = FD_TYPE_DIR;
         entry->node = NULL;
+        entry->ofd->ino = 1;
     } else {
         entry->type = KRFFS_IS_DIR(node->mode) ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->node = node;
+        entry->ofd->ino = krffs_node_ino(node);
     }
     entry->ofd->offset = 0;
 
@@ -1748,7 +1913,7 @@ again:
             name = through;
             goto again;
         }
-        rc = open_create(name, flags, mode, &ref);
+        rc = open_create(name, flags, mode & 07777u, &ref);
         if (rc > 0) {
             goto again;
         }
@@ -1774,6 +1939,9 @@ again:
             } else {
                 rc = synth_open(&vpc, flags);
             }
+            goto out;
+        }
+        if (open_special(&ref, flags, &rc)) {
             goto out;
         }
         locked = ref.mnt;
@@ -3113,13 +3281,6 @@ struct linux_stat64 {
     unsigned long long st_ino;
 };
 
-/* File type bits for st_mode */
-#define S_IFMT 0170000
-
-#define S_IFREG 0100000
-
-#define S_IFDIR 0040000
-
 /**
  * Report a node's three times into a stat64.
  *
@@ -3225,7 +3386,7 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
          * the filesystem anchor); a path can reach it via "..". */
         kst->st_mode = S_IFDIR | 0755;
     } else {
-        kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) | (node->mode & 07777);
+        kst->st_mode = krffs_mode_type(node->mode) | (node->mode & 07777);
     }
     kst->st_nlink = 1; /* KRFFS has no hard links */
     kst->st_uid = node->uid;
@@ -4729,7 +4890,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
         }
         mode = kst.st_mode;
     } else if (mnt_is_root(ref->mnt)) {
-        mode = (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? S_IFDIR : S_IFREG;
+        mode = node == krffs_fs->node ? S_IFDIR : krffs_mode_type(node->mode);
     } else {
         struct vfs_stat vst;
 
@@ -5648,6 +5809,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             kst.st_ino = (unsigned long)s64.st_ino;
             kst.st_uid = (unsigned short)s64.st_uid;
             kst.st_gid = (unsigned short)s64.st_gid;
+            kst.st_rdev = (unsigned long)s64.st_rdev;
             kst.st_size = (unsigned long)s64.st_size;
             kst.st_blksize = (unsigned long)s64.st_blksize;
             kst.st_blocks = (unsigned long)s64.st_blocks;
@@ -5664,8 +5826,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     /* '..' can reach the root, whose stored mode may lack S_IFDIR. */
     kst.st_mode = node == krffs_fs->node
                       ? S_IFDIR | 0755
-                      : (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
-                                         (node->mode & 07777));
+                      : (unsigned short)(krffs_mode_type(node->mode) | (node->mode & 07777));
     kst.st_nlink = 1; /* Always 1 for KRFFS */
     kst.st_uid = (unsigned short)node->uid;
     kst.st_gid = (unsigned short)node->gid;
@@ -5962,6 +6123,114 @@ int32_t sys_mkdirat(isr_params_t *params)
         return rc;
     }
     rc = do_mkdir(path, params->edx);
+    path_buf_put(path);
+    return rc;
+}
+
+/**
+ * Make the node `path` names, an absolute canonical path: the core of
+ * mknod(2) and mknodat(2).
+ *
+ * The kind is the S_IF type bits of `mode`, a regular file for none; `dev`
+ * is a device's number as the call takes it, Linux's 32-bit encoding, which
+ * is the kernel's own. The refusals come in Linux's order: a kind that is not
+ * one of the five (EINVAL, or EPERM for a directory), the path, a name that
+ * exists (EEXIST, a symbolic link included), a read-only mount, the write
+ * permission on the directory, and last a device node made by a caller who
+ * is not root (EPERM). A file system that cannot keep the kind answers
+ * EPERM; nothing is made under /dev or /proc (EROFS).
+ */
+static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev)
+{
+    uint32_t type = mode & S_IFMT;
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    void *made;
+    int32_t rc;
+
+    if (type == S_IFDIR) {
+        return -EPERM;
+    }
+    if (type != 0 && type != S_IFREG && type != S_IFCHR && type != S_IFBLK && type != S_IFIFO &&
+        type != S_IFSOCK) {
+        return -EINVAL;
+    }
+    rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
+        return rc;
+    }
+    if (vfs_synth_vpath(parent.mnt, parent.node)) {
+        vfs_ref_release(&parent);
+        return -EROFS; /* nothing is created under /dev or /proc */
+    }
+    if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
+        vfs_ref_release(&parent);
+        return -EEXIST;
+    }
+    if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &made) == 0) {
+        if (parent.mnt->type->ops->put) {
+            parent.mnt->type->ops->put(parent.mnt, made);
+        }
+        vfs_ref_release(&parent);
+        return -EEXIST;
+    }
+    if (mnt_is_root(parent.mnt)) {
+        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+    } else if (parent.mnt->flags & VFS_MS_RDONLY) {
+        rc = -EROFS;
+    } else {
+        rc = cred_access_ref(&parent, CRED_W, 0);
+    }
+    if (rc == 0 && (type == S_IFCHR || type == S_IFBLK) && !cred_privileged()) {
+        rc = -EPERM;
+    }
+    if (rc == 0) {
+        vfs_ns_lock(parent.mnt);
+        rc = node_make(&parent, leaf, mode, dev, &made);
+        vfs_ns_unlock(parent.mnt);
+        if (rc == 0 && parent.mnt->type->ops->put) {
+            parent.mnt->type->ops->put(parent.mnt, made);
+        }
+    }
+    vfs_ref_release(&parent);
+    return rc;
+}
+
+/* mknod(2): EBX = path, ECX = mode, EDX = dev. */
+int32_t sys_mknod(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_mknod(path, params->ecx, params->edx);
+    path_buf_put(path);
+    return rc;
+}
+
+/* mknodat(2): EBX = dirfd, ECX = path, EDX = mode, ESI = dev; a relative
+ * path is resolved from `dirfd` as openat's is. */
+int32_t sys_mknodat(isr_params_t *params)
+{
+    const char __user *upath = (const char __user *)params->ecx;
+    char *path;
+    int32_t rc;
+
+    if (!current_proc || !upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user((int)params->ebx, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = do_mknod(path, params->edx, params->esi);
     path_buf_put(path);
     return rc;
 }
@@ -6597,22 +6866,27 @@ struct linux_dirent64 {
     char d_name[1];    /* Filename (variable length, null-terminated) */
 };
 
-/* Directory entry types */
-#define DT_REG 8 /* Regular file */
+/* Directory entry types, the S_IF type bits shifted down by twelve. */
+#define DT_FIFO 1
+#define DT_CHR  2
+#define DT_DIR  4
+#define DT_BLK  6
+#define DT_REG  8
+#define DT_LNK  10
+#define DT_SOCK 12
 
-#define DT_DIR 4 /* Directory */
-
-#ifndef DT_CHR
-
-#define DT_CHR 2
-
-#endif
-
-#ifndef DT_LNK
-
-#define DT_LNK 10
-
-#endif
+/**
+ * The `d_type` of an entry a mounted type listed: its S_IF type bits
+ * shifted down, as Linux derives the one from the other, or the directory
+ * and regular-file answer of a type that reports only `is_dir`.
+ */
+static uint8_t dirent_dtype(const struct vfs_dirent *de)
+{
+    if (de->type != 0) {
+        return (uint8_t)((de->type >> 12) & 017u);
+    }
+    return de->is_dir ? DT_DIR : DT_REG;
+}
 
 /* Format an unsigned decimal into out (NUL-terminated). */
 static void synth_u32_str(char *out, uint32_t v)
@@ -6663,6 +6937,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
     if (kind == VNODE_DEV_DIR) {
         const char *dn = NULL;
         uint32_t dino = 0;
+        uint32_t dmode = 0;
         int i;
 
         /* Through devfs_dirent, which skips absent entries and reports the
@@ -6676,7 +6951,8 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         }
         name[i] = '\0';
         *ino = dino;
-        *dtype = DT_CHR;
+        (void)devfs_stat(dn, &dmode, NULL, NULL);
+        *dtype = (dmode & S_IFMT) == 0060000u ? DT_BLK : DT_CHR;
         return 1;
     }
     if (kind == VNODE_PTS_DIR) {
@@ -6969,7 +7245,7 @@ int32_t sys_getdents64(isr_params_t *params)
             dirent->d_ino = de.ino;
             dirent->d_off = (int64_t)cursor; /* next position */
             dirent->d_reclen = (uint16_t)rec_len;
-            dirent->d_type = de.is_dir ? DT_DIR : DT_REG;
+            dirent->d_type = dirent_dtype(&de);
             k_memcpy(dirent->d_name, de.name, name_len + 1);
             if (copy_to_user((void __user *)(buf + bytes_written), recbuf.bytes, rec_len) != 0) {
                 fd_ofd_unlock(ofd);
@@ -7011,9 +7287,6 @@ int32_t sys_dup3(isr_params_t *params)
     }
     return r;
 }
-
-/* The file type bits of a socket file. */
-#define S_IFSOCK_BITS 0140000u
 
 /**
  * The kernel path `path`, relative to the working directory unless it is
@@ -7058,7 +7331,7 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
     }
     rc = kernel_path_cwd(buf, path);
     if (rc >= 0) {
-        rc = open_create(buf, O_EXCL, S_IFSOCK_BITS | (mode & 07777u), ref);
+        rc = open_create(buf, O_EXCL, S_IFSOCK | (mode & 07777u), ref);
         if (rc == 0) {
             vfs_walk_unlock(ref->mnt);
             rc = vfs_getattr(ref->mnt, ref->node, &st);
@@ -7108,7 +7381,7 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
         return rc;
     }
     rc = vfs_getattr(ref.mnt, ref.node, &st);
-    if (rc == 0 && (st.mode & 0170000u) != S_IFSOCK_BITS) {
+    if (rc == 0 && (st.mode & S_IFMT) != S_IFSOCK) {
         rc = -ECONNREFUSED;
     }
     if (rc == 0) {

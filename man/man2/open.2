@@ -136,6 +136,60 @@ and the specified
 It truncates an existing regular file and refuses a directory,
 including the root, with
 .Er EISDIR .
+.Ss FIFOs, sockets and device nodes
+A FIFO, a socket file and a device node on a mounted file system have
+no bytes of their own, and an open of one takes these checks, in this
+order:
+.Dv O_CREAT Ns | Ns Dv O_EXCL
+returns
+.Er EEXIST ,
+.Dv O_DIRECTORY
+returns
+.Er ENOTDIR ,
+and the node's own permission bits are checked for the access mode.
+.Dv O_TRUNC
+is ignored, and a read-only mount does not refuse an open for writing,
+since nothing is written to the file.
+.Pp
+A FIFO opens as an end of the pipe every open of the file shares, made
+at the first open and freed when no end is open.
+An open for reading waits for a writer and an open for writing for a
+reader.
+With
+.Dv O_NONBLOCK ,
+a reader does not wait and a writer with no reader fails with
+.Er ENXIO .
+.Dv O_RDWR
+opens both ends and never waits.
+The description holds the file and its mount as a regular file's does;
+.Xr fstat 2
+of the descriptor reports the pipe:
+.Dv S_IFIFO ,
+mode 0666 and the pipe's own inode number, where Linux reports the
+FIFO file.
+.Pp
+A socket file returns
+.Er ENXIO ,
+as on Linux; it is reached by
+.Xr connect 2 .
+.Pp
+A device node opens the
+.Pa /dev
+device of its kind whose number is the node's, as an open of the
+.Pa /dev
+path would, without that entry's permission check: the node's own
+mode decides.
+Major number 136 opens the pseudo-terminal slave whose index is the
+minor number.
+A number no present device has returns
+.Er ENXIO ,
+and a device node on a mount with
+.Dv MS_NODEV
+returns
+.Er EACCES ,
+as on Linux.
+.Xr mknod 2
+makes all three kinds.
 .Ss Descriptors and close
 An ordinary open starts at offset zero with a new open-file description.
 On mounted KRFFS, opening a pathname during file relocation waits
@@ -189,8 +243,6 @@ returns
 for
 .Dv O_CREAT Ns | Ns Dv O_EXCL
 before allocating a descriptor or pseudoterminal pair.
-ext2 device inodes cannot be opened as devices and return
-.Er EACCES .
 .Pp
 Proc files contain a snapshot taken at open.
 They refuse write access or
@@ -270,7 +322,8 @@ call.
 .It Bq Er EACCES
 Search or file access permission was denied, creation lacked parent
 write permission, a proc file was opened for writing or creation,
-or an ext2 device inode was opened.
+or a device node was opened on a mount with
+.Dv MS_NODEV .
 .It Bq Er EBADF
 .Fn close
 was given an invalid descriptor, or a relative
@@ -289,9 +342,12 @@ creation call has no current process.
 .It Bq Er EFBIG
 An ext2 parent directory cannot grow further or a required block
 exceeds the file system's addressing limit.
+.It Bq Er EINTR
+A signal arrived while an open of a FIFO waited for the other end.
 .It Bq Er EINVAL
 A file system rejects the new name, required attributes cannot be
-obtained, or truncation selects an ext2 object that is not a regular file.
+obtained, truncation selects an ext2 object that is not a regular file,
+or a FIFO was opened with the access mode 3.
 .It Bq Er EIO
 File-system I/O failed, the device was removed, or a pseudo-terminal
 slave is still locked.
@@ -308,7 +364,8 @@ The process cannot allocate another descriptor or open-file description.
 A copied path, directory prefix, component, reconstructed directory
 path, or symbolic-link expansion is too long.
 .It Bq Er ENFILE
-The kernel cannot allocate a synthetic-directory record or pseudo-terminal.
+The kernel cannot allocate a synthetic-directory record, a
+pseudo-terminal, or the pipe of a FIFO.
 .It Bq Er ENODEV
 The special mouse device was requested but no mouse is available.
 .It Bq Er ENOENT
@@ -324,8 +381,11 @@ or an existing target is not a directory under
 .Dv O_DIRECTORY .
 .It Bq Er ENXIO
 .Pa /dev/tty
-was opened without a controlling terminal, or the requested
-pseudo-terminal has no open master.
+was opened without a controlling terminal, the requested
+pseudo-terminal has no open master, a socket file was opened, a device
+node names no device present, or a FIFO was opened for writing with
+.Dv O_NONBLOCK
+and no reader.
 .It Bq Er EOVERFLOW
 The generated
 .Pa /proc/disk
@@ -343,6 +403,7 @@ was called without a current process.
 .Xr dup 2 ,
 .Xr fcntl 2 ,
 .Xr getdents64 2 ,
+.Xr mknod 2 ,
 .Xr mount 2 ,
 .Xr read 2 ,
 .Xr umask 2 ,

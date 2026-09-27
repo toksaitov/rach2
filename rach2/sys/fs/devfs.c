@@ -1505,6 +1505,29 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
     return 0;
 }
 
+const char *devfs_name_of(int block, uint32_t rdev)
+{
+    int i;
+
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        const struct devfs_entry *dev = &dev_table[i];
+
+        if (devfs_entry_present(i) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+            (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
+            return dev->name;
+        }
+    }
+    for (i = 0; i < disk_node_count; i++) {
+        const struct devfs_entry *dev = &disk_nodes[i].entry;
+
+        if (disk_node_present(i) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+            (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
+            return disk_nodes[i].name;
+        }
+    }
+    return NULL;
+}
+
 uint32_t devfs_rdev(struct fd_entry *e)
 {
     const struct devfs_entry *dev;

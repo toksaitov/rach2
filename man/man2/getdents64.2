@@ -62,16 +62,36 @@ Null-terminated name beginning at byte offset 19.
 .Pp
 The record length is rounded up to a multiple of eight bytes.
 Padding bytes are zero.
-For stored file systems,
 .Va d_type
-is
+is the entry's type as Linux numbers it:
+.Dv DT_FIFO
+(1),
+.Dv DT_CHR
+(2),
+.Dv DT_DIR
+(4),
+.Dv DT_BLK
+(6),
+.Dv DT_REG
+(8),
+.Dv DT_LNK
+(10) or
+.Dv DT_SOCK
+(12).
+ext2 takes it from the entry's type byte, or from the inode on a volume
+without the
+.Ql filetype
+feature; tmpfs and KRFFS from the node.
+FAT32 and exFAT report
 .Dv DT_DIR
 for a directory and
 .Dv DT_REG
-for every other entry, including an ext2 symbolic link.
-Synthetic directories also report
+for every other entry.
+Synthetic directories report
 .Dv DT_CHR
-for device entries and
+for character devices,
+.Dv DT_BLK
+for the disk nodes, and
 .Dv DT_LNK
 for links.
 .Ss File systems

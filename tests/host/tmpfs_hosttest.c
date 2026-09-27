@@ -12,11 +12,11 @@
  * first name goes; rename moves a name, replaces a file, and refuses to put a
  * directory over a file, a file over a directory, a directory over one that
  * is not empty, or a directory under itself. A symbolic link reads back its
- * target, a FIFO keeps its type, a device node does not open, a listing is
- * ".", "..", then the names in the order they were made or renamed, and a
- * directory knows its path. A node held after its last name goes stays
- * readable, and a shared mapping's page takes a reference of its own.
- * Returns the failed-check count.
+ * target, a FIFO keeps its type, a device node keeps its number and does not
+ * open, a listing is ".", "..", then the names in the order they were made
+ * or renamed, each with its type, and a directory knows its path. A node
+ * held after its last name goes stays readable, and a shared mapping's page
+ * takes a reference of its own. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -276,8 +276,12 @@ static void kinds(void)
     CHECK(tmpfs_readlink(&mnt, s, buf, sizeof(buf)) == 1 && buf[0] == 'c');
     CHECK(tmpfs_getattr(&mnt, s, &st) == 0 && (st.mode & T_IFMT) == T_IFLNK && st.size == 1);
     p = make(NULL, "p", T_IFIFO | 0600);
-    CHECK(tmpfs_getattr(&mnt, p, &st) == 0 && (st.mode & T_IFMT) == T_IFIFO);
-    c = make(NULL, "dev", T_IFCHR | 0600);
+    CHECK(tmpfs_getattr(&mnt, p, &st) == 0 && (st.mode & T_IFMT) == T_IFIFO && st.rdev == 0);
+    c = NULL;
+    CHECK(tmpfs_mknod(&mnt, NULL, "dev", T_IFCHR | 0600, (1u << 8) | 3u, &c) == 0);
+    CHECK(tmpfs_getattr(&mnt, c, &st) == 0 && st.mode == (T_IFCHR | 0600u) &&
+          st.rdev == ((1u << 8) | 3u));
+    CHECK(tmpfs_mknod(&mnt, NULL, "dev", T_IFBLK | 0600, 0, &handle) == -EEXIST);
     CHECK(tmpfs_open(&mnt, c, 0, &handle) == -ENXIO);
     CHECK(tmpfs_create(&mnt, NULL, "dir", T_IFDIR | 0755, &handle) == -EINVAL);
     tmpfs_put(&mnt, s);
@@ -288,13 +292,16 @@ static void kinds(void)
 static void listing(void)
 {
     static const char *want[] = {".", "..", "x", "w", "c", "s", "p", "dev"};
+    static const uint32_t types[] = {T_IFDIR, T_IFDIR, T_IFDIR, T_IFDIR,
+                                     T_IFREG, T_IFLNK, T_IFIFO, T_IFCHR};
     struct vfs_dirent ent;
     void *root = ((struct tmpfs_mount *)mnt.priv)->root;
     uint32_t cursor = 0;
     unsigned i;
 
     for (i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
-        CHECK(tmpfs_readdir(&mnt, root, &cursor, &ent) == 1 && same(ent.name, want[i]));
+        CHECK(tmpfs_readdir(&mnt, root, &cursor, &ent) == 1 && same(ent.name, want[i]) &&
+              ent.type == types[i]);
     }
     CHECK(tmpfs_readdir(&mnt, root, &cursor, &ent) == 0);
 }

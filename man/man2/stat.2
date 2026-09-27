@@ -122,6 +122,9 @@ It does not measure the blocks actually allocated to a sparse file.
 .It KRFFS root
 Nodes other than the root directory report stored owner, group, size,
 and access, modification, and attribute-change times, including nanoseconds.
+A node's type is a directory's, a FIFO's or a socket's when its stored
+mode has those bits, and a regular file's otherwise; KRFFS keeps no
+device nodes.
 The link count is 1.
 The root directory has inode 1, mode 0755, and its own stored times;
 without a mounted KRFFS image, the time helper uses boot time.
@@ -165,7 +168,8 @@ call's 32-bit
 keeps the low 32 bits of the number, so there two files share one
 whenever those bits are equal.
 .It Mounted KRFFS
-Attributes and times come from the stored node.
+Attributes and times come from the stored node, its type as on the
+KRFFS root.
 Directories report two links and files one.
 The inode is the node's byte offset plus one; relocation changes it.
 .It ext2
@@ -173,8 +177,10 @@ Owner, group, mode, link count, size, and the three times come from the inode.
 Times have second precision.
 .Fn lstat
 reports a symbolic link's type and target length.
-Device inodes report their stored device numbers even though they cannot
-be opened as devices.
+FIFOs, socket files and device nodes report their types, and a device
+node its stored number, as Linux encodes it: the low byte of the minor
+number in bits 0 to 7, the major number in bits 8 to 19, and the rest
+of the minor number in bits 20 to 31.
 .It FAT32
 Owner and group are the mount's values.
 Permissions are 0777 with the mount mask removed; the read-only attribute
@@ -328,12 +334,10 @@ which has 64-bit time fields.
 The attributes above are the 64-bit interfaces'.
 Calls 106 and 107 instead fill the older, narrower structure with
 16-bit mode, link count, and owner fields and 32-bit sizes and inode numbers.
-They do not check for truncation when converting wider attributes, they
-report the fixed attributes of the boot root for
+They do not check for truncation when converting wider attributes, and
+they report the fixed attributes of the boot root for
 .Pa /
-even on an ext2 root, and they leave
-.Fa st_rdev
-zero for a device inode on a mounted volume.
+even on an ext2 root.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set
@@ -401,6 +405,7 @@ A path component or relative-path base descriptor is not a directory.
 .Sh SEE ALSO
 .Xr chmod 2 ,
 .Xr chown 2 ,
+.Xr mknod 2 ,
 .Xr open 2 ,
 .Xr statfs 2 ,
 .Xr symlink 2 ,

@@ -113,6 +113,9 @@ struct open_file {
     struct vfs_mount *vmnt;
     void *vnode;
     void *fhandle;
+    /* The inode number the file had when it was opened: with `vmnt`, the
+     * key its record locks and a FIFO's pipe are found by. */
+    uint64_t ino;
     /* The description lock: read, write, lseek, getdents64 and ftruncate
      * hold the description for the length of the operation, so a sharer
      * cannot use the offset while another sleeps in a disk request with it;

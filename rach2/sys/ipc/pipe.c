@@ -451,7 +451,7 @@ static int fifo_partner_came(void *arg)
     return (w->for_reader ? w->p->read_opens : w->p->write_opens) != w->seen;
 }
 
-static pipe_t *fifo_find(const void *mnt, uint32_t ino)
+static pipe_t *fifo_find(const void *mnt, uint64_t ino)
 {
     pipe_t *p;
 
@@ -471,7 +471,7 @@ static void fifo_unopen(pipe_t *p, int reads, int writes)
     }
 }
 
-int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint32_t ino, int flags)
+int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
 {
     int acc = flags & 3;
     int nonblock = (flags & O_NONBLOCK_FLAG) != 0;
