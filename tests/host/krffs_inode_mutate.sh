@@ -80,6 +80,9 @@ static char path_page[4096];
 static int path_from_user(int dirfd, const char *in, char **out)
 { unsigned n = k_strlen(in) + 1; (void)dirfd; if (n > sizeof(path_page)) return -1;
   k_memcpy(path_page, in, n); *out = path_page; return 0; }
+static int path_names_dir(const char *raw, int len);
+static int path_from_user_dir(int dirfd, const char *in, char **out, int *dir)
+{ if (dir) *dir = path_names_dir(in, (int)k_strlen(in)); return path_from_user(dirfd, in, out); }
 static void path_buf_put(char *buf) { (void)buf; }
 static int copy_to_user(void *out, const void *in, unsigned n)
 { k_memcpy(out, in, n); return 0; }
@@ -94,9 +97,9 @@ static int synth_stat(const struct vpath *p, struct linux_stat64 *s, int f)
 static int vfs_fill_stat64(struct linux_stat64 *s, const struct vfs_ref *r)
 { (void)s; (void)r; return -1; }
 static void stat64_boot_times(struct linux_stat64 *s) { (void)s; }
-static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\0'; }
+static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\\0'; }
 ''')
-for name in ['stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
+for name in ['path_names_dir', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
              'stat_times_from_stat64', 'stat_node_times', 'stat_root_times',
              'do_stat64', 'do_old_stat']:
     parts.append(function(s, name))
