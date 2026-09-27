@@ -20,7 +20,9 @@
  * wait uses the poll core (poll.c). An epoll set inside another is ready
  * while a wait on it would report an event, and a wait on the outer set is
  * on the queues of the sets inside it and of what they watch, four sets
- * deep at most, as Linux nests them.
+ * deep at most, as Linux nests them; an add that would nest sets deeper,
+ * counting those above the set added to as well as those below the set
+ * added, or make a cycle, is refused.
  */
 
 struct isr_params;

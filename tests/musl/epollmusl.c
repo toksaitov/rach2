@@ -21,12 +21,16 @@
  * wakes the wait. A set whose edge-triggered event was reported does not poll
  * readable, and a poll of a set is woken by a child's write to a pipe it
  * watches. A write to a pipe in a set inside a set inside a third wakes a wait
- * on the third, and a cycle of sets is ELOOP. Waits with room for one event
- * report two ready descriptors in turn. A one-shot event a wait cannot store,
- * EFAULT, is reported by the next wait. The registration of a closed eventfd
- * does not report the eventfd made next at its number, which can be added.
- * epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative seconds
- * with EINVAL.
+ * on the third, and a cycle of sets, of three or of two, is ELOOP. Five sets
+ * may nest, each added to the one before, and a write to a pipe in the fifth
+ * reaches a wait on the first; a sixth set is ELOOP whether the chain is built
+ * from the outermost set in or from the innermost out, and so is a set that
+ * another holds by two paths when the longer would make a chain of six. Waits
+ * with room for one event report two ready descriptors in turn. A one-shot
+ * event a wait cannot store, EFAULT, is reported by the next wait. The
+ * registration of a closed eventfd does not report the eventfd made next at its
+ * number, which can be added. epoll_pwait2 takes a timeout of 2^31 seconds, and
+ * refuses negative seconds with EINVAL.
  *
  * An edge-triggered registration is told only of the kinds of change its
  * events watch, as in Linux: an AF_UNIX stream end watched for output is not
@@ -425,7 +429,7 @@ static int polled_after_edge(void)
 
 /* Sets inside sets: with a pipe in A, A in B and B in C, a child's write to
  * the pipe wakes a wait on C, which reports B while the data is there; and
- * adding C to A, a cycle, is ELOOP. */
+ * adding C to A, or B to A, a cycle, is ELOOP. */
 static int nested(void)
 {
     struct epoll_event ev, out;
@@ -445,7 +449,8 @@ static int nested(void)
     if (epoll_ctl(c, EPOLL_CTL_ADD, b, &ev) != 0 || wait_one(c, 0, &out) != 0) {
         return fail("a chain of sets over an empty pipe");
     }
-    if (epoll_ctl(a, EPOLL_CTL_ADD, c, &ev) != -1 || errno != ELOOP) {
+    if (epoll_ctl(a, EPOLL_CTL_ADD, c, &ev) != -1 || errno != ELOOP ||
+        epoll_ctl(a, EPOLL_CTL_ADD, b, &ev) != -1 || errno != ELOOP) {
         return fail("a cycle of sets was not ELOOP");
     }
     if (wake_start(&w, p[1], -1, -1) != 0) {
@@ -830,12 +835,97 @@ static int tcp_arrival(void)
     return 0;
 }
 
+/* Six sets, each added to the one before: five may nest, as in Linux, and a
+ * pipe in the fifth is reported by a wait on the first; the sixth is ELOOP,
+ * counting the sets above the one it is added to when the chain is built from
+ * the outermost in, and those below it when built from the innermost out. */
+static int nested_six(void)
+{
+    struct epoll_event ev, out;
+    int e[6], f[6];
+    int p[2];
+    int i;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    for (i = 0; i < 6; i++) {
+        e[i] = epoll_create1(0);
+        f[i] = epoll_create1(0);
+        if (e[i] < 0 || f[i] < 0) {
+            return fail("setup for six sets");
+        }
+    }
+    if (pipe(p) != 0 || epoll_ctl(e[4], EPOLL_CTL_ADD, p[0], &ev) != 0) {
+        return fail("setup for six sets");
+    }
+    for (i = 0; i < 4; i++) {
+        if (epoll_ctl(e[i], EPOLL_CTL_ADD, e[i + 1], &ev) != 0) {
+            return fail("an add that nests five sets, the outermost first, was refused");
+        }
+    }
+    if (epoll_ctl(e[4], EPOLL_CTL_ADD, e[5], &ev) != -1 || errno != ELOOP) {
+        return fail("a sixth set added below five, the outermost first, was not ELOOP");
+    }
+    if (write(p[1], "n", 1) != 1 || wait_one(e[0], 0, &out) != 1) {
+        return fail("a write to a pipe in the fifth of five nested sets did not reach the first");
+    }
+    for (i = 4; i > 0; i--) {
+        if (epoll_ctl(f[i], EPOLL_CTL_ADD, f[i + 1], &ev) != 0) {
+            return fail("an add that nests five sets, the innermost first, was refused");
+        }
+    }
+    if (epoll_ctl(f[0], EPOLL_CTL_ADD, f[1], &ev) != -1 || errno != ELOOP) {
+        return fail("a sixth set added above five, the innermost first, was not ELOOP");
+    }
+    for (i = 0; i < 6; i++) {
+        close(e[i]);
+        close(f[i]);
+    }
+    close(p[0]);
+    close(p[1]);
+    return 0;
+}
+
+/* A set held by two paths: I holds A, A holds X, and I holds X as well, and
+ * X holds P, which holds Q. Adding I to a sixth set E would put Q five below
+ * E by the longer path, which is ELOOP, whichever path a check takes first;
+ * X, added to I last, is the first I's list gives. */
+static int nested_two_paths(void)
+{
+    struct epoll_event ev;
+    int e = epoll_create1(0);
+    int in = epoll_create1(0);
+    int a = epoll_create1(0);
+    int x = epoll_create1(0);
+    int p = epoll_create1(0);
+    int q = epoll_create1(0);
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    if (e < 0 || in < 0 || a < 0 || x < 0 || p < 0 || q < 0 ||
+        epoll_ctl(p, EPOLL_CTL_ADD, q, &ev) != 0 || epoll_ctl(x, EPOLL_CTL_ADD, p, &ev) != 0 ||
+        epoll_ctl(a, EPOLL_CTL_ADD, x, &ev) != 0 || epoll_ctl(in, EPOLL_CTL_ADD, a, &ev) != 0 ||
+        epoll_ctl(in, EPOLL_CTL_ADD, x, &ev) != 0) {
+        return fail("setup for a set held by two paths");
+    }
+    if (epoll_ctl(e, EPOLL_CTL_ADD, in, &ev) != -1 || errno != ELOOP) {
+        return fail("a set nested five below another by the longer of two paths was not ELOOP");
+    }
+    close(q);
+    close(p);
+    close(x);
+    close(a);
+    close(in);
+    close(e);
+    return 0;
+}
+
 int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
         long_timeout() || unix_kinds() || unix_own_room() || unix_accept_edge() || udp_arrival() ||
-        tcp_arrival()) {
+        tcp_arrival() || nested_six() || nested_two_paths()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

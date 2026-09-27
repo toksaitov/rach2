@@ -46,8 +46,8 @@
 /* Policy: the events one wait returns at most, as Linux bounds maxevents. */
 #define EP_MAX_EVENTS (0x7FFFFFFF / EP_EVENT_SIZE)
 
-/* Policy: how deep a scan looks into sets inside sets, Linux's
- * EP_MAX_NESTS; it bounds the kernel stack a scan takes. */
+/* Policy: how many sets deep a set may hold others, and a scan looks into
+ * them, Linux's EP_MAX_NESTS; it bounds the kernel stack a scan takes. */
 #define EP_MAX_NESTS 4
 
 struct epitem {
@@ -68,6 +68,11 @@ struct epitem {
     uint32_t seen;
     const struct wait_queue *at;
     uint32_t wakes;
+    /* The set the registration is in; for a registration of a set, that set
+     * while it lives, and the next registration of it (its `holders`). */
+    struct epoll *owner;
+    struct epoll *set;
+    struct epitem *hold_next;
 };
 
 struct epoll {
@@ -81,6 +86,11 @@ struct epoll {
     uint32_t mark;
     int ready;
     uint32_t sig;
+    /* The registrations of this set in the sets it is in, and the longest
+     * chain of sets a nesting check found below or above it (`sets_below`,
+     * `sets_above`). */
+    struct epitem *holders;
+    int height;
 };
 
 /* The queues a scan finds, which a wait must be on: where they go, as many
@@ -256,12 +266,29 @@ struct epoll_scan {
     uint32_t grow;
 };
 
+/* Take the registration `it` of a set off that set's `holders`. */
+static void unhold(struct epitem *it)
+{
+    struct epitem **link = &it->set->holders;
+
+    while (*link && *link != it) {
+        link = &(*link)->hold_next;
+    }
+    if (*link) {
+        *link = it->hold_next;
+    }
+    it->set = NULL;
+}
+
 static void drop_item(struct epoll *ep, struct epitem **link)
 {
     struct epitem *it = *link;
 
     *link = it->next;
     ep->count--;
+    if (it->set) {
+        unhold(it);
+    }
     kfree(it);
 }
 
@@ -443,40 +470,90 @@ short epoll_poll_set(fd_entry_t *e, short events, struct wait_queue **wqs, uint3
 }
 
 /*
- * Whether the set `inner`, which sets `depth` deep hold, reaches the set
- * `ep` through the sets it watches, or holds sets deeper than
- * EP_MAX_NESTS: adding it to `ep` would make a cycle, or nesting a scan
- * does not look into, which Linux refuses with ELOOP. Each set is looked
- * into once, as Linux's check does.
+ * The longest chain of sets below the set `inner`, which a path puts
+ * `depth` sets below the set `ep` it is to be added to: 0 when it holds no
+ * set. A chain that reaches `ep`, which the add would close into a cycle,
+ * one deeper than EP_MAX_NESTS, and one through a cycle below count as
+ * longer than EP_MAX_NESTS. Each set is looked into once per check
+ * (`scan_marks`) and keeps what it found in `height`, so a set met first by
+ * a short path counts the same for a longer one.
  */
-static int set_loops(struct epoll *inner, const struct epoll *ep, int depth)
+static int sets_below(struct epoll *inner, const struct epoll *ep, int depth)
 {
     struct epitem *it;
+    int most = 0;
 
     if (inner == ep || depth > EP_MAX_NESTS) {
-        return 1;
+        return EP_MAX_NESTS + 1;
     }
     if (inner->mark == scan_marks) {
-        return 0;
+        return inner->height;
     }
     inner->mark = scan_marks;
-    inner->ready = 0;
-    for (it = inner->items; it; it = it->next) {
+    inner->height = EP_MAX_NESTS + 1;
+    for (it = inner->items; it && most <= EP_MAX_NESTS; it = it->next) {
         fd_entry_t *e = fd_get(current_proc->fds, it->fd);
+        int below;
 
-        if (item_names(it, e) && is_set(e) && set_loops((struct epoll *)e->priv, ep, depth + 1)) {
-            return 1;
+        if (item_names(it, e) && is_set(e)) {
+            below = sets_below((struct epoll *)e->priv, ep, depth + 1) + 1;
+            if (below > most) {
+                most = below;
+            }
         }
     }
-    return 0;
+    inner->height = most;
+    return most;
 }
 
+/*
+ * The longest chain of sets above the set `ep`, through the registrations
+ * of it whose numbers still name it, from `depth` sets above the set a
+ * check began at: 0 when no set holds it. A chain longer than EP_MAX_NESTS,
+ * or one through a cycle, counts as longer; each set is looked into once
+ * per check, as in `sets_below`.
+ */
+static int sets_above(struct epoll *ep, int depth)
+{
+    struct epitem *h;
+    int most = 0;
+
+    if (depth > EP_MAX_NESTS) {
+        return EP_MAX_NESTS + 1;
+    }
+    if (ep->mark == scan_marks) {
+        return ep->height;
+    }
+    ep->mark = scan_marks;
+    ep->height = EP_MAX_NESTS + 1;
+    for (h = ep->holders; h && most <= EP_MAX_NESTS; h = h->hold_next) {
+        int above;
+
+        if (item_names(h, fd_get(current_proc->fds, h->fd))) {
+            above = sets_above(h->owner, depth + 1) + 1;
+            if (above > most) {
+                most = above;
+            }
+        }
+    }
+    ep->height = most;
+    return most;
+}
+
+/*
+ * The last close of a set: its registrations go, and those of it in other
+ * sets no longer name it, which their next scan drops.
+ */
 static void epoll_close(fd_entry_t *e)
 {
     struct epoll *ep = (struct epoll *)e->priv;
+    struct epitem *h;
 
     while (ep->items) {
         drop_item(ep, &ep->items);
+    }
+    for (h = ep->holders; h; h = h->hold_next) {
+        h->set = NULL;
     }
     kfree(ep);
     e->priv = NULL;
@@ -532,17 +609,25 @@ int32_t sys_epoll_create1(struct isr_params *params)
     return make_epoll(params->ebx);
 }
 
-/* Whether adding the set `inner` to `ep` would make a cycle or nesting too
- * deep (`set_loops`). */
-static int nests_badly(struct epoll *inner, const struct epoll *ep)
+/*
+ * Whether adding the set `inner` to `ep` would make a cycle of sets, or a
+ * chain of them more than EP_MAX_NESTS deep below its outermost set,
+ * counting the sets above `ep` as well as those below `inner`. Linux
+ * refuses either with ELOOP, and a scan of the outermost set would not look
+ * into the innermost of a longer chain, whose events a wait on it would
+ * then never report.
+ */
+static int nests_badly(struct epoll *inner, struct epoll *ep)
 {
     uint32_t irq = kirq_save();
-    int loops;
+    int below, above;
 
     scan_marks++;
-    loops = set_loops(inner, ep, 1);
+    below = sets_below(inner, ep, 1);
+    scan_marks++;
+    above = sets_above(ep, 0);
     kirq_restore(irq);
-    return loops;
+    return below + 1 + above > EP_MAX_NESTS;
 }
 
 int32_t sys_epoll_ctl(struct isr_params *params)
@@ -588,6 +673,12 @@ int32_t sys_epoll_ctl(struct isr_params *params)
         it->fd = fd;
         it->ofd = target->ofd;
         it->serial = target->ofd->serial;
+        it->owner = ep;
+        if (is_set(target)) {
+            it->set = (struct epoll *)target->priv;
+            it->hold_next = it->set->holders;
+            it->set->holders = it;
+        }
         it->next = ep->items;
         ep->items = it;
         ep->count++;
