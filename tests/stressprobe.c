@@ -3,14 +3,15 @@
  * than the cache holds.
  *
  * On a KRFFS mounted from a real disk (rach2.fsdisk), writes 132 files of 256
- * KiB each, 33 MiB, fsyncs each, then reads every file back and checks a
+ * KiB each, 33 MiB, fsyncing each, then reads every file back and checks a
  * pattern that depends on the file and the offset. The page cache holds at
- * most 8 MiB, so the run evicts and writes back pages throughout, whatever
- * the machine's memory; that the data round-trips exactly is the proof that
- * a file system larger than the cache works through it. Prints "STRESSPROBE
- * OK n=<files> bytes=<total>" and exits 0, or prints "STRESSPROBE FAIL:" with
- * the step, the file and the call's result or the offset that differs, and
- * exits 1. Each file stays well under the cache's size.
+ * most 8 MiB, so once its slots are full the writes and the reads replace
+ * pages in it, whatever the machine's memory; that the data round-trips
+ * exactly is the proof that a file system larger than the cache works
+ * through it. Prints "STRESSPROBE OK n=<files> bytes=<total>" and exits 0,
+ * or prints "STRESSPROBE FAIL:" with the step, the file and the call's
+ * result or the offset that differs, and exits 1. A file is a thirty-second
+ * of the cache's 8 MiB at most.
  *
  * Freestanding; direct int 0x80.
  */
