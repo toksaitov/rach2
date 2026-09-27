@@ -16,7 +16,8 @@
 # row passing; this script does not run the rows on the unmodified tree. It
 # holds the run lock, as tests/run does, so that no suite builds or boots the
 # tree while a fault is in it, and refuses to start while another run holds
-# it.
+# it. Its owner file appears whole, by rename, since tests/run takes over a
+# lock whose owner file names no live process.
 #
 # NAME arguments run those faults alone. -s K/N runs the faults whose place
 # in the list, counted from 0, is K modulo N, so that N copies of the tree can
@@ -44,7 +45,8 @@ trap 'rm -rf build/.run.lock' EXIT
 work=$(mktemp -d "$repo/build/tests/probe-faults.XXXXXX")
 printf 'pid %s\npgid %s\nargs probe_faults.sh %s\nsince %s\nwork %s\n' "$$" \
     "$(ps -o pgid= -p $$ | tr -d ' ')" "$*" "$(date '+%Y-%m-%d %H:%M:%S')" "$work" \
-    > build/.run.lock/owner
+    > build/.run.lock/owner.new
+mv build/.run.lock/owner.new build/.run.lock/owner
 
 # `faults select SHARD [NAME...]` prints the chosen faults, one a line, as
 # NAME, PROBE, FILE and WORDS separated by tabs; `faults apply NAME` puts that
