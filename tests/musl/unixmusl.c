@@ -2,15 +2,19 @@
  * AF_UNIX sockets as GNU libc and its programs use them.
  *
  * A stream pair carries bytes both ways, ends with the end of input when one
- * end closes, and gives EPIPE to a write after that; shutdown(SHUT_WR) ends
- * the peer's input only. A datagram pair and a sequenced-packet pair keep
- * the boundaries of messages, and a datagram too long for the buffer is cut
- * with MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child that has
- * closed its own ends of the pipe, and the child writes through it. A child
- * that becomes user and group 1000 reads the pair's creator from SO_PEERCRED,
- * and the byte it writes reaches the creator's end, which has SO_PASSCRED, with
- * the child's pid, uid and gid. A listener bound to a path makes a socket file,
- * accepts a connection queued before the accept, and both ends report the
+ * end closes, and gives EPIPE to a write after that; shutdown(SHUT_WR) ends the
+ * peer's input only. A datagram pair and a sequenced-packet pair keep the
+ * boundaries of messages, and a datagram too long for the buffer is cut with
+ * MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child that has closed
+ * its own ends of the pipe, and the child writes through it. A child that
+ * becomes user and group 1000 reads the pair's creator from SO_PEERCRED, and
+ * the byte it writes reaches the creator's end, which has SO_PASSCRED, with the
+ * child's pid, uid and gid. A listener bound to a path makes a socket file,
+ * accepts a connection queued before the accept, and both ends report the A
+ * descriptor sent with SCM_RIGHTS reaches a child, which writes through it.
+ * SO_PEERCRED reports the peer, and SO_PASSCRED brings the sender's
+ * credentials; an unprivileged thread that is not the leader may name its
+ * process's id in SCM_CREDENTIALS.
  * names; a second bind of the path fails with EADDRINUSE, and a connect to the
  * file after the listener is gone fails with ECONNREFUSED. An abstract name
  * works without a file. A datagram sent to a name arrives with the sender's
@@ -38,6 +42,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -325,6 +330,66 @@ static int rights_and_creds(void)
     close(p[0]);
     close(sv[0]);
     return creds();
+}
+
+/* Send one byte over `*arg` with SCM_CREDENTIALS naming the process, from
+ * a thread that is not the leader: 0, or the errno of the refusal. */
+static void *send_creds(void *arg)
+{
+    union {
+        struct cmsghdr h;
+        char buf[CMSG_SPACE(sizeof(struct ucred))];
+    } ctl;
+    struct ucred cr;
+    struct msghdr msg;
+    struct iovec iov;
+    struct cmsghdr *c;
+    char byte = 'c';
+
+    cr.pid = getpid();
+    cr.uid = getuid();
+    cr.gid = getgid();
+    memset(&msg, 0, sizeof(msg));
+    memset(&ctl, 0, sizeof(ctl));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctl.buf;
+    msg.msg_controllen = sizeof(ctl.buf);
+    c = CMSG_FIRSTHDR(&msg);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_CREDENTIALS;
+    c->cmsg_len = CMSG_LEN(sizeof(cr));
+    memcpy(CMSG_DATA(c), &cr, sizeof(cr));
+    return (void *)(long)(sendmsg(*(int *)arg, &msg, 0) == 1 ? 0 : errno);
+}
+
+/* An unprivileged thread other than the leader may name its process's id,
+ * getpid's, in SCM_CREDENTIALS. */
+static int thread_creds(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        pthread_t t;
+        void *res = (void *)1;
+        int sv[2];
+
+        if (getuid() == 0 && (setgid(65534) != 0 || setuid(65534) != 0)) {
+            _exit(2);
+        }
+        if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0 ||
+            pthread_create(&t, NULL, send_creds, &sv[0]) != 0 || pthread_join(t, &res) != 0) {
+            _exit(3);
+        }
+        _exit(res == NULL ? 0 : 1);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("a thread's SCM_CREDENTIALS naming its process was refused");
+    }
+    return 0;
 }
 
 static int named(void)
@@ -708,9 +773,9 @@ static int shut_writable(void)
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
-    if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
-        backlog_growth() || datagram_peers() || full_receiver_shut() || chain_close() ||
-        datagram_names() || waiting() || shut_writable()) {
+    if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
+        listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
+        chain_close() || datagram_names() || waiting() || shut_writable()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");

@@ -1581,8 +1581,9 @@ static int32_t get_rights(uint32_t data, uint32_t n, struct unix_out *out)
     return 0;
 }
 
-/* The credentials of an SCM_CREDENTIALS message: the sender's own ids,
- * unless it is root, as Linux checks them. */
+/* The credentials of an SCM_CREDENTIALS message: the sender's own process
+ * id, the thread group's and not a thread's, and ids, unless it is root, as
+ * Linux checks them. */
 static int32_t get_cred(uint32_t data, struct unix_out *out)
 {
     const process_t *p = current_proc;
@@ -1595,7 +1596,7 @@ static int32_t get_cred(uint32_t data, struct unix_out *out)
         return -EINVAL;
     }
     if (p->euid != 0 &&
-        (c.pid != p->pid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
+        (c.pid != p->tgid || (c.uid != p->ruid && c.uid != p->euid && c.uid != p->suid) ||
          (c.gid != p->rgid && c.gid != p->egid && c.gid != p->sgid))) {
         return -EPERM;
     }

@@ -156,8 +156,10 @@ A receiver with
 gets
 .Dv SCM_CREDENTIALS
 with every message: the sender's process id and real user and group ids,
-or those the sender gave, which must be its own real, effective or saved
-ids unless it is root.
+or those the sender gave, which must be its own process id, the one
+.Xr getpid 2
+returns in each of its threads, and its own real, effective or saved
+ids, unless it is root.
 On a stream with
 .Dv SO_PASSCRED ,
 a read does not join the bytes of two senders.
