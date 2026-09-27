@@ -4,7 +4,7 @@
  * Four threads start and are joined, each with its own thread id, the
  * process's pid, and its own copy of a thread-local variable, and they count
  * to 40000 under one mutex in memory they share. A condition variable
- * passes a value from one thread to another. pthread_kill reaches the thread
+ * passes a value to a waiter seen asleep. pthread_kill reaches the thread
  * it names, which alone runs the handler. A signal sent to the process
  * while every thread blocks it waits, and is taken by the thread that
  * unblocks it. Of two signals sent to the process at once, the second, which
@@ -85,9 +85,12 @@ static void *count(void *arg)
     return (void *)(long)(mine == i + 100 && getpid() != ids[i] ? 1 : 0);
 }
 
+static volatile pid_t receiver_tid;
+
 static void *receive(void *arg)
 {
     (void)arg;
+    receiver_tid = tid();
     pthread_mutex_lock(&lock);
     while (!handed) {
         pthread_cond_wait(&ready, &lock);
@@ -238,6 +241,36 @@ static int sleeping(pid_t t)
     line[n] = '\0';
     state = strrchr(line, ')');
     return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/**
+ * A condition variable passes a value to a thread that is seen asleep in its
+ * wait before the value is published, so that only the signal's wake can
+ * end the wait. Returns 0, or 1 once the failure is reported.
+ */
+static int condition_row(void)
+{
+    pthread_t r;
+    void *result;
+    int i;
+
+    if (pthread_create(&r, NULL, receive, NULL) != 0) {
+        return fail("pthread_create for the condition");
+    }
+    for (i = 0; i < 500 && !(receiver_tid && sleeping(receiver_tid)); i++) {
+        usleep(10000);
+    }
+    if (i == 500) {
+        return fail("the receiver was never seen asleep in pthread_cond_wait");
+    }
+    pthread_mutex_lock(&lock);
+    handed = 5;
+    pthread_cond_signal(&ready);
+    pthread_mutex_unlock(&lock);
+    if (pthread_join(r, &result) != 0 || (long)result != 5) {
+        return fail("the condition variable");
+    }
+    return 0;
 }
 
 /** The sharing of descriptors, the working directory and the umask. */
@@ -609,7 +642,7 @@ static int two_execs(void)
 
 int main(void)
 {
-    pthread_t t[THREADS], r, w, spare;
+    pthread_t t[THREADS], w, spare;
     sigset_t block;
     void *result;
     int i, status;
@@ -630,15 +663,8 @@ int main(void)
         return fail("the count under the mutex, or the ids");
     }
 
-    if (pthread_create(&r, NULL, receive, NULL) != 0) {
-        return fail("pthread_create for the condition");
-    }
-    pthread_mutex_lock(&lock);
-    handed = 5;
-    pthread_cond_signal(&ready);
-    pthread_mutex_unlock(&lock);
-    if (pthread_join(r, &result) != 0 || (long)result != 5) {
-        return fail("the condition variable");
+    if (condition_row() != 0) {
+        return 1;
     }
 
     signal(SIGUSR1, on_usr1);
