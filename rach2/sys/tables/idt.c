@@ -17,9 +17,10 @@ static void _idt_set_desciptor(size_t index, uint32_t offset, uint16_t segment_s
  * Installs gates for the 32 CPU exception vectors (0..31), programs the PIC,
  * installs the 16 hardware IRQ vectors remapped to 32..47, and the syscall
  * trap at vector 0x80. Exception and IRQ gates use flags 0x8E (present,
- * DPL=0, 32-bit interrupt gate); the syscall gate uses 0xEE so its DPL is 3
- * and user mode can reach it with `int 0x80`. All gates target the kernel
- * code segment 0x08. The PIC is remapped before its IRQ gates are installed.
+ * DPL=0, 32-bit interrupt gate); the breakpoint and overflow gates, vectors 3
+ * and 4, and the syscall gate use 0xEE, DPL 3, so user mode reaches them with
+ * `int3`, `into` and `int 0x80`. All gates target the kernel code segment
+ * 0x08. The PIC is remapped before its IRQ gates are installed.
  */
 void init_idt(void)
 {
