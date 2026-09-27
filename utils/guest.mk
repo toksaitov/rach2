@@ -1,7 +1,9 @@
 # Build the Rach2 utilities on Rach2 itself.
 #
 # The POSIX makefile pdpmake reads in the guest, driving the staged tcc
-# through /bin/cc; the GNU Makefile beside it stays the host build. Each
+# through /bin/cc, spelt out because a system with GCC, the GNU root among
+# them, has another cc first on its path; the GNU Makefile beside it stays
+# the host build. Each
 # program is one hosted static link against the compiler's own sysroot
 # (musl's headers and libc.a, the crt objects), which is exactly what the
 # host build produces through the muslgcc wrapper. Both makefiles include
@@ -15,7 +17,7 @@
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
-UCC = cc
+UCC = /bin/cc
 UFLAGS = -static
 
 include programs.mk

@@ -1,8 +1,9 @@
 # Build the Rach2 kernel on Rach2 itself.
 #
 # This is the POSIX makefile pdpmake reads in the guest, driving the staged
-# tcc through its /bin/cc name; the GNU Makefile beside it stays the host
-# build and pdpmake cannot read it. Both include sources.mk, so one file
+# tcc through its /bin/cc name, spelt out because a system with GCC, the GNU
+# root among them, has another cc first on its path; the GNU Makefile beside
+# it stays the host build and pdpmake cannot read it. Both include sources.mk, so one file
 # lists the kernel sources for the two builds and they cannot drift apart.
 #
 # The link reads the object list from kernel.objs, a response file, because
@@ -19,7 +20,7 @@
 #
 # Run from a writable copy of this tree: make -f guest.mk
 
-KCC = cc
+KCC = /bin/cc
 KCFLAGS = -m32 -Wall -Wunsupported -nostdlib
 
 include sources.mk
