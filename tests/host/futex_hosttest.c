@@ -1,6 +1,7 @@
 /**
  * Check what `proc/futex.c` reads of a thread that may end while it works,
- * and the robust futexes a thread's end releases.
+ * the robust futexes a thread's end releases, a wait's deadline, and which
+ * interrupted calls are restarted.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -16,7 +17,13 @@
  * for a sleep in which a waiter runs: with interrupts on, it sets
  * FUTEX_WAITERS in the word a row names, as that waiter would before it
  * sleeps. A thread that ends holding that robust futex must leave the word
- * with FUTEX_WAITERS and FUTEX_OWNER_DIED, and wake the waiter.
+ * with FUTEX_WAITERS and FUTEX_OWNER_DIED, and wake the waiter. Of the futex
+ * it was taking or giving back, one with no owner must have a waiter woken
+ * and be left 0, unless it is a priority-inheritance futex.
+ *
+ * A fault can also stand for a sleep of some ticks, which a wait's deadline,
+ * fixed when the call begins, must count. The model's wait ends at once,
+ * noting the tick it was armed for.
  */
 #include "proc/futex.c"
 
