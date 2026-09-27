@@ -50,7 +50,7 @@ The dispatcher records a system call that returned `-EINTR` in `restart_nr` unle
 
 ## Delivery and return
 
-The interrupt and system-call epilogue and the hardware-IRQ epilogue call `deliver_signals` with interrupts disabled. It does nothing for a kernel-mode return. For a user-mode return it chooses the lowest-numbered pending, unblocked signal and clears that pending bit.
+The interrupt and system-call epilogue and the hardware-IRQ epilogue call `deliver_signals` with interrupts disabled. It does nothing for a kernel-mode return. For a user-mode return it takes one pending, unblocked signal and clears its pending bit (`sig_dequeue`): the lowest-numbered of the thread's own, or, when the thread has none, the lowest-numbered of its process's, as Linux's `dequeue_signal` takes them.
 
 A default disposition ignores, stops, or terminates as described above. A caught disposition builds a frame below the user stack pointer, or at the top of the alternate stack for `SA_ONSTACK` when one is set and not in use, redirects `EIP` to the handler, and blocks the action's mask plus the delivered signal unless `SA_NODEFER` is set. `SA_RESETHAND` resets the disposition for the next signal once the frame is built. Only one handler is entered at a time; remaining signals are reconsidered at a later return-to-user boundary.
 

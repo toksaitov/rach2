@@ -3454,20 +3454,25 @@ static void sig_park(void)
     sig_irq_restore(flags);
 }
 
-/** Take the lowest signal of `deliverable` off the current thread's pending
- * set, or else off its process's, into `*info`; the signal. */
-static int sig_dequeue(uint64_t deliverable, struct k_siginfo *info)
+/**
+ * Take a signal of `wanted`, one of which is pending, off the current
+ * thread's pending signals into `*info`, as Linux's `dequeue_signal` takes
+ * it: the lowest of the thread's own, or, when the thread has none of
+ * `wanted`, the lowest of its process's. Returns the signal.
+ */
+static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
 {
-    uint32_t flags;
+    uint32_t flags = sig_irq_save();
+    uint64_t own = current_proc->sig_pending & wanted;
+    uint64_t from = own != 0 ? own : current_proc->tg->pending & wanted;
     int signo;
 
     for (signo = 1; signo < KSIG_MAX; signo++) {
-        if (deliverable & KSIG_BIT(signo)) {
+        if (from & KSIG_BIT(signo)) {
             break;
         }
     }
-    flags = sig_irq_save();
-    if (current_proc->sig_pending & KSIG_BIT(signo)) {
+    if (own != 0) {
         current_proc->sig_pending &= ~KSIG_BIT(signo);
         *info = current_proc->sig_info[signo];
     } else {
@@ -3484,11 +3489,12 @@ static int sig_dequeue(uint64_t deliverable, struct k_siginfo *info)
  * Called from the ISR/IRQ return path just before iret, with the trapframe
  * about to be restored. If the current thread is returning to USER mode and
  * has a deliverable signal, one pending for it or for its process and not
- * blocked, act on the lowest-numbered one, the thread's own first: ignore it,
- * end the process (a default that terminates), stop the process, or build a
- * handler frame. A thread whose process is stopped parks here first. The
- * records of ended threads are freed here too, a point every running process
- * passes where none of them is in use.
+ * blocked, act on one (`sig_dequeue`), the lowest-numbered of the thread's
+ * own or, when it has none, of its process's: ignore it, end the process (a
+ * default that terminates), stop the process, or build a handler frame. A
+ * thread whose process is stopped parks here first. The records of ended
+ * threads are freed here too, a point every running process passes where
+ * none of them is in use.
  *
  * A system call the dispatcher found interrupted and restartable is
  * restarted when no handler runs, and when the handler that runs has
@@ -3650,16 +3656,16 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
  * which sigwait, sigwaitinfo and sigtimedwait make.
  *
  * EBX = const sigset_t *set, ECX = siginfo_t *info or NULL, EDX = const
- * struct timespec *timeout or NULL, ESI = sigsetsize, which must be 8. The
- * first signal of `set` pending for the thread or its process, lowest first
- * and the thread's own before the process's, is taken off its pending set
- * without its handler running. While the call waits the signals of `set`
- * count as unblocked, as Linux counts them, so a signal sent to the process
- * wakes this thread; when it returns the old mask comes back, and a signal
- * of `set` that it blocks and that is still pending for the process is left
- * to another thread (`signal_set_blocked`). The timeout is rounded up to
- * whole 10 ms ticks, and one of zero polls; SIGKILL and SIGSTOP cannot be
- * waited for.
+ * struct timespec *timeout or NULL, ESI = sigsetsize, which must be 8. A
+ * signal of `set` pending for the thread or its process, the lowest of the
+ * thread's own or, when it has none of them, the lowest of the process's, is
+ * taken off its pending set without its handler running. While the call
+ * waits the signals of `set` count as unblocked, as Linux counts them, so a
+ * signal sent to the process wakes this thread; when it returns the old mask
+ * comes back, and a signal of `set` that it blocks and that is still pending
+ * for the process is left to another thread (`signal_set_blocked`). The
+ * timeout is rounded up to whole 10 ms ticks, and one of zero polls; SIGKILL
+ * and SIGSTOP cannot be waited for.
  */
 int32_t sys_rt_sigtimedwait(isr_params_t *params)
 {

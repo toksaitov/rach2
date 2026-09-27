@@ -3,7 +3,8 @@
  * added.
  *
  * sigtimedwait takes a blocked signal the process sent itself and returns
- * its number and sender, and with no signal pending its timeout ends it
+ * its number and sender, takes a signal sent to the thread before a lower
+ * one sent to the process, and with no signal pending its timeout ends it
  * with EAGAIN. mlock, munlock, mlockall and munlockall accept a mapped range
  * and refuse a gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -53,6 +54,15 @@ static int signals(void)
     errno = 0;
     if (sigtimedwait(&set, &info, &zero) != -1 || errno != EAGAIN) {
         return fail("sigtimedwait with nothing pending");
+    }
+    sigaddset(&set, SIGUSR2);
+    if (sigprocmask(SIG_BLOCK, &set, NULL) != 0 || kill(getpid(), SIGUSR1) != 0 ||
+        syscall(SYS_tkill, syscall(SYS_gettid), SIGUSR2) != 0) {
+        return fail("sending SIGUSR1 to the process and SIGUSR2 to the thread");
+    }
+    if (sigtimedwait(&set, &info, &zero) != SIGUSR2 || info.si_code != SI_TKILL ||
+        sigtimedwait(&set, &info, &zero) != SIGUSR1 || info.si_code != SI_USER) {
+        return fail("sigtimedwait did not take the thread's signal before the process's");
     }
     return 0;
 }

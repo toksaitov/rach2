@@ -123,7 +123,9 @@ and are reported by
 The booted init process cannot be stopped.
 .Pp
 Signals act on return to user mode from a system call or interrupt.
-The lowest-numbered pending, unblocked signal is selected first.
+The lowest-numbered of the thread's own pending, unblocked signals is
+selected first, and when it has none, the lowest-numbered of the
+process's.
 An ignored signal does not interrupt a blocking wait.
 A caught, stopping, or terminating signal that is not blocked can
 interrupt a wait;
@@ -285,7 +287,8 @@ and
 .Fn sigtimedwait
 make, waits for a signal of a set to be pending for the thread or its
 process and takes it off its pending set without running its handler:
-the lowest first, and the thread's own before the process's.
+the lowest of the thread's own, or, when it has none of the set pending,
+the lowest of the process's.
 Its siginfo is stored unless the pointer is null, and its number is
 returned.
 While the call waits the signals of the set count as unblocked, so a
