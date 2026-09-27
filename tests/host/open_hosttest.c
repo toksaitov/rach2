@@ -236,11 +236,10 @@ int vfs_truncate(struct vfs_mount *mnt, void *at, uint64_t size)
     return truncate_error;
 }
 
-/** Release exactly one successfully opened handle. */
+/** Release a successfully opened handle, never more than were opened. */
 void vfs_release(struct vfs_mount *mnt, void *at)
 {
-    check(mnt == &mount && at == &handle && opens == releases + 1,
-          "release balances successful open");
+    check(mnt == &mount && at == &handle && opens > releases, "release balances successful open");
     releases++;
 }
 
@@ -530,6 +529,55 @@ static void deferred_release(void)
     row_end();
 }
 
+/* The source of the dup2 in `dup2_source_closed`. */
+static int dup_source = -1;
+
+/** Another thread closes the dup2's source while the replacement sleeps. */
+static void other_closes_source(void)
+{
+    current_proc = &other;
+    check(close_fd(dup_source) == 0 && (proc.fds->entries[dup_source].flags & FD_FLAG_CLOSING),
+          "a close of the source the dup2 holds leaves it to the dup2's call");
+    current_proc = &proc;
+}
+
+/** A dup2 whose source is closed while the replacement of its target sleeps
+ * makes an open descriptor, which outlives the source's release. */
+static void dup2_source_closed(void)
+{
+    isr_params_t params;
+    int target;
+
+    row_begin();
+    files.refs = 2;
+    proc_list = &proc;
+    proc.next = &other;
+    other.fds = &files;
+    dup_source = model_open();
+    target = model_open();
+    check(dup_source >= 0 && target >= 0, "open a source and a target");
+    if (dup_source >= 0 && target >= 0) {
+        k_memset(&params, 0, sizeof(params));
+        params.ebx = (uint32_t)dup_source;
+        params.ecx = (uint32_t)target;
+        in_release = other_closes_source;
+        check(sys_dup2(&params) == target && in_release == 0, "dup2 replaces its target");
+        check(fd_get(proc.fds, target) == &proc.fds->entries[target] &&
+                  !(proc.fds->entries[target].flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)),
+              "the copy is an open descriptor");
+        fd_holds_release();
+        current_proc = &other;
+        fd_holds_release();
+        current_proc = &proc;
+        check(proc.fds->entries[dup_source].type == FD_TYPE_NONE &&
+                  proc.fds->entries[target].type == FD_TYPE_FILE &&
+                  proc.fds->entries[target].ofd->refcount == 1 && refs == 1,
+              "the source's release leaves the copy its description");
+    }
+    dup_source = -1;
+    row_end();
+}
+
 /** Check node repointing without changing a mounted open identity. */
 static void loop_handles(void)
 {
@@ -556,6 +604,7 @@ int main(void)
     truncation();
     close_sleeping();
     deferred_release();
+    dup2_source_closed();
     loop_handles();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation and loop handles\n");

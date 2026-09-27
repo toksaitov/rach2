@@ -3321,7 +3321,15 @@ static int32_t dup_clear(int fd)
     return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
 }
 
-/* dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno. */
+/**
+ * dup2(2): EBX = oldfd, ECX = newfd. Returns newfd or -errno.
+ *
+ * The replacement of an open `newfd` may sleep (`dup_clear`), and another
+ * thread may close `oldfd` meanwhile. The call holds `oldfd`, so the close
+ * leaves it to the call, and the copy is made of what the call looked up, as
+ * Linux's dup2 installs the file it looked up; the copy is an open
+ * descriptor of its own, with none of the source's closing state.
+ */
 int32_t sys_dup2(isr_params_t *params)
 {
     int oldfd = (int)params->ebx;
@@ -3367,7 +3375,8 @@ int32_t sys_dup2(isr_params_t *params)
     new_entry->dev = old_entry->dev;
     new_entry->ofd = old_entry->ofd;
     fd_ofd_ref(new_entry->ofd);
-    new_entry->flags = old_entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
+    new_entry->flags =
+        old_entry->flags & ~(uint32_t)(FD_FLAG_CLOEXEC | FD_FLAG_CLOSING | FD_FLAG_RELEASING);
 
     if (new_entry->type == FD_TYPE_SOCKET && new_entry->sock) {
         socket_ref(new_entry->sock);
