@@ -32,7 +32,15 @@ in
 .Fa buf ,
 following a final symbolic link.
 .Fn lstat
-reports the link itself.
+reports the link itself, unless
+.Fa path
+names it as a directory by a trailing slash,
+.Pa \&.
+or
+.Pa \&.. ,
+as in
+.Pa /proc/self/.\& ,
+which it then follows, as Linux does.
 Both follow links in preceding components.
 .Fn fstat
 reports the object referred to by

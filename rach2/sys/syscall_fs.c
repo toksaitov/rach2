@@ -1095,9 +1095,29 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
 }
 
 /**
+ * Whether the path `raw` of `len` bytes ends in a slash, or in a last
+ * component of "." or "..": its last name is then a directory the walk
+ * reaches through a symbolic link, as Linux's does, where a call that does
+ * not follow a final link would stop at the link itself.
+ */
+static int path_names_dir(const char *raw, int len)
+{
+    if (raw[len - 1] == '/') {
+        return 1;
+    }
+    if (raw[len - 1] == '.' && (len == 1 || raw[len - 2] == '/')) {
+        return 1;
+    }
+    return len >= 2 && raw[len - 1] == '.' && raw[len - 2] == '.' &&
+           (len == 2 || raw[len - 3] == '/');
+}
+
+/**
  * Copy a user path into `pathbuf` as an absolute, canonical path, a
  * relative one joined to the directory `dirfd` is open on, or to the working
- * directory for `AT_FDCWD`.
+ * directory for `AT_FDCWD`, and say in `*dir`, when `dir` is not NULL,
+ * whether the path as written named a directory by its end
+ * (`path_names_dir`), which the canonical path no longer shows.
  *
  * The rules and the errors are `copy_path_cwd`'s, with the directory's:
  * -EBADF for a descriptor that is not open and -ENOTDIR for one that is not
@@ -1106,7 +1126,7 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
  * `VFS_PATH_MAX`. The empty path is -ENOENT; a call that takes AT_EMPTY_PATH
  * looks for it before copying.
  */
-static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath)
+static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath, int *dir)
 {
     fd_entry_t *entry;
     char *dirpath;
@@ -1118,6 +1138,9 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
     }
     if (len == 0) {
         return -ENOENT;
+    }
+    if (dir) {
+        *dir = path_names_dir(pathbuf, len);
     }
     if (pathbuf[0] == '/') {
         return canonicalize_abs(pathbuf);
@@ -1145,13 +1168,14 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
 /**
  * The path a caller named, in a path page: absolute, canonical, and joined to
  * the directory `dirfd` is open on when it is relative, or to the working
- * directory for `AT_FDCWD`.
+ * directory for `AT_FDCWD`; with `dir` not NULL, whether it named a
+ * directory by its end, as `copy_path_at` says.
  *
  * Returns 0 with the page in `*out`, which the caller gives back with
  * `path_buf_put`, or a negative errno with nothing taken: -ENOMEM when the
  * heap has no page, or `copy_path_at`'s.
  */
-static int path_from_user(int dirfd, const char __user *upath, char **out)
+static int path_from_user_dir(int dirfd, const char __user *upath, char **out, int *dir)
 {
     char *buf = path_buf_get();
     int len;
@@ -1159,13 +1183,19 @@ static int path_from_user(int dirfd, const char __user *upath, char **out)
     if (!buf) {
         return -ENOMEM;
     }
-    len = copy_path_at(buf, VFS_PATH_MAX, dirfd, upath);
+    len = copy_path_at(buf, VFS_PATH_MAX, dirfd, upath, dir);
     if (len < 0) {
         path_buf_put(buf);
         return len;
     }
     *out = buf;
     return 0;
+}
+
+/** `path_from_user_dir` for a caller that does not ask how the path ends. */
+static int path_from_user(int dirfd, const char __user *upath, char **out)
+{
+    return path_from_user_dir(dirfd, upath, out, NULL);
 }
 
 /** The absolute path `abs` without its leading slash, as the cores take it. */
@@ -4612,11 +4642,13 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     }
 
     {
-        int rc = path_from_user(AT_FDCWD, path, &pathbuf);
+        int dir = 0;
+        int rc = path_from_user_dir(AT_FDCWD, path, &pathbuf, &dir);
 
         if (rc != 0) {
             return rc;
         }
+        follow |= dir;
     }
 
     /* Build the result in a kernel struct, then copy it out in one shot. */
@@ -4672,7 +4704,8 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
  * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat()
  * only works once 196 exists. The follow flag decides whether a symbolic
  * link at the end, on /proc or on a mounted type, is the result or its
- * target. */
+ * target; a link the path names as a directory by its end is followed
+ * either way (`path_names_dir`). */
 int32_t sys_stat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)params->ebx, (struct linux_stat64 __user *)params->ecx,
@@ -5129,7 +5162,9 @@ static int32_t fstatat_path(const char *path, int follow, struct linux_stat64 *k
  *
  * The path resolves as openat's does: absolute, or relative to the working
  * directory for AT_FDCWD or to the directory `dirfd` is open on (see
- * copy_path_at). AT_SYMLINK_NOFOLLOW reports a final symbolic link itself.
+ * copy_path_at). AT_SYMLINK_NOFOLLOW reports a final symbolic link itself,
+ * but not one the path names as a directory by a trailing slash, "." or
+ * "..", which is followed, as Linux's walk does.
  * With AT_EMPTY_PATH an empty or null path reports the object `dirfd` refers
  * to, whatever it is, as fstat64 does, or the working directory for
  * AT_FDCWD. Returns 0 or a negative errno.
@@ -5139,6 +5174,7 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct li
     int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     char *pathbuf;
     int empty = 0;
+    int dir = 0;
     int32_t rc;
 
     if (flags & AT_EMPTY_PATH) {
@@ -5162,12 +5198,12 @@ static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct li
         if (!upath) {
             return -EFAULT;
         }
-        rc = path_from_user(dirfd, upath, &pathbuf);
+        rc = path_from_user_dir(dirfd, upath, &pathbuf, &dir);
         if (rc != 0) {
             return rc;
         }
     }
-    rc = fstatat_path(pathbuf, follow, kst);
+    rc = fstatat_path(pathbuf, follow || dir, kst);
     path_buf_put(pathbuf);
     return rc;
 }
