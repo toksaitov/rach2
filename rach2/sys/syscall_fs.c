@@ -107,9 +107,14 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  * are the count, so there is nothing to keep in step.
  *
  * The tables are a few pointer compares per live process, of kernel memory;
- * it never touches the page-cache window. A descriptor in flight on an
- * AF_UNIX socket and a file mapping hold the node as a descriptor does, and
- * count as one holder more.
+ * the scan never touches the page-cache window, and the node's own mode is
+ * the one read of it. A descriptor in flight on an AF_UNIX socket and a
+ * file mapping hold the node as a descriptor does, and count as one holder
+ * more. The ends of a FIFO hold it too, by their descriptions, whose
+ * descriptors name a pipe and no node: every description of the FIFO
+ * counts, `except`'s only when a descriptor besides it keeps it, since the
+ * FIFO's pipe is found by the node's address, which a new node must not
+ * take while an end is open.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
@@ -132,7 +137,31 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
     if (unix_inflight_holds(node) || filemap_holds(node)) {
         held++;
     }
+    if (krffs_mode_type(node->mode) == KRFFS_S_IFIFO) {
+        held += fd_ofd_holders(vfs_root_mount(), node, except ? except->ofd : NULL);
+    }
     return held;
+}
+
+/**
+ * Free the node of a FIFO of the KRFFS root that lost its name while open,
+ * when `e`, an end of it or the reservation of an open of it that did not
+ * finish, is the last to hold it: the release of a file's last descriptor
+ * frees its orphan, and a FIFO's ends are its descriptors.
+ */
+static void fd_fifo_orphan(const fd_entry_t *e)
+{
+    krffs_node_t *fifo;
+
+    if (!e->ofd || !e->ofd->vmnt || !krffs_fs || !mnt_is_root(e->ofd->vmnt)) {
+        return;
+    }
+    fifo = e->ofd->vnode;
+    if (fifo && fifo != krffs_fs->node && fifo->type == KRFFS_RESERVED_NODE &&
+        krffs_mode_type(fifo->mode) == KRFFS_S_IFIFO && fifo->name[0] == '\0' &&
+        fd_node_holders(fifo, e) == 0) {
+        krffs_remove_reserved_node(krffs_fs, fifo);
+    }
 }
 
 /**
@@ -244,6 +273,9 @@ static void fd_release_objects(fd_entry_t *e)
         e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
         krffs_remove_reserved_node(krffs_fs, e->node);
         e->node = NULL;
+    }
+    if (e->type == FD_TYPE_PIPE) {
+        fd_fifo_orphan(e);
     }
     /* A synthetic directory fd's pooled cookie, or an O_PATH leaf's node, is
      * freed when its last descriptor closes (dup/fork share it via the OFD
@@ -1752,6 +1784,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_leave(mnt);
     rc = fifo_attach(e, mnt, ino, flags);
     if (rc != 0) {
+        fd_fifo_orphan(e);
         fd_free(current_proc->fds, fd);
         return rc;
     }
@@ -1792,6 +1825,14 @@ static int32_t open_device(int block, uint32_t rdev, int flags)
  * ignored, and a read-only mount does not refuse an open for writing, since
  * nothing is written to the file. A socket file is ENXIO, as it is on Linux,
  * whose sockets are reached by connect(2).
+ *
+ * A FIFO's pipe is found by the file's mount and a number that names the
+ * file alone for as long as an end is open: a mounted type's inode number,
+ * and on the KRFFS root the node's address, since the root numbers a file
+ * by its directory and its name, which a rename changes and two names can
+ * share. The node stays where it is, a FIFO having no bytes to move, and
+ * keeps its place, nameless after an unlink, while an end holds it
+ * (`fd_node_holders`).
  */
 static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
 {
@@ -1809,7 +1850,7 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
             return 0;
         }
         type = krffs_mode_type(node->mode);
-        ino = krffs_node_ino(node);
+        ino = (uint64_t)(uintptr_t)node;
     } else {
         struct vfs_stat st;
 

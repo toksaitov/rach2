@@ -158,6 +158,13 @@ uint64_t krffs_node_ino(const krffs_node_t *node)
     return 0;
 }
 
+/** A KRFFS node's type bits, which no row reads: its nodes are a mounted
+ * type's. */
+uint32_t krffs_mode_type(uint16_t mode)
+{
+    return mode & 0170000u;
+}
+
 /** Whether the row has a record lock somewhere, which is when a close
  * drops the closer's. */
 int lock_any(void)

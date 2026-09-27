@@ -5,12 +5,14 @@
  * reader, a nonblocking open for writing fails with ENXIO; a nonblocking
  * open for reading succeeds and reads the end of input. Bytes written at one
  * open are read at the other, and the reader sees the end of input when the
- * writer closes. A blocking open for reading waits for a writer: a child
- * opens the FIFO for writing only once it has seen the parent asleep, and
- * first writes a byte to a pipe, which must be there when the parent's open
- * returns. The child's bytes then arrive. An open for reading and writing
- * does not wait, and once full it polls writable when a child's open reads a
- * byte.
+ * writer closes. A blocking open for reading waits for a writer: a child opens
+ * the FIFO for writing only once it has seen the parent asleep, and first
+ * writes a byte to a pipe, which must be there when the parent's open returns.
+ * The child's bytes then arrive. An open for reading and writing does not wait,
+ * and once full it polls writable when a child's open reads a byte. Two FIFOs
+ * whose names have one hash, which the KRFFS root numbers a file by, are two
+ * pipes; a renamed FIFO keeps its pipe; and one unlinked while an end is open
+ * keeps its pipe for that end, apart from a FIFO made in its name.
  *
  * Prints "FIFOMUSL OK" on success and "FIFOMUSL FAIL (detail)" otherwise.
  */
@@ -29,6 +31,10 @@
 
 #define FIFO_PATH "/tmp/fifomusl"
 #define NODE_PATH "/tmp/fifomusl.node"
+/* Two names with one hash, the DJB hash the KRFFS root numbers files by. */
+#define TWIN_A    "/tmp/fifomusl.a3"
+#define TWIN_B    "/tmp/fifomusl.bP"
+#define MOVED     "/tmp/fifomusl.moved"
 
 static int fail(const char *what)
 {
@@ -125,6 +131,46 @@ static int rdwr_opens(void)
     return 0;
 }
 
+/** A FIFO is its own pipe, by name hash, across a rename and past an
+ * unlink. */
+static int identity(void)
+{
+    char buf[4];
+    int r, w;
+
+    unlink(TWIN_A);
+    unlink(TWIN_B);
+    unlink(MOVED);
+    if (mkfifo(TWIN_A, 0600) != 0 || mkfifo(TWIN_B, 0600) != 0) {
+        return fail("two FIFOs whose names have one hash");
+    }
+    r = open(TWIN_A, O_RDONLY | O_NONBLOCK);
+    if (r < 0) {
+        return fail("a reader of the first");
+    }
+    if (open(TWIN_B, O_WRONLY | O_NONBLOCK) != -1 || errno != ENXIO) {
+        return fail("the second found the first's reader");
+    }
+    if (rename(TWIN_A, MOVED) != 0) {
+        return fail("the rename");
+    }
+    w = open(MOVED, O_WRONLY | O_NONBLOCK);
+    if (w < 0 || write(w, "mv", 2) != 2 || read(r, buf, sizeof(buf)) != 2) {
+        return fail("the renamed FIFO lost its reader");
+    }
+    close(w);
+    if (unlink(MOVED) != 0 || mkfifo(MOVED, 0600) != 0) {
+        return fail("a FIFO in an unlinked one's name");
+    }
+    if (open(MOVED, O_WRONLY | O_NONBLOCK) != -1 || errno != ENXIO) {
+        return fail("a new FIFO found the unlinked one's reader");
+    }
+    close(r);
+    unlink(MOVED);
+    unlink(TWIN_B);
+    return 0;
+}
+
 int main(void)
 {
     struct stat st;
@@ -191,6 +237,9 @@ int main(void)
         return 1;
     }
     unlink(FIFO_PATH);
+    if (identity() != 0) {
+        return 1;
+    }
     printf("FIFOMUSL OK\n");
     return 0;
 }

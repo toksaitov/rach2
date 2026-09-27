@@ -159,6 +159,9 @@ since nothing is written to the file.
 .Pp
 A FIFO opens as an end of the pipe every open of the file shares, made
 at the first open and freed when no end is open.
+The pipe is the file's own, whatever its name: a renamed FIFO keeps it,
+and one unlinked while an end is open keeps it for that end, apart from
+any FIFO made in its name meanwhile.
 An open for reading waits for a writer and an open for writing for a
 reader.
 With

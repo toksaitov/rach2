@@ -114,6 +114,20 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
+int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going)
+{
+    struct ofd_rec *rec;
+    int held = 0;
+
+    for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.vmnt == mnt && rec->ofd.vnode == node &&
+            (&rec->ofd != going || rec->ofd.refcount > 1)) {
+            held++;
+        }
+    }
+    return held;
+}
+
 /**
  * Repoint node references after relocation.
  *

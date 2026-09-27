@@ -368,6 +368,38 @@ static void table_copies(void)
     check(allocations == 0, "table copy releases every allocation");
 }
 
+/**
+ * Every description of a node holds it, one whose release is under way only
+ * while another reference keeps it, and a description of another node or
+ * one released holds nothing.
+ */
+static void description_holders(void)
+{
+    struct vfs_mount mnt = {0};
+    struct open_file *a = fd_ofd_new();
+    struct open_file *b = fd_ofd_new();
+    struct open_file *other = fd_ofd_new();
+    int node, elsewhere;
+
+    check(a && b && other, "three descriptions");
+    if (!a || !b || !other) {
+        return;
+    }
+    a->vmnt = b->vmnt = other->vmnt = &mnt;
+    a->vnode = b->vnode = &node;
+    other->vnode = &elsewhere;
+    check(fd_ofd_holders(&mnt, &node, NULL) == 2, "every description of the node holds it");
+    check(fd_ofd_holders(&mnt, &node, a) == 1, "a description that is going does not");
+    fd_ofd_ref(a);
+    check(fd_ofd_holders(&mnt, &node, a) == 2, "one that another reference keeps does");
+    fd_ofd_unref(a);
+    fd_ofd_unref(a);
+    fd_ofd_unref(b);
+    fd_ofd_unref(other);
+    check(fd_ofd_holders(&mnt, &node, NULL) == 0 && allocations == 0,
+          "released descriptions hold nothing");
+}
+
 /** Exercise a waiting independent open, a shared open, and other file types. */
 int main(void)
 {
@@ -379,6 +411,7 @@ int main(void)
     process_allocations();
     shared_limits();
     table_copies();
+    description_holders();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
     }

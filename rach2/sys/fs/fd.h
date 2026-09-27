@@ -276,6 +276,12 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
 /** Whether a description of (`mnt`, `node`) is inside an operation now. */
 int fd_node_busy(struct vfs_mount *mnt, void *node);
 
+/** How many descriptions of (`mnt`, `node`) there are, `going` counted only
+ * when it keeps a reference besides the one its release drops: the holders
+ * of a KRFFS root node that no descriptor's `node` names, a FIFO's ends
+ * among them, wherever their descriptors are. */
+int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct open_file *going);
+
 /** 1 if fd is allocated, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);
 
