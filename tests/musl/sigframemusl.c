@@ -152,7 +152,8 @@ static void nest(int sig)
 
 /** A child whose SIGUSR1 handler raises SIGUSR1 again, SA_NODEFER, on an
  * alternate stack of MINSIGSTKSZ bytes at the start of a shared page, with
- * the page below it filled with a mark the kernel must leave. */
+ * the page below it filled with a mark the kernel must leave. The child
+ * clears the mask it inherits, in which the rows before block SIGUSR1. */
 static int overflow(void)
 {
     char *m = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -167,14 +168,17 @@ static int overflow(void)
     if (pid == 0) {
         stack_t ss;
         struct sigaction sa;
+        sigset_t none;
 
+        sigemptyset(&none);
         ss.ss_sp = m + 4096;
         ss.ss_size = MINSIGSTKSZ;
         ss.ss_flags = 0;
         memset(&sa, 0, sizeof(sa));
         sa.sa_handler = nest;
         sa.sa_flags = SA_ONSTACK | SA_NODEFER;
-        if (sigaltstack(&ss, NULL) != 0 || sigaction(SIGUSR1, &sa, NULL) != 0) {
+        if (sigaltstack(&ss, NULL) != 0 || sigaction(SIGUSR1, &sa, NULL) != 0 ||
+            sigprocmask(SIG_SETMASK, &none, NULL) != 0) {
             _exit(2);
         }
         raise(SIGUSR1);
