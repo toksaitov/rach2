@@ -3025,6 +3025,21 @@ static int crash_bytes_ok(const char *path, const unsigned char *before, uint32_
     return as_before || as_after;
 }
 
+/* A node of the special-files sequence at a stop: absent, or named with its
+   whole mode, its device number and size 0, since mknod writes the inode
+   whole before the entry that names it. */
+static int crash_node_ok(const char *path, uint32_t mode, uint32_t rdev)
+{
+    int err;
+    void *n = walk(path, &err);
+
+    if (!n) {
+        return err == -ENOENT;
+    }
+    OPS->put(&mnt, n);
+    return node_is(path, mode, rdev);
+}
+
 static int crash_ok(int i)
 {
     static unsigned char want[300000];
@@ -3064,6 +3079,10 @@ static int crash_ok(int i)
                crash_bytes_ok("/two.txt", 0, 0, pattern, 700);
     case 11:
         return crash_bytes_ok("/temp.txt", 0, 0, pattern, 8000);
+    case 13:
+        return crash_node_ok("/fifo", 0010644, 0) && crash_node_ok("/sock", 0140755, 0) &&
+               crash_node_ok("/null", 0020666, NULL_RDEV) &&
+               crash_node_ok("/wide", 0060600, WIDE_RDEV);
     default:
         return 1;
     }
