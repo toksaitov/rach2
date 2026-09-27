@@ -12,7 +12,10 @@
  * handler finds the interrupted context in Linux's layout: the user code
  * selector and a stack pointer in the saved registers, the floating-point
  * state's address, the mask from before the handler, and a siginfo that names
- * raise's tkill and its sender.
+ * raise's tkill and its sender. A handler that finds the user code selector,
+ * the stack pointer or the floating-point state missing reports the context
+ * and ends the program itself, since a return through that frame would
+ * restore no registers and fault before any report.
  *
  * "SIGMUSL OK" means the whole path worked through libc: sigaction, the signal
  * mask, synchronous delivery on syscall return, musl's restorer trampoline,
@@ -47,7 +50,24 @@ static void usr1_handler(int sig)
     handler_sig = sig;
 }
 
-/** Record the siginfo and the parts of the context the kernel fills. */
+/** Write the context's report, as `run_context` prints it, and end the
+ * program: what a handler does with a frame it cannot return through. */
+static void context_fail(void)
+{
+    char line[128];
+    int n = snprintf(line, sizeof(line),
+                     "SIGMUSL FAIL: ucontext cs=0x%lx esp=0x%lx fpregs=0x%lx usr1-masked=%d\n",
+                     context_cs, context_esp, context_fpregs, context_mask_has_usr1);
+
+    if (n > 0) {
+        (void)write(1, line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
+    }
+    _exit(1);
+}
+
+/** Record the siginfo and the parts of the context the kernel fills, and end
+ * the program with the report when the registers a return restores are not
+ * there. */
 static void info_handler(int sig, siginfo_t *info, void *context)
 {
     const ucontext_t *uc = context;
@@ -61,6 +81,9 @@ static void info_handler(int sig, siginfo_t *info, void *context)
     context_esp = (unsigned long)uc->uc_mcontext.gregs[REG_ESP];
     context_fpregs = (unsigned long)uc->uc_mcontext.fpregs;
     context_mask_has_usr1 = sigismember(&uc->uc_sigmask, SIGUSR1);
+    if (context_cs != 0x1B || context_esp == 0 || context_fpregs == 0) {
+        context_fail();
+    }
 }
 
 /** Check musl's SA_SIGINFO arguments and return through __restore_rt. */
