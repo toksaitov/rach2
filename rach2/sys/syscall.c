@@ -2014,7 +2014,7 @@ void init_syscall(void)
     _syscall_table[SYS_UMASK] = sys_umask;
     _syscall_table[SYS_TIMES] = sys_times;
     _syscall_table[SYS_SYSINFO] = sys_sysinfo;
-    _syscall_table[SYS_VFORK] = sys_fork; /* conservative alias */
+    _syscall_table[SYS_VFORK] = sys_vfork;
     _syscall_table[SYS_READV] = sys_readv;
     _syscall_table[SYS_WRITEV] = sys_writev;
     _syscall_table[SYS_UNAME] = sys_uname;

@@ -8,7 +8,7 @@
 #include "../mm/usercopy.h"
 
 /* The auxiliary vector's entries, AT_NULL included. */
-#define UIMAGE_AUXV 9u
+#define UIMAGE_AUXV 15u
 
 /* A temporary mapping of one page of the new stack, kept while the
  * accesses made through it stay in that page. */
@@ -200,6 +200,9 @@ static int uimage_copy(struct uimage *u, const char __user *user, const char *ke
         }
     }
     uwin_close(&w);
+    if (u->used == 0) {
+        u->execfn = start;
+    }
     u->used += len;
     return 0;
 }
@@ -272,7 +275,7 @@ static uint32_t uimage_random_at(const struct uimage *u)
 
 /**
  * Place the information block below the strings, and take the frames it
- * needs, before the old image is destroyed.
+ * needs.
  *
  * Below the strings go the 16 bytes AT_RANDOM points at, and below them
  * argc, the argv pointers and their NULL, the envp pointers and theirs, and
@@ -325,13 +328,15 @@ static int uimage_next(struct uwin *w, uint32_t *str)
  * argc, the pointers to the `argc` strings of argv and then the `envc` of
  * the environment, each array ending in NULL, and the auxiliary vector
  * (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_PAGESZ, AT_CLKTCK 100,
- * AT_SECURE, AT_RANDOM and AT_NULL). The pointers are found by walking the
+ * AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID, AT_GID, AT_EGID, AT_EXECFN
+ * and AT_NULL), which a dynamic linker reads to find itself and the program
+ * it loads. The pointers are found by walking the
  * strings from the lowest, which is argv[0], as Linux's `create_elf_tables`
  * finds them; the walk stops before any string above the environment, such
  * as the program's path. 0, or -1 when no temporary mapping was free.
  */
 int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image_t *img,
-                 const uint8_t random16[16], int secure)
+                 const uint8_t random16[16], const struct uimage_aux *ids)
 {
     struct uwin out;
     struct uwin in;
@@ -355,11 +360,23 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     aux[10] = AT_CLKTCK;
     aux[11] = 100;
     aux[12] = AT_SECURE;
-    aux[13] = secure ? 1u : 0u;
+    aux[13] = ids->secure ? 1u : 0u;
     aux[14] = AT_RANDOM;
     aux[15] = random_at;
-    aux[16] = AT_NULL;
-    aux[17] = 0;
+    aux[16] = AT_BASE;
+    aux[17] = ids->base;
+    aux[18] = AT_UID;
+    aux[19] = ids->uid;
+    aux[20] = AT_EUID;
+    aux[21] = ids->euid;
+    aux[22] = AT_GID;
+    aux[23] = ids->gid;
+    aux[24] = AT_EGID;
+    aux[25] = ids->egid;
+    aux[26] = AT_EXECFN;
+    aux[27] = u->execfn;
+    aux[28] = AT_NULL;
+    aux[29] = 0;
 
     uwin_open(&out, u);
     uwin_open(&in, u);

@@ -19,14 +19,13 @@ struct page_dir;
  * The initial stack of a new image while execve builds it, which Linux calls
  * the argument pages of its `linux_binprm`.
  *
- * The pages are user frames taken for the new image before the old one is
- * destroyed. The strings are copied into them from the top of the stack
+ * The pages are user frames taken for the new image while the old one
+ * still runs. The strings are copied into them from the top of the stack
  * down, as Linux copies them: the program's path, the environment from its
- * last string, and argv from its last string, so argv[0] is the lowest. A
- * refusal can therefore still be returned to the caller. Once the image is
- * loaded, the pointer arrays and the auxiliary vector are written below the
- * strings and the frames are mapped where the stack is. `frames[i]` backs
- * the page `i` pages below `top`.
+ * last string, and argv from its last string, so argv[0] is the lowest. Once
+ * the image is loaded, the pointer arrays and the auxiliary vector are
+ * written below the strings and the frames are mapped where the stack is.
+ * `frames[i]` backs the page `i` pages below `top`.
  */
 struct uimage {
     uintptr_t *frames; /* `cap` entries, in the heap */
@@ -35,6 +34,7 @@ struct uimage {
     uint32_t given;   /* frames a page directory has taken over */
     uint32_t top;     /* the address just past the stack */
     uint32_t used;    /* bytes of strings below `top` */
+    uint32_t execfn;  /* the first string, the program's path: AT_EXECFN */
     uint32_t room;    /* bytes the strings may take */
     uint32_t esp;     /* the entry stack pointer, once placed */
 };
@@ -64,10 +64,22 @@ int uimage_drop_first(struct uimage *u);
  * take the frames it needs; 0, -E2BIG, -ENOMEM. */
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc);
 
+/* What the auxiliary vector says beside the program's image: where the
+ * interpreter was loaded (AT_BASE, 0 without one), the ids the image runs
+ * with, and AT_SECURE. */
+struct uimage_aux {
+    uint32_t base;
+    uint32_t uid;
+    uint32_t euid;
+    uint32_t gid;
+    uint32_t egid;
+    int secure;
+};
+
 /** Write the pointers, AT_RANDOM's bytes and the auxiliary vector; 0, or -1
- * when no temporary mapping was free. `secure` is AT_SECURE. */
+ * when no temporary mapping was free. */
 int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image_t *img,
-                 const uint8_t random16[16], int secure);
+                 const uint8_t random16[16], const struct uimage_aux *aux);
 
 /** Map every frame into `dir` where the stack is; 0, or -1 for a page table
  * that could not be had. The mapped frames belong to `dir` from then on. */

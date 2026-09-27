@@ -90,6 +90,14 @@ void vfs_cwd_clear(process_t *p)
     cwd_released = 1;
 }
 
+static int vfork_released;
+
+void proc_vfork_release(process_t *p)
+{
+    CHECK(p == &child && closed && cwd_released, "a vfork parent runs after the files go");
+    vfork_released++;
+}
+
 void reparent_children(uint32_t pid)
 {
     CHECK(pid == child.pid && closed && cwd_released, "children are adopted after cleanup");
@@ -122,7 +130,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     fd_wait = files;
     cwd_wait = directory;
     with_parent = has_parent;
-    closed = cwd_released = adopted = notified = switches = 0;
+    closed = cwd_released = adopted = notified = switches = vfork_released = 0;
     child.pid = 42;
     child.parent_pid = 7;
     child.state = PROC_RUNNING;
@@ -141,6 +149,7 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     CHECK(child.exit_code == status, "the encoded wait status is preserved");
     CHECK(child.in_syscall, "remaining teardown cannot be preempted");
     CHECK(notified == has_parent, "the parent is notified once");
+    CHECK(vfork_released == 1, "a vfork parent is let go once");
     CHECK(parent.state == (has_parent ? PROC_READY : PROC_BLOCKED),
           "a blocked parent becomes ready");
     CHECK(!wq_active(&lock_wait), "cleanup leaves no waiter");

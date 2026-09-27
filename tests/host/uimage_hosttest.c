@@ -264,12 +264,26 @@ static void random_bytes(uint8_t rnd[16])
     }
 }
 
-/** Check the auxiliary vector at `va` against `img`, `rnd` and `secure`,
- * in the order the stack has it. */
-static void check_auxv(uint32_t va, const elf_image_t *img, const uint8_t rnd[16], int secure)
+/** The interpreter's base, the ids and AT_SECURE for the auxiliary vector:
+ * a set-user-id image when `secure`. */
+static void aux_ids(struct uimage_aux *aux, int secure)
+{
+    aux->base = 0xAFF00000u;
+    aux->uid = 1000u;
+    aux->euid = secure ? 0u : 1000u;
+    aux->gid = 100u;
+    aux->egid = 100u;
+    aux->secure = secure;
+}
+
+/** Check the auxiliary vector at `va` against `img`, `rnd`, `aux` and the
+ * program's `path`, in the order the stack has it. */
+static void check_auxv(uint32_t va, const elf_image_t *img, const uint8_t rnd[16],
+                       const struct uimage_aux *aux, const char *path)
 {
     uint32_t want[15];
     uint32_t rnd_at = word(va + 60u);
+    int secure = aux->secure;
     int i;
 
     want[0] = AT_PHDR;
@@ -291,7 +305,24 @@ static void check_auxv(uint32_t va, const elf_image_t *img, const uint8_t rnd[16
         CHECK(word(va + 4u * (uint32_t)i) == want[i],
               "the auxiliary vector has the entries execve gives");
     }
-    CHECK(word(va + 64u) == AT_NULL && word(va + 68u) == 0, "the auxiliary vector ends in AT_NULL");
+    want[0] = AT_BASE;
+    want[1] = aux->base;
+    want[2] = AT_UID;
+    want[3] = aux->uid;
+    want[4] = AT_EUID;
+    want[5] = aux->euid;
+    want[6] = AT_GID;
+    want[7] = aux->gid;
+    want[8] = AT_EGID;
+    want[9] = aux->egid;
+    want[10] = AT_EXECFN;
+    for (i = 0; i < 11; i++) {
+        CHECK(word(va + 64u + 4u * (uint32_t)i) == want[i],
+              "the auxiliary vector has the interpreter's base and the ids");
+    }
+    CHECK(str_is(word(va + 108u), path), "AT_EXECFN points at the program's path");
+    CHECK(word(va + 112u) == AT_NULL && word(va + 116u) == 0,
+          "the auxiliary vector ends in AT_NULL");
     CHECK((rnd_at & 15u) == 0, "AT_RANDOM is aligned to 16 bytes");
     for (i = 0; i < 16; i++) {
         uint8_t *p = at(rnd_at + (uint32_t)i);
@@ -324,16 +355,18 @@ static void row_one_page(void)
     struct uimage u;
     elf_image_t img;
     uint8_t rnd[16];
+    struct uimage_aux aux;
     uint32_t esp;
     uint32_t va;
     int zero = 1;
 
     image(&img);
     random_bytes(rnd);
+    aux_ids(&aux, 0);
     CHECK(uimage_start(&u, TOP, 8u * MIB, 2, 2) == 0, "one page: the stack is started");
     CHECK(push_all(&u, "/bin/prog", argv, 2, envp, 2) == 0, "one page: the strings are pushed");
     CHECK(uimage_place(&u, 2, 2) == 0, "one page: the information block is placed");
-    CHECK(uimage_write(&u, 2, 2, &img, rnd, 0) == 0, "one page: the stack is written");
+    CHECK(uimage_write(&u, 2, 2, &img, rnd, &aux) == 0, "one page: the stack is written");
     CHECK(uimage_map(&u, &dir) == 0, "one page: the stack is mapped");
     esp = u.esp;
     CHECK(u.nframes == 1 && uimage_bottom(&u) == TOP - PAGE_SIZE,
@@ -349,7 +382,7 @@ static void row_one_page(void)
     CHECK(str_is(word(esp + 16u), "PATH=/bin") && str_is(word(esp + 20u), "HOME=/"),
           "one page: envp points at its strings");
     CHECK(word(esp + 24u) == 0, "one page: envp ends in NULL");
-    check_auxv(esp + 28u, &img, rnd, 0);
+    check_auxv(esp + 28u, &img, rnd, &aux, "/bin/prog");
     CHECK(str_is(TOP - 10u, "/bin/prog"), "one page: the path is at the top");
     for (va = TOP - PAGE_SIZE; va < esp; va++) {
         uint8_t *p = at(va);
@@ -371,6 +404,7 @@ static void row_many_pages(void)
     struct uimage u;
     elf_image_t img;
     uint8_t rnd[16];
+    struct uimage_aux aux;
     uint32_t i;
     int right = 1;
 
@@ -388,10 +422,11 @@ static void row_many_pages(void)
     envp[0] = env;
     image(&img);
     random_bytes(rnd);
+    aux_ids(&aux, 0);
     CHECK(uimage_start(&u, TOP, 8u * MIB, 3000, 1) == 0, "many pages: the stack is started");
     CHECK(push_all(&u, "/p", argv, 3000, envp, 1) == 0, "many pages: the strings are pushed");
     CHECK(uimage_place(&u, 3000, 1) == 0, "many pages: the information block is placed");
-    CHECK(uimage_write(&u, 3000, 1, &img, rnd, 0) == 0, "many pages: the stack is written");
+    CHECK(uimage_write(&u, 3000, 1, &img, rnd, &aux) == 0, "many pages: the stack is written");
     CHECK(uimage_map(&u, &dir) == 0, "many pages: the stack is mapped");
     CHECK(u.nframes == (TOP - u.esp + PAGE_SIZE - 1u) / PAGE_SIZE && u.nframes > 5,
           "many pages: the frames cover the stack");
@@ -409,7 +444,7 @@ static void row_many_pages(void)
     CHECK(word(u.esp + 4u * 3001u) == 0 && str_is(word(u.esp + 4u * 3002u), env) &&
               word(u.esp + 4u * 3003u) == 0,
           "many pages: envp points at its string and ends in NULL");
-    check_auxv(u.esp + 4u * 3004u, &img, rnd, 0);
+    check_auxv(u.esp + 4u * 3004u, &img, rnd, &aux, "/p");
     uimage_release(&u);
     end_row("many pages: every frame is mapped or given back");
 }
@@ -502,12 +537,14 @@ static void row_script(void)
     struct uimage u;
     elf_image_t img;
     uint8_t rnd[16];
+    struct uimage_aux aux;
     uint32_t used;
     uint32_t i;
     int cleared = 1;
 
     image(&img);
     random_bytes(rnd);
+    aux_ids(&aux, 1);
     CHECK(uimage_start(&u, TOP, 8u * MIB, 2, 1) == 0, "script: the stack is started");
     CHECK(push_all(&u, "/s/script", argv, 2, envp, 1) == 0, "script: the strings are pushed");
     used = u.used;
@@ -519,7 +556,7 @@ static void row_script(void)
     CHECK(uimage_push(&u, "/s/script") == 0 && uimage_push(&u, "-e") == 0 &&
               uimage_push(&u, "/bin/sh") == 0,
           "script: the interpreter's strings are taken");
-    CHECK(uimage_place(&u, 4, 1) == 0 && uimage_write(&u, 4, 1, &img, rnd, 1) == 0 &&
+    CHECK(uimage_place(&u, 4, 1) == 0 && uimage_write(&u, 4, 1, &img, rnd, &aux) == 0 &&
               uimage_map(&u, &dir) == 0,
           "script: the stack is built");
     CHECK(word(u.esp) == 4 && str_is(word(u.esp + 4u), "/bin/sh") &&
@@ -527,7 +564,7 @@ static void row_script(void)
               str_is(word(u.esp + 16u), "x") && word(u.esp + 20u) == 0,
           "script: argv is the interpreter, its argument, the script and the rest");
     CHECK(str_is(word(u.esp + 24u), "E=1") && word(u.esp + 28u) == 0, "script: envp is kept");
-    check_auxv(u.esp + 32u, &img, rnd, 1);
+    check_auxv(u.esp + 32u, &img, rnd, &aux, "/s/script");
     uimage_release(&u);
     end_row("script: every frame is mapped or given back");
 }
@@ -540,9 +577,11 @@ static void row_failures(void)
     struct uimage u;
     elf_image_t img;
     uint8_t rnd[16];
+    struct uimage_aux aux;
 
     image(&img);
     random_bytes(rnd);
+    aux_ids(&aux, 0);
     k_memset(s, 'f', sizeof(s) - 1u);
     s[sizeof(s) - 1u] = '\0';
     CHECK(uimage_start(&u, TOP, 8u * MIB, 1, 0) == 0, "failures: the stack is started");
@@ -553,7 +592,7 @@ static void row_failures(void)
     CHECK(uimage_push_user(&u, s) == 0 && uimage_place(&u, 1, 0) == 0,
           "failures: the string is taken once frames are there");
     kmap_fails = 1;
-    CHECK(uimage_write(&u, 1, 0, &img, rnd, 0) == -1,
+    CHECK(uimage_write(&u, 1, 0, &img, rnd, &aux) == -1,
           "failures: a write without a temporary mapping is -1");
     kmap_fails = 0;
     maps_left = 2;

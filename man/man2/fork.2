@@ -47,21 +47,30 @@ including the parent.
 A parent with real user ID 0 is exempt.
 .Pp
 .Fn vfork
-uses the same kernel handler as
-.Fn fork .
-Unlike Linux
-.Fn vfork ,
-it does not suspend the parent or share one address space with the child.
-The child has the same copy-on-write address space as a
-.Fn fork
-child.
+creates a child that shares the parent's address space instead of a copy
+of it, and the parent does not return from the call until the child calls
+.Xr execve 2
+or ends.
+Every store the child makes, on the stack included, is the parent's, so
+the child should do nothing else before one of the two.
+An
+.Xr execve 2
+that fails returns to the child, and the parent still waits.
+A signal to the parent does not end its wait, except
+.Dv SIGKILL ,
+after which the parent dies, as Linux's killable wait lets it.
+musl's and GNU libc's
+.Fn vfork
+make this call.
 .Pp
 .Fn clone ,
 number 120, creates a child the way
 .Fn fork
-does, in the form GNU libc's
+does, in the forms GNU libc's
 .Fn fork
-uses.
+and both C libraries'
+.Fn posix_spawn
+use.
 Its i386 arguments are, in order, the flags, a stack pointer for the
 child, the address of the parent's copy of the child's ID, a TLS
 descriptor, and the address of the child's copy.
@@ -69,10 +78,19 @@ The low byte of the flags, the signal the parent receives when the child
 exits, must be
 .Dv SIGCHLD .
 The flags may also contain
+.Dv CLONE_VM ,
+which gives the child the parent's address space itself, so a store, a
+mapping or a
+.Xr brk 2
+by either is seen by both;
+.Dv CLONE_VFORK ,
+which makes the parent wait as the parent of
+.Fn vfork
+waits;
 .Dv CLONE_PARENT_SETTID ,
 which stores the child's ID at
 .Fa parent_tid
-in the parent's memory;
+in the parent's memory before the child runs;
 .Dv CLONE_CHILD_SETTID ,
 which stores it at
 .Fa child_tid
@@ -91,8 +109,8 @@ A failed store is ignored, as on Linux.
 A nonzero
 .Fa stack
 is the stack pointer the child returns to user mode with.
-Every other flag, including those that share memory, files or signal
-handlers, and every other exit signal is refused.
+Every other flag, including those that share files or signal handlers or
+make a thread, and every other exit signal is refused.
 .Pp
 The i386 system call numbers are 2 for
 .Fn fork ,
@@ -112,6 +130,20 @@ creates a child that exits with status 42, waits for it, and checks for a
 normal exit with that status.
 .Pa tests/ofdprobe.c
 checks that a child advances the file offset seen by its parent.
+.Pa tests/musl/vforkmusl.c
+checks that a child made with
+.Dv CLONE_VM
+and
+.Dv CLONE_VFORK
+stores into the parent's memory before the parent runs again, that its
+.Xr execve 2
+leaves the parent's memory whole, that a failed one returns to the child,
+and that
+.Fn vfork ,
+.Fn system
+and
+.Fn popen
+run their children.
 .Sh ERRORS
 .Bl -tag -width "[ENOMEM]"
 .It Bq Er EINVAL

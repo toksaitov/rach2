@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prove the three exit callers and their prohibition on waits after publication.
+# Prove the two exit callers and their prohibition on waits after publication.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -85,7 +85,6 @@ run_row()
         case $row in
             normal) set -- "expect=EXITPROBE FAIL $row: reap or release" ;;
             signal) set -- 'expect=panic: stopped: a dying process was scheduled again' ;;
-            exec) set -- "expect=Type 'help' for available commands" ;;
         esac
     fi
     build/tests/system/runutil group build/tests/system/harness \
@@ -102,10 +101,6 @@ run_row()
     stop_child
     cat "$work/$phase.$row.log" "$work/$phase.$row.serial.log"
     grep -F "exitprobe: waiting: $row" "$work/$phase.$row.serial.log" >/dev/null
-    if [ "$row" = exec ]; then
-        grep -F 'the image was destroyed and step 1 failed' \
-            "$work/$phase.$row.serial.log" >/dev/null
-    fi
     if [ "$expected" = pass ]; then
         [ "$status" -eq 0 ] || exit 1
         grep -F 'exited with status 0, returning to kernel shell' \
@@ -120,9 +115,6 @@ run_row()
         elif [ "$row" = signal ] && grep -F 'panic: stopped: a dying process was scheduled again' \
             "$work/$phase.$row.serial.log" >/dev/null; then
             detail='dying process resumed'
-        elif [ "$row" = exec ] && \
-            [ "$(grep -Fc "Type 'help' for available commands" "$work/$phase.$row.serial.log")" -eq 2 ]; then
-            detail='returned to shell before reap'
         else
             echo "exit-integration: unexpected failure: $phase $row" >&2; exit 1
         fi
@@ -180,7 +172,7 @@ for row in normal signal exec; do
     : >"$work/fixed.$row.passed"
 done
 for fault in remove wait; do
-    for row in normal signal exec; do
+    for row in normal signal; do
         [ ! -f "$work/$row-$fault.passed" ] || continue
         changed=1
         python3 - "$row" "$fault" <<'PY'
@@ -191,7 +183,6 @@ row, fault = sys.argv[1:]
 path, call = {
     'normal': ('rach2/sys/syscall_proc.c', 'proc_exit_cleanup((status & 0xFF) << 8);'),
     'signal': ('rach2/kernel.c', 'proc_exit_cleanup(signo & 0x7F);'),
-    'exec': ('rach2/sys/syscall_proc.c', 'proc_exit_cleanup(SIGKILL & 0x7F);'),
 }[row]
 path = Path(path)
 source = path.read_text()
@@ -244,4 +235,4 @@ PY
         : >"$work/$row-$fault.passed"
     done
 done
-echo 'exit-integration: result: pass, six compiled faults failed their rows; six restored kernels matched and passed'
+echo 'exit-integration: result: pass, four compiled faults failed their rows; four restored kernels matched and passed'

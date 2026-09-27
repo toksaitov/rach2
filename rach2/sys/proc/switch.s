@@ -17,8 +17,8 @@
 .set PROC_KERNEL_STACK, 56 # offset of kernel_stack
 .set PROC_TLS_BASE, 148    # offset of tls_base, after the descriptor table's
                            # pointer, count and limit, the cwd and in_syscall
-.set PROC_PAGE_DIR, 2112   # offset of page_dir, the directory cr3 names, after
-                           # the 512-byte floating-point area at 1600
+.set PROC_PAGE_DIR, 2096   # offset of page_dir, the directory cr3 names, after
+                           # the 512-byte floating-point area at 1584
 
 # Shared TLS GDT descriptor (mirrors GDT_TLS_ENTRY / GDT_TLS_SELECTOR in
 # tables/gdt.h): entry 6, so its 8-byte descriptor lives at gdt_descriptors+48;

@@ -1,5 +1,6 @@
 /**
- * Reap children through all three production death paths.
+ * Reap children that end by exit, by a signal, and by exit after an exec
+ * that failed once the program's header had been accepted.
  *
  * Each victim observes its parent blocked in waitpid before dying. The parent
  * checks the encoded status, pipe EOF and removal of the process record. A
@@ -110,8 +111,9 @@ static void wait_parent(int parent)
 
 /**
  * Keep a pipe writer, an unlinked file and a working directory until death.
- * The truncated ELF passes the initial header check but fails its program
- * header read after execve has destroyed the old image.
+ * The truncated ELF passes the header check but has no program headers, so
+ * execve fails while it loads the image, which it builds before it gives up
+ * the old one, and returns ENOEXEC to the victim, which then exits.
  */
 static void victim(int mode, int parent, int report, int reader)
 {
@@ -130,8 +132,8 @@ static void victim(int mode, int parent, int report, int reader)
         die(37);
     } else if (mode == 1) {
         call(SYS_KILL, call(SYS_GETPID, 0, 0, 0), 15, 0);
-    } else {
-        call(SYS_EXECVE, (int)args[0], (int)args, 0);
+    } else if (call(SYS_EXECVE, (int)args[0], (int)args, 0) == -8) {
+        die(38);
     }
     die(91);
 }
@@ -141,7 +143,7 @@ static void reaper(int mode, int report)
 {
     int fds[2], parent, pid, status = -1, ok, fd;
     char byte = 0, path[40];
-    int expected = mode == 0 ? 37 << 8 : (mode == 1 ? 15 : 9);
+    int expected = mode == 0 ? 37 << 8 : (mode == 1 ? 15 : 38 << 8);
     if (call(SYS_PIPE, (int)fds, 0, 0) != 0 || call(SYS_FCNTL, fds[0], 4, 04000) != 0) {
         die(92);
     }

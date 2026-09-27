@@ -16,6 +16,7 @@
 #include "mouse.h"
 #include "proc/process.h"
 #include "proc/sched.h"
+#include "proc/wait_queue.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
@@ -65,6 +66,7 @@
 #include "network/netconf.h" /* net_ip_addr for getsockname */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 #include "mm/filemap.h"
+#include "mm/mm.h"
 #include "fs/tmpfs.h"
 #include "fs/devfs.h"
 #include "syscall_internal.h"
@@ -202,10 +204,7 @@ static void proc_end_others(void)
                 continue;
             }
             if (p->state == PROC_ZOMBIE) {
-                if (p->cr3 != 0) {
-                    free_user_pages(p->page_dir);
-                    free_page_directory(p->page_dir);
-                }
+                mm_drop(p);
                 kstack_free(p->kernel_stack);
                 free_process(p);
                 continue;
@@ -321,19 +320,11 @@ int32_t sys_exit(isr_params_t *params)
              status);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
-        /* Clean up the init process resources. Switch off its address space
-         * BEFORE freeing the page directory: free_page_directory refuses to
-         * free whatever CR3 currently points at, so freeing while still loaded
-         * would leak the directory and its private page tables. */
-        if (current_proc->cr3 != 0) {
-            page_dir_t *init_dir;
-            init_dir = current_proc->page_dir;
-            free_user_pages(init_dir);
-            switch_page_directory(_kernel_dir);
-            free_page_directory(init_dir);
-        } else {
-            switch_page_directory(_kernel_dir);
-        }
+        /* Clean up the init process resources; `mm_drop` switches off the
+         * address space first, since free_page_directory refuses the
+         * directory in CR3. */
+        mm_drop(current_proc);
+        switch_page_directory(_kernel_dir);
         /* Freed and replaced with interrupts off: a handler between the two
          * would count its entry in the record just freed. */
         __asm__ __volatile__("cli");
@@ -372,7 +363,8 @@ int32_t sys_exit(isr_params_t *params)
 }
 
 /**
- * Duplicate the parent's user address space into the child, copy-on-write.
+ * Duplicate the parent's user address space `from`, the one in use, into
+ * the child's directory, copy-on-write.
  *
  * Iterates the parent's page directory and, for each present user page, maps
  * the SAME physical frame into the child (bumping the frame refcount) rather
@@ -380,22 +372,11 @@ int32_t sys_exit(isr_params_t *params)
  * both directories so the first write faults into cow_fault for a private
  * copy. Returns 0 on success, -1 on failure.
  */
-static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
+static int copy_user_pages(struct mm *from, page_dir_t *child_dir)
 {
-    page_dir_t *parent_dir;
+    page_dir_t *parent_dir = from->dir;
     uint32_t dir_idx, page_idx;
     page_table_t *parent_table;
-
-    if (parent->cr3 == 0) {
-        parent_dir = _kernel_dir;
-    } else {
-        /* The directory's record is kept beside cr3, since a directory
-         * lives in the heap and its physical address says nothing about
-         * where the kernel reads it. The layout is
-         * logical_page_tables[1024] then phys_page_tables[1024], so the offset
-         * is 1024 * sizeof(page_table_t*) = 4096 bytes. */
-        parent_dir = parent->page_dir;
-    }
 
     for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
         parent_table = parent_dir->logical_page_tables[dir_idx];
@@ -424,7 +405,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             /* A page of a shared region is the same frame in the child, with
              * the same rights: a store on either side is seen by both. */
             {
-                vma_t *r = vm_find(&parent->vm, virt_addr);
+                vma_t *r = vm_find(&from->vm, virt_addr);
 
                 if (r && r->type == VM_SHARED) {
                     if (map_user_frame(child_dir, virt_addr, parent_phys, pte & 0xFFFu) != 0) {
@@ -486,53 +467,63 @@ static void close_cloexec_fds(void)
     }
 }
 
-/* elf_read_fn over a KRFFS file (ctx is the path): lets the segment loader pull
- * the ELF header, program headers, and each PT_LOAD straight from the file. */
-static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
-{
-    const struct exec_krffs_ctx *c = ctx;
-
-    return krffs_read(c->name, (char *)dst, count, off);
-}
-
-/* A program on a mount that is not the root is read through the mount: the
- * node held from the resolution, opened once for the load and released
- * after it. It lives in the caller's own exec workspace below, because a
- * read of a mounted volume sleeps and a second exec runs while it does. */
-struct exec_vfs_ctx {
-    struct vfs_ref ref;
+/*
+ * A file execve reads: the program, a script's interpreter, or the dynamic
+ * linker a PT_INTERP names. One on the KRFFS root is read by its path; one
+ * on another mount through a handle on the node its resolution held, opened
+ * once and released after the load. It lives in the caller's own exec
+ * workspace below, because a read of a mounted volume sleeps and a second
+ * exec runs while it does.
+ */
+struct exec_file {
+    const char *path;   /* the path on the KRFFS root */
+    struct vfs_ref ref; /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
     int32_t err; /* the last failed read's errno, reported instead of ENOEXEC */
 };
 
-static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
-{
-    struct exec_vfs_ctx *c = ctx;
-    int32_t got = vfs_read(c->ref.mnt, c->handle, dst, count, off);
+/* What a program's set-id bits would do: the bits that apply, and the file
+ * owner's ids they would give. */
+struct exec_setid {
+    uint32_t mode;
+    uint32_t uid;
+    uint32_t gid;
+};
 
+/** An `elf_read_fn` over an `exec_file`. */
+static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    struct exec_file *f = ctx;
+    int32_t got;
+
+    if (f->ref.mnt == NULL) {
+        return krffs_read(f->path, (char *)dst, count, off);
+    }
+    got = vfs_read(f->ref.mnt, f->handle, dst, count, off);
     if (got < 0) {
-        c->err = got;
+        f->err = got;
         return -1;
     }
     return (int)got;
 }
 
-static void exec_vfs_done(struct exec_vfs_ctx *c)
+/** Release the handle and the node `f` holds on another mount, if any. */
+static void exec_file_close(struct exec_file *f)
 {
-    if (c->ref.mnt) {
-        vfs_release(c->ref.mnt, c->handle);
-        vfs_ref_release(&c->ref);
-        c->ref.mnt = NULL;
-        c->handle = NULL;
+    if (f->ref.mnt) {
+        vfs_release(f->ref.mnt, f->handle);
+        vfs_ref_release(&f->ref);
+        f->ref.mnt = NULL;
+        f->handle = NULL;
     }
 }
 
 /*
- * Where execve has the program's path and the new image's arguments while it
- * destroys the old image.
+ * Where execve has the program's path, the new image's arguments and the
+ * new image itself until it commits.
  *
  * Each call has a workspace of its own in the heap, which the caller's record
- * points at until the call ends, so `exec_fail_destroyed` can give it back
+ * points at until the call ends, so a record freed during one gives it back
  * too. It is not one for the machine: a program on a mounted volume is read
  * through the buffer cache, which sleeps, so a second execve runs while the
  * first is inside a read, and a shared workspace let the second overwrite the
@@ -541,23 +532,37 @@ static void exec_vfs_done(struct exec_vfs_ctx *c)
  * gives the processor up.
  *
  * The strings are in `args`, the pages of the new stack (`proc/uimage.h`),
- * taken before the old image is destroyed, so every limit on them is checked
- * while there is still a caller to return an error to.
+ * and the image is built in `mm`, an address space of its own, so every
+ * limit and every failure of the load is found while there is still a
+ * caller to return an error to.
  */
 
 /* A script's first line, read here to be parsed. */
 #define EXEC_SHEBANG_MAX 128
 
 struct exec_state {
-    struct exec_vfs_ctx vfs;
+    struct exec_file prog; /* the file being read */
+    struct exec_setid id;
     struct uimage args;
+    struct mm *mm; /* the new image's address space until it commits */
+    uint32_t argc;
+    uint32_t envc;
+    uint32_t euid; /* the ids the new image runs with */
+    uint32_t egid;
+    int secure;     /* AT_SECURE */
+    uint32_t entry; /* where the new image starts */
+    elf_layout_t layout;
+    elf_layout_t ilayout; /* the interpreter's */
+    elf_image_t img;
+    elf_image_t iimg; /* the interpreter's */
     char path[VFS_PATH_MAX];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
 };
 
 /** Give back the current process's exec workspace, if it has one: the
- * program held open, the frames of a stack no page directory took, and the
- * workspace itself. */
+ * file held open, the frames of a stack no page directory took, the
+ * address space of an image that did not commit, and the workspace
+ * itself. */
 static void exec_release(void)
 {
     struct exec_state *s = current_proc->exec_ws;
@@ -565,101 +570,11 @@ static void exec_release(void)
     if (s == NULL) {
         return;
     }
-    exec_vfs_done(&s->vfs);
+    exec_file_close(&s->prog);
     uimage_release(&s->args);
+    mm_put(s->mm);
     kfree(s);
     current_proc->exec_ws = NULL;
-}
-
-/**
- * Kill the current process after exec has destroyed its old address space.
- *
- * Past free_user_pages there is no image to return to, so a load/stack failure
- * cannot continue. Give back the exec workspace, which `sys_execve` never
- * sees again, mark the process a zombie, wake any parent waiting on it (so
- * the scheduler has a target), switch away, and never iret back into the
- * destroyed space.
- */
-static void __attribute__((noreturn)) exec_fail_destroyed(int where)
-{
-    /* The process cannot report this itself: its image is gone and its
-     * parent sees only a death by signal. The record says which step of
-     * the load failed, so a machine that dies here says why. */
-    page_dir_t *dir;
-    int was_init = (current_proc->pid == init_pid && init_pid != 0);
-
-    exec_release();
-    klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
-         (int)current_proc->pid, where);
-
-    /* If the console-owning session leader is the one whose exec failed,
-     * release the controlling terminal before zombifying so the timer-IRQ
-     * serial drain does not target this dead session during the teardown window
-     * (mirrors sys_exit; usually a no-op here because sys_execve already
-     * released before free_user_pages; kept as a defensive backstop). */
-    if (tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid)) {
-        tty_set_session(&console_tty, 0, 0);
-    }
-    /* A dying session leader also disassociates any pty slave it controlled, so
-     * a later session can claim the same /dev/pts/N. */
-    pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
-
-    proc_exit_cleanup(SIGKILL & 0x7F);
-
-    /* A real /sbin/init whose exec failed is a fatal init death; halt BEFORE
-     * schedule(), or a still-READY process would mask the panic and run on with
-     * a dead PID 1. Only when the debug shell is the supervisor does it return
-     * to the shell, below. */
-    if (was_init && !debug_shell_is_home) {
-        panic_init_died(current_proc->pid); /* never returns */
-    }
-
-    schedule();
-
-    /* schedule() returned -> nothing else is runnable. Reparenting guarantees
-     * every process has a live parent (init at worst), and a blocked parent was
-     * woken above, so the scheduler always has the parent as a target: this
-     * point is reached only for the init-role process itself, under the debug
-     * shell. */
-    if (current_proc->pid == init_pid) {
-        init_pid = 0;
-    }
-    /* Switch to the kernel directory BEFORE freeing the dead one, otherwise
-     * free_page_directory() refuses the still-active directory and leaks it. */
-    sched_disable();
-    switch_page_directory(_kernel_dir);
-    if (current_proc->cr3 != 0) {
-        dir = current_proc->page_dir;
-        free_user_pages(dir);
-        free_page_directory(dir);
-    }
-    /* Freed with interrupts off until the record is replaced below: a
-     * handler between the two would count its entry in the freed record. */
-    __asm__ __volatile__("cli");
-    free_process(current_proc);
-    current_proc = proc_idle;
-    current_proc->state = PROC_RUNNING;
-    /* Fresh command line + drop stdin-wait state before re-enabling IRQs. */
-    shell_reset_input();
-    /* Return to the debug shell only when it is the supervisor; on a normal
-     * boot (which the reasoning above makes unreachable here) halt rather than
-     * expose the shell. */
-    if (!debug_shell_is_home) {
-        for (;;) {
-            __asm__ __volatile__("cli; hlt");
-        }
-    }
-    __asm__ __volatile__("movl %0, %%esp\n\t"
-                         "sti\n\t"
-                         "jmp *%1\n\t"
-                         :
-                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL), "r"((uint32_t)shell_loop)
-                         : "memory");
-    /* The jmp above never falls through; this loop makes the noreturn
-     * contract visible to the compiler, which cannot know that. */
-    for (;;) {
-        __asm__ __volatile__("cli; hlt");
-    }
 }
 
 /**
@@ -816,15 +731,15 @@ static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
 
 /**
  * How far below its top page the stack of a new image may grow, when the
- * pages its arguments took start at `bottom`: to the soft RLIMIT_STACK in
- * force at the exec, in whole pages, which bounds the whole stack as Linux's
- * does, but never into the range below VM_MMAP_BASE where anonymous mappings
- * are placed, and always as far as `bottom`. A limit changed later applies at
- * the next exec.
+ * pages its arguments took start at `bottom`: to `limit`, the soft
+ * RLIMIT_STACK in force at the exec, in whole pages, which bounds the whole
+ * stack as Linux's does, but never into the range below VM_MMAP_BASE where
+ * anonymous mappings are placed, and always as far as `bottom`. A limit
+ * changed later applies at the next exec.
  */
-static uint32_t exec_stack_window(uint32_t bottom)
+static uint32_t exec_stack_window(uint32_t bottom, uint32_t limit)
 {
-    uint32_t size = current_proc->rlim[RLIM_STACK].cur & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t size = limit & ~(uint32_t)(PAGE_SIZE - 1);
     uint32_t floor;
 
     if (size > USER_ADDR_MAX - VM_MMAP_BASE) {
@@ -938,457 +853,354 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
 }
 
 /**
- * Replace the current process image with a new program, in the workspace
- * `s`; the body of `sys_execve`.
+ * Open the file at the absolute, canonical `path` into `f` for execve to
+ * read, and when `id` is not NULL, say in it what the file's set-id bits
+ * would do.
  *
- * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success.
- * Resolves the path and checks the execute right, copies the path, argv and
- * envp onto the new stack's pages, resolves a `#!` script to its
- * interpreter, validates the ELF header and places the stack's information
- * block, all BEFORE tearing the old image down, so a refusal leaves the
- * caller intact; then frees the old user pages, streams the new program in,
- * writes and maps the SysV/i386 initial stack, and redirects the iret frame
- * to the entry point. A failure after the old image is gone, a segment that
- * does not load, routes to exec_fail_destroyed, which ends the process.
+ * The walk may not arrive on the synthetic /dev and /proc mounts, which
+ * hold no programs, so execve sees the mount boundary open sees and cannot
+ * reach a file a hostile image placed below the synthetic prefix; a mount
+ * with MS_NOEXEC holds none either. The caller needs the execute right,
+ * root too. The set-id facts are taken while the node is at hand and apply
+ * only once the exec commits. Setgid counts only with the group-execute
+ * bit beside it, which is Linux's rule: without it a 02700 file owned
+ * 1000:0 passes the execute check on its owner bits, since the check judges
+ * one identity class and the owner's first, and would hand its executor
+ * egid 0. Setgid without group-execute is the mark of mandatory locking in
+ * Unix, which nothing here implements. On a mount with MS_NOSUID the bits
+ * are read and ignored. 0 or a negative errno.
  */
-static int32_t exec_run(isr_params_t *params, struct exec_state *s)
+static int32_t exec_open(struct exec_file *f, const char *path, struct exec_setid *id)
 {
-    const char __user *user_path = (const char __user *)params->ebx;
-    char *const __user *user_argv = (char *const __user *)params->ecx;
-    char *const __user *user_envp = (char *const __user *)params->edx;
-    struct exec_krffs_ctx kctx;
+    struct vfs_ref ref;
+    struct vfs_stat vst;
+    int nosuid;
+    int32_t rc;
 
-    uint32_t argc = 0;
-    uint32_t envc = 0;
-    int owned_console = 0;
-    uint32_t setid_mode = 0;
-    uint32_t file_uid = 0;
-    uint32_t file_gid = 0;
-    int secure = 0;
-    uint32_t old_euid;
-    uint32_t old_egid;
-    uint32_t entry_point;
-    int32_t err;
-
-    elf_image_t img;
-    uint8_t random16[16];
-    page_dir_t *proc_dir;
-    const char *name;
-    int len;
-
-    /* Resolve the program path (relative names against the cwd) into the
-     * workspace. A bad user pointer, an over-long path, or an empty path is
-     * rejected by the return value, so a kernel-range pointer cannot leak
-     * kernel memory. The buffer is VFS_PATH_MAX bytes (NUL included). */
-    if (!user_path) {
-        return -EFAULT;
+    f->path = path;
+    f->ref.mnt = NULL;
+    f->handle = NULL;
+    f->err = 0;
+    rc = vfs_resolve(0, path + (path[0] == '/'), VFS_WALK_LOCK, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
     }
-    len = copy_path_cwd(s->path, sizeof(s->path), user_path);
-    if (len < 0) {
-        return len;
-    }
+    nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
+    if (vfs_synth_vpath(ref.mnt, ref.node) || (ref.mnt->flags & VFS_MS_NOEXEC)) {
+        rc = -EACCES;
+    } else if (mnt_is_root(ref.mnt)) {
+        const krffs_node_t *node = ref.node;
 
-    name = s->path;
-
-    kctx.name = name;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    /* The synthetic /dev and /proc mounts hold no executables: the walk
-     * arriving on one is refused, so execve sees the same mount boundary as
-     * open and cannot reach a file a hostile image placed below the
-     * synthetic prefix. */
-    {
-        struct vfs_ref xref;
-        krffs_node_t *prog;
-        int32_t rc;
-
-        rc = vfs_resolve(0, name, VFS_WALK_LOCK, &xref, 0, 0);
-        if (rc != 0) {
-            return rc; /* missing, not-a-dir, or a denied ancestor */
-        }
-        if (vfs_synth_vpath(xref.mnt, xref.node)) {
-            vfs_walk_unlock(xref.mnt);
-            vfs_ref_release(&xref);
-            return -EACCES;
-        }
-        /* MS_NOEXEC is enforced here. */
-        if (xref.mnt->flags & VFS_MS_NOEXEC) {
-            vfs_walk_unlock(xref.mnt);
-            vfs_ref_release(&xref);
-            return -EACCES;
-        }
-        if (!mnt_is_root(xref.mnt)) {
-            /* A program on another type: its attributes decide the execute
-             * right and the set-id facts; the image is read through the
-             * mount below. */
-            struct vfs_stat vst;
-
-            rc = (int)cred_access_ref(&xref, CRED_X, 0);
-            if (rc == 0) {
-                rc = vfs_getattr(xref.mnt, xref.node, &vst);
-            }
-            if (rc != 0) {
-                vfs_walk_unlock(xref.mnt);
-                vfs_ref_release(&xref);
-                return rc;
-            }
-            setid_mode = vst.mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID);
-            if (!(vst.mode & 010u)) {
-                setid_mode &=
-                    ~KRFFS_MODE_SGID; /* set-gid without group execute is mandatory locking */
-            }
-            if (xref.mnt->flags & VFS_MS_NOSUID) {
-                setid_mode = 0;
-            }
-            file_uid = vst.uid;
-            file_gid = vst.gid;
-            s->vfs.ref = xref; /* held until the image is loaded or refused */
-            s->vfs.err = 0;
-            rc = vfs_open_node(xref.mnt, xref.node, 0, &s->vfs.handle);
-            vfs_walk_unlock(xref.mnt);
-            if (rc != 0) {
-                vfs_ref_release(&s->vfs.ref);
-                s->vfs.ref.mnt = NULL;
-                return rc;
-            }
-            goto checked;
-        }
-        prog = xref.node;
-        rc = cred_access_node(prog, CRED_X, 0);
-        if (rc != 0) {
-            vfs_walk_unlock(xref.mnt);
-            vfs_ref_release(&xref);
-            return rc; /* the execute bit, for root too */
-        }
-        /* Capture the set-id facts while the node is at hand; they apply only
-         * once the exec commits, so a rejected image changes nothing. The
-         * root node cannot reach here (a directory fails the execute check),
-         * so the dirty flag can never read as a set-id bit.
-         *
-         * Setgid is honored only when the group-execute bit is set with it,
-         * which is Linux's rule. Without that condition a 02700 file owned
-         * 1000:0 passes the execute check on its OWNER bits, since the access
-         * check judges one identity class and the owner's first, and then hands
-         * its executor egid 0. The mode needs no write to appear either: an
-         * owner may chmod any 07777 onto their own file. Setgid without
-         * group-execute means something else in Unix (the mandatory-locking
-         * mark), and nothing here implements that: the lock family is advisory
-         * and always granted. */
-        setid_mode = (uint32_t)(prog->mode & KRFFS_MODE_SUID);
-        if ((prog->mode & KRFFS_MODE_SGID) && (prog->mode & 0010u)) {
-            setid_mode |= KRFFS_MODE_SGID;
-        }
-        /* MS_NOSUID: the bits are read and then ignored. */
-        if (xref.mnt->flags & VFS_MS_NOSUID) {
-            setid_mode = 0;
-        }
-        file_uid = prog->uid;
-        file_gid = prog->gid;
-        vfs_walk_unlock(xref.mnt);
-        vfs_ref_release(&xref);
-    }
-checked:
-
-    err = exec_copy_args(s, user_path, user_argv, user_envp, &argc, &envc);
-    if (err != 0) {
-        return err;
-    }
-
-    if (current_proc->cr3 == 0) {
-        proc_dir = _kernel_dir;
+        rc = cred_access_node(node, CRED_X, 0);
+        vst.mode = node->mode;
+        vst.uid = node->uid;
+        vst.gid = node->gid;
     } else {
-        proc_dir = current_proc->page_dir;
-    }
-
-    /* The ELF header is validated before the old image is torn down, so the
-     * common "not a valid executable" failure leaves the calling process
-     * intact. A file that is not an ELF may still be a script naming its
-     * interpreter, which is checked here as the script was. */
-    {
-        Elf32_Ehdr ehdr;
-
-        int script = 0;
-
-        if (s->vfs.ref.mnt) {
-            /* On another type the image is read through its mount; a
-             * script there is read the same way, and its interpreter is
-             * resolved below as any program is. */
-            if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                int32_t sb =
-                    s->vfs.err ? s->vfs.err : exec_shebang(s, &argc, exec_vfs_read, &s->vfs);
-
-                exec_vfs_done(&s->vfs);
-                if (sb < 0) {
-                    return sb;
-                }
-                if (sb == 0) {
-                    return -ENOEXEC;
-                }
-                script = 1;
-            }
-        } else if (exec_krffs_read(&kctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                   !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-            struct exec_krffs_ctx sctx;
-            int32_t sb;
-
-            sctx.name = s->path + (s->path[0] == '/' ? 1 : 0);
-            sb = exec_shebang(s, &argc, exec_krffs_read, &sctx);
-
-            if (sb < 0) {
-                return sb;
-            }
-            if (sb == 0) {
-                return -ENOEXEC;
-            }
-            script = 1;
+        rc = cred_access_ref(&ref, CRED_X, 0);
+        if (rc == 0) {
+            rc = vfs_getattr(ref.mnt, ref.node, &vst);
         }
-        if (script) {
-            /* A set-id script runs as its invoker. The interpreter is what
-             * actually runs, it is not set-id, and honouring the script's bits
-             * is a hole Unix closed long ago: the interpreter can be made to
-             * read a different file than the one whose bits were checked. */
-            setid_mode = 0;
-            file_uid = 0;
-            file_gid = 0;
-
-            name = s->path;
-
-            kctx.name = name;
-            if (name[0] == '/') {
-                name++;
-            }
-            {
-                struct vfs_ref iref;
-                int32_t rc;
-
-                rc = vfs_resolve(0, name, VFS_WALK_LOCK, &iref, 0, 0);
-                if (rc != 0) {
-                    return rc;
-                }
-                if (vfs_synth_vpath(iref.mnt, iref.node) || (iref.mnt->flags & VFS_MS_NOEXEC)) {
-                    vfs_walk_unlock(iref.mnt);
-                    vfs_ref_release(&iref);
-                    return -EACCES;
-                }
-                if (!mnt_is_root(iref.mnt)) {
-                    /* An interpreter on another type loads through its
-                     * mount, as a program there does. */
-                    rc = cred_access_ref(&iref, CRED_X, 0);
-                    if (rc != 0) {
-                        vfs_walk_unlock(iref.mnt);
-                        vfs_ref_release(&iref);
-                        return rc;
-                    }
-                    s->vfs.ref = iref;
-                    s->vfs.err = 0;
-                    rc = vfs_open_node(iref.mnt, iref.node, 0, &s->vfs.handle);
-                    vfs_walk_unlock(iref.mnt);
-                    if (rc != 0) {
-                        vfs_ref_release(&s->vfs.ref);
-                        s->vfs.ref.mnt = NULL;
-                        return rc;
-                    }
-                    if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                        !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                        int32_t why = s->vfs.err ? s->vfs.err : -ENOEXEC;
-
-                        exec_vfs_done(&s->vfs);
-                        return why; /* one level only: an interpreter that is a script */
-                    }
-                    goto interpreter_checked;
-                }
-                rc = cred_access_node((krffs_node_t *)iref.node, CRED_X, 0);
-                vfs_walk_unlock(iref.mnt);
-                vfs_ref_release(&iref);
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-            if (exec_krffs_read(&kctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-                !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                /* One level only: an interpreter that is itself a script. */
-                return -ENOEXEC;
-            }
-        interpreter_checked:;
+        if (rc == 0) {
+            rc = vfs_open_node(ref.mnt, ref.node, 0, &f->handle);
+        }
+        if (rc == 0) {
+            f->ref = ref; /* held until exec_file_close */
         }
     }
-
-    err = uimage_place(&s->args, argc, envc);
-    if (err != 0) {
-        return err;
+    vfs_walk_unlock(ref.mnt);
+    if (f->ref.mnt == NULL) {
+        vfs_ref_release(&ref);
     }
+    if (rc == 0 && id != NULL) {
+        id->mode = vst.mode & KRFFS_MODE_SUID;
+        if ((vst.mode & KRFFS_MODE_SGID) && (vst.mode & 010u)) {
+            id->mode |= KRFFS_MODE_SGID;
+        }
+        if (nosuid) {
+            id->mode = 0;
+        }
+        id->uid = vst.uid;
+        id->gid = vst.gid;
+    }
+    return rc;
+}
 
-    /* The exec is now committed (the image is valid). Drop close-on-exec
-     * descriptors before the old address space goes away. */
+/**
+ * Turn an exec of a script into an exec of its interpreter, when the file
+ * `s` has open is not an ELF image: `exec_shebang` rewrites the arguments,
+ * and the interpreter is opened in the script's place. A set-id script runs
+ * as its invoker: the interpreter is what runs, it is not set-id, and
+ * honouring the script's bits is a hole Unix closed long ago, since the
+ * interpreter can be made to read a different file than the one whose bits
+ * were checked. One level only: an interpreter that is itself a script is
+ * refused. 0, -ENOEXEC, or an error of the open or the read.
+ */
+static int32_t exec_script(struct exec_state *s)
+{
+    Elf32_Ehdr ehdr;
+    int32_t rc;
+
+    if (exec_file_read(&s->prog, &ehdr, sizeof(ehdr), 0) == (int)sizeof(ehdr) &&
+        elf_valid_exec(&ehdr, sizeof(ehdr))) {
+        return 0;
+    }
+    if (s->prog.err) {
+        return s->prog.err;
+    }
+    rc = exec_shebang(s, &s->argc, exec_file_read, &s->prog);
+    exec_file_close(&s->prog);
+    if (rc <= 0) {
+        return rc < 0 ? rc : -ENOEXEC;
+    }
+    s->id.mode = 0;
+    rc = exec_open(&s->prog, s->path, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    if (exec_file_read(&s->prog, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+        !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+        return s->prog.err ? s->prog.err : -ENOEXEC;
+    }
+    return 0;
+}
+
+/**
+ * The ids the new image runs with, into `s`: the file owner's where a
+ * set-id bit applies, the way privilege is regained, and the caller's
+ * effective ids otherwise. A process that set no_new_privs gains nothing:
+ * its bits are read and ignored, as a nosuid mount's are. `secure`, which
+ * is AT_SECURE, says whether the image runs with authority its invoker
+ * lacks, the effective id differing from the real one either way, so libc
+ * distrusts the environment the caller gave it.
+ */
+static void exec_ids(struct exec_state *s)
+{
+    uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
+
+    s->euid = (mode & KRFFS_MODE_SUID) ? s->id.uid : current_proc->euid;
+    s->egid = (mode & KRFFS_MODE_SGID) ? s->id.gid : current_proc->egid;
+    s->secure = s->euid != current_proc->ruid || s->egid != current_proc->rgid;
+}
+
+/**
+ * Load the interpreter the program's PT_INTERP names into the new address
+ * space, as Linux's `load_elf_interp` loads it: a position-independent one,
+ * which every dynamic linker is, at the top of the range mmap places
+ * mappings in, just below VM_MMAP_BASE, and one with fixed addresses at
+ * those. Its own PT_INTERP is ignored. The new image starts at its entry,
+ * and `*base`, AT_BASE, is the distance it was moved by. 0, -ENOENT,
+ * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel
+ * loads, -ENOMEM for one that would cover the program, or an error of the
+ * read.
+ */
+static int32_t exec_interp(struct exec_state *s, uint32_t *base)
+{
+    uint32_t bias = 0;
+    int32_t rc;
+
+    if (canonicalize_abs(s->layout.interp) < 0) {
+        return -ENOENT;
+    }
+    rc = exec_open(&s->prog, s->layout.interp, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    if (elf_read_layout(exec_file_read, &s->prog, &s->ilayout) != 0) {
+        return s->prog.err ? s->prog.err : -ELIBBAD;
+    }
+    if (s->ilayout.type == ET_DYN) {
+        bias = VM_MMAP_BASE - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
+    }
+    if (s->ilayout.lo + bias < s->img.image_end && s->ilayout.hi + bias > s->img.segs[0].start) {
+        return -ENOMEM;
+    }
+    if (elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->iimg) != 0) {
+        return s->prog.err ? s->prog.err : -ELIBBAD;
+    }
+    exec_file_close(&s->prog);
+    s->entry = s->iimg.entry;
+    *base = bias;
+    return 0;
+}
+
+/**
+ * Build the new image in an address space of its own while the caller's
+ * still runs, as Linux's `load_elf_binary` builds one: the program, at
+ * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
+ * PT_INTERP names; the regions; and the stack, with the pointers and the
+ * auxiliary vector below its strings. The stack may grow to the soft
+ * RLIMIT_STACK, lowered to 8 MiB for an image that runs with ids its
+ * caller lacks, and the regions may cover no more than RLIMIT_AS. The
+ * caller's image is untouched, so every failure is an error execve
+ * returns. 0, -ENOEXEC, -ENOMEM, or an error of `exec_interp` or of a read.
+ */
+static int32_t exec_build(struct exec_state *s)
+{
+    struct uimage_aux aux;
+    uint32_t bias = 0;
+    uint32_t bottom = uimage_bottom(&s->args);
+    uint32_t limit = current_proc->rlim[RLIM_STACK].cur;
+    uint8_t random16[16];
+    int32_t rc;
+
+    if (elf_read_layout(exec_file_read, &s->prog, &s->layout) != 0) {
+        return s->prog.err ? s->prog.err : -ENOEXEC;
+    }
+    if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
+        bias = ELF_ET_DYN_BASE - s->layout.lo;
+    }
+    s->mm = mm_new();
+    if (s->mm == NULL) {
+        return -ENOMEM;
+    }
+    if (elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->img) != 0) {
+        return s->prog.err ? s->prog.err : -ENOEXEC;
+    }
+    exec_file_close(&s->prog);
+    s->entry = s->img.entry;
+    aux.base = 0;
+    if (s->layout.interp[0] != '\0') {
+        rc = exec_interp(s, &aux.base);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (s->secure && limit > RLIM_STACK_DEFAULT) {
+        limit = RLIM_STACK_DEFAULT;
+    }
+    if (elf_setup_vmas(&s->mm->vm, &s->img, USER_STACK_BASE, exec_stack_window(bottom, limit)) !=
+            0 ||
+        (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
+        (bottom < USER_STACK_BASE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY32)) ||
+        vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
+        return -ENOMEM;
+    }
+    aux.uid = current_proc->ruid;
+    aux.euid = s->euid;
+    aux.gid = current_proc->rgid;
+    aux.egid = s->egid;
+    aux.secure = s->secure;
+    krandom_bytes(random16, 16);
+    if (uimage_write(&s->args, s->argc, s->envc, &s->img, random16, &aux) != 0 ||
+        uimage_map(&s->args, s->mm->dir) != 0) {
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+/**
+ * Make the image `s` built the process's; past here execve cannot fail.
+ *
+ * Drops the close-on-exec descriptors; takes the new ids, the saved ids
+ * becoming the new effective ones, which is the POSIX rule for every exec
+ * and what lets an image shed acquired authority and take it back; resets
+ * what pointed into the old image: caught signals' handlers (SIG_IGN, the
+ * blocked mask and the pending signals are kept, as POSIX says), the
+ * alternate signal stack, the address a thread end clears, the TLS base and
+ * the floating-point state. Then it switches to the new address space and
+ * puts the old one, which the parent of a vfork child keeps, lets that
+ * parent go, and points the return frame at the entry with the stack
+ * pointer at argc. A fresh image has no TLS until its libc calls
+ * set_thread_area, so the segment registers get the plain user-data
+ * selector, as a new process gets it, in place of the old image's TLS one.
+ * The general registers are cleared, since the SysV i386 entry has argc on
+ * the stack and %edx an atexit hook or zero, and %ebp 0 marks the
+ * outermost frame.
+ */
+static void exec_commit(isr_params_t *params, struct exec_state *s)
+{
+    struct mm *old = current_proc->mm;
+    uint32_t old_euid = current_proc->euid;
+    uint32_t old_egid = current_proc->egid;
+    int sig;
+
     close_cloexec_fds();
-
-    /* The set-id bits, the way privilege is regained: the new image runs with
-     * the file owner's effective ids while the real ids still say who is
-     * asking. Then the POSIX exec rule for every exec, set-id or not: the
-     * saved ids take the new effective ids, which is what lets the image shed
-     * the acquired authority and take it back. AT_SECURE then reports whether
-     * the image runs with authority its invoker lacks, the effective id
-     * differing from the real one either way, so libc distrusts the
-     * caller-supplied environment; it is the only such signal, since the
-     * stack has no AT_UID/AT_EUID for libc to compare. A process that set
-     * no_new_privs gains nothing: its bits are read and ignored, as a
-     * nosuid mount's are. An exec that runs with ids its caller lacks also
-     * lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB, as Linux's does. */
-    if (current_proc->no_new_privs) {
-        setid_mode = 0;
-    }
-    old_euid = current_proc->euid;
-    old_egid = current_proc->egid;
-    if (setid_mode & KRFFS_MODE_SUID) {
-        current_proc->euid = file_uid;
-    }
-    if (setid_mode & KRFFS_MODE_SGID) {
-        current_proc->egid = file_gid;
-    }
-    current_proc->suid = current_proc->euid;
-    current_proc->sgid = current_proc->egid;
-    secure =
-        (current_proc->euid != current_proc->ruid) || (current_proc->egid != current_proc->rgid);
-    exec_privileges(secure, old_euid, old_egid);
-
-    /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
-    proc_set_comm(current_proc, name);
-
-    /* Reset caught signal dispositions to default: their handler addresses
-     * point into the OLD image that is about to be replaced. SIG_IGN
-     * dispositions, the blocked mask and the pending signals are preserved
-     * (POSIX exec semantics). The new image has named no address for its
-     * thread's end yet.
-     */
-    {
-        int sig;
-        for (sig = 1; sig <= KSIG_MAX; sig++) {
-            if (current_proc->sigacts[sig].handler != KSIG_DFL &&
-                current_proc->sigacts[sig].handler != KSIG_IGN) {
-                k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
-            }
+    current_proc->euid = s->euid;
+    current_proc->egid = s->egid;
+    current_proc->suid = s->euid;
+    current_proc->sgid = s->egid;
+    exec_privileges(s->secure, old_euid, old_egid);
+    proc_set_comm(current_proc, s->path);
+    for (sig = 1; sig <= KSIG_MAX; sig++) {
+        if (current_proc->sigacts[sig].handler != KSIG_DFL &&
+            current_proc->sigacts[sig].handler != KSIG_IGN) {
+            k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
         }
     }
     current_proc->clear_child_tid = 0;
     current_proc->altstack_on = 0;
     current_proc->altstack_sp = 0;
     current_proc->altstack_size = 0;
+    current_proc->vma_reported = 0;
 
-    /* If this process owns the console, release the controlling terminal across
-     * the destructive load below: once free_user_pages runs the old image is
-     * gone and a load/stack failure routes to exec_fail_destroyed (death), so
-     * leaving sid set would let the timer-IRQ serial drain target a destroyed
-     * image in that window (the same class as the sys_exit teardown bug). On
-     * success it is re-published with the unchanged session/group before
-     * returning to userspace, preserving exec's keep-the-controlling-terminal
-     * semantics; on failure exec_fail_destroyed releases again (idempotent). */
-    owned_console = tty_console_owned_by_leader((int)current_proc->sid, (int)current_proc->pid);
-    if (owned_console) {
-        tty_set_session(&console_tty, 0, 0);
+    current_proc->mm = s->mm;
+    current_proc->cr3 = s->mm->cr3;
+    current_proc->page_dir = s->mm->dir;
+    s->mm = NULL;
+    switch_page_directory(current_proc->page_dir);
+    mm_put(old);
+    proc_vfork_release(current_proc);
+
+    params->eip = s->entry;
+    params->user_esp = s->args.esp;
+    params->ebp = 0;
+    params->edx = 0;
+    params->ebx = 0;
+    params->ecx = 0;
+    params->esi = 0;
+    params->edi = 0;
+    params->gs = 0x23;
+    params->fs = 0x23;
+    params->es = 0x23;
+    params->ds = 0x23;
+    current_proc->tls_base = 0;
+    gdt_set_tls(0);
+    fpu_init_area(current_proc->fpu);
+    fpu_restore(current_proc->fpu);
+}
+
+/**
+ * Replace the current process image with a new program, in the workspace
+ * `s`; the body of `sys_execve`.
+ *
+ * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success.
+ * Resolves the path and checks the execute right, copies the path, argv and
+ * envp onto the new stack's pages, resolves a `#!` script to its
+ * interpreter, builds the new image, with the dynamic linker it names, in
+ * an address space of its own, and only then commits, so every refusal and
+ * every failure of the load returns to the caller with its image intact.
+ */
+static int32_t exec_run(isr_params_t *params, struct exec_state *s)
+{
+    const char __user *user_path = (const char __user *)params->ebx;
+    int32_t rc;
+
+    if (!user_path) {
+        return -EFAULT;
     }
-
-    /* Free old user pages, then stream the new program in (header + program
-     * headers + each PT_LOAD; no 512 KB whole-file buffer). Past this point the
-     * old image is gone, so any failure terminates the process rather than
-     * returning into a destroyed address space. */
-    free_user_pages(proc_dir);
-
-    if (elf_load_image(s->vfs.ref.mnt ? exec_vfs_read : exec_krffs_read,
-                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)&kctx, proc_dir, &img) != 0) {
-        exec_vfs_done(&s->vfs);
-        exec_fail_destroyed(1);
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
+    if (rc < 0) {
+        return rc;
     }
-    exec_vfs_done(&s->vfs);
-    entry_point = img.entry;
-
-    /* Write the SysV/i386 initial stack (argc, the argv and envp pointer
-     * arrays, and the auxv) below the strings on the pages taken for it, and
-     * map them; the layout is verified host-side
-     * (tests/host/uimage_hosttest.c). */
-    krandom_bytes(random16, 16);
-    {
-        uint32_t user_esp = s->args.esp;
-        uint32_t bottom = uimage_bottom(&s->args);
-        uint32_t window = exec_stack_window(bottom);
-
-        if (uimage_write(&s->args, argc, envc, &img, random16, secure) != 0) {
-            exec_fail_destroyed(2);
-        }
-        if (uimage_map(&s->args, proc_dir) != 0) {
-            exec_fail_destroyed(3);
-        }
-
-        /* Modify the ISR return frame so iret resumes at the new program's
-         * entry point on its fresh stack. */
-        params->eip = entry_point;
-        params->user_esp = user_esp;
-
-        /* SysV i386 process entry gives argc/argv on the stack and %edx as an
-         * atexit hook or zero. %ebp marks the outermost frame. Clear the GP
-         * registers inherited across exec so startup code cannot read stale
-         * state from the old image. */
-        params->ebp = 0;
-        params->edx = 0;
-        params->ebx = 0;
-        params->ecx = 0;
-        params->esi = 0;
-        params->edi = 0;
-
-        /* Reset thread-local storage for the new image. exec replaces the
-         * program in place, so the trapframe still has the old program's
-         * segment selectors (its %gs may be the 0x33 TLS selector) and the PCB
-         * still has its TLS base. A fresh image has no TLS until its libc
-         * calls set_thread_area, so restore the plain user-data selector (0x23,
-         * as enter_usermode does for a brand-new process) in all four slots and
-         * clear the base in both the PCB and the live GDT descriptor. */
-        params->gs = 0x23;
-        params->fs = 0x23;
-        params->es = 0x23;
-        params->ds = 0x23;
-        current_proc->tls_base = 0;
-        gdt_set_tls(0);
-        /* A fresh image starts with the initial floating-point state, in the
-         * registers now and in the record for the next switch. */
-        fpu_init_area(current_proc->fpu);
-        fpu_restore(current_proc->fpu);
-
-        /* Build the address-space map (VMAs) for the new image so the
-         * page-fault handler can demand-page, grow the stack, or segfault. The
-         * ELF code/data pages themselves are still eagerly loaded above. */
-        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, window) != 0 ||
-            (bottom < USER_STACK_BASE &&
-             !vm_grow_stack(&current_proc->vm, bottom, RLIM_INFINITY32))) {
-            exec_fail_destroyed(4); /* the regions could not be made */
-        }
-        /* RLIMIT_AS: an image whose regions cover more than the limit does
-         * not run; the old image is gone by now, so the process ends. */
-        if (vm_total(&current_proc->vm) > current_proc->rlim[RLIM_AS].cur) {
-            klog(KLOG_WARN, "exec", "refused: the image is past RLIMIT_AS, pid %d",
-                 (int)current_proc->pid);
-            exec_fail_destroyed(5);
-        }
-        /* The new image may report a full descriptor table once of its own. */
-        current_proc->vma_reported = 0;
+    rc = exec_open(&s->prog, s->path, &s->id);
+    if (rc == 0) {
+        rc = exec_copy_args(s, user_path, (char *const __user *)params->ecx,
+                            (char *const __user *)params->edx, &s->argc, &s->envc);
     }
-
-    /* Reload CR3 to flush the whole TLB: after freeing the old user pages and
-     * mapping new stack/code pages, the TLB may hold stale entries from the
-     * replaced image. */
-    __asm__ __volatile__("movl %%cr3, %%eax\n\t"
-                         "movl %%eax, %%cr3" ::
-                             : "eax", "memory");
-
-    /* Exec succeeded: re-publish the controlling terminal we released above,
-     * with the unchanged session/group (exec keeps the controlling terminal),
-     * so the new image owns the console exactly as the old one did. */
-    if (owned_console) {
-        tty_set_session(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
+    if (rc == 0) {
+        rc = exec_script(s);
     }
-
-    return 0; /* unused: iret resumes at the new entry point */
+    if (rc == 0) {
+        rc = uimage_place(&s->args, s->argc, s->envc);
+    }
+    if (rc == 0) {
+        exec_ids(s);
+        rc = exec_build(s);
+    }
+    if (rc == 0) {
+        exec_commit(params, s);
+    }
+    return rc;
 }
 
 /**
@@ -1396,8 +1208,7 @@ checked:
  *
  * Gives the call a workspace of its own, which `exec_run` does the work in,
  * and gives it back when that returns, whether the exec failed or the new
- * image is about to be entered. A failure past the destruction of the old
- * image does not return here; `exec_fail_destroyed` gives the workspace back.
+ * image is about to be entered.
  */
 int32_t sys_execve(isr_params_t *params)
 {
@@ -1418,28 +1229,107 @@ int32_t sys_execve(isr_params_t *params)
     return rc;
 }
 
+/* clone(2) flags; the low byte is the signal the parent gets at the child's
+ * exit. */
+#define CSIGNAL              0x000000FFu
+#define CLONE_VM             0x00000100u
+#define CLONE_VFORK          0x00004000u
+#define CLONE_PARENT_SETTID  0x00100000u
+#define CLONE_CHILD_CLEARTID 0x00200000u
+#define CLONE_DETACHED       0x00400000u
+#define CLONE_CHILD_SETTID   0x01000000u
+
+/* What a fork or a clone asks of `do_fork`: the clone flags, the stack
+ * pointer the child starts with or 0 for the parent's, the parent's address
+ * CLONE_PARENT_SETTID names, and the child's addresses CLONE_CHILD_SETTID
+ * and CLONE_CHILD_CLEARTID name, each 0 for none. */
+struct fork_req {
+    uint32_t flags;
+    uint32_t newsp;
+    uint32_t ptid;
+    uint32_t settid;
+    uint32_t cleartid;
+};
+
+/* The parents that wait in vfork until their child calls execve or ends. */
+static wait_queue_t vfork_wq;
+
+/** Whether the vfork wait for the child `*arg` is over: the child has let
+ * its parent go or is gone, or the parent has SIGKILL pending. */
+static int vfork_done(void *arg)
+{
+    const process_t *child = get_process(*(const uint32_t *)arg);
+
+    return child == NULL || !child->vfork_waiting ||
+           (current_proc->sig_pending & KSIG_BIT(SIGKILL)) != 0;
+}
+
 /**
- * Create a child process: fork(2), and the part of clone(2) this kernel has.
+ * Wait, as the parent, until the child `pid` made with CLONE_VFORK lets the
+ * parent go. The child runs on the parent's memory, its stack included,
+ * until it calls execve or ends, so the parent must not run before. Other
+ * signals wait for the end as well; only SIGKILL cuts it short, as Linux's
+ * killable wait does, and the parent then dies on the way out.
+ */
+void proc_vfork_wait(uint32_t pid)
+{
+    (void)wq_wait_event_nointr(&vfork_wq, vfork_done, &pid);
+}
+
+void proc_vfork_release(process_t *p)
+{
+    if (p->vfork_waiting) {
+        p->vfork_waiting = 0;
+        wq_wake_all(&vfork_wq);
+    }
+}
+
+/**
+ * The address space of the child `do_fork` makes: `mm` itself, with one
+ * more reference, under CLONE_VM, and otherwise a copy-on-write copy of its
+ * pages and regions; an empty one for a kernel thread's child. NULL when no
+ * memory was left for a copy.
+ */
+static struct mm *fork_mm(struct mm *mm, uint32_t flags)
+{
+    struct mm *copy;
+
+    if ((flags & CLONE_VM) && mm) {
+        mm_get(mm);
+        return mm;
+    }
+    copy = mm_new();
+    if (copy && mm && (copy_user_pages(mm, copy->dir) != 0 || vm_copy(&copy->vm, &mm->vm) != 0)) {
+        mm_put(copy);
+        return NULL;
+    }
+    return copy;
+}
+
+/**
+ * Create a child process: fork(2), vfork(2), and the part of clone(2) this
+ * kernel has.
  *
- * Clones the current process: PCB, page directory (copy-on-write user
- * pages), and fd table. The child is set up to return from fork with value
- * 0; the parent gets the child's PID. Returns -errno on failure. A nonzero
- * `newsp` is the stack pointer the child starts with. A nonzero
- * `child_settid` is an address of the child's memory that gets the child's
- * id before it runs (CLONE_CHILD_SETTID), and `child_cleartid` the address
- * its thread end clears (CLONE_CHILD_CLEARTID).
+ * Clones the current process: PCB, address space, and fd table. The address
+ * space is a copy-on-write copy, or under CLONE_VM the parent's own,
+ * shared. The child is set up to return from fork with value 0; the parent
+ * gets the child's PID, after the child has called execve or ended when
+ * `req` has CLONE_VFORK. Returns -errno on failure. `req` has the stack
+ * pointer the child starts with and the addresses of the ids clone stores:
+ * the parent's CLONE_PARENT_SETTID word, stored before the child runs, and
+ * the child's CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address
+ * its thread end clears.
  *
  * Among what the child inherits is the program name, which `execve` sets and a
  * child that never execs would otherwise never have: a daemon that forks
  * itself into the background is exactly such a child, and without this it
  * shows in `ps` and in /proc/<pid>/stat with no name for as long as it runs.
  */
-static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_settid,
-                       uint32_t child_cleartid)
+static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
     process_t *parent = current_proc;
     process_t *child;
-    page_dir_t *child_dir;
+    uint32_t pid;
     uintptr_t child_kstack_base;
     uint32_t *child_sp;
     isr_params_t *child_frame;
@@ -1479,35 +1369,21 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     release_fd_table(&child->fds);
     fd_table_free(&child->fds);
 
-    child_dir = clone_page_directory();
-    if (!child_dir) {
+    child->mm = fork_mm(parent->mm, req->flags);
+    if (!child->mm) {
         free_process(child);
         return -ENOMEM;
     }
-
-    /* Copy user pages from parent to child. On failure, release the frames
-     * copy_user_pages already allocated and the cloned directory (not just the
-     * PCB) or each failed fork leaks a directory and its private page tables.
-     * child_dir is never the running (parent) directory, so it frees cleanly.
-     */
-    if (copy_user_pages(parent, child_dir) != 0) {
-        free_user_pages(child_dir);
-        free_page_directory(child_dir);
-        free_process(child);
-        return -ENOMEM;
-    }
+    child->cr3 = child->mm->cr3;
+    child->page_dir = child->mm->dir;
 
     child_kstack_base = kstack_alloc();
     if (!child_kstack_base) {
-        free_user_pages(child_dir);
-        free_page_directory(child_dir);
+        mm_drop(child);
         free_process(child);
         return -ENOMEM;
     }
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
-
-    child->cr3 = get_page_dir_phys(child_dir);
-    child->page_dir = child_dir;
     child->parent_pid = parent->pid;
 
     /* Inherit the parent's session and process group: a forked child stays in
@@ -1545,15 +1421,6 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     /* The floating-point registers as they are now, since the parent's record
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
-
-    /* The child's address space is a copy of the parent's at the same virtual
-     * addresses (copy_user_pages duplicated the pages), so copy the VMA map too
-     * otherwise the child would have no regions and the first heap/stack
-     * fault would segfault it. (k_memcpy, not struct assignment, so the
-     * freestanding kernel does not need a compiler-emitted memcpy.) */
-    if (vm_copy(&child->vm, &parent->vm) != 0) {
-        goto fail_built;
-    }
 
     /* The child inherits the parent's current working directory. */
     if (proc_cwd_copy(child, parent) != 0) {
@@ -1610,14 +1477,18 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     child_frame = (isr_params_t *)child_sp;
     k_memcpy(child_frame, params, sizeof(isr_params_t));
     child_frame->eax = 0;
-    if (newsp) {
-        child_frame->user_esp = newsp;
+    if (req->newsp) {
+        child_frame->user_esp = req->newsp;
     }
     /* A failed store leaves the word as the parent had it, as Linux's does. */
-    if (child_settid) {
-        (void)paging_store_u32(child_dir, &child->vm, child_settid, child->pid);
+    if (req->settid) {
+        (void)paging_store_u32(child->mm->dir, &child->mm->vm, req->settid, child->pid);
     }
-    child->clear_child_tid = child_cleartid;
+    child->clear_child_tid = req->cleartid;
+    pid = child->pid;
+    if (req->ptid) {
+        (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
+    }
 
     /* The switch_context return address, then its saved EBP/EBX/ESI/EDI. */
     --child_sp;
@@ -1632,66 +1503,78 @@ static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_sett
     *child_sp = 0; /* EDI */
 
     child->regs.esp = (uint32_t)child_sp;
+    if (req->flags & CLONE_VFORK) {
+        child->vfork_waiting = 1;
+    }
     child->state = PROC_READY;
-
-    return (int32_t)child->pid;
+    if (req->flags & CLONE_VFORK) {
+        proc_vfork_wait(pid);
+    }
+    return (int32_t)pid;
 
 fail_built:
     /* Everything built for the child so far goes back: the working
-     * directory's hold, the kernel stack, the copied pages and the
-     * directory, then the record. */
+     * directory's hold, the kernel stack and the address space, then the
+     * record. */
     vfs_cwd_clear(child);
     kstack_free(child->kernel_stack);
-    free_user_pages(child_dir);
-    free_page_directory(child_dir);
+    mm_drop(child);
     free_process(child);
     return -ENOMEM;
 }
 
 int32_t sys_fork(isr_params_t *params)
 {
-    return do_fork(params, 0, 0, 0);
+    struct fork_req req = {0, 0, 0, 0, 0};
+
+    return do_fork(params, &req);
 }
 
-/* clone(2) flags; the low byte is the signal the parent gets at the child's
- * exit. */
-#define CSIGNAL              0x000000FFu
-#define CLONE_PARENT_SETTID  0x00100000u
-#define CLONE_CHILD_CLEARTID 0x00200000u
-#define CLONE_DETACHED       0x00400000u
-#define CLONE_CHILD_SETTID   0x01000000u
+/**
+ * vfork (190): a child that runs on the parent's memory while the parent
+ * waits, until the child calls execve or ends. musl's vfork and glibc's call
+ * it; the child must do nothing else before one of the two, since every
+ * store it makes is the parent's.
+ */
+int32_t sys_vfork(isr_params_t *params)
+{
+    struct fork_req req = {CLONE_VM | CLONE_VFORK, 0, 0, 0, 0};
+
+    return do_fork(params, &req);
+}
 
 /**
- * clone (120), in the form glibc's fork uses: a new process with its own copy
- * of the address space, files and signal handlers, as fork makes one.
+ * clone (120), in the forms glibc's fork and the two C libraries'
+ * posix_spawn use: a new process with its own copy of the address space,
+ * files and signal handlers, as fork makes one, or with the caller's
+ * address space itself under CLONE_VM, and with the caller waiting as vfork
+ * waits under CLONE_VFORK.
  *
  * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
  * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD,
- * and the flags other than CLONE_PARENT_SETTID, CLONE_CHILD_SETTID,
- * CLONE_CHILD_CLEARTID and CLONE_DETACHED, which Linux ignores, are refused
- * with EINVAL: sharing memory, files or handlers is a later phase's work.
- * CLONE_PARENT_SETTID stores the child's id in the parent's memory, and a
- * failed store is ignored, as Linux ignores it.
+ * and the flags other than CLONE_VM, CLONE_VFORK, CLONE_PARENT_SETTID,
+ * CLONE_CHILD_SETTID, CLONE_CHILD_CLEARTID and CLONE_DETACHED, which Linux
+ * ignores, are refused with EINVAL: sharing files or handlers, and threads,
+ * are a later phase's work. CLONE_PARENT_SETTID stores the child's id in
+ * the parent's memory before the child runs, and a failed store is ignored,
+ * as Linux ignores it.
  */
 int32_t sys_clone(isr_params_t *params)
 {
     uint32_t flags = params->ebx;
-    uint32_t newsp = params->ecx;
-    int32_t __user *ptid = (int32_t __user *)params->edx;
-    uint32_t ctid = params->edi;
-    int32_t pid;
+    struct fork_req req;
 
     if ((flags & CSIGNAL) != SIGCHLD ||
-        (flags & ~(CSIGNAL | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
-                   CLONE_DETACHED)) != 0) {
+        (flags & ~(CSIGNAL | CLONE_VM | CLONE_VFORK | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID |
+                   CLONE_CHILD_CLEARTID | CLONE_DETACHED)) != 0) {
         return -EINVAL;
     }
-    pid = do_fork(params, newsp, (flags & CLONE_CHILD_SETTID) ? ctid : 0,
-                  (flags & CLONE_CHILD_CLEARTID) ? ctid : 0);
-    if (pid > 0 && (flags & CLONE_PARENT_SETTID) && ptid) {
-        (void)copy_to_user(ptid, &pid, sizeof(pid));
-    }
-    return pid;
+    req.flags = flags;
+    req.newsp = params->ecx;
+    req.ptid = (flags & CLONE_PARENT_SETTID) ? params->edx : 0;
+    req.settid = (flags & CLONE_CHILD_SETTID) ? params->edi : 0;
+    req.cleartid = (flags & CLONE_CHILD_CLEARTID) ? params->edi : 0;
+    return do_fork(params, &req);
 }
 
 /* The options of waitpid, wait4 and waitid. */
@@ -1828,19 +1711,15 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 
 /**
  * Reap zombie `p`: add its CPU time, with its reaped children's, to the
- * caller's children's totals, and give back its pages, page directory,
- * kernel stack and record. The zombie no longer runs on its kernel stack,
+ * caller's children's totals, and give back its address space, kernel stack
+ * and record. The zombie no longer runs on its kernel stack,
  * and this is the single release point for a per-fork stack.
  */
 static void wait_reap(process_t *p)
 {
     current_proc->cutime += p->utime + p->cutime;
     current_proc->cstime += p->stime + p->cstime;
-    if (p->cr3 != 0) {
-        page_dir_t *child_dir = p->page_dir;
-        free_user_pages(child_dir);
-        free_page_directory(child_dir);
-    }
+    mm_drop(p);
     kstack_free(p->kernel_stack);
     free_process(p);
 }
@@ -3642,11 +3521,11 @@ int32_t sys_brk(isr_params_t *params)
     vm_space_t *vm;
     uint32_t old_top, new_top;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     mem_balance();
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
 
     /* brk(0) queries the break; below the heap base or into the stack window is
      * refused with the break left unchanged. */
@@ -3795,11 +3674,11 @@ int32_t sys_mmap2(isr_params_t *params)
     vm_type_t type;
     int32_t rc;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     mem_balance();
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
 
     if (length == 0 || (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
         return -EINVAL;
@@ -3881,10 +3760,10 @@ int32_t sys_munmap(isr_params_t *params)
     vm_space_t *vm;
     uint32_t start, end;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
 
     if (length == 0 || (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
@@ -3911,7 +3790,7 @@ int32_t sys_munmap(isr_params_t *params)
 static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
 {
     while (start < end) {
-        vma_t *r = vm_find(&current_proc->vm, start);
+        vma_t *r = vm_find(&current_proc->mm->vm, start);
         uint32_t stop = (r && r->end < end) ? r->end : end;
 
         paging_protect_range(_curr_dir, start, stop,
@@ -3936,7 +3815,7 @@ int32_t sys_mprotect(isr_params_t *params)
     uint32_t end, vmprot;
     int rc;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 ||
@@ -3951,7 +3830,7 @@ int32_t sys_mprotect(isr_params_t *params)
     }
     end = PAGE_UP(addr + length);
     vmprot = vm_prot_of(prot);
-    rc = vm_protect(&current_proc->vm, addr, end, vmprot);
+    rc = vm_protect(&current_proc->mm->vm, addr, end, vmprot);
     if (rc == -1) {
         return -ENOMEM;
     }
@@ -4020,10 +3899,10 @@ int32_t sys_mremap(isr_params_t *params)
     vm_space_t *vm;
     vma_t *r;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    vm = &current_proc->vm;
+    vm = &current_proc->mm->vm;
     if ((addr & (PAGE_SIZE - 1)) != 0 || new_len == 0 || old_len == 0 ||
         (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) != 0 ||
         ((flags & MREMAP_FIXED) && !(flags & MREMAP_MAYMOVE))) {
@@ -4104,7 +3983,7 @@ int32_t sys_madvise(isr_params_t *params)
     uint32_t len = PAGE_UP(params->ecx);
     uint32_t advice = params->edx;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX - len || advice == MADV_REMOVE ||
@@ -4114,7 +3993,7 @@ int32_t sys_madvise(isr_params_t *params)
     if (len == 0) {
         return 0;
     }
-    if (vm_covered(&current_proc->vm, addr, addr + len) != len) {
+    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
     if (advice == MADV_DONTNEED || advice == MADV_FREE) {
@@ -4136,14 +4015,14 @@ int32_t sys_msync(isr_params_t *params)
     uint32_t len = PAGE_UP(params->ecx);
     uint32_t flags = params->edx;
 
-    if (!current_proc) {
+    if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
         addr > USER_ADDR_MAX - len) {
         return -EINVAL;
     }
-    if (vm_covered(&current_proc->vm, addr, addr + len) != len) {
+    if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
     return 0;

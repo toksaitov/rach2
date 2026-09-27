@@ -6,4 +6,4 @@ A waiter files a `struct futex_q` on its own kernel stack in one of 64 buckets, 
 
 Deadlines are whole 10 ms ticks, rounded up, plus the tick in progress. A relative timeout is measured from the call; an absolute one is converted against the monotonic or real-time clock when the call begins.
 
-A key names an address space by its page directory, so a waiter and its waker are the same process until threads share one. A futex in memory two processes share needs a key made from the shared page instead, and the requeue, wake-and-modify and priority-inheritance operations answer `ENOSYS`.
+A key names an address space by its page directory, so a waiter and its waker are the same process or processes that share one address space, as `vfork` and `clone` with `CLONE_VM` make them. A futex in memory two processes share needs a key made from the shared page instead, and the requeue, wake-and-modify and priority-inheritance operations answer `ENOSYS`.

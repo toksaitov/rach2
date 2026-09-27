@@ -8,6 +8,7 @@
 #include "../serial.h"
 #include "../lib/ksignal.h"
 #include "../proc/process.h"
+#include "mm.h"
 #include "pressure.h"
 
 /* For `terminate_current_process`, with which the fault handler ends a
@@ -474,7 +475,7 @@ static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
  * frame could be had or zeroed; the caller then segfaults the process, or a
  * pre-fault answers -EFAULT. The current process always has a user address
  * space here (the handler and the pre-fault path both check
- * `current_proc->cr3 != 0`).
+ * `current_proc->mm`).
  */
 /**
  * Back a page of a region that maps a file: a frame filled from the file and
@@ -549,7 +550,7 @@ static int shared_fault(vm_space_t *vm, vma_t *vma, uint32_t addr)
 
 static int vm_resolve(uint32_t addr, int write)
 {
-    vm_space_t *vm = &current_proc->vm;
+    vm_space_t *vm = &current_proc->mm->vm;
     vma_t *vma = vm_find(vm, addr);
     uintptr_t phys;
 
@@ -598,7 +599,7 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
 {
     uint32_t page, end;
 
-    if (!current_proc || current_proc->cr3 == 0) {
+    if (!current_proc || current_proc->mm == NULL) {
         return 0; /* no user address space to fault against */
     }
     if (len == 0) {
@@ -708,7 +709,7 @@ static void _page_fault_handler(isr_params_t *params)
 
     write = (params->error_code & PF_ERR_WRITE) != 0;
     user_mode = (params->error_code & PF_ERR_USER) != 0;
-    have_user_proc = (current_proc != NULL && current_proc->cr3 != 0);
+    have_user_proc = (current_proc != NULL && current_proc->mm != NULL);
     in_user_range = (fault_address >= USER_ADDR_MIN && fault_address < USER_ADDR_MAX);
 
     if (have_user_proc && in_user_range) {
@@ -735,7 +736,7 @@ static void _page_fault_handler(isr_params_t *params)
            SEGV_MAPERR when none does, forced as Linux forces it: a handler
            runs, and the faulting instruction runs again after it returns. */
         k_memset(&info, 0, sizeof(info));
-        info.code = vm_find(&current_proc->vm, fault_address) ? SEGV_ACCERR : SEGV_MAPERR;
+        info.code = vm_find(&current_proc->mm->vm, fault_address) ? SEGV_ACCERR : SEGV_MAPERR;
         info.addr = fault_address;
         current_proc->trap_nr = 14;
         current_proc->trap_err = params->error_code;

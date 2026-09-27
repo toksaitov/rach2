@@ -15,6 +15,7 @@
 #include "sys/isr.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
+#include "sys/mm/mm.h"
 #include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
@@ -316,20 +317,11 @@ void terminate_current_process(int32_t signo)
 
     proc_exit_cleanup(signo & 0x7F);
 
-    /* Switch off the dying address space BEFORE freeing its page directory:
-     * free_page_directory refuses to free whatever is currently loaded in CR3,
-     * so freeing while still on this directory would silently leak it and all
-     * its private page tables. */
-    if (current_proc->cr3 != 0) {
-        page_dir_t *dir;
-        dir = current_proc->page_dir;
-        free_user_pages(dir);
-        switch_page_directory(_kernel_dir);
-        free_page_directory(dir);
-        current_proc->cr3 = 0;
-    } else {
-        switch_page_directory(_kernel_dir);
-    }
+    /* The address space goes now, not at the reap; `mm_drop` switches off
+     * it first when this was its last user, since free_page_directory
+     * refuses the directory in CR3. One shared with a vfork parent stays. */
+    mm_drop(current_proc);
+    switch_page_directory(_kernel_dir);
 
     if (is_init) {
         /* A real /sbin/init killed by a signal is a fatal init death; only when
@@ -1081,6 +1073,7 @@ static uint32_t boot_stack(page_dir_t *dir, int argc, char *argv[], char *envp[]
                            const elf_image_t *img, uint32_t *bottom)
 {
     struct uimage u;
+    static const struct uimage_aux root = {0, 0, 0, 0, 0, 0};
     uint8_t random16[16];
     uint32_t envc = 0;
     uint32_t esp = 0;
@@ -1104,7 +1097,7 @@ static uint32_t boot_stack(page_dir_t *dir, int argc, char *argv[], char *envp[]
         rc = uimage_place(&u, (uint32_t)argc, envc);
     }
     krandom_bytes(random16, 16);
-    if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, 0) == 0 &&
+    if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, &root) == 0 &&
         uimage_map(&u, dir) == 0) {
         esp = u.esp;
         *bottom = uimage_bottom(&u);
@@ -1137,7 +1130,7 @@ static void exec_program(int argc, char *argv[])
     const char *path;
     uint32_t entry_point;
     elf_image_t img;
-    page_dir_t *user_dir;
+    struct mm *mm;
     process_t *user_proc;
     uint32_t user_esp;
     uint32_t stack_bottom = USER_STACK_BASE;
@@ -1182,8 +1175,8 @@ static void exec_program(int argc, char *argv[])
         }
     }
 
-    user_dir = clone_page_directory();
-    if (!user_dir) {
+    mm = mm_new();
+    if (!mm) {
         boot_exec_done();
         console_puts("exec: Failed to clone page directory");
         return;
@@ -1193,29 +1186,33 @@ static void exec_program(int argc, char *argv[])
      * the binary size is unbounded); img records entry and auxv metadata. */
     kctx.name = path;
     if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, user_dir, &img) != 0) {
+                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, mm->dir, &img) != 0) {
         boot_exec_done();
+        mm_put(mm);
         console_puts("exec: Failed to load ELF segments");
         return;
     }
     boot_exec_done();
     entry_point = img.entry;
 
-    user_esp = boot_stack(user_dir, argc, argv, default_envp, &img, &stack_bottom);
+    user_esp = boot_stack(mm->dir, argc, argv, default_envp, &img, &stack_bottom);
     if (user_esp == 0) {
+        mm_put(mm);
         console_puts("exec: the initial stack could not be built");
         return;
     }
 
     user_proc = alloc_process();
     if (!user_proc) {
+        mm_put(mm);
         console_puts("exec: Failed to allocate process");
         return;
     }
 
     user_proc->state = PROC_RUNNING;
-    user_proc->cr3 = get_page_dir_phys(user_dir);
-    user_proc->page_dir = user_dir;
+    user_proc->mm = mm;
+    user_proc->cr3 = mm->cr3;
+    user_proc->page_dir = mm->dir;
     user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->pid : 0;
     proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
@@ -1226,9 +1223,8 @@ static void exec_program(int argc, char *argv[])
 
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
-    if (elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
-        (stack_bottom < USER_STACK_BASE &&
-         !vm_grow_stack(&user_proc->vm, stack_bottom, RLIM_INFINITY32))) {
+    if (elf_setup_vmas(&mm->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
+        (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY32))) {
         k_panic("boot: no memory for the first process's regions");
     }
 
@@ -1261,7 +1257,7 @@ static void exec_program(int argc, char *argv[])
         tty_set_session(&console_tty, (int)user_proc->sid, (int)user_proc->pgid);
     }
 
-    switch_page_directory(user_dir);
+    switch_page_directory(mm->dir);
 
     /* fork/waitpid need the scheduler running. */
     sched_enable();
@@ -3169,7 +3165,7 @@ static void process_command(const char *cmd)
  * read, and releases the console controlling terminal so the timer-IRQ drain
  * does not steal the input the debug shell polls itself.
  *
- * The exit paths (sys_exit, terminate, exec_fail_destroyed) call this with
+ * The exit paths (sys_exit, terminate_current_process) call this with
  * interrupts off, before they enable them and jump here, so a keyboard IRQ in
  * the jump window cannot observe stale state; shell_loop calls it again on
  * entry as the catch-all for boot and any path that did not.

@@ -75,6 +75,7 @@ struct rlimit32 {
 #define NGROUPS_MAX 8
 
 struct vfs_mount;
+struct mm;
 
 /* A sleeper's record on a wait queue: one is in every process record, for
  * the one queue a process sleeps on, and `poll` supplies one per watched
@@ -104,7 +105,7 @@ struct process {
      * record. process.c has the same offsets and checks them against the
      * compiler's, at build time where the compiler can and at boot. */
     uint32_t tls_base;    /* Per-process %gs TLS base (set_thread_area) */
-    vm_space_t vm;        /* Address-space map (VMAs + brk + stack limit) */
+    struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
     uint32_t wakeup_tick; /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */
     /* Signal state: per-signal disposition (sigacts[signo], index 0 unused)
      * plus 64-bit pending and blocked masks (bit signo-1). */
@@ -254,6 +255,10 @@ struct process {
     uint32_t pdeath_signal;
     uint32_t dumpable;
     uint32_t no_new_privs;
+    /* Set while a parent that made this process with CLONE_VFORK waits for
+     * it to call execve or end; cleared, and the parent woken, at the one or
+     * the other (`proc_vfork_release`). */
+    uint32_t vfork_waiting;
 };
 
 typedef struct process process_t;
@@ -282,9 +287,9 @@ void proc_reclaim_boot_pids(void);
 process_t *alloc_process(void);
 
 /** Take a record off the list and give it back to the heap with its
- * descriptor-table storage, region array and exec workspace; the caller
- * frees the user pages, the page directory and the kernel stack first.
- * Nothing may refer to the record afterwards. */
+ * descriptor-table storage and exec workspace; the caller drops the address
+ * space (`mm_drop`) and frees the kernel stack first. Nothing may refer to
+ * the record afterwards. */
 void free_process(process_t *proc);
 
 /** Get process by PID; returns the record, or NULL if not found. */
@@ -302,6 +307,14 @@ void reparent_children(uint32_t dead_pid);
 /** Release files, reparent the children onto init, publish the encoded exit
  * status, and wake the parent; see exit.c. */
 void proc_exit_cleanup(int32_t status);
+
+/** Let the parent a CLONE_VFORK clone made `p` for run again, at `p`'s
+ * execve or end; nothing when no parent waits. */
+void proc_vfork_release(process_t *p);
+
+/** Wait, as the parent, until the child `pid` made with CLONE_VFORK calls
+ * execve or ends. */
+void proc_vfork_wait(uint32_t pid);
 
 /** Set a process's `comm` name from the final component of `path`. */
 void proc_set_comm(process_t *p, const char *path);

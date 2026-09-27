@@ -14,11 +14,11 @@
  * (`sched_preempt`), also on the exception and signal-delivery paths, which
  * run outside a system call.
  *
- * This helper releases file descriptions and cwd and reparents the children
- * onto init; it does not free the address space or the descriptor-table
- * allocation. Normal child exit and failed exec leave their remaining
- * mappings to do_wait. Signal death frees its mappings and clears cr3 before
- * scheduling. A successful reap releases the remaining storage.
+ * This helper releases file descriptions and cwd, lets a parent that waits
+ * in vfork run again, and reparents the children onto init; it does not
+ * drop the address space or free the descriptor-table allocation. A normal
+ * exit leaves the address space to the reap; a death by signal drops it
+ * before scheduling. A successful reap releases the remaining storage.
  *
  * `status` is the encoded wait status. The caller must not return to user mode.
  */
@@ -29,6 +29,7 @@ void proc_exit_cleanup(int32_t status)
     current_proc->in_syscall = 1;
     release_fd_table(&current_proc->fds);
     vfs_cwd_clear(current_proc);
+    proc_vfork_release(current_proc);
     reparent_children(current_proc->pid);
 
     current_proc->exit_code = status;

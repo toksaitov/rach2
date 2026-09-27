@@ -17,7 +17,7 @@
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
 #define PROC_OFF_TLS_BASE     148u
-#define PROC_OFF_PAGE_DIR     2112u
+#define PROC_OFF_PAGE_DIR     2096u
 #if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
 typedef char process_offsets_fit
     [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
@@ -205,7 +205,6 @@ void free_process(process_t *proc)
         proc_idle = NULL;
     }
     fd_table_free(&proc->fds);
-    vm_free(&proc->vm);
     kfree(proc->exec_ws);
     path_bufs_free(proc);
     kfree(proc);
