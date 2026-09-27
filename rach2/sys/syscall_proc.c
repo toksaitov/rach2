@@ -4817,25 +4817,36 @@ static char *fd_path_copy(int fd)
     return copy;
 }
 
+/* What a new mapping maps, which `mmap_backing` finds: the file or shared
+ * memory, NULL for private anonymous memory; the region kind; the file's
+ * page at the region's start; and the region's protection. */
+struct map_source {
+    struct vm_file *file;
+    vm_type_t type;
+    uint32_t pgoff;
+    uint32_t prot;
+};
+
 /**
  * The file or shared memory a new mapping maps, with the region kind it
- * makes: a private mapping of a file (VM_FILE), a shared mapping of a file
- * in memory or of shared anonymous memory (VM_SHARED), or NULL for private
- * anonymous memory (VM_ANON). /dev/zero maps as anonymous memory. A shared
- * mapping of a file on a disk file system is served as a private one when
- * it is read-only, which reads the same bytes, and refused with ENODEV when
- * it may be written, since its stores would not reach the file. It may
- * sleep, finding the file's path.
+ * makes, into `src`, whose protection and page offset the caller set from
+ * its arguments: a private mapping of a file (VM_FILE), a shared mapping of
+ * a file in memory or of shared anonymous memory (VM_SHARED), or NULL for
+ * private anonymous memory (VM_ANON). /dev/zero maps as anonymous memory.
+ * Anonymous memory has its pages from its own first on, so its offset is
+ * set to 0, as Linux ignores it. A shared mapping of a file on a disk file
+ * system is served as a private one when it is read-only, which reads the
+ * same bytes, and refused with ENODEV when it may be written, since its
+ * stores would not reach the file. It may sleep, finding the file's path.
  */
-static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_file **file,
-                            vm_type_t *type)
+static int32_t mmap_backing(uint32_t flags, int fd, struct map_source *src)
 {
     int shared = (flags & MAP_TYPE) != MAP_PRIVATE;
     fd_entry_t *e;
     struct shmem *sh;
 
-    *file = NULL;
-    *type = VM_ANON;
+    src->file = NULL;
+    src->type = VM_ANON;
     if (!(flags & MAP_ANONYMOUS)) {
         e = fd_get(current_proc->fds, fd);
         if (!e) {
@@ -4846,26 +4857,27 @@ static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_fil
                 return -ENODEV;
             }
             if (!(e->flags & FD_FLAG_READ) ||
-                (shared && (prot & PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
+                (shared && (src->prot & VM_PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
                 return -EACCES;
             }
             sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode)
                                                                    : NULL;
-            if (shared && !sh && (prot & PROT_WRITE)) {
+            if (shared && !sh && (src->prot & VM_PROT_WRITE)) {
                 return -ENODEV;
             }
-            *file = sh ? filemap_shared(e, sh) : filemap_new(e);
-            *type = sh ? VM_SHARED : VM_FILE;
-            if (*file) {
-                (*file)->path = fd_path_copy(fd);
+            src->file = sh ? filemap_shared(e, sh) : filemap_new(e);
+            src->type = sh ? VM_SHARED : VM_FILE;
+            if (src->file) {
+                src->file->path = fd_path_copy(fd);
             }
-            return *file ? 0 : -ENOMEM;
+            return src->file ? 0 : -ENOMEM;
         }
     }
+    src->pgoff = 0;
     if (shared) {
-        *file = filemap_anon_shared();
-        *type = VM_SHARED;
-        return *file ? 0 : -ENOMEM;
+        src->file = filemap_anon_shared();
+        src->type = VM_SHARED;
+        return src->file ? 0 : -ENOMEM;
     }
     return 0;
 }
@@ -4909,8 +4921,10 @@ static int32_t mmap_place(vm_space_t *vm, uint32_t addr, uint32_t len, uint32_t 
 
 /*
  * sys_mmap2 - map memory. Args: EBX=addr, ECX=length, EDX=prot, ESI=flags,
- * EDI=fd, EBP=pgoffset, the offset in the file in pages. Returns the mapped
- * base address, or -errno. What is mapped is `mmap_backing`'s: anonymous
+ * EDI=fd, EBP=pgoffset, the offset in the file in pages, which anonymous
+ * memory ignores; an offset whose last page would not fit in 32 bits is
+ * EOVERFLOW, as in Linux, whatever is mapped. Returns the mapped base
+ * address, or -errno. What is mapped is `mmap_backing`'s: anonymous
  * memory, private or shared, or a file, private or shared; where it goes is
  * `mmap_place`'s. The backing is found first, since finding it may sleep,
  * and the place after, so that nothing sleeps between the checks on the
@@ -4925,10 +4939,9 @@ int32_t sys_mmap2(isr_params_t *params)
     uint32_t length = params->ecx;
     uint32_t prot = params->edx;
     uint32_t flags = params->esi;
+    struct map_source src;
     vm_space_t *vm;
     uint32_t len, base = 0;
-    struct vm_file *file;
-    vm_type_t type;
     int32_t rc;
 
     if (!current_proc || !current_proc->mm) {
@@ -4948,8 +4961,13 @@ int32_t sys_mmap2(isr_params_t *params)
     if ((flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) && (addr & (PAGE_SIZE - 1)) != 0) {
         return -EINVAL;
     }
+    if (params->ebp > 0xFFFFFFFFu - len / PAGE_SIZE) {
+        return -EOVERFLOW;
+    }
     mem_balance();
-    rc = mmap_backing(flags, prot, (int)params->edi, &file, &type);
+    src.prot = vm_prot_of(prot);
+    src.pgoff = params->ebp;
+    rc = mmap_backing(flags, (int)params->edi, &src);
     if (rc != 0) {
         return rc;
     }
@@ -4967,11 +4985,11 @@ int32_t sys_mmap2(isr_params_t *params)
         }
     }
     if (rc == 0 &&
-        vm_insert_file(vm, base, base + len, vm_prot_of(prot), type, file, params->ebp) != 0) {
+        vm_insert_file(vm, base, base + len, src.prot, src.type, src.file, src.pgoff) != 0) {
         rc = -ENOMEM;
         vma_exhausted("mmap");
     }
-    vm_file_put(file);
+    vm_file_put(src.file);
     vm_file_reap();
     return rc == 0 ? (int32_t)base : rc;
 }
@@ -5168,9 +5186,10 @@ static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, u
  * the whole mapping, pages and all, to a free range of the new length, or
  * to the new address with MREMAP_FIXED, whatever was there going first
  * (`remap_fixed`). Returns the mapping's address, or -errno: EINVAL for the
- * arguments `remap_args_valid` refuses, EFAULT for a range not in one
- * region, ENOMEM when it can grow in place and may not move, or when no
- * range is free. MREMAP_DONTUNMAP is not implemented.
+ * arguments `remap_args_valid` refuses, and for a mapping of a file whose
+ * last page at the new length would not fit in 32 bits; EFAULT for a range
+ * not in one region; ENOMEM when it can grow in place and may not move, or
+ * when no range is free. MREMAP_DONTUNMAP is not implemented.
  */
 int32_t sys_mremap(isr_params_t *params)
 {
@@ -5194,6 +5213,9 @@ int32_t sys_mremap(isr_params_t *params)
     r = vm_find(vm, addr);
     if (!r || addr + old_len > r->end) {
         return -EFAULT;
+    }
+    if (r->file && new_len / PAGE_SIZE > 0xFFFFFFFFu - (r->pgoff + (addr - r->start) / PAGE_SIZE)) {
+        return -EINVAL;
     }
     if (flags & MREMAP_FIXED) {
         rc = remap_fixed(vm, addr, old_len, to, new_len);

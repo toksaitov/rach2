@@ -102,6 +102,12 @@ and a page offset in EBX, ECX, EDX, ESI, EDI and EBP respectively.
 The offset in the public
 .Fn mmap
 interface is in bytes; musl divides it by 4096.
+Anonymous memory ignores the offset and has its pages from its own
+first.
+An offset whose last page, at the mapping's length, would not fit in 32
+bits is refused with
+.Er EOVERFLOW ,
+whatever is mapped, as Linux refuses it.
 .Pp
 The mapping type in the low four bits must be
 .Dv MAP_SHARED ,
@@ -386,8 +392,9 @@ without
 an old range that runs past
 .Ql 0xC0000000
 or a new length larger than user space, both judged before they are
-rounded up to pages, or a new address that is not page-aligned, lies
-outside user space or overlaps the old range; for
+rounded up to pages, a mapping of a file whose last page at the new
+length would not fit in 32 bits, or a new address that is not
+page-aligned, lies outside user space or overlaps the old range; for
 .Fn madvise ,
 .Dv MADV_REMOVE
 or
@@ -439,6 +446,10 @@ Musl also rejects mapping lengths at least
 and every public
 .Fn brk
 request.
+.It Er EOVERFLOW
+The page offset of an
+.Nm mmap2
+call and its length together pass the last page 32 bits can count.
 .It Er ESRCH
 The kernel has no current process.
 .El

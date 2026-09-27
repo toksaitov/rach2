@@ -7,11 +7,14 @@
  * sees the parent's bytes and its own stores stay its own. A shared
  * anonymous mapping and a shared mapping of a file in /dev/shm carry a
  * child's store to the parent, and a store through the mapping of the file
- * reaches read(2). mremap grows a mapping in place or moves it with its
- * bytes, and shrinks one, and refuses an old length that would wrap past
- * the end of memory, leaving the mapping; a fixed mremap that shrinks a
- * mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
- * gives a private anonymous mapping zero pages again.
+ * reaches read(2). Shared anonymous memory ignores a raw mmap2's page
+ * offset, a file's offset whose last page would not fit in 32 bits is
+ * EOVERFLOW, and a page of a file in memory past 1 GiB is never backed.
+ * mremap grows a mapping in place or moves it with its bytes, and shrinks
+ * one, and refuses an old length that would wrap past the end of memory,
+ * leaving the mapping; a fixed mremap that shrinks a mapping is held to
+ * RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED) gives a private
+ * anonymous mapping zero pages again.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -19,11 +22,13 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -142,6 +147,50 @@ static int shared(void)
     return 0;
 }
 
+/* The page offset of a raw mmap2. Shared anonymous memory ignores it, where
+   an offset of 2^31 pages once doubled the length of the memory's table of
+   pages until the length wrapped to zero and the first touch never ended.
+   A file's offset whose last page would not fit in 32 bits is EOVERFLOW,
+   and the page of a file in memory 2^31 pages in, past the 1 GiB such a
+   file holds, is never backed: a child that touches it dies of SIGSEGV. */
+static int offsets(void)
+{
+    char *m = (char *)syscall(SYS_mmap2, 0, PAGE, PROT_READ | PROT_WRITE,
+                              MAP_SHARED | MAP_ANONYMOUS, -1, 0x80000000u);
+    int status;
+    pid_t pid;
+    int fd;
+
+    if (m == MAP_FAILED) {
+        return fail("mmap2 of shared anonymous memory at a page offset of 2^31");
+    }
+    m[0] = 'o';
+    munmap(m, PAGE);
+    fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        return fail("a file in /dev/shm for the offsets");
+    }
+    if (syscall(SYS_mmap2, 0, PAGE, PROT_READ, MAP_SHARED, fd, 0xFFFFFFFFu) != -1 ||
+        errno != EOVERFLOW) {
+        return fail("mmap2 of a file whose last page is past 32 bits");
+    }
+    m = (char *)syscall(SYS_mmap2, 0, PAGE, PROT_READ, MAP_SHARED, fd, 0x80000000u);
+    if (m == MAP_FAILED) {
+        return fail("mmap2 of a file at a page offset of 2^31");
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(m[0] == 0 ? 0 : 1);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
+        return fail("a touch of a file in memory past 1 GiB was not SIGSEGV");
+    }
+    munmap(m, PAGE);
+    close(fd);
+    unlink(SHM_PATH);
+    return 0;
+}
+
 static int remaps(void)
 {
     char *m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -245,7 +294,7 @@ static int remap_limit(void)
 
 int main(void)
 {
-    if (private_file() || shared() || remaps() || remap_limit()) {
+    if (private_file() || shared() || offsets() || remaps() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");
