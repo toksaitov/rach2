@@ -4687,6 +4687,166 @@ int32_t sys_fchown(isr_params_t *params)
     return 0;
 }
 
+/**
+ * The refusals of truncate(2) for the file `ref` resolved to, in Linux's
+ * order: a directory is -EISDIR and anything but a regular file -EINVAL, a
+ * read-only mount -EROFS, a caller without write permission -EACCES, and a
+ * file a loop device holds -EBUSY. A /proc file is -EACCES to every caller,
+ * root included, as an open of one for writing is. Returns 0 or the errno.
+ */
+static int32_t truncate_checks(const struct vfs_ref *ref)
+{
+    const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
+    krffs_node_t *node = ref->node;
+    uint32_t mode;
+    int32_t rc;
+
+    if (vp) {
+        struct linux_stat64 kst;
+
+        rc = synth_stat(vp, &kst, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        mode = kst.st_mode;
+    } else if (mnt_is_root(ref->mnt)) {
+        mode = (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) ? S_IFDIR : S_IFREG;
+    } else {
+        struct vfs_stat vst;
+
+        rc = vfs_getattr(ref->mnt, ref->node, &vst);
+        if (rc != 0) {
+            return rc;
+        }
+        mode = vst.mode;
+    }
+    if ((mode & S_IFMT) == S_IFDIR) {
+        return -EISDIR;
+    }
+    if ((mode & S_IFMT) != S_IFREG) {
+        return -EINVAL;
+    }
+    if (vp) {
+        return -EACCES;
+    }
+    if (ref->mnt->flags & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
+    if (mnt_is_root(ref->mnt)) {
+        rc = cred_access_node(node, CRED_W, 0);
+    } else {
+        rc = cred_access_ref(ref, CRED_W, 0);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    return loop_backs(ref->mnt, ref->node) ? -EBUSY : 0;
+}
+
+/**
+ * Set the length of the file at `path`, an absolute path in a path page, to
+ * `length` bytes, which is not negative, for truncate(2) and truncate64(2).
+ *
+ * The path is resolved through links and `truncate_checks` has what is
+ * refused. The file is then truncated through an open-file description of
+ * its own, which no descriptor points at, with the open, the lock and the
+ * close of an open for writing and an ftruncate: a KRFFS file that must move
+ * to grow repoints the description, so the set-id clear of an unprivileged
+ * caller finds the file where it is now, and a loop attachment sees the
+ * truncation in progress, as it sees an ftruncate. Linux has ETXTBSY where
+ * a program being run is truncated, and no loop rule; this kernel has the
+ * loop rule and no ETXTBSY.
+ */
+static int32_t truncate_path(const char *path, long long length)
+{
+    struct vfs_ref ref;
+    struct vfs_mount *locked;
+    struct open_file *desc = NULL;
+    int32_t rc;
+
+    rc = vfs_resolve(0, path_name(path), VFS_WALK_LOCK, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    locked = ref.mnt;
+    rc = truncate_checks(&ref);
+    if (rc == 0) {
+        desc = fd_ofd_new();
+        rc = desc ? vfs_open_node(ref.mnt, ref.node, 1 /* O_WRONLY */, &desc->fhandle) : -ENOMEM;
+    }
+    if (rc != 0) {
+        fd_ofd_unref(desc);
+        vfs_walk_unlock(locked);
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    desc->vmnt = ref.mnt;
+    desc->vnode = ref.node;
+    vfs_desc_open(ref.mnt);
+    vfs_leave(ref.mnt);
+    fd_ofd_lock(desc);
+    rc = -EBUSY;
+    if (!loop_backs(desc->vmnt, desc->vnode)) {
+        rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
+    }
+    if (rc == 0 && !cred_privileged()) {
+        if (mnt_is_root(desc->vmnt)) {
+            cred_kill_setid(desc->vnode);
+        } else {
+            vfs_kill_setid(desc->vmnt, desc->vnode);
+        }
+    }
+    fd_ofd_unlock(desc);
+    fd_ofd_unref(desc);
+    vfs_walk_unlock(locked);
+    return rc;
+}
+
+/**
+ * The shared body of truncate(2) and truncate64(2): a negative length is
+ * -EINVAL before the path is looked at, as on Linux, and the path is copied
+ * into a path page for `truncate_path`.
+ */
+static int32_t truncate_user(const char __user *upath, long long length)
+{
+    char *path;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (length < 0) {
+        return -EINVAL;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user(AT_FDCWD, upath, &path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = truncate_path(path, length);
+    path_buf_put(path);
+    return rc;
+}
+
+/** truncate(2): EBX = path, ECX = the length, a signed 32-bit value. */
+int32_t sys_truncate(isr_params_t *params)
+{
+    return truncate_user((const char __user *)params->ebx, (long long)(int32_t)params->ecx);
+}
+
+/**
+ * truncate64(2): EBX = path, ECX and EDX = the length's low and high words.
+ * Musl's and GNU libc's truncate are this call on i386.
+ */
+int32_t sys_truncate64(isr_params_t *params)
+{
+    uint64_t length = (uint64_t)params->ecx | ((uint64_t)params->edx << 32);
+
+    return truncate_user((const char __user *)params->ebx, (long long)length);
+}
+
 /*
  * A hard link: the source resolved as itself unless `follow`, a directory
  * refused with EPERM, another mount with EXDEV, and the new name made by

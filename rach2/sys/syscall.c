@@ -1592,6 +1592,8 @@ void init_syscall(void)
     _syscall_table[SYS_SYNC] = sys_sync;
     _syscall_table[SYS_REBOOT] = sys_reboot;
     _syscall_table[SYS_FSYNC] = sys_fsync;
+    _syscall_table[SYS_TRUNCATE] = sys_truncate;
+    _syscall_table[SYS_TRUNCATE64] = sys_truncate64;
     _syscall_table[SYS_FTRUNCATE] = sys_ftruncate;
     _syscall_table[SYS_FTRUNCATE64] = sys_ftruncate64;
     _syscall_table[SYS_MOUNT] = sys_mount;

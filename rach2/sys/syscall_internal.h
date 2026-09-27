@@ -137,6 +137,10 @@ int32_t sys_fchownat(isr_params_t *params);
 
 int32_t sys_fchown(isr_params_t *params);
 
+int32_t sys_truncate(isr_params_t *params);
+
+int32_t sys_truncate64(isr_params_t *params);
+
 int32_t sys_symlink(isr_params_t *params);
 
 int32_t sys_symlinkat(isr_params_t *params);

@@ -47,6 +47,11 @@ static struct open_file *ofd_alloc(void)
     return &rec->ofd;
 }
 
+struct open_file *fd_ofd_new(void)
+{
+    return ofd_alloc();
+}
+
 void fd_ofd_ref(struct open_file *ofd)
 {
     if (ofd) {

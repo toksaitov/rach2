@@ -84,7 +84,8 @@ struct vfs_mount;
  * offset and one set of status flags (the POSIX open-file description
  * semantics) instead of each carrying its own. Allocated from a fixed pool (see
  * fd.c); refcount 0 means the slot is free, and the last referencing close
- * frees it.
+ * frees it. truncate(2) makes one that no descriptor points at and frees it
+ * before it returns.
  *
  * There are two offsets because there are two ranges. Everything this kernel
  * opens as a file is under 4 GiB, so `offset` is 32 bits and every path that
@@ -207,6 +208,13 @@ fd_entry_t *fd_get(fd_table_t *table, int fd);
  */
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
+
+/**
+ * A new open-file description with one reference and no descriptor pointing
+ * at it, for a call that changes a file by path with the rules of an open
+ * one: truncate(2). NULL when the heap has no room; `fd_ofd_unref` frees it.
+ */
+struct open_file *fd_ofd_new(void);
 
 /** The description lock (see `busy` above); the lock is uninterruptible and
  * short: one file operation. */

@@ -364,6 +364,7 @@ traceroute 1 busybox-networking
 tree 1 busybox-miscutils
 true 1 busybox-coreutils
 truncate 1 busybox-coreutils
+truncate64 2 truncate
 ts 1 busybox-miscutils
 tsort 1 busybox-coreutils
 tty 1 busybox-coreutils
