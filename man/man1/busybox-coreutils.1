@@ -996,12 +996,16 @@ describes, and run
 .Ar PROG
 with
 .Ar ARGS
-from the new root, or
+from the new root, or with no
+.Ar PROG
+a shell with
+.Fl i :
 .Ev SHELL
-with
-.Fl i ,
-.Pa /bin/sh
-when it is unset.
+when it is set and not empty, else the shell the caller's real user ID
+has in the new root's
+.Pa /etc/passwd ,
+else
+.Pa /bin/sh .
 .It Nm cksum
 Calculate CRC32 checksums of files.
 .It Nm comm
