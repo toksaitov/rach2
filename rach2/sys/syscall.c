@@ -1857,6 +1857,36 @@ static int syscall_restartable(uint32_t nr, const isr_params_t *params)
 }
 
 /**
+ * Report a call this kernel does not have, when `rach2.trace=enosys` asks:
+ * a missing call is otherwise invisible, -ENOSYS going back in a register
+ * with nothing printed, so a program that fails for want of one fails for no
+ * stated reason. Each number is reported once per process, a number past the
+ * table as one in it: musl asks for `clock_gettime64` before every
+ * `clock_gettime`, so a program that read the clock in a loop printed a line
+ * a second and the console could not be read.
+ */
+static void syscall_missing(uint32_t syscall_num)
+{
+    uint32_t pid = current_proc ? current_proc->pid : 0;
+    const char *who = current_proc ? current_proc->comm : "?";
+
+    if (!_trace_enosys) {
+        return;
+    }
+    if (syscall_num >= SYSCALL_TABLE_SIZE) {
+        if (_enosys_big_num != syscall_num || _enosys_big_pid != pid) {
+            _enosys_big_num = syscall_num;
+            _enosys_big_pid = pid;
+            klog(KLOG_WARN, "syscall", "%d: not implemented, and past the table (asked for by %s)",
+                 (int)syscall_num, who);
+        }
+    } else if (_enosys_last_pid[syscall_num] != pid) {
+        _enosys_last_pid[syscall_num] = pid;
+        klog(KLOG_WARN, "syscall", "%d: not implemented (asked for by %s)", (int)syscall_num, who);
+    }
+}
+
+/**
  * The syscall trap handler: dispatch on the number in EAX.
  *
  * Looks up _syscall_table[EAX] and calls it, storing the result back in
@@ -1868,6 +1898,11 @@ static int syscall_restartable(uint32_t nr, const isr_params_t *params)
  * call gives way once per call; a call that does not return does not. The
  * descriptors the call held in a shared table are let go as the body
  * returns, before a tracer's exit stop (`fd_holds_release`).
+ *
+ * A tracer's stop at the entry may change the call through orig_eax, as
+ * Linux's `syscall_trace_enter` lets it: the number is read again after the
+ * stop, a number of no call answers -ENOSYS, and -1 runs no call, whose
+ * result is then what the tracer left in EAX, -ENOSYS unless it set one.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -1876,6 +1911,7 @@ static void _syscall_handler(isr_params_t *params)
      * real "no such syscall" errno; musl relies on -ENOSYS to fall back to an
      * alternate path instead of treating it as a generic -EPERM failure. */
     int32_t ret = -ENOSYS;
+    int skip = 0;
 
     /* Mark this process non-preemptible BEFORE enabling interrupts. The ISR
      * stub keeps IF=0 through entry (segments/%gs are still being saved), so
@@ -1903,34 +1939,16 @@ static void _syscall_handler(isr_params_t *params)
         current_proc->orig_eax = (int32_t)syscall_num;
         if (current_proc->ptrace & PT_SYSCALL) {
             ptrace_syscall_stop(params, syscall_num, 0);
+            syscall_num = (uint32_t)current_proc->orig_eax;
+            skip = current_proc->orig_eax == -1;
         }
     }
-    if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
+    if (skip) {
+        ret = (int32_t)params->eax;
+    } else if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);
-    } else if (_trace_enosys) {
-        /* A missing syscall is otherwise invisible: -ENOSYS goes back in a
-         * register and nothing is printed, so a program that fails for want of
-         * one fails for no stated reason. */
-        uint32_t pid = current_proc ? current_proc->pid : 0;
-        const char *who = current_proc ? current_proc->comm : "?";
-
-        if (syscall_num >= SYSCALL_TABLE_SIZE) {
-            /* Said once per number per process, as an in-table one is: musl
-               asks for `clock_gettime64` before every `clock_gettime`, so a
-               program that reads the clock in a loop printed a line a second
-               and the console could not be read. */
-            if (_enosys_big_num != syscall_num || _enosys_big_pid != pid) {
-                _enosys_big_num = syscall_num;
-                _enosys_big_pid = pid;
-                klog(KLOG_WARN, "syscall",
-                     "%d: not implemented, and past the table (asked for by %s)", (int)syscall_num,
-                     who);
-            }
-        } else if (_enosys_last_pid[syscall_num] != pid) {
-            _enosys_last_pid[syscall_num] = pid;
-            klog(KLOG_WARN, "syscall", "%d: not implemented (asked for by %s)", (int)syscall_num,
-                 who);
-        }
+    } else {
+        syscall_missing(syscall_num);
     }
 
     fd_holds_release();

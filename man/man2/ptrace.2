@@ -119,6 +119,11 @@ with
 At the entry EAX holds
 .Er -ENOSYS
 and orig_eax the call's number; at the exit EAX holds the result.
+A tracer that changes orig_eax at the entry changes the call, as on
+Linux: the number it leaves there is the call run, one of no call returns
+.Er ENOSYS ,
+and -1 runs none, the call returning what the tracer left in EAX.
+The arguments are the registers as the tracer leaves them.
 .El
 .Pp
 The requests are:
@@ -285,7 +290,8 @@ reads its registers and floating-point state, steps an instruction, stops
 it at a breakpoint in its read-only text and moves it back, stops it at
 the entry and exit of a system call and after an
 .Xr execve 2 ,
-sets and reads a debug register, has a breakpoint on a kernel address
+changes one call into another and has another run none at their entry
+stops, sets and reads a debug register, has a breakpoint on a kernel address
 refused and one ending at the last user address taken, attaches to and
 detaches from a running process, and reads the
 .Dv SIGCHLD

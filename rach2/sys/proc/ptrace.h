@@ -60,9 +60,14 @@ int ptrace_group_stop(int signo);
  * thread is traced and its options ask for the event. */
 void ptrace_event(int event, uint32_t msg);
 
-/** The stop at the entry, or with `leaving` the exit, of system call `nr`,
+/**
+ * The stop at the entry, or with `leaving` the exit, of system call `nr`,
  * when the current thread's tracer asked for them with PTRACE_SYSCALL; `tf`
- * is its trap frame. */
+ * is its trap frame, and orig_eax is `nr` during the stop. At the entry EAX
+ * is -ENOSYS during the stop, as on Linux, and both stay as the tracer
+ * leaves them: the dispatcher runs the call orig_eax then names, or none for
+ * -1, with EAX its result.
+ */
 void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 
 /**
