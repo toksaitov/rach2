@@ -25,7 +25,9 @@
 # port is built for another's DEPENDS only when it has no such list, and
 # every port depends on the runtime, the toolchain's glibc. --all builds
 # every recipe into an empty root. Programs link with the shared libraries;
-# GNU_LINK=static links the ports configured by autoconf statically instead.
+# GNU_LINK=static links the ports configured by autoconf statically instead,
+# and gives make -all-static in a port with libtool, which reads -static as
+# "no uninstalled shared libraries" and links the C library shared.
 # Under make, the makes a port runs share the caller's jobs; run alone, the
 # script gives each as many jobs as there are processors.
 #
@@ -89,6 +91,16 @@ configure_autoconf()
         $CONFIGURE_ARGS "$@"
 }
 
+# libtool_static: the make argument a static link needs in a port whose
+# configure made a libtool script; nothing for a shared link or a port
+# without one.
+libtool_static()
+{
+    if [ "$GNU_LINK" = static ] && [ -f libtool ]; then
+        echo LDFLAGS=-all-static
+    fi
+}
+
 # depends NAME: print the ports NAME needs before it, one a line.
 depends()
 {
@@ -132,7 +144,8 @@ build()
     port_build()
     {
         configure_autoconf
-        make
+        # shellcheck disable=SC2046 # one word or none
+        make $(libtool_static)
     }
     port_install()
     {

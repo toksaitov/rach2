@@ -28,7 +28,7 @@ The first port in the root, `build/vendor/gnu/root`, is the runtime, `ports/runt
 * The compilers run through wrappers in `build/vendor/gnu/wrap/` that give them the root as their sysroot, so a port finds the headers and libraries of the ports before it where the target has them.
 * A port's dependencies are built first when the root does not have them, and every port depends on the runtime.
 * A port installs into `build/vendor/gnu/stage/NAME`. There the target's `strip` removes the debugging information from its ELF files, which keep their symbol tables, and its libtool archives and Info index are removed; the rest is copied into the root and listed in `stage/NAME.files`.
-* Programs link with the shared glibc and ask for `/lib/ld-linux.so.2`. `GNU_LINK=static` links the ports that autoconf configures statically instead.
+* Programs link with the shared glibc and ask for `/lib/ld-linux.so.2`. `GNU_LINK=static` links the ports that autoconf configures statically instead, with `-all-static` for a port with libtool, which reads `-static` as leaving the C library shared.
 
 A program in the root runs on the build host through the root's own loader, which loads the root's glibc rather than the host's i386 one:
 
