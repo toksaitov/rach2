@@ -70,7 +70,7 @@ These notes say what some ports provide and what they leave to the system they a
 * Vim has its huge feature set, for the terminal only.
 * Perl is configured as a native build whose programs run on the build host, for the reasons its recipe gives, and has 143 extensions.
 * Git has curl, OpenSSL, zlib and Perl, and no Tcl/Tk, gettext, Python, expat or Rust. Its manual pages come from the `git-manpages` tarball.
-* coreutils and make start their children with `vfork` (gnulib's `posix_spawn`, and make's jobs) until `clone` can share an address space.
+* coreutils and make start their children with glibc's `posix_spawn`, which shares the caller's address space through `clone` with `CLONE_VM` and `CLONE_VFORK`.
 
 ## The root image
 
