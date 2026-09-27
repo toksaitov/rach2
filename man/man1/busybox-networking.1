@@ -294,14 +294,6 @@ Rach2 answers the display; the requests that add or delete an entry are not
 implemented, so those changes fail.
 .It Nm arping
 Send ARP requests or replies.
-Rach2 does not restart a call a signal interrupts
-.Pq Xr sigaction 2 ,
-so while
-.Nm arping
-waits it prints
-.Ql arping: recvfrom: Interrupted system call
-on standard error each time its once-a-second alarm interrupts the wait,
-except for an alarm that ends the run.
 .It Nm dnsd
 Run a small static DNS server.
 .It Nm dnsdomainname
@@ -310,12 +302,15 @@ Display the DNS domain name.
 Provide a fake ident authentication service.
 .It Nm ftpd
 Serve FTP requests as an inetd service.
-Run as root, the applet makes
+The applet asks
+.Xr chroot 2
+to make
 .Ar DIR
-its root with
-.Xr chroot 2 ,
-which confines clients to it; otherwise the change of root fails, and it
-changes the current directory to
+its root, which confines clients to it when the call succeeds.
+When the call fails, for a caller that is not root, or for root with a
+directory the call refuses, such as one under
+.Pa /proc ,
+it changes the current directory to
 .Ar DIR
 instead, where clients are not confined.
 .It Nm ftpget
