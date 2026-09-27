@@ -1692,8 +1692,20 @@ static int peer_has_room(void *arg)
     return !p || p->closed || (s->shut & SHUT_SEND) || s->err || !queue_full(p);
 }
 
-/* A send on a connected stream or sequenced-packet socket. A stream's bytes
- * go in pieces as the peer's queue has room; a packet goes whole. */
+/* Whether a send on the connected socket `s` to its peer `p` must end with
+ * EPIPE: the connection is gone, or shut down in the send's direction. */
+static int send_stopped(const struct unix_sock *s, const struct unix_sock *p)
+{
+    return !p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV);
+}
+
+/*
+ * A send on a connected stream or sequenced-packet socket. A stream's bytes
+ * go in pieces as the peer's queue has room; a packet goes whole. Copying a
+ * piece from the caller can sleep, and the connection is judged again after
+ * it, so a piece is not queued past an error or a shutdown that came
+ * meanwhile.
+ */
 static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_iovec *iov,
                          uint32_t iovlen, uint32_t total, struct unix_out *out, int flags)
 {
@@ -1719,7 +1731,7 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
             s->err = 0;
             return done ? (int32_t)done : rc;
         }
-        if (!p || p->closed || (s->shut & SHUT_SEND) || (p->shut & SHUT_RCV)) {
+        if (send_stopped(s, p)) {
             if (done == 0) {
                 broken_pipe(flags);
             }
@@ -1748,7 +1760,7 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
         if (!m) {
             return done ? (int32_t)done : rc;
         }
-        if (s->peer != p || p->closed || queue_full(p)) {
+        if (s->peer != p || s->err || send_stopped(s, p) || queue_full(p)) {
             kfree(m);
             continue;
         }
@@ -1811,6 +1823,10 @@ static int32_t send_dgram(struct unix_sock *s, int nonblock, const struct kernel
         return rc;
     }
     for (;;) {
+        if (s->shut & SHUT_SEND) {
+            rc = -EPIPE;
+            break;
+        }
         if (t->closed) {
             /* As Linux: a peer that is gone disconnects, and then ENOTCONN. */
             if (!to && s->peer == t) {
