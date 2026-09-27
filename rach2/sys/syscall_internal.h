@@ -134,6 +134,8 @@ int32_t sys_fchmod(isr_params_t *params);
 
 int32_t sys_chown(isr_params_t *params);
 
+int32_t sys_lchown(isr_params_t *params);
+
 int32_t sys_fchownat(isr_params_t *params);
 
 int32_t sys_fchown(isr_params_t *params);

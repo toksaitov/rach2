@@ -1342,9 +1342,10 @@ static int32_t sys_ioctl(isr_params_t *params)
     }
 
     /* Validate the fd first, so a bad fd reports -EBADF, not a request-
-     * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY). */
+     * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY).
+     * An O_PATH descriptor is -EBADF to every request, as on Linux. */
     entry = fd_get(&current_proc->fds, fd_num);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
 
@@ -2055,8 +2056,8 @@ void init_syscall(void)
     _syscall_table[SYS_FCHMOD] = sys_fchmod;
     _syscall_table[SYS_CHOWN] = sys_chown;
     _syscall_table[SYS_CHOWN32] = sys_chown;
-    _syscall_table[SYS_LCHOWN] = sys_chown;
-    _syscall_table[SYS_LCHOWN32] = sys_chown;
+    _syscall_table[SYS_LCHOWN] = sys_lchown;
+    _syscall_table[SYS_LCHOWN32] = sys_lchown;
     _syscall_table[SYS_FCHOWNAT] = sys_fchownat;
     _syscall_table[SYS_FCHOWN] = sys_fchown;
     _syscall_table[SYS_FCHOWN32] = sys_fchown;

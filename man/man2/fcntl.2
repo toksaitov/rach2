@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt FCNTL 2
 .Os
 .Sh NAME
@@ -61,6 +61,12 @@ combined with the stored
 and
 .Dv O_NONBLOCK
 flags.
+A descriptor opened with
+.Dv O_PATH
+reports
+.Dv O_RDONLY
+and
+.Dv O_PATH .
 .It Dv F_SETFL
 Replace the open-file description's
 .Dv O_APPEND
@@ -87,6 +93,18 @@ Every other command is refused with
 .Er EINVAL .
 The kernel accepts both the older lock command numbers 5, 6, and 7
 and the 64-bit lock command numbers 12, 13, and 14.
+A descriptor opened with
+.Dv O_PATH
+takes
+.Dv F_DUPFD ,
+.Dv F_DUPFD_CLOEXEC ,
+.Dv F_GETFD ,
+.Dv F_SETFD
+and
+.Dv F_GETFL
+and returns
+.Er EBADF
+for every other command, as on Linux.
 .Pp
 .Dv FD_CLOEXEC
 belongs to one descriptor and causes it to close during
@@ -134,7 +152,9 @@ and checks that the new descriptor's flag is clear.
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EBADF
 .Fa fd
-is not an open descriptor.
+is not an open descriptor, or was opened with
+.Dv O_PATH
+and the command is not one it takes.
 .It Bq Er EFAULT
 A lock query cannot write
 .Va l_type

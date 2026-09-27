@@ -1,4 +1,4 @@
-.Dd September 20, 2026
+.Dd September 27, 2026
 .Dt SYNC 2
 .Os
 .Sh NAME
@@ -91,7 +91,8 @@ can fail with:
 .Bl -tag -width "[ESRCH]"
 .It Bq Er EBADF
 .Fa fd
-is not an open descriptor.
+is not an open descriptor, or was opened with
+.Dv O_PATH .
 .It Bq Er EIO
 A write-back or device flush failed, or the mounted device was removed.
 A KRFFS boot-root page write was already in flight.

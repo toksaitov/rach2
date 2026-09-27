@@ -99,11 +99,23 @@ struct vfs_stat {
 #define VFS_SET_MTIME 0x10
 #define VFS_SET_SIZE  0x20
 
-/* One directory entry, as readdir fills it. */
+/*
+ * An entry's file type as getdents64 reports it in `d_type`: the type bits
+ * of its mode shifted down twelve, which is what Linux's DT_* values are,
+ * or VFS_DT_UNKNOWN when the file system cannot tell without more reading
+ * than a listing does.
+ */
+#define VFS_DT_UNKNOWN  0
+#define VFS_DT_DIR      4
+#define VFS_DT_REG      8
+#define VFS_DT_OF(mode) (((mode) >> 12) & 017)
+
+/* One directory entry, as readdir fills it: `type` is a VFS_DT_* value. */
 struct vfs_dirent {
     char name[VFS_NAME_MAX + 1];
     uint64_t ino;
     int is_dir;
+    int type;
 };
 
 /* What statfs reports; the syscall layer shapes it into linux_statfs64. */
@@ -409,7 +421,9 @@ int vfs_sync_all(void);
  * A description opened on `mnt`: the mount's reference count goes up; the
  * node's hold is the one the resolution already took, moved rather than
  * retaken. `vfs_desc_close` is the last close: release the handle, put the
- * node, drop the reference.
+ * node, drop the reference. A description opened with O_PATH has a NULL
+ * handle, since the type's `open` never ran, and its `release` does not run
+ * either.
  */
 void vfs_desc_open(struct vfs_mount *mnt);
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle);

@@ -94,6 +94,9 @@ Require an existing target to be a directory.
 Do not follow a final symbolic link; return
 .Er ELOOP
 instead.
+.It Dv O_PATH
+Name the file without opening it; see
+.Sx Path descriptors .
 .El
 .Pp
 Other flag bits are not checked by the ordinary-file open handler and
@@ -214,6 +217,100 @@ The kernel open handler ignores flags and mode for these paths.
 The framebuffer opens for reading and writing and is owned by one
 process at a time; the mouse opens for reading and requires an
 available mouse device.
+.Ss Path descriptors
+With
+.Dv O_PATH
+(010000000),
+.Fn open
+and
+.Fn openat
+return a descriptor that names the file and opens nothing, as on Linux.
+Every other flag but
+.Dv O_DIRECTORY ,
+.Dv O_NOFOLLOW
+and
+.Dv O_CLOEXEC
+is dropped, so nothing is created or truncated, and the access mode is
+ignored.
+The directories of the path need search permission; the file itself
+needs none.
+A final symbolic link is followed unless
+.Dv O_NOFOLLOW
+is given, and then the descriptor names the link.
+A link under
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+is not followed: without
+.Dv O_NOFOLLOW
+it returns
+.Er ENOENT ,
+as an ordinary open of one does, where Linux gives a descriptor on the
+file the link names.
+The file system's own open does not run: a device, an ext2 device inode
+among them, is not opened, a
+.Pa /proc
+file takes no snapshot, and a mounted file system counts no open and no
+release for the descriptor.
+The special paths
+.Pa /fb
+and
+.Pa /mouse
+are not recognized.
+.Pp
+The descriptor serves
+.Xr fstat 2 ,
+.Xr fstatfs 2 ,
+.Xr fchdir 2
+on a directory,
+.Fn fstatat
+and
+.Fn utimensat
+with an empty path and
+.Dv AT_EMPTY_PATH ,
+the directory argument of the other
+.Fn *at
+calls,
+.Xr dup 2 ,
+.Xr dup2 2 ,
+.Xr dup3 2 ,
+the
+.Xr fcntl 2
+commands
+.Dv F_DUPFD ,
+.Dv F_DUPFD_CLOEXEC ,
+.Dv F_GETFD ,
+.Dv F_SETFD
+and
+.Dv F_GETFL ,
+which reports
+.Dv O_PATH ,
+and
+.Fn close .
+.Xr read 2 ,
+.Xr write 2 ,
+.Xr lseek 2 ,
+.Xr getdents64 2 ,
+.Xr ioctl 2 ,
+.Xr fsync 2 ,
+.Xr ftruncate 2 ,
+.Xr fchmod 2 ,
+.Xr fchown 2 ,
+.Fn utimensat
+with a null path, and the other
+.Xr fcntl 2
+commands return
+.Er EBADF ,
+and
+.Xr poll 2
+reports the descriptor with
+.Dv POLLNVAL .
+Its entry in
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+is the file's path, as an open descriptor's is; on a
+.Pa /dev
+or
+.Pa /proc
+node it is the path the descriptor was opened by, where Linux shows the
+node's own path.
 .Ss System call interface
 The i386 system call numbers are 5 for
 .Fn open ,

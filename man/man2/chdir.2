@@ -57,7 +57,9 @@ A descriptor on anything but a directory returns
 .Er ENOTDIR .
 Entering takes search permission on the directory, as
 .Fn chdir
-does.
+does, and a directory opened with
+.Dv O_PATH
+serves as well as one opened for reading, as on Linux.
 .Pp
 A working directory on a mounted file system holds a reference to its
 node and mount, preventing unmount while it remains in use.

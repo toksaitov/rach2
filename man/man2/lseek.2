@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt LSEEK 2
 .Os
 .Sh NAME
@@ -109,8 +109,10 @@ each to report the original file size.
 .Bl -tag -width "[EOVERFLOW]"
 .It Bq Er EBADF
 .Fa fd
-is invalid, its type is not supported by the seek handler, or the
-ordinary file description no longer identifies a valid file.
+is invalid, was opened with
+.Dv O_PATH ,
+its type is not supported by the seek handler, or the ordinary file
+description no longer identifies a valid file.
 .It Bq Er EFAULT
 The 64-bit result cannot be written to user memory, or a required
 result pointer is null.

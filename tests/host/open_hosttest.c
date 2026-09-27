@@ -64,6 +64,7 @@ static int32_t sys_chmod(isr_params_t *params);
 static int32_t sys_fchmodat(isr_params_t *params);
 static int32_t sys_fchmod(isr_params_t *params);
 static int32_t sys_chown(isr_params_t *params);
+static int32_t sys_lchown(isr_params_t *params);
 static int32_t sys_fchownat(isr_params_t *params);
 static int32_t sys_fchown(isr_params_t *params);
 static int32_t sys_truncate(isr_params_t *params);

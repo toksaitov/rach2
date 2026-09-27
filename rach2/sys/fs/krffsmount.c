@@ -439,6 +439,7 @@ static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
             ent->name[i] = '\0';
             ent->ino = scan + 1;
             ent->is_dir = KRFFS_IS_DIR(head.mode) ? 1 : 0;
+            ent->type = ent->is_dir ? VFS_DT_DIR : VFS_DT_REG;
             *cursor = next == 0 ? KRFFS_DIR_END : (uint32_t)next;
             vfs_ns_unlock(mnt);
             return 1;
