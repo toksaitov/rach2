@@ -156,6 +156,7 @@ static int clocks(void)
 static int ranges(void)
 {
     int fd[3];
+    int flags;
     int i;
 
     for (i = 0; i < 3; i++) {
@@ -164,9 +165,18 @@ static int ranges(void)
             return fail("dup");
         }
     }
-    if (syscall(436, fd[0], fd[2], 4) != 0 || !(fcntl(fd[0], F_GETFD) & FD_CLOEXEC) ||
-        !(fcntl(fd[2], F_GETFD) & FD_CLOEXEC) || (fcntl(0, F_GETFD) & FD_CLOEXEC)) {
+    if (syscall(436, fd[0], fd[2], 4) != 0) {
         return fail("close_range with CLOSE_RANGE_CLOEXEC");
+    }
+    for (i = 0; i < 3; i++) {
+        flags = fcntl(fd[i], F_GETFD);
+        if (flags < 0 || !(flags & FD_CLOEXEC)) {
+            return fail("close_range with CLOSE_RANGE_CLOEXEC left a descriptor unmarked");
+        }
+    }
+    flags = fcntl(0, F_GETFD);
+    if (flags < 0 || (flags & FD_CLOEXEC)) {
+        return fail("close_range with CLOSE_RANGE_CLOEXEC marked a descriptor below the range");
     }
     errno = 0;
     if (syscall(436, fd[0], fd[0], 8) != -1 || errno != EINVAL) {
