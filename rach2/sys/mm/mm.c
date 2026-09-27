@@ -22,27 +22,52 @@ struct mm *mm_new(void)
         return NULL;
     }
     mm->cr3 = get_page_dir_phys(mm->dir);
-    mm->refs = 1;
+    mm->users = 1;
+    mm->holds = 1;
     mm->dumpable = 1;
     return mm;
 }
 
 void mm_get(struct mm *mm)
 {
-    mm->refs++;
+    mm->users++;
+}
+
+int mm_get_live(struct mm *mm)
+{
+    if (mm->users == 0) {
+        return 0;
+    }
+    mm->users++;
+    return 1;
 }
 
 void mm_put(struct mm *mm)
 {
-    if (!mm || --mm->refs != 0) {
+    if (!mm || --mm->users != 0) {
         return;
     }
     free_user_pages(mm->dir);
     free_page_directory(mm->dir);
+    mm->dir = NULL;
+    mm->cr3 = 0;
     vm_free(&mm->vm);
+    vm_file_reap();
+    mm_unhold(mm);
+}
+
+void mm_hold(struct mm *mm)
+{
+    mm->holds++;
+}
+
+void mm_unhold(struct mm *mm)
+{
+    if (!mm || --mm->holds != 0) {
+        return;
+    }
     kfree(mm->exe);
     kfree(mm);
-    vm_file_reap();
 }
 
 void mm_set_exe(struct mm *mm, const char *path)
@@ -79,7 +104,7 @@ void mm_drop(struct process *p)
     if (!mm) {
         return;
     }
-    if (mm->refs == 1 && _curr_dir == mm->dir) {
+    if (mm->users == 1 && _curr_dir == mm->dir) {
         switch_page_directory(_kernel_dir);
     }
     p->mm = NULL;

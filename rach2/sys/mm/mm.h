@@ -7,11 +7,20 @@
 /*
  * An address space: a page directory and the regions it holds. A process
  * points at one; fork makes a copy, and clone with CLONE_VM, which vfork and
- * posix_spawn use, shares it, counted in `refs`. execve builds a new one
- * while the old one still runs and puts the old one after, so a failed load
- * returns to its caller, and a child that shares its parent's address space
- * leaves the parent's pages in place. The last reference frees the pages,
- * the directory and the regions.
+ * posix_spawn use, shares it. execve builds a new one while the old one still
+ * runs and puts the old one after, so a failed load returns to its caller,
+ * and a child that shares its parent's address space leaves the parent's
+ * pages in place.
+ *
+ * It has two counts, as Linux's mm_struct has mm_users and mm_count. `users`
+ * counts what runs in it or works on its pages: each thread that has it, an
+ * execve that builds it, and a call that reads or writes the pages of another
+ * process for the length of the call. The last user's put frees the pages, the
+ * page tables, the directory and the regions. `holds` counts what keeps the
+ * record alone: the users, together as one, and each /proc/PID/mem descriptor,
+ * whose reads take a user's count only while a user remains, so a descriptor
+ * keeps none of the memory of a process that has ended or executed another
+ * program. The last hold frees the record.
  *
  * What /proc reports of the image is kept with it: the program's path,
  * which /proc/PID/exe names; where on the stack its arguments and its
@@ -26,9 +35,10 @@ struct page_dir;
 #define MM_AUXV_WORDS 32
 
 struct mm {
-    uint32_t refs;
-    struct page_dir *dir;
-    uint32_t cr3; /* the directory's physical address */
+    uint32_t users;
+    uint32_t holds;
+    struct page_dir *dir; /* NULL once the last user has gone */
+    uint32_t cr3;         /* the directory's physical address */
     vm_space_t vm;
     char *exe; /* the program's path, from the heap; NULL for none */
     uint32_t arg_start;
@@ -45,8 +55,8 @@ struct mm {
     uint32_t dumpable;
 };
 
-/** A new, empty, dumpable address space with one reference; NULL when no
- * directory or record can be had. */
+/** A new, empty, dumpable address space with one user and one hold; NULL
+ * when no directory or record can be had. */
 struct mm *mm_new(void);
 
 /** Copy what `from` keeps beside its pages, for /proc and the dumpable flag,
@@ -60,20 +70,32 @@ void mm_copy_info(struct mm *to, const struct mm *from);
  * /proc/PID/exe is absolute. */
 void mm_set_exe(struct mm *mm, const char *path);
 
-/** Take a reference to `mm`. */
+/** Take a user's count of `mm`, for a caller that runs in it or that found
+ * it as the address space of a process that runs in it, with no sleep
+ * since. */
 void mm_get(struct mm *mm);
 
-/** Drop a reference; the last one frees the address space and then releases
- * the files its regions mapped, which may sleep. Its directory must not be
- * the one in use, which the caller switches away from first. */
+/** Take a user's count of `mm` if a user remains, for a holder that is not
+ * one: 1 when taken, 0 once the last user's put has freed the pages. */
+int mm_get_live(struct mm *mm);
+
+/** Drop a user's count; the last frees the pages, the page tables, the
+ * directory and the regions, releases the files its regions mapped, which
+ * may sleep, and then drops the users' hold. Its directory must not be the
+ * one in use, which the caller switches away from first. */
 void mm_put(struct mm *mm);
+
+/** Keep the record of `mm`, and nothing of its memory. */
+void mm_hold(struct mm *mm);
+
+/** Let go of a hold `mm_hold` took; the last frees the record. */
+void mm_unhold(struct mm *mm);
 
 struct process;
 
-/** Take `p`'s address space from it and drop that reference, loading the
- * kernel's directory first when this is the last reference and its
- * directory is the one in use. `p` is left with none, as a kernel thread
- * has none. */
+/** Take `p`'s address space from it and drop its user's count, loading the
+ * kernel's directory first when this is the last user and its directory is
+ * the one in use. `p` is left with none, as a kernel thread has none. */
 void mm_drop(struct process *p);
 
 #endif /* _MM_H_ */

@@ -1,10 +1,13 @@
 /**
  * Check proc stat generation when every text allocation fails, the CPU time
  * of a process's stat and of a thread's, the descriptor links of a process,
- * which a closed descriptor has none of, and the ids a path under a
- * process's task directory needs.
+ * which a closed descriptor has none of, the ids a path under a process's
+ * task directory needs, and the counts a /proc/PID/mem descriptor takes of
+ * the address space: a hold on its record, and a user's count for a read
+ * only while a user remains.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * Unused exports are private so the compiler removes unrelated generators.
  */
@@ -51,6 +54,13 @@ process_t *current_proc = &process;
 static fd_table_t table;
 static fd_entry_t entries[1];
 static int refuse, allocations, failures;
+/* Process 7's address space in the /proc/7/mem rows, the description of
+ * their descriptor, and the reads that reached the memory. */
+static struct mm space;
+static struct open_file mem_ofd;
+static int mem_reads;
+page_dir_t *_kernel_dir;
+page_dir_t *_curr_dir;
 
 /** Record a failed invariant. */
 static void check(int ok, const char *what)
@@ -93,6 +103,78 @@ void *kmalloc(size_t size)
 void kfree(void *ptr)
 {
     free(ptr);
+}
+
+void *kzalloc(size_t size)
+{
+    void *p = malloc(size);
+
+    if (p) {
+        k_memset(p, 0, size);
+    }
+    return p;
+}
+
+/** The one descriptor of the /proc/7/mem rows. */
+int fd_alloc(fd_table_t *t)
+{
+    (void)t;
+    return 0;
+}
+
+/* The counts of an address space, as mm.c keeps them. */
+void mm_hold(struct mm *mm)
+{
+    mm->holds++;
+}
+
+void mm_unhold(struct mm *mm)
+{
+    if (mm) {
+        mm->holds--;
+    }
+}
+
+int mm_get_live(struct mm *mm)
+{
+    if (mm->users == 0) {
+        return 0;
+    }
+    mm->users++;
+    return 1;
+}
+
+void mm_put(struct mm *mm)
+{
+    mm->users--;
+}
+
+void switch_page_directory(page_dir_t *dir)
+{
+    _curr_dir = dir;
+}
+
+/** Memory that reads as 'm', counting the reads that reach it. */
+int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
+{
+    (void)mm;
+    (void)addr;
+    (void)write;
+    k_memset(buf, 'm', len);
+    mem_reads++;
+    return 0;
+}
+
+int copy_to_user(void __user *dst, const void *src, uint32_t n)
+{
+    k_memcpy((void __force *)dst, src, n);
+    return 0;
+}
+
+int copy_from_user(void *dst, const void __user *src, uint32_t n)
+{
+    k_memcpy(dst, (const void __force *)src, n);
+    return 0;
 }
 
 /** The descriptor table's size, as fd.c reports it. */
@@ -242,6 +324,40 @@ static void descriptor_links(void)
           "a descriptor being released has no link");
 }
 
+/**
+ * A /proc/PID/mem descriptor holds the record of the address space and is no
+ * user of it: its open takes a hold, a read takes a user's count for its
+ * length while the process runs in the space, a read once the last user has
+ * gone returns 0 and reaches no memory, and the close lets go of the hold.
+ */
+static void mem_descriptor(void)
+{
+    struct vpath vp;
+    char buf[4];
+
+    k_memset(&vp, 0, sizeof(vp));
+    space.users = 1;
+    space.holds = 1;
+    space.dumpable = 1;
+    process.mm = &space;
+    process.fds = &table;
+    table.entries = entries;
+    table.cap = 1;
+    k_memset(&entries[0], 0, sizeof(entries[0]));
+    entries[0].ofd = &mem_ofd;
+    check(procfs_open_mem(&vp, 7, 0) == 0 && space.users == 1 && space.holds == 2,
+          "an open of /proc/PID/mem holds the record and is no user of it");
+    check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == 4 && mem_reads == 1 &&
+              space.users == 1,
+          "a read while the process runs is a user for its length");
+    space.users = 0;
+    check(procfs_mem_read(&entries[0], (char __user *)buf, sizeof(buf)) == 0 && mem_reads == 1,
+          "a read once the process has ended returns 0 and reaches no memory");
+    procfs_close(&entries[0]);
+    check(space.holds == 1 && entries[0].priv == NULL, "the close lets go of the hold");
+    process.mm = NULL;
+}
+
 /** Exercise empty and partially allocated text, then normal generation. */
 int main(void)
 {
@@ -277,9 +393,10 @@ int main(void)
     thread_times();
     descriptor_links();
     task_ids();
+    mem_descriptor();
     if (!failures) {
-        printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor links "
-               "and task ids\n");
+        printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
+               "links, task ids and the mem descriptor's counts\n");
     }
     return failures != 0;
 }

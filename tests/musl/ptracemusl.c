@@ -4,7 +4,10 @@
  * A child that calls PTRACE_TRACEME and stops itself is reported stopped to its
  * parent. The parent reads and changes a word of the child's memory with
  * PEEKDATA and POKEDATA, and through /proc/PID/mem, where a read and a write
- * that run from a page into a hole do the bytes before the hole; reads the
+ * that run from a page into a hole do the bytes before the hole, and whose
+ * descriptor keeps none of the memory of a child that has ended: the free
+ * memory /proc/meminfo reports is back once a child that touched 16 MiB is
+ * reaped, while a descriptor of its memory is still open; reads the
  * registers with GETREGS and the floating-point state with GETFPXREGS; steps
  * one instruction with SINGLESTEP, which moves the instruction pointer; plants
  * a breakpoint with POKETEXT on a read-only text page, continues to it, finds
@@ -447,6 +450,92 @@ static int abandon(pid_t pid, const char *what)
     kill(pid, SIGKILL);
     waitpid(pid, NULL, __WALL);
     return fail(what);
+}
+
+/** MemFree of /proc/meminfo, in KiB, or -1 when it cannot be read. */
+static long mem_free_kib(void)
+{
+    char text[1024];
+    char *at;
+    long kib = -1;
+    ssize_t n;
+    int fd = open("/proc/meminfo", O_RDONLY);
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    at = strstr(text, "MemFree:");
+    if (at == NULL || sscanf(at + 8, "%ld", &kib) != 1) {
+        return -1;
+    }
+    return kib;
+}
+
+/*
+ * A child touches 16 MiB and waits; the parent opens its /proc/PID/mem, lets
+ * it end and reaps it. With the descriptor still open, the free memory
+ * /proc/meminfo reports must be back within 8 MiB of what it was before the
+ * fork: the descriptor keeps the record of the address space, and the pages
+ * go with the child.
+ */
+static int mem_after_end(void)
+{
+    int ready[2], go[2];
+    long before, after;
+    char path[32];
+    int status, fd = -1;
+    char c;
+    pid_t pid;
+
+    if (pipe(ready) != 0 || pipe(go) != 0) {
+        return fail("pipe");
+    }
+    before = mem_free_kib();
+    pid = fork();
+    if (pid < 0) {
+        return fail("fork");
+    }
+    if (pid == 0) {
+        size_t size = (size_t)16 << 20;
+        char *m = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+        close(ready[0]);
+        close(go[1]);
+        if (m == MAP_FAILED) {
+            _exit(1);
+        }
+        memset(m, 1, size);
+        _exit(write(ready[1], "r", 1) == 1 && read(go[0], &c, 1) == 1 ? 0 : 1);
+    }
+    close(ready[1]);
+    close(go[0]);
+    snprintf(path, sizeof(path), "/proc/%d/mem", (int)pid);
+    if (read(ready[0], &c, 1) == 1) {
+        fd = open(path, O_RDONLY);
+    }
+    if (fd < 0 || write(go[1], "g", 1) != 1) {
+        return abandon(pid, "a child whose memory was opened");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the child that touched 16 MiB");
+    }
+    after = mem_free_kib();
+    close(fd);
+    close(ready[0]);
+    close(go[1]);
+    if (before < 0 || after < 0) {
+        return fail("/proc/meminfo");
+    }
+    if (after < before - 8192) {
+        return fail("a /proc/PID/mem descriptor kept the memory of a child that ended");
+    }
+    return 0;
 }
 
 /** Wait up to ten seconds for a change in the child `pid` that waitpid
@@ -933,9 +1022,10 @@ static int killed_tracee(void)
 
 int main(void)
 {
-    if (memory_and_registers() || syscalls_and_exec() || syscall_changes() || killed_at_entry() ||
-        restart_cancelled() || attach() || attach_stopped() || interrupt_read() ||
-        stopped_leader() || traced_thread_usage() || tracer_first() || killed_tracee()) {
+    if (memory_and_registers() || mem_after_end() || syscalls_and_exec() || syscall_changes() ||
+        killed_at_entry() || restart_cancelled() || attach() || attach_stopped() ||
+        interrupt_read() || stopped_leader() || traced_thread_usage() || tracer_first() ||
+        killed_tracee()) {
         return 1;
     }
     printf("PTRACEMUSL OK\n");

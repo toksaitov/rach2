@@ -376,7 +376,7 @@ void proc_thread_gone(process_t *p)
 
     robust_exit(p);
     p->robust_list = 0;
-    if (p->clear_child_tid != 0 && p->mm != NULL && p->mm->refs > 1 &&
+    if (p->clear_child_tid != 0 && p->mm != NULL && p->mm->users > 1 &&
         copy_to_user((void __user *)p->clear_child_tid, &zero, sizeof(zero)) == 0) {
         (void)futex_wake(p->clear_child_tid, 1, FUTEX_MATCH_ANY, 0);
     }
