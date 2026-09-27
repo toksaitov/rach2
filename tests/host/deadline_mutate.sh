@@ -71,7 +71,8 @@ run_phase()
     binary="$work/$phase"
     # The test's host-deps, a kernel source taken from the private tree.
     deps=
-    for dep in $(grep -oE 'host-deps:[^*]*' "tests/host/$test.c" | sed 's/host-deps://'); do
+    listed=$(grep -oE 'host-deps:[^*]*' "tests/host/$test.c" | sed 's/host-deps://')
+    for dep in $listed; do
         case $dep in
             rach2/sys/*) deps="$deps $work/sys/${dep#rach2/sys/}" ;;
             *) deps="$deps $dep" ;;
