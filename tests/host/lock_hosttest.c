@@ -212,10 +212,43 @@ static void wait_cycle(void)
     CHECK(count_locks() == 0);
 }
 
+static struct open_file shared, holder;
+static int32_t second_result;
+
+/** The second thread sharing a description asks for its lock too. */
+static void second_asks(void)
+{
+    second_result = lock_flock(&file, &shared, LOCK_SH);
+}
+
+/** The other description lets its exclusive lock go. */
+static void holder_lets_go(void)
+{
+    CHECK(lock_flock(&file, &holder, LOCK_UN) == 0);
+}
+
+/**
+ * Two threads that share a description and wait behind another
+ * description's exclusive lock end with one lock between them: the second
+ * to wake finds the one the first took, so one LOCK_UN lets the file go.
+ */
+static void shared_wait(void)
+{
+    CHECK(lock_flock(&file, &holder, LOCK_EX) == 0);
+    steps[0] = second_asks;
+    steps[1] = holder_lets_go;
+    steps[2] = NULL;
+    step = 0;
+    CHECK(lock_flock(&file, &shared, LOCK_SH) == 0 && second_result == 0);
+    CHECK(count_locks() == 1);
+    CHECK(lock_flock(&file, &shared, LOCK_UN) == 0 && count_locks() == 0);
+}
+
 int main(void)
 {
     records();
     descriptions();
     wait_cycle();
+    shared_wait();
     return fails > 100 ? 100 : fails;
 }

@@ -353,6 +353,16 @@ static int flock_free(void *arg)
     return !flock_conflict((const struct flock_want *)arg);
 }
 
+/**
+ * flock(2)'s lock of `ofd` on `key`, as lock.h describes it.
+ *
+ * The description's lock of the type asked for is kept as it is, and one of
+ * the other type is let go first, so a conversion is not atomic, as in
+ * Linux. Both are looked for again after every wait: the threads that share
+ * a description may wait for one lock together, and the first to wake takes
+ * it for the description, so the others find it there and take no second
+ * lock that one LOCK_UN would leave behind.
+ */
 int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
 {
     struct flock_want want;
@@ -372,28 +382,29 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
     }
     want.key = key;
     want.ofd = ofd;
-    /* The description's lock of the other type goes first, so a conversion
-     * is not atomic, as in Linux. */
-    for (link = &locks; (l = *link) != NULL; link = &l->next) {
-        if (mine(l, key, LK_FLOCK, (uintptr_t)ofd)) {
-            if (l->type == want.type) {
-                return 0;
+    for (;;) {
+        for (link = &locks; (l = *link) != NULL; link = &l->next) {
+            if (mine(l, key, LK_FLOCK, (uintptr_t)ofd)) {
+                if (l->type == want.type) {
+                    return 0;
+                }
+                unlink_lock(link);
+                wq_wake_all(&lock_wq);
+                break;
             }
-            unlink_lock(link);
-            wq_wake_all(&lock_wq);
+        }
+        if (want.type == F_UNLCK || !flock_conflict(&want)) {
             break;
         }
-    }
-    if (want.type == F_UNLCK) {
-        return 0;
-    }
-    while (flock_conflict(&want)) {
         if (nb) {
             return -EAGAIN;
         }
         if (wq_wait_event(&lock_wq, flock_free, &want) < 0) {
             return -EINTR;
         }
+    }
+    if (want.type == F_UNLCK) {
+        return 0;
     }
     l = kzalloc(sizeof(*l));
     if (!l) {

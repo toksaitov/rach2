@@ -52,6 +52,9 @@ A request for the type the description already has succeeds at once; a
 request for the other type first lets go of the lock the description
 has, so a conversion is not atomic, and a failed one leaves no lock,
 as on Linux.
+A request that waits looks for the description's lock again when it
+wakes, so threads that share a description and wait together end with
+one lock.
 .Pp
 .Fn flock
 locks and
