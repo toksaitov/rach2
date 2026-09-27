@@ -21,7 +21,8 @@
  * address and no length pointer fails with EFAULT. A listener shut down for
  * reading gives up the connection queued before, then fails an accept with
  * EINVAL and refuses a connect. A connect waiting for room in a full queue
- * finishes when listen makes the backlog larger.
+ * finishes when listen makes the backlog larger. A datagram socket refuses a
+ * connect with EPERM while it is connected to another.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -494,6 +495,27 @@ static int backlog_growth(void)
     return 0;
 }
 
+static int datagram_peers(void)
+{
+    struct sockaddr_un a;
+    socklen_t alen = abstract_addr(&a, "unixmusl.pair");
+    int sv[2];
+    int other;
+
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0 ||
+        bind(sv[0], (struct sockaddr *)&a, alen) != 0) {
+        return fail("a named datagram pair");
+    }
+    other = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (connect(other, (struct sockaddr *)&a, alen) != -1 || errno != EPERM) {
+        return fail("a connect to a datagram socket connected elsewhere was not EPERM");
+    }
+    close(other);
+    close(sv[0]);
+    close(sv[1]);
+    return 0;
+}
+
 static int datagram_names(void)
 {
     struct sockaddr_un to, from, got;
@@ -556,7 +578,7 @@ int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
-        backlog_growth() || datagram_names() || waiting()) {
+        backlog_growth() || datagram_peers() || datagram_names() || waiting()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");

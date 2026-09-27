@@ -955,6 +955,12 @@ static int listener_has_room(void *arg)
            (int)l->acc_len <= l->backlog;
 }
 
+/**
+ * connect(2) of a datagram socket: the target becomes the peer its sends
+ * without a name go to, or with AF_UNSPEC it has none. A target connected
+ * to another socket refuses with EPERM and the connection is left as it
+ * was, as Linux's unix_may_send has it.
+ */
 static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrlen)
 {
     struct unix_name n;
@@ -989,6 +995,10 @@ static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrle
     if (target->type != SOCK_DGRAM) {
         unix_put(target);
         return -EPROTOTYPE;
+    }
+    if (target->peer && target->peer != s) {
+        unix_put(target);
+        return -EPERM;
     }
     if (s->peer) {
         unix_put(s->peer);

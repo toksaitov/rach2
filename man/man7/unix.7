@@ -110,7 +110,7 @@ A datagram receiver queues at most 10 messages and 212992 bytes, and a
 sender waits for room, or fails with
 .Er EAGAIN .
 A datagram socket may be connected to one peer; a socket connected to
-another refuses the send with
+another refuses the send, and the connect, with
 .Er EPERM .
 .Dv MSG_PEEK ,
 .Dv MSG_DONTWAIT
