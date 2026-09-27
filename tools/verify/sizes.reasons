@@ -555,7 +555,6 @@ tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one tabl
 tests/musl/direntmusl.c:main complexity 28 a test's rows, each a case, read as one table
 
 tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
-tests/musl/epollmusl.c:sets lines 112 a test's rows, each a case, read as one table
 
 tests/musl/execargmusl.c:child complexity 26 a test's rows, each a case, read as one table
 
