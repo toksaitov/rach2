@@ -163,6 +163,13 @@ void switch_page_directory(page_dir_t *dir);
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr);
 
 /*
+ * A frame for a user page, taken as alloc_user_page takes one, never from
+ * the reserve, and not mapped: for a page that is filled before it is
+ * mapped. Returns its physical address, or 0 when there is none.
+ */
+uintptr_t alloc_user_frame(void);
+
+/*
  * Map an already-owned physical frame 'phys' at user virtual address 'virt'
  * in 'dir' with the given low-12-bit PTE 'flags'
  * (present/user/write/PTE_COW, etc.), creating a private page table for the

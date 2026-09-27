@@ -476,6 +476,46 @@ static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
  * space here (the handler and the pre-fault path both check
  * `current_proc->cr3 != 0`).
  */
+/**
+ * Back a page of a region that maps a file: a frame filled from the file and
+ * mapped once it is full, writable when the region is. The mapping is
+ * private: a store changes the frame, never the file.
+ *
+ * The fill may sleep in the disk, so the region is looked up again after
+ * it, and a page that another path backed meanwhile, or a region that
+ * changed, leaves the frame unused; the access then runs again and faults
+ * on what is there now.
+ */
+static int file_fault(vm_space_t *vm, vma_t *vma, uint32_t addr)
+{
+    struct vm_file *f = vma->file;
+    uint32_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uintptr_t phys;
+    int rc;
+
+    mem_balance();
+    phys = alloc_user_frame();
+    if (phys == 0) {
+        return 0;
+    }
+    vm_file_get(f);
+    rc = f->fill(f, pgoff, phys);
+    vma = vm_find(vm, page);
+    if (rc != 0 || !vma || vma->file != f ||
+        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(_curr_dir, page)) {
+        vm_file_put(f);
+        free_frame(phys);
+        return rc == 0 && vma != NULL;
+    }
+    vm_file_put(f);
+    if (map_user_frame(_curr_dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
+        free_frame(phys);
+        return 0;
+    }
+    return 1;
+}
+
 static int vm_resolve(uint32_t addr, int write)
 {
     vm_space_t *vm = &current_proc->vm;
@@ -500,6 +540,9 @@ static int vm_resolve(uint32_t addr, int write)
                 return cow_fault(addr);
             }
             return 1; /* already backed; nothing to do */
+        }
+        if (vma->file) {
+            return file_fault(vm, vma, addr);
         }
     }
 
@@ -1284,34 +1327,10 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t fla
     return 0;
 }
 
-uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
+uintptr_t alloc_user_frame(void)
 {
-    uintptr_t phys_addr;
-    uintptr_t page_num;
-    uintptr_t table_index;
-    uintptr_t page_index;
     uintptr_t frame;
-    page_table_t *table;
     uint32_t flags;
-
-    /* Align to page boundary */
-    virt_addr &= ~(PAGE_SIZE - 1);
-
-    /* Calculate table and page indices */
-    page_num = virt_addr / PAGE_SIZE;
-    table_index = page_num / 1024;
-    page_index = page_num % 1024;
-
-    if (table_index >= 1024) {
-        klog(KLOG_ERR, "vm", "user page: table index %d is past the directory", (int)table_index);
-        return 0;
-    }
-
-    /* The table first: one that cannot be had leaves no frame to give back. */
-    table = ensure_user_table(dir, table_index);
-    if (!table) {
-        return 0;
-    }
 
     if (!mem_may_take(1)) {
         klog(KLOG_WARN, "vm", "user page: refused: the free frames are the reserve's, pid %d",
@@ -1352,8 +1371,39 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
              (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
         return 0; /* No free frames */
     }
+    return frame * PAGE_SIZE;
+}
 
-    phys_addr = frame * PAGE_SIZE;
+uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
+{
+    uintptr_t phys_addr;
+    uintptr_t page_num;
+    uintptr_t table_index;
+    uintptr_t page_index;
+    page_table_t *table;
+
+    /* Align to page boundary */
+    virt_addr &= ~(PAGE_SIZE - 1);
+
+    /* Calculate table and page indices */
+    page_num = virt_addr / PAGE_SIZE;
+    table_index = page_num / 1024;
+    page_index = page_num % 1024;
+
+    if (table_index >= 1024) {
+        klog(KLOG_ERR, "vm", "user page: table index %d is past the directory", (int)table_index);
+        return 0;
+    }
+
+    /* The table first: one that cannot be had leaves no frame to give back. */
+    table = ensure_user_table(dir, table_index);
+    if (!table) {
+        return 0;
+    }
+    phys_addr = alloc_user_frame();
+    if (phys_addr == 0) {
+        return 0;
+    }
 
     /* Map the page with present, rw, and user bits */
     table->pages[page_index] = phys_addr | 0x7; /* P + RW + U/S */

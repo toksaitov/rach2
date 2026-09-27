@@ -24,8 +24,8 @@
 /* Policy: the regions a process may hold at most. A process's regions are an
  * array in the heap that starts at VMA_FIRST entries and doubles as it
  * fills; at the limit a further mapping answers ENOMEM, the bound Linux
- * keeps as max_map_count. An entry is 16 bytes, so a process at the limit
- * holds a megabyte of them. A program starts with a region per loaded
+ * keeps as max_map_count. An entry is 24 bytes, so a process at the limit
+ * holds a megabyte and a half of them. A program starts with a region per loaded
  * segment and one for its stack, and the heap's comes with its first brk;
  * the rest are anonymous mmaps, which is what a C library's allocator
  * reaches for, one per large allocation. `tests/musl/vmamusl.c`
@@ -55,12 +55,29 @@ typedef enum {
     VM_ANON   /* anonymous mmap */
 } vm_type_t;
 
-/* A single virtual memory area: [start, end) page-aligned. */
+/*
+ * A file a region maps. The record is the first member of its owner's own,
+ * which keeps the open file; `refs` counts the regions that map it, and the
+ * last one to go calls `release`. `fill` reads the file's page `pgoff` into
+ * the frame `phys`, with zeros past the end of the file: 0, or -1 when the
+ * read fails.
+ */
+struct vm_file {
+    uint32_t refs;
+    int (*fill)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
+    void (*release)(struct vm_file *f);
+};
+
+/* A single virtual memory area: [start, end) page-aligned. A region that
+ * maps a file has it in `file`, and `pgoff` is the page of the file at
+ * `start`; an anonymous region has neither. */
 typedef struct vma {
     uint32_t start; /* inclusive, page-aligned */
     uint32_t end;   /* exclusive, page-aligned */
     uint32_t prot;  /* VM_PROT_* */
     vm_type_t type;
+    struct vm_file *file;
+    uint32_t pgoff;
 } vma_t;
 
 /* The per-process address space. */
@@ -73,13 +90,15 @@ typedef struct vm_space {
     uint32_t stack_limit; /* lowest address the stack VMA may grow down to */
 } vm_space_t;
 
-/* Reset an address space to empty; the array it has, if any, is kept. */
+/* Reset an address space to empty, dropping the files its regions map; the
+ * array it has, if any, is kept. */
 void vm_init(vm_space_t *vm);
 
 /* Give the array back; the space is empty after. */
 void vm_free(vm_space_t *vm);
 
-/* Make `dst`, which has no array, a copy of `src`; 0, or -1 with no memory. */
+/* Make `dst`, which has no array, a copy of `src`, whose regions take a
+ * reference each to the files they map; 0, or -1 with no memory. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /* Return the VMA containing 'addr' (start <= addr < end), or NULL. */
@@ -91,6 +110,15 @@ int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end);
 /** Insert a region [start, end) with 'prot'/'type'; 0 ok, -1 on error,
  * which includes the limit reached and a heap with no room to grow. */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type);
+
+/** The same, for a region that maps `file` from its page `pgoff`; the region
+ * takes a reference of its own. */
+int vm_insert_file(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type,
+                   struct vm_file *file, uint32_t pgoff);
+
+/** Take a reference to `f`, or drop one, releasing it with the last. */
+void vm_file_get(struct vm_file *f);
+void vm_file_put(struct vm_file *f);
 
 /** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room,
  * in which case nothing has changed. */

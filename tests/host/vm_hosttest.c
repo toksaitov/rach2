@@ -7,7 +7,8 @@
  * overlap detection, the four munmap cases (full cover, left trim, right
  * trim, middle split), the array's growth past what it starts with, the
  * merging of neighbours, mprotect's splits and merges and its refusal of a
- * gap, the search for a free range, and the bytes a range covers.
+ * gap, the search for a free range, the bytes a range covers, and the file
+ * a region maps: its pages through splits and merges, and its references.
  * Returns the failed-check count (0 == all passed). Run natively under
  * AddressSanitizer/UBSan.
  */
@@ -59,6 +60,23 @@ void *k_memmove(void *dest, const void *src, size_t n)
 }
 
 static int fails;
+
+/* A mapped file that counts its releases, for the cases below. */
+static int released;
+
+static int no_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    (void)f;
+    (void)pgoff;
+    (void)phys;
+    return 0;
+}
+
+static void count_release(struct vm_file *f)
+{
+    (void)f;
+    released++;
+}
 
 #define CHECK(cond)    \
     do {               \
@@ -290,6 +308,46 @@ int main(void)
         CHECK(vm_find_free(&f, 2 * PG, 0x19000, 0x20000) == 0x1D000);
         CHECK(vm_covered(&f, 0x13000, 0x1E000) == 4 * PG + PG);
         vm_free(&f);
+    }
+
+    /* A region that maps a file: a split gives the upper part the file's
+     * later pages and a reference of its own; the pieces join again only
+     * where the pages continue; the file is released when the last region
+     * that maps it goes, and a copy for fork takes references of its own. */
+    {
+        vm_space_t m = {0};
+        vm_space_t c = {0};
+        struct vm_file file = {1, no_fill, count_release};
+        vma_t *lo, *hi;
+
+        released = 0;
+        CHECK(vm_insert_file(&m, 0x40000, 0x48000, VM_PROT_READ, VM_DATA, &file, 3) == 0);
+        CHECK(file.refs == 2);
+        CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ | VM_PROT_WRITE) == 0);
+        CHECK(m.count == 3 && file.refs == 4);
+        lo = vm_find(&m, 0x42000);
+        hi = vm_find(&m, 0x44000);
+        CHECK(lo != NULL && lo->pgoff == 5 && hi != NULL && hi->pgoff == 7);
+        CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ) == 0);
+        CHECK(m.count == 1 && file.refs == 2 && m.vmas[0].pgoff == 3);
+        CHECK(vm_remove(&m, 0x41000, 0x42000) == 0);
+        CHECK(m.count == 2 && file.refs == 3);
+        hi = vm_find(&m, 0x42000);
+        CHECK(hi != NULL && hi->start == 0x42000 && hi->pgoff == 5);
+        CHECK(vm_remove(&m, 0x42000, 0x43000) == 0);
+        hi = vm_find(&m, 0x43000);
+        CHECK(hi != NULL && hi->pgoff == 6);
+        /* The gap is filled from the file's page 4 at 0x41000: page 5 is
+         * gone, so it does not join the region above. */
+        CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
+        CHECK(m.count == 2 && m.vmas[0].end == 0x42000);
+        CHECK(vm_copy(&c, &m) == 0 && file.refs == 5);
+        vm_free(&c);
+        CHECK(file.refs == 3 && released == 0);
+        vm_free(&m);
+        CHECK(file.refs == 1 && released == 0);
+        vm_file_put(&file);
+        CHECK(released == 1);
     }
 
     return (fails > 100) ? 100 : fails;

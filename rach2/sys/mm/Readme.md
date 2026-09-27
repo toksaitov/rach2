@@ -26,7 +26,7 @@ User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not includin
 
 ## Virtual memory areas
 
-Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The array starts with 16 entries and doubles as it fills, up to 65536. It is kept sorted by address, a lookup is a binary search, and neighbours of the same type and protection merge. This limit serves the same purpose as Linux's `max_map_count`: a mapping that needs another VMA is refused. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
+Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The array starts with 16 entries and doubles as it fills, up to 65536. It is kept sorted by address, a lookup is a binary search, and neighbours of the same type and protection merge; two that map a file merge only where its pages continue. A VMA that maps a file holds a reference to a `struct vm_file`, whose owner keeps the file open, and the page of the file at its start, which splits and trims carry on; the last VMA to let go of the file releases it. This limit serves the same purpose as Linux's `max_map_count`: a mapping that needs another VMA is refused. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
 
 * `VM_CODE` and `VM_DATA` describe loaded ELF segments.
 * `VM_HEAP` describes the non-empty part of the `brk` heap, one VMA or several when `mprotect` has divided it.
@@ -53,7 +53,7 @@ The vector 14 handler reads CR2 and the x86 error code, then handles these cases
 3. Any remaining user-mode fault terminates the process with `SIGSEGV`; a real init death halts the kernel.
 4. Any remaining supervisor fault panics the kernel.
 
-`vm_resolve` checks the VMA permissions first, so a write to a present copy-on-write page reaches `cow_fault` only when its VMA is writable; a VMA `mprotect` made read-only keeps its shared pages read-only. A new heap, stack, or anonymous page receives a zeroed frame. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
+`vm_resolve` checks the VMA permissions first, so a write to a present copy-on-write page reaches `cow_fault` only when its VMA is writable; a VMA `mprotect` made read-only keeps its shared pages read-only. A new heap, stack, or anonymous page receives a zeroed frame. A page of a VMA that maps a file is read from the file into a frame, which is mapped once it is full, writable when the VMA is; the mapping is private, so a store changes the frame and never the file. The read may sleep, so the VMA is looked up again after it, and a page backed meanwhile leaves the frame unused. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
 
 Stack growth extends the stack VMA down to the faulting page when the page is at or above `stack_limit`. Growth fails if it would cross another VMA. Pages between the old and new start remain unallocated until touched.
 
