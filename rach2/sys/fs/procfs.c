@@ -828,6 +828,8 @@ static const char *procfs_pid_file_name(int kind)
         return "environ";
     case SYNTH_PROC_COMM:
         return "comm";
+    case SYNTH_PROC_MEM:
+        return "mem";
     default:
         return "stat";
     }
@@ -1919,6 +1921,112 @@ static void procfs_close(fd_entry_t *e)
 static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procfs_poll,
                                                 procfs_ioctl, procfs_close};
 
+/**
+ * Read or write `count` bytes of /proc/<pid>/mem at the descriptor's offset,
+ * which is the address, through the process's address space, and move the
+ * offset past them, as GDB reads and writes the memory of a tracee with
+ * pread64 and pwrite64. A write reaches read-only program text, as a
+ * tracer's does. The bytes done are returned, -EIO when none could be at an
+ * address no region allows, and 0 once the process has no address space.
+ */
+static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    process_t *p = f ? get_process((uint32_t)f->origin_pid) : NULL;
+    uint32_t addr = (uint32_t)e->ofd->offset;
+    uint32_t done = 0;
+    char buf[256];
+    int rc = 0;
+
+    if (!p || p->state == PROC_UNUSED || !p->mm) {
+        return 0;
+    }
+    while (done < count) {
+        uint32_t n = count - done < sizeof(buf) ? count - done : (uint32_t)sizeof(buf);
+
+        if (write) {
+            if (copy_from_user(buf, ubuf + done, n) != 0) {
+                rc = -EFAULT;
+                break;
+            }
+            rc = paging_access(p->mm, addr, buf, n, 1);
+        } else {
+            rc = paging_access(p->mm, addr, buf, n, 0);
+            if (rc == 0 && copy_to_user(ubuf + done, buf, n) != 0) {
+                rc = -EFAULT;
+            }
+        }
+        if (rc != 0) {
+            break;
+        }
+        done += n;
+        addr += n;
+    }
+    e->ofd->offset = addr;
+    return done > 0 ? (int32_t)done : rc;
+}
+
+static int32_t procfs_mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return procfs_mem_access(e, buf, count, 0);
+}
+
+static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    return procfs_mem_access(e, (char __user *)(uintptr_t)buf, count, 1);
+}
+
+static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write, procfs_poll,
+                                               procfs_ioctl, procfs_close};
+
+/**
+ * Open /proc/<pid>/mem for reading, writing or both: the caller needs
+ * effective user ID 0, or the process's real user ID and a dumpable process,
+ * as a tracer does to attach. The descriptor keeps the process's id and no
+ * text; its offset is an address.
+ */
+static int procfs_open_mem(int pid, int flags)
+{
+    process_t *p = get_process((uint32_t)pid);
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (!p || !p->mm) {
+        return -ENOENT;
+    }
+    if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
+        return -EACCES;
+    }
+    if (current_proc->euid != 0 && (current_proc->ruid != p->ruid || !p->dumpable)) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_pid = pid;
+    f->origin_file = SYNTH_PROC_MEM;
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return -EMFILE;
+    }
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_mem_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /** Append one decimal audio field. */
 static void audio_field(struct procfs_text *t, const char *name, uint32_t value)
 {
@@ -2039,6 +2147,9 @@ int procfs_open(const struct vpath *vp, int flags)
     }
     if (flags & 0200000 /* O_DIRECTORY */) {
         return -ENOTDIR;
+    }
+    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
+        return procfs_open_mem(pid, flags);
     }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;

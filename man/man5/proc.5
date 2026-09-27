@@ -462,6 +462,17 @@ The environment strings of the initial stack, each ended by a NUL.
 It and
 .Pa auxv
 need effective user ID 0 or the process's real user ID.
+.It Pa /proc/PID/mem
+The process's memory, read and written at the descriptor's offset, which
+is the address, as GDB uses it through
+.Xr pread 2
+and
+.Xr pwrite 2 .
+An address no region allows is
+.Er EIO ,
+and a write reaches read-only program text, as a tracer's does.
+Opening it needs effective user ID 0, or the process's real user ID and a
+dumpable process.
 .It Pa /proc/self
 The calling thread's process.
 .Pa /proc
