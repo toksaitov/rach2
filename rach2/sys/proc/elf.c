@@ -163,7 +163,7 @@ static int elf_read_exact(elf_read_fn readfn, void *ctx, void *dst, uint32_t cou
     return got == (int)count ? 0 : -ENOEXEC;
 }
 
-int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out)
+int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out)
 {
     Elf32_Phdr phdrs[ELF_MAX_PHNUM];
     Elf32_Ehdr ehdr;
@@ -200,7 +200,7 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out)
             if (((end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)) > out->hi) {
                 out->hi = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
             }
-        } else if (ph->p_type == PT_INTERP) {
+        } else if (ph->p_type == PT_INTERP && interp) {
             if (ph->p_filesz < 2 || ph->p_filesz > sizeof(out->interp)) {
                 return -ENOEXEC;
             }

@@ -210,10 +210,12 @@ typedef struct {
     char interp[ELF_INTERP_MAX];
 } elf_layout_t;
 
-/** Read an image's layout; 0, -ENOEXEC for an image this kernel does not
- * load, an interpreter path that is not an absolute path within the limit or
- * a file that ends before its headers, or -EIO when a read fails. */
-int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out);
+/** Read an image's layout, and with `interp` the interpreter its PT_INTERP
+ * names; without it a PT_INTERP is not read, as for an interpreter, whose
+ * own one is ignored. 0, -ENOEXEC for an image this kernel does not load, an
+ * interpreter path that is not an absolute path within the limit or a file
+ * that ends before its headers, or -EIO when a read fails. */
+int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out);
 
 /** Run-time vaddr of the program header table (AT_PHDR), or 0 if none
  * covers `phoff`. */

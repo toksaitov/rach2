@@ -14,7 +14,8 @@
  * numbers to host buffers and loads a second image inside the first image's
  * read callback. Both loads must retain their own segment geometry and
  * bytes. A position-independent image is read for its layout and
- * interpreter and loaded at a base. Returns the failed-check count.
+ * interpreter and loaded at a base, and read as an interpreter is, with its
+ * own PT_INTERP not read. Returns the failed-check count.
  */
 
 #include "proc/elf.c"
@@ -327,7 +328,9 @@ static int same_text(const char *a, const char *b)
  * load at a base moves its segment, entry and program headers by the base.
  * Without a base it lies below the user window and is refused before a page
  * is taken, as are an unaligned base, a base for an ET_EXEC image, and an
- * interpreter path that is relative or has no NUL.
+ * interpreter path that is relative or has no NUL. Read as an interpreter
+ * is read, without its PT_INTERP, the same image with either path has its
+ * layout and names no interpreter.
  */
 static void dynamic_images(void)
 {
@@ -342,7 +345,7 @@ static void dynamic_images(void)
     set_interp(0, 0x100u, "/lib/ld-linux.so.2");
     set_load(1, 0, 0, 0x200u, 0x1800u, PF_R | PF_X);
     img_size = 0x200u;
-    CHECK(elf_read_layout(test_read, 0, &lay) == 0);
+    CHECK(elf_read_layout(test_read, 0, 1, &lay) == 0);
     CHECK(lay.type == ET_DYN && lay.lo == 0 && lay.hi == 0x2000u);
     CHECK(same_text(lay.interp, "/lib/ld-linux.so.2"));
 
@@ -364,9 +367,12 @@ static void dynamic_images(void)
           alloc_reached == 0);
 
     img_buf[0x100 + 18] = 'x';
-    CHECK(elf_read_layout(test_read, 0, &lay) == -ENOEXEC);
+    CHECK(elf_read_layout(test_read, 0, 1, &lay) == -ENOEXEC);
+    CHECK(elf_read_layout(test_read, 0, 0, &lay) == 0 && lay.interp[0] == '\0' &&
+          lay.type == ET_DYN && lay.hi == 0x2000u);
     set_interp(0, 0x100u, "ld.so");
-    CHECK(elf_read_layout(test_read, 0, &lay) == -ENOEXEC);
+    CHECK(elf_read_layout(test_read, 0, 1, &lay) == -ENOEXEC);
+    CHECK(elf_read_layout(test_read, 0, 0, &lay) == 0 && lay.interp[0] == '\0');
 
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
@@ -399,10 +405,10 @@ static void read_error(void)
     CHECK(elf_load_image(test_read, 0, &dir, &out) == -EIO && alloc_reached == 1);
     map_frames = 0;
     read_fails_at = sizeof(Elf32_Ehdr);
-    CHECK(elf_read_layout(test_read, 0, &lay) == -EIO);
+    CHECK(elf_read_layout(test_read, 0, 1, &lay) == -EIO);
     read_fails_at = 0xFFFFFFFFu;
     img_size = sizeof(Elf32_Ehdr) + 10u;
-    CHECK(elf_read_layout(test_read, 0, &lay) == -ENOEXEC);
+    CHECK(elf_read_layout(test_read, 0, 1, &lay) == -ENOEXEC);
 }
 
 int main(void)

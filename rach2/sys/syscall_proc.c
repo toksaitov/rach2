@@ -1176,7 +1176,7 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
     if (rc != 0) {
         return rc;
     }
-    rc = elf_read_layout(exec_file_read, &s->prog, &s->ilayout);
+    rc = elf_read_layout(exec_file_read, &s->prog, 0, &s->ilayout);
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ELIBBAD);
     }
@@ -1217,7 +1217,7 @@ static int32_t exec_build(struct exec_state *s)
     uint8_t random16[16];
     int32_t rc;
 
-    rc = elf_read_layout(exec_file_read, &s->prog, &s->layout);
+    rc = elf_read_layout(exec_file_read, &s->prog, 1, &s->layout);
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ENOEXEC);
     }
