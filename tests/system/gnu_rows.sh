@@ -195,11 +195,14 @@ row_sed() {
 
 row_gawk() {
     same "strftime" "$(gawk 'BEGIN { print strftime("%Y", 0, 1), 6 * 7 }')" "1970 42"
+    has "the version" "$(gawk --version | head -n 1)" "GNU Awk 5.4.1"
 }
 
 row_findutils() {
     same "find" "$(find /usr/share/terminfo -name vt100 -printf '%f\n' | head -n 1)" "vt100"
     same "xargs" "$(printf 'a b c' | xargs -n 1 | wc -l)" "3"
+    # shellcheck disable=SC2185 # --version names no path to walk
+    has "the version" "$(find --version | head -n 1)" "(GNU findutils) 4.11.0"
 }
 
 row_diffutils() {
@@ -209,6 +212,7 @@ row_diffutils() {
     same "diff's status for two files that differ" "$?" "1"
     has "the difference" "$(cat "$WORK/ab.diff")" "+2"
     runs "cmp" cmp "$WORK/a" "$WORK/a"
+    has "the version" "$(diff --version | head -n 1)" "(GNU diffutils) 3.12"
 }
 
 row_patch() {
@@ -216,6 +220,7 @@ row_patch() {
     printf -- '--- a\n+++ b\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n' > "$WORK/ab.diff"
     runs "patch" patch -s -o "$WORK/c" "$WORK/a" "$WORK/ab.diff"
     same "the patched file" "$(tr '\n' ' ' < "$WORK/c")" "one 2 three "
+    has "the version" "$(patch --version | head -n 1)" "GNU patch 2.8"
 }
 
 row_tar() {
@@ -225,6 +230,7 @@ row_tar() {
     same "tar -t" "$(tar -tzf "$WORK/t.tgz" | sort | tr '\n' ' ')" "dir/ dir/file "
     runs "tar -x" tar -xzf "$WORK/t.tgz" -C "$WORK/x"
     same "the extracted file" "$(cat "$WORK/x/dir/file" 2>&1)" "tar row"
+    has "the version" "$(tar --version | head -n 1)" "(GNU tar) 1.35"
 }
 
 row_gzip() {
