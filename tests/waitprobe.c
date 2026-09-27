@@ -6,8 +6,8 @@
  * of 0, 1, or 2 is legal and the freed number reopens, so closing stdin then
  * opening a file hands back fd 0, and closing stderr returns 0, not -EBADF;
  * (c) a blocking wait is signal-interruptible, so a child blocked in a
- * recvfrom() on the socket wait queue unwinds with -EINTR when the parent
- * signals it instead of hanging or dying.
+ * recvfrom() on the socket wait queue unwinds with -EINTR when the parent,
+ * once it sees the child asleep, signals it, instead of hanging or dying.
  *
  * The multi-waiter wake (wq_wake_all makes every blocked waiter runnable) and
  * the lost-wakeup safety are proved by the host test
@@ -133,6 +133,39 @@ static int rd(int fd, char *buf, int n)
     return syscall3(SYS_READ, fd, (int)(size_t)buf, n);
 }
 
+/** Whether process `pid` sleeps, by the state its /proc/<pid>/stat gives. */
+static int sleeping(int pid)
+{
+    char path[32] = "/proc/";
+    char digits[12];
+    char line[256];
+    int i = 0, j = 6, fd, n;
+
+    do {
+        digits[i++] = (char)('0' + pid % 10);
+        pid /= 10;
+    } while (pid > 0);
+    while (i > 0) {
+        path[j++] = digits[--i];
+    }
+    for (i = 0; "/stat"[i] != '\0'; i++) {
+        path[j++] = "/stat"[i];
+    }
+    path[j] = '\0';
+    fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    n = rd(fd, line, (int)sizeof(line) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0;
+    }
+    for (i = n - 1; i >= 0 && line[i] != ')'; i--) {
+    }
+    return i >= 0 && i + 2 < n && line[i + 1] == ' ' && line[i + 2] == 'S';
+}
+
 /**
  * Signal restorer trampoline: the handler returns here, which invokes
  * rt_sigreturn (173) to restore the interrupted context (musl's __restore_rt).
@@ -239,15 +272,19 @@ void _start(void)
     if (pid == 0) {
         eintr_child();
     } else {
-        /* Give the child time to reach the blocking recvfrom, then signal
-         * it. */
+        /* Signal the child once it is seen asleep in its recvfrom. */
         struct {
             int tv_sec;
             int tv_nsec;
         } ts;
+        int tries;
+
         ts.tv_sec = 0;
-        ts.tv_nsec = 50000000; /* 50 ms */
-        syscall2(SYS_NANOSLEEP, (int)(size_t)&ts, 0);
+        ts.tv_nsec = 10000000; /* 10 ms */
+        for (tries = 0; tries < 300 && !sleeping(pid); tries++) {
+            syscall2(SYS_NANOSLEEP, (int)(size_t)&ts, 0);
+        }
+        check(tries < 300, "the child was seen asleep in its recvfrom");
         syscall2(SYS_KILL, pid, SIGUSR1);
         r = syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
         check(r == pid && status == 0, "child recvfrom interrupted with -EINTR (no hang)");
