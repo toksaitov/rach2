@@ -5112,20 +5112,25 @@ static int32_t remap_move(vm_space_t *vm, vma_t *r, uint32_t addr, uint32_t len,
  * mremap with MREMAP_FIXED: give [addr, addr + old_len), which lies in one
  * region, the range [to, to + new_len), whatever was mapped there going
  * first. EINVAL for a new address not page-aligned, outside user space or
- * overlapping the old range; ENOMEM past RLIMIT_AS or with no room for the
- * regions. The destination's removal does not sleep, so the old range is
- * still in its region when the move starts.
+ * overlapping the old range; ENOMEM with no room for the regions, or past
+ * RLIMIT_AS, which counts what the move leaves: every region but the old
+ * range and what the destination held, and the new range. The two ranges
+ * do not overlap and the old one is mapped whole, so the subtraction cannot
+ * wrap. The destination's removal does not sleep, so the old range is still
+ * in its region when the move starts.
  */
 static int32_t remap_fixed(vm_space_t *vm, uint32_t addr, uint32_t old_len, uint32_t to,
                            uint32_t new_len)
 {
+    uint32_t limit = current_proc->rlim[RLIM_AS].cur;
+    uint32_t rest;
+
     if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||
         (to < addr + old_len && addr < to + new_len)) {
         return -EINVAL;
     }
-    if (vm_total(vm) - vm_covered(vm, to, to + new_len) +
-            (new_len > old_len ? new_len - old_len : 0) >
-        current_proc->rlim[RLIM_AS].cur) {
+    rest = vm_total(vm) - vm_covered(vm, to, to + new_len) - old_len;
+    if (new_len > limit || rest > limit - new_len) {
         return -ENOMEM;
     }
     if (vm_reserve(vm, 4) != 0) {

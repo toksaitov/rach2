@@ -9,8 +9,9 @@
  * child's store to the parent, and a store through the mapping of the file
  * reaches read(2). mremap grows a mapping in place or moves it with its
  * bytes, and shrinks one, and refuses an old length that would wrap past
- * the end of memory, leaving the mapping; madvise(MADV_DONTNEED) gives a
- * private anonymous mapping zero pages again.
+ * the end of memory, leaving the mapping; a fixed mremap that shrinks a
+ * mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
+ * gives a private anonymous mapping zero pages again.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -19,8 +20,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -184,9 +187,65 @@ static int remaps(void)
     return 0;
 }
 
+/* The pages this process's regions cover, the first number of
+   /proc/self/statm, read with no allocation that would change it. */
+static unsigned long mapped_pages(void)
+{
+    char text[64];
+    ssize_t n;
+    int fd = open("/proc/self/statm", O_RDONLY);
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    text[n] = '\0';
+    return strtoul(text, NULL, 10);
+}
+
+/* A fixed mremap that shrinks a mapping of 64 pages to one is held to
+   RLIMIT_AS by what it leaves, 63 pages less than now: under a limit 32
+   pages below the present size it succeeds, with the pages between left
+   for the stack to grow into. */
+static int remap_limit(void)
+{
+    struct rlimit old, lim;
+    char *m = mmap(NULL, 64 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *dest = mmap(NULL, PAGE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *moved;
+    unsigned long pages;
+
+    if (m == MAP_FAILED || dest == MAP_FAILED || munmap(dest, PAGE) != 0) {
+        return fail("mmap for a fixed mremap that shrinks");
+    }
+    m[0] = 'k';
+    pages = mapped_pages();
+    if (pages < 64 || getrlimit(RLIMIT_AS, &old) != 0) {
+        return fail("the process's size");
+    }
+    lim.rlim_cur = (pages - 32) * PAGE;
+    lim.rlim_max = old.rlim_max;
+    if (setrlimit(RLIMIT_AS, &lim) != 0) {
+        return fail("setrlimit RLIMIT_AS");
+    }
+    moved = mremap(m, 64 * PAGE, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, dest);
+    if (setrlimit(RLIMIT_AS, &old) != 0) {
+        return fail("setrlimit RLIMIT_AS back");
+    }
+    if (moved != dest || moved[0] != 'k') {
+        return fail("a fixed mremap that shrinks was held to its old size");
+    }
+    munmap(moved, PAGE);
+    return 0;
+}
+
 int main(void)
 {
-    if (private_file() || shared() || remaps()) {
+    if (private_file() || shared() || remaps() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");
