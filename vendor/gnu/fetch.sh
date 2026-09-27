@@ -6,10 +6,11 @@
 # Usage: fetch.sh [NAME...]
 #        fetch.sh --path NAME
 #
-# sources.txt gives each tarball's version, URL and SHA-256. A tarball is
-# downloaded into downloads/ once and checked against its digest on every
-# call; a file with another digest is removed and refused. With no NAME every
-# tarball is fetched. --path fetches one and prints its path.
+# sources.txt and sources-extra.txt give each tarball's version, URL and
+# SHA-256. A tarball is downloaded into downloads/ once and checked against
+# its digest on every call; a file with another digest is removed and
+# refused. With no NAME every tarball of both lists is fetched. --path fetches
+# one and prints its path.
 #
 
 set -e
@@ -40,9 +41,9 @@ download()
 # fetch_one NAME: print the checked tarball's path, fetching it if needed.
 fetch_one()
 {
-    line="$(awk -v n="$1" '$1 == n { print; exit }' "$DIR/sources.txt")"
+    line="$(awk -v n="$1" '$1 == n { print; exit }' "$DIR/sources.txt" "$DIR/sources-extra.txt")"
     if [ -z "$line" ]; then
-        echo "fetch: $1: not in sources.txt" >&2
+        echo "fetch: $1: not in sources.txt or sources-extra.txt" >&2
         return 1
     fi
     set -- $line
@@ -73,7 +74,7 @@ if [ "$1" = "--path" ]; then
     exit
 fi
 if [ $# -eq 0 ]; then
-    set -- $(awk '$1 !~ /^#/ && NF { print $1 }' "$DIR/sources.txt")
+    set -- $(awk '$1 !~ /^#/ && NF { print $1 }' "$DIR/sources.txt" "$DIR/sources-extra.txt")
 fi
 for name in "$@"; do
     fetch_one "$name" >/dev/null
