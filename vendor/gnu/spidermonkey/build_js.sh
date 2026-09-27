@@ -149,8 +149,9 @@ EOF
 
 # The script calls a function in a loop until SpiderMonkey has compiled it,
 # then asks the shell whether the function runs in JIT code and in Ion, the
-# optimizing compiler. The library path gives the loader the sysroot's glibc
-# and the cross toolchain's C++ runtime.
+# optimizing compiler. Ion compiles on the calling thread, so the compilation
+# is done by the time the loop is. The library path gives the loader the
+# sysroot's glibc and the cross toolchain's C++ runtime.
 step_check()
 {
     cat > "$WORK/js-check.js" <<'EOF'
@@ -170,7 +171,7 @@ print("inJit() = " + r[1] + ", inIon() = " + r[2]);
 EOF
     "$SYSROOT/lib/ld-linux.so.2" \
         --library-path "$SYSROOT/lib:$SYSROOT/usr/lib:$CROSS/$TARGET/lib" \
-        "$ROOT/usr/bin/js" "$WORK/js-check.js" > "$WORK/js-check.out"
+        "$ROOT/usr/bin/js" --ion-offthread-compile=off "$WORK/js-check.js" > "$WORK/js-check.out"
     cat "$WORK/js-check.out"
     grep -q 'inJit() = true, inIon() = true' "$WORK/js-check.out"
 }
