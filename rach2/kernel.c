@@ -277,8 +277,8 @@ static void timer_handler(isr_params_t *params)
  * Leave the core file of the current process, which the signal `signo`
  * ends, when it is dumpable and its soft RLIMIT_CORE allows a page: the
  * status it ends with, which has WCOREFLAG, as WCOREDUMP reads it, only when
- * the whole file was written. The file is written with `in_syscall` set, as
- * a system call writes one, so that the timer does not switch away in the
+ * the whole file was written. The caller has set `in_syscall`, as a system
+ * call writing the file would, so that the timer does not switch away in the
  * middle of the file system's work.
  */
 static int32_t terminate_core(int32_t signo)
@@ -286,7 +286,6 @@ static int32_t terminate_core(int32_t signo)
     if (!current_proc->dumpable || current_proc->rlim[RLIM_CORE].cur < PAGE_SIZE) {
         return signo;
     }
-    current_proc->in_syscall = 1;
     if (fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur) != 0) {
         return signo;
     }
@@ -304,7 +303,9 @@ static int32_t terminate_core(int32_t signo)
  * waitpid sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process
  * leaves a core file first (`terminate_core`), unless another thread has
  * begun to end it, after the other threads are sent SIGKILL and before any
- * of the process is released, as Linux's `do_coredump` does. The whole
+ * of the process is released, as Linux's `do_coredump` does. The teardown
+ * runs with `in_syscall` set, as a system call does, since what it releases
+ * may sleep and the timer must not switch away in the middle. The whole
  * process dies:
  * its other threads are sent SIGKILL, and the last thread to end publishes
  * the death. This thread releases the descriptor table and its reference to
@@ -333,6 +334,7 @@ void terminate_current_process(int32_t signo)
     ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
+    current_proc->in_syscall = 1;
 
     /* The signal ends the whole process: the other threads are sent SIGKILL,
      * and the process ends with this signal whichever thread ends last. */
@@ -357,14 +359,16 @@ void terminate_current_process(int32_t signo)
         fb_release_if_owner(pid);
     }
 
-    last = proc_exit_cleanup(signo);
-
-    /* The address space goes now, not at the reap; `mm_drop` switches off
-     * it first when this was its last user, since free_page_directory
-     * refuses the directory in CR3. One another thread or a vfork parent
-     * shares stays. */
+    /* The address space goes now, not at the reap, and before the zombie is
+     * published, since its release may sleep; the thread's futex words go
+     * first, while it is there. `mm_drop` switches off it first when this was
+     * its last user, since free_page_directory refuses the directory in CR3.
+     * One another thread or a vfork parent shares stays. */
+    proc_thread_gone(current_proc);
     mm_drop(current_proc);
     switch_page_directory(_kernel_dir);
+
+    last = proc_exit_cleanup(signo);
 
     if (!last) {
         for (;;) {

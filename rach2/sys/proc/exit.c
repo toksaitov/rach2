@@ -28,8 +28,9 @@
  * group's when exit_group or a fatal signal ended it and the leader's own
  * otherwise, and notifies the parent. The address space and the
  * descriptor-table allocation are not released here: a normal exit leaves
- * them to the reap, and a death by signal drops the address space before
- * scheduling.
+ * them to the reap, and a death by signal drops the address space before it
+ * calls this, since a release that sleeps must come before the zombie is
+ * published.
  *
  * `status` is the thread's encoded wait status. Returns nonzero when the
  * process ended with this thread. The caller must not return to user mode.
