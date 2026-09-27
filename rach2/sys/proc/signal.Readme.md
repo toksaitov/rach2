@@ -6,7 +6,7 @@ CPU exceptions take a separate path. A user page fault terminates the process wi
 
 ## Process state
 
-`process_t` contains `sigacts[1..64]`, `sig_pending`, and `sig_blocked`. A new process starts with default dispositions and empty masks. `fork` copies the dispositions and blocked mask but gives the child an empty pending set. `execve` preserves ignored dispositions and the blocked mask, resets caught dispositions to default, and clears the pending set. The real-time interval timer is two more fields: `alarm_tick`, the tick its next `SIGALRM` is due at, or zero when it is disarmed, and `alarm_interval`, the ticks between one `SIGALRM` and the next, or zero for a single one. `fork` gives the child no timer and `execve` keeps it, though a `SIGALRM` already pending is cleared with the rest of the pending set.
+`process_t` contains `sigacts[1..64]`, `sig_pending`, and `sig_blocked`. A new process starts with default dispositions and empty masks. `fork` copies the dispositions and blocked mask but gives the child an empty pending set. `execve` preserves ignored dispositions, the blocked mask and the pending set, and resets caught dispositions to default. The real-time interval timer is two more fields: `alarm_tick`, the tick its next `SIGALRM` is due at, or zero when it is disarmed, and `alarm_interval`, the ticks between one `SIGALRM` and the next, or zero for a single one. `fork` gives the child no timer and `execve` keeps it, with a `SIGALRM` already pending.
 
 `SIGKILL` and `SIGSTOP` cannot be caught or ignored, and every mask update removes their bits. Installing `SIG_IGN` for another signal also removes an instance already pending.
 

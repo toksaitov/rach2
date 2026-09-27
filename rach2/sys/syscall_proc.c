@@ -1208,8 +1208,9 @@ checked:
 
     /* Reset caught signal dispositions to default: their handler addresses
      * point into the OLD image that is about to be replaced. SIG_IGN
-     * dispositions and the blocked mask are preserved (POSIX exec semantics).
-     * The new image has named no address for its thread's end yet.
+     * dispositions, the blocked mask and the pending signals are preserved
+     * (POSIX exec semantics). The new image has named no address for its
+     * thread's end yet.
      */
     {
         int sig;
@@ -1219,7 +1220,6 @@ checked:
                 k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
             }
         }
-        current_proc->sig_pending = 0;
     }
     current_proc->clear_child_tid = 0;
 
