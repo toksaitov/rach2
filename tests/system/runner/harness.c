@@ -850,6 +850,28 @@ static int is_expect_step(const char *step)
 }
 
 /**
+ * Compile the pattern of every step that has one, the `expect=`, `boot=`
+ * and `seen=` steps and the mark of an `exec=` step, so that a pattern the
+ * matcher refuses ends the run before the machine starts, and not at its
+ * step with the machine left running.
+ */
+static void check_patterns(const char *const *steps, int n_steps)
+{
+    int i;
+
+    for (i = 0; i < n_steps; i++) {
+        const char *step = steps[i];
+        const char *bar = strchr(step, '|');
+        struct regex re;
+
+        if (is_expect_step(step) || strncmp(step, "seen=", 5) == 0)
+            regex_compile(&re, strchr(step, '=') + 1);
+        else if (strncmp(step, "exec=", 5) == 0 && bar != NULL)
+            regex_compile(&re, bar + 1);
+    }
+}
+
+/**
  * Wait for an `expect=` step under the step's limit, or for a `boot=` step
  * under the run's deadline, since a boot may take longer than a command when
  * many emulators run at once.
@@ -1779,6 +1801,7 @@ int main(int argc, char **argv)
     }
     qemu[nq] = NULL;
 
+    check_patterns(steps, n_steps);
     if (pipe(out_pipe) != 0 || pipe(in_pipe) != 0) {
         fprintf(stderr, "harness: cannot make a pipe\n");
         return 2;
