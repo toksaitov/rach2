@@ -153,7 +153,7 @@ static int removals, keeps;
 /* The call that holds the root's namespace lock when a row's call first
  * asks for it, which runs before the row's call has the lock, the depth of
  * the lock, the number of times it was taken from a depth of 0, and that
- * number at the last lookup in the root. */
+ * number at the row's first lookup in the root. */
 static void (*waiting)(void);
 static int ns_depth, ns_takes, lookup_take;
 
@@ -413,7 +413,11 @@ static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     nodes[1] = &source;
     check(mnt == &mount && dir == &root_dir, "a lookup in the root directory");
     check(ns_depth > 0, "a lookup in the root runs under the root's lock");
-    lookup_take = ns_takes;
+    if (lookup_take == 0) {
+        lookup_take = ns_takes;
+    }
+    check(ns_takes == lookup_take,
+          "the lookups, the count and the change run under one hold of the root's lock");
     for (i = 0; i < 2; i++) {
         if (nodes[i]->name[0] != '\0' &&
             __builtin_strcmp((const char *)nodes[i]->name, name) == 0) {

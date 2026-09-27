@@ -61,7 +61,7 @@ run_phase()
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
-    rename-locked-walk; do
+    rename-locked-walk rename-relocked; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -98,6 +98,9 @@ changes = {
          "        return rc;\n    }\n    rc = mnt_is_root(npar.mnt)"),
         ("out:\n    vfs_ref_release(&npar);", "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"),
     ],
+    "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
+                        "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
+                        "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -116,6 +119,7 @@ PY
         rename-lock) message="the rename keeps the file it replaces for the open's descriptor" ;;
         rename-unlocked) message="a lookup in the root runs under the root's lock" ;;
         rename-locked-walk) message='a walk starts with no namespace lock held' ;;
+        rename-relocked) message='the lookups, the count and the change run under one hold of the root' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
