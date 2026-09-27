@@ -126,6 +126,20 @@ static void kstack_free(uintptr_t top)
     }
 }
 
+/**
+ * Give back the record `p` of a thread or a process that has ended: its
+ * address space reference, its kernel stack and the record. The release of
+ * the address space may sleep, on a file's close or its writeback, and
+ * another reaper may run then, so the caller has first taken `p` off the
+ * zombies by marking it `PROC_UNUSED`, which no reaper and no wait takes.
+ */
+static void proc_release(process_t *p)
+{
+    mm_drop(p);
+    kstack_free(p->kernel_stack);
+    free_process(p);
+}
+
 /* Fork child return point in isr_handler.s */
 extern void isr_return(void);
 
@@ -255,17 +269,18 @@ static fd_table_t *files_copy(const fd_table_t *src)
  * from an interrupt as well. The shell's resume disables the scheduler, so
  * anything left runnable or holding a lock then would run no further, and
  * the next program would wait on it forever. A zombie is reaped as `wait`
- * reaps one. Kernel threads and the idle record are not user processes
- * and stay.
+ * reaps one, taken off the zombies before its release, which may sleep
+ * (`proc_release`), and the walk starts again after each, since the list
+ * may have changed while it slept. Kernel threads and the idle record are
+ * not user processes and stay.
  */
 static void proc_end_others(void)
 {
     for (;;) {
-        process_t *p, *next;
+        process_t *p;
         int alive = 0;
 
-        for (p = proc_list; p; p = next) {
-            next = p->next;
+        for (p = proc_list; p; p = p->next) {
             if (p->tg == current_proc->tg || p == proc_idle) {
                 continue;
             }
@@ -274,16 +289,18 @@ static void proc_end_others(void)
                     alive++; /* a leader waits for the rest of its threads */
                     continue;
                 }
-                mm_drop(p);
-                kstack_free(p->kernel_stack);
-                free_process(p);
-                continue;
+                break;
             }
             if (p->cr3 == 0) {
                 continue;
             }
             signal_post(p, SIGKILL);
             alive++;
+        }
+        if (p) {
+            p->state = PROC_UNUSED;
+            proc_release(p);
+            continue;
         }
         if (!alive) {
             return;
@@ -2034,7 +2051,9 @@ static void sig_irq_restore(uint32_t flags);
 /**
  * Whether `p` is a child of the caller's process that `idtype` and `id`
  * select: the leader of a process whose parent is any thread of the
- * caller's, since the children of a process are all its threads'.
+ * caller's, since the children of a process are all its threads'. A record
+ * another reaper has taken, or that fork is still building, is no child
+ * (`PROC_UNUSED`).
  *
  * Linux's __WCLONE asks for the children that report their end with a signal
  * other than SIGCHLD, unless __WALL is beside it, and every child here
@@ -2042,7 +2061,7 @@ static void sig_irq_restore(uint32_t flags);
  */
 static int wait_selects(int idtype, uint32_t id, int options, const process_t *p)
 {
-    if (p->parent_pid != current_proc->tgid || p->pid != p->tgid) {
+    if (p->state == PROC_UNUSED || p->parent_pid != current_proc->tgid || p->pid != p->tgid) {
         return 0;
     }
     if (((uint32_t)options & W_CLONE) && !(options & W_ALL)) {
@@ -2072,12 +2091,13 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 }
 
 /**
- * Reap zombie `p`, the leader of a process whose threads have all ended: add
- * the process's CPU time, with its reaped children's, to the children's
- * totals of the caller's process, which its thread group keeps, and give
- * back its address space, kernel stack and record. The zombie no longer runs
- * on its kernel stack, and this is the single release point for a per-fork
- * stack.
+ * Reap zombie `p`, the leader of a process whose threads have all ended: take
+ * it off the zombies, so that no other thread's wait reaps it while the
+ * release sleeps, add the process's CPU time, with its reaped children's, to
+ * the children's totals of the caller's process, which its thread group
+ * keeps, and give back its address space, kernel stack and record
+ * (`proc_release`). The zombie no longer runs on its kernel stack, and this
+ * is the single release point for a per-fork stack.
  */
 static void wait_reap(process_t *p)
 {
@@ -2085,24 +2105,27 @@ static void wait_reap(process_t *p)
     uint32_t user;
     uint32_t sys;
 
+    p->state = PROC_UNUSED;
     proc_cpu_time(p, &user, &sys);
     me->cutime += user + p->tg->cutime;
     me->cstime += sys + p->tg->cstime;
-    mm_drop(p);
-    kstack_free(p->kernel_stack);
-    free_process(p);
+    proc_release(p);
 }
 
 /**
- * Whether the thread `p`, which the caller's process traces, is one `idtype`
- * and `id` select. A thread that is not its process's leader ends with no
- * signal to its tracer, so, as Linux's __WCLONE and __WALL have it, it is
- * waited for with __WCLONE or __WALL, and a leader without __WCLONE.
+ * Whether `p` is a thread the caller's process traces that `idtype` and `id`
+ * select; a record another reaper has taken is none (`PROC_UNUSED`). A
+ * thread that is not its process's leader ends with no signal to its tracer,
+ * so, as Linux's __WCLONE and __WALL have it, it is waited for with __WCLONE
+ * or __WALL, and a leader without __WCLONE.
  */
 static int wait_selects_tracee(int idtype, uint32_t id, int options, const process_t *p)
 {
     int clone = p->pid != p->tgid;
 
+    if (p->state == PROC_UNUSED || !(p->ptrace & PT_TRACED) || p->tracer != current_proc->tgid) {
+        return 0;
+    }
     if (!(options & W_ALL) && clone != (((uint32_t)options & W_CLONE) != 0)) {
         return 0;
     }
@@ -2129,9 +2152,10 @@ static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t st
 /**
  * What a tracer's wait finds of its tracee `p`: a ptrace stop the wait has
  * not reported, reported once; a thread that ended while traced, which the
- * report frees, as no other wait reports it; or the end of a process whose
- * parent the tracer is not, reported once and left for the parent to reap.
- * With WNOWAIT nothing is marked or freed. Returns 1 with `out` filled, or 0.
+ * report takes off the zombies and frees, as no other wait reports it; or the
+ * end of a process whose parent the tracer is not, reported once and left for
+ * the parent to reap. With WNOWAIT nothing is marked or freed. Returns 1 with
+ * `out` filled, or 0.
  */
 static int wait_tracee(process_t *p, int options, struct wait_report *out)
 {
@@ -2149,11 +2173,10 @@ static int wait_tracee(process_t *p, int options, struct wait_report *out)
     if (p->pid != p->tgid) {
         wait_fill_exit(out, p, p->exit_code);
         if (!(options & WNOWAIT)) {
+            p->state = PROC_UNUSED;
             p->tg->utime += p->utime;
             p->tg->stime += p->stime;
-            mm_drop(p);
-            kstack_free(p->kernel_stack);
-            free_process(p);
+            proc_release(p);
         }
         return 1;
     }
@@ -2197,8 +2220,7 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         /* Scan ALL selected children for a reportable event (a zombie to
          * reap, or a stop/continue to report), not just the first. */
         for (p = proc_list; p; p = p->next) {
-            if ((p->ptrace & PT_TRACED) && p->tracer == current_proc->tgid &&
-                wait_selects_tracee(idtype, id, options, p)) {
+            if (wait_selects_tracee(idtype, id, options, p)) {
                 have_child = 1;
                 if (wait_tracee(p, options, out)) {
                     return (int32_t)out->pid;
@@ -3367,11 +3389,11 @@ static void restart_syscall(isr_params_t *tf, uint32_t restart_nr)
  * Free the records of the threads that have ended and are not leaders,
  * which no wait reaps, a traced one aside, which its tracer's wait reaps:
  * their CPU time goes to their process, and their address space reference,
- * kernel stack and record go back. A record the current process is not is
- * never running, so its stack is free to take. The release of the address
- * space may sleep, and another reaper may run then, so a record is taken
- * off the zombies first, and the walk starts again after each one, since the
- * list may have changed under it.
+ * kernel stack and record go back (`proc_release`). A record the current
+ * process is not is never running, so its stack is free to take. The release
+ * of the address space may sleep, and another reaper may run then, so a
+ * record is taken off the zombies first, and the walk starts again after
+ * each one, since the list may have changed under it.
  */
 static void reap_threads(void)
 {
@@ -3391,9 +3413,7 @@ static void reap_threads(void)
         proc_dead_threads--;
         p->tg->utime += p->utime;
         p->tg->stime += p->stime;
-        mm_drop(p);
-        kstack_free(p->kernel_stack);
-        free_process(p);
+        proc_release(p);
     }
 }
 
