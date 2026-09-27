@@ -1005,7 +1005,8 @@ static int has_connection(void *arg)
  * the queue, so a caller with none free leaves it queued, and published only
  * after the peer's name is copied out: a copy that fails frees the slot and
  * ends the connection as a close of it would, and no other thread can have
- * used the socket or freed the peer whose name is copied.
+ * used the socket or freed the peer whose name is copied. An address with
+ * no length pointer is such a failure, EFAULT, as in Linux.
  */
 int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flags)
 {
@@ -1045,7 +1046,7 @@ int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flag
     c->acc_next = NULL;
     s->acc_len--;
     wq_wake_all(&s->wq);
-    if (addr && addrlen_ptr) {
+    if (addr) {
         rc = put_name(addr, addrlen_ptr, c->peer ? &c->peer->name : &none, 0);
         if (rc != 0) {
             fd_free(table(), fd);

@@ -57,11 +57,9 @@ set, an empty queue instead gives
 An unblocked, nonignored pending signal interrupts the wait with
 .Er EINTR .
 .Pp
-If both
+If
 .Fa addr
-and
-.Fa addrlen
-are non-null, the call reports the peer's IPv4 address and port.
+is non-null, the call reports the peer's IPv4 address and port.
 Before the call,
 .Pf * Fa addrlen
 is the capacity of
@@ -74,7 +72,17 @@ are copied, and
 is set to 16 even if the result was truncated.
 The family is in host byte order; the address and port are in network
 byte order.
-If either pointer is null, no address is returned.
+If
+.Fa addr
+is null, no address is returned and
+.Fa addrlen
+is not used; if
+.Fa addr
+is non-null and
+.Fa addrlen
+is null, the call fails with
+.Er EFAULT ,
+as in Linux.
 The new descriptor is reserved before the connection leaves the queue
 and refers to it only once the address has been copied, so another
 thread sharing the descriptor table cannot use or close it before
@@ -138,8 +146,12 @@ accepted with both flags and with none have exactly those flags.
 .It Er EAGAIN
 The listener is nonblocking and its accept queue is empty.
 .It Er EFAULT
-The socketcall argument array cannot be read, or the peer address or
-length cannot be read or written as required.
+The socketcall argument array cannot be read, the peer address or
+length cannot be read or written as required, or
+.Fa addr
+is non-null and
+.Fa addrlen
+is null.
 .It Er EINTR
 A signal interrupted the wait.
 .It Er EINVAL

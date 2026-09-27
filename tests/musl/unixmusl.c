@@ -7,16 +7,18 @@
  * the boundaries of messages, and a datagram too long for the buffer is cut
  * with MSG_TRUNC. A descriptor sent with SCM_RIGHTS reaches a child that has
  * closed its own ends of the pipe, and the child writes through it. A child
- * that becomes user and group 1000 reads the pair's creator from
- * SO_PEERCRED, and the byte it writes reaches the creator's end, which has
- * SO_PASSCRED, with the child's pid, uid and gid. A listener bound to a path
- * makes a socket file, accepts a connection queued before the accept, and
- * both ends report the names; a second bind of the path fails with
- * EADDRINUSE, and a connect to the file after the listener is gone fails
- * with ECONNREFUSED. An abstract name works without a file. A datagram sent
- * to a name arrives with the sender's name. A nonblocking receive on an
- * empty socket fails with EAGAIN, and poll reports the socket readable once
- * a byte arrives.
+ * that becomes user and group 1000 reads the pair's creator from SO_PEERCRED,
+ * and the byte it writes reaches the creator's end, which has SO_PASSCRED, with
+ * the child's pid, uid and gid. A listener bound to a path makes a socket file,
+ * accepts a connection queued before the accept, and both ends report the
+ * names; a second bind of the path fails with EADDRINUSE, and a connect to the
+ * file after the listener is gone fails with ECONNREFUSED. An abstract name
+ * works without a file. A datagram sent to a name arrives with the sender's
+ * name. A nonblocking receive on an empty socket fails with EAGAIN, and poll
+ * reports the socket readable once a byte arrives. A descriptor sent with
+ * SCM_RIGHTS reaches a child, which writes through it. SO_PEERCRED reports the
+ * peer, and SO_PASSCRED brings the sender's credentials. An accept given an
+ * address and no length pointer fails with EFAULT.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -391,6 +393,41 @@ static int named(void)
     return 0;
 }
 
+/* A listener on the abstract name `name`, and a client connected to it. */
+static int abstract_pair(const char *name, int *l, int *c)
+{
+    struct sockaddr_un a;
+    socklen_t alen;
+
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    memcpy(a.sun_path + 1, name, strlen(name));
+    alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name));
+    *l = socket(AF_UNIX, SOCK_STREAM, 0);
+    *c = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (*l < 0 || *c < 0 || bind(*l, (struct sockaddr *)&a, alen) != 0 || listen(*l, 4) != 0 ||
+        connect(*c, (struct sockaddr *)&a, alen) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int listening(void)
+{
+    struct sockaddr_un got;
+    int l, c;
+
+    if (abstract_pair("unixmusl.acc", &l, &c) != 0) {
+        return fail("a listener for accept");
+    }
+    if (accept(l, (struct sockaddr *)&got, NULL) != -1 || errno != EFAULT) {
+        return fail("an accept with an address and no length was not EFAULT");
+    }
+    close(c);
+    close(l);
+    return 0;
+}
+
 static int datagram_names(void)
 {
     struct sockaddr_un to, from, got;
@@ -452,8 +489,8 @@ static int waiting(void)
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
-    if (stream_pair() || message_pairs() || rights_and_creds() || named() || datagram_names() ||
-        waiting()) {
+    if (stream_pair() || message_pairs() || rights_and_creds() || named() || listening() ||
+        datagram_names() || waiting()) {
         return 1;
     }
     printf("UNIXMUSL OK\n");

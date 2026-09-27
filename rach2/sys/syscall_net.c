@@ -1040,7 +1040,8 @@ static int32_t do_listen(int fd, int backlog)
  * with none free leaves it queued, and gets its socket only after the
  * address is copied out: the copy can sleep, and a thread sharing the table
  * must find nothing it could use or close. A copy that fails frees the slot
- * and the connection.
+ * and the connection, and so does an address with no length pointer, which
+ * is EFAULT, as in Linux.
  */
 static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t flags)
 {
@@ -1092,8 +1093,8 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
 
     /* The queued socket already holds the reference created when tcp_rx
      * accepted it; the new descriptor takes ownership of that reference. */
-    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip) !=
-        0) {
+    if ((sa_ptr && !salen_ptr) || copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
+                                                        conn_sock->remote_ip) != 0) {
         fd_free(current_proc->fds, new_fd);
         socket_unref(conn_sock);
         return -EFAULT;
