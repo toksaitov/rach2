@@ -112,6 +112,12 @@ sender waits for room, or fails with
 A datagram socket may be connected to one peer; a socket connected to
 another refuses the send, and the connect, with
 .Er EPERM .
+A datagram socket that connects to another peer, or disconnects with
+.Dv AF_UNSPEC ,
+drops the messages it has queued, and the peer it leaves, if connected
+back to it, gets
+.Er ECONNRESET ,
+as in Linux.
 .Dv MSG_PEEK ,
 .Dv MSG_DONTWAIT
 and

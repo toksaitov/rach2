@@ -22,7 +22,10 @@
  * reading gives up the connection queued before, then fails an accept with
  * EINVAL and refuses a connect. A connect waiting for room in a full queue
  * finishes when listen makes the backlog larger. A datagram socket refuses a
- * connect with EPERM while it is connected to another.
+ * connect with EPERM while it is connected to another. A datagram socket
+ * refuses a connect with EPERM while it is connected to another; one that
+ * connects elsewhere or disconnects drops its queued messages, and the peer it
+ * left gets ECONNRESET.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -499,6 +502,7 @@ static int datagram_peers(void)
 {
     struct sockaddr_un a;
     socklen_t alen = abstract_addr(&a, "unixmusl.pair");
+    char buf[8];
     int sv[2];
     int other;
 
@@ -510,7 +514,30 @@ static int datagram_peers(void)
     if (connect(other, (struct sockaddr *)&a, alen) != -1 || errno != EPERM) {
         return fail("a connect to a datagram socket connected elsewhere was not EPERM");
     }
+    alen = abstract_addr(&a, "unixmusl.other");
+    if (bind(other, (struct sockaddr *)&a, alen) != 0 || send(sv[0], "old", 3, 0) != 3 ||
+        connect(sv[1], (struct sockaddr *)&a, alen) != 0) {
+        return fail("a datagram socket connected to another peer");
+    }
+    if (recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT) != -1 || errno != EAGAIN) {
+        return fail("a reconnected datagram socket kept its old peer's message");
+    }
+    if (recv(sv[0], buf, sizeof(buf), MSG_DONTWAIT) != -1 || errno != ECONNRESET) {
+        return fail("the peer left with a message lost was not ECONNRESET");
+    }
     close(other);
+    close(sv[0]);
+    close(sv[1]);
+
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNSPEC;
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0 || send(sv[0], "old", 3, 0) != 3 ||
+        connect(sv[1], (struct sockaddr *)&a, sizeof(a.sun_family)) != 0) {
+        return fail("a datagram socket disconnected with AF_UNSPEC");
+    }
+    if (recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT) != -1 || errno != EAGAIN) {
+        return fail("a disconnected datagram socket kept its old peer's message");
+    }
     close(sv[0]);
     close(sv[1]);
     return 0;

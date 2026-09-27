@@ -845,6 +845,35 @@ static void bind_unlock(struct unix_sock *s)
     wq_wake_all(&s->lock_wq);
 }
 
+static int recv_idle(void *arg)
+{
+    return !((const struct unix_sock *)arg)->reading;
+}
+
+/**
+ * Take `s`'s receive lock, which a receive holds from choosing a message to
+ * consuming it, as Linux holds its iolock.
+ *
+ * The copy to the caller's buffers can sleep in a page fault, even for pages
+ * made present before it, since another thread sharing the address space
+ * can unmap one. The message must stay while the copy sleeps, so another
+ * receiver, and a connect that drops the queue, wait for the lock. The wait
+ * is the length of one copy, and a signal does not end it.
+ */
+static void recv_lock(struct unix_sock *s)
+{
+    while (s->reading) {
+        wq_wait_event_nointr(&s->lock_wq, recv_idle, s);
+    }
+    s->reading = 1;
+}
+
+static void recv_unlock(struct unix_sock *s)
+{
+    s->reading = 0;
+    wq_wake_all(&s->lock_wq);
+}
+
 /* Give a socket with SO_PASSCRED and no name the automatic one, before a
  * connect or a send, as Linux does. */
 static int32_t passcred_name(struct unix_sock *s)
@@ -955,10 +984,40 @@ static int listener_has_room(void *arg)
 }
 
 /**
+ * Make `target` the peer of the datagram socket `s`, which takes the
+ * reference the caller had, or with NULL leave `s` with none.
+ *
+ * A socket that leaves its peer for another, or for none, drops the
+ * messages it has queued, whoever sent them, as Linux's
+ * unix_dgram_disconnected does; the receive lock keeps a receive's message
+ * until its copy ends. The peer it leaves then gets ECONNRESET when it was
+ * connected back, its end of a pair whose messages were lost.
+ */
+static void dgram_repeer(struct unix_sock *s, struct unix_sock *target)
+{
+    struct unix_sock *old = s->peer;
+
+    s->peer = target;
+    if (!old) {
+        return;
+    }
+    if (old != target && s->rq_head) {
+        recv_lock(s);
+        purge(s);
+        recv_unlock(s);
+        if (!old->closed && old->peer == s) {
+            old->err = ECONNRESET;
+            wq_wake_all(&old->wq);
+        }
+    }
+    unix_put(old);
+}
+
+/**
  * connect(2) of a datagram socket: the target becomes the peer its sends
- * without a name go to, or with AF_UNSPEC it has none. A target connected
- * to another socket refuses with EPERM and the connection is left as it
- * was, as Linux's unix_may_send has it.
+ * without a name go to, or with AF_UNSPEC it has none (`dgram_repeer`). A
+ * target connected to another socket refuses with EPERM and the connection
+ * is left as it was, as Linux's unix_may_send has it.
  */
 static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrlen)
 {
@@ -970,10 +1029,7 @@ static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrle
     if (addrlen >= SUN_PATH_OFF &&
         copy_from_user(family, (const void __user *)addr, sizeof(family)) == 0 &&
         (family[0] | (family[1] << 8)) == AF_UNSPEC) {
-        if (s->peer) {
-            unix_put(s->peer);
-            s->peer = NULL;
-        }
+        dgram_repeer(s, NULL);
         return 0;
     }
     rc = get_name(addr, addrlen, &n);
@@ -999,10 +1055,7 @@ static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrle
         unix_put(target);
         return -EPERM;
     }
-    if (s->peer) {
-        unix_put(s->peer);
-    }
-    s->peer = target;
+    dgram_repeer(s, target);
     return 0;
 }
 
@@ -1730,35 +1783,6 @@ static int32_t send_core(fd_entry_t *e, const struct kernel_iovec *iov, uint32_t
     }
     release_out(out);
     return rc;
-}
-
-static int recv_idle(void *arg)
-{
-    return !((const struct unix_sock *)arg)->reading;
-}
-
-/**
- * Take `s`'s receive lock, which a receive holds from choosing a message to
- * consuming it, as Linux holds its iolock.
- *
- * The copy to the caller's buffers can sleep in a page fault, even for pages
- * made present before it, since another thread sharing the address space
- * can unmap one. The message must stay while the copy sleeps, so another
- * receiver, and a connect that drops the queue, wait for the lock. The wait
- * is the length of one copy, and a signal does not end it.
- */
-static void recv_lock(struct unix_sock *s)
-{
-    while (s->reading) {
-        wq_wait_event_nointr(&s->lock_wq, recv_idle, s);
-    }
-    s->reading = 1;
-}
-
-static void recv_unlock(struct unix_sock *s)
-{
-    s->reading = 0;
-    wq_wake_all(&s->lock_wq);
 }
 
 static int has_data(void *arg)
