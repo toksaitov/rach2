@@ -66,7 +66,7 @@ These notes say what some ports provide and what they leave to the system they a
 
 * OpenSSL is built for `linux-x86`, shared, with zlib. Its configuration is in `/etc/ssl`, where the programs that use it look for certificates; the root has none, and the root image installs the CA bundle there.
 * OpenSSH installs `ssh`, `scp`, `sftp`, `ssh-keygen` and the other clients in `/usr/bin`, `sshd` in `/usr/sbin`, and `sshd-session`, `sshd-auth`, `sftp-server` and the helpers in `/usr/libexec`, with its configuration in `/etc/ssh` and no PAM. The server's privilege-separated child runs as the user `sshd` in `/var/empty`, so the system needs that user and a `/var/empty` owned by root. The child that talks to a client before it authenticates is held by resource limits, `--with-sandbox=rlimit`, since the kernel has no seccomp for the sandbox configure would choose. The host keys are made on the system. The root image has the user and the directory, and its init makes the keys.
-* ncurses has wide characters and installs the terminfo database, 1861 entries, in `/usr/share/terminfo`.
+* ncurses has wide characters and installs the terminfo database, 1861 entries, in `/usr/share/terminfo`. bash's readline reads the terminal's capabilities through it.
 * Vim has its huge feature set, for the terminal only.
 * Perl is configured as a native build whose programs run on the build host, for the reasons its recipe gives, and has 143 extensions.
 * Git has curl, OpenSSL, zlib and Perl, and no Tcl/Tk, gettext, Python, expat or Rust. Its manual pages come from the `git-manpages` tarball.
