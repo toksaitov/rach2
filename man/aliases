@@ -484,3 +484,6 @@ timerfd_gettime64 2 timerfd
 socketpair 2 socket
 accept4 2 accept
 sendmsg 2 send
+mremap 2 brk
+madvise 2 brk
+msync 2 brk

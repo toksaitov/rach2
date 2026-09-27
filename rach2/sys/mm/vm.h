@@ -44,6 +44,9 @@
 #define VM_PROT_READ  0x1u
 #define VM_PROT_WRITE 0x2u
 #define VM_PROT_EXEC  0x4u
+/* Given to paging_protect_range for a shared region, whose pages are shared
+ * on purpose: a write goes to the frame they share, never to a copy. */
+#define VM_PROT_SHARED 0x8u
 
 /* Region kind; drives both teaching clarity and fault policy. */
 typedef enum {
@@ -52,19 +55,24 @@ typedef enum {
     VM_DATA,  /* ELF data/bss: read + write */
     VM_HEAP,  /* brk-managed heap */
     VM_STACK, /* the main stack (grows down) */
-    VM_ANON   /* anonymous mmap */
+    VM_ANON,  /* anonymous mmap */
+    VM_FILE,  /* a private mapping of a file */
+    VM_SHARED /* a shared mapping: of a file in memory, or of shared anonymous memory */
 } vm_type_t;
 
 /*
  * A file a region maps. The record is the first member of its owner's own,
  * which keeps the open file; `refs` counts the regions that map it, and the
- * last one to go calls `release`. `fill` reads the file's page `pgoff` into
- * the frame `phys`, with zeros past the end of the file: 0, or -1 when the
- * read fails.
+ * last one to go calls `release`. A private mapping's `fill` reads the
+ * file's page `pgoff` into the frame `phys`, with zeros past the end of the
+ * file: 0, or -1 when the read fails. A shared mapping's `share` gives the
+ * frame of page `pgoff` itself, with a reference taken for the mapping, or 0
+ * when none can be had.
  */
 struct vm_file {
     uint32_t refs;
     int (*fill)(struct vm_file *f, uint32_t pgoff, uintptr_t phys);
+    uintptr_t (*share)(struct vm_file *f, uint32_t pgoff);
     void (*release)(struct vm_file *f);
 };
 

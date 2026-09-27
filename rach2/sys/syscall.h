@@ -184,6 +184,11 @@
 #define SYS_FCHOWN32    207
 #define SYS_FCHOWNAT    298
 
+/* mremap, madvise and msync (syscall_proc.c). */
+#define SYS_MSYNC   144
+#define SYS_MREMAP  163
+#define SYS_MADVISE 219
+
 /* The direct socket calls (syscall_net.c), socketcall's sub-calls by
  * number. */
 #define SYS_SOCKET          359

@@ -72,6 +72,7 @@ C_SRC = kernel.c \
         sys/latency.c \
         sys/mm/usercopy.c \
         sys/mm/vm.c \
+        sys/mm/filemap.c \
         sys/mm/shmem.c \
         sys/mm/frame.c \
         sys/mm/pagecache.c \

@@ -62,6 +62,7 @@
 #include "network/ip/icmp.h"
 #include "network/net.h"
 #include "ipc/unix.h"
+#include "mm/filemap.h"
 #include "syscall_internal.h"
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
@@ -92,8 +93,8 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid)
  *
  * The tables are a few pointer compares per live process, of kernel memory;
  * it never touches the page-cache window. A descriptor in flight on an
- * AF_UNIX socket holds the node as a descriptor does, and counts as one
- * holder more.
+ * AF_UNIX socket and a file mapping hold the node as a descriptor does, and
+ * count as one holder more.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
@@ -113,7 +114,7 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
             }
         }
     }
-    if (unix_inflight_holds(node)) {
+    if (unix_inflight_holds(node) || filemap_holds(node)) {
         held++;
     }
     return held;
@@ -7120,4 +7121,29 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
     }
     vfs_ref_release(&ref);
     return rc;
+}
+
+/**
+ * Read a file mapping's bytes: `count` bytes at `off` into the kernel buffer
+ * `buf`, the description's offset untouched. It takes the mount's namespace
+ * lock, which a type that moves a file's bytes needs, and not the
+ * description's lock: a read into a mapping of the file being read faults
+ * here while that lock is held.
+ */
+int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off)
+{
+    struct open_file *ofd = e->ofd;
+    int32_t n;
+
+    if (e->type != FD_TYPE_FILE || !ofd || !ofd->vmnt) {
+        return -ENODEV;
+    }
+    if (ofd->vmnt->type->ns_serialised) {
+        vfs_ns_lock(ofd->vmnt);
+    }
+    n = vfs_read(ofd->vmnt, ofd->fhandle, buf, count, off);
+    if (ofd->vmnt->type->ns_serialised) {
+        vfs_ns_unlock(ofd->vmnt);
+    }
+    return n;
 }

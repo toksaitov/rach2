@@ -108,6 +108,8 @@ static const char *const PROBES[] = {
     /* AF_UNIX: pairs, descriptors and credentials in messages, and names
        in the file system and the abstract namespace. */
     "musl/unixmusl",
+    /* File mappings, shared memory, mremap and madvise. */
+    "musl/mapmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

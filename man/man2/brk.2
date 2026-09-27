@@ -5,8 +5,11 @@
 .Nm brk ,
 .Nm mmap2 ,
 .Nm munmap ,
-.Nm mprotect
-.Nd change the heap, anonymous memory mappings and their protection
+.Nm mprotect ,
+.Nm mremap ,
+.Nm madvise ,
+.Nm msync
+.Nd change the heap, memory mappings and their protection
 .Sh SYNOPSIS
 .Fd "#define _BSD_SOURCE"
 .In unistd.h
@@ -22,6 +25,12 @@
 .Fn munmap "void *addr" "size_t length"
 .Ft int
 .Fn mprotect "void *addr" "size_t length" "int prot"
+.Ft void *
+.Fn mremap "void *old" "size_t old_length" "size_t new_length" "int flags" "..."
+.Ft int
+.Fn madvise "void *addr" "size_t length" "int advice"
+.Ft int
+.Fn msync "void *addr" "size_t length" "int flags"
 .Sh DESCRIPTION
 These kernel calls change the process's virtual memory areas (VMAs).
 Pages are 4096 bytes.
@@ -60,7 +69,7 @@ The kernel interface is available through
 .Fn syscall
 with
 .Dv SYS_brk .
-.Ss Anonymous mappings
+.Ss Mappings
 Musl exposes
 .Fn mmap ,
 which uses kernel call 192,
@@ -78,19 +87,52 @@ The offset in the public
 .Fn mmap
 interface is in bytes; musl divides it by 4096.
 .Pp
-The kernel requires
-.Dv MAP_ANONYMOUS ;
-file mappings are not implemented, and the file descriptor and page
-offset are ignored.
 The mapping type in the low four bits must be
 .Dv MAP_SHARED ,
 .Dv MAP_PRIVATE
 or
 .Dv MAP_SHARED_VALIDATE .
-Every accepted mapping has private copy-on-write behavior across fork,
-.Dv MAP_SHARED
-included.
 Other flag bits are ignored.
+What is mapped is one of four things.
+.Bl -tag -width Ds
+.It Private anonymous memory
+With
+.Dv MAP_ANONYMOUS
+and
+.Dv MAP_PRIVATE ,
+or a mapping of
+.Pa /dev/zero :
+pages zeroed on first access, copied on write across fork.
+.It Shared anonymous memory
+With
+.Dv MAP_ANONYMOUS
+and
+.Dv MAP_SHARED :
+pages this mapping and the children forked after it share, so a store
+by one is seen by all.
+.It A private mapping of a file
+The file
+.Fa fd
+is open on, from the page offset: a page is read from the file on first
+access, and a store changes the page and never the file.
+The descriptor must be open for reading.
+The mapping keeps the file open, so
+.Fa fd
+may be closed after the call.
+.It A shared mapping of a file
+On tmpfs, which
+.Pa /dev/shm
+and
+.Xr memfd_create 2
+use, the mapping maps the file's own pages, so a store is seen by every
+mapping of the file and by
+.Xr read 2 .
+A shared mapping of a file on a disk file system is served as a private
+one when it is read-only, which reads the same bytes, and refused with
+.Er ENODEV
+when it may be written.
+A writable shared mapping needs a descriptor open for writing.
+.El
 .Pp
 .Fa length
 is rounded up to a page boundary.
@@ -155,6 +197,49 @@ Write permission is granted in place on a page the process alone
 holds; a page it shares with a forked relative becomes copy-on-write,
 so the first write copies it.
 A read-only VMA refuses writes even to such a page.
+.Pp
+A region that is shared stays shared through
+.Fn mprotect :
+write permission is granted on its pages in place, never as copy on
+write.
+.Ss Resizing and advice
+.Fn mremap ,
+kernel call 163, resizes the mapping at the page-aligned
+.Fa old ,
+whose
+.Fa old_length
+bytes must lie in one VMA.
+A shrink cuts its end.
+A growth takes the pages after it when they are free, or with
+.Dv MREMAP_MAYMOVE
+moves the whole mapping, its pages with it, to a free range of the new
+length, or with
+.Dv MREMAP_FIXED
+to the address in the fifth argument, whatever was mapped there going
+first.
+A mapping of a file keeps mapping the same pages of it.
+.Dv MREMAP_DONTUNMAP
+is not implemented.
+.Pp
+.Fn madvise ,
+kernel call 219, with
+.Dv MADV_DONTNEED
+or
+.Dv MADV_FREE
+lets the resident pages of the range go: a private anonymous page reads
+as zeros again, a private page of a file reads the file again, and a
+shared page reads what its shared memory holds.
+Other advice Linux has is accepted and changes nothing, but
+.Dv MADV_REMOVE
+and
+.Dv MADV_HWPOISON ,
+which are refused.
+.Pp
+.Fn msync ,
+kernel call 144, has nothing to write: a shared mapping here maps the
+file's pages in memory, and a mapping of a disk file is private or
+read-only.
+It checks its arguments and the range.
 .Ss Limits
 The soft
 .Dv RLIMIT_AS
@@ -237,32 +322,69 @@ is zero,
 the address is not page-aligned, is at or above
 .Ql 0xC0000000 ,
 or the range extends past that address.
+For
+.Fn mremap ,
+an address not page-aligned, a length of zero, an unknown flag,
+.Dv MREMAP_FIXED
+without
+.Dv MREMAP_MAYMOVE ,
+or a new address that overlaps the old range; for
+.Fn madvise ,
+.Dv MADV_REMOVE
+or
+.Dv MADV_HWPOISON ;
+for
+.Fn msync ,
+an unknown flag, or both
+.Dv MS_ASYNC
+and
+.Dv MS_SYNC .
 Musl also rejects an
 .Fn mmap
 offset that is negative, not page-aligned, or not representable as the
 kernel's page offset.
+.It Er EACCES
+A mapping of a file whose descriptor is not open for reading, or a
+writable shared one whose descriptor is not open for writing.
+.It Er EBADF
+.Fa fd
+is not open, for a mapping without
+.Dv MAP_ANONYMOUS .
+.It Er EFAULT
+The range
+.Fn mremap
+is given is not within one VMA.
+.It Er ENODEV
+.Fa fd
+is not a file, or a writable shared mapping names a file on a disk file
+system.
 .It Er ENOMEM
-An anonymous mapping has no suitable address range, would exceed
+A mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,
 or cannot obtain a VMA entry, or a fixed mapping lies outside user
 space.
 Unmapping cannot obtain an entry needed to split an area.
 A page of an
-.Fn mprotect
+.Fn mprotect ,
+.Fn madvise
+or
+.Fn msync
 range belongs to no VMA, or the range lies outside user space, or the
-split cannot obtain its entries.
+split cannot obtain its entries;
+.Fn mremap
+cannot grow a mapping in place without
+.Dv MREMAP_MAYMOVE ,
+or finds no free range.
 Musl also rejects mapping lengths at least
 .Dv PTRDIFF_MAX
 and every public
 .Fn brk
 request.
-.It Er ENOSYS
-A mapping lacks
-.Dv MAP_ANONYMOUS .
 .It Er ESRCH
 The kernel has no current process.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,
+.Xr open 2 ,
 .Xr prlimit64 2 ,
 .Xr memory 7

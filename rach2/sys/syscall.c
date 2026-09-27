@@ -2079,6 +2079,9 @@ void init_syscall(void)
     _syscall_table[SYS_RECVFROM] = sys_recvfrom;
     _syscall_table[SYS_RECVMSG] = sys_recvmsg;
     _syscall_table[SYS_SHUTDOWN] = sys_shutdown;
+    _syscall_table[SYS_MSYNC] = sys_msync;
+    _syscall_table[SYS_MREMAP] = sys_mremap;
+    _syscall_table[SYS_MADVISE] = sys_madvise;
     _syscall_table[SYS_EVENTFD] = sys_eventfd;
     _syscall_table[SYS_EVENTFD2] = sys_eventfd2;
     _syscall_table[SYS_EPOLL_CREATE] = sys_epoll_create;

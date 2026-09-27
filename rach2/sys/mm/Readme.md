@@ -32,15 +32,20 @@ Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The
 * `VM_HEAP` describes the non-empty part of the `brk` heap, one VMA or several when `mprotect` has divided it.
 * `VM_STACK` starts with one page and may grow downward to `stack_limit`, which `execve` sets from the soft `RLIMIT_STACK` in force at the exec so that the whole stack is at most that size in whole pages, and never below `VM_MMAP_BASE`. The first image gets 8 MiB, the default.
 * `VM_ANON` describes an anonymous `mmap2` allocation.
+* `VM_FILE` describes a private mapping of a file.
+* `VM_SHARED` describes a shared mapping: of a file in memory (tmpfs), or of shared anonymous memory. Its pages are the frames of the file's `struct shmem` (`shmem.c`) or of the anonymous memory's own, so every mapping of a page maps one frame.
 
 `execve` loads ELF pages eagerly, then creates one VMA per loadable segment with the segment's permissions. It records an empty heap at the image end, places the initial stack at `0xBFFFF000`, and places anonymous mappings below `VM_MMAP_BASE` (`0xB0000000`). The heap receives a VMA on its first non-empty growth. `fork` copies the complete `vm_space_t`.
 
 The syscall contracts are:
 
 * `brk` (45) grows or shrinks the heap range. Growth adds a read-write `VM_HEAP` region above the old top, which merges with a read-write top piece, and reserves virtual addresses only; pages are allocated on first access. Shrinking removes the range above the new top and releases its present frames. A collision or out-of-range request returns the old break.
-* `mmap2` (192) requires `MAP_ANONYMOUS` and one of `MAP_SHARED`, `MAP_PRIVATE` and `MAP_SHARED_VALIDATE`, and ignores the file descriptor and page offset; file-backed mappings return `-ENOSYS`. Every accepted mapping receives the private copy-on-write behavior used by fork, a shared one included. `MAP_FIXED` replaces what its range held, after making room for the entries the change needs, so a refusal leaves the old mapping; `MAP_FIXED_NOREPLACE` refuses a range in use with `EEXIST`. Otherwise a page-aligned hint whose range is free below the stack limit is used, and without one `vm_find_free` takes the highest free range below `VM_MMAP_BASE` and above the heap's top, so a range `munmap` freed is used again.
+* `mmap2` (192) takes one of `MAP_SHARED`, `MAP_PRIVATE` and `MAP_SHARED_VALIDATE`, and maps private anonymous memory (`MAP_ANONYMOUS`, or `/dev/zero`), shared anonymous memory, a private mapping of a file from the page offset in EBP, or a shared mapping of a tmpfs file (`mmap_backing`). The mapping holds its file through `filemap.c`, a copy of the descriptor with its open file description, so the descriptor may be closed after the call. A shared mapping of a file on a disk file system is served as a private one when it is read-only and refused with `ENODEV` when it may be written, since there is no write-back of mapped pages. `MAP_FIXED` replaces what its range held; what is mapped is found and the entries the change needs are made room for before the old mapping goes, so a refusal leaves it; `MAP_FIXED_NOREPLACE` refuses a range in use with `EEXIST`. Otherwise a page-aligned hint whose range is free below the stack limit is used, and without one `vm_find_free` takes the highest free range below `VM_MMAP_BASE` and above the heap's top, so a range `munmap` freed is used again.
 * `munmap` (91) removes full VMAs, trims either end, or splits a VMA, then releases every present frame in the range. A never-faulted page has no frame to release.
-* `mprotect` (125) requires a page-aligned address and a range that VMAs cover without a gap (`ENOMEM` otherwise). `vm_protect` splits the VMAs at the range's ends, sets the new protection and merges the pieces with matching neighbours; `paging_protect_range` then changes the resident pages. A page made inaccessible stays present with its frame, supervisor-only and marked `PTE_NONE`, so fork and teardown still own it. A page made writable gets the write bit only when this process alone holds its frame, and becomes copy-on-write otherwise.
+* `mprotect` (125) requires a page-aligned address and a range that VMAs cover without a gap (`ENOMEM` otherwise). `vm_protect` splits the VMAs at the range's ends, sets the new protection and merges the pieces with matching neighbours; `paging_protect_range` then changes the resident pages. A page made inaccessible stays present with its frame, supervisor-only and marked `PTE_NONE`, so fork and teardown still own it. A page made writable gets the write bit only when this process alone holds its frame, and becomes copy-on-write otherwise; a page of a `VM_SHARED` region gets it in place, since its frame is shared on purpose.
+* `mremap` (163) resizes a mapping whose old range lies in one VMA: a shrink cuts its end, a growth takes the free range after it, and with `MREMAP_MAYMOVE` the mapping moves to a free range, or with `MREMAP_FIXED` to the address given; `paging_move_range` moves its page-table entries, frames and flags as they are, and the new VMA maps the same pages of the same file.
+* `madvise` (219) with `MADV_DONTNEED` or `MADV_FREE` releases the range's resident frames; a later access backs the page again as a first access does. Other advice is accepted and ignored, but `MADV_REMOVE` and `MADV_HWPOISON`.
+* `msync` (144) checks its arguments and returns 0: a shared mapping maps the file's pages in memory, and nothing else is written back.
 
 VMA allocation does not reserve physical frames. If a later user fault cannot allocate a frame, the unresolved fault terminates that process with `SIGSEGV`. A kernel prefault reports failure to its caller instead.
 
@@ -53,13 +58,13 @@ The vector 14 handler reads CR2 and the x86 error code, then handles these cases
 3. Any remaining user-mode fault terminates the process with `SIGSEGV`; a real init death halts the kernel.
 4. Any remaining supervisor fault panics the kernel.
 
-`vm_resolve` checks the VMA permissions first, so a write to a present copy-on-write page reaches `cow_fault` only when its VMA is writable; a VMA `mprotect` made read-only keeps its shared pages read-only. A new heap, stack, or anonymous page receives a zeroed frame. A page of a VMA that maps a file is read from the file into a frame, which is mapped once it is full, writable when the VMA is; the mapping is private, so a store changes the frame and never the file. The read may sleep, so the VMA is looked up again after it, and a page backed meanwhile leaves the frame unused. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
+`vm_resolve` checks the VMA permissions first, so a write to a present copy-on-write page reaches `cow_fault` only when its VMA is writable; a VMA `mprotect` made read-only keeps its shared pages read-only. A new heap, stack, or anonymous page receives a zeroed frame. A page of a VMA that maps a file privately is read from the file into a frame, which is mapped once it is full, writable when the VMA is; a store changes the frame and never the file. A page of a `VM_SHARED` VMA is the shared frame itself (`shared_fault`), mapped writable when the VMA is. The read may sleep, so the VMA is looked up again after it, and a page backed meanwhile leaves the frame unused. A read-only VMA remains read-only in its PTE. A write prefault of a present COW page makes the page private before kernel code writes through the pointer. A present page that cannot satisfy the requested access is rejected instead of retrying the same instruction.
 
 Stack growth extends the stack VMA down to the faulting page when the page is at or above `stack_limit`. Growth fails if it would cross another VMA. Pages between the old and new start remain unallocated until touched.
 
 ## Copy-on-write fork
 
-`fork` maps each present user frame into the child. Writable pages become read-only and receive `PTE_COW` in both processes; the frame reference count increases. Genuine read-only pages, and the `PTE_NONE` pages of an inaccessible range, keep their existing flags and are not marked COW.
+`fork` maps each present user frame into the child. A page of a `VM_SHARED` region keeps its flags in both, writable ones included, so a store by either is seen by both. Other writable pages become read-only and receive `PTE_COW` in both processes; the frame reference count increases. Genuine read-only pages, and the `PTE_NONE` pages of an inaccessible range, keep their existing flags and are not marked COW.
 
 On the first write, `cow_fault` allocates and copies a frame when another process still references the old one. If the writer is the sole owner, it removes `PTE_COW` and restores write permission without copying. Exit, `execve`, `munmap`, and failed-fork cleanup decrement the same reference counts.
 
@@ -88,6 +93,8 @@ Clock eviction writes a dirty victim before reuse. Writeback pins the slot and f
 * `modlayout.*` validates Multiboot module placement.
 * `paging.*` owns page tables, frame references, faults, demand paging, COW, and kernel mappings.
 * `vm.*` implements VMA lookup, insertion, removal, protection changes, the free-range search, overlap checks, and stack growth.
+* `filemap.*` keeps the files and the shared anonymous memory that VMAs map.
+* `shmem.*` keeps a file's pages in memory, for tmpfs and shared anonymous memory.
 * `usercopy.*` implements the user-pointer boundary.
 * `pagecache.*` implements the disk window, residency, eviction, and writeback.
 
@@ -96,5 +103,7 @@ Clock eviction writes a dirty victim before reuse. Writeback pins the slot and f
 `make test` runs `vmprobe`, `forkro`, `cowregrant`, `usercopyfault`, and `musl/vmamusl` in its default guest suite. They cover lazy heap and anonymous pages, stack growth, read-only mappings across fork, COW re-grant, checked strings crossing into an unmapped page, 300 simultaneous mappings, and at least 8 MiB of live small allocations.
 
 The boot self-tests exercise page-table isolation and force page-cache faults, eviction, cross-page writes, and writeback through a RAM backing store. `tests/run host` runs the pure VMA, memory-map, module-layout, and page-cache bookkeeping tests under AddressSanitizer and UndefinedBehaviorSanitizer.
+
+`musl/mapmusl` checks private file mappings (the file's bytes, zeros past its end, stores that stay in the mapping, a mapping that outlives its descriptor, fork, an offset), shared anonymous memory and a shared `/dev/shm` file across fork and against `read`, `mremap` in place and moving, and `MADV_DONTNEED`.
 
 The test image also contains `vmfault`, `vmro`, `winprobe`, `cowprobe`, `musl/mallocqsort`, and `musl/cowfork` for dedicated or manual runs. See the [guest test inventory](../../../tests/Readme.md) for their execution contract.

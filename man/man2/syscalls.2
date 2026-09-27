@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 184 calls.
+The kernel registers the following 187 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -95,6 +95,7 @@ The kernel registers the following 184 calls.
 .It 133 Ta Xr fchdir 2
 .It 140 Ta Xr llseek 2
 .It 142 Ta Xr newselect 2
+.It 144 Ta Xr msync 2
 .It 145 Ta Xr readv 2
 .It 146 Ta Xr writev 2
 .It 147 Ta Xr getsid 2
@@ -108,6 +109,7 @@ The kernel registers the following 184 calls.
 .It 160 Ta Xr sched_get_priority_min 2
 .It 161 Ta Xr sched_rr_get_interval 2
 .It 162 Ta Xr nanosleep 2
+.It 163 Ta Xr mremap 2
 .It 168 Ta Xr poll 2
 .It 172 Ta Xr prctl 2
 .It 173 Ta Xr rt_sigreturn 2
@@ -145,6 +147,7 @@ The kernel registers the following 184 calls.
 .It 212 Ta Xr chown32 2
 .It 213 Ta Xr setuid32 2
 .It 214 Ta Xr setgid32 2
+.It 219 Ta Xr madvise 2
 .It 220 Ta Xr getdents64 2
 .It 221 Ta Xr fcntl64 2
 .It 224 Ta Xr gettid 2

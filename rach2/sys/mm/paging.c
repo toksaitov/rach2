@@ -516,6 +516,37 @@ static int file_fault(vm_space_t *vm, vma_t *vma, uint32_t addr)
     return 1;
 }
 
+/**
+ * Back a page of a shared region: map the frame the region's file or shared
+ * memory has for it, writable when the region is. The frame is the same one
+ * every mapping of that page maps, so a store is seen by all of them.
+ */
+static int shared_fault(vm_space_t *vm, vma_t *vma, uint32_t addr)
+{
+    struct vm_file *f = vma->file;
+    uint32_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uintptr_t phys;
+
+    mem_balance();
+    vm_file_get(f);
+    phys = f->share(f, pgoff);
+    vma = vm_find(vm, page);
+    if (phys == 0 || !vma || vma->file != f || pte_present(_curr_dir, page)) {
+        if (phys) {
+            free_frame(phys);
+        }
+        vm_file_put(f);
+        return phys != 0 && vma != NULL;
+    }
+    vm_file_put(f);
+    if (map_user_frame(_curr_dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
+        free_frame(phys);
+        return 0;
+    }
+    return 1;
+}
+
 static int vm_resolve(uint32_t addr, int write)
 {
     vm_space_t *vm = &current_proc->vm;
@@ -542,7 +573,7 @@ static int vm_resolve(uint32_t addr, int write)
             return 1; /* already backed; nothing to do */
         }
         if (vma->file) {
-            return file_fault(vm, vma, addr);
+            return vma->type == VM_SHARED ? shared_fault(vm, vma, addr) : file_fault(vm, vma, addr);
         }
     }
 
@@ -1528,6 +1559,54 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
     }
 }
 
+/* The private table of `addr` in `dir`, with the entry's index in `*index`,
+ * or NULL where no private table covers it. */
+static page_table_t *user_table(page_dir_t *dir, uint32_t addr, uint32_t *index)
+{
+    uint32_t table_index = addr / PAGE_SIZE / 1024;
+    page_table_t *table;
+
+    if (table_index >= 1024) {
+        return NULL;
+    }
+    table = dir->logical_page_tables[table_index];
+    if (!table || table == _kernel_dir->logical_page_tables[table_index]) {
+        return NULL;
+    }
+    *index = (addr / PAGE_SIZE) % 1024;
+    return table;
+}
+
+int paging_move_range(page_dir_t *dir, uint32_t from, uint32_t to, uint32_t len)
+{
+    uint32_t off, i, j;
+
+    /* The tables first, so the move cannot stop half way. */
+    for (off = 0; off < len; off += PAGE_SIZE) {
+        page_table_t *t = user_table(dir, from + off, &i);
+
+        if (t && t->pages[i] && !ensure_user_table(dir, (to + off) / PAGE_SIZE / 1024)) {
+            return -1;
+        }
+    }
+    for (off = 0; off < len; off += PAGE_SIZE) {
+        page_table_t *t = user_table(dir, from + off, &i);
+        page_table_t *dst;
+
+        if (!t || !t->pages[i]) {
+            continue;
+        }
+        dst = user_table(dir, to + off, &j);
+        dst->pages[j] = t->pages[i];
+        t->pages[i] = 0;
+        if (dir == _curr_dir) {
+            paging_flush_tlb(from + off);
+            paging_flush_tlb(to + off);
+        }
+    }
+    return 0;
+}
+
 int paging_store_u32(page_dir_t *dir, struct vm_space *vm, uint32_t addr, uint32_t value)
 {
     uint32_t page_num = addr / PAGE_SIZE;
@@ -1610,6 +1689,8 @@ void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_
             frame = (pte & ~0xFFFu) / PAGE_SIZE;
             if (!(prot & VM_PROT_WRITE)) {
                 pte &= ~0x2u;
+            } else if (prot & VM_PROT_SHARED) {
+                pte |= 0x2u;
             } else if (pte & PTE_COW) {
                 /* Still shared: the first write copies or takes it. */
             } else if (frame < _frames_number && _frames[frame] > 1) {

@@ -202,10 +202,20 @@ void free_user_pages(page_dir_t *dir);
  */
 void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
 
+/*
+ * Move the entries of [from, from + len) in `dir` to [to, to + len), for
+ * mremap: each frame moves with its flags and keeps its references, and a
+ * page never backed stays so. The two ranges must not overlap. Returns 0,
+ * or -1 when a page table for the new range cannot be had, with nothing
+ * moved.
+ */
+int paging_move_range(page_dir_t *dir, uint32_t from, uint32_t to, uint32_t len);
+
 /* Bring the resident pages of [start, end) in `dir` to the VMA protection
  * `prot` (VM_PROT_*): no access makes them PTE_NONE, read-only clears the
  * write bit, and write sets it only on a page this process alone holds; a
- * shared page becomes copy-on-write instead. */
+ * shared page becomes copy-on-write instead, unless `prot` has
+ * VM_PROT_SHARED for a shared region, whose pages are written in place. */
 void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot);
 
 struct vm_space;

@@ -64,6 +64,9 @@
 #include "network/net.h"
 #include "network/netconf.h" /* net_ip_addr for getsockname */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
+#include "mm/filemap.h"
+#include "fs/tmpfs.h"
+#include "fs/devfs.h"
 #include "syscall_internal.h"
 
 /**
@@ -416,6 +419,20 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
              * mapping. */
             if (virt_addr < USER_ADDR_MIN || parent_phys == 0) {
                 continue;
+            }
+
+            /* A page of a shared region is the same frame in the child, with
+             * the same rights: a store on either side is seen by both. */
+            {
+                vma_t *r = vm_find(&parent->vm, virt_addr);
+
+                if (r && r->type == VM_SHARED) {
+                    if (map_user_frame(child_dir, virt_addr, parent_phys, pte & 0xFFFu) != 0) {
+                        return -1;
+                    }
+                    frame_ref(parent_phys);
+                    continue;
+                }
             }
 
             /*
@@ -3715,16 +3732,68 @@ static uint32_t vm_prot_of(uint32_t prot)
     return vmprot;
 }
 
+/**
+ * The file or shared memory a new mapping maps, with the region kind it
+ * makes: a private mapping of a file (VM_FILE), a shared mapping of a file
+ * in memory or of shared anonymous memory (VM_SHARED), or NULL for private
+ * anonymous memory (VM_ANON). /dev/zero maps as anonymous memory. A shared
+ * mapping of a file on a disk file system is served as a private one when
+ * it is read-only, which reads the same bytes, and refused with ENODEV when
+ * it may be written, since its stores would not reach the file.
+ */
+static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_file **file,
+                            vm_type_t *type)
+{
+    int shared = (flags & MAP_TYPE) != MAP_PRIVATE;
+    fd_entry_t *e;
+    struct shmem *sh;
+
+    *file = NULL;
+    *type = VM_ANON;
+    if (!(flags & MAP_ANONYMOUS)) {
+        e = fd_get(&current_proc->fds, fd);
+        if (!e) {
+            return -EBADF;
+        }
+        if (devfs_rdev(e) == ((1u << 8) | 5u)) { /* /dev/zero, 1:5 */
+            flags |= MAP_ANONYMOUS;
+        } else {
+            if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
+                return -ENODEV;
+            }
+            if (!(e->flags & FD_FLAG_READ) ||
+                (shared && (prot & PROT_WRITE) && !(e->flags & FD_FLAG_WRITE))) {
+                return -EACCES;
+            }
+            sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode)
+                                                                   : NULL;
+            if (shared && !sh && (prot & PROT_WRITE)) {
+                return -ENODEV;
+            }
+            *file = sh ? filemap_shared(e, sh) : filemap_new(e);
+            *type = sh ? VM_SHARED : VM_FILE;
+            return *file ? 0 : -ENOMEM;
+        }
+    }
+    if (shared) {
+        *file = filemap_anon_shared();
+        *type = VM_SHARED;
+        return *file ? 0 : -ENOMEM;
+    }
+    return 0;
+}
+
 /*
- * sys_mmap2 - map anonymous memory. Args: EBX=addr, ECX=length, EDX=prot,
- * ESI=flags, EDI=fd, EBP=pgoffset. Returns the mapped base address, or
- * -errno. MAP_ANONYMOUS is required; every mapping is private and
- * copy-on-write across fork, MAP_SHARED included. MAP_FIXED replaces whatever
- * the range held, and MAP_FIXED_NOREPLACE refuses a range in use with EEXIST.
- * Otherwise a page-aligned hint that is free below the stack's growth window
- * is taken as it is, and without one the highest free range below
- * VM_MMAP_BASE and above the heap's top is used, so the ranges munmap frees
- * are used again. Pages are demand-paged and zero-filled on touch.
+ * sys_mmap2 - map memory. Args: EBX=addr, ECX=length, EDX=prot, ESI=flags,
+ * EDI=fd, EBP=pgoffset, the offset in the file in pages. Returns the mapped
+ * base address, or -errno. What is mapped is `mmap_backing`'s: anonymous
+ * memory, private or shared, or a file, private or shared. MAP_FIXED
+ * replaces whatever the range held, and MAP_FIXED_NOREPLACE refuses a range
+ * in use with EEXIST. Otherwise a page-aligned hint that is free below the
+ * stack's growth window is taken as it is, and without one the highest free
+ * range below VM_MMAP_BASE and above the heap's top is used, so the ranges
+ * munmap frees are used again. Pages are backed on first touch: zeroed, read
+ * from the file, or the shared page itself.
  */
 int32_t sys_mmap2(isr_params_t *params)
 {
@@ -3734,6 +3803,9 @@ int32_t sys_mmap2(isr_params_t *params)
     uint32_t flags = params->esi;
     vm_space_t *vm;
     uint32_t len, base, limit;
+    struct vm_file *file;
+    vm_type_t type;
+    int32_t rc;
 
     if (!current_proc) {
         return -ESRCH;
@@ -3747,9 +3819,6 @@ int32_t sys_mmap2(isr_params_t *params)
     if ((flags & MAP_TYPE) != MAP_SHARED && (flags & MAP_TYPE) != MAP_PRIVATE &&
         (flags & MAP_TYPE) != MAP_SHARED_VALIDATE) {
         return -EINVAL;
-    }
-    if (!(flags & MAP_ANONYMOUS)) {
-        return -ENOSYS; /* file-backed mmap is not implemented */
     }
     if (length > USER_ADDR_MAX - USER_ADDR_MIN) {
         return -ENOMEM;
@@ -3770,14 +3839,6 @@ int32_t sys_mmap2(isr_params_t *params)
         if (vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit) {
             return -ENOMEM; /* RLIMIT_AS, the replaced bytes not counted twice */
         }
-        /* A split in the removal and the new region take two entries, found
-           before the old mapping goes. */
-        if (vm_reserve(vm, 2) != 0) {
-            vma_exhausted("mmap");
-            return -ENOMEM;
-        }
-        vm_remove(vm, addr, addr + len);
-        unmap_user_range(_curr_dir, addr, addr + len);
         base = addr;
     } else {
         base = 0;
@@ -3793,10 +3854,29 @@ int32_t sys_mmap2(isr_params_t *params)
             return -ENOMEM;
         }
     }
-    if (vm_insert(vm, base, base + len, vm_prot_of(prot), VM_ANON) != 0) {
+    /* What is mapped is found before anything MAP_FIXED replaces goes, so a
+       refusal leaves the old mapping. */
+    rc = mmap_backing(flags, prot, (int)params->edi, &file, &type);
+    if (rc != 0) {
+        return rc;
+    }
+    if (flags & MAP_FIXED) {
+        /* A split in the removal and the new region take two entries, found
+           before the old mapping goes. */
+        if (vm_reserve(vm, 2) != 0) {
+            vm_file_put(file);
+            vma_exhausted("mmap");
+            return -ENOMEM;
+        }
+        vm_remove(vm, base, base + len);
+        unmap_user_range(_curr_dir, base, base + len);
+    }
+    if (vm_insert_file(vm, base, base + len, vm_prot_of(prot), type, file, params->ebp) != 0) {
+        vm_file_put(file);
         vma_exhausted("mmap");
         return -ENOMEM;
     }
+    vm_file_put(file);
     return (int32_t)base;
 }
 
@@ -3838,6 +3918,20 @@ int32_t sys_munmap(isr_params_t *params)
     return 0;
 }
 
+/* Bring the resident pages of [start, end) to `prot`, region by region, so a
+ * shared region's pages stay shared. */
+static void protect_resident(uint32_t start, uint32_t end, uint32_t prot)
+{
+    while (start < end) {
+        vma_t *r = vm_find(&current_proc->vm, start);
+        uint32_t stop = (r && r->end < end) ? r->end : end;
+
+        paging_protect_range(_curr_dir, start, stop,
+                             prot | ((r && r->type == VM_SHARED) ? VM_PROT_SHARED : 0u));
+        start = stop;
+    }
+}
+
 /*
  * sys_mprotect - change the protection of a range. Args: EBX=addr (page
  * aligned), ECX=length, EDX=prot. Returns 0, or -errno: EINVAL for an
@@ -3877,7 +3971,193 @@ int32_t sys_mprotect(isr_params_t *params)
         vma_exhausted("mprotect");
         return -ENOMEM;
     }
-    paging_protect_range(_curr_dir, addr, end, vmprot);
+    protect_resident(addr, end, vmprot);
+    return 0;
+}
+
+#define MREMAP_MAYMOVE   1
+#define MREMAP_FIXED     2
+#define MREMAP_DONTUNMAP 4
+
+/* Give [addr, addr + len), the pages of one region from its page `pgoff`,
+ * the region at `to`, moving the pages there and making the region `new_len`
+ * long. The file the region maps is held across the move, which removes
+ * the old region's hold before the new region takes its own. */
+static int32_t remap_move(vm_space_t *vm, vma_t *r, uint32_t addr, uint32_t len, uint32_t to,
+                          uint32_t new_len)
+{
+    struct vm_file *file = r->file;
+    uint32_t pgoff = r->pgoff + (addr - r->start) / PAGE_SIZE;
+    uint32_t prot = r->prot;
+    vm_type_t type = r->type;
+    uint32_t moved = len < new_len ? len : new_len;
+
+    if (vm_reserve(vm, 3) != 0) {
+        vma_exhausted("mremap");
+        return -ENOMEM;
+    }
+    if (paging_move_range(_curr_dir, addr, to, moved) != 0) {
+        return -ENOMEM;
+    }
+    vm_file_get(file);
+    vm_remove(vm, addr, addr + len);
+    unmap_user_range(_curr_dir, addr, addr + len);
+    if (vm_insert_file(vm, to, to + new_len, prot, type, file, pgoff) != 0) {
+        vm_file_put(file);
+        unmap_user_range(_curr_dir, to, to + moved);
+        return -ENOMEM;
+    }
+    vm_file_put(file);
+    return (int32_t)to;
+}
+
+/*
+ * sys_mremap - resize a mapping, or move it. Args: EBX=old address, ECX=old
+ * length, EDX=new length, ESI=flags, EDI=new address with MREMAP_FIXED.
+ * The old range must lie in one region. A shrink cuts its end; a growth
+ * takes the range after it when that is free, or with MREMAP_MAYMOVE moves
+ * the whole mapping, pages and all, to a free range of the new length, or
+ * to the new address with MREMAP_FIXED, whatever was there going first.
+ * Returns the mapping's address, or -errno: EINVAL, EFAULT for a range not
+ * in one region, ENOMEM when it can grow in place and may not move, or when
+ * no range is free. MREMAP_DONTUNMAP is not implemented.
+ */
+int32_t sys_mremap(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t old_len = PAGE_UP(params->ecx);
+    uint32_t new_len = PAGE_UP(params->edx);
+    uint32_t flags = params->esi;
+    uint32_t to = params->edi;
+    vm_space_t *vm;
+    vma_t *r;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    vm = &current_proc->vm;
+    if ((addr & (PAGE_SIZE - 1)) != 0 || new_len == 0 || old_len == 0 ||
+        (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) != 0 ||
+        ((flags & MREMAP_FIXED) && !(flags & MREMAP_MAYMOVE))) {
+        return -EINVAL;
+    }
+    if (params->edx > USER_ADDR_MAX - USER_ADDR_MIN || addr > USER_ADDR_MAX - old_len) {
+        return -EINVAL;
+    }
+    r = vm_find(vm, addr);
+    if (!r || addr + old_len > r->end) {
+        return -EFAULT;
+    }
+    if (flags & MREMAP_FIXED) {
+        if ((to & (PAGE_SIZE - 1)) != 0 || to < USER_ADDR_MIN || to > USER_ADDR_MAX - new_len ||
+            (to < addr + old_len && addr < to + new_len)) {
+            return -EINVAL;
+        }
+        if (vm_total(vm) - vm_covered(vm, to, to + new_len) + (new_len > old_len ? new_len - old_len : 0) >
+            current_proc->rlim[RLIM_AS].cur) {
+            return -ENOMEM;
+        }
+        if (vm_reserve(vm, 4) != 0) {
+            vma_exhausted("mremap");
+            return -ENOMEM;
+        }
+        vm_remove(vm, to, to + new_len);
+        unmap_user_range(_curr_dir, to, to + new_len);
+        r = vm_find(vm, addr);
+        return remap_move(vm, r, addr, old_len, to, new_len);
+    }
+    if (new_len <= old_len) {
+        if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {
+            vma_exhausted("mremap");
+            return -ENOMEM;
+        }
+        unmap_user_range(_curr_dir, addr + new_len, addr + old_len);
+        return (int32_t)addr;
+    }
+    if (vm_total(vm) + (new_len - old_len) > current_proc->rlim[RLIM_AS].cur) {
+        return -ENOMEM;
+    }
+    if (addr + old_len == r->end && addr <= USER_ADDR_MAX - new_len &&
+        addr + new_len <= vm->stack_limit && !vm_overlaps(vm, addr + old_len, addr + new_len)) {
+        if (vm_insert_file(vm, addr + old_len, addr + new_len, r->prot, r->type, r->file,
+                           r->pgoff + (addr + old_len - r->start) / PAGE_SIZE) != 0) {
+            vma_exhausted("mremap");
+            return -ENOMEM;
+        }
+        return (int32_t)addr;
+    }
+    if (!(flags & MREMAP_MAYMOVE)) {
+        return -ENOMEM;
+    }
+    to = vm_find_free(vm, new_len, PAGE_UP(vm->brk), VM_MMAP_BASE);
+    if (to == 0) {
+        return -ENOMEM;
+    }
+    return remap_move(vm, r, addr, old_len, to, new_len);
+}
+
+#define MADV_DONTNEED 4
+#define MADV_FREE     8
+#define MADV_REMOVE   9
+#define MADV_HWPOISON 100
+
+/*
+ * sys_madvise - advice about a range. Args: EBX=address, ECX=length,
+ * EDX=advice. MADV_DONTNEED and MADV_FREE let the resident pages go: a
+ * private anonymous page reads as zeros again, a private page of a file
+ * reads the file again, and a shared page reads what the shared memory
+ * holds. The other advice Linux has is accepted and changes nothing, but
+ * MADV_REMOVE and MADV_HWPOISON, which are refused with EINVAL. A range with
+ * a page in no region is ENOMEM, as in Linux.
+ */
+int32_t sys_madvise(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t len = PAGE_UP(params->ecx);
+    uint32_t advice = params->edx;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX - len || advice == MADV_REMOVE ||
+        advice >= MADV_HWPOISON) {
+        return -EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (vm_covered(&current_proc->vm, addr, addr + len) != len) {
+        return -ENOMEM;
+    }
+    if (advice == MADV_DONTNEED || advice == MADV_FREE) {
+        unmap_user_range(_curr_dir, addr, addr + len);
+    }
+    return 0;
+}
+
+/*
+ * sys_msync - write a mapping back. Args: EBX=address, ECX=length,
+ * EDX=flags. A shared mapping here maps the file in memory itself, and a
+ * mapping of a disk file is private or read-only, so there is nothing to
+ * write: the call checks its arguments and returns 0, or ENOMEM for a range
+ * with a page in no region, or EINVAL.
+ */
+int32_t sys_msync(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t len = PAGE_UP(params->ecx);
+    uint32_t flags = params->edx;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
+        addr > USER_ADDR_MAX - len) {
+        return -EINVAL;
+    }
+    if (vm_covered(&current_proc->vm, addr, addr + len) != len) {
+        return -ENOMEM;
+    }
     return 0;
 }
 

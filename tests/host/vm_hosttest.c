@@ -317,7 +317,7 @@ int main(void)
     {
         vm_space_t m = {0};
         vm_space_t c = {0};
-        struct vm_file file = {1, no_fill, count_release};
+        struct vm_file file = {1, no_fill, NULL, count_release};
         vma_t *lo, *hi;
 
         released = 0;
