@@ -12,8 +12,9 @@
  * and may not open the memory of, attach to, or read the robust list of its
  * parent, which has them, but may still change the mode of a node root
  * owns. A child that keeps them may not make a parent that gave them up its
- * tracer, and a thread that gave them up still reads its own process's exe
- * link. An exec gives them back, and the image is then not dumpable, except
+ * tracer, nor a parent whose first thread ended with them and whose live
+ * thread gave them up, and a thread that gave them up still reads its own
+ * process's exe link. An exec gives them back, and the image is then not dumpable, except
  * under no_new_privs or with another process sharing its directories; the
  * exec of a thread of user 1000 that gave up the none it had keeps its
  * parent-death signal and stays dumpable.
@@ -41,6 +42,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define VERSION_3 0x20080522u
@@ -328,6 +330,95 @@ static int traceme_refused(void)
            WEXITSTATUS(status) == 0;
 }
 
+/* The pipe the child of `traceme_leader_ended_refused` waits on, and that
+ * child. */
+static int leader_go[2];
+static pid_t leader_child;
+
+/** Whether this process's first thread, whose id is its pid, has ended: its
+ * stat under the task directory says Z. */
+static int leader_ended(void)
+{
+    char path[64], buf[512];
+    const char *end;
+    int fd;
+    ssize_t n;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/stat", (int)getpid());
+    fd = open(path, O_RDONLY);
+    n = fd < 0 ? -1 : read(fd, buf, sizeof(buf) - 1);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n <= 0) {
+        return 0;
+    }
+    buf[n] = '\0';
+    end = strrchr(buf, ')');
+    return end != NULL && end[1] == ' ' && end[2] == 'Z';
+}
+
+/**
+ * The thread left once the first has ended: it gives up its capabilities,
+ * waits to see the first thread ended, lets the child try PTRACE_TRACEME,
+ * and ends the process with the child's verdict.
+ */
+static void *last_thread(void *arg)
+{
+    struct timespec tick = {0, 10000000};
+    int tries, status;
+
+    (void)arg;
+    if (give_up() != 0) {
+        _exit(2);
+    }
+    for (tries = 0; tries < 1000 && !leader_ended(); tries++) {
+        nanosleep(&tick, NULL);
+    }
+    if (tries == 1000 || write(leader_go[1], "x", 1) != 1) {
+        _exit(2);
+    }
+    _exit(waitpid(leader_child, &status, 0) == leader_child && WIFEXITED(status) &&
+                  WEXITSTATUS(status) == 0
+              ? 0
+              : 1);
+    return NULL;
+}
+
+/**
+ * A child that keeps its capabilities may not make its parent process its
+ * tracer when the process's live thread gave its up, though its first
+ * thread, which ended with them, keeps its record. Whether the call was
+ * refused.
+ */
+static int traceme_leader_ended_refused(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        pthread_t t;
+        char c;
+
+        if (pipe(leader_go) != 0) {
+            _exit(2);
+        }
+        leader_child = fork();
+        if (leader_child == 0) {
+            _exit(read(leader_go[0], &c, 1) == 1 && ptrace(PTRACE_TRACEME, 0, 0, 0) == -1 &&
+                          errno == EPERM
+                      ? 0
+                      : 1);
+        }
+        if (leader_child < 0 || pthread_create(&t, NULL, last_thread, NULL) != 0) {
+            _exit(2);
+        }
+        pthread_exit(NULL);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
 /** A thread that gives up its capabilities and reads its process's exe
  * link, into the int at `arg`: whether the read succeeded. */
 static void *reads_own_exe(void *arg)
@@ -483,6 +574,9 @@ static int later_rows(void)
     }
     if (!traceme_refused()) {
         return fail("a child with capabilities made a parent without them its tracer");
+    }
+    if (!traceme_leader_ended_refused()) {
+        return fail("a privileged child made its tracer a parent whose live thread was not");
     }
     if (!own_exe_readable()) {
         return fail("a thread without capabilities could not read its own process's exe link");

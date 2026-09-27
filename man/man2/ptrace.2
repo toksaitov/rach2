@@ -145,16 +145,20 @@ stops nothing and takes the options in
 A thread whose process a stop signal has already stopped is reported to
 the tracer at once in a group stop, as on Linux, and its process stays
 stopped.
-The caller needs effective user ID 0, or a real user and group ID equal to
-each of the target's three, a dumpable target and a target that is not
-privileged, as Linux asks of a tracer without
+The caller needs a process whose every live thread is privileged, or a
+real user and group ID equal to each of the target's three, a dumpable
+target and a target that is not privileged, as Linux asks of a tracer
+without
 .Dv CAP_SYS_PTRACE :
 a root thread that gave up its capabilities
 .Pq see Xr capget 2
 cannot trace one that has them.
-For the same reason a thread that has them cannot make a parent that
-gave them up its tracer with
-.Dv PTRACE_TRACEME .
+A process traces as a whole, since each of its threads may make the
+tracer's requests, so it is as privileged as its least privileged live
+thread; Linux makes the attaching thread alone the tracer.
+For the same reason a privileged thread cannot make its tracer, with
+.Dv PTRACE_TRACEME ,
+a parent process with a live thread that is not privileged.
 Such a caller cannot attach to a thread inside
 .Xr execve 2 ,
 which chooses the IDs of the new image by the tracer the thread has: for

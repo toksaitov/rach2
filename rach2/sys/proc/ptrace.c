@@ -714,11 +714,42 @@ static void ptrace_unpark(process_t *t)
 }
 
 /**
+ * Whether every live thread of the thread group `tg` is privileged. A
+ * process traces as a whole, since each of its threads may make the
+ * tracer's requests, so it is as privileged as its least privileged live
+ * thread; a leader that has ended keeps its record and its credentials, and
+ * does not count. A group with no live thread is not privileged.
+ */
+static int group_privileged(const struct tgroup *tg)
+{
+    const process_t *t;
+    int live = 0;
+
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg && t->state != PROC_ZOMBIE && t->state != PROC_UNUSED) {
+            if (!proc_privileged(t)) {
+                return 0;
+            }
+            live = 1;
+        }
+    }
+    return live;
+}
+
+int ptrace_tracer_privileged(const process_t *t)
+{
+    const process_t *tracer = get_process(t->tracer);
+
+    return tracer != NULL && group_privileged(tracer->tg);
+}
+
+/**
  * PTRACE_ATTACH and PTRACE_SEIZE: make the caller's process `t`'s tracer.
- * The caller needs privilege, or its real user ID equal to each of `t`'s
- * three, `t` dumpable and `t` not privileged, as Linux's
- * `__ptrace_may_access` asks when the caller lacks CAP_SYS_PTRACE: a root
- * thread that gave up its capabilities may not trace one that has them.
+ * The caller's process needs privilege (`group_privileged`), or the caller
+ * its real user ID equal to each of `t`'s three, `t` dumpable and `t` not
+ * privileged, as Linux's `__ptrace_may_access` asks when the caller lacks
+ * CAP_SYS_PTRACE: a root thread that gave up its capabilities may not trace
+ * one that has them.
  * Such a caller is also refused a thread inside execve, which chooses the
  * ids of its new image by the tracer the thread has (`exec_ids` in
  * syscall_proc.c); Linux makes the attach wait for the exec instead. A
@@ -733,10 +764,10 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
     if (t->tg == current_proc->tg || t->mm == NULL || t->tgid == 1 || (t->ptrace & PT_TRACED)) {
         return -EPERM;
     }
-    if (!proc_privileged(current_proc) && t->exec_ws != NULL) {
+    if (!group_privileged(current_proc->tg) && t->exec_ws != NULL) {
         return -EPERM;
     }
-    if (!proc_privileged(current_proc) &&
+    if (!group_privileged(current_proc->tg) &&
         (current_proc->ruid != t->ruid || current_proc->ruid != t->euid ||
          current_proc->ruid != t->suid || current_proc->rgid != t->rgid ||
          current_proc->rgid != t->egid || current_proc->rgid != t->sgid || !t->mm->dumpable ||
@@ -763,15 +794,16 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
 
 /**
  * PTRACE_TRACEME: make the caller's parent its tracer. A privileged caller
- * may not make a parent that is not privileged its tracer, as Linux's
- * `cap_ptrace_traceme` refuses a parent whose capabilities are fewer.
+ * may not make a parent process that is not privileged (`group_privileged`)
+ * its tracer, as Linux's `cap_ptrace_traceme` refuses a parent whose
+ * capabilities are fewer.
  */
 static int ptrace_traceme(void)
 {
     process_t *parent = get_process(current_proc->parent_pid);
 
     if ((current_proc->ptrace & PT_TRACED) || parent == NULL ||
-        (proc_privileged(current_proc) && !proc_privileged(parent))) {
+        (proc_privileged(current_proc) && !group_privileged(parent->tg))) {
         return -EPERM;
     }
     current_proc->ptrace = PT_TRACED;

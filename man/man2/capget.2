@@ -71,8 +71,10 @@ clears the parent-death signal, as an exec that changes the effective
 user ID does.
 A root thread that gave up its capabilities may not attach to another
 process that has them, nor open its memory, and a thread that has them
-may not make a parent that gave them up its tracer with
-.Dv PTRACE_TRACEME .
+may not make its tracer, with
+.Dv PTRACE_TRACEME ,
+a parent process with a live thread that gave them up
+.Pq see Xr ptrace 2 .
 The check is made at the attach and the open, as on Linux: a tracer
 that attached before it gave them up, and a descriptor opened before,
 keep working.

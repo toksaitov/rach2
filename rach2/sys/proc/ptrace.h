@@ -100,6 +100,10 @@ void ptrace_exit_release(process_t *t);
  * the end, as `ptrace_exit_release` tells it. */
 void ptrace_tracer_gone(uint32_t tgid);
 
+/** Whether the process tracing `t` is privileged: every live thread of it,
+ * since each may make the tracer's requests. 0 for no tracer. */
+int ptrace_tracer_privileged(const process_t *t);
+
 /** Load the debug registers of `next`, or clear what `old` left, at a switch
  * between the two. */
 void ptrace_switch_debug(const process_t *old, const process_t *next);

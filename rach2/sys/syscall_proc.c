@@ -1171,21 +1171,15 @@ static int32_t exec_script(struct exec_state *s)
 }
 
 /**
- * Whether the calling thread has a tracer that is not privileged, which
- * could write the new image's memory and registers at the exec's stop and so
- * act with any ids or capabilities the image would be given. Linux's
- * `ptracer_capable` asks the same of the credentials the tracer had when it
- * attached.
+ * Whether the calling thread has a tracer that is not privileged
+ * (`ptrace_tracer_privileged`), which could write the new image's memory and
+ * registers at the exec's stop and so act with any ids or capabilities the
+ * image would be given. Linux's `ptracer_capable` asks the same of the
+ * credentials the tracer had when it attached.
  */
 static int exec_traced(void)
 {
-    const process_t *tracer;
-
-    if (!(current_proc->ptrace & PT_TRACED)) {
-        return 0;
-    }
-    tracer = get_process(current_proc->tracer);
-    return tracer == NULL || !proc_privileged(tracer);
+    return (current_proc->ptrace & PT_TRACED) && !ptrace_tracer_privileged(current_proc);
 }
 
 /**

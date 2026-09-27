@@ -71,31 +71,19 @@ probe suidmusl
 file rach2/sys/syscall_proc.c
 expect SUIDMUSL FAIL (the exec traced by root)
 old
-static int exec_traced(void)
-{
-    const process_t *tracer;
-
-    if (!(current_proc->ptrace & PT_TRACED)) {
-        return 0;
-    }
-    tracer = get_process(current_proc->tracer);
-    return tracer == NULL || !proc_privileged(tracer);
-}
+    return (current_proc->ptrace & PT_TRACED) && !ptrace_tracer_privileged(current_proc);
 new
-static int exec_traced(void)
-{
     return (current_proc->ptrace & PT_TRACED) != 0;
-}
 end
 
 fault exec-user-tracer-gains
 probe suidmusl
-file rach2/sys/syscall_proc.c
+file rach2/sys/proc/ptrace.c
 expect SUIDMUSL FAIL (the exec traced by uid 1000)
 old
-    return tracer == NULL || !proc_privileged(tracer);
+    return tracer != NULL && group_privileged(tracer->tg);
 new
-    return tracer == NULL;
+    return tracer != NULL;
 end
 
 fault exec-shared-fs-gains
@@ -2476,9 +2464,19 @@ file rach2/sys/proc/ptrace.c
 expect CAPMUSL FAIL (a child with capabilities made a parent without them its tracer)
 old
     if ((current_proc->ptrace & PT_TRACED) || parent == NULL ||
-        (proc_privileged(current_proc) && !proc_privileged(parent))) {
+        (proc_privileged(current_proc) && !group_privileged(parent->tg))) {
 new
     if ((current_proc->ptrace & PT_TRACED) || parent == NULL) {
+end
+
+fault traceme-judges-leader-record
+probe capmusl
+file rach2/sys/proc/ptrace.c
+expect CAPMUSL FAIL (a privileged child made its tracer a parent whose live thread was not)
+old
+        (proc_privileged(current_proc) && !group_privileged(parent->tg))) {
+new
+        (proc_privileged(current_proc) && !proc_privileged(parent))) {
 end
 
 fault own-exe-needs-privilege
