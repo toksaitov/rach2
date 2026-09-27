@@ -90,6 +90,8 @@ C_SRC = kernel.c \
         sys/ipc/pipe_ring.c \
         sys/io/poll.c \
         sys/io/poll_select.c \
+        sys/io/eventfd.c \
+        sys/io/epoll.c \
         sys/tty/n_tty.c \
         sys/tty/tty.c \
         sys/tty/pty.c \

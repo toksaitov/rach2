@@ -50,6 +50,7 @@
 #include "../rtc.h"
 #include "../proc/sched.h"
 #include "../mm/paging.h"
+#include "../io/anon.h"
 
 #define PROCFS_O_CLOEXEC 02000000
 
@@ -478,6 +479,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         ap_str(t, "socket:[");
         ap_u32(t, e->sock ? e->sock->inode : 0u);
         ap_ch(t, ']');
+        break;
+    case FD_TYPE_ANON:
+        ap_str(t, "anon_inode:");
+        ap_str(t, e->priv ? ((const struct anon_obj *)e->priv)->name : "[unknown]");
         break;
     case FD_TYPE_FILE:
     case FD_TYPE_DIR:
