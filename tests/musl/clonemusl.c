@@ -8,9 +8,12 @@
  * there sends raise() to the parent. glibc also calls futex in a process of
  * one thread, from pthread_once. The probe checks that the child's copy of the
  * word holds the child's id and the parent's copy is untouched, that the
- * parent's CLONE_PARENT_SETTID word holds the child's id, that a sharing flag
- * is refused, and that futex compares, times out on both clocks and refuses
- * what it does not implement.
+ * parent's CLONE_PARENT_SETTID word holds the child's id, that CLONE_SIGHAND
+ * without CLONE_VM is refused, and that futex compares, times out on both
+ * clocks no sooner than asked, and refuses what it does not implement.
+ *
+ * The futex call (240) takes the kernel's 32-bit timespec, not musl's, whose
+ * seconds are 64 bits wide.
  *
  * Prints "CLONEMUSL OK" on success and "CLONEMUSL FAIL (detail)" otherwise.
  */
@@ -25,7 +28,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define CLONE_VM             0x00000100
+#define CLONE_SIGHAND        0x00000800
 #define CLONE_PARENT_SETTID  0x00100000
 #define CLONE_CHILD_CLEARTID 0x00200000
 #define CLONE_CHILD_SETTID   0x01000000
@@ -50,10 +53,32 @@ static long raw(long n, long a, long b, long c, long d, long e, long f)
     return r == -1 ? -errno : r;
 }
 
-static long futex(volatile uint32_t *word, int op, uint32_t val, const struct timespec *ts,
+/* The kernel's 32-bit timespec. */
+struct ts32 {
+    long sec;
+    long nsec;
+};
+
+static long futex(volatile uint32_t *word, int op, uint32_t val, const struct ts32 *ts,
                   uint32_t val3)
 {
     return raw(SYS_futex, (long)word, op, (long)val, (long)ts, 0, (long)val3);
+}
+
+/** A clock's reading in nanoseconds. */
+static long long ns_of(clockid_t clk)
+{
+    struct timespec ts;
+
+    clock_gettime(clk, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/** A time in nanoseconds as a 32-bit timespec. */
+static void to32(long long ns, struct ts32 *ts)
+{
+    ts->sec = (long)(ns / 1000000000LL);
+    ts->nsec = (long)(ns % 1000000000LL);
 }
 
 int main(void)
@@ -61,7 +86,9 @@ int main(void)
     static volatile int32_t ctid;
     static volatile int32_t ptid;
     static volatile uint32_t word = 7;
-    struct timespec ts;
+    struct ts32 ts;
+    long long start;
+    long long deadline;
     long pid;
     int status;
 
@@ -89,8 +116,15 @@ int main(void)
     if (ctid != 0) {
         return fail("the store in the child changed the parent's word");
     }
-    if (raw(SYS_clone, CLONE_VM | SIGCHLD, 0, 0, 0, 0, 0) != -EINVAL) {
-        return fail("a sharing flag was not refused");
+    pid = raw(SYS_clone, CLONE_SIGHAND | SIGCHLD, 0, 0, 0, 0, 0);
+    if (pid == 0) {
+        _exit(1);
+    }
+    if (pid > 0) {
+        waitpid((pid_t)pid, &status, 0);
+    }
+    if (pid != -EINVAL) {
+        return fail("CLONE_SIGHAND without CLONE_VM was not refused");
     }
 
     if (futex(&word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL, 0) != 0) {
@@ -99,21 +133,23 @@ int main(void)
     if (futex(&word, FUTEX_WAIT, 8, NULL, 0) != -EAGAIN) {
         return fail("a wait on another value did not return EAGAIN");
     }
-    ts.tv_sec = 0;
-    ts.tv_nsec = 20000000;
+    start = ns_of(CLOCK_MONOTONIC);
+    to32(20000000, &ts);
     if (futex(&word, FUTEX_WAIT, 7, &ts, 0) != -ETIMEDOUT) {
         return fail("a relative wait did not time out");
     }
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    ts.tv_nsec += 20000000;
-    if (ts.tv_nsec >= 1000000000) {
-        ts.tv_nsec -= 1000000000;
-        ts.tv_sec++;
+    if (ns_of(CLOCK_MONOTONIC) - start < 20000000) {
+        return fail("a relative wait of 20 ms ended sooner");
     }
+    deadline = ns_of(CLOCK_MONOTONIC) + 20000000;
+    to32(deadline, &ts);
     if (futex(&word, FUTEX_WAIT_BITSET, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
         return fail("an absolute monotonic wait did not time out");
     }
-    clock_gettime(CLOCK_REALTIME, &ts);
+    if (ns_of(CLOCK_MONOTONIC) < deadline) {
+        return fail("an absolute monotonic wait ended before its deadline");
+    }
+    to32(ns_of(CLOCK_REALTIME), &ts);
     if (futex(&word, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
         return fail("an absolute real-time wait in the past did not time out");
     }
