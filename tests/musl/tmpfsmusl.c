@@ -7,7 +7,8 @@
  * replaces a file whose other name keeps the old bytes. /proc/mounts has the
  * mount's line and /proc/filesystems has "nodev\ttmpfs". umount2 refuses the
  * mount while a file on it is open and succeeds after the close, and a new
- * mount there is empty. /dev/shm is a directory of mode 1777 that /dev lists
+ * mount there is empty. A second mount takes 512 nested directories and is
+ * unmounted with them. /dev/shm is a directory of mode 1777 that /dev lists
  * as one, with tmpfs's magic and its line in /proc/mounts with nosuid and
  * nodev; a file is made, written, read and removed there as shm_open makes
  * one; a working directory there climbs to /dev by "..", /dev/pts/../shm
@@ -28,6 +29,7 @@
 #include <unistd.h>
 
 #define DIR_PATH    "/tmp/tmpfsmusl"
+#define DEEP_PATH   "/tmp/tmpfsmusl-d"
 #define TMPFS_MAGIC 0x01021994
 
 /** Report one failed check and return 1, the probe's failure status. */
@@ -163,6 +165,30 @@ static int placed(void)
     return 0;
 }
 
+/**
+ * A tree as deep as a working directory's path allows: 512 nested
+ * directories, each made from the one above it, and an unmount that frees
+ * them all.
+ */
+static int deep(void)
+{
+    int i;
+
+    mkdir(DEEP_PATH, 0755);
+    if (mount("none", DEEP_PATH, "tmpfs", 0, NULL) != 0 || chdir(DEEP_PATH) != 0) {
+        return fail("the deep tree's mount");
+    }
+    for (i = 0; i < 512; i++) {
+        if (mkdir("a", 0755) != 0 || chdir("a") != 0) {
+            return fail("a level of the deep tree");
+        }
+    }
+    if (chdir("/") != 0 || umount2(DEEP_PATH, 0) != 0 || rmdir(DEEP_PATH) != 0) {
+        return fail("the deep tree's unmount");
+    }
+    return 0;
+}
+
 static int shm(void)
 {
     struct stat st;
@@ -204,7 +230,7 @@ static int shm(void)
 
 int main(void)
 {
-    if (placed() || shm()) {
+    if (placed() || deep() || shm()) {
         return 1;
     }
     printf("TMPFSMUSL OK\n");

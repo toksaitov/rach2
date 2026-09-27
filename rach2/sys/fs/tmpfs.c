@@ -695,16 +695,31 @@ static int tmpfs_prepare_unmount(struct vfs_mount *mnt)
     return 0;
 }
 
-/* Free a directory's tree, the unmount's end: nothing holds a node of it,
- * since the common layer refuses an unmount while anything does. */
-static void free_tree(struct tmpfs_node *d)
+/**
+ * Free the tree under `top`, the unmount's end: nothing holds a node of it,
+ * since the common layer refuses an unmount while anything does.
+ *
+ * The walk is a loop over the parent links and not a recursion, since a tree
+ * may be as deep as a path is long and the kernel stack is 16 KiB. It goes
+ * down into a first name that is a directory with names of its own, frees a
+ * first name that is anything else, and goes back up from a directory it has
+ * emptied, which is then the first name of its parent.
+ */
+static void free_tree(struct tmpfs_node *top)
 {
-    while (d->entries) {
-        struct tmpfs_dirent *e = d->entries;
-        struct tmpfs_node *n = e->node;
+    struct tmpfs_node *d = top;
 
-        if (is_dir(n)) {
-            free_tree(n);
+    while (d != top || d->entries) {
+        struct tmpfs_node *n;
+
+        if (!d->entries) {
+            d = d->parent;
+            continue;
+        }
+        n = d->entries->node;
+        if (is_dir(n) && n->entries) {
+            d = n;
+            continue;
         }
         remove_entry(d, &d->entries);
         n->refs = 0;
