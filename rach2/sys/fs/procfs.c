@@ -462,11 +462,12 @@ uint32_t procfs_task_links(int pid)
 }
 
 /** Whether the caller may read what /proc shows of `p`'s memory, its
- * environment and its auxiliary vector: effective user ID 0, or a real user
- * ID that is `p`'s, as Linux's ptrace check asks at its simplest. */
+ * environment and its auxiliary vector: a thread of `p`'s own process, a
+ * privileged caller, or one whose real user ID is `p`'s when `p` is not
+ * privileged, as Linux's ptrace check asks at its simplest. */
 static int procfs_may_read_mem(const process_t *p)
 {
-    return current_proc && (proc_privileged(current_proc) ||
+    return current_proc && (p->tg == current_proc->tg || proc_privileged(current_proc) ||
                             (current_proc->ruid == p->ruid && !proc_privileged(p)));
 }
 
@@ -2164,7 +2165,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     if (acc == 3 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
-    if (!proc_privileged(current_proc) &&
+    if (p->tg != current_proc->tg && !proc_privileged(current_proc) &&
         (current_proc->ruid != p->ruid || !p->mm->dumpable || proc_privileged(p))) {
         return -EACCES;
     }

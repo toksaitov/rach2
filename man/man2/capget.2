@@ -70,7 +70,9 @@ An exec that gives them back leaves the new image not dumpable and
 clears the parent-death signal, as an exec that changes the effective
 user ID does.
 A root thread that gave up its capabilities may not trace, or read the
-memory of, a process that has them.
+memory of, another process that has them, and a thread that has them may
+not make a parent that gave them up its tracer with
+.Dv PTRACE_TRACEME .
 .Sh RETURN VALUES
 .Rv -std capget capset
 .Sh ERRORS

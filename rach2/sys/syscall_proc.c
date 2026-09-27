@@ -902,20 +902,21 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
  * What an exec's credentials change beside the ids, as Linux's exec does:
  * the new image's address space `mm` is dumpable unless the image runs with
  * ids its caller lacks (`secure`), its effective ids moved from `old_euid`
- * and `old_egid`, it has the capabilities its caller gave up (`old_nocaps`),
- * or an image it loaded is one the caller may not read (`unreadable`), whose
- * bytes a core file or a tracer's attach would give the caller, as Linux's
- * `would_dump` has it. A secure exec, or one that moved the effective ids or
- * gave the capabilities back, clears the parent-death signal too, as Linux's
- * `commit_creds` clears it; a secure exec lowers a soft RLIMIT_STACK above
- * 8 MiB to 8 MiB. The flag is set before the address space is installed, so
- * no other process sees the image dumpable while it runs with new ids.
+ * and `old_egid`, it is privileged where its caller was not
+ * (`was_privileged`), or an image it loaded is one the caller may not read
+ * (`unreadable`), whose bytes a core file or a tracer's attach would give
+ * the caller, as Linux's `would_dump` has it. A secure exec, or one that
+ * moved the effective ids or made the caller privileged, clears the
+ * parent-death signal too, as Linux's `commit_creds` clears it; a secure
+ * exec lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB. The flag is set
+ * before the address space is installed, so no other process sees the image
+ * dumpable while it runs with new ids.
  */
 static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t old_euid,
-                            uint32_t old_egid, uint32_t old_nocaps)
+                            uint32_t old_egid, int was_privileged)
 {
     int moved = current_proc->euid != old_euid || current_proc->egid != old_egid ||
-                (old_nocaps && !current_proc->nocaps);
+                (!was_privileged && proc_privileged(current_proc));
 
     mm->dumpable = secure || moved || unreadable ? 0u : 1u;
     if (secure || moved) {
@@ -1514,7 +1515,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     struct mm *old = current_proc->mm;
     uint32_t old_euid = current_proc->euid;
     uint32_t old_egid = current_proc->egid;
-    uint32_t old_nocaps = current_proc->nocaps;
+    int was_privileged = proc_privileged(current_proc);
     int sig;
 
     proc_thread_gone(current_proc);
@@ -1528,7 +1529,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
     current_proc->nocaps = s->nocaps;
-    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, old_nocaps);
+    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
     proc_set_comm(current_proc, s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         if (current_proc->sigacts[sig].handler != KSIG_DFL &&

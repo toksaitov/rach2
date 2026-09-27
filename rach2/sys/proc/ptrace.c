@@ -761,12 +761,17 @@ static int ptrace_attach(process_t *t, int seize, uint32_t opts)
     return 0;
 }
 
-/** PTRACE_TRACEME: make the caller's parent its tracer. */
+/**
+ * PTRACE_TRACEME: make the caller's parent its tracer. A privileged caller
+ * may not make a parent that is not privileged its tracer, as Linux's
+ * `cap_ptrace_traceme` refuses a parent whose capabilities are fewer.
+ */
 static int ptrace_traceme(void)
 {
     process_t *parent = get_process(current_proc->parent_pid);
 
-    if ((current_proc->ptrace & PT_TRACED) || parent == NULL) {
+    if ((current_proc->ptrace & PT_TRACED) || parent == NULL ||
+        (proc_privileged(current_proc) && !proc_privileged(parent))) {
         return -EPERM;
     }
     current_proc->ptrace = PT_TRACED;

@@ -11,8 +11,12 @@
  * below 1024 nor read a file only another user may, may not take them back,
  * and may not open the memory of, attach to, or read the robust list of its
  * parent, which has them, but may still change the mode of a node root
- * owns. An exec gives them back, and the image is then not dumpable, except
- * under no_new_privs or with another process sharing its directories.
+ * owns. A child that keeps them may not make a parent that gave them up its
+ * tracer, and a thread that gave them up still reads its own process's exe
+ * link. An exec gives them back, and the image is then not dumpable, except
+ * under no_new_privs or with another process sharing its directories; the
+ * exec of a thread of user 1000 that gave up the none it had keeps its
+ * parent-death signal and stays dumpable.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
@@ -24,6 +28,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -291,6 +296,83 @@ static int exec_finds(int nnp, int shared, const char *mode)
 }
 
 /**
+ * A child that keeps its capabilities, whose parent gave its up after the
+ * fork, may not make that parent its tracer with PTRACE_TRACEME. Whether
+ * the call was refused; a traceme the kernel allowed stops nothing.
+ */
+static int traceme_refused(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        int go[2];
+        pid_t g;
+        char c;
+
+        if (pipe(go) != 0) {
+            _exit(2);
+        }
+        g = fork();
+        if (g == 0) {
+            _exit(read(go[0], &c, 1) == 1 && ptrace(PTRACE_TRACEME, 0, 0, 0) == -1 && errno == EPERM
+                      ? 0
+                      : 1);
+        }
+        if (g < 0 || give_up() != 0 || write(go[1], "x", 1) != 1) {
+            _exit(2);
+        }
+        _exit(waitpid(g, &status, 0) == g && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 1);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/** A thread that gives up its capabilities and reads its process's exe
+ * link, into the int at `arg`: whether the read succeeded. */
+static void *reads_own_exe(void *arg)
+{
+    char link[256];
+
+    *(int *)arg = give_up() == 0 && readlink("/proc/self/exe", link, sizeof(link)) > 0;
+    return NULL;
+}
+
+/** Whether a thread without capabilities read its own process's exe link
+ * while the first thread kept them. */
+static int own_exe_readable(void)
+{
+    pthread_t t;
+    int ok = 0;
+
+    if (pthread_create(&t, NULL, reads_own_exe, &ok) != 0 || pthread_join(t, NULL) != 0) {
+        return 0;
+    }
+    return ok;
+}
+
+/**
+ * The exec of a thread of user 1000, which gave up the capabilities it did
+ * not have and set a parent-death signal: the image has none to regain, so
+ * it keeps the signal and stays dumpable. Whether it did.
+ */
+static int nothing_regained(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        if (setuid(1000) != 0 || give_up() != 0 || prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0) != 0) {
+            _exit(2);
+        }
+        execl("/proc/self/exe", "capmusl", "kept", "0", (char *)NULL);
+        _exit(3);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/**
  * A capget of a header whose version is the last four bytes of a page with
  * no page after it: with no data it answers the version alone, as on Linux,
  * and reads no pid. Whether it did.
@@ -326,23 +408,39 @@ static int make_secret(void)
     return ok;
 }
 
-int main(int argc, char **argv)
+/**
+ * The image an exec row runs, which judges its sets by `mode`: "all",
+ * "none", "undumpable" for every capability in an image that is not
+ * dumpable, or "kept" for none, the parent-death signal SIGUSR1 and a
+ * dumpable image. It kills the process `other` names first, when it names
+ * one. Its exit status: 0 when the image is as `mode` says.
+ */
+static int judge_image(const char *mode, const char *other)
+{
+    struct cap_data d[2];
+    int found = get_caps(d) == 0;
+    int sig = 0;
+
+    if (other != NULL && atoi(other) > 0) {
+        kill(atoi(other), SIGKILL);
+    }
+    if (strcmp(mode, "undumpable") == 0) {
+        return !(found && all_of(d) && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0);
+    }
+    if (strcmp(mode, "kept") == 0) {
+        return !(found && none_of(d) && prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) == 0 &&
+                 sig == SIGUSR1 && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 1);
+    }
+    return !(found && (strcmp(mode, "all") == 0 ? all_of(d) : none_of(d)));
+}
+
+/** The rows of the calls themselves, run as root: 0, or 1 once the failure
+ * is printed. */
+static int call_rows(void)
 {
     unsigned h[2] = {0x12345678u, 0};
     struct cap_data d[2];
-    int row;
 
-    if (argc > 1) {
-        int found = get_caps(d) == 0;
-
-        if (argc > 2 && atoi(argv[2]) > 0) {
-            kill(atoi(argv[2]), SIGKILL);
-        }
-        if (strcmp(argv[1], "undumpable") == 0) {
-            return !(found && all_of(d) && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0);
-        }
-        return !(found && (strcmp(argv[1], "all") == 0 ? all_of(d) : none_of(d)));
-    }
     if (get_caps(d) != 0 || !all_of(d)) {
         return fail("root does not have every capability");
     }
@@ -361,14 +459,13 @@ int main(int argc, char **argv)
     if (set_caps(d) != -1 || errno != EINVAL) {
         return fail("a set between none and all was not EINVAL");
     }
-    if (!make_secret()) {
-        return fail("the file only user 1000 may read");
-    }
-    row = in_dropped_child();
-    unlink(SECRET);
-    if (row != 0) {
-        return fail(dropped_rows[row]);
-    }
+    return 0;
+}
+
+/** The rows of the execs, the traceme and a thread's own exe link: 0, or 1
+ * once the failure is printed. */
+static int later_rows(void)
+{
     if (!exec_finds(0, 0, "all")) {
         return fail("an exec as root did not give the capabilities back");
     }
@@ -380,6 +477,39 @@ int main(int argc, char **argv)
     }
     if (!exec_finds(0, 1, "none")) {
         return fail("an exec whose directories another process shares gave the capabilities back");
+    }
+    if (!nothing_regained()) {
+        return fail("an exec that regained nothing cleared the parent-death signal");
+    }
+    if (!traceme_refused()) {
+        return fail("a child with capabilities made a parent without them its tracer");
+    }
+    if (!own_exe_readable()) {
+        return fail("a thread without capabilities could not read its own process's exe link");
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    int row;
+
+    if (argc > 1) {
+        return judge_image(argv[1], argc > 2 ? argv[2] : NULL);
+    }
+    if (call_rows() != 0) {
+        return 1;
+    }
+    if (!make_secret()) {
+        return fail("the file only user 1000 may read");
+    }
+    row = in_dropped_child();
+    unlink(SECRET);
+    if (row != 0) {
+        return fail(dropped_rows[row]);
+    }
+    if (later_rows() != 0) {
+        return 1;
     }
 
     printf("CAPMUSL OK\n");

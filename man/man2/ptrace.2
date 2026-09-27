@@ -152,6 +152,9 @@ privileged, as Linux asks of a tracer without
 a root thread that gave up its capabilities
 .Pq see Xr capget 2
 cannot trace one that has them.
+For the same reason a thread that has them cannot make a parent that
+gave them up its tracer with
+.Dv PTRACE_TRACEME .
 Such a caller cannot attach to a thread inside
 .Xr execve 2 ,
 which chooses the IDs of the new image by the tracer the thread has: for

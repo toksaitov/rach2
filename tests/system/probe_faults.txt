@@ -2405,9 +2405,9 @@ file rach2/sys/syscall_proc.c
 expect CAPMUSL FAIL (an exec that gave the capabilities back left the image dumpable)
 old
     int moved = current_proc->euid != old_euid || current_proc->egid != old_egid ||
-                (old_nocaps && !current_proc->nocaps);
+                (!was_privileged && proc_privileged(current_proc));
 new
-    int moved = (current_proc->euid != old_euid || current_proc->egid != old_egid) + 0 * old_nocaps;
+    int moved = (current_proc->euid != old_euid || current_proc->egid != old_egid) + 0 * was_privileged;
 end
 
 fault capget-reads-pid-first
@@ -2468,4 +2468,35 @@ old
         return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
 new
         return cred_privileged() ? 0 : -EPERM; /* fixed metadata root owns */
+end
+
+fault traceme-ignores-privilege
+probe capmusl
+file rach2/sys/proc/ptrace.c
+expect CAPMUSL FAIL (a child with capabilities made a parent without them its tracer)
+old
+    if ((current_proc->ptrace & PT_TRACED) || parent == NULL ||
+        (proc_privileged(current_proc) && !proc_privileged(parent))) {
+new
+    if ((current_proc->ptrace & PT_TRACED) || parent == NULL) {
+end
+
+fault own-exe-needs-privilege
+probe capmusl
+file rach2/sys/fs/procfs.c
+expect CAPMUSL FAIL (a thread without capabilities could not read its own process's exe link)
+old
+    return current_proc && (p->tg == current_proc->tg || proc_privileged(current_proc) ||
+new
+    return current_proc && (proc_privileged(current_proc) ||
+end
+
+fault nocaps-cleared-counts-as-gain
+probe capmusl
+file rach2/sys/syscall_proc.c
+expect CAPMUSL FAIL (an exec that regained nothing cleared the parent-death signal)
+old
+                (!was_privileged && proc_privileged(current_proc));
+new
+                (!was_privileged && !current_proc->nocaps);
 end
