@@ -233,19 +233,49 @@ static void wait_remove(const struct lock_wait *me)
     }
 }
 
-static int record_free(void *arg)
-{
-    const struct record_want *w = (const struct record_want *)arg;
+/* A wait for a record lock: what it asks for, its record in the list of
+ * waits, and whether it ended by closing a cycle. */
+struct record_wait {
+    const struct record_want *want;
+    struct lock_wait *me;
+    int deadlock;
+};
 
-    return record_conflict(w->key, w->kind, w->owner, w->type, w->start, w->end) == NULL;
+/**
+ * Whether a wait for a record lock is over: nothing conflicts any more, or
+ * the lock that conflicts now closes a cycle of waits. It runs before each
+ * sleep, so the waiter's record always names the owner of the lock it waits
+ * for now: a waiter behind two read locks waits for the second when the
+ * first goes, and a cycle through it is found by the waiter that closes it,
+ * whether that is this one or a process that begins to wait for it later.
+ */
+static int record_ready(void *arg)
+{
+    struct record_wait *rw = (struct record_wait *)arg;
+    const struct record_want *w = rw->want;
+    const struct file_lock *c =
+        record_conflict(w->key, w->kind, w->owner, w->type, w->start, w->end);
+
+    if (!c) {
+        return 1;
+    }
+    rw->me->blocker = c->kind == LK_POSIX ? c->pid : 0u;
+    if (w->kind == LK_POSIX && c->kind == LK_POSIX && deadlock(rw->me->pid, c->pid)) {
+        rw->deadlock = 1;
+        return 1;
+    }
+    return 0;
 }
 
 int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
                     struct lock_req *req)
 {
     struct record_want want;
+    struct record_wait waiting;
+    struct lock_wait me;
     struct file_lock *c;
     uint32_t pid = current_proc->tgid;
+    int rc;
 
     if ((req->type != F_RDLCK && req->type != F_WRLCK && req->type != F_UNLCK) ||
         req->start > req->end) {
@@ -272,32 +302,31 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
         req->pid = c->kind == LK_OFD ? -1 : (int32_t)c->pid;
         return 0;
     }
-    for (;;) {
-        struct lock_wait me;
-        int rc;
-
-        c = req->type == F_UNLCK
-                ? NULL
-                : record_conflict(key, want.kind, want.owner, req->type, req->start, req->end);
-        if (!c) {
-            return record_apply(&want, pid);
-        }
-        if (cmd != LOCK_WAIT) {
-            return -EAGAIN;
-        }
-        if (want.kind == LK_POSIX && c->kind == LK_POSIX && deadlock(pid, c->pid)) {
-            return -EDEADLK;
-        }
-        me.pid = pid;
-        me.blocker = c->kind == LK_POSIX ? c->pid : 0u;
-        me.next = waits;
-        waits = &me;
-        rc = wq_wait_event(&lock_wq, record_free, &want);
-        wait_remove(&me);
-        if (rc < 0) {
-            return -EINTR;
-        }
+    c = req->type == F_UNLCK
+            ? NULL
+            : record_conflict(key, want.kind, want.owner, req->type, req->start, req->end);
+    if (!c) {
+        return record_apply(&want, pid);
     }
+    if (cmd != LOCK_WAIT) {
+        return -EAGAIN;
+    }
+    me.pid = pid;
+    me.blocker = 0;
+    me.next = waits;
+    waits = &me;
+    waiting.want = &want;
+    waiting.me = &me;
+    waiting.deadlock = 0;
+    rc = wq_wait_event(&lock_wq, record_ready, &waiting);
+    wait_remove(&me);
+    if (waiting.deadlock) {
+        return -EDEADLK;
+    }
+    if (rc < 0) {
+        return -EINTR;
+    }
+    return record_apply(&want, pid);
 }
 
 struct flock_want {

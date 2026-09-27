@@ -93,7 +93,9 @@ As
 but wait for a conflicting lock to go.
 A wait that would close a cycle of processes waiting for each other's
 locks fails with
-.Er EDEADLK ;
+.Er EDEADLK ,
+when it begins or when the lock it waits for passes to another owner
+while it sleeps, as on Linux;
 a signal ends the wait with
 .Er EINTR ,
 which

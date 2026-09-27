@@ -49,10 +49,22 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
+/* What other processes do while a caller sleeps, one step for each sleep in
+ * the order the sleeps come; a sleep with no step left is ended by a
+ * signal. A step may itself wait, and its sleeps take the steps after it. */
+static void (*steps[4])(void);
+static int step;
+
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    return cond(arg) ? 0 : -EINTR;
+    while (!cond(arg)) {
+        if (step >= 4 || !steps[step]) {
+            return -EINTR;
+        }
+        steps[step++]();
+    }
+    return 0;
 }
 
 static const struct lock_key file = {(const void *)0x1000, 42};
@@ -161,9 +173,49 @@ static void descriptions(void)
     CHECK(count_locks() == 0 && !lock_any());
 }
 
+static int32_t cycle_result;
+
+/** Pid 2 lets go of its read lock of byte 0. */
+static void two_unlocks(void)
+{
+    CHECK(as(2, NULL, LOCK_SET, F_UNLCK, 0, 0, NULL) == 0);
+}
+
+/** Pid 1 waits for byte 1, which pid 3 holds. */
+static void one_waits(void)
+{
+    cycle_result = as(1, NULL, LOCK_WAIT, F_WRLCK, 1, 1, NULL);
+}
+
+/**
+ * A waiter's record follows the lock it waits for. Pids 1 and 2 read-lock
+ * byte 0, and pid 3 holds byte 1 and waits to write byte 0, behind pid 2's
+ * lock first. When pid 2 lets go, pid 3 waits for pid 1, so pid 1's wait
+ * for byte 1 closes a cycle and fails with EDEADLK.
+ */
+static void wait_cycle(void)
+{
+    CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, 0, NULL) == 0);
+    CHECK(as(2, NULL, LOCK_SET, F_RDLCK, 0, 0, NULL) == 0);
+    CHECK(as(3, NULL, LOCK_SET, F_WRLCK, 1, 1, NULL) == 0);
+    steps[0] = two_unlocks;
+    steps[1] = one_waits;
+    steps[2] = NULL;
+    step = 0;
+    CHECK(as(3, NULL, LOCK_WAIT, F_WRLCK, 0, 0, NULL) == -EINTR);
+    CHECK(cycle_result == -EDEADLK);
+    CHECK(waits == NULL);
+    process.pid = process.tgid = 1;
+    lock_close(&file);
+    process.pid = process.tgid = 3;
+    lock_close(&file);
+    CHECK(count_locks() == 0);
+}
+
 int main(void)
 {
     records();
     descriptions();
+    wait_cycle();
     return fails > 100 ? 100 : fails;
 }
