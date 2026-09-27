@@ -143,6 +143,9 @@ static const char *const PROBES[] = {
     /* Core files: their notes and memory, the limit, the dumpable flag,
        and a link at the name. */
     "musl/coremusl",
+    /* Threads: their ids, locks and signals, the descriptors, directories
+       and umask they share, /proc/self/task, and exec and exit from one. */
+    "musl/threadmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */
