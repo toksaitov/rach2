@@ -169,6 +169,12 @@ typedef struct fd_table {
 /** Close every descriptor's backing object before releasing its slot. */
 void release_fd_table(fd_table_t *table);
 
+/** Drop the current process's record locks on every file `table`, its own
+ * descriptor table, has open: at the process's end when the table outlives
+ * it, shared with another process, whose close of the files would not drop
+ * this one's locks. Defined in syscall_fs.c. */
+void fd_table_drop_locks(fd_table_t *table);
+
 /** Give a fresh table its first entries; 0, or -1 when the heap has none. */
 int fd_table_init(fd_table_t *table);
 

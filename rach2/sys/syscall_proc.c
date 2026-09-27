@@ -187,11 +187,13 @@ void proc_files_put(process_t *p)
     if (!table) {
         return;
     }
-    p->fds = NULL;
-    if (--table->refs == 0) {
+    if (table->refs == 1) {
         release_fd_table(table);
         fd_table_delete(table);
+    } else {
+        table->refs--;
     }
+    p->fds = NULL;
 }
 
 void proc_fs_put(process_t *p)

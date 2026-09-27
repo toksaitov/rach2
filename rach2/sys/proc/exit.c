@@ -19,7 +19,9 @@
  *
  * The thread's own part comes first: the word CLONE_CHILD_CLEARTID names and
  * its robust futexes, its file descriptions and working directory, and a
- * parent waiting in vfork. A thread that is not the last becomes a zombie
+ * parent waiting in vfork. The process's last thread drops the process's
+ * record locks itself when its descriptor table outlives it, shared with
+ * another process. A thread that is not the last becomes a zombie
  * no wait reports but its tracer's; one that is not the leader and has no
  * tracer is freed from the next return to user mode, a traced one by its
  * tracer's wait, and the leader, whose id is the process id, waits for the
@@ -44,6 +46,9 @@ int proc_exit_cleanup(int32_t status)
 
     self->in_syscall = 1;
     proc_thread_gone(self);
+    if (tg->live == 1 && self->fds && self->fds->refs > 1) {
+        fd_table_drop_locks(self->fds);
+    }
     proc_files_put(self);
     proc_fs_put(self);
     proc_vfork_release(self);

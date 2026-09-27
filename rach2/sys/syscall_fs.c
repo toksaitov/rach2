@@ -195,6 +195,17 @@ static void fd_close_locks(const fd_entry_t *e)
     lock_close(&key);
 }
 
+void fd_table_drop_locks(fd_table_t *table)
+{
+    int i;
+
+    for (i = 0; i < fd_table_cap(table); i++) {
+        if (table->entries[i].type != FD_TYPE_NONE) {
+            fd_close_locks(&table->entries[i]);
+        }
+    }
+}
+
 /**
  * Release every backing reference a descriptor holds before its slot is freed.
  *

@@ -85,6 +85,13 @@ void proc_files_put(process_t *p)
     closed = 1;
 }
 
+/** No row's table is shared with another process. */
+void fd_table_drop_locks(fd_table_t *table)
+{
+    (void)table;
+    CHECK(0, "the process's locks are dropped only for a table another process shares");
+}
+
 /** The working directory and the root go together, with the record they
  * are kept in. */
 void proc_fs_put(process_t *p)
