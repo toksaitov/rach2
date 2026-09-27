@@ -19,7 +19,7 @@
 # stepping, printing a variable and a backtrace; the SpiderMonkey shell
 # running a script in its JIT; and chromium-headless-shell printing the DOM
 # of a local page. Each row has its own bound and a failed row does not stop
-# the next, so a run names every row the machine cannot yet do.
+# the next, so a run reports every row the machine cannot yet do.
 #
 # Usage: gnu.sh KERNEL IMAGE DISK PORT ROOT_PASSWORD TEST_PASSWORD
 #

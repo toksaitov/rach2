@@ -130,7 +130,7 @@ tar -xpf "$WORK/debian.tar" -C "$TREE"
 echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
 # bash is /bin/bash, and cc is GCC, as on a Debian system; /bin/sh stays
-# BusyBox's ash. The links are relative, so they hold wherever the volume is
+# BusyBox's ash. The links are relative, so they resolve wherever the volume is
 # mounted.
 ln -s ../usr/bin/bash "$TREE/bin/bash"
 ln -s gcc "$TREE/usr/bin/cc"

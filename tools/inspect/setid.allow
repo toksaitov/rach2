@@ -93,7 +93,7 @@ manifest rach2-metal-disk copy os-real
 init init-metal
 
 # The GNU system's root: os-real's privilege set with OpenSSH in Dropbear's
-# place, so there is no dropbearmulti to pin, and the accounts, shells and
+# place, so there is no dropbearmulti to declare, and the accounts, shells and
 # path that go with it, the metal init that starts OpenSSH's server, and
 # the two files by which glibc decides whose account a name is and which
 # libraries a program of root's loads. What vendor/gnu/install_root.sh adds

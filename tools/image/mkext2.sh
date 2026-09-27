@@ -102,7 +102,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 if [ -n "$OVERLAY" ]; then
     "$OVERLAY" "$TREE"
     # The nodes the program added are the paths of the directory the node
-    # list does not have; the list names a directory twice when a line
+    # list does not have; the list has a directory twice when a line
     # makes it as a parent before its own line. debugfs reads a command's
     # words split at spaces, so a name with a space or a quote could not be
     # given to it.

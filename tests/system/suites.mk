@@ -1422,7 +1422,7 @@ run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(RUNUTIL) $(MKM
 # `prepare-all` builds: it is made from the GNU layer, on a Linux host only
 # (mk/gnu-image.mk), which a set without this suite must not need, so the
 # suite's own target asks for it through `os-real-gnu-ext2`, and the
-# registry names the image among the files this suite writes.
+# registry lists the image among the files this suite writes.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
 run-gnu: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL) $(MKMBR)
 	sh tests/system/suites/gnu.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(GNU_TEST_DISK) \
