@@ -16,7 +16,10 @@
  * open, a listing is ".", "..", then the names in the order they were made
  * or renamed, each with its type, and a directory knows its path. A node
  * held after its last name goes stays readable, and a shared mapping's page
- * takes a reference of its own. Returns the failed-check count.
+ * takes a reference of its own. A memfd's node has its name and no
+ * directory, and goes with its last hold; its seals refuse a shrink, a
+ * growth, a write, a change of its execute bits and more seals, and a
+ * named file starts sealed against sealing. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -320,6 +323,47 @@ static void mapping(void)
     tmpfs_put(&mnt, f);
 }
 
+static void seals(void)
+{
+    struct vfs_stat st;
+    char buf[8];
+    void *f = NULL;
+
+    CHECK(tmpfs_memfd(&mnt, "blob", 0777, 0, &f) == 0 && same(tmpfs_label(f), "blob") &&
+          tmpfs_seals(f) == 0);
+    CHECK(tmpfs_write(&mnt, f, "sealed", 6, 0) == 6);
+    CHECK(tmpfs_add_seals(f, TMPFS_SEAL_SHRINK) == 0);
+    CHECK(tmpfs_truncate(&mnt, f, 3) == -EPERM && tmpfs_truncate(&mnt, f, 10) == 0);
+    st.size = 2;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_SIZE, &st) == -EPERM);
+    CHECK(tmpfs_add_seals(f, TMPFS_SEAL_GROW) == 0);
+    CHECK(tmpfs_write(&mnt, f, "x", 1, 10) == -EPERM && tmpfs_write(&mnt, f, "S", 1, 0) == 1);
+    CHECK(tmpfs_truncate(&mnt, f, 11) == -EPERM);
+    CHECK(tmpfs_add_seals(f, TMPFS_SEAL_FUTURE_WRITE) == 0 &&
+          tmpfs_write(&mnt, f, "s", 1, 0) == -EPERM);
+    CHECK(tmpfs_add_seals(f, 0x40) == -EINVAL);
+    CHECK(tmpfs_add_seals(f, TMPFS_SEAL_SEAL) == 0 &&
+          tmpfs_add_seals(f, TMPFS_SEAL_WRITE) == -EPERM);
+    CHECK(tmpfs_read(&mnt, f, buf, 6, 0) == 6 && k_memcmp(buf, "Sealed", 6) == 0);
+    tmpfs_put(&mnt, f);
+
+    f = make(NULL, "named", 0644);
+    CHECK(tmpfs_seals(f) == TMPFS_SEAL_SEAL && tmpfs_add_seals(f, TMPFS_SEAL_WRITE) == -EPERM &&
+          tmpfs_label(f) == NULL);
+    tmpfs_put(&mnt, f);
+    CHECK(tmpfs_unlink(&mnt, NULL, "named") == 0);
+
+    /* Sealed against a change of its execute bits, a file that has them is
+     * sealed against writing too. */
+    CHECK(tmpfs_memfd(&mnt, "exec", 0755, 0, &f) == 0 && tmpfs_add_seals(f, TMPFS_SEAL_EXEC) == 0 &&
+          (tmpfs_seals(f) & TMPFS_SEAL_WRITE));
+    st.mode = 0644;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_MODE, &st) == -EPERM);
+    st.mode = 0755 | 04000;
+    CHECK(tmpfs_setattr(&mnt, f, VFS_SET_MODE, &st) == 0);
+    tmpfs_put(&mnt, f);
+}
+
 int main(void)
 {
     struct vfs_stat st;
@@ -335,6 +379,7 @@ int main(void)
     kinds();
     listing();
     mapping();
+    seals();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);
     return fails > 100 ? 100 : fails;

@@ -1,0 +1,148 @@
+/**
+ * memfd_create and its seals.
+ *
+ * A memfd made with MFD_CLOEXEC and MFD_ALLOW_SEALING is close-on-exec, open
+ * for reading and writing, a regular file of mode 0777 whose size fstat
+ * reports, and /proc/self/fd names it "/memfd:NAME (deleted)". Its seals
+ * start empty. F_SEAL_SHRINK refuses a smaller ftruncate and takes a larger
+ * one; F_SEAL_GROW refuses a write past the end and a larger ftruncate, and
+ * takes an overwrite; F_SEAL_FUTURE_WRITE refuses a write; F_SEAL_SEAL
+ * refuses more seals; F_GET_SEALS reports each one. A memfd made without
+ * MFD_ALLOW_SEALING starts with F_SEAL_SEAL and refuses F_ADD_SEALS with
+ * EPERM, and one made with MFD_NOEXEC_SEAL has mode 0666 and F_SEAL_EXEC.
+ * F_ADD_SEALS is EINVAL on a KRFFS file and EPERM on a tmpfs file with a
+ * name, and on a descriptor not open for writing. A name of 250 bytes,
+ * MFD_HUGETLB and an unknown flag are EINVAL.
+ *
+ * Prints "MEMFDMUSL OK" on success and "MEMFDMUSL FAIL (detail)" otherwise.
+ */
+
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/* The flag and the seal of Linux 6.3, which this musl does not name. */
+#define MFD_NOEXEC_SEAL 0x0008u
+#define F_SEAL_EXEC     0x0020
+
+/** Report one failed check and return 1, the probe's failure status. */
+static int fail(const char *what)
+{
+    printf("MEMFDMUSL FAIL (%s: errno %d)\n", what, errno);
+    return 1;
+}
+
+/** Whether the call's -1 came with `err`. */
+static int refused(long rc, int err)
+{
+    return rc == -1 && errno == err;
+}
+
+/** Whether the file open on `fd` is `size` bytes long. */
+static int size_is(int fd, off_t size)
+{
+    struct stat st;
+
+    return fstat(fd, &st) == 0 && st.st_size == size;
+}
+
+static int sealing(void)
+{
+    char link[64], path[32], buf[8];
+    struct stat st;
+    int fd = memfd_create("memfdmusl", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    ssize_t n;
+
+    if (fd < 0 || fcntl(fd, F_GETFD) != FD_CLOEXEC || (fcntl(fd, F_GETFL) & O_ACCMODE) != O_RDWR) {
+        return fail("the descriptor");
+    }
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || (st.st_mode & 07777) != 0777 ||
+        st.st_size != 0 || write(fd, "memory", 6) != 6 || !size_is(fd, 6)) {
+        return fail("the file");
+    }
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    n = readlink(path, link, sizeof(link) - 1);
+    if (n < 0 || (link[n] = '\0', strcmp(link, "/memfd:memfdmusl (deleted)") != 0)) {
+        return fail("the /proc/self/fd name");
+    }
+    if (fcntl(fd, F_GET_SEALS) != 0 || fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK) != 0 ||
+        !refused(ftruncate(fd, 3), EPERM) || ftruncate(fd, 10) != 0 || !size_is(fd, 10)) {
+        return fail("F_SEAL_SHRINK");
+    }
+    if (fcntl(fd, F_ADD_SEALS, F_SEAL_GROW) != 0 || !refused(pwrite(fd, "x", 1, 10), EPERM) ||
+        !refused(ftruncate(fd, 11), EPERM) || pwrite(fd, "M", 1, 0) != 1 || !size_is(fd, 10)) {
+        return fail("F_SEAL_GROW");
+    }
+    if (fcntl(fd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) != 0 ||
+        !refused(pwrite(fd, "m", 1, 0), EPERM) || pread(fd, buf, 6, 0) != 6 ||
+        memcmp(buf, "Memory", 6) != 0) {
+        return fail("F_SEAL_FUTURE_WRITE");
+    }
+    if (fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL) != 0 ||
+        !refused(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE), EPERM) ||
+        fcntl(fd, F_GET_SEALS) !=
+            (F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_FUTURE_WRITE | F_SEAL_SEAL)) {
+        return fail("F_SEAL_SEAL");
+    }
+    close(fd);
+    return 0;
+}
+
+static int others(void)
+{
+    char longname[251];
+    struct stat st;
+    int fd, ro;
+
+    fd = memfd_create("plain", 0);
+    if (fd < 0 || fcntl(fd, F_GETFD) != 0 || fcntl(fd, F_GET_SEALS) != F_SEAL_SEAL ||
+        !refused(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE), EPERM)) {
+        return fail("a memfd without MFD_ALLOW_SEALING");
+    }
+    close(fd);
+    fd = memfd_create("noexec", MFD_NOEXEC_SEAL);
+    if (fd < 0 || fstat(fd, &st) != 0 || (st.st_mode & 07777) != 0666 ||
+        fcntl(fd, F_GET_SEALS) != F_SEAL_EXEC || !refused(fchmod(fd, 0755), EPERM)) {
+        return fail("MFD_NOEXEC_SEAL");
+    }
+    close(fd);
+    fd = open("/tmp/memfdmusl", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0 || !refused(fcntl(fd, F_GET_SEALS), EINVAL) ||
+        !refused(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE), EINVAL)) {
+        return fail("the seal commands on a KRFFS file");
+    }
+    close(fd);
+    unlink("/tmp/memfdmusl");
+    fd = open("/dev/shm/memfdmusl", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    ro = open("/dev/shm/memfdmusl", O_RDONLY);
+    if (fd < 0 || ro < 0 || fcntl(fd, F_GET_SEALS) != F_SEAL_SEAL ||
+        !refused(fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE), EPERM) ||
+        !refused(fcntl(ro, F_ADD_SEALS, F_SEAL_WRITE), EPERM)) {
+        return fail("the seal commands on a named tmpfs file");
+    }
+    close(fd);
+    close(ro);
+    unlink("/dev/shm/memfdmusl");
+    memset(longname, 'n', sizeof(longname) - 1);
+    longname[sizeof(longname) - 1] = '\0';
+    if (!refused(memfd_create(longname, 0), EINVAL) ||
+        !refused(memfd_create("huge", MFD_HUGETLB), EINVAL) ||
+        !refused(memfd_create("odd", 0x100), EINVAL)) {
+        return fail("the refused names and flags");
+    }
+    return 0;
+}
+
+int main(void)
+{
+    if (sealing() || others()) {
+        return 1;
+    }
+    printf("MEMFDMUSL OK\n");
+    return 0;
+}

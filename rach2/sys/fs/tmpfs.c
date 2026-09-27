@@ -53,11 +53,13 @@ struct tmpfs_node {
     uint32_t mode;
     uint32_t uid;
     uint32_t gid;
-    uint32_t rdev; /* a device node's number, in the kernel's encoding */
+    uint32_t rdev;  /* a device node's number, in the kernel's encoding */
+    uint32_t seals; /* the TMPFS_SEAL_ bits a regular file has */
     uint64_t ino;
     int64_t atime, atime_ns, mtime, mtime_ns, ctime, ctime_ns;
     struct shmem data;
     char *target;
+    char *label; /* a memfd's name, for /proc/PID/fd; NULL for a named file */
 };
 
 struct tmpfs_mount {
@@ -104,6 +106,7 @@ static struct tmpfs_node *new_node(struct vfs_mount *mnt, uint32_t mode)
     n->mode = mode;
     n->uid = current_proc ? current_proc->euid : 0u;
     n->gid = current_proc ? current_proc->egid : 0u;
+    n->seals = TMPFS_SEAL_SEAL;
     n->ino = ++tm->next_ino;
     stamp(n, STAMP_A | STAMP_M | STAMP_C);
     return n;
@@ -115,6 +118,7 @@ static void settle(struct tmpfs_node *n)
     if (n->refs == 0 && n->links == 0) {
         shmem_free(&n->data);
         kfree(n->target);
+        kfree(n->label);
         kfree(n);
     }
 }
@@ -262,11 +266,28 @@ static int tmpfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/**
+ * Whether the seals of `n` allow its size to become `size`: F_SEAL_SHRINK
+ * refuses a smaller one and F_SEAL_GROW a larger one, as on Linux. 0 or
+ * -EPERM.
+ */
+static int seals_allow_size(const struct tmpfs_node *n, uint64_t size)
+{
+    if ((size < n->data.size && (n->seals & TMPFS_SEAL_SHRINK)) ||
+        (size > n->data.size && (n->seals & TMPFS_SEAL_GROW))) {
+        return -EPERM;
+    }
+    return 0;
+}
+
 static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     struct tmpfs_node *n = (struct tmpfs_node *)node;
 
     (void)mnt;
+    if ((what & VFS_SET_MODE) && (n->seals & TMPFS_SEAL_EXEC) && ((st->mode ^ n->mode) & 0111u)) {
+        return -EPERM;
+    }
     if (what & VFS_SET_SIZE) {
         int rc;
 
@@ -276,7 +297,10 @@ static int tmpfs_setattr(struct vfs_mount *mnt, void *node, int what, const stru
         if ((n->mode & T_IFMT) != T_IFREG) {
             return -EINVAL;
         }
-        rc = shmem_truncate(&n->data, st->size);
+        rc = seals_allow_size(n, st->size);
+        if (rc == 0) {
+            rc = shmem_truncate(&n->data, st->size);
+        }
         if (rc != 0) {
             return rc;
         }
@@ -338,6 +362,8 @@ static int32_t tmpfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32
     return shmem_read(&n->data, buf, count, offset);
 }
 
+/* A write under F_SEAL_WRITE or F_SEAL_FUTURE_WRITE is EPERM, and one past
+ * the end under F_SEAL_GROW is EPERM whole, as on Linux. */
 static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
@@ -350,6 +376,10 @@ static int32_t tmpfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
     if ((n->mode & T_IFMT) != T_IFREG) {
         return -EINVAL;
     }
+    if ((n->seals & (TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE)) ||
+        ((n->seals & TMPFS_SEAL_GROW) && offset + count > n->data.size)) {
+        return -EPERM;
+    }
     stamp(n, STAMP_M | STAMP_C);
     return shmem_write(&n->data, buf, count, offset);
 }
@@ -361,6 +391,9 @@ static int tmpfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     (void)mnt;
     if ((n->mode & T_IFMT) != T_IFREG) {
         return is_dir(n) ? -EISDIR : -EINVAL;
+    }
+    if (seals_allow_size(n, size) != 0) {
+        return -EPERM;
     }
     stamp(n, STAMP_M | STAMP_C);
     return shmem_truncate(&n->data, size);
@@ -790,6 +823,53 @@ struct shmem *tmpfs_shmem(void *node)
     struct tmpfs_node *n = (struct tmpfs_node *)node;
 
     return (n->mode & T_IFMT) == T_IFREG ? &n->data : NULL;
+}
+
+int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t seals, void **node)
+{
+    uint32_t len = (uint32_t)k_strlen(name);
+    struct tmpfs_node *n = new_node(mnt, T_IFREG | (mode & 07777u));
+
+    if (!n) {
+        return -ENOMEM;
+    }
+    n->label = kmalloc(len + 1u);
+    if (!n->label) {
+        kfree(n);
+        return -ENOMEM;
+    }
+    k_memcpy(n->label, name, len + 1u);
+    n->seals = seals;
+    n->refs = 1;
+    *node = n;
+    return 0;
+}
+
+uint32_t tmpfs_seals(void *node)
+{
+    return ((struct tmpfs_node *)node)->seals;
+}
+
+int tmpfs_add_seals(void *node, uint32_t seals)
+{
+    struct tmpfs_node *n = (struct tmpfs_node *)node;
+
+    if (seals & ~TMPFS_SEAL_ALL) {
+        return -EINVAL;
+    }
+    if (n->seals & TMPFS_SEAL_SEAL) {
+        return -EPERM;
+    }
+    if ((seals & TMPFS_SEAL_EXEC) && (n->mode & 0111u)) {
+        seals |= TMPFS_SEAL_SHRINK | TMPFS_SEAL_GROW | TMPFS_SEAL_WRITE | TMPFS_SEAL_FUTURE_WRITE;
+    }
+    n->seals |= seals;
+    return 0;
+}
+
+const char *tmpfs_label(void *node)
+{
+    return ((struct tmpfs_node *)node)->label;
 }
 
 static const struct vfs_ops tmpfs_ops = {

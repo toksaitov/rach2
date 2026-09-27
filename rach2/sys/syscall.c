@@ -1964,6 +1964,7 @@ void init_syscall(void)
     _syscall_table[SYS_LLSEEK] = sys__llseek;
     _syscall_table[SYS_FCNTL64] = sys_fcntl64;
     _syscall_table[SYS_FLOCK] = sys_flock;
+    _syscall_table[SYS_MEMFD_CREATE] = sys_memfd_create;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;

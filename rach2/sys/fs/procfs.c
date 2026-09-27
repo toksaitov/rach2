@@ -35,6 +35,7 @@
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
 #include "vfs.h"
+#include "tmpfs.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
 #include "../network/arp/arp.h"
@@ -514,6 +515,11 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             } else {
                 ap_ch(t, '/'); /* unresolvable or stale */
             }
+        } else if (e->ofd && e->ofd->vmnt && e->ofd->vmnt->type == &vfs_tmpfs_type &&
+                   tmpfs_label(e->ofd->vnode)) {
+            ap_str(t, "/memfd:"); /* a memfd, by its name, as Linux shows one */
+            ap_str(t, tmpfs_label(e->ofd->vnode));
+            ap_str(t, " (deleted)");
         } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
             ap_str(t, e->ofd->dirpath); /* a node of another type, by the path it was opened by */
         } else {
@@ -1081,8 +1087,8 @@ static int procfs_gen_mounts(struct procfs_text *t)
     for (i = 3; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
-        if (!m || m->state != VFS_ACTIVE || vfs_mount_gone(m)) {
-            continue;
+        if (!m || m->state != VFS_ACTIVE || vfs_mount_gone(m) || !m->parent) {
+            continue; /* the memfd mount has no parent and no path */
         }
         ap_str(t, m->source);
         ap_ch(t, ' ');

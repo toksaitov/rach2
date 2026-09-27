@@ -94,7 +94,7 @@ Each live `/proc/<pid>` directory contains `stat`, `cmdline`, and `fd`:
 
 * `stat` emits fields 1 through 24. Pid, program name, parent, process group, and session come from the process table, and so do the user and system times and the reaped children's, in ticks, as `times` reports them, and the nice value `setpriority` keeps, with the priority Linux reports for it, 20 more. Running and ready processes use state `R`, blocked processes use `S`, zombies use `Z`, and other states also use `R`. Terminal, fault, start-time, address-space, and resident-size fields that the kernel does not track are fixed values or zero.
 * `cmdline` contains one NUL-terminated argument: the stored program basename. The kernel retains no full argument vector. The basename is limited to 15 bytes, is inherited by `fork`, and is replaced by `execve` and by `prctl(PR_SET_NAME)`.
-* `fd` lists the process's open descriptors as magic links. Targets include KRFFS paths, `/dev` paths, pty endpoints, synthetic directories, `pipe:[inode]`, and `socket:[inode]`.
+* `fd` lists the process's open descriptors as magic links. Targets include KRFFS paths, `/dev` paths, pty endpoints, synthetic directories, `pipe:[inode]`, `socket:[inode]`, `anon_inode:NAME`, and `/memfd:NAME (deleted)` for a file of `memfd_create`.
 
 Following `/proc/self` produces the numeric pid directory. Following `/proc/<pid>/fd/N` produces the target descriptor's stat identity; `lstat` sees the link itself. This is the identity check used by musl's `ttyname` implementation. `open` of `/proc/<pid>/fd/N` answers `ENOENT`: the link is not reopened as the descriptor it names. Under `O_NOFOLLOW` either link answers `ELOOP`, and under `O_CREAT|O_EXCL` it answers `EEXIST`, as a link on a mounted type does.
 

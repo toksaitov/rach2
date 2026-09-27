@@ -1903,7 +1903,8 @@ static void install(int idx, const struct vfs_type *type, const char *path,
  * root directory, and in /dev's root directory the tmpfs /dev/shm, with
  * `nosuid` and `nodev` as Linux systems mount it and mode 1777. A synthetic
  * type cannot host a mount point, so /dev/shm is a nameless mount entered
- * by its name, as /dev and /proc are.
+ * by its name, as /dev and /proc are. Last the tmpfs of memfd_create, with
+ * no parent and no path, which nothing enters by name.
  */
 static void install_permanent(void)
 {
@@ -1912,6 +1913,13 @@ static void install_permanent(void)
     install(3, &vfs_tmpfs_type, "/dev/shm", mounts[1]);
     mounts[3]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
     k_strncpy(mounts[3]->source, "tmpfs", sizeof(mounts[3]->source));
+    install(4, &vfs_tmpfs_type, "", 0);
+    mounts[4]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
+}
+
+struct vfs_mount *vfs_memfd_mount(void)
+{
+    return mounts[4];
 }
 
 static int root_installed;

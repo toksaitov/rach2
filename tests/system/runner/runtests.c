@@ -124,6 +124,8 @@ static const char *const PROBES[] = {
     /* mknod's kinds on KRFFS and tmpfs: their types, a device node's
        number and open, and the refusals in Linux's order. */
     "musl/mknodmusl",
+    /* memfd_create, its descriptor and name, and each seal. */
+    "musl/memfdmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

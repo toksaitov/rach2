@@ -1,0 +1,138 @@
+.Dd September 27, 2026
+.Dt MEMFD_CREATE 2
+.Os
+.Sh NAME
+.Nm memfd_create
+.Nd make a file in memory that no path names
+.Sh SYNOPSIS
+.Fd "#define _GNU_SOURCE"
+.In sys/mman.h
+.Ft int
+.Fn memfd_create "const char *name" "unsigned int flags"
+.Sh DESCRIPTION
+.Fn memfd_create
+makes an empty regular file in memory and returns a new descriptor open
+on it for reading and writing, at offset 0.
+The file is on a tmpfs the kernel keeps for these files, which no path
+reaches and no listing shows; it goes when the last descriptor, mapping
+or description of it goes.
+It reads, writes, seeks, truncates and maps as a tmpfs file does.
+Its owner is the caller's effective user and group, and its mode 0777,
+not masked by the umask.
+.Pp
+.Fa name
+is at most 249 bytes and is for people:
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+shows the descriptor as
+.Ql /memfd: Ns Ar name Ns Ql " (deleted)" ,
+as Linux does, and nothing else reads it.
+.Pp
+.Fa flags
+is a combination of:
+.Bl -tag -width MFD_ALLOW_SEALING
+.It Dv MFD_CLOEXEC
+Set
+.Dv FD_CLOEXEC
+on the descriptor.
+.It Dv MFD_ALLOW_SEALING
+Make the file without seals, so that
+.Xr fcntl 2 Ns 's
+.Dv F_ADD_SEALS
+can add them.
+Without it the file has
+.Dv F_SEAL_SEAL ,
+which refuses every other seal.
+.It Dv MFD_NOEXEC_SEAL
+(8) Make the file with mode 0666 and the seal
+.Dv F_SEAL_EXEC ,
+and allow sealing, as Linux 6.3 does.
+.It Dv MFD_EXEC
+(0x10) Make the file with mode 0777, which it has anyway.
+.El
+.Ss Seals
+.Xr fcntl 2 Ns 's
+.Dv F_GET_SEALS
+reports the file's seals and
+.Dv F_ADD_SEALS
+adds to them; they are never removed.
+.Bl -tag -width F_SEAL_FUTURE_WRITE
+.It Dv F_SEAL_SEAL
+Refuse any seal more.
+.It Dv F_SEAL_SHRINK
+Refuse a
+.Xr truncate 2
+or
+.Xr ftruncate 2
+to a smaller size.
+.It Dv F_SEAL_GROW
+Refuse a truncation to a larger size and a write that would pass the
+end; such a write fails whole, with nothing written.
+.It Dv F_SEAL_WRITE , F_SEAL_FUTURE_WRITE
+Refuse a
+.Xr write 2 ,
+.Xr pwrite64 2
+and
+.Xr writev 2 .
+The kernel does not refuse a shared mapping of a sealed file that may
+write, and a mapping made before the seal keeps writing through it;
+Linux refuses a new one and, for
+.Dv F_SEAL_WRITE ,
+refuses the seal with
+.Er EBUSY
+while one exists.
+.It Dv F_SEAL_EXEC
+Refuse a change of the execute bits by
+.Xr chmod 2 ;
+a file that has execute bits when it is sealed so is sealed against
+writing too.
+.El
+.Pp
+Every tmpfs file supports the seal commands, and one made by
+.Xr open 2
+starts with
+.Dv F_SEAL_SEAL ;
+a file of any other type answers them with
+.Er EINVAL .
+.Pp
+The i386 system call number is 356.
+The kernel takes the name in EBX and the flags in ECX.
+.Sh RETURN VALUES
+.Fn memfd_create
+returns the new descriptor, or -1 on failure and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/musl/memfdmusl.c
+makes a memfd that allows sealing, checks its descriptor, its mode, its
+size and its name under
+.Pa /proc/self/fd ,
+then adds each seal in turn and checks the writes and truncations it
+refuses, and makes one without
+.Dv MFD_ALLOW_SEALING
+and one with
+.Dv MFD_NOEXEC_SEAL .
+.Sh ERRORS
+.Bl -tag -width "[EMFILE]"
+.It Bq Er EFAULT
+.Fa name
+cannot be read.
+.It Bq Er EINVAL
+.Fa name
+is longer than 249 bytes,
+.Fa flags
+has
+.Dv MFD_HUGETLB
+or a bit that is no flag, or both
+.Dv MFD_NOEXEC_SEAL
+and
+.Dv MFD_EXEC .
+.It Bq Er EMFILE
+The process has no free descriptor.
+.It Bq Er ENOMEM
+The kernel heap has no room for the file.
+.El
+.Sh SEE ALSO
+.Xr fcntl 2 ,
+.Xr mount 2 ,
+.Xr truncate 2 ,
+.Xr proc 5

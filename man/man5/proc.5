@@ -428,6 +428,23 @@ resident size are zero.
 .It Pa /proc/PID/cmdline
 The program name as one NUL-terminated argument.
 The full argument vector is not retained.
+.It Pa /proc/PID/fd/N
+A symbolic link for each open descriptor N, whose target names what the
+descriptor is open on: a file of the KRFFS root by its path now, a file
+of another type by the path it was opened by, a device by its
+.Pa /dev
+path, a pipe or a FIFO as
+.Ql pipe:[INODE] ,
+a socket as
+.Ql socket:[INODE] ,
+an eventfd, epoll or timerfd descriptor as
+.Ql anon_inode: Ns Ar NAME ,
+and a file of
+.Xr memfd_create 2
+as
+.Ql /memfd: Ns Ar NAME Ns Ql " (deleted)" ,
+as Linux names each.
+A followed link reports the descriptor's attributes.
 .It Pa /proc/self/stat , /proc/self/cmdline
 The corresponding files for the calling process.
 .El

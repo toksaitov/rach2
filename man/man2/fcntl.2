@@ -108,6 +108,18 @@ The same three for open file description locks, which belong to the
 open-file description rather than the process.
 .Va l_pid
 must be 0.
+.It Dv F_ADD_SEALS
+Add the seals in the integer argument to the tmpfs file
+.Fa fd
+is open on, which needs
+.Fa fd
+open for writing, as
+.Xr memfd_create 2
+describes.
+.It Dv F_GET_SEALS
+Return the seals of the tmpfs file
+.Fa fd
+is open on.
 .El
 .Pp
 Every other command is refused with
@@ -268,9 +280,12 @@ A lock command cannot read or write the lock structure.
 .It Bq Er EINTR
 A signal ended a lock wait.
 .It Bq Er EINVAL
-The command is unsupported; a duplication command's minimum descriptor
-is negative or at or above the process's descriptor limit; a lock's
-type or
+The command is unsupported; a seal command's descriptor is not open on
+a tmpfs file, or
+.Dv F_ADD_SEALS
+was given a bit that is no seal; a duplication command's minimum
+descriptor is negative or at or above the process's descriptor limit; a
+lock's type or
 .Va l_whence
 is none of the three, its range begins before byte 0, or
 .Dv F_GETLK
@@ -283,6 +298,10 @@ No free descriptor exists at or above the requested minimum and below
 the limit, or the required descriptor storage could not be allocated.
 .It Bq Er ENOLCK
 The kernel heap has no room for a lock.
+.It Bq Er EPERM
+.Dv F_ADD_SEALS
+was given a descriptor not open for writing, or the file has
+.Dv F_SEAL_SEAL .
 .It Bq Er EOVERFLOW
 A lock's range passes the largest offset, or
 .Dv F_GETLK
@@ -295,5 +314,6 @@ There is no current process.
 .Xr execve 2 ,
 .Xr flock 2 ,
 .Xr fork 2 ,
+.Xr memfd_create 2 ,
 .Xr open 2 ,
 .Xr prlimit64 2

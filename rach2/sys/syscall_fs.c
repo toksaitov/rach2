@@ -40,6 +40,7 @@
 #include "fs/vfs.h"
 #include "block/usbdisk.h"
 #include "fs/procfs.h"
+#include "fs/tmpfs.h"
 #include "mm/paging.h"
 #include "mm/pressure.h"
 #include "mm/pagecache.h"
@@ -5859,6 +5860,114 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
     return copy_to_user((void __user *)arg, raw, size) != 0 ? -EFAULT : 0;
 }
 
+/* fcntl's seal commands, on a tmpfs file. */
+#define F_ADD_SEALS 1033
+#define F_GET_SEALS 1034
+
+/**
+ * F_ADD_SEALS and F_GET_SEALS on `entry`: the seals of a tmpfs file
+ * (tmpfs.h), which a memfd made with MFD_ALLOW_SEALING starts without and
+ * every other tmpfs file starts with F_SEAL_SEAL alone, which refuses more.
+ * A descriptor of anything else is EINVAL; adding needs a descriptor open
+ * for writing (EPERM), then `arg` must be seals (EINVAL) and the file not
+ * sealed against sealing (EPERM), in Linux's order. F_SEAL_WRITE does not
+ * wait for writable shared mappings to go, as Linux's does, and is not
+ * refused with EBUSY while one exists.
+ */
+static int32_t fcntl_seals(const fd_entry_t *entry, int cmd, uint32_t arg)
+{
+    if (entry->type != FD_TYPE_FILE || !entry->ofd || !entry->ofd->vmnt ||
+        entry->ofd->vmnt->type != &vfs_tmpfs_type) {
+        return -EINVAL;
+    }
+    if (cmd == F_GET_SEALS) {
+        return (int32_t)tmpfs_seals(entry->ofd->vnode);
+    }
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EPERM;
+    }
+    return tmpfs_add_seals(entry->ofd->vnode, arg);
+}
+
+/* memfd_create's flags. */
+#define MFD_CLOEXEC       0x01u
+#define MFD_ALLOW_SEALING 0x02u
+#define MFD_NOEXEC_SEAL   0x08u
+#define MFD_EXEC          0x10u
+
+/* The longest memfd name: Linux's NAME_MAX less the "memfd:" of its link. */
+#define MFD_NAME_MAX 249
+
+/**
+ * memfd_create(2): EBX = name, ECX = flags.
+ *
+ * A file in memory that no path names, on the tmpfs `vfs_memfd_mount` has,
+ * open for reading and writing on a new descriptor: mode 0777 and the
+ * caller's owner, 0666 with MFD_NOEXEC_SEAL; sealed against sealing unless
+ * MFD_ALLOW_SEALING or MFD_NOEXEC_SEAL, and sealed against a change of its
+ * execute bits with MFD_NOEXEC_SEAL; close-on-exec with MFD_CLOEXEC. It goes
+ * with its descriptions' last close, and /proc/PID/fd names it
+ * "/memfd:NAME (deleted)". A name longer than 249 bytes, MFD_HUGETLB or
+ * another unknown flag, and MFD_NOEXEC_SEAL with MFD_EXEC are EINVAL.
+ */
+int32_t sys_memfd_create(isr_params_t *params)
+{
+    uint32_t flags = params->ecx;
+    struct vfs_mount *mnt = vfs_memfd_mount();
+    uint32_t mode = 0777u, seals = TMPFS_SEAL_SEAL;
+    char name[MFD_NAME_MAX + 2];
+    struct vfs_stat st;
+    fd_entry_t *e;
+    void *node;
+    int32_t rc;
+    int fd;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if ((flags & ~(MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_NOEXEC_SEAL | MFD_EXEC)) ||
+        ((flags & MFD_NOEXEC_SEAL) && (flags & MFD_EXEC))) {
+        return -EINVAL;
+    }
+    rc = strncpy_from_user(name, (const char __user *)params->ebx, sizeof(name));
+    if (rc > MFD_NAME_MAX || rc == -ENAMETOOLONG) {
+        return -EINVAL;
+    }
+    if (rc < 0) {
+        return rc;
+    }
+    if (flags & MFD_NOEXEC_SEAL) {
+        mode = 0666u;
+        seals = TMPFS_SEAL_EXEC;
+    } else if (flags & MFD_ALLOW_SEALING) {
+        seals = 0;
+    }
+    if (!fd_can_alloc(&current_proc->fds)) {
+        return -EMFILE;
+    }
+    rc = tmpfs_memfd(mnt, name, mode, seals, &node);
+    if (rc != 0) {
+        return rc;
+    }
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0 || vfs_open_node(mnt, node, 2, &current_proc->fds.entries[fd].ofd->fhandle) != 0) {
+        if (fd >= 0) {
+            fd_free(&current_proc->fds, fd);
+        }
+        mnt->type->ops->put(mnt, node);
+        return fd < 0 ? -EMFILE : -ENOMEM;
+    }
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_FILE;
+    e->node = NULL;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | ((flags & MFD_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    e->ofd->vmnt = mnt;
+    e->ofd->vnode = node;
+    e->ofd->ino = vfs_getattr(mnt, node, &st) == 0 ? st.ino : 0;
+    vfs_desc_open(mnt);
+    return fd;
+}
+
 /* flock(2)'s obsolete mandatory-lock bit, which Linux accepts and ignores. */
 #define LOCK_MAND 32
 
@@ -6019,6 +6128,9 @@ int32_t sys_fcntl64(isr_params_t *params)
     case F_OFD_SETLK:
     case F_OFD_SETLKW:
         return fcntl_lock(entry, cmd, arg);
+    case F_ADD_SEALS:
+    case F_GET_SEALS:
+        return fcntl_seals(entry, cmd, arg);
     default:
         return -EINVAL;
     }

@@ -10,9 +10,9 @@
  *
  * The table is an array of records from the heap that grows as mounts are
  * placed. Entry zero is the root; entries one and two are the two synthetic
- * namespaces, /dev and /proc; entry three is the tmpfs at /dev/shm. The four
- * are permanent: umount2 on any of them answers EBUSY. The rest are placed
- * by mount(2) and removed by umount2.
+ * namespaces, /dev and /proc; entry three is the tmpfs at /dev/shm, and
+ * entry four the tmpfs of memfd_create, which no path reaches. The five are
+ * permanent. The rest are placed by mount(2) and removed by umount2.
  *
  * A mount point is the covered directory's node. It is held through
  * the parent file system's `hold`, so it cannot be reached under another
@@ -493,8 +493,13 @@ extern const struct vfs_type vfs_devfs_type;
 extern const struct vfs_type vfs_procfs_type;
 
 /* The permanent mounts, entries 0 to VFS_PERMANENT - 1: the root, /dev,
- * /proc, and the tmpfs /dev/shm, a nameless mount in /dev's root directory.
- * umount2 answers EBUSY for each. */
-#define VFS_PERMANENT 4
+ * /proc, the tmpfs /dev/shm, a nameless mount in /dev's root directory, and
+ * the tmpfs of memfd_create's files, which no path reaches. umount2 answers
+ * EBUSY for each it can name. */
+#define VFS_PERMANENT 5
+
+/** The tmpfs memfd_create makes its files on: no path reaches it, no
+ * listing shows it, and it lasts as long as the kernel. */
+struct vfs_mount *vfs_memfd_mount(void);
 
 #endif /* _VFS_H_ */
