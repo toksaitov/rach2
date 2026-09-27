@@ -35,7 +35,7 @@ run_phase()
         -Wall -Wextra -Werror -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
         -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        tests/host/krffsmount_hosttest.c "$work/sys/fs/fd.c" \
+        tests/host/krffsmount_hosttest.c "$work/sys/fs/fd.c" "$work/sys/fs/lock.c" \
         "$work/sys/lib/kstring.c" "$work/sys/lib/kctypes.c" -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
