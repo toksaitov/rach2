@@ -85,7 +85,10 @@ The flags may also contain
 which gives the child the parent's address space itself, so a store, a
 mapping or a
 .Xr brk 2
-by either is seen by both, and gives the child no alternate signal stack;
+by either is seen by both, and gives the child no alternate signal stack
+unless
+.Dv CLONE_VFORK
+is set too;
 .Dv CLONE_VFORK ,
 which makes the parent wait as the parent of
 .Fn vfork
