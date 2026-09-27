@@ -4,7 +4,8 @@
  * A timer armed for 50 ms with a 20 ms interval blocks a read until it
  * expires, then reads a count of at least one, and timerfd_gettime reports
  * the interval it was given. A nonblocking read of a timer not yet expired
- * fails with EAGAIN; a timer armed with a zero value is disarmed and reports
+ * fails with EAGAIN, and a read of zero bytes with EINVAL, as a read of fewer
+ * than eight does; a timer armed with a zero value is disarmed and reports
  * zeros. An absolute time already past on the monotonic clock, 1 ns, which the
  * first timer's 50 ms have put behind it, expires at once, as poll sees. A
  * timer in an epoll set wakes a wait with no timeout: a child arms the timer
@@ -220,6 +221,9 @@ int main(void)
     }
     if (read(t, &n, sizeof(n)) != -1 || errno != EAGAIN) {
         return fail("a nonblocking read of an unexpired timer was not EAGAIN");
+    }
+    if (read(t, &n, 0) != -1 || errno != EINVAL) {
+        return fail("a read of zero bytes was not EINVAL");
     }
 
     memset(&it, 0, sizeof(it));

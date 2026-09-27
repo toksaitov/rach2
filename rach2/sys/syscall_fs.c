@@ -2910,9 +2910,21 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     return -EBADF;
 }
 
-/* read(2): EBX = fd, ECX = buf, EDX = count. */
+/**
+ * read(2): EBX = fd, ECX = buf, EDX = count.
+ *
+ * An eventfd and a timerfd read whole eight-byte counts and refuse a
+ * shorter read with EINVAL, as Linux does, and a read of zero bytes among
+ * them: such a read goes to their read method, before the zero-length
+ * shortcut of `read_fd`, which readv(2) of nothing keeps, as Linux's does.
+ */
 int32_t sys_read(isr_params_t *params)
 {
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, (int)params->ebx) : NULL;
+
+    if (params->edx == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {
+        return read_ops(e, (char __user *)params->ecx, 0);
+    }
     return read_fd((int)params->ebx, (char __user *)params->ecx, params->edx);
 }
 

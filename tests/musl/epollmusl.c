@@ -3,8 +3,9 @@
  *
  * An eventfd's read takes the whole counter and leaves it empty; with
  * EFD_SEMAPHORE each read takes one, and a counter of 3 is empty after three.
- * A nonblocking read of zero fails with EAGAIN, and a write of the all-ones
- * value with EINVAL. poll reports it readable once written.
+ * A nonblocking read of zero fails with EAGAIN, and a read of zero bytes and a
+ * write of the all-ones value with EINVAL. poll reports it readable once
+ * written.
  * An epoll set reports a pipe with data, level-triggered, at every wait
  * while the data is there; edge-triggered only once until more arrives;
  * with EPOLLONESHOT once until EPOLL_CTL_MOD. Its data word comes back as it
@@ -98,6 +99,9 @@ static int counters(void)
     }
     if (read(e, &v, sizeof(v)) != -1 || errno != EAGAIN) {
         return fail("a nonblocking read of zero was not EAGAIN");
+    }
+    if (read(e, &v, 0) != -1 || errno != EINVAL) {
+        return fail("a read of zero bytes was not EINVAL");
     }
     pfd.fd = e;
     pfd.events = POLLIN;

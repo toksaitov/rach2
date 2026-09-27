@@ -26,7 +26,13 @@ into
 .Fa buf .
 A successful call may return fewer bytes than requested.
 A zero-length read checks that the descriptor exists, then returns zero
-without inspecting the buffer or checking the descriptor's read mode.
+without inspecting the buffer or checking the descriptor's read mode;
+an eventfd and a timerfd, which read whole eight-byte counts, refuse it
+with
+.Er EINVAL ,
+as Linux does, while
+.Fn readv
+of zero bytes returns zero for them, as Linux's does.
 .Pp
 Regular files are read at the open-file description's offset.
 A positive result advances that offset by the number of bytes read.
@@ -248,6 +254,8 @@ or
 .Pa /dev/grubcore ,
 also returns this error when the offset or count is not a multiple of
 512 bytes; disk and partition nodes take any byte range.
+An eventfd or a timerfd returns it for a read of fewer than eight bytes,
+zero among them.
 .It Er EIO
 A file system or device read failed, a device was removed, or the
 random device has no usable seed.

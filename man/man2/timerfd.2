@@ -94,7 +94,8 @@ is not in the caller's memory.
 The clock or a flag is not one of those above;
 .Fa fd
 is not a timer; a nanosecond field is outside 0 to 999999999, or a time
-is negative; or a read was shorter than eight bytes.
+is negative; or a read was shorter than eight bytes, a read of zero bytes
+among them.
 .It Er EMFILE
 The process has no free descriptor.
 .It Er EPERM

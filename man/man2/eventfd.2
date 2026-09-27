@@ -59,7 +59,8 @@ set.
 .Bl -tag -width EMFILE
 .It Er EINVAL
 .Fa flags
-has another bit; or a read or write was shorter than eight bytes, or a
+has another bit; or a read or write was shorter than eight bytes, a read
+of zero bytes among them, or a
 write gave 0xffffffffffffffff.
 .It Er EMFILE
 The process has no free descriptor.
