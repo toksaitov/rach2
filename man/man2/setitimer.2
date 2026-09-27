@@ -58,10 +58,13 @@ say when that ends their call with
 and
 .Xr sigaction 2
 says it for other waits.
-This kernel does not restart an interrupted call, whatever the handler's
+A call the signal interrupts is restarted after a handler with
 .Dv SA_RESTART
-says
-.Pq Xr sigaction 2 .
+when
+.Xr sigaction 2
+says it is, and otherwise fails with
+.Er EINTR ;
+the waits for a signal or a deadline are never restarted.
 .Pp
 .Fn getitimer
 reports the time left before the next
@@ -92,17 +95,22 @@ A child of
 .Xr fork 2
 starts with the timer disarmed.
 .Xr execve 2
-keeps it, but clears the pending signals, so a
+keeps the timer and the pending signals, so a
 .Dv SIGALRM
-posted and not yet delivered is lost.
+posted and not yet delivered, while blocked, comes to the new program
+when it unblocks the signal.
 .Ss Differences from Linux
 .Dv ITIMER_VIRTUAL
 and
 .Dv ITIMER_PROF
 are refused with
 .Er EINVAL :
-they count a process's own processor time, which this kernel does not
-keep.
+they are not implemented, though the tick keeps each thread's processor
+time, which
+.Xr times 2
+and the CPU clocks of
+.Xr clock_gettime 2
+read.
 The timer counts 10 ms ticks, so the signal is posted at a tick, and
 .Fn getitimer
 reports whole ticks where Linux reports microseconds.
@@ -122,8 +130,6 @@ reports an
 .Va it_value
 of zero with the interval; this kernel arms it again at the tick that
 posts the signal, whatever the mask, and reports the time to the next.
-Linux keeps the pending signals across
-.Xr execve 2 .
 .Ss System call interface
 The i386 system call numbers are 104 for
 .Fn setitimer ,
