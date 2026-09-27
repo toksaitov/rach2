@@ -13,9 +13,11 @@
  * registration is removed by EPOLL_CTL_DEL and dropped when its descriptor
  * is closed; a regular file is refused with EPERM and a second add with
  * EEXIST. A child's write wakes a parent the child has seen asleep in an
- * epoll_wait with no timeout. The child stays alive until the parent
- * answers, so that only the write can end the wait, and an alarm bounds
- * it. epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative
+ * epoll_wait with no timeout. The child stays alive until the parent answers,
+ * so that only the write can end the wait, and an alarm bounds it. The
+ * registration of a closed eventfd does not report the eventfd made next at its
+ * number, which can be added. epoll_pwait2 takes a timeout of 2^31 seconds, and
+ * refuses negative
  * seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
@@ -257,6 +259,37 @@ static int sets(void)
     return 0;
 }
 
+/* A registration of a closed eventfd is not the eventfd made next at its
+ * number, whose description the kernel may put at the same address: a wait
+ * does not report the new one for it, and the new one can be added. */
+static int number_reused(void)
+{
+    struct epoll_event ev, out;
+    int ep = epoll_create1(0);
+    int e = eventfd(0, 0);
+    int again;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    ev.data.u32 = 1;
+    if (ep < 0 || e < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
+        return fail("setup for a reused number");
+    }
+    close(e);
+    again = eventfd(1, 0);
+    if (again < 0 || wait_one(ep, 0, &out) != 0) {
+        return fail("a closed eventfd's registration reported the one after it");
+    }
+    ev.data.u32 = 2;
+    if (epoll_ctl(ep, EPOLL_CTL_ADD, again, &ev) != 0 || wait_one(ep, 0, &out) != 1 ||
+        out.data.u32 != 2) {
+        return fail("the eventfd at a closed one's number could not be added");
+    }
+    close(again);
+    close(ep);
+    return 0;
+}
+
 /* epoll_pwait2 takes 64-bit seconds: a timeout of 2^31 seconds is valid,
  * and with a descriptor ready the wait returns at once. */
 static int long_timeout(void)
@@ -290,7 +323,7 @@ static int long_timeout(void)
 
 int main(void)
 {
-    if (counters() || sets() || long_timeout()) {
+    if (counters() || sets() || number_reused() || long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

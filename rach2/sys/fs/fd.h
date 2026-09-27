@@ -130,6 +130,10 @@ struct open_file {
      * type has no `path` operation and `/proc/PID/fd` reports, or "" when
      * the path did not fit, so that such a call answers ENAMETOOLONG. */
     char dirpath[64];
+    /* The count of descriptions made when this one was, which tells it
+     * from a new description the heap gives the same address after its
+     * last close; an epoll registration keeps both. */
+    uint32_t serial;
 };
 
 /*

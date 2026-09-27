@@ -40,7 +40,10 @@
 struct epitem {
     struct epitem *next;
     int fd;
-    const struct open_file *ofd; /* the open file the number named when added */
+    /* The open file the number named when added, and its serial, which a
+     * new description at the same address after its last close has not. */
+    const struct open_file *ofd;
+    uint32_t serial;
     uint32_t events;
     uint32_t data[2];
     uint32_t seen; /* EPOLLET: the events reported that have not gone since */
@@ -60,6 +63,13 @@ struct epoll_out {
 
 static struct epoll *epoll_of(int fd);
 
+/* Whether the descriptor `e` is the open file the registration `it` was
+ * made for. */
+static int item_names(const struct epitem *it, const fd_entry_t *e)
+{
+    return e && e->ofd == it->ofd && e->ofd->serial == it->serial;
+}
+
 /* The events of `it` ready now, as a wait reports them, or 0; the wait queue
  * of its descriptor in `*wq`. A registration whose number names another open
  * file, or none, is marked for removal with `*gone`. */
@@ -70,7 +80,7 @@ static uint32_t item_ready(struct epitem *it, struct wait_queue **wq, int *gone)
     uint32_t ready;
 
     *wq = NULL;
-    *gone = !e || e->ofd != it->ofd;
+    *gone = !item_names(it, e);
     if (*gone || (it->events & EPOLL_EVENTS) == 0) {
         return 0;
     }
@@ -151,7 +161,7 @@ static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         struct wait_queue *ignored;
         uint32_t want = (it->events & EPOLL_EVENTS) | EPOLLERR | EPOLLHUP;
 
-        if (t && t->ofd == it->ofd && t->ops != e->ops && (it->events & EPOLL_EVENTS) &&
+        if (item_names(it, t) && t->ops != e->ops && (it->events & EPOLL_EVENTS) &&
             ((uint32_t)(uint16_t)poll_fd(t, (short)want, &ignored) & want)) {
             return (short)(events & 0x001);
         }
@@ -244,7 +254,7 @@ int32_t sys_epoll_ctl(struct isr_params *params)
         return -EFAULT;
     }
     for (link = &ep->items; (it = *link) != NULL; link = &it->next) {
-        if (it->fd == fd && it->ofd == target->ofd) {
+        if (it->fd == fd && item_names(it, target)) {
             break;
         }
     }
@@ -259,6 +269,7 @@ int32_t sys_epoll_ctl(struct isr_params *params)
         }
         it->fd = fd;
         it->ofd = target->ofd;
+        it->serial = target->ofd->serial;
         it->next = ep->items;
         ep->items = it;
         ep->count++;

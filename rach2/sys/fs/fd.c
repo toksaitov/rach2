@@ -23,6 +23,7 @@ struct ofd_rec {
 };
 
 static struct ofd_rec *ofds;
+static uint32_t ofd_serials;
 
 static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
 {
@@ -43,6 +44,7 @@ static struct open_file *ofd_alloc(void)
         return NULL;
     }
     rec->ofd.refcount = 1;
+    rec->ofd.serial = ++ofd_serials;
     wait_queue_init(&rec->wq);
     rec->next = ofds;
     ofds = rec;
