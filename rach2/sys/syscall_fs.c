@@ -8286,10 +8286,17 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kerne
  * is -EROFS, as the path to a synthetic one answers; Linux sets the times of
  * such an inode. An O_PATH descriptor names its file for the empty path and
  * is -EBADF to the NULL one, as on Linux.
+ *
+ * The description's node is read under the mount's namespace lock, which
+ * `utimes_node` takes again: a KRFFS write that grows the file moves it
+ * under that lock and repoints the description, so a node read before the
+ * wait for the lock could be the storage the file left.
  */
 static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
+    struct vfs_mount *mnt;
+    int32_t rc;
 
     if (!entry || (!empty && (entry->flags & FD_FLAG_PATH))) {
         return -EBADF;
@@ -8297,10 +8304,18 @@ static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
     if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
         return -EROFS;
     }
-    if ((entry->node && fd_node_check(entry) != 0) || !entry->ofd || !entry->ofd->vmnt) {
+    if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
     }
-    return utimes_node(entry->ofd->vmnt, entry->ofd->vnode, times);
+    mnt = entry->ofd->vmnt;
+    vfs_ns_lock(mnt);
+    if (entry->node && fd_node_check(entry) != 0) {
+        rc = -EBADF;
+    } else {
+        rc = utimes_node(mnt, entry->ofd->vnode, times);
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
 /**
@@ -8313,7 +8328,10 @@ static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
  * (-EINVAL otherwise); with AT_FDCWD it is -EFAULT. Otherwise the path
  * resolves as openat's does, AT_SYMLINK_NOFOLLOW sets a final symbolic link's
  * own times, and with AT_EMPTY_PATH an empty path names the file `dirfd`
- * refers to, or the working directory for AT_FDCWD. Returns 0 or -errno.
+ * refers to, or the working directory for AT_FDCWD. A type that serialises
+ * its uses keeps the final mount's namespace lock from the resolution to
+ * the store, so a KRFFS write cannot move the file between the two. Returns
+ * 0 or -errno.
  */
 int32_t sys_utimensat(isr_params_t *params)
 {
@@ -8370,12 +8388,15 @@ int32_t sys_utimensat(isr_params_t *params)
             return rc;
         }
     }
-    rc = vfs_resolve(0, pathbuf, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0, 0);
+    rc = vfs_resolve(0, pathbuf,
+                     VFS_WALK_LOCK | ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), &ref,
+                     0, 0);
     path_buf_put(pathbuf);
     if (rc != 0) {
         return rc;
     }
     rc = utimes_node(ref.mnt, ref.node, times);
+    vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
     return rc;
 }
