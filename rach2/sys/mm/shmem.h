@@ -28,7 +28,8 @@ int32_t shmem_write(struct shmem *sh, const void *buf, uint32_t count, uint64_t 
 int shmem_truncate(struct shmem *sh, uint64_t size);
 
 /** The frame of page `pgoff`, allocated zeroed when there is none, with a
- * reference taken for the caller's mapping; 0 when no frame can be had. */
+ * reference taken for the caller's mapping; 0 when no frame can be had, or
+ * when the page lies at or past SHMEM_MAX_SIZE. */
 uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff);
 
 /** Free every page; the size is 0 after. */

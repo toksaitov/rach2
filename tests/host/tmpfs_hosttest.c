@@ -16,7 +16,9 @@
  * open, a listing is ".", "..", then the names in the order they were made
  * or renamed, each with its type, and a directory knows its path. A node
  * held after its last name goes stays readable, and a shared mapping's page
- * takes a reference of its own. A memfd's node has its name and no
+ * takes a reference of its own; a page at or past the most a file may have
+ * is refused without growing the table, 2^31 and 2^32 - 1 among them, and
+ * the last page below it is given. A memfd's node has its name and no
  * directory, and goes with its last hold; its seals refuse a shrink, a
  * growth, a write, a change of its execute bits and more seals, and a
  * named file starts sealed against sealing. Returns the failed-check count.
@@ -311,15 +313,24 @@ static void listing(void)
 
 static void mapping(void)
 {
+    const uint32_t most = (uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE);
     void *f = look(NULL, "c");
     struct shmem *sh = tmpfs_shmem(f);
-    uintptr_t phys;
+    uintptr_t phys, last;
+    uint32_t npages;
 
     CHECK(sh != NULL && tmpfs_shmem(((struct tmpfs_mount *)mnt.priv)->root) == NULL);
     phys = shmem_map_page(sh, 0);
     CHECK(phys != 0 && refs[frame_index(phys)] == 2);
-    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && refs[frame_index(phys)] == 1);
+    npages = sh->npages;
+    CHECK(shmem_map_page(sh, 0xFFFFFFFFu) == 0 && shmem_map_page(sh, 0x80000000u) == 0 &&
+          shmem_map_page(sh, most) == 0 && sh->npages == npages);
+    last = shmem_map_page(sh, most - 1u);
+    CHECK(last != 0 && sh->npages == most && refs[frame_index(last)] == 2);
+    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && refs[frame_index(phys)] == 1 &&
+          refs[frame_index(last)] == 1);
     free_frame(phys);
+    free_frame(last);
     tmpfs_put(&mnt, f);
 }
 

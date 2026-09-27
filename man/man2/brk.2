@@ -150,6 +150,13 @@ when it may be written.
 A writable shared mapping needs a descriptor open for writing.
 .El
 .Pp
+Shared memory, anonymous or a file on tmpfs, has pages up to 1 GiB, the
+most a file in memory holds.
+A page at or past that, which a mapping reaches from a large offset or
+past 1 GiB of its own length, is never backed, and an access to it
+ends in
+.Dv SIGSEGV .
+.Pp
 .Fa length
 is rounded up to a page boundary.
 With

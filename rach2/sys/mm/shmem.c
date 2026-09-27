@@ -9,7 +9,12 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
-/* Make the table reach page `n - 1`; 0, or -ENOSPC. */
+/* The most pages a file in memory has, SHMEM_MAX_SIZE of them. */
+#define SHMEM_MAX_PAGES ((uint32_t)(SHMEM_MAX_SIZE / PAGE_SIZE))
+
+/* Make the table reach page `n - 1`, where `n` is at most SHMEM_MAX_PAGES;
+ * 0, or -ENOSPC. The length doubles from 16 and stops at that bound, so
+ * neither it nor the table's size in bytes can wrap. */
 static int reach(struct shmem *sh, uint32_t n)
 {
     uint32_t cap = sh->npages ? sh->npages : 16u;
@@ -20,6 +25,9 @@ static int reach(struct shmem *sh, uint32_t n)
     }
     while (cap < n) {
         cap *= 2;
+    }
+    if (cap > SHMEM_MAX_PAGES) {
+        cap = SHMEM_MAX_PAGES;
     }
     grown = kzalloc(sizeof(uintptr_t) * cap);
     if (!grown) {
@@ -35,12 +43,13 @@ static int reach(struct shmem *sh, uint32_t n)
 }
 
 /* The frame of page `i`, made and zeroed when there is none; 0 when none
- * can be had. */
+ * can be had, or when `i` is past the pages a file in memory may have: a
+ * mapping names its page by an offset the caller chose. */
 static uintptr_t page_at(struct shmem *sh, uint32_t i)
 {
     uintptr_t phys;
 
-    if (reach(sh, i + 1u) != 0) {
+    if (i >= SHMEM_MAX_PAGES || reach(sh, i + 1u) != 0) {
         return 0;
     }
     if (sh->pages[i]) {
