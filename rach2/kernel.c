@@ -405,9 +405,19 @@ void terminate_current_process(int32_t signo)
         if (!debug_shell_is_home) {
             panic_init_died(pid); /* never returns */
         }
-        /* Same resume path as when init exits normally; see sys_exit. */
-        klog(KLOG_INFO, "terminate",
-             "init process %d killed by signal %d, returning to kernel shell", pid, signo & 0x7F);
+        /* Same resume path as when init exits normally; see sys_exit. The
+         * status is the process's: when exit_group's SIGKILL ends this thread
+         * last, the line is the one sys_exit prints for the group's exit. */
+        signo = current_proc->tg->exit_code;
+        if ((signo & 0x7F) == 0) {
+            klog(KLOG_INFO, "sys_exit",
+                 "init process %d exited with status %d, returning to kernel shell", pid,
+                 (signo >> 8) & 0xFF);
+        } else {
+            klog(KLOG_INFO, "terminate",
+                 "init process %d killed by signal %d, returning to kernel shell", pid,
+                 signo & 0x7F);
+        }
         console_puts("Init process exited. Returning to kernel debug shell.");
 
         free_process(current_proc);
