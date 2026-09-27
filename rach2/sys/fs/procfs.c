@@ -433,16 +433,45 @@ static const char *procfs_global_fd_path(int origin)
 }
 
 /**
+ * Append the /proc/<pid>/fd/<fd> target of a file or directory descriptor to
+ * `t`: the absolute path of a KRFFS node, "/memfd:NAME (deleted)" for a memfd
+ * as Linux shows one, the path a node of another type was opened by, and "/"
+ * for the root directory or a stale descriptor. A KRFFS path is rebuilt only
+ * from a node still live and reachable, since a stale descriptor's node
+ * (unlinked or relocated) may be free-list bytes by now; 256 bytes is the
+ * path capacity the syscall layer uses.
+ */
+static void procfs_file_target(struct procfs_text *t, const fd_entry_t *e)
+{
+    char path[256];
+
+    if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
+        if (krffs_node_path(e->node, path, sizeof(path)) == 0 && krffs_resolve(path) == e->node) {
+            ap_str(t, path);
+        } else {
+            ap_ch(t, '/');
+        }
+    } else if (e->ofd && e->ofd->vmnt && e->ofd->vmnt->type == &vfs_tmpfs_type &&
+               tmpfs_label(e->ofd->vnode)) {
+        ap_str(t, "/memfd:");
+        ap_str(t, tmpfs_label(e->ofd->vnode));
+        ap_str(t, " (deleted)");
+    } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
+        ap_str(t, e->ofd->dirpath);
+    } else {
+        ap_ch(t, '/');
+    }
+}
+
+/**
  * Render the /proc/<pid>/fd/<fd> symlink target into `buf`, or -ENOENT.
  *
  * The target string matches what each descriptor type reports through the real
- * Linux /proc: a path for files and dirs, /dev/console, /dev/pts/N, /dev/ptmx,
- * and the pipe:[N]/socket:[N]/anon_inode forms. musl ttyname_r relies on the
- * /dev/pts/N spelling. A socket names its own inode, the same number
- * `/proc/net/tcp` and `fstat` report, so one socket is one thing to a program
- * reading all three. A KRFFS path is rebuilt only from a node still live and
- * reachable, since a stale descriptor's node (unlinked or relocated) may be
- * free-list bytes by now.
+ * Linux /proc: a path for files and dirs (`procfs_file_target`), /dev/console,
+ * /dev/pts/N, /dev/ptmx, and the pipe:[N]/socket:[N]/anon_inode forms. musl
+ * ttyname_r relies on the /dev/pts/N spelling. A socket names its own inode,
+ * the same number `/proc/net/tcp` and `fstat` report, so one socket is one
+ * thing to a program reading all three.
  *
  * @return the length written, -ENOENT, or -ENOMEM.
  */
@@ -507,24 +536,7 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         break;
     case FD_TYPE_FILE:
     case FD_TYPE_DIR:
-        if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
-            char path[256]; /* the same path capacity the syscall layer uses */
-            if (krffs_node_path(e->node, path, sizeof(path)) == 0 &&
-                krffs_resolve(path) == e->node) {
-                ap_str(t, path); /* the full absolute path */
-            } else {
-                ap_ch(t, '/'); /* unresolvable or stale */
-            }
-        } else if (e->ofd && e->ofd->vmnt && e->ofd->vmnt->type == &vfs_tmpfs_type &&
-                   tmpfs_label(e->ofd->vnode)) {
-            ap_str(t, "/memfd:"); /* a memfd, by its name, as Linux shows one */
-            ap_str(t, tmpfs_label(e->ofd->vnode));
-            ap_str(t, " (deleted)");
-        } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
-            ap_str(t, e->ofd->dirpath); /* a node of another type, by the path it was opened by */
-        } else {
-            ap_ch(t, '/'); /* the root directory, or a stale fd */
-        }
+        procfs_file_target(t, e);
         break;
     case FD_TYPE_SYNTH_DIR: {
         /* a /dev or /proc directory fd: its reconstructed path */

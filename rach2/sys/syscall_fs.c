@@ -174,6 +174,23 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 }
 
 /**
+ * Drop the calling process's record locks on what `e` is open on, when `e`
+ * is one of its own descriptors, as POSIX has every close do. The copy of an
+ * entry a file mapping or a message in flight keeps is not a descriptor of
+ * the process (`fd_in_table`), and its release drops none.
+ */
+static void fd_close_locks(const fd_entry_t *e)
+{
+    struct lock_key key;
+
+    if (!lock_any() || !e->ofd || !current_proc || !fd_in_table(&current_proc->fds, e)) {
+        return;
+    }
+    fd_lock_key(e, &key);
+    lock_close(&key);
+}
+
+/**
  * Release every backing reference a descriptor holds before its slot is freed.
  *
  * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
@@ -182,11 +199,8 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
  * process-exit fd-table release) so none can forget a backing kind as new ones
  * are added. It does NOT free the slot; the caller does that with fd_free.
  *
- * A close of one of the calling process's own descriptors drops the process's
- * record locks on what it is open on, as POSIX has every close do. The copy
- * of an entry a file mapping or a message in flight keeps is released here
- * too, and is not a descriptor of the process (`fd_in_table`), so its release
- * drops none.
+ * A close of one of the process's own descriptors also drops its record
+ * locks on the file (`fd_close_locks`).
  *
  * An ops-backed object rides the shared open-file description: dup/dup2/fork
  * copy the ops/priv pointers and bump the OFD refcount, so the object must
@@ -200,12 +214,7 @@ void fd_release_backing(fd_entry_t *e)
     if (!e) {
         return;
     }
-    if (lock_any() && e->ofd && current_proc && fd_in_table(&current_proc->fds, e)) {
-        struct lock_key key;
-
-        fd_lock_key(e, &key);
-        lock_close(&key);
-    }
+    fd_close_locks(e);
     /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
      * node no path names) is freed by its LAST holder, and this runs while the
      * closing slot is still populated, which is what `except` is for: the
@@ -5771,6 +5780,103 @@ static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, i
 }
 
 /**
+ * The lock operation an fcntl64 lock command asks for: LOCK_GET, LOCK_SET or
+ * LOCK_WAIT, with `*wide` set for the commands that take struct flock64 and
+ * `*by_ofd` for the open file description ones.
+ */
+static int flock_cmd(int cmd, int *wide, int *by_ofd)
+{
+    *wide = cmd != F_GETLK && cmd != F_SETLK && cmd != F_SETLKW;
+    *by_ofd = cmd == F_OFD_GETLK || cmd == F_OFD_SETLK || cmd == F_OFD_SETLKW;
+    switch (cmd) {
+    case F_GETLK:
+    case F_GETLK64:
+    case F_OFD_GETLK:
+        return LOCK_GET;
+    case F_SETLKW:
+    case F_SETLKW64:
+    case F_OFD_SETLKW:
+        return LOCK_WAIT;
+    default:
+        return LOCK_SET;
+    }
+}
+
+/* The fields of a struct flock or struct flock64. */
+struct flock_args {
+    int16_t type;
+    int16_t whence;
+    int64_t start;
+    int64_t len;
+    int32_t pid;
+};
+
+/**
+ * Read the caller's lock description at `arg` into `fl`: struct flock64, 24
+ * bytes, when `wide`, and otherwise struct flock, 16 bytes with 32-bit
+ * offsets. Returns 0 or -EFAULT.
+ */
+static int32_t flock_read(uint32_t arg, int wide, struct flock_args *fl)
+{
+    uint8_t raw[24];
+    int32_t s32, l32;
+
+    if (copy_from_user(raw, (const void __user *)arg, wide ? 24u : 16u) != 0) {
+        return -EFAULT;
+    }
+    k_memcpy(&fl->type, raw, 2);
+    k_memcpy(&fl->whence, raw + 2, 2);
+    if (wide) {
+        k_memcpy(&fl->start, raw + 4, 8);
+        k_memcpy(&fl->len, raw + 12, 8);
+        k_memcpy(&fl->pid, raw + 20, 4);
+        return 0;
+    }
+    k_memcpy(&s32, raw + 4, 4);
+    k_memcpy(&l32, raw + 8, 4);
+    k_memcpy(&fl->pid, raw + 12, 4);
+    fl->start = s32;
+    fl->len = l32;
+    return 0;
+}
+
+/**
+ * Write F_GETLK's answer, the lock `req` found, over the caller's lock
+ * description at `arg`, in the layout `flock_read` read: its type, its range
+ * from the start of the file with a length of 0 for one to the end, and its
+ * owner's pid; or F_UNLCK in `l_type` alone when none conflicts. Returns 0,
+ * -EFAULT, or -EOVERFLOW for a lock struct flock cannot describe.
+ */
+static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
+{
+    uint8_t raw[24];
+    int16_t type = (int16_t)req->type, whence = 0;
+    int64_t start = (int64_t)req->start;
+    int64_t len = req->end == LOCK_EOF ? 0 : (int64_t)(req->end - req->start + 1u);
+    int32_t s32 = (int32_t)start, l32 = (int32_t)len;
+    uint32_t size = wide ? 24u : 16u;
+
+    k_memcpy(raw, &type, 2);
+    if (req->type == F_UNLCK) {
+        size = 2;
+    } else if (!wide &&
+               (req->start > 0x7FFFFFFFu || (req->end != LOCK_EOF && req->end > 0x7FFFFFFFu))) {
+        return -EOVERFLOW;
+    }
+    k_memcpy(raw + 2, &whence, 2);
+    if (wide) {
+        k_memcpy(raw + 4, &start, 8);
+        k_memcpy(raw + 12, &len, 8);
+        k_memcpy(raw + 20, &req->pid, 4);
+    } else {
+        k_memcpy(raw + 4, &s32, 4);
+        k_memcpy(raw + 8, &l32, 4);
+        k_memcpy(raw + 12, &req->pid, 4);
+    }
+    return copy_to_user((void __user *)arg, raw, size) != 0 ? -EFAULT : 0;
+}
+
+/**
  * The record-lock commands of fcntl64 on `entry`: `cmd` one of the nine,
  * `arg` the caller's struct flock, 16 bytes with 32-bit offsets for F_GETLK,
  * F_SETLK and F_SETLKW, or struct flock64, 24 bytes, for the rest.
@@ -5786,78 +5892,39 @@ static int32_t flock_range(const fd_entry_t *entry, int whence, int64_t start, i
  */
 static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
 {
-    int wide = cmd != F_GETLK && cmd != F_SETLK && cmd != F_SETLKW;
-    int by_ofd = cmd == F_OFD_GETLK || cmd == F_OFD_SETLK || cmd == F_OFD_SETLKW;
-    int op = (cmd == F_GETLK || cmd == F_GETLK64 || cmd == F_OFD_GETLK)      ? LOCK_GET
-             : (cmd == F_SETLKW || cmd == F_SETLKW64 || cmd == F_OFD_SETLKW) ? LOCK_WAIT
-                                                                             : LOCK_SET;
-    uint32_t size = wide ? 24u : 16u;
-    uint8_t raw[24];
-    int16_t type, whence;
-    int64_t start, len;
-    int32_t pid, rc;
+    int wide, by_ofd;
+    int op = flock_cmd(cmd, &wide, &by_ofd);
+    struct flock_args fl;
     struct lock_req req;
     struct lock_key key;
+    int32_t rc;
 
-    if (!entry->ofd || copy_from_user(raw, (const void __user *)arg, size) != 0) {
-        return entry->ofd ? -EFAULT : -EBADF;
-    }
-    k_memcpy(&type, raw, 2);
-    k_memcpy(&whence, raw + 2, 2);
-    if (wide) {
-        k_memcpy(&start, raw + 4, 8);
-        k_memcpy(&len, raw + 12, 8);
-        k_memcpy(&pid, raw + 20, 4);
-    } else {
-        int32_t s32, l32;
-
-        k_memcpy(&s32, raw + 4, 4);
-        k_memcpy(&l32, raw + 8, 4);
-        k_memcpy(&pid, raw + 12, 4);
-        start = s32;
-        len = l32;
-    }
-    if (by_ofd && pid != 0) {
-        return -EINVAL;
-    }
-    if (op != LOCK_GET && ((type == F_RDLCK && !(entry->flags & FD_FLAG_READ)) ||
-                           (type == F_WRLCK && !(entry->flags & FD_FLAG_WRITE)))) {
+    if (!entry->ofd) {
         return -EBADF;
     }
-    rc = flock_range(entry, whence, start, len, &req);
+    rc = flock_read(arg, wide, &fl);
     if (rc != 0) {
         return rc;
     }
-    req.type = type;
+    if (by_ofd && fl.pid != 0) {
+        return -EINVAL;
+    }
+    if (op != LOCK_GET && ((fl.type == F_RDLCK && !(entry->flags & FD_FLAG_READ)) ||
+                           (fl.type == F_WRLCK && !(entry->flags & FD_FLAG_WRITE)))) {
+        return -EBADF;
+    }
+    rc = flock_range(entry, fl.whence, fl.start, fl.len, &req);
+    if (rc != 0) {
+        return rc;
+    }
+    req.type = fl.type;
     req.pid = 0;
     fd_lock_key(entry, &key);
     rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
     if (rc != 0 || op != LOCK_GET) {
         return rc;
     }
-    if (req.type != F_UNLCK) {
-        if (!wide && (req.start > 0x7FFFFFFFu || (req.end != LOCK_EOF && req.end > 0x7FFFFFFFu))) {
-            return -EOVERFLOW;
-        }
-        start = (int64_t)req.start;
-        len = req.end == LOCK_EOF ? 0 : (int64_t)(req.end - req.start + 1u);
-        whence = 0;
-        k_memcpy(raw + 2, &whence, 2);
-        if (wide) {
-            k_memcpy(raw + 4, &start, 8);
-            k_memcpy(raw + 12, &len, 8);
-            k_memcpy(raw + 20, &req.pid, 4);
-        } else {
-            int32_t s32 = (int32_t)start, l32 = (int32_t)len;
-
-            k_memcpy(raw + 4, &s32, 4);
-            k_memcpy(raw + 8, &l32, 4);
-            k_memcpy(raw + 12, &req.pid, 4);
-        }
-    }
-    type = (int16_t)req.type;
-    k_memcpy(raw, &type, 2);
-    return copy_to_user((void __user *)arg, raw, size) != 0 ? -EFAULT : 0;
+    return flock_write(arg, wide, &req);
 }
 
 /* fcntl's seal commands, on a tmpfs file. */
