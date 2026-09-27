@@ -4,7 +4,7 @@
 .Sh NAME
 .Nm getpriority ,
 .Nm setpriority
-.Nd get or set the nice value of processes
+.Nd get or set the nice value of threads
 .Sh SYNOPSIS
 .In sys/resource.h
 .Ft int
@@ -12,53 +12,56 @@
 .Ft int
 .Fn setpriority "int which" "id_t who" "int prio"
 .Sh DESCRIPTION
-Each process has a nice value from -20 to 19, 0 at boot.
+Each thread has a nice value from -20 to 19, 0 at boot, as on Linux.
 .Xr fork 2
-passes it to the child and
+and
+.Xr clone 2
+give the new thread the caller's, and
 .Xr execve 2
 keeps it.
 .Pp
 .Fa which
 and
 .Fa who
-select the processes:
+select the threads:
 .Bl -tag -width "PRIO_PROCESS"
 .It Dv PRIO_PROCESS
-The process whose ID is
-.Fa who .
+The thread whose ID is
+.Fa who ;
+a process's ID is its first thread's, and selects that thread alone.
 .It Dv PRIO_PGRP
-The members of the process group
+Every thread of the processes in the process group
 .Fa who .
 .It Dv PRIO_USER
-The processes whose real user ID is
+Every thread whose real user ID is
 .Fa who .
 .El
 .Pp
 A
 .Fa who
-of 0 selects the caller, its process group, or its real user ID.
-A zombie not yet reaped is selected like any process, as on Linux.
+of 0 selects the calling thread, its process group, or its real user ID.
+A zombie not yet reaped is selected like any thread, as on Linux.
 .Pp
 .Fn getpriority
-returns the lowest nice value among the selected processes.
+returns the lowest nice value among the selected threads.
 .Pp
 .Fn setpriority
-sets the nice value of each selected process to
+sets the nice value of each selected thread to
 .Fa prio ,
 clamped to the range -20 through 19.
-A caller with effective user ID 0 may change any process.
-Any other caller may change a process only when its effective user ID
-equals that process's real or effective user ID, and may only raise the
-nice value, since it may not raise a process's priority; with a resource
+A caller with effective user ID 0 may change any thread.
+Any other caller may change a thread only when its effective user ID
+equals that thread's real or effective user ID, and may only raise the
+nice value, since it may not raise a thread's priority; with a resource
 limit on the nice value of 0, the Linux default, the same rules hold on
 Linux.
-When some selected processes may not be changed, the others are changed
+When some selected threads may not be changed, the others are changed
 and the call fails with the error of the last refusal.
 .Pp
-The scheduler does not read the nice value: every ready process takes
+The scheduler does not read the nice value: every ready thread takes
 its turn in the same round-robin order.
 .Pa /proc/ Ns Ar pid Ns Pa /stat
-reports it as field 19, and field 18 as 20 more than it.
+reports the first thread's as field 19, and field 18 as 20 more than it.
 .Ss System call interface
 The i386 system call numbers are 96 for
 .Fn getpriority
@@ -99,10 +102,10 @@ A caller without effective user ID 0 asked to lower a nice value.
 .Fa which
 is none of the three.
 .It Bq Er EPERM
-A caller without effective user ID 0 selected a process whose real and
+A caller without effective user ID 0 selected a thread whose real and
 effective user IDs both differ from its effective user ID.
 .It Bq Er ESRCH
-No process was selected.
+No thread was selected.
 .El
 .Sh SEE ALSO
 .Xr fork 2 ,
