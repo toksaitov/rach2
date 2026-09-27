@@ -207,16 +207,13 @@ void fd_table_drop_locks(fd_table_t *table)
 }
 
 /**
- * Release every backing reference a descriptor holds before its slot is freed.
+ * Release every backing reference a descriptor holds before its slot is
+ * freed, the calling process's record locks apart.
  *
  * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
- * object (pipe/tty/pty). Every fd-teardown site routes through this (close, the
- * dup2 replacement of an open target, the execve CLOEXEC sweep, and the
- * process-exit fd-table release) so none can forget a backing kind as new ones
+ * object (pipe/tty/pty). Every fd-teardown site routes through this, most of
+ * them by `fd_release_backing`, so none can forget a backing kind as new ones
  * are added. It does NOT free the slot; the caller does that with fd_free.
- *
- * A close of one of the process's own descriptors also drops its record
- * locks on the file (`fd_close_locks`).
  *
  * An ops-backed object rides the shared open-file description: dup/dup2/fork
  * copy the ops/priv pointers and bump the OFD refcount, so the object must
@@ -225,12 +222,8 @@ void fd_table_drop_locks(fd_table_t *table)
  * is counted per descriptor (socket_ref on dup/fork), so it is always
  * dropped here. No descriptor is both an ops object and a socket.
  */
-void fd_release_backing(fd_entry_t *e)
+static void fd_release_objects(fd_entry_t *e)
 {
-    if (!e) {
-        return;
-    }
-    fd_close_locks(e);
     /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
      * node no path names) is freed by its LAST holder, and this runs while the
      * closing slot is still populated, which is what `except` is for: the
@@ -263,6 +256,22 @@ void fd_release_backing(fd_entry_t *e)
     if (e->ops && e->ops->close && e->ofd && e->ofd->refcount == 1) {
         e->ops->close(e);
     }
+}
+
+/**
+ * Release every backing reference a descriptor holds before its slot is
+ * freed (`fd_release_objects`), and first, for a close of one of the
+ * process's own descriptors, its record locks on the file
+ * (`fd_close_locks`): the close, the dup2 replacement of an open target, the
+ * execve CLOEXEC sweep, and the process-exit fd-table release.
+ */
+void fd_release_backing(fd_entry_t *e)
+{
+    if (!e) {
+        return;
+    }
+    fd_close_locks(e);
+    fd_release_objects(e);
 }
 
 /** Dispatch an ops-backed write, serializing a raw device's offset. */
@@ -2340,29 +2349,33 @@ static int fd_held_elsewhere(const fd_table_t *table, int fd)
 }
 
 /**
- * Release descriptor `fd` of `table`, with every backing it holds, and free
- * its slot. The entry is marked closing and releasing first, since the
- * release may sleep, in a file system's release of the description's last
- * reference among other places: while it does, a lookup, a dup onto the
- * slot, a copy of the table and another release all pass the entry by, and
- * none of them can take a reference to a description that is going.
+ * Release descriptor `fd` of `table`, with every backing it holds but the
+ * record locks, which the close that ends it drops itself, and free its
+ * slot. The entry is marked closing and releasing first, since the release
+ * may sleep, in a file system's release of the description's last reference
+ * among other places: while it does, a lookup, a dup onto the slot, a copy
+ * of the table and another release all pass the entry by, and none of them
+ * can take a reference to a description that is going.
  */
 static void fd_teardown(fd_table_t *table, int fd)
 {
     fd_entry_t *e = &table->entries[fd];
 
     e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
-    fd_release_backing(e);
+    fd_release_objects(e);
     fd_free(table, fd);
 }
 
 /**
- * Close descriptor `fd` of the caller's table: release what it holds and
- * free its slot (`fd_teardown`), or, while a call of another thread sharing
- * the table holds it, mark it closing, so that the call ends with what it
- * had and the slot is released as that call ends (`fd_holds_release`).
- * Linux keeps the file for such a call through the reference `fdget` takes.
- * 0, or -EBADF.
+ * Close descriptor `fd` of the caller's table. The caller's record locks on
+ * the file go at once, as Linux drops them at every close. Then the entry
+ * is released and its slot freed (`fd_teardown`), or, while a call of
+ * another thread sharing the table holds it, marked closing, so that the
+ * call ends with what it had and the slot is released as that call ends
+ * (`fd_holds_release`), which drops no locks: that may be the call of
+ * another process sharing the table, or a call of the caller's own that
+ * ends after it took a lock again. Linux keeps the file for such a call
+ * through the reference `fdget` takes. 0, or -EBADF.
  */
 static int32_t close_fd(int fd)
 {
@@ -2372,6 +2385,7 @@ static int32_t close_fd(int fd)
     if (!e) {
         return -EBADF;
     }
+    fd_close_locks(e);
     if (fd_held_elsewhere(table, fd)) {
         e->flags |= FD_FLAG_CLOSING;
         return 0;
@@ -3302,6 +3316,7 @@ static int32_t dup_clear(int fd)
     if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
         return -EBUSY;
     }
+    fd_close_locks(e);
     fd_teardown(table, fd);
     return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
 }

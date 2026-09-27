@@ -136,6 +136,9 @@ static int open_error, truncate_error, dropped, attrs, relocate;
  * file system's release of its description sleeps. */
 static int releasing = -1;
 static void (*in_release)(void);
+/* Whether a record lock exists, and the drops of one process's locks. */
+static int locking, lock_closes;
+static process_t *lock_closer;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -153,10 +156,11 @@ uint64_t krffs_node_ino(const krffs_node_t *node)
     return 0;
 }
 
-/** No row takes a lock. */
+/** Whether the row has a record lock somewhere, which is when a close
+ * drops the closer's. */
 int lock_any(void)
 {
-    return 0;
+    return locking;
 }
 
 void lock_ofd_gone(const struct open_file *ofd)
@@ -315,10 +319,12 @@ void socket_unref(struct socket *sock)
     check(0, "unexpected socket release");
 }
 
-/** No row takes a record lock, so none is dropped. */
+/** Count the drops of a process's record locks, and whose they were. */
 void lock_close(const struct lock_key *key)
 {
     (void)key;
+    lock_closes++;
+    lock_closer = current_proc;
 }
 
 /** Initialize an unused wait queue. */
@@ -404,6 +410,9 @@ static void row_begin(void)
     proc.euid = 1;
     opens = releases = refs = leaves = dropped = truncates = attrs = relocate = 0;
     open_error = truncate_error = 0;
+    locking = 1;
+    lock_closes = 0;
+    lock_closer = 0;
 }
 
 /** Free what the row left open and require every allocation back. */
@@ -428,6 +437,7 @@ static void row_end(void)
     current_proc = &proc;
     releasing = -1;
     in_release = 0;
+    locking = 0;
 }
 
 /** A descriptor on the model file, open for reading and writing. */
@@ -462,6 +472,7 @@ static void close_sleeping(void)
         releasing = fd;
         in_release = release_closed;
         check(close_fd(fd) == 0 && in_release == 0 && refs == 0, "close releases the description");
+        check(lock_closes == 1 && lock_closer == &proc, "the close drops the closer's locks once");
         check(proc.fds->entries[fd].type == FD_TYPE_NONE && !proc.fds->entries[fd].ofd,
               "the slot is free after the release");
     }
@@ -503,6 +514,8 @@ static void deferred_release(void)
         other.fd_holding = 1;
         check(close_fd(fd) == 0 && (proc.fds->entries[fd].flags & FD_FLAG_CLOSING) && refs == 1,
               "a close of a descriptor another call holds leaves it to that call");
+        check(lock_closes == 1 && lock_closer == &proc,
+              "that close drops the closer's record locks at once");
         fd_holds_release();
         check(proc.fds->entries[fd].type == FD_TYPE_FILE, "the closer's call end leaves it");
         current_proc = &other;
@@ -512,6 +525,7 @@ static void deferred_release(void)
         current_proc = &proc;
         check(proc.fds->entries[fd].type == FD_TYPE_NONE && refs == 0 && in_release == 0,
               "the holder's call end releases it");
+        check(lock_closes == 1, "that release drops no process's record locks");
     }
     row_end();
 }
