@@ -260,10 +260,19 @@ static void run_fresh(void)
     sys_exit(0);
 }
 
+/* `/dev/framefail`, which `run_fail` opens before it arms the first count. */
+static int framefail = -1;
+
+/**
+ * Arm the frame allocator to fail its `n`-th allocation in a system call, or
+ * disarm it with 0. The count goes through the descriptor `run_fail` opened
+ * once: an open allocates, and a count a fork or an exec left unspent would
+ * fail the open that was to disarm it. The write allocates nothing.
+ */
 static void arm(unsigned n)
 {
     char digits[12];
-    int i = 0, fd;
+    int i = 0;
     unsigned v = n;
 
     do {
@@ -275,11 +284,9 @@ static void arm(unsigned n)
         digits[v] = digits[i - 1 - (int)v];
         digits[i - 1 - (int)v] = t;
     }
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/framefail", O_WRONLY, 0);
-    if (fd < 0 || syscall3(SYS_WRITE, fd, (int)(size_t)digits, i) != i) {
+    if (syscall3(SYS_WRITE, framefail, (int)(size_t)digits, i) != i) {
         fail("rach2.framefail is not on this boot's line");
     }
-    syscall1(SYS_CLOSE, fd);
 }
 
 /* The parent's own pages after an attempt: as written, then rewritten. */
@@ -305,6 +312,10 @@ static void run_fail(void)
     }
     for (i = 0; i < pages; i++) {
         write_page((unsigned *)(base + i * PAGE), i);
+    }
+    framefail = syscall3(SYS_OPEN, (int)(size_t)"/dev/framefail", O_WRONLY, 0);
+    if (framefail < 0) {
+        fail("/dev/framefail did not open");
     }
     baseline = mem_free_kib();
     for (n = 1; n <= 32; n++) {
