@@ -32,8 +32,9 @@ The supported types are
 .Ql vfat ,
 .Ql exfat ,
 .Ql ext2 ,
+.Ql krffs ,
 and
-.Ql krffs .
+.Ql tmpfs .
 .Dv MS_RDONLY ,
 .Dv MS_NOSUID ,
 .Dv MS_NOEXEC ,
@@ -59,7 +60,20 @@ See
 .Xr mount 8
 for the command interface.
 .Pp
-The source must name a published block device under
+For
+.Ql tmpfs ,
+a file system in memory whose files go at the unmount, the source is
+any string, conventionally
+.Ql none
+or
+.Ql tmpfs ,
+and is recorded as given; nothing is claimed.
+Its root has mode 1777, or the octal mode an option
+.Ql mode=
+gives; the other options Linux's tmpfs takes are accepted and change
+nothing.
+For every other type, the source must name a published block device
+under
 .Pa /dev :
 a disk or partition containing a volume,
 .Pa /dev/bootpart ,
@@ -130,6 +144,19 @@ The kernel reserves a slot before running the file-system constructor,
 holds the covered directory, and keeps a reference to its parent mount.
 The mount becomes active only after the constructor succeeds.
 A failure releases the claim and references acquired by the call.
+The kernel mounts a tmpfs at
+.Pa /dev/shm
+at boot, with
+.Dv MS_NOSUID
+and
+.Dv MS_NODEV .
+.Pa /dev
+is synthetic and has no directory to cover, so
+.Pa /dev/shm
+stands in its root directory by name, as
+.Pa /dev
+stands in the root's; a mount may be placed on a directory inside it.
+.Pp
 An active mount's source, target and type appear in
 .Pa /proc/mounts
 with
@@ -146,7 +173,8 @@ and
 .Ql relatime
 are set; the silent flag and the file system's own options are not
 shown.
-KRFFS and ext2 ignore the option string; FAT32 and exFAT parse it.
+KRFFS and ext2 ignore the option string; FAT32, exFAT and tmpfs parse
+it.
 .Ss Dirty-volume checks
 Before a writable mount, FAT32 checks a dirty volume with limits of
 32 directory levels including the root and 16 surplus tails.
@@ -179,8 +207,9 @@ and all other nonzero values return
 .Er EINVAL .
 The root,
 .Pa /dev ,
+.Pa /proc ,
 and
-.Pa /proc
+.Pa /dev/shm
 are permanent and return
 .Er EBUSY .
 .Pp
@@ -192,6 +221,7 @@ A loop device attached to a file on the mount also prevents unmounting.
 .Pp
 The file system syncs and prepares to unmount; the kernel writes dirty
 cache buffers, flushes the device, and invalidates its cached buffers.
+A tmpfs has no device and writes nothing; its unmount frees its files.
 For a writable KRFFS volume, preparation flushes earlier writes to the
 medium before clearing and separately flushing the dirty flag.
 If clearing or flushing that flag fails, unmount returns
@@ -241,8 +271,8 @@ user memory.
 A KRFFS source device exceeds the size the file system can address.
 .It Bq Er EINVAL
 A flag is unsupported, the mount target is the root or in a synthetic
-namespace, the source is not a supported block device, or the unmount
-target is not a mount root.
+namespace, the source of a type with a device is not a supported block
+device, or the unmount target is not a mount root.
 A constructor also returns this error for invalid options or volume
 structure it cannot accept.
 .It Bq Er EIO

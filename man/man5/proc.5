@@ -145,7 +145,11 @@ The two synthetic file systems have the lines
 and
 .Ql nodev proc ,
 with a tab between fields.
-Each remaining line is a tab followed by a type accepted for mounting.
+Each remaining line is a type accepted for mounting after a tab, and
+after
+.Ql nodev
+for a type that stands on no device:
+.Ql nodev tmpfs .
 .It Pa /proc/interrupts
 One line per PIC or MSI vector, numbered 32 through 63, with a nonzero
 interrupt count:
@@ -199,11 +203,13 @@ are both
 .It Pa /proc/mounts
 One line per mount, with six whitespace-separated fields:
 .Dl SOURCE TARGET TYPE OPTIONS 0 0
-The root and the synthetic
+The root, the synthetic
 .Pa /dev
 and
 .Pa /proc
-mounts precede mounts made by programs.
+mounts, and the tmpfs at
+.Pa /dev/shm
+precede mounts made by programs.
 The source, target, type, and options describe the mounted file system.
 Options are comma-separated:
 .Ql ro

@@ -7268,8 +7268,23 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         const char *dn = NULL;
         uint32_t dino = 0;
         uint32_t dmode = 0;
-        int i;
+        uint64_t mino = 0;
+        int i, named = 0;
 
+        /* The mounts that stand in /dev by name come first: /dev/shm. */
+        while (vfs_named_mount(vfs_mount_at(1), named, &dn, &mino)) {
+            named++;
+        }
+        if (n < named && vfs_named_mount(vfs_mount_at(1), n, &dn, &mino)) {
+            for (i = 0; i < 30 && dn[i]; i++) {
+                name[i] = dn[i];
+            }
+            name[i] = '\0';
+            *ino = mino;
+            *dtype = DT_DIR;
+            return 1;
+        }
+        n -= named;
         /* Through devfs_dirent, which skips absent entries and reports the
          * registry inode: two devices are dynamically present now, so a walk
          * that stopped at the first absent one would hide the second. */
@@ -7282,7 +7297,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         name[i] = '\0';
         *ino = dino;
         (void)devfs_stat(dn, &dmode, NULL, NULL);
-        *dtype = (dmode & S_IFMT) == 0060000u ? DT_BLK : DT_CHR;
+        *dtype = (dmode & S_IFMT) == S_IFBLK ? DT_BLK : DT_CHR;
         return 1;
     }
     if (kind == VNODE_PTS_DIR) {

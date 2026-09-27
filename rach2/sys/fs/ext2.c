@@ -4580,4 +4580,4 @@ static const struct vfs_ops ext2_ops = {
     ext2_unmount, ext2_path,  ext2_symlink,         ext2_mknod,
 };
 
-const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0};

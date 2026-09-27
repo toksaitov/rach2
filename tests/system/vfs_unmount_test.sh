@@ -15,7 +15,7 @@ trap 'exit 143' TERM
 run_phase()
 {
     awk '
-        /^(static int streq|int vfs_mount_gone|static void unmount_abandoned|static struct vfs_mount \*unmount_below_gone|int vfs_do_umount)\(/ {copy = 1}
+        /^(static int streq|int vfs_mount_gone|static int mount_permanent|static void unmount_abandoned|static struct vfs_mount \*unmount_below_gone|int vfs_do_umount)\(/ {copy = 1}
         copy {print}
         copy && /^}/ {copy = 0}
     ' "$work/vfs.c" > "$work/unmount.inc"

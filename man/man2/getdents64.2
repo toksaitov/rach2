@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt GETDENTS64 2
 .Os
 .Sh NAME
@@ -123,7 +123,9 @@ Every synthetic directory begins with
 and
 .Ql .. .
 .Pa /dev
-lists published device registry entries.
+lists
+.Pa shm ,
+the tmpfs mounted there, then the published device registry entries.
 .Pa /dev/pts
 lists allocated pseudo-terminal slaves by number.
 .Pa /proc

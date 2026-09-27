@@ -25,6 +25,7 @@
 #include "krffsmount.h"
 #include "pathbuf.h"
 #include "synthfs.h"
+#include "tmpfs.h"
 
 #define VFS_S_IFMT       0170000u
 #define VFS_S_IFDIR      0040000u
@@ -69,13 +70,14 @@ static struct vfs_mount *mount_record(int idx)
     return mounts[idx];
 }
 
-/* The first free slot from 3 on, the array grown by doubling when every
- * slot is taken, with a record in it; -1 when the heap has none. */
+/* The first free slot past the permanent ones, the array grown by doubling
+ * when every slot is taken, with a record in it; -1 when the heap has
+ * none. */
 static int mount_new_slot(void)
 {
     int i;
 
-    for (i = 3; i < mount_slots; i++) {
+    for (i = VFS_PERMANENT; i < mount_slots; i++) {
         if (!mounts[i]) {
             return mount_record(i) ? i : -1;
         }
@@ -101,7 +103,7 @@ static void mount_release(struct vfs_mount *m)
 {
     int i;
 
-    for (i = 3; i < mount_slots; i++) {
+    for (i = VFS_PERMANENT; i < mount_slots; i++) {
         if (mounts[i] == m) {
             mounts[i] = NULL;
             kfree(m);
@@ -322,15 +324,50 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+/* The last component of a mount's recorded path: the name a nameless mount
+ * stands at in its parent's root directory. */
+static const char *path_last(const char *path)
+{
+    const char *last = path;
+
+    for (; *path; path++) {
+        if (*path == '/') {
+            last = path + 1;
+        }
+    }
+    return last;
+}
+
+/* The nameless mount standing at `name` in the root directory `node` of
+ * `mnt`: /dev and /proc in the root's, /dev/shm in /dev's; or NULL. */
 static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node, const char *name)
 {
     int i;
 
     for (i = 1; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state == VFS_ACTIVE && mounts[i]->parent == mnt &&
-            !mounts[i]->covered && node == mnt->root && streq(mounts[i]->covered_path + 1, name)) {
+            !mounts[i]->covered && node == mnt->root &&
+            streq(path_last(mounts[i]->covered_path), name)) {
             return mounts[i];
         }
+    }
+    return 0;
+}
+
+int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, uint64_t *ino)
+{
+    int i;
+
+    for (i = 1; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
+        struct vfs_stat st;
+
+        if (!m || m->state != VFS_ACTIVE || m->parent != parent || m->covered || n-- > 0) {
+            continue;
+        }
+        *name = path_last(m->covered_path);
+        *ino = m->type->ops->getattr && m->type->ops->getattr(m, m->root, &st) == 0 ? st.ino : 0;
+        return 1;
     }
     return 0;
 }
@@ -430,6 +467,45 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
     }
     *cur = next;
     return 0;
+}
+
+/* Replace the node `cur` holds with `node`, held already, on the same mount:
+ * the put clears the reference, so the mount is kept across it. */
+static void ref_move_node(struct vfs_ref *cur, void *node)
+{
+    struct vfs_mount *stay = cur->mnt;
+
+    vfs_ref_put(cur);
+    cur->mnt = stay;
+    cur->node = node;
+}
+
+/**
+ * The nameless mount the path at `*p` names first, when the walk is at the
+ * root directory of a type that takes the rest of a path in one call: the
+ * mount is entered before that type sees the rest, as /dev/shm is before
+ * devfs would classify "shm". `*p` moves past the name; NULL, with `*p`
+ * where it was, for none.
+ */
+static struct vfs_mount *named_in_rest(const struct vfs_ref *cur, const char **p)
+{
+    char comp[VFS_NAME_MAX + 1];
+    struct vfs_mount *m;
+    uint32_t len = 0;
+
+    while ((*p)[len] != '\0' && (*p)[len] != '/') {
+        len++;
+    }
+    if (cur->node != cur->mnt->root || len > VFS_NAME_MAX) {
+        return 0;
+    }
+    k_memcpy(comp, *p, len);
+    comp[len] = '\0';
+    m = mount_named(cur->mnt, cur->node, comp);
+    if (m) {
+        *p += len;
+    }
+    return m;
 }
 
 /** Copy the unwalked final component and locate it within a parent path. */
@@ -544,7 +620,15 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
             const char *left = 0;
             char restbuf[VFS_NAME_MAX + 1];
             const char *rest = p;
-            struct vfs_mount *stay = cur.mnt;
+
+            m = named_in_rest(&cur, &p);
+            if (m) {
+                rc = walk_move(&cur, m, m->root, locked);
+                if (rc != 0) {
+                    goto out_err;
+                }
+                continue;
+            }
 
             /* With WALK_PARENT only the part before the leaf is walked. */
             if (last_comp) {
@@ -584,9 +668,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
             if (rc != 0) {
                 goto out_err;
             }
-            vfs_ref_put(&cur);
-            cur.mnt = stay; /* the put clears the ref; the mount stays */
-            cur.node = found;
+            ref_move_node(&cur, found);
             break;
         }
 
@@ -720,13 +802,7 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 continue;
             }
         }
-        {
-            struct vfs_mount *stay = cur.mnt;
-
-            vfs_ref_put(&cur);
-            cur.mnt = stay; /* the put clears the ref; the mount stays */
-            cur.node = found;
-        }
+        ref_move_node(&cur, found);
 
         /* A directory covered by a mount is replaced by that mount's root
          * before the walk continues. */
@@ -1557,7 +1633,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
-const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1};
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0};
 
 /* The two synthetic types. */
 
@@ -1759,8 +1835,8 @@ static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
     return synth_mount_root(mnt, dev, flags, "proc");
 }
 
-const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0};
-const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0};
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1};
 
 /** The classification of a synthetic node, or NULL when `mnt` is not one
  * of the two synthetic mounts. The syscall layer's glue reads it. */
@@ -1773,6 +1849,19 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 }
 
 /* The permanent entries. */
+
+/** Whether `m` is one of the permanent mounts, which umount2 refuses. */
+static int mount_permanent(const struct vfs_mount *m)
+{
+    int i;
+
+    for (i = 0; i < VFS_PERMANENT; i++) {
+        if (mounts[i] == m) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /** Construct permanent mount `idx` of `type` at `path`; a failure panics. */
 static void install(int idx, const struct vfs_type *type, const char *path,
@@ -1809,6 +1898,22 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->state = VFS_ACTIVE;
 }
 
+/**
+ * The permanent mounts over a root just installed: /dev and /proc in the
+ * root directory, and in /dev's root directory the tmpfs /dev/shm, with
+ * `nosuid` and `nodev` as Linux systems mount it and mode 1777. A synthetic
+ * type cannot host a mount point, so /dev/shm is a nameless mount entered
+ * by its name, as /dev and /proc are.
+ */
+static void install_permanent(void)
+{
+    install(1, &vfs_devfs_type, "/dev", mounts[0]);
+    install(2, &vfs_procfs_type, "/proc", mounts[0]);
+    install(3, &vfs_tmpfs_type, "/dev/shm", mounts[1]);
+    mounts[3]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
+    k_strncpy(mounts[3]->source, "tmpfs", sizeof(mounts[3]->source));
+}
+
 static int root_installed;
 
 int vfs_root_mounted(void)
@@ -1830,8 +1935,7 @@ void vfs_init(void)
     root_installed = 1;
     mount_table_init();
     install(0, &vfs_krffs_type, "/", 0);
-    install(1, &vfs_devfs_type, "/dev", mounts[0]);
-    install(2, &vfs_procfs_type, "/proc", mounts[0]);
+    install_permanent();
 }
 
 int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
@@ -1865,17 +1969,16 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     }
     m->state = VFS_ACTIVE;
     root_installed = 1;
-    install(1, &vfs_devfs_type, "/dev", mounts[0]);
-    install(2, &vfs_procfs_type, "/proc", mounts[0]);
+    install_permanent();
     return 0;
 }
 
 /* mount(2) and umount2(2). */
 
-/* The types mount(2) accepts, by name; the permanent three are not here
- * because nothing mounts them by name. */
-static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type,
-                                                     &vfs_ext2_type, &vfs_krffs_volume_type, 0};
+/* The types mount(2) accepts, by name; the root's adapter and the two
+ * synthetic types are not here because nothing mounts them by name. */
+static const struct vfs_type *const mount_types[] = {
+    &vfs_vfat_type, &vfs_exfat_type, &vfs_ext2_type, &vfs_krffs_volume_type, &vfs_tmpfs_type, 0};
 
 /* The table's entries, its terminator apart. Counted, not written down twice:
  * a fifth type added to the list above and not to a number here is a type
@@ -1916,6 +2019,50 @@ static int drained(void *arg)
 }
 
 /**
+ * The device `source` names for a mount of `t`, into `*dev`, with its claim
+ * in `*claim`: a partition window, a stick or a loop device under /dev, its
+ * sectors claimed, and `*flags` made read-only for a device that refuses
+ * writes. A type with no device takes any source string, claims nothing and
+ * has a NULL device. Returns 0, or the errno with nothing claimed: a
+ * device's own, EBUSY for a claimed range or a device with a mount already.
+ */
+static int mount_source(const struct vfs_type *t, const char *source, block_device_t **dev,
+                        uint32_t *flags, int *claim)
+{
+    block_device_t *backing;
+    uint64_t first, count;
+    int i, rc;
+
+    *dev = 0;
+    *claim = -1;
+    if (t->nodev) {
+        return 0;
+    }
+    rc = devfs_window_of(source, dev, &backing, &first, &count);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((*dev)->flags & BLOCK_READ_ONLY) {
+        *flags |= VFS_MS_RDONLY;
+    }
+    if (backing) {
+        rc = devfs_claim(backing, first, first + count - 1);
+        if (rc < 0) {
+            return rc;
+        }
+        *claim = rc;
+    }
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->dev == *dev) {
+            devfs_release_claim(*claim);
+            *claim = -1;
+            return -EBUSY; /* the device already has a mount */
+        }
+    }
+    return 0;
+}
+
+/**
  * mount(2): the order of work is resolve and hold the target, check its
  * path length and what it is, claim the source's range, take a slot as
  * `mounting` under the parent's namespace lock so no namespace change runs
@@ -1925,7 +2072,8 @@ static int drained(void *arg)
  *
  * The source is a partition window under /dev, claimed as a sector range on
  * the backing disk; a loop device has no disk under it and claims nothing,
- * since the device itself is what a second mount of it collides with. A
+ * since the device itself is what a second mount of it collides with, and a
+ * type with no device, tmpfs, takes any source string (`mount_source`). A
  * device that refuses writes, a write-protected stick or a loop device
  * attached read-only, makes the mount read-only whatever the caller asked
  * for, and the type learns it from the flags. The slot is taken before the
@@ -1940,8 +2088,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     struct vfs_ref tref;
     struct vfs_stat st;
     struct vfs_mount *m = 0;
-    block_device_t *dev, *backing;
-    uint64_t first, count;
+    block_device_t *dev;
     char canon[VFS_COVERED_PATH_MAX];
     int claim;
     int i;
@@ -1996,32 +2143,11 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
             return -EBUSY; /* covered, or reserved by a mount in progress */
         }
     }
-    rc = devfs_window_of(source, &dev, &backing, &first, &count);
+    rc = mount_source(t, source, &dev, &flags, &claim);
     if (rc != 0) {
         vfs_ns_unlock(tref.mnt);
         vfs_ref_release(&tref);
         return rc;
-    }
-    if (dev->flags & BLOCK_READ_ONLY) {
-        flags |= VFS_MS_RDONLY;
-    }
-
-    claim = -1;
-    if (backing) {
-        claim = devfs_claim(backing, first, first + count - 1);
-        if (claim < 0) {
-            vfs_ns_unlock(tref.mnt);
-            vfs_ref_release(&tref);
-            return claim;
-        }
-    }
-    for (i = 0; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->dev == dev) {
-            devfs_release_claim(claim);
-            vfs_ns_unlock(tref.mnt);
-            vfs_ref_release(&tref);
-            return -EBUSY; /* the device already has a mount */
-        }
     }
     i = mount_new_slot();
     m = i < 0 ? NULL : mounts[i];
@@ -2107,7 +2233,7 @@ static struct vfs_mount *unmount_below_gone(const char *target)
     struct vfs_mount *parent;
     int i;
 
-    for (i = 3; i < mount_slots; i++) {
+    for (i = VFS_PERMANENT; i < mount_slots; i++) {
         m = mounts[i];
         if (!m || m->state != VFS_ACTIVE || !streq(m->covered_path, target)) {
             continue;
@@ -2157,9 +2283,9 @@ int vfs_do_umount(const char *target)
             vfs_ref_release(&tref);
             return -EINVAL; /* not a mount point */
         }
-        if (m == mounts[0] || m == mounts[1] || m == mounts[2]) {
+        if (mount_permanent(m)) {
             vfs_ref_release(&tref);
-            return -EBUSY; /* the permanent three */
+            return -EBUSY;
         }
         vfs_ref_release(&tref);
     }
@@ -2192,14 +2318,14 @@ int vfs_do_umount(const char *target)
             return rc;
         }
     }
-    if (!gone && bcache_sync(m->dev) != 0) {
+    if (!gone && m->dev && bcache_sync(m->dev) != 0) {
         unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
         return -EIO; /* nothing irreversible has happened yet */
     }
     /* A stick's own cache is not on the medium until the stick is told. */
-    rc = gone ? 0 : block_flush(m->dev);
+    rc = gone || !m->dev ? 0 : block_flush(m->dev);
     if (rc != 0) {
         vfs_device_failed(m->dev, 0, rc);
         unmount_abandoned(m);
@@ -2207,7 +2333,7 @@ int vfs_do_umount(const char *target)
         m->state = VFS_ACTIVE;
         return -EIO;
     }
-    if (bcache_invalidate(m->dev) != 0) {
+    if (m->dev && bcache_invalidate(m->dev) != 0) {
         unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;

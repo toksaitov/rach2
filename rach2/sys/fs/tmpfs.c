@@ -801,4 +801,4 @@ static const struct vfs_ops tmpfs_ops = {
     tmpfs_unmount, tmpfs_path,  tmpfs_symlink,         tmpfs_mknod,
 };
 
-const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1};
+const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1};

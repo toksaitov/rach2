@@ -119,6 +119,11 @@ static const char *const PROBES[] = {
     /* Record, open file description and flock locks between processes:
        conflicts, splits, waits, EDEADLK and the closes that drop them. */
     "musl/lockmusl",
+    /* tmpfs mounted by a program and at /dev/shm. */
+    "musl/tmpfsmusl",
+    /* mknod's kinds on KRFFS and tmpfs: their types, a device node's
+       number and open, and the refusals in Linux's order. */
+    "musl/mknodmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

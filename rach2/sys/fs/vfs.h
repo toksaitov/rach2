@@ -10,9 +10,9 @@
  *
  * The table is an array of records from the heap that grows as mounts are
  * placed. Entry zero is the root; entries one and two are the two synthetic
- * namespaces, /dev and /proc. The three are permanent: umount2 on any of
- * them answers EBUSY. The rest are placed by mount(2) and removed by
- * umount2.
+ * namespaces, /dev and /proc; entry three is the tmpfs at /dev/shm. The four
+ * are permanent: umount2 on any of them answers EBUSY. The rest are placed
+ * by mount(2) and removed by umount2.
  *
  * A mount point is the covered directory's node. It is held through
  * the parent file system's `hold`, so it cannot be reached under another
@@ -213,6 +213,10 @@ struct vfs_type {
      * need one caller at a time. A file system with neither property does
      * not, and taking it there would serialise every reader of one volume. */
     int ns_serialised;
+    /* Nonzero for a type that stands on no device, tmpfs and the synthetic
+     * two: mount(2) takes any source string for one and claims no sectors,
+     * and /proc/filesystems marks it `nodev`. */
+    int nodev;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
@@ -340,9 +344,17 @@ int vfs_root_mounted(void);
 int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
                   int claim);
 
-/** The type mount(2) accepts at index `idx` of four, or NULL; the order
+/** The type mount(2) accepts at index `idx` of five, or NULL; the order
  * /proc/filesystems lists them in. */
 const struct vfs_type *vfs_type_at(int idx);
+
+/**
+ * The `n`-th mount that stands by name in the root directory of `parent`,
+ * as /dev and /proc stand in the root's and /dev/shm in /dev's: its name in
+ * `*name`, and the inode number of its root in `*ino`. 1, or 0 past the
+ * last. The synthetic directories list them with their own entries.
+ */
+int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, uint64_t *ino);
 
 /**
  * The working directory's hold on its mount: a process whose directory is
@@ -479,5 +491,10 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node);
 extern const struct vfs_type vfs_krffs_type;
 extern const struct vfs_type vfs_devfs_type;
 extern const struct vfs_type vfs_procfs_type;
+
+/* The permanent mounts, entries 0 to VFS_PERMANENT - 1: the root, /dev,
+ * /proc, and the tmpfs /dev/shm, a nameless mount in /dev's root directory.
+ * umount2 answers EBUSY for each. */
+#define VFS_PERMANENT 4
 
 #endif /* _VFS_H_ */

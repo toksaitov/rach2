@@ -1219,8 +1219,9 @@ static int procfs_gen_loop(struct procfs_text *t)
 }
 
 /* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
- * type mount(2) accepts, KRFFS among them. The KRFFS root's own type is not
- * one of these: it is a mapped image, not a volume placed by mount(2). */
+ * type mount(2) accepts, KRFFS among them, with `nodev` before one that
+ * stands on no device. The KRFFS root's own type is not one of these: it is
+ * a mapped image, not a volume placed by mount(2). */
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
     int i;
@@ -1231,6 +1232,9 @@ static int procfs_gen_filesystems(struct procfs_text *t)
         const struct vfs_type *ty = vfs_type_at(i);
 
         if (ty) {
+            if (ty->nodev) {
+                ap_str(t, "nodev");
+            }
             ap_ch(t, '\t');
             ap_str(t, ty->name);
             ap_ch(t, '\n');

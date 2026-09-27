@@ -13,6 +13,9 @@
 #define BLOCK_GONE     1
 #define KLOG_INFO      0
 #define klog(...)      ((void)0)
+/* This model's permanent entries, the root and two others; the kernel has
+ * more, and the rows need the three slots after them for mounts. */
+#define VFS_PERMANENT  3
 
 struct block_device {
     int flags, backing_flags;
