@@ -4,6 +4,7 @@
 
 #include "shmem.h"
 
+#include "filemap.h"
 #include "kheap.h"
 #include "paging.h"
 #include "../lib/kerrno.h"
@@ -142,6 +143,9 @@ int shmem_truncate(struct shmem *sh, uint64_t size)
         return -EFBIG;
     }
     keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);
+    if (sh->maps && keep < sh->npages) {
+        filemap_shmem_cut(sh, keep);
+    }
     for (i = keep; i < sh->npages; i++) {
         if (sh->pages[i]) {
             free_frame(sh->pages[i]);

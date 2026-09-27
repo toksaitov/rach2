@@ -37,6 +37,14 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh);
  */
 struct vm_file *filemap_anon_shared(void);
 
+/**
+ * Take the pages of `sh` from its page `first` on out of every region that
+ * maps them, in every address space, for a truncation that is about to free
+ * them: a later access to one faults and maps the page the memory has then,
+ * as it would after a first touch.
+ */
+void filemap_shmem_cut(struct shmem *sh, uint32_t first);
+
 /** Whether a mapping holds a KRFFS file with the node `node`, as a
  * descriptor in a table does: the node the file is at now, which a
  * relocation moves in the mapping's open file description. */

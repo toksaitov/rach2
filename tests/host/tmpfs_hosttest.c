@@ -18,7 +18,8 @@
  * held after its last name goes stays readable, and a shared mapping's page
  * takes a reference of its own; a page at or past the most a file may have
  * is refused without growing the table, 2^31 and 2^32 - 1 among them, and
- * the last page below it is given. A memfd's node has its name and no
+ * the last page below it is given; a truncation of mapped memory takes the
+ * pages it frees out of the mappings first. A memfd's node has its name and no
  * directory, and goes with its last hold; its seals refuse a shrink, a
  * growth, a write, a change of its execute bits and more seals, and a
  * named file starts sealed against sealing. Returns the failed-check count.
@@ -133,6 +134,28 @@ uint32_t frame_free_count(void)
 static int frames_in_use(void)
 {
     return POOL - (int)frame_free_count();
+}
+
+/* The mapping side's part, which a truncation of mapped memory calls before
+ * it frees the pages: counted, with the first page it was given, and every
+ * mapped page past it let go, as the regions' page tables would let go. */
+static int cuts;
+static uint32_t cut_first;
+static uintptr_t mapped[4];
+
+void filemap_shmem_cut(struct shmem *sh, uint32_t first)
+{
+    int i;
+
+    (void)sh;
+    cuts++;
+    cut_first = first;
+    for (i = 0; i < 4; i++) {
+        if (mapped[i] && (uint32_t)i >= first) {
+            free_frame(mapped[i]);
+            mapped[i] = 0;
+        }
+    }
 }
 
 static struct vfs_mount mnt;
@@ -334,6 +357,33 @@ static void mapping(void)
     tmpfs_put(&mnt, f);
 }
 
+/* A truncation of memory a mapping maps takes the pages it frees out of the
+ * mapping first, from the first page past the new end, so that after the
+ * file grows again a write and the mapping's next touch meet in one page.
+ * Memory no mapping maps is truncated without the mapping side. */
+static void truncation(void)
+{
+    void *f = make(NULL, "t", 0644);
+    struct shmem *sh = tmpfs_shmem(f);
+
+    CHECK(sh != NULL && tmpfs_write(&mnt, f, "abcd", 4, 3 * PAGE_SIZE) == 4);
+    sh->maps = 1;
+    mapped[0] = shmem_map_page(sh, 0);
+    mapped[3] = shmem_map_page(sh, 3);
+    cuts = 0;
+    CHECK(tmpfs_truncate(&mnt, f, PAGE_SIZE + 1) == 0 && cuts == 1 && cut_first == 2);
+    CHECK(mapped[0] != 0 && mapped[3] == 0 && refs[frame_index(mapped[0])] == 2);
+    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && cuts == 2 && cut_first == 0 && mapped[0] == 0);
+    CHECK(tmpfs_write(&mnt, f, "x", 1, 3 * PAGE_SIZE) == 1);
+    mapped[3] = shmem_map_page(sh, 3);
+    CHECK(mapped[3] != 0 && pool[frame_index(mapped[3])][0] == 'x');
+    free_frame(mapped[3]);
+    mapped[3] = 0;
+    sh->maps = 0;
+    CHECK(tmpfs_truncate(&mnt, f, 0) == 0 && cuts == 2);
+    tmpfs_put(&mnt, f);
+}
+
 static void seals(void)
 {
     struct vfs_stat st;
@@ -390,6 +440,7 @@ int main(void)
     kinds();
     listing();
     mapping();
+    truncation();
     seals();
     tmpfs_unmount(&mnt);
     CHECK(frames_in_use() == 0);

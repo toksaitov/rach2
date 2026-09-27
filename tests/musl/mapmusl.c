@@ -7,17 +7,19 @@
  * sees the parent's bytes and its own stores stay its own. A shared
  * anonymous mapping and a shared mapping of a file in /dev/shm carry a
  * child's store to the parent, and a store through the mapping of the file
- * reaches read(2). mprotect will not make a shared mapping of a file opened
- * read-only writable, and will a private one. Shared anonymous memory
- * ignores a raw mmap2's page offset, a file's offset whose last page would
- * not fit in 32 bits is EOVERFLOW, and a page of a file in memory past
- * 1 GiB is never backed. mremap grows a mapping in place or moves it with
- * its bytes, and shrinks one, and refuses an old length that would wrap
- * past the end of memory, leaving the mapping; a fixed mremap that shrinks
- * a mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
- * gives a private anonymous mapping zero pages again, and madvise and msync
- * refuse a length that would round up to 0. A write through /proc/self/mem
- * to a read-only page a fork shared leaves the page read-only.
+ * reaches read(2), and after a truncation and a growth a write to the file
+ * is seen through the mapping. mprotect will not make a shared mapping of a
+ * file opened read-only writable, and will a private one. Shared anonymous
+ * memory ignores a raw mmap2's page offset, a file's offset whose last page
+ * would not fit in 32 bits is EOVERFLOW, and a page of a file in memory
+ * past 1 GiB is never backed. mremap grows a mapping in place or moves it
+ * with its bytes, and shrinks one, and refuses an old length that would
+ * wrap past the end of memory, leaving the mapping; a fixed mremap that
+ * shrinks a mapping is held to RLIMIT_AS by what it leaves;
+ * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages
+ * again, and madvise and msync refuse a length that would round up to 0. A
+ * write through /proc/self/mem to a read-only page a fork shared leaves the
+ * page read-only.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -144,6 +146,33 @@ static int shared(void)
     m[6] = 'd';
     if (pread(fd, check, 2, 5) != 2 || check[0] != 'c' || check[1] != 'd') {
         return fail("a store in a shared mapping did not reach read");
+    }
+    munmap(m, PAGE);
+    close(fd);
+    unlink(SHM_PATH);
+    return 0;
+}
+
+/* A truncation takes the pages past the new end out of every mapping of a
+   file in memory: after the file shrinks to nothing and grows again, a
+   write to it is seen through the mapping, which maps the file's page and
+   no longer the one the truncation freed. */
+static int truncated_shared(void)
+{
+    char *m;
+    int fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+
+    if (fd < 0 || ftruncate(fd, PAGE) != 0) {
+        return fail("a file in /dev/shm to truncate");
+    }
+    m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (m == MAP_FAILED) {
+        return fail("mmap of a file in /dev/shm to truncate");
+    }
+    m[0] = 'o';
+    if (ftruncate(fd, 0) != 0 || ftruncate(fd, PAGE) != 0 || pwrite(fd, "n", 1, 0) != 1 ||
+        m[0] != 'n') {
+        return fail("a shared mapping kept a page its file's truncation freed");
     }
     munmap(m, PAGE);
     close(fd);
@@ -388,8 +417,8 @@ static int remap_limit(void)
 
 int main(void)
 {
-    if (private_file() || shared() || readonly_shared() || offsets() || remaps() ||
-        forced_write() || remap_limit()) {
+    if (private_file() || shared() || truncated_shared() || readonly_shared() || offsets() ||
+        remaps() || forced_write() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");

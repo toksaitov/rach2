@@ -8,12 +8,15 @@
  * allocated when it is first written or mapped, and a size. A tmpfs file and
  * the memory of a shared anonymous mapping are one each. The table holds one
  * reference to each frame, and a shared mapping holds one more for every
- * page it maps, so a frame a process still maps outlives a truncation.
+ * page it maps. `maps` counts the mappings (filemap.c) that map the memory,
+ * and while it is not 0 a truncation takes the pages it frees out of them
+ * first, so that a mapping never keeps a page the file no longer has.
  */
 struct shmem {
     uintptr_t *pages; /* physical frames, 0 for a page never written */
     uint32_t npages;  /* the table's length */
     uint64_t size;
+    uint32_t maps; /* the mappings of it, which a truncation reaches */
 };
 
 /** Read `count` bytes at `off` into `buf`, a hole as zeros: the bytes read,
@@ -24,7 +27,8 @@ int32_t shmem_read(struct shmem *sh, void *buf, uint32_t count, uint64_t off);
  * written, or -ENOSPC or -EFBIG. */
 int32_t shmem_write(struct shmem *sh, const void *buf, uint32_t count, uint64_t off);
 
-/** Set the size, freeing the pages past it; 0, or -EFBIG. */
+/** Set the size, freeing the pages past it, which it first takes out of
+ * every region that maps them (`filemap_shmem_cut`); 0, or -EFBIG. */
 int shmem_truncate(struct shmem *sh, uint64_t size);
 
 /** The frame of page `pgoff`, allocated zeroed when there is none, with a

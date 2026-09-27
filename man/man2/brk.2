@@ -155,6 +155,8 @@ and
 use, the mapping maps the file's own pages, so a store is seen by every
 mapping of the file and by
 .Xr read 2 .
+A truncation takes the pages past the new end out of every mapping, and
+a later access maps the page the file has then.
 A shared mapping of a file on a disk file system is served as a private
 one when it is read-only, which reads the same bytes, and refused with
 .Er ENODEV

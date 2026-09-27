@@ -5,6 +5,7 @@
 #include "filemap.h"
 
 #include "kheap.h"
+#include "mm.h"
 #include "paging.h"
 #include "shmem.h"
 #include "../isr.h"
@@ -72,6 +73,9 @@ static void filemap_release(struct vm_file *f)
     if (*link) {
         *link = m->next;
     }
+    if (m->sh) {
+        m->sh->maps--;
+    }
     if (m->entry.ofd) {
         m->entry.node = filemap_node(m);
         fd_release_backing(&m->entry);
@@ -108,6 +112,7 @@ struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh)
 
     if (f) {
         ((struct filemap *)f)->sh = sh;
+        sh->maps++;
         f->fill = NULL;
         f->share = filemap_share;
     }
@@ -125,9 +130,34 @@ struct vm_file *filemap_anon_shared(void)
     m->vf.share = filemap_share;
     m->vf.release = filemap_release;
     m->sh = &m->own;
+    m->own.maps = 1;
     m->next = maps;
     maps = m;
     return &m->vf;
+}
+
+void filemap_shmem_cut(struct shmem *sh, uint32_t first)
+{
+    process_t *p;
+    uint32_t i;
+
+    for (p = proc_list; p; p = p->next) {
+        const vm_space_t *vm = p->mm ? &p->mm->vm : NULL;
+
+        for (i = 0; vm && i < vm->count; i++) {
+            const vma_t *r = &vm->vmas[i];
+            uint32_t pages = (r->end - r->start) / PAGE_SIZE;
+            uint32_t from;
+
+            if (r->type != VM_SHARED || !r->file || r->file->share != filemap_share ||
+                ((const struct filemap *)r->file)->sh != sh ||
+                (r->pgoff < first && pages <= first - r->pgoff)) {
+                continue;
+            }
+            from = r->pgoff < first ? r->start + (first - r->pgoff) * PAGE_SIZE : r->start;
+            unmap_user_range(p->mm->dir, from, r->end);
+        }
+    }
 }
 
 int filemap_holds(const void *node)
