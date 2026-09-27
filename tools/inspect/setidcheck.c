@@ -1681,9 +1681,9 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 #define EXT2_FT_MAX    7u
 
 /* The largest regular file the reader copies: about twice the largest any
-   image stages, the GNU system's chromium-headless-shell at 197 MiB, so
-   that the size a damaged inode claims cannot ask for any amount of
-   memory. */
+   image stages, the GNU system's chromium-headless-shell at 197 MiB. The
+   limit bounds the allocation made from an inode's recorded size, which a
+   damaged inode may have wrong. */
 #define EXT2_FILE_MAX (512ul * 1024 * 1024)
 
 struct ext2 {
