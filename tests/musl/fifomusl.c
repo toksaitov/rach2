@@ -5,8 +5,10 @@
  * reader, a nonblocking open for writing fails with ENXIO; a nonblocking
  * open for reading succeeds and reads the end of input. Bytes written at one
  * open are read at the other, and the reader sees the end of input when the
- * writer closes. A blocking open for reading waits for a child's open for
- * writing, and the child's bytes arrive. An open for reading and writing
+ * writer closes. A blocking open for reading waits for a writer: a child
+ * opens the FIFO for writing only once it has seen the parent asleep, and
+ * first writes a byte to a pipe, which must be there when the parent's open
+ * returns. The child's bytes then arrive. An open for reading and writing
  * does not wait.
  *
  * Prints "FIFOMUSL OK" on success and "FIFOMUSL FAIL (detail)" otherwise.
@@ -15,6 +17,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -30,11 +33,55 @@ static int fail(const char *what)
     return 1;
 }
 
+/** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
+static int sleeping(pid_t pid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/** Wait up to 3 s to see `parent` asleep, write a byte to `told`, then open
+ * the FIFO for writing and write to it: exits 0 when all of that happened,
+ * 2 when the parent was never seen asleep. */
+static void writer(pid_t parent, int told)
+{
+    int tries;
+    int w;
+
+    for (tries = 0; tries < 300 && !sleeping(parent); tries++) {
+        usleep(10000);
+    }
+    if (tries == 300) {
+        _exit(2);
+    }
+    if (write(told, "o", 1) != 1) {
+        _exit(1);
+    }
+    w = open(FIFO_PATH, O_WRONLY);
+    _exit(w >= 0 && write(w, "child", 5) == 5 ? 0 : 1);
+}
+
 int main(void)
 {
     struct stat st;
     char buf[16];
     int r, w, status;
+    int told[2];
+    pid_t parent = getpid();
     pid_t pid;
 
     unlink(FIFO_PATH);
@@ -66,20 +113,29 @@ int main(void)
     }
     close(r);
 
+    if (pipe(told) != 0 || fcntl(told[0], F_SETFL, O_NONBLOCK) != 0) {
+        return fail("the pipe the child writes to");
+    }
     pid = fork();
     if (pid == 0) {
-        w = open(FIFO_PATH, O_WRONLY);
-        _exit(w >= 0 && write(w, "child", 5) == 5 ? 0 : 1);
+        writer(parent, told[1]);
     }
     r = open(FIFO_PATH, O_RDONLY);
-    if (r < 0 || read(r, buf, sizeof(buf)) != 5 || memcmp(buf, "child", 5) != 0) {
-        return fail("the blocking opens");
+    if (r < 0 || read(told[0], buf, 1) != 1) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail("a blocking open for reading returned before a writer opened");
+    }
+    if (read(r, buf, sizeof(buf)) != 5 || memcmp(buf, "child", 5) != 0) {
+        return fail("the child's bytes");
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
         read(r, buf, sizeof(buf)) != 0) {
         return fail("the writing child");
     }
     close(r);
+    close(told[0]);
+    close(told[1]);
 
     r = open(FIFO_PATH, O_RDWR);
     if (r < 0 || write(r, "rw", 2) != 2 || read(r, buf, sizeof(buf)) != 2) {
