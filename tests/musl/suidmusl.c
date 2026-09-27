@@ -13,7 +13,10 @@
  * gets the same. A child traced by a helper that is uid 1000 too, and one
  * such a helper makes with CLONE_FS, sharing its directories and umask,
  * exec the copy with the argument `plain`, which must find every id 1000,
- * AT_SECURE 0 and itself dumpable. The parent relays each status.
+ * AT_SECURE 0 and itself dumpable. A child that is uid 1000 execs the
+ * execute-only copy, mode 0111 (`/musl/suidmusl.xonly`), with the argument
+ * `xonly`, which must find itself not dumpable, since its caller may not
+ * read it. The parent relays each status.
  *
  * Prints "SUIDMUSL OK" on success, "SUIDMUSL FAIL ..." otherwise. Linked
  * against the ported musl.
@@ -29,6 +32,9 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
+
+#define SUID_COPY  "/musl/suidmusl.suid"
+#define XONLY_COPY "/musl/suidmusl.xonly"
 
 static int run_child(void)
 {
@@ -71,6 +77,23 @@ static int run_plain(void)
     return 0;
 }
 
+/** The execute-only copy, which its caller may run and not read: every id
+ * 1000, and a process that is not dumpable. */
+static int run_xonly(void)
+{
+    uid_t r, e, s;
+
+    if (getresuid(&r, &e, &s) != 0 || r != 1000 || e != 1000 || s != 1000) {
+        printf("SUIDMUSL FAIL (the execute-only copy's ids)\n");
+        return 1;
+    }
+    if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0) {
+        printf("SUIDMUSL FAIL (the execute-only copy is dumpable)\n");
+        return 1;
+    }
+    return 0;
+}
+
 /** Drop the calling process to uid and gid 1000; 0, or -1. */
 static int drop(void)
 {
@@ -79,11 +102,11 @@ static int drop(void)
 
 /**
  * Fork a child that drops to uid 1000, asks with `traced` to be traced by
- * the caller, and execs the setuid copy with the argument `mode`; continue
- * a traced one past the SIGTRAP its exec stops with. The child's exit
- * status, or 1.
+ * the caller, and execs the copy at `path` with the argument `mode`;
+ * continue a traced one past the SIGTRAP its exec stops with. The child's
+ * exit status, or 1.
  */
-static int exec_copy(const char *mode, int traced)
+static int exec_copy(const char *path, const char *mode, int traced)
 {
     pid_t pid = fork();
     int status;
@@ -95,7 +118,7 @@ static int exec_copy(const char *mode, int traced)
         if (drop() != 0 || (traced && ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0)) {
             _exit(1);
         }
-        execl("/musl/suidmusl.suid", "suidmusl", mode, (char *)0);
+        execl(path, "suidmusl", mode, (char *)0);
         _exit(1);
     }
     if (traced && (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) ||
@@ -111,7 +134,7 @@ static int exec_copy(const char *mode, int traced)
 /** The copy traced by a helper that is uid 1000 itself. */
 static int traced_row(void)
 {
-    return exec_copy("plain", 1);
+    return exec_copy(SUID_COPY, "plain", 1);
 }
 
 static char clone_stack[16384] __attribute__((aligned(16)));
@@ -120,7 +143,7 @@ static char clone_stack[16384] __attribute__((aligned(16)));
 static int exec_plain(void *arg)
 {
     (void)arg;
-    execl("/musl/suidmusl.suid", "suidmusl", "plain", (char *)0);
+    execl(SUID_COPY, "suidmusl", "plain", (char *)0);
     return 1;
 }
 
@@ -163,11 +186,14 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "plain") == 0) {
         return run_plain();
     }
-    if (exec_copy("child", 0) != 0) {
+    if (argc >= 2 && strcmp(argv[1], "xonly") == 0) {
+        return run_xonly();
+    }
+    if (exec_copy(SUID_COPY, "child", 0) != 0) {
         printf("SUIDMUSL FAIL (child status)\n");
         return 1;
     }
-    if (exec_copy("child", 1) != 0) {
+    if (exec_copy(SUID_COPY, "child", 1) != 0) {
         printf("SUIDMUSL FAIL (the exec traced by root)\n");
         return 1;
     }
@@ -177,6 +203,10 @@ int main(int argc, char **argv)
     }
     if (as_user(shared_row) != 0) {
         printf("SUIDMUSL FAIL (the exec whose directories uid 1000 shares)\n");
+        return 1;
+    }
+    if (exec_copy(XONLY_COPY, "xonly", 0) != 0) {
+        printf("SUIDMUSL FAIL (the execute-only copy)\n");
         return 1;
     }
     printf("SUIDMUSL OK\n");

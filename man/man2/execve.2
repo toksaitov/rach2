@@ -186,8 +186,13 @@ The initial stack's
 .Dv AT_SECURE
 value is set when an effective ID differs from its real ID.
 Such an exec leaves the process not dumpable and clears its parent-death
-signal, as one that changes an effective ID does; any other makes the
-process dumpable again.
+signal, as one that changes an effective ID does.
+An exec of a program, or of the interpreter its
+.Dv PT_INTERP
+names, that the caller may execute but not read leaves the process not
+dumpable as well, as on Linux: it then leaves no core file, and a tracer
+without effective user ID 0 cannot attach to it.
+Any other exec makes the process dumpable again.
 .Pp
 Descriptors marked
 .Dv FD_CLOEXEC

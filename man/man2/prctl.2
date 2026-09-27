@@ -59,9 +59,10 @@ passes the dumpable flag and the no_new_privs bit to the child and not the
 parent-death signal.
 .Xr execve 2
 makes the process dumpable again, or not dumpable when the new program
-runs with an effective ID that differs from its real one; such an exec
-also clears the parent-death signal, and so does a change of the effective
-user or group ID by an exec or by
+runs with an effective ID that differs from its real one or when the
+caller may not read the program or its interpreter.
+An exec with such an effective ID also clears the parent-death signal,
+and so does a change of the effective user or group ID by an exec or by
 .Xr setuid 2
 and its relatives, which clears the dumpable flag as well.
 Under no_new_privs,

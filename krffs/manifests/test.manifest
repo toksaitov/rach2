@@ -98,6 +98,9 @@ exec-dir 0755 /musl build/tests/musl
 # parent that drops to 1000 and execs this to prove libc's view of a set-id
 # exec (getresuid, getauxval(AT_SECURE), the saved-id dance).
 file 04755:0:0 /musl/suidmusl.suid build/tests/musl/suidmusl
+# Its execute-only copy, which uid 1000 may run and not read, so an exec of
+# it must leave the process not dumpable.
+file 0111:0:0 /musl/suidmusl.xonly build/tests/musl/suidmusl
 
 # A minimal /etc: catfile reads motd and lists the directory, permmusl opens
 # motd, and authmusl resolves root through passwd to uid 0. Both shadow lines

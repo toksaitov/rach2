@@ -636,7 +636,8 @@ struct exec_file {
     char path[VFS_PATH_MAX]; /* the node's path on the KRFFS root */
     struct vfs_ref ref;      /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
-    int32_t err; /* the errno of a failed read of a mount, which execve reports */
+    int32_t err;  /* the errno of a failed read of a mount, which execve reports */
+    int readable; /* whether the caller may read the file itself */
 };
 
 /* What a program's set-id bits would do: the bits that apply, and the file
@@ -721,6 +722,7 @@ struct exec_state {
     uint32_t euid; /* the ids the new image runs with */
     uint32_t egid;
     int secure;     /* AT_SECURE */
+    int unreadable; /* an image loaded is one the caller may not read */
     uint32_t entry; /* where the new image starts */
     elf_layout_t layout;
     elf_layout_t ilayout; /* the interpreter's */
@@ -896,17 +898,21 @@ static void cred_moved(process_t *p, uint32_t old_euid, uint32_t old_egid)
 /**
  * What an exec's credentials change beside the ids, as Linux's exec does:
  * the new image's address space `mm` is dumpable unless the image runs with
- * ids its caller lacks (`secure`) or its effective ids moved from `old_euid`
- * and `old_egid`, either of which clears the parent-death signal too, as
+ * ids its caller lacks (`secure`), its effective ids moved from `old_euid`
+ * and `old_egid`, or an image it loaded is one the caller may not read
+ * (`unreadable`), whose bytes a core file or a tracer's attach would give
+ * the caller, as Linux's `would_dump` has it. A secure exec or one that
+ * moved the effective ids clears the parent-death signal too, as
  * `cred_moved` clears it; a secure exec lowers a soft RLIMIT_STACK above
  * 8 MiB to 8 MiB. The flag is set before the address space is installed, so
  * no other process sees the image dumpable while it runs with new ids.
  */
-static void exec_privileges(struct mm *mm, int secure, uint32_t old_euid, uint32_t old_egid)
+static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t old_euid,
+                            uint32_t old_egid)
 {
     int moved = current_proc->euid != old_euid || current_proc->egid != old_egid;
 
-    mm->dumpable = secure || moved ? 0u : 1u;
+    mm->dumpable = secure || moved || unreadable ? 0u : 1u;
     if (secure || moved) {
         current_proc->pdeath_signal = 0;
     }
@@ -1043,7 +1049,8 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * read, and when `id` is not NULL, say in it what the file's set-id bits
  * would do. `path` starts at the caller's root, which chroot may have
  * moved, and a file it names on the KRFFS root is read by its node's own
- * path, which `f` keeps.
+ * path, which `f` keeps. `f` also says whether the caller may read the
+ * file, which the kernel loads for it with the execute right alone.
  *
  * The walk may not arrive on the synthetic /dev and /proc mounts, which
  * hold no programs, so execve sees the mount boundary open sees and cannot
@@ -1068,6 +1075,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
     f->ref.mnt = NULL;
     f->handle = NULL;
     f->err = 0;
+    f->readable = 0;
     rc = vfs_resolve(0, path + (path[0] == '/'), VFS_WALK_LOCK, &ref, 0, 0);
     if (rc != 0) {
         return rc;
@@ -1079,6 +1087,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
         const krffs_node_t *node = ref.node;
 
         rc = cred_access_node(node, CRED_X, 0);
+        f->readable = cred_access_node(node, CRED_R, 0) == 0;
         if (rc == 0 && krffs_node_path(ref.node, f->path, sizeof(f->path)) != 0) {
             rc = -ENAMETOOLONG;
         }
@@ -1088,6 +1097,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
     } else {
         rc = cred_access_ref(&ref, CRED_X, 0);
         if (rc == 0) {
+            f->readable = cred_access_ref(&ref, CRED_R, 0) == 0;
             rc = vfs_getattr(ref.mnt, ref.node, &vst);
         }
         if (rc == 0) {
@@ -1253,6 +1263,9 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
     if (rc != 0) {
         return rc;
     }
+    if (!s->prog.readable) {
+        s->unreadable = 1;
+    }
     rc = elf_read_layout(exec_file_read, &s->prog, 0, &s->ilayout);
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ELIBBAD);
@@ -1309,6 +1322,7 @@ static int32_t exec_build(struct exec_state *s)
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ENOEXEC);
     }
+    s->unreadable = !s->prog.readable;
     exec_file_close(&s->prog);
     s->entry = s->img.entry;
     aux.base = 0;
@@ -1500,7 +1514,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->egid = s->egid;
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
-    exec_privileges(s->mm, s->secure, old_euid, old_egid);
+    exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid);
     proc_set_comm(current_proc, s->path);
     for (sig = 1; sig <= KSIG_MAX; sig++) {
         if (current_proc->sigacts[sig].handler != KSIG_DFL &&
