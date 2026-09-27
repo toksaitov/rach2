@@ -2,15 +2,17 @@
  * lchown and the two flags of fchownat, with Linux's meaning.
  *
  * With no argument the rows run on the KRFFS boot root, which has no
- * symbolic links: lchown by both numbers and fchownat change a file,
- * AT_EMPTY_PATH changes the file a descriptor is open on, an O_PATH one
- * included, and the working directory, and each refusal of the flags comes
- * before the path is read. With a directory argument, which
- * tests/system/suites/ext2.sh gives as /tmp on an ext2 root, the rows run
- * there and a symbolic link is required: lchown and AT_SYMLINK_NOFOLLOW
- * change the link and leave its target alone, chown changes the target, an
- * O_PATH descriptor opened with O_NOFOLLOW names the link for AT_EMPTY_PATH,
- * and a dangling link can be changed and not followed.
+ * symbolic links: lchown by both numbers and fchownat change a file;
+ * fchownat through a descriptor of the directory, called from another
+ * directory that has a file of the same name, changes the file the
+ * descriptor's directory has and not the other; AT_EMPTY_PATH changes the
+ * file a descriptor is open on, an O_PATH one included, and the working
+ * directory; and each refusal of the flags comes before the path is read.
+ * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
+ * on an ext2 root, the rows run there and a symbolic link is required: lchown
+ * and AT_SYMLINK_NOFOLLOW change the link and leave its target alone, chown
+ * changes the target, an O_PATH descriptor opened with O_NOFOLLOW names the
+ * link for AT_EMPTY_PATH, and a dangling link can be changed and not followed.
  *
  * Prints "LCHOWNMUSL OK" on success and "LCHOWNMUSL FAIL (detail)" otherwise.
  */
@@ -26,6 +28,9 @@
 
 /* The names the rows make in the directory, and remove. */
 static char file[256], link_name[256], dangling[256], subdir[256];
+
+/* A second directory there, and in it a second lchown.tmp. */
+static char decoy_dir[256], decoy[256];
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -60,11 +65,40 @@ static int group_is(const char *path, gid_t gid)
     return lstat(path, &st) == 0 && st.st_gid == gid;
 }
 
+/**
+ * fchownat of lchown.tmp through a descriptor of `dir`, called from
+ * `decoy_dir`, which has a lchown.tmp of its own: `file` takes the new owner
+ * and group, and the decoy keeps its own.
+ */
+static int through_descriptor(const char *dir)
+{
+    struct stat before, after;
+    int dfd, fd;
+    int ok;
+
+    if (mkdir(decoy_dir, 0755) != 0) {
+        return 0;
+    }
+    fd = open(decoy, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        return 0;
+    }
+    close(fd);
+    dfd = open(dir, O_RDONLY | O_DIRECTORY);
+    ok = dfd >= 0 && lstat(decoy, &before) == 0 && chdir(decoy_dir) == 0 &&
+         fchownat(dfd, "lchown.tmp", 1300, 1300, 0) == 0;
+    if (dfd >= 0) {
+        close(dfd);
+    }
+    return chdir(dir) == 0 && ok && owner_is(file, 1, 1300) && group_is(file, 1300) &&
+           lstat(decoy, &after) == 0 && after.st_uid == before.st_uid &&
+           after.st_gid == before.st_gid;
+}
+
 /** The forms that change the file itself, and the descriptor forms. */
 static int file_rows(const char *dir)
 {
-    int dfd, pfd, ffd;
-    int ok;
+    int pfd, ffd;
 
     if (lchown(file, 1000, 1001) != 0 || !owner_is(file, 1, 1000) || !group_is(file, 1001)) {
         return fail("lchown on a file");
@@ -76,11 +110,8 @@ static int file_rows(const char *dir)
         !owner_is(file, 1, 1200) || !group_is(file, 1101)) {
         return fail("AT_SYMLINK_NOFOLLOW on a file");
     }
-    dfd = open(dir, O_RDONLY | O_DIRECTORY);
-    ok = dfd >= 0 && fchownat(dfd, "lchown.tmp", 1300, 1300, 0) == 0 && owner_is(file, 1, 1300);
-    close(dfd);
-    if (!ok) {
-        return fail("fchownat through a directory descriptor");
+    if (!through_descriptor(dir)) {
+        return fail("fchownat through a directory descriptor, from a directory with a decoy");
     }
     pfd = open(file, O_PATH);
     if (pfd < 0 || fchownat(pfd, "", 1400, 1400, AT_EMPTY_PATH) != 0 || !owner_is(file, 1, 1400) ||
@@ -183,6 +214,8 @@ static void tidy(void)
     unlink(link_name);
     unlink(file);
     rmdir(subdir);
+    unlink(decoy);
+    rmdir(decoy_dir);
 }
 
 int main(int argc, char **argv)
@@ -197,6 +230,8 @@ int main(int argc, char **argv)
     snprintf(link_name, sizeof(link_name), "%s%slchown.lnk", dir, sep);
     snprintf(dangling, sizeof(dangling), "%s%slchown.dng", dir, sep);
     snprintf(subdir, sizeof(subdir), "%s%slchowndir", dir, sep);
+    snprintf(decoy_dir, sizeof(decoy_dir), "%s%slchowndecoy", dir, sep);
+    snprintf(decoy, sizeof(decoy), "%s/lchown.tmp", decoy_dir);
     tidy();
     fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || chdir(dir) != 0) {
