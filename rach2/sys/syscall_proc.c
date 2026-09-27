@@ -3828,6 +3828,26 @@ static int sig_dequeue(uint64_t wanted, struct k_siginfo *info)
 }
 
 /**
+ * Take the stop of the current thread's process, when one is in effect, no
+ * SIGKILL is pending and the thread has not reported the stop: a traced
+ * thread reports it to its tracer (`ptrace_group_stop`), and another parks
+ * (`sig_park`). Returns 1 when it did either, so the caller looks at the
+ * stop again: a thread its tracer detached meanwhile then parks. 0 when
+ * there was nothing to take.
+ */
+static int group_stop_taken(void)
+{
+    if (!current_proc->tg->stop || (sig_pending_now() & KSIG_BIT(SIGKILL)) ||
+        current_proc->stop_seen) {
+        return 0;
+    }
+    if (!ptrace_group_stop((int)current_proc->tg->stop)) {
+        sig_park();
+    }
+    return 1;
+}
+
+/**
  * Act on a pending signal at the return-to-user boundary.
  *
  * Called from the ISR/IRQ return path just before iret, with the trapframe
@@ -3875,11 +3895,7 @@ void deliver_signals(isr_params_t *tf)
         uint32_t handler_flags;
         int signo;
 
-        if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
-            !current_proc->stop_seen) {
-            if (!ptrace_group_stop((int)current_proc->tg->stop)) {
-                sig_park();
-            }
+        if (group_stop_taken()) {
             continue;
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
