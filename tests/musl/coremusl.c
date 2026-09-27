@@ -7,9 +7,11 @@
  * the file is an i386 ELF core whose NT_PRSTATUS names the child and
  * SIGABRT, whose NT_PRPSINFO has the program's name, whose NT_AUXV has the
  * page size, and whose PT_LOAD for the child's data has the word the child
- * stored there. A child whose soft limit is two pages leaves a file cut
- * short and no WCOREDUMP; one whose limit is 0, and one that is not
- * dumpable, leave no file and no WCOREDUMP.
+ * stored there. A child whose soft limit is two pages leaves no WCOREDUMP
+ * and a file of its own, with the child's notes, that stops before its last
+ * segment ends and has no more than two pages of bytes that are not zero,
+ * since only a hole reads as zeros without being written. One whose limit
+ * is 0, and one that is not dumpable, leave no file and no WCOREDUMP.
  *
  * Prints "COREMUSL OK" on success and "COREMUSL FAIL (detail)" otherwise.
  */
@@ -182,6 +184,52 @@ static int core_check(pid_t child)
     return 0;
 }
 
+/** Check the core file a child whose limit was `limit` bytes left: its
+ * notes are the child's, it stops before its last segment ends, and no more
+ * than `limit` of its bytes are not zero. */
+static int short_check(pid_t child, size_t limit)
+{
+    size_t size, i, end = 0, written = 0;
+    unsigned char *core = slurp(CORE_PATH, &size);
+    const Elf32_Ehdr *eh = (const Elf32_Ehdr *)core;
+    int notes = 0;
+    int k;
+
+    if (!core || size < sizeof(*eh)) {
+        return fail("reading the short core file");
+    }
+    errno = 0;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_type != ET_CORE ||
+        eh->e_phoff + (size_t)eh->e_phnum * sizeof(Elf32_Phdr) > size) {
+        return fail("the short core's ELF header");
+    }
+    for (k = 0; k < eh->e_phnum; k++) {
+        const Elf32_Phdr *ph = (const Elf32_Phdr *)(core + eh->e_phoff) + k;
+
+        if (ph->p_type == PT_NOTE) {
+            if ((size_t)ph->p_offset + ph->p_filesz > size) {
+                return fail("the short core's notes cut short");
+            }
+            if (notes_check(core, ph, child) != 0) {
+                return 1;
+            }
+            notes = 1;
+        } else if (ph->p_type == PT_LOAD && (size_t)ph->p_offset + ph->p_filesz > end) {
+            end = (size_t)ph->p_offset + ph->p_filesz;
+        }
+    }
+    for (i = 0; i < size; i++) {
+        written += core[i] != 0;
+    }
+    free(core);
+    if (!notes || size >= end || written > limit) {
+        return fail(!notes        ? "no note segment in the short core"
+                    : size >= end ? "a short core with every segment whole"
+                                  : "a short core with more bytes than its limit");
+    }
+    return 0;
+}
+
 int main(void)
 {
     struct stat st;
@@ -205,9 +253,13 @@ int main(void)
         return 1;
     }
 
+    unlink(CORE_PATH);
     child = abort_child(8192, 1, &status);
-    if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || stat(CORE_PATH, &st) != 0) {
+    if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status)) {
         return fail("a core past a two-page limit");
+    }
+    if (short_check(child, 8192) != 0) {
+        return 1;
     }
     unlink(CORE_PATH);
     child = abort_child(0, 1, &status);
