@@ -14,12 +14,13 @@
  * write wakes a parent blocked in epoll_wait. A registration of no events is
  * told of a hangup. A pipe added to a set while a wait on it sleeps, then
  * written, wakes the wait. A set whose edge-triggered event was reported does
- * not poll readable. A write to a pipe in a set inside a set inside a third
- * wakes a wait on the third, and a cycle of sets is ELOOP. Waits with room for
- * one event report two ready descriptors in turn. A one-shot event a wait
- * cannot store, EFAULT, is reported by the next wait. The registration of a
- * closed eventfd does not report the eventfd made next at its number, which can
- * be added. epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative
+ * not poll readable, and a poll of a set is woken by a child's write to a pipe
+ * it watches. A write to a pipe in a set inside a set inside a third wakes a
+ * wait on the third, and a cycle of sets is ELOOP. Waits with room for one
+ * event report two ready descriptors in turn. A one-shot event a wait cannot
+ * store, EFAULT, is reported by the next wait. The registration of a closed
+ * eventfd does not report the eventfd made next at its number, which can be
+ * added. epoll_pwait2 takes a timeout of 2^31 seconds, and refuses negative
  * seconds with EINVAL.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
@@ -375,6 +376,43 @@ static int nested(void)
     return 0;
 }
 
+/* A poll of an epoll set is woken by a child's write to a pipe the set
+ * watches. */
+static int polled_set_woken(void)
+{
+    struct epoll_event ev;
+    struct pollfd pfd;
+    int ep = epoll_create1(0);
+    int p[2], status;
+    pid_t pid;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
+        return fail("setup for a poll of a set");
+    }
+    pid = fork();
+    if (pid == 0) {
+        struct timespec pause = {0, 100000000};
+
+        nanosleep(&pause, NULL);
+        _exit(write(p[1], "q", 1) == 1 ? 0 : 1);
+    }
+    pfd.fd = ep;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 5000) != 1 || !(pfd.revents & POLLIN)) {
+        return fail("a write to a pipe in a set did not wake a poll of the set");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the writing child");
+    }
+    close(p[0]);
+    close(p[1]);
+    close(ep);
+    return 0;
+}
+
 /* Two descriptors ready, and waits with room for one event: the waits
  * report each in turn. */
 static int in_turn(void)
@@ -520,7 +558,8 @@ static int long_timeout(void)
 int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
-        polled_after_edge() || nested() || in_turn() || failed_copy() || long_timeout()) {
+        polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
+        long_timeout()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

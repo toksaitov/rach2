@@ -23,6 +23,20 @@
  */
 
 struct isr_params;
+struct fd_entry;
+struct wait_queue;
+
+/** Whether the descriptor `e` is an epoll set. */
+int epoll_is_set(const struct fd_entry *e);
+
+/**
+ * The readiness of the epoll set `e` for poll and select: POLLIN among
+ * `events` while a wait on it would report an event. The wait queues a poll
+ * of it must be on, the set's own and those of what it watches, go to
+ * `wqs`, as many as `room` has, and their count to `*n`.
+ */
+short epoll_poll_set(struct fd_entry *e, short events, struct wait_queue **wqs, uint32_t room,
+                     uint32_t *n);
 
 int32_t sys_epoll_create(struct isr_params *params);
 int32_t sys_epoll_create1(struct isr_params *params);

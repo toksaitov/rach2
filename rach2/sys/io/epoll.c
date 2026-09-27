@@ -372,7 +372,8 @@ static int scan_set(void *ctx, struct wait_queue **wqs)
  * The readiness of an epoll set for poll: readable when a wait would report
  * an event, which `set_ready` says without taking it, so an edge-triggered
  * event reported already, or a one-shot registration that is off, does not
- * make the set readable. The queue named is the set's own.
+ * make the set readable. The queue named is the set's own; poll's scan
+ * takes all a set's queues from `epoll_poll_set`.
  */
 static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -390,6 +391,27 @@ static short epoll_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (wq) {
         *wq = &ep->wq;
     }
+    return ready ? (short)((uint32_t)events & (EPOLLIN | EPOLLRDNORM)) : 0;
+}
+
+int epoll_is_set(const fd_entry_t *e)
+{
+    return is_set(e);
+}
+
+short epoll_poll_set(fd_entry_t *e, short events, struct wait_queue **wqs, uint32_t room,
+                     uint32_t *n)
+{
+    struct epoll *ep = (struct epoll *)e->priv;
+    struct qlist q;
+    int ready;
+
+    q.wqs = wqs;
+    q.room = room;
+    q.n = 0;
+    scan_marks++;
+    ready = set_ready(ep, 0, &q);
+    *n = q.n;
     return ready ? (short)((uint32_t)events & (EPOLLIN | EPOLLRDNORM)) : 0;
 }
 

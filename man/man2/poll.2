@@ -66,6 +66,10 @@ No other event bits are reported.
 Regular files and directories report requested read and write readiness
 immediately.
 Pipes report readiness from their buffered data, free space, and peer lifetime.
+An epoll set is readable while a wait on it would report an event, and a
+poll of it is woken by a change in any descriptor it watches, as
+.Xr epoll 2
+describes.
 Terminals report input when the line discipline has data ready;
 pseudoterminals also report peer hangup.
 Console readiness is restricted to the descriptor's read and write modes.

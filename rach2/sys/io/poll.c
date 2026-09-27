@@ -18,6 +18,7 @@
 
 #include "poll.h"
 #include "poll_select.h"
+#include "epoll.h"
 #include "../isr.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
@@ -100,27 +101,74 @@ short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(events & (POLLIN | POLLOUT));
 }
 
+/* A poll's or a select's descriptors, for the scan of `poll_wait`: the
+ * queues it has records for, and the queues the last scan found, when they
+ * were more with nothing ready, for the wait to begin again with. */
+struct pollfd_scan {
+    struct kernel_pollfd *fds;
+    uint32_t nfds;
+    int sel;
+    uint32_t room;
+    uint32_t grow;
+};
+
+/*
+ * The readiness of `e` and its wait queues, into `wqs` from `*used` on as
+ * far as `room` goes, `*used` counting them all: one queue, or for an epoll
+ * set the set's own and those of what it watches, so that a change in any
+ * of them wakes a poll of the set (`epoll_poll_set`).
+ */
+static short poll_one(fd_entry_t *e, short events, struct wait_queue **wqs, uint32_t room,
+                      uint32_t *used)
+{
+    struct wait_queue *wq;
+    short revents;
+
+    if (epoll_is_set(e)) {
+        uint32_t n = 0;
+
+        revents = epoll_poll_set(e, events, *used < room ? wqs + *used : NULL,
+                                 *used < room ? room - *used : 0, &n);
+        *used += n;
+        return revents;
+    }
+    revents = poll_fd(e, events, &wq);
+    if (wq) {
+        if (*used < room) {
+            wqs[*used] = wq;
+        }
+        (*used)++;
+    }
+    return revents;
+}
+
 /**
  * Scan all pollfds once.
  *
- * Fills revents for each entry, records each one's wait queue in `wqs[]`,
- * and returns the number that are ready. `sel` selects the readiness rule:
+ * Fills revents for each entry, records the wait queues in `wqs[]`, and
+ * returns the number that are ready. `sel` selects the readiness rule:
  * poll() counts any non-zero revents, while select() counts an fd only on a
  * revent that projects onto a direction it was selected in (so a write- or
  * except-only fd reporting only POLLHUP is not "ready", matching the fd_set
  * projection and not busy-spinning). Called with interrupts off so the
  * readiness reads and the enqueue that follows cannot be split by a waker.
+ *
+ * An epoll set has a queue for each descriptor it watches, so the queues
+ * can be more than the records the wait has; with nothing ready, the scan
+ * says so in `grow` and returns 1 to end the wait, which begins again with
+ * a record for each.
  */
-static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue **wqs, int sel)
+static int poll_scan(struct pollfd_scan *p, struct wait_queue **wqs)
 {
+    struct kernel_pollfd *fds = p->fds;
+    uint32_t used = 0;
     uint32_t i;
     int ready = 0;
 
-    for (i = 0; i < nfds; i++) {
+    for (i = 0; i < p->nfds; i++) {
         fd_entry_t *e;
         short revents;
 
-        wqs[i] = NULL;
         if (fds[i].fd < 0) {
             fds[i].revents = 0; /* a negative fd is skipped (POSIX) */
             continue;
@@ -131,12 +179,16 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
             ready++;
             continue;
         }
-        revents = poll_fd(e, (short)(fds[i].events | POLLERR | POLLHUP), &wqs[i]);
+        revents = poll_one(e, (short)(fds[i].events | POLLERR | POLLHUP), wqs, p->room, &used);
         revents &= (short)(fds[i].events | POLLERR | POLLHUP | POLLNVAL);
         fds[i].revents = revents;
-        if (sel ? pollfd_select_ready(fds[i].events, revents) : (revents != 0)) {
+        if (p->sel ? pollfd_select_ready(fds[i].events, revents) : (revents != 0)) {
             ready++;
         }
+    }
+    if (ready == 0 && used > p->room) {
+        p->grow = used;
+        return 1;
     }
     return ready;
 }
@@ -244,32 +296,31 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32
     return rc;
 }
 
-/* A poll's or a select's descriptors, for the scan of `poll_wait`. */
-struct pollfd_scan {
-    struct kernel_pollfd *fds;
-    uint32_t nfds;
-    int sel;
-};
-
 static int scan_pollfds(void *ctx, struct wait_queue **wqs)
 {
-    struct pollfd_scan *p = (struct pollfd_scan *)ctx;
-
-    return poll_scan(p->fds, p->nfds, wqs, p->sel);
+    return poll_scan((struct pollfd_scan *)ctx, wqs);
 }
 
 /* The poll core over `fds`; `sel` selects the select() per-direction
  * readiness rule over poll()'s. nfds is already bounded to POLL_MAX_FDS by
- * the callers. */
+ * the callers. A wait whose scan found more queues than it had records for
+ * begins again with a record for each (`poll_scan`). */
 static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline,
                    int sel)
 {
     struct pollfd_scan p;
+    int rc;
 
     p.fds = fds;
     p.nfds = nfds;
     p.sel = sel;
-    return poll_wait(scan_pollfds, &p, nfds, has_deadline, deadline);
+    p.grow = nfds;
+    do {
+        p.room = p.grow;
+        p.grow = 0;
+        rc = poll_wait(scan_pollfds, &p, p.room, has_deadline, deadline);
+    } while (rc > 0 && p.grow != 0);
+    return rc;
 }
 
 /**
