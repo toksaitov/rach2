@@ -6,8 +6,9 @@
  * to 40000 under one mutex in memory they share. A condition variable
  * passes a value to a waiter seen asleep. pthread_kill reaches the thread
  * it names, which alone runs the handler. A signal sent to the process
- * while every thread blocks it waits, and is taken by the thread that
- * unblocks it. Of two signals sent to the process at once, the second, which
+ * while every thread blocks it waits, as sigpending reports, with no
+ * handler run, and a thread made after it takes it once it unblocks it.
+ * Of two signals sent to the process at once, the second, which
  * the first one's handler blocks, is taken by another thread while that
  * handler runs. A thread's exit leaves the process running; /proc/self/task
  * lists each live thread, and /proc/self/exe names the program. The threads
@@ -143,6 +144,36 @@ static void *spare_main(void *arg)
         pause();
     }
     return NULL;
+}
+
+/**
+ * A signal sent to the process while its two threads block it, the first
+ * and the one `spare_main` runs: it waits, as sigpending reports, and no
+ * handler runs. A thread made after it then takes it in `wait_signal`, the
+ * first thread still blocking it. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int process_signal_row(void)
+{
+    sigset_t block, pending;
+    pthread_t w;
+
+    handled_by = 0;
+    sigemptyset(&block);
+    sigaddset(&block, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+    kill(getpid(), SIGUSR1);
+    if (sigpending(&pending) != 0 || sigismember(&pending, SIGUSR1) != 1 || handled_by != 0) {
+        return fail("a process signal all threads block was not pending with no handler run");
+    }
+    if (pthread_create(&w, NULL, wait_signal, NULL) != 0) {
+        return fail("pthread_create for the process signal");
+    }
+    if (pthread_join(w, NULL) != 0 || handled_by == 0 || handled_by == tid()) {
+        return fail("a process signal did not reach the thread that has it unblocked");
+    }
+    pthread_sigmask(SIG_UNBLOCK, &block, NULL);
+    return 0;
 }
 
 static void *idle(void *arg)
@@ -642,8 +673,7 @@ static int two_execs(void)
 
 int main(void)
 {
-    pthread_t t[THREADS], w, spare;
-    sigset_t block;
+    pthread_t t[THREADS], spare;
     void *result;
     int i, status;
     pid_t pid;
@@ -685,18 +715,9 @@ int main(void)
         return 1;
     }
 
-    handled_by = 0;
-    sigemptyset(&block);
-    sigaddset(&block, SIGUSR1);
-    pthread_sigmask(SIG_BLOCK, &block, NULL);
-    if (pthread_create(&w, NULL, wait_signal, NULL) != 0) {
-        return fail("pthread_create for the process signal");
+    if (process_signal_row() != 0) {
+        return 1;
     }
-    kill(getpid(), SIGUSR1);
-    if (pthread_join(w, NULL) != 0 || handled_by == 0 || handled_by == tid()) {
-        return fail("a process signal did not reach the thread that has it unblocked");
-    }
-    pthread_sigmask(SIG_UNBLOCK, &block, NULL);
 
     pid = fork();
     if (pid == 0) {
