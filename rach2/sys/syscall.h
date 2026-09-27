@@ -43,6 +43,7 @@
 #define SYS_STATX           383
 #define SYS_FLOCK           143
 #define SYS_MEMFD_CREATE    356
+#define SYS_CLOSE_RANGE     436
 #define SYS_UNLINKAT        301
 #define SYS_GETPID          20
 #define SYS_TIMES           43

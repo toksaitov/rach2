@@ -9,13 +9,16 @@
  * getcpu reports CPU 0, and personality keeps and returns its value.
  * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
  * recvmmsg receives both, each with its count. clock_gettime64 reads the
- * monotonic clock with 64-bit fields.
+ * monotonic clock with 64-bit fields. close_range marks a range of
+ * descriptors close-on-exec and closes it, reaches past the table's end,
+ * and refuses a flag it does not take and a backward range.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -150,9 +153,39 @@ static int clocks(void)
     return 0;
 }
 
+static int ranges(void)
+{
+    int fd[3];
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        fd[i] = dup(0);
+        if (fd[i] < 0) {
+            return fail("dup");
+        }
+    }
+    if (syscall(436, fd[0], fd[2], 4) != 0 || !(fcntl(fd[0], F_GETFD) & FD_CLOEXEC) ||
+        !(fcntl(fd[2], F_GETFD) & FD_CLOEXEC) || (fcntl(0, F_GETFD) & FD_CLOEXEC)) {
+        return fail("close_range with CLOSE_RANGE_CLOEXEC");
+    }
+    errno = 0;
+    if (syscall(436, fd[0], fd[0], 8) != -1 || errno != EINVAL) {
+        return fail("close_range with an unknown flag");
+    }
+    errno = 0;
+    if (syscall(436, fd[2], fd[0], 0) != -1 || errno != EINVAL) {
+        return fail("close_range with first past last");
+    }
+    if (syscall(436, fd[0], ~0U, 0) != 0 || fcntl(fd[0], F_GETFD) != -1 ||
+        fcntl(fd[2], F_GETFD) != -1 || fcntl(0, F_GETFD) < 0) {
+        return fail("close_range to the end of the table");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (signals() || memory() || identity() || messages() || clocks()) {
+    if (signals() || memory() || identity() || messages() || clocks() || ranges()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

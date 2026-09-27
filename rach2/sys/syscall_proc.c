@@ -1390,13 +1390,7 @@ static int32_t exec_follow_exe(char *path)
     return 0;
 }
 
-/**
- * Give the calling thread a descriptor table of its own when it shares one,
- * as Linux's execve does before anything else, so that the close-on-exec
- * descriptors the new image drops are dropped for it alone; the threads the
- * exec ends keep the shared one until they are gone. 0, or -ENOMEM.
- */
-static int32_t exec_unshare_files(void)
+int32_t proc_files_unshare(void)
 {
     fd_table_t *own;
 
@@ -1431,7 +1425,7 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     if (!user_path) {
         return -EFAULT;
     }
-    rc = exec_unshare_files();
+    rc = proc_files_unshare();
     if (rc < 0) {
         return rc;
     }

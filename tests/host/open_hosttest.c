@@ -95,6 +95,7 @@ static int32_t sys_dup3(isr_params_t *params);
 static int32_t sys_statx(isr_params_t *params);
 static int32_t sys_memfd_create(isr_params_t *params);
 static int32_t sys_flock(isr_params_t *params);
+static int32_t sys_close_range(isr_params_t *params);
 static int32_t fs_core_file(int signo, uint32_t limit);
 static int32_t sys_mknod(isr_params_t *params);
 static int32_t sys_mknodat(isr_params_t *params);

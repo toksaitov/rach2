@@ -2289,6 +2289,42 @@ void fd_holds_release(void)
     }
 }
 
+#define CLOSE_RANGE_UNSHARE 0x2u
+#define CLOSE_RANGE_CLOEXEC 0x4u
+
+/**
+ * close_range(2), system call 436: EBX = first, ECX = last, EDX = flags.
+ * Closes each open descriptor from `first` to `last`, or with
+ * CLOSE_RANGE_CLOEXEC marks each close-on-exec instead; CLOSE_RANGE_UNSHARE
+ * first gives a caller that shares its table a copy of its own. A number
+ * past the table is no descriptor. 0, or -EINVAL for a flag it does not
+ * take or `first` past `last`, or -ENOMEM.
+ */
+int32_t sys_close_range(isr_params_t *params)
+{
+    uint32_t first = params->ebx;
+    uint32_t last = params->ecx;
+    uint32_t flags = params->edx;
+    uint32_t fd;
+
+    if ((flags & ~(CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC)) != 0 || first > last) {
+        return -EINVAL;
+    }
+    if ((flags & CLOSE_RANGE_UNSHARE) && proc_files_unshare() != 0) {
+        return -ENOMEM;
+    }
+    for (fd = first; fd <= last && fd < (uint32_t)fd_table_cap(current_proc->fds); fd++) {
+        fd_entry_t *e = fd_get(current_proc->fds, (int)fd);
+
+        if (e && (flags & CLOSE_RANGE_CLOEXEC)) {
+            e->flags |= FD_FLAG_CLOEXEC;
+        } else if (e) {
+            (void)close_fd((int)fd);
+        }
+    }
+    return 0;
+}
+
 /* close(2): EBX = fd. Returns 0 or -EBADF. Closing 0, 1 or 2 is legal; a
  * shell or daemon closes one and opens again onto the freed (lowest)
  * number to redirect it. */

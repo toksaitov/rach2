@@ -138,7 +138,7 @@ static const char *const PROBES[] = {
        syscall stops, the exec event, a debug register, attach and detach. */
     "musl/ptracemusl",
     /* sigtimedwait, the memory lock calls, mincore, getcpu, personality,
-       sendmmsg and recvmmsg, and clock_gettime64. */
+       sendmmsg and recvmmsg, clock_gettime64 and close_range. */
     "musl/callsmusl",
     /* Core files: their notes and memory, the limit, the dumpable flag,
        and a link at the name. */

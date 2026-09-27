@@ -5,7 +5,8 @@
 .Nm open ,
 .Nm openat ,
 .Nm creat ,
-.Nm close
+.Nm close ,
+.Nm close_range
 .Nd open, create, or close a file descriptor
 .Sh SYNOPSIS
 .In fcntl.h
@@ -18,6 +19,8 @@
 .In unistd.h
 .Ft int
 .Fn close "int fd"
+.Ft int
+.Fn close_range "unsigned int first" "unsigned int last" "int flags"
 .Sh DESCRIPTION
 .Fn open
 opens
@@ -231,6 +234,34 @@ The same releases occur on descriptor replacement by
 .Xr dup2 2 ,
 close-on-exec, and process exit.
 .Pp
+.Fn close_range
+closes each open descriptor from
+.Fa first
+to
+.Fa last ,
+as
+.Fn close
+closes one; a number past the table's end is no descriptor, so
+.Fa last
+may be
+.Dv ~0U .
+With
+.Dv CLOSE_RANGE_CLOEXEC
+in
+.Fa flags
+it marks each close-on-exec instead, and with
+.Dv CLOSE_RANGE_UNSHARE
+it first gives a caller whose descriptor table threads share a copy of its
+own, as
+.Xr execve 2
+does, and works on the copy.
+Another flag, or a
+.Fa first
+past
+.Fa last ,
+is
+.Er EINVAL .
+.Pp
 In a descriptor table that threads share, a close of a descriptor that a
 call of another thread is using, one that looked it up since it began,
 leaves the call what it had, as Linux's reference to the file does: the
@@ -383,8 +414,10 @@ The i386 system call numbers are 5 for
 .Fn openat ,
 8 for
 .Fn creat ,
-and 6 for
-.Fn close .
+6 for
+.Fn close ,
+and 436 for
+.Fn close_range .
 .Fn open
 takes path, flags, and mode in EBX, ECX, and EDX;
 .Fn openat
@@ -457,7 +490,12 @@ A signal arrived while an open of a FIFO waited for the other end.
 .It Bq Er EINVAL
 A file system rejects the new name, required attributes cannot be
 obtained, truncation selects an ext2 object that is not a regular file,
-or a FIFO was opened with the access mode 3.
+or a FIFO was opened with the access mode 3;
+.Fn close_range
+was given a flag it does not take, or a
+.Fa first
+past
+.Fa last .
 .It Bq Er EIO
 File-system I/O failed, the device was removed, or a pseudo-terminal
 slave is still locked.
@@ -482,7 +520,10 @@ The special mouse device was requested but no mouse is available.
 The path is empty, a required component does not exist, or a synthetic
 entry or process no longer exists.
 .It Bq Er ENOMEM
-A file-system node, per-open handle, or proc snapshot cannot be allocated.
+A file-system node, per-open handle, or proc snapshot cannot be allocated,
+or the copy of the table
+.Dv CLOSE_RANGE_UNSHARE
+asks for.
 .It Bq Er ENOSPC
 The file system has no room to create the file or its directory entry.
 .It Bq Er ENOTDIR

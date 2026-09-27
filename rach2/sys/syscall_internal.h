@@ -169,6 +169,8 @@ int32_t sys_flock(isr_params_t *params);
 
 int32_t sys_memfd_create(isr_params_t *params);
 
+int32_t sys_close_range(isr_params_t *params);
+
 int32_t sys_stat(isr_params_t *params);
 
 int32_t sys_lstat(isr_params_t *params);
