@@ -9,8 +9,10 @@
  * clocks advance while this process spins and agree with
  * what `times` reports; a CPU clock by process id, the form
  * `clock_getcpuclockid` returns, reads that process's time, and an id of no
- * process is refused. Real time resolves to the microsecond and every other
- * clock to the 10 ms tick.
+ * process is refused. A child blocked after reporting its own CPU time has a
+ * clock by id that reads what it reported, or one tick more, and that
+ * advances by the three ticks it spins between two reports. Real time
+ * resolves to the microsecond and every other clock to the 10 ms tick.
  *
  * `clock_nanosleep` is called through `syscall`, since musl answers some
  * clocks itself and uses `nanosleep` for a relative sleep of real time. An
@@ -148,8 +150,6 @@ static int clocks(void)
     long long after;
     long long x;
     unsigned int i;
-    pid_t child;
-    int status;
 
     for (i = 0; i < sizeof(boot_clocks) / sizeof(boot_clocks[0]); i++) {
         before = ns_of(CLOCK_MONOTONIC);
@@ -208,31 +208,78 @@ static int clocks(void)
     if (clock_getcpuclockid(999999, &cpu) != ESRCH) {
         return fail("a CPU clock of no such process was not refused");
     }
+    return 0;
+}
 
+/** Report the child's own CPU time on `fd`, wait for a byte on `go`, spin
+ * three ticks, report again and wait to be killed. */
+static void child_reports(int fd, int go)
+{
+    long long own;
+    char byte;
+
+    own = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    if (write(fd, &own, sizeof(own)) != sizeof(own) || read(go, &byte, 1) != 1) {
+        _exit(1);
+    }
+    spin_until(CLOCK_PROCESS_CPUTIME_ID, 3 * TICK_NS);
+    own = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    if (write(fd, &own, sizeof(own)) != sizeof(own)) {
+        _exit(1);
+    }
+    pause();
+    _exit(0);
+}
+
+/** A child's CPU clock by id, read each time the child has reported its own
+ * time and blocked: at least what it reported and at most one tick more, and
+ * three ticks further on after it spins. The parent does not run meanwhile,
+ * so a clock that read the caller's time does not advance. */
+static int child_clock(void)
+{
+    long long own[2];
+    long long seen[2];
+    clockid_t cpu;
+    pid_t child;
+    int up[2];
+    int down[2];
+    int status;
+    int bad;
+
+    if (pipe(up) != 0 || pipe(down) != 0) {
+        return fail("pipe failed");
+    }
     child = fork();
     if (child < 0) {
         return fail("fork failed");
     }
     if (child == 0) {
-        spin_until(CLOCK_PROCESS_CPUTIME_ID, 3 * TICK_NS);
-        pause();
-        _exit(0);
+        child_reports(up[1], down[0]);
     }
-    if (clock_getcpuclockid(child, &cpu) != 0) {
-        kill(child, SIGKILL);
-        waitpid(child, &status, 0);
-        return fail("clock_getcpuclockid gave no clock for a child");
+    close(up[1]);
+    close(down[0]);
+    bad = clock_getcpuclockid(child, &cpu) != 0 ||
+          read(up[0], &own[0], sizeof(own[0])) != sizeof(own[0]);
+    if (!bad) {
+        seen[0] = ns_of(cpu);
+        bad = write(down[1], "g", 1) != 1 || read(up[0], &own[1], sizeof(own[1])) != sizeof(own[1]);
     }
-    before = ns_of(CLOCK_MONOTONIC);
-    x = ns_of(cpu);
-    while (x < 3 * TICK_NS && ns_of(CLOCK_MONOTONIC) - before < SPIN_BOUND_NS) {
-        usleep(20000);
-        x = ns_of(cpu);
+    if (!bad) {
+        seen[1] = ns_of(cpu);
     }
     kill(child, SIGKILL);
     waitpid(child, &status, 0);
-    if (x < 3 * TICK_NS) {
-        return fail("a child's CPU clock by id did not show the time it spun");
+    close(up[0]);
+    close(down[1]);
+    if (bad) {
+        return fail("the child's clock or its reports could not be read");
+    }
+    if (seen[0] < own[0] || seen[0] > own[0] + TICK_NS || seen[1] < own[1] ||
+        seen[1] > own[1] + TICK_NS) {
+        return fail("a child's CPU clock by id did not read the time the child reported");
+    }
+    if (seen[1] - seen[0] < 3 * TICK_NS) {
+        return fail("a child's CPU clock by id did not advance while the child spun");
     }
     return 0;
 }
@@ -323,7 +370,7 @@ static int sleeps(void)
 
 int main(void)
 {
-    if (clocks() != 0 || sleeps() != 0) {
+    if (clocks() != 0 || child_clock() != 0 || sleeps() != 0) {
         return 1;
     }
     printf("CLOCKIDMUSL OK\n");
