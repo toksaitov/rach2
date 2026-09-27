@@ -244,6 +244,8 @@ static void publication_open(int flags, int before)
     k_memset(&reader, 0, sizeof(reader));
     writer.pid = 1;
     reader.pid = 2;
+    writer.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
+    reader.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     current_proc = &writer;
     setup();
     writer.fds = &table;
@@ -326,6 +328,7 @@ static void locked_walks(void)
     int fd;
 
     current_proc = &writer;
+    writer.rlim[RLIM_NOFILE].cur = FD_TABLE_LIMIT;
     setup();
     writer.fds = &table;
     writer.fs = &dirs;
