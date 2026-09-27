@@ -5,15 +5,16 @@
  *
  * Includes elf.c directly and stubs the page and VMA calls, then drives
  * elf_load_image with crafted in-memory images through a readfn over a byte
- * buffer. Every malformed image must be rejected during validation, BEFORE
- * any page is allocated. The alloc stub records whether allocation was
- * reached, so a test tells a validation reject (alloc never reached) from an
- * image that passed validation (reached alloc, which the stub then fails). A
- * separate reentry row maps synthetic frame numbers to host buffers and loads
- * a second image inside the first image's read callback. Both loads must retain
- * their own segment geometry and bytes. A position-independent image is read
- * for its layout and interpreter and loaded at a base. Returns the
- * failed-check count.
+ * buffer. Every malformed image must be rejected with ENOEXEC during
+ * validation, BEFORE any page is allocated. The alloc stub records whether
+ * allocation was reached, so a test tells a validation reject (alloc never
+ * reached) from an image that passed validation (reached alloc, which the
+ * stub then fails, and which must answer ENOMEM). A reader that fails must
+ * make the load answer EIO. A separate reentry row maps synthetic frame
+ * numbers to host buffers and loads a second image inside the first image's
+ * read callback. Both loads must retain their own segment geometry and
+ * bytes. A position-independent image is read for its layout and
+ * interpreter and loaded at a base. Returns the failed-check count.
  */
 
 #include "proc/elf.c"
@@ -120,10 +121,17 @@ void *k_memcpy(void *dest, const void *src, size_t n)
 static unsigned char img_buf[8192];
 static uint32_t img_size;
 
+/* The file offset from which `test_read` fails, as a device error would;
+ * past any image for none. */
+static uint32_t read_fails_at = 0xFFFFFFFFu;
+
 static int test_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     uint32_t avail;
     (void)ctx;
+    if (off >= read_fails_at) {
+        return -1;
+    }
     if (off >= img_size) {
         return 0;
     }
@@ -350,20 +358,51 @@ static void dynamic_images(void)
           out.segs[0].end == ELF_ET_DYN_BASE + 0x2000u);
 
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, 0, &out) == -1 && alloc_reached == 0);
+    CHECK(elf_load_image_at(test_read, 0, &dir, 0, &out) == -ENOEXEC && alloc_reached == 0);
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE + 0x10u, &out) == -1 &&
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE + 0x10u, &out) == -ENOEXEC &&
           alloc_reached == 0);
 
     img_buf[0x100 + 18] = 'x';
-    CHECK(elf_read_layout(test_read, 0, &lay) == -1);
+    CHECK(elf_read_layout(test_read, 0, &lay) == -ENOEXEC);
     set_interp(0, 0x100u, "ld.so");
-    CHECK(elf_read_layout(test_read, 0, &lay) == -1);
+    CHECK(elf_read_layout(test_read, 0, &lay) == -ENOEXEC);
 
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
     alloc_reached = 0;
-    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == -1 && alloc_reached == 0);
+    CHECK(elf_load_image_at(test_read, 0, &dir, ELF_ET_DYN_BASE, &out) == -ENOEXEC &&
+          alloc_reached == 0);
+}
+
+/**
+ * A read that fails is an I/O error, not a malformed image: a reader that
+ * fails on a segment's bytes makes the load answer EIO once its page was
+ * taken, and one that fails on the program headers makes the layout read
+ * answer EIO, where a file that merely ends before them is ENOEXEC.
+ */
+static void read_error(void)
+{
+    static page_dir_t dir;
+    static page_table_t table;
+    elf_layout_t lay;
+    elf_image_t out;
+
+    base_image(1);
+    set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
+    k_memset(&dir, 0, sizeof(dir));
+    dir.logical_page_tables[0x08048000u / PAGE_SIZE / 1024] = &table;
+    frame_count = 0;
+    map_frames = 1;
+    read_fails_at = 0x100u;
+    alloc_reached = 0;
+    CHECK(elf_load_image(test_read, 0, &dir, &out) == -EIO && alloc_reached == 1);
+    map_frames = 0;
+    read_fails_at = sizeof(Elf32_Ehdr);
+    CHECK(elf_read_layout(test_read, 0, &lay) == -EIO);
+    read_fails_at = 0xFFFFFFFFu;
+    img_size = sizeof(Elf32_Ehdr) + 10u;
+    CHECK(elf_read_layout(test_read, 0, &lay) == -ENOEXEC);
 }
 
 int main(void)
@@ -380,13 +419,13 @@ int main(void)
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x10u, 0x10u, 5u);
     img_size = 20u;
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* A bad magic byte. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x10u, 0x10u, 5u);
     ((Elf32_Ehdr *)img_buf)->e_ident[EI_MAG0] = 0;
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* More program headers than the loader will hold. img_size covers the whole
        claimed table and phdr[0] is a valid PT_LOAD, so the e_phnum cap is the
@@ -397,40 +436,42 @@ int main(void)
     set_load(0, 0x100u, 0x08048000u, 0x10u, 0x10u, 5u);
     ((Elf32_Ehdr *)img_buf)->e_phnum = ELF_MAX_PHNUM + 1;
     img_size = sizeof(Elf32_Ehdr) + (uint32_t)(ELF_MAX_PHNUM + 1) * sizeof(Elf32_Phdr) + 0x100u;
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* A program-header table that runs past the image. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x10u, 0x10u, 5u);
     img_size = sizeof(Elf32_Ehdr) + 10u;
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* p_filesz larger than p_memsz. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x200u, 0x100u, 5u);
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* A segment whose end runs into the page-cache window. */
     base_image(1);
     set_load(0, 0x100u, 0xBFFFE000u, 0x2000u, 0x2000u, 5u);
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* A segment below the user image window (into the kernel identity map). */
     base_image(1);
     set_load(0, 0x100u, 0x01000000u, 0x100u, 0x100u, 5u);
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* A segment whose address range wraps past 2^32. */
     base_image(1);
     set_load(0, 0x100u, 0xBFFFE000u, 0x100u, 0xFFFFFFFFu, 5u);
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 0);
+    CHECK(run(&dir, &out) == -ENOEXEC && alloc_reached == 0);
 
     /* A well-formed single-segment image passes validation and reaches the
-       allocation step (which the stub then fails, so the call still returns -1
-       but only after alloc_reached is set). */
+       allocation step, which the stub then fails: the load answers ENOMEM,
+       not the ENOEXEC of a malformed image. */
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
-    CHECK(run(&dir, &out) == -1 && alloc_reached == 1);
+    CHECK(run(&dir, &out) == -ENOMEM && alloc_reached == 1);
+
+    read_error();
 
     reentrant_load();
     header_table_bounds();

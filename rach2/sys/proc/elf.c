@@ -5,6 +5,7 @@
 #include "elf.h"
 #include "../mm/paging.h"
 #include "../mm/vm.h"
+#include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../serial.h"
 
@@ -147,21 +148,40 @@ bool elf_valid_exec(const void *ehdr, uint32_t len)
     return true;
 }
 
+/**
+ * Read `count` bytes at file offset `off` into `dst` through `readfn`: 0,
+ * -EIO when the read failed, or -ENOEXEC when the file ended first, which
+ * makes an image whose headers name bytes past its end a malformed one.
+ */
+static int elf_read_exact(elf_read_fn readfn, void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    int got = readfn(ctx, dst, count, off);
+
+    if (got < 0) {
+        return -EIO;
+    }
+    return got == (int)count ? 0 : -ENOEXEC;
+}
+
 int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out)
 {
     Elf32_Phdr phdrs[ELF_MAX_PHNUM];
     Elf32_Ehdr ehdr;
-    uint32_t ph_bytes;
     uint16_t i;
+    int rc;
 
     k_memset(out, 0, sizeof(*out));
-    if (readfn(ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-        !elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
-        return -1;
+    rc = elf_read_exact(readfn, ctx, &ehdr, sizeof(ehdr), 0);
+    if (rc != 0) {
+        return rc;
     }
-    ph_bytes = (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr);
-    if (readfn(ctx, phdrs, ph_bytes, ehdr.e_phoff) != (int)ph_bytes) {
-        return -1;
+    if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
+        return -ENOEXEC;
+    }
+    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr),
+                        ehdr.e_phoff);
+    if (rc != 0) {
+        return rc;
     }
     out->type = ehdr.e_type;
     out->lo = 0xFFFFFFFFu;
@@ -172,7 +192,7 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out)
             uint32_t end = ph->p_vaddr + ph->p_memsz;
 
             if (end < ph->p_vaddr || end > 0xFFFFF000u) {
-                return -1;
+                return -ENOEXEC;
             }
             if ((ph->p_vaddr & ~(PAGE_SIZE - 1)) < out->lo) {
                 out->lo = ph->p_vaddr & ~(PAGE_SIZE - 1);
@@ -181,14 +201,19 @@ int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out)
                 out->hi = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
             }
         } else if (ph->p_type == PT_INTERP) {
-            if (ph->p_filesz < 2 || ph->p_filesz > sizeof(out->interp) ||
-                readfn(ctx, out->interp, ph->p_filesz, ph->p_offset) != (int)ph->p_filesz ||
-                out->interp[ph->p_filesz - 1] != '\0' || out->interp[0] != '/') {
-                return -1;
+            if (ph->p_filesz < 2 || ph->p_filesz > sizeof(out->interp)) {
+                return -ENOEXEC;
+            }
+            rc = elf_read_exact(readfn, ctx, out->interp, ph->p_filesz, ph->p_offset);
+            if (rc != 0) {
+                return rc;
+            }
+            if (out->interp[ph->p_filesz - 1] != '\0' || out->interp[0] != '/') {
+                return -ENOEXEC;
             }
         }
     }
-    return out->hi == 0 ? -1 : 0;
+    return out->hi == 0 ? -ENOEXEC : 0;
 }
 
 /**
@@ -243,11 +268,13 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
  *
  * @param out filled with the segment table, image end (the heap base), entry
  *            point, and program header geometry on success.
- * @return 0 on success, -1 on any malformed or out-of-policy image, a read
- *         short of the requested length, an allocation failure, more program
- *         headers than `ELF_MAX_PHNUM` or more PT_LOADs than `ELF_MAX_SEGS`.
- *         On failure the pages already mapped stay in `dir`, for the caller
- *         to free with the address space.
+ * @return 0; -ENOEXEC for a malformed or out-of-policy image, one with more
+ *         program headers than `ELF_MAX_PHNUM` or more PT_LOADs than
+ *         `ELF_MAX_SEGS`, or a file that ends before the bytes its headers
+ *         name; -EIO when `readfn` fails; -ENOMEM when a page, its table or
+ *         a temporary mapping could not be had; -EINVAL without a reader, a
+ *         directory or `out`. On failure the pages already mapped stay in
+ *         `dir`, for the caller to free with the address space.
  */
 int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
 {
@@ -260,30 +287,32 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
     Elf32_Phdr phdrs[ELF_MAX_PHNUM];
     Elf32_Ehdr ehdr;
     uint16_t i;
-    uint32_t ph_bytes;
     uint32_t prev_end = ELF_USER_MIN; /* page-aligned end of the previous PT_LOAD */
     int nload = 0;
+    int rc;
 
     if (!readfn || !dir || !out) {
-        return -1;
+        return -EINVAL;
     }
 
     out->nsegs = 0;
     out->image_end = 0;
 
-    if (readfn(ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr)) {
-        return -1;
+    rc = elf_read_exact(readfn, ctx, &ehdr, sizeof(ehdr), 0);
+    if (rc != 0) {
+        return rc;
     }
     if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
-        return -1;
+        return -ENOEXEC;
     }
     if ((ehdr.e_type == ET_EXEC && bias != 0) || (bias & (PAGE_SIZE - 1)) != 0) {
-        return -1;
+        return -ENOEXEC;
     }
 
-    ph_bytes = (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr);
-    if (readfn(ctx, phdrs, ph_bytes, ehdr.e_phoff) != (int)ph_bytes) {
-        return -1;
+    rc = elf_read_exact(readfn, ctx, phdrs, (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr),
+                        ehdr.e_phoff);
+    if (rc != 0) {
+        return rc;
     }
 
     for (i = 0; i < ehdr.e_phnum; i++) {
@@ -295,20 +324,20 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             continue;
         }
         if (ph->p_filesz > ph->p_memsz) {
-            return -1;
+            return -ENOEXEC;
         }
 
         vaddr = ph->p_vaddr + bias;
         vaddr_end = vaddr + ph->p_memsz;
 
         if (vaddr < bias || vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
-            return -1;
+            return -ENOEXEC;
         }
         if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
-            return -1;
+            return -ENOEXEC;
         }
         if ((vaddr & ~(PAGE_SIZE - 1)) < prev_end) {
-            return -1;
+            return -ENOEXEC;
         }
         prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         nload++;
@@ -318,7 +347,7 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             uint32_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
             if (out->nsegs >= ELF_MAX_SEGS) {
-                return -1;
+                return -ENOEXEC;
             }
             out->segs[out->nsegs].start = seg_start;
             out->segs[out->nsegs].end = seg_end;
@@ -333,11 +362,8 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
              page_addr += PAGE_SIZE) {
             uintptr_t phys_addr = alloc_user_page(dir, page_addr);
 
-            if (phys_addr == 0) {
-                return -1;
-            }
-            if (paging_zero_frame(phys_addr) != 0) {
-                return -1;
+            if (phys_addr == 0 || paging_zero_frame(phys_addr) != 0) {
+                return -ENOMEM;
             }
         }
 
@@ -362,21 +388,21 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
             pte_idx = (page_base / PAGE_SIZE) % 1024;
             pt = dir->logical_page_tables[pde_idx];
             if (!pt) {
-                return -1;
+                return -ENOMEM;
             }
             phys_base = pt->pages[pte_idx] & ~0xFFF;
 
             {
                 uint8_t *page = kmap_temp(phys_base);
-                int got;
 
                 if (!page) {
-                    return -1;
+                    return -ENOMEM;
                 }
-                got = readfn(ctx, page + page_offset, chunk_size, file_offset + copied);
+                rc = elf_read_exact(readfn, ctx, page + page_offset, chunk_size,
+                                    file_offset + copied);
                 kunmap_temp(page);
-                if (got != (int)chunk_size) {
-                    return -1;
+                if (rc != 0) {
+                    return rc;
                 }
             }
             copied += chunk_size;
@@ -411,11 +437,11 @@ int elf_load_image_at(elf_read_fn readfn, void *ctx, page_dir_t *dir, uint32_t b
 
     out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phoff);
     if (nload == 0 || out->phdr_vaddr == 0) {
-        return -1;
+        return -ENOEXEC;
     }
     out->phdr_vaddr += bias;
     if (ehdr.e_entry + bias < ELF_USER_MIN || ehdr.e_entry + bias >= ELF_USER_MAX) {
-        return -1;
+        return -ENOEXEC;
     }
     out->entry = ehdr.e_entry + bias;
     out->phent = ehdr.e_phentsize;

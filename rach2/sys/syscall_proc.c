@@ -626,7 +626,7 @@ struct exec_file {
     char path[VFS_PATH_MAX]; /* the node's path on the KRFFS root */
     struct vfs_ref ref;      /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
-    int32_t err; /* the last failed read's errno, reported instead of ENOEXEC */
+    int32_t err; /* the errno of a failed read of a mount, which execve reports */
 };
 
 /* What a program's set-id bits would do: the bits that apply, and the file
@@ -652,6 +652,20 @@ static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
         return -1;
     }
     return (int)got;
+}
+
+/**
+ * The error execve answers for a load of the file `f` the ELF loader failed
+ * with `rc`: the error of a read of a mount, which the loader can only call
+ * -EIO, else `rc`, with a malformed image, -ENOEXEC, answered as
+ * `malformed`.
+ */
+static int32_t exec_load_err(const struct exec_file *f, int rc, int32_t malformed)
+{
+    if (f->err != 0) {
+        return f->err;
+    }
+    return rc == -ENOEXEC ? malformed : rc;
 }
 
 /** Release the handle and the node `f` holds on another mount, if any. */
@@ -1147,8 +1161,8 @@ static void exec_ids(struct exec_state *s)
  * those. Its own PT_INTERP is ignored. The new image starts at its entry,
  * and `*base`, AT_BASE, is the distance it was moved by. 0, -ENOENT,
  * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel
- * loads, -ENOMEM for one that would cover the program, or an error of the
- * read.
+ * loads, -ENOMEM for one that would cover the program or for memory its
+ * load could not have, -EIO or a mount's error for a read that failed.
  */
 static int32_t exec_interp(struct exec_state *s, uint32_t *base)
 {
@@ -1162,8 +1176,9 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
     if (rc != 0) {
         return rc;
     }
-    if (elf_read_layout(exec_file_read, &s->prog, &s->ilayout) != 0) {
-        return s->prog.err ? s->prog.err : -ELIBBAD;
+    rc = elf_read_layout(exec_file_read, &s->prog, &s->ilayout);
+    if (rc != 0) {
+        return exec_load_err(&s->prog, rc, -ELIBBAD);
     }
     if (s->ilayout.type == ET_DYN) {
         bias = VM_MMAP_BASE - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
@@ -1171,8 +1186,9 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
     if (s->ilayout.lo + bias < s->img.image_end && s->ilayout.hi + bias > s->img.segs[0].start) {
         return -ENOMEM;
     }
-    if (elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->iimg) != 0) {
-        return s->prog.err ? s->prog.err : -ELIBBAD;
+    rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->iimg);
+    if (rc != 0) {
+        return exec_load_err(&s->prog, rc, -ELIBBAD);
     }
     exec_file_close(&s->prog);
     s->entry = s->iimg.entry;
@@ -1189,7 +1205,8 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
  * RLIMIT_STACK, lowered to 8 MiB for an image that runs with ids its
  * caller lacks, and the regions may cover no more than RLIMIT_AS. The
  * caller's image is untouched, so every failure is an error execve
- * returns. 0, -ENOEXEC, -ENOMEM, or an error of `exec_interp` or of a read.
+ * returns. 0, -ENOEXEC, -ENOMEM, -EIO, or an error of `exec_interp` or of a
+ * mount's read.
  */
 static int32_t exec_build(struct exec_state *s)
 {
@@ -1200,8 +1217,9 @@ static int32_t exec_build(struct exec_state *s)
     uint8_t random16[16];
     int32_t rc;
 
-    if (elf_read_layout(exec_file_read, &s->prog, &s->layout) != 0) {
-        return s->prog.err ? s->prog.err : -ENOEXEC;
+    rc = elf_read_layout(exec_file_read, &s->prog, &s->layout);
+    if (rc != 0) {
+        return exec_load_err(&s->prog, rc, -ENOEXEC);
     }
     if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
         bias = ELF_ET_DYN_BASE - s->layout.lo;
@@ -1210,8 +1228,9 @@ static int32_t exec_build(struct exec_state *s)
     if (s->mm == NULL) {
         return -ENOMEM;
     }
-    if (elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->img) != 0) {
-        return s->prog.err ? s->prog.err : -ENOEXEC;
+    rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->img);
+    if (rc != 0) {
+        return exec_load_err(&s->prog, rc, -ENOEXEC);
     }
     exec_file_close(&s->prog);
     s->entry = s->img.entry;

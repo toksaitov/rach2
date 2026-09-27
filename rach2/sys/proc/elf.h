@@ -151,8 +151,9 @@ struct page_dir;
 
 /*
  * Byte-range reader for the segment loader: copy `count` bytes from source
- * offset `off` into `dst`. Returns count on success, a negative value on error.
- * The kernel supplies a KRFFS-backed reader so the whole file is never slurped
+ * offset `off` into `dst`. Returns the bytes copied, fewer than `count` only
+ * at the end of the file, or a negative value when the read failed. The
+ * kernel supplies a KRFFS-backed reader so the whole file is never slurped
  * into one buffer.
  */
 typedef int (*elf_read_fn)(void *ctx, void *dst, uint32_t count, uint32_t off);
@@ -209,16 +210,18 @@ typedef struct {
     char interp[ELF_INTERP_MAX];
 } elf_layout_t;
 
-/** Read an image's layout; 0, or -1 for an image this kernel does not load
- * or an interpreter path that is not an absolute path within the limit. */
+/** Read an image's layout; 0, -ENOEXEC for an image this kernel does not
+ * load, an interpreter path that is not an absolute path within the limit or
+ * a file that ends before its headers, or -EIO when a read fails. */
 int elf_read_layout(elf_read_fn readfn, void *ctx, elf_layout_t *out);
 
 /** Run-time vaddr of the program header table (AT_PHDR), or 0 if none
  * covers `phoff`. */
 uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff);
 
-/** Stream an ELF into `dir` via `read`, recording layout in `out`; 0 ok, -1
- * on error. */
+/** Stream an ELF into `dir` via `read`, recording layout in `out`; 0, or
+ * -ENOEXEC for a malformed image, -EIO for a failed read and -ENOMEM for
+ * memory the load could not have. */
 int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_t *out);
 
 /** The same with every address moved by `bias`, page-aligned, which must be
