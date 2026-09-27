@@ -5861,13 +5861,138 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     rtc_realtime(seconds, nanoseconds);
 }
 
+/** Whether `nsec` is a time's nanoseconds, UTIME_NOW or UTIME_OMIT. */
+static int utime_nsec_valid(int32_t nsec)
+{
+    return nsec == UTIME_NOW || nsec == UTIME_OMIT || (nsec >= 0 && nsec <= 999999999);
+}
+
+/**
+ * Set the access and modification times of the file at (`mnt`, `node`), for
+ * utimensat by path and by descriptor. `times` is the pair [atime, mtime];
+ * NULL sets both to now, a tv_nsec of UTIME_NOW sets that one to now and
+ * UTIME_OMIT leaves it, and any change advances ctime.
+ *
+ * The POSIX permission split: setting both to now is the owner's, or anyone's
+ * with write permission, or root's; an explicit time is the owner's or root's
+ * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
+ * no stored times and is -EROFS; the KRFFS root's times are not changed and
+ * the call succeeds. On another type the read, the check and the store are
+ * one step under the mount's namespace lock, as for chmod and chown.
+ */
+static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kernel_timespec *times)
+{
+    krffs_node_t *kn = node;
+    int64_t now_sec, now_nsec;
+    int now_both =
+        times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
+    int32_t rc = 0;
+
+    if (times && (!utime_nsec_valid(times[0].tv_nsec) || !utime_nsec_valid(times[1].tv_nsec))) {
+        return -EINVAL;
+    }
+    if (vfs_synth_vpath(mnt, node)) {
+        return -EROFS;
+    }
+    get_current_time(&now_sec, &now_nsec);
+    if (!mnt_is_root(mnt)) {
+        struct vfs_ref ref;
+        struct vfs_stat vst;
+        int what = 0;
+
+        ref.mnt = mnt;
+        ref.node = node;
+        vfs_ns_lock(mnt);
+        rc = vfs_getattr(mnt, node, &vst);
+        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+            rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
+        }
+        if (rc == 0 && (times == NULL || times[0].tv_nsec != UTIME_OMIT)) {
+            int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
+
+            vst.atime_sec = now ? now_sec : times[0].tv_sec;
+            vst.atime_nsec = now ? now_nsec : times[0].tv_nsec;
+            what |= VFS_SET_ATIME;
+        }
+        if (rc == 0 && (times == NULL || times[1].tv_nsec != UTIME_OMIT)) {
+            int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
+
+            vst.mtime_sec = now ? now_sec : times[1].tv_sec;
+            vst.mtime_nsec = now ? now_nsec : times[1].tv_nsec;
+            what |= VFS_SET_MTIME;
+        }
+        if (rc == 0) {
+            rc = vfs_setattr(mnt, node, what, &vst);
+        }
+        vfs_ns_unlock(mnt);
+        return rc;
+    }
+    if (kn == krffs_fs->node) {
+        return 0;
+    }
+    if (now_both) {
+        if (!cred_privileged() && current_proc->euid != kn->uid &&
+            cred_access_node(kn, CRED_W, 0) != 0) {
+            return -EACCES;
+        }
+    } else if (!cred_privileged() && current_proc->euid != kn->uid) {
+        return -EPERM;
+    }
+    if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
+        int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
+
+        kn->access_time.seconds = now ? now_sec : times[0].tv_sec;
+        kn->access_time.nanoseconds = now ? now_nsec : times[0].tv_nsec;
+    }
+    if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
+        int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
+
+        kn->modification_time.seconds = now ? now_sec : times[1].tv_sec;
+        kn->modification_time.nanoseconds = now ? now_nsec : times[1].tv_nsec;
+    }
+    kn->attribute_change_time.seconds = now_sec;
+    kn->attribute_change_time.nanoseconds = now_nsec;
+    return 0;
+}
+
+/**
+ * utimensat on the file descriptor `fd` refers to: a NULL path, which is GNU
+ * libc's futimens, and an empty one with AT_EMPTY_PATH.
+ *
+ * A file or a directory of a file system has its times set by the rules of
+ * `utimes_node`, and one of the KRFFS boot root must still be the node it
+ * was, or have lost its name to an unlink since. A pipe, a socket, a
+ * terminal, a device or a synthetic directory has no times stored for it and
+ * is -EROFS, as the path to a synthetic one answers; Linux sets the times of
+ * such an inode.
+ */
+static int32_t utimes_fd(int fd, const struct kernel_timespec *times)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
+        return -EROFS;
+    }
+    if ((entry->node && fd_node_check(entry) != 0) || !entry->ofd || !entry->ofd->vmnt) {
+        return -EBADF;
+    }
+    return utimes_node(entry->ofd->vmnt, entry->ofd->vnode, times);
+}
+
 /**
  * Update a file's access and modification timestamps (utimensat(2)).
  *
- * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is a 2-element
- * timespec array [atime, mtime]; a NULL `times` sets both to the current
- * time. A tv_nsec of UTIME_NOW means "now", UTIME_OMIT means "leave
- * unchanged". Returns 0 or -errno.
+ * EBX = dirfd, ECX = path, EDX = times, ESI = flags. `times` is the pair
+ * [atime, mtime] or NULL, as `utimes_node` takes it, and a pair of
+ * UTIME_OMIT changes nothing and returns 0 before anything else is looked at,
+ * as on Linux. A NULL path names the file `dirfd` refers to, with no flags
+ * (-EINVAL otherwise); with AT_FDCWD it is -EFAULT. Otherwise the path
+ * resolves as openat's does, AT_SYMLINK_NOFOLLOW sets a final symbolic link's
+ * own times, and with AT_EMPTY_PATH an empty path names the file `dirfd`
+ * refers to, or the working directory for AT_FDCWD. Returns 0 or -errno.
  */
 int32_t sys_utimensat(isr_params_t *params)
 {
@@ -5875,150 +6000,63 @@ int32_t sys_utimensat(isr_params_t *params)
     const char __user *user_path = (const char __user *)params->ecx;
     struct kernel_timespec __user *user_times = (struct kernel_timespec __user *)params->edx;
     int flags = (int)params->esi;
-    char *pathbuf;
     struct kernel_timespec ktimes[2];
     const struct kernel_timespec *times = NULL;
-    const char *name;
-    krffs_node_t *node;
-    int64_t now_sec, now_nsec;
-    int len;
+    struct vfs_ref ref;
+    char *pathbuf;
+    int empty = 0;
+    int32_t rc;
 
-    if (flags & ~AT_SYMLINK_NOFOLLOW) {
-        return -EINVAL;
-    }
-
-    if (!current_proc || !user_path) {
+    if (!current_proc) {
         return -EFAULT;
-    }
-
-    /* Copy the path (resolved against AT_FDCWD/the dirfd) and, if given, the
-     * two timespecs into kernel memory through the fault-safe helpers. */
-    len = path_from_user(dirfd, user_path, &pathbuf);
-    if (len != 0) {
-        return len;
     }
     if (user_times) {
         if (copy_from_user(ktimes, user_times, sizeof(ktimes)) != 0) {
-            path_buf_put(pathbuf);
             return -EFAULT;
+        }
+        if (ktimes[0].tv_nsec == UTIME_OMIT && ktimes[1].tv_nsec == UTIME_OMIT) {
+            return 0;
         }
         times = ktimes;
     }
-
-    name = path_name(pathbuf);
-    if (name[0] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
-        path_buf_put(pathbuf);
-        return 0; /* the KRFFS root's timestamps are not modifiable; report success */
+    if (!user_path && dirfd != AT_FDCWD) {
+        return flags != 0 ? -EINVAL : utimes_fd(dirfd, times);
     }
-
-    {
-        struct vfs_ref ref;
-        int rc =
-            vfs_resolve(0, name, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0, 0);
-
-        path_buf_put(pathbuf);
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
+    }
+    if (!user_path) {
+        return -EFAULT;
+    }
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(user_path);
+        if (empty < 0) {
+            return empty;
+        }
+    }
+    if (empty && dirfd != AT_FDCWD) {
+        return utimes_fd(dirfd, times);
+    }
+    if (empty) {
+        pathbuf = path_buf_get();
+        if (!pathbuf) {
+            return -ENOMEM;
+        }
+        k_strncpy(pathbuf, proc_cwd(current_proc), VFS_PATH_MAX);
+    } else {
+        rc = path_from_user(dirfd, user_path, &pathbuf);
         if (rc != 0) {
-            return rc; /* missing, not-a-dir, or a denied ancestor */
-        }
-        if (vfs_synth_vpath(ref.mnt, ref.node)) {
-            vfs_ref_release(&ref);
-            return -EROFS; /* the synthetic mounts are read-only */
-        }
-        if (!mnt_is_root(ref.mnt)) {
-            struct vfs_stat vst;
-            int what = 0;
-            int now_both =
-                times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
-
-            rc = vfs_getattr(ref.mnt, ref.node, &vst);
-            if (rc == 0 && times != NULL && times[0].tv_nsec == UTIME_OMIT &&
-                times[1].tv_nsec == UTIME_OMIT) {
-                vfs_ref_release(&ref);
-                return 0;
-            }
-            if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
-                rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
-            }
-            if (rc == 0) {
-                get_current_time(&now_sec, &now_nsec);
-                if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
-                    int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
-
-                    vst.atime_sec = now ? now_sec : times[0].tv_sec;
-                    vst.atime_nsec = now ? now_nsec : times[0].tv_nsec;
-                    what |= VFS_SET_ATIME;
-                }
-                if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
-                    int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
-
-                    vst.mtime_sec = now ? now_sec : times[1].tv_sec;
-                    vst.mtime_nsec = now ? now_nsec : times[1].tv_nsec;
-                    what |= VFS_SET_MTIME;
-                }
-                rc = vfs_setattr(ref.mnt, ref.node, what, &vst);
-            }
-            vfs_ref_release(&ref);
             return rc;
         }
-        node = ref.node;
-        /* The hold is a no-op for the root type and the times are stored
-         * before anything else can run, so the ref is returned here. */
-        vfs_ref_release(&ref);
-        if (node == krffs_fs->node) {
-            return 0; /* root timestamps are not modifiable; report success */
-        }
     }
-
-    /* The POSIX permission split. Both UTIME_OMIT changes nothing, so it
-     * needs no right and touches no timestamp (not even ctime). Setting both
-     * to "now" (times NULL, or both UTIME_NOW) is the owner's, or anyone with
-     * write, or root. Any explicit time is the owner's or root's alone. */
-    if (times != NULL && times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT) {
-        return 0;
+    rc = vfs_resolve(0, pathbuf, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0, 0);
+    path_buf_put(pathbuf);
+    if (rc != 0) {
+        return rc;
     }
-    if (times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW)) {
-        if (!cred_privileged() && current_proc->euid != node->uid &&
-            cred_access_node(node, CRED_W, 0) != 0) {
-            return -EACCES;
-        }
-    } else if (!cred_privileged() && current_proc->euid != node->uid) {
-        return -EPERM;
-    }
-
-    get_current_time(&now_sec, &now_nsec);
-
-    if (times == NULL) {
-        node->access_time.seconds = now_sec;
-        node->access_time.nanoseconds = now_nsec;
-        node->modification_time.seconds = now_sec;
-        node->modification_time.nanoseconds = now_nsec;
-    } else {
-        if (times[0].tv_nsec == UTIME_OMIT) {
-            /* leave atime unchanged */
-        } else if (times[0].tv_nsec == UTIME_NOW) {
-            node->access_time.seconds = now_sec;
-            node->access_time.nanoseconds = now_nsec;
-        } else {
-            node->access_time.seconds = times[0].tv_sec;
-            node->access_time.nanoseconds = times[0].tv_nsec;
-        }
-
-        if (times[1].tv_nsec == UTIME_OMIT) {
-            /* leave mtime unchanged */
-        } else if (times[1].tv_nsec == UTIME_NOW) {
-            node->modification_time.seconds = now_sec;
-            node->modification_time.nanoseconds = now_nsec;
-        } else {
-            node->modification_time.seconds = times[1].tv_sec;
-            node->modification_time.nanoseconds = times[1].tv_nsec;
-        }
-    }
-
-    /* ctime always advances on a metadata change. */
-    node->attribute_change_time.seconds = now_sec;
-    node->attribute_change_time.nanoseconds = now_nsec;
-
-    return 0;
+    rc = utimes_node(ref.mnt, ref.node, times);
+    vfs_ref_release(&ref);
+    return rc;
 }
 
 /*
