@@ -63,6 +63,9 @@ file 0755:0:0 /login build/utils/sbin/login
 dir 0755 /home
 dir 0700:1000:1000 /home/probe
 
+# The sticky /tmp the systems ship, where the musl probes make their files.
+dir 1777 /tmp
+
 # searchprobe's fixtures: a root-owned tree whose modes the probe flips to prove
 # search is charged on every directory a path enters. Staged rather than minted
 # because the execve cases need a real program under the denied ancestor and a
