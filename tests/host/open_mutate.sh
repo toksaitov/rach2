@@ -1,6 +1,7 @@
 #!/bin/sh
-# Compile mounted open cleanup, and the KRFFS root's unlink and rename under
-# the root's lock, before, during and after each fault.
+# Compile mounted open cleanup, the KRFFS root's unlink and rename under the
+# root's lock, and the key of a file's locks, before, during and after each
+# fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -61,7 +62,8 @@ run_phase()
 echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
-    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked; do
+    rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked root-lock-key \
+    volume-lock-key; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -105,6 +107,10 @@ changes = {
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
+    "root-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;",
+                      "    return mnt->type == &vfs_krffs_volume_type;"),
+    "volume-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;",
+                        "    return mnt->type == &vfs_krffs_type;"),
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -125,6 +131,8 @@ PY
         rename-locked-walk) message='a walk starts with no namespace lock held' ;;
         rename-relocked) message='the lookups, the count and the change run under one hold of the root' ;;
         chmod-walk-unlocked | chown-walk-unlocked) message='attributes use node identity' ;;
+        root-lock-key) message='a file of the KRFFS root is keyed by its node' ;;
+        volume-lock-key) message='a file of a KRFFS volume is keyed by its node' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

@@ -2,7 +2,8 @@
  * Check mounted open truncation, cleanup and loop handle relocation, the
  * close of a descriptor whose release sleeps, by one thread or by the end of
  * another thread's call, an unlink and a rename on the KRFFS root of a file
- * an open is installing, and a chmod and a chown of a file a write moves.
+ * an open is installing, a chmod and a chown of a file a write moves, and
+ * the key a file's locks are found by on each kind of mount.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -130,6 +131,8 @@ krffs_file_system_t *krffs_fs;
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static const struct vfs_ops root_ops = {.lookup = root_lookup};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
+/* A mounted KRFFS volume's type, which the lock key row names. */
+const struct vfs_type vfs_krffs_volume_type = {"krffs", 0, 0, 1, 0};
 static const struct vfs_type mounted_type = {0};
 /* A mounted type whose uses are serialised under its namespace lock, as
  * KRFFS volumes and ext2 are, for the attribute rows. */
@@ -903,6 +906,45 @@ static void loop_handles(void)
           "memory-root loop handle follows node");
 }
 
+/**
+ * The key a file's locks are found by. A KRFFS file, on the boot root or on
+ * a mounted volume, is keyed by the node its description has now, which a
+ * move repoints, and not by the inode number recorded at the open, which a
+ * rename or a move leaves behind and two names with one hash share; a file
+ * of another type is keyed by that inode number.
+ */
+static void lock_keys(void)
+{
+    struct vfs_mount root_mnt, volume_mnt, other_mnt;
+    struct open_file desc;
+    struct lock_key key;
+    fd_entry_t e;
+
+    k_memset(&root_mnt, 0, sizeof(root_mnt));
+    k_memset(&volume_mnt, 0, sizeof(volume_mnt));
+    k_memset(&other_mnt, 0, sizeof(other_mnt));
+    k_memset(&desc, 0, sizeof(desc));
+    k_memset(&e, 0, sizeof(e));
+    root_mnt.type = &vfs_krffs_type;
+    volume_mnt.type = &vfs_krffs_volume_type;
+    other_mnt.type = &mounted_type;
+    e.ofd = &desc;
+    desc.vnode = &moved;
+    desc.ino = 7;
+    desc.vmnt = &root_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &root_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of the KRFFS root is keyed by its node");
+    desc.vmnt = &volume_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &volume_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of a KRFFS volume is keyed by its node");
+    desc.vmnt = &other_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &other_mnt && key.ino == 7,
+          "a file of another type is keyed by its inode number at the open");
+}
+
 /** Exercise mounted open and loop references. */
 int main(void)
 {
@@ -915,6 +957,7 @@ int main(void)
     rename_over_installing();
     attrs_after_move();
     loop_handles();
+    lock_keys();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }

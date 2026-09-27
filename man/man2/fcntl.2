@@ -217,11 +217,21 @@ Open file description locks and POSIX locks conflict with each other.
 .Xr flock 2
 locks meet neither.
 .Pp
-A lock is on the file, found by its mount and the inode number it had
-when the description was opened.
-On KRFFS, whose inode numbers change when a file is renamed on the
-boot root or moved on a mounted volume, a lock taken before such a
-change does not meet one taken through a description opened after it.
+A lock is on a file.
+On KRFFS, the boot root or a mounted volume, a file's locks are found by
+the place of its node, and a write that moves the file to a new node
+moves its locks, and the waits for them, with it: a lock taken before a
+rename or a move meets one taken after it, and two files whose names have
+one hash, and so one inode number on the boot root, have locks of their
+own.
+The boot root frees a directory removed while a descriptor has it open,
+and the locks of that descriptor stay on the place, where a node made
+later meets them; Linux keeps them with the removed directory.
+On another type a lock is found by the file's mount and the inode number
+it had when the description was opened.
+FAT32 and exFAT number a file by its directory entry, so there a lock
+taken before a rename does not meet one taken through a description
+opened after it, where Linux's locks stay with the file.
 A descriptor of a pipe, a socket, a device or a terminal is locked by
 the object it is open on.
 .Pp
@@ -283,8 +293,10 @@ offset and of every byte before it joining into one to the end of the
 file, a wait, one
 .Er EDEADLK
 for two processes that wait for each other, a wait whose descriptor
-another thread closes, and open file description locks against a second
-open and a POSIX lock.
+another thread closes, also while a write moves the file, a lock on one
+of two files whose names hash alike, a lock taken before a rename and
+before a move, and open file description locks against a second open
+and a POSIX lock.
 .Pp
 The default suite's
 .Pa tests/ofdprobe.c

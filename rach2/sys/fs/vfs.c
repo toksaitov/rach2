@@ -23,6 +23,7 @@
 #include "krffs.h"
 #include "../block/loop.h"
 #include "krffsmount.h"
+#include "lock.h"
 #include "pathbuf.h"
 #include "procfs.h"
 #include "synthfs.h"
@@ -1070,6 +1071,7 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
     }
     fd_ofd_repoint(mnt, from, to);
     loop_repoint(mnt, from, to);
+    lock_repoint(mnt, (uint64_t)(uintptr_t)from, (uint64_t)(uintptr_t)to);
 }
 
 /* The default-answer wrappers. */

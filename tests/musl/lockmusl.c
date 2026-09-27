@@ -15,12 +15,16 @@
  * fails with EDEADLK and the other takes the lock, and neither fails in any
  * other way. A thread's F_SETLKW whose descriptor another thread closes
  * during the wait fails with EBADF when the holder lets go, and leaves the
- * byte free. A flock LOCK_EX on one open makes LOCK_EX|LOCK_NB on another
- * fail with EWOULDBLOCK, and a dup shares the lock. A description's lock
- * stays through the close of one of its two descriptors, as another open's
- * LOCK_EX|LOCK_NB finds, and goes at the last close. An open file description
- * lock conflicts with a second open in the same process, and with that
- * process's POSIX lock.
+ * byte free, and so does one whose file a write moves during the wait. A
+ * lock is on the file: a child's lock on a file leaves free another file
+ * whose name hashes alike, and a lock taken before a rename, or before a
+ * write that moves the file on the KRFFS root, refuses a child's lock
+ * through an open after it. A flock LOCK_EX on one open makes
+ * LOCK_EX|LOCK_NB on another fail with EWOULDBLOCK, and a dup shares the
+ * lock. A description's lock stays through the close of one of its two
+ * descriptors, as another open's LOCK_EX|LOCK_NB finds, and goes at the last
+ * close. An open file description lock conflicts with a second open in the
+ * same process, and with that process's POSIX lock.
  *
  * Prints "LOCKMUSL OK" on success and "LOCKMUSL FAIL (detail)" otherwise.
  */
@@ -33,11 +37,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #define LOCK_PATH "/tmp/lockmusl"
+/* The directory of the rows about which file a lock is on. */
+#define KEY_DIR   "/tmp/lockmusl.d"
 
 static int fail(const char *what)
 {
@@ -346,18 +353,25 @@ static void *wait_for_byte(void *arg)
     return NULL;
 }
 
-/** Whether a child can take a write lock of byte 50. */
-static int byte_free(void)
+/** Whether a child can take a write lock of byte `at` of the file at `path`
+ * through an open of its own. */
+static int byte_free_at(const char *path, off_t at)
 {
     int status;
     pid_t pid = fork();
 
     if (pid == 0) {
-        int fd = open(LOCK_PATH, O_RDWR);
+        int fd = open(path, O_RDWR);
 
-        _exit(fd >= 0 && lk(fd, F_SETLK, F_WRLCK, 50, 1) == 0 ? 0 : 1);
+        _exit(fd >= 0 && lk(fd, F_SETLK, F_WRLCK, at, 1) == 0 ? 0 : 1);
     }
     return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/** Whether a child can take a write lock of byte 50. */
+static int byte_free(void)
+{
+    return byte_free_at(LOCK_PATH, 50);
 }
 
 /**
@@ -417,6 +431,209 @@ static int closed_wait(void)
     close(to_parent[0]);
     close(to_parent[1]);
     return 0;
+}
+
+/**
+ * Two files whose names hash alike are two files: `bC` and `cb` in one
+ * directory have one inode number on the KRFFS root, and a child's write
+ * lock on byte 0 of one must leave byte 0 of the other free.
+ */
+static int same_hash(void)
+{
+    int to_child[2], to_parent[2];
+    int one, two, status;
+    pid_t pid;
+
+    one = open(KEY_DIR "/bC", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    two = open(KEY_DIR "/cb", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (one < 0 || two < 0 || pipe(to_child) != 0 || pipe(to_parent) != 0) {
+        return fail("two files whose names hash alike");
+    }
+    pid = fork();
+    if (pid == 0) {
+        if (lk(one, F_SETLK, F_WRLCK, 0, 1) != 0) {
+            _exit(1);
+        }
+        post(to_parent[1]);
+        await(to_child[0]);
+        _exit(0);
+    }
+    await(to_parent[0]);
+    if (lk(two, F_SETLK, F_WRLCK, 0, 1) != 0) {
+        return fail("a lock on one file refused a lock on another whose name hashes alike");
+    }
+    post(to_child[1]);
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the child that locked the file whose name hashes alike");
+    }
+    close(one);
+    close(two);
+    close(to_child[0]);
+    close(to_child[1]);
+    close(to_parent[0]);
+    close(to_parent[1]);
+    unlink(KEY_DIR "/bC");
+    unlink(KEY_DIR "/cb");
+    return 0;
+}
+
+/** Whether a child's write lock of byte 0 of the file at `path`, through an
+ * open of its own, fails because another process holds the byte. */
+static int byte_held(const char *path)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        int fd = open(path, O_RDWR);
+        int refused =
+            fd >= 0 && lk(fd, F_SETLK, F_WRLCK, 0, 1) == -1 && (errno == EAGAIN || errno == EACCES);
+
+        _exit(refused ? 0 : 1);
+    }
+    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/**
+ * A lock is on the file whatever its name: the parent's write lock on byte
+ * 0, taken before a rename, must refuse a child's lock of the byte through
+ * an open of the new name.
+ */
+static int renamed(void)
+{
+    int fd = open(KEY_DIR "/old", O_RDWR | O_CREAT | O_TRUNC, 0644);
+
+    if (fd < 0 || lk(fd, F_SETLK, F_WRLCK, 0, 1) != 0 ||
+        rename(KEY_DIR "/old", KEY_DIR "/new") != 0) {
+        return fail("a locked file renamed");
+    }
+    if (!byte_held(KEY_DIR "/new")) {
+        return fail("a lock through the new name did not meet one taken before the rename");
+    }
+    close(fd);
+    unlink(KEY_DIR "/new");
+    return 0;
+}
+
+/**
+ * A lock goes where its file goes. Two files made one after the other lie
+ * side by side on the KRFFS root, so a write that grows the first past its
+ * node moves it; the parent's write lock on byte 0, taken before that
+ * write, must refuse a child's lock through an open made after it.
+ */
+static int moved(void)
+{
+    char block[1024];
+    int fd, beside;
+
+    memset(block, 'm', sizeof(block));
+    fd = open(KEY_DIR "/moved", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    beside = open(KEY_DIR "/beside", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || beside < 0 || lk(fd, F_SETLK, F_WRLCK, 0, 1) != 0 ||
+        write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
+        return fail("a locked file grown past its node");
+    }
+    if (!byte_held(KEY_DIR "/moved")) {
+        return fail("a lock through an open after a move did not meet one taken before it");
+    }
+    close(fd);
+    close(beside);
+    unlink(KEY_DIR "/moved");
+    unlink(KEY_DIR "/beside");
+    return 0;
+}
+
+/**
+ * closed_wait, with the file moved during the wait: a thread waits for byte
+ * 50 of a file whose node another file follows, the main thread closes the
+ * descriptor it waits through and grows the file past its node, and when
+ * the child that held the byte lets go, the wait fails with EBADF and a
+ * second child can take the byte through an open of the file.
+ */
+static int closed_wait_moved(void)
+{
+    int to_child[2], to_parent[2];
+    char block[1024];
+    pthread_t waiter;
+    int status, tries, made, beside, grow;
+    pid_t pid;
+
+    made = open(KEY_DIR "/waited", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    beside = open(KEY_DIR "/after", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (made < 0 || beside < 0 || pipe(to_child) != 0 || pipe(to_parent) != 0) {
+        return fail("a file for the closed wait across a move");
+    }
+    close(made);
+    pid = fork();
+    if (pid == 0) {
+        int fd = open(KEY_DIR "/waited", O_RDWR);
+
+        if (fd < 0 || lk(fd, F_SETLK, F_WRLCK, 50, 1) != 0) {
+            _exit(1);
+        }
+        post(to_parent[1]);
+        await(to_child[0]);
+        _exit(0);
+    }
+    await(to_parent[0]);
+    waiter_fd = open(KEY_DIR "/waited", O_RDWR);
+    waiter_tid = 0;
+    if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
+        return fail("the waiting thread across a move");
+    }
+    for (tries = 0; tries < 300 && !(waiter_tid != 0 && thread_sleeping(waiter_tid)); tries++) {
+        usleep(10000);
+    }
+    if (tries == 300) {
+        return fail("the waiting thread across a move was never seen asleep in F_SETLKW");
+    }
+    close(waiter_fd);
+    memset(block, 'w', sizeof(block));
+    grow = open(KEY_DIR "/waited", O_RDWR);
+    if (grow < 0 || write(grow, block, sizeof(block)) != (ssize_t)sizeof(block)) {
+        return fail("the file of the wait grown past its node");
+    }
+    close(grow);
+    post(to_child[1]);
+    if (pthread_join(waiter, NULL) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("the waiting thread and the holding child across a move");
+    }
+    if (waiter_rc != -1 || waiter_errno != EBADF) {
+        errno = waiter_errno;
+        return fail("a closed wait across a move did not fail with EBADF");
+    }
+    if (!byte_free_at(KEY_DIR "/waited", 50)) {
+        return fail("the lock of a closed wait whose file moved outlived the close");
+    }
+    close(beside);
+    close(to_child[0]);
+    close(to_child[1]);
+    close(to_parent[0]);
+    close(to_parent[1]);
+    unlink(KEY_DIR "/waited");
+    unlink(KEY_DIR "/after");
+    return 0;
+}
+
+/**
+ * The rows about which file a lock is on. The first three run whatever the
+ * others answer, since each says its own failure and a fault that breaks
+ * two of them is seen in both. The closed wait across a move runs only once
+ * a lock has been seen to move with its file: where it does not, the wait
+ * never meets the holder's unlock and would sleep for good.
+ */
+static int which_file(void)
+{
+    int failed = 0;
+
+    failed |= same_hash();
+    failed |= renamed();
+    if (moved() != 0) {
+        return 1;
+    }
+    failed |= closed_wait_moved();
+    return failed;
 }
 
 static int flocks(void)
@@ -487,11 +704,15 @@ int main(void)
     if (fd < 0 || write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
         return fail("the file");
     }
-    if (records(fd) || largest(fd) || waits(fd) || closed_wait() || flocks()) {
+    if (mkdir(KEY_DIR, 0755) != 0 && errno != EEXIST) {
+        return fail("the directory of the rows about which file a lock is on");
+    }
+    if (records(fd) || largest(fd) || waits(fd) || closed_wait() || which_file() || flocks()) {
         return 1;
     }
     close(fd);
     unlink(LOCK_PATH);
+    rmdir(KEY_DIR);
     printf("LOCKMUSL OK\n");
     return 0;
 }

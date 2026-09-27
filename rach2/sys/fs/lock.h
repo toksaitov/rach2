@@ -23,9 +23,11 @@
  * contract.
  */
 
-/* The file a lock is on: its mount and its inode number. A descriptor that
- * is not open on a file of a mounted type has the object it is open on in
- * `ino` and no mount. */
+/* The file a lock is on: its mount and a number that names the file while a
+ * description of it is open. A KRFFS file's number is the place of its node,
+ * which `lock_repoint` follows when a write moves the file; any other file's
+ * is its inode number at the open. A descriptor that is not open on a file
+ * of a mounted type has the object it is open on in `ino` and no mount. */
 struct lock_key {
     const void *mnt;
     uint64_t ino;
@@ -64,7 +66,9 @@ struct lock_req {
 /**
  * A record lock request `cmd` (LOCK_GET, LOCK_SET or LOCK_WAIT) on the file
  * `key`, for the calling process, or with `ofd` non-NULL for that open file
- * description. Returns 0 or -errno.
+ * description. Returns 0 or -errno. A wait goes on with a copy of `key`,
+ * which `lock_repoint` moves with the file's locks, so the caller's own key
+ * is not the file's after a wait the file moved in.
  */
 int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
                     struct lock_req *req);
@@ -84,5 +88,15 @@ void lock_close(const struct lock_key *key);
 
 /** Drop the locks `ofd` owns: its last reference is gone. */
 void lock_ofd_gone(const struct open_file *ofd);
+
+/**
+ * The file whose key is (`mnt`, `from`) is now (`mnt`, `to`): every lock on
+ * it, of every kind and owner, and the key of every wait for one move with
+ * it. A KRFFS file is keyed by the place of its node, and `vfs_repoint`
+ * calls this when a write moves the node, so that locks taken before the
+ * move meet those taken after it and a file made at the old place meets
+ * none of them.
+ */
+void lock_repoint(const void *mnt, uint64_t from, uint64_t to);
 
 #endif /* _LOCK_H_ */

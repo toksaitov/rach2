@@ -36,6 +36,7 @@
 #include "rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
+#include "fs/krffsmount.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
@@ -192,18 +193,36 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
 }
 
 /**
- * The key the locks of what `e` is open on are found by (lock.h): the mount
- * and the inode number its description recorded at open, for a file of a
- * mounted type, a FIFO among them; and for any other descriptor the object
- * it is open on, a pipe, a socket, a device or a terminal, with no mount, so
- * that two opens of one object share their locks as two opens of a file do.
+ * Whether `mnt` is KRFFS, the boot root or a mounted volume, whose node is
+ * the place of a file: a write that grows the file can move it, and
+ * `vfs_repoint` moves every holder of the place with it.
+ */
+static int mnt_is_krffs(const struct vfs_mount *mnt)
+{
+    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;
+}
+
+/**
+ * The key the locks of what `e` is open on are found by (lock.h), for a file
+ * of a mounted type, a FIFO among them, its mount and a number that names
+ * the file; and for any other descriptor the object it is open on, a pipe, a
+ * socket, a device or a terminal, with no mount, so that two opens of one
+ * object share their locks as two opens of a file do.
+ *
+ * A KRFFS file is named by its node as the description has it now, which is
+ * the file itself at any moment, and a write that moves the node moves the
+ * locks with it (`lock_repoint`). Its inode number would not do: the root
+ * numbers a file by its directory and the hash of its name, which a rename
+ * changes and two names can share, and a volume by the node's offset, which
+ * a move changes. A file of another type is named by the inode number its
+ * description recorded at the open.
  */
 static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 {
     key->mnt = NULL;
     if (e->ofd && e->ofd->vmnt) {
         key->mnt = e->ofd->vmnt;
-        key->ino = e->ofd->ino;
+        key->ino = mnt_is_krffs(e->ofd->vmnt) ? (uint64_t)(uintptr_t)e->ofd->vnode : e->ofd->ino;
     } else if (e->dev) {
         key->ino = (uintptr_t)e->dev;
     } else if (e->priv) {
@@ -6905,7 +6924,9 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
  * closing while the call has it. A POSIX lock gained after that is let go
  * with the process's others on the file and the call answers EBADF, as
  * Linux's does, so no lock outlives the close that should have dropped it.
- * An OFD lock belongs to the description, which the call still holds.
+ * The file's key is taken again for that, since a KRFFS file a write moved
+ * during the wait has a new one. An OFD lock belongs to the description,
+ * which the call still holds.
  */
 static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
 {
@@ -6940,6 +6961,7 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
     rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
     if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
         (entry->flags & FD_FLAG_CLOSING)) {
+        fd_lock_key(entry, &key);
         lock_close(&key);
         return -EBADF;
     }
