@@ -1484,15 +1484,17 @@ static int name_is(const char *name, const char *lit)
 }
 
 /**
- * The framebuffer descriptor, for an open of the name "fb": one owner at a
- * time, and the open switches the display to mode 13h.
+ * The framebuffer descriptor, for an open of the name "fb". One process at a
+ * time owns the framebuffer, by its thread group id, which the ioctl, the
+ * console read and the last close compare too, so any of its threads may use
+ * it; the open switches the display to mode 13h.
  */
 static int32_t open_framebuffer(void)
 {
     fd_entry_t *entry;
     int fd;
 
-    if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
+    if (fb_owner_pid != 0 && fb_owner_pid != current_proc->tgid) {
         return -EBUSY; /* Already in use */
     }
 
@@ -1508,7 +1510,7 @@ static int32_t open_framebuffer(void)
     entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
     vga_mode13h_enter();
-    fb_owner_pid = current_proc->pid;
+    fb_owner_pid = current_proc->tgid;
 
     kbd_clear_scancodes(); /* drop stale scancodes left by the shell */
 
@@ -2821,7 +2823,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
          * If the process owns the framebuffer (graphics mode), use non-blocking
          * raw scancode input for game controls, bypassing the line discipline.
          */
-        if (fb_owner_pid == current_proc->pid) {
+        if (fb_owner_pid == current_proc->tgid) {
             /* Non-blocking raw scancode read for games. kbd_read_scancodes
              * writes into the user buffer; range-check it first, then __force
              * strips the __user tag at the boundary. */
