@@ -10,13 +10,19 @@
 .Fn umask "mode_t mask"
 .Sh DESCRIPTION
 .Fn umask
-sets the calling process's file creation mask to
+sets the calling thread's file creation mask to
 .Fa mask
 and returns the previous mask.
-The threads of a process share the mask, as they share the working
-directory;
-.Xr fork 2
-gives the child a copy.
+Threads made by
+.Xr clone 2
+with
+.Dv CLONE_FS ,
+as glibc's and musl's
+.Fn pthread_create
+make them, share the mask, as they share the working directory; a thread
+made without it, and a child of
+.Xr fork 2 ,
+gets a copy.
 Only the low nine permission bits are kept:
 .Ql "mask & 0777" .
 .Pp
