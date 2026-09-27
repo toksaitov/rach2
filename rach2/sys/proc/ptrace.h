@@ -73,7 +73,8 @@ void ptrace_syscall_stop(isr_params_t *tf, uint32_t nr, int leaving);
 int ptrace_fork_attach(process_t *child, uint32_t flags);
 
 /** The stop a traced thread makes after its execve, whose thread id was
- * `old_tid` before: PTRACE_EVENT_EXEC with the options, else a SIGTRAP. */
+ * `old_tid` before: PTRACE_EVENT_EXEC with the options, else a SIGTRAP when
+ * the tracer did not attach with PTRACE_SEIZE, and else none. */
 void ptrace_exec(uint32_t old_tid);
 
 /** Tell the tracer of `p` of its end, the thread's, or, for a leader whose

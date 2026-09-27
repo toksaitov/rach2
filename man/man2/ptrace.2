@@ -102,8 +102,11 @@ Without
 .Dv PTRACE_O_TRACEEXEC ,
 an
 .Xr execve 2
-sends the tracee
-.Dv SIGTRAP .
+sends a tracee
+.Dv SIGTRAP
+unless it was attached with
+.Dv PTRACE_SEIZE ,
+as on Linux; a seized tracee then has no stop for the exec.
 .It syscall stop
 At the entry and at the exit of each system call, after
 .Dv PTRACE_SYSCALL ,
