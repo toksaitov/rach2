@@ -771,6 +771,17 @@ static int32_t sys_nanosleep(isr_params_t *params)
     return 0;
 }
 
+/** Whether real time, read to the microsecond as `clock_gettime` reads it,
+ * has reached `when`. */
+static int real_reached(const struct kernel_timespec *when)
+{
+    int64_t sec;
+    int64_t nsec;
+
+    get_current_time(&sec, &nsec);
+    return sec > when->tv_sec || (sec == when->tv_sec && nsec >= when->tv_nsec);
+}
+
 /**
  * Sleep until real time or time since boot, `kind`, reads `when` or later.
  *
@@ -778,7 +789,9 @@ static int32_t sys_nanosleep(isr_params_t *params)
  * `rtc_boot_epoch`, plus the time since boot, and time since boot at a tick
  * is that tick's count in hundredths of a second. So the sleep ends at the
  * first tick whose count reaches `when`, and a program that reads the clock
- * then reads `when` or later. The tick count and the time since boot are read
+ * then reads `when` or later. Real time is read to the microsecond, within
+ * the tick, so a time it has reached returns at once, before the deadline
+ * is rounded up to a tick. The tick count and the time since boot are read
  * in one masked step, since the tick changes both. A deadline further than
  * `sleep_until` can wait for, about 248 days, is waited for in pieces, and
  * the clock read again after each. Returns 0, or -EINTR when a signal the
@@ -787,13 +800,19 @@ static int32_t sys_nanosleep(isr_params_t *params)
 static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_timespec *when)
 {
     for (;;) {
-        uint32_t flags = kirq_save();
-        uint64_t now = (uint64_t)kernel_uptime_seconds * 100u + kernel_second_ticks;
-        uint32_t base = kernel_ticks;
+        uint32_t flags;
+        uint64_t now;
+        uint32_t base;
         int64_t sec = when->tv_sec;
         uint64_t due;
         int32_t rc;
 
+        if (kind == KCLOCK_REAL && real_reached(when)) {
+            return 0;
+        }
+        flags = kirq_save();
+        now = (uint64_t)kernel_uptime_seconds * 100u + kernel_second_ticks;
+        base = kernel_ticks;
         kirq_restore(flags);
         if (kind == KCLOCK_REAL) {
             sec -= rtc_boot_epoch();

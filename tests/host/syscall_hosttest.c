@@ -150,11 +150,16 @@ void kirq_restore(uint32_t flags)
     }
 }
 
-/** Supply a distinct real-time value to check clock selection. */
+/* The real time the model reads, a distinct value to check clock selection
+ * unless a row sets another. */
+static int64_t real_sec = 123;
+static int64_t real_nsec = 450000000;
+
+/** Supply the model's real time. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    *seconds = 123;
-    *nanoseconds = 450000000;
+    *seconds = real_sec;
+    *nanoseconds = real_nsec;
 }
 
 /** The real time at boot, which coarse real time and a real-time deadline
@@ -1107,6 +1112,19 @@ static void clock_sleeps(void)
     uptime_at(1000);
     pending = 1;
     CHECK(clock_sleep_call(&p) == 0 && sleeps == 0, "a real time before the boot returns at once");
+    real_sec = 1000010;
+    real_nsec = 5000000;
+    ask_clock_sleep(&p, 0, 1, 1000010, 4000000);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == 0 && sleeps == 0,
+          "a real time the clock passed within the tick returns at once");
+    ask_clock_sleep(&p, 0, 1, 1000010, 8000000);
+    uptime_at(1000);
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1001,
+          "a real time still ahead within the tick is reached at the next tick");
+    real_sec = 123;
+    real_nsec = 450000000;
     ask_clock_sleep(&p, 1, 1, 10, 35000000);
     uptime_at(1000);
     pending = 1;

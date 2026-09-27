@@ -66,6 +66,9 @@ With
 .Fa req
 is a time of the clock: the call returns at the first tick at which the
 clock reads that time or later, and at once for a time already past.
+Real time is read to the microsecond, so a time of it that has passed
+within the tick in progress returns at once, though its tick has not yet
+come.
 .Fa rem
 is not written, and other flag bits are ignored.
 .Pp
