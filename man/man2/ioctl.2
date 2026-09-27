@@ -39,7 +39,7 @@ A descriptor with device operations handles its remaining requests through
 those operations; the framebuffer and console handle their private requests.
 An unsupported request returns
 .Er ENOTTY .
-The mouse has no ioctl requests.
+The mouse has no requests of its own.
 .Ss Terminal requests
 The console and pseudo-terminal slaves accept:
 .Bl -tag -width "TIOCGWINSZ"
