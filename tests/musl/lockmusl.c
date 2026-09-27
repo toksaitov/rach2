@@ -4,22 +4,23 @@
  * A child's write lock over bytes 10 to 29 makes the parent's lock over
  * byte 25 fail with EAGAIN, while a lock beside it succeeds; F_GETLK reports
  * the child's pid and range. The child's unlock of bytes 15 to 19 splits its
- * lock in two, and its close of another descriptor of the file drops what is
- * left. A child's locks of the largest offset and of every byte before it
- * join into one F_GETLK reports with a length of 0. F_SETLKW waits until the
- * holder unlocks: the child that asks is seen asleep, with nothing taken,
- * before the parent unlocks. Two processes that each wait for the other's
- * lock, the parent asking only once the child is seen asleep in its wait: one
- * of the two waits fails with EDEADLK and the other takes the lock, and
- * neither fails in any other way. A thread's F_SETLKW whose descriptor
- * another thread closes during the wait fails with EBADF when the holder lets
- * go, and leaves the byte free. A flock
- * LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
- * EWOULDBLOCK, and a dup shares the lock. A description's lock stays through
- * the close of one of its two descriptors, as another open's LOCK_EX|LOCK_NB
- * finds, and goes at the last close. An open file description lock conflicts
- * with a second open in the same process, and with that process's POSIX
- * lock.
+ * lock in two: the parent's lock on either side fails, and F_GETLK reports
+ * the child's pid with bytes 10 to 14 and with bytes 20 to 29. The child's
+ * close of another descriptor of the file drops what is left. A child's locks
+ * of the largest offset and of every byte before it join into one F_GETLK
+ * reports with a length of 0. F_SETLKW waits until the holder unlocks: the
+ * child that asks is seen asleep, with nothing taken, before the parent
+ * unlocks. Two processes that each wait for the other's lock, the parent
+ * asking only once the child is seen asleep in its wait: one of the two waits
+ * fails with EDEADLK and the other takes the lock, and neither fails in any
+ * other way. A thread's F_SETLKW whose descriptor another thread closes
+ * during the wait fails with EBADF when the holder lets go, and leaves the
+ * byte free. A flock LOCK_EX on one open makes LOCK_EX|LOCK_NB on another
+ * fail with EWOULDBLOCK, and a dup shares the lock. A description's lock
+ * stays through the close of one of its two descriptors, as another open's
+ * LOCK_EX|LOCK_NB finds, and goes at the last close. An open file description
+ * lock conflicts with a second open in the same process, and with that
+ * process's POSIX lock.
  *
  * Prints "LOCKMUSL OK" on success and "LOCKMUSL FAIL (detail)" otherwise.
  */
@@ -88,6 +89,27 @@ static int sleeping(pid_t pid)
     return state && state[1] == ' ' && state[2] == 'S';
 }
 
+/**
+ * Whether the parent's write lock on byte `at` of `fd` fails, with EAGAIN or
+ * EACCES, because child `pid` holds the `len` bytes from `start`, as F_GETLK
+ * reports them.
+ */
+static int held_by(int fd, pid_t pid, off_t at, off_t start, off_t len)
+{
+    struct flock q;
+
+    if (lk(fd, F_SETLK, F_WRLCK, at, 1) != -1 || (errno != EAGAIN && errno != EACCES)) {
+        return 0;
+    }
+    memset(&q, 0, sizeof(q));
+    q.l_type = F_WRLCK;
+    q.l_whence = SEEK_SET;
+    q.l_start = at;
+    q.l_len = 1;
+    return fcntl(fd, F_GETLK, &q) == 0 && q.l_type == F_WRLCK && q.l_pid == pid &&
+           q.l_start == start && q.l_len == len;
+}
+
 /** Whether process `pid` is seen asleep within 3 s. */
 static int seen_asleep(pid_t pid)
 {
@@ -153,8 +175,8 @@ static int records(int fd)
     if (lk(fd, F_SETLK, F_WRLCK, 15, 5) != 0 || lk(fd, F_SETLK, F_UNLCK, 15, 5) != 0) {
         return fail("the middle the child unlocked");
     }
-    if (lk(fd, F_SETLK, F_WRLCK, 12, 1) != -1) {
-        return fail("the child's unlock of the middle took the rest");
+    if (!held_by(fd, pid, 12, 10, 5) || !held_by(fd, pid, 25, 20, 10)) {
+        return fail("the child's unlock of the middle did not leave bytes 10 to 14 and 20 to 29");
     }
     post(to_child[1]);
     await(to_parent[0]);
