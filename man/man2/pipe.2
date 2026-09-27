@@ -53,7 +53,9 @@ writes wait while it is full and a reader remains open.
 These waits allow other processes to run.
 A signal interrupting a wait produces
 .Er EINTR
-if no bytes have been transferred.
+if no bytes have been transferred, and the call is restarted instead, as
+in Linux, when the signal runs no handler or its handler has
+.Dv SA_RESTART .
 A read returns at most the bytes available when its first transfer starts,
 up to the requested count.
 A write that stops after transferring bytes returns that count.
