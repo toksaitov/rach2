@@ -521,9 +521,9 @@ int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
  * Read a POSIX clock (clock_gettime, syscall 265, 32-bit timespec).
  *
  * EBX = clockid, ECX = struct timespec*. The clocks are `clock_resolve`'s and
- * the readings `clock_read`'s. musl and glibc fall back here from
- * clock_gettime64 (403), which this kernel does not provide. An unknown clock
- * is refused before the timespec is written, as Linux refuses it.
+ * the readings `clock_read`'s. clock_gettime64 (403) reads the same with 64-bit
+ * fields. An unknown clock is refused before the timespec is written, as
+ * Linux refuses it.
  */
 static int32_t sys_clock_gettime(isr_params_t *params)
 {
@@ -537,6 +537,50 @@ static int32_t sys_clock_gettime(isr_params_t *params)
     }
     clock_read(&c, &kts);
     if (copy_to_user(ts, &kts, sizeof(kts)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/* The timespec of the time64 calls: seconds and nanoseconds of 64 bits. */
+struct kernel_timespec64 {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
+/**
+ * clock_gettime64 (403): clock_gettime with the 64-bit timespec GNU libc and
+ * musl try first, so a clock read is one call and not a refused call and a
+ * second. The seconds are the ones the 32-bit call reports.
+ */
+static int32_t sys_clock_gettime64(isr_params_t *params)
+{
+    struct kernel_timespec64 t;
+    int64_t sec;
+    int32_t nsec;
+    int32_t rc = clock_now((int32_t)params->ebx, &sec, &nsec);
+
+    if (rc != 0) {
+        return rc;
+    }
+    t.tv_sec = sec;
+    t.tv_nsec = nsec;
+    return copy_to_user((void __user *)params->ecx, &t, sizeof(t)) == 0 ? 0 : -EFAULT;
+}
+
+/** clock_getres_time64 (406): clock_getres with the 64-bit timespec. */
+static int32_t sys_clock_getres_time64(isr_params_t *params)
+{
+    struct kernel_timespec64 t;
+    struct kclock c;
+    int32_t rc = clock_resolve((int32_t)params->ebx, &c);
+
+    if (rc != 0) {
+        return rc;
+    }
+    t.tv_sec = 0;
+    t.tv_nsec = c.kind == KCLOCK_REAL ? 1000 : 10000000;
+    if (params->ecx && copy_to_user((void __user *)params->ecx, &t, sizeof(t)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -2097,6 +2141,15 @@ void init_syscall(void)
     _syscall_table[SYS_PTRACE] = sys_ptrace;
     _syscall_table[SYS_PERSONALITY] = sys_personality;
     _syscall_table[SYS_GETCPU] = sys_getcpu;
+    _syscall_table[SYS_RT_SIGTIMEDWAIT] = sys_rt_sigtimedwait;
+    _syscall_table[SYS_MLOCK] = sys_mlock;
+    _syscall_table[SYS_MUNLOCK] = sys_munlock;
+    _syscall_table[SYS_MLOCKALL] = sys_mlockall;
+    _syscall_table[SYS_MUNLOCKALL] = sys_munlockall;
+    _syscall_table[SYS_MLOCK2] = sys_mlock2;
+    _syscall_table[SYS_MINCORE] = sys_mincore;
+    _syscall_table[SYS_CLOCK_GETTIME64] = sys_clock_gettime64;
+    _syscall_table[SYS_CLOCK_GETRES64] = sys_clock_getres_time64;
     _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     /* musl's exit() issues exit_group(); for a single-threaded process it is

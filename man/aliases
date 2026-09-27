@@ -37,7 +37,9 @@ chrt 1 busybox-util-linux
 cksum 1 busybox-coreutils
 clear 1 busybox-console-tools
 clock_getres 2 gettimeofday
+clock_getres_time64 2 gettimeofday
 clock_gettime 2 gettimeofday
+clock_gettime64 2 gettimeofday
 clock_nanosleep 2 nanosleep
 clone 2 fork
 close 2 open
@@ -198,6 +200,7 @@ md5sum 1 busybox-coreutils
 mesg 1 busybox-util-linux
 microcom 1 busybox-miscutils
 mim 1 busybox-miscutils
+mincore 2 brk
 mkdir 1 busybox-coreutils
 mkdirat 2 mkdir
 mkfifo 1 busybox-coreutils
@@ -206,6 +209,9 @@ mknod 1 busybox-coreutils
 mkpasswd 8 busybox-loginutils
 mkswap 1 busybox-util-linux
 mktemp 1 busybox-coreutils
+mlock 2 brk
+mlock2 2 brk
+mlockall 2 brk
 mmap2 2 brk
 modinfo 8 busybox-modutils
 modprobe 8 busybox-modutils
@@ -214,6 +220,8 @@ mountpoint 1 busybox-util-linux
 mprotect 2 brk
 mpstat 1 busybox-procps
 mt 1 busybox-miscutils
+munlock 2 brk
+munlockall 2 brk
 munmap 2 brk
 mv 1 busybox-coreutils
 netstat 1 busybox-networking
@@ -290,6 +298,7 @@ rt_sigpending 2 sigaction
 rt_sigprocmask 2 sigaction
 rt_sigreturn 2 sigaction
 rt_sigsuspend 2 sigaction
+rt_sigtimedwait 2 sigaction
 rtcwake 1 busybox-util-linux
 run-parts 1 busybox-debianutils
 runlevel 1 busybox-miscutils

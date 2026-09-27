@@ -13,6 +13,7 @@
 .Nm rt_sigpending ,
 .Nm sigreturn ,
 .Nm rt_sigreturn ,
+.Nm rt_sigtimedwait ,
 .Nm pause
 .Nd control signal dispositions and masks
 .Sh SYNOPSIS
@@ -255,6 +256,29 @@ return from the call.
 .Fn sigpending
 reports the signals pending for the calling thread or its process while
 the thread blocks them.
+.Pp
+.Nm rt_sigtimedwait ,
+number 177, which
+.Fn sigwait ,
+.Fn sigwaitinfo
+and
+.Fn sigtimedwait
+make, waits for a signal of a set to be pending for the thread or its
+process and takes it off its pending set without running its handler:
+the lowest first, and the thread's own before the process's.
+Its siginfo is stored unless the pointer is null, and its number is
+returned.
+While the call waits the signals of the set count as unblocked, so a
+signal sent to the process wakes this thread.
+A timeout, rounded up to whole 10 ms ticks, ends the wait with
+.Er EAGAIN ,
+one of zero polls, and another signal the thread acts on ends it with
+.Er EINTR ;
+the call is not restarted.
+.Dv SIGKILL
+and
+.Dv SIGSTOP
+cannot be waited for.
 .Ss Alternate stack
 .Fn sigaltstack
 sets the stack a handler with

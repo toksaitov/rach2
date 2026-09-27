@@ -107,6 +107,15 @@
 #define SYS_PTRACE          26
 #define SYS_PERSONALITY     136
 #define SYS_GETCPU          318
+#define SYS_MLOCK           150
+#define SYS_MUNLOCK         151
+#define SYS_MLOCKALL        152
+#define SYS_MUNLOCKALL      153
+#define SYS_RT_SIGTIMEDWAIT 177
+#define SYS_MINCORE         218
+#define SYS_MLOCK2          376
+#define SYS_CLOCK_GETTIME64 403
+#define SYS_CLOCK_GETRES64  406
 #define SYS_SET_TID_ADDRESS 258
 #define SYS_SET_ROBUST_LIST 311
 #define SYS_GET_ROBUST_LIST 312

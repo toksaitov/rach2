@@ -170,6 +170,20 @@ int32_t sys_exit_group(isr_params_t *params);
 
 int32_t sys_getcpu(isr_params_t *params);
 
+int32_t sys_rt_sigtimedwait(isr_params_t *params);
+
+int32_t sys_mlock(isr_params_t *params);
+
+int32_t sys_munlock(isr_params_t *params);
+
+int32_t sys_mlock2(isr_params_t *params);
+
+int32_t sys_mlockall(isr_params_t *params);
+
+int32_t sys_munlockall(isr_params_t *params);
+
+int32_t sys_mincore(isr_params_t *params);
+
 int32_t sys_personality(isr_params_t *params);
 
 int32_t sys_waitpid(isr_params_t *params);

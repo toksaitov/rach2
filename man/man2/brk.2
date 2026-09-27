@@ -8,7 +8,13 @@
 .Nm mprotect ,
 .Nm mremap ,
 .Nm madvise ,
-.Nm msync
+.Nm msync ,
+.Nm mlock ,
+.Nm munlock ,
+.Nm mlock2 ,
+.Nm mlockall ,
+.Nm munlockall ,
+.Nm mincore
 .Nd change the heap, memory mappings and their protection
 .Sh SYNOPSIS
 .Fd "#define _BSD_SOURCE"
@@ -31,6 +37,16 @@
 .Fn madvise "void *addr" "size_t length" "int advice"
 .Ft int
 .Fn msync "void *addr" "size_t length" "int flags"
+.Ft int
+.Fn mlock "const void *addr" "size_t length"
+.Ft int
+.Fn munlock "const void *addr" "size_t length"
+.Ft int
+.Fn mlockall "int flags"
+.Ft int
+.Fn munlockall "void"
+.Ft int
+.Fn mincore "void *addr" "size_t length" "unsigned char *vec"
 .Sh DESCRIPTION
 These kernel calls change the process's virtual memory areas (VMAs).
 Pages are 4096 bytes.
@@ -240,6 +256,34 @@ kernel call 144, has nothing to write: a shared mapping here maps the
 file's pages in memory, and a mapping of a disk file is private or
 read-only.
 It checks its arguments and the range.
+.Ss Locking and residency
+There is no swap, so every page a process has stays in memory.
+.Fn mlock ,
+.Fn munlock
+and
+.Fn mlock2 ,
+calls 150, 151 and 376, check that mappings cover the range, with
+.Er ENOMEM
+for a gap, and
+.Fn mlock2
+that its flags are 0 or
+.Dv MLOCK_ONFAULT ;
+they change nothing.
+.Fn mlockall ,
+call 152, takes
+.Dv MCL_CURRENT ,
+.Dv MCL_FUTURE
+and
+.Dv MCL_ONFAULT ,
+not the last alone, and
+.Fn munlockall ,
+call 153, takes nothing; neither changes anything.
+.Dv RLIMIT_MEMLOCK
+is not kept.
+.Pp
+.Fn mincore ,
+call 218, stores a byte for each page of a page-aligned range the
+mappings cover: 1 for a page in memory and 0 for one not yet brought in.
 .Ss Limits
 The soft
 .Dv RLIMIT_AS

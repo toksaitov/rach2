@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 194 calls.
+The kernel registers the following 203 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -102,6 +102,10 @@ The kernel registers the following 194 calls.
 .It 146 Ta Xr writev 2
 .It 147 Ta Xr getsid 2
 .It 148 Ta Xr fdatasync 2
+.It 150 Ta Xr mlock 2
+.It 151 Ta Xr munlock 2
+.It 152 Ta Xr mlockall 2
+.It 153 Ta Xr munlockall 2
 .It 154 Ta Xr sched_setparam 2
 .It 155 Ta Xr sched_getparam 2
 .It 156 Ta Xr sched_setscheduler 2
@@ -118,6 +122,7 @@ The kernel registers the following 194 calls.
 .It 174 Ta Xr rt_sigaction 2
 .It 175 Ta Xr rt_sigprocmask 2
 .It 176 Ta Xr rt_sigpending 2
+.It 177 Ta Xr rt_sigtimedwait 2
 .It 179 Ta Xr rt_sigsuspend 2
 .It 180 Ta Xr pread64 2
 .It 181 Ta Xr pwrite64 2
@@ -149,6 +154,7 @@ The kernel registers the following 194 calls.
 .It 212 Ta Xr chown32 2
 .It 213 Ta Xr setuid32 2
 .It 214 Ta Xr setgid32 2
+.It 218 Ta Xr mincore 2
 .It 219 Ta Xr madvise 2
 .It 220 Ta Xr getdents64 2
 .It 221 Ta Xr fcntl64 2
@@ -216,6 +222,9 @@ The kernel registers the following 194 calls.
 .It 371 Ta Xr recvfrom 2
 .It 372 Ta Xr recvmsg 2
 .It 373 Ta Xr shutdown 2
+.It 376 Ta Xr mlock2 2
+.It 403 Ta Xr clock_gettime64 2
+.It 406 Ta Xr clock_getres_time64 2
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2
 .It 441 Ta Xr epoll_pwait2 2

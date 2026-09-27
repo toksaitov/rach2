@@ -233,8 +233,10 @@ about 68 years since boot for monotonic time.
 musl and glibc first try
 .Fn clock_gettime64
 .Pq system call 403 ,
-which the kernel does not implement, then convert the result of the
-32-bit call into their public timespec.
+which reads the same clock into a timespec with 64-bit fields, as
+.Fn clock_getres_time64
+.Pq system call 406
+reads the resolution; their seconds are those of the 32-bit calls.
 musl calls system call 266 for
 .Fn clock_getres
 directly.

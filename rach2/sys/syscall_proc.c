@@ -3359,6 +3359,105 @@ void deliver_signals(isr_params_t *tf)
     }
 }
 
+/**
+ * Wait, as rt_sigtimedwait does, for a signal of `set` to be pending for the
+ * current thread or its process until the tick `deadline` when `timed`, and
+ * take it: its siginfo goes to `uinfo` unless null, and its number is
+ * returned. -EINTR for another signal the thread acts on, -EAGAIN at the
+ * deadline, -EFAULT.
+ */
+static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __user *uinfo)
+{
+    uint32_t flags = sig_irq_save();
+
+    for (;;) {
+        uint64_t hit = sig_pending_now() & set;
+
+        if (hit) {
+            struct k_siginfo info;
+            uint8_t buf[128];
+            int signo = sig_dequeue(hit, &info);
+
+            current_proc->wakeup_tick = 0;
+            sig_irq_restore(flags);
+            if (uinfo) {
+                sigframe_fill_siginfo(buf, signo, &info);
+                if (copy_to_user(uinfo, buf, sizeof(buf)) != 0) {
+                    return -EFAULT;
+                }
+            }
+            return signo;
+        }
+        if (signal_pending() || (timed && (int32_t)(kernel_ticks - deadline) >= 0)) {
+            current_proc->wakeup_tick = 0;
+            sig_irq_restore(flags);
+            return signal_pending() ? -EINTR : -EAGAIN;
+        }
+        current_proc->wakeup_tick = timed ? (deadline != 0 ? deadline : 1u) : 0;
+        current_proc->state = PROC_BLOCKED;
+        sig_irq_restore(flags);
+        schedule();
+        flags = sig_irq_save();
+        if (current_proc->state == PROC_BLOCKED) {
+            idle_wait_irq_off();
+        }
+        current_proc->state = PROC_RUNNING;
+    }
+}
+
+/**
+ * Wait for a signal of a set and take it (rt_sigtimedwait(2), syscall 177),
+ * which sigwait, sigwaitinfo and sigtimedwait make.
+ *
+ * EBX = const sigset_t *set, ECX = siginfo_t *info or NULL, EDX = const
+ * struct timespec *timeout or NULL, ESI = sigsetsize, which must be 8. The
+ * first signal of `set` pending for the thread or its process, lowest first
+ * and the thread's own before the process's, is taken off its pending set
+ * without its handler running. While the call waits the signals of `set`
+ * count as unblocked, as Linux counts them, so a signal sent to the process
+ * wakes this thread. The timeout is rounded up to whole 10 ms ticks, and one
+ * of zero polls; SIGKILL and SIGSTOP cannot be waited for.
+ */
+int32_t sys_rt_sigtimedwait(isr_params_t *params)
+{
+    struct kernel_timespec ts;
+    uint64_t set;
+    uint64_t saved;
+    uint32_t deadline = 0;
+    int timed = 0;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (params->esi != sizeof(uint64_t)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&set, (const void __user *)params->ebx, sizeof(set)) != 0) {
+        return -EFAULT;
+    }
+    if (params->edx) {
+        uint32_t ticks;
+
+        if (copy_from_user(&ts, (const void __user *)params->edx, sizeof(ts)) != 0) {
+            return -EFAULT;
+        }
+        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
+            return -EINVAL;
+        }
+        ticks = (uint32_t)(ts.tv_sec > 21474836 ? 21474836 : ts.tv_sec) * 100u +
+                ((uint32_t)ts.tv_nsec + 9999999u) / 10000000u;
+        deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+        timed = 1;
+    }
+    set &= ~(uint64_t)KSIG_UNCATCHABLE;
+    saved = current_proc->sig_blocked;
+    current_proc->sig_blocked &= ~set;
+    rc = sigwait_set(set, timed, deadline, (void __user *)params->ecx);
+    current_proc->sig_blocked = saved;
+    return rc;
+}
+
 /*
  * sys_getpid - return the calling process's PID (getpid(2)), which is its
  * thread group's id.
@@ -4892,6 +4991,106 @@ int32_t sys_sched_getaffinity(isr_params_t *params)
         return -EFAULT;
     }
     return (int32_t)CPU_MASK_BYTES;
+}
+
+/** Whether [`addr`, `addr` + `len`) is a range the current process's
+ * regions cover without a gap, as mlock asks: -EINVAL for an address past
+ * the end of the address space, -ENOMEM for a gap, 0. */
+static int32_t lock_range(uint32_t addr, uint32_t len)
+{
+    uint32_t start = addr & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t end = addr + len;
+
+    if (end < addr) {
+        return -EINVAL;
+    }
+    end = (end + PAGE_SIZE - 1) & ~(uint32_t)(PAGE_SIZE - 1);
+    if (end < start) {
+        return -EINVAL;
+    }
+    return vm_covered(&current_proc->mm->vm, start, end) == end - start ? 0 : -ENOMEM;
+}
+
+/**
+ * mlock (150), munlock (151) and mlock2 (376): lock or unlock the pages of a
+ * range, which must be mapped without a gap. There is no swap, so every page
+ * already stays in memory; the calls check the range, and mlock2 its flags,
+ * 0 or MLOCK_ONFAULT, and change nothing. RLIMIT_MEMLOCK is not kept.
+ */
+int32_t sys_mlock(isr_params_t *params)
+{
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    return lock_range(params->ebx, params->ecx);
+}
+
+int32_t sys_munlock(isr_params_t *params)
+{
+    return sys_mlock(params);
+}
+
+int32_t sys_mlock2(isr_params_t *params)
+{
+    if (params->edx & ~1u) {
+        return -EINVAL;
+    }
+    return sys_mlock(params);
+}
+
+/**
+ * mlockall (152) and munlockall (153): lock or unlock every page, which the
+ * machine keeps in memory anyway; mlockall's flags must be MCL_CURRENT,
+ * MCL_FUTURE and MCL_ONFAULT, not MCL_ONFAULT alone, and not none.
+ */
+int32_t sys_mlockall(isr_params_t *params)
+{
+    uint32_t flags = params->ebx;
+
+    if (flags == 0 || (flags & ~7u) || flags == 4u) {
+        return -EINVAL;
+    }
+    return 0;
+}
+
+int32_t sys_munlockall(isr_params_t *params)
+{
+    (void)params;
+    return 0;
+}
+
+/**
+ * mincore (218): EBX = a page-aligned address, ECX = a length, EDX = a byte
+ * for each page, which gets 1 when the page is in memory and 0 when it has
+ * not been brought in yet. -EINVAL for an address not page-aligned, -ENOMEM
+ * for a range with a gap, -EFAULT.
+ */
+int32_t sys_mincore(isr_params_t *params)
+{
+    uint32_t addr = params->ebx;
+    uint32_t pages;
+    uint32_t i;
+    int32_t rc;
+
+    if (!current_proc || !current_proc->mm) {
+        return -ESRCH;
+    }
+    if (addr & (PAGE_SIZE - 1)) {
+        return -EINVAL;
+    }
+    rc = lock_range(addr, params->ecx);
+    if (rc != 0) {
+        return rc;
+    }
+    pages = (params->ecx + PAGE_SIZE - 1) / PAGE_SIZE;
+    for (i = 0; i < pages; i++) {
+        uint8_t in = paging_user_phys(current_proc->page_dir, addr + i * PAGE_SIZE) != 0;
+
+        if (copy_to_user((void __user *)(params->edx + i), &in, 1) != 0) {
+            return -EFAULT;
+        }
+    }
+    return 0;
 }
 
 /**
