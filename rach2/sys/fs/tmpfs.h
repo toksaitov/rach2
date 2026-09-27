@@ -21,9 +21,9 @@ struct shmem;
 struct shmem *tmpfs_shmem(void *node);
 
 /* The seals of a tmpfs file, fcntl's F_SEAL_ bits: sealing refused, and a
- * smaller size, a larger size, a write or a new writable shared mapping, and
- * a change of the execute bits refused. Every file starts with SEAL alone
- * but a memfd made with MFD_ALLOW_SEALING. */
+ * smaller size, a larger size, a write, and a change of the execute bits
+ * refused. Every file starts with SEAL alone but a memfd made with
+ * MFD_ALLOW_SEALING. */
 #define TMPFS_SEAL_SEAL         0x01u
 #define TMPFS_SEAL_SHRINK       0x02u
 #define TMPFS_SEAL_GROW         0x04u
@@ -41,8 +41,10 @@ struct shmem *tmpfs_shmem(void *node);
 int tmpfs_memfd(struct vfs_mount *mnt, const char *name, uint32_t mode, uint32_t seals,
                 void **node);
 
-/** The seals of the tmpfs file `node`. A shared mapping that may write is
- * refused for a file with TMPFS_SEAL_WRITE or TMPFS_SEAL_FUTURE_WRITE. */
+/** The seals of the tmpfs file `node`. They do not reach a shared mapping:
+ * mmap(2) does not refuse a writable shared mapping of a file with
+ * TMPFS_SEAL_WRITE or TMPFS_SEAL_FUTURE_WRITE, and one made before the seal
+ * goes on writing, where Linux refuses both. */
 uint32_t tmpfs_seals(void *node);
 
 /**
