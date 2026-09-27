@@ -49,6 +49,8 @@ The syscall contracts are:
 * `madvise` (219) with `MADV_DONTNEED` or `MADV_FREE` releases the range's resident frames; a later access backs the page again as a first access does. Other advice is accepted and ignored, but `MADV_REMOVE` and `MADV_HWPOISON`.
 * `msync` (144) checks its arguments and returns 0: a shared mapping maps the file's pages in memory, and nothing else is written back.
 
+`madvise` and `msync` judge the length as it is given, before rounding it up to pages: a range that runs past user space is `EINVAL`, a length within a page of 4 GiB among them, which rounds up to 0 and would pass for an empty range.
+
 VMA allocation does not reserve physical frames. If a later user fault cannot allocate a frame, the unresolved fault terminates that process with `SIGSEGV`. A kernel prefault reports failure to its caller instead.
 
 ## Page faults

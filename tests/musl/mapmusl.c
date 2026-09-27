@@ -15,7 +15,8 @@
  * its bytes, and shrinks one, and refuses an old length that would wrap
  * past the end of memory, leaving the mapping; a fixed mremap that shrinks
  * a mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
- * gives a private anonymous mapping zero pages again.
+ * gives a private anonymous mapping zero pages again, and madvise and msync
+ * refuse a length that would round up to 0.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -149,9 +150,9 @@ static int shared(void)
 }
 
 /* A shared mapping of a file opened read-only may never be written:
-   mprotect refuses write with EACCES, where it once let stores reach the
-   file. A private mapping of the same descriptor may be written, its
-   stores its own. */
+   mprotect refuses write with EACCES, since stores through the mapping
+   would reach the file. A private mapping of the same descriptor may be
+   written, its stores its own. */
 static int readonly_shared(void)
 {
     char *ro, *priv;
@@ -184,9 +185,9 @@ static int readonly_shared(void)
     return 0;
 }
 
-/* The page offset of a raw mmap2. Shared anonymous memory ignores it, where
-   an offset of 2^31 pages once doubled the length of the memory's table of
-   pages until the length wrapped to zero and the first touch never ended.
+/* The page offset of a raw mmap2. Shared anonymous memory ignores it; an
+   offset of 2^31 pages would double the length of the memory's table of
+   pages until the length wrapped to zero, and the first touch would not end.
    A file's offset whose last page would not fit in 32 bits is EOVERFLOW,
    and the page of a file in memory 2^31 pages in, past the 1 GiB such a
    file holds, is never backed: a child that touches it dies of SIGSEGV. */
@@ -268,6 +269,12 @@ static int remaps(void)
     m[PAGE] = 'z';
     if (madvise(m, PAGE, MADV_DONTNEED) != 0 || m[0] != 0 || m[PAGE] != 'z') {
         return fail("MADV_DONTNEED");
+    }
+    if (madvise(m, 0xFFFFFFFFu, MADV_DONTNEED) != -1 || errno != EINVAL) {
+        return fail("madvise took a length that rounds up to 0 for an empty range");
+    }
+    if (msync(m, 0xFFFFFFFFu, MS_SYNC) != -1 || errno != EINVAL) {
+        return fail("msync took a length that rounds up to 0 for an empty range");
     }
     munmap(m, 2 * PAGE);
     return 0;

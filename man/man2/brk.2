@@ -283,6 +283,12 @@ kernel call 144, has nothing to write: a shared mapping here maps the
 file's pages in memory, and a mapping of a disk file is private or
 read-only.
 It checks its arguments and the range.
+.Pp
+Both calls take a page-aligned address and judge the length as it is
+given, before rounding it up to a page boundary: a range that runs past
+.Ql 0xC0000000
+is refused, a length within a page of 4 GiB among them, which rounds up
+to 0.
 .Ss Locking and residency
 There is no swap, so every page a process has stays in memory.
 .Fn mlock ,
@@ -418,7 +424,10 @@ for
 an unknown flag, or both
 .Dv MS_ASYNC
 and
-.Dv MS_SYNC .
+.Dv MS_SYNC ;
+for either, an address not page-aligned, or a range that runs past
+.Ql 0xC0000000 ,
+judged by the length before it is rounded up.
 Musl also rejects an
 .Fn mmap
 offset that is negative, not page-aligned, or not representable as the
@@ -451,8 +460,9 @@ A page of an
 .Fn madvise
 or
 .Fn msync
-range belongs to no VMA, or the range lies outside user space, or the
-split cannot obtain its entries;
+range belongs to no VMA, an
+.Fn mprotect
+range lies outside user space, or its split cannot obtain its entries;
 .Fn mremap
 cannot grow a mapping in place without
 .Dv MREMAP_MAYMOVE ,

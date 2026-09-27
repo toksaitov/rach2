@@ -5210,9 +5210,9 @@ static int32_t remap_fixed(vm_space_t *vm, uint32_t addr, uint32_t old_len, uint
  * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside
  * user space and a new length that fits in it. The lengths are judged as
  * they are given, before they are rounded up to pages, so that neither
- * range can wrap past the end of the address space: an old length near
- * 4 GiB once made the old range seem to end below its start, and a fixed
- * move then removed its own source.
+ * range can wrap past the end of the address space: with an old length
+ * near 4 GiB the old range would seem to end below its start, and a fixed
+ * move onto its own address would remove its source.
  */
 static int remap_args_valid(uint32_t addr, uint32_t old_len, uint32_t new_len, uint32_t flags)
 {
@@ -5311,21 +5311,24 @@ int32_t sys_mremap(isr_params_t *params)
  * reads the file again, and a shared page reads what the shared memory
  * holds. The other advice Linux has is accepted and changes nothing, but
  * MADV_REMOVE and MADV_HWPOISON, which are refused with EINVAL. A range with
- * a page in no region is ENOMEM, as in Linux.
+ * a page in no region is ENOMEM, as in Linux. A range that runs past user
+ * space is EINVAL, judged by the length as given: a length within a page of
+ * 4 GiB rounds up to 0, which would pass for an empty range.
  */
 int32_t sys_madvise(isr_params_t *params)
 {
     uint32_t addr = params->ebx;
-    uint32_t len = PAGE_UP(params->ecx);
     uint32_t advice = params->edx;
+    uint32_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX - len || advice == MADV_REMOVE ||
-        advice >= MADV_HWPOISON) {
+    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||
+        params->ecx > USER_ADDR_MAX - addr || advice == MADV_REMOVE || advice >= MADV_HWPOISON) {
         return -EINVAL;
     }
+    len = PAGE_UP(params->ecx);
     if (len == 0) {
         return 0;
     }
@@ -5343,21 +5346,23 @@ int32_t sys_madvise(isr_params_t *params)
  * EDX=flags. A shared mapping here maps the file in memory itself, and a
  * mapping of a disk file is private or read-only, so there is nothing to
  * write: the call checks its arguments and returns 0, or ENOMEM for a range
- * with a page in no region, or EINVAL.
+ * with a page in no region, or EINVAL, which a range that runs past user
+ * space is too, judged by the length as given, as `sys_madvise` judges it.
  */
 int32_t sys_msync(isr_params_t *params)
 {
     uint32_t addr = params->ebx;
-    uint32_t len = PAGE_UP(params->ecx);
     uint32_t flags = params->edx;
+    uint32_t len;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
     if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||
-        addr > USER_ADDR_MAX - len) {
+        addr > USER_ADDR_MAX || params->ecx > USER_ADDR_MAX - addr) {
         return -EINVAL;
     }
+    len = PAGE_UP(params->ecx);
     if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
