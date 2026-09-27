@@ -71,6 +71,11 @@ GNU libc's resolver sends its two queries with it.
 sends two datagrams in one call and receives them in one
 .Xr recvmmsg 2 .
 .Ss Streams
+This section describes TCP streams;
+.Xr unix 7
+describes
+.Dv AF_UNIX
+ones.
 A stream sends to its connected peer.
 .Fn sendto
 ignores
@@ -94,7 +99,19 @@ If it cannot send, a pending TCP error is returned and cleared.
 If the stream is outside those states and has no pending TCP error, the
 call fails with
 .Er EPIPE .
-No SIGPIPE is generated.
+A TCP send generates no
+.Dv SIGPIPE .
+An
+.Dv AF_UNIX
+stream or sequenced-packet send that fails with
+.Er EPIPE ,
+its peer gone or the connection shut down in its direction, posts
+.Dv SIGPIPE
+to the sending thread, whose default action ends the process, unless
+.Fa flags
+has
+.Dv MSG_NOSIGNAL ,
+as in Linux.
 .Ss Datagrams
 For an IPv4 datagram socket,
 .Fa addr
