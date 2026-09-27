@@ -124,6 +124,12 @@ The caller needs effective user ID 0, or a real user and group ID equal to
 each of the target's three and a dumpable target, as Linux asks of a
 tracer without
 .Dv CAP_SYS_PTRACE .
+Such a caller cannot attach to a thread inside
+.Xr execve 2 ,
+which chooses the IDs of the new image by the tracer the thread has: for
+a caller of its own without effective user ID 0, it ignores set-ID bits
+under such a tracer.
+Linux makes the attach wait for the exec to end.
 A thread of the caller's own process, init, a kernel thread and a thread
 already traced cannot be attached.
 .It Dv PTRACE_PEEKTEXT , PTRACE_PEEKDATA , PTRACE_POKETEXT , PTRACE_POKEDATA
@@ -285,7 +291,10 @@ or
 .Dv PTRACE_LISTEN
 for a tracee that was not seized.
 .It Bq Er EPERM
-The attach is not allowed, or the caller is already traced.
+The attach is not allowed, the target is inside
+.Xr execve 2
+and the caller's effective user ID is not 0, or the caller is already
+traced.
 .It Bq Er ESRCH
 No such thread, one the caller's process does not trace, or one not in a
 ptrace stop.

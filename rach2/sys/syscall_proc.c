@@ -1151,17 +1151,47 @@ static int32_t exec_script(struct exec_state *s)
 }
 
 /**
+ * Whether the calling thread has a tracer whose effective user ID is not 0,
+ * which could write the new image's memory and registers at the exec's stop
+ * and so act with any ids the image would be given. Linux's
+ * `ptracer_capable` asks the same of the credentials the tracer had when it
+ * attached.
+ */
+static int exec_traced(void)
+{
+    const process_t *tracer;
+
+    if (!(current_proc->ptrace & PT_TRACED)) {
+        return 0;
+    }
+    tracer = get_process(current_proc->tracer);
+    return tracer == NULL || tracer->euid != 0;
+}
+
+/**
  * The ids the new image runs with, into `s`: the file owner's where a
  * set-id bit applies, the way privilege is regained, and the caller's
- * effective ids otherwise. A process that set no_new_privs gains nothing:
- * its bits are read and ignored, as a nosuid mount's are. `secure`, which
- * is AT_SECURE, says whether the image runs with authority its invoker
- * lacks, the effective id differing from the real one either way, so libc
- * distrusts the environment the caller gave it.
+ * effective ids otherwise. `secure`, which is AT_SECURE, says whether the
+ * image runs with authority its invoker lacks, the effective id differing
+ * from the real one either way, so libc distrusts the environment the
+ * caller gave it.
+ *
+ * A process that set no_new_privs gains nothing: its bits are read and
+ * ignored, as a nosuid mount's are. Neither does a caller without effective
+ * uid 0 whose thread has a tracer that is not root (`exec_traced`), which
+ * could change the image once it had the ids; Linux's
+ * `cap_bprm_creds_from_file` ignores the bits in the same case for a caller
+ * without CAP_SETUID. No tracer that is not root can attach while the exec
+ * runs (`ptrace_attach`), so the choice made here holds until the image is
+ * the process's.
  */
 static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
+
+    if (mode != 0 && current_proc->euid != 0 && exec_traced()) {
+        mode = 0;
+    }
 
     s->euid = (mode & KRFFS_MODE_SUID) ? s->id.uid : current_proc->euid;
     s->egid = (mode & KRFFS_MODE_SGID) ? s->id.gid : current_proc->egid;

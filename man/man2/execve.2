@@ -147,6 +147,18 @@ A mount with
 .Dv MS_NOSUID
 suppresses both changes, and so does the no_new_privs bit of
 .Xr prctl 2 .
+For a caller whose effective user ID is not 0, so does a tracer of the
+calling thread whose effective user ID is not 0, which could change the
+new image's memory and registers at the stop the exec makes for it, as
+.Xr ptrace 2
+describes, and so act with the image's IDs.
+Such a tracer cannot attach to a thread inside
+.Fn execve ,
+so none can begin once the call has chosen the IDs.
+Linux suppresses the changes in the same case for a caller without
+.Dv CAP_SETUID ,
+judging the tracer by the credentials it had when it attached, and makes
+such an attach wait for the exec to end.
 Script execution applies neither the script's nor the interpreter's
 set-ID bits.
 Real IDs are unchanged; saved IDs become the resulting effective IDs.

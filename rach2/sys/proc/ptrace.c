@@ -696,16 +696,22 @@ static int ptrace_resume(process_t *t, uint32_t sig, int step, int syscalls)
  * PTRACE_ATTACH and PTRACE_SEIZE: make the caller's process `t`'s tracer.
  * The caller needs effective user ID 0, or its real user ID equal to each of
  * `t`'s three and `t` dumpable, as Linux's `__ptrace_may_access` asks when
- * the caller lacks CAP_SYS_PTRACE. A thread of the caller's own process, a
- * thread with no address space, init, and a thread already traced are
- * refused. ATTACH sends the thread SIGSTOP; SEIZE takes the options in
- * `opts` and stops nothing.
+ * the caller lacks CAP_SYS_PTRACE. Such a caller is also refused a thread
+ * inside execve, which chooses the ids of its new image by the tracer the
+ * thread has (`exec_ids` in syscall_proc.c); Linux makes the attach wait for
+ * the exec instead. A thread of the caller's own process, a thread with no
+ * address space, init, and a thread already traced are refused. ATTACH
+ * sends the thread SIGSTOP; SEIZE takes the options in `opts` and stops
+ * nothing.
  */
 static int ptrace_attach(process_t *t, int seize, uint32_t opts)
 {
     struct k_siginfo info;
 
     if (t->tg == current_proc->tg || t->mm == NULL || t->tgid == 1 || (t->ptrace & PT_TRACED)) {
+        return -EPERM;
+    }
+    if (current_proc->euid != 0 && t->exec_ws != NULL) {
         return -EPERM;
     }
     if (current_proc->euid != 0 &&
