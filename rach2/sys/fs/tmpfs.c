@@ -180,11 +180,11 @@ static struct tmpfs_dirent *new_entry(const char *name)
 }
 
 /**
- * Give the names of `d` new places, 2 on, in their order, once its places
- * have run out: a cursor ends at the largest place, so none may be used. A
- * listing in progress may then see a name twice or miss one, as it may when
- * names are made or removed during it; that takes four thousand million
- * names made in one directory.
+ * Give the names of `d` new places, 2 on, in their order, when its next place
+ * would be 0xFFFFFFFF: a listing's cursor goes one past the place of the name
+ * it returns, and could not go past that one. A listing in progress may then
+ * see a name twice or miss one, as it may when names are made or removed
+ * during it; it takes about four billion names made in one directory.
  */
 static void renumber(struct tmpfs_node *d)
 {
