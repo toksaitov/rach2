@@ -630,13 +630,13 @@ probe fifomusl
 file rach2/sys/syscall_fs.c
 expect FIFOMUSL FAIL (a FIFO in an unlinked one's name
 old
-        if (fd_node_holders(node, NULL) > 0) {
-            krffs_unlink_held(node);
+    if (fd_node_holders(node, NULL) > 0) {
+        krffs_unlink_held(node);
 new
-        if (fd_node_holders(node, NULL) > 0) {
-            if (krffs_mode_type(node->mode) != KRFFS_S_IFIFO) {
-                krffs_unlink_held(node);
-            }
+    if (fd_node_holders(node, NULL) > 0) {
+        if (krffs_mode_type(node->mode) != KRFFS_S_IFIFO) {
+            krffs_unlink_held(node);
+        }
 end
 
 fault fifo-ends-not-holders
