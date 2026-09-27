@@ -44,7 +44,8 @@ while an
 .Xr open 2
 in another thread has reserved it, or while a call of another thread
 sharing the descriptor table uses the descriptor there, or the one a
-close left to such a call; Linux gives
+close left to such a call, or while a close in another thread is still
+releasing it; Linux gives
 .Er EBUSY
 for the first.
 If both arguments are equal and valid, and below the current descriptor

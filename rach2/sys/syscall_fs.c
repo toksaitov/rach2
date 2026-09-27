@@ -2340,11 +2340,29 @@ static int fd_held_elsewhere(const fd_table_t *table, int fd)
 }
 
 /**
+ * Release descriptor `fd` of `table`, with every backing it holds, and free
+ * its slot. The entry is marked closing and releasing first, since the
+ * release may sleep, in a file system's release of the description's last
+ * reference among other places: while it does, a lookup, a dup onto the
+ * slot, a copy of the table and another release all pass the entry by, and
+ * none of them can take a reference to a description that is going.
+ */
+static void fd_teardown(fd_table_t *table, int fd)
+{
+    fd_entry_t *e = &table->entries[fd];
+
+    e->flags |= FD_FLAG_CLOSING | FD_FLAG_RELEASING;
+    fd_release_backing(e);
+    fd_free(table, fd);
+}
+
+/**
  * Close descriptor `fd` of the caller's table: release what it holds and
- * free its slot, or, while a call of another thread sharing the table holds
- * it, mark it closing, so that the call ends with what it had and the slot
- * is released as that call ends (`fd_holds_release`). Linux keeps the file
- * for such a call through the reference `fdget` takes. 0, or -EBADF.
+ * free its slot (`fd_teardown`), or, while a call of another thread sharing
+ * the table holds it, mark it closing, so that the call ends with what it
+ * had and the slot is released as that call ends (`fd_holds_release`).
+ * Linux keeps the file for such a call through the reference `fdget` takes.
+ * 0, or -EBADF.
  */
 static int32_t close_fd(int fd)
 {
@@ -2358,11 +2376,16 @@ static int32_t close_fd(int fd)
         e->flags |= FD_FLAG_CLOSING;
         return 0;
     }
-    fd_release_backing(e);
-    fd_free(table, fd);
+    fd_teardown(table, fd);
     return 0;
 }
 
+/**
+ * The end of a call's holds (syscall_internal.h). An entry whose release
+ * another thread has begun is left to it: two threads whose calls end while
+ * one of them sleeps in a release would otherwise both find the entry
+ * closing and held by nobody, and release it twice.
+ */
 void fd_holds_release(void)
 {
     process_t *p = current_proc;
@@ -2384,9 +2407,9 @@ void fd_holds_release(void)
                 continue;
             }
             e = &p->fds->entries[fd];
-            if ((e->flags & FD_FLAG_CLOSING) && !fd_held_elsewhere(p->fds, fd)) {
-                fd_release_backing(e);
-                fd_free(p->fds, fd);
+            if ((e->flags & (FD_FLAG_CLOSING | FD_FLAG_RELEASING)) == FD_FLAG_CLOSING &&
+                !fd_held_elsewhere(p->fds, fd)) {
+                fd_teardown(p->fds, fd);
             }
         }
     }
@@ -3261,11 +3284,12 @@ int32_t sys_dup(isr_params_t *params)
 
 /**
  * Free slot `fd` for dup2 and dup3 to put a copy in, closing the descriptor
- * there if there is one, with every backing it held. -EBUSY when the slot
- * cannot be had: an open has reserved it and not yet filled it, which is
- * when Linux's dup2 answers EBUSY; or a call of another thread sharing the
- * table holds its descriptor, or the descriptor a close left to such a call,
- * where Linux replaces the descriptor and the call keeps its file.
+ * there if there is one, with every backing it held (`fd_teardown`). -EBUSY
+ * when the slot cannot be had: an open has reserved it and not yet filled
+ * it, which is when Linux's dup2 answers EBUSY; or a call of another thread
+ * sharing the table holds its descriptor, or the descriptor a close left to
+ * such a call, or a close of it is still releasing it, where Linux replaces
+ * the descriptor and the call or the close keeps its file.
  */
 static int32_t dup_clear(int fd)
 {
@@ -3278,8 +3302,7 @@ static int32_t dup_clear(int fd)
     if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
         return -EBUSY;
     }
-    fd_release_backing(e);
-    fd_free(table, fd);
+    fd_teardown(table, fd);
     return e->type == FD_TYPE_NONE && !e->ofd ? 0 : -EBUSY;
 }
 

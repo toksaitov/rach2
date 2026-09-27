@@ -1,5 +1,7 @@
 /**
- * Check mounted open truncation, cleanup and loop handle relocation.
+ * Check mounted open truncation, cleanup and loop handle relocation, and the
+ * close of a descriptor whose release sleeps, by one thread or by the end of
+ * another thread's call.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -118,9 +120,11 @@ extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
 
-static process_t proc;
+static process_t proc, other, third;
 static fd_table_t files;
 process_t *current_proc = &proc;
+process_t *proc_list;
+volatile uint32_t fb_owner_pid;
 krffs_file_system_t *krffs_fs;
 const struct vfs_type vfs_krffs_type = {0};
 static const struct vfs_type mounted_type = {0};
@@ -128,6 +132,10 @@ static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
 static int open_error, truncate_error, dropped, attrs, relocate;
+/* The descriptor a release is under way for, and what happens while the
+ * file system's release of its description sleeps. */
+static int releasing = -1;
+static void (*in_release)(void);
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -253,12 +261,64 @@ void vfs_leave(struct vfs_mount *mnt)
     leaves++;
 }
 
-/** Close the handle when the description is freed. */
+/** Close the handle when the description is freed, which is where a release
+ * sleeps: run what the row has happen meanwhile. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
     check(at == (relocate ? &moved : &node), "close retains current node identity");
+    if (in_release) {
+        void (*meanwhile)(void) = in_release;
+
+        in_release = 0;
+        meanwhile();
+    }
     vfs_release(mnt, opened);
     refs--;
+}
+
+/** No row's file is held by a message in flight or a mapping. */
+int unix_inflight_holds(const void *node)
+{
+    (void)node;
+    return 0;
+}
+
+int filemap_holds(const void *node)
+{
+    (void)node;
+    return 0;
+}
+
+/** No row frees a node of the KRFFS root, owns the display or has a
+ * socket. */
+void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
+{
+    (void)fs;
+    (void)node;
+    check(0, "unexpected root node removal");
+}
+
+void vga_mode13h_exit(void)
+{
+    check(0, "unexpected display release");
+}
+
+void socket_ref(struct socket *sock)
+{
+    (void)sock;
+    check(0, "unexpected socket reference");
+}
+
+void socket_unref(struct socket *sock)
+{
+    (void)sock;
+    check(0, "unexpected socket release");
+}
+
+/** No row takes a record lock, so none is dropped. */
+void lock_close(const struct lock_key *key)
+{
+    (void)key;
 }
 
 /** Initialize an unused wait queue. */
@@ -335,6 +395,127 @@ static void truncation(void)
     }
 }
 
+/** A fresh table of one thread for a row, with the counters at zero. */
+static void row_begin(void)
+{
+    proc.fds = &files;
+    check(fd_table_init(proc.fds) == 0, "initialize descriptor table");
+    files.refs = 1;
+    proc.euid = 1;
+    opens = releases = refs = leaves = dropped = truncates = attrs = relocate = 0;
+    open_error = truncate_error = 0;
+}
+
+/** Free what the row left open and require every allocation back. */
+static void row_end(void)
+{
+    int fd;
+
+    for (fd = 0; fd < fd_table_cap(proc.fds); fd++) {
+        if (proc.fds->entries[fd].type != FD_TYPE_NONE || proc.fds->entries[fd].ofd) {
+            fd_free(proc.fds, fd);
+        }
+    }
+    check(opens == releases && refs == 0, "every open handle released");
+    fd_table_free(proc.fds);
+    check(allocations == 0, "all descriptor storage released");
+    k_memset(&other, 0, sizeof(other));
+    k_memset(&third, 0, sizeof(third));
+    k_memset(proc.fd_held, 0, sizeof(proc.fd_held));
+    proc.fd_holding = 0;
+    proc.next = 0;
+    proc_list = 0;
+    current_proc = &proc;
+    releasing = -1;
+    in_release = 0;
+}
+
+/** A descriptor on the model file, open for reading and writing. */
+static int model_open(void)
+{
+    struct vfs_ref ref;
+
+    ref.mnt = &mount;
+    ref.node = &node;
+    return open_install(&ref, "target", 2);
+}
+
+/** While a close's release sleeps, its descriptor is closed to a lookup and
+ * to a dup2 onto it. */
+static void release_closed(void)
+{
+    check(fd_get(proc.fds, releasing) == NULL &&
+              (proc.fds->entries[releasing].flags & FD_FLAG_RELEASING),
+          "a descriptor being released is closed to lookups");
+    check(dup_clear(releasing) == -EBUSY, "dup2 onto a descriptor being released is busy");
+}
+
+/** Close a descriptor whose release sleeps in the file system's release. */
+static void close_sleeping(void)
+{
+    int fd;
+
+    row_begin();
+    fd = model_open();
+    check(fd >= 0, "open a descriptor to close");
+    if (fd >= 0) {
+        releasing = fd;
+        in_release = release_closed;
+        check(close_fd(fd) == 0 && in_release == 0 && refs == 0, "close releases the description");
+        check(proc.fds->entries[fd].type == FD_TYPE_NONE && !proc.fds->entries[fd].ofd,
+              "the slot is free after the release");
+    }
+    row_end();
+}
+
+/** The call of a third thread that held `releasing` ends while the release
+ * the second one began sleeps: the release is left to the second. */
+static void third_call_ends(void)
+{
+    process_t *self = current_proc;
+
+    current_proc = &third;
+    third.fd_held[releasing / 32] |= 1u << (releasing % 32);
+    third.fd_holding = 1;
+    fd_holds_release();
+    current_proc = self;
+    check(proc.fds->entries[releasing].type == FD_TYPE_FILE && proc.fds->entries[releasing].ofd,
+          "a release under way is not begun again");
+}
+
+/** A close leaves a descriptor another thread's call holds to that call, and
+ * its release happens once, when the call ends. */
+static void deferred_release(void)
+{
+    int fd;
+
+    row_begin();
+    files.refs = 3;
+    proc_list = &proc;
+    proc.next = &other;
+    other.next = &third;
+    other.fds = &files;
+    third.fds = &files;
+    fd = model_open();
+    check(fd >= 0, "open a descriptor two calls hold");
+    if (fd >= 0) {
+        other.fd_held[fd / 32] |= 1u << (fd % 32);
+        other.fd_holding = 1;
+        check(close_fd(fd) == 0 && (proc.fds->entries[fd].flags & FD_FLAG_CLOSING) && refs == 1,
+              "a close of a descriptor another call holds leaves it to that call");
+        fd_holds_release();
+        check(proc.fds->entries[fd].type == FD_TYPE_FILE, "the closer's call end leaves it");
+        current_proc = &other;
+        releasing = fd;
+        in_release = third_call_ends;
+        fd_holds_release();
+        current_proc = &proc;
+        check(proc.fds->entries[fd].type == FD_TYPE_NONE && refs == 0 && in_release == 0,
+              "the holder's call end releases it");
+    }
+    row_end();
+}
+
 /** Check node repointing without changing a mounted open identity. */
 static void loop_handles(void)
 {
@@ -359,6 +540,8 @@ int main(void)
 {
     mount.type = &mounted_type;
     truncation();
+    close_sleeping();
+    deferred_release();
     loop_handles();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation and loop handles\n");

@@ -56,11 +56,12 @@ typedef enum {
 /*
  * File descriptor flags (for open mode)
  */
-#define FD_FLAG_READ    0x01
-#define FD_FLAG_WRITE   0x02
-#define FD_FLAG_CLOEXEC 0x08 /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
-#define FD_FLAG_PATH    0x10 /* O_PATH: names a file, reads and writes nothing */
-#define FD_FLAG_CLOSING 0x20 /* closed while another sharer's call uses it */
+#define FD_FLAG_READ      0x01
+#define FD_FLAG_WRITE     0x02
+#define FD_FLAG_CLOEXEC   0x08 /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
+#define FD_FLAG_PATH      0x10 /* O_PATH: names a file, reads and writes nothing */
+#define FD_FLAG_CLOSING   0x20 /* closed; no lookup finds it until the slot is free */
+#define FD_FLAG_RELEASING 0x40 /* its release has begun, and may be asleep */
 /* O_APPEND/O_NONBLOCK are OFD status flags (OFD_* in struct open_file), not
  * per-descriptor flags; they are shared by dup/dup2/fork. */
 

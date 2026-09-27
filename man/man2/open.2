@@ -269,6 +269,13 @@ number answers
 .Er EBADF
 at once, and the releases above happen, and the number is free again, as
 that call ends.
+A release may sleep, in a file system's release of the last reference to
+a description among other places; until it ends, the number answers
+.Er EBADF
+to every thread, is not given to another descriptor, and
+.Xr dup2 2
+onto it gives
+.Er EBUSY .
 .Pp
 Closing an ordinary descriptor for a file backing a loop device does
 not detach the device.
