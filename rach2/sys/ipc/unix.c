@@ -821,7 +821,7 @@ int32_t unix_bind(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
             return -EADDRINUSE;
         }
     } else {
-        rc = fs_socket_bind(n.path, 0777u & ~current_proc->umask, &s->fs_ref, &s->fs_ino);
+        rc = fs_socket_bind(n.path, 0777u & ~current_proc->fs->umask, &s->fs_ref, &s->fs_ino);
         if (rc != 0) {
             return rc;
         }

@@ -194,6 +194,24 @@ void proc_files_put(process_t *p)
     }
 }
 
+void proc_fs_put(process_t *p)
+{
+    struct fs_struct *fs = p->fs;
+
+    if (!fs) {
+        return;
+    }
+    if (fs->refs == 1) {
+        vfs_cwd_clear(p);
+        vfs_root_clear(p);
+        kfree(fs->cwd_long);
+        kfree(fs);
+    } else {
+        fs->refs--;
+    }
+    p->fs = NULL;
+}
+
 /**
  * A copy of the descriptor table `src` for a child that does not share it:
  * each descriptor names the same open-file description, which gains a
@@ -1536,6 +1554,25 @@ static struct mm *fork_mm(struct mm *mm, uint32_t flags)
 }
 
 /**
+ * Give `child` the directories and umask of `parent`: the same record under
+ * CLONE_FS, and otherwise a copy, with holds of its own on the working
+ * directory's mount and on the root. 0, or -ENOMEM.
+ */
+static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
+{
+    if (flags & CLONE_FS) {
+        proc_fs_put(child);
+        child->fs = parent->fs;
+        parent->fs->refs++;
+        return 0;
+    }
+    child->fs->umask = parent->fs->umask;
+    vfs_cwd_set(child, parent->fs->cwd_mnt, parent->fs->cwd_node);
+    vfs_root_copy(child, parent);
+    return proc_cwd_copy(child, parent) != 0 ? -ENOMEM : 0;
+}
+
+/**
  * Create a child process: fork(2), vfork(2), and the part of clone(2) this
  * kernel has.
  *
@@ -1622,7 +1659,6 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
      * setsid/setpgid. alloc_process defaulted these to the child's own pid. */
     child->sid = parent->sid;
     child->pgid = parent->pgid;
-    child->umask = parent->umask; /* the file-creation mask is inherited */
     child->nice = parent->nice;
     child->persona = parent->persona;
     child->dumpable = parent->dumpable;
@@ -1637,13 +1673,6 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
     k_memcpy(child->comm, parent->comm, sizeof(child->comm));
-    /* The working directory's hold on its mount is the child's too, and so
-     * is the root chroot gave the parent. */
-    child->cwd_mnt = NULL;
-    child->cwd_node = NULL;
-    vfs_cwd_set(child, parent->cwd_mnt, parent->cwd_node);
-    vfs_root_copy(child, parent);
-
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same
      * virtual addresses, so the same base is correct. Without this the context
@@ -1655,8 +1684,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
 
-    /* The child inherits the parent's current working directory. */
-    if (proc_cwd_copy(child, parent) != 0) {
+    if (fork_fs(child, parent, req->flags) != 0) {
         goto fail_built;
     }
 
@@ -1758,11 +1786,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 
 fail_built:
     /* Everything built for the child so far goes back: the descriptor table,
-     * the working directory's and the root's holds, the kernel stack and the
-     * address space, then the record. */
+     * the directories, the kernel stack and the address space, then the
+     * record. */
     proc_files_put(child);
-    vfs_cwd_clear(child);
-    vfs_root_clear(child);
+    proc_fs_put(child);
     kstack_free(child->kernel_stack);
     mm_drop(child);
     free_process(child);
@@ -1796,7 +1823,8 @@ int32_t sys_vfork(isr_params_t *params)
  * space itself under CLONE_VM, and with the caller waiting as vfork waits
  * under CLONE_VFORK; or a new thread of the caller's process under
  * CLONE_THREAD, which needs CLONE_SIGHAND, which in turn needs CLONE_VM.
- * CLONE_FILES shares the caller's descriptor table in place of a copy.
+ * CLONE_FILES shares the caller's descriptor table in place of a copy, and
+ * CLONE_FS its working directory, root directory and umask.
  *
  * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
  * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD
@@ -1814,7 +1842,7 @@ int32_t sys_clone(isr_params_t *params)
     uint32_t flags = params->ebx;
     struct fork_req req;
 
-    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
+    if ((flags & ~(CSIGNAL | CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_VFORK |
                    CLONE_PARENT | CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
                    CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
                    CLONE_DETACHED)) != 0 ||
@@ -3744,8 +3772,8 @@ int32_t sys_umask(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    old = current_proc->umask;
-    current_proc->umask = params->ebx & 0777;
+    old = current_proc->fs->umask;
+    current_proc->fs->umask = params->ebx & 0777;
     return (int32_t)old;
 }
 

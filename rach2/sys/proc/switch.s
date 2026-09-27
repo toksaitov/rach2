@@ -15,10 +15,10 @@
 .set PROC_REGS_ESP, 48     # offset of regs.esp (pid=4 + state=4 + regs offset 40)
 .set PROC_CR3, 52          # offset of cr3 (page directory physical address)
 .set PROC_KERNEL_STACK, 56 # offset of kernel_stack
-.set PROC_TLS_BASE, 140    # offset of tls_base, after the descriptor table's
-                           # pointer, the cwd and in_syscall
-.set PROC_PAGE_DIR, 800    # offset of page_dir, the directory cr3 names, after
-                           # the 512-byte floating-point area at 288
+.set PROC_TLS_BASE, 80     # offset of tls_base, after the descriptor table's
+                           # pointer, the fs record's pointer and in_syscall
+.set PROC_PAGE_DIR, 720    # offset of page_dir, the directory cr3 names, after
+                           # the 512-byte floating-point area at 208
 
 # Shared TLS GDT descriptor (mirrors GDT_TLS_ENTRY / GDT_TLS_SELECTOR in
 # tables/gdt.h): entry 6, so its 8-byte descriptor lives at gdt_descriptors+48;

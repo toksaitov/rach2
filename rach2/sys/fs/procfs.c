@@ -699,10 +699,12 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     for (i = 0; i < sizeof(p->comm) && p->comm[i]; i++) {
         ap_ch(t, p->comm[i]);
     }
-    ap_str(t, "\nUmask:\t0");
-    ap_ch(t, (char)('0' + ((p->umask >> 6) & 7u)));
-    ap_ch(t, (char)('0' + ((p->umask >> 3) & 7u)));
-    ap_ch(t, (char)('0' + (p->umask & 7u)));
+    if (p->fs) {
+        ap_str(t, "\nUmask:\t0");
+        ap_ch(t, (char)('0' + ((p->fs->umask >> 6) & 7u)));
+        ap_ch(t, (char)('0' + ((p->fs->umask >> 3) & 7u)));
+        ap_ch(t, (char)('0' + (p->fs->umask & 7u)));
+    }
     ap_str(t, "\nState:\t");
     ap_str(t, p->state == PROC_ZOMBIE    ? "Z (zombie)"
               : p->ptrace_status != 0    ? "t (tracing stop)"

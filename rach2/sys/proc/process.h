@@ -68,6 +68,33 @@ struct rlimit32 {
  * in the heap (`cwd_long`). */
 #define CWD_MAX 64
 
+/*
+ * The working directory, the root directory and the file-creation mask,
+ * which clone with CLONE_FS shares, as Linux shares its fs_struct: every
+ * thread a C library makes shares them, `refs` counting the records that do.
+ * fork gives the child a copy, and exec keeps them.
+ */
+struct vfs_mount;
+
+struct fs_struct {
+    int refs;
+    /* The working directory's path, in `cwd` when it fits and in `cwd_long`
+     * from the heap when it does not; `proc_cwd` reads whichever it is. */
+    char cwd[CWD_MAX];
+    char *cwd_long;
+    /* The working directory's hold on a mount that can be unmounted: the
+     * mount and the held node, or NULL on a permanent mount (vfs_cwd_set). */
+    struct vfs_mount *cwd_mnt;
+    void *cwd_node;
+    /* The root directory chroot set: its mount and held node, or NULL for
+     * the root of the mount table (vfs_root_set). Absolute paths start there
+     * and `..` stops there. */
+    struct vfs_mount *root_mnt;
+    void *root_node;
+    /* File-creation mask (umask(2)), low 9 bits. */
+    uint32_t umask;
+};
+
 /* Policy: the pages one process's system calls may copy paths into at once
  * (fs/pathbuf.c); the deepest call takes four. */
 #define PATH_BUFS 8
@@ -100,7 +127,7 @@ struct process {
     uint32_t parent_pid;   /* Parent process ID */
     int32_t exit_code;     /* Exit status (for zombie) */
     fd_table_t *fds;       /* Descriptor table, shared under CLONE_FILES */
-    char cwd[CWD_MAX];     /* The working directory's path, unless `cwd_long` has it */
+    struct fs_struct *fs;  /* Directories and umask, shared under CLONE_FS */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
     /* switch.s reads `regs.esp`, `cr3`, `kernel_stack`, `tls_base` and
      * `page_dir` at fixed offsets, so a new field goes at the end of the
@@ -130,8 +157,6 @@ struct process {
      * an unreaped continue, or the reverse) supersedes the first, so a parent
      * that does not reap promptly can miss one stop or continue report. */
     uint32_t jc_status;
-    /* File-creation mask (umask(2)); inherited across fork, low 9 bits. */
-    uint32_t umask;
     /* Credentials: the V7 model with POSIX saved IDs. Real, effective, and
      * saved uid and gid plus the supplementary groups; fork copies them, exec
      * passes the real ids through, applies the file's setuid/setgid bits to
@@ -153,10 +178,6 @@ struct process {
      * the process and not to a remembered pid, which a later process reusing
      * that pid would silence. */
     uint32_t vma_reported;
-    /* The working directory's hold on a mount that can be unmounted: the
-     * mount and the held node, or NULL on a permanent mount (vfs_cwd_set). */
-    struct vfs_mount *cwd_mnt;
-    void *cwd_node;
     /* The x87 and SSE state, saved at every switch away and loaded at every
      * switch to; `fxsave` needs the 16-byte alignment. */
     uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(16)));
@@ -232,9 +253,6 @@ struct process {
      * no frame after the first (fs/pathbuf.c). */
     char *path_bufs[PATH_BUFS];
     uint32_t path_bufs_busy;
-    /* The working directory's path when it is too long for `cwd`, from the
-     * heap; NULL while it fits `cwd`. `proc_cwd` reads whichever it is. */
-    char *cwd_long;
     /* CPU time in ticks. The timer adds the tick it interrupts to `utime`
      * when this process was in user mode and to `stime` when it was in the
      * kernel, and a tick of an idle wait to neither. A reap adds a child's
@@ -296,12 +314,6 @@ struct process {
     /* The execution domain and its flags personality(2) keeps; fork passes
      * it on and exec keeps it. */
     uint32_t persona;
-    /* The root directory chroot set: its mount and held node, or NULL for
-     * the root of the mount table (vfs_root_set). The process's absolute
-     * paths start there and `..` stops there; fork passes it on and exec
-     * keeps it. */
-    struct vfs_mount *root_mnt;
-    void *root_node;
     /* The descriptors of its shared table the current call has looked up,
      * one bit each, which a close by another sharer leaves in place until
      * the call ends (`fd_holds_release`); `fd_holding` says whether any bit
@@ -384,6 +396,11 @@ void proc_vfork_release(process_t *p);
 /** Drop `p`'s reference to its descriptor table and leave it none; the last
  * reference closes every descriptor and frees the table. May sleep. */
 void proc_files_put(process_t *p);
+
+/** Drop `p`'s reference to its directories and umask and leave it none;
+ * the last reference lets go of the working directory's and the root's
+ * holds. May sleep. */
+void proc_fs_put(process_t *p);
 
 /** Wait, as the parent, until the child `pid` made with CLONE_VFORK calls
  * execve or ends. */

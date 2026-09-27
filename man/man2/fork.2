@@ -95,6 +95,14 @@ which gives the child the parent's descriptor table itself, so a
 descriptor either opens, closes or duplicates is the other's too, until an
 .Xr execve 2 ,
 which gives the caller a copy of its own;
+.Dv CLONE_FS ,
+which gives the child the parent's working directory, root directory and
+file-creation mask themselves, so a
+.Xr chdir 2 ,
+.Xr chroot 2
+or
+.Xr umask 2
+by either changes both;
 .Dv CLONE_THREAD
 with
 .Dv CLONE_SIGHAND ,
@@ -141,9 +149,7 @@ A failed store is ignored, as on Linux.
 A nonzero
 .Fa stack
 is the stack pointer the child returns to user mode with.
-Every other flag is refused, among them
-.Dv CLONE_FS ,
-which shares the working directory: a thread has a copy of it.
+Every other flag is refused.
 .Pp
 The i386 system call numbers are 2 for
 .Fn fork ,

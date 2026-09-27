@@ -76,7 +76,7 @@ void path_buf_put(char *buf)
 
 const char *proc_cwd(const struct process *p)
 {
-    return p->cwd_long ? p->cwd_long : p->cwd;
+    return p->fs->cwd_long ? p->fs->cwd_long : p->fs->cwd;
 }
 
 /**
@@ -93,17 +93,17 @@ int proc_cwd_set(struct process *p, const char *path)
     if (len + 1 > VFS_PATH_MAX) {
         return -ENAMETOOLONG;
     }
-    if (len + 1 > sizeof(p->cwd)) {
+    if (len + 1 > sizeof(p->fs->cwd)) {
         heap = kmalloc(len + 1);
         if (!heap) {
             return -ENOMEM;
         }
         k_memcpy(heap, path, len + 1);
     } else {
-        k_memmove(p->cwd, path, len + 1);
+        k_memmove(p->fs->cwd, path, len + 1);
     }
-    kfree(p->cwd_long);
-    p->cwd_long = heap;
+    kfree(p->fs->cwd_long);
+    p->fs->cwd_long = heap;
     return 0;
 }
 
@@ -123,6 +123,4 @@ void path_bufs_free(struct process *p)
         }
     }
     p->path_bufs_busy = 0;
-    kfree(p->cwd_long);
-    p->cwd_long = NULL;
 }

@@ -411,13 +411,13 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
     process_t *pr;
     int is = 0;
 
-    for (pr = proc_list; pr && pr->root_mnt != mnt; pr = pr->next) {
+    for (pr = proc_list; pr && !(pr->fs && pr->fs->root_mnt == mnt); pr = pr->next) {
     }
     if (!pr || !mnt->type->ops->lookup || mnt->type->ops->lookup(mnt, node, name, &found) != 0) {
         return 0;
     }
     for (pr = proc_list; pr && !is; pr = pr->next) {
-        is = pr->root_mnt == mnt && pr->root_node == found;
+        is = pr->fs && pr->fs->root_mnt == mnt && pr->fs->root_node == found;
     }
     node_put(mnt, found);
     return is;
@@ -519,9 +519,9 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node, int
  * set, or the root of the root mount. */
 static void walk_root(struct vfs_ref *r)
 {
-    if (current_proc && current_proc->root_mnt) {
-        r->mnt = current_proc->root_mnt;
-        r->node = current_proc->root_node;
+    if (current_proc && current_proc->fs->root_mnt) {
+        r->mnt = current_proc->fs->root_mnt;
+        r->node = current_proc->fs->root_node;
     } else {
         r->mnt = mounts[0];
         r->node = mounts[0]->root;
@@ -532,8 +532,8 @@ static void walk_root(struct vfs_ref *r)
  * the calling process's root, which chroot set. */
 static int dotdot_stays(const struct vfs_ref *cur)
 {
-    if (current_proc && current_proc->root_mnt) {
-        return cur->mnt == current_proc->root_mnt && cur->node == current_proc->root_node;
+    if (current_proc && current_proc->fs->root_mnt) {
+        return cur->mnt == current_proc->fs->root_mnt && cur->node == current_proc->fs->root_node;
     }
     return cur->mnt == mounts[0] && cur->node == mounts[0]->root;
 }
@@ -959,11 +959,11 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
                 }
             }
         }
-        if (pr->cwd_mnt == mnt && pr->cwd_node == from) {
-            pr->cwd_node = to;
+        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == from) {
+            pr->fs->cwd_node = to;
         }
-        if (pr->root_mnt == mnt && pr->root_node == from) {
-            pr->root_node = to;
+        if (pr->fs && pr->fs->root_mnt == mnt && pr->fs->root_node == from) {
+            pr->fs->root_node = to;
         }
     }
     for (i = 0; i < mount_slots; i++) {
@@ -2440,8 +2440,8 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
         (mnt == mounts[0] && mnt->type == &vfs_krffs_type)) {
         return; /* the permanent mounts need no hold, but a root of another type does */
     }
-    p->cwd_mnt = mnt;
-    p->cwd_node = node;
+    p->fs->cwd_mnt = mnt;
+    p->fs->cwd_node = node;
     if (mnt->type->ops->hold) {
         mnt->type->ops->hold(mnt, node);
     }
@@ -2460,27 +2460,27 @@ void vfs_root_set(struct process *p, struct vfs_mount *mnt, void *node)
         mnt->refs++;
     }
     vfs_root_clear(p);
-    p->root_mnt = mnt;
-    p->root_node = mnt ? node : 0;
+    p->fs->root_mnt = mnt;
+    p->fs->root_node = mnt ? node : 0;
 }
 
 void vfs_root_copy(struct process *child, const struct process *parent)
 {
-    vfs_root_set(child, parent->root_mnt, parent->root_node);
+    vfs_root_set(child, parent->fs->root_mnt, parent->fs->root_node);
 }
 
 void vfs_root_clear(struct process *p)
 {
     struct vfs_ref r;
-    struct vfs_mount *was = p->root_mnt;
+    struct vfs_mount *was = p->fs->root_mnt;
 
     if (!was) {
         return;
     }
     r.mnt = was;
-    r.node = p->root_node;
-    p->root_mnt = 0;
-    p->root_node = 0;
+    r.node = p->fs->root_node;
+    p->fs->root_mnt = 0;
+    p->fs->root_node = 0;
     vfs_ref_put(&r);
     was->refs--;
 }
@@ -2490,15 +2490,15 @@ void vfs_cwd_clear(struct process *p)
     struct vfs_ref r;
     struct vfs_mount *was;
 
-    if (!p->cwd_mnt) {
+    if (!p->fs->cwd_mnt) {
         return;
     }
-    was = p->cwd_mnt;
+    was = p->fs->cwd_mnt;
 
     r.mnt = was;
-    r.node = p->cwd_node;
-    p->cwd_mnt = 0;
-    p->cwd_node = 0;
+    r.node = p->fs->cwd_node;
+    p->fs->cwd_mnt = 0;
+    p->fs->cwd_node = 0;
     /* The put may sleep; the mount's count keeps it until the put is done. */
     vfs_ref_put(&r);
     was->refs--;

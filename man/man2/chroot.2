@@ -22,10 +22,10 @@ in the root stays in the root.
 itself is resolved as any path is, from the old root or from the working
 directory.
 .Pp
-The root belongs to the process.
+The root belongs to the process, and its threads share it, as they share
+the working directory.
 .Xr fork 2
-gives the child the parent's, and a thread takes a copy when it is made,
-as it takes the working directory;
+gives the child a copy of the parent's;
 .Xr execve 2
 keeps it, and the program it runs is found from it.
 While a process has its root in a directory,

@@ -85,21 +85,16 @@ void proc_files_put(process_t *p)
     closed = 1;
 }
 
-void vfs_cwd_clear(process_t *p)
+/** The working directory and the root go together, with the record they
+ * are kept in. */
+void proc_fs_put(process_t *p)
 {
-    CHECK(p == &child && closed, "the directory is released after the files");
-    CHECK(child.state != PROC_ZOMBIE, "the directory is released before death is published");
+    CHECK(p == &child && closed, "the directories are released after the files");
+    CHECK(child.state != PROC_ZOMBIE, "the directories are released before death is published");
     if (cwd_wait) {
         wait_for_lock();
     }
-    cwd_released = 1;
-}
-
-void vfs_root_clear(process_t *p)
-{
-    CHECK(p == &child && cwd_released, "the root is released after the working directory");
-    CHECK(child.state != PROC_ZOMBIE, "the root is released before death is published");
-    root_released = 1;
+    cwd_released = root_released = 1;
 }
 
 static int vfork_released;

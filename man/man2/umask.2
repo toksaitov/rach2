@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt UMASK 2
 .Os
 .Sh NAME
@@ -13,6 +13,10 @@
 sets the calling process's file creation mask to
 .Fa mask
 and returns the previous mask.
+The threads of a process share the mask, as they share the working
+directory;
+.Xr fork 2
+gives the child a copy.
 Only the low nine permission bits are kept:
 .Ql "mask & 0777" .
 .Pp

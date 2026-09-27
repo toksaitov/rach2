@@ -18,8 +18,8 @@
 #define PROC_OFF_REGS_ESP     48u
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
-#define PROC_OFF_TLS_BASE     140u
-#define PROC_OFF_PAGE_DIR     800u
+#define PROC_OFF_TLS_BASE     80u
+#define PROC_OFF_PAGE_DIR     720u
 #if !defined(__TINYC__) && !defined(RACH2_HOSTTEST)
 typedef char process_offsets_fit
     [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
@@ -159,7 +159,6 @@ process_t *alloc_process(void)
     p->state = PROC_READY;
     p->sid = candidate;
     p->pgid = candidate;
-    p->umask = 022;
     p->dumpable = 1;
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
     p->rlim[RLIM_NOFILE].cur = p->rlim[RLIM_NOFILE].max = FD_TABLE_LIMIT;
@@ -171,21 +170,29 @@ process_t *alloc_process(void)
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
 
+    p->fs = kzalloc(sizeof(*p->fs));
+    if (!p->fs) {
+        tgroup_put(p->tg);
+        kfree(p);
+        return NULL;
+    }
+    p->fs->refs = 1;
+    p->fs->cwd[0] = '/';
+    p->fs->umask = 022;
     p->fds = fd_table_new();
     if (!p->fds) {
+        kfree(p->fs);
         tgroup_put(p->tg);
         kfree(p);
         return NULL;
     }
     if (fd_init_stdio(p->fds) != 0) {
         fd_table_delete(p->fds);
+        kfree(p->fs);
         tgroup_put(p->tg);
         kfree(p);
         return NULL;
     }
-
-    p->cwd[0] = '/';
-    p->cwd[1] = '\0';
 
     p->prev = proc_tail;
     p->next = NULL;
@@ -222,6 +229,10 @@ void free_process(process_t *proc)
     }
     if (proc->fds && --proc->fds->refs == 0) {
         fd_table_delete(proc->fds);
+    }
+    if (proc->fs && --proc->fs->refs == 0) {
+        kfree(proc->fs->cwd_long);
+        kfree(proc->fs);
     }
     tgroup_put(proc->tg);
     kfree(proc->exec_ws);

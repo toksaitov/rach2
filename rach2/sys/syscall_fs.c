@@ -839,14 +839,14 @@ static int32_t path_in_root(char *path)
     uint32_t rl = 0;
     int32_t rc;
 
-    if (!current_proc || !current_proc->root_mnt) {
+    if (!current_proc || !current_proc->fs->root_mnt) {
         return 0;
     }
     root = path_buf_get();
     if (!root) {
         return -ENOMEM;
     }
-    rc = vfs_node_path(current_proc->root_mnt, current_proc->root_node, root, VFS_PATH_MAX);
+    rc = vfs_node_path(current_proc->fs->root_mnt, current_proc->fs->root_node, root, VFS_PATH_MAX);
     if (rc == 0) {
         rl = (uint32_t)k_strlen(root);
         rc = path_under(path, root, rl) ? 0 : -ENOENT;
@@ -869,7 +869,7 @@ static int32_t path_in_root(char *path)
  */
 static int names_tree_root(const char *path)
 {
-    return path[0] == '/' && path[1] == '\0' && (!current_proc || !current_proc->root_mnt);
+    return path[0] == '/' && path[1] == '\0' && (!current_proc || !current_proc->fs->root_mnt);
 }
 
 /**
@@ -1362,7 +1362,7 @@ static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
 {
     node->uid = current_proc->euid;
     node->gid = current_proc->egid;
-    node->mode = (uint16_t)((node->mode & ~07777u) | (mode & 07777u & ~current_proc->umask));
+    node->mode = (uint16_t)((node->mode & ~07777u) | (mode & 07777u & ~current_proc->fs->umask));
 }
 
 static int synth_is_link(const struct vpath *vp);
@@ -1511,7 +1511,7 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
 {
     uint32_t type = mode & S_IFMT;
     uint32_t perm =
-        mnt_is_root(parent->mnt) ? (mode & 07777u) : (mode & 07777u & ~current_proc->umask);
+        mnt_is_root(parent->mnt) ? (mode & 07777u) : (mode & 07777u & ~current_proc->fs->umask);
     int rc;
 
     if (type == 0 || type == S_IFREG) {
@@ -3430,8 +3430,8 @@ static int32_t cwd_global(char *buf)
     uint32_t rl = 0;
     int32_t rc;
 
-    if (current_proc->root_mnt) {
-        rc = vfs_node_path(current_proc->root_mnt, current_proc->root_node, buf, VFS_PATH_MAX);
+    if (current_proc->fs->root_mnt) {
+        rc = vfs_node_path(current_proc->fs->root_mnt, current_proc->fs->root_node, buf, VFS_PATH_MAX);
         if (rc != 0) {
             return rc;
         }
@@ -7199,7 +7199,7 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
             rc = cred_access_ref(&parent, CRED_W, 0);
             if (rc == 0) {
                 vfs_ns_lock(parent.mnt);
-                rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode & 07777u & ~current_proc->umask);
+                rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode & 07777u & ~current_proc->fs->umask);
                 vfs_ns_unlock(parent.mnt);
             }
             vfs_ref_release(&parent);

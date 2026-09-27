@@ -16,7 +16,8 @@
 .Fn getcwd "char *buf" "size_t size"
 .Sh DESCRIPTION
 .Fn chdir
-changes the calling process's working directory to
+changes the calling process's working directory, which its threads
+share, to
 .Fa path .
 A relative path is resolved from the current working directory.
 The target must be a directory.
@@ -25,8 +26,8 @@ supplementary groups; the target also requires search permission.
 The KRFFS root is treated as a directory with mode 0755.
 .Pp
 The kernel records an absolute path of at most 4095 bytes for the new
-working directory: in the process record when it is shorter than 64
-bytes, and in kernel memory when it is longer.
+working directory: in the record the threads share when it is shorter
+than 64 bytes, and in kernel memory when it is longer.
 On KRFFS it reconstructs that path from the directory's parents.
 On another file system it uses the resolved directory's path operation
 when it has one, the reconstruction succeeds and the mount's prefix plus
