@@ -10,7 +10,8 @@
  * holder unlocks: the child that asks is seen asleep, with nothing taken,
  * before the parent unlocks. Two processes that each wait for the other's
  * lock, the parent asking only once the child is seen asleep in its wait: one
- * of the two waits fails with EDEADLK. A thread's F_SETLKW whose descriptor
+ * of the two waits fails with EDEADLK and the other takes the lock, and
+ * neither fails in any other way. A thread's F_SETLKW whose descriptor
  * another thread closes during the wait fails with EBADF when the holder lets
  * go, and leaves the byte free. A flock
  * LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
@@ -174,7 +175,7 @@ static int waits(int fd)
 {
     struct pollfd pfd;
     int done[2], ready[2];
-    int status, parent_dead, child_dead;
+    int status, rc, err;
     char c;
     pid_t pid;
 
@@ -205,29 +206,31 @@ static int waits(int fd)
     }
     pid = fork();
     if (pid == 0) {
-        int dead;
-
         if (lk(fd, F_SETLK, F_WRLCK, 1, 1) != 0) {
             _exit(3);
         }
         post(ready[1]);
-        dead = lk(fd, F_SETLKW, F_WRLCK, 0, 1) != 0 && errno == EDEADLK;
-        _exit(dead ? 1 : 0);
+        if (lk(fd, F_SETLKW, F_WRLCK, 0, 1) == 0) {
+            _exit(0);
+        }
+        _exit(errno == EDEADLK ? 1 : 2);
     }
     await(ready[0]);
     if (!seen_asleep(pid)) {
         return fail("the child's F_SETLKW did not wait for the parent's lock");
     }
-    parent_dead = lk(fd, F_SETLKW, F_WRLCK, 1, 1) != 0 && errno == EDEADLK;
-    if (parent_dead) {
-        lk(fd, F_SETLK, F_UNLCK, 0, 1);
-    }
+    rc = lk(fd, F_SETLKW, F_WRLCK, 1, 1);
+    err = errno;
+    lk(fd, F_SETLK, F_UNLCK, 0, 1);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) > 1) {
-        return fail("the child of the deadlock");
+        return fail("the child of the deadlock took neither the lock nor EDEADLK");
     }
-    child_dead = WEXITSTATUS(status) == 1;
-    if (parent_dead + child_dead != 1) {
-        return fail("not one EDEADLK for the two waits");
+    errno = err;
+    if (rc != 0 && err != EDEADLK) {
+        return fail("the parent of the deadlock took neither the lock nor EDEADLK");
+    }
+    if ((rc == 0) == (WEXITSTATUS(status) == 0)) {
+        return fail("not one lock and one EDEADLK for the two waits");
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 0);
     close(done[0]);
