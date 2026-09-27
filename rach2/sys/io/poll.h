@@ -14,8 +14,8 @@
  * Linux i386 exposes the whole family and musl/busybox may use any of them,
  * so all route to one core: select(82), _newselect(142), poll(168),
  * pselect6(308), ppoll(309). The pselect6/ppoll "p" variants additionally
- * carry a signal mask to swap for the duration; Rach2 accepts that argument
- * but does not apply it (a documented limitation; see the note in poll.c).
+ * carry a signal mask the wait runs under. epoll waits through the same
+ * core.
  */
 
 /* poll(2) event bits (Linux values). POLLHUP/POLLERR/POLLNVAL are reported in
@@ -35,6 +35,32 @@ struct kernel_pollfd {
 };
 
 struct isr_params;
+struct wait_queue;
+struct fd_entry;
+
+/** The readiness of one descriptor: a subset of `events` for POLLIN and
+ * POLLOUT, with POLLHUP and POLLERR always reported, and in `*wq` the wait
+ * queue whose wake means look again, or NULL for a descriptor always ready. */
+short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
+
+/* A scan of what a wait watches: the wait queue of each object in `wqs`, and
+ * the count of those ready. */
+typedef int (*poll_scan_fn)(void *ctx, struct wait_queue **wqs);
+
+/** Wait until `scan` finds something ready, a signal arrives, or the tick
+ * `deadline` passes when `has_deadline`; `n` bounds the queues a scan names.
+ * Returns the ready count, 0 at the deadline, -EINTR or -ENOMEM. */
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32_t deadline);
+
+/** The deadline of a timeout in milliseconds, rounded up to a tick; a
+ * negative timeout has none. */
+uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline);
+
+/** Install the signal mask a wait runs under, from the user set `umask` of
+ * `size` bytes (0 for none), and restore it after with `poll_mask_done`,
+ * which passes the wait's result through. */
+int32_t poll_mask_set(uint32_t umask, uint32_t size);
+int32_t poll_mask_done(int32_t ret);
 
 /* poll(168) / ppoll(309). */
 int32_t sys_poll(struct isr_params *params);

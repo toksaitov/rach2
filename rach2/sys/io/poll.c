@@ -73,7 +73,7 @@ static void irq_restore(uint32_t flags)
  * serial input, only for a readable descriptor, and POLLOUT only for a
  * writable one, so poll(stdout, POLLOUT) never drains serial input.
  */
-static short fd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     *wq = NULL;
 
@@ -131,7 +131,7 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
             ready++;
             continue;
         }
-        revents = fd_poll(e, (short)(fds[i].events | POLLERR | POLLHUP), &wqs[i]);
+        revents = poll_fd(e, (short)(fds[i].events | POLLERR | POLLHUP), &wqs[i]);
         revents &= (short)(fds[i].events | POLLERR | POLLHUP | POLLNVAL);
         fds[i].revents = revents;
         if (sel ? pollfd_select_ready(fds[i].events, revents) : (revents != 0)) {
@@ -151,31 +151,30 @@ static int deadline_reached(uint32_t deadline)
 }
 
 /**
- * The poll core: block until at least one of `fds` is ready, a signal arrives,
- * or the deadline passes.
+ * The wait of the poll core: block until `scan` finds an object ready, a
+ * signal arrives, or the deadline passes.
  *
- * `has_deadline` == 0 means wait forever. nfds is already bounded to
- * POLL_MAX_FDS by the callers.
+ * `has_deadline` == 0 means wait forever. `scan` names the wait queue of each
+ * of at most `n` objects in the array it is given and returns how many are
+ * ready; it runs with interrupts off, so the readiness it reads and the
+ * enqueue that follows cannot be split by a waker.
  *
- * `sel` selects the select() per-direction readiness rule over poll()'s.
- *
- * The process is parked on every polled object's wait queue under the same
- * cli as the scan, so a readiness change cannot be lost. A finite timeout
- * also sets the timer wake, `wakeup_tick`, which proc_wake_sleepers acts on
- * at the deadline: with another process runnable, schedule() does not return
- * here on its own, and a poll of no queue (nfds == 0) or of objects that
- * never fire would otherwise sleep past its deadline. A computed tick of 0 is
- * stored as 1, since 0 means not sleeping. A process still blocked when
- * schedule() returns, which nothing woke and nothing else could run, idles
- * until the next interrupt, still on every queue so a waker can find it, and
- * leaves the queues after. On return the process is on no queue and its timer
- * wake is cleared.
+ * The process is parked on every object's wait queue under the same cli as
+ * the scan, so a readiness change cannot be lost. A finite timeout also sets
+ * the timer wake, `wakeup_tick`, which proc_wake_sleepers acts on at the
+ * deadline: with another process runnable, schedule() does not return here on
+ * its own, and a wait on no queue or on objects that never fire would
+ * otherwise sleep past its deadline. A computed tick of 0 is stored as 1,
+ * since 0 means not sleeping. A process still blocked when schedule()
+ * returns, which nothing woke and nothing else could run, idles until the
+ * next interrupt, still on every queue so a waker can find it, and leaves the
+ * queues after. On return the process is on no queue and its timer wake is
+ * cleared.
  *
  * @return the ready count, 0 once the deadline has passed, -EINTR, or
  *         -ENOMEM.
  */
-static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline,
-                   int sel)
+int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, int has_deadline, uint32_t deadline)
 {
     struct wait_queue **wqs;
     struct wq_waiter *recs;
@@ -183,8 +182,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
     int rc;
     uint32_t i;
 
-    wqs = kzalloc(sizeof(*wqs) * (nfds ? nfds : 1));
-    recs = kzalloc(sizeof(*recs) * (nfds ? nfds : 1));
+    wqs = kzalloc(sizeof(*wqs) * (n ? n : 1));
+    recs = kzalloc(sizeof(*recs) * (n ? n : 1));
     if (!wqs || !recs) {
         kfree(wqs);
         kfree(recs);
@@ -192,7 +191,12 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
     }
     flags = irq_save();
     for (;;) {
-        int ready = poll_scan(fds, nfds, wqs, sel);
+        int ready;
+
+        for (i = 0; i < n; i++) {
+            wqs[i] = NULL;
+        }
+        ready = scan(ctx, wqs);
         if (ready > 0) {
             rc = ready;
             break;
@@ -206,7 +210,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
             break;
         }
 
-        for (i = 0; i < nfds; i++) {
+        for (i = 0; i < n; i++) {
             recs[i].proc = current_proc;
             recs[i].next = NULL;
             wq_poll_add(wqs[i], &recs[i]);
@@ -223,14 +227,14 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
         }
-        for (i = 0; i < nfds; i++) {
+        for (i = 0; i < n; i++) {
             wq_poll_remove(wqs[i], &recs[i]);
         }
         current_proc->state = PROC_RUNNING;
     }
 
     current_proc->wakeup_tick = 0; /* disarm the timer wake */
-    for (i = 0; i < nfds; i++) {
+    for (i = 0; i < n; i++) {
         wq_poll_remove(wqs[i], &recs[i]);
     }
     current_proc->state = PROC_RUNNING;
@@ -238,6 +242,34 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
     kfree(wqs);
     kfree(recs);
     return rc;
+}
+
+/* A poll's or a select's descriptors, for the scan of `poll_wait`. */
+struct pollfd_scan {
+    struct kernel_pollfd *fds;
+    uint32_t nfds;
+    int sel;
+};
+
+static int scan_pollfds(void *ctx, struct wait_queue **wqs)
+{
+    struct pollfd_scan *p = (struct pollfd_scan *)ctx;
+
+    return poll_scan(p->fds, p->nfds, wqs, p->sel);
+}
+
+/* The poll core over `fds`; `sel` selects the select() per-direction
+ * readiness rule over poll()'s. nfds is already bounded to POLL_MAX_FDS by
+ * the callers. */
+static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline,
+                   int sel)
+{
+    struct pollfd_scan p;
+
+    p.fds = fds;
+    p.nfds = nfds;
+    p.sel = sel;
+    return poll_wait(scan_pollfds, &p, nfds, has_deadline, deadline);
 }
 
 /**
@@ -255,7 +287,7 @@ static uint32_t tick_deadline(uint32_t ticks)
  * Convert a poll(2) millisecond timeout to a deadline in 10 ms ticks, rounded
  * up. `*has_deadline` is 0 for an infinite wait (timeout_ms < 0).
  */
-static uint32_t ms_deadline(int timeout_ms, int *has_deadline)
+uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
 {
     uint32_t ticks;
 
@@ -290,7 +322,7 @@ static int ts_valid(const struct poll_timespec *ts)
 }
 
 /**
- * Convert a timeval to a millisecond timeout for ms_deadline.
+ * Convert a timeval to a millisecond timeout for poll_ms_deadline.
  *
  * Saturating: tv_sec is clamped so tv_sec*1000 cannot overflow the signed
  * result (INT_MAX ms is ~24 days, which for a select() timeout is
@@ -369,7 +401,7 @@ int32_t sys_poll(struct isr_params *params)
     uint32_t nfds = params->ecx;
     int timeout_ms = (int)params->edx;
     int has_deadline;
-    uint32_t deadline = ms_deadline(timeout_ms, &has_deadline);
+    uint32_t deadline = poll_ms_deadline(timeout_ms, &has_deadline);
 
     return poll_common(ufds, nfds, has_deadline, deadline);
 }
@@ -381,9 +413,9 @@ int32_t sys_poll(struct isr_params *params)
  * replaces becomes the process's saved mask: `deliver_signals` puts it back
  * after the handler a signal runs for this wait, or at once when none runs,
  * and a wait that did not end for a signal puts it back through
- * `wait_mask_done`. Returns 0, or -EINVAL or -EFAULT.
+ * `poll_mask_done`. Returns 0, or -EINVAL or -EFAULT.
  */
-static int32_t wait_mask_set(uint32_t umask, uint32_t size)
+int32_t poll_mask_set(uint32_t umask, uint32_t size)
 {
     uint64_t mask;
 
@@ -404,7 +436,7 @@ static int32_t wait_mask_set(uint32_t umask, uint32_t size)
 
 /* The mask back, unless the wait ended for a signal, whose delivery puts it
  * back after its handler. */
-static int32_t wait_mask_done(int32_t ret)
+int32_t poll_mask_done(int32_t ret)
 {
     if (current_proc->sigmask_saved && ret != -EINTR) {
         current_proc->sig_blocked = current_proc->saved_sigmask;
@@ -437,13 +469,13 @@ int32_t sys_ppoll(struct isr_params *params)
         return -ESRCH;
     }
     {
-        int32_t rc = wait_mask_set(params->esi, params->edi);
+        int32_t rc = poll_mask_set(params->esi, params->edi);
 
         if (rc != 0) {
             return rc;
         }
     }
-    return wait_mask_done(poll_common(ufds, nfds, has_deadline, deadline));
+    return poll_mask_done(poll_common(ufds, nfds, has_deadline, deadline));
 }
 
 /**
@@ -547,9 +579,9 @@ int32_t sys__newselect(struct isr_params *params)
         if (!tv_valid(&tv)) {
             return -EINVAL;
         }
-        deadline = ms_deadline(tv_to_ms(&tv), &has_deadline);
+        deadline = poll_ms_deadline(tv_to_ms(&tv), &has_deadline);
     } else {
-        deadline = ms_deadline(-1, &has_deadline); /* NULL timeout == wait forever */
+        deadline = poll_ms_deadline(-1, &has_deadline); /* NULL timeout == wait forever */
     }
     return select_common(nfds, ur, uw, ue, has_deadline, deadline);
 }
@@ -574,9 +606,9 @@ int32_t sys_select(struct isr_params *params)
             if (!tv_valid(&tv)) {
                 return -EINVAL;
             }
-            deadline = ms_deadline(tv_to_ms(&tv), &has_deadline);
+            deadline = poll_ms_deadline(tv_to_ms(&tv), &has_deadline);
         } else {
-            deadline = ms_deadline(-1, &has_deadline);
+            deadline = poll_ms_deadline(-1, &has_deadline);
         }
         return select_common((int)a[0], a[1], a[2], a[3], has_deadline, deadline);
     }
@@ -615,11 +647,11 @@ int32_t sys_pselect6(struct isr_params *params)
         deadline = ts_deadline(NULL, &has_deadline);
     }
     {
-        int32_t rc = wait_mask_set(sigarg[0], sigarg[1]);
+        int32_t rc = poll_mask_set(sigarg[0], sigarg[1]);
 
         if (rc != 0) {
             return rc;
         }
     }
-    return wait_mask_done(select_common(nfds, ur, uw, ue, has_deadline, deadline));
+    return poll_mask_done(select_common(nfds, ur, uw, ue, has_deadline, deadline));
 }
