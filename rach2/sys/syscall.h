@@ -120,8 +120,6 @@
 #define SYS_RT_SIGTIMEDWAIT 177
 #define SYS_MINCORE         218
 #define SYS_MLOCK2          376
-#define SYS_CLOCK_GETTIME64 403
-#define SYS_CLOCK_GETRES64  406
 #define SYS_SET_TID_ADDRESS 258
 #define SYS_SET_ROBUST_LIST 311
 #define SYS_GET_ROBUST_LIST 312
@@ -155,6 +153,11 @@
 #define SYS_SCHED_RR_GET_INTERVAL  161
 #define SYS_SCHED_SETAFFINITY      241
 #define SYS_SCHED_GETAFFINITY      242
+
+/* The clock calls with 64-bit times, whose names are longer than the column
+ * above. */
+#define SYS_CLOCK_GETTIME64     403
+#define SYS_CLOCK_GETRES_TIME64 406
 
 /* Auth/identity, resource, and tail syscalls a login server touches. */
 #define SYS_SETHOSTNAME 74

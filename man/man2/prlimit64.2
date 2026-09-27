@@ -54,7 +54,7 @@ If
 is non-null, it receives the values from before the attempted change.
 Either or both pointers may be null.
 .Pp
-Four resources are stored and enforced:
+Five resources are stored and enforced:
 .Bl -tag -width RLIMIT_NOFILE
 .It Dv RLIMIT_NPROC
 The number of processes with the same real user ID across the machine.
@@ -93,6 +93,11 @@ A change applies at the next
 .Xr execve 2 .
 An exec that runs with an effective ID its caller lacks lowers a soft
 limit above 8 MiB to 8 MiB, as Linux's does.
+.It Dv RLIMIT_CORE
+The bytes of a core file, holes excepted; a soft limit below a page
+leaves none, as
+.Xr core 5
+describes.
 .El
 .Pp
 For these resources the soft limit must not exceed the hard limit.
@@ -100,14 +105,15 @@ A process may lower its hard limits; only a caller with effective user
 ID 0 may raise a hard limit.
 Fork inherits both values and exec preserves them.
 The kernel's initial soft and hard limits are 4096 processes,
-1024 descriptors, and unlimited address space, and the stack's are
-8 MiB soft and unlimited hard, which are Linux's.
+1024 descriptors, and unlimited address space; the stack's are 8 MiB
+soft and unlimited hard, and the core file's 0 soft and unlimited hard,
+which are Linux's.
 Init may replace these defaults as described in
 .Xr limits 7 .
 .Pp
 Every other resource number, including an unknown number, reports
 unlimited values.
-Setting any resource other than the four stored resources succeeds
+Setting any resource other than the five stored resources succeeds
 without changing anything, even if its soft value exceeds its hard value.
 .Pp
 Linux measures each growth of the stack against the limit in force when
@@ -191,4 +197,5 @@ No process record exists for
 .Xr fork 2 ,
 .Xr mmap 2 ,
 .Xr open 2 ,
+.Xr core 5 ,
 .Xr limits 7

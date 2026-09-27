@@ -255,14 +255,15 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 
         if (!p->read_open) {
             {
-                /* As Linux sends it: SI_USER, from the writer itself. */
+                /* As Linux sends it: SI_USER, from the writer itself, to
+                 * the writing thread. */
                 struct k_siginfo info;
 
                 k_memset(&info, 0, sizeof(info));
                 info.code = SI_USER;
                 info.pid = current_proc->tgid;
                 info.uid = current_proc->ruid;
-                signal_post_info(current_proc, SIGPIPE, &info);
+                signal_post_thread(current_proc, SIGPIPE, &info);
             }
             return (done > 0) ? (int32_t)done : -EPIPE;
         }

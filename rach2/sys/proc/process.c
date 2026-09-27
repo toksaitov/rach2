@@ -166,6 +166,8 @@ process_t *alloc_process(void)
     p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY32;
     p->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
     p->rlim[RLIM_STACK].max = RLIM_INFINITY32;
+    p->rlim[RLIM_CORE].cur = 0;
+    p->rlim[RLIM_CORE].max = RLIM_INFINITY32;
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
 

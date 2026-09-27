@@ -1,0 +1,143 @@
+.Dd September 27, 2026
+.Dt CORE 5
+.Os
+.Sh NAME
+.Nm core
+.Nd memory image of a process a signal ended
+.Sh SYNOPSIS
+.Pa core
+.Sh DESCRIPTION
+A process that
+.Dv SIGQUIT , SIGILL , SIGTRAP , SIGABRT , SIGBUS , SIGFPE , SIGSEGV ,
+.Dv SIGXCPU , SIGXFSZ
+or
+.Dv SIGSYS
+ends by its default action leaves a core file, and so does one that ends
+with
+.Dv SIGSEGV
+because the kernel could not build or read back a signal frame.
+GDB reads the file with the program to show where the process was.
+.Pp
+The file is written only when the process is dumpable, as
+.Xr prctl 2
+describes, its soft
+.Dv RLIMIT_CORE
+is at least a page, 4096 bytes, and no other thread of it has begun to end
+it.
+The soft limit starts at 0, so a process asks for core files with
+.Ic ulimit Fl c Cm unlimited
+in the shell, or through
+.Xr prlimit64 2 .
+.Pp
+The file is
+.Pa core
+in the working directory of the process.
+Whatever has that name is unlinked first, and the file is created with
+.Dv O_EXCL
+and
+.Dv O_NOFOLLOW ,
+mode 0600 less the umask, owned by the effective user and group IDs, so a
+link planted at the name cannot send the file elsewhere.
+A directory the process cannot write, or a descriptor table with no free
+entry, leaves no file.
+.Pp
+The other threads of the process are sent
+.Dv SIGKILL
+before the file is written, and the process ends with the signal after
+it.
+Its wait status has the core bit,
+.Dv WCOREDUMP
+in
+.Xr wait 2 ,
+and
+.Xr waitid 2
+reports
+.Dv CLD_DUMPED ,
+only when the whole file was written.
+.Pp
+Linux names the file by
+.Pa /proc/sys/kernel/core_pattern
+and may pipe it to a program; here the name is always
+.Pa core .
+Linux also writes
+.Dv NT_SIGINFO ,
+.Dv NT_FILE
+and the TLS entries as notes, leaves out the pages of a private file
+mapping the process never wrote, and writes a core file for a process
+that is not dumpable when
+.Pa /proc/sys/fs/suid_dumpable
+asks; this kernel does none of these.
+.Ss Format
+The file is an ELF32 file of type
+.Dv ET_CORE
+for
+.Dv EM_386 ,
+laid out as Linux lays it out for i386.
+Its first program header is a
+.Dv PT_NOTE
+segment with these notes, in this order:
+.Bl -tag -width NT_PRXFPREG
+.It Dv NT_PRSTATUS
+The 144-byte
+.Vt elf_prstatus
+of the thread the signal ended: the signal, the low words of its pending
+and blocked sets, its thread ID and the process's parent, group and
+session, the CPU times, and its registers in the order of
+.Vt user_regs_struct .
+.It Dv NT_PRPSINFO
+The 124-byte
+.Vt elf_prpsinfo :
+the nice value, the real user and group IDs, the process's IDs, the
+program's name and the first 79 bytes of its arguments.
+.It Dv NT_AUXV
+The auxiliary vector the program started with.
+.It Dv NT_FPREGSET
+The thread's x87 state, as
+.Vt user_i387_struct .
+.It Dv NT_PRXFPREG
+Named
+.Dq LINUX ,
+the thread's
+.Ic fxsave
+image.
+.El
+.Pp
+.Dv NT_PRSTATUS ,
+.Dv NT_FPREGSET
+and
+.Dv NT_PRXFPREG
+follow for each other thread.
+One
+.Dv PT_LOAD
+segment follows for each region of the address space, in address order,
+with the region's protection.
+A readable region has all its bytes in the file, from an offset aligned
+to a page; a
+.Dv PROT_NONE
+region has none.
+A page the process never touched is a hole in the file, and reads as
+zeros.
+.Pp
+The soft
+.Dv RLIMIT_CORE
+bounds the bytes written, holes excepted.
+A file that reaches it stops there, and the wait status has no core bit.
+.Sh FILES
+.Bl -tag -width core
+.It Pa core
+The core file, in the working directory of the process that left it.
+.El
+.Sh EXAMPLES
+.Dl ulimit -c unlimited
+.Pp
+.Pa tests/musl/coremusl.c
+aborts children in a directory of
+.Pa /dev/shm ,
+where a link has the name, and reads the notes and the memory of the file
+one leaves; a child whose limit is two pages leaves a file cut short, and
+one whose limit is 0, or which is not dumpable, leaves none.
+.Sh SEE ALSO
+.Xr prctl 2 ,
+.Xr prlimit64 2 ,
+.Xr sigaction 2 ,
+.Xr wait 2

@@ -114,14 +114,20 @@ struct k_sigaction {
 /* A 64-bit signal set: bit (signo-1) set means signo is in the set. */
 #define KSIG_BIT(signo) (1ULL << ((signo) - 1))
 
+/* The bit of a wait status that says the process left a core file. */
+#define WCOREFLAG 0x80
+
 /* Signals that can never be caught, blocked, or ignored. */
 #define KSIG_UNCATCHABLE (KSIG_BIT(SIGKILL) | KSIG_BIT(SIGSTOP))
 
-/* Default-action classes; ksig_default_action in syscall.c maps a signal to
- * one. The common default is TERM; SIGCHLD/SIGURG/SIGWINCH/SIGCONT ignore; the
- * job-control signals SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU stop. */
+/* Default-action classes; ksig_default_action in syscall_proc.c maps a
+ * signal to one. The common default is TERM; the signals of a program fault,
+ * SIGQUIT, SIGABRT, SIGXCPU and SIGXFSZ end the process with a core file;
+ * SIGCHLD/SIGURG/SIGWINCH/SIGCONT ignore; the job-control signals
+ * SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU stop. */
 enum ksig_default {
-    KSIG_DEFAULT_TERM,   /* terminate (the common case, incl. core signals) */
+    KSIG_DEFAULT_TERM,   /* terminate (the common case) */
+    KSIG_DEFAULT_CORE,   /* terminate with a core file */
     KSIG_DEFAULT_IGNORE, /* ignore */
     KSIG_DEFAULT_STOP    /* stop (job control) */
 };

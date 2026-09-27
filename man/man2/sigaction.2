@@ -82,6 +82,14 @@ and
 .Dv SIGSTOP , SIGTSTP , SIGTTIN ,
 and
 .Dv SIGTTOU .
+.It Core
+.Dv SIGQUIT , SIGILL , SIGTRAP , SIGABRT , SIGBUS , SIGFPE , SIGSEGV ,
+.Dv SIGXCPU , SIGXFSZ ,
+and
+.Dv SIGSYS ,
+which terminate the process and leave a core file where
+.Xr core 5
+allows one.
 .It Terminate
 Every other accepted signal number.
 .El
@@ -96,7 +104,7 @@ A stop signal removes pending
 .Dv SIGCONT .
 .Dv SIGKILL
 makes a stopped process runnable so it can terminate.
-A terminating default ends every thread of the process, as
+A terminating or core default ends every thread of the process, as
 .Xr exit 2
 describes for
 .Nm exit_group .
@@ -467,4 +475,5 @@ There is no current process.
 .El
 .Sh SEE ALSO
 .Xr kill 2 ,
-.Xr wait 2
+.Xr wait 2 ,
+.Xr core 5

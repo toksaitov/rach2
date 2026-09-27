@@ -28,6 +28,24 @@ static int32_t sys_setitimer(isr_params_t *params);
 static int32_t sys_getitimer(isr_params_t *params);
 static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
+static int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
+static int32_t sys_accept4(isr_params_t *params);
+static int32_t sys_bind(isr_params_t *params);
+static int32_t sys_connect(isr_params_t *params);
+static int32_t sys_getpeername(isr_params_t *params);
+static int32_t sys_getsockname(isr_params_t *params);
+static int32_t sys_getsockopt(isr_params_t *params);
+static int32_t sys_listen(isr_params_t *params);
+static int32_t sys_recvfrom(isr_params_t *params);
+static int32_t sys_recvmmsg(isr_params_t *params);
+static int32_t sys_recvmsg(isr_params_t *params);
+static int32_t sys_sendmmsg(isr_params_t *params);
+static int32_t sys_sendmsg(isr_params_t *params);
+static int32_t sys_sendto(isr_params_t *params);
+static int32_t sys_setsockopt(isr_params_t *params);
+static int32_t sys_shutdown(isr_params_t *params);
+static int32_t sys_socket(isr_params_t *params);
+static int32_t sys_socketpair(isr_params_t *params);
 #include "syscall.c"
 #include "syscall_net.c"
 
@@ -147,8 +165,16 @@ int64_t rtc_boot_epoch(void)
 
 /** The model's one other process, pid 9, whose CPU clock a caller may read. */
 static process_t other;
+static struct tgroup group, other_group;
 
 /** Find the model's processes: this one and pid 9. */
+/** Each process here is one thread, whose CPU time is the process's. */
+void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
+{
+    *user = p->utime;
+    *sys = p->stime;
+}
+
 process_t *get_process(uint32_t pid)
 {
     if (pid == proc.pid) {
@@ -260,7 +286,7 @@ static void connects(void)
 /** A stale descriptor cannot alter another process's mode or palette. */
 static void framebuffer(void)
 {
-    proc.pid = 1;
+    proc.pid = proc.tgid = 1;
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "acquire framebuffer");
     CHECK(enters == 1 && fb_owner_pid == 1 && vga_graphics_mode, "graphics entered");
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0 && enters == 1, "mode request is idempotent");
@@ -268,15 +294,15 @@ static void framebuffer(void)
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "reacquire framebuffer");
     CHECK(enters == 2 && vga_graphics_mode && fb_owner_pid == 1, "graphics reentered");
     CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == 0, "release before second owner");
-    proc.pid = 2;
+    proc.pid = proc.tgid = 2;
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == 0, "second owner acquires");
-    proc.pid = 1;
+    proc.pid = proc.tgid = 1;
     CHECK(framebuffer_ioctl(FB_MODE_TEXT, 0) == -EBUSY, "stale text request refused");
     CHECK(framebuffer_ioctl(FB_MODE_13H, 0) == -EBUSY, "stale graphics request refused");
     CHECK(framebuffer_ioctl(FB_SETPALETTE, 16) == -EBUSY, "stale palette request refused");
     CHECK(fb_owner_pid == 2 && vga_graphics_mode && enters == 3 && exits == 2 && !palettes,
           "second owner's display unchanged");
-    proc.pid = 2;
+    proc.pid = proc.tgid = 2;
     CHECK(framebuffer_ioctl(FB_SETPALETTE, 0) == -EFAULT, "null palette refused");
     CHECK(framebuffer_ioctl(FB_SETPALETTE, 900) == -EFAULT, "short palette refused");
     CHECK(framebuffer_ioctl(FB_SETPALETTE, 16) == 0 && palettes == 1, "owner sets palette");
@@ -899,10 +925,10 @@ static void clock_ids(void)
     kernel_ticks = 4205;
     kernel_uptime_seconds = 42;
     kernel_second_ticks = 5;
-    proc.pid = 3;
+    proc.pid = proc.tgid = 3;
     proc.utime = 250;
     proc.stime = 120;
-    other.pid = 9;
+    other.pid = other.tgid = 9;
     other.utime = 7;
     other.stime = 1;
     for (clk = 1; clk <= 7; clk++) {
@@ -1080,6 +1106,10 @@ static void clock_sleeps(void)
 /** Run the independent syscall state cases. */
 int main(void)
 {
+    proc.tg = &group;
+    group.leader = &proc;
+    other.tg = &other_group;
+    other_group.leader = &other;
     connects();
     framebuffer();
     clocks();

@@ -1,0 +1,359 @@
+/*
+ * coredump.c: the core file of a process a signal ends, as coredump.h
+ * describes it.
+ */
+
+#include "coredump.h"
+
+#include "elf.h"
+#include "fpu.h"
+#include "process.h"
+#include "tgroup.h"
+#include "../lib/kerrno.h"
+#include "../lib/kstring.h"
+#include "../mm/kheap.h"
+#include "../mm/mm.h"
+#include "../mm/paging.h"
+#include "../mm/vm.h"
+
+/* The notes Linux writes for an i386 process, and their sizes. */
+#define NT_PRSTATUS 1u
+#define NT_FPREGSET 2u
+#define NT_PRPSINFO 3u
+#define NT_AUXV     6u
+#define NT_PRXFPREG 0x46E62B7Fu
+
+#define PRSTATUS_SIZE 144u
+#define PRPSINFO_SIZE 124u
+#define FPREGSET_SIZE 108u
+#define PRXFPREG_SIZE 512u
+
+/* The ELF header, a program header and a note header. */
+#define EHDR_SIZE 52u
+#define PHDR_SIZE 32u
+
+/* What is being written and how much may be. */
+struct core_out {
+    core_write_fn write;
+    void *ctx;
+    uint32_t done;
+    uint32_t limit;
+    int32_t err;
+};
+
+static void put16(uint8_t *p, uint16_t v)
+{
+    k_memcpy(p, &v, sizeof(v));
+}
+
+static void put32(uint8_t *p, uint32_t v)
+{
+    k_memcpy(p, &v, sizeof(v));
+}
+
+/** Write `len` bytes of `buf`, or a hole of `len` zeros when `buf` is null,
+ * unless an earlier write failed or the bytes pass the limit, which a hole
+ * does not count toward; 0, or -1 with `err` set. */
+static int out(struct core_out *o, const void *buf, uint32_t len)
+{
+    int32_t rc;
+
+    if (o->err != 0) {
+        return -1;
+    }
+    if (buf && len > o->limit - o->done) {
+        o->err = -EFBIG;
+        return -1;
+    }
+    rc = o->write(o->ctx, buf, len);
+    if (rc < 0) {
+        o->err = rc;
+        return -1;
+    }
+    if (buf) {
+        o->done += len;
+    }
+    return 0;
+}
+
+/** The bytes a note of `descsz` bytes takes, its name "CORE" or "LINUX"
+ * padded to eight bytes and its description to a word. */
+static uint32_t note_bytes(uint32_t descsz)
+{
+    return 12u + 8u + ((descsz + 3u) & ~3u);
+}
+
+/** Put the note `type` named `name` with `desc` at `*p` and step past it. */
+static void note_put(uint8_t **p, const char *name, uint32_t type, const void *desc,
+                     uint32_t descsz)
+{
+    uint8_t *q = *p;
+    uint32_t namesz = (uint32_t)k_strlen(name) + 1u;
+
+    put32(q, namesz);
+    put32(q + 4, descsz);
+    put32(q + 8, type);
+    k_memset(q + 12, 0, 8);
+    k_memcpy(q + 12, name, namesz);
+    k_memcpy(q + 20, desc, descsz);
+    k_memset(q + 20 + descsz, 0, ((descsz + 3u) & ~3u) - descsz);
+    *p = q + note_bytes(descsz);
+}
+
+/** Put a time in ticks as the timeval of an elf_prstatus. */
+static void put_timeval(uint8_t *p, uint32_t ticks)
+{
+    put32(p, ticks / 100u);
+    put32(p + 4, (ticks % 100u) * 10000u);
+}
+
+/**
+ * Fill the i386 `elf_prstatus` of thread `t`, whose user registers are the
+ * frame at the top of its kernel stack, with `signo` the signal that ends
+ * the process: the signal, the pending and blocked sets' low words, the ids,
+ * the times, the 17 registers in `user_regs_struct`'s order, and a valid
+ * floating-point mark.
+ */
+static void prstatus_fill(uint8_t *d, const process_t *t, int signo)
+{
+    const isr_params_t *tf = (const isr_params_t *)(t->kernel_stack - sizeof(isr_params_t));
+    uint32_t regs[17];
+    int i;
+
+    regs[0] = tf->ebx;
+    regs[1] = tf->ecx;
+    regs[2] = tf->edx;
+    regs[3] = tf->esi;
+    regs[4] = tf->edi;
+    regs[5] = tf->ebp;
+    regs[6] = tf->eax;
+    regs[7] = tf->ds & 0xFFFFu;
+    regs[8] = tf->es & 0xFFFFu;
+    regs[9] = tf->fs & 0xFFFFu;
+    regs[10] = tf->gs & 0xFFFFu;
+    regs[11] = (uint32_t)t->orig_eax;
+    regs[12] = tf->eip;
+    regs[13] = tf->cs & 0xFFFFu;
+    regs[14] = tf->eflags;
+    regs[15] = tf->user_esp;
+    regs[16] = tf->user_ss & 0xFFFFu;
+    k_memset(d, 0, PRSTATUS_SIZE);
+    put32(d, (uint32_t)signo);
+    put16(d + 12, (uint16_t)signo);
+    put32(d + 16, (uint32_t)t->sig_pending);
+    put32(d + 20, (uint32_t)t->sig_blocked);
+    put32(d + 24, t->pid);
+    put32(d + 28, t->parent_pid);
+    put32(d + 32, t->pgid);
+    put32(d + 36, t->sid);
+    put_timeval(d + 40, t->utime);
+    put_timeval(d + 48, t->stime);
+    put_timeval(d + 56, t->tg->leader->cutime);
+    put_timeval(d + 64, t->tg->leader->cstime);
+    for (i = 0; i < 17; i++) {
+        put32(d + 72 + 4 * i, regs[i]);
+    }
+    put32(d + 140, 1);
+}
+
+/**
+ * Fill the i386 `elf_prpsinfo` of the current process: its state, nice
+ * value, ids, program name, and the start of its arguments, NULs made
+ * spaces, as `ps` shows them, read from its stack.
+ */
+static void prpsinfo_fill(uint8_t *d)
+{
+    const process_t *p = current_proc;
+    struct mm *mm = p->mm;
+    uint32_t len = mm->arg_end - mm->arg_start;
+    uint32_t i;
+
+    k_memset(d, 0, PRPSINFO_SIZE);
+    d[1] = 'R';
+    d[3] = (uint8_t)p->nice;
+    put16(d + 8, (uint16_t)p->ruid);
+    put16(d + 10, (uint16_t)p->rgid);
+    put32(d + 12, p->tgid);
+    put32(d + 16, p->parent_pid);
+    put32(d + 20, p->pgid);
+    put32(d + 24, p->sid);
+    k_memcpy(d + 28, p->comm, 16);
+    if (len > 79u) {
+        len = 79u;
+    }
+    if (mm->arg_end > mm->arg_start &&
+        paging_access(mm, mm->arg_start, d + 44, len, 0) == 0) {
+        for (i = 0; i + 1u < len; i++) {
+            if (d[44 + i] == 0) {
+                d[44 + i] = ' ';
+            }
+        }
+    }
+    d[44 + 79] = 0;
+}
+
+/** Whether `t` is a thread of the dumping process the core describes: its
+ * leader and live threads, which have a frame on their kernel stacks. */
+static int core_thread(const process_t *t)
+{
+    return t->tg == current_proc->tg && t->state != PROC_UNUSED &&
+           (t->state != PROC_ZOMBIE || t == current_proc) && t->kernel_stack != 0;
+}
+
+/* The notes are in Linux's order: the dumping thread's status, the
+ * process's information, the auxiliary vector and the thread's
+ * floating-point state, which is in the unit's registers until it is saved
+ * here, then each other thread's status and the floating-point state its
+ * last switch saved. */
+uint8_t *core_notes(int signo, uint32_t *size)
+{
+    uint8_t status[PRSTATUS_SIZE];
+    uint8_t info[PRPSINFO_SIZE];
+    uint8_t fp[FPU_LINUX_SIZE];
+    uint32_t threads = 0;
+    uint32_t each = note_bytes(PRSTATUS_SIZE) + note_bytes(FPREGSET_SIZE) +
+                    note_bytes(PRXFPREG_SIZE);
+    uint8_t *buf;
+    uint8_t *p;
+    process_t *t;
+
+    for (t = proc_list; t; t = t->next) {
+        if (core_thread(t)) {
+            threads++;
+        }
+    }
+    *size = threads * each + note_bytes(PRPSINFO_SIZE) + note_bytes(MM_AUXV_WORDS * 4u);
+    buf = kmalloc(*size);
+    if (!buf) {
+        return NULL;
+    }
+    p = buf;
+    prstatus_fill(status, current_proc, signo);
+    note_put(&p, "CORE", NT_PRSTATUS, status, PRSTATUS_SIZE);
+    prpsinfo_fill(info);
+    note_put(&p, "CORE", NT_PRPSINFO, info, PRPSINFO_SIZE);
+    note_put(&p, "CORE", NT_AUXV, current_proc->mm->auxv, MM_AUXV_WORDS * 4u);
+    fpu_save(current_proc->fpu);
+    fpu_to_linux(current_proc->fpu, fp);
+    note_put(&p, "CORE", NT_FPREGSET, fp, FPREGSET_SIZE);
+    note_put(&p, "LINUX", NT_PRXFPREG, fp + 112, PRXFPREG_SIZE);
+    for (t = proc_list; t; t = t->next) {
+        if (t == current_proc || !core_thread(t)) {
+            continue;
+        }
+        prstatus_fill(status, t, signo);
+        note_put(&p, "CORE", NT_PRSTATUS, status, PRSTATUS_SIZE);
+        fpu_to_linux(t->fpu, fp);
+        note_put(&p, "CORE", NT_FPREGSET, fp, FPREGSET_SIZE);
+        note_put(&p, "LINUX", NT_PRXFPREG, fp + 112, PRXFPREG_SIZE);
+    }
+    *size = (uint32_t)(p - buf);
+    return buf;
+}
+
+/** The bytes of region `r` the file has: all of a readable region, none of
+ * one that is not, as Linux leaves a PROT_NONE reservation out. */
+static uint32_t region_file_size(const vma_t *r)
+{
+    return (r->prot & VM_PROT_READ) ? r->end - r->start : 0u;
+}
+
+/** Write the pages of region `r`: a page the process has, read through its
+ * address space, and a hole for one it never touched, which is not brought
+ * in for the file. */
+static void region_write(struct core_out *o, struct mm *mm, const vma_t *r)
+{
+    uint8_t *page = kmalloc(PAGE_SIZE);
+    uint32_t addr;
+
+    if (!page) {
+        o->err = -ENOMEM;
+        return;
+    }
+    for (addr = r->start; addr < r->end && o->err == 0; addr += PAGE_SIZE) {
+        if (paging_user_phys(mm->dir, addr) == 0 ||
+            paging_access(mm, addr, page, PAGE_SIZE, 0) != 0) {
+            (void)out(o, NULL, PAGE_SIZE);
+        } else {
+            (void)out(o, page, PAGE_SIZE);
+        }
+    }
+    kfree(page);
+}
+
+int32_t core_write(core_write_fn write, void *ctx, const uint8_t *notes, uint32_t notes_size,
+                   uint32_t limit)
+{
+    struct mm *mm = current_proc->mm;
+    const vm_space_t *vm = &mm->vm;
+    struct core_out o;
+    uint8_t ehdr[EHDR_SIZE];
+    uint8_t phdr[PHDR_SIZE];
+    uint32_t phnum = vm->count + 1u;
+    uint32_t data;
+    uint32_t off;
+    uint32_t i;
+
+    o.write = write;
+    o.ctx = ctx;
+    o.done = 0;
+    o.limit = limit;
+    o.err = 0;
+
+    k_memset(ehdr, 0, sizeof(ehdr));
+    ehdr[EI_MAG0] = ELFMAG0;
+    ehdr[EI_MAG1] = ELFMAG1;
+    ehdr[EI_MAG2] = ELFMAG2;
+    ehdr[EI_MAG3] = ELFMAG3;
+    ehdr[EI_CLASS] = ELFCLASS32;
+    ehdr[EI_DATA] = ELFDATA2LSB;
+    ehdr[EI_VERSION] = EV_CURRENT;
+    put16(ehdr + 16, ET_CORE);
+    put16(ehdr + 18, EM_386);
+    put32(ehdr + 20, EV_CURRENT);
+    put32(ehdr + 28, EHDR_SIZE);
+    put16(ehdr + 40, EHDR_SIZE);
+    put16(ehdr + 42, PHDR_SIZE);
+    put16(ehdr + 44, (uint16_t)phnum);
+    (void)out(&o, ehdr, sizeof(ehdr));
+
+    k_memset(phdr, 0, sizeof(phdr));
+    put32(phdr, PT_NOTE);
+    put32(phdr + 4, EHDR_SIZE + phnum * PHDR_SIZE);
+    put32(phdr + 16, notes_size);
+    (void)out(&o, phdr, sizeof(phdr));
+    data = (EHDR_SIZE + phnum * PHDR_SIZE + notes_size + PAGE_SIZE - 1u) & ~(PAGE_SIZE - 1u);
+    off = data;
+    for (i = 0; i < vm->count; i++) {
+        const vma_t *r = &vm->vmas[i];
+        uint32_t flags = 0;
+
+        if (r->prot & VM_PROT_READ) {
+            flags |= PF_R;
+        }
+        if (r->prot & VM_PROT_WRITE) {
+            flags |= PF_W;
+        }
+        if (r->prot & VM_PROT_EXEC) {
+            flags |= PF_X;
+        }
+        k_memset(phdr, 0, sizeof(phdr));
+        put32(phdr, PT_LOAD);
+        put32(phdr + 4, off);
+        put32(phdr + 8, r->start);
+        put32(phdr + 16, region_file_size(r));
+        put32(phdr + 20, r->end - r->start);
+        put32(phdr + 24, flags);
+        put32(phdr + 28, PAGE_SIZE);
+        (void)out(&o, phdr, sizeof(phdr));
+        off += region_file_size(r);
+    }
+    (void)out(&o, notes, notes_size);
+    (void)out(&o, NULL, data - (EHDR_SIZE + phnum * PHDR_SIZE + notes_size));
+    for (i = 0; i < vm->count && o.err == 0; i++) {
+        if (region_file_size(&vm->vmas[i]) != 0) {
+            region_write(&o, mm, &vm->vmas[i]);
+        }
+    }
+    return o.err;
+}

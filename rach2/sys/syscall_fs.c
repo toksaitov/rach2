@@ -65,6 +65,7 @@
 #include "network/net.h"
 #include "ipc/unix.h"
 #include "mm/filemap.h"
+#include "proc/coredump.h"
 #include "syscall_internal.h"
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
@@ -6989,6 +6990,87 @@ int32_t sys_unlink(isr_params_t *params)
     }
     rc = do_unlink(path);
     path_buf_put(path);
+    return rc;
+}
+
+/* Where `fs_core_file` writes: the open file, the place of the next byte,
+ * and the end of the last bytes written, which a hole leaves short of it. */
+struct core_file {
+    struct open_file *ofd;
+    uint64_t pos;
+    uint64_t end;
+};
+
+/** The core file's writer for `core_write`: `len` bytes of `buf` at the
+ * file's place, or a hole of `len` bytes for a null `buf`. A short write is
+ * a full disk. */
+static int32_t core_file_put(void *ctx, const void *buf, uint32_t len)
+{
+    struct core_file *cf = ctx;
+    int32_t n;
+
+    if (buf) {
+        n = vfs_write(cf->ofd->vmnt, cf->ofd->fhandle, buf, len, cf->pos);
+        if (n < 0) {
+            return n;
+        }
+        if ((uint32_t)n != len) {
+            return -ENOSPC;
+        }
+        cf->end = cf->pos + len;
+    }
+    cf->pos += len;
+    return 0;
+}
+
+int32_t fs_core_file(int signo, uint32_t limit)
+{
+    static const char zero;
+    struct core_file cf;
+    fd_entry_t *entry;
+    uint32_t notes_size;
+    uint8_t *notes = core_notes(signo, &notes_size);
+    char *path = path_buf_get();
+    int32_t fd = -ENOMEM;
+    int32_t rc;
+    int len;
+
+    if (!notes || !path) {
+        goto out;
+    }
+    k_memcpy(path, "core", 5);
+    len = path_prepend(path, VFS_PATH_MAX, 4, proc_cwd(current_proc));
+    if (len >= 0) {
+        len = canonicalize_abs(path);
+    }
+    if (len < 0) {
+        fd = len;
+        goto out;
+    }
+    (void)do_unlink(path);
+    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+out:
+    path_buf_put(path);
+    if (fd < 0) {
+        kfree(notes);
+        return fd;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || !entry->ofd || !entry->ofd->vmnt) {
+        rc = -EINVAL;
+    } else {
+        cf.ofd = entry->ofd;
+        cf.pos = 0;
+        cf.end = 0;
+        rc = core_write(core_file_put, &cf, notes, notes_size, limit);
+        if (rc == 0 && cf.end < cf.pos) {
+            cf.pos--;
+            rc = core_file_put(&cf, &zero, 1);
+        }
+    }
+    kfree(notes);
+    fd_release_backing(entry);
+    fd_free(&current_proc->fds, fd);
     return rc;
 }
 

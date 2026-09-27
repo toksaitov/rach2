@@ -18,6 +18,7 @@
 #include "sys/mm/mm.h"
 #include "sys/proc/tgroup.h"
 #include "sys/proc/ptrace.h"
+#include "sys/proc/coredump.h"
 #include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
@@ -275,11 +276,18 @@ static void timer_handler(isr_params_t *params)
 /**
  * Terminate the current user process by signal and give up its CPU.
  *
- * Shared teardown for every kill that originates outside sys_exit: the CTRL+C
- * handler and the page-fault segfault path both route here. The process dies by
- * signal `signo` (SIGSEGV for a fault, SIGINT for CTRL+C); the exit code stores
- * the Linux wait-status encoding of a signal death (low 7 bits = the signal),
- * so the parent's waitpid sees WIFSIGNALED/WTERMSIG. The whole process dies:
+ * Shared teardown for every death by signal: a signal whose default action
+ * ends the process, and a signal frame that cannot be built or read back. The
+ * process dies by signal `signo`; the exit code stores the Linux wait-status
+ * encoding of a signal death (low 7 bits = the signal), so the parent's
+ * waitpid sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process
+ * leaves a core file first, when it is dumpable, its soft RLIMIT_CORE allows
+ * a page, and no other thread has begun to end it; the flag stays in the
+ * status, as WCOREDUMP, only when the whole file was written. The file is
+ * written after the other threads are sent SIGKILL and before any of the
+ * process is released, as Linux's `do_coredump` does, and with `in_syscall`
+ * set, as a system call writes a file, so that the timer does not switch
+ * away in the middle of the file system's work. The whole process dies:
  * its other threads are sent SIGKILL, and the last thread to end publishes
  * the death. This thread releases the descriptor table and its reference to
  * the address space, switching off it before its page directory can be
@@ -289,14 +297,12 @@ static void timer_handler(isr_params_t *params)
  * this jumps back into shell_loop on a fresh kernel stack. Any other process
  * stays a zombie for the parent's waitpid to collect, and the now-READY parent
  * is scheduled. Does not return for a user process.
- *
- * Declared extern (no header) by mm/paging.c, which calls it from the fault
- * handler, mirroring how syscall.c reaches shell_loop/stack.
  */
 void terminate_current_process(int32_t signo)
 {
     bool is_init;
     uint32_t pid;
+    int core;
     int alone;
     int last;
 
@@ -312,7 +318,16 @@ void terminate_current_process(int32_t signo)
 
     /* The signal ends the whole process: the other threads are sent SIGKILL,
      * and the process ends with this signal whichever thread ends last. */
-    proc_group_exit(signo & 0x7F);
+    core = (signo & WCOREFLAG) && !current_proc->tg->exiting && !current_proc->tg->exec_task;
+    signo &= 0x7F;
+    proc_group_exit(signo);
+    if (core && current_proc->dumpable && current_proc->rlim[RLIM_CORE].cur >= PAGE_SIZE) {
+        current_proc->in_syscall = 1;
+        if (fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur) == 0) {
+            signo |= WCOREFLAG;
+            current_proc->tg->exit_code = signo;
+        }
+    }
     alone = current_proc->tg->live == 1;
 
     /* If the console-owning session leader is dying (init, or a later TIOCSCTTY
@@ -328,7 +343,7 @@ void terminate_current_process(int32_t signo)
         fb_release_if_owner(pid);
     }
 
-    last = proc_exit_cleanup(signo & 0x7F);
+    last = proc_exit_cleanup(signo);
 
     /* The address space goes now, not at the reap; `mm_drop` switches off
      * it first when this was its last user, since free_page_directory
@@ -361,7 +376,7 @@ void terminate_current_process(int32_t signo)
         }
         /* Same resume path as when init exits normally; see sys_exit. */
         klog(KLOG_INFO, "terminate",
-             "init process %d killed by signal %d, returning to kernel shell", pid, signo);
+             "init process %d killed by signal %d, returning to kernel shell", pid, signo & 0x7F);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
         free_process(current_proc);

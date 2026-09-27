@@ -2155,7 +2155,7 @@ void init_syscall(void)
     _syscall_table[SYS_MLOCK2] = sys_mlock2;
     _syscall_table[SYS_MINCORE] = sys_mincore;
     _syscall_table[SYS_CLOCK_GETTIME64] = sys_clock_gettime64;
-    _syscall_table[SYS_CLOCK_GETRES64] = sys_clock_getres_time64;
+    _syscall_table[SYS_CLOCK_GETRES_TIME64] = sys_clock_getres_time64;
     _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     /* musl's exit() issues exit_group(); for a single-threaded process it is

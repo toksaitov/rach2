@@ -24,11 +24,12 @@
  * tracer is freed from the next return to user mode, a traced one by its
  * tracer's wait, and the leader, whose id is the process id, waits for the
  * rest of its group. The last thread detaches the process's own tracees,
- * reparents the children onto init, gives the process its status, the group's when exit_group or a fatal signal
- * ended it and the leader's own otherwise, and notifies the parent. The
- * address space and the descriptor-table allocation are not released here:
- * a normal exit leaves them to the reap, and a death by signal drops the
- * address space before scheduling.
+ * reparents the children onto init, gives the process its status, the
+ * group's when exit_group or a fatal signal ended it and the leader's own
+ * otherwise, and notifies the parent. The address space and the
+ * descriptor-table allocation are not released here: a normal exit leaves
+ * them to the reap, and a death by signal drops the address space before
+ * scheduling.
  *
  * `status` is the thread's encoded wait status. Returns nonzero when the
  * process ended with this thread. The caller must not return to user mode.
