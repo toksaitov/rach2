@@ -33,8 +33,9 @@ static uint8_t user[1024];
 static process_t *named;
 static process_t *ends_at_copy;
 static uint32_t waiters_at;
+static uint32_t slow_at, slow_ticks, armed;
 static struct futex_q waiter;
-static int masked, failures, wakes;
+static int masked, failures, wakes, waits;
 
 #define CHECK(c, detail)                              \
     do {                                              \
@@ -66,7 +67,8 @@ static void word_set(uint32_t addr, uint32_t w)
 }
 
 /** Bring a range in; a fault for a write taken with interrupts on is a
- * sleep in which the waiter on the word at `waiters_at` sets its bit. */
+ * sleep in which the waiter on the word at `waiters_at` sets its bit, and
+ * one at `slow_at` a sleep of `slow_ticks` ticks. */
 int vm_prefault_range(uint32_t addr, uint32_t len, int write)
 {
     if (!in_user(addr, len)) {
@@ -75,6 +77,10 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
     if (write && !masked && waiters_at != 0 && waiters_at == addr) {
         word_set(addr, word_at(addr) | FUTEX_WAITERS);
         waiters_at = 0;
+    }
+    if (!masked && slow_at != 0 && slow_at == addr) {
+        kernel_ticks += slow_ticks;
+        slow_at = 0;
     }
     return 1;
 }
@@ -129,11 +135,14 @@ process_t *get_process(uint32_t pid)
     return pid == 5 ? named : NULL;
 }
 
+/** A wait that ends at its deadline, noting the tick it was armed for. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     (void)cond;
     (void)arg;
+    waits++;
+    armed = current_proc->wakeup_tick;
     return 0;
 }
 
@@ -260,6 +269,44 @@ static void pending_released(void)
     }
 }
 
+/** Wait on the word at 600, which holds 7, for `sec` s and `nsec` ns from
+ * tick `now`, while bringing the word's page in takes `fault` ticks. */
+static int32_t timed_wait(uint32_t now, int32_t sec, int32_t nsec, uint32_t fault)
+{
+    isr_params_t p;
+    struct kernel_timespec ts;
+
+    ts.tv_sec = sec;
+    ts.tv_nsec = nsec;
+    k_memcpy(user + 608, &ts, sizeof(ts));
+    word_set(600, 7u);
+    kernel_ticks = now;
+    slow_at = 600;
+    slow_ticks = fault;
+    waits = 0;
+    armed = 0;
+    k_memset(&p, 0, sizeof(p));
+    p.ebx = 600;
+    p.ecx = FUTEX_WAIT | FUTEX_PRIVATE_FLAG;
+    p.edx = 7;
+    p.esi = 608;
+    return sys_futex(&p);
+}
+
+/**
+ * A wait's deadline is fixed when the call begins: a wait of one tick whose
+ * page takes 50 ticks to come in has passed its deadline and ends without
+ * sleeping, and a wait of a second from tick 2000 sleeps until 2101 whatever
+ * the fault took.
+ */
+static void deadline_fixed(void)
+{
+    CHECK(timed_wait(1000, 0, 10000000, 50) == -ETIMEDOUT && waits == 0,
+          "a deadline a fault outlasted ends the wait without a sleep");
+    CHECK(timed_wait(2000, 1, 0, 50) == -ETIMEDOUT && waits == 1 && armed == 2101,
+          "a wait of a second from tick 2000 sleeps until 2101");
+}
+
 /**
  * get_robust_list reads the head of thread 5's list before it copies
  * anything out: the first copy ends the thread and frees its record, and the
@@ -300,9 +347,10 @@ int main(void)
     robust_head_read();
     owner_released();
     pending_released();
+    deadline_fixed();
     if (failures) {
         return 1;
     }
-    printf("futex-test: pass: the robust head and the robust release\n");
+    printf("futex-test: pass: the robust head, the robust release and the deadline\n");
     return 0;
 }

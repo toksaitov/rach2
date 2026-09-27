@@ -167,9 +167,12 @@ static void futex_unlink(struct futex_q *q, uint32_t bucket)
  * after the comparison finds the waiter. `utime` is a relative timeout, or an
  * absolute one with `absolute`, on the monotonic clock or, with
  * FUTEX_CLOCK_REALTIME in `flags_op`, on the real-time clock; `flags_op` has
- * FUTEX_PRIVATE_FLAG for a futex no other process maps. Returns 0 when woken,
- * -EAGAIN when the word differs, -ETIMEDOUT at the deadline, -EINTR for a
- * signal and -EFAULT for an address the process cannot read.
+ * FUTEX_PRIVATE_FLAG for a futex no other process maps. The deadline's tick
+ * is fixed before the word's page is brought in, so the time a fault sleeps
+ * counts against it, and a deadline the fault outlasted ends the call.
+ * Returns 0 when woken, -EAGAIN when the word differs, -ETIMEDOUT at the
+ * deadline, -EINTR for a signal and -EFAULT for an address the process
+ * cannot read.
  */
 static int32_t futex_wait(uint32_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
                           uint32_t bitset, int absolute, int flags_op)
@@ -191,6 +194,7 @@ static int32_t futex_wait(uint32_t uaddr, uint32_t val, const struct kernel_time
                          : futex_ticks(ts.tv_sec, ts.tv_nsec);
         q.timed = 1;
     }
+    q.target = kernel_ticks + ticks + 1u;
     if (!vm_prefault_range(uaddr, sizeof(uint32_t), 0)) {
         return -EFAULT;
     }
@@ -210,11 +214,10 @@ static int32_t futex_wait(uint32_t uaddr, uint32_t val, const struct kernel_time
         kirq_restore(flags);
         return -EAGAIN;
     }
-    if (q.timed && ticks == 0) {
+    if (q.timed && (ticks == 0 || (int32_t)(q.target - kernel_ticks) <= 0)) {
         kirq_restore(flags);
         return -ETIMEDOUT;
     }
-    q.target = kernel_ticks + ticks + 1u;
     q.next = _waiters[bucket];
     _waiters[bucket] = &q;
     kirq_restore(flags);

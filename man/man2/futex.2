@@ -73,6 +73,8 @@ The same, waking only waiters whose bits meet the nonzero
 .Pp
 A deadline is rounded up to whole 10 ms ticks, and the tick in progress
 is not counted.
+It is fixed when the call begins, so the time taken to bring in the
+word's page counts against it.
 .Fa uaddr2
 is ignored.
 The requeue, wake-and-modify and priority-inheritance operations, and
