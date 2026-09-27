@@ -74,9 +74,9 @@ typedef enum {
  * faults reading it, and the last one to go puts the file on the list that
  * `vm_file_reap` empties, calling `release`. A private mapping's `fill`
  * reads the file's page `pgoff` into the frame `phys`, with zeros past the
- * end of the file: 0, or -1 when the read fails. A shared mapping's `share`
- * gives the frame of page `pgoff` itself, with a reference taken for the
- * mapping, or 0 when none can be had.
+ * end of the file: 0, or -1 when the read fails; it may sleep. A shared
+ * mapping's `share` gives the frame of page `pgoff` itself, with a reference
+ * taken for the mapping, or 0 when none can be had; it does not sleep.
  */
 struct vm_file {
     uint32_t refs;

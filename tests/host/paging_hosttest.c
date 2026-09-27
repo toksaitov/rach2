@@ -143,6 +143,9 @@ int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
     return 0;
 }
 
+void vm_file_reap(void)
+{}
+
 void mem_balance(void)
 {}
 

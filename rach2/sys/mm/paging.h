@@ -188,6 +188,8 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, uint32_t fla
  * accessible (an empty range vacuously so), or 0 if any page is outside every
  * VMA or lacks the permission (so the caller can return -EFAULT instead of
  * faulting in kernel mode), or 0 if there is no current user address space.
+ * It may sleep; a 1 holds until the caller sleeps, since the range is checked
+ * again after the last page is in and brought in again when a page went.
  */
 int vm_prefault_range(uint32_t addr, uint32_t len, int write);
 
@@ -277,7 +279,9 @@ struct mm;
  * private page, a breakpoint in the program's text, through a copy of its
  * own, as Linux's FOLL_FORCE does. A page of no region, of a PROT_NONE one,
  * or of a read-only shared one for a write, is -EIO; 0, or -EIO, or -ENOMEM
- * when no temporary mapping was free.
+ * when no temporary mapping was free. It may sleep, bringing a page in or
+ * releasing a file a region let go of meanwhile, and looks each page up
+ * again after a sleep.
  */
 int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write);
 
