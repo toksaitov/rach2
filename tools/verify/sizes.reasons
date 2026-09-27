@@ -192,7 +192,7 @@ rach2/sys/proc/elf.c:elf_load_image nesting 5 a parser over an external format, 
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 144 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 163 a table, one entry per system call number
 rach2/sys/syscall.c:sys_ioctl complexity 43 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 162 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
@@ -239,14 +239,13 @@ rach2/sys/syscall_net.c:do_sendto lines 144 one system call's contract, its chec
 rach2/sys/syscall_net.c:do_setsockopt complexity 32 a dispatcher, one arm per command, read as a table
 
 rach2/sys/syscall_proc.c:deliver_signals nesting 5 a state machine, one arm per state, read as a table
-rach2/sys/syscall_proc.c:do_wait lines 109 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:exec_run complexity 82 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:exec_run lines 431 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:exec_run nesting 5 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:exec_shebang complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_proc.c:signal_post nesting 5 a state machine, one arm per state, read as a table
 rach2/sys/syscall_proc.c:sys_exit lines 116 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_proc.c:sys_fork lines 193 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_proc.c:sys_fork lines 196 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/tty/n_tty.c:n_tty_receive complexity 33 a state machine, one arm per state, read as a table
 
