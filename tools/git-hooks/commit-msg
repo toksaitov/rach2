@@ -2,7 +2,7 @@
 #
 # commit-msg: refuse a commit message with an attribution line.
 #
-# CLAUDE.md allows no attribution of any kind in a commit message, and a
+# AGENTS.md allows no attribution of any kind in a commit message, and a
 # tool's default can add one anyway: Claude Code ends a message with a
 # Co-Authored-By trailer and, in a web session, a Claude-Session link. The
 # hook refuses a message with a line that starts with Co-Authored-By,

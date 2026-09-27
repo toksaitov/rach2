@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # textcheck.sh: mechanical text-style checks for the in-house files (see
-# CLAUDE.md for the rules). It is called by tools/verify/check.sh, and a
+# AGENTS.md for the rules). It is called by tools/verify/check.sh, and a
 # finding fails `tests/run style`.
 #
 # It checks only objective things that cannot misfire: non-ASCII bytes (which

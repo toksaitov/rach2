@@ -15,7 +15,7 @@
  * the form BusyBox's `klogd` parses, so a userland log reader can be added
  * later without changing the kernel. The brackets hold uptime in seconds and
  * hundredths. The subsystem and the `event: detail` text after it are the shape
- * `CLAUDE.md` requires of every message; here the call enforces it.
+ * `AGENTS.md` requires of every message; here the call enforces it.
  *
  * The debug shell's menus, prompts and command output are not diagnostics.
  * They go through `console_putc`, `console_puts` and `console_printf`, which

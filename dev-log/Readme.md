@@ -4,7 +4,7 @@ This directory records how each Rach2 milestone was planned and built, with one 
 
 A milestone runs from its `plan.md`. It stops only when the goal is met or when a phase remains impossible after three supported attempts. The latter result includes its evidence. The starting prompt is one line of fewer than thirty words that identifies the plan file, because the receiving interface truncates longer prompts.
 
-These records establish what was decided and when, but they do not define the writing style. Milestones before 26 predate a measurable register rule and retain the habits addressed by milestone 26. Use them for history and use `CLAUDE.md` for the writing standard. Their wording remains unchanged because a rewrite would alter the record.
+These records establish what was decided and when, but they do not define the writing style. Milestones before 26 predate a measurable register rule and retain the habits addressed by milestone 26. Use them for history and use `AGENTS.md` for the writing standard. Their wording remains unchanged because a rewrite would alter the record.
 
 The list contains completed work, in the order of the milestones' numbers. A directory containing only a `plan.md` represents planned work and is absent because an index entry asserts completion. `prosecheck devlog`, which `tools/verify/check.sh` runs in `tests/run style`, enforces this correspondence. The review of `06-review` ran a second time after milestone 53, and `06-review/results-2026-09-20.md` has the last acceptance, the runs and the machine state it was accepted on, and the steps it leaves for the owner.
 
