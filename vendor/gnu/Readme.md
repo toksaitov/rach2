@@ -40,10 +40,15 @@ The table gives each port's version, the time it took under `make -j32 gnu-ports
 | Port      | Version    | Time  | Size    |
 | --------- | ---------- | ----- | ------- |
 | runtime   | glibc 2.44 | 1 s   | 65.0 MB |
+| zlib      | 1.3.2      | 1 s   | 0.4 MB  |
+| OpenSSL   | 4.0.2      | 32 s  | 31.5 MB |
+| OpenSSH   | 10.5p1     | 31 s  | 10.2 MB |
 | coreutils | 9.12       | 46 s  | 12.4 MB |
 | bash      | 5.3        | 24 s  | 5.8 MB  |
 | make      | 4.4.1      | 7 s   | 0.9 MB  |
 
 These notes say what some ports provide and what they leave to the system they are installed on.
 
+* OpenSSL is built for `linux-x86`, shared, with zlib. Its configuration is in `/etc/ssl`, where the programs that use it look for certificates; the root has none.
+* OpenSSH installs `ssh`, `scp`, `sftp`, `ssh-keygen` and the other clients in `/usr/bin`, `sshd` in `/usr/sbin`, and `sshd-session`, `sshd-auth`, `sftp-server` and the helpers in `/usr/libexec`, with its configuration in `/etc/ssh` and no PAM. The server's privilege-separated child runs as the user `sshd` in `/var/empty`, so the system needs that user and a `/var/empty` owned by root. The host keys are made on the system.
 * coreutils and make start their children with `vfork` (gnulib's `posix_spawn`, and make's jobs) until `clone` can share an address space.
