@@ -12,11 +12,12 @@
  * handler runs. A thread's exit leaves the process running; /proc/self/task
  * lists each live thread, and /proc/self/exe names the program. The threads
  * share the descriptors, the working directory and the umask: what one
- * opens, closes or changes the others see. A descriptor one thread closes
- * while another reads it stays with the read, which returns what is written
- * after the close, and its number is free once the read is over. A wait
- * whose status page another thread unmaps while it sleeps fails with EFAULT
- * and leaves the zombie to a later wait. A child forked by a thread has one
+ * opens, closes or changes the others see, and an execve that fails leaves
+ * its thread in the shared table. A descriptor one thread closes while
+ * another reads it stays with the read, which returns what is written after
+ * the close, and its number is free once the read is over. A wait whose
+ * status page another thread unmaps while it sleeps fails with EFAULT and
+ * leaves the zombie to a later wait. A child forked by a thread has one
  * thread. A thread that calls execve replaces the whole process, whose other
  * threads end. A thread that calls exit ends them all.
  *
@@ -170,6 +171,19 @@ static void *close_file(void *arg)
     return (void *)(long)close(shared_fd);
 }
 
+/** Open a descriptor after an execve of a program that is not there, which
+ * fails; 1 when it failed with ENOENT. */
+static void *exec_missing(void *arg)
+{
+    int missing;
+
+    (void)arg;
+    execl("/musl/no-such-program", "no-such-program", (char *)0);
+    missing = errno == ENOENT;
+    shared_fd = open("/dev/null", O_WRONLY);
+    return (void *)(long)missing;
+}
+
 static void *change_dir(void *arg)
 {
     (void)arg;
@@ -229,6 +243,12 @@ static int sharing(void)
     if (pthread_create(&t, NULL, close_file, NULL) != 0 || pthread_join(t, &result) != 0 ||
         result != 0 || fcntl(shared_fd, F_GETFD) != -1 || errno != EBADF) {
         return fail("a descriptor a thread closed");
+    }
+    shared_fd = -1;
+    if (pthread_create(&t, NULL, exec_missing, NULL) != 0 || pthread_join(t, &result) != 0 ||
+        (long)result != 1 || shared_fd < 0 || write(shared_fd, "x", 1) != 1 ||
+        close(shared_fd) != 0) {
+        return fail("a descriptor a thread opened after its execve failed");
     }
     if (pthread_create(&t, NULL, change_dir, NULL) != 0 || pthread_join(t, &result) != 0 ||
         result != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/tmp") != 0 || umask(022) != 077 ||

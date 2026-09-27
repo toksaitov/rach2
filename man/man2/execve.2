@@ -162,6 +162,12 @@ Descriptors marked
 are closed once the new image has been built, as the process takes it.
 This includes descriptors 0, 1, and 2 if marked.
 Other open descriptors remain available to the new image.
+A caller that shares its descriptor table, through
+.Xr clone 2
+with
+.Dv CLONE_FILES ,
+first gets a copy of its own, so the marked descriptors are closed for it
+alone and the other sharers keep the table.
 .Ss Failure
 The path is resolved and its permissions checked first, as Linux opens
 the program before it copies the vectors.
@@ -170,9 +176,11 @@ and then the arguments, each vector from its last string, onto pages
 taken for the new stack.
 The program and its interpreter are then loaded, the regions made and
 the initial stack written, all in a new address space while the old one
-still runs.
+still runs, and the storage for the copy of a shared descriptor table is
+taken.
 A failure at any of these stages returns to the caller without replacing
-its image, changing its credentials, or closing its marked descriptors:
+its image, changing its credentials, closing its marked descriptors or
+taking it out of a descriptor table it shares:
 a malformed segment, an interpreter that cannot be loaded, an allocation
 that fails, and an image whose address-space regions, the initial stack's
 pages among them, exceed
@@ -265,9 +273,9 @@ to
 a user image may take.
 .It Bq Er ENOMEM
 The exec workspace, the new address space, a page of the new image or its
-stack, a region record, or storage needed to resolve or open the program
-could not be allocated; the interpreter would cover the program; or the
-image's regions exceed
+stack, a region record, the copy of a shared descriptor table, or storage
+needed to resolve or open the program could not be allocated; the
+interpreter would cover the program; or the image's regions exceed
 .Dv RLIMIT_AS .
 .It Bq Er ENOTDIR
 A path component used as a directory is not a directory.

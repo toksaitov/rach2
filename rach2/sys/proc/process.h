@@ -396,10 +396,10 @@ void proc_vfork_release(process_t *p);
 void proc_files_put(process_t *p);
 
 /** Give the calling thread a descriptor table of its own when it shares one:
- * a copy whose descriptors share the table's descriptions, as execve does
- * before anything else, so that the close-on-exec descriptors the new image
- * drops are dropped for it alone, and as close_range does under
- * CLOSE_RANGE_UNSHARE; the other sharers keep the table. 0, or -ENOMEM. */
+ * a copy whose descriptors share the table's descriptions, as close_range
+ * does under CLOSE_RANGE_UNSHARE; the other sharers keep the table. execve
+ * makes the same copy as it commits, in storage it took before. 0, or
+ * -ENOMEM. */
 int32_t proc_files_unshare(void);
 
 /** Drop `p`'s reference to its directories and umask and leave it none;

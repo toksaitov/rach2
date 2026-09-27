@@ -98,9 +98,9 @@ waits;
 .Dv CLONE_FILES ,
 which gives the child the parent's descriptor table itself, so a
 descriptor either opens, closes or duplicates is the other's too, until an
-.Xr execve 2 ,
-which gives the caller a copy of its own; each of the two is held to its
-own
+.Xr execve 2
+succeeds, which gives the caller a copy of its own; each of the two is
+held to its own
 .Dv RLIMIT_NOFILE
 in the table they share;
 .Dv CLONE_FS ,

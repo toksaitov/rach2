@@ -229,19 +229,18 @@ void proc_fs_put(process_t *p)
 }
 
 /**
- * A copy of the descriptor table `src` for a child that does not share it:
- * each descriptor names the same open-file description, which gains a
+ * Make `table`, whose entries were copied from another table, a table of its
+ * own: each descriptor names the same open-file description, which gains a
  * reference, so a seek in one process is seen by the other, as POSIX says,
  * and a socket gains one too, so that the two release it independently. A
- * descriptor a sharer closed, which a call of another still holds, is not
- * copied. NULL when the heap has no room.
+ * descriptor a sharer closed, which a call of another still holds, is
+ * dropped from the copy.
  */
-static fd_table_t *files_copy(const fd_table_t *src)
+static void files_take(fd_table_t *table)
 {
-    fd_table_t *table = fd_table_dup(src);
     int fdi;
 
-    for (fdi = 0; table && fdi < table->cap; fdi++) {
+    for (fdi = 0; fdi < table->cap; fdi++) {
         fd_entry_t *e = &table->entries[fdi];
 
         if (e->flags & FD_FLAG_CLOSING) {
@@ -254,6 +253,17 @@ static fd_table_t *files_copy(const fd_table_t *src)
         if (e->type == FD_TYPE_SOCKET && e->sock) {
             socket_ref(e->sock);
         }
+    }
+}
+
+/** A copy of the descriptor table `src` for a child that does not share it,
+ * as `files_take` makes one; NULL when the heap has no room. */
+static fd_table_t *files_copy(const fd_table_t *src)
+{
+    fd_table_t *table = fd_table_dup(src);
+
+    if (table) {
+        files_take(table);
     }
     return table;
 }
@@ -715,15 +725,17 @@ struct exec_state {
     elf_layout_t layout;
     elf_layout_t ilayout; /* the interpreter's */
     elf_image_t img;
-    elf_image_t iimg; /* the interpreter's */
+    elf_image_t iimg;  /* the interpreter's */
+    fd_table_t *files; /* the caller's own table (`exec_files`) */
     char path[VFS_PATH_MAX];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
 };
 
 /** Give back the current process's exec workspace, if it has one: the
  * file held open, the frames of a stack no page directory took, the
- * address space of an image that did not commit, and the workspace
- * itself. */
+ * address space of an image that did not commit, the storage of a
+ * descriptor table it did not install, which holds no references, and the
+ * workspace itself. */
 static void exec_release(void)
 {
     struct exec_state *s = current_proc->exec_ws;
@@ -734,6 +746,9 @@ static void exec_release(void)
     exec_file_close(&s->prog);
     uimage_release(&s->args);
     mm_put(s->mm);
+    if (s->files != NULL) {
+        fd_table_delete(s->files);
+    }
     kfree(s);
     current_proc->exec_ws = NULL;
 }
@@ -1333,11 +1348,55 @@ static void exec_one_thread(void)
 }
 
 /**
+ * Set aside for a caller that shares its descriptor table the storage of
+ * the table of its own the new image gets, which `exec_files` fills at the
+ * commit, so that the allocation fails while the exec can still return. A
+ * shared table has all FD_TABLE_LIMIT entries (fs/fd.h) and never shrinks,
+ * so the storage has room for the table as it will be then; the entries
+ * copied into it now name descriptions it holds no references to, and the
+ * commit writes over them. 0, or -ENOMEM.
+ */
+static int32_t exec_files_stage(struct exec_state *s)
+{
+    if (current_proc->fds->refs == 1) {
+        return 0;
+    }
+    s->files = fd_table_dup(current_proc->fds);
+    return s->files != NULL ? 0 : -ENOMEM;
+}
+
+/**
+ * Give the caller, as the exec commits, a descriptor table of its own in the
+ * storage `exec_files_stage` set aside, when the table it shares still has
+ * another sharer: a copy of the table as it is now, made as `files_copy`
+ * makes one, so the close-on-exec descriptors are closed for the new image
+ * alone and the other sharers keep the table. A caller whose other sharers
+ * have all gone keeps the table, and the storage goes back with the
+ * workspace.
+ */
+static void exec_files(struct exec_state *s)
+{
+    fd_table_t *shared = current_proc->fds;
+    fd_table_t *own = s->files;
+
+    if (own == NULL || shared->refs == 1) {
+        return;
+    }
+    k_memcpy(own->entries, shared->entries, sizeof(fd_entry_t) * (size_t)shared->cap);
+    own->limit = shared->limit;
+    files_take(own);
+    s->files = NULL;
+    proc_files_put(current_proc);
+    current_proc->fds = own;
+}
+
+/**
  * Make the image `s` built the process's; past here execve cannot fail.
  *
  * Ends the process's other threads first, and releases the robust futexes
  * the thread holds and clears the word CLONE_CHILD_CLEARTID names while the
- * old image is still there to hold them. Drops the close-on-exec
+ * old image is still there to hold them. Gives a caller that shares its
+ * descriptor table one of its own (`exec_files`) and drops the close-on-exec
  * descriptors; takes the new ids, the saved ids becoming the new effective
  * ones, which is the POSIX rule for every exec and what lets an image shed
  * acquired authority and take it back; resets what pointed into the old
@@ -1362,6 +1421,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 
     exec_one_thread();
     proc_thread_gone(current_proc);
+    exec_files(s);
     close_cloexec_fds();
     current_proc->euid = s->euid;
     current_proc->egid = s->egid;
@@ -1457,8 +1517,10 @@ int32_t proc_files_unshare(void)
  * Resolves the path and checks the execute right, copies the path, argv and
  * envp onto the new stack's pages, resolves a `#!` script to its
  * interpreter, builds the new image, with the dynamic linker it names, in
- * an address space of its own, and only then commits, so every refusal and
- * every failure of the load returns to the caller with its image intact.
+ * an address space of its own, sets aside the storage of a descriptor table
+ * of the caller's own, and only then commits, so every refusal and every
+ * failure of the load returns to the caller with its image and its
+ * descriptor table intact.
  */
 static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 {
@@ -1467,10 +1529,6 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
 
     if (!user_path) {
         return -EFAULT;
-    }
-    rc = proc_files_unshare();
-    if (rc < 0) {
-        return rc;
     }
     rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
     if (rc < 0) {
@@ -1494,6 +1552,9 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     if (rc == 0) {
         exec_ids(s);
         rc = exec_build(s);
+    }
+    if (rc == 0) {
+        rc = exec_files_stage(s);
     }
     if (rc == 0) {
         uint32_t tid = current_proc->pid;
