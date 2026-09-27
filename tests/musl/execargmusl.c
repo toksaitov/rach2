@@ -77,6 +77,28 @@ static int run(char *const argv[], char *const envp[], rlim_t limit)
     return WEXITSTATUS(status);
 }
 
+/** Whether `s` is `n` copies of `c`. */
+static int all_of(const char *s, size_t n, char c)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        if (s[i] != c) {
+            return 0;
+        }
+    }
+    return s[n] == '\0';
+}
+
+/** The length of the one variable that, with the path, the arguments of the
+ * budget case and four pointers, fills a budget of 256 KiB. */
+static size_t budget_env_len(void)
+{
+    size_t fixed = 2 * (strlen(SELF) + 1) + strlen("budget") + 1 + 4 * sizeof(char *);
+
+    return 256 * KIB - fixed - (LONGEST + 1) - 1;
+}
+
 /** The child half: 0 when this image was handed what its mode says. */
 static int child(int argc, char *argv[])
 {
@@ -100,7 +122,14 @@ static int child(int argc, char *argv[])
         return 0;
     }
     if (strcmp(argv[1], "long") == 0) {
-        return argc == 3 && strlen(argv[2]) == LONGEST && argv[2][LONGEST - 1] == 'x' ? 0 : 1;
+        return argc == 3 && all_of(argv[2], LONGEST, 'x') ? 0 : 1;
+    }
+    if (strcmp(argv[1], "budget") == 0) {
+        return argc == 3 && all_of(argv[2], LONGEST, 'y') && environ[0] != NULL &&
+                       environ[1] == NULL && strncmp(environ[0], "E=", 2) == 0 &&
+                       all_of(environ[0] + 2, budget_env_len() - 2, 'z')
+                   ? 0
+                   : 1;
     }
     if (strcmp(argv[1], "env") == 0) {
         char want[8];
@@ -114,7 +143,7 @@ static int child(int argc, char *argv[])
         }
         return i == MANY ? 0 : 1;
     }
-    return strcmp(argv[1], "ok") == 0 ? 0 : 1;
+    return 1;
 }
 
 /** Fill `s` with `n` copies of `c` and a NUL. */
@@ -177,15 +206,14 @@ static int one_string(void)
 
 /**
  * Under a stack limit of 1 MiB the budget is 256 KiB: the path, four strings
- * and four pointers fill it to the byte, split across argv and envp, and a
- * byte more is E2BIG.
+ * and four pointers fill it to the byte, split across argv and envp, and are
+ * delivered whole; a byte more is E2BIG.
  */
 static int budget(void)
 {
-    char *argv[4] = {(char *)SELF, (char *)"ok", NULL, NULL};
+    char *argv[4] = {(char *)SELF, (char *)"budget", NULL, NULL};
     char *envp[2] = {NULL, NULL};
-    size_t fixed = 2 * (strlen(SELF) + 1) + strlen("ok") + 1 + 4 * sizeof(char *);
-    size_t env_len = 256 * KIB - fixed - (LONGEST + 1) - 1;
+    size_t env_len = budget_env_len();
 
     argv[2] = text(big_a, LONGEST, 'y');
     envp[0] = text(big_b, env_len, 'z');
