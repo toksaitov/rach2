@@ -10,8 +10,8 @@
  * exactly is the proof that a file system larger than the cache works
  * through it. Prints "STRESSPROBE OK n=<files> bytes=<total>" and exits 0,
  * or prints "STRESSPROBE FAIL:" with the step, the file and the call's
- * result or the offset that differs, and exits 1. A file is a thirty-second
- * of the cache's 8 MiB at most.
+ * result or the offset that differs, and exits 1. A file, 256 KiB, is a
+ * thirty-second of the cache's largest size.
  *
  * Freestanding; direct int 0x80.
  */
