@@ -224,6 +224,43 @@ static void owner_released(void)
 }
 
 /**
+ * The futex a thread was taking or giving back when it ended, the head's
+ * pending entry: with no owner in its word, a wake is owed and one waiter
+ * is woken with the word left 0; not when it is a priority-inheritance
+ * futex, and not when another thread owns it. One the thread owns is
+ * released as a listed one is.
+ */
+static void pending_released(void)
+{
+    static const struct {
+        uint32_t bits;
+        uint32_t word;
+        uint32_t after;
+        int woken;
+        const char *what;
+    } rows[] = {
+        {0u, 0u, 0u, 1, "an unlock the thread stored and did not wake wakes a waiter"},
+        {1u, 0u, 0u, 0, "an ownerless priority-inheritance futex wakes no one"},
+        {0u, 77u | FUTEX_WAITERS, 77u | FUTEX_WAITERS, 0, "another thread's futex is left"},
+        {0u, 42u | FUTEX_WAITERS, FUTEX_WAITERS | FUTEX_OWNER_DIED, 1,
+         "a futex the thread holds is released"},
+    };
+    unsigned int i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        robust_list_set(0, 1, rows[i].bits);
+        word_set(144, rows[i].word);
+        waiter_file(144);
+        proc_thread_gone(&self);
+        CHECK(waiter.woken == rows[i].woken && wakes == rows[i].woken, rows[i].what);
+        CHECK(word_at(144) == rows[i].after, "and the word is as it should be after");
+        if (!waiter.woken) {
+            waiter_unfile();
+        }
+    }
+}
+
+/**
  * get_robust_list reads the head of thread 5's list before it copies
  * anything out: the first copy ends the thread and frees its record, and the
  * head and the length must still arrive.
@@ -262,6 +299,7 @@ int main(void)
     self.state = PROC_RUNNING;
     robust_head_read();
     owner_released();
+    pending_released();
     if (failures) {
         return 1;
     }

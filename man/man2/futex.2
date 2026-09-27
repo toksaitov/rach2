@@ -98,6 +98,12 @@ and wakes one waiter when the word has waiters; the next owner then
 learns from
 .Er EOWNERDEAD
 that the lock's state may be half made.
+The entry the thread was taking or giving back is handled last, the same
+way, except that a word of it with no owner, as an unlock the thread
+stored and did not yet wake leaves it, has one waiter woken and is left
+as it is.
+An entry with the low bit set, a priority-inheritance futex, is not woken
+so.
 An
 .Xr execve 2
 by a thread other than the first of its process walks the list before

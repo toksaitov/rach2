@@ -286,12 +286,19 @@ int futex_wake_address(uint32_t uaddr, uint32_t n)
  * next owner learns from EOWNERDEAD that the state the lock guarded may be
  * half made. A word that cannot be read or written is left.
  *
+ * With `pending`, the word is that of the ordinary futex the thread was
+ * taking or giving back when it ended. When that word has no owner, the
+ * thread ended after an unlock stored it and before the unlock's wake, or
+ * after a wake and before it took the lock; either way a wake is owed. One
+ * waiter is woken, and the word is left as it is, since FUTEX_OWNER_DIED in
+ * it would tell the next owner of a death that left the lock's state whole.
+ *
  * The word's page is made present and writable first, and the word is then
  * read, compared and written with interrupts off, so no fault sleeps between
  * the read and the write. A waiter that set FUTEX_WAITERS during such a
  * sleep would have its bit written over and would not be woken.
  */
-static void robust_release(uint32_t uaddr, uint32_t tid)
+static void robust_release(uint32_t uaddr, uint32_t tid, int pending)
 {
     uint32_t word;
     uint32_t flags;
@@ -301,11 +308,14 @@ static void robust_release(uint32_t uaddr, uint32_t tid)
         return;
     }
     flags = kirq_save();
-    if (copy_from_user(&word, (const void __user *)uaddr, sizeof(word)) == 0 &&
-        (word & FUTEX_TID_MASK) == tid) {
-        word = (word & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
-        wake = copy_to_user((void __user *)uaddr, &word, sizeof(word)) == 0 &&
-               (word & FUTEX_WAITERS) != 0;
+    if (copy_from_user(&word, (const void __user *)uaddr, sizeof(word)) == 0) {
+        if (pending && (word & FUTEX_TID_MASK) == 0) {
+            wake = 1;
+        } else if ((word & FUTEX_TID_MASK) == tid) {
+            word = (word & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
+            wake = copy_to_user((void __user *)uaddr, &word, sizeof(word)) == 0 &&
+                   (word & FUTEX_WAITERS) != 0;
+        }
     }
     kirq_restore(flags);
     if (wake) {
@@ -315,10 +325,11 @@ static void robust_release(uint32_t uaddr, uint32_t tid)
 
 /**
  * Walk the robust list of the current thread `p`, which is ending, and
- * release each futex on it that the thread still holds, the one it was
- * taking or giving back included. The list is circular through its head;
- * the low bit of an entry marks a priority-inheritance futex and is not part
- * of the address.
+ * release each futex on it that the thread still holds, then the one it was
+ * taking or giving back, a waiter of which is also woken when it has no
+ * owner and is not a priority-inheritance futex. The list is circular
+ * through its head; the low bit of an entry marks a priority-inheritance
+ * futex and is not part of the address.
  */
 static void robust_exit(process_t *p)
 {
@@ -340,12 +351,12 @@ static void robust_exit(process_t *p)
             break;
         }
         if (entry != pending) {
-            robust_release(entry + (uint32_t)head.futex_offset, p->pid);
+            robust_release(entry + (uint32_t)head.futex_offset, p->pid, 0);
         }
         entry = next & ~1u;
     }
     if (pending != 0) {
-        robust_release(pending + (uint32_t)head.futex_offset, p->pid);
+        robust_release(pending + (uint32_t)head.futex_offset, p->pid, (head.op_pending & 1u) == 0);
     }
 }
 
