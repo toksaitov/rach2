@@ -156,6 +156,12 @@ when it may be written.
 A writable shared mapping needs a descriptor open for writing.
 .El
 .Pp
+A file on a device that a page fault cannot read, a loop device or a USB
+stick, is not mapped at all and is refused with
+.Er ENODEV :
+a fault reads the file with interrupts off, where only a disk the kernel
+polls can answer, and such a device would stop the machine.
+.Pp
 Shared memory, anonymous or a file on tmpfs, has pages up to 1 GiB, the
 most a file in memory holds.
 A page at or past that, which a mapping reaches from a large offset or
@@ -432,8 +438,8 @@ The range
 is given is not within one VMA.
 .It Er ENODEV
 .Fa fd
-is not a file, or a writable shared mapping names a file on a disk file
-system.
+is not a file, the file is on a loop device or a USB stick, or a
+writable shared mapping names a file on a disk file system.
 .It Er ENOMEM
 A mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,

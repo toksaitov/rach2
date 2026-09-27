@@ -4828,22 +4828,44 @@ struct map_source {
 };
 
 /**
+ * Whether a page of a file on `mnt` can be read where a user page fault
+ * reads it, with interrupts off and outside any system call. A file in
+ * memory or on the root window can, and so can one on a disk the block
+ * layer polls there. A loop device, which reads through the file system
+ * that holds its file and sleeps its caller, and a USB stick, which answers
+ * only through its interrupts, cannot: `block_request` stops the machine
+ * when a fault reaches either.
+ */
+static int mmap_fault_readable(const struct vfs_mount *mnt)
+{
+    uint32_t flags;
+
+    if (!mnt->dev) {
+        return 1;
+    }
+    flags = block_flags(mnt->dev);
+    return (flags & BLOCK_FAULT_SAFE) || ((flags & BLOCK_POLLABLE) && !(flags & BLOCK_CALLER_SYNC));
+}
+
+/**
  * The file half of `mmap_backing`: the file the descriptor `e`, number
  * `fd`, is open on, mapped shared or not. A private mapping of it is
  * VM_FILE, and a shared mapping of a file in memory is VM_SHARED, the
- * file's own pages. A shared mapping of a file on a disk file system is
- * served as a private one when it is read-only, which reads the same bytes,
- * and refused with ENODEV when it may be written, since its stores would
- * not reach the file. A shared mapping that may not be written now, since
- * the descriptor is not open for writing or the file is on a disk, is
- * given VM_PROT_NOWRITE, so that mprotect cannot make it writable later. It
- * may sleep, finding the file's path.
+ * file's own pages. A file on a device a page fault cannot read
+ * (`mmap_fault_readable`) is refused with ENODEV, since the first touch of
+ * the mapping would read it there. A shared mapping of a file on a disk
+ * file system is served as a private one when it is read-only, which reads
+ * the same bytes, and refused with ENODEV when it may be written, since its
+ * stores would not reach the file. A shared mapping that may not be written
+ * now, since the descriptor is not open for writing or the file is on a
+ * disk, is given VM_PROT_NOWRITE, so that mprotect cannot make it writable
+ * later. It may sleep, finding the file's path.
  */
 static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
 {
     struct shmem *sh;
 
-    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt) {
+    if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt || !mmap_fault_readable(e->ofd->vmnt)) {
         return -ENODEV;
     }
     if (!(e->flags & FD_FLAG_READ) ||
