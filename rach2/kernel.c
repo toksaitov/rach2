@@ -274,6 +274,27 @@ static void timer_handler(isr_params_t *params)
 }
 
 /**
+ * Leave the core file of the current process, which the signal `signo`
+ * ends, when it is dumpable and its soft RLIMIT_CORE allows a page: the
+ * status it ends with, which has WCOREFLAG, as WCOREDUMP reads it, only when
+ * the whole file was written. The file is written with `in_syscall` set, as
+ * a system call writes one, so that the timer does not switch away in the
+ * middle of the file system's work.
+ */
+static int32_t terminate_core(int32_t signo)
+{
+    if (!current_proc->dumpable || current_proc->rlim[RLIM_CORE].cur < PAGE_SIZE) {
+        return signo;
+    }
+    current_proc->in_syscall = 1;
+    if (fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur) != 0) {
+        return signo;
+    }
+    current_proc->tg->exit_code = signo | WCOREFLAG;
+    return signo | WCOREFLAG;
+}
+
+/**
  * Terminate the current user process by signal and give up its CPU.
  *
  * Shared teardown for every death by signal: a signal whose default action
@@ -281,13 +302,10 @@ static void timer_handler(isr_params_t *params)
  * process dies by signal `signo`; the exit code stores the Linux wait-status
  * encoding of a signal death (low 7 bits = the signal), so the parent's
  * waitpid sees WIFSIGNALED/WTERMSIG. With WCOREFLAG in `signo` the process
- * leaves a core file first, when it is dumpable, its soft RLIMIT_CORE allows
- * a page, and no other thread has begun to end it; the flag stays in the
- * status, as WCOREDUMP, only when the whole file was written. The file is
- * written after the other threads are sent SIGKILL and before any of the
- * process is released, as Linux's `do_coredump` does, and with `in_syscall`
- * set, as a system call writes a file, so that the timer does not switch
- * away in the middle of the file system's work. The whole process dies:
+ * leaves a core file first (`terminate_core`), unless another thread has
+ * begun to end it, after the other threads are sent SIGKILL and before any
+ * of the process is released, as Linux's `do_coredump` does. The whole
+ * process dies:
  * its other threads are sent SIGKILL, and the last thread to end publishes
  * the death. This thread releases the descriptor table and its reference to
  * the address space, switching off it before its page directory can be
@@ -321,12 +339,8 @@ void terminate_current_process(int32_t signo)
     core = (signo & WCOREFLAG) && !current_proc->tg->exiting && !current_proc->tg->exec_task;
     signo &= 0x7F;
     proc_group_exit(signo);
-    if (core && current_proc->dumpable && current_proc->rlim[RLIM_CORE].cur >= PAGE_SIZE) {
-        current_proc->in_syscall = 1;
-        if (fs_core_file(signo, current_proc->rlim[RLIM_CORE].cur) == 0) {
-            signo |= WCOREFLAG;
-            current_proc->tg->exit_code = signo;
-        }
+    if (core) {
+        signo = terminate_core(signo);
     }
     alone = current_proc->tg->live == 1;
 

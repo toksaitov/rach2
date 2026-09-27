@@ -1596,23 +1596,153 @@ static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
 }
 
 /**
+ * RLIMIT_NPROC for a fork by `parent`: the processes of its real user, this
+ * one included, against its limit; root is not limited. Counted by the real
+ * uid at the time, so a process that took a new identity with setuid counts
+ * for that user, and counted after the reclaim that may sleep, so two forks
+ * cannot both see the last place. 0, or -EAGAIN.
+ */
+static int32_t fork_nproc(const process_t *parent)
+{
+    const process_t *q;
+    uint32_t mine = 0;
+
+    if (parent->ruid == 0 || parent->rlim[RLIM_NPROC].cur == RLIM_INFINITY32) {
+        return 0;
+    }
+    for (q = proc_list; q; q = q->next) {
+        if (q->ruid == parent->ruid && q->state != PROC_UNUSED) {
+            mine++;
+        }
+    }
+    return mine >= parent->rlim[RLIM_NPROC].cur ? -EAGAIN : 0;
+}
+
+/**
+ * What a child takes of `parent` besides its memory, files and signals: the
+ * session and the process group, which it keeps until it or the parent calls
+ * setsid or setpgid, the nice value, the persona, the dumpable and
+ * no_new_privs flags, the limits, the credentials, and the program name,
+ * which `execve` sets and a child that never execs would otherwise never
+ * have: a daemon that forks itself into the background is such a child, and
+ * without it shows in `ps` and in /proc/<pid>/stat with no name.
+ */
+static void fork_ids(process_t *child, const process_t *parent)
+{
+    child->sid = parent->sid;
+    child->pgid = parent->pgid;
+    child->nice = parent->nice;
+    child->persona = parent->persona;
+    child->dumpable = parent->dumpable;
+    child->no_new_privs = parent->no_new_privs;
+    k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
+    child->ruid = parent->ruid;
+    child->euid = parent->euid;
+    child->suid = parent->suid;
+    child->rgid = parent->rgid;
+    child->egid = parent->egid;
+    child->sgid = parent->sgid;
+    child->ngroups = parent->ngroups;
+    k_memcpy(child->groups, parent->groups, sizeof(child->groups));
+    k_memcpy(child->comm, parent->comm, sizeof(child->comm));
+}
+
+/**
+ * The signals of a child of `parent`: under CLONE_THREAD it joins the
+ * parent's process, whose dispositions and signals it shares; otherwise its
+ * process takes a copy of the dispositions. Either way it has the parent's
+ * blocked mask and no pending signal, as POSIX says of fork, and the
+ * alternate stack unless it shares the memory and runs beside the parent, as
+ * Linux's child does.
+ */
+static void fork_signals(process_t *child, const process_t *parent, uint32_t flags)
+{
+    if (flags & CLONE_THREAD) {
+        tgroup_put(child->tg);
+        child->tg = parent->tg;
+        child->tg->refs++;
+        child->tg->live++;
+        child->tgid = parent->tgid;
+        child->sigacts = child->tg->action;
+    } else {
+        k_memcpy(child->tg->action, parent->tg->action, sizeof(child->tg->action));
+    }
+    child->sig_blocked = parent->sig_blocked;
+    child->sig_pending = 0;
+    if ((flags & (CLONE_VM | CLONE_VFORK)) != CLONE_VM) {
+        child->altstack_sp = parent->altstack_sp;
+        child->altstack_size = parent->altstack_size;
+        child->altstack_on = parent->altstack_on;
+    }
+}
+
+/** Give `child` the descriptor table of `parent`: the table itself under
+ * CLONE_FILES, a copy otherwise. 0, or -ENOMEM. */
+static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
+{
+    if (flags & CLONE_FILES) {
+        if (fd_table_share(parent->fds) != 0) {
+            return -ENOMEM;
+        }
+        child->fds = parent->fds;
+        return 0;
+    }
+    child->fds = files_copy(parent->fds);
+    return child->fds ? 0 : -ENOMEM;
+}
+
+/**
+ * Lay out `child`'s kernel stack for its first switch, from the parent's
+ * trap frame `params`: the frame, with 0 in EAX, fork's return, and the new
+ * stack pointer a clone asks for; above it the return address `isr_return`
+ * and the four registers `switch_context` pops. When the child is first
+ * scheduled, switch_context pops EDI, ESI, EBX and EBP, returns to
+ * isr_return, and the frame takes it to user mode. The ids CLONE_CHILD_SETTID
+ * and CLONE_PARENT_SETTID ask for are stored before the child runs, a failed
+ * store leaving the word as it was, as Linux's does.
+ */
+static void fork_frame(process_t *child, const isr_params_t *params, const struct fork_req *req)
+{
+    uint32_t *sp = (uint32_t *)child->kernel_stack;
+    isr_params_t *frame;
+    uint32_t pid = child->pid;
+
+    sp -= sizeof(isr_params_t) / sizeof(uint32_t);
+    frame = (isr_params_t *)sp;
+    k_memcpy(frame, params, sizeof(isr_params_t));
+    frame->eax = 0;
+    if (req->newsp) {
+        frame->user_esp = req->newsp;
+    }
+    if (req->settid) {
+        (void)paging_store_u32(child->mm->dir, &child->mm->vm, req->settid, pid);
+    }
+    child->clear_child_tid = req->cleartid;
+    if (req->ptid) {
+        (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
+    }
+    *--sp = (uint32_t)isr_return;
+    *--sp = 0; /* EBP */
+    *--sp = 0; /* EBX */
+    *--sp = 0; /* ESI */
+    *--sp = 0; /* EDI */
+    child->regs.esp = (uint32_t)sp;
+}
+
+/**
  * Create a child process: fork(2), vfork(2), and the part of clone(2) this
  * kernel has.
  *
- * Clones the current process: PCB, address space, and fd table. The address
- * space is a copy-on-write copy, or under CLONE_VM the parent's own,
- * shared. The child is set up to return from fork with value 0; the parent
- * gets the child's PID, after the child has called execve or ended when
- * `req` has CLONE_VFORK. Returns -errno on failure. `req` has the stack
- * pointer the child starts with and the addresses of the ids clone stores:
- * the parent's CLONE_PARENT_SETTID word, stored before the child runs, and
- * the child's CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address
- * its thread end clears.
- *
- * Among what the child inherits is the program name, which `execve` sets and a
- * child that never execs would otherwise never have: a daemon that forks
- * itself into the background is exactly such a child, and without this it
- * shows in `ps` and in /proc/<pid>/stat with no name for as long as it runs.
+ * The child's record takes its parts from the parent's (`fork_ids`,
+ * `fork_fs`, `fork_files`, `fork_signals`), and its address space is a
+ * copy-on-write copy, or under CLONE_VM the parent's own. The child is set
+ * up to return from fork with value 0 (`fork_frame`); the parent gets the
+ * child's PID, after the child has called execve or ended when `req` has
+ * CLONE_VFORK. Returns -errno on failure. `req` has the stack pointer the
+ * child starts with and the addresses of the ids clone stores: the parent's
+ * CLONE_PARENT_SETTID word, stored before the child runs, and the child's
+ * CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address its thread end
+ * clears.
  */
 static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
 {
@@ -1620,33 +1750,17 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     process_t *child;
     uint32_t pid;
     uintptr_t child_kstack_base;
-    uint32_t *child_sp;
-    isr_params_t *child_frame;
+    int32_t rc;
     int event;
 
     if (!parent) {
         return -ESRCH;
     }
     mem_balance();
-    /* RLIMIT_NPROC: the processes of the parent's real user, this one
-     * included, against the parent's limit; root is not limited. Counted by
-     * the real uid at the time, so a process that took a new identity with
-     * setuid counts for that user, and counted after the reclaim above,
-     * which may sleep, so two forks cannot both see the last place. */
-    if (parent->ruid != 0 && parent->rlim[RLIM_NPROC].cur != RLIM_INFINITY32) {
-        process_t *q;
-        uint32_t mine = 0;
-
-        for (q = proc_list; q; q = q->next) {
-            if (q->ruid == parent->ruid && q->state != PROC_UNUSED) {
-                mine++;
-            }
-        }
-        if (mine >= parent->rlim[RLIM_NPROC].cur) {
-            return -EAGAIN;
-        }
+    rc = fork_nproc(parent);
+    if (rc != 0) {
+        return rc;
     }
-
     child = alloc_process();
     if (!child) {
         return -ENOMEM; /* a record the heap could not give */
@@ -1676,123 +1790,22 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
      * process's parent. */
     child->parent_pid =
         (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
-
-    /* Inherit the parent's session and process group: a forked child stays in
-     * the parent's job-control group until it (or the parent) calls
-     * setsid/setpgid. alloc_process defaulted these to the child's own pid. */
-    child->sid = parent->sid;
-    child->pgid = parent->pgid;
-    child->nice = parent->nice;
-    child->persona = parent->persona;
-    child->dumpable = parent->dumpable;
-    child->no_new_privs = parent->no_new_privs;
-    k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
-    child->ruid = parent->ruid; /* credentials: the child is who the parent was */
-    child->euid = parent->euid;
-    child->suid = parent->suid;
-    child->rgid = parent->rgid;
-    child->egid = parent->egid;
-    child->sgid = parent->sgid;
-    child->ngroups = parent->ngroups;
-    k_memcpy(child->groups, parent->groups, sizeof(child->groups));
-    k_memcpy(child->comm, parent->comm, sizeof(child->comm));
-    /* Inherit the parent's TLS base: the child's copied trapframe keeps the
-     * parent's %gs selector, and its address space is a copy at the same
-     * virtual addresses, so the same base is correct. Without this the context
-     * switch would reprogram the TLS descriptor to 0 for the child and its
-     * %gs-relative reads (errno, the stack canary) would fault or read garbage.
-     */
+    fork_ids(child, parent);
+    /* The same TLS base, since the frame keeps the parent's %gs selector and
+     * the address space is at the same addresses, unless CLONE_SETTLS names
+     * another; the switch would otherwise load a base of 0. */
     child->tls_base = (req->flags & CLONE_SETTLS) ? req->tls : parent->tls_base;
     /* The floating-point registers as they are now, since the parent's record
      * holds only what they were at its last switch away. */
     fpu_save(child->fpu);
 
-    if (fork_fs(child, parent, req->flags) != 0) {
+    if (fork_fs(child, parent, req->flags) != 0 || fork_files(child, parent, req->flags) != 0) {
         goto fail_built;
     }
 
-    /* Signals: the child inherits the dispositions and the blocked mask, but
-     * its pending set starts empty (POSIX fork semantics). */
-    k_memcpy(child->tg->action, parent->tg->action, sizeof(child->tg->action));
-    child->sig_blocked = parent->sig_blocked;
-    child->sig_pending = 0;
-    /* A child that shares the memory and runs beside the parent does not
-     * share its alternate stack, as Linux's does not. */
-    if ((req->flags & (CLONE_VM | CLONE_VFORK)) != CLONE_VM) {
-        child->altstack_sp = parent->altstack_sp;
-        child->altstack_size = parent->altstack_size;
-        child->altstack_on = parent->altstack_on;
-    }
-
-    /* The descriptor table: the parent's own under CLONE_FILES, a copy
-     * otherwise. */
-    if (req->flags & CLONE_FILES) {
-        if (fd_table_share(parent->fds) != 0) {
-            goto fail_built;
-        }
-        child->fds = parent->fds;
-    } else {
-        child->fds = files_copy(parent->fds);
-        if (!child->fds) {
-            goto fail_built;
-        }
-    }
-
-    /*
-     * Set up child's kernel stack for returning from fork.
-     *
-     * Stack layout (growing down from kernel_stack):
-     *   [ISR frame copied from parent, with eax=0]
-     *   [return address = isr_return]
-     *   [saved registers for switch_context: ebp, ebx, esi, edi]
-     *
-     * When child is scheduled via switch_context:
-     * 1. Pops edi, esi, ebx, ebp
-     * 2. ret jumps to isr_return
-     * 3. isr_return restores segments, popal (eax=0), iret to userspace
-     */
-    child_sp = (uint32_t *)child->kernel_stack;
-
-    /* The ISR frame, copied from the parent, with eax (fork's return) set
-     * to 0. */
-    child_sp -= sizeof(isr_params_t) / sizeof(uint32_t);
-    child_frame = (isr_params_t *)child_sp;
-    k_memcpy(child_frame, params, sizeof(isr_params_t));
-    child_frame->eax = 0;
-    if (req->newsp) {
-        child_frame->user_esp = req->newsp;
-    }
-    /* A failed store leaves the word as the parent had it, as Linux's does. */
-    if (req->settid) {
-        (void)paging_store_u32(child->mm->dir, &child->mm->vm, req->settid, child->pid);
-    }
-    child->clear_child_tid = req->cleartid;
+    fork_signals(child, parent, req->flags);
+    fork_frame(child, params, req);
     pid = child->pid;
-    if (req->ptid) {
-        (void)copy_to_user((void __user *)req->ptid, &pid, sizeof(pid));
-    }
-
-    /* The switch_context return address, then its saved EBP/EBX/ESI/EDI. */
-    --child_sp;
-    *child_sp = (uint32_t)isr_return;
-    --child_sp;
-    *child_sp = 0; /* EBP */
-    --child_sp;
-    *child_sp = 0; /* EBX */
-    --child_sp;
-    *child_sp = 0; /* ESI */
-    --child_sp;
-    *child_sp = 0; /* EDI */
-
-    child->regs.esp = (uint32_t)child_sp;
-    if (req->flags & CLONE_THREAD) {
-        tgroup_put(child->tg);
-        child->tg = parent->tg;
-        child->tg->refs++;
-        child->tg->live++;
-        child->tgid = parent->tgid;
-        child->sigacts = child->tg->action;
-    }
     if (req->flags & CLONE_VFORK) {
         child->vfork_waiting = 1;
     }

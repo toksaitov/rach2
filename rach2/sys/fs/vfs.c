@@ -611,12 +611,12 @@ static int walk_leaf(const char *path, char *leaf, uint32_t leafcap, const char 
  * Splice the target of the link `found` on `mnt` in front of `rest`, the
  * part of the path after the link, in the path page `*linkpath`, taking it
  * and `*target` at the first link of the walk; `found` is put. The walk goes
- * on at `*linkpath`, from the root when `*absolute` says the target is
- * absolute. 0, or -ELOOP past VFS_LINK_MAX links, -ENOENT for an empty
+ * on at `*linkpath`: 1 when the target is absolute, so from the root, 0 when
+ * it is relative, or -ELOOP past VFS_LINK_MAX links, -ENOENT for an empty
  * target, -ENAMETOOLONG, -ENOMEM, or the type's error.
  */
 static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char **linkpath,
-                     char **target, int *links, int *absolute)
+                     char **target, int *links)
 {
     uint32_t rlen = (uint32_t)k_strlen(rest);
     uint32_t join = rlen != 0 ? 1u : 0u;
@@ -652,8 +652,7 @@ static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char 
     if (join) {
         (*linkpath)[tlen] = '/';
     }
-    *absolute = (*target)[0] == '/';
-    return 0;
+    return (*target)[0] == '/';
 }
 
 /** Whether `node` on `mnt` is a symbolic link its type can read. */
@@ -791,14 +790,12 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 goto out_err;
             }
             if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
-                int absolute;
-
-                rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links, &absolute);
-                if (rc != 0) {
+                rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links);
+                if (rc < 0) {
                     goto out_err;
                 }
                 p = linkpath;
-                if (absolute) {
+                if (rc == 1) {
                     rc = walk_move_root(&cur, locked);
                     if (rc != 0) {
                         goto out_err;
@@ -877,10 +874,10 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
                 goto out_err;
             }
             if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
-                int absolute;
+                int absolute = walk_link(cur.mnt, found, rest, &linkpath, &target, &links);
 
-                rc = walk_link(cur.mnt, found, rest, &linkpath, &target, &links, &absolute);
-                if (rc != 0) {
+                if (absolute < 0) {
+                    rc = absolute;
                     goto out_err;
                 }
                 if (last_comp) {
