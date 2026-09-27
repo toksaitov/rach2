@@ -136,10 +136,12 @@ a thread that is not privileged.
 Linux applies its
 .Xr ptrace 2
 access check with the caller's real IDs
-.Pq Dv PTRACE_MODE_READ_REALCREDS ,
-which compares them with every ID of the thread and asks for a dumpable
-process, where this kernel compares the effective user ID alone and
-does not.
+.Pq Dv PTRACE_MODE_READ_REALCREDS :
+for a thread of another process and a caller without
+.Dv CAP_SYS_PTRACE ,
+it compares them with the thread's real, effective and saved user and
+group IDs and asks for a dumpable process, where this kernel compares
+the effective user ID alone and does not ask for one.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
 The raw call returns a negative error number on failure;
