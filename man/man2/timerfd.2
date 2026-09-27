@@ -71,6 +71,11 @@ names it
 The kernel keeps time in 10 ms ticks: an expiration and an interval are
 rounded up to whole ticks, and the tick in progress is not counted, so a
 timer never expires early.
+A time of any length up to 4294967295 seconds, about 136 years, is kept
+whole, and
+.Fn timerfd_gettime
+reports it; a longer one is taken as that many seconds, as Linux takes a
+time past its own limit of about 292 years.
 .Sh RETURN VALUES
 .Fn timerfd_create
 returns the descriptor, and the others 0; each returns -1 with

@@ -5,13 +5,14 @@
  * expires, then reads a count of at least one, and timerfd_gettime reports
  * the interval it was given. A nonblocking read of a timer not yet expired
  * fails with EAGAIN; a timer armed with a zero value is disarmed and reports
- * zeros. An absolute time already past on the monotonic clock, 1 ns, which
- * the first timer's 50 ms have put behind it, expires at once, as poll sees.
- * A timer in an epoll set wakes a wait with no timeout: a child arms the
- * timer only once it has seen the parent asleep in epoll_wait, and keeps
- * running until the parent answers, so that the kernel does not idle, which
- * would scan the set again at every interrupt. An alarm bounds the wait, and
- * a wait the alarm ended fails.
+ * zeros. An absolute time already past on the monotonic clock, 1 ns, which the
+ * first timer's 50 ms have put behind it, expires at once, as poll sees. A
+ * timer in an epoll set wakes a wait with no timeout: a child arms the timer
+ * only once it has seen the parent asleep in epoll_wait, and keeps running
+ * until the parent answers, so that the kernel does not idle, which would scan
+ * the set again at every interrupt. An alarm bounds the wait, and a wait the
+ * alarm ended fails. A timer of 200 days reports 200 days, and its interval of
+ * 200 days.
  *
  * Prints "TIMERFDMUSL OK" on success and "TIMERFDMUSL FAIL (detail)"
  * otherwise.
@@ -162,6 +163,27 @@ static int epoll_row(int t)
     return 0;
 }
 
+/* A timer of 200 days, longer than one wait of ticks spans, reports the
+ * whole time, and so does its interval. */
+static int long_timer(void)
+{
+    struct itimerspec it, got;
+    int t = timerfd_create(CLOCK_MONOTONIC, 0);
+
+    memset(&it, 0, sizeof(it));
+    it.it_value.tv_sec = 200L * 86400L;
+    it.it_interval.tv_sec = 200L * 86400L;
+    if (t < 0 || timerfd_settime(t, 0, &it, NULL) != 0 || timerfd_gettime(t, &got) != 0) {
+        return fail("a timer of 200 days");
+    }
+    if (got.it_value.tv_sec < 199L * 86400L || got.it_value.tv_sec > 200L * 86400L ||
+        got.it_interval.tv_sec != 200L * 86400L) {
+        return fail("a timer of 200 days did not report 200 days");
+    }
+    close(t);
+    return 0;
+}
+
 int main(void)
 {
     struct itimerspec it, got;
@@ -211,7 +233,7 @@ int main(void)
         return fail("an absolute time already past did not expire");
     }
 
-    if (epoll_row(t) != 0) {
+    if (epoll_row(t) != 0 || long_timer() != 0) {
         return 1;
     }
     close(t);

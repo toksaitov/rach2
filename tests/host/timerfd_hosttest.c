@@ -12,6 +12,11 @@
  * comes while the copy sleeps is kept for the next read, a second read in
  * that time finds nothing, and a copy that fails loses what it took, as in
  * Linux.
+ *
+ * A timer of 200 days, longer than one wait of ticks can span, reports 200
+ * days, does not expire a tick early and expires at its tick; an interval of
+ * 200 days is reported and waited whole; and a time past the most seconds a
+ * setting keeps is taken as that most.
  */
 #include "io/timerfd.c"
 
@@ -176,6 +181,48 @@ static void setup(void)
     CHECK(timer.count == 1, "the timer expires at its tick");
 }
 
+/* The timer disarmed, at tick 1000. */
+static void reset(void)
+{
+    k_memset(&timer, 0, sizeof(timer));
+    armed = NULL;
+    kernel_ticks = 1000;
+}
+
+/** A timer of 200 days, past the most one wait of ticks can span, and one
+ * past the most seconds a setting keeps. */
+static void long_rows(void)
+{
+    struct setting days = {0, 0, 17280000, 0};
+    struct setting every = {17280000, 0, 1, 0};
+    struct setting forever = {0, 0, 0x7FFFFFFFFFFFFFFFll, 0};
+    struct setting got;
+
+    reset();
+    CHECK(arm(&timer, 0, &days) == 0, "a timer of 200 days arms");
+    current_setting(&timer, &got);
+    CHECK(got.vsec == 17280000 && got.vnsec == NS_PER_TICK,
+          "a timer of 200 days reports 200 days and the tick in progress");
+    timerfd_tick(1000u + 1728000000u);
+    CHECK(timer.count == 0 && timer.armed, "a timer of 200 days does not expire early");
+    timerfd_tick(1000u + 1728000001u);
+    CHECK(timer.count == 1 && !timer.armed, "a timer of 200 days expires at its tick");
+
+    reset();
+    CHECK(arm(&timer, 0, &every) == 0, "a timer every 200 days arms");
+    kernel_ticks += 101;
+    timerfd_tick(kernel_ticks);
+    CHECK(timer.count == 1, "its first expiration comes after a second");
+    current_setting(&timer, &got);
+    CHECK(got.vsec == 17280000 && got.vnsec == 0 && got.isec == 17280000 && got.insec == 0,
+          "its next expiration is 200 days away, and its interval 200 days");
+
+    reset();
+    CHECK(arm(&timer, 0, &forever) == 0, "a timer past the most seconds a setting keeps arms");
+    current_setting(&timer, &got);
+    CHECK(got.vsec == (int64_t)TIME_MAX, "it is taken as the most seconds a setting keeps");
+}
+
 int main(void)
 {
     setup();
@@ -195,6 +242,7 @@ int main(void)
     CHECK(timerfd_read(&entry, NULL, 8) == -EFAULT, "a read into memory it cannot write");
     CHECK(timer.count == 0, "a failed copy loses the count it took");
     CHECK(timerfd_read(&entry, (char *)user, 7) == -EINVAL, "a read shorter than eight bytes");
+    long_rows();
     CHECK(masked == 0, "every interrupt mask is taken back");
 
     printf("timerfd-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
