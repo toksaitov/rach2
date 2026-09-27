@@ -2,8 +2,9 @@
  * Check mounted open truncation, cleanup and loop handle relocation, the
  * close of a descriptor whose release sleeps, by one thread or by the end of
  * another thread's call, an unlink and a rename on the KRFFS root of a file
- * an open is installing, a chmod and a chown of a file a write moves, and
- * the key a file's locks are found by on each kind of mount.
+ * an open is installing, a chmod and a chown of a file a write moves, the
+ * key a file's locks are found by on each kind of mount, and a mkdir of a
+ * name another process makes while the call waits for the parent's lock.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -137,6 +138,8 @@ static const struct vfs_type mounted_type = {0};
 /* A mounted type whose uses are serialised under its namespace lock, as
  * KRFFS volumes and ext2 are, for the attribute rows. */
 static const struct vfs_type locked_type = {"locked", 0, 0, 1, 0};
+/* A serialised mounted type with the root's lookup, for the mkdir rows. */
+static const struct vfs_type mkdir_type = {"mkdir", 0, &root_ops, 1, 0};
 static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
@@ -156,6 +159,11 @@ static process_t *lock_closer;
 static krffs_node_t root_dir, victim, source;
 static krffs_file_system_t root_fs;
 static int removals, keeps;
+/* The directory of the mkdir rows, named once a mkdir has made it, and the
+ * working directories and umask of their calling process. */
+static krffs_node_t made_dir;
+static struct fs_struct row_fs;
+static int mkdir_row;
 /* The call that holds the root's namespace lock when a row's call first
  * asks for it, which runs before the row's call has the lock, the depth of
  * the lock, the number of times it was taken from a depth of 0, and that
@@ -225,13 +233,26 @@ struct vfs_mount *vfs_root_mount(void)
     return &mount;
 }
 
-/** Report an accessible regular file with set-id bits. */
+/** Report an accessible regular file with set-id bits, or in the mkdir rows
+ * the directory a name is made in. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
-    check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     k_memset(st, 0, sizeof(*st));
+    if (mkdir_row) {
+        check(mnt == &mount && at == &root_dir,
+              "a mkdir checks the directory it makes the name in");
+        st->mode = 040755;
+        return 0;
+    }
+    check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     st->mode = 0106777;
     return 0;
+}
+
+/** The mkdir rows have a root. */
+int vfs_root_mounted(void)
+{
+    return 1;
 }
 
 /** Require the node the file is at, and, but in the attribute rows,
@@ -412,14 +433,15 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     ns_depth--;
 }
 
-/** Find `victim` or `source` by its name in the root directory. */
+/** Find `victim`, `source` or `made_dir` by its name in the root directory. */
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found)
 {
-    krffs_node_t *nodes[2];
+    krffs_node_t *nodes[3];
     int i;
 
     nodes[0] = &victim;
     nodes[1] = &source;
+    nodes[2] = &made_dir;
     check(mnt == &mount && dir == &root_dir, "a lookup in the root directory");
     check(ns_depth > 0, "a lookup in the root runs under the root's lock");
     if (lookup_take == 0) {
@@ -427,7 +449,7 @@ static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     }
     check(ns_takes == lookup_take,
           "the lookups, the count and the change run under one hold of the root's lock");
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 3; i++) {
         if (nodes[i]->name[0] != '\0' &&
             __builtin_strcmp((const char *)nodes[i]->name, name) == 0) {
             *found = nodes[i];
@@ -503,6 +525,23 @@ static void changed_in_lookup_hold(void)
 {
     check(ns_depth > 0 && ns_takes == lookup_take,
           "the lookups, the count and the change run under one hold of the root's lock");
+}
+
+/** Make `name` in the root directory, or refuse a name that is there, as
+ * the KRFFS core refuses one, with the errno its adapter gives every such
+ * refusal: ENOSPC on the root and EIO on a volume. */
+int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
+{
+    (void)mode;
+    check(mnt == &mount && dir == &root_dir, "the mkdir is in the root directory");
+    changed_in_lookup_hold();
+    if (made_dir.name[0] != '\0' && __builtin_strcmp((const char *)made_dir.name, name) == 0) {
+        return mnt->type == &vfs_krffs_type ? -ENOSPC : -EIO;
+    }
+    k_strncpy((char *)made_dir.name, name, sizeof(made_dir.name));
+    made_dir.type = KRFFS_RESERVED_NODE;
+    made_dir.mode = KRFFS_S_IFDIR | 0755;
+    return 0;
 }
 
 /** Free the file an unlink takes the name of, as the root does. */
@@ -709,6 +748,68 @@ static void rename_over_installing(void)
     check(keeps == 1 && removals == 0,
           "the rename keeps the file it replaces for the open's descriptor");
     root_row_end();
+}
+
+/** The mkdir a row's call waits for: another process has made the
+ * directory "made" while it held the lock the call asks for. */
+static void other_makes_it(void)
+{
+    k_strncpy((char *)made_dir.name, "made", sizeof(made_dir.name));
+    made_dir.type = KRFFS_RESERVED_NODE;
+    made_dir.mode = KRFFS_S_IFDIR | 0755;
+}
+
+/** Begin a mkdir row on the root, or with `mounted` on a serialised mounted
+ * type, with no directory made and a process whose umask is 027. */
+static void mkdir_row_begin(int mounted)
+{
+    root_row_begin();
+    if (mounted) {
+        mount.type = &mkdir_type;
+    }
+    k_memset(&made_dir, 0, sizeof(made_dir));
+    k_memset(&row_fs, 0, sizeof(row_fs));
+    row_fs.umask = 027;
+    proc.fs = &row_fs;
+    proc.egid = 5;
+    mkdir_row = 1;
+}
+
+static void mkdir_row_end(void)
+{
+    mkdir_row = 0;
+    proc.fs = 0;
+    proc.egid = 0;
+    root_row_end();
+}
+
+/**
+ * A mkdir of a name another process makes while this one waits for the
+ * namespace lock, on the KRFFS root and on a serialised mounted type. The
+ * lookup runs under the lock with the creation, so the name is found and
+ * the answer is EEXIST, where the file system would refuse it as it refuses
+ * a full volume on the root (ENOSPC) and a failing one on a KRFFS volume
+ * (EIO). With no other process, the directory is made, and on the root
+ * stamped with its maker's ids and the mode less the umask.
+ */
+static void mkdir_race(void)
+{
+    int mounted;
+
+    for (mounted = 0; mounted < 2; mounted++) {
+        mkdir_row_begin(mounted);
+        waiting = other_makes_it;
+        check(do_mkdir("/made", 0777) == -EEXIST,
+              "a mkdir of a name another process made while it waited is EEXIST");
+        mkdir_row_end();
+
+        mkdir_row_begin(mounted);
+        check(do_mkdir("/made", 0777) == 0 && made_dir.name[0] != '\0',
+              "a mkdir with nobody before it makes the directory");
+        check(mounted || (made_dir.gid == 5 && (made_dir.mode & 07777) == 0750),
+              "the directory a mkdir makes on the root has its maker's group and mode");
+        mkdir_row_end();
+    }
 }
 
 /** The write a row's call waits for: it holds the mount's lock and moves
@@ -955,6 +1056,7 @@ int main(void)
     dup2_source_closed();
     unlink_installing();
     rename_over_installing();
+    mkdir_race();
     attrs_after_move();
     loop_handles();
     lock_keys();

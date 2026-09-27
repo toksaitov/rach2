@@ -7685,14 +7685,68 @@ out:
 }
 
 /**
+ * Make the directory `leaf` in `parent`, which the caller's walk reached and
+ * whose namespace lock it holds where the type takes one: the body of
+ * `do_mkdir`. The lookup that answers -EEXIST and the creation are one hold
+ * of that lock, so a directory of the same name that another process makes
+ * while this one waits for the lock is a name that exists here, and not one
+ * handed to the file system, which refuses it as it refuses a full volume
+ * (ENOSPC on the KRFFS root) or a failing one (EIO on a KRFFS volume).
+ */
+static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode)
+{
+    void *found;
+    int32_t rc;
+
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return -EROFS; /* nothing is created under /dev or /proc */
+    }
+    /* A name a mount stands at exists, whatever the type's own lookup
+     * says: a KRFFS /dev would shadow the synthetic mount. */
+    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
+        return -EEXIST;
+    }
+    if (parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
+        if (parent->mnt->type->ops->put) {
+            parent->mnt->type->ops->put(parent->mnt, found);
+        }
+        return -EEXIST;
+    }
+    if (!mnt_is_root(parent->mnt)) {
+        rc = cred_access_ref(parent, CRED_W, 0);
+        if (rc == 0) {
+            vfs_ns_lock(parent->mnt);
+            rc = vfs_mkdir(parent->mnt, parent->node, leaf,
+                           mode & 07777u & ~current_proc->fs->umask);
+            vfs_ns_unlock(parent->mnt);
+        }
+        return rc;
+    }
+    rc = cred_access_node((krffs_node_t *)parent->node, CRED_W, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    vfs_ns_lock(parent->mnt);
+    rc = vfs_mkdir(parent->mnt, parent->node, leaf, mode);
+    vfs_ns_unlock(parent->mnt);
+    if (rc == 0 && parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
+        krffs_stamp_new_node(found, mode);
+    }
+    return rc;
+}
+
+/**
  * Create the directory `path`, an absolute canonical path, with the
  * permission bits of `mode` less the umask, as any creation takes them: the
  * core of mkdir(2) and mkdirat(2). Returns 0 or -errno (-EEXIST if it exists,
- * -ENOENT if a parent is missing).
+ * -ENOENT if a parent is missing). The walk keeps the parent's namespace
+ * lock, where its type takes one, until the directory is made (`mkdir_in`).
  */
 static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
 {
-    krffs_node_t *node;
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc;
 
     if (!vfs_root_mounted()) {
         return -ENOENT;
@@ -7700,63 +7754,14 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
         return -EEXIST; /* the root exists; mkdir -p walks through here */
     }
-    {
-        struct vfs_ref parent;
-        char leaf[VFS_NAME_MAX + 1];
-        void *found;
-        int32_t rc;
-
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
-        if (rc != 0) {
-            return rc; /* a missing parent, or a denied ancestor */
-        }
-        if (vfs_synth_vpath(parent.mnt, parent.node)) {
-            vfs_ref_release(&parent);
-            return -EROFS; /* nothing is created under /dev or /proc */
-        }
-        /* A name a mount stands at exists, whatever the type's own lookup
-         * says: a KRFFS /dev would shadow the synthetic mount. */
-        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
-            vfs_ref_release(&parent);
-            return -EEXIST;
-        }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
-            if (parent.mnt->type->ops->put) {
-                parent.mnt->type->ops->put(parent.mnt, found);
-            }
-            vfs_ref_release(&parent);
-            return -EEXIST;
-        }
-        if (!mnt_is_root(parent.mnt)) {
-            rc = cred_access_ref(&parent, CRED_W, 0);
-            if (rc == 0) {
-                vfs_ns_lock(parent.mnt);
-                rc = vfs_mkdir(parent.mnt, parent.node, leaf,
-                               mode & 07777u & ~current_proc->fs->umask);
-                vfs_ns_unlock(parent.mnt);
-            }
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode);
-        vfs_ns_unlock(parent.mnt);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
-            node = found;
-            krffs_stamp_new_node(node, mode);
-        }
-        vfs_ref_release(&parent);
+    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
+        return rc; /* a missing parent, or a denied ancestor */
     }
-    return 0;
+    rc = mkdir_in(&parent, leaf, mode);
+    vfs_walk_unlock(parent.mnt);
+    vfs_ref_release(&parent);
+    return rc;
 }
 
 /* mkdir(2): EBX = path, ECX = mode. */
