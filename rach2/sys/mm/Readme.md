@@ -70,7 +70,7 @@ Stack growth extends the stack VMA down to the faulting page when the page is at
 
 `fork` maps each present user frame into the child. A page of a `VM_SHARED` region keeps its flags in both, writable ones included, so a store by either is seen by both. Other writable pages become read-only and receive `PTE_COW` in both processes; the frame reference count increases. Genuine read-only pages, and the `PTE_NONE` pages of an inaccessible range, keep their existing flags and are not marked COW.
 
-On the first write, `cow_fault` allocates and copies a frame when another process still references the old one. If the writer is the sole owner, it removes `PTE_COW` and restores write permission without copying. Exit, `execve`, `munmap`, and failed-fork cleanup decrement the same reference counts.
+On the first write, `cow_fault` allocates and copies a frame when another process still references the old one. If the writer is the sole owner, it removes `PTE_COW` and restores write permission without copying. A write through `paging_access`, which ptrace and `/proc/PID/mem` make, takes the copy-on-write path only for a page of a writable VMA; any other shared page, a copy-on-write page of a VMA `mprotect` made read-only among them, gets a copy with its own rights, and a page the process alone holds loses its `PTE_COW` and keeps its rights, so the write never leaves a page writable that its VMA is not. Exit, `execve`, `munmap`, and failed-fork cleanup decrement the same reference counts.
 
 ## Checked user access
 

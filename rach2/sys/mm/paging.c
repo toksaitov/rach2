@@ -733,13 +733,17 @@ static int cow_fault(page_dir_t *dir, uint32_t addr)
  * Give the present page at `addr` of `dir` a frame of its own, as a
  * copy-on-write fault would, but keeping its rights: a store the kernel then
  * makes through its own mapping of the frame changes this address space
- * alone. A copy-on-write page takes the copy-on-write path, which also makes
- * it writable, as its region is; a read-only page another address space
- * shares, the text a fork left in both, gets a copy with the same rights.
- * The caller balanced memory first, so nothing here sleeps. 0, or -1 when no
- * frame could be had or copied.
+ * alone. A copy-on-write page of a region that is `writable` takes the
+ * copy-on-write path, which also makes it writable, as its region is. Any
+ * other page another address space shares, the text a fork left in both or
+ * a copy-on-write page of a region mprotect made read-only since, gets a
+ * copy with the same rights, read-only still, and one this space alone
+ * holds is used as it is; either way the frame is this space's alone after,
+ * and the page loses its copy-on-write mark. The caller balanced memory
+ * first, so nothing here sleeps. 0, or -1 when no frame could be had or
+ * copied.
  */
-static int page_private(page_dir_t *dir, uint32_t addr)
+static int page_private(page_dir_t *dir, uint32_t addr, int writable)
 {
     page_table_t *table = dir->logical_page_tables[addr / PAGE_SIZE / 1024];
     uint32_t index = (addr / PAGE_SIZE) % 1024;
@@ -750,24 +754,26 @@ static int page_private(page_dir_t *dir, uint32_t addr)
     if (!table || !((pte = table->pages[index]) & 0x1)) {
         return -1;
     }
-    if (pte & PTE_COW) {
+    if ((pte & PTE_COW) && writable) {
         return cow_fault(dir, addr) ? 0 : -1;
     }
     old_phys = pte & ~0xFFFu;
-    if (old_phys / PAGE_SIZE >= _frames_number || _frames[old_phys / PAGE_SIZE] <= 1) {
-        return 0;
+    new_phys = old_phys;
+    if (old_phys / PAGE_SIZE < _frames_number && _frames[old_phys / PAGE_SIZE] > 1) {
+        new_phys = alloc_user_frame();
+        if (new_phys == 0) {
+            return -1;
+        }
+        if (paging_copy_frame(new_phys, old_phys) != 0) {
+            free_frame(new_phys);
+            return -1;
+        }
     }
-    new_phys = alloc_user_frame();
-    if (new_phys == 0) {
-        return -1;
-    }
-    if (paging_copy_frame(new_phys, old_phys) != 0) {
-        free_frame(new_phys);
-        return -1;
-    }
-    table->pages[index] = new_phys | (pte & 0xFFFu);
+    table->pages[index] = new_phys | (pte & 0xFFFu & ~PTE_COW);
     paging_flush_tlb(addr);
-    frame_unref(old_phys);
+    if (new_phys != old_phys) {
+        frame_unref(old_phys);
+    }
     return 0;
 }
 
@@ -796,8 +802,9 @@ static int access_page(struct mm *mm, uint32_t addr, uint8_t *p, uint32_t len, i
         !pte_present(mm->dir, addr)) {
         return -EIO;
     }
-    if (write && (vma->type == VM_SHARED ? !(vma->prot & VM_PROT_WRITE)
-                                         : page_private(mm->dir, addr) != 0)) {
+    if (write && (vma->type == VM_SHARED
+                      ? !(vma->prot & VM_PROT_WRITE)
+                      : page_private(mm->dir, addr, (vma->prot & VM_PROT_WRITE) != 0) != 0)) {
         return -EIO;
     }
     map = kmap_temp(paging_user_phys(mm->dir, addr) & ~(uintptr_t)(PAGE_SIZE - 1));

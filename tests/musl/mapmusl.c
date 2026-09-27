@@ -16,7 +16,8 @@
  * past the end of memory, leaving the mapping; a fixed mremap that shrinks
  * a mapping is held to RLIMIT_AS by what it leaves; madvise(MADV_DONTNEED)
  * gives a private anonymous mapping zero pages again, and madvise and msync
- * refuse a length that would round up to 0.
+ * refuse a length that would round up to 0. A write through /proc/self/mem
+ * to a read-only page a fork shared leaves the page read-only.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -24,6 +25,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -280,6 +282,54 @@ static int remaps(void)
     return 0;
 }
 
+static sigjmp_buf segv_jump;
+
+static void on_segv(int sig)
+{
+    (void)sig;
+    siglongjmp(segv_jump, 1);
+}
+
+/* A write through /proc/self/mem to a page a fork left copy-on-write, in a
+   region mprotect has made read-only since, goes into a page of this
+   process's own that stays read-only: a store from the program after it
+   faults, since the region allows none. */
+static int forced_write(void)
+{
+    char *m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    struct sigaction sa, old;
+    pid_t pid;
+    int fd;
+
+    if (m == MAP_FAILED) {
+        return fail("mmap for a forced write");
+    }
+    m[0] = 'a';
+    pid = fork();
+    if (pid == 0) {
+        _exit(0);
+    }
+    if (!wait_ok(pid) || mprotect(m, PAGE, PROT_READ) != 0) {
+        return fail("fork and mprotect for a forced write");
+    }
+    fd = open("/proc/self/mem", O_RDWR);
+    if (fd < 0 || pwrite(fd, "b", 1, (off_t)(unsigned long)m) != 1 || m[0] != 'b') {
+        return fail("a write through /proc/self/mem");
+    }
+    close(fd);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_segv;
+    sigaction(SIGSEGV, &sa, &old);
+    if (sigsetjmp(segv_jump, 1) == 0) {
+        *(volatile char *)m = 'c';
+        sigaction(SIGSEGV, &old, NULL);
+        return fail("a store reached a read-only page after a write through /proc/self/mem");
+    }
+    sigaction(SIGSEGV, &old, NULL);
+    munmap(m, PAGE);
+    return 0;
+}
+
 /* The pages this process's regions cover, the first number of
    /proc/self/statm, read with no allocation that would change it. */
 static unsigned long mapped_pages(void)
@@ -338,7 +388,8 @@ static int remap_limit(void)
 
 int main(void)
 {
-    if (private_file() || shared() || readonly_shared() || offsets() || remaps() || remap_limit()) {
+    if (private_file() || shared() || readonly_shared() || offsets() || remaps() ||
+        forced_write() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");
