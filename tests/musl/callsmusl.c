@@ -4,9 +4,10 @@
  *
  * sigtimedwait takes a blocked signal the process sent itself and returns
  * its number and sender, takes a signal sent to the thread before a lower
- * one sent to the process, and with no signal pending its timeout ends it
- * with EAGAIN. mlock, munlock, mlockall and munlockall accept a mapped range
- * and refuse a gap with ENOMEM; mincore reports a touched page resident.
+ * one sent to the process, waits for an alarm under a timeout of more than
+ * 2^31 ticks, and with no signal pending its timeout ends it with EAGAIN.
+ * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
+ * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
  * sendmmsg sends two datagrams in one call over an AF_UNIX pair and
  * recvmmsg receives both, each with its count. clock_gettime64 reads the
@@ -41,6 +42,7 @@ static int signals(void)
     sigset_t set;
     siginfo_t info;
     struct timespec zero = {0, 0};
+    struct timespec far = {21474836, 500000000};
 
     sigemptyset(&set);
     sigaddset(&set, SIGUSR1);
@@ -63,6 +65,15 @@ static int signals(void)
     if (sigtimedwait(&set, &info, &zero) != SIGUSR2 || info.si_code != SI_TKILL ||
         sigtimedwait(&set, &info, &zero) != SIGUSR1 || info.si_code != SI_USER) {
         return fail("sigtimedwait did not take the thread's signal before the process's");
+    }
+    sigemptyset(&set);
+    sigaddset(&set, SIGALRM);
+    if (sigprocmask(SIG_BLOCK, &set, NULL) != 0) {
+        return fail("blocking SIGALRM");
+    }
+    alarm(1);
+    if (sigtimedwait(&set, &info, &far) != SIGALRM) {
+        return fail("sigtimedwait under a timeout past 2^31 ticks did not wait for the alarm");
     }
     return 0;
 }

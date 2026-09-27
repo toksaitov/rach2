@@ -3664,7 +3664,10 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
  * signal sent to the process wakes this thread; when it returns the old mask
  * comes back, and a signal of `set` that it blocks and that is still pending
  * for the process is left to another thread (`signal_set_blocked`). The
- * timeout is rounded up to whole 10 ms ticks, and one of zero polls; SIGKILL
+ * timeout is rounded up to whole 10 ms ticks and cut to 2147483646 of them,
+ * as nanosleep's is, so that with the tick in progress added the deadline
+ * stays ahead of the present in the signed comparison of ticks `sigwait_set`
+ * makes, which would take a longer one for past; one of zero polls. SIGKILL
  * and SIGSTOP cannot be waited for.
  */
 int32_t sys_rt_sigtimedwait(isr_params_t *params)
@@ -3696,6 +3699,9 @@ int32_t sys_rt_sigtimedwait(isr_params_t *params)
         }
         ticks = (uint32_t)(ts.tv_sec > 21474836 ? 21474836 : ts.tv_sec) * 100u +
                 ((uint32_t)ts.tv_nsec + 9999999u) / 10000000u;
+        if (ticks > 0x7FFFFFFEu) {
+            ticks = 0x7FFFFFFEu;
+        }
         deadline = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
         timed = 1;
     }

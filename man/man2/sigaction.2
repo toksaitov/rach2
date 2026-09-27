@@ -293,7 +293,10 @@ Its siginfo is stored unless the pointer is null, and its number is
 returned.
 While the call waits the signals of the set count as unblocked, so a
 signal sent to the process wakes this thread.
-A timeout, rounded up to whole 10 ms ticks, ends the wait with
+A timeout is rounded up to whole 10 ms ticks and limited to 2147483646
+ticks, about 248.55 days, as for
+.Xr nanosleep 2 ;
+it ends the wait with
 .Er EAGAIN ,
 one of zero polls, and another signal the thread acts on ends it with
 .Er EINTR ;
