@@ -69,11 +69,20 @@ run_phase()
     expected=$3
     details=$4
     binary="$work/$phase"
+    # The test's host-deps, a kernel source taken from the private tree.
+    deps=
+    for dep in $(grep -oE 'host-deps:[^*]*' "tests/host/$test.c" | sed 's/host-deps://'); do
+        case $dep in
+            rach2/sys/*) deps="$deps $work/sys/${dep#rach2/sys/}" ;;
+            *) deps="$deps $dep" ;;
+        esac
+    done
+    # shellcheck disable=SC2086 # deps is a list of paths without spaces
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
         -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body \
         -ffreestanding -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
         -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        "tests/host/$test.c" -o "$binary" >"$binary.compile.log" 2>&1; then
+        "tests/host/$test.c" $deps -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi
