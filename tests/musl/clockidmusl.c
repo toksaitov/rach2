@@ -22,7 +22,9 @@
  * waiting. A signal ends a relative sleep with a remainder no greater than the
  * interval, and an absolute one with none written. The raw and coarse clocks
  * and the thread CPU clock cannot be slept on, and a bad clock or request is
- * refused. The caller's CPU clock returns at once for a time it has reached.
+ * refused. The caller's CPU clock returns at once for a time it has reached,
+ * and a sleep on it for an interval ends once another thread of the
+ * process, spinning, has advanced it that far.
  *
  * Prints "CLOCKIDMUSL OK" on success and "CLOCKIDMUSL FAIL (detail)"
  * otherwise.
@@ -30,6 +32,7 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -368,9 +371,59 @@ static int sleeps(void)
     return 0;
 }
 
+static volatile int spinning;
+
+/** Spin until `spinning` is cleared: another thread of the process, whose
+ * time the process's CPU clock counts. */
+static void *spinner(void *arg)
+{
+    (void)arg;
+    while (spinning) {
+        spin();
+    }
+    return NULL;
+}
+
+/**
+ * A sleep of 50 ms on the process CPU clock, while another thread of the
+ * process spins, returns 0 once the clock has advanced that far. A SIGALRM
+ * ten seconds on ends the sleep with EINTR if the clock is not read while
+ * the caller sleeps.
+ */
+static int cpu_sleep_sibling(void)
+{
+    struct sigaction sa;
+    struct ts32 req;
+    pthread_t t;
+    long long before;
+    long rc;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_alarm;
+    sigaction(SIGALRM, &sa, NULL);
+    spinning = 1;
+    if (pthread_create(&t, NULL, spinner, NULL) != 0) {
+        return fail("a spinning thread could not be made");
+    }
+    before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    to32(50000000LL, &req);
+    alarm_in(10000000);
+    rc = sleep_raw(CLOCK_PROCESS_CPUTIME_ID, 0, &req, NULL);
+    alarm_in(0);
+    spinning = 0;
+    pthread_join(t, NULL);
+    if (rc != 0) {
+        return fail("a sleep on the process CPU clock another thread advanced did not end");
+    }
+    if (ns_of(CLOCK_PROCESS_CPUTIME_ID) - before < 50000000LL) {
+        return fail("a sleep on the process CPU clock ended before the clock reached its time");
+    }
+    return 0;
+}
+
 int main(void)
 {
-    if (clocks() != 0 || child_clock() != 0 || sleeps() != 0) {
+    if (clocks() != 0 || child_clock() != 0 || sleeps() != 0 || cpu_sleep_sibling() != 0) {
         return 1;
     }
     printf("CLOCKIDMUSL OK\n");

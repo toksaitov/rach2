@@ -73,6 +73,7 @@ static int state_at_unmask = -1, unblocked_unmasks;
 static int halts, unmasked_halts, blocks;
 static uint32_t first_blocked_until, wakeup_at_unmask;
 static int unarmed_unmasks, switch_back, tick_at_save, tick_after_yield, halt_without_tick;
+static int sibling_runs;
 
 #define CHECK(c, detail)                                    \
     do {                                                    \
@@ -335,10 +336,15 @@ static void wake(int with_signal)
     }
 }
 
-/** One tick of the model's clock, and the timer's wake of a due sleeper. */
+/** One tick of the model's clock, and the timer's wake of a due sleeper; with
+ * `sibling_runs`, another thread of the process runs in the tick, which the
+ * timer charges to the process. */
 static void tick(void)
 {
     kernel_ticks++;
+    if (sibling_runs) {
+        proc.utime++;
+    }
     if (current_proc->state == PROC_BLOCKED && current_proc->wakeup_tick != 0 &&
         (int32_t)(kernel_ticks - current_proc->wakeup_tick) >= 0) {
         wake(0);
@@ -483,7 +489,7 @@ static void model_at(uint32_t tick)
     kernel_ticks = tick;
     pending = 0;
     post_at_block = wake_at_deadline = tick_signals = wake_unacted = 0;
-    switch_back = tick_at_save = tick_after_yield = halt_without_tick = 0;
+    switch_back = tick_at_save = tick_after_yield = halt_without_tick = sibling_runs = 0;
     sleeps = cut_short = halts = unmasked_halts = blocks = unblocked_unmasks = 0;
     unarmed_unmasks = 0;
     blocked_until = first_blocked_until = 0;
@@ -1001,6 +1007,35 @@ static void uptime_at(uint32_t tick)
 }
 
 /**
+ * The caller's process CPU clock while another thread of the process lives
+ * and runs, charging the process a tick at every tick: it is read again at
+ * every tick, so a sleep from 3.7 s of CPU time until 3.75 s, absolute or
+ * relative, blocks until the next tick first and returns at tick 3005.
+ */
+static void cpu_clock_sibling(void)
+{
+    isr_params_t p;
+    int absolute;
+
+    group.live = 2;
+    for (absolute = 0; absolute <= 1; absolute++) {
+        proc.utime = 250;
+        proc.stime = 120;
+        if (absolute) {
+            ask_clock_sleep(&p, 2, 1, 3, 750000000);
+        } else {
+            ask_clock_sleep(&p, 2, 0, 0, 50000000);
+        }
+        uptime_at(3000);
+        sibling_runs = 1;
+        CHECK(clock_sleep_call(&p) == 0 && first_blocked_until == 3001 && kernel_ticks == 3005,
+              "a sleep on the process CPU clock another thread advances ends when it reaches the "
+              "time");
+    }
+    group.live = 0;
+}
+
+/**
  * clock_nanosleep's clocks, deadlines and remainders.
  *
  * The raw and coarse clocks and the thread CPU clock cannot be slept on
@@ -1098,6 +1133,7 @@ static void clock_sleeps(void)
     CHECK(clock_sleep_call(&p) == -EINTR, "a signal ends a wait for a CPU time not reached");
     rem = remainder();
     CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "and an absolute one leaves no remainder");
+    cpu_clock_sibling();
 }
 
 /** Run the independent syscall state cases. */

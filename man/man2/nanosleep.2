@@ -82,11 +82,12 @@ The fourth is the caller's process CPU clock,
 or any process's in the negative form
 .Xr clock_gettime 2
 describes.
-The caller's own CPU time does not advance while it sleeps, since each
-process is one thread, so a sleep on it for an interval, or until a time
-not yet reached, ends only at a signal; another process's CPU clock is read
-at every tick, and the sleep ends at the first tick that finds it at the
-time asked for.
+While the caller sleeps, its process's CPU clock advances by the time of
+the process's other threads alone: it is read at every tick while another
+thread of the process lives, as another process's CPU clock is, and the
+sleep ends at the first tick that finds it at the time asked for.
+With no other thread it does not advance, and a sleep on it for an
+interval, or until a time not yet reached, ends only at a signal.
 For an interval on a CPU clock a signal leaves the CPU time still due in
 .Fa rem .
 .Pp
@@ -185,7 +186,8 @@ the parent slept.
 .Pa tests/musl/clockidmusl.c
 sleeps until a time of each clock that can be slept on and checks that the
 clock reads it afterwards, has a signal end a relative and an absolute
-sleep, and checks the clocks and requests that are refused.
+sleep, checks the clocks and requests that are refused, and sleeps on the
+process CPU clock while another thread of the process spins.
 .Sh ERRORS
 The kernel handlers return:
 .Bl -tag -width "[EOPNOTSUPP]"

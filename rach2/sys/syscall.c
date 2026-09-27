@@ -816,14 +816,16 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
 }
 
 /**
- * Sleep until the CPU clock `clk` reads `due` ticks or more.
+ * Sleep until the CPU clock `clk`, a process's, reads `due` ticks or more.
  *
  * The clock is looked up again at every turn, since the process whose time it
- * reads may be reaped meanwhile. The caller's own clock does not advance
- * while it sleeps, one thread per process, and neither does a reaped
- * process's, so the wait for either ends only at a signal; another process's
- * is read again at every tick. A relative sleep's remainder is the ticks
- * still due at the last reading. Returns 0, or -EINTR.
+ * reads may be reaped meanwhile. It is read again at every tick while it can
+ * advance: another process's, and the caller's own while another thread of
+ * the caller's process lives, whose time the clock counts. The caller's
+ * clock with no other thread does not advance while it sleeps, and neither
+ * does a reaped process's, so the wait for either ends only at a signal. A
+ * relative sleep's remainder is the ticks still due at the last reading.
+ * Returns 0, or -EINTR.
  */
 static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec __user *urem)
 {
@@ -839,7 +841,7 @@ static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec
             if (now >= due) {
                 return 0;
             }
-            if (c.proc != current_proc) {
+            if (c.proc->tg != current_proc->tg || current_proc->tg->live > 1) {
                 wait = 1;
             }
         }
@@ -872,8 +874,9 @@ static int32_t sleep_until_cpu(int32_t clk, uint32_t due, struct kernel_timespec
  * Real time, time since boot and boot time sleep; the raw and coarse clocks
  * and the calling thread's CPU clock return -EOPNOTSUPP, the clocks Linux
  * cannot sleep on either, and a thread CPU clock by id returns -EINVAL. The
- * caller's process CPU clock is Linux's too: its time does not advance while
- * it sleeps, so an interval or a time not yet reached is waited out only by a
+ * caller's process CPU clock is Linux's too: while the caller sleeps it
+ * advances by the time of the process's other threads alone, so with no
+ * other thread an interval or a time not yet reached is waited out only by a
  * signal. The order of the checks is Linux's: the clock, then the request
  * (-EFAULT, then -EINVAL for a negative second or nanoseconds past a
  * second), then a CPU clock by id.
