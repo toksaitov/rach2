@@ -133,8 +133,10 @@ step_gdb()
 step_check()
 {
     lib="$SYSROOT/lib:$SYSROOT/usr/lib:$CROSS/$TARGET/lib"
-    "$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdb" --version | sed -n 1p
-    "$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdbserver" --version | sed -n 1p
+    v="$("$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdb" --version)"
+    echo "$v" | sed -n 1p
+    v="$("$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdbserver" --version)"
+    echo "$v" | sed -n 1p
     r="$(fresh check)/root"
     mkdir -p "$r/tmp" "$r/proc" "$r/check" "$r/usr/lib"
     cp -a "$SYSROOT/." "$r/"
