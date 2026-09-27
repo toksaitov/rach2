@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -310,11 +311,36 @@ static int largest(int fd)
 }
 
 static int waiter_fd, waiter_rc, waiter_errno;
+static volatile pid_t waiter_tid;
 
-/** Wait for a write lock of byte 50 through `waiter_fd`. */
+/** Whether thread `tid` of this process sleeps, by its state in
+ * /proc/self/task/<tid>/stat. */
+static int thread_sleeping(pid_t tid)
+{
+    char path[64], line[256], *state;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/stat", (int)tid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = (int)read(fd, line, sizeof(line) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    line[n] = '\0';
+    state = strrchr(line, ')');
+    return state && state[1] == ' ' && state[2] == 'S';
+}
+
+/** Say this thread's id in `waiter_tid`, and wait for a write lock of byte
+ * 50 through `waiter_fd`. */
 static void *wait_for_byte(void *arg)
 {
     (void)arg;
+    waiter_tid = (pid_t)syscall(SYS_gettid);
     waiter_rc = lk(waiter_fd, F_SETLKW, F_WRLCK, 50, 1);
     waiter_errno = errno;
     return NULL;
@@ -335,16 +361,16 @@ static int byte_free(void)
 }
 
 /**
- * A thread waits in F_SETLKW for a byte a child holds, and the main thread
- * closes the descriptor it waits through. When the child lets go, the wait
- * gains the lock, lets it go for the close, and fails with EBADF, and a
- * second child can take the byte.
+ * A thread waits in F_SETLKW for a byte a child holds, and the main thread,
+ * once it sees the thread asleep, closes the descriptor it waits through.
+ * When the child lets go, the wait gains the lock, lets it go for the close,
+ * and fails with EBADF, and a second child can take the byte.
  */
 static int closed_wait(void)
 {
     int to_child[2], to_parent[2];
     pthread_t waiter;
-    int status;
+    int status, tries;
     pid_t pid;
 
     if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
@@ -363,10 +389,16 @@ static int closed_wait(void)
     }
     await(to_parent[0]);
     waiter_fd = open(LOCK_PATH, O_RDWR);
+    waiter_tid = 0;
     if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
         return fail("the waiting thread");
     }
-    (void)poll(NULL, 0, 200);
+    for (tries = 0; tries < 300 && !(waiter_tid != 0 && thread_sleeping(waiter_tid)); tries++) {
+        usleep(10000);
+    }
+    if (tries == 300) {
+        return fail("the waiting thread was never seen asleep in F_SETLKW");
+    }
     close(waiter_fd);
     post(to_child[1]);
     if (pthread_join(waiter, NULL) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
