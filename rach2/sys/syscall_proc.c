@@ -4792,18 +4792,10 @@ static uint32_t vm_prot_of(uint32_t prot)
     return vmprot;
 }
 
-/**
- * The file or shared memory a new mapping maps, with the region kind it
- * makes: a private mapping of a file (VM_FILE), a shared mapping of a file
- * in memory or of shared anonymous memory (VM_SHARED), or NULL for private
- * anonymous memory (VM_ANON). /dev/zero maps as anonymous memory. A shared
- * mapping of a file on a disk file system is served as a private one when
- * it is read-only, which reads the same bytes, and refused with ENODEV when
- * it may be written, since its stores would not reach the file.
- */
 /** A copy in the heap of the path /proc/PID/fd would give the current
  * process's descriptor `fd`, for /proc/PID/maps to name the file a region
- * maps; NULL when there is no room or no path. */
+ * maps; NULL when there is no room or no path. Rebuilding the path may
+ * sleep in the disk. */
 static char *fd_path_copy(int fd)
 {
     char *buf = kmalloc(VFS_PATH_MAX);
@@ -4825,6 +4817,16 @@ static char *fd_path_copy(int fd)
     return copy;
 }
 
+/**
+ * The file or shared memory a new mapping maps, with the region kind it
+ * makes: a private mapping of a file (VM_FILE), a shared mapping of a file
+ * in memory or of shared anonymous memory (VM_SHARED), or NULL for private
+ * anonymous memory (VM_ANON). /dev/zero maps as anonymous memory. A shared
+ * mapping of a file on a disk file system is served as a private one when
+ * it is read-only, which reads the same bytes, and refused with ENODEV when
+ * it may be written, since its stores would not reach the file. It may
+ * sleep, finding the file's path.
+ */
 static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_file **file,
                             vm_type_t *type)
 {
@@ -4868,17 +4870,54 @@ static int32_t mmap_backing(uint32_t flags, uint32_t prot, int fd, struct vm_fil
     return 0;
 }
 
+/**
+ * Where a new mapping of `len` bytes goes, in `*base`: `addr` itself under
+ * MAP_FIXED or MAP_FIXED_NOREPLACE, which refuses a range in use with
+ * EEXIST; otherwise a page-aligned hint whose range is free below the
+ * stack's growth window, and without one the highest free range below
+ * VM_MMAP_BASE and above the heap's top, so the ranges munmap frees are used
+ * again. RLIMIT_AS counts the range, less what a fixed mapping replaces.
+ * 0, -ENOMEM or -EEXIST. Nothing here sleeps, so the range is still as it
+ * was found when the caller inserts the region straight after.
+ */
+static int32_t mmap_place(vm_space_t *vm, uint32_t addr, uint32_t len, uint32_t flags,
+                          uint32_t *base)
+{
+    uint32_t limit = current_proc->rlim[RLIM_AS].cur;
+
+    if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
+        if (addr < USER_ADDR_MIN || addr > USER_ADDR_MAX - len) {
+            return -ENOMEM;
+        }
+        if ((flags & MAP_FIXED_NOREPLACE) && vm_overlaps(vm, addr, addr + len)) {
+            return -EEXIST;
+        }
+        *base = addr;
+        return vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit ? -ENOMEM : 0;
+    }
+    *base = 0;
+    if (addr != 0 && (addr & (PAGE_SIZE - 1)) == 0 && addr >= USER_ADDR_MIN &&
+        len <= vm->stack_limit && addr <= vm->stack_limit - len &&
+        !vm_overlaps(vm, addr, addr + len)) {
+        *base = addr;
+    }
+    if (*base == 0) {
+        *base = vm_find_free(vm, len, PAGE_UP(vm->brk), VM_MMAP_BASE);
+    }
+    return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
+}
+
 /*
  * sys_mmap2 - map memory. Args: EBX=addr, ECX=length, EDX=prot, ESI=flags,
  * EDI=fd, EBP=pgoffset, the offset in the file in pages. Returns the mapped
  * base address, or -errno. What is mapped is `mmap_backing`'s: anonymous
- * memory, private or shared, or a file, private or shared. MAP_FIXED
- * replaces whatever the range held, and MAP_FIXED_NOREPLACE refuses a range
- * in use with EEXIST. Otherwise a page-aligned hint that is free below the
- * stack's growth window is taken as it is, and without one the highest free
- * range below VM_MMAP_BASE and above the heap's top is used, so the ranges
- * munmap frees are used again. Pages are backed on first touch: zeroed, read
- * from the file, or the shared page itself.
+ * memory, private or shared, or a file, private or shared; where it goes is
+ * `mmap_place`'s. The backing is found first, since finding it may sleep,
+ * and the place after, so that nothing sleeps between the checks on the
+ * range and the insertion: a thread sharing the address space cannot map
+ * the range meanwhile, and MAP_FIXED_NOREPLACE cannot replace what it put
+ * there. MAP_FIXED replaces whatever the range held. Pages are backed on
+ * first touch: zeroed, read from the file, or the shared page itself.
  */
 int32_t sys_mmap2(isr_params_t *params)
 {
@@ -4887,7 +4926,7 @@ int32_t sys_mmap2(isr_params_t *params)
     uint32_t prot = params->edx;
     uint32_t flags = params->esi;
     vm_space_t *vm;
-    uint32_t len, base, limit;
+    uint32_t len, base = 0;
     struct vm_file *file;
     vm_type_t type;
     int32_t rc;
@@ -4895,9 +4934,6 @@ int32_t sys_mmap2(isr_params_t *params)
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
     }
-    mem_balance();
-    vm = &current_proc->mm->vm;
-
     if (length == 0 || (prot & ~(uint32_t)(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0) {
         return -EINVAL;
     }
@@ -4909,62 +4945,35 @@ int32_t sys_mmap2(isr_params_t *params)
         return -ENOMEM;
     }
     len = PAGE_UP(length);
-    limit = current_proc->rlim[RLIM_AS].cur;
-
-    if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
-        if ((addr & (PAGE_SIZE - 1)) != 0) {
-            return -EINVAL;
-        }
-        if (addr < USER_ADDR_MIN || addr > USER_ADDR_MAX - len) {
-            return -ENOMEM;
-        }
-        if ((flags & MAP_FIXED_NOREPLACE) && vm_overlaps(vm, addr, addr + len)) {
-            return -EEXIST;
-        }
-        if (vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit) {
-            return -ENOMEM; /* RLIMIT_AS, the replaced bytes not counted twice */
-        }
-        base = addr;
-    } else {
-        base = 0;
-        if (addr != 0 && (addr & (PAGE_SIZE - 1)) == 0 && addr >= USER_ADDR_MIN &&
-            len <= vm->stack_limit && addr <= vm->stack_limit - len &&
-            !vm_overlaps(vm, addr, addr + len)) {
-            base = addr;
-        }
-        if (base == 0) {
-            base = vm_find_free(vm, len, PAGE_UP(vm->brk), VM_MMAP_BASE);
-        }
-        if (base == 0 || vm_total(vm) + len > limit) {
-            return -ENOMEM;
-        }
+    if ((flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) && (addr & (PAGE_SIZE - 1)) != 0) {
+        return -EINVAL;
     }
-    /* What is mapped is found before anything MAP_FIXED replaces goes, so a
-       refusal leaves the old mapping. */
+    mem_balance();
     rc = mmap_backing(flags, prot, (int)params->edi, &file, &type);
     if (rc != 0) {
         return rc;
     }
-    if (flags & MAP_FIXED) {
+    vm = &current_proc->mm->vm;
+    rc = mmap_place(vm, addr, len, flags, &base);
+    if (rc == 0 && (flags & MAP_FIXED)) {
         /* A split in the removal and the new region take two entries, found
            before the old mapping goes. */
-        if (vm_reserve(vm, 2) != 0) {
-            vm_file_put(file);
-            vm_file_reap();
+        if (vm_reserve(vm, 2) == 0) {
+            vm_remove(vm, base, base + len);
+            unmap_user_range(_curr_dir, base, base + len);
+        } else {
+            rc = -ENOMEM;
             vma_exhausted("mmap");
-            return -ENOMEM;
         }
-        vm_remove(vm, base, base + len);
-        unmap_user_range(_curr_dir, base, base + len);
     }
-    rc = vm_insert_file(vm, base, base + len, vm_prot_of(prot), type, file, params->ebp);
+    if (rc == 0 &&
+        vm_insert_file(vm, base, base + len, vm_prot_of(prot), type, file, params->ebp) != 0) {
+        rc = -ENOMEM;
+        vma_exhausted("mmap");
+    }
     vm_file_put(file);
     vm_file_reap();
-    if (rc != 0) {
-        vma_exhausted("mmap");
-        return -ENOMEM;
-    }
-    return (int32_t)base;
+    return rc == 0 ? (int32_t)base : rc;
 }
 
 /*
