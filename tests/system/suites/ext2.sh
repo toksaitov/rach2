@@ -170,7 +170,7 @@ echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
 #      and its target does not, chown changes the target, an O_PATH descriptor
 #      opened with O_NOFOLLOW names the link, and a dangling link changes.
 boot_root "$ROOT.lchown.log" --ok "LCHOWNMUSL OK (links)" \
-    "send=/lchownmusl /tmp" "expect=LCHOWNMUSL OK (links)" || fail "lchown on the ext2 root"
+    "send=/lchownmusl /tmp" "expect=LCHOWNMUSL OK \(links\)" || fail "lchown on the ext2 root"
 echo "ext2-test: lchown and AT_SYMLINK_NOFOLLOW change a link and chown its target: OK"
 
 # ---- 2d'': the entry types getdents64 reports from ext2's file-type bytes. The
@@ -178,7 +178,7 @@ echo "ext2-test: lchown and AT_SYMLINK_NOFOLLOW change a link and chown its targ
 #       DT_LNK, and every entry of / and /bin of this root must have the type
 #       lstat gives it.
 boot_root "$ROOT.dirent.log" --ok "DIRENTMUSL OK (links)" \
-    "send=/direntmusl /tmp" "expect=DIRENTMUSL OK (links)" || fail "d_type on the ext2 root"
+    "send=/direntmusl /tmp" "expect=DIRENTMUSL OK \(links\)" || fail "d_type on the ext2 root"
 echo "ext2-test: getdents64 reports each entry's type, a link as DT_LNK: OK"
 
 # ---- 2e: signal teardown beside a writer on an ext2 root. This stress row
