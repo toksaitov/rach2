@@ -1,6 +1,6 @@
-# `io/`: `poll` and `select`
+# `io/`: `poll`, `select`, `epoll`, `eventfd` and `timerfd`
 
-Rach2 implements `poll`, `ppoll`, `select`, `_newselect`, and `pselect6` over one readiness scanner. These calls report which descriptors can make progress without waiting. They do not copy file, terminal, pipe, or socket payloads.
+Rach2 implements `poll`, `ppoll`, `select`, `_newselect`, and `pselect6` over one readiness scanner, and `epoll` over the same scanner and wait. These calls report which descriptors can make progress without waiting. They do not copy file, terminal, pipe, or socket payloads. `eventfd` and `timerfd` are descriptors whose readiness these calls report, a counter and a timer.
 
 ## Readiness
 
@@ -14,6 +14,7 @@ The main backing rules are:
 * A tty is readable when its line discipline has input ready and is always writable. Console readiness is restricted to the descriptor's access mode: `POLLIN` requires read access and `POLLOUT` requires write access. A read-only console descriptor polled only for output reports no readiness. A pseudoterminal also reports peer hangup.
 * Datagram and protocol-bearing raw sockets are readable when a packet is queued and always writable. A listening stream socket is readable when an accepted connection is queued. A connected stream socket is readable with buffered data or a received FIN; it is writable in `ESTABLISHED` or `CLOSE_WAIT` while its send ring has space. Socket errors and a closed stream report `POLLERR` and `POLLHUP` as applicable. See the [network documentation](../network/Readme.md).
 * Procfs snapshots report read readiness, including at EOF. Devfs character devices report requested read and write readiness.
+* An eventfd is readable while its counter is not zero and writable while another 1 fits; a timerfd is readable while it has expirations to read; an epoll set is readable while a descriptor of its set is ready.
 
 The framebuffer, mouse, and any remaining descriptor type use the fallback that reports requested read and write readiness immediately. Mouse readiness is not tied to packet availability, so `poll` cannot wait for a mouse packet.
 
@@ -21,11 +22,11 @@ For `poll`, a negative descriptor is ignored. A closed or out-of-range nonnegati
 
 ## Scan and wait
 
-The core disables interrupts and scans every entry once. If one is ready, a signal that is neither blocked nor ignored is pending, or the deadline has passed, it returns. Otherwise it adds the process to every non-null wait queue, arms its timer deadline when needed, marks it blocked, and schedules another process.
+The wait, `poll_wait`, takes a scan function, which `poll` and `select` give their descriptors and `epoll` its set. The core disables interrupts and scans every entry once. If one is ready, a signal that is neither blocked nor ignored is pending, or the deadline has passed, it returns. Otherwise it adds the process to every non-null wait queue, arms its timer deadline when needed, marks it blocked, and schedules another process.
 
 A pipe operation, socket path, terminal path, or signal can wake the process. The 100 Hz timer wakes a finite wait at its deadline. After any wake, the process removes itself from every queue and scans again. The scan and all queue insertions happen while interrupts are disabled, so a readiness change cannot occur between the test and the sleep.
 
-If no descriptor is ready, a pending signal that is neither blocked nor ignored returns `EINTR`; the kernel does not restart the call for `SA_RESTART`. A finite timeout is rounded up to a 10 ms tick, and the tick in progress is not counted, so a timeout never expires before the time asked, up to the limits below. A zero timeout performs one scan without waiting. `poll` with no entries and a finite timeout acts as a sleep. A negative `poll` timeout or a null timeout pointer for `select`, `_newselect`, `ppoll`, or `pselect6` waits indefinitely, until readiness or a pending signal that is neither blocked nor ignored.
+If no descriptor is ready, a pending signal that is neither blocked nor ignored returns `EINTR`; the kernel does not restart the call for `SA_RESTART`, nor an `epoll` wait, as Linux does not. A finite timeout is rounded up to a 10 ms tick, and the tick in progress is not counted, so a timeout never expires before the time asked, up to the limits below. A zero timeout performs one scan without waiting. `poll` with no entries and a finite timeout acts as a sleep. A negative `poll` timeout or a null timeout pointer for `select`, `_newselect`, `ppoll`, or `pselect6` waits indefinitely, until readiness or a pending signal that is neither blocked nor ignored.
 
 Finite waits saturate without an error. `select` and `_newselect` convert any seconds value above 2147482 to 2147483647 milliseconds before tick rounding, about 24.86 days. `ppoll` and `pselect6` cap seconds at 21474836, round nanoseconds up to ticks, and cap the sum at 2147483646 ticks, about 248.55 days. Larger requested intervals are shortened. These kernel limits apply even when the timeout fits the 32-bit ABI; they are separate from musl's time64 fallback described below.
 
@@ -43,13 +44,21 @@ An `fd_set` has 1024 bits, matching the maximum number of descriptors a process 
 
 ## System-call ABI and limits
 
-The implemented i386 calls are old packed-argument `select(82)`, `_newselect(142)`, `poll(168)`, `pselect6(308)`, and `ppoll(309)`. The `pselect6_time64(413)` and `ppoll_time64(414)` calls are absent and return `ENOSYS`.
+The implemented i386 calls are old packed-argument `select(82)`, `_newselect(142)`, `poll(168)`, `pselect6(308)`, and `ppoll(309)`; `epoll_create(254)`, `epoll_ctl(255)`, `epoll_wait(256)`, `epoll_pwait(319)`, `epoll_create1(329)` and `epoll_pwait2(441)`; `eventfd(323)` and `eventfd2(328)`; and `timerfd_create(322)`, `timerfd_settime(325)`, `timerfd_gettime(326)` and their time64 forms, 411 and 410. The `pselect6_time64(413)` and `ppoll_time64(414)` calls are absent and return `ENOSYS`.
 
 The ported i386 musl calls `poll(168)` directly. It remaps ordinary `select` to `_newselect(142)`. `pselect` and `ppoll` use calls 308 and 309 while the timeout seconds fit in 32 bits. Only a larger timeout makes musl try call 413 or 414 before falling back to the 32-bit call with a clamped timeout.
 
 `poll` accepts at most 1024 entries, the maximum number of descriptors a process may hold. Its descriptor, wait-queue and waiter arrays are allocated from the heap for each call. `select` reads and writes a complete 128-byte `fd_set` for each non-null set. `timeval` and `timespec` fields must be nonnegative and normalized; an invalid value returns `EINVAL`. This implementation does not write the remaining `select` time back to the caller's `timeval`.
 
-`ppoll`'s signal-mask arguments and `pselect6`'s sixth mask block are ignored. There is no atomic signal-mask replacement around the wait. No backing reports `POLLPRI`, so an exception-only `select` cannot become ready. The kernel does not implement `epoll`.
+`ppoll`, `pselect6` and `epoll_pwait` install the signal mask they are given for the wait (`poll_mask_set`); the old mask comes back when the wait ends, or, when a signal ended it, after that signal's handler runs. No backing reports `POLLPRI`, so an exception-only `select` cannot become ready.
+
+## `epoll`
+
+An epoll set (`epoll.c`) keeps registrations of a descriptor number and the open file it named when it was added, with the events it is watched for and a 64-bit word of data. A wait scans the set with the poll core's descriptor readiness and reports at most `maxevents` ready registrations with their data. A registration is level-triggered, or with `EPOLLET` edge-triggered: it is reported when an event appears in its readiness and not again until the event has gone and come back. `EPOLLONESHOT` disables a registration at its first report until `EPOLL_CTL_MOD`. A registration whose number is closed, or names another open file, is dropped at the next scan; Linux keeps it while its open file stays open. A regular file or directory cannot be added (`EPERM`). An epoll set inside another is reported ready by what it holds, but a change in it does not wake a wait on the outer set.
+
+## `eventfd` and `timerfd`
+
+An eventfd (`eventfd.c`) is a 64-bit counter: a write of eight bytes adds, a read takes the whole counter or one with `EFD_SEMAPHORE`, a read of zero waits, and a write that would carry the counter past `0xfffffffffffffffe` waits. A timerfd (`timerfd.c`) is armed with a first expiration, relative or absolute on its clock, and an interval; the timer tick (`timerfd_tick`, from the timer interrupt) counts expirations of the armed timers and wakes their readers, and a read of eight bytes returns the count since the last read. Times are 10 ms ticks: an expiration is rounded up and the tick in progress is not counted. The descriptors of all three have type `FD_TYPE_ANON`, `/proc/PID/fd` names them `anon_inode:[eventfd]`, `anon_inode:[eventpoll]` and `anon_inode:[timerfd]`, and `fstat` reports mode 0600 with no type bits, as Linux's anonymous inodes.
 
 ## Verification
 
@@ -58,5 +67,7 @@ The ported i386 musl calls `poll(168)` directly. It remaps ordinary `select` to 
 `tests/run host` runs `tests/host/poll_select_hosttest.c` under AddressSanitizer and UndefinedBehaviorSanitizer. It checks bitmap word boundaries, dense translation, multi-set descriptors, array-capacity failure, error and hangup projection, direction gating, and ready-set counting.
 
 `tests/musl/pollmusl.c` is built and staged at `/musl/pollmusl` for manual use. Its short timeouts exercise musl's direct `poll(168)` and `_newselect(142)` paths over a pipe, including timeout, readiness, and a cross-process wake. It does not exercise the time64 fallback.
+
+`tests/musl/epollmusl.c` checks the eventfd counter and its semaphore form, and an epoll set's level-triggered, edge-triggered and one-shot reports, its data word, deletion, a closed descriptor dropped, the refusals, and a child's write waking a wait. `tests/musl/timerfdmusl.c` checks a blocking read of an expiration, the interval reported back, a disarmed timer, a nonblocking read, an absolute time already past, and a timer waking an epoll wait.
 
 The specialized guest targets extend socket coverage: `tests/run packet` checks `poll` and `select` over a packet socket, `tests/run raw` polls a raw socket, `tests/run netif` checks immediate `POLLERR` on an ioctl-only socket, and `tests/run dhcp` drives the in-house DHCP client's libc `poll` waits.

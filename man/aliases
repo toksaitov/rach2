@@ -469,3 +469,15 @@ full 4 null
 urandom 4 random
 dbclient 8 dropbear
 dropbearkey 8 dropbear
+epoll_create 2 epoll
+epoll_create1 2 epoll
+epoll_ctl 2 epoll
+epoll_wait 2 epoll
+epoll_pwait 2 epoll
+epoll_pwait2 2 epoll
+eventfd2 2 eventfd
+timerfd_create 2 timerfd
+timerfd_settime 2 timerfd
+timerfd_gettime 2 timerfd
+timerfd_settime64 2 timerfd
+timerfd_gettime64 2 timerfd

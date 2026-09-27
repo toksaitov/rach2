@@ -102,6 +102,9 @@ static const char *const PROBES[] = {
        process is named and scheduled, waitid, prctl, and the stack limit. */
     "musl/cputimemusl", "musl/clockidmusl", "musl/schedmusl", "musl/waitidmusl",
     "musl/prctlmusl", "musl/stackmusl",
+    /* eventfd, and epoll's level-triggered, edge-triggered and one-shot
+       reports; timerfd's expirations, alone and through epoll. */
+    "musl/epollmusl", "musl/timerfdmusl",
     /* The shell's one-line form, which `su -c` depends on. It runs
        /musl/statushelper, a fixture and not a probe, which is why that one
        is staged but not listed here. */

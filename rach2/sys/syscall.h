@@ -184,11 +184,26 @@
 #define SYS_FCHOWN32    207
 #define SYS_FCHOWNAT    298
 
+/* eventfd, epoll and timerfd (io/eventfd.c, io/epoll.c, io/timerfd.c). */
+#define SYS_EPOLL_CREATE     254
+#define SYS_EPOLL_CTL        255
+#define SYS_EPOLL_WAIT       256
+#define SYS_EPOLL_PWAIT      319
+#define SYS_TIMERFD_CREATE   322
+#define SYS_EVENTFD          323
+#define SYS_TIMERFD_SETTIME  325
+#define SYS_TIMERFD_GETTIME  326
+#define SYS_EVENTFD2         328
+#define SYS_EPOLL_CREATE1    329
+#define SYS_TIMERFD_GETTIME64 410
+#define SYS_TIMERFD_SETTIME64 411
+#define SYS_EPOLL_PWAIT2     441
+
 /*
- * Size of the syscall dispatch table
- * Must be large enough to hold highest syscall number + 1
+ * Size of the syscall dispatch table: the highest number Linux i386 has,
+ * 462, and one.
  */
-#define SYSCALL_TABLE_SIZE 356
+#define SYSCALL_TABLE_SIZE 463
 
 /**
  * Register the syscall handler and populate the dispatch table.

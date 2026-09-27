@@ -1,0 +1,100 @@
+.Dd September 27, 2026
+.Dt TIMERFD 2
+.Os
+.Sh NAME
+.Nm timerfd_create ,
+.Nm timerfd_settime ,
+.Nm timerfd_gettime
+.Nd timers read through a descriptor
+.Sh SYNOPSIS
+.In sys/timerfd.h
+.Ft int
+.Fn timerfd_create "int clockid" "int flags"
+.Ft int
+.Fn timerfd_settime "int fd" "int flags" "const struct itimerspec *new" "struct itimerspec *old"
+.Ft int
+.Fn timerfd_gettime "int fd" "struct itimerspec *cur"
+.Sh DESCRIPTION
+.Fn timerfd_create ,
+number 322, makes a timer on the clock
+.Dv CLOCK_REALTIME ,
+.Dv CLOCK_MONOTONIC
+or
+.Dv CLOCK_BOOTTIME ,
+disarmed, and returns a descriptor for it;
+.Fa flags
+may be
+.Dv TFD_CLOEXEC
+and
+.Dv TFD_NONBLOCK .
+.Pp
+.Fn timerfd_settime ,
+number 325, arms the timer to expire first after
+.Fa new Ns -> Ns Fa it_value ,
+or at that time on its clock with
+.Dv TFD_TIMER_ABSTIME ,
+and then every
+.Fa it_interval ,
+or disarms it when
+.Fa it_value
+is zero; the setting it replaces goes to
+.Fa old
+when that is not NULL.
+An absolute time already past expires at the next tick.
+.Dv TFD_TIMER_CANCEL_ON_SET
+is accepted and does nothing: a change of the real-time clock does not
+move an armed timer.
+.Fn timerfd_gettime ,
+number 326, reports the time to the next expiration and the interval,
+zeros for a disarmed timer.
+The 64-bit time forms are numbers 411 and 410.
+.Pp
+A
+.Xr read 2
+of eight bytes returns the number of expirations since the last read or
+setting, and waits while there are none, or fails with
+.Er EAGAIN
+for a nonblocking descriptor.
+.Xr poll 2
+and
+.Xr epoll 2
+report the descriptor readable while there are expirations to read.
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+names it
+.Dq anon_inode:[timerfd] .
+.Pp
+The kernel keeps time in 10 ms ticks: an expiration and an interval are
+rounded up to whole ticks, and the tick in progress is not counted, so a
+timer never expires early.
+.Sh RETURN VALUES
+.Fn timerfd_create
+returns the descriptor, and the others 0; each returns -1 with
+.Va errno
+set on failure.
+.Sh ERRORS
+.Bl -tag -width EMFILE
+.It Er EBADF
+.Fa fd
+is not an open descriptor.
+.It Er EFAULT
+A
+.Vt struct itimerspec
+is not in the caller's memory.
+.It Er EINVAL
+The clock or a flag is not one of those above;
+.Fa fd
+is not a timer; a nanosecond field is outside 0 to 999999999, or a time
+is negative; or a read was shorter than eight bytes.
+.It Er EMFILE
+The process has no free descriptor.
+.It Er EPERM
+The clock is
+.Dv CLOCK_REALTIME_ALARM
+or
+.Dv CLOCK_BOOTTIME_ALARM ,
+which need a privilege this kernel does not grant.
+.El
+.Sh SEE ALSO
+.Xr clock_gettime 2 ,
+.Xr epoll 2 ,
+.Xr poll 2

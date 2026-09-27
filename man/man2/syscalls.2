@@ -22,7 +22,7 @@ including Linux calls not implemented here.
 A registered number does not imply that every Linux option or behavior
 is implemented; the individual pages describe each call.
 .Ss System call numbers
-The kernel registers the following 156 calls.
+The kernel registers the following 169 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -154,6 +154,9 @@ The kernel registers the following 156 calls.
 .It 242 Ta Xr sched_getaffinity 2
 .It 243 Ta Xr set_thread_area 2
 .It 252 Ta Xr exit_group 2
+.It 254 Ta Xr epoll_create 2
+.It 255 Ta Xr epoll_ctl 2
+.It 256 Ta Xr epoll_wait 2
 .It 258 Ta Xr set_tid_address 2
 .It 265 Ta Xr clock_gettime 2
 .It 266 Ta Xr clock_getres 2
@@ -175,12 +178,22 @@ The kernel registers the following 156 calls.
 .It 307 Ta Xr faccessat 2
 .It 308 Ta Xr pselect6 2
 .It 309 Ta Xr ppoll 2
+.It 319 Ta Xr epoll_pwait 2
 .It 320 Ta Xr utimensat 2
+.It 322 Ta Xr timerfd_create 2
+.It 323 Ta Xr eventfd 2
+.It 325 Ta Xr timerfd_settime 2
+.It 326 Ta Xr timerfd_gettime 2
+.It 328 Ta Xr eventfd2 2
+.It 329 Ta Xr epoll_create1 2
 .It 330 Ta Xr dup3 2
 .It 331 Ta Xr pipe2 2
 .It 340 Ta Xr prlimit64 2
 .It 353 Ta Xr renameat2 2
 .It 355 Ta Xr getrandom 2
+.It 410 Ta Xr timerfd_gettime64 2
+.It 411 Ta Xr timerfd_settime64 2
+.It 441 Ta Xr epoll_pwait2 2
 .El
 .Ss Socket operations
 The following operation numbers select calls through system call 102,

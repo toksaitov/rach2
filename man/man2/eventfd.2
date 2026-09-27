@@ -1,0 +1,66 @@
+.Dd September 27, 2026
+.Dt EVENTFD 2
+.Os
+.Sh NAME
+.Nm eventfd ,
+.Nm eventfd2
+.Nd a descriptor over a counter, for waking a process
+.Sh SYNOPSIS
+.In sys/eventfd.h
+.Ft int
+.Fn eventfd "unsigned int initval" "int flags"
+.Sh DESCRIPTION
+.Fn eventfd
+returns a new descriptor over a 64-bit counter that starts at
+.Fa initval .
+The C library calls
+.Nm eventfd2 ,
+number 328, with
+.Fa flags ;
+.Nm eventfd ,
+number 323, is the same call with no flags.
+The flags are
+.Dv EFD_CLOEXEC ,
+.Dv EFD_NONBLOCK
+and
+.Dv EFD_SEMAPHORE .
+.Pp
+A
+.Xr write 2
+of eight bytes adds their value to the counter; a write that would
+carry the counter past 0xfffffffffffffffe waits, or fails with
+.Er EAGAIN
+without waiting.
+A
+.Xr read 2
+of eight bytes takes the counter and sets it to zero, or with
+.Dv EFD_SEMAPHORE
+returns 1 and takes 1; a read of a zero counter waits, or fails with
+.Er EAGAIN .
+.Xr poll 2
+and
+.Xr epoll 2
+report the descriptor readable while the counter is not zero and
+writable while 1 more fits.
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+names it
+.Dq anon_inode:[eventfd] .
+.Sh RETURN VALUES
+.Fn eventfd
+returns the descriptor, or -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width EMFILE
+.It Er EINVAL
+.Fa flags
+has another bit; or a read or write was shorter than eight bytes, or a
+write gave 0xffffffffffffffff.
+.It Er EMFILE
+The process has no free descriptor.
+.It Er ENOMEM
+The kernel had no memory for the counter.
+.El
+.Sh SEE ALSO
+.Xr epoll 2 ,
+.Xr poll 2

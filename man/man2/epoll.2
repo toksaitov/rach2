@@ -1,0 +1,156 @@
+.Dd September 27, 2026
+.Dt EPOLL 2
+.Os
+.Sh NAME
+.Nm epoll_create ,
+.Nm epoll_create1 ,
+.Nm epoll_ctl ,
+.Nm epoll_wait ,
+.Nm epoll_pwait ,
+.Nm epoll_pwait2
+.Nd watch a set of descriptors
+.Sh SYNOPSIS
+.In sys/epoll.h
+.Ft int
+.Fn epoll_create1 "int flags"
+.Ft int
+.Fn epoll_ctl "int epfd" "int op" "int fd" "struct epoll_event *event"
+.Ft int
+.Fn epoll_wait "int epfd" "struct epoll_event *events" "int maxevents" "int timeout"
+.Ft int
+.Fn epoll_pwait "int epfd" "struct epoll_event *events" "int maxevents" "int timeout" "const sigset_t *sigmask"
+.Sh DESCRIPTION
+An epoll set is a descriptor that keeps the descriptors a process
+watches, so that a wait names them once rather than in every call, as
+.Xr poll 2
+does.
+.Fn epoll_create1 ,
+number 329, makes one;
+.Fa flags
+is 0 or
+.Dv EPOLL_CLOEXEC .
+.Fn epoll_create ,
+number 254, is the older form, whose argument must be positive and is
+otherwise ignored.
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+names the set
+.Dq anon_inode:[eventpoll] .
+.Pp
+.Fn epoll_ctl ,
+number 255, changes the set:
+.Dv EPOLL_CTL_ADD
+adds
+.Fa fd
+with the events in
+.Fa event
+and its word of data,
+.Dv EPOLL_CTL_MOD
+changes them, and
+.Dv EPOLL_CTL_DEL
+removes
+.Fa fd .
+The events are those of
+.Xr poll 2 ,
+.Dv EPOLLIN ,
+.Dv EPOLLOUT ,
+.Dv EPOLLRDHUP
+and the rest;
+.Dv EPOLLERR
+and
+.Dv EPOLLHUP
+are always reported.
+A registration is level-triggered: a wait reports it while its
+descriptor is ready.
+With
+.Dv EPOLLET
+it is edge-triggered: a wait reports an event when it appears, and not
+again until it has gone and come back.
+With
+.Dv EPOLLONESHOT
+the first report disables it until an
+.Dv EPOLL_CTL_MOD .
+.Dv EPOLLEXCLUSIVE
+is accepted at
+.Dv EPOLL_CTL_ADD
+and changes nothing, since each wait here wakes its own process.
+.Pp
+.Fn epoll_wait ,
+number 256, waits until a descriptor of the set is ready, a signal
+arrives, or
+.Fa timeout
+milliseconds pass, a negative
+.Fa timeout
+waiting without a limit, and stores at most
+.Fa maxevents
+events and their data in
+.Fa events .
+.Fn epoll_pwait ,
+number 319, waits with the signal mask
+.Fa sigmask
+in place, as
+.Xr ppoll 2
+does.
+.Fn epoll_pwait2 ,
+number 441, takes its timeout as a
+.Vt struct timespec
+of 64-bit seconds and nanoseconds.
+A timeout is rounded up to whole 10 ms ticks.
+.Pp
+A registration belongs to the descriptor number and the open file it
+named when it was added.
+When the number is closed, or names another open file, the next wait
+drops the registration; Linux keeps it while the open file stays open
+through another descriptor.
+A set inside another set is reported ready by what it holds, but a
+change in it does not wake a wait on the outer set.
+.Sh RETURN VALUES
+.Fn epoll_create1
+returns the new descriptor,
+.Fn epoll_ctl
+0, and the waits the number of events stored, 0 when the time ran out;
+each returns -1 with
+.Va errno
+set on failure.
+.Sh ERRORS
+.Bl -tag -width EEXIST
+.It Er EBADF
+.Fa epfd
+or
+.Fa fd
+is not an open descriptor.
+.It Er EEXIST
+.Dv EPOLL_CTL_ADD
+of a descriptor already in the set.
+.It Er EFAULT
+.Fa event
+or
+.Fa events
+is not in the caller's memory.
+.It Er EINTR
+A signal arrived before a descriptor was ready.
+.It Er EINVAL
+.Fa epfd
+is not an epoll set, or is
+.Fa fd ;
+.Fa op
+or
+.Fa flags
+is not one of those above;
+.Fa maxevents
+is not positive; or
+.Dv EPOLL_CTL_MOD
+touched
+.Dv EPOLLEXCLUSIVE .
+.It Er ENOENT
+.Dv EPOLL_CTL_MOD
+or
+.Dv EPOLL_CTL_DEL
+of a descriptor not in the set.
+.It Er EPERM
+.Fa fd
+is a regular file or a directory, which is always ready.
+.El
+.Sh SEE ALSO
+.Xr eventfd 2 ,
+.Xr poll 2 ,
+.Xr select 2

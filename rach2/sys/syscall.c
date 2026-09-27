@@ -66,6 +66,9 @@
 #include "network/net.h"
 #include "network/netconf.h" /* net_ip_addr, for the boot line's address */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
+#include "io/eventfd.h"
+#include "io/epoll.h"
+#include "io/timerfd.h"
 #include "syscall_internal.h"
 
 /* Only one process owns the framebuffer at a time. Text mode is restored when
@@ -481,6 +484,21 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
         out->tv_nsec = (int32_t)((ticks % 100u) * 10000000u);
         break;
     }
+}
+
+int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
+{
+    struct kclock c;
+    struct kernel_timespec ts;
+    int32_t rc = clock_resolve(clk, &c);
+
+    if (rc != 0) {
+        return rc;
+    }
+    clock_read(&c, &ts);
+    *sec = ts.tv_sec;
+    *nsec = ts.tv_nsec;
+    return 0;
 }
 
 /**
@@ -1757,9 +1775,12 @@ static int syscall_restartable(uint32_t nr)
     case 173: /* rt_sigreturn */
     case 177: /* rt_sigtimedwait */
     case 179: /* rt_sigsuspend */
+    case 256: /* epoll_wait */
     case 267: /* clock_nanosleep */
     case 308: /* pselect6 */
     case 309: /* ppoll */
+    case 319: /* epoll_pwait */
+    case 441: /* epoll_pwait2 */
         return 0;
     default:
         return 1;
@@ -2043,6 +2064,19 @@ void init_syscall(void)
     /* musl's exit() issues exit_group(); for a single-threaded process it is
      * exactly _exit(). */
     _syscall_table[SYS_EXIT_GROUP] = sys_exit;
+    _syscall_table[SYS_EVENTFD] = sys_eventfd;
+    _syscall_table[SYS_EVENTFD2] = sys_eventfd2;
+    _syscall_table[SYS_EPOLL_CREATE] = sys_epoll_create;
+    _syscall_table[SYS_EPOLL_CREATE1] = sys_epoll_create1;
+    _syscall_table[SYS_EPOLL_CTL] = sys_epoll_ctl;
+    _syscall_table[SYS_EPOLL_WAIT] = sys_epoll_wait;
+    _syscall_table[SYS_EPOLL_PWAIT] = sys_epoll_pwait;
+    _syscall_table[SYS_EPOLL_PWAIT2] = sys_epoll_pwait2;
+    _syscall_table[SYS_TIMERFD_CREATE] = sys_timerfd_create;
+    _syscall_table[SYS_TIMERFD_SETTIME] = sys_timerfd_settime;
+    _syscall_table[SYS_TIMERFD_GETTIME] = sys_timerfd_gettime;
+    _syscall_table[SYS_TIMERFD_SETTIME64] = sys_timerfd_settime64;
+    _syscall_table[SYS_TIMERFD_GETTIME64] = sys_timerfd_gettime64;
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 

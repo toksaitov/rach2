@@ -27,6 +27,7 @@
 #include "sys/fs/vfs.h"
 #include "sys/fs/ext2.h"
 #include "sys/proc/process.h"
+#include "sys/io/timerfd.h"
 #include "sys/tty/tty.h"
 #include "sys/tty/pty.h"
 #include "sys/ipc/pipe.h"
@@ -243,6 +244,7 @@ static void timer_handler(isr_params_t *params)
     /* Runs regardless of in_syscall, so a sleeper parked inside its syscall
      * still becomes runnable on time. */
     proc_wake_sleepers(kernel_ticks);
+    timerfd_tick(kernel_ticks);
 
     hda_tick();
     /* A polled network device gets its turn here, before the layers above are
