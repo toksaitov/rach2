@@ -2217,10 +2217,10 @@ file rach2/sys/syscall_net.c
 expect SOCKFLAGMUSL FAIL (an accepted connection reported IP options
 old
     } else if (level == SOL_IP && optname == IP_OPTIONS) {
-        olen = 0;
+        width = 0;
 new
     } else if (level == SOL_IP && optname == IP_OPTIONS) {
-        olen = 4;
+        width = (uint32_t)sizeof(val);
 end
 
 fault stat-dir-end-not-checked

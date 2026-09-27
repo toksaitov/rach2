@@ -231,7 +231,7 @@ rach2/sys/syscall_net.c:do_bind complexity 32 one system call's contract, its ch
 rach2/sys/syscall_net.c:do_bind lines 118 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect complexity 30 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect lines 132 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_getsockopt complexity 38 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_net.c:do_getsockopt complexity 36 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:do_recvfrom complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvfrom lines 105 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvmsg complexity 30 one system call's contract, its checks in the order the manual page lists the errors

@@ -32,7 +32,9 @@ points to the capacity of
 on success it receives the number of bytes copied.
 .Pp
 Except for
-.Dv SO_BINDTODEVICE ,
+.Dv SO_BINDTODEVICE
+and
+.Dv IP_OPTIONS ,
 results are four-byte integers, truncated to the caller's capacity.
 Both output pointers must be nonnull even when that capacity is zero.
 A truncated result reports its copied length, not four.

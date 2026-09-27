@@ -1440,16 +1440,16 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
  * type), SO_REUSEADDR and SO_BROADCAST as stored, SO_BINDTODEVICE as the
- * interface name, and IP_OPTIONS as empty, a length of 0, since no socket
- * keeps IP options: OpenSSH's server ends a connection whose socket reports
- * any. An int result is truncated to the caller's capacity, and the length
+ * interface name, and IP_OPTIONS as empty, a result of width 0, since no
+ * socket keeps IP options: OpenSSH's server ends a connection whose socket
+ * reports any. A result is truncated to the caller's capacity, and the length
  * written is what was copied. */
 static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              uint32_t optlen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     int val = 0;
-    uint32_t olen;
+    uint32_t olen, width = (uint32_t)sizeof(val);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
@@ -1497,11 +1497,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     } else if (level == SOL_IP && optname == IP_HDRINCL) {
         return -ENOPROTOOPT;
     } else if (level == SOL_IP && optname == IP_OPTIONS) {
-        olen = 0;
-        if (!optlen_ptr || copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
+        width = 0;
     } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
         val = entry->sock->broadcast;
     } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
@@ -1515,8 +1511,8 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
         return -EFAULT;
     }
-    if (olen > sizeof(val)) {
-        olen = (uint32_t)sizeof(val);
+    if (olen > width) {
+        olen = width;
     }
     if (olen > 0 && copy_to_user((void __user *)optval_ptr, &val, olen) != 0) {
         return -EFAULT;
