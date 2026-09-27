@@ -12,10 +12,6 @@
 #include "mm.h"
 #include "pressure.h"
 
-/* For `terminate_current_process`, with which the fault handler ends a
- * process that faulted in user mode. */
-#include "../../kernel.h"
-
 /*
  * tests/host/paging_hosttest.c compiles this file natively with
  * RACH2_HOSTTEST defined. That build leaves out every instruction that
