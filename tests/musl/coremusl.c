@@ -20,10 +20,12 @@
  * and maps the stack's top page, where its arguments are, with no access,
  * all from a handler on an alternate stack; it then counts the bytes its
  * dump writes before that zero, from /proc/self/maps and mincore, and sets
- * its soft limit to one byte less than the count, or to the count. The
- * first file ends before the marked page, which shows the count is not more
- * than the dump writes; the second has the marked page and ends with it,
- * and its wait status has no WCOREDUMP, since the zero no longer fits.
+ * its soft limit to one byte less than the count, or to the count, each in
+ * a directory of its own. Both run before either file is read, so that the
+ * parent forks them from one state and their counts agree. The first file
+ * ends before the marked page, which shows the count is not more than the
+ * dump writes; the second has the marked page and ends with it, and its wait
+ * status has no WCOREDUMP, since the zero no longer fits.
  *
  * Prints "COREMUSL OK" on success and "COREMUSL FAIL (detail)" otherwise.
  */
@@ -347,11 +349,12 @@ static void hole_dump(int sig)
 
 /**
  * Fork a child that counts the bytes its dump writes before the zero at its
- * end and aborts with a limit of the count less `less`, as `hole_dump` does,
- * its arguments being in the stack's top page; the child's pid, with its
- * wait status in `*status` and its count in `*counted`, 0 when it sent none.
+ * end and aborts in the directory `dir` with a limit of the count less
+ * `less`, as `hole_dump` does, its arguments being in the stack's top page;
+ * the child's pid, with its wait status in `*status` and its count in
+ * `*counted`, 0 when it sent none.
  */
-static pid_t hole_child(rlim_t less, int *status, uint32_t *counted)
+static pid_t hole_child(const char *dir, rlim_t less, int *status, uint32_t *counted)
 {
     pid_t pid;
 
@@ -375,7 +378,7 @@ static pid_t hole_child(rlim_t less, int *status, uint32_t *counted)
         ss.ss_size = sizeof(alt_stack);
         ss.ss_flags = 0;
         close(count_pipe[0]);
-        if (first_arg < ARGS_FLOOR || chdir(DIR_PATH) != 0 || sigaltstack(&ss, NULL) != 0 ||
+        if (first_arg < ARGS_FLOOR || chdir(dir) != 0 || sigaltstack(&ss, NULL) != 0 ||
             sigaction(SIGUSR1, &sa, NULL) != 0) {
             _exit(2);
         }
@@ -394,15 +397,15 @@ static pid_t hole_child(rlim_t less, int *status, uint32_t *counted)
 }
 
 /**
- * Whether the core file ends with the marked page after the pages before
- * it: 1 when its size is at least the marked page's end and that page is
- * all the mark, 0 when it is not, -1 when the file is no ELF core. The
+ * Whether the core file at `path` ends with the marked page after the pages
+ * before it: 1 when its size is at least the marked page's end and that page
+ * is all the mark, 0 when it is not, -1 when the file is no ELF core. The
  * file's size goes to `*size` and the length its program headers give it to
  * `*whole`.
  */
-static int marked_page(size_t *size, size_t *whole)
+static int marked_page(const char *path, size_t *size, size_t *whole)
 {
-    unsigned char *core = slurp(CORE_PATH, size);
+    unsigned char *core = slurp(path, size);
     const Elf32_Ehdr *eh = (const Elf32_Ehdr *)core;
     size_t end = 0, i;
     int k, marked = 0;
@@ -438,20 +441,31 @@ static int marked_page(size_t *size, size_t *whole)
  */
 static int hole_row(void)
 {
+    static const char *const dirs[2] = {DIR_PATH "/short", DIR_PATH "/exact"};
+    static const char *const cores[2] = {DIR_PATH "/short/core", DIR_PATH "/exact/core"};
     uint32_t counted[2];
     size_t size[2], whole[2];
     int status[2], marked[2];
-    int i;
+    int i, ran = 1;
 
     for (i = 0; i < 2; i++) {
-        unlink(CORE_PATH);
-        if (hole_child(i == 0 ? 1 : 0, &status[i], &counted[i]) < 0 || counted[i] == 0 ||
-            !WIFSIGNALED(status[i]) || WTERMSIG(status[i]) != SIGABRT) {
-            return fail("a child that rebuilt its stack's top and aborted");
+        unlink(cores[i]);
+        if (mkdir(dirs[i], 0700) != 0 && errno != EEXIST) {
+            return fail("the directories of the counting children");
         }
-        marked[i] = marked_page(&size[i], &whole[i]);
     }
-    unlink(CORE_PATH);
+    for (i = 0; i < 2; i++) {
+        ran &= hole_child(dirs[i], i == 0 ? 1 : 0, &status[i], &counted[i]) > 0 &&
+               counted[i] != 0 && WIFSIGNALED(status[i]) && WTERMSIG(status[i]) == SIGABRT;
+    }
+    for (i = 0; i < 2; i++) {
+        marked[i] = ran ? marked_page(cores[i], &size[i], &whole[i]) : -1;
+        unlink(cores[i]);
+        rmdir(dirs[i]);
+    }
+    if (!ran) {
+        return fail("a child that rebuilt its stack's top and aborted");
+    }
     errno = 0;
     if (counted[0] != counted[1] || WCOREDUMP(status[0]) || marked[0] != 0 || marked[1] != 1) {
         return fail("the limit a child counted from its regions");
