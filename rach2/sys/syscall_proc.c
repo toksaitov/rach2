@@ -1209,6 +1209,7 @@ checked:
     /* Reset caught signal dispositions to default: their handler addresses
      * point into the OLD image that is about to be replaced. SIG_IGN
      * dispositions and the blocked mask are preserved (POSIX exec semantics).
+     * The new image has named no address for its thread's end yet.
      */
     {
         int sig;
@@ -1220,6 +1221,7 @@ checked:
         }
         current_proc->sig_pending = 0;
     }
+    current_proc->clear_child_tid = 0;
 
     /* If this process owns the console, release the controlling terminal across
      * the destructive load below: once free_user_pages runs the old image is
@@ -1343,18 +1345,23 @@ checked:
 }
 
 /**
- * Create a child process (fork(2)).
+ * Create a child process: fork(2), and the part of clone(2) this kernel has.
  *
  * Clones the current process: PCB, page directory (copy-on-write user
  * pages), and fd table. The child is set up to return from fork with value
- * 0; the parent gets the child's PID. Returns -errno on failure.
+ * 0; the parent gets the child's PID. Returns -errno on failure. A nonzero
+ * `newsp` is the stack pointer the child starts with. A nonzero
+ * `child_settid` is an address of the child's memory that gets the child's
+ * id before it runs (CLONE_CHILD_SETTID), and `child_cleartid` the address
+ * its thread end clears (CLONE_CHILD_CLEARTID).
  *
  * Among what the child inherits is the program name, which `execve` sets and a
  * child that never execs would otherwise never have: a daemon that forks
  * itself into the background is exactly such a child, and without this it
  * shows in `ps` and in /proc/<pid>/stat with no name for as long as it runs.
  */
-int32_t sys_fork(isr_params_t *params)
+static int32_t do_fork(isr_params_t *params, uint32_t newsp, uint32_t child_settid,
+                       uint32_t child_cleartid)
 {
     process_t *parent = current_proc;
     process_t *child;
@@ -1521,6 +1528,14 @@ int32_t sys_fork(isr_params_t *params)
     child_frame = (isr_params_t *)child_sp;
     k_memcpy(child_frame, params, sizeof(isr_params_t));
     child_frame->eax = 0;
+    if (newsp) {
+        child_frame->user_esp = newsp;
+    }
+    /* A failed store leaves the word as the parent had it, as Linux's does. */
+    if (child_settid) {
+        (void)paging_store_u32(child_dir, &child->vm, child_settid, child->pid);
+    }
+    child->clear_child_tid = child_cleartid;
 
     /* The switch_context return address, then its saved EBP/EBX/ESI/EDI. */
     --child_sp;
@@ -1549,6 +1564,52 @@ fail_built:
     free_page_directory(child_dir);
     free_process(child);
     return -ENOMEM;
+}
+
+int32_t sys_fork(isr_params_t *params)
+{
+    return do_fork(params, 0, 0, 0);
+}
+
+/* clone(2) flags; the low byte is the signal the parent gets at the child's
+ * exit. */
+#define CSIGNAL              0x000000FFu
+#define CLONE_PARENT_SETTID  0x00100000u
+#define CLONE_CHILD_CLEARTID 0x00200000u
+#define CLONE_DETACHED       0x00400000u
+#define CLONE_CHILD_SETTID   0x01000000u
+
+/**
+ * clone (120), in the form glibc's fork uses: a new process with its own copy
+ * of the address space, files and signal handlers, as fork makes one.
+ *
+ * i386 argument order: EBX=flags, ECX=new stack or 0, EDX=parent tid address,
+ * ESI=TLS descriptor, EDI=child tid address. The exit signal must be SIGCHLD,
+ * and the flags other than CLONE_PARENT_SETTID, CLONE_CHILD_SETTID,
+ * CLONE_CHILD_CLEARTID and CLONE_DETACHED, which Linux ignores, are refused
+ * with EINVAL: sharing memory, files or handlers is a later phase's work.
+ * CLONE_PARENT_SETTID stores the child's id in the parent's memory, and a
+ * failed store is ignored, as Linux ignores it.
+ */
+int32_t sys_clone(isr_params_t *params)
+{
+    uint32_t flags = params->ebx;
+    uint32_t newsp = params->ecx;
+    int32_t __user *ptid = (int32_t __user *)params->edx;
+    uint32_t ctid = params->edi;
+    int32_t pid;
+
+    if ((flags & CSIGNAL) != SIGCHLD ||
+        (flags & ~(CSIGNAL | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID |
+                   CLONE_DETACHED)) != 0) {
+        return -EINVAL;
+    }
+    pid = do_fork(params, newsp, (flags & CLONE_CHILD_SETTID) ? ctid : 0,
+                  (flags & CLONE_CHILD_CLEARTID) ? ctid : 0);
+    if (pid > 0 && (flags & CLONE_PARENT_SETTID) && ptid) {
+        (void)copy_to_user(ptid, &pid, sizeof(pid));
+    }
+    return pid;
 }
 
 /* waitpid/wait4 options. */

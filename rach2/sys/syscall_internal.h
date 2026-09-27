@@ -285,4 +285,6 @@ int32_t sys_munmap(isr_params_t *params);
 
 int32_t sys_mprotect(isr_params_t *params);
 
+int32_t sys_clone(isr_params_t *params);
+
 #endif

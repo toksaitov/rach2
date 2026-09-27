@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt SET_THREAD_AREA 2
 .Os
 .Sh NAME
@@ -68,10 +68,18 @@ The caller can then load
 If this writeback fails, the new TLS base has already been installed.
 .Pp
 .Nm set_tid_address
-returns the caller's process ID as its thread ID.
-Rach2 has no threads.
-The clear-child-tid pointer is accepted without validation and ignored;
-the kernel neither records it nor clears it at exit.
+records its pointer argument as the address the caller's thread end
+clears, replacing any earlier one, and returns the caller's process ID as
+its thread ID.
+Each Rach2 process has one thread, so no other thread can wait on that
+word, and the kernel does not yet clear it at exit.
+.Xr execve 2
+forgets the address, and a child made by
+.Xr fork 2
+starts without one unless
+.Xr clone 2
+names one with
+.Dv CLONE_CHILD_CLEARTID .
 .Sh RETURN VALUES
 .Nm set_thread_area
 returns zero on success.

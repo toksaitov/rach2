@@ -36,6 +36,7 @@ chrt 1 busybox-util-linux
 cksum 1 busybox-coreutils
 clear 1 busybox-console-tools
 clock_gettime 2 gettimeofday
+clone 2 fork
 close 2 open
 cmp 1 busybox-editors
 comm 1 busybox-coreutils

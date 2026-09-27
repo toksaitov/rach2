@@ -201,6 +201,15 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
  * shared page becomes copy-on-write instead. */
 void paging_protect_range(page_dir_t *dir, uint32_t start, uint32_t end, uint32_t prot);
 
+struct vm_space;
+
+/* Store `value` at the aligned user address `addr` of the address space `dir`
+ * and `vm` describe, which need not be the current one: a page not yet backed
+ * gets a zeroed frame, and a page shared by copy-on-write is copied first, so
+ * the store changes that address space alone. 0, or -1 when the VMA does not
+ * allow writing there, the word crosses a page, or no frame could be had. */
+int paging_store_u32(page_dir_t *dir, struct vm_space *vm, uint32_t addr, uint32_t value);
+
 /** Free a page directory and its private page tables; call after
  * free_user_pages(). */
 void free_page_directory(page_dir_t *dir);

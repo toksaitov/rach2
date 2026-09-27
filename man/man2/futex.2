@@ -1,0 +1,103 @@
+.Dd September 27, 2026
+.Dt FUTEX 2
+.Os
+.Sh NAME
+.Nm futex
+.Nd wait on a word of memory and wake its waiters
+.Sh SYNOPSIS
+.In linux/futex.h
+.In sys/syscall.h
+.In unistd.h
+.Ft long
+.Fn syscall "SYS_futex" "uint32_t *uaddr" "int op" "uint32_t val" "const struct timespec *timeout" "uint32_t *uaddr2" "uint32_t val3"
+.Sh DESCRIPTION
+.Nm ,
+number 240, lets a process sleep until the 32-bit word at
+.Fa uaddr
+changes, without spinning, and lets another wake it.
+C libraries build their locks, condition variables and one-time
+initialization on it.
+The address must be aligned to four bytes.
+A futex is named by the caller's address space and
+.Fa uaddr ;
+each Rach2 process has an address space of its own, so a waiter and its
+waker are the same process until threads share one.
+.Dv FUTEX_PRIVATE_FLAG
+is accepted with every operation and changes nothing here.
+.Pp
+The operations are:
+.Bl -tag -width FUTEX_WAIT_BITSET
+.It Dv FUTEX_WAIT
+If the word holds
+.Fa val ,
+sleep until a wake, a signal, or the relative
+.Fa timeout ,
+measured on the monotonic clock; a NULL
+.Fa timeout
+waits without a limit.
+The comparison and the start of the sleep are one step, so a wake that
+follows the comparison is not lost.
+.It Dv FUTEX_WAIT_BITSET
+The same, with
+.Fa val3
+as a nonzero set of bits a wake must share, and
+.Fa timeout
+an absolute time on the monotonic clock, or on the real-time clock with
+.Dv FUTEX_CLOCK_REALTIME .
+.It Dv FUTEX_WAKE
+Wake up to
+.Fa val
+waiters on the word, and return how many were woken.
+.It Dv FUTEX_WAKE_BITSET
+The same, waking only waiters whose bits meet the nonzero
+.Fa val3 .
+.El
+.Pp
+A deadline is rounded up to whole 10 ms ticks, and the tick in progress
+is not counted.
+.Fa uaddr2
+is ignored.
+The requeue, wake-and-modify and priority-inheritance operations, and
+the time64 form, number 422, are not implemented.
+.Sh RETURN VALUES
+A wait returns 0 when a wake ended it and a wake the number it woke.
+The raw call returns a negative error number on failure;
+.Fn syscall
+instead returns -1 and sets
+.Va errno .
+.Sh EXAMPLES
+.Pa tests/musl/clonemusl.c
+waits on a word that holds another value, waits out relative and
+absolute deadlines, and wakes an address with no waiters.
+.Sh ERRORS
+.Bl -tag -width ETIMEDOUT
+.It Er EAGAIN
+The word did not hold
+.Fa val .
+.It Er EFAULT
+.Fa uaddr
+or
+.Fa timeout
+is not readable.
+.It Er EINTR
+A signal ended the wait.
+.It Er EINVAL
+.Fa uaddr
+is not aligned, a bitset operation was given a zero
+.Fa val3 ,
+or
+.Fa timeout
+has a negative field or nanoseconds past 999999999.
+.It Er ENOSYS
+The operation is not one of the four above, or
+.Dv FUTEX_CLOCK_REALTIME
+was given to an operation other than
+.Dv FUTEX_WAIT_BITSET .
+.It Er ESRCH
+There is no current process.
+.It Er ETIMEDOUT
+The deadline passed first.
+.El
+.Sh SEE ALSO
+.Xr clone 2 ,
+.Xr nanosleep 2

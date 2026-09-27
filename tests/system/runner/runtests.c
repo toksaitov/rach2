@@ -83,6 +83,8 @@ static const char *const PROBES[] = {
     "musl/passwdmusl", "musl/addusermusl", "musl/loginmusl", "rebootprobe", "musl/readvmusl",
     "musl/timemusl", "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl",
     "musl/spawnmusl", "musl/sigmusl",
+    /* clone in glibc's fork form, set_tid_address and futex. */
+    "musl/clonemusl",
     /* How many mappings a process may hold, which the compiler found too
        few. */
     "musl/vmamusl",

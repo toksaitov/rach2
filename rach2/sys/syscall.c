@@ -21,6 +21,7 @@
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
+#include "proc/futex.h"
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -1270,19 +1271,18 @@ static int32_t sys_sysinfo(isr_params_t *params)
 }
 
 /**
- * Return the caller's tid, ignoring the clear-child-tid pointer
- * (set_tid_address(2)).
+ * Record the address the caller's thread end clears and return the caller's
+ * thread id (set_tid_address(2)).
  *
- * Rach2 has no threads, so this only returns the caller's PID as its thread id;
- * the pointer (EBX) is accepted and ignored.
+ * The address, EBX, becomes `clear_child_tid`; with one thread per process the
+ * thread id is the process id.
  */
 static int32_t sys_set_tid_address(isr_params_t *params)
 {
-    (void)params;
-
     if (!current_proc) {
         return -ESRCH;
     }
+    current_proc->clear_child_tid = params->ebx;
     return (int32_t)current_proc->pid;
 }
 
@@ -1503,6 +1503,8 @@ void init_syscall(void)
     _syscall_table[SYS_MMAP2] = sys_mmap2;
     _syscall_table[SYS_MUNMAP] = sys_munmap;
     _syscall_table[SYS_MPROTECT] = sys_mprotect;
+    _syscall_table[SYS_CLONE] = sys_clone;
+    _syscall_table[SYS_FUTEX] = sys_futex;
     _syscall_table[SYS_LSEEK] = sys_lseek;
     _syscall_table[SYS_RENAME] = sys_rename;
     _syscall_table[SYS_IOCTL] = sys_ioctl;

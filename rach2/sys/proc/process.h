@@ -185,6 +185,10 @@ struct process {
      * zero, since the child inherits no timer; an exec keeps them. */
     uint32_t alarm_tick;
     uint32_t alarm_interval;
+    /* The user address set_tid_address and CLONE_CHILD_CLEARTID name, whose
+     * word is cleared and woken when the thread ends; 0 for none. Kept, not
+     * used, while every address space has one thread. */
+    uint32_t clear_child_tid;
 };
 
 typedef struct process process_t;
