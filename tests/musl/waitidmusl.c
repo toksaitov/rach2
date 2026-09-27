@@ -9,9 +9,12 @@
  * 0 and leaves the resource usage alone; WNOWAIT reports an exit and leaves
  * the zombie for `waitpid` to reap, and a stop it left reports no more once
  * the child has been killed. A child is selected by pid, by its process
- * group and by the caller's, and the raw call's fifth argument receives the
- * CPU time of a child that spun. No event, an unknown option or idtype, a
- * pid of 0 and a pidfd are refused, and no child at all is ECHILD.
+ * group and by the caller's, each beside an exited child of another group,
+ * whose exit a wait with WNOHANG passes over; once the selected child is
+ * killed, the wait reports it and reaps it alone. The raw call's fifth
+ * argument receives the CPU time of a child that spun. No event, an unknown
+ * option or idtype, a pid of 0 and a pidfd are refused, and no child at all
+ * is ECHILD.
  *
  * Prints "WAITIDMUSL OK" on success and "WAITIDMUSL FAIL (detail)" otherwise.
  */
@@ -177,6 +180,58 @@ static int events(void)
     return dead_stop();
 }
 
+/**
+ * A wait that selects an idle child, `mine`, beside an exited child of a
+ * group of its own: with P_PID by `mine`'s pid, and with P_PGID by `mine`'s
+ * group, one of its own, or, with `callers`, by the caller's group, which
+ * `mine` keeps. With WNOHANG the wait passes over the other child's exit and
+ * reports nothing; once `mine` is killed the wait reports and reaps `mine`
+ * alone, and a wait by pid then reaps the other. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int selects(idtype_t idtype, int callers)
+{
+    siginfo_t si;
+    pid_t other, mine;
+    id_t id;
+
+    other = fork();
+    if (other == 0) {
+        setpgid(0, 0);
+        _exit(4);
+    }
+    setpgid(other, other);
+    mine = fork();
+    if (mine == 0) {
+        for (;;) {
+            pause();
+        }
+    }
+    id = idtype == P_PID || !callers ? (id_t)mine : 0;
+    if (other < 0 || mine < 0 || (!callers && setpgid(mine, mine) != 0) ||
+        waitid(P_PID, (id_t)other, &si, WEXITED | WNOWAIT) != 0 ||
+        !reports(&si, other, CLD_EXITED, 4)) {
+        if (mine > 0) {
+            kill(mine, SIGKILL);
+        }
+        return fail("the two children of a selection");
+    }
+    memset(&si, 0xFF, sizeof(si));
+    if (waitid(idtype, id, &si, WEXITED | WNOHANG) != 0 || si.si_pid != 0) {
+        kill(mine, SIGKILL);
+        return fail("a wait reported the exit of a child it does not select");
+    }
+    kill(mine, SIGTERM);
+    if (waitid(idtype, id, &si, WEXITED) != 0 || !reports(&si, mine, CLD_KILLED, SIGTERM) ||
+        waitid(P_PID, (id_t)mine, &si, WEXITED | WNOHANG) != -1 || errno != ECHILD) {
+        return fail("a wait did not report and reap the child it selects");
+    }
+    if (waitid(P_PID, (id_t)other, &si, WEXITED) != 0 || !reports(&si, other, CLD_EXITED, 4)) {
+        return fail("the other child's exit was not left to a wait by its pid");
+    }
+    return 0;
+}
+
 /** WNOWAIT, the selections, the resource usage and the refusals. */
 static int selections(void)
 {
@@ -193,18 +248,8 @@ static int selections(void)
         return fail("WNOWAIT did not leave the zombie to be reaped");
     }
 
-    pid = fork();
-    if (pid == 0) {
-        setpgid(0, 0);
-        _exit(4);
-    }
-    setpgid(pid, pid);
-    if (waitid(P_PGID, (id_t)pid, &si, WEXITED) != 0 || !reports(&si, pid, CLD_EXITED, 4)) {
-        return fail("a child was not selected by its process group");
-    }
-    pid = exiting_child(5);
-    if (waitid(P_PGID, 0, &si, WEXITED) != 0 || !reports(&si, pid, CLD_EXITED, 5)) {
-        return fail("a child was not selected by the caller's process group");
+    if (selects(P_PID, 0) != 0 || selects(P_PGID, 0) != 0 || selects(P_PGID, 1) != 0) {
+        return 1;
     }
 
     pid = spinning_child(2);
