@@ -3889,6 +3889,12 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_ino = entry->sock ? entry->sock->inode : 0u;
+    } else if (entry->type == FD_TYPE_ANON) {
+        /* eventfd, epoll, timerfd: Linux's anonymous inode, mode 0600 with
+         * no type bits. */
+        kst->st_mode = 0600;
+        kst->st_nlink = 1;
+        kst->st_blksize = 4096;
     } else if (entry->type == FD_TYPE_PIPE) {
         /* A pipe end: S_ISFIFO, and the pipe's own inode (see fd.h). */
         pipe_t *pp = (pipe_t *)entry->priv;
