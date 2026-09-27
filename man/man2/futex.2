@@ -98,6 +98,12 @@ and wakes one waiter when the word has waiters; the next owner then
 learns from
 .Er EOWNERDEAD
 that the lock's state may be half made.
+An
+.Xr execve 2
+by a thread other than the first of its process walks the list before
+the thread takes the process ID, so the ID it looks for is the one the
+thread locked the words with; Linux walks it after, and looks for the
+process ID.
 .Nm get_robust_list ,
 number 312, stores the list's head and 12 for the thread
 .Fa tid ,

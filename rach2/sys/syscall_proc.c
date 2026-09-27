@@ -1401,24 +1401,25 @@ static void exec_files(struct exec_state *s)
  * Make the image `s` built the process's, once `exec_one_thread` has ended
  * the process's other threads; past here execve cannot fail.
  *
- * A thread that is not the leader takes the leader's place first, and the
- * thread releases the robust futexes it holds and clears the word
- * CLONE_CHILD_CLEARTID names while the old image is still there to hold
- * them. Gives a caller that shares its descriptor table one of its own
- * (`exec_files`) and drops the close-on-exec descriptors; takes the new
- * ids, the saved ids becoming the new effective ones, which is the POSIX
- * rule for every exec and what lets an image shed acquired authority and
- * take it back; resets what pointed into the old image: caught signals'
- * handlers (SIG_IGN, the blocked mask and the pending signals are kept, as
- * POSIX says), the alternate signal stack, the TLS base and the
- * floating-point state. Then it switches to the new address space and puts
- * the old one, which the parent of a vfork child keeps, lets that parent
- * go, and points the return frame at the entry with the stack pointer at
- * argc. A fresh image has no TLS until its libc calls set_thread_area, so
- * the segment registers get the plain user-data selector, as a new process
- * gets it, in place of the old image's TLS one. The general registers are
- * cleared, since the SysV i386 entry has argc on the stack and %edx an
- * atexit hook or zero, and %ebp 0 marks the outermost frame.
+ * The thread first releases the robust futexes it holds and clears the word
+ * CLONE_CHILD_CLEARTID names, while the old image is still there to hold
+ * them, and under its own id, which the words it locked hold; a thread that
+ * is not the leader then takes the leader's place and id. Gives a caller
+ * that shares its descriptor table one of its own (`exec_files`) and drops
+ * the close-on-exec descriptors; takes the new ids, the saved ids becoming
+ * the new effective ones, which is the POSIX rule for every exec and what
+ * lets an image shed acquired authority and take it back; resets what
+ * pointed into the old image: caught signals' handlers (SIG_IGN, the
+ * blocked mask and the pending signals are kept, as POSIX says), the
+ * alternate signal stack, the TLS base and the floating-point state. Then
+ * it switches to the new address space and puts the old one, which the
+ * parent of a vfork child keeps, lets that parent go, and points the return
+ * frame at the entry with the stack pointer at argc. A fresh image has no
+ * TLS until its libc calls set_thread_area, so the segment registers get
+ * the plain user-data selector, as a new process gets it, in place of the
+ * old image's TLS one. The general registers are cleared, since the SysV
+ * i386 entry has argc on the stack and %edx an atexit hook or zero, and
+ * %ebp 0 marks the outermost frame.
  */
 static void exec_commit(isr_params_t *params, struct exec_state *s)
 {
@@ -1427,10 +1428,10 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     uint32_t old_egid = current_proc->egid;
     int sig;
 
+    proc_thread_gone(current_proc);
     if (current_proc != current_proc->tg->leader) {
         exec_take_leader();
     }
-    proc_thread_gone(current_proc);
     exec_files(s);
     close_cloexec_fds();
     current_proc->euid = s->euid;

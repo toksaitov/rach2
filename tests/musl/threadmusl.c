@@ -22,7 +22,9 @@
  * threads end. Of two threads in execve at once, the one whose call first
  * waits for the other threads to end replaces the process, and the other
  * ends: the probe traces the second and holds it at the entry of its call
- * until the first waits for it. A thread that calls exit ends them all.
+ * until the first waits for it. A robust mutex a thread other than the
+ * first holds when it calls execve is released, and its next locker gets
+ * EOWNERDEAD. A thread that calls exit ends them all.
  *
  * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
  * otherwise.
@@ -42,6 +44,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define THREADS 4
@@ -488,6 +491,66 @@ static void on_alarm(int sig)
     (void)sig;
 }
 
+/* The process-shared robust mutex of the robust row, in shared memory. */
+static pthread_mutex_t *robust;
+
+/** Lock the robust mutex, and keep it into an execve. */
+static void *lock_and_exec(void *arg)
+{
+    (void)arg;
+    if (pthread_mutex_lock(robust) != 0) {
+        _exit(2);
+    }
+    execl("/bin/sh", "sh", "-c", "exit 7", (char *)0);
+    _exit(3);
+}
+
+/**
+ * A robust mutex that a thread other than the first holds when it calls
+ * execve is released under the id the thread locked it with, before the
+ * thread takes the process id, so the probe's lock after the child's end
+ * gets EOWNERDEAD and the mutex. A release that looked for the process id
+ * would leave the mutex held for good; a time limit bounds the lock.
+ */
+static int robust_exec(void)
+{
+    pthread_mutexattr_t attr;
+    struct timespec deadline;
+    int status, rc;
+    pid_t pid;
+
+    robust = mmap(NULL, sizeof(*robust), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (robust == MAP_FAILED || pthread_mutexattr_init(&attr) != 0 ||
+        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED) != 0 ||
+        pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) != 0 ||
+        pthread_mutex_init(robust, &attr) != 0) {
+        return fail("the robust mutex");
+    }
+    pid = fork();
+    if (pid == 0) {
+        pthread_t t;
+
+        if (pthread_create(&t, NULL, lock_and_exec, NULL) == 0) {
+            pthread_join(t, NULL);
+        }
+        _exit(4);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
+        return fail("the child whose thread locked a robust mutex and called execve");
+    }
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 5;
+    rc = pthread_mutex_timedlock(robust, &deadline);
+    if (rc != EOWNERDEAD) {
+        errno = rc;
+        return fail("a robust mutex a thread held into its execve");
+    }
+    pthread_mutex_consistent(robust);
+    pthread_mutex_unlock(robust);
+    munmap(robust, sizeof(*robust));
+    return 0;
+}
+
 /**
  * Two execs at once. The child's second thread stops at the entry of its
  * execve under the probe's PTRACE_SYSCALL, and only then does the first
@@ -623,7 +686,7 @@ int main(void)
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
         return fail("execve from a thread");
     }
-    if (two_execs() != 0) {
+    if (two_execs() != 0 || robust_exec() != 0) {
         return 1;
     }
 

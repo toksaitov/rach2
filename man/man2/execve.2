@@ -200,11 +200,10 @@ as well: the call then fails with
 .Er EAGAIN
 and sends nothing, and the thread ends before it returns to user mode, as
 on Linux.
-A thread other than the one that began the process then takes that
-thread's ID, which is the process ID, as on Linux.
-The robust futexes the thread holds are released, as
+The robust futexes the thread holds are released next, as
 .Xr futex 2
-describes.
+describes, and a thread other than the one that began the process then
+takes that thread's ID, which is the process ID, as on Linux.
 The old address space is freed, unless the parent of a
 .Xr vfork 2
 child still has it; that parent then runs again.
