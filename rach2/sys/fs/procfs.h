@@ -24,6 +24,10 @@ int procfs_resolve_pid(int pid);
  * process is gone or the thread is not one of its threads. */
 int procfs_resolve_id(const struct vpath *vp);
 
+/** The link count of process `pid`'s task directory: 2 and one for each of
+ * its live threads. */
+uint32_t procfs_task_links(int pid);
+
 /** Open a /proc/<pid>/{stat,cmdline} file; returns the fd or -errno. */
 int procfs_open(const struct vpath *vp, int flags);
 

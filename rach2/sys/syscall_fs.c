@@ -4262,6 +4262,9 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = procfs_ino_pid(procfs_resolve_id(vp));
+        if (vp->kind == VNODE_PROC_TASK_DIR) {
+            kst->st_nlink = procfs_task_links(procfs_resolve_id(vp));
+        }
         return 0;
     case VNODE_PROC_FILE:
         if (procfs_resolve_id(vp) < 0) {

@@ -448,6 +448,19 @@ static process_t *procfs_proc(int pid)
     return (p && p->state != PROC_UNUSED) ? p : NULL;
 }
 
+/**
+ * The link count of process `pid`'s task directory, as Linux gives it: 2,
+ * for the directory's entry in its parent and its own `.`, and one for each
+ * live thread, whose directory's `..` names it. Chromium's zygote takes a
+ * count of 3 as the proof that it runs one thread, and stops when it is less.
+ */
+uint32_t procfs_task_links(int pid)
+{
+    process_t *p = procfs_proc(pid);
+
+    return 2u + (p ? p->tg->live : 0u);
+}
+
 /** Whether the caller may read what /proc shows of `p`'s memory, its
  * environment and its auxiliary vector: effective user ID 0, or a real user
  * ID that is `p`'s, as Linux's ptrace check asks at its simplest. */

@@ -10,7 +10,8 @@
  * run, and a thread made after it takes it once it unblocks it. Of two signals
  * sent to the process at once, the second, which the first one's handler
  * blocks, is taken by another thread while that handler runs. A thread's exit
- * leaves the process running; /proc/self/task lists each live thread, a
+ * leaves the process running; /proc/self/task lists each live thread and has
+ * two links and one for each, as Chromium's zygote reads it, a
  * thread's directory there has no task directory and keeps its path in a
  * descriptor, down to the thread's descriptor links, a task path names only a
  * thread of its process, a thread's stat there has its own time, and
@@ -203,6 +204,24 @@ static int count_tasks(void)
         }
     }
     closedir(d);
+    return n;
+}
+
+/** The link count of this process's task directory, read with fstatat
+ * through a descriptor on /proc as Chromium's zygote reads it; -1 when the
+ * read fails. */
+static long task_links(void)
+{
+    struct stat st;
+    int proc = open("/proc", O_RDONLY | O_DIRECTORY);
+    long n = -1;
+
+    if (proc >= 0 && fstatat(proc, "self/task/", &st, 0) == 0) {
+        n = (long)st.st_nlink;
+    }
+    if (proc >= 0) {
+        close(proc);
+    }
     return n;
 }
 
@@ -874,6 +893,9 @@ int main(void)
     if (count_tasks() != 2) {
         return fail("/proc/self/task did not list two threads");
     }
+    if (task_links() != 4) {
+        return fail("/proc/self/task of two threads did not have four links");
+    }
     if (task_paths((pid_t)handled_by) != 0 || thread_times((pid_t)handled_by) != 0 ||
         later_rows() != 0) {
         return 1;
@@ -885,10 +907,13 @@ int main(void)
 
     pid = fork();
     if (pid == 0) {
-        _exit(count_tasks() == 1 ? 0 : 1);
+        _exit(count_tasks() != 1 ? 1 : task_links() != 3 ? 2 : 0);
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) == 1) {
         return fail("a child forked by a thread did not have one thread");
+    }
+    if (WEXITSTATUS(status) != 0) {
+        return fail("/proc/self/task of one thread did not have three links");
     }
 
     pid = fork();
