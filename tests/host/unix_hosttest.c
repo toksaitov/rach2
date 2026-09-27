@@ -11,11 +11,11 @@
  * files are models; user memory is eight model pages. A copy that reaches a
  * page not yet present sleeps while the page comes in, and there the model
  * runs the call a row gives the other thread, the sibling; so do the file
- * system's making of a socket file and the release of a file's last
- * description, which can sleep too. A sibling that must wait for a lock the
- * sleeping call holds parks (`compat/park_host.c`): its turn ends there, the
- * sleeping call goes on, and the row runs the sibling again once the lock
- * is free, as the woken thread would.
+ * system's making and lookup of a socket file and the release of a file's
+ * last description, which can sleep too. A sibling that must wait for a
+ * lock the sleeping call holds parks (`compat/park_host.c`): its turn ends
+ * there, the sleeping call goes on, and the row runs the sibling again once
+ * the lock is free, as the woken thread would.
  *
  * The descriptors accept, socketpair, a receive of SCM_RIGHTS and pipe2
  * make are reserved while their numbers, and for accept the peer's name,
