@@ -54,8 +54,13 @@ struct rlimit32 {
 #define RLIM_NPROC      0
 #define RLIM_NOFILE     1
 #define RLIM_AS         2
-#define RLIM_COUNT      3
+#define RLIM_STACK      3
+#define RLIM_COUNT      4
 #define RLIM_INFINITY32 0xFFFFFFFFu
+
+/* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;
+ * an exec that runs with ids its caller lacks lowers a larger one to it. */
+#define RLIM_STACK_DEFAULT 0x800000u
 
 /* Policy: the working directory's path is kept in the record, and a
  * directory whose path is longer cannot be made current (ENAMETOOLONG). */
@@ -165,8 +170,8 @@ struct process {
      * switches away leaves the count with the process it interrupted. */
     uint32_t irq_depth;
     /* The resource limits `prlimit64` keeps: processes of the real user,
-     * open descriptors, and the address space in bytes; soft and hard,
-     * inherited by fork and exec. */
+     * open descriptors, the address space and the stack in bytes; soft and
+     * hard, inherited by fork and exec. */
     struct rlimit32 rlim[RLIM_COUNT];
     /* Inside `mem_reclaim`: its own allocations, the requests a writeback
      * needs, may take from the reserve. */

@@ -30,7 +30,7 @@ Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The
 
 * `VM_CODE` and `VM_DATA` describe loaded ELF segments.
 * `VM_HEAP` describes the non-empty part of the `brk` heap, one VMA or several when `mprotect` has divided it.
-* `VM_STACK` starts with one page and may grow downward by at most 8 MiB.
+* `VM_STACK` starts with one page and may grow downward to `stack_limit`, which `execve` sets from the soft `RLIMIT_STACK` in force at the exec so that the whole stack is at most that size in whole pages, and never below `VM_MMAP_BASE`. The first image gets 8 MiB, the default.
 * `VM_ANON` describes an anonymous `mmap2` allocation.
 
 `execve` loads ELF pages eagerly, then creates one VMA per loadable segment with the segment's permissions. It records an empty heap at the image end, places the initial stack at `0xBFFFF000`, and places anonymous mappings below `VM_MMAP_BASE` (`0xB0000000`). The heap receives a VMA on its first non-empty growth. `fork` copies the complete `vm_space_t`.

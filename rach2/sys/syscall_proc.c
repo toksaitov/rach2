@@ -814,8 +814,30 @@ static void exec_privileges(int secure, uint32_t old_euid, uint32_t old_egid)
     current_proc->dumpable = secure ? 0u : 1u;
     if (secure) {
         current_proc->pdeath_signal = 0;
+        if (current_proc->rlim[RLIM_STACK].cur > RLIM_STACK_DEFAULT) {
+            current_proc->rlim[RLIM_STACK].cur = RLIM_STACK_DEFAULT;
+        }
     }
     cred_moved(current_proc, old_euid, old_egid);
+}
+
+/**
+ * How far below its first page the stack of a new image may grow: the soft
+ * RLIMIT_STACK in force at the exec, which bounds the whole stack as Linux's
+ * does, in whole pages, less the page it starts with, and never into the
+ * range below VM_MMAP_BASE where anonymous mappings are placed. A limit
+ * changed later applies at the next exec.
+ */
+static uint32_t exec_stack_window(void)
+{
+    uint32_t limit = current_proc->rlim[RLIM_STACK].cur & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t room = USER_STACK_BASE - VM_MMAP_BASE;
+
+    if (limit <= PAGE_SIZE) {
+        return 0;
+    }
+    limit -= PAGE_SIZE;
+    return limit < room ? limit : room;
 }
 
 /**
@@ -1226,7 +1248,8 @@ checked:
      * caller-supplied environment; it is the only such signal, since the
      * stack has no AT_UID/AT_EUID for libc to compare. A process that set
      * no_new_privs gains nothing: its bits are read and ignored, as a
-     * nosuid mount's are. */
+     * nosuid mount's are. An exec that runs with ids its caller lacks also
+     * lowers a soft RLIMIT_STACK above 8 MiB to 8 MiB, as Linux's does. */
     if (current_proc->no_new_privs) {
         setid_mode = 0;
     }
@@ -1352,7 +1375,7 @@ checked:
         /* Build the address-space map (VMAs) for the new image so the
          * page-fault handler can demand-page, grow the stack, or segfault. The
          * ELF code/data pages themselves are still eagerly loaded above. */
-        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0) {
+        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, exec_stack_window()) != 0) {
             exec_fail_destroyed(5); /* the regions could not be made */
         }
         /* RLIMIT_AS: an image whose regions cover more than the limit does
@@ -3222,8 +3245,8 @@ int32_t sys_getgroups(isr_params_t *params)
     return (int32_t)p->ngroups;
 }
 
-/* The resources: three are kept in the record and enforced, RLIMIT_STACK
- * reports the stack growth cap, and the rest are unlimited. */
+/* The resources: four are kept in the record and enforced, and the rest
+ * are unlimited. */
 #define RLIMIT_STACK_RES 3
 
 #define RLIMIT_NPROC_RES 6
@@ -3244,6 +3267,8 @@ static int rlimit_slot(uint32_t resource)
         return RLIM_NOFILE;
     case RLIMIT_AS_RES:
         return RLIM_AS;
+    case RLIMIT_STACK_RES:
+        return RLIM_STACK;
     default:
         return -1;
     }
@@ -3258,7 +3283,7 @@ static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uin
         *max = p->rlim[slot].max;
         return;
     }
-    *cur = *max = resource == RLIMIT_STACK_RES ? 0x800000u : RLIM_INF32;
+    *cur = *max = RLIM_INF32;
 }
 
 /**
