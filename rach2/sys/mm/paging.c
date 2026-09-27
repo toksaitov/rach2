@@ -7,6 +7,7 @@
 #include "usercopy.h"
 #include "../serial.h"
 #include "../lib/ksignal.h"
+#include "../lib/kerrno.h"
 #include "../proc/process.h"
 #include "mm.h"
 #include "pressure.h"
@@ -381,7 +382,7 @@ static void _load_page_dir(page_dir_t *dir)
 #define PF_ERR_WRITE   0x2u /* 0 = read access, 1 = write access */
 #define PF_ERR_USER    0x4u /* 0 = supervisor mode, 1 = user mode */
 
-static int cow_fault(uint32_t addr);
+static int cow_fault(page_dir_t *dir, uint32_t addr);
 
 /**
  * Is the page containing `addr` writable in `dir`? Present and write-enabled;
@@ -450,9 +451,81 @@ static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
 }
 
 /**
+ * Back a page of a region that maps a file: a frame filled from the file and
+ * mapped once it is full, writable when the region is. The mapping is
+ * private: a store changes the frame, never the file.
+ *
+ * The fill may sleep in the disk, so the region is looked up again after
+ * it, and a page that another path backed meanwhile, or a region that
+ * changed, leaves the frame unused; the access then runs again and faults
+ * on what is there now.
+ */
+static int file_fault(page_dir_t *dir, vm_space_t *vm, vma_t *vma, uint32_t addr)
+{
+    struct vm_file *f = vma->file;
+    uint32_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uintptr_t phys;
+    int rc;
+
+    mem_balance();
+    phys = alloc_user_frame();
+    if (phys == 0) {
+        return 0;
+    }
+    vm_file_get(f);
+    rc = f->fill(f, pgoff, phys);
+    vma = vm_find(vm, page);
+    if (rc != 0 || !vma || vma->file != f ||
+        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
+        vm_file_put(f);
+        free_frame(phys);
+        return rc == 0 && vma != NULL;
+    }
+    vm_file_put(f);
+    if (map_user_frame(dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
+        free_frame(phys);
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * Back a page of a shared region: map the frame the region's file or shared
+ * memory has for it, writable when the region is. The frame is the same one
+ * every mapping of that page maps, so a store is seen by all of them.
+ */
+static int shared_fault(page_dir_t *dir, vm_space_t *vm, vma_t *vma, uint32_t addr)
+{
+    struct vm_file *f = vma->file;
+    uint32_t page = addr & ~(PAGE_SIZE - 1);
+    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uintptr_t phys;
+
+    mem_balance();
+    vm_file_get(f);
+    phys = f->share(f, pgoff);
+    vma = vm_find(vm, page);
+    if (phys == 0 || !vma || vma->file != f || pte_present(dir, page)) {
+        if (phys) {
+            free_frame(phys);
+        }
+        vm_file_put(f);
+        return phys != 0 && vma != NULL;
+    }
+    vm_file_put(f);
+    if (map_user_frame(dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
+        free_frame(phys);
+        return 0;
+    }
+    return 1;
+}
+
+/**
  * Demand-paging resolver. Decide whether an access at the (not necessarily
- * aligned) `addr` is legal for the current process and, if so, make sure the
- * page is backed. `write` is 1 for a write.
+ * aligned) `addr` is legal in the address space `mm` and, if so, make sure
+ * the page is backed. `write` is 1 for a write, and `as_limit` is the
+ * RLIMIT_AS a grown stack is held to.
  *
  * Outside every region the one legal access grows the stack down
  * (`vm_grow_stack`, under RLIMIT_AS). Inside one, the region's protection
@@ -473,89 +546,18 @@ static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
  *
  * Returns 1 if the page is now mapped, 0 if the access is illegal or no
  * frame could be had or zeroed; the caller then segfaults the process, or a
- * pre-fault answers -EFAULT. The current process always has a user address
- * space here (the handler and the pre-fault path both check
- * `current_proc->mm`).
+ * pre-fault answers -EFAULT. `mm` is the current process's for a fault and
+ * a pre-fault, and a stopped tracee's for ptrace.
  */
-/**
- * Back a page of a region that maps a file: a frame filled from the file and
- * mapped once it is full, writable when the region is. The mapping is
- * private: a store changes the frame, never the file.
- *
- * The fill may sleep in the disk, so the region is looked up again after
- * it, and a page that another path backed meanwhile, or a region that
- * changed, leaves the frame unused; the access then runs again and faults
- * on what is there now.
- */
-static int file_fault(vm_space_t *vm, vma_t *vma, uint32_t addr)
+static int vm_resolve_in(struct mm *mm, uint32_t addr, int write, uint32_t as_limit)
 {
-    struct vm_file *f = vma->file;
-    uint32_t page = addr & ~(PAGE_SIZE - 1);
-    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
-    uintptr_t phys;
-    int rc;
-
-    mem_balance();
-    phys = alloc_user_frame();
-    if (phys == 0) {
-        return 0;
-    }
-    vm_file_get(f);
-    rc = f->fill(f, pgoff, phys);
-    vma = vm_find(vm, page);
-    if (rc != 0 || !vma || vma->file != f ||
-        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(_curr_dir, page)) {
-        vm_file_put(f);
-        free_frame(phys);
-        return rc == 0 && vma != NULL;
-    }
-    vm_file_put(f);
-    if (map_user_frame(_curr_dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
-        free_frame(phys);
-        return 0;
-    }
-    return 1;
-}
-
-/**
- * Back a page of a shared region: map the frame the region's file or shared
- * memory has for it, writable when the region is. The frame is the same one
- * every mapping of that page maps, so a store is seen by all of them.
- */
-static int shared_fault(vm_space_t *vm, vma_t *vma, uint32_t addr)
-{
-    struct vm_file *f = vma->file;
-    uint32_t page = addr & ~(PAGE_SIZE - 1);
-    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
-    uintptr_t phys;
-
-    mem_balance();
-    vm_file_get(f);
-    phys = f->share(f, pgoff);
-    vma = vm_find(vm, page);
-    if (phys == 0 || !vma || vma->file != f || pte_present(_curr_dir, page)) {
-        if (phys) {
-            free_frame(phys);
-        }
-        vm_file_put(f);
-        return phys != 0 && vma != NULL;
-    }
-    vm_file_put(f);
-    if (map_user_frame(_curr_dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
-        free_frame(phys);
-        return 0;
-    }
-    return 1;
-}
-
-static int vm_resolve(uint32_t addr, int write)
-{
-    vm_space_t *vm = &current_proc->mm->vm;
+    page_dir_t *dir = mm->dir;
+    vm_space_t *vm = &mm->vm;
     vma_t *vma = vm_find(vm, addr);
     uintptr_t phys;
 
     if (!vma) {
-        if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1), current_proc->rlim[RLIM_AS].cur)) {
+        if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1), as_limit)) {
             return 0;
         }
         /* A grown stack page is read+write; fall through to back it. */
@@ -567,32 +569,39 @@ static int vm_resolve(uint32_t addr, int write)
         } else if (!(vma->prot & VM_PROT_READ)) {
             return 0;
         }
-        if (pte_present(_curr_dir, addr)) {
-            if (write && !pte_writable(_curr_dir, addr)) {
-                return cow_fault(addr);
+        if (pte_present(dir, addr)) {
+            if (write && !pte_writable(dir, addr)) {
+                return cow_fault(dir, addr);
             }
             return 1; /* already backed; nothing to do */
         }
         if (vma->file) {
-            return vma->type == VM_SHARED ? shared_fault(vm, vma, addr) : file_fault(vm, vma, addr);
+            return vma->type == VM_SHARED ? shared_fault(dir, vm, vma, addr)
+                                          : file_fault(dir, vm, vma, addr);
         }
     }
 
     mem_balance();
-    phys = alloc_user_page(_curr_dir, addr);
+    phys = alloc_user_page(dir, addr);
     if (phys == 0) {
         return 0; /* out of frames */
     }
 
     if (paging_zero_frame(phys) != 0) {
-        unmap_user_page_frame(_curr_dir, addr);
+        unmap_user_page_frame(dir, addr);
         return 0;
     }
 
     if (vma && !(vma->prot & VM_PROT_WRITE)) {
-        paging_set_writable(_curr_dir, addr, false);
+        paging_set_writable(dir, addr, false);
     }
     return 1;
+}
+
+/** `vm_resolve_in` for the current process's address space. */
+static int vm_resolve(uint32_t addr, int write)
+{
+    return vm_resolve_in(current_proc->mm, addr, write, current_proc->rlim[RLIM_AS].cur);
 }
 
 int vm_prefault_range(uint32_t addr, uint32_t len, int write)
@@ -621,14 +630,14 @@ int vm_prefault_range(uint32_t addr, uint32_t len, int write)
 
 /**
  * Copy-on-write resolver for a write fault on a present, PTE_COW page in the
- * current address space. If this process is the frame's last owner (refcount
+ * address space of `dir`. If this process is the frame's last owner (refcount
  * 1) the page is just made writable in place; otherwise a private writable
  * copy is allocated, the shared bytes are copied in, and the shared frame's
  * reference is dropped. Returns 1 if it handled a COW page, 0 if the page is
  * not COW or no frame could be had or copied for it (the caller continues to
  * demand paging / segfault).
  */
-static int cow_fault(uint32_t addr)
+static int cow_fault(page_dir_t *dir, uint32_t addr)
 {
     uint32_t page_num = addr / PAGE_SIZE;
     uint32_t table_index = page_num / 1024;
@@ -640,7 +649,7 @@ static int cow_fault(uint32_t addr)
     if (table_index >= 1024) {
         return 0;
     }
-    table = _curr_dir->logical_page_tables[table_index];
+    table = dir->logical_page_tables[table_index];
     if (!table) {
         return 0;
     }
@@ -660,7 +669,7 @@ static int cow_fault(uint32_t addr)
     }
 
     mem_balance(); /* the caches give frames back first when memory is short */
-    new_phys = alloc_user_page(_curr_dir, addr);
+    new_phys = alloc_user_page(dir, addr);
     if (new_phys == 0) {
         return 0; /* out of frames -> caller segfaults the process */
     }
@@ -674,6 +683,89 @@ static int cow_fault(uint32_t addr)
     }
     frame_unref(old_phys);
     return 1;
+}
+
+/**
+ * Give the present page at `addr` of `dir` a frame of its own, as a
+ * copy-on-write fault would, but keeping its rights: a store the kernel then
+ * makes through its own mapping of the frame changes this address space
+ * alone. A copy-on-write page takes the copy-on-write path, which also makes
+ * it writable, as its region is; a read-only page another address space
+ * shares, the text a fork left in both, gets a copy with the same rights.
+ * 0, or -1 when no frame could be had or copied.
+ */
+static int page_private(page_dir_t *dir, uint32_t addr)
+{
+    page_table_t *table = dir->logical_page_tables[addr / PAGE_SIZE / 1024];
+    uint32_t index = (addr / PAGE_SIZE) % 1024;
+    uint32_t pte;
+    uintptr_t old_phys;
+    uintptr_t new_phys;
+
+    if (!table || !((pte = table->pages[index]) & 0x1)) {
+        return -1;
+    }
+    if (pte & PTE_COW) {
+        return cow_fault(dir, addr) ? 0 : -1;
+    }
+    old_phys = pte & ~0xFFFu;
+    if (old_phys / PAGE_SIZE >= _frames_number || _frames[old_phys / PAGE_SIZE] <= 1) {
+        return 0;
+    }
+    mem_balance();
+    new_phys = alloc_user_frame();
+    if (new_phys == 0) {
+        return -1;
+    }
+    if (paging_copy_frame(new_phys, old_phys) != 0) {
+        free_frame(new_phys);
+        return -1;
+    }
+    table->pages[index] = new_phys | (pte & 0xFFFu);
+    paging_flush_tlb(addr);
+    frame_unref(old_phys);
+    return 0;
+}
+
+int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
+{
+    uint8_t *p = buf;
+
+    while (len > 0) {
+        uint32_t off = addr & (PAGE_SIZE - 1);
+        uint32_t chunk = PAGE_SIZE - off;
+        const vma_t *vma = vm_find(&mm->vm, addr);
+        uint8_t *map;
+
+        if (chunk > len) {
+            chunk = len;
+        }
+        if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
+            !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC))) {
+            return -EIO;
+        }
+        if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, RLIM_INFINITY32)) {
+            return -EIO;
+        }
+        if (write && (vma->type == VM_SHARED ? !(vma->prot & VM_PROT_WRITE)
+                                             : page_private(mm->dir, addr) != 0)) {
+            return -EIO;
+        }
+        map = kmap_temp(paging_user_phys(mm->dir, addr) & ~(uintptr_t)(PAGE_SIZE - 1));
+        if (!map) {
+            return -ENOMEM;
+        }
+        if (write) {
+            k_memcpy(map + off, p, chunk);
+        } else {
+            k_memcpy(p, map + off, chunk);
+        }
+        kunmap_temp(map);
+        addr += chunk;
+        p += chunk;
+        len -= chunk;
+    }
+    return 0;
 }
 
 /**

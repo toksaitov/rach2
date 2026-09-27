@@ -18,6 +18,7 @@
 #include "proc/sched.h"
 #include "proc/wait_queue.h"
 #include "proc/tgroup.h"
+#include "proc/ptrace.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
 #include "proc/tls.h"
@@ -319,6 +320,7 @@ static int32_t exit_current(int32_t code)
         __asm__ __volatile__("cli; hlt");
         return 0;
     }
+    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)code);
     exiting_pid = current_proc->tgid;
     is_init = (exiting_pid == init_pid && init_pid != 0);
     alone = current_proc->tg->live == 1;
@@ -1329,7 +1331,10 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
         rc = exec_build(s);
     }
     if (rc == 0) {
+        uint32_t tid = current_proc->pid;
+
         exec_commit(params, s);
+        ptrace_exec(tid);
     }
     return rc;
 }
@@ -1473,6 +1478,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     uintptr_t child_kstack_base;
     uint32_t *child_sp;
     isr_params_t *child_frame;
+    int event;
 
     if (!parent) {
         return -ESRCH;
@@ -1661,9 +1667,14 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (req->flags & CLONE_VFORK) {
         child->vfork_waiting = 1;
     }
+    event = ptrace_fork_attach(child, req->flags);
     child->state = PROC_READY;
+    if (event) {
+        ptrace_event(event, pid);
+    }
     if (req->flags & CLONE_VFORK) {
         proc_vfork_wait(pid);
+        ptrace_event(PTRACE_EVENT_VFORK_DONE, pid);
     }
     return (int32_t)pid;
 
@@ -1680,7 +1691,7 @@ fail_built:
 
 int32_t sys_fork(isr_params_t *params)
 {
-    struct fork_req req = {0, 0, 0, 0, 0, 0};
+    struct fork_req req = {SIGCHLD, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
@@ -1693,7 +1704,7 @@ int32_t sys_fork(isr_params_t *params)
  */
 int32_t sys_vfork(isr_params_t *params)
 {
-    struct fork_req req = {CLONE_VM | CLONE_VFORK, 0, 0, 0, 0, 0};
+    struct fork_req req = {CLONE_VM | CLONE_VFORK | SIGCHLD, 0, 0, 0, 0, 0};
 
     return do_fork(params, &req);
 }
@@ -1905,9 +1916,84 @@ static void wait_reap(process_t *p)
 }
 
 /**
+ * Whether the thread `p`, which the caller's process traces, is one `idtype`
+ * and `id` select. A thread that is not its process's leader ends with no
+ * signal to its tracer, so, as Linux's __WCLONE and __WALL have it, it is
+ * waited for with __WCLONE or __WALL, and a leader without __WCLONE.
+ */
+static int wait_selects_tracee(int idtype, uint32_t id, int options, const process_t *p)
+{
+    int clone = p->pid != p->tgid;
+
+    if (!(options & W_ALL) && clone != (((uint32_t)options & W_CLONE) != 0)) {
+        return 0;
+    }
+    switch (idtype) {
+    case P_PID:
+        return p->pid == id;
+    case P_PGID:
+        return p->pgid == id;
+    default:
+        return 1;
+    }
+}
+
+/** Fill `r` with the end of `p`, from the encoded status `status`. */
+static void wait_fill_exit(struct wait_report *r, const process_t *p, int32_t status)
+{
+    if ((status & 0x7f) == 0) {
+        wait_fill(r, p, status, CLD_EXITED, (status >> 8) & 0xff);
+    } else {
+        wait_fill(r, p, status, (status & 0x80) ? CLD_DUMPED : CLD_KILLED, status & 0x7f);
+    }
+}
+
+/**
+ * What a tracer's wait finds of its tracee `p`: a ptrace stop the wait has
+ * not reported, reported once; a thread that ended while traced, which the
+ * report frees, as no other wait reports it; or the end of a process whose
+ * parent the tracer is not, reported once and left for the parent to reap.
+ * With WNOWAIT nothing is marked or freed. Returns 1 with `out` filled, or 0.
+ */
+static int wait_tracee(process_t *p, int options, struct wait_report *out)
+{
+    if (p->ptrace_status != 0 && !p->ptrace_reported && p->state != PROC_ZOMBIE) {
+        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED,
+                  (int32_t)((p->ptrace_status >> 8) & 0xFF));
+        if (!(options & WNOWAIT)) {
+            p->ptrace_reported = 1;
+        }
+        return 1;
+    }
+    if (p->state != PROC_ZOMBIE || !(options & WEXITED)) {
+        return 0;
+    }
+    if (p->pid != p->tgid) {
+        wait_fill_exit(out, p, p->exit_code);
+        if (!(options & WNOWAIT)) {
+            p->tg->utime += p->utime;
+            p->tg->stime += p->stime;
+            mm_drop(p);
+            kstack_free(p->kernel_stack);
+            free_process(p);
+        }
+        return 1;
+    }
+    if (p->tg->live == 0 && p->parent_pid != current_proc->tgid && !p->ptrace_exit_seen) {
+        wait_fill_exit(out, p, p->exit_code);
+        if (!(options & WNOWAIT)) {
+            p->ptrace_exit_seen = 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * The shared core of waitpid, wait4 and waitid: find a child `idtype` and
  * `id` select that has an event `options` asks for, fill `out` with it and
- * return its pid.
+ * return its pid. The threads the caller's process traces are waited for
+ * too, as `wait_tracee` reports them.
  *
  * The events are an exit (WEXITED), which reaps the zombie; a stop
  * (WUNTRACED), reported once, while the child is stopped; and a continue
@@ -1933,20 +2019,20 @@ static int32_t wait_find(int idtype, uint32_t id, int options, struct wait_repor
         /* Scan ALL selected children for a reportable event (a zombie to
          * reap, or a stop/continue to report), not just the first. */
         for (p = proc_list; p; p = p->next) {
+            if ((p->ptrace & PT_TRACED) && p->tracer == current_proc->tgid &&
+                wait_selects_tracee(idtype, id, options, p)) {
+                have_child = 1;
+                if (wait_tracee(p, options, out)) {
+                    return (int32_t)out->pid;
+                }
+            }
             if (!wait_selects(idtype, id, options, p)) {
                 continue;
             }
             have_child = 1;
 
             if (p->state == PROC_ZOMBIE && p->tg->live == 0 && (options & WEXITED)) {
-                int32_t status = p->exit_code;
-
-                if ((status & 0x7f) == 0) {
-                    wait_fill(out, p, status, CLD_EXITED, (status >> 8) & 0xff);
-                } else {
-                    wait_fill(out, p, status, (status & 0x80) ? CLD_DUMPED : CLD_KILLED,
-                              status & 0x7f);
-                }
+                wait_fill_exit(out, p, p->exit_code);
                 if (!(options & WNOWAIT)) {
                     wait_reap(p);
                 }
@@ -2343,7 +2429,11 @@ static void sig_job_control(process_t *target, int signo)
 
             tg->stop = 0;
             for (t = proc_list; t; t = t->next) {
-                if (t->tg == tg && t->state == PROC_STOPPED) {
+                if (t->tg != tg) {
+                    continue;
+                }
+                t->stop_seen = 0;
+                if (t->state == PROC_STOPPED && t->ptrace_status == 0) {
                     t->state = PROC_READY;
                 }
             }
@@ -3178,6 +3268,9 @@ void deliver_signals(isr_params_t *tf)
     if (proc_dead_threads != 0) {
         reap_threads();
     }
+    if (current_proc->ptrace) {
+        ptrace_return_stops();
+    }
     restart_nr = current_proc->restart_nr;
     current_proc->restart_nr = 0;
 
@@ -3189,7 +3282,8 @@ void deliver_signals(isr_params_t *tf)
         uint32_t handler_flags;
         int signo;
 
-        if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL))) {
+        if (current_proc->tg->stop && !(sig_pending_now() & KSIG_BIT(SIGKILL)) &&
+            !ptrace_group_stop((int)current_proc->tg->stop) && !current_proc->stop_seen) {
             sig_park();
         }
         deliverable = sig_pending_now() & ~current_proc->sig_blocked;
@@ -3197,6 +3291,18 @@ void deliver_signals(isr_params_t *tf)
             break;
         }
         signo = sig_dequeue(deliverable, &info);
+        if (current_proc->ptrace) {
+            /* The tracer sees the stop's system call, and may cancel its
+             * restart through orig_eax. */
+            current_proc->restart_nr = restart_nr;
+            current_proc->orig_eax = restart_nr ? (int32_t)restart_nr - 1 : -1;
+            signo = ptrace_signal_stop(signo, &info);
+            restart_nr = current_proc->restart_nr;
+            current_proc->restart_nr = 0;
+            if (signo == 0) {
+                continue;
+            }
+        }
         sa = &current_proc->sigacts[signo];
 
         if (sa->handler == KSIG_IGN) {

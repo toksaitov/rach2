@@ -1,4 +1,5 @@
 #include "process.h"
+#include "ptrace.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
 
@@ -19,10 +20,11 @@
  * The thread's own part comes first: the word CLONE_CHILD_CLEARTID names and
  * its robust futexes, its file descriptions and working directory, and a
  * parent waiting in vfork. A thread that is not the last becomes a zombie
- * no wait reports; one that is not the leader is freed from the next return
- * to user mode, and the leader, whose id is the process id, waits for the
- * rest of its group. The last thread reparents the children onto init, gives
- * the process its status, the group's when exit_group or a fatal signal
+ * no wait reports but its tracer's; one that is not the leader and has no
+ * tracer is freed from the next return to user mode, a traced one by its
+ * tracer's wait, and the leader, whose id is the process id, waits for the
+ * rest of its group. The last thread detaches the process's own tracees,
+ * reparents the children onto init, gives the process its status, the group's when exit_group or a fatal signal
  * ended it and the leader's own otherwise, and notifies the parent. The
  * address space and the descriptor-table allocation are not released here:
  * a normal exit leaves them to the reap, and a death by signal drops the
@@ -46,13 +48,16 @@ int proc_exit_cleanup(int32_t status)
     self->exit_code = status;
     tg->live--;
     if (tg->live == 0) {
+        ptrace_tracer_gone(self->tgid);
         reparent_children(self->tgid);
         if (tg->exiting) {
             leader->exit_code = tg->exit_code;
         }
     }
     self->state = PROC_ZOMBIE;
-    if (self != leader) {
+    if (self->ptrace & PT_TRACED) {
+        ptrace_exit_notify(self);
+    } else if (self != leader) {
         proc_dead_threads++;
     }
     if (tg->live != 0) {

@@ -269,6 +269,29 @@ struct process {
      * end, and its length; 0 for none. */
     uint32_t robust_list;
     uint32_t robust_len;
+    /* Set once this thread has been through the stop in effect in its
+     * process, which a tracer may then have resumed it from; cleared when
+     * the process continues. */
+    uint32_t stop_seen;
+    /* ptrace (ptrace.h): the PT_ flags; the tracer's process id; the options
+     * PTRACE_SETOPTIONS set; the wait status of the ptrace stop the thread is
+     * in, 0 when it is in none; whether the tracer's wait reported that
+     * stop; the signal the tracer resumes it with; the message
+     * PTRACE_GETEVENTMSG reads; the siginfo of the stop; the system call a
+     * stop is in, -1 for none; whether the tracer has seen the process end;
+     * and the debug registers DR0 to DR7 as the tracer set them, DR6 as the
+     * last debug exception left it. */
+    uint32_t ptrace;
+    uint32_t tracer;
+    uint32_t ptrace_opts;
+    uint32_t ptrace_status;
+    uint32_t ptrace_reported;
+    int32_t ptrace_signo;
+    uint32_t ptrace_msg;
+    struct k_siginfo ptrace_info;
+    int32_t orig_eax;
+    uint32_t ptrace_exit_seen;
+    uint32_t debugreg[8];
 };
 
 typedef struct process process_t;

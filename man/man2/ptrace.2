@@ -1,0 +1,291 @@
+.Dd September 27, 2026
+.Dt PTRACE 2
+.Os
+.Sh NAME
+.Nm ptrace
+.Nd trace a process
+.Sh SYNOPSIS
+.In sys/ptrace.h
+.Ft long
+.Fn ptrace "int request" "pid_t pid" "void *addr" "void *data"
+.Sh DESCRIPTION
+.Nm ,
+number 26, lets one process, the tracer, stop the threads of another, its
+tracees, read and change their memory and registers, and resume them, as
+GDB and strace do.
+.Fa pid
+is a thread ID.
+The tracer is a process: any thread of it may make the requests and wait
+for the tracees.
+.Pp
+A tracee stops for its tracer in a
+.Em ptrace stop ,
+which the tracer learns of from
+.Xr wait 2
+with the status
+.Dv WIFSTOPPED ,
+and from a
+.Dv SIGCHLD
+with
+.Dv CLD_TRAPPED .
+The tracer's wait reports each stop once, and reports a traced thread that
+is not the first of its process only with
+.Dv __WALL
+or
+.Dv __WCLONE .
+The stops are:
+.Bl -tag -width "signal-delivery stop"
+.It signal-delivery stop
+A signal the tracee is about to act on, other than
+.Dv SIGKILL ,
+with the signal in the status; the signal the tracer resumes it with is
+the one acted on, 0 for none, and a blocked one stays pending.
+.It group stop
+The stop of the tracee's process by a stop signal, after the
+signal-delivery stop for it; the tracer may resume the thread while the
+process stays stopped.
+With
+.Dv PTRACE_SEIZE
+it is reported with
+.Dv PTRACE_EVENT_STOP
+in bits 16 to 23 of the status.
+.It event stop
+.Dv SIGTRAP
+with an event in bits 16 to 23, when the options ask for it:
+.Dv PTRACE_EVENT_FORK ,
+.Dv PTRACE_EVENT_VFORK
+and
+.Dv PTRACE_EVENT_CLONE
+after a
+.Xr fork 2 ,
+a
+.Xr vfork 2
+or
+.Xr clone 2
+by the tracee, whose new child or thread is then traced too and first
+stops with
+.Dv SIGSTOP ,
+or
+.Dv PTRACE_EVENT_STOP
+under
+.Dv PTRACE_SEIZE ;
+.Dv PTRACE_EVENT_VFORK_DONE
+when the vfork child lets the tracee go;
+.Dv PTRACE_EVENT_EXEC
+after an
+.Xr execve 2 ;
+and
+.Dv PTRACE_EVENT_EXIT
+as the thread begins to end.
+.Dv PTRACE_GETEVENTMSG
+reads the new child's ID, the thread's ID before the exec, or the exit
+status.
+Without
+.Dv PTRACE_O_TRACEEXEC ,
+an
+.Xr execve 2
+sends the tracee
+.Dv SIGTRAP .
+.It syscall stop
+At the entry and at the exit of each system call, after
+.Dv PTRACE_SYSCALL ,
+with
+.Dv SIGTRAP ,
+or
+.Dv SIGTRAP No | 0x80
+with
+.Dv PTRACE_O_TRACESYSGOOD .
+At the entry EAX holds
+.Er -ENOSYS
+and orig_eax the call's number; at the exit EAX holds the result.
+.El
+.Pp
+The requests are:
+.Bl -tag -width "PTRACE_GET_THREAD_AREA"
+.It Dv PTRACE_TRACEME
+The caller's parent becomes its tracer.
+.It Dv PTRACE_ATTACH , PTRACE_SEIZE
+The caller's process becomes the tracer of
+.Fa pid .
+.Dv PTRACE_ATTACH
+sends it
+.Dv SIGSTOP ;
+.Dv PTRACE_SEIZE
+stops nothing and takes the options in
+.Fa data .
+The caller needs effective user ID 0, or a real user and group ID equal to
+each of the target's three and a dumpable target, as Linux asks of a
+tracer without
+.Dv CAP_SYS_PTRACE .
+A thread of the caller's own process, init, a kernel thread and a thread
+already traced cannot be attached.
+.It Dv PTRACE_PEEKTEXT , PTRACE_PEEKDATA , PTRACE_POKETEXT , PTRACE_POKEDATA
+Read the word at
+.Fa addr
+of the tracee's memory into the word
+.Fa data
+points to, or write
+.Fa data
+there.
+Missing pages are brought in, and a write reaches a read-only private page,
+such as program text, through a copy of its own, so a breakpoint changes
+this process alone; a page of no mapping, of a
+.Dv PROT_NONE
+one, or of a read-only shared one for a write, is
+.Er EIO .
+.It Dv PTRACE_PEEKUSER , PTRACE_POKEUSER
+A word of the i386
+.Vt struct user
+at byte
+.Fa addr :
+the registers of
+.Vt user_regs_struct
+from 0, the debug registers
+.Va u_debugreg
+from 252; the floating-point valid mark reads 1 and the other fields 0.
+.It Dv PTRACE_GETREGS , PTRACE_SETREGS
+The 68-byte
+.Vt user_regs_struct
+at
+.Fa data .
+A tracer changes only the flags a program may change; the data segment
+registers take a null selector, the user data selector or the TLS entry's,
+and CS and SS only the ones they have.
+An orig_eax of -1 keeps an interrupted system call from being restarted.
+.It Dv PTRACE_GETFPREGS , PTRACE_SETFPREGS
+The 108-byte
+.Vt user_i387_struct .
+.It Dv PTRACE_GETFPXREGS , PTRACE_SETFPXREGS
+The 512-byte
+.Ic fxsave
+image;
+.Er EIO
+on a processor without FXSR, and
+.Er EINVAL
+for an MXCSR the processor refuses.
+.It Dv PTRACE_CONT , PTRACE_SYSCALL , PTRACE_SINGLESTEP
+Resume the tracee with the signal
+.Fa data ,
+0 for none; after a stop that is not a signal-delivery stop the signal is
+sent afresh after a syscall stop and dropped after any other.
+.Dv PTRACE_SYSCALL
+stops it at the next system call's entry or exit, and
+.Dv PTRACE_SINGLESTEP
+after one instruction, with
+.Dv SIGTRAP
+and
+.Dv TRAP_TRACE .
+.It Dv PTRACE_KILL
+Send the tracee
+.Dv SIGKILL .
+.It Dv PTRACE_DETACH
+Resume the tracee with the signal
+.Fa data
+and stop tracing it; its debug registers are cleared.
+.It Dv PTRACE_INTERRUPT
+Stop a tracee attached with
+.Dv PTRACE_SEIZE
+with
+.Dv PTRACE_EVENT_STOP
+and
+.Dv SIGTRAP ,
+at its next return to user mode.
+.It Dv PTRACE_LISTEN
+Accepted for a seized tracee, which stays stopped.
+.It Dv PTRACE_SETOPTIONS
+.Dv PTRACE_O_TRACESYSGOOD ,
+.Dv PTRACE_O_TRACEFORK ,
+.Dv PTRACE_O_TRACEVFORK ,
+.Dv PTRACE_O_TRACECLONE ,
+.Dv PTRACE_O_TRACEEXEC ,
+.Dv PTRACE_O_TRACEVFORKDONE ,
+.Dv PTRACE_O_TRACEEXIT
+and
+.Dv PTRACE_O_EXITKILL ,
+which sends the tracees
+.Dv SIGKILL
+when the tracer ends; every tracee is detached then.
+.It Dv PTRACE_GETEVENTMSG
+The event's message, into the word at
+.Fa data .
+.It Dv PTRACE_GETSIGINFO , PTRACE_SETSIGINFO
+The 128-byte
+.Vt siginfo_t
+of the stop.
+.It Dv PTRACE_GET_THREAD_AREA , PTRACE_SET_THREAD_AREA
+The TLS descriptor of entry
+.Fa addr ,
+which must be 6, the one entry, as a
+.Vt user_desc ,
+as
+.Xr set_thread_area 2
+describes it.
+.El
+.Pp
+Every request but
+.Dv PTRACE_TRACEME ,
+.Dv PTRACE_ATTACH ,
+.Dv PTRACE_SEIZE ,
+.Dv PTRACE_KILL
+and
+.Dv PTRACE_INTERRUPT
+needs the tracee in a ptrace stop.
+.Ss Debug registers
+DR0 to DR3 hold breakpoint addresses, DR6 the status of the last debug
+exception, and DR7 the control bits, which the kernel loads when the
+tracee runs.
+DR7 may enable a breakpoint only on a user address aligned to its length
+of 1, 2 or 4 bytes, an execute breakpoint only of length 1, and neither an
+I/O breakpoint nor the general-detect bit; a value against these is
+.Er EINVAL .
+A breakpoint that fires sends
+.Dv SIGTRAP
+with
+.Dv TRAP_HWBKPT ,
+also when the kernel touches the address in a copy for the tracee.
+.Sh RETURN VALUES
+0, or the negative error number of the raw call; the C libraries' wrappers
+return -1 and set
+.Va errno ,
+and return the word for the three peek requests.
+.Sh EXAMPLES
+.Pa tests/musl/ptracemusl.c
+traces a child that stops itself, reads and writes its memory directly and
+through
+.Pa /proc/PID/mem ,
+reads its registers and floating-point state, steps an instruction, stops
+it at a breakpoint in its read-only text and moves it back, stops it at
+the entry and exit of a system call and after an
+.Xr execve 2 ,
+sets and reads a debug register, and attaches to and detaches from a
+running process.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EFAULT
+A buffer at
+.Fa data
+cannot be read or written.
+.It Bq Er EINVAL
+A debug register, an MXCSR, a TLS descriptor or entry, or an option the
+kernel does not take.
+.It Bq Er EIO
+An unknown request, a
+.Vt struct user
+offset out of range or not a word's, a register value the kernel refuses,
+a signal past 64, a memory address no mapping allows, or
+.Dv PTRACE_INTERRUPT
+or
+.Dv PTRACE_LISTEN
+for a tracee that was not seized.
+.It Bq Er EPERM
+The attach is not allowed, or the caller is already traced.
+.It Bq Er ESRCH
+No such thread, one the caller's process does not trace, or one not in a
+ptrace stop.
+.El
+.Sh SEE ALSO
+.Xr execve 2 ,
+.Xr fork 2 ,
+.Xr set_thread_area 2 ,
+.Xr sigaction 2 ,
+.Xr wait 2

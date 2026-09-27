@@ -58,6 +58,14 @@ void fpu_restore(const void *area)
     CHECK(area != current_proc->fpu, "restore belongs to incoming process");
 }
 
+/** Check the mask at the debug registers' switch; no row sets any. */
+void ptrace_switch_debug(const process_t *old, const process_t *next)
+{
+    (void)old;
+    (void)next;
+    CHECK(!irq_flags, "debug register switch with interrupts on");
+}
+
 /** Record a dispatch; the host remains on the test's stack. */
 void switch_context(process_t *old, process_t *next)
 {

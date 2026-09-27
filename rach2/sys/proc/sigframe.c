@@ -92,9 +92,7 @@ static void put32(uint8_t *p, uint32_t v)
     k_memcpy(p, &v, sizeof(v));
 }
 
-/* The i386 siginfo_t: signo, errno and code, then the fault's address, or
- * the sender's pid and uid and a child's status. */
-static void fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
+void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info)
 {
     int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
                  signo == SIGTRAP) &&
@@ -176,7 +174,7 @@ int sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
         frame.rt.sig = signo;
         frame.rt.pinfo = frame_addr + (uint32_t)((char *)frame.rt.info - (char *)&frame.rt);
         frame.rt.puc = frame_addr + (uint32_t)((char *)&frame.rt.uc - (char *)&frame.rt);
-        fill_siginfo(frame.rt.info, signo, info);
+        sigframe_fill_siginfo(frame.rt.info, signo, info);
         frame.rt.uc.ss_sp = current_proc->altstack_sp;
         frame.rt.uc.ss_size = current_proc->altstack_size;
         frame.rt.uc.ss_flags =

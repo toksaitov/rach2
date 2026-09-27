@@ -23,6 +23,7 @@
 #include "proc/tls.h"
 #include "proc/futex.h"
 #include "proc/tgroup.h"
+#include "proc/ptrace.h"
 #include "tables/gdt.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
@@ -1848,6 +1849,12 @@ static void _syscall_handler(isr_params_t *params)
      * there is none. */
     usbdisk_service();
 
+    if (current_proc) {
+        current_proc->orig_eax = (int32_t)syscall_num;
+        if (current_proc->ptrace & PT_SYSCALL) {
+            ptrace_syscall_stop(params, syscall_num, 0);
+        }
+    }
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);
     } else if (_trace_enosys) {
@@ -1874,6 +1881,12 @@ static void _syscall_handler(isr_params_t *params)
             klog(KLOG_WARN, "syscall", "%d: not implemented (asked for by %s)", (int)syscall_num,
                  who);
         }
+    }
+
+    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {
+        params->eax = (uint32_t)ret;
+        ptrace_syscall_stop(params, syscall_num, 1);
+        ret = (int32_t)params->eax;
     }
 
     /* Disable interrupts again so the epilogue restores the trapframe (segments
@@ -2081,6 +2094,7 @@ void init_syscall(void)
     _syscall_table[SYS_FCHOWN] = sys_fchown;
     _syscall_table[SYS_FCHOWN32] = sys_fchown;
     _syscall_table[SYS_SET_TID_ADDRESS] = sys_set_tid_address;
+    _syscall_table[SYS_PTRACE] = sys_ptrace;
     _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     /* musl's exit() issues exit_group(); for a single-threaded process it is

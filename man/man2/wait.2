@@ -35,6 +35,10 @@ The children of a process are the children of all its threads, and any
 thread may wait for any of them.
 A child is a process: it has exited once its last thread has ended, and
 its threads are never reported one by one.
+A tracer's wait also reports the threads its process traces, as
+.Xr ptrace 2
+describes: their ptrace stops, a traced thread's end, and the end of a
+traced process whose parent is another.
 By default, the call waits for a child to exit and reaps it.
 The
 .Fa options

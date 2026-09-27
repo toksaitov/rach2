@@ -97,6 +97,18 @@ void vfs_cwd_clear(process_t *p)
 static int vfork_released;
 static int thread_released;
 
+/** No row traces the child or has it trace another. */
+void ptrace_exit_notify(process_t *p)
+{
+    (void)p;
+    CHECK(0, "an untraced thread tells no tracer");
+}
+
+void ptrace_tracer_gone(uint32_t tgid)
+{
+    CHECK(tgid == child.tgid, "the process's own tracees are let go at its end");
+}
+
 void proc_thread_gone(process_t *p)
 {
     CHECK(p == &child && !closed, "the thread's futexes go before its files");

@@ -17,6 +17,7 @@
 #include "sys/mm/paging.h"
 #include "sys/mm/mm.h"
 #include "sys/proc/tgroup.h"
+#include "sys/proc/ptrace.h"
 #include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
@@ -305,6 +306,7 @@ void terminate_current_process(int32_t signo)
         return;
     }
 
+    ptrace_event(PTRACE_EVENT_EXIT, (uint32_t)(signo & 0x7F));
     pid = current_proc->tgid;
     is_init = (pid == init_pid && init_pid != 0);
 
