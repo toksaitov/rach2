@@ -113,32 +113,38 @@ QPID=$!
 "$RUNUTIL" until "$LOG" "init: sshd: started as pid" "$(scaled 60)" ||
     fail "init did not start the SSH server"
 
-# ssh_as USER KEY COMMAND: run COMMAND on the machine as USER, by KEY.
+# ssh_as BOUND USER KEY COMMAND: run COMMAND on the machine as USER, by KEY,
+# under the deadline tool at BOUND seconds: ConnectTimeout bounds only the
+# connection and its key exchange, and a session that stalls after them
+# would never return.
 ssh_as() {
-    ssh -i "$2" -p "$PORT" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes -o IdentitiesOnly=yes \
-        -o PreferredAuthentications=publickey "$1@127.0.0.1" "$3"
+    "$DEADLINE" "$1" ssh -i "$3" -p "$PORT" -o StrictHostKeyChecking=no \
+        -o "UserKnownHostsFile=$KNOWN" -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes \
+        -o IdentitiesOnly=yes -o PreferredAuthentications=publickey "$2@127.0.0.1" "$4"
 }
 
 # The server makes its host keys before it listens, which on an emulated
-# machine takes a minute or more; the bound is on the time since the first
-# try, whatever each try took.
+# machine takes a minute or more. The bound is on the time since the first
+# try, and each try is held to what is left of it.
 start=$("$RUNUTIL" now)
-until ssh_as root "$ROOT_KEY" 'echo GNU""READY' 2>/dev/null | grep -q GNUREADY; do
-    [ $(($("$RUNUTIL" now) - start)) -lt "$(scaled 900)" ] ||
-        fail "no SSH answer: init did not bring OpenSSH's server up"
+while :; do
+    left=$((start + $(scaled 900) - $("$RUNUTIL" now)))
+    [ "$left" -gt 0 ] || fail "no SSH answer: init did not bring OpenSSH's server up"
+    try=$(scaled 60)
+    [ "$try" -le "$left" ] || try=$left
+    ssh_as "$try" root "$ROOT_KEY" 'echo GNU""READY' 2>/dev/null | grep -q GNUREADY && break
     # interval: a try of SSH every two seconds until the server answers
     sleep 2
 done
 echo "gnu-test: OpenSSH's server answered with nobody at the console: OK"
 
-OUT=$(ssh_as root "$ROOT_KEY" 'id -u; ls /etc/ssh' 2>&1)
+OUT=$(ssh_as "$(scaled 120)" root "$ROOT_KEY" 'id -u; ls /etc/ssh' 2>&1)
 case "$OUT" in
     0*ssh_host_ed25519_key*) ;;
     *) fail "root by key did not arrive as root on a machine with its own host keys: $OUT" ;;
 esac
 echo "gnu-test: root logs in by key, and the machine made its host keys: OK"
-OUT=$(ssh_as test "$TEST_KEY" 'id -u' 2>&1)
+OUT=$(ssh_as "$(scaled 120)" test "$TEST_KEY" 'id -u' 2>&1)
 [ "$OUT" = 1000 ] || fail "the test account by key did not arrive as uid 1000: $OUT"
 echo "gnu-test: the test account logs in by key: OK"
 
@@ -180,14 +186,17 @@ esac
 echo "gnu-test: root's password is refused: OK"
 
 # The rows' script, sent by scp and fetched back by sftp, whose server is
-# OpenSSH's sftp-server; scp speaks the same protocol since OpenSSH 9.
-ssh_as root "$ROOT_KEY" 'mkdir -p /tmp/gnu' || fail "the rows' directory on the machine"
-scp -P "$PORT" -i "$ROOT_KEY" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-    -o BatchMode=yes "$REPO/tests/system/gnu_rows.sh" root@127.0.0.1:/tmp/gnu/rows.sh \
-    > /dev/null 2>&1 || fail "scp could not put the rows' script on the machine"
+# OpenSSH's sftp-server; scp speaks the same protocol since OpenSSH 9. Each
+# is held to a bound, as every ssh is.
+ssh_as "$(scaled 120)" root "$ROOT_KEY" 'mkdir -p /tmp/gnu' ||
+    fail "the rows' directory on the machine"
+"$DEADLINE" "$(scaled 120)" scp -P "$PORT" -i "$ROOT_KEY" -o StrictHostKeyChecking=no \
+    -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes "$REPO/tests/system/gnu_rows.sh" \
+    root@127.0.0.1:/tmp/gnu/rows.sh > /dev/null 2>&1 ||
+    fail "scp could not put the rows' script on the machine"
 printf 'get /tmp/gnu/rows.sh %s\n' "$DISK.back" |
-    sftp -P "$PORT" -i "$ROOT_KEY" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-    -o BatchMode=yes -b - root@127.0.0.1 > /dev/null 2>&1 ||
+    "$DEADLINE" "$(scaled 120)" sftp -P "$PORT" -i "$ROOT_KEY" -o StrictHostKeyChecking=no \
+    -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes -b - root@127.0.0.1 > /dev/null 2>&1 ||
     fail "sftp could not fetch the rows' script back"
 cmp -s "$REPO/tests/system/gnu_rows.sh" "$DISK.back" ||
     fail "the file sftp fetched is not the one scp sent"
