@@ -214,6 +214,75 @@ static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t cou
 }
 
 /**
+ * Write `count` bytes of user buffer `buf` to the file of a mounted type or
+ * of the KRFFS root that `entry` is open on: at the description's offset,
+ * which moves past what was written, or at `*at` for pwrite64, which leaves
+ * it where it was.
+ *
+ * With O_APPEND every write lands at the current end of the file, whatever
+ * the offset says and whatever `at` asks for, as Linux's pwrite does. The
+ * file system reads the user buffer directly, so its pages are range-checked
+ * and faulted in first. A file that backs a loop device is reached through
+ * that device and nowhere else, since the file system mounted on it may not
+ * have its image change underneath: that is asked before the description is
+ * locked, since a return from under the lock leaves a description nobody can
+ * use again, and again under it, since an attachment can publish itself
+ * while this call waits for the lock. Only a write that moved bytes disarms
+ * the set-id bits, through the node as the write left it (a grow relocates a
+ * KRFFS file and repoints every holder), and a privileged writer is exempt:
+ * that is the CAP_FSETID analogue, without which any root process disarms
+ * /bin/su by rewriting it.
+ */
+static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t count,
+                          const uint64_t *at)
+{
+    struct open_file *ofd = entry->ofd;
+    uint64_t pos;
+    int32_t written;
+
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (!ofd || !ofd->vmnt) {
+        return -EBADF;
+    }
+    if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
+        return -EFAULT;
+    }
+    if (loop_backs(ofd->vmnt, ofd->vnode)) {
+        return -EBUSY;
+    }
+    fd_ofd_lock(ofd);
+    if (loop_backs(ofd->vmnt, ofd->vnode)) {
+        fd_ofd_unlock(ofd);
+        return -EBUSY;
+    }
+    pos = at ? *at : ofd->offset;
+    if (ofd->status_flags & OFD_APPEND) {
+        struct vfs_stat vst;
+
+        if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
+            pos = vst.size;
+        }
+    }
+    written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, pos);
+    if (written > 0) {
+        if (!cred_privileged()) {
+            if (entry->node) {
+                cred_kill_setid(entry->node);
+            } else {
+                vfs_kill_setid(ofd->vmnt, ofd->vnode);
+            }
+        }
+        if (!at) {
+            ofd->offset = pos + (uint64_t)written;
+        }
+    }
+    fd_ofd_unlock(ofd);
+    return written;
+}
+
+/**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
  *
  * The shared body of write(2) and writev(2). Dispatches by backing kind: an
@@ -319,65 +388,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        struct open_file *ofd = entry->ofd;
-        int32_t written;
-
-        if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF; /* Not opened for writing */
-        }
-        if (!ofd || !ofd->vmnt) {
-            return -EBADF;
-        }
-        /* The file system reads the user buffer directly, so range-check AND
-         * fault its pages in first (as the socket path does) before stripping
-         * __user. */
-        if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
-            return -EFAULT;
-        }
-        /* A file that backs a loop device is reached through that device and
-         * nowhere else: the file system mounted on it may not have its image
-         * change underneath. Answered before the description is locked, since
-         * a return from under that lock is a description nobody can use
-         * again. */
-        if (loop_backs(ofd->vmnt, ofd->vnode)) {
-            return -EBUSY;
-        }
-        fd_ofd_lock(ofd);
-        /* And again under it: taking the lock waits, and an attachment can
-         * publish itself while this call is in that wait. */
-        if (loop_backs(ofd->vmnt, ofd->vnode)) {
-            fd_ofd_unlock(ofd);
-            return -EBUSY;
-        }
-        /* O_APPEND: every write lands at the current end of file, regardless of
-         * any intervening seek (the POSIX append contract). The flag lives on
-         * the shared open-file description. */
-        if (ofd->status_flags & OFD_APPEND) {
-            struct vfs_stat vst;
-
-            if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
-                ofd->offset = vst.size;
-            }
-        }
-        written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, ofd->offset);
-        if (written > 0) {
-            /* Through the UPDATED node pointer: a grow relocates the file and
-             * the write repointed every holder, this descriptor included.
-             * Only a write that moved bytes disarms the set-id bits, and a
-             * privileged writer is exempt: that is the CAP_FSETID analogue,
-             * and without it any root process silently disarms /bin/su by
-             * rewriting it. */
-            if (!cred_privileged()) {
-                if (entry->node) {
-                    cred_kill_setid(entry->node);
-                } else {
-                    vfs_kill_setid(ofd->vmnt, ofd->vnode);
-                }
-            }
-            ofd->offset += (uint64_t)written;
-        }
-        fd_ofd_unlock(ofd);
-        return written;
+        return file_write(entry, buf, count, NULL);
     }
 
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
@@ -2228,6 +2239,42 @@ static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
 }
 
 /**
+ * Read up to `count` bytes into user buffer `buf` from the file of a mounted
+ * type or of the KRFFS root that `entry` is open on: at the description's
+ * offset, which moves past what was read, or at `*at` for pread64, which
+ * leaves it where it was.
+ *
+ * The file system writes straight into the user buffer, so its pages are
+ * range-checked and faulted in first. The description is held across the
+ * operation: with dup or fork sharing the offset, a second reader sleeps
+ * rather than reading the same bytes while the first is in a request, and a
+ * KRFFS relocation cannot move the handle while it is in use.
+ */
+static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, const uint64_t *at)
+{
+    struct open_file *ofd = entry->ofd;
+    int32_t bytes_read;
+
+    if (!(entry->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    if (!ofd || !ofd->vmnt) {
+        return -EBADF;
+    }
+    if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
+        return -EFAULT;
+    }
+    fd_ofd_lock(ofd);
+    bytes_read =
+        vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, at ? *at : ofd->offset);
+    if (bytes_read > 0 && !at) {
+        ofd->offset += (uint64_t)bytes_read;
+    }
+    fd_ofd_unlock(ofd);
+    return bytes_read;
+}
+
+/**
  * Read up to `count` bytes from descriptor `fd` (read(2)).
  *
  * EBX = fd, ECX = buf, EDX = count. Returns the bytes read, 0 at end, or
@@ -2386,31 +2433,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        struct open_file *ofd = entry->ofd;
-        int32_t bytes_read;
-
-        if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF; /* Not opened for reading */
-        }
-        if (!ofd || !ofd->vmnt) {
-            return -EBADF;
-        }
-        /* The file system writes straight into the user buffer, so
-         * range-check AND fault its pages in (write) before stripping the
-         * __user tag. The description is held across the operation: with
-         * dup or fork sharing this offset, the second reader sleeps here
-         * rather than reading the same bytes while the first is in a
-         * request. */
-        if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
-            return -EFAULT;
-        }
-        fd_ofd_lock(ofd);
-        bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, ofd->offset);
-        if (bytes_read > 0) {
-            ofd->offset += (uint64_t)bytes_read;
-        }
-        fd_ofd_unlock(ofd);
-        return bytes_read;
+        return file_read(entry, buf, count, NULL);
     }
 
     return -EBADF;
@@ -5052,6 +5075,139 @@ int32_t sys__llseek(isr_params_t *params)
         return -EFAULT;
     }
     return 0;
+}
+
+/**
+ * The refusals pread64 and pwrite64 share, in Linux's order: a negative
+ * offset is -EINVAL before the descriptor is looked at, a descriptor that is
+ * not open is -EBADF, one that cannot seek is -ESPIPE, one not open for the
+ * direction (`write` or not) is -EBADF, a count or an end past the signed
+ * range is -EINVAL, and a directory is -EISDIR.
+ *
+ * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
+ * mouse, the framebuffer, and a device other than a raw disk window, the log
+ * and the three whose seek always lands at 0, /dev/null, /dev/zero and
+ * /dev/full. A /proc snapshot is read at an offset, as Linux reads one,
+ * though lseek refuses it. Returns 0 with the descriptor in `*out`, or the
+ * errno.
+ */
+static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_entry_t **out)
+{
+    fd_entry_t *entry;
+
+    if (pos < 0) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_DEVICE) {
+        if (!devfs_fd_is_raw(entry) && !devfs_fd_log_size(entry, NULL) &&
+            !devfs_lseek_zero(entry)) {
+            return -ESPIPE;
+        }
+    } else if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR &&
+               entry->type != FD_TYPE_SYNTH_DIR && entry->type != FD_TYPE_PROC) {
+        return -ESPIPE;
+    }
+    if (!(entry->flags & (write ? FD_FLAG_WRITE : FD_FLAG_READ))) {
+        return -EBADF;
+    }
+    if (count > 0x7FFFFFFFu || (uint64_t)count > 0x7FFFFFFFFFFFFFFFull - (uint64_t)pos) {
+        return -EINVAL;
+    }
+    if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
+        return -EISDIR;
+    }
+    *out = entry;
+    return 0;
+}
+
+/**
+ * Make `view` a copy of the device or /proc descriptor `entry` whose
+ * description is `desc`, a copy of the shared one with both offsets at `at`,
+ * for pread64 and pwrite64.
+ *
+ * A device's read or write moves the offset it uses, a raw window's own or
+ * the description's for the log and a /proc snapshot, and reads nothing else
+ * of the description. Given the copy, it uses and moves the copy's, and the
+ * shared description, which a sharer may be reading or seeking at the same
+ * time, never changes. The log and a snapshot take a 32-bit offset and are
+ * shorter than 4 GiB, so a position past that is their end.
+ */
+static void pio_view(fd_entry_t *entry, uint64_t at, fd_entry_t *view, struct open_file *desc)
+{
+    *desc = *entry->ofd;
+    desc->offset = at > 0xFFFFFFFFu ? 0xFFFFFFFFu : at;
+    desc->raw_offset = at;
+    *view = *entry;
+    view->ofd = desc;
+}
+
+/**
+ * pread64(2): EBX = fd, ECX = buffer, EDX = count, ESI and EDI = the
+ * offset's low and high words, the i386 order. Reads at the offset and
+ * leaves the descriptor's own where it was; `pio_entry` has what it refuses.
+ * A regular file is read at the offset under the description's lock, as
+ * read(2) reads it, and a device or a /proc snapshot through `pio_view`.
+ */
+int32_t sys_pread64(isr_params_t *params)
+{
+    char __user *buf = (char __user *)params->ecx;
+    uint32_t count = params->edx;
+    long long pos = off_from(params->edi, params->esi);
+    uint64_t at = (uint64_t)pos;
+    fd_entry_t *entry = NULL;
+    fd_entry_t view;
+    struct open_file desc;
+    int32_t rc = pio_entry((int)params->ebx, 0, count, pos, &entry);
+
+    if (rc != 0 || count == 0) {
+        return rc;
+    }
+    if (entry->type == FD_TYPE_FILE) {
+        return file_read(entry, buf, count, &at);
+    }
+    if (!entry->ops || !entry->ops->read || !entry->ofd) {
+        return -EBADF;
+    }
+    pio_view(entry, at, &view, &desc);
+    return entry->ops->read(&view, buf, count);
+}
+
+/**
+ * pwrite64(2): pread64's arguments, with the buffer written from. Writes at
+ * the offset and leaves the descriptor's own where it was, except that
+ * O_APPEND writes at the end of the file, as Linux's pwrite does; the
+ * set-id bits and the loop device's file are write's rules (`file_write`).
+ * A device is written as pread64 reads it.
+ */
+int32_t sys_pwrite64(isr_params_t *params)
+{
+    const char __user *buf = (const char __user *)params->ecx;
+    uint32_t count = params->edx;
+    long long pos = off_from(params->edi, params->esi);
+    uint64_t at = (uint64_t)pos;
+    fd_entry_t *entry = NULL;
+    fd_entry_t view;
+    struct open_file desc;
+    int32_t rc = pio_entry((int)params->ebx, 1, count, pos, &entry);
+
+    if (rc != 0 || count == 0) {
+        return rc;
+    }
+    if (entry->type == FD_TYPE_FILE) {
+        return file_write(entry, buf, count, &at);
+    }
+    if (!entry->ops || !entry->ops->write || !entry->ofd) {
+        return -EBADF;
+    }
+    pio_view(entry, at, &view, &desc);
+    return entry->ops->write(&view, buf, count);
 }
 
 /**

@@ -86,6 +86,10 @@ int sock_is_query(const struct socket *sock);
 
 int32_t sys_read(isr_params_t *params);
 
+int32_t sys_pread64(isr_params_t *params);
+
+int32_t sys_pwrite64(isr_params_t *params);
+
 int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port);
 

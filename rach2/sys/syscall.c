@@ -1489,6 +1489,8 @@ void init_syscall(void)
     _syscall_table[SYS_FORK] = sys_fork;
     _syscall_table[SYS_READ] = sys_read;
     _syscall_table[SYS_WRITE] = sys_write;
+    _syscall_table[SYS_PREAD64] = sys_pread64;
+    _syscall_table[SYS_PWRITE64] = sys_pwrite64;
     _syscall_table[SYS_OPEN] = sys_open;
     _syscall_table[SYS_CLOSE] = sys_close;
     _syscall_table[SYS_WAITPID] = sys_waitpid;

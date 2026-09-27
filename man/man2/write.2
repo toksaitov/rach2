@@ -1,14 +1,18 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
 .Nm write ,
-.Nm writev
+.Nm writev ,
+.Nm pwrite ,
+.Nm pwrite64
 .Nd write bytes to a descriptor
 .Sh SYNOPSIS
 .In unistd.h
 .Ft ssize_t
 .Fn write "int fd" "const void *buf" "size_t count"
+.Ft ssize_t
+.Fn pwrite "int fd" "const void *buf" "size_t count" "off_t offset"
 .In sys/uio.h
 .Ft ssize_t
 .Fn writev "int fd" "const struct iovec *iov" "int iovcnt"
@@ -152,11 +156,49 @@ The vector is a sequence of separate writes, not one atomic operation.
 On a datagram socket, each nonempty entry sends a separate datagram.
 Musl's buffered output uses
 .Fn writev .
+.Ss Positioned writes
+.Fn pwrite
+writes up to
+.Fa count
+bytes at
+.Fa offset
+of the file
+.Fa fd
+is open on and leaves the descriptor's offset where it was.
+Its checks are those of
+.Xr pread 2 ,
+in the same order, with a descriptor not open for writing returning
+.Er EBADF ;
+a directory is never open for writing, so it returns
+.Er EBADF
+as well.
+With
+.Dv O_APPEND ,
+a regular file is written at its end whatever
+.Fa offset
+says, as Linux does and POSIX does not.
+The regular-file rules of
+.Fn write
+apply otherwise: a file backing a loop device returns
+.Er EBUSY ,
+and a write of one or more bytes by an unprivileged process clears the
+set-id bits.
+A raw disk window is written at
+.Fa offset .
+The offset the descriptor shares with its duplicates does not change at
+any point of the call.
 .Pp
 The i386 system call numbers are 4 for
-.Nm write
-and 146 for
-.Nm writev .
+.Nm write ,
+146 for
+.Nm writev
+and 181 for
+.Nm pwrite64 ,
+which takes the descriptor, the buffer and the count in EBX, ECX and
+EDX, and the offset's low and high 32 bits in ESI and EDI.
+Musl's and GNU libc's
+.Fn pwrite
+are this call.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes written.
 .Fn writev
@@ -172,6 +214,12 @@ issues system call 146 with standard output as the descriptor,
 as the vector address, and a vector count of 1.
 It requires
 .Er EFAULT .
+.Pa tests/musl/preadmusl.c
+writes a file at offsets with
+.Fn pwrite ,
+checks that the descriptor's offset does not move, and that
+.Dv O_APPEND
+writes at the end.
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EACCES
@@ -205,6 +253,9 @@ A signal interrupted a wait, or a background terminal write posted
 .It Er EINVAL
 The vector count is outside 0 through 1024, a vector length exceeds
 2147483647, or the next length would overflow the running byte total.
+.Fn pwrite
+was given a negative offset, a count past 2147483647 or an end past the
+signed 64-bit range.
 A raw write has an offset or length not divisible by 512.
 A device control write has an invalid argument or command.
 .It Er EIO
@@ -254,6 +305,9 @@ A pipe has no reader, or a stream socket can no longer send and has
 no recorded error.
 .It Er EROFS
 The mount is read-only or its type has no write operation.
+.It Er ESPIPE
+.Fn pwrite
+was given a descriptor that cannot seek.
 .It Er ESRCH
 There is no current process.
 .It Er ETIMEDOUT

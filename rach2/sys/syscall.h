@@ -77,6 +77,8 @@
 #define SYS_UNAME           122
 #define SYS_READV           145
 #define SYS_WRITEV          146
+#define SYS_PREAD64         180
+#define SYS_PWRITE64        181
 #define SYS_GETCWD          183
 #define SYS_LLSEEK          140
 #define SYS_FSTAT64         197

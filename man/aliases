@@ -236,6 +236,8 @@ popmaildir 1 busybox-mailutils
 poweroff 8 busybox-init
 powertop 1 busybox-procps
 ppoll 2 poll
+pread 2 read
+pread64 2 read
 printenv 1 busybox-coreutils
 printf 1 busybox-coreutils
 ps 1 busybox-procps
@@ -244,6 +246,8 @@ pselect6 2 select
 pstree 1 busybox-procps
 pwd 1 busybox-coreutils
 pwdx 1 busybox-procps
+pwrite 2 write
+pwrite64 2 write
 rdate 1 busybox-util-linux
 rdev 1 busybox-util-linux
 readahead 1 busybox-miscutils

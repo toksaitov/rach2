@@ -112,8 +112,9 @@ struct open_file {
     void *fhandle;
     /* The description lock: read, write, lseek, getdents64 and ftruncate
      * hold the description for the length of the operation, so a sharer
-     * cannot use the offset while another sleeps in a disk request with it.
-     * The wait queue is beside the pool in fd.c. */
+     * cannot use the offset while another sleeps in a disk request with it;
+     * pread64 and pwrite64 hold it on a regular file and leave the offset
+     * alone. The wait queue is beside the pool in fd.c. */
     int busy;
     /* A node of another type: the canonical path it was opened by, which
      * the `*at` calls resolve relative names against for a directory whose

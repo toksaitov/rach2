@@ -1,14 +1,18 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt READ 2
 .Os
 .Sh NAME
 .Nm read ,
-.Nm readv
+.Nm readv ,
+.Nm pread ,
+.Nm pread64
 .Nd read bytes from a descriptor
 .Sh SYNOPSIS
 .In unistd.h
 .Ft ssize_t
 .Fn read "int fd" "void *buf" "size_t count"
+.Ft ssize_t
+.Fn pread "int fd" "void *buf" "size_t count" "off_t offset"
 .In sys/uio.h
 .Ft ssize_t
 .Fn readv "int fd" "const struct iovec *iov" "int iovcnt"
@@ -125,10 +129,61 @@ The consumed message is not restored.
 Musl's buffered input uses
 .Fn readv
 and handles short returns by reading again.
+.Ss Positioned reads
+.Fn pread
+reads up to
+.Fa count
+bytes at
+.Fa offset
+of the file
+.Fa fd
+is open on and leaves the descriptor's offset where it was.
+The checks come in Linux's order.
+A negative offset returns
+.Er EINVAL
+before the descriptor is looked at.
+A pipe, a socket, a terminal, the mouse, the framebuffer and a device
+that
+.Xr lseek 2
+refuses return
+.Er ESPIPE ;
+.Pa /dev/random
+and
+.Pa /dev/urandom
+are among them, which Linux reads.
+A descriptor not open for reading returns
+.Er EBADF ,
+a count past 2147483647 or an end past the signed 64-bit range
+.Er EINVAL ,
+and a directory
+.Er EISDIR .
+.Pp
+A regular file, a raw disk window,
+.Pa /dev/bootlog
+and a file under
+.Pa /proc
+are read at
+.Fa offset ;
+.Pa /dev/null
+and
+.Pa /dev/zero
+read as they always do.
+The offset the descriptor shares with its duplicates does not change at
+any point of the call, so a process that shares it can read, write or
+seek meanwhile.
+A zero count returns zero once the descriptor has passed these checks.
+.Pp
 The i386 system call numbers are 3 for
-.Nm read
-and 145 for
-.Nm readv .
+.Nm read ,
+145 for
+.Nm readv
+and 180 for
+.Nm pread64 ,
+which takes the descriptor, the buffer and the count in EBX, ECX and
+EDX, and the offset's low and high 32 bits in ESI and EDI.
+Musl's and GNU libc's
+.Fn pread
+are this call.
 .Sh RETURN VALUES
 On success, these functions return the number of bytes read.
 Zero denotes end of a file or stream, a zero-length request, an empty
@@ -154,6 +209,12 @@ and
 in that order.
 It also checks pipe and datagram reads and that an invalid later buffer
 leaves input queued.
+.Pa tests/musl/preadmusl.c
+reads a file at offsets with
+.Fn pread
+and checks that the descriptor's offset does not move, and that a pipe,
+a socket and a terminal return
+.Er ESPIPE .
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN
@@ -176,7 +237,10 @@ A signal interrupted a wait, or a background terminal read posted
 .Dv SIGTTIN .
 .It Er EINVAL
 The vector count is outside 0 through 1024, the total vector length
-exceeds 2147483647, or a file system has no read operation.
+exceeds 2147483647, a file system has no read operation, or
+.Fn pread
+was given a negative offset, a count past 2147483647 or an end past
+the signed 64-bit range.
 A boot window,
 .Pa /dev/bootpart
 or
@@ -189,6 +253,9 @@ random device has no usable seed.
 A background terminal read also gives this error when
 .Dv SIGTTIN
 is blocked or ignored.
+.It Er EISDIR
+.Fn pread
+was given a descriptor on a directory.
 .It Er ENETRESET
 A stream connection was ended by a network configuration change.
 .It Er ENOTCONN
@@ -200,6 +267,9 @@ A boot window is not present; a removed disk's node gives
 The descriptor is an ioctl-only socket.
 .It Er EPERM
 A loop device node was read directly.
+.It Er ESPIPE
+.Fn pread
+was given a descriptor that cannot seek.
 .It Er ETIMEDOUT
 A stream connection timed out.
 .El

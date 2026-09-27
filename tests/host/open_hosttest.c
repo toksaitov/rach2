@@ -40,6 +40,8 @@ static int32_t sys_sync(isr_params_t *params);
 static int32_t sys_lseek(isr_params_t *params);
 static int sock_is_query(const struct socket *sock);
 static int32_t sys_read(isr_params_t *params);
+static int32_t sys_pread64(isr_params_t *params);
+static int32_t sys_pwrite64(isr_params_t *params);
 static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
                            uint16_t *src_port);
 static int32_t sys_readv(isr_params_t *params);
