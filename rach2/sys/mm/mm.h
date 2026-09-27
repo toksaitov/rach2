@@ -89,7 +89,7 @@ void mm_copy_info(struct mm *to, const struct mm *from);
 void mm_set_exe(struct mm *mm, const char *path);
 
 /**
- * Keep the file `ref` names as the program of `mm`, which keeps none yet: a
+ * Keep the file at `ref` as the program of `mm`, which keeps none yet: a
  * description of it that opens nothing (`fs_exe_open`), and `mm` on the list
  * `mm_exe_holds` reads. Nothing may sleep between the resolution that found
  * the node and this call unless the caller holds the node's namespace lock,
@@ -136,8 +136,8 @@ struct process;
 void mm_drop(struct process *p);
 
 /*
- * The file system's part, in syscall_fs.c: a description of the file `ref`
- * names that opens nothing, with a hold of its own on the node and a
+ * The file system's part, in syscall_fs.c: a description of the file at
+ * `ref` that opens nothing, with a hold of its own on the node and a
  * reference on the mount, or NULL when the heap has no room or the type
  * cannot pin the node; and the release of one that no list has any more,
  * which frees a file of the KRFFS root that lost its name when nothing else

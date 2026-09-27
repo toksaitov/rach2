@@ -110,13 +110,12 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
  * The tables are a few pointer compares per live process, of kernel memory;
  * the scan never touches the page-cache window, and the node's own mode is
  * the one read of it. A descriptor in flight on an AF_UNIX socket, a file
- * mapping and an address space whose program the file is hold the node as a
- * descriptor does, and count as one holder more. The ends of a FIFO hold it
- * too, by their descriptions, whose
- * descriptors name a pipe and no node: every description of the FIFO
- * counts, `except`'s only when a descriptor besides it keeps it, since the
- * FIFO's pipe is found by the node's address, which a new node must not
- * take while an end is open.
+ * mapping and an address space that runs the file as its program hold the
+ * node as a descriptor does, and count as one holder more. The ends of a FIFO
+ * hold it too, by their descriptions, whose descriptors name a pipe and no
+ * node: every description of the FIFO counts, `except`'s only when a
+ * descriptor besides it keeps it, since the FIFO's pipe is found by the
+ * node's address, which a new node must not take while an end is open.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
@@ -320,7 +319,7 @@ void fd_release_backing(fd_entry_t *e)
 }
 
 /**
- * A description of the file `ref` names for an address space to keep its
+ * A description of the file at `ref` for an address space to keep its
  * program by (`mm_exe_open`): one that opens nothing, as `path_install` makes
  * for O_PATH, with a hold of its own on the node and a reference on the
  * mount, so a volume is not unmounted while a program on it runs, as on

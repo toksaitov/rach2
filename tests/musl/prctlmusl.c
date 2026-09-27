@@ -455,7 +455,7 @@ static int exe_ran(void)
  * itself reads its new path from the link and runs itself, not the script
  * put at its old path, through the link; the image that runs removes the
  * copy's name and still reaches the copy through the link. The copy's exit
- * status names the step that failed.
+ * status says which step failed.
  */
 static int exe_follows(void)
 {
