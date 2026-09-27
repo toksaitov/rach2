@@ -132,11 +132,29 @@ static int memory_and_registers(void)
     return 0;
 }
 
+/** The exec event stop of `pid`, which waitid reports with the event above
+ * the signal in si_status and waitpid with it in the status; 0, or 1 after
+ * the failure is reported. */
+static int exec_event(pid_t pid)
+{
+    siginfo_t si;
+    int status;
+
+    if (waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOWAIT) != 0 || si.si_code != CLD_TRAPPED ||
+        si.si_status != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
+        return fail("waitid's si_status of the exec event");
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) ||
+        status >> 8 != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
+        return fail("the exec event");
+    }
+    return 0;
+}
+
 static int syscalls_and_exec(void)
 {
     struct user_regs_struct regs;
     unsigned long dr;
-    siginfo_t si;
     int status;
     pid_t pid = fork();
 
@@ -173,14 +191,11 @@ static int syscalls_and_exec(void)
         regs.eax != pid) {
         return fail("the exit stop of getpid");
     }
-    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOWAIT) != 0 || si.si_code != CLD_TRAPPED ||
-        si.si_status != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
-        return fail("waitid's si_status of the exec event");
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+        return fail("PTRACE_CONT before the exec");
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) ||
-        status >> 8 != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
-        return fail("the exec event");
+    if (exec_event(pid) != 0) {
+        return 1;
     }
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 6) {

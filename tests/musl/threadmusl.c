@@ -419,6 +419,15 @@ static int lost_status_row(void)
     return 0;
 }
 
+/** The rows that follow the first ones: what the threads share, a signal a
+ * handler's mask blocks, and a wait whose status page goes; 0 when all pass.
+ * They are one call so that `main` stays within the complexity
+ * tools/verify/sizes.reasons allows it. */
+static int later_rows(void)
+{
+    return sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0;
+}
+
 static void *exec_self(void *arg)
 {
     (void)arg;
@@ -480,7 +489,7 @@ int main(void)
     if (count_tasks() != 2) {
         return fail("/proc/self/task did not list two threads");
     }
-    if (sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0) {
+    if (later_rows() != 0) {
         return 1;
     }
 
