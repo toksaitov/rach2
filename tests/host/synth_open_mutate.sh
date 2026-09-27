@@ -58,33 +58,65 @@ run_phase()
     echo "synth-open-mutation: result: $test $phase status $status"
 }
 
+# faults TEST: the faults compiled into the source of TEST, one at a time.
+faults()
+{
+    case $1 in
+        devfs) echo ptmx ;;
+        procfs) echo terminator mem-hold mem-live exe-present exe-deleted ;;
+    esac
+}
+
 echo "synth-open-mutation: logs: $work"
 for test in devfs procfs; do
     run_phase "$test" fixed 0 "$test-hosttest: result: pass:"
-    python3 - "$work/sys/fs/$test.c" "$test" <<'PY'
+    for fault in $(faults "$test"); do
+        python3 - "$work/sys/fs/$test.c" "$fault" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 source = path.read_text()
-if sys.argv[2] == 'devfs':
+fault = sys.argv[2]
+if fault == 'ptmx':
     old = '    if (name_eq(name, "ptmx")) {\n        return pty_open_master(flags);\n    }\n'
     assert source.count(old) == 1
     source = source.replace(old, '')
     at = source.index('    dev = devfs_find(name);', source.index('int devfs_open('))
     source = source[:at] + old + source[at:]
-else:
+elif fault == 'terminator':
     old = "    if (!t->nomem) {\n        t->buf[t->len] = '\\0';\n    }"
     assert source.count(old) == 1
     source = source.replace(old, "    t->buf[t->len] = '\\0';")
+elif fault == 'mem-hold':
+    old = '    mm_hold(p->mm);\n    f->mm = p->mm;\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    mm_get_live(p->mm);\n    f->mm = p->mm;\n')
+elif fault == 'mem-live':
+    old = '    return f->mm && mm_get_live(f->mm) ? f->mm : NULL;\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    if (f->mm) {\n        f->mm->users++;\n    }\n    return f->mm;\n')
+elif fault == 'exe-present':
+    old = '    if (node && !deleted && cap > 0) {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    if (node && !deleted && cap < 0) {\n')
+else:
+    old = '    if (deleted && mark) {\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    if (deleted && mark && cap < 0) {\n')
 path.write_text(source)
 PY
-    case $test in
-        devfs) message='ptmx exclusive create returns EEXIST before dispatch' ;;
-        procfs) message='runtime error: store to null pointer' ;;
-    esac
-    run_phase "$test" mutated 1 "$message"
-    cleanup
-    run_phase "$test" restored 0 "$test-hosttest: result: pass:"
-    cmp "$work/$test.saved" "$work/sys/fs/$test.c"
+        case $fault in
+            ptmx) message='ptmx exclusive create returns EEXIST before dispatch' ;;
+            terminator) message='runtime error: store to null pointer' ;;
+            mem-hold) message='fail: an open of /proc/PID/mem holds the record and is no user of it' ;;
+            mem-live) message='fail: a read once the process has ended returns 0 and reaches no memory' ;;
+            exe-present) message="fail: the link reads a renamed program's present path" ;;
+            exe-deleted) message="fail: a program whose name is gone reads as its exec's path, deleted" ;;
+        esac
+        run_phase "$test" "$fault" 1 "$message"
+        cleanup
+        run_phase "$test" "$fault-restored" 0 "$test-hosttest: result: pass:"
+        cmp "$work/$test.saved" "$work/sys/fs/$test.c"
+    done
 done

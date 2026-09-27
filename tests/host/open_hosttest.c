@@ -3,7 +3,8 @@
  * close of a descriptor whose release sleeps, by one thread or by the end of
  * another thread's call, the errors of an open, a dup and a dup2 that get no
  * descriptor, an unlink and a rename on the KRFFS root of a file an open is
- * installing, and a chmod and a chown of a file a write moves.
+ * installing or a program runs from, and a chmod and a chown of a file a
+ * write moves.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -19,6 +20,8 @@
 #include "fs/krffs.h"
 #include "network/socket/socket.h"
 static int fs_node_is_held(const krffs_node_t *node);
+static struct open_file *fs_exe_open(const struct vfs_ref *ref);
+static void fs_exe_close(struct open_file *ofd);
 static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
 static void fd_holds_release(void);
@@ -154,6 +157,8 @@ static process_t *lock_closer;
 static krffs_node_t root_dir, victim, source;
 static krffs_file_system_t root_fs;
 static int removals, keeps;
+/* The node of the root an address space keeps as its program's file. */
+static const krffs_node_t *program;
 /* The call that holds the root's namespace lock when a row's call first
  * asks for it, which runs before the row's call has the lock, the depth of
  * the lock, the number of times it was taken from a depth of 0, and that
@@ -388,6 +393,13 @@ int filemap_holds(const void *node)
 {
     (void)node;
     return 0;
+}
+
+/** An address space keeps `program`, a node of the root, as its program's
+ * file. */
+int mm_exe_holds(const struct vfs_mount *mnt, const void *n)
+{
+    return n != NULL && n == program && mnt == &mount;
 }
 
 /** No row frees a node of the KRFFS root, owns the display or has a
@@ -769,6 +781,26 @@ static void rename_over_installing(void)
     root_row_end();
 }
 
+/**
+ * An unlink, and a rename over the file, of a file of the KRFFS root that an
+ * address space keeps as its program: the program is one of the file's
+ * holders, so each takes the name and leaves the node, as for a descriptor.
+ */
+static void program_kept(void)
+{
+    root_row_begin();
+    program = &victim;
+    check(do_unlink("/kept") == 0 && keeps == 1 && removals == 0,
+          "an unlink keeps the file a program runs from");
+    root_row_end();
+    root_row_begin();
+    program = &victim;
+    check(do_rename("/src", "/kept", 0) == 0 && keeps == 1 && removals == 0,
+          "a rename over the file a program runs from keeps it");
+    program = NULL;
+    root_row_end();
+}
+
 /** The write a row's call waits for: it holds the mount's lock and moves
  * the file, as a growing write on a mounted KRFFS volume does. */
 static void write_moves(void)
@@ -1014,6 +1046,7 @@ int main(void)
     dup2_source_closed();
     descriptor_errors();
     unlink_installing();
+    program_kept();
     rename_over_installing();
     attrs_after_move();
     loop_handles();

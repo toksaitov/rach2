@@ -222,7 +222,7 @@ The mount stops accepting new operations and waits for operations
 already in progress to finish.
 An open-file description, working directory, root directory set by
 .Xr chroot 2 ,
-or child mount in any process then makes it busy.
+program a process runs, or child mount in any process then makes it busy.
 A loop device attached to a file on the mount also prevents unmounting.
 .Pp
 The file system syncs and prepares to unmount; the kernel writes dirty

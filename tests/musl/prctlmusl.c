@@ -17,6 +17,12 @@
  * of its caller, user 1000, and AT_SECURE 0. An option this kernel does not
  * have is EINVAL, never ENOSYS.
  *
+ * /proc/self/exe, which the name row executes, reaches the program's file: a
+ * copy of the probe that renames itself reads its new path from the link, and
+ * an exec of the link runs the copy and not a script put at its old path; the
+ * image that exec runs removes the copy's name, and an open of the link still
+ * reaches the copy's ELF header.
+ *
  * Prints "PRCTLMUSL OK" on success and "PRCTLMUSL FAIL (detail)" otherwise.
  */
 
@@ -29,11 +35,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 /* The pipe a grandchild reports its parent-death signal on. */
 static int report_fd = -1;
+
+/* The copy of the probe the /proc/self/exe rows run, and the name the copy
+ * moves itself to. */
+#define EXE_COPY  "/tmp/prctlmusl.a"
+#define EXE_MOVED "/tmp/prctlmusl.b"
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -354,12 +366,148 @@ static int no_new_privs(void)
     return 0;
 }
 
+/** Copy the file at `from` to a new file `to` of mode 0755; 0, or -1. */
+static int copy_program(const char *from, const char *to)
+{
+    char buf[4096];
+    ssize_t n = 0;
+    int in = open(from, O_RDONLY);
+    int out = open(to, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    int ok = in >= 0 && out >= 0 && fchmod(out, 0755) == 0;
+
+    while (ok && (n = read(in, buf, sizeof(buf))) > 0) {
+        ok = write(out, buf, (size_t)n) == n;
+    }
+    if (in >= 0) {
+        close(in);
+    }
+    if (out >= 0) {
+        close(out);
+    }
+    return ok && n == 0 ? 0 : -1;
+}
+
+/** Put a script of mode 0755 that ends with 7 at the new file `path`; 0,
+ * or -1. */
+static int put_script(const char *path)
+{
+    static const char text[] = "#!/bin/sh\nexit 7\n";
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0755);
+    int ok = fd >= 0 && fchmod(fd, 0755) == 0 &&
+             write(fd, text, sizeof(text) - 1) == (ssize_t)(sizeof(text) - 1);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : -1;
+}
+
+/**
+ * The image of the probe's copy at EXE_COPY, which `exe_follows` runs: it
+ * renames its program to EXE_MOVED, where the link must now read, puts at the
+ * old path a script that ends with 7, and executes /proc/self/exe, which must
+ * run the program itself, in the "exe-ran" mode, and not the script. Returns
+ * the step that failed, when the exec returns.
+ */
+static int exe_moved(void)
+{
+    char link[64];
+    ssize_t n;
+
+    if (rename(EXE_COPY, EXE_MOVED) != 0) {
+        return 2;
+    }
+    n = readlink("/proc/self/exe", link, sizeof(link) - 1);
+    if (n <= 0 || (link[n] = '\0', strcmp(link, EXE_MOVED) != 0)) {
+        return 3;
+    }
+    if (put_script(EXE_COPY) != 0) {
+        return 2;
+    }
+    execl("/proc/self/exe", "prctlmusl", "exe-ran", (char *)0);
+    return 5;
+}
+
+/**
+ * The image `exe_moved` runs through /proc/self/exe, from EXE_MOVED: it
+ * removes its program's name, and an open of /proc/self/exe must still reach
+ * the program's ELF header. 0, or the step that failed.
+ */
+static int exe_ran(void)
+{
+    unsigned char head[4];
+    int fd, ok;
+
+    if (unlink(EXE_MOVED) != 0) {
+        return 6;
+    }
+    fd = open("/proc/self/exe", O_RDONLY);
+    ok = fd >= 0 && read(fd, head, sizeof(head)) == (ssize_t)sizeof(head) &&
+         memcmp(head, "\177ELF", 4) == 0;
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : 4;
+}
+
+/**
+ * /proc/self/exe follows the program's file: a copy of the probe that renames
+ * itself reads its new path from the link and runs itself, not the script
+ * put at its old path, through the link; the image that runs removes the
+ * copy's name and still reaches the copy through the link. The copy's exit
+ * status says which step failed.
+ */
+static int exe_follows(void)
+{
+    static const char *const steps[] = {
+        NULL,
+        "the copy of the probe did not start",
+        "the copy of the probe could not move itself or place the script",
+        "/proc/self/exe did not read the program's path after a rename",
+        "an open of /proc/self/exe did not reach the program once its name was gone",
+        "an exec of /proc/self/exe failed once the program was renamed",
+        "the program's name could not be removed",
+        "an exec of /proc/self/exe ran the file put at the program's old path",
+        "the copy of the probe ended another way",
+    };
+    int status = 0;
+    pid_t child;
+
+    unlink(EXE_COPY);
+    unlink(EXE_MOVED);
+    if (copy_program("/proc/self/exe", EXE_COPY) != 0) {
+        return fail("a copy of the probe could not be made");
+    }
+    child = fork();
+    if (child == 0) {
+        execl(EXE_COPY, "prctlmusl", "exe-moved", (char *)0);
+        _exit(1);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) > 8) {
+        status = 8 << 8;
+    }
+    unlink(EXE_COPY);
+    unlink(EXE_MOVED);
+    if (WEXITSTATUS(status) != 0) {
+        return fail(steps[WEXITSTATUS(status)]);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "name") == 0) {
         return padded_name();
     }
-    if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0) {
+    if (argc > 1 && strcmp(argv[1], "exe-moved") == 0) {
+        return exe_moved();
+    }
+    if (argc > 1 && strcmp(argv[1], "exe-ran") == 0) {
+        return exe_ran();
+    }
+    if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0 ||
+        exe_follows() != 0) {
         return 1;
     }
     printf("PRCTLMUSL OK\n");

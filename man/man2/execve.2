@@ -205,6 +205,32 @@ with
 .Dv CLONE_FILES ,
 first gets a copy of its own, so the marked descriptors are closed for it
 alone and the other sharers keep the table.
+.Ss The program's file
+The new image keeps the program's file, the interpreter's for a script,
+from the moment its path is resolved until the last thread that runs the
+image ends or executes another program, as Linux keeps it.
+The load reads that file, whatever is put at its path meanwhile.
+A removal of the file's name, or a rename over it, leaves the file,
+without a name, until then, and a file system the program is on is busy
+for
+.Xr umount2 2 .
+.Pp
+.Pa /proc/ Ns Ar pid Ns Pa /exe
+reaches that file, as
+.Xr proc 5
+describes, so an
+.Fn execve
+of
+.Pa /proc/self/exe
+runs the program the caller runs, wherever it is now and whatever is put
+at its old path.
+The new image takes its name, which
+.Xr prctl 2
+reads, from the path that link reads, less a
+.Ql " (deleted)" ,
+and keeps that path as the one its own link reads where the file has no
+present path; Linux names such an image
+.Ql exe .
 .Ss Failure
 The path is resolved and its permissions checked first, as Linux opens
 the program before it copies the vectors.
@@ -281,6 +307,15 @@ until another thread's
 .Fn execve
 waits for it to end, and checks that the held thread ends and the other
 call's program runs.
+.Pp
+.Pa tests/musl/prctlmusl.c
+runs a copy of itself that renames its file, puts a script at the old
+path and executes
+.Pa /proc/self/exe ,
+which must run the copy and not the script; the image that runs removes
+the copy's name, and an open of
+.Pa /proc/self/exe
+must still reach the copy.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG

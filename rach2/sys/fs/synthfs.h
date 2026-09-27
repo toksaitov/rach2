@@ -46,7 +46,7 @@ enum vnode_kind {
     VNODE_PROC_LOOP,        /* /proc/loop: the files attached to devices */
     VNODE_PROC_INTERRUPTS,  /* /proc/interrupts: the count on each vector */
     VNODE_PROC_CONSOLE,     /* /proc/console: the serial receive path's counters */
-    VNODE_PROC_EXE,         /* /proc/<pid>/exe: a link to the program's path */
+    VNODE_PROC_EXE,         /* /proc/<pid>/exe: a link to the program's file */
     VNODE_PROC_TASK_DIR,    /* /proc/<pid>/task: the directory of the threads */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */

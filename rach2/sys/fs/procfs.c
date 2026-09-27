@@ -167,18 +167,17 @@ struct procfs_file {
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
     int origin_task; /* the process whose task/<origin_pid> it came from, or 0 */
-    struct mm *mm;   /* /proc/<pid>/mem: the address space the open allowed */
+    struct mm *mm;   /* /proc/<pid>/mem: a hold on the address space it allowed */
 };
 
 /**
- * Drop a reference to `mm` that /proc took, loading the kernel's directory
- * first when this is the last reference and its directory is the one in
- * use: a process a signal ends drops its own reference before it closes
- * its descriptors, and its /proc/self/mem descriptor may hold the last one.
+ * Drop a user's count of `mm` that a read of /proc took for its length,
+ * loading the kernel's directory first when this is the last user and its
+ * directory is the one in use, as `mm_drop` does.
  */
 static void procfs_mm_put(struct mm *mm)
 {
-    if (mm->refs == 1 && _curr_dir == mm->dir) {
+    if (mm->users == 1 && _curr_dir == mm->dir) {
         switch_page_directory(_kernel_dir);
     }
     mm_put(mm);
@@ -471,23 +470,102 @@ static int procfs_may_read_mem(const process_t *p)
                             (current_proc->ruid == p->ruid && !proc_privileged(p)));
 }
 
-int procfs_readlink_exe(int pid, char *buf, int cap)
+int procfs_exe_file(int pid, struct vfs_ref *out)
 {
     process_t *p = procfs_proc(pid);
-    int n;
 
-    if (!p || !p->mm || !p->mm->exe) {
+    if (!p || !p->mm || !p->mm->exe_file) {
         return -ENOENT;
     }
     if (!procfs_may_read_mem(p)) {
         return -EACCES;
     }
-    n = (int)k_strlen(p->mm->exe);
-    if (n > cap) {
-        n = cap;
+    out->mnt = p->mm->exe_file->vmnt;
+    out->node = p->mm->exe_file->vnode;
+    return 0;
+}
+
+/** The node of the program's file `ofd` describes when that is a file of
+ * the KRFFS root, whose node has a path of its own; NULL otherwise. */
+static krffs_node_t *exe_root_node(const struct open_file *ofd)
+{
+    if (!ofd || ofd->vmnt != vfs_root_mount() || ofd->vmnt->type != &vfs_krffs_type ||
+        ofd->vnode == krffs_fs->node) {
+        return NULL;
     }
-    k_memcpy(buf, p->mm->exe, (uint32_t)n);
+    return ofd->vnode;
+}
+
+/** The present path of `node`, a file of the KRFFS root that has a name, in
+ * a buffer from the heap the caller frees; NULL when no path resolves back
+ * to it, or the heap has no room. */
+static char *exe_present_path(krffs_node_t *node)
+{
+    char *path = kmalloc(VFS_PATH_MAX);
+
+    if (path && (krffs_node_path(node, path, VFS_PATH_MAX) != 0 || krffs_resolve(path) != node)) {
+        kfree(path);
+        path = NULL;
+    }
+    return path;
+}
+
+/** Copy the string `s` into `buf` from `n` on, as far as `cap` allows; the
+ * length after. */
+static int exe_put(char *buf, int cap, int n, const char *s)
+{
+    while (*s && n < cap) {
+        buf[n++] = *s++;
+    }
     return n;
+}
+
+/**
+ * The text of process `pid`'s /proc/<pid>/exe into `buf` of `cap` bytes, as
+ * `procfs_readlink_exe` says, with " (deleted)" after the path of a file that
+ * lost its name only when `mark` is set. The record of the address space is
+ * held while its path is read, since reading the node may sleep in the page
+ * cache while the process ends.
+ */
+static int exe_text(int pid, char *buf, int cap, int mark)
+{
+    process_t *p = procfs_proc(pid);
+    krffs_node_t *node;
+    struct mm *mm;
+    char *now = NULL;
+    int deleted;
+    int n;
+
+    if (!p || !p->mm || (!p->mm->exe && !p->mm->exe_file)) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    mm = p->mm;
+    mm_hold(mm);
+    node = exe_root_node(mm->exe_file);
+    deleted = node && node->name[0] == '\0';
+    if (node && !deleted && cap > 0) {
+        now = exe_present_path(node);
+    }
+    n = exe_put(buf, cap, 0, now ? now : mm->exe ? mm->exe : "");
+    if (deleted && mark) {
+        n = exe_put(buf, cap, n, " (deleted)");
+    }
+    kfree(now);
+    mm_unhold(mm);
+    return n;
+}
+
+int procfs_readlink_exe(int pid, char *buf, int cap)
+{
+    return exe_text(pid, buf, cap, 1);
+}
+
+int procfs_exe_name(int pid, char *buf, int cap)
+{
+    return exe_text(pid, buf, cap, 0);
 }
 
 /**
@@ -2039,9 +2117,7 @@ static void procfs_close(fd_entry_t *e)
     struct procfs_file *f = (struct procfs_file *)e->priv;
     if (f) {
         e->priv = NULL;
-        if (f->mm) {
-            procfs_mm_put(f->mm);
-        }
+        mm_unhold(f->mm);
         kfree(f->data);
         kfree(f);
     }
@@ -2051,29 +2127,18 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
                                                 procfs_ioctl, procfs_close};
 
 /**
- * The address space a /proc/<pid>/mem descriptor may reach, with a reference
- * of the caller's own, or NULL: the one the open allowed, while the process
- * it was opened for still runs in it. Once the process has another, which
- * an execve gives it, or none, the descriptor's reference goes, as on Linux,
- * where the file keeps the address space it was opened on and reads end
- * when that has no user left; a program the process executes, one of other
- * ids among them, is never reached through a descriptor opened before.
+ * The address space a /proc/<pid>/mem descriptor may reach, with a user's
+ * count of the caller's own, or NULL: the one the open allowed, while
+ * anything still runs in it. The descriptor keeps only its record
+ * (`mm_hold`), as Linux's file keeps the mm_struct and a read takes
+ * mm_users only while it is not 0: the pages go when the last thread that
+ * ran in them ends or executes another program, and a program the process
+ * executes, one of other ids among them, is never reached through a
+ * descriptor opened before.
  */
-static struct mm *procfs_mem_mm(struct procfs_file *f)
+static struct mm *procfs_mem_mm(const struct procfs_file *f)
 {
-    struct mm *mm = f->mm;
-    process_t *p = mm ? get_process((uint32_t)f->origin_pid) : NULL;
-
-    if (!mm) {
-        return NULL;
-    }
-    if (!p || p->state == PROC_UNUSED || p->mm != mm) {
-        f->mm = NULL;
-        procfs_mm_put(mm);
-        return NULL;
-    }
-    mm_get(mm);
-    return mm;
+    return f->mm && mm_get_live(f->mm) ? f->mm : NULL;
 }
 
 /**
@@ -2085,9 +2150,9 @@ static struct mm *procfs_mem_mm(struct procfs_file *f)
  * than a page at a time, and all of a page or none of it is done, so one
  * that meets an address no region allows has done every byte before it:
  * those are returned and the offset moves past them. -EIO when none could
- * be, and 0 once the address space is not the process's. The address space
- * is held for the length of the call, which may sleep bringing a page in
- * while the process ends.
+ * be, and 0 once nothing runs in the address space. It has a user's count
+ * for the length of the call, which may sleep bringing a page in while the
+ * process ends.
  */
 static int32_t procfs_mem_access(fd_entry_t *e, char __user *ubuf, uint32_t count, int write)
 {
@@ -2147,9 +2212,9 @@ static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write
  * Open /proc/<pid>/mem for reading, writing or both: the caller needs
  * effective user ID 0, or the process's real user ID and a dumpable process,
  * as a tracer does to attach. The descriptor keeps the process's id, `pid`
- * as `procfs_resolve_id` gave it for the path `vp`, a reference to the
- * address space those checks allowed, and no text; its offset is an
- * address.
+ * as `procfs_resolve_id` gave it for the path `vp`, a hold on the record of
+ * the address space those checks allowed, which keeps none of its memory,
+ * and no text; its offset is an address.
  */
 static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
 {
@@ -2181,7 +2246,7 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
         kfree(f);
         return fd;
     }
-    mm_get(p->mm);
+    mm_hold(p->mm);
     f->mm = p->mm;
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;

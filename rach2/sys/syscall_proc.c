@@ -724,19 +724,25 @@ static void close_cloexec_fds(void)
 
 /*
  * A file execve reads: the program, a script's interpreter, or the dynamic
- * linker a PT_INTERP names. One on the KRFFS root is read by the path of its
- * node, from the root of the mount table, which is not the path the caller
- * gave when chroot moved the caller's root; one on another mount through a
- * handle on the node its resolution held, opened once and released after
- * the load. It lives in the caller's own exec workspace below, because a
- * read of a mounted volume sleeps and a second exec runs while it does.
+ * linker a PT_INTERP names. The program, or the interpreter a script names,
+ * on the KRFFS root is read through the description of it the new address
+ * space keeps (`mm_exe_open`), at the node the file is at now, so the load
+ * reads the file whose rights and set-id bits the exec checked, whatever is
+ * put at its path meanwhile; the dynamic linker there is read by the path of
+ * its node, from the root of the mount table, which is not the path the
+ * caller gave when chroot moved the caller's root. One on another mount is
+ * read through a handle on the node its resolution held, opened once and
+ * released after the load. It lives in the caller's own exec workspace below,
+ * because a read of a mounted volume sleeps and a second exec runs while it
+ * does.
  */
 struct exec_file {
     char path[VFS_PATH_MAX]; /* the node's path on the KRFFS root */
     struct vfs_ref ref;      /* the mount is NULL on the KRFFS root and once closed */
     void *handle;
-    int32_t err;  /* the errno of a failed read of a mount, which execve reports */
-    int readable; /* whether the caller may read the file itself */
+    struct mm *held; /* the address space whose program this file of the root is */
+    int32_t err;     /* the errno of a failed read of a mount, which execve reports */
+    int readable;    /* whether the caller may read the file itself */
 };
 
 /* What a program's set-id bits would do: the bits that apply, and the file
@@ -747,12 +753,35 @@ struct exec_setid {
     uint32_t gid;
 };
 
+/**
+ * Read the program's file of the KRFFS root through `ofd`, the description
+ * its new address space keeps: at the node the file is at now, under the
+ * root's lock, which a relocation takes, and not a directory, as
+ * `krffs_read` refuses one.
+ */
+static int exec_held_read(const struct open_file *ofd, void *dst, uint32_t count, uint32_t off)
+{
+    krffs_node_t *node;
+    int got = -1;
+
+    vfs_ns_lock(ofd->vmnt);
+    node = ofd->vnode;
+    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+        got = krffs_read_node(node, (char *)dst, count, off);
+    }
+    vfs_ns_unlock(ofd->vmnt);
+    return got;
+}
+
 /** An `elf_read_fn` over an `exec_file`. */
 static int exec_file_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     struct exec_file *f = ctx;
     int32_t got;
 
+    if (f->held != NULL) {
+        return exec_held_read(f->held->exe_file, dst, count, off);
+    }
     if (f->ref.mnt == NULL) {
         return krffs_read(f->path, (char *)dst, count, off);
     }
@@ -778,9 +807,11 @@ static int32_t exec_load_err(const struct exec_file *f, int rc, int32_t malforme
     return rc == -ENOEXEC ? malformed : rc;
 }
 
-/** Release the handle and the node `f` holds on another mount, if any. */
+/** Release the handle and the node `f` holds on another mount, if any; a
+ * file of the root the new address space keeps stays with it. */
 static void exec_file_close(struct exec_file *f)
 {
+    f->held = NULL;
     if (f->ref.mnt) {
         vfs_release(f->ref.mnt, f->handle);
         vfs_ref_release(&f->ref);
@@ -803,9 +834,10 @@ static void exec_file_close(struct exec_file *f)
  * gives the processor up.
  *
  * The strings are in `args`, the pages of the new stack (`proc/uimage.h`),
- * and the image is built in `mm`, an address space of its own, so every
- * limit and every failure of the load is found while there is still a
- * caller to return an error to.
+ * and the image is built in `mm`, an address space of its own, made before
+ * the program is opened so that it keeps the program's file from the open
+ * on, so every limit and every failure of the load is found while there is
+ * still a caller to return an error to.
  */
 
 /* A script's first line, read here to be parsed. */
@@ -1151,9 +1183,12 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * Open the file at the absolute, canonical `path` into `f` for execve to
  * read, and when `id` is not NULL, say in it what the file's set-id bits
  * would do. `path` starts at the caller's root, which chroot may have
- * moved, and a file it names on the KRFFS root is read by its node's own
- * path, which `f` keeps. `f` also says whether the caller may read the
- * file, which the kernel loads for it with the execute right alone.
+ * moved. When `keep` is not NULL the file is the program the image runs,
+ * and `keep`, the new address space, keeps it (`mm_exe_open`) while the walk
+ * still holds the node's mount locked; one on the KRFFS root is then read
+ * through that, and any other file on the root by its node's own path, which
+ * `f` keeps. `f` also says whether the caller may read the file, which the
+ * kernel loads for it with the execute right alone.
  *
  * The walk may not arrive on the synthetic /dev and /proc mounts, which
  * hold no programs, so execve sees the mount boundary open sees and cannot
@@ -1168,7 +1203,8 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * Unix, which nothing here implements. On a mount with MS_NOSUID the bits
  * are read and ignored. 0 or a negative errno.
  */
-static int32_t exec_open(struct exec_file *f, const char *path, struct exec_setid *id)
+static int32_t exec_open(struct exec_file *f, const char *path, struct exec_setid *id,
+                         struct mm *keep)
 {
     struct vfs_ref ref;
     struct vfs_stat vst;
@@ -1177,6 +1213,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
 
     f->ref.mnt = NULL;
     f->handle = NULL;
+    f->held = NULL;
     f->err = 0;
     f->readable = 0;
     rc = vfs_resolve(0, path + (path[0] == '/'), VFS_WALK_LOCK, &ref, 0, 0);
@@ -1191,7 +1228,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
 
         rc = cred_access_node(node, CRED_X, 0);
         f->readable = cred_access_node(node, CRED_R, 0) == 0;
-        if (rc == 0 && krffs_node_path(ref.node, f->path, sizeof(f->path)) != 0) {
+        if (rc == 0 && keep == NULL && krffs_node_path(ref.node, f->path, sizeof(f->path)) != 0) {
             rc = -ENAMETOOLONG;
         }
         vst.mode = node->mode;
@@ -1208,6 +1245,12 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
         }
         if (rc == 0) {
             f->ref = ref; /* held until exec_file_close */
+        }
+    }
+    if (rc == 0 && keep != NULL) {
+        rc = mm_exe_open(keep, &ref);
+        if (rc == 0 && f->ref.mnt == NULL) {
+            f->held = keep;
         }
     }
     vfs_walk_unlock(ref.mnt);
@@ -1231,7 +1274,8 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
 /**
  * Turn an exec of a script into an exec of its interpreter, when the file
  * `s` has open is not an ELF image: `exec_shebang` rewrites the arguments,
- * and the interpreter is opened in the script's place. A set-id script runs
+ * and the interpreter is opened in the script's place, as the program the new
+ * address space keeps, which is Linux's exe for a script. A set-id script runs
  * as its invoker: the interpreter is what runs, it is not set-id, and
  * honouring the script's bits is a hole Unix closed long ago, since the
  * interpreter can be made to read a different file than the one whose bits
@@ -1252,11 +1296,12 @@ static int32_t exec_script(struct exec_state *s)
     }
     rc = exec_shebang(s, &s->argc, exec_file_read, &s->prog);
     exec_file_close(&s->prog);
+    mm_exe_close(s->mm);
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOEXEC;
     }
     s->id.mode = 0;
-    rc = exec_open(&s->prog, s->path, NULL);
+    rc = exec_open(&s->prog, s->path, NULL, s->mm);
     if (rc != 0) {
         return rc;
     }
@@ -1364,7 +1409,7 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
     if (canonicalize_abs(s->layout.interp) < 0) {
         return -ENOENT;
     }
-    rc = exec_open(&s->prog, s->layout.interp, NULL);
+    rc = exec_open(&s->prog, s->layout.interp, NULL, NULL);
     if (rc != 0) {
         return rc;
     }
@@ -1392,7 +1437,7 @@ static int32_t exec_interp(struct exec_state *s, uint32_t *base)
 }
 
 /**
- * Build the new image in an address space of its own while the caller's
+ * Build the new image in `s`'s address space of its own while the caller's
  * still runs, as Linux's `load_elf_binary` builds one: the program, at
  * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
  * PT_INTERP names; the regions; and the stack, with the pointers and the
@@ -1418,10 +1463,6 @@ static int32_t exec_build(struct exec_state *s)
     }
     if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
         bias = ELF_ET_DYN_BASE - s->layout.lo;
-    }
-    s->mm = mm_new();
-    if (s->mm == NULL) {
-        return -ENOMEM;
     }
     rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, &s->img);
     if (rc != 0) {
@@ -1661,14 +1702,16 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
 }
 
 /**
- * Replace the canonical path `path`, of VFS_PATH_MAX bytes, by the target
- * of the /proc/<pid>/exe link it names, if it names one: Chromium runs its
- * children by executing /proc/self/exe, and the program they run must have
- * its own path, not the link's, for its /proc/self/exe to name it in turn.
- * A process chroot put in a directory has no /proc, and its path is left for
- * the resolver to refuse. 0, or the link's error.
+ * Replace the canonical path `path`, of VFS_PATH_MAX bytes, by the path of
+ * the program the /proc/<pid>/exe link it names reaches, if it names one,
+ * once `exec_open` has gone on from the link to that program's file: Chromium
+ * runs its children by executing /proc/self/exe, and the program they run is
+ * named by that path, not the link's, in its comm, and in its own link where
+ * its file has no present path to give. A process chroot put in a directory
+ * has no /proc, and its path was left for the resolver to refuse. 0, or the
+ * link's error.
  */
-static int32_t exec_follow_exe(char *path)
+static int32_t exec_link_name(char *path)
 {
     struct vpath vp;
     int pid;
@@ -1678,7 +1721,7 @@ static int32_t exec_follow_exe(char *path)
         return 0;
     }
     pid = procfs_resolve_id(&vp);
-    n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, path, VFS_PATH_MAX - 1);
+    n = pid < 0 ? -ENOENT : procfs_exe_name(pid, path, VFS_PATH_MAX - 1);
     if (n < 0) {
         return n;
     }
@@ -1707,10 +1750,11 @@ int32_t proc_files_unshare(void)
  * `s`; the body of `sys_execve`.
  *
  * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success.
- * Resolves the path and checks the execute right, copies the path, argv and
- * envp onto the new stack's pages, resolves a `#!` script to its
- * interpreter, builds the new image, with the dynamic linker it names, in
- * an address space of its own, sets aside the storage of a descriptor table
+ * Makes the new image's address space, resolves the path and checks the
+ * execute right, keeping the program's file with the address space, copies
+ * the path, argv and envp onto the new stack's pages, resolves a `#!` script
+ * to its interpreter, builds the new image, with the dynamic linker it
+ * names, in that address space, sets aside the storage of a descriptor table
  * of the caller's own, ends the process's other threads, and only then
  * commits, so every refusal and every failure of the load returns to the
  * caller with its image and its descriptor table intact.
@@ -1727,11 +1771,14 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     if (rc < 0) {
         return rc;
     }
-    rc = exec_follow_exe(s->path);
-    if (rc < 0) {
-        return rc;
+    s->mm = mm_new();
+    if (s->mm == NULL) {
+        return -ENOMEM;
     }
-    rc = exec_open(&s->prog, s->path, &s->id);
+    rc = exec_open(&s->prog, s->path, &s->id, s->mm);
+    if (rc == 0) {
+        rc = exec_link_name(s->path);
+    }
     if (rc == 0) {
         rc = exec_copy_args(s, user_path, (char *const __user *)params->ecx,
                             (char *const __user *)params->edx, &s->argc, &s->envc);

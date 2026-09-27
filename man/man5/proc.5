@@ -462,10 +462,11 @@ A followed link reports the descriptor's attributes.
 A descriptor that is closed has no link, also while its release waits
 for a call of another thread that is using it.
 .It Pa /proc/PID/exe
-A symbolic link to the program the process runs, by the path its
+A symbolic link to the program the process runs: the file its
 .Xr execve 2
-found it at.
-A path through it reaches the file at that path, so an
+found, which the process keeps.
+A path through it reaches that file itself, as on Linux, wherever a
+rename has put it and after its name is removed, so an
 .Xr open 2 ,
 a
 .Xr stat 2
@@ -473,14 +474,19 @@ or an
 .Xr execve 2
 of
 .Pa /proc/self/exe
-is one of the program itself, as on Linux, where a program runs itself
-again this way, until the program is renamed or removed; after that the
-path reaches nothing, or a file put there since.
-On Linux the link is to the program's file itself: a path through it
-reaches that file wherever it is, and reading the link gives the file's
-present path.
-Reading the link needs a thread of the process, a privileged caller,
-one whose effective user ID is 0 and which kept its capabilities
+is one of the program itself, which is how a program runs itself again.
+Reading the link gives the file's present path on the KRFFS root, and
+for a file there whose name has been removed the path
+.Xr execve 2
+found it at followed by
+.Ql " (deleted)" ,
+as Linux names one.
+On another file system it gives the path
+.Xr execve 2
+found it at, where Linux gives the file's present path.
+Reading the link, or going through it, needs a thread of the process, a
+privileged caller, one whose effective user ID is 0 and which kept its
+capabilities
 .Pq see Xr capget 2 ,
 or the process's real user ID and a process that is not privileged.
 .It Pa /proc/PID/task
@@ -567,16 +573,17 @@ Opening it needs a thread of the process, a privileged caller, or the
 process's real user ID and a dumpable process that is not privileged;
 Linux compares the caller's file-system IDs with every user and group ID
 of the process.
-The descriptor reaches the address space the open found: once the
-process runs in another, after an
-.Xr execve 2 ,
-or ends, a read or a write returns 0, so a program the process executes
+The descriptor reaches the address space the open found while anything
+runs in it, a thread of the process or another process that shares it
+with
+.Dv CLONE_VM ,
+as on Linux: once the last of them has run another program with
+.Xr execve 2
+or ended, a read or a write returns 0, so a program the process executes
 later, a set-user-ID one among them, is not reached through a descriptor
 opened before.
-Linux keeps the old address space for the descriptor while another
-process that shares it with
-.Dv CLONE_VM
-runs in it.
+The descriptor keeps none of the memory, which goes when the last of them
+does.
 .It Pa /proc/self
 The calling thread's process.
 .Pa /proc

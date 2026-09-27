@@ -265,8 +265,9 @@ void fd_ofd_unref(struct open_file *ofd);
 
 /**
  * A new open-file description with one reference and no descriptor pointing
- * at it, for a call that changes a file by path with the rules of an open
- * one: truncate(2). NULL when the heap has no room; `fd_ofd_unref` frees it.
+ * at it: for a call that changes a file by path with the rules of an open
+ * one, truncate(2), and for the program's file an address space keeps
+ * (`fs_exe_open`). NULL when the heap has no room; `fd_ofd_unref` frees it.
  */
 struct open_file *fd_ofd_new(void);
 

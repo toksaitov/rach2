@@ -24,6 +24,10 @@
  * A fault can also stand for a sleep of some ticks, which a wait's deadline,
  * fixed when the call begins, must count. The model's wait ends at once,
  * noting the tick it was armed for.
+ *
+ * A thread's end clears its CLONE_CHILD_CLEARTID word only when another
+ * thread uses its address space, which a hold on the record, as a
+ * /proc/PID/mem descriptor has, does not count as.
  */
 #include "proc/futex.c"
 
@@ -276,6 +280,39 @@ static void pending_released(void)
     }
 }
 
+/**
+ * A thread's end clears the word CLONE_CHILD_CLEARTID named, and wakes its
+ * waiter, only when another thread runs in the address space: by the count
+ * of its users, not of the holds on its record, which a /proc/PID/mem
+ * descriptor adds to.
+ */
+static void child_tid_cleared(void)
+{
+    struct mm space;
+
+    k_memset(&space, 0, sizeof(space));
+    space.users = 1;
+    space.holds = 2;
+    self.mm = &space;
+    self.clear_child_tid = 700;
+    word_set(700, 42u);
+    waiter_file(700);
+    proc_thread_gone(&self);
+    CHECK(word_at(700) == 42u && wakes == 0 && self.clear_child_tid == 0,
+          "a thread alone in an address space a descriptor holds leaves its word");
+    waiter_unfile();
+    space.users = 2;
+    self.clear_child_tid = 700;
+    waiter_file(700);
+    proc_thread_gone(&self);
+    CHECK(word_at(700) == 0 && waiter.woken && wakes == 1,
+          "a thread that shares its address space clears the word and wakes the waiter");
+    if (!waiter.woken) {
+        waiter_unfile();
+    }
+    self.mm = NULL;
+}
+
 /** Wait on the word at 600, which holds 7, for `sec` s and `nsec` ns from
  * tick `now`, while bringing the word's page in takes `fault` ticks. */
 static int32_t timed_wait(uint32_t now, int32_t sec, int32_t nsec, uint32_t fault)
@@ -371,12 +408,13 @@ int main(void)
     robust_head_read();
     owner_released();
     pending_released();
+    child_tid_cleared();
     deadline_fixed();
     restarts();
     if (failures) {
         return 1;
     }
-    printf("futex-test: pass: the robust head, the robust release, the deadline and the "
-           "restarts\n");
+    printf("futex-test: pass: the robust head, the robust release, the child's word, the "
+           "deadline and the restarts\n");
     return 0;
 }
