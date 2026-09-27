@@ -209,9 +209,10 @@ static int count_tasks(void)
 /**
  * The paths of thread `t` under this process's task directory: its
  * directory lists no task directory of its own, a descriptor on it keeps
- * its path, for its link and for a name relative to it, the thread's
- * descriptor links are there six components deep, and a task path under a
- * process the thread is not of, or under none, names nothing.
+ * its path, for its link and for a name relative to it, whose stat is the
+ * thread's own, the thread's descriptor links are there six components
+ * deep, and a task path under another process, a child made for the row,
+ * or under none, names nothing.
  */
 static int task_paths(pid_t t)
 {
@@ -219,7 +220,8 @@ static int task_paths(pid_t t)
     struct dirent *e;
     struct stat st;
     DIR *d;
-    int dirfd, fd, task = 0;
+    int dirfd, fd, err, task = 0;
+    pid_t other;
     long n;
 
     snprintf(dir, sizeof(dir), "/proc/%d/task/%d", (int)getpid(), (int)t);
@@ -242,16 +244,33 @@ static int task_paths(pid_t t)
     }
     fd = openat(dirfd, "stat", O_RDONLY);
     close(dirfd);
-    if (fd < 0) {
+    n = fd < 0 ? -1 : read(fd, link, sizeof(link) - 1);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n <= 0 || (link[n] = '\0', strtol(link, NULL, 10) != (long)t)) {
         return fail("a name relative to a thread's directory");
     }
-    close(fd);
     snprintf(path, sizeof(path), "%s/fd/0", dir);
     if (lstat(path, &st) != 0 || !S_ISLNK(st.st_mode)) {
         return fail("a thread's descriptor link");
     }
-    snprintf(path, sizeof(path), "/proc/1/task/%d/status", (int)t);
-    if (open(path, O_RDONLY) != -1 || errno != ENOENT) {
+    other = fork();
+    if (other == 0) {
+        pause();
+        _exit(0);
+    }
+    snprintf(path, sizeof(path), "/proc/%d/task/%d/status", (int)other, (int)t);
+    fd = open(path, O_RDONLY);
+    err = errno;
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (other > 0) {
+        kill(other, SIGKILL);
+        waitpid(other, NULL, 0);
+    }
+    if (other < 0 || fd != -1 || err != ENOENT) {
         return fail("a thread under another process's task directory");
     }
     snprintf(path, sizeof(path), "/proc/999999/task/%d/status", (int)t);
@@ -287,38 +306,60 @@ static long stat_ticks(const char *path)
     return (long)(u + s);
 }
 
-/**
- * A thread's stat under the task directory has the thread's own time: this
- * thread spins until its own counts five ticks more, bounded by the ticks
- * since boot, while thread `t` sleeps and gains none of them, and the
- * process's stat has at least as many as this thread's.
- */
-static int thread_times(pid_t t)
+/* The spinning thread's own time in ticks, before and after it spun. */
+static long spun_from, spun_to;
+
+/** Spin until this thread's own time, read from its stat under the task
+ * directory, counts five ticks more, bounded by the ticks since boot. */
+static void *spin_main(void *arg)
 {
-    char own_stat[64], other[64];
+    char own_stat[64];
     struct tms tms;
-    long start, now, rested, deadline;
+    long deadline;
     volatile unsigned long spin = 0;
     int i;
 
+    (void)arg;
     snprintf(own_stat, sizeof(own_stat), "/proc/self/task/%d/stat", (int)tid());
-    snprintf(other, sizeof(other), "/proc/self/task/%d/stat", (int)t);
-    start = stat_ticks(own_stat);
-    rested = stat_ticks(other);
+    spun_from = stat_ticks(own_stat);
     deadline = (long)times(&tms) + 1000;
     do {
         for (i = 0; i < 1000000; i++) {
             spin++;
         }
-        now = stat_ticks(own_stat);
-    } while (start >= 0 && now >= 0 && now < start + 5 && (long)times(&tms) < deadline);
-    if (start < 0 || now < start + 5) {
+        spun_to = stat_ticks(own_stat);
+    } while (spun_from >= 0 && spun_to >= 0 && spun_to < spun_from + 5 &&
+             (long)times(&tms) < deadline);
+    return NULL;
+}
+
+/**
+ * A thread's stat under the task directory has the thread's own time: a
+ * thread made for the row spins until its own counts five ticks more, while
+ * thread `t` sleeps and gains none of them, and the process's stat has the
+ * ticks the spinning thread spun, though it has ended by then, beside this
+ * thread's own.
+ */
+static int thread_times(pid_t t)
+{
+    char other[64], first[64];
+    pthread_t s;
+    long rested, own;
+
+    snprintf(other, sizeof(other), "/proc/self/task/%d/stat", (int)t);
+    snprintf(first, sizeof(first), "/proc/self/task/%d/stat", (int)tid());
+    rested = stat_ticks(other);
+    if (pthread_create(&s, NULL, spin_main, NULL) != 0 || pthread_join(s, NULL) != 0) {
+        return fail("the thread that spins");
+    }
+    if (spun_from < 0 || spun_to < spun_from + 5) {
         return fail("a busy thread's own time");
     }
-    if (rested < 0 || stat_ticks(other) - rested >= now - start) {
+    if (rested < 0 || stat_ticks(other) - rested >= spun_to - spun_from) {
         return fail("a sleeping thread's time in its task stat");
     }
-    if (stat_ticks("/proc/self/stat") < now) {
+    own = stat_ticks(first);
+    if (own < 0 || stat_ticks("/proc/self/stat") < own + (spun_to - spun_from)) {
         return fail("the process's time in its stat");
     }
     return 0;
