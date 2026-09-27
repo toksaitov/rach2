@@ -264,7 +264,7 @@ static void proc_end_others(void)
 
         for (p = proc_list; p; p = next) {
             next = p->next;
-            if (p == current_proc || p == proc_idle) {
+            if (p->tg == current_proc->tg || p == proc_idle) {
                 continue;
             }
             if (p->state == PROC_ZOMBIE) {
