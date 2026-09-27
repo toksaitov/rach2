@@ -170,7 +170,9 @@ is null.
 A signal interrupted the wait.
 .It Er EINVAL
 The socket is a TCP datagram socket, or a stream or sequenced-packet
-socket that is not listening, or
+socket that is not listening; an
+.Dv AF_UNIX
+listener shut down for reading has no connection queued; or
 .Fa flags
 has a bit other than
 .Dv SOCK_CLOEXEC

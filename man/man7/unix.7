@@ -87,6 +87,11 @@ once.
 .Xr shutdown 2
 ends the input or output of one end, and the matching direction of the
 other.
+A listener shut down for reading refuses new connections with
+.Er ECONNREFUSED ,
+and an accept there that finds none queued fails with
+.Er EINVAL ,
+as in Linux.
 .Ss Data
 A stream is sent in pieces of at most 64 KiB as the receiver's queue has
 room, at most 212992 bytes; a read returns what is queued, across the

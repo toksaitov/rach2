@@ -939,11 +939,14 @@ int32_t unix_listen(fd_entry_t *e, int backlog)
     return 0;
 }
 
+/* Whether a connect waiting for room on the listener `l` can stop: there
+ * is room, or `l` takes connections no more. */
 static int listener_has_room(void *arg)
 {
     const struct unix_sock *l = (const struct unix_sock *)arg;
 
-    return l->closed || l->state != US_LISTENING || (int)l->acc_len <= l->backlog;
+    return l->closed || l->state != US_LISTENING || (l->shut & SHUT_RCV) ||
+           (int)l->acc_len <= l->backlog;
 }
 
 static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrlen)
@@ -990,7 +993,8 @@ static int32_t connect_dgram(struct unix_sock *s, uint32_t addr, uint32_t addrle
 
 /*
  * Why the stream or sequenced-packet socket `s` cannot connect to `target`
- * now, or 0 when it can.
+ * now, or 0 when it can. A listener shut down for reading refuses, as in
+ * Linux.
  */
 static int32_t connect_refusal(const struct unix_sock *s, const struct unix_sock *target)
 {
@@ -1000,7 +1004,7 @@ static int32_t connect_refusal(const struct unix_sock *s, const struct unix_sock
     if (target->type != s->type) {
         return -EPROTOTYPE;
     }
-    if (target->state != US_LISTENING) {
+    if (target->state != US_LISTENING || (target->shut & SHUT_RCV)) {
         return -ECONNREFUSED;
     }
     return 0;
@@ -1089,11 +1093,13 @@ int32_t unix_connect(fd_entry_t *e, uint32_t addr, uint32_t addrlen)
     return 0;
 }
 
+/* Whether an accept waiting on the listener `l` can stop: a connection is
+ * queued, or `l` takes connections no more. */
 static int has_connection(void *arg)
 {
     const struct unix_sock *l = (const struct unix_sock *)arg;
 
-    return l->acc_head != NULL || l->state != US_LISTENING;
+    return l->acc_head != NULL || l->state != US_LISTENING || (l->shut & SHUT_RCV);
 }
 
 /**
@@ -1102,7 +1108,9 @@ static int has_connection(void *arg)
  * after the peer's name is copied out: a copy that fails frees the slot and
  * ends the connection as a close of it would, and no other thread can have
  * used the socket or freed the peer whose name is copied. An address with
- * no length pointer is such a failure, EFAULT, as in Linux.
+ * no length pointer is such a failure, EFAULT, as in Linux. A listener shut
+ * down for reading gives up the connections queued before and then fails
+ * with EINVAL, as Linux's does.
  */
 int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flags)
 {
@@ -1119,7 +1127,7 @@ int32_t unix_accept(fd_entry_t *e, uint32_t addr, uint32_t addrlen_ptr, int flag
         return -EINVAL;
     }
     while (!s->acc_head) {
-        if (s->state != US_LISTENING) {
+        if (s->state != US_LISTENING || (s->shut & SHUT_RCV)) {
             return -EINVAL;
         }
         if (nonblocking(e, 0)) {

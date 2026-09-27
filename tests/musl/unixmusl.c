@@ -18,7 +18,9 @@
  * reports the socket readable once a byte arrives. A descriptor sent with
  * SCM_RIGHTS reaches a child, which writes through it. SO_PEERCRED reports the
  * peer, and SO_PASSCRED brings the sender's credentials. An accept given an
- * address and no length pointer fails with EFAULT.
+ * address and no length pointer fails with EFAULT. A listener shut down for
+ * reading gives up the connection queued before, then fails an accept with
+ * EINVAL and refuses a connect.
  *
  * Prints "UNIXMUSL OK" on success and "UNIXMUSL FAIL (detail)" otherwise.
  */
@@ -393,16 +395,21 @@ static int named(void)
     return 0;
 }
 
+/* The address of the abstract name `name`, and its length. */
+static socklen_t abstract_addr(struct sockaddr_un *a, const char *name)
+{
+    memset(a, 0, sizeof(*a));
+    a->sun_family = AF_UNIX;
+    memcpy(a->sun_path + 1, name, strlen(name));
+    return (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name));
+}
+
 /* A listener on the abstract name `name`, and a client connected to it. */
 static int abstract_pair(const char *name, int *l, int *c)
 {
     struct sockaddr_un a;
-    socklen_t alen;
+    socklen_t alen = abstract_addr(&a, name);
 
-    memset(&a, 0, sizeof(a));
-    a.sun_family = AF_UNIX;
-    memcpy(a.sun_path + 1, name, strlen(name));
-    alen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(name));
     *l = socket(AF_UNIX, SOCK_STREAM, 0);
     *c = socket(AF_UNIX, SOCK_STREAM, 0);
     if (*l < 0 || *c < 0 || bind(*l, (struct sockaddr *)&a, alen) != 0 || listen(*l, 4) != 0 ||
@@ -415,7 +422,8 @@ static int abstract_pair(const char *name, int *l, int *c)
 static int listening(void)
 {
     struct sockaddr_un got;
-    int l, c;
+    socklen_t glen;
+    int l, c, s, late;
 
     if (abstract_pair("unixmusl.acc", &l, &c) != 0) {
         return fail("a listener for accept");
@@ -423,6 +431,26 @@ static int listening(void)
     if (accept(l, (struct sockaddr *)&got, NULL) != -1 || errno != EFAULT) {
         return fail("an accept with an address and no length was not EFAULT");
     }
+    close(c);
+    close(l);
+
+    if (abstract_pair("unixmusl.shut", &l, &c) != 0 || shutdown(l, SHUT_RD) != 0) {
+        return fail("a listener shut down for reading");
+    }
+    s = accept(l, NULL, NULL);
+    if (s < 0) {
+        return fail("the connection queued before SHUT_RD was not accepted");
+    }
+    if (accept(l, NULL, NULL) != -1 || errno != EINVAL) {
+        return fail("an accept with none queued after SHUT_RD was not EINVAL");
+    }
+    glen = abstract_addr(&got, "unixmusl.shut");
+    late = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (connect(late, (struct sockaddr *)&got, glen) != -1 || errno != ECONNREFUSED) {
+        return fail("a connect to a listener shut down for reading was not ECONNREFUSED");
+    }
+    close(late);
+    close(s);
     close(c);
     close(l);
     return 0;
