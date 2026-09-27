@@ -2,17 +2,22 @@
  * Run the production unmount path with a missing ancestor and counted releases.
  * The generated include contains whole functions from vfs.c. Filesystem and
  * scheduler substitutes check ownership and writes; the USB rows test real I/O.
+ * A caller with a root of its own names the target from that root.
  */
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define VFS_ACTIVE     2
-#define VFS_UNMOUNTING 3
-#define BLOCK_GONE     1
-#define KLOG_INFO      0
-#define klog(...)      ((void)0)
+#define VFS_ACTIVE           2
+#define VFS_UNMOUNTING       3
+#define VFS_COVERED_PATH_MAX 64
+#define BLOCK_GONE           1
+#define KLOG_INFO            0
+#define klog(...)            ((void)0)
+#define k_strlen             strlen
+#define k_memcpy             memcpy
 /* This model's permanent entries, the root and two others; the kernel has
  * more, and the rows need the three slots after them for mounts. */
 #define VFS_PERMANENT  3
@@ -43,11 +48,23 @@ struct vfs_ref {
     struct vfs_mount *mnt;
     void *node;
 };
+struct fs_struct {
+    struct vfs_mount *root_mnt;
+    void *root_node;
+};
+struct process {
+    struct fs_struct *fs;
+};
 static struct vfs_mount records[6], *mounts[6];
 static struct block_device disks[6];
 static int mount_slots = 6;
 static int lookup_error, resolve_calls, syncs, prepares, flushes, invalidates;
 static int puts_count, releases, claims, locks, waits, sync_error, failures;
+static struct fs_struct caller_fs;
+static struct process caller = {&caller_fs};
+static struct process *current_proc = &caller;
+static const char *root_path; /* the path of the caller's root, when it has one */
+static int root_holds, ref_releases;
 
 static unsigned block_flags(struct block_device *d)
 {
@@ -97,6 +114,26 @@ static int resolve_path(int a, const char *path, int b, struct vfs_ref *ref, int
 static void vfs_ref_release(struct vfs_ref *r)
 {
     (void)r;
+    ref_releases++;
+}
+static int vfs_enter(struct vfs_mount *m)
+{
+    (void)m;
+    return 0;
+}
+static void vfs_ref_hold(const struct vfs_ref *r)
+{
+    (void)r;
+    root_holds++;
+}
+/** The caller's root is the one node this path is asked of. */
+static int vfs_node_path(struct vfs_mount *m, void *node, char *out, uint32_t cap)
+{
+    (void)m;
+    if (node != caller_fs.root_node || strlen(root_path) + 1 > cap)
+        abort();
+    strcpy(out, root_path);
+    return 0;
 }
 static void vfs_ref_put(struct vfs_ref *r)
 {
@@ -187,6 +224,9 @@ static void setup(void)
     lookup_error = -EIO;
     resolve_calls = syncs = prepares = flushes = invalidates = 0;
     puts_count = releases = claims = locks = waits = sync_error = 0;
+    memset(&caller_fs, 0, sizeof(caller_fs));
+    root_path = NULL;
+    root_holds = ref_releases = 0;
 }
 
 static void check(int condition, const char *name)
@@ -241,8 +281,20 @@ int main(void)
     records[4].refs = 1;
     check(vfs_do_umount("/mnt/a/b/c") == 0 && !records[4].refs,
           "removed grandparent permits deepest mount to unmount");
+    setup();
+    caller_fs.root_mnt = &records[0];
+    caller_fs.root_node = &caller_fs;
+    root_path = "/mnt";
+    check(vfs_do_umount("/a/b") == 0 && !records[4].state && root_holds == 1 && ref_releases == 1,
+          "a target named from the caller's root is found below it");
+    setup();
+    caller_fs.root_mnt = &records[0];
+    caller_fs.root_node = &caller_fs;
+    root_path = "/elsewhere";
+    check(vfs_do_umount("/a/b") == -EIO && records[4].state == VFS_ACTIVE,
+          "a target outside the caller's root matches nothing");
     if (failures)
         return 1;
-    puts("vfs-unmount: result: 13 checks passed");
+    puts("vfs-unmount: result: 15 checks passed");
     return 0;
 }

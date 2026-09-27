@@ -2404,24 +2404,75 @@ static void unmount_abandoned(struct vfs_mount *m)
 }
 
 /**
+ * `target`, a path from the calling process's root, as the path from the
+ * root of the mount table that a mount records, into `out` of
+ * VFS_COVERED_PATH_MAX bytes: the root's own path goes in front of it, so
+ * the answer names a place at or below the caller's root. The root is held
+ * while its path is rebuilt, since a thread that shares it may chroot
+ * meanwhile. Returns 0; -EBUSY for a root on a mount being unmounted; the
+ * error `vfs_node_path` gives; or -ENAMETOOLONG for a path longer than a
+ * recorded one can be.
+ */
+static int unmount_target(const char *target, char *out)
+{
+    uint32_t tl = (uint32_t)k_strlen(target);
+    struct vfs_ref root;
+    struct vfs_mount *mnt;
+    uint32_t rl = 0;
+    int rc;
+
+    if (current_proc && current_proc->fs->root_mnt) {
+        mnt = current_proc->fs->root_mnt;
+        root.mnt = mnt;
+        root.node = current_proc->fs->root_node;
+        if (vfs_enter(mnt) != 0) {
+            return -EBUSY;
+        }
+        vfs_ref_hold(&root);
+        rc = vfs_node_path(mnt, root.node, out, VFS_COVERED_PATH_MAX);
+        vfs_ref_release(&root);
+        if (rc != 0) {
+            return rc;
+        }
+        rl = (uint32_t)k_strlen(out);
+        if (tl == 1) {
+            return 0;
+        }
+    }
+    if (rl + tl + 1 > VFS_COVERED_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(out + rl, target, tl + 1);
+    return 0;
+}
+
+/**
  * Find a mount by its recorded target when a removed ancestor blocks lookup.
  *
  * Removal must not make a child mount's reference on its parent permanent.
  * The recorded spelling is the recovery name; no lookup on the missing
- * medium is needed. Only a unique active mount below a gone ancestor is
- * eligible. Ordinary lookup errors and mounts on present ancestors retain
- * their usual pathname rules.
+ * medium is needed. The caller names the target from its own root, and the
+ * name is put in the mount table's terms before it is compared
+ * (`unmount_target`), so only a mount at or below that root can match; a
+ * recorded path has no `.` or `..`, so a target that climbs matches none.
+ * Only a unique active mount below a gone ancestor is eligible. Ordinary
+ * lookup errors and mounts on present ancestors retain their usual pathname
+ * rules.
  */
 static struct vfs_mount *unmount_below_gone(const char *target)
 {
+    char want[VFS_COVERED_PATH_MAX];
     struct vfs_mount *found = NULL;
     struct vfs_mount *m;
     struct vfs_mount *parent;
     int i;
 
+    if (unmount_target(target, want) != 0) {
+        return NULL;
+    }
     for (i = VFS_PERMANENT; i < mount_slots; i++) {
         m = mounts[i];
-        if (!m || m->state != VFS_ACTIVE || !streq(m->covered_path, target)) {
+        if (!m || m->state != VFS_ACTIVE || !streq(m->covered_path, want)) {
             continue;
         }
         for (parent = m->parent; parent; parent = parent->parent) {

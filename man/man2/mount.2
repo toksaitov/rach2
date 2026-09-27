@@ -238,6 +238,10 @@ A mount whose device has been removed can be unmounted once its
 references are released, without writes to the absent device.
 If a removed ancestor prevents path lookup, the recorded target can
 identify a unique active child mount below it.
+A caller whose root
+.Xr chroot 2
+moved names the target from that root, and only a mount below the root
+matches.
 Children must be unmounted before their parents.
 .Ss System call interface
 The i386 system call number for

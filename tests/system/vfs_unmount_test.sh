@@ -15,7 +15,7 @@ trap 'exit 143' TERM
 run_phase()
 {
     awk '
-        /^(static int streq|int vfs_mount_gone|static int mount_permanent|static void unmount_abandoned|static struct vfs_mount \*unmount_below_gone|int vfs_do_umount)\(/ {copy = 1}
+        /^(static int streq|int vfs_mount_gone|static int mount_permanent|static void unmount_abandoned|static int unmount_target|static struct vfs_mount \*unmount_below_gone|int vfs_do_umount)\(/ {copy = 1}
         copy {print}
         copy && /^}/ {copy = 0}
     ' "$work/vfs.c" > "$work/unmount.inc"
@@ -34,6 +34,14 @@ if [ "$#" -ne 0 ]; then
     [ "$status" -eq 1 ]
     grep -q 'failed: live child below removed parent unmounts' "$work/mutated.log"
     echo 'vfs-unmount: result: missing recovery lookup detected'
+    [ "$(grep -c 'streq(m->covered_path, want)' "$work/saved.c")" -eq 1 ]
+    sed 's/streq(m->covered_path, want)/streq(m->covered_path, target)/' "$work/saved.c" \
+        > "$work/vfs.c"
+    status=0
+    run_phase unrooted || status=$?
+    [ "$status" -eq 1 ]
+    grep -q "failed: a target named from the caller's root is found below it" "$work/unrooted.log"
+    echo 'vfs-unmount: result: a target compared without the caller root detected'
     cp "$work/saved.c" "$work/vfs.c"
     run_phase restored
     cat "$work/restored.log"
