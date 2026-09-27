@@ -3,11 +3,12 @@
  *
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
- * The system call exports are made private before the source is included, so
- * at -O1, which the host suite and the scripts that build this test use, the
- * native compiler removes every path but the conversions and the comparison
- * this test calls, and nothing else of the kernel is linked. The wait itself,
- * which asks `deadline_reached` at each wake, is not compiled.
+ * The system call exports and the poll core's other exports are made private
+ * before the source is included, so at -O1, which the host suite and the
+ * scripts that build this test use, the native compiler removes every path
+ * but the conversions and the comparison this test calls, and nothing else of
+ * the kernel is linked. The wait itself, which asks `deadline_reached` at each
+ * wake, is not compiled.
  *
  * The tick in progress has partly passed when the wait starts, so a timeout
  * of three ticks from tick 1000 ends at 1004: `poll`'s milliseconds, which
@@ -27,6 +28,13 @@ static int32_t sys_ppoll(struct isr_params *params);
 static int32_t sys__newselect(struct isr_params *params);
 static int32_t sys_select(struct isr_params *params);
 static int32_t sys_pselect6(struct isr_params *params);
+struct fd_entry;
+struct wait_queue;
+static short poll_fd(struct fd_entry *e, short events, struct wait_queue **wq);
+static int poll_wait(int (*scan)(void *ctx, struct wait_queue **wqs), void *ctx, uint32_t n,
+                     int has_deadline, uint32_t deadline);
+static int32_t poll_mask_set(uint32_t umask, uint32_t size);
+static int32_t poll_mask_done(int32_t ret);
 #include "io/poll.c"
 
 extern int printf(const char *format, ...);
