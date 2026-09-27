@@ -221,7 +221,8 @@ a socket and a terminal return
 A nonblocking input would have to wait.
 .It Er EBADF
 The descriptor is invalid, is not open for reading, has no read
-operation, or refers to a directory.
+operation, refers to a directory, or was opened with
+.Dv O_PATH .
 .It Er ECONNREFUSED
 A stream connection was refused.
 .It Er ECONNRESET

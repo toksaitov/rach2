@@ -409,7 +409,9 @@ int vfs_sync_all(void);
  * A description opened on `mnt`: the mount's reference count goes up; the
  * node's hold is the one the resolution already took, moved rather than
  * retaken. `vfs_desc_close` is the last close: release the handle, put the
- * node, drop the reference.
+ * node, drop the reference. A description opened with O_PATH has a NULL
+ * handle, since the type's `open` never ran, and its `release` does not run
+ * either.
  */
 void vfs_desc_open(struct vfs_mount *mnt);
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle);

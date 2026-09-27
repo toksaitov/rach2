@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt POLL 2
 .Os
 .Sh NAME
@@ -35,7 +35,9 @@ specifies the requested conditions;
 receives the conditions found.
 A negative descriptor is ignored and receives zero in
 .Va revents .
-A closed or out-of-range nonnegative descriptor receives
+A closed or out-of-range nonnegative descriptor, or one opened with
+.Dv O_PATH ,
+receives
 .Dv POLLNVAL .
 .Bl -tag -width POLLNVAL
 .It Dv POLLIN
@@ -50,7 +52,8 @@ An error condition exists.
 .It Dv POLLHUP
 A peer has closed or hung up.
 .It Dv POLLNVAL
-The descriptor is invalid.
+The descriptor is invalid or was opened with
+.Dv O_PATH .
 .El
 .Pp
 .Dv POLLERR ,

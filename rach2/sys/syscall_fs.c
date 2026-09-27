@@ -171,10 +171,11 @@ void fd_release_backing(fd_entry_t *e)
         krffs_remove_reserved_node(krffs_fs, e->node);
         e->node = NULL;
     }
-    /* A synthetic directory fd's pooled cookie is freed when its last
-     * descriptor closes (dup/fork share it via the OFD refcount, like an ops
-     * backing). */
-    if (e->type == FD_TYPE_SYNTH_DIR && e->priv && e->ofd && e->ofd->refcount == 1) {
+    /* A synthetic directory fd's pooled cookie, or an O_PATH leaf's node, is
+     * freed when its last descriptor closes (dup/fork share it via the OFD
+     * refcount, like an ops backing). */
+    if ((e->type == FD_TYPE_SYNTH_DIR || e->type == FD_TYPE_SYNTH_PATH) && e->priv && e->ofd &&
+        e->ofd->refcount == 1) {
         kfree(e->priv);
         e->priv = NULL;
     }
@@ -416,10 +417,10 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 /**
  * Truncate an open file to `length` (ftruncate(2)).
  *
- * The descriptor must be a writable file on a mounted file system. A
- * successful shrink or extend clears set-uid, and set-gid where group execute
- * is set, for an unprivileged caller, like a write. `SYS_FTRUNCATE` takes
- * the length in ECX, and
+ * The descriptor must be a writable file on a mounted file system, and an
+ * O_PATH one is -EBADF, as on Linux. A successful shrink or extend clears
+ * set-uid, and set-gid where group execute is set, for an unprivileged
+ * caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
  * `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
  * high halves; the file system answers a length past what it can hold.
  */
@@ -432,7 +433,7 @@ static int32_t truncate_fd(int fd, uint64_t length)
         return -ESRCH;
     }
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry || entry->type != FD_TYPE_FILE) {
+    if (!entry || entry->type != FD_TYPE_FILE || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
     if (!(entry->flags & FD_FLAG_WRITE)) {
@@ -544,6 +545,8 @@ int32_t sys_writev(isr_params_t *params)
 #define O_NOFOLLOW 0400000 /* a symbolic link at the end answers -ELOOP */
 
 #define O_CLOEXEC 02000000 /* close-on-exec: the fd is dropped across execve */
+
+#define O_PATH 010000000 /* a descriptor that names a file and opens nothing */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
 #define AT_FDCWD (-100)
@@ -908,6 +911,8 @@ static const char *path_name(const char *abs)
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
+
+static int32_t open_path(const char *name, int flags);
 
 /** Non-zero when the caller has appropriate privilege (effective uid 0). */
 int cred_privileged(void)
@@ -1700,7 +1705,8 @@ static int32_t open_install(struct vfs_ref *ref, const char *name, int flags)
  * O_CREAT|O_EXCL, which answers EEXIST for the link. On a type that sets
  * `ns_serialised`, resolution through open-handle registration holds the
  * final mount's namespace lock, which is what keeps a writer from moving the
- * file between the lookup and the registration.
+ * file between the lookup and the registration. O_PATH goes to `open_path`,
+ * which names the file and opens nothing.
  */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
@@ -1710,6 +1716,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     int followed = 0;
     int rc;
 
+    if (flags & O_PATH) {
+        return open_path(name, flags);
+    }
     if (name_is(name, "fb")) {
         return open_framebuffer();
     }
@@ -1970,7 +1979,8 @@ int32_t sys_close(isr_params_t *params)
 /**
  * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
  *
- * EBX = fd. Validates the descriptor (any open fd; the type is not checked).
+ * EBX = fd. Validates the descriptor (any open fd but an O_PATH one; the type
+ * is not checked).
  * A descriptor on a mounted volume goes to the type's fsync through
  * `vfs_fsync`; any other writes back every dirty page of the disk-backed
  * window via `pc_sync`. That flush is whole-cache, not per-file, a safe
@@ -1991,7 +2001,7 @@ int32_t sys_fsync(isr_params_t *params)
     {
         fd_entry_t *e = fd_get(&current_proc->fds, fd);
 
-        if (!e) {
+        if (!e || (e->flags & FD_FLAG_PATH)) {
             return -EBADF;
         }
         if (e->ofd && e->ofd->vmnt) {
@@ -2109,7 +2119,7 @@ int32_t sys_lseek(isr_params_t *params)
     }
 
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
     if (entry->type == FD_TYPE_PIPE) {
@@ -2291,7 +2301,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
 
@@ -3429,6 +3439,171 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
 }
 
 /**
+ * An O_PATH descriptor on the synthetic node `vp`, whose canonical path is
+ * `name`, leading '/' stripped. A directory is FD_TYPE_SYNTH_DIR, as an open
+ * of it makes, and anything else FD_TYPE_SYNTH_PATH, which keeps a copy of
+ * `vp` for fstat and fstatfs and `name` for /proc/PID/fd. Nothing is opened:
+ * a device does not learn of it and a /proc file takes no snapshot.
+ *
+ * The /proc links are classified, not resolved, so the O_NOFOLLOW choice is
+ * made here: /proc/self is the process directory unless O_NOFOLLOW names the
+ * link, and a /proc/PID/fd link is -ENOENT unless O_NOFOLLOW, as open(2)
+ * answers for one; Linux follows it to the descriptor's file. O_DIRECTORY on
+ * anything but a directory is -ENOTDIR, and a node that is gone, a process
+ * that exited among them, is -ENOENT.
+ */
+static int32_t synth_open_path(const struct vpath *vp, const char *name, int flags)
+{
+    int follow = !(flags & O_NOFOLLOW);
+    struct linux_stat64 kst;
+    struct vpath *copy;
+    fd_entry_t *e;
+    int fd;
+
+    if (follow && vp->kind == VNODE_PROC_FD_LINK) {
+        return -ENOENT;
+    }
+    if (synth_stat(vp, &kst, follow) != 0) {
+        return -ENOENT;
+    }
+    if ((kst.st_mode & S_IFMT) == S_IFDIR) {
+        fd = synth_open_dir(vp, flags & O_CLOEXEC);
+        if (fd >= 0) {
+            e = &current_proc->fds.entries[fd];
+            e->flags = (e->flags & FD_FLAG_CLOEXEC) | FD_FLAG_PATH;
+        }
+        return fd;
+    }
+    if (flags & O_DIRECTORY) {
+        return -ENOTDIR;
+    }
+    copy = kmalloc(sizeof(*copy));
+    if (!copy) {
+        return -ENOMEM;
+    }
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        kfree(copy);
+        return -EMFILE;
+    }
+    *copy = *vp;
+    e = &current_proc->fds.entries[fd];
+    e->type = FD_TYPE_SYNTH_PATH;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = NULL;
+    e->priv = copy;
+    e->dev = NULL;
+    e->ofd->dirpath[0] = '\0';
+    if (k_strlen(name) + 1 < sizeof(e->ofd->dirpath)) {
+        e->ofd->dirpath[0] = '/';
+        k_memcpy(e->ofd->dirpath + 1, name, k_strlen(name) + 1);
+    }
+    e->flags = FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    return fd;
+}
+
+/**
+ * An O_PATH descriptor on the node `ref` resolved to, on the KRFFS boot root
+ * or a mounted type: a directory as FD_TYPE_DIR and anything else as
+ * FD_TYPE_FILE, with FD_FLAG_PATH and neither access flag. The description
+ * takes the resolution's hold and a reference on the mount, as an open's
+ * does, and no handle, since the type's `open` does not run: a device node
+ * of ext2 is not refused, and its last close runs no `release`. O_DIRECTORY
+ * on anything but a directory is -ENOTDIR. The reference is released on
+ * every error.
+ */
+static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
+{
+    krffs_node_t *node = ref->node;
+    fd_entry_t *entry;
+    int is_dir;
+    int fd;
+
+    if (mnt_is_root(ref->mnt)) {
+        is_dir = node == krffs_fs->node || KRFFS_IS_DIR(node->mode);
+    } else {
+        struct vfs_stat vst;
+        int rc = vfs_getattr(ref->mnt, ref->node, &vst);
+
+        if (rc != 0) {
+            vfs_ref_release(ref);
+            return rc;
+        }
+        is_dir = (vst.mode & S_IFMT) == S_IFDIR;
+    }
+    if (!is_dir && (flags & O_DIRECTORY)) {
+        vfs_ref_release(ref);
+        return -ENOTDIR;
+    }
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        vfs_ref_release(ref);
+        return -EMFILE;
+    }
+    entry = &current_proc->fds.entries[fd];
+    entry->type = is_dir ? FD_TYPE_DIR : FD_TYPE_FILE;
+    entry->node = (mnt_is_root(ref->mnt) && node != krffs_fs->node) ? node : NULL;
+    entry->ofd->dirpath[0] = '\0';
+    if (!mnt_is_root(ref->mnt) && k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
+        entry->ofd->dirpath[0] = '/';
+        k_memcpy(entry->ofd->dirpath + 1, name, k_strlen(name) + 1);
+    }
+    entry->ofd->vmnt = ref->mnt;
+    entry->ofd->vnode = ref->node;
+    entry->ofd->fhandle = NULL;
+    vfs_desc_open(ref->mnt);
+    vfs_leave(ref->mnt);
+    entry->flags = FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
+    return fd;
+}
+
+/**
+ * open(2) and openat(2) with O_PATH: a descriptor that names the file at
+ * `name`, leading '/' stripped, and opens nothing.
+ *
+ * Linux keeps O_DIRECTORY, O_NOFOLLOW and O_CLOEXEC beside O_PATH and drops
+ * every other flag, so nothing is created or truncated. The directories on
+ * the way need search permission and the file itself none. A symbolic link
+ * at the end is followed unless O_NOFOLLOW, which names the link. The
+ * descriptor serves fstat, fstatfs, fchdir, the *at calls as a directory
+ * and with AT_EMPTY_PATH, the two duplications, F_GETFD, F_SETFD, F_GETFL
+ * and close; read, write and the other calls on a descriptor are -EBADF.
+ */
+static int32_t open_path(const char *name, int flags)
+{
+    struct vfs_ref ref;
+    struct vfs_mount *locked;
+    const struct vpath *vp;
+    int walk = VFS_WALK_LOCK;
+    int32_t rc;
+
+    flags &= O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+    if (flags & O_NOFOLLOW) {
+        walk |= VFS_WALK_NOFOLLOW;
+    }
+    if (!fd_can_alloc(&current_proc->fds)) {
+        return -EMFILE;
+    }
+    rc = vfs_resolve(0, name, walk, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    locked = ref.mnt;
+    vp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (vp) {
+        struct vpath vpc = *vp;
+
+        vfs_walk_unlock(locked);
+        vfs_ref_release(&ref);
+        return synth_open_path(&vpc, name, flags);
+    }
+    rc = path_install(&ref, name, flags);
+    vfs_walk_unlock(locked);
+    return rc;
+}
+
+/**
  * readlink core (readlink(2)/readlinkat(2)).
  *
  * The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
@@ -3831,6 +4006,13 @@ int32_t sys_fstatfs64(isr_params_t *params)
     if (e->type == FD_TYPE_PROC) {
         return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_PROC);
     }
+    if (e->type == FD_TYPE_SYNTH_PATH) {
+        const struct vpath *vp = (const struct vpath *)e->priv;
+        int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
+
+        return statfs_fill((struct linux_statfs64 __user *)params->edx,
+                           dev ? STATFS_MAGIC_DEVFS : STATFS_MAGIC_PROC);
+    }
     if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
         e->type == FD_TYPE_SYNTH_DIR) {
         return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_DEVFS);
@@ -3939,6 +4121,21 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_nlink = 1;
             kst->st_blksize = 4096;
             kst->st_dev = PROCFS_FSID;
+        }
+    } else if (entry->type == FD_TYPE_SYNTH_PATH) {
+        /* An O_PATH descriptor on a /dev or /proc leaf, or on a /proc link
+         * under O_NOFOLLOW: what an lstat of its path reports while the node
+         * is there, and a bare device or file once it is gone. */
+        const struct vpath *vp = (const struct vpath *)entry->priv;
+
+        if (!vp || synth_stat(vp, kst, 0) != 0) {
+            int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
+
+            k_memset(kst, 0, sizeof(*kst));
+            stat64_boot_times(kst);
+            kst->st_mode = dev ? 020600 : (S_IFREG | 0444); /* S_IFCHR | 0600 */
+            kst->st_blksize = 4096;
+            kst->st_dev = dev ? DEVFS_FSID : PROCFS_FSID;
         }
     } else if (entry->type == FD_TYPE_PTS) {
         /* A pty slave: report the SAME identity as stat("/dev/pts/N") so
@@ -4517,7 +4714,8 @@ int32_t sys_fchmodat(isr_params_t *params)
 /* fchmod(fd, mode): the descriptor form, under the rules do_chmod keeps:
  * a KRFFS node or a node of another mounted file system stores the mode, a
  * pty slave stores it on the pty, and every other descriptor has fixed
- * metadata (root succeeds without a change, anyone else is refused). */
+ * metadata (root succeeds without a change, anyone else is refused). An
+ * O_PATH descriptor is -EBADF, as on Linux. */
 int32_t sys_fchmod(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -4528,7 +4726,7 @@ int32_t sys_fchmod(isr_params_t *params)
         return -ESRCH;
     }
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
@@ -4615,7 +4813,7 @@ int32_t sys_fchownat(isr_params_t *params)
 
 /* fchown(fd, uid, gid): the descriptor form, under the same ownership rule
  * as the path forms, on the node or the mounted volume the descriptor is
- * open on. */
+ * open on. An O_PATH descriptor is -EBADF, as on Linux. */
 int32_t sys_fchown(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -4627,7 +4825,7 @@ int32_t sys_fchown(isr_params_t *params)
         return -ESRCH;
     }
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
@@ -5125,6 +5323,9 @@ int32_t sys__llseek(isr_params_t *params)
         return -ESRCH;
     }
     entry = fd_get(&current_proc->fds, fd);
+    if (entry && (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
     if (entry && entry->type == FD_TYPE_PIPE) {
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
@@ -5240,9 +5441,9 @@ int32_t sys__llseek(isr_params_t *params)
 /**
  * The refusals pread64 and pwrite64 share, in Linux's order: a negative
  * offset is -EINVAL before the descriptor is looked at, a descriptor that is
- * not open is -EBADF, one that cannot seek is -ESPIPE, one not open for the
- * direction (`write` or not) is -EBADF, a count or an end past the signed
- * range is -EINVAL, and a directory is -EISDIR.
+ * not open or is an O_PATH one is -EBADF, one that cannot seek is -ESPIPE,
+ * one not open for the direction (`write` or not) is -EBADF, a count or an
+ * end past the signed range is -EINVAL, and a directory is -EISDIR.
  *
  * What cannot seek is a pipe, a socket, a terminal or pseudoterminal, the
  * mouse, the framebuffer, and a device other than a raw disk window, the log
@@ -5262,7 +5463,7 @@ static int32_t pio_entry(int fd, int write, uint32_t count, long long pos, fd_en
         return -ESRCH;
     }
     entry = fd_get(&current_proc->fds, fd);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
     if (entry->type == FD_TYPE_DEVICE) {
@@ -5377,6 +5578,9 @@ int32_t sys_pwrite64(isr_params_t *params)
  * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
  * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND on
  * the shared open-file description, which the write and socket paths read).
+ * An O_PATH descriptor takes the commands Linux lets it take, the two
+ * duplications, F_GETFD, F_SETFD and F_GETFL, which reports O_PATH, and is
+ * -EBADF to the rest.
  */
 int32_t sys_fcntl64(isr_params_t *params)
 {
@@ -5407,6 +5611,10 @@ int32_t sys_fcntl64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
+    if ((entry->flags & FD_FLAG_PATH) && cmd != F_DUPFD && cmd != F_DUPFD_CLOEXEC &&
+        cmd != F_GETFD && cmd != F_SETFD && cmd != F_GETFL) {
+        return -EBADF;
+    }
 
     switch (cmd) {
     case F_GETFD:
@@ -5432,6 +5640,9 @@ int32_t sys_fcntl64(isr_params_t *params)
         }
         if (entry->ofd) {
             fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK));
+        }
+        if (entry->flags & FD_FLAG_PATH) {
+            fl |= O_PATH;
         }
         return fl;
     }
@@ -6465,20 +6676,21 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kerne
 
 /**
  * utimensat on the file descriptor `fd` refers to: a NULL path, which is GNU
- * libc's futimens, and an empty one with AT_EMPTY_PATH.
+ * libc's futimens, and an empty one with AT_EMPTY_PATH, which `empty` says.
  *
  * A file or a directory of a file system has its times set by the rules of
  * `utimes_node`, and one of the KRFFS boot root must still be the node it
  * was, or have lost its name to an unlink since. A pipe, a socket, a
  * terminal, a device or a synthetic directory has no times stored for it and
  * is -EROFS, as the path to a synthetic one answers; Linux sets the times of
- * such an inode.
+ * such an inode. An O_PATH descriptor names its file for the empty path and
+ * is -EBADF to the NULL one, as on Linux.
  */
-static int32_t utimes_fd(int fd, const struct kernel_timespec *times)
+static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
 
-    if (!entry) {
+    if (!entry || (!empty && (entry->flags & FD_FLAG_PATH))) {
         return -EBADF;
     }
     if (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) {
@@ -6528,7 +6740,7 @@ int32_t sys_utimensat(isr_params_t *params)
         times = ktimes;
     }
     if (!user_path && dirfd != AT_FDCWD) {
-        return flags != 0 ? -EINVAL : utimes_fd(dirfd, times);
+        return flags != 0 ? -EINVAL : utimes_fd(dirfd, times, 0);
     }
     if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
         return -EINVAL;
@@ -6543,7 +6755,7 @@ int32_t sys_utimensat(isr_params_t *params)
         }
     }
     if (empty && dirfd != AT_FDCWD) {
-        return utimes_fd(dirfd, times);
+        return utimes_fd(dirfd, times, 1);
     }
     if (empty) {
         pathbuf = path_buf_get();
@@ -6855,7 +7067,7 @@ int32_t sys_getdents64(isr_params_t *params)
     }
 
     entry = fd_get(&current_proc->fds, fd_num);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
 

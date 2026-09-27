@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 27, 2026
 .Dt SELECT 2
 .Os
 .Sh NAME
@@ -169,7 +169,9 @@ bit in the returned set.
 .It Bq Er EBADF
 A selected descriptor below
 .Fa nfds
-is not open, including one beyond the allocated descriptor table.
+is not open, including one beyond the allocated descriptor table, or
+was opened with
+.Dv O_PATH .
 .It Bq Er EFAULT
 A complete descriptor set cannot be read or written, the timeout cannot
 be read, or the old call's argument array cannot be read.

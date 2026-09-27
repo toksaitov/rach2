@@ -232,7 +232,9 @@ A nonblocking pipe, pseudoterminal master, or stream socket cannot
 accept bytes without waiting, or a datagram socket cannot acquire
 an ephemeral port.
 .It Er EBADF
-The descriptor is invalid, is not open for writing, or has no write operation.
+The descriptor is invalid, is not open for writing, has no write operation,
+or was opened with
+.Dv O_PATH .
 A framebuffer descriptor also gives this error outside graphics mode.
 .It Er EBUSY
 A regular file backs a loop device, or a loop-control command encounters

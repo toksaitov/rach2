@@ -120,8 +120,10 @@ Musl's
 sequence can also require read permission when it opens the target.
 .It Er EBADF
 .Fa fd
-is invalid, its pseudoterminal no longer exists, or a relative path
-uses an invalid or stale
+is invalid, was opened with
+.Dv O_PATH
+or has a pseudoterminal that no longer exists, or a relative path uses
+an invalid or stale
 .Fa dirfd .
 .It Er EBUSY
 Path resolution enters a mount being mounted or unmounted.

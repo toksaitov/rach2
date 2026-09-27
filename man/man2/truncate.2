@@ -155,8 +155,9 @@ permission on the file, or the file is under
 .Pa /proc .
 .It Er EBADF
 .Fa fd
-is invalid, does not refer to a file, or has no mounted open-file
-description.
+is invalid, was opened with
+.Dv O_PATH ,
+does not refer to a file, or has no mounted open-file description.
 .It Er EBUSY
 The file backs an attached loop device, or path resolution enters a
 mount being mounted or unmounted.

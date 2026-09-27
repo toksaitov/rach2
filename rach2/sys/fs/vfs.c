@@ -790,7 +790,9 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     struct vfs_ref r;
 
-    vfs_release(mnt, handle);
+    if (handle) {
+        vfs_release(mnt, handle);
+    }
     r.mnt = mnt;
     r.node = node;
     vfs_ref_put(&r);

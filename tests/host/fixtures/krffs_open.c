@@ -168,6 +168,15 @@ static int32_t open_mouse(void)
     return -EIO;
 }
 
+/** Reject an unexpected O_PATH open. */
+static int32_t open_path(const char *name, int flags)
+{
+    (void)name;
+    (void)flags;
+    check(0, "unexpected O_PATH open");
+    return -EIO;
+}
+
 #include "syscall_open.inc"
 
 /** Run the real open path in the second process. */

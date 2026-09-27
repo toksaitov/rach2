@@ -969,9 +969,10 @@ static int32_t sys_ioctl(isr_params_t *params)
     }
 
     /* Validate the fd first, so a bad fd reports -EBADF, not a request-
-     * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY). */
+     * specific status (e.g. ioctl(-1, TCGETS) must be -EBADF, not -ENOTTY).
+     * An O_PATH descriptor is -EBADF to every request, as on Linux. */
     entry = fd_get(&current_proc->fds, fd_num);
-    if (!entry) {
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
 

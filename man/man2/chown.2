@@ -137,8 +137,9 @@ to supplementary group 3000 and that group 4000 is refused.
 Search permission was denied on an ancestor directory.
 .It Bq Er EBADF
 .Fa fd
-is invalid, a pseudo-terminal slave descriptor has no live terminal,
-or a relative
+is invalid, was opened with
+.Dv O_PATH ,
+a pseudo-terminal slave descriptor has no live terminal, or a relative
 .Fn fchownat
 path uses an invalid or stale directory descriptor.
 .It Bq Er EBUSY

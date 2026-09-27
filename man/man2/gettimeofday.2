@@ -235,7 +235,9 @@ was given an invalid directory descriptor for a relative path, or the
 descriptor refers to a removed KRFFS boot-root directory; or, with a null
 path or an empty one and
 .Dv AT_EMPTY_PATH ,
-the descriptor is invalid or refers to a KRFFS boot-root file that is gone.
+the descriptor is invalid or refers to a KRFFS boot-root file that is gone;
+or, with a null path, the descriptor was opened with
+.Dv O_PATH .
 .It Bq Er EBUSY
 The
 .Fn utimensat

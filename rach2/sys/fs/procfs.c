@@ -522,6 +522,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         }
         break;
     }
+    case FD_TYPE_SYNTH_PATH:
+        /* an O_PATH fd on a /dev or /proc node: the path it was opened by */
+        ap_str(t, e->ofd && e->ofd->dirpath[0] ? e->ofd->dirpath : "/");
+        break;
     case FD_TYPE_FRAMEBUFFER:
     case FD_TYPE_MOUSE:
     case FD_TYPE_NONE:

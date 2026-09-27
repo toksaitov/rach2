@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 27, 2026
 .Dt GETDENTS64 2
 .Os
 .Sh NAME
@@ -166,8 +166,10 @@ as well on ext2.
 .Bl -tag -width "[ENOTDIR]"
 .It Bq Er EBADF
 .Fa fd
-is invalid, its directory has been removed from the KRFFS boot root,
-or its open-file description has no mount.
+is invalid, was opened with
+.Dv O_PATH ,
+its directory has been removed from the KRFFS boot root, or its
+open-file description has no mount.
 .It Bq Er EFAULT
 There is no current process,
 .Fa dirp
