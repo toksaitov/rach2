@@ -40,8 +40,10 @@ static int fails;
 static process_t process;
 process_t *current_proc = &process;
 /* The descriptor table of each process a row names, by its pid, the owner
- * of its record locks. */
+ * of its record locks: a table of its own, or the one `table_of` names for
+ * it while a row has it share one. */
 static fd_table_t tables[10];
+static fd_table_t *table_of[10];
 
 void *kzalloc(size_t n)
 {
@@ -81,26 +83,19 @@ static const struct lock_key other = {(const void *)0x1000, 43};
 /* Where `file` moves to in the rows of a move. */
 static const struct lock_key there = {(const void *)0x1000, 4242};
 
-/** Run as process `pid` with the descriptor table `table`. */
-static void be_in(fd_table_t *table, uint32_t pid)
-{
-    process.pid = process.tgid = pid;
-    process.fds = table;
-}
-
-/** Run as process `pid` with a table of its own. */
+/** Run as process `pid`, with the table `table_of` names for it or its own. */
 static void be(uint32_t pid)
 {
-    be_in(&tables[pid], pid);
+    process.pid = process.tgid = pid;
+    process.fds = table_of[pid] ? table_of[pid] : &tables[pid];
 }
 
-static int32_t as_in(fd_table_t *table, const struct lock_key *key, uint32_t pid,
-                     struct open_file *ofd, int cmd, int type, uint64_t start, uint64_t end,
-                     struct lock_req *out)
+static int32_t as_on(const struct lock_key *key, uint32_t pid, struct open_file *ofd, int cmd,
+                     int type, uint64_t start, uint64_t end, struct lock_req *out)
 {
     struct lock_req req;
 
-    be_in(table, pid);
+    be(pid);
     req.type = type;
     req.start = start;
     req.end = end;
@@ -113,12 +108,6 @@ static int32_t as_in(fd_table_t *table, const struct lock_key *key, uint32_t pid
         }
         return rc;
     }
-}
-
-static int32_t as_on(const struct lock_key *key, uint32_t pid, struct open_file *ofd, int cmd,
-                     int type, uint64_t start, uint64_t end, struct lock_req *out)
-{
-    return as_in(&tables[pid], key, pid, ofd, cmd, type, start, end, out);
 }
 
 static int32_t as(uint32_t pid, struct open_file *ofd, int cmd, int type, uint64_t start,
@@ -381,22 +370,28 @@ static void shared_table(void)
 {
     struct lock_req got;
 
-    CHECK(as_in(&shared_fds, &file, 6, NULL, LOCK_SET, F_WRLCK, 0, 9, NULL) == 0);
-    CHECK(as_in(&shared_fds, &file, 7, NULL, LOCK_SET, F_RDLCK, 5, 5, NULL) == 0);
+    table_of[6] = table_of[7] = &shared_fds;
+    CHECK(as(6, NULL, LOCK_SET, F_WRLCK, 0, 9, NULL) == 0);
+    CHECK(as(7, NULL, LOCK_SET, F_RDLCK, 5, 5, NULL) == 0);
     CHECK(as(8, NULL, LOCK_GET, F_WRLCK, 0, 0, &got) == 0 && got.type == F_WRLCK &&
           got.start == 0 && got.end == 4 && got.pid == 6);
     CHECK(as(8, NULL, LOCK_GET, F_WRLCK, 5, 5, &got) == 0 && got.type == F_RDLCK && got.pid == 7);
-    be_in(&shared_fds, 7);
+    be(7);
     lock_close(&file);
     CHECK(count_locks() == 0);
     CHECK(as(8, NULL, LOCK_SET, F_WRLCK, 0, 9, NULL) == 0);
     be(8);
     lock_close(&file);
+    table_of[6] = table_of[7] = NULL;
 
-    CHECK(as_in(&thread_fds[0], &file, 9, NULL, LOCK_SET, F_WRLCK, 20, 20, NULL) == 0);
-    CHECK(as_in(&thread_fds[1], &file, 9, NULL, LOCK_SET, F_WRLCK, 20, 20, NULL) == -EAGAIN);
-    be_in(&thread_fds[0], 9);
+    table_of[9] = &thread_fds[0];
+    CHECK(as(9, NULL, LOCK_SET, F_WRLCK, 20, 20, NULL) == 0);
+    table_of[9] = &thread_fds[1];
+    CHECK(as(9, NULL, LOCK_SET, F_WRLCK, 20, 20, NULL) == -EAGAIN);
+    table_of[9] = &thread_fds[0];
+    be(9);
     lock_close(&file);
+    table_of[9] = NULL;
     CHECK(count_locks() == 0);
 }
 
@@ -417,18 +412,20 @@ static void eight_waits(void)
  */
 static void shared_cycle(void)
 {
-    CHECK(as_in(&shared_fds, &file, 6, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == 0);
+    table_of[6] = table_of[7] = &shared_fds;
+    CHECK(as(6, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == 0);
     CHECK(as(8, NULL, LOCK_SET, F_WRLCK, 1, 1, NULL) == 0);
     steps[0] = eight_waits;
     steps[1] = NULL;
     step = 0;
-    CHECK(as_in(&shared_fds, &file, 7, NULL, LOCK_WAIT, F_WRLCK, 1, 1, NULL) == -EINTR);
+    CHECK(as(7, NULL, LOCK_WAIT, F_WRLCK, 1, 1, NULL) == -EINTR);
     CHECK(sharer_result == -EDEADLK);
     CHECK(waits == NULL);
     be(8);
     lock_close(&file);
-    be_in(&shared_fds, 6);
+    be(6);
     lock_close(&file);
+    table_of[6] = table_of[7] = NULL;
     CHECK(count_locks() == 0);
 }
 
