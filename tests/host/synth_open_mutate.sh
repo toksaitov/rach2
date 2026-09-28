@@ -73,7 +73,7 @@ faults()
     case $1 in
         devfs) echo ptmx ;;
         procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
-            record-after-sleep oom-range oom-floor oom-floor-kept ;;
+            record-after-sleep oom-range oom-floor oom-floor-kept oom-open-emfile ;;
     esac
 }
 
@@ -126,6 +126,12 @@ else:
         'oom-range': [("    if (v < OOM_SCORE_ADJ_MIN || v > OOM_SCORE_ADJ_MAX) {", "    if (0) {")],
         'oom-floor': [("    if (v < p->tg->oom_score_adj_min && !proc_privileged(current_proc)) {",
                        "    if (0) {")],
+        'oom-open-emfile': [("        kfree(f);\n        return fd;\n    }\n    e = &current_proc->fds->entries[fd];\n"
+                             "    e->type = FD_TYPE_PROC;\n    e->node = NULL;\n    e->sock = NULL;\n"
+                             "    e->ops = &procfs_oom_ops;",
+                             "        kfree(f);\n        return -EMFILE;\n    }\n    e = &current_proc->fds->entries[fd];\n"
+                             "    e->type = FD_TYPE_PROC;\n    e->node = NULL;\n    e->sock = NULL;\n"
+                             "    e->ops = &procfs_oom_ops;")],
         'oom-floor-kept': [("    p->tg->oom_score_adj = v;\n    if (proc_privileged(current_proc)) {\n"
                             "        p->tg->oom_score_adj_min = v;\n    }\n",
                             "    p->tg->oom_score_adj = v;\n")],
@@ -146,6 +152,7 @@ PY
             oom-range) message='a value past -1000 to 1000 is EINVAL and changes nothing' ;;
             oom-floor) message='and may not lower it below the floor' ;;
             oom-floor-kept) message='a privileged write sets the floor' ;;
+            oom-open-emfile) message='an open of oom_score_adj the heap has no room for is ENOMEM' ;;
         esac
         run_phase "$test" "$fault" 1 "$message"
         cleanup

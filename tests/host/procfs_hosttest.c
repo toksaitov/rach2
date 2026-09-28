@@ -148,11 +148,14 @@ void *kzalloc(size_t size)
     return p;
 }
 
-/** The one descriptor of the /proc/7/mem rows. */
+/* The error a row has the descriptor table answer, or 0. */
+static int alloc_error;
+
+/** The one descriptor of the /proc/7/mem rows, or the error a row set. */
 int fd_alloc(fd_table_t *t)
 {
     (void)t;
-    return 0;
+    return alloc_error;
 }
 
 /* The counts of an address space, as mm.c keeps them: the users together
@@ -577,6 +580,22 @@ static void oom_floor(void)
     group.oom_score_adj = group.oom_score_adj_min = 0;
 }
 
+/** An open of oom_score_adj that gets no descriptor answers the table's
+ * error: ENOMEM for a heap with no room, EMFILE at the limit. */
+static void oom_open_errors(void)
+{
+    struct vpath vp;
+
+    k_memset(&vp, 0, sizeof(vp));
+    alloc_error = -ENOMEM;
+    check(procfs_open_oom(&vp, 7, 0) == -ENOMEM,
+          "an open of oom_score_adj the heap has no room for is ENOMEM");
+    alloc_error = -EMFILE;
+    check(procfs_open_oom(&vp, 7, 0) == -EMFILE,
+          "an open of oom_score_adj at the descriptor limit is EMFILE");
+    alloc_error = 0;
+}
+
 /**
  * A read of a process's arguments that sleeps for a page while the process
  * ends and is reaped reads the rest through the user's count it took of the
@@ -651,6 +670,7 @@ int main(void)
     reaped_during_read();
     oom_values();
     oom_floor();
+    oom_open_errors();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "

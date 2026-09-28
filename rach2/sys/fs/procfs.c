@@ -2559,7 +2559,7 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
         kfree(f);
-        return -EMFILE;
+        return fd;
     }
     e = &current_proc->fds->entries[fd];
     e->type = FD_TYPE_PROC;
