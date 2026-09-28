@@ -55,7 +55,7 @@ or
 .Pa \&..
 it returns
 .Er EEXIST ,
-before
+as the root does, before
 .Er EXDEV
 and the refusal of a file system without hard links.
 .Pp
@@ -212,7 +212,7 @@ loop device.
 .It Bq Er EEXIST
 The ext2 destination name already exists, or a
 .Fn link
-destination names one by its end.
+destination names one by its end or is the root.
 .It Bq Er EFAULT
 A path cannot be read from user memory, or there is no current process.
 .It Bq Er EFBIG
@@ -222,7 +222,7 @@ exceeds the file system's addressing limit.
 .Fn linkat
 or
 .Fn unlinkat
-was given unsupported flags, a destination has no leaf component,
+was given unsupported flags,
 .Fn unlinkat
 with
 .Dv AT_REMOVEDIR

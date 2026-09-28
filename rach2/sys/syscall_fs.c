@@ -1339,8 +1339,8 @@ int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 /**
  * Make the absolute path `path`, which the kernel read from a file, canonical
  * in place, and hold a path that named a directory by its end to the rule
- * `copy_path_cwd` holds execve's to: the interpreter a script names. Returns
- * the length, or a negative errno.
+ * `copy_path_cwd` holds execve's to: the interpreter a script names, or an
+ * ELF image's PT_INTERP. Returns the length, or a negative errno.
  */
 int canonicalize_named(char *path)
 {
@@ -1699,11 +1699,12 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     /* The directory exists, so honour flags that contradict that. An exclusive
      * create of an existing object is -EEXIST regardless of access mode (the
      * usual O_CREAT|O_EXCL form implies write access), so that check comes
-     * first; then a directory cannot be opened for writing. */
+     * first; then a directory cannot be opened for writing, nor by O_CREAT
+     * without O_DIRECTORY, which asks for a file. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
     }
-    if ((flags & 3) != 0) {
+    if ((flags & 3) != 0 || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT) {
         return -EISDIR;
     }
     sd = synth_dir_alloc(vp->kind, pid, vp->tid);
@@ -2112,9 +2113,10 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
 /**
  * The checks on an existing node of a mounted type, from its attributes in
  * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the mount's EROFS
- * for a write-side request, then permission and loop attachment. Truncation
- * uses the open handle in `open_install`. On an error the reference is
- * released.
+ * for a write-side request, then permission and loop attachment. A directory
+ * is EISDIR to an open for writing, to O_TRUNC, and to O_CREAT without
+ * O_DIRECTORY, which asks for a file, as on Linux. Truncation uses the open
+ * handle in `open_install`. On an error the reference is released.
  */
 static int open_mounted_node(struct vfs_ref *ref, int flags)
 {
@@ -2137,7 +2139,8 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -ELOOP; /* the link itself, under O_NOFOLLOW */
     }
-    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {
+    if ((vst.mode & 0170000u) == 0040000u &&
+        (acc != 0 || (flags & O_TRUNC) || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT)) {
         vfs_ref_release(ref);
         return -EISDIR;
     }
@@ -2183,10 +2186,10 @@ static int open_root_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -EEXIST;
     }
-    /* A directory cannot be opened for writing or truncated into a
-     * file (the access mode is the low two bits); O_DIRECTORY
-     * requires one. */
-    if (is_dir && (acc != 0 || (flags & O_TRUNC))) {
+    /* A directory cannot be opened for writing, truncated, or opened by
+     * O_CREAT without O_DIRECTORY, which asks for a file (the access mode
+     * is the low two bits); O_DIRECTORY requires one. */
+    if (is_dir && (acc != 0 || (flags & O_TRUNC) || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT)) {
         vfs_ref_release(ref);
         return -EISDIR;
     }
@@ -6687,6 +6690,23 @@ int32_t sys_truncate64(isr_params_t *params)
 }
 
 /**
+ * Walk to the parent of the new name `path`, with or without its leading
+ * '/', for a call that makes a node other than a directory there:
+ * `vfs_resolve` with VFS_WALK_PARENT, the last name in `leaf` of `leafcap`
+ * bytes. The root, which exists and has no last name to make, is -EEXIST,
+ * as Linux answers link(2), symlink(2) and mknod(2) there, and bind(2) as
+ * EADDRINUSE.
+ */
+static int32_t new_name_parent(const char *path, struct vfs_ref *parent, char *leaf,
+                               uint32_t leafcap)
+{
+    if (path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        return -EEXIST;
+    }
+    return vfs_resolve(0, path, VFS_WALK_PARENT, parent, leaf, leafcap);
+}
+
+/**
  * The answer of a call that makes a node other than a directory, `leaf` in
  * the held directory `parent`, when its path named a directory by its end,
  * `end` (`path_names_dir`), as Linux answers it: -EEXIST for a last "." or
@@ -6722,7 +6742,8 @@ static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int 
  * and KRFFS, the root, is one. A source that named a directory by its end,
  * `olddir`, follows a final link and must reach a directory
  * (`resolve_named`), which is EPERM after it, and a new name that did,
- * `newend`, is `make_dir_end`'s.
+ * `newend`, is `make_dir_end`'s; the root as the new name is EEXIST
+ * (`new_name_parent`).
  */
 static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
 {
@@ -6735,7 +6756,7 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
     if (rc != 0) {
         return rc;
     }
-    rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         vfs_ref_release(&src);
         return rc;
@@ -6772,7 +6793,8 @@ out:
 /*
  * A symbolic link `newname` to `target`, made by the type under the
  * namespace lock; a type without them answers EPERM. A new name that named a
- * directory by its end, `end`, is `make_dir_end`'s.
+ * directory by its end, `end`, is `make_dir_end`'s, and the root is EEXIST
+ * (`new_name_parent`).
  */
 static int32_t do_symlink(const char *target, const char *newname, int end)
 {
@@ -6783,7 +6805,7 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
     if (target[0] == '\0') {
         return -ENOENT; /* an empty target, as Linux answers */
     }
-    rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
     }
@@ -8404,12 +8426,12 @@ static int32_t mknod_kind(uint32_t mode)
  * The kind is the S_IF type bits of `mode`, a regular file for none; `dev`
  * is a device's number as the call takes it, Linux's 32-bit encoding, which
  * is the kernel's own. The refusals after the kind's and the path's come in
- * Linux's order: a path that named a directory by its end, `end`, as
- * `make_dir_end` answers it, a name that exists (EEXIST, a symbolic link
- * included), a read-only mount, the write permission on the directory, and
- * last a device node made by a caller who is not root (EPERM). A file
- * system that cannot keep the kind answers EPERM; nothing is made under /dev
- * or /proc (EROFS).
+ * Linux's order: the root (EEXIST, `new_name_parent`), a path that named a
+ * directory by its end, `end`, as `make_dir_end` answers it, a name that
+ * exists (EEXIST, a symbolic link included), a read-only mount, the write
+ * permission on the directory, and last a device node made by a caller who
+ * is not root (EPERM). A file system that cannot keep the kind answers
+ * EPERM; nothing is made under /dev or /proc (EROFS).
  */
 static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
 {
@@ -8419,7 +8441,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     void *made;
     int32_t rc;
 
-    rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         return rc;
     }
@@ -9762,14 +9784,15 @@ static int kernel_path_cwd(char *buf, const char *path, int *end)
 /**
  * `make_dir_end`'s answer for a node other than a directory made at `path`,
  * an absolute canonical path that named a directory by its end as `end`
- * says, once the walk to its parent is made: for the socket file of a bind,
- * which `open_create` would make whatever the path's end.
+ * says, once the walk to its parent is made, and -EEXIST for the root
+ * (`new_name_parent`): for the socket file of a bind, which `open_create`
+ * would make whatever the path's end.
  */
 static int32_t path_make_dir_end(const char *path, int end)
 {
     struct vfs_ref parent;
     char leaf[VFS_NAME_MAX + 1];
-    int32_t rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    int32_t rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
 
     if (rc == 0) {
         rc = make_dir_end(&parent, leaf, end);
@@ -9785,8 +9808,8 @@ static int32_t path_make_dir_end(const char *path, int end)
  * so the mount counts it and refuses to go while the socket is bound. A name
  * that names a directory by its end makes nothing (`path_make_dir_end`), as
  * on Linux: -ENOENT after a slash for a name nothing has, and -EADDRINUSE,
- * which a name that exists answers, for one that does and for a last "." or
- * "..".
+ * which a name that exists answers, for one that does, for a last "." or
+ * "..", and for the root.
  */
 int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino)
 {

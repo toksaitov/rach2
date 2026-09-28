@@ -26,13 +26,17 @@
  * "." and ENOTEMPTY for a last "..", and rename EBUSY for either, and so do
  * unlinkat and renameat through a directory descriptor. execve of a file so
  * named is ENOTDIR and of a directory EACCES, and so is a script whose
- * interpreter is named with a trailing slash ENOTDIR; bind to a name so
- * named makes nothing, connect to a socket so named is ENOTDIR, and so is
- * umount2 of a file so named. rmdir and rename of the root are EBUSY. A
- * symbolic link to a directory named with a trailing slash is followed by
- * the calls that look it up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW
- * notwithstanding, and is ENOTDIR to unlink and rename, in /dev/shm and on
- * an ext2 root.
+ * interpreter is named with a trailing slash ENOTDIR, and an ELF image whose
+ * PT_INTERP names the file or the directory so ENOTDIR or EACCES; bind to a
+ * name so named makes nothing, connect to a socket so named is ENOTDIR, and
+ * so is umount2 of a file so named. rmdir and rename of the root are EBUSY,
+ * link, symlink and mknod with the root as the new name EEXIST and bind to
+ * it EADDRINUSE, and open with O_CREAT and without O_DIRECTORY is EISDIR
+ * for an existing directory, one of the probe's, one of /dev/shm and /proc,
+ * even to read. A symbolic link to a directory named with a trailing slash
+ * is followed by the calls that look it up, O_NOFOLLOW and
+ * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename,
+ * in /dev/shm and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -44,6 +48,7 @@
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -230,8 +235,9 @@ static int refused(long rc, int err)
 /* The paths the rows of `dir_end_calls` name in one directory: the regular
  * file f and the directory s, which the directory has, the empty directory
  * e, which the rows make, the name n, which nothing has, the socket file k,
- * the script x and the symbolic link ld to s, which the rows make and
- * remove, each also with a slash after it, "s", or a last "." or "..". */
+ * the program x, a script and then an ELF image, and the symbolic link ld to
+ * s, which the rows make and remove, each also with a slash after it, "s",
+ * or a last "." or "..". */
 struct ends {
     char f[300], fs[304], fdot[304];
     char s[300], ss[304], sdot[304], sdotdot[304];
@@ -317,7 +323,9 @@ static int lookup_ends(const struct ends *p)
  * last "." after a directory, and mknod ENOTDIR for one after the file;
  * mkdir is EEXIST for a last "." after a directory, in /proc too, where
  * nothing is made, and ENOENT for one after a name nothing has; and none of
- * them makes n. 0, or 1 once the failure is reported.
+ * them makes n. open with O_CREAT, which asks for a file, is EISDIR for the
+ * directory s and for /proc too, even to read. 0, or 1 once the failure is
+ * reported.
  */
 static int make_ends(const struct ends *p)
 {
@@ -329,6 +337,10 @@ static int make_ends(const struct ends *p)
         !refused(open(p->sdotdot, O_RDONLY | O_CREAT | O_EXCL, 0644), EEXIST) ||
         lstat(p->n, &st) == 0) {
         return fail("an open with O_CREAT of a path that names a directory by its end");
+    }
+    if (!refused(open(p->s, O_RDONLY | O_CREAT, 0644), EISDIR) ||
+        !refused(open("/proc", O_RDONLY | O_CREAT, 0644), EISDIR)) {
+        return fail("an open with O_CREAT of an existing directory was not EISDIR");
     }
     if (!refused(link(p->f, p->ns), ENOENT) || !refused(link(p->f, p->sdot), EEXIST)) {
         return fail("link to a new name with a trailing slash or a last .");
@@ -437,10 +449,88 @@ static int connect_path(int fd, const char *path)
 }
 
 /**
+ * Write the ELF image `path`, mode 0755, whose PT_INTERP is `interp`: the
+ * ELF header, the PT_INTERP, and one PT_LOAD at 0x08048000 that covers the
+ * whole file, headers and interpreter path included, which the kernel loads
+ * before it opens the interpreter. 0, or -1 when the file could not be
+ * written.
+ */
+static int write_elf(const char *path, const char *interp)
+{
+    unsigned char img[sizeof(Elf32_Ehdr) + 2 * sizeof(Elf32_Phdr) + 320];
+    Elf32_Ehdr eh;
+    Elf32_Phdr ph[2];
+    size_t at = sizeof(eh) + sizeof(ph);
+    size_t size = at + strlen(interp) + 1;
+    int fd;
+    int ok;
+
+    if (size > sizeof(img)) {
+        return -1;
+    }
+    memset(&eh, 0, sizeof(eh));
+    memcpy(eh.e_ident, ELFMAG, SELFMAG);
+    eh.e_ident[EI_CLASS] = ELFCLASS32;
+    eh.e_ident[EI_DATA] = ELFDATA2LSB;
+    eh.e_ident[EI_VERSION] = EV_CURRENT;
+    eh.e_type = ET_EXEC;
+    eh.e_machine = EM_386;
+    eh.e_version = EV_CURRENT;
+    eh.e_entry = 0x08048000 + at;
+    eh.e_phoff = sizeof(eh);
+    eh.e_ehsize = sizeof(eh);
+    eh.e_phentsize = sizeof(Elf32_Phdr);
+    eh.e_phnum = 2;
+    memset(ph, 0, sizeof(ph));
+    ph[0].p_type = PT_INTERP;
+    ph[0].p_offset = at;
+    ph[0].p_vaddr = 0x08048000 + at;
+    ph[0].p_filesz = size - at;
+    ph[0].p_memsz = size - at;
+    ph[0].p_flags = PF_R;
+    ph[1].p_type = PT_LOAD;
+    ph[1].p_vaddr = 0x08048000;
+    ph[1].p_filesz = size;
+    ph[1].p_memsz = size;
+    ph[1].p_flags = PF_R | PF_X;
+    ph[1].p_align = 4096;
+    memcpy(img, &eh, sizeof(eh));
+    memcpy(img + sizeof(eh), ph, sizeof(ph));
+    memcpy(img + at, interp, size - at);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    ok = fd >= 0 && write(fd, img, size) == (ssize_t)size;
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : -1;
+}
+
+/**
+ * execve of an ELF image, x, whose PT_INTERP names a directory by its end,
+ * which is held to the rule for the program's own path: the file f so named
+ * is ENOTDIR, and the directory s, which is no program, EACCES. 0, or 1 once
+ * the failure is reported.
+ */
+static int interp_ends(const struct ends *p)
+{
+    static char *const args[] = {"direntmusl", NULL};
+    int ok = write_elf(p->x, p->fs) == 0 && refused(execve(p->x, args, args + 1), ENOTDIR) &&
+             write_elf(p->x, p->fdot) == 0 && refused(execve(p->x, args, args + 1), ENOTDIR) &&
+             write_elf(p->x, p->ss) == 0 && refused(execve(p->x, args, args + 1), EACCES) &&
+             write_elf(p->x, p->sdotdot) == 0 && refused(execve(p->x, args, args + 1), EACCES);
+
+    unlink(p->x);
+    if (!ok) {
+        return fail("an ELF image whose PT_INTERP names a directory by its end was not refused");
+    }
+    return 0;
+}
+
+/**
  * execve given a path that names a directory by its end: the file so named
  * is ENOTDIR and the directory EACCES, and a script whose interpreter is
- * named with a trailing slash is ENOTDIR. 0, or 1 once the failure is
- * reported.
+ * named with a trailing slash is ENOTDIR, and so is an ELF image whose
+ * PT_INTERP is (`interp_ends`). 0, or 1 once the failure is reported.
  */
 static int exec_ends(const struct ends *p)
 {
@@ -465,7 +555,7 @@ static int exec_ends(const struct ends *p)
     if (!ok) {
         return fail("a script whose interpreter has a trailing slash was not ENOTDIR");
     }
-    return 0;
+    return interp_ends(p);
 }
 
 /**
@@ -621,11 +711,40 @@ static int shm_dir_end_calls(void)
 }
 
 /**
+ * The root as the name a call removes, moves or makes: rmdir, and rename
+ * with it as either name, are EBUSY, with both names on the root's mount;
+ * link, symlink and mknod are EEXIST, as for any name that exists, and bind
+ * EADDRINUSE. 0, or 1 once the failure is reported.
+ */
+static int root_rows(void)
+{
+    int s;
+    int bound;
+
+    if (!refused(rmdir("/"), EBUSY) || !refused(rename("/", sub), EBUSY) ||
+        !refused(rename(file, "/"), EBUSY)) {
+        return fail("rmdir or rename of the root was not EBUSY");
+    }
+    if (!refused(link(file, "/"), EEXIST) || !refused(symlink("f", "/"), EEXIST) ||
+        !refused(mknod("/", S_IFIFO | 0644, 0), EEXIST)) {
+        return fail("link, symlink or mknod with the root as the new name was not EEXIST");
+    }
+    s = socket(AF_UNIX, SOCK_STREAM, 0);
+    bound = s >= 0 && refused(bind_path(s, "/"), EADDRINUSE);
+    if (s >= 0) {
+        close(s);
+    }
+    if (!bound) {
+        return fail("a bind to the root was not EADDRINUSE");
+    }
+    return 0;
+}
+
+/**
  * The rows that read the probe's own directory beyond the types of its
  * listing: the path ends of `dir_ends`, rewinddir and seekdir of it and of
- * /proc/self (`rewinds`), the root as the name rmdir removes and rename moves
- * or replaces, which is EBUSY with both names on the root's mount, and the
- * other calls given a path that names a directory by its end, there and in
+ * /proc/self (`rewinds`), the root as a name (`root_rows`), and the other
+ * calls given a path that names a directory by its end, there and in
  * /dev/shm (`dir_end_calls`). 0, or 1 once the failure is reported.
  */
 static int own_dir_rows(void)
@@ -643,9 +762,8 @@ static int own_dir_rows(void)
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
-    if (!refused(rmdir("/"), EBUSY) || !refused(rename("/", sub), EBUSY) ||
-        !refused(rename(file, "/"), EBUSY)) {
-        return fail("rmdir or rename of the root was not EBUSY");
+    if (root_rows() != 0) {
+        return 1;
     }
     return dir_end_calls(base, 0) != 0 || shm_dir_end_calls() != 0;
 }

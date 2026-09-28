@@ -1398,18 +1398,24 @@ static void exec_ids(struct exec_state *s)
  * which every dynamic linker is, at the top of the range mmap places
  * mappings in, just below VM_MMAP_BASE, and one with fixed addresses at
  * those. Its own PT_INTERP is ignored. The new image starts at its entry,
- * and `*base`, AT_BASE, is the distance it was moved by. 0, -ENOENT,
- * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel
- * loads, -ENOMEM for one that would cover the program or for memory its
- * load could not have, -EIO or a mount's error for a read that failed.
+ * and `*base`, AT_BASE, is the distance it was moved by.
+ *
+ * The path is held to the rule execve's own is (`canonicalize_named`): one
+ * that names a directory by its end must reach one, so a file so named is
+ * -ENOTDIR and a directory the open's -EACCES, as Linux's open of the
+ * interpreter answers. 0, -ENOENT, -ENOTDIR, -EACCES, -ELIBBAD for a file
+ * that is not an interpreter this kernel loads, -ENOMEM for one that would
+ * cover the program or for memory its load could not have, -EIO or a
+ * mount's error for a read that failed.
  */
 static int32_t exec_interp(struct exec_state *s, uint32_t *base)
 {
     uint32_t bias = 0;
     int32_t rc;
 
-    if (canonicalize_abs(s->layout.interp) < 0) {
-        return -ENOENT;
+    rc = canonicalize_named(s->layout.interp);
+    if (rc < 0) {
+        return rc;
     }
     rc = exec_open(&s->prog, s->layout.interp, NULL, NULL);
     if (rc != 0) {

@@ -126,6 +126,9 @@ names a directory, which no program is: it returns
 when it reaches anything else, through a final symbolic link, and
 .Er EACCES
 for a directory, as on Linux.
+The interpreter a
+.Dv PT_INTERP
+names is held to the same rule.
 .Ss Interpreter scripts
 A file beginning with
 .Ql #!
@@ -387,8 +390,10 @@ needed to resolve or open the program could not be allocated; the
 interpreter would cover the program; or the image's regions exceed
 .Dv RLIMIT_AS .
 .It Bq Er ENOTDIR
-A path component used as a directory is not a directory, or the path or a
-script's interpreter path ends in a slash or in
+A path component used as a directory is not a directory, or the path, a
+script's interpreter path or a
+.Dv PT_INTERP
+path ends in a slash or in
 .Pa \&.
 or
 .Pa \&..
