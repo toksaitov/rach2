@@ -82,6 +82,17 @@ static void await(int fd)
     (void)read(fd, &c, 1);
 }
 
+/**
+ * Close, in a child that waits on the pipe `from_parent`, the end the parent
+ * writes, so that the parent's exit ends every wait of the child's: a probe
+ * that stops at a failed row then leaves no child behind holding its locks
+ * for a later run to meet.
+ */
+static void leave_parent_end(int from_parent[2])
+{
+    close(from_parent[1]);
+}
+
 /** Whether process `pid` sleeps, by its state in /proc/<pid>/stat. */
 static int sleeping(pid_t pid)
 {
@@ -152,6 +163,7 @@ static int records(int fd)
     if (pid == 0) {
         int other;
 
+        leave_parent_end(to_child);
         if (lk(fd, F_SETLK, F_WRLCK, 10, 20) != 0) {
             _exit(1);
         }
@@ -296,6 +308,7 @@ static int largest(int fd)
     }
     pid = fork();
     if (pid == 0) {
+        leave_parent_end(to_child);
         if (lk(fd, F_SETLK, F_WRLCK, max, 1) != 0 || lk(fd, F_SETLK, F_WRLCK, 0, max) != 0) {
             _exit(1);
         }
@@ -421,6 +434,7 @@ static int closed_wait(void)
     if (pid == 0) {
         int fd = open(LOCK_PATH, O_RDWR);
 
+        leave_parent_end(to_child);
         if (fd < 0 || lk(fd, F_SETLK, F_WRLCK, 50, 1) != 0) {
             _exit(1);
         }
@@ -607,8 +621,10 @@ static int same_hash(void)
     }
     pid = fork();
     if (pid == 0) {
-        int rc = lk(one, F_SETLK, F_WRLCK, 0, 1);
+        int rc;
 
+        leave_parent_end(to_child);
+        rc = lk(one, F_SETLK, F_WRLCK, 0, 1);
         post(to_parent[1]);
         await(to_child[0]);
         _exit(rc == 0 ? 0 : 1);
@@ -720,6 +736,7 @@ static int closed_wait_moved(void)
     if (pid == 0) {
         int fd = open(KEY_DIR "/waited", O_RDWR);
 
+        leave_parent_end(to_child);
         if (fd < 0 || lk(fd, F_SETLK, F_WRLCK, 50, 1) != 0) {
             _exit(1);
         }
