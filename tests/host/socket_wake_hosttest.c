@@ -6,7 +6,8 @@
  * host-deps: tests/host/compat/kheap_host.c
  *
  * A datagram delivered to a UDP socket, and data delivered to a TCP
- * connection, wake the socket's queue for data alone; an acknowledgement that
+ * connection, wake the socket's queue for data alone, and data a full TCP
+ * receive ring takes none of wakes nothing; an acknowledgement that
  * frees send-ring space wakes it for room alone; a FIN, a connection that
  * completes or ends, and a connection queued on a listener wake it for every
  * kind. So an edge-triggered epoll registration of a socket for output alone
@@ -194,6 +195,10 @@ int main(void)
           "a TCP connection takes the data delivered");
     CHECK(woken == &tcp.waiters && woken_kinds == WQ_DATA,
           "data wakes a TCP connection for data alone");
+    block.recv_tail = block.recv_head + TCP_RING_SIZE;
+    reset();
+    CHECK(socket_tcp_deliver(&tcp, bytes, sizeof(bytes)) == 0 && woken == NULL && woken_kinds == 0,
+          "data a full TCP receive ring takes none of wakes nothing");
     reset();
     socket_tcp_writable(&tcp);
     CHECK(woken == &tcp.waiters && woken_kinds == WQ_ROOM,

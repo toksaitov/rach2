@@ -597,7 +597,9 @@ static void recv_ring_get(uint8_t *dst, struct tcb *tcb, uint32_t at, uint32_t n
  * and returns the count accepted; the caller advances rcv_nxt by that, so
  * surplus bytes are neither stored nor acknowledged and the peer retransmits
  * them once the window reopens. recv_head/recv_tail are free-running indices
- * masked to size.
+ * masked to size. The wake is for data, and comes only when bytes were
+ * taken: a full ring takes none, and an edge-triggered registration for
+ * input would be told of data with nothing new to read.
  */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {
@@ -616,7 +618,9 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     recv_ring_put(tcb, tcb->recv_tail, data, copy_len);
     tcb->recv_tail += copy_len;
 
-    wq_wake(&sock->waiters, WQ_DATA);
+    if (copy_len > 0) {
+        wq_wake(&sock->waiters, WQ_DATA);
+    }
     return (uint16_t)copy_len;
 }
 
