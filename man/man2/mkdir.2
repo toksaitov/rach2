@@ -138,6 +138,9 @@ and
 .Pa /proc .
 Changes on a read-only mount return
 .Er EROFS .
+A name that exists, in those namespaces or on a read-only mount, returns
+.Er EEXIST
+first, as on Linux.
 .Pp
 The i386 system call numbers are 39 for
 .Fn mkdir ,

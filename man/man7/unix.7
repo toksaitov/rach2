@@ -47,8 +47,13 @@ socket file:
 .Xr bind 2
 makes it, with the permission bits 0777 less the umask, and fails with
 .Er EADDRINUSE
-when the path exists; a connect or a send to it needs write permission on
-it.
+when the path exists, before the
+.Er EROFS
+of a read-only mount or of
+.Pa /dev
+and
+.Pa /proc ;
+a connect or a send to it needs write permission on it.
 The file stays after the socket is closed, as in Linux, and a connect to
 it then fails with
 .Er ECONNREFUSED .

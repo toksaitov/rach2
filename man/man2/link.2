@@ -58,6 +58,16 @@ it returns
 as the root does, before
 .Er EXDEV
 and the refusal of a file system without hard links.
+A
+.Fa newpath
+that exists returns
+.Er EEXIST
+before
+.Er EXDEV ,
+the refusals of a directory source and of a file system without hard
+links, and
+.Er EROFS ,
+as on Linux.
 .Pp
 .Fn link
 and

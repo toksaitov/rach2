@@ -57,6 +57,11 @@ A read-only mount or synthetic namespace returns
 Writable KRFFS, FAT32, and exFAT mounts return
 .Er EPERM
 because they have no symbolic-link creation operation.
+A
+.Fa linkpath
+that exists returns
+.Er EEXIST
+before either, as on Linux.
 .Pp
 .Fn readlink
 copies up to
