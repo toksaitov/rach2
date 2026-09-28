@@ -25,7 +25,11 @@
  * may nest, each added to the one before, and a write to a pipe in the fifth
  * reaches a wait on the first; a sixth set is ELOOP whether the chain is built
  * from the outermost set in or from the innermost out, and so is a set that
- * another holds by two paths when the longer would make a chain of six. Waits
+ * another holds by two paths when the longer would make a chain of six. A
+ * child of a fork that closes its copy of the second of five nested sets'
+ * numbers, which the parent's keeps open, is refused a sixth set under them
+ * and them under a sixth, and its wait on the first leaves the registration
+ * to the parent, whose wait reports a write to a pipe in the fifth. Waits
  * with room for one event report two ready descriptors in turn. A one-shot
  * event a wait cannot store, EFAULT, is reported by the next wait. The
  * registration of a closed eventfd does not report the eventfd made next at its
@@ -970,13 +974,83 @@ static int nested_two_paths(void)
     return 0;
 }
 
+/*
+ * A child of a fork shares its parent's sets: s0 holds s1, on to s4, and a
+ * pipe is in s4. The child closes its copy of s1's number, which the
+ * parent's keeps open, so s0's registration of s1 lasts and holds s1: the
+ * child's add of a sixth set under s4 is ELOOP, and so is its add of s0
+ * under a sixth; and its wait on s0 leaves the registration to the parent,
+ * whose wait on s0 reports a write to the pipe.
+ */
+static int nested_forked(void)
+{
+    struct epoll_event ev, out;
+    int s[5], p[2];
+    int sixth = epoll_create1(0);
+    int above = epoll_create1(0);
+    int i, status;
+    pid_t pid;
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN;
+    for (i = 0; i < 5; i++) {
+        s[i] = epoll_create1(0);
+    }
+    if (sixth < 0 || above < 0 || s[0] < 0 || s[1] < 0 || s[2] < 0 || s[3] < 0 || s[4] < 0 ||
+        pipe(p) != 0 || epoll_ctl(s[4], EPOLL_CTL_ADD, p[0], &ev) != 0) {
+        return fail("setup for a child's nested sets");
+    }
+    for (i = 0; i < 4; i++) {
+        if (epoll_ctl(s[i], EPOLL_CTL_ADD, s[i + 1], &ev) != 0) {
+            return fail("setup for a child's nested sets");
+        }
+    }
+    pid = fork();
+    if (pid < 0) {
+        return fail("fork for a child's nested sets");
+    }
+    if (pid == 0) {
+        close(s[1]);
+        if (epoll_ctl(s[4], EPOLL_CTL_ADD, sixth, &ev) != -1 || errno != ELOOP) {
+            _exit(1);
+        }
+        if (epoll_ctl(above, EPOLL_CTL_ADD, s[0], &ev) != -1 || errno != ELOOP) {
+            _exit(2);
+        }
+        _exit(epoll_wait(s[0], &out, 1, 0) < 0 ? 3 : 0);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) > 3) {
+        return fail("the child of the nested sets");
+    }
+    if (WEXITSTATUS(status) == 1) {
+        return fail("a child's add under five sets, one number closed, was not ELOOP");
+    }
+    if (WEXITSTATUS(status) == 2) {
+        return fail("a child's add of five sets under a sixth, one number closed, was not ELOOP");
+    }
+    if (WEXITSTATUS(status) == 3) {
+        return fail("a child's wait on the nested sets");
+    }
+    if (write(p[1], "f", 1) != 1 || wait_one(s[0], 0, &out) != 1) {
+        return fail("a child's close and wait took the parent's registration of a set");
+    }
+    for (i = 0; i < 5; i++) {
+        close(s[i]);
+    }
+    close(sixth);
+    close(above);
+    close(p[0]);
+    close(p[1]);
+    return 0;
+}
+
 int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
         long_timeout() || pipe_each_write() || unix_kinds() || unix_shutdown_edge() ||
         unix_own_room() || unix_accept_edge() || udp_arrival() || tcp_arrival() || nested_six() ||
-        nested_two_paths()) {
+        nested_two_paths() || nested_forked()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

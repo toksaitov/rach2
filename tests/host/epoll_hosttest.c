@@ -19,10 +19,19 @@
  * would nest sets more than four deep below the outermost, or make a cycle,
  * is ELOOP, whether the chain would grow above the set added to, below the
  * set added, or both, and a set held by two paths counts by the longer. Five
- * sets nest, and a wait on the first reports an object in the fifth. A
- * registration whose number was closed holds its set no more, and the closes
- * of sets that hold or are held leave every list whole, which AddressSanitizer
- * checks.
+ * sets nest, and a wait on the first reports an object in the fifth.
+ *
+ * A registration lasts while its open file is open, whatever became of the
+ * number it was added by: a wait of a caller whose number names the file no
+ * more reports nothing of it and keeps it, and the wait after the file's
+ * last close drops it. A registration of a set holds the set in the nesting
+ * count while it lasts, for a fork's child that closed its copy of the
+ * number too, and the child's waits leave it to the parent. The last close
+ * of a set takes the registrations of it in other sets, and the closes of
+ * sets that hold or are held leave every list whole, which AddressSanitizer
+ * checks. A fork is a second table whose descriptors share the first's open
+ * files, and the list of live descriptions `fd_ofd_live` reads is the
+ * model's own.
  */
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
@@ -39,9 +48,11 @@ extern int printf(const char *format, ...);
 #define OUT_MAX  4
 
 process_t *current_proc;
-static process_t proc;
-static fd_table_t table;
-static fd_entry_t entries[SLOTS];
+static process_t proc, child;
+static fd_table_t table, child_table;
+static fd_entry_t entries[SLOTS], child_entries[SLOTS];
+/* The open files of both tables, as fd.c lists the live descriptions. */
+static struct open_file *live[2 * SLOTS];
 static uint8_t arena[1024];
 static uint32_t serials;
 static int failures;
@@ -100,6 +111,19 @@ fd_entry_t *fd_get(fd_table_t *t, int fd)
     return &t->entries[fd];
 }
 
+/** Put `ofd` on the list of live descriptions, or with `gone` take it off. */
+static void list_live(struct open_file *ofd, int gone)
+{
+    int i;
+
+    for (i = 0; i < 2 * SLOTS; i++) {
+        if (live[i] == (gone ? ofd : NULL)) {
+            live[i] = gone ? NULL : ofd;
+            return;
+        }
+    }
+}
+
 /** The lowest free number above the standard three, with a new open file
  * description of its own and the next serial. */
 int fd_alloc(fd_table_t *t)
@@ -115,11 +139,26 @@ int fd_alloc(fd_table_t *t)
             }
             ofd->refcount = 1;
             ofd->serial = ++serials;
+            list_live(ofd, 0);
             t->entries[fd].ofd = ofd;
             return fd;
         }
     }
     return -1;
+}
+
+/** Whether `ofd`, made with `serial`, is on the list of live descriptions;
+ * one that is not is not read, as in fd.c. */
+int fd_ofd_live(const struct open_file *ofd, uint32_t serial)
+{
+    int i;
+
+    for (i = 0; i < 2 * SLOTS; i++) {
+        if (live[i] == ofd) {
+            return ofd->refcount > 0 && ofd->serial == serial;
+        }
+    }
+    return 0;
 }
 
 short poll_fd(fd_entry_t *e, short events, struct wait_queue **wq)
@@ -218,17 +257,23 @@ static int create(void)
     return (int)sys_epoll_create1(&params);
 }
 
+/** The entry of `fd` in the calling process's table. */
+static fd_entry_t *slot(int fd)
+{
+    return &current_proc->fds->entries[fd];
+}
+
 /** A model object's number. */
 static int open_model(struct model *m, short ready)
 {
-    int fd = fd_alloc(&table);
+    int fd = fd_alloc(current_proc->fds);
 
     m->ready = ready;
     wait_queue_init(&m->wq);
     if (fd >= 0) {
-        entries[fd].type = FD_TYPE_PIPE;
-        entries[fd].ops = &model_ops;
-        entries[fd].priv = m;
+        slot(fd)->type = FD_TYPE_PIPE;
+        slot(fd)->ops = &model_ops;
+        slot(fd)->priv = m;
     }
     return fd;
 }
@@ -239,9 +284,9 @@ static int dup_fd(int fd)
     int n;
 
     for (n = 3; n < SLOTS; n++) {
-        if (entries[n].type == FD_TYPE_NONE) {
-            entries[n] = entries[fd];
-            entries[n].ofd->refcount++;
+        if (slot(n)->type == FD_TYPE_NONE) {
+            *slot(n) = *slot(fd);
+            slot(n)->ofd->refcount++;
             return n;
         }
     }
@@ -252,19 +297,55 @@ static int dup_fd(int fd)
  * what it is, as fd_release_backing does. */
 static void close_fd(int fd)
 {
-    fd_entry_t *e = &entries[fd];
+    fd_entry_t *e = slot(fd);
     struct open_file *ofd = e->ofd;
 
     if (--ofd->refcount == 0) {
         if (e->ops && e->ops->close) {
             e->ops->close(e);
         }
+        list_live(ofd, 1);
         kfree(ofd);
     }
     e->type = FD_TYPE_NONE;
     e->ops = NULL;
     e->priv = NULL;
     e->ofd = NULL;
+}
+
+/** A fork: the child's table is a copy of the parent's, each open file one
+ * reference more, and the child runs. */
+static void fork_model(void)
+{
+    int fd;
+
+    for (fd = 0; fd < SLOTS; fd++) {
+        child_entries[fd] = entries[fd];
+        if (entries[fd].ofd) {
+            entries[fd].ofd->refcount++;
+        }
+    }
+    current_proc = &child;
+}
+
+/** The child's exit: its descriptors close, and the parent runs again. */
+static void exit_model(void)
+{
+    int fd;
+
+    current_proc = &child;
+    for (fd = 3; fd < SLOTS; fd++) {
+        if (child_entries[fd].ofd) {
+            close_fd(fd);
+        }
+    }
+    current_proc = &proc;
+}
+
+/** How many registrations the set `ep` has, the dropped ones gone. */
+static uint32_t registrations(int ep)
+{
+    return ((struct epoll *)slot(ep)->priv)->count;
 }
 
 /** EPOLL_CTL_ADD of `fd` to the set `ep` for `events`. */
@@ -461,12 +542,13 @@ static void nest_cycles(void)
 }
 
 /**
- * The registrations of a set go with their numbers and their sets: h0 holds
- * h1, which holds h2, which holds h3. With h1's number closed and a second
- * number keeping h1 open, h0's registration of it no longer holds it, and a
- * chain of four can go below h3. The last closes of h0 and h2, the one
- * holding a registration of a live set and the other held by one, and a
- * wait that drops h1's stale registration of h2, leave h3 held by nothing.
+ * The registrations of a set last while its open file does, and go with it:
+ * h0 holds h1, which holds h2, which holds h3. With h1's number closed and a
+ * second number keeping h1 open, h0's registration of it holds it still, as
+ * in Linux, and a set under h3 is the last the chain takes. The last closes
+ * of h0 and of h2, the one holding a registration of a live set and the
+ * other held by one, take their registrations with them, h1's of h2 among
+ * them, and leave h3 held by nothing.
  */
 static void nest_after_close(void)
 {
@@ -481,17 +563,14 @@ static void nest_after_close(void)
         CHECK(add(h[i], h[i + 1], EPOLLIN) == 0, "a chain of four sets");
     }
     kept = dup_fd(h[1]);
-    x = create();
-    CHECK(add(h[3], x, EPOLLIN) == 0 && add(x, k[0], EPOLLIN) == -ELOOP,
-          "a set under four is the last a chain takes");
-    close_fd(x);
     close_fd(h[1]);
     x = create();
-    CHECK(add(h[3], x, EPOLLIN) == 0 && add(x, k[0], EPOLLIN) == 0,
-          "a registration whose number was closed holds its set no more");
+    CHECK(add(h[3], x, EPOLLIN) == 0 && add(x, k[0], EPOLLIN) == -ELOOP,
+          "a registration whose number was closed holds its set while another number keeps it");
     close_fd(x);
     close_fd(h[0]);
     close_fd(h[2]);
+    CHECK(registrations(kept) == 0, "the last close of a set takes the registrations of it");
     CHECK(wait_set(kept) == 0, "a set whose registration's set was closed reports nothing");
     for (i = 0; i < 3; i++) {
         CHECK(add(k[i], k[i + 1], EPOLLIN) == 0, "a second chain of four sets");
@@ -507,6 +586,73 @@ static void nest_after_close(void)
     }
 }
 
+/**
+ * A registration of an object lasts while the object's open file is open,
+ * whatever became of its number: with the number closed and a second one
+ * keeping the file open, a wait reports nothing of it and keeps it, and the
+ * wait after the second number's close drops it.
+ */
+static void kept_open(void)
+{
+    static struct model m;
+    int ep = create();
+    int fd = open_model(&m, POLLIN);
+    int second;
+
+    CHECK(add(ep, fd, EPOLLIN) == 0 && wait_set(ep) == 1, "a ready object in a set");
+    second = dup_fd(fd);
+    close_fd(fd);
+    CHECK(wait_set(ep) == 0 && registrations(ep) == 1,
+          "a registration whose number was closed stays while another number keeps its file");
+    close_fd(second);
+    CHECK(wait_set(ep) == 0 && registrations(ep) == 0,
+          "a registration whose file has closed everywhere is dropped");
+    close_fd(ep);
+}
+
+/**
+ * A fork's child shares the parent's sets and open files: s0 holds s1, on
+ * to s4, and a ready object is in s4. The child closes its copy of s1's
+ * number, which the parent's keeps open, so s0's registration of s1 holds
+ * s1 still: the child's add of a sixth set under s4 is ELOOP, and so is its
+ * add of s0 under a sixth. The child's wait on s0 cannot look into s1 and
+ * reports nothing, and leaves the registration, so the parent's wait on s0
+ * reports the object after the child has gone.
+ */
+static void nest_forked(void)
+{
+    static struct model m;
+    int s[5];
+    int sixth, above, fd, i;
+
+    for (i = 0; i < 5; i++) {
+        s[i] = create();
+    }
+    sixth = create();
+    above = create();
+    fd = open_model(&m, POLLIN);
+    CHECK(add(s[4], fd, EPOLLIN) == 0, "a ready object in the fifth set");
+    for (i = 0; i < 4; i++) {
+        CHECK(add(s[i], s[i + 1], EPOLLIN) == 0, "five sets nested, each in the one before");
+    }
+    fork_model();
+    close_fd(s[1]);
+    CHECK(add(s[4], sixth, EPOLLIN) == -ELOOP,
+          "a child's add under five sets, one of whose numbers it closed, is ELOOP");
+    CHECK(add(above, s[0], EPOLLIN) == -ELOOP,
+          "a child's add of five sets, one of whose numbers it closed, under a sixth is ELOOP");
+    CHECK(wait_set(s[0]) == 0, "a child's wait does not look into a set whose number it closed");
+    exit_model();
+    CHECK(wait_set(s[0]) == 1,
+          "a child's wait on a set whose registration's number it closed leaves it to the parent");
+    close_fd(fd);
+    close_fd(sixth);
+    close_fd(above);
+    for (i = 0; i < 5; i++) {
+        close_fd(s[i]);
+    }
+}
+
 int main(void)
 {
     int i;
@@ -519,6 +665,10 @@ int main(void)
     table.cap = SLOTS;
     table.refs = 1;
     proc.fds = &table;
+    child_table.entries = child_entries;
+    child_table.cap = SLOTS;
+    child_table.refs = 1;
+    child.fds = &child_table;
     current_proc = &proc;
     edge_kinds();
     nested_kinds();
@@ -528,6 +678,8 @@ int main(void)
     nest_two_paths();
     nest_cycles();
     nest_after_close();
+    kept_open();
+    nest_forked();
     printf("epoll-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

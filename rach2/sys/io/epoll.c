@@ -68,8 +68,9 @@ struct epitem {
     uint32_t seen;
     const struct wait_queue *at;
     uint32_t wakes;
-    /* The set the registration is in; for a registration of a set, that set
-     * while it lives, and the next registration of it (its `holders`). */
+    /* The set the registration is in; for a registration of a set, that
+     * set, whose last close drops the registration (`epoll_close`), and the
+     * next registration of it (its `holders`). */
     struct epoll *owner;
     struct epoll *set;
     struct epitem *hold_next;
@@ -204,8 +205,15 @@ static uint32_t target_poll(fd_entry_t *e, uint32_t want, int depth, struct qlis
  * and the queues a wait must be on in `q` (`target_poll`), for a set
  * inside the one scanned at `depth`. EPOLLERR and EPOLLHUP are watched
  * whatever the registration asked, none included, and nothing is while a
- * one-shot registration is off. A registration whose number names another
- * open file, or none, is marked for removal with `*gone`.
+ * one-shot registration is off.
+ *
+ * A registration lasts while the open file it was made for is open in any
+ * process, as in Linux, and is marked for removal with `*gone` once it is
+ * not; a registration of a set goes at the set's last close. It is looked
+ * at through the caller's descriptor at its number alone, since a wait
+ * sleeps on the queues of what it looks at and only the caller's own
+ * descriptors keep those while it sleeps: a caller whose number names
+ * another open file, or none, is told nothing of it.
  *
  * An edge-triggered registration is reported when an event is ready that
  * was not at its last report, or has gone since, or when its descriptor's
@@ -224,8 +232,12 @@ static uint32_t item_ready(struct epitem *it, int depth, struct qlist *q, struct
 
     *wq = NULL;
     *wakes = 0;
-    *gone = !item_names(it, e);
-    if (*gone || it->off) {
+    *gone = 0;
+    if (!item_names(it, e)) {
+        *gone = !it->set && !fd_ofd_live(it->ofd, it->serial);
+        return 0;
+    }
+    if (it->off) {
         return 0;
     }
     ready = target_poll(e, want, depth, q, wq, wakes);
@@ -472,11 +484,14 @@ short epoll_poll_set(fd_entry_t *e, short events, struct wait_queue **wqs, uint3
 /*
  * The longest chain of sets below the set `inner`, which a path puts
  * `depth` sets below the set `ep` it is to be added to: 0 when it holds no
- * set. A chain that reaches `ep`, which the add would close into a cycle,
- * one deeper than EP_MAX_NESTS, and one through a cycle below count as
- * longer than EP_MAX_NESTS. Each set is looked into once per check
- * (`scan_marks`) and keeps what it found in `height`, so a set met first by
- * a short path counts the same for a longer one.
+ * set. The chain goes through every registration of a set (`set`),
+ * whichever process made it and whatever became of its number, since a
+ * scan by a process that has all their numbers looks into each. A chain
+ * that reaches `ep`, which the add would close into a cycle, one deeper
+ * than EP_MAX_NESTS, and one through a cycle below count as longer than
+ * EP_MAX_NESTS. Each set is looked into once per check (`scan_marks`) and
+ * keeps what it found in `height`, so a set met first by a short path
+ * counts the same for a longer one.
  */
 static int sets_below(struct epoll *inner, const struct epoll *ep, int depth)
 {
@@ -492,11 +507,9 @@ static int sets_below(struct epoll *inner, const struct epoll *ep, int depth)
     inner->mark = scan_marks;
     inner->height = EP_MAX_NESTS + 1;
     for (it = inner->items; it && most <= EP_MAX_NESTS; it = it->next) {
-        fd_entry_t *e = fd_get(current_proc->fds, it->fd);
-        int below;
+        if (it->set) {
+            int below = sets_below(it->set, ep, depth + 1) + 1;
 
-        if (item_names(it, e) && is_set(e)) {
-            below = sets_below((struct epoll *)e->priv, ep, depth + 1) + 1;
             if (below > most) {
                 most = below;
             }
@@ -507,11 +520,12 @@ static int sets_below(struct epoll *inner, const struct epoll *ep, int depth)
 }
 
 /*
- * The longest chain of sets above the set `ep`, through the registrations
- * of it whose numbers still name it, from `depth` sets above the set a
- * check began at: 0 when no set holds it. A chain longer than EP_MAX_NESTS,
- * or one through a cycle, counts as longer; each set is looked into once
- * per check, as in `sets_below`.
+ * The longest chain of sets above the set `ep`, through every registration
+ * of it (`holders`), whichever process made it and whatever became of its
+ * number, from `depth` sets above the set a check began at: 0 when no set
+ * holds it. A chain longer than EP_MAX_NESTS, or one through a cycle,
+ * counts as longer; each set is looked into once per check, as in
+ * `sets_below`.
  */
 static int sets_above(struct epoll *ep, int depth)
 {
@@ -527,33 +541,46 @@ static int sets_above(struct epoll *ep, int depth)
     ep->mark = scan_marks;
     ep->height = EP_MAX_NESTS + 1;
     for (h = ep->holders; h && most <= EP_MAX_NESTS; h = h->hold_next) {
-        int above;
+        int above = sets_above(h->owner, depth + 1) + 1;
 
-        if (item_names(h, fd_get(current_proc->fds, h->fd))) {
-            above = sets_above(h->owner, depth + 1) + 1;
-            if (above > most) {
-                most = above;
-            }
+        if (above > most) {
+            most = above;
         }
     }
     ep->height = most;
     return most;
 }
 
+/* Take the registration `h` of a set out of the set that has it, and off
+ * the holders of the set it is of. */
+static void drop_holder(struct epitem *h)
+{
+    struct epitem **link = &h->owner->items;
+
+    while (*link && *link != h) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        drop_item(h->owner, link);
+    } else {
+        unhold(h);
+    }
+}
+
 /*
- * The last close of a set: its registrations go, and those of it in other
- * sets no longer name it, which their next scan drops.
+ * The last close of a set, when its open file is closed in every process:
+ * its registrations go, and so do the registrations of it in other sets, as
+ * Linux removes a file's registrations at its last close.
  */
 static void epoll_close(fd_entry_t *e)
 {
     struct epoll *ep = (struct epoll *)e->priv;
-    struct epitem *h;
 
     while (ep->items) {
         drop_item(ep, &ep->items);
     }
-    for (h = ep->holders; h; h = h->hold_next) {
-        h->set = NULL;
+    while (ep->holders) {
+        drop_holder(ep->holders);
     }
     kfree(ep);
     e->priv = NULL;
@@ -612,10 +639,12 @@ int32_t sys_epoll_create1(struct isr_params *params)
 /*
  * Whether adding the set `inner` to `ep` would make a cycle of sets, or a
  * chain of them more than EP_MAX_NESTS deep below its outermost set,
- * counting the sets above `ep` as well as those below `inner`. Linux
- * refuses either with ELOOP, and a scan of the outermost set would not look
- * into the innermost of a longer chain, whose events a wait on it would
- * then never report.
+ * counting the sets above `ep` as well as those below `inner`, through the
+ * registrations of every process: a fork's child that has closed its copy
+ * of a number shares the sets with a parent that has not. Linux refuses
+ * either with ELOOP, and a scan of the outermost set would not look into
+ * the innermost of a longer chain, whose events a wait on it would then
+ * never report.
  */
 static int nests_badly(struct epoll *inner, struct epoll *ep)
 {
