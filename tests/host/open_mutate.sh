@@ -105,9 +105,9 @@ changes = {
         ("vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,",
          "vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,"),
         ("    if (rc != 0) {\n        vfs_ref_release(&opar);\n        return rc;\n    }\n"
-         "    rc = mnt_is_root(npar.mnt)",
+         "    /* rename is within one mount;",
          "    if (rc != 0) {\n        vfs_walk_unlock(opar.mnt);\n        vfs_ref_release(&opar);\n"
-         "        return rc;\n    }\n    rc = mnt_is_root(npar.mnt)"),
+         "        return rc;\n    }\n    /* rename is within one mount;"),
         ("out:\n    vfs_ref_release(&npar);", "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"),
     ],
     "chmod-walk-unlocked": ("    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);", "    rc = resolve_named(name, 0, dir, &ref);"),

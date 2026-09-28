@@ -59,7 +59,14 @@ or
 names a directory, which no socket file is, as in Linux: a bind to one,
 the root among them, makes nothing and fails with
 .Er ENOENT
-when a slash follows a name nothing has and with
+when the name before the end is one nothing has, with
+.Er ENOTDIR
+when a last
+.Pa \&.
+or
+.Pa \&..
+follows a name that is not a directory, which the walk to the parent
+reports, and with
 .Er EADDRINUSE
 otherwise, and a connect or a send to one fails with
 .Er ENOTDIR

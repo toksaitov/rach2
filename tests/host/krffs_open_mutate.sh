@@ -49,7 +49,8 @@ groups = [
      "walk_move walk_root root_current dotdot_stays walk_leaf walk_link walk_last_comp walk_is_link "
      "resolve_path vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close "
      "vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create"),
-    ("syscall_fs.c", "syscall_open.inc", "name_is open_link_target node_make open_create "
+    ("syscall_fs.c", "syscall_open.inc", "name_is device_name open_device_name open_link_target "
+     "node_make open_create "
      "open_mounted_node ofd_record_path open_install open_synth_node do_open"),
 ]
 for source, output, names in groups:

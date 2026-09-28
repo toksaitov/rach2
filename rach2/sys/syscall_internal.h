@@ -52,9 +52,11 @@ int32_t sys_writev(isr_params_t *params);
 
 int canonicalize_abs(char *path);
 
-int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath);
+int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *end);
 
-int canonicalize_named(char *path);
+int canonicalize_named(char *path, int *end);
+
+int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 
 int fd_node_check(fd_entry_t *entry);
 
