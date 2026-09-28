@@ -21,9 +21,9 @@
  *
  * Unused syscall and loop exports are private so their hardware paths are
  * removed. The model uses distinct nodes and open handles. A call of another
- * process that must wait for a description a sleeping call holds parks
- * (`compat/park_host.c`), and the row runs it again once the holder has let
- * the description go and woken its queue.
+ * process that must wait for a description a sleeping call holds parks in
+ * its wait with its frames kept (`compat/park_host.c`), and the row resumes
+ * it there once the holder has let the description go and woken its queue.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -43,8 +43,9 @@ static int32_t sys_ftruncate64(isr_params_t *params);
 static int32_t sys_write(isr_params_t *params);
 static int32_t sys_writev(isr_params_t *params);
 static int canonicalize_abs(char *path);
-static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath);
-static int canonicalize_named(char *path);
+static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *end);
+static int canonicalize_named(char *path, int *end);
+static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref);
 static int fd_node_check(fd_entry_t *entry);
 static int cred_privileged(void);
 static void cred_kill_setid(krffs_node_t *node);
@@ -141,6 +142,7 @@ extern void free(void *ptr);
 extern void exit(int status);
 
 int park_run(void (*call)(void));
+int park_resume(void);
 int park_active(void);
 void park(void);
 
@@ -164,6 +166,13 @@ static const struct vfs_type mounted_type = {0};
 static const struct vfs_type locked_type = {"locked", 0, 0, 1, 0};
 /* A serialised mounted type with the root's lookup, for the mkdir rows. */
 static const struct vfs_type mkdir_type = {"mkdir", 0, &root_ops, 1, 0};
+/* A serialised mounted type that keeps a node only while it is open and
+ * pins one for a holder that opens nothing, as a KRFFS volume does, for the
+ * chdir row. */
+static int dir_pin(struct vfs_mount *mnt, void *at, void **token);
+static void dir_unpin(struct vfs_mount *mnt, void *token);
+static const struct vfs_ops pinning_ops = {.pin = dir_pin, .unpin = dir_unpin};
+static const struct vfs_type pinning_type = {"pinning", 0, &pinning_ops, 1, 0};
 static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
@@ -485,6 +494,11 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
         run_waiting();
     }
     k_memset(st, 0, sizeof(*st));
+    if (mount.type == &pinning_type) {
+        check(mnt == &mount && at == &node, "a chdir checks the directory its walk found");
+        st->mode = 040755;
+        return 0;
+    }
     if (mkdir_row) {
         check(mnt == &mount && at == &root_dir,
               "a mkdir checks the directory it makes the name in");
@@ -718,22 +732,21 @@ void wq_wake_all(wait_queue_t *wq)
 }
 
 /**
- * A description wait: it ends at once when `cond` holds, and a call of
- * another process that a row runs in a sleep parks. Any other wait is one
- * that nothing can end, which ends the run.
+ * A description wait: it ends when `cond` holds, and a call of another
+ * process that a row runs in a sleep parks until the row resumes it, then
+ * asks again. Any other wait is one that nothing can end, which ends the run.
  */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    if (cond(arg)) {
-        return 0;
-    }
-    if (park_active()) {
+    while (!cond(arg)) {
+        if (!park_active()) {
+            printf("open-hosttest: fail: a description wait that nothing can end\n");
+            exit(1);
+        }
         parked_on = wq;
         parked_wakes = 0;
         park();
     }
-    printf("open-hosttest: fail: a description wait that nothing can end\n");
-    exit(1);
     return 0;
 }
 
@@ -849,6 +862,97 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
     (void)node;
     (void)name;
     return 0;
+}
+
+/* The pins the chdir row's directory has, and the pins it had while the
+ * chdir slept between its walk and its record and when the working
+ * directory recorded it; and what the working directory recorded. */
+static int dir_pins, pins_asleep, pins_at_record;
+static struct vfs_mount *cwd_mnt_recorded;
+static void *cwd_node_recorded;
+
+/** Pin the chdir row's directory, which the walk that found it must still
+ * have locked, as a KRFFS volume pins a node for an O_PATH description. */
+static int dir_pin(struct vfs_mount *mnt, void *at, void **token)
+{
+    check(mnt == &mount && at == &node && ns_depth > 0,
+          "a chdir pins the node under the lock of the walk that found it");
+    dir_pins++;
+    *token = &dir_pins;
+    return 0;
+}
+
+static void dir_unpin(struct vfs_mount *mnt, void *token)
+{
+    check(mnt == &mount && token == &dir_pins && dir_pins > 0, "an unpin matches a pin");
+    dir_pins--;
+}
+
+/** No row's path is a directory of /proc. */
+int procfs_resolve_id(const struct vpath *vp)
+{
+    (void)vp;
+    check(0, "unexpected /proc lookup");
+    return -1;
+}
+
+int procfs_resolve_pid(int pid)
+{
+    (void)pid;
+    check(0, "unexpected /proc lookup");
+    return 0;
+}
+
+void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
+{
+    (void)kind;
+    (void)pid;
+    (void)tid;
+    (void)out;
+    (void)cap;
+    check(0, "unexpected synthetic directory path");
+}
+
+/** The working directory's path, which no row reads. */
+int proc_cwd_set(struct process *p, const char *path)
+{
+    (void)p;
+    (void)path;
+    return 0;
+}
+
+/** Record the working directory, and the pins its node has then. */
+void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *at)
+{
+    (void)p;
+    cwd_mnt_recorded = mnt;
+    cwd_node_recorded = at;
+    pins_at_record = dir_pins;
+}
+
+/** No row's type names its nodes, and no row's process has a root of its
+ * own. */
+int vfs_node_path(struct vfs_mount *mnt, void *at, char *out, uint32_t cap)
+{
+    (void)mnt;
+    (void)at;
+    (void)out;
+    (void)cap;
+    check(0, "unexpected node path");
+    return -ENOENT;
+}
+
+int vfs_enter(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    check(0, "unexpected entry to a process's root");
+    return -EBUSY;
+}
+
+void vfs_ref_hold(const struct vfs_ref *r)
+{
+    (void)r;
+    check(0, "unexpected hold of a process's root");
 }
 
 /** Whether a change to the root runs in the hold of the root's lock that
@@ -1385,6 +1489,51 @@ static void rmdir_in_use(void)
     rmdir_row_end();
 }
 
+/** The call that runs while the chdir row's chdir sleeps for the disk
+ * between its walk and its record, where an rmdir would look for the pin. */
+static void chdir_sleeps(void)
+{
+    pins_asleep = dir_pins;
+}
+
+/** The call that holds the lock the chdir row's walk asks for last; the
+ * chdir's next sleep comes after its walk. */
+static void chdir_walks(void)
+{
+    waiting = chdir_sleeps;
+}
+
+/**
+ * A chdir into a directory of a type that keeps a node only while it is
+ * open, as a KRFFS volume does. The walk's reference holds nothing there,
+ * and the checks before the record may sleep for the disk, so the chdir
+ * pins the node under the lock its walk ends with and lets the pin go once
+ * the working directory records the node: an rmdir while the chdir sleeps
+ * finds the pin, and one after it finds the working directory.
+ */
+static void chdir_pins(void)
+{
+    char path[] = "/dir";
+
+    row_begin();
+    mount.type = &pinning_type;
+    k_memset(&row_fs, 0, sizeof(row_fs));
+    proc.fs = &row_fs;
+    dir_pins = pins_asleep = pins_at_record = 0;
+    cwd_mnt_recorded = NULL;
+    cwd_node_recorded = NULL;
+    waiting = chdir_walks;
+    check(do_chdir(path) == 0, "a chdir into a directory of a pinning type");
+    check(pins_asleep == 1, "the directory is pinned while the chdir sleeps before its record");
+    check(cwd_mnt_recorded == &mount && cwd_node_recorded == &node && pins_at_record == 1,
+          "the directory is pinned when the working directory records it");
+    check(dir_pins == 0 && ns_depth == 0 && !waiting, "the chdir lets its pin and the lock go");
+    waiting = 0;
+    proc.fs = 0;
+    mount.type = &mounted_type;
+    row_end();
+}
+
 /** The write a row's call waits for: it holds the mount's lock and moves
  * the file, as a growing write on a mounted KRFFS volume does, and repoints
  * the descriptions open on it. */
@@ -1856,16 +2005,16 @@ static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0};
  * A read, then a write, of 32 bytes of a /proc/PID/mem descriptor at 0x1000,
  * as read(2) and write(2) dispatch them, whose page fetch sleeps while a
  * process that shares the description seeks 16 bytes on: the transfer holds
- * the description as the seek does, so the seek waits, and once the
- * transfer's end has woken it, it moves the offset on from 0x1020, where the
- * transfer left it, and is not lost.
+ * the description as the seek does, so the seek waits, and resumed in its
+ * wait once the transfer's end has woken it, it moves the offset on from
+ * 0x1020, where the transfer left it, and is not lost.
  */
 static void proc_seek_waits(void)
 {
     char buf[32];
     fd_entry_t *e;
     int32_t moved_bytes;
-    int writing, fd;
+    int writing, fd, resumed;
 
     for (writing = 0; writing < 2; writing++) {
         row_begin();
@@ -1892,9 +2041,11 @@ static void proc_seek_waits(void)
                                      : "a seek waits for a /proc read that sleeps in a page fetch");
         if (sharer_parked) {
             check(parked_wakes != 0, "the end of the /proc transfer wakes the seek that waits");
-            check(park_run(sharer_seeks) && sharer_seek == 0x1030,
-                  "the seek that waited moves on from where the /proc transfer left the offset");
+            current_proc = &other;
+            resumed = park_resume();
             current_proc = &proc;
+            check(resumed && sharer_seek == 0x1030,
+                  "the seek that waited moves on from where the /proc transfer left the offset");
         }
         check(e->ofd->offset == 0x1030 && !e->ofd->busy,
               "a seek made while a /proc transfer sleeps is not lost");
@@ -1921,6 +2072,7 @@ int main(void)
     mkdir_race();
     orphan_locks();
     rmdir_in_use();
+    chdir_pins();
     attrs_after_move();
     stats_after_move();
     times_after_move();

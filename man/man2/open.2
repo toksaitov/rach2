@@ -396,7 +396,21 @@ The special paths
 and
 .Pa /mouse
 open the framebuffer and mouse directly.
-The kernel open handler ignores flags and mode for these paths.
+The kernel open handler ignores flags and mode for these paths, except
+that neither device is a directory:
+.Dv O_DIRECTORY
+returns
+.Er ENOTDIR ,
+and so does a path that ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+after either name, before the device is touched.
+With
+.Dv O_CREAT ,
+such a path follows the rule for
+.Dv O_CREAT
+above.
 The framebuffer opens for reading and writing and is owned by one
 process at a time; the mouse opens for reading and requires an
 available mouse device.

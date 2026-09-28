@@ -536,15 +536,20 @@ else; it is kept for the programs that set it, as Chromium sets it for
 its renderers.
 .Pp
 A write takes its first 12 bytes as one integer, as Linux reads them:
-spaces at either end are stripped, and the number is decimal, hexadecimal
-after
+the bytes at either end that Linux's
+.Fn isspace
+takes for spaces are stripped, which are the space, tab, newline, vertical
+tab, form feed, carriage return and 0xa0, and the number is decimal,
+hexadecimal after
 .Ql 0x
 or octal after
 .Ql 0 .
-Text that is no integer, and a value out of the range, are
+Text that is no integer is
 .Er EINVAL ,
-and a number an int does not hold is
-.Er ERANGE .
+however many digits it begins with; an integer an int does not hold is
+.Er ERANGE ,
+and one it holds that is out of the range
+.Er EINVAL .
 A caller that is not privileged may not write a value below the floor,
 the value the last privileged write left, 0 before any, and gets
 .Er EACCES ;

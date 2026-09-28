@@ -2690,9 +2690,10 @@ static void hold_release(struct vfs_mount *mnt, void *node)
  * one, whose put may sleep: a thread that shares the working directory
  * (CLONE_FS) and changes it meanwhile replaces a hold that is in the record,
  * and the pair in the record stays the directory its path names. /dev and
- * /proc need no hold and take none. The KRFFS boot root, whose type has no
- * `hold`, takes only the mount's count, and the record keeps its node for
- * `rmdir`, which refuses a directory that is a working directory.
+ * /proc need no hold and take none. KRFFS, the boot root and a mounted
+ * volume, has no `hold`: the working directory takes only the mount's
+ * count, and the record keeps its node for `rmdir`, which refuses a
+ * directory that is a working directory.
  */
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {

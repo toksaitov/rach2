@@ -153,9 +153,20 @@ A first line that fills the 128-byte read buffer without a newline is
 also refused.
 The interpreter is checked for execute permission and loaded as an ELF
 executable, and its path is held to the rule for a path that names a
-directory by its end: an interpreter named with a trailing slash returns
-.Er ENOTDIR ,
-as on Linux.
+directory by its end: an interpreter named with a trailing slash, or with
+a last
+.Pa \&.
+or
+.Pa \&.. ,
+returns
+.Er ENOTDIR
+when the name reaches anything but a directory, as
+.Ql #!/bin/sh/
+does, and
+.Er EACCES
+when it reaches a directory, as
+.Ql #!/bin/
+does, since no program is one, as on Linux.
 .Ss Credentials and descriptors
 For an ELF executable, set-user-ID changes the effective user ID to the
 file's owner.

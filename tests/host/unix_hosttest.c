@@ -10,12 +10,14 @@
  * threads share, the heap, the wait queues and the file system's socket
  * files are models; user memory is eight model pages. A copy that reaches a
  * page not yet present sleeps while the page comes in, and there the model
- * runs the call a row gives the other thread, the sibling; so do the file
- * system's making and lookup of a socket file and the release of a file's
- * last description, which can sleep too. A sibling that must wait for a
- * lock the sleeping call holds parks (`compat/park_host.c`): its turn ends
- * there, the sleeping call goes on, and the row runs the sibling again once
- * the lock is free, as the woken thread would.
+ * runs the call a row gives the other thread, the sibling, on a stack of
+ * its own (`compat/park_host.c`); so do the file system's making and lookup
+ * of a socket file and the release of a file's last description, which can
+ * sleep too. A sibling that must wait for a lock the sleeping call holds
+ * parks: its turn ends in the wait, with its frames kept, and the sleeping
+ * call goes on. The row resumes the sibling in its wait only after a wake
+ * of the queue it waits on, as the scheduler runs a sleeper again only once
+ * a wake has made it runnable.
  *
  * The descriptors accept, socketpair, a receive of SCM_RIGHTS and pipe2
  * make are reserved while their numbers, and for accept the peer's name,
@@ -49,8 +51,10 @@ extern void free(void *p);
 extern void exit(int status);
 extern int dprintf(int fd, const char *format, ...);
 
-int park_run(void (*call)(void));
+int park_run(void (*fn)(void));
+int park_resume(void);
 int park_active(void);
+int park_waiting(void);
 void park(void);
 
 #define USER_BASE 0x04000000u
@@ -98,6 +102,8 @@ static int files_made;
 static void (*page_sibling)(void);
 static void (*fs_sibling)(void);
 static void (*release_sibling)(void);
+/* How many siblings ran, and whether the last one is parked in a wait: on
+ * which queue, and how many wakes of that queue came since it parked. */
 static int ran, parked;
 static wait_queue_t *parked_on;
 static uint32_t parked_wakes;
@@ -189,26 +195,49 @@ void kfree(void *p)
 }
 
 /**
- * Run the sibling call armed in `*slot`, once, as the scheduler runs another
- * thread while this one sleeps. A sibling that parks leaves nothing behind
- * but the entry a receive puts on the transit list, which was on its stack
- * and comes off again.
+ * Run the sibling call armed in `*slot`, once, on a stack of its own, as the
+ * scheduler runs another thread while this one sleeps. The sibling runs
+ * until it returns or parks in a wait; a parked one is resumed with
+ * `wake_sibling`.
  */
 static void run_sibling(void (**slot)(void))
 {
     void (*call)(void) = *slot;
-    struct unix_in *was = transits;
 
     *slot = NULL;
     if (!call) {
         return;
     }
-    ran++;
-    parked_on = NULL;
-    parked = !park_run(call);
-    if (parked) {
-        transits = was;
+    if (park_active() || park_waiting()) {
+        check(0, "a sibling is armed at a sleep while another runs or sleeps");
+        return;
     }
+    ran++;
+    parked = !park_run(call);
+}
+
+/**
+ * Resume the parked sibling in its wait, as the scheduler runs a sleeper
+ * again once a wake of its queue has made it runnable: 1 when the sibling
+ * then returned. One that no wake has reached stays asleep, and 0 is
+ * returned without running it.
+ */
+static int wake_sibling(void)
+{
+    if (!parked || parked_wakes == 0) {
+        return 0;
+    }
+    parked = !park_resume();
+    return !parked;
+}
+
+/** Park the sibling in its wait on `wq`, until a row resumes it. */
+static void sleep_on(wait_queue_t *wq)
+{
+    parked_on = wq;
+    parked_wakes = 0;
+    park();
+    parked_on = NULL;
 }
 
 /**
@@ -257,43 +286,39 @@ int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 }
 
 /**
- * A wait: it ends at once when `cond` holds. A sibling whose condition does
- * not hold parks; the row's own thread is ended by a signal, since nothing
- * else runs.
+ * A wait: it ends when `cond` holds. A sibling whose condition does not
+ * hold sleeps, and tests the condition again each time it is resumed; the
+ * row's own thread is ended by a signal, since no other thread could make
+ * the condition hold.
  */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    if (cond(arg)) {
-        return 0;
+    while (!cond(arg)) {
+        if (!park_active()) {
+            return -EINTR;
+        }
+        sleep_on(wq);
     }
-    if (park_active()) {
-        parked_on = wq;
-        parked_wakes = 0;
-        park();
-    }
-    return -EINTR;
+    return 0;
 }
 
-/** An uninterruptible wait, which only a sibling can end by parking. */
+/** An uninterruptible wait, which only a sibling can make and sleep in. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    if (cond(arg)) {
-        return 0;
+    while (!cond(arg)) {
+        if (!park_active()) {
+            dprintf(2, "unix-hosttest: fail: an uninterruptible wait that no call can end\n");
+            exit(1);
+        }
+        sleep_on(wq);
     }
-    if (park_active()) {
-        parked_on = wq;
-        parked_wakes = 0;
-        park();
-    }
-    dprintf(2, "unix-hosttest: fail: an uninterruptible wait that no call can end\n");
-    exit(1);
     return 0;
 }
 
 /**
  * A wake counts one for each kind of change it names, as wait_queue.c
- * does, and one in `parked_wakes` when it is of the queue a sibling parked
- * on, whatever its kinds, since it would end that sibling's wait.
+ * does, and one in `parked_wakes` when it is of the queue the parked sibling
+ * sleeps on, whatever its kinds, since it makes that sibling runnable.
  */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
@@ -729,12 +754,30 @@ static void setup(void)
     sigpipes = 0;
 }
 
-/** The end of the row `name`: every descriptor is closed, and nothing is
- * left, no socket, pipe, message, receive or socket file held. */
+/**
+ * Resume a sibling still asleep, which only a fault leaves, without a wake,
+ * so that its call ends and lets go of what it holds before the row closes
+ * the descriptors it uses, as the kernel defers the release of a descriptor
+ * until the call using it ends. One that sleeps again cannot be ended, and
+ * the test stops.
+ */
+static void finish_sibling(const char *name)
+{
+    if (park_waiting() && !park_resume()) {
+        dprintf(2, "unix-hosttest: fail: the %s row leaves a sibling asleep\n", name);
+        exit(1);
+    }
+    parked = 0;
+}
+
+/** The end of the row `name`: the sibling's call is over, every descriptor
+ * is closed, and nothing is left, no socket, pipe, message, receive or
+ * socket file held. */
 static void end_row(const char *name)
 {
     int i;
 
+    finish_sibling(name);
     for (i = 0; i < SLOTS; i++) {
         do_close(i);
         fd_free(&shared, i);
@@ -1032,8 +1075,9 @@ static void bind_sibling(void)
 /**
  * bind(2) to a path: the file system's making of the socket file sleeps,
  * and a sibling's bind of the same socket must wait for the bind lock. The
- * first bind names the socket; the one that waited then fails with EINVAL,
- * so one socket file is made, and the socket's close lets it go.
+ * first bind names the socket and wakes the one that waits, which goes on
+ * from its wait and fails with EINVAL, so one socket file is made, and the
+ * socket's close lets it go.
  */
 static void bind_row(void)
 {
@@ -1056,10 +1100,13 @@ static void bind_row(void)
           "the first bind names the socket with the file it made");
     if (parked) {
         check(parked_wakes != 0, "the first bind's end wakes the bind that waits");
-        check(park_run(bind_sibling) && sibling_rc[0] == -EINVAL,
-              "the bind that waited finds the socket named and fails with EINVAL");
+        check(wake_sibling() && sibling_rc[0] == -EINVAL,
+              "the bind that waited goes on from its wait, finds the socket named and fails with "
+              "EINVAL");
     }
-    check(files_made == 1, "the two binds make one socket file");
+    check(files_made == 1 && s->fs_ref.node == &sockfiles[0],
+          "the two binds make one socket file, which the socket keeps");
+    finish_sibling("bind");
     do_close(0);
     check(!sockfiles[0].held && !sockfiles[1].held,
           "the socket's close lets go of every socket file it was given");
@@ -1075,7 +1122,8 @@ static void receive_sibling(void)
 /**
  * A receive whose copy of the first of two messages sleeps: a sibling's
  * receive must wait for the receive lock, the first receive must return its
- * message whole, and the sibling, run again, the second.
+ * message whole and wake the sibling as it lets the lock go, and the
+ * sibling, going on from its wait, must take the second.
  */
 static void receive_row(int type, const char *waits)
 {
@@ -1092,8 +1140,10 @@ static void receive_row(int type, const char *waits)
     check(rc == 3 && bytes_are(AT(0, 0), "one"),
           "the receive whose copy slept returns its message whole");
     if (parked) {
-        check(park_run(receive_sibling) && sibling_rc[0] == 3 && bytes_are(AT(1, 256), "two"),
-              "the receive that waited takes the next message");
+        check(parked_wakes != 0, "the end of a receive's hold of the lock wakes the receive that "
+                                 "waits for it");
+        check(wake_sibling() && sibling_rc[0] == 3 && bytes_are(AT(1, 256), "two"),
+              "the receive that waited goes on from its wait and takes the next message");
     }
     check(!sock_at(1)->rq_head, "receive: both messages are taken");
     end_row("receive");

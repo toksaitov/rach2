@@ -73,7 +73,8 @@ faults()
     case $1 in
         devfs) echo ptmx ;;
         procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
-            record-after-sleep oom-range oom-floor oom-floor-kept oom-open-emfile ;;
+            record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile \
+            oom-nbsp oom-range-first ;;
     esac
 }
 
@@ -119,6 +120,9 @@ else:
         'unheld-space': [("    mm_get(mm);\n    while (start < end) {", "    while (start < end) {"),
                          ("        start += n;\n    }\n    procfs_mm_put(mm);\n}",
                           "        start += n;\n    }\n}")],
+        'hold-not-user': [("    mm_get(mm);\n    while (start < end) {", "    mm_hold(mm);\n    while (start < end) {"),
+                          ("        start += n;\n    }\n    procfs_mm_put(mm);\n}",
+                           "        start += n;\n    }\n    mm_unhold(mm);\n}")],
         'record-after-sleep': [("        if (paging_access(mm, start, chunk, n, 0) != 0) {\n"
                                 "            break;\n        }\n        for (i = 0; i < n; i++) {",
                                 "        if (paging_access(p->mm, start, chunk, n, 0) != 0) {\n"
@@ -135,6 +139,9 @@ else:
         'oom-floor-kept': [("    p->tg->oom_score_adj = v;\n    if (proc_privileged(current_proc)) {\n"
                             "        p->tg->oom_score_adj_min = v;\n    }\n",
                             "    p->tg->oom_score_adj = v;\n")],
+        'oom-nbsp': [(" || (unsigned char)c == 0xA0;\n", ";\n")],
+        'oom-range-first': [("        if (over || mag > (limit - d) / base) {\n            over = 1;\n",
+                             "        if (over || mag > (limit - d) / base) {\n            return -ERANGE;\n")],
     }
     for old, new in changes[fault]:
         assert source.count(old) == 1
@@ -149,10 +156,13 @@ PY
             exe-present) message="fail: the link reads a renamed program's present path" ;;
             exe-deleted) message="fail: a program whose name is gone reads as its exec's path, deleted" ;;
             unheld-space | record-after-sleep) message='heap-use-after-free' ;;
+            hold-not-user) message='a read of the arguments reaches pages a user keeps' ;;
             oom-range) message='a value past -1000 to 1000 is EINVAL and changes nothing' ;;
             oom-floor) message='and may not lower it below the floor' ;;
             oom-floor-kept) message='a privileged write sets the floor' ;;
             oom-open-emfile) message='an open of oom_score_adj the heap has no room for is ENOMEM' ;;
+            oom-nbsp) message="the byte 0xa0 at either end is a space, as Linux's isspace has it" ;;
+            oom-range-first) message='text that is no integer is EINVAL however many digits it begins with' ;;
         esac
         run_phase "$test" "$fault" 1 "$message"
         cleanup

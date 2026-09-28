@@ -207,7 +207,9 @@ void switch_page_directory(page_dir_t *dir)
  * process 13 are all 'a': their first read sleeps for the page, and
  * meanwhile the process ends, putting its user's count of its address space,
  * and is reaped, which frees its record; each read then looks the page up in
- * `mm`, as `paging_access` looks up the region and the page after a sleep.
+ * `mm`, as `paging_access` looks up the region and the page after a sleep,
+ * and finds none once no user is left, since the last user's put frees the
+ * pages whatever holds keep the record.
  */
 int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
 {
@@ -224,6 +226,10 @@ int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int wri
         reading = NULL;
         mm_put(own);
         reaps++;
+    }
+    if (mm->users == 0) {
+        check(0, "a read of the arguments reaches pages a user keeps");
+        return -EFAULT;
     }
     check(addr >= mm->arg_start && addr + len <= mm->arg_end,
           "a read of the arguments stays in them");
@@ -550,7 +556,18 @@ static void oom_values(void)
               oom_write(&process, "12a") == -EINVAL && oom_write(&process, "+-5") == -EINVAL &&
               oom_write(&process, "09") == -EINVAL,
           "text that is no integer is EINVAL");
-    check(oom_write(&process, "99999999999") == -ERANGE, "a number an int does not hold is ERANGE");
+    check(oom_write(&process, "99999999999") == -ERANGE &&
+              oom_write(&process, "2147483648") == -ERANGE &&
+              oom_write(&process, "-2147483649") == -ERANGE,
+          "a number an int does not hold is ERANGE");
+    check(oom_write(&process, "-2147483648") == -EINVAL &&
+              oom_write(&process, "2147483647") == -EINVAL,
+          "a number an int holds that is out of the range is EINVAL");
+    check(oom_write(&process, "2147483648x") == -EINVAL &&
+              oom_write(&process, "-2147483649z") == -EINVAL && oom_reads("300\n"),
+          "text that is no integer is EINVAL however many digits it begins with");
+    check(oom_write(&process, "\240100\240") == 5 && oom_reads("100\n"),
+          "the byte 0xa0 at either end is a space, as Linux's isspace has it");
     check(oom_write(&process, "0") == 1 && oom_reads("0\n"), "a write of 0");
 }
 

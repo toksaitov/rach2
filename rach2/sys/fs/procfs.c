@@ -2370,10 +2370,12 @@ int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
     return 0;
 }
 
-/** Whether `c` is a space as Linux's `isspace` has it. */
+/** Whether `c` is a space as Linux's `isspace` has it: a space, a tab, a
+ * newline, a vertical tab, a form feed, a carriage return, or the byte 0xa0,
+ * the no-break space of Latin-1, whose classes Linux's table has. */
 static int oom_space(char c)
 {
-    return c == ' ' || (c >= '\t' && c <= '\r');
+    return c == ' ' || (c >= '\t' && c <= '\r') || (unsigned char)c == 0xA0;
 }
 
 /** The value of the digit `c` in any base up to 16, or 16 for none. */
@@ -2397,12 +2399,16 @@ static uint32_t oom_digit(char c)
  * spaces stripped at both ends: a sign, then a decimal number, a hexadecimal
  * one after `0x` or an octal one after `0`. 0, -EINVAL for text that is no
  * such number, or -ERANGE for a number an int does not hold.
+ *
+ * The whole text is read before the number is judged, as `kstrtoint` reads
+ * it through a conversion wider than an int, which a write's 12 bytes cannot
+ * pass: text that is no number is EINVAL however many digits it begins with.
  */
 static int oom_parse(const char *s, int32_t *v)
 {
     const char *end = s + k_strlen(s);
     uint32_t base = 10, mag = 0, limit = 0x7FFFFFFFu, d;
-    int neg = 0, digits = 0;
+    int neg = 0, digits = 0, over = 0;
 
     while (oom_space(*s)) {
         s++;
@@ -2428,13 +2434,17 @@ static int oom_parse(const char *s, int32_t *v)
         if (d >= base) {
             return -EINVAL;
         }
-        if (mag > (limit - d) / base) {
-            return -ERANGE;
+        if (over || mag > (limit - d) / base) {
+            over = 1;
+        } else {
+            mag = mag * base + d;
         }
-        mag = mag * base + d;
     }
     if (digits == 0) {
         return -EINVAL;
+    }
+    if (over) {
+        return -ERANGE;
     }
     *v = neg ? (int32_t)(0u - mag) : (int32_t)mag;
     return 0;

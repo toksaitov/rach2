@@ -5,8 +5,9 @@
 # the lock their walk takes, the key of a file's locks, a mkdir's lookup under
 # the lock of its parent, an orphan's locks dropped before it is freed, an
 # rmdir on the KRFFS root of a directory a description or a working directory
-# has, and a read and a write of a /proc file that hold its description while
-# a sharer's seek waits, before, during and after each fault.
+# has, a chdir's pin of a directory on a type that keeps a node only while it
+# is open, and a read and a write of a /proc file that hold its description
+# while a sharer's seek waits, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -74,7 +75,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     open-emfile dup-enomem dup2-enomem program-holder program-reclaim-unlocked root-lock-key \
     volume-lock-key fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
     rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
-    proc-read-unheld proc-write-unheld; do
+    chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record proc-read-unheld \
+    proc-write-unheld; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -106,9 +108,9 @@ changes = {
         ("vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,",
          "vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,"),
         ("    if (rc != 0) {\n        vfs_ref_release(&opar);\n        return rc;\n    }\n"
-         "    rc = mnt_is_root(npar.mnt)",
+         "    /* rename is within one mount;",
          "    if (rc != 0) {\n        vfs_walk_unlock(opar.mnt);\n        vfs_ref_release(&opar);\n"
-         "        return rc;\n    }\n    rc = mnt_is_root(npar.mnt)"),
+         "        return rc;\n    }\n    /* rename is within one mount;"),
         ("out:\n    vfs_ref_release(&npar);", "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"),
     ],
     "chmod-walk-unlocked": ("    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);", "    rc = resolve_named(name, 0, dir, &ref);"),
@@ -210,6 +212,24 @@ changes = {
                               "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {",
                               "    for (pr = current_proc; pr; pr = NULL) {\n"
                               "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {"),
+    "chdir-unpinned": ("    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {\n"
+                       "        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n"
+                       "    }\n    vfs_walk_unlock(ref.mnt);\n",
+                       "    vfs_walk_unlock(ref.mnt);\n"),
+    "chdir-walk-unlocked": [
+        ("    rc = vfs_resolve(0, path, VFS_WALK_LOCK, &ref, 0, 0);\n    if (rc != 0) {\n"
+         "        return rc;\n    }\n    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {",
+         "    rc = vfs_resolve(0, path, 0, &ref, 0, 0);\n    if (rc != 0) {\n"
+         "        return rc;\n    }\n    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {"),
+        ("        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n"
+         "    }\n    vfs_walk_unlock(ref.mnt);\n",
+         "        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n    }\n"),
+    ],
+    "chdir-unpinned-before-record": ("        rc = chdir_mounted(&ref, path);\n        if (pin) {\n"
+                                     "            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n",
+                                     "        if (pin) {\n"
+                                     "            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n"
+                                     "        rc = chdir_mounted(&ref, path);\n"),
     "proc-read-unheld": ("static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n"
                          "    struct open_file *held = ops_offset_held(entry);",
                          "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n"
@@ -257,6 +277,9 @@ PY
         rmdir-tables-only) message='an rmdir of a directory a description in flight has is EBUSY' ;;
         rmdir-cwd-ignored) message="an rmdir of the caller's working directory is EBUSY" ;;
         rmdir-cwd-caller-only) message="an rmdir of another process's working directory is EBUSY" ;;
+        chdir-unpinned) message='the directory is pinned while the chdir sleeps before its record' ;;
+        chdir-walk-unlocked) message='a chdir pins the node under the lock of the walk that found it' ;;
+        chdir-unpinned-before-record) message='the directory is pinned when the working directory records it' ;;
         proc-read-unheld) message='a seek waits for a /proc read that sleeps in a page fetch' ;;
         proc-write-unheld) message='a seek waits for a /proc write that sleeps in a page fetch' ;;
     esac

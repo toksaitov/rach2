@@ -37,10 +37,12 @@
  * returns -EPERM and the name stays readable, through the held descriptor and
  * through a fresh open alike. An implementation that orphans before it refuses
  * cannot pass that. The other shape refuses for the destination, not the
- * source: renaming a file onto an open directory returns -EISDIR, which this
- * kernel decides after it takes the orphan, so the directory's name survives
- * only because a directory descriptor is not a holder. The assertion is what
- * keeps the answer right if one ever becomes one.
+ * source: renaming a file onto an open directory returns -EISDIR, which the
+ * boot root decides once it has looked the destination up and before it
+ * counts the destination's holders, so it takes no orphan, and ext2 before it
+ * writes anything. The directory's name must survive the refusal; were the
+ * refusal moved after the count, the name would still survive, but only
+ * because a directory descriptor is not a holder.
  *
  * The rename onto the reader's name is the case the whole change exists for,
  * and it runs across two processes, since a holder scan that looked only at
@@ -99,9 +101,9 @@
  * the directory, on the boot root as on ext2. A descriptor of the boot root
  * finds its directory by the node's place, so a directory freed under one
  * would leave it on whatever node the allocator put there next. The case
- * holds the directory each way in turn, the working directory in a child,
- * and requires the descriptor to go on listing it and the rmdir to succeed
- * once nothing refers to it.
+ * holds the directory each way in turn, as the working directory of a child
+ * and then of the caller, and requires the descriptor to go on listing it
+ * and the rmdir to succeed once nothing refers to it.
  *
  * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
@@ -600,11 +602,6 @@ static void orphan_scan_case(void)
     want_eq("close the orphan", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/* A refusal must destroy nothing, in both the shapes this kernel has: the
- * directory source, refused before the destination is resolved, and the
- * directory destination, refused after the orphan is taken. The second name
- * survives only because a directory descriptor is not a holder, so it is
- * asserted, not assumed. */
 /* Whether the root this probe runs on is the boot root. A rename row below
  * owes different answers on the two file systems, and reads the type out of
  * `/proc/mounts` rather than assuming the one it was written on. A root whose
@@ -642,6 +639,12 @@ static int root_moves_directories(void)
     return !root_is_krffs();
 }
 
+/* A refusal must destroy nothing, in both the shapes this kernel has: the
+ * directory source, which the boot root refuses before it looks the
+ * destination up and ext2 before it writes anything, and the directory
+ * destination, which the boot root refuses with EISDIR once it has looked
+ * the destination up and before it counts the destination's holders, so it
+ * takes no orphan. Both names are asserted to survive, not assumed to. */
 static void failed_rename_case(void)
 {
     int len = (int)slen(KEEP_LINE);
@@ -960,10 +963,11 @@ static void cwd_child(void)
 
 /* A directory in use is refused with EBUSY, which POSIX permits, on the boot
  * root as on ext2: while a descriptor has it, one opened for reading and then
- * one opened with O_PATH, and while it is a child's working directory. The
- * descriptor opened for reading still lists the directory and resolves a
- * relative path through it, and the rmdir succeeds once nothing refers to
- * the directory. */
+ * one opened with O_PATH, while it is a child's working directory, and while
+ * it is the caller's own. The descriptor opened for reading still lists the
+ * directory and resolves a relative path through it, and the rmdir succeeds
+ * once nothing refers to the directory, the caller having gone back to the
+ * root, which on the boot root leaves the working directory no node. */
 static void directory_case(void)
 {
     static char dbuf[256];
@@ -995,6 +999,11 @@ static void directory_case(void)
             -EBUSY);
     notify("the parent releases the working-directory child", down[1]);
     reap(pid, "the working-directory child");
+
+    want_eq("chdir into the directory", syscall1(SYS_CHDIR, (int)DDIR), 0);
+    want_eq("rmdir refused under the caller's own working directory",
+            syscall3(SYS_RMDIR, (int)DDIR, 0, 0), -EBUSY);
+    want_eq("chdir back to the root", syscall1(SYS_CHDIR, (int)"/"), 0);
     want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
 }
 

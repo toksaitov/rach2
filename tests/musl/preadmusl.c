@@ -144,8 +144,9 @@ static const char mem_mark[] = "procseek";
 /**
  * lseek of a /proc snapshot and of /proc/self/mem, as Linux seeks them:
  * SEEK_SET and SEEK_CUR move the offset, by _llseek and by the old call 19,
- * SEEK_END is EINVAL, and an address of /proc/self/mem reads what the probe
- * has there.
+ * and the read after each finds the bytes at the offset returned, so an
+ * offset returned and not kept fails; SEEK_END is EINVAL, and an address of
+ * /proc/self/mem reads what the probe has there.
  */
 static int proc_seek_rows(void)
 {
@@ -157,7 +158,8 @@ static int proc_seek_rows(void)
     fd = open("/proc/meminfo", O_RDONLY);
     ok = fd >= 0 && read(fd, whole, 16) == 16 && lseek(fd, 4, SEEK_SET) == 4;
     ok = ok && read(fd, part, 8) == 8 && memcmp(part, whole + 4, 8) == 0;
-    ok = ok && lseek(fd, -6, SEEK_CUR) == 6 && refused(lseek(fd, 0, SEEK_END), EINVAL);
+    ok = ok && lseek(fd, -6, SEEK_CUR) == 6 && read(fd, part, 8) == 8 &&
+         memcmp(part, whole + 6, 8) == 0 && refused(lseek(fd, 0, SEEK_END), EINVAL);
     ok = ok && syscall(SYS_lseek, fd, 2, SEEK_SET) == 2 && read(fd, part, 8) == 8 &&
          memcmp(part, whole + 2, 8) == 0;
     close(fd);

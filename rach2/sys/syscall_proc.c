@@ -866,6 +866,7 @@ struct exec_state {
     elf_image_t iimg;          /* the interpreter's */
     fd_table_t *files;         /* the caller's own table (`exec_files`) */
     struct fs_struct *fs_held; /* holds off CLONE_FS (`exec_ids`) */
+    int path_end;              /* how `path` named a directory by its end */
     char path[VFS_PATH_MAX];
     char shebang_line[EXEC_SHEBANG_MAX + 1];
 };
@@ -917,11 +918,14 @@ static void exec_release(void)
  * read through `read` over `ctx`: the root's reader by path, or the mount's
  * over an open handle.
  *
+ * The interpreter's path is made canonical, with `s->path_end` saying how
+ * it named a directory by its end (`canonicalize_named`), which the open of
+ * the interpreter answers for.
+ *
  * @param argc the argument count, updated when the vector grows.
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
- *         errno for one whose first line names nothing, whose arguments no
- *         longer fit, or whose interpreter is named as a directory by its
- *         end, which `canonicalize_named` refuses.
+ *         errno for one whose first line names nothing or whose arguments no
+ *         longer fit.
  */
 static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
                             int (*read)(void *, void *, uint32_t, uint32_t), void *ctx)
@@ -1009,7 +1013,7 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
        does not collapse `.` or `..`, so an interpreter named
        `/bin/../dev/something` would pass it while the file system resolved the
        name it really wrote. */
-    rc = canonicalize_named(s->path);
+    rc = canonicalize_named(s->path, &s->path_end);
     return rc < 0 ? rc : 1;
 }
 
@@ -1193,6 +1197,12 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * `f` keeps. `f` also says whether the caller may read the file, which the
  * kernel loads for it with the execute right alone.
  *
+ * A path that named a directory by its end, `end` (`copy_path_cwd`), must
+ * reach one, and the walk that finds the file answers for it
+ * (`resolve_named`): a file so named is -ENOTDIR. The node it checked is the
+ * node opened, so a symbolic link replaced while the walk waits for a disk
+ * cannot hand the open a program the check never saw.
+ *
  * The walk may not arrive on the synthetic /dev and /proc mounts, which
  * hold no programs, so execve sees the mount boundary open sees and cannot
  * reach a file a hostile image placed below the synthetic prefix; a mount
@@ -1207,7 +1217,7 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * locking in Unix, which nothing here implements. On a mount with MS_NOSUID
  * the bits are read and ignored. 0 or a negative errno.
  */
-static int32_t exec_open(struct exec_file *f, const char *path, struct exec_setid *id,
+static int32_t exec_open(struct exec_file *f, const char *path, int end, struct exec_setid *id,
                          struct mm *keep)
 {
     struct vfs_ref ref;
@@ -1220,7 +1230,7 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
     f->held = NULL;
     f->err = 0;
     f->readable = 0;
-    rc = vfs_resolve(0, path + (path[0] == '/'), VFS_WALK_LOCK, &ref, 0, 0);
+    rc = resolve_named(path + (path[0] == '/'), VFS_WALK_LOCK, end, &ref);
     if (rc != 0) {
         return rc;
     }
@@ -1307,7 +1317,7 @@ static int32_t exec_script(struct exec_state *s)
         return rc < 0 ? rc : -ENOEXEC;
     }
     s->id.mode = 0;
-    rc = exec_open(&s->prog, s->path, NULL, s->mm);
+    rc = exec_open(&s->prog, s->path, s->path_end, NULL, s->mm);
     if (rc != 0) {
         return rc;
     }
@@ -1404,24 +1414,25 @@ static void exec_ids(struct exec_state *s)
  * those. Its own PT_INTERP is ignored. The new image starts at its entry,
  * and `*base`, AT_BASE, is the distance it was moved by.
  *
- * The path is held to the rule execve's own is (`canonicalize_named`): one
- * that names a directory by its end must reach one, so a file so named is
- * -ENOTDIR and a directory the open's -EACCES, as Linux's open of the
- * interpreter answers. 0, -ENOENT, -ENOTDIR, -EACCES, -ELIBBAD for a file
- * that is not an interpreter this kernel loads, -ENOMEM for one that would
- * cover the program or for memory its load could not have, -EIO or a
- * mount's error for a read that failed.
+ * The path is held to the rule execve's own is (`canonicalize_named`), in
+ * the one walk of the open: one that names a directory by its end must
+ * reach one, so a file so named is -ENOTDIR and a directory the open's
+ * -EACCES, as Linux's open of the interpreter answers. 0, -ENOENT, -ENOTDIR,
+ * -EACCES, -ELIBBAD for a file that is not an interpreter this kernel loads,
+ * -ENOMEM for one that would cover the program or for memory its load could
+ * not have, -EIO or a mount's error for a read that failed.
  */
 static int32_t exec_interp(struct exec_state *s, uint32_t *base)
 {
     uint32_t bias = 0;
+    int end;
     int32_t rc;
 
-    rc = canonicalize_named(s->layout.interp);
+    rc = canonicalize_named(s->layout.interp, &end);
     if (rc < 0) {
         return rc;
     }
-    rc = exec_open(&s->prog, s->layout.interp, NULL, NULL);
+    rc = exec_open(&s->prog, s->layout.interp, end, NULL, NULL);
     if (rc != 0) {
         return rc;
     }
@@ -1779,7 +1790,7 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     if (!user_path) {
         return -EFAULT;
     }
-    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path, &s->path_end);
     if (rc < 0) {
         return rc;
     }
@@ -1787,7 +1798,7 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     if (s->mm == NULL) {
         return -ENOMEM;
     }
-    rc = exec_open(&s->prog, s->path, &s->id, s->mm);
+    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
     if (rc == 0) {
         rc = exec_link_name(s->path);
     }

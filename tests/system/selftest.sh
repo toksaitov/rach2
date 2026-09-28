@@ -300,18 +300,25 @@ check "and says which" 1 "$(printf '%s\n' "$out" | grep -c 'run: failing: FAIL')
 
 # A failing suite's serial logs are kept where the next run does not write
 # over them: each failing run copies the log it wrote under build/images and
-# its machine's console into a directory of its own.
+# its machine's console into a directory of its own, which it names; the next
+# run's go into another, and the first is left as it was.
+kept() { # kept DIR: the files in DIR, then its log and its console
+    printf '%s|%s|%s' "$(cd "$WORK/$1" 2>/dev/null && find . -type f | sed 's|^\./||' | sort | tr '\n' ' ')" \
+        "$(cat "$WORK/$1/logging-test.log" 2>/dev/null)" "$(cat "$WORK/$1/console.log" 2>/dev/null)"
+}
 rm -rf "$WORK/build/tests/failed" "$WORK/logging.count"
 out=$(run logging); rc=$?
+first=$(printf '%s\n' "$out" | sed -n 's/^run: logging: logs kept in //p')
 check "a failing suite that writes a log fails" 1 "$rc"
-check "and says where its logs are kept" 1 \
-    "$(printf '%s\n' "$out" | grep -c '^run: logging: logs kept in build/tests/failed/logging\.')"
+check "and says where its logs are kept" 1 "$(printf '%s\n' "$first" | grep -c '^build/tests/failed/logging\.')"
 out=$(run logging)
-check "each failing run keeps the log it wrote, which the next run does not write over" \
-    'logging run 1 logging run 2 ' \
-    "$(cat "$WORK"/build/tests/failed/logging.*/logging-test.log 2>/dev/null | sort | tr '\n' ' ')"
-check "and its machine's console" 'machine said 1 machine said 2 ' \
-    "$(cat "$WORK"/build/tests/failed/logging.*/console.log 2>/dev/null | sort | tr '\n' ' ')"
+second=$(printf '%s\n' "$out" | sed -n 's/^run: logging: logs kept in //p')
+check "the next failing run keeps its logs in a directory of its own" 1 \
+    "$([ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ] && echo 1 || echo 0)"
+check "the first run's directory has its log and console alone, as it left them" \
+    'console.log logging-test.log |logging run 1|machine said 1' "$(kept "$first")"
+check "and the second run's has its own" \
+    'console.log logging-test.log |logging run 2|machine said 2' "$(kept "$second")"
 
 out=$(run nosuch); rc=$?
 check "an unknown name is refused" 2 "$rc"
