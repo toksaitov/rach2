@@ -31,7 +31,6 @@ static int fails;
     do {                                           \
         if (!(cond)) {                             \
             fails++;                               \
-            fix_keep();                            \
             fprintf(stderr, "  FAIL: %s\n", what); \
         }                                          \
     } while (0)
@@ -224,6 +223,18 @@ static void expect_open_error(const char *opt, const char *needle)
     err[0] = '\0';
     CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == -1, opt);
     CHECK(strstr(err, needle) != NULL, needle);
+}
+
+/** Report the failures, or say the test passed; the exit status, which keeps
+ * its low eight bits, so at most 255. */
+static int finish(void)
+{
+    if (fails) {
+        fprintf(stderr, "bootctl_hosttest: %d failure(s)\n", fails);
+    } else {
+        fix_passed();
+    }
+    return fails > 255 ? 255 : fails;
 }
 
 int main(void)
@@ -782,8 +793,5 @@ int main(void)
           "the setter writes the empty value a consumed trial leaves");
     CHECK(env_has("next_entry=\n"), "and that line is there too");
 
-    if (fails) {
-        fprintf(stderr, "bootctl_hosttest: %d failure(s)\n", fails);
-    }
-    return fails > 255 ? 255 : fails;
+    return finish();
 }

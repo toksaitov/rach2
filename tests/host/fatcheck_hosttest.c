@@ -190,8 +190,7 @@ int main(void)
 
     if (fails == 0) {
         printf("fatcheck_hosttest: OK\n");
-    } else {
-        fix_keep();
+        fix_passed();
     }
     return fails > 255 ? 255 : fails;
 }

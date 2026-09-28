@@ -30,7 +30,6 @@ static int fails;
     do {                                           \
         if (!(cond)) {                             \
             fails++;                               \
-            fix_keep();                            \
             fprintf(stderr, "  FAIL: %s\n", what); \
         }                                          \
     } while (0)
@@ -347,5 +346,8 @@ int main(void)
     check_refusals();
     check_names();
     check_static_judgement();
+    if (!fails) {
+        fix_passed();
+    }
     return fails > 120 ? 120 : fails;
 }

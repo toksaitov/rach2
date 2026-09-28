@@ -3642,9 +3642,9 @@ finish:
     }
     if (fails) {
         printf("ext2_hosttest: %d failure(s)\n", fails);
-        fix_keep();
         return 1;
     }
     printf("ext2_hosttest: PASS\n");
+    fix_passed();
     return 0;
 }

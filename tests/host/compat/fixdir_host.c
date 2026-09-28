@@ -24,7 +24,7 @@
 #define FIX_TMP_MAX 100
 
 static char own[FIX_PATH_MAX];
-static int keep;
+static int passed;
 
 /** Whether $TMPDIR, `tmp`, can hold the fixture directory: an absolute path
  * of at most FIX_TMP_MAX characters, each one a shell passes unchanged. */
@@ -34,12 +34,13 @@ static int fix_plain(const char *tmp)
            tmp[strspn(tmp, FIX_PLAIN)] == '\0';
 }
 
-/** Remove the test's own directory, unless `fix_keep` asked to keep it. */
+/** At exit, remove the test's own directory if it passed, or else keep it
+ * and say where, so that a failed test's fixtures can be read. */
 static void fix_remove(void)
 {
     char cmd[FIX_PATH_MAX + 16];
 
-    if (keep) {
+    if (!passed) {
         printf("fixtures: kept in %s\n", own);
         return;
     }
@@ -99,9 +100,9 @@ const char *fix_path(const char *name)
     return paths[i];
 }
 
-void fix_keep(void)
+void fix_passed(void)
 {
 #ifndef FIXDIR
-    keep = 1;
+    passed = 1;
 #endif
 }

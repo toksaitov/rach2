@@ -367,9 +367,9 @@ int main(void)
 
     if (fails == 0) {
         printf("exfatcheck_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     printf("exfatcheck_hosttest: %d failure(s)\n", fails);
-    fix_keep();
     return 1;
 }

@@ -8,10 +8,17 @@
  * since the tests put the fixture paths in their commands unquoted: a
  * semicolon, a space, a redirection, an ampersand, a wildcard, a quote or a
  * dollar sign sends the directory to /tmp, and so do a relative path and one
- * of 101 characters.
+ * of 101 characters. A child whose exit comes without `fix_passed`, as an
+ * exit on a failed check does, keeps its directory; one that said it passed
+ * has it removed. This process makes no fixture directory of its own, so
+ * the children's are their own.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "compat/fixdir_host.c"
 
@@ -50,9 +57,58 @@ static void plain_bases(void)
     CHECK(!fix_plain(longest), "a $TMPDIR of 101 characters is not taken");
 }
 
+/**
+ * The fixture directory a child makes and tells through a pipe, whether it
+ * is there after the child's exit, with status `code`, and after a
+ * `fix_passed` first when `pass`; a directory left is removed.
+ */
+static int left_after(int pass, int code)
+{
+    char dir[FIX_PATH_MAX], cmd[FIX_PATH_MAX + 16];
+    struct stat st;
+    int ends[2], status = 0, there;
+    ssize_t n;
+    pid_t pid;
+
+    if (pipe(ends) != 0) {
+        return -1;
+    }
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+        const char *made = fix_dir();
+
+        if (write(ends[1], made, strlen(made)) < 0) {
+            _exit(2);
+        }
+        if (pass) {
+            fix_passed();
+        }
+        exit(code);
+    }
+    close(ends[1]);
+    n = read(ends[0], dir, sizeof(dir) - 1);
+    close(ends[0]);
+    if (pid < 0 || n <= 0 || waitpid(pid, &status, 0) != pid) {
+        return -1;
+    }
+    dir[n] = '\0';
+    there = stat(dir, &st) == 0;
+    if (there) {
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+        if (system(cmd) != 0) {
+            return -1;
+        }
+    }
+    return there;
+}
+
 int main(void)
 {
     plain_bases();
+    CHECK(left_after(0, 1) == 1, "a test that exits failed keeps its fixture directory");
+    CHECK(left_after(0, 0) == 1, "a test that exits without saying it passed keeps it");
+    CHECK(left_after(1, 0) == 0, "a test that said it passed has its directory removed");
     printf("fixdir-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

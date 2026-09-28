@@ -2255,6 +2255,7 @@ int main(int argc, char **argv)
         matrix_rows();
         durability_rows();
         printf("fat32_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     well_formed_rows();
@@ -2269,11 +2270,11 @@ int main(int argc, char **argv)
     durability_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     /* Not the count: an exit status keeps its low eight bits, and 256
        failures would read as a pass. */
     printf("fat32_hosttest: %d failure(s)\n", fails);
-    fix_keep();
     return 1;
 }

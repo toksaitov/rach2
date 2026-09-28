@@ -2187,6 +2187,7 @@ int main(int argc, char **argv)
             return 2;
         }
         printf("exfat_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     well_formed_rows("", "the held up-case table");
@@ -2202,9 +2203,9 @@ int main(int argc, char **argv)
     dirty_rows();
     if (fails == 0) {
         printf("exfat_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     printf("exfat_hosttest: %d failure(s)\n", fails);
-    fix_keep();
     return 1;
 }
