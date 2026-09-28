@@ -1,43 +1,101 @@
 /*
- * A call that blocks, for a host test that runs a second thread's call
- * inside a sleep of the first. `park_run` runs the call; a wait of the model
- * that finds its condition false calls `park`, which ends the call there and
- * returns from `park_run`, as the scheduler would switch back to the
- * sleeping thread. The parked call's frames are gone, so a test resumes it
- * by running it again from its start, which is the same call as long as
- * nothing it did before it blocked lasts.
+ * A second thread for a host test that runs one thread's call inside a
+ * sleep of another, without threads. `park_run` runs the call on a stack of
+ * its own; a wait of the model that must block calls `park`, which switches
+ * back to the caller of `park_run` and keeps the call's frames, as the
+ * scheduler switches back to the sleeping thread. `park_resume` switches
+ * into the parked call again, and `park` returns inside it, where it waited.
+ * One call runs or waits at a time.
  *
- * Only <setjmp.h> is included here: the kernel's headers, which the test
- * includes, define types the C library's headers would define again.
+ * The switches are the C library's ucontext calls, which macOS marks
+ * deprecated and still provides. Only C library headers are included here:
+ * the kernel's headers, which the test includes, define types these would
+ * define again.
  */
-#include <setjmp.h>
+#define _XOPEN_SOURCE 700
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#include <stdlib.h>
+#include <ucontext.h>
 
-static jmp_buf *point;
+/* The size of a call's stack, more than the frames of any call a row makes
+ * take with the sanitizers' red zones. */
+#define PARK_STACK (1024 * 1024)
 
-/** Run `call`: 1 when it returned, 0 when it parked. */
-int park_run(void (*call)(void))
+static ucontext_t caller, call;
+static void (*entry)(void);
+static char *stack;
+static int running, returned;
+
+/* The first frame on the call's own stack. When the call returns, it
+ * switches to `caller`, the context of the last `park_run` or
+ * `park_resume`, and is never resumed; its stack is then freed. */
+static void start(void)
 {
-    jmp_buf here;
-    jmp_buf *outer = point;
-
-    point = &here;
-    if (setjmp(here) != 0) {
-        point = outer;
-        return 0;
-    }
-    call();
-    point = outer;
-    return 1;
+    entry();
+    returned = 1;
+    swapcontext(&call, &caller);
 }
 
-/** Whether `park_run` is running a call that may park. */
+/* Switch into the call until it returns or parks: 1 when it returned, and
+ * then its stack is freed. */
+static int enter(void)
+{
+    running = 1;
+    swapcontext(&caller, &call);
+    running = 0;
+    if (returned) {
+        free(stack);
+        stack = NULL;
+    }
+    return returned;
+}
+
+/** Run `fn` on a stack of its own: 1 when it returned, 0 when it parked. */
+int park_run(void (*fn)(void))
+{
+    if (stack) {
+        abort();
+    }
+    stack = malloc(PARK_STACK);
+    if (!stack || getcontext(&call) != 0) {
+        abort();
+    }
+    call.uc_stack.ss_sp = stack;
+    call.uc_stack.ss_size = PARK_STACK;
+    call.uc_link = &caller;
+    entry = fn;
+    returned = 0;
+    makecontext(&call, start, 0);
+    return enter();
+}
+
+/** Switch into the parked call where it parked: 1 when it returned, 0 when
+ * it parked again. */
+int park_resume(void)
+{
+    if (!stack) {
+        abort();
+    }
+    return enter();
+}
+
+/** Whether a call `park_run` started is running now, not parked. */
 int park_active(void)
 {
-    return point != 0;
+    return running;
 }
 
-/** End the call `park_run` is running; does not return. */
+/** Whether a call is parked, waiting for `park_resume`. */
+int park_waiting(void)
+{
+    return stack != NULL && !running;
+}
+
+/** Park the running call: switch back to whoever ran or resumed it, and
+ * return when `park_resume` switches into it again. */
 void park(void)
 {
-    longjmp(*point, 1);
+    running = 0;
+    swapcontext(&call, &caller);
+    running = 1;
 }
