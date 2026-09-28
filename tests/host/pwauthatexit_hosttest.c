@@ -35,8 +35,6 @@
 
 #include "pwauth.h"
 
-#define LOCK "/tmp/pwauthatexit_hosttest.lock"
-
 static int Failed;
 
 /** Record one failed check, naming the contract that broke. */
@@ -123,18 +121,24 @@ static int present(const char *path)
 
 int main(void)
 {
+    char dir[] = "/tmp/pwauthatexit_hosttest.XXXXXX";
+    char lock[64];
     int taken;
     int saved = dup(2);
     int quiet = open("/dev/null", O_WRONLY);
 
-    unlink(LOCK);
+    if (!mkdtemp(dir)) {
+        fail("no directory could be made for the lock");
+        return 1;
+    }
+    snprintf(lock, sizeof(lock), "%s/lock", dir);
 
     /* The refusal prints, and that line is the point of the refusal rather than
      * a fault, so it is kept out of a log every other test leaves empty. */
     if (saved >= 0 && quiet >= 0) {
         dup2(quiet, 2);
     }
-    taken = cred_txn_begin_at("pwauthatexit_hosttest", LOCK, 0);
+    taken = cred_txn_begin_at("pwauthatexit_hosttest", lock, 0);
     if (saved >= 0) {
         dup2(saved, 2);
         close(saved);
@@ -149,9 +153,9 @@ int main(void)
     /* The refusal has to leave the name as it found it. An acquire that created
      * the lock and then gave up without removing it would hand every later
      * writer the stale lock this program exists to prevent. */
-    if (present(LOCK)) {
+    if (present(lock)) {
         fail("a refused acquire left its lock behind");
-        unlink(LOCK);
+        unlink(lock);
     }
     if (Atexit_calls < 2) {
         fail("the library did not attempt the second registration");
@@ -182,6 +186,8 @@ int main(void)
             }
         }
     }
+
+    rmdir(dir);
 
     return Failed > 100 ? 100 : Failed;
 }
