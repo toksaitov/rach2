@@ -63,7 +63,7 @@ echo "open-mutation: logs: $work"
 run_phase fixed 0 'open-hosttest: result: pass:'
 for fault in node release truncate loop registration unlink-lock rename-lock rename-unlocked \
     rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked root-lock-key \
-    volume-lock-key mkdir-walk-unlocked; do
+    volume-lock-key fat-lock-key mkdir-walk-unlocked; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -107,10 +107,13 @@ changes = {
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
-    "root-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;",
-                      "    return mnt->type == &vfs_krffs_volume_type;"),
-    "volume-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;",
-                        "    return mnt->type == &vfs_krffs_type;"),
+    "root-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||",
+                      "    return mnt->type == &vfs_krffs_volume_type ||"),
+    "volume-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||",
+                        "    return mnt->type == &vfs_krffs_type ||"),
+    "fat-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||\n"
+                     "           mnt->type == &vfs_vfat_type || mnt->type == &vfs_exfat_type;",
+                     "    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;"),
     "mkdir-walk-unlocked": [
         ("rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));",
          "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));"),
@@ -139,6 +142,7 @@ PY
         chmod-walk-unlocked | chown-walk-unlocked) message='attributes use node identity' ;;
         root-lock-key) message='a file of the KRFFS root is keyed by its node' ;;
         volume-lock-key) message='a file of a KRFFS volume is keyed by its node' ;;
+        fat-lock-key) message='a file of a FAT32 volume is keyed by its node, which a rename keeps' ;;
         mkdir-walk-unlocked) message='a mkdir of a name another process made while it waited is EEXIST' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"

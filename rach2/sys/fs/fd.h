@@ -119,8 +119,8 @@ struct open_file {
     void *fhandle;
     /* With `vmnt`, the inode number the file had when it was opened, or for
      * a FIFO of the KRFFS root its node's address: the key a FIFO's pipe is
-     * found by, and the file's locks on a type other than KRFFS, whose
-     * locks are found by `vnode` instead. */
+     * found by, and the file's locks on a type other than KRFFS, FAT32 and
+     * exFAT, whose locks are found by `vnode` instead. */
     uint64_t ino;
     /* The description lock: read, write, lseek, getdents64 and ftruncate
      * hold the description for the length of the operation, so a sharer

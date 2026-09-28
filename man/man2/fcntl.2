@@ -227,11 +227,11 @@ own.
 The boot root frees a directory removed while a descriptor has it open,
 and the locks of that descriptor stay on the place, where a node made
 later meets them; Linux keeps them with the removed directory.
+On FAT32 and exFAT a lock is found by the file's node, which a rename
+keeps, since their inode number is the file's directory entry, which a
+rename changes.
 On another type a lock is found by the file's mount and the inode number
 it had when the description was opened.
-FAT32 and exFAT number a file by its directory entry, so there a lock
-taken before a rename does not meet one taken through a description
-opened after it, where Linux's locks stay with the file.
 A descriptor of a pipe, a socket, a device or a terminal is locked by
 the object it is open on.
 .Pp

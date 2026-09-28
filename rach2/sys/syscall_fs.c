@@ -37,6 +37,8 @@
 #include "block/loop.h"
 #include "fs/krffs.h"
 #include "fs/krffsmount.h"
+#include "fs/fat32.h"
+#include "fs/exfat.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
@@ -193,13 +195,17 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
 }
 
 /**
- * Whether `mnt` is KRFFS, the boot root or a mounted volume, whose node is
- * the place of a file: a write that grows the file can move it, and
- * `vfs_repoint` moves every holder of the place with it.
+ * Whether a lock on a file of `mnt` is found by the file's node, on a type
+ * whose inode number does not stay with the file: KRFFS, the boot root or a
+ * mounted volume, whose node is the file's place, which a growing write can
+ * move and `vfs_repoint` moves every holder of; and FAT32 and exFAT, whose
+ * node is one record per file while it is held, which a rename updates in
+ * place, where the inode number is the file's directory entry.
  */
-static int mnt_is_krffs(const struct vfs_mount *mnt)
+static int mnt_locks_by_node(const struct vfs_mount *mnt)
 {
-    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;
+    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||
+           mnt->type == &vfs_vfat_type || mnt->type == &vfs_exfat_type;
 }
 
 /**
@@ -209,20 +215,23 @@ static int mnt_is_krffs(const struct vfs_mount *mnt)
  * socket, a device or a terminal, with no mount, so that two opens of one
  * object share their locks as two opens of a file do.
  *
- * A KRFFS file is named by its node as the description has it now, which is
- * the file itself at any moment, and a write that moves the node moves the
- * locks with it (`lock_repoint`). Its inode number would not do: the root
- * numbers a file by its directory and the hash of its name, which a rename
- * changes and two names can share, and a volume by the node's offset, which
- * a move changes. A file of another type is named by the inode number its
- * description recorded at the open.
+ * A file of KRFFS, FAT32 or exFAT is named by its node as the description
+ * has it now, which is the file itself while a description has it; a write
+ * that moves a KRFFS node moves the locks with it (`lock_repoint`). Its
+ * inode number would not do: the KRFFS root numbers a file by its directory
+ * and the hash of its name, which a rename changes and two names can share,
+ * a KRFFS volume by the node's offset, which a move changes, and FAT32 and
+ * exFAT by the file's directory entry, which a rename changes. A file of
+ * another type is named by the inode number its description recorded at
+ * the open, which stays with the file.
  */
 static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 {
     key->mnt = NULL;
     if (e->ofd && e->ofd->vmnt) {
         key->mnt = e->ofd->vmnt;
-        key->ino = mnt_is_krffs(e->ofd->vmnt) ? (uint64_t)(uintptr_t)e->ofd->vnode : e->ofd->ino;
+        key->ino =
+            mnt_locks_by_node(e->ofd->vmnt) ? (uint64_t)(uintptr_t)e->ofd->vnode : e->ofd->ino;
     } else if (e->dev) {
         key->ino = (uintptr_t)e->dev;
     } else if (e->priv) {

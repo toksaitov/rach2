@@ -132,8 +132,11 @@ krffs_file_system_t *krffs_fs;
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static const struct vfs_ops root_ops = {.lookup = root_lookup};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
-/* A mounted KRFFS volume's type, which the lock key row names. */
+/* A mounted KRFFS volume's type and the two FAT types, which the lock key
+ * row names. */
 const struct vfs_type vfs_krffs_volume_type = {"krffs", 0, 0, 1, 0};
+const struct vfs_type vfs_vfat_type = {"vfat", 0, 0, 0, 0};
+const struct vfs_type vfs_exfat_type = {"exfat", 0, 0, 0, 0};
 static const struct vfs_type mounted_type = {0};
 /* A mounted type whose uses are serialised under its namespace lock, as
  * KRFFS volumes and ext2 are, for the attribute rows. */
@@ -1009,25 +1012,30 @@ static void loop_handles(void)
 
 /**
  * The key a file's locks are found by. A KRFFS file, on the boot root or on
- * a mounted volume, is keyed by the node its description has now, which a
- * move repoints, and not by the inode number recorded at the open, which a
- * rename or a move leaves behind and two names with one hash share; a file
- * of another type is keyed by that inode number.
+ * a mounted volume, and a FAT32 or exFAT file are keyed by the node their
+ * description has now, which a move repoints and a rename keeps, and not by
+ * the inode number recorded at the open, which a rename or a move leaves
+ * behind and two KRFFS names with one hash share; a file of another type
+ * is keyed by that inode number, which stays with the file.
  */
 static void lock_keys(void)
 {
-    struct vfs_mount root_mnt, volume_mnt, other_mnt;
+    struct vfs_mount root_mnt, volume_mnt, vfat_mnt, exfat_mnt, other_mnt;
     struct open_file desc;
     struct lock_key key;
     fd_entry_t e;
 
     k_memset(&root_mnt, 0, sizeof(root_mnt));
     k_memset(&volume_mnt, 0, sizeof(volume_mnt));
+    k_memset(&vfat_mnt, 0, sizeof(vfat_mnt));
+    k_memset(&exfat_mnt, 0, sizeof(exfat_mnt));
     k_memset(&other_mnt, 0, sizeof(other_mnt));
     k_memset(&desc, 0, sizeof(desc));
     k_memset(&e, 0, sizeof(e));
     root_mnt.type = &vfs_krffs_type;
     volume_mnt.type = &vfs_krffs_volume_type;
+    vfat_mnt.type = &vfs_vfat_type;
+    exfat_mnt.type = &vfs_exfat_type;
     other_mnt.type = &mounted_type;
     e.ofd = &desc;
     desc.vnode = &moved;
@@ -1040,6 +1048,14 @@ static void lock_keys(void)
     fd_lock_key(&e, &key);
     check(key.mnt == &volume_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
           "a file of a KRFFS volume is keyed by its node");
+    desc.vmnt = &vfat_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &vfat_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of a FAT32 volume is keyed by its node, which a rename keeps");
+    desc.vmnt = &exfat_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &exfat_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of an exFAT volume is keyed by its node, which a rename keeps");
     desc.vmnt = &other_mnt;
     fd_lock_key(&e, &key);
     check(key.mnt == &other_mnt && key.ino == 7,

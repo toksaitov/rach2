@@ -24,10 +24,11 @@
  */
 
 /* The file a lock is on: its mount and a number that names the file while a
- * description of it is open. A KRFFS file's number is the place of its node,
- * which `lock_repoint` follows when a write moves the file; any other file's
- * is its inode number at the open. A descriptor that is not open on a file
- * of a mounted type has the object it is open on in `ino` and no mount. */
+ * description of it is open. A file of KRFFS, FAT32 or exFAT has its node,
+ * a KRFFS node being the file's place, which `lock_repoint` follows when a
+ * write moves the file; any other file has its inode number at the open. A
+ * descriptor that is not open on a file of a mounted type has the object it
+ * is open on in `ino` and no mount. */
 struct lock_key {
     const void *mnt;
     uint64_t ino;

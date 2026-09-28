@@ -1682,6 +1682,25 @@ static void write_rows(void)
     n = walk("/over.txt", &err);
     check(n && read_all(n, back, sizeof(back)) == 40 && memcmp(back, pattern, 40) == 0,
           "and the file renamed over another has the source's bytes");
+    /* The node is the file's while it is held, under a new name in another
+       directory too: its advisory locks are found by it (lock.Readme.md). */
+    {
+        void *d = walk("/dir", &err);
+
+        check(n && d && OPS->rename(&mnt, mnt.root, "over.txt", d, "held over.txt") == 0,
+              "a held file renamed into another directory");
+        if (d) {
+            OPS->put(&mnt, d);
+        }
+    }
+    {
+        void *renamed = walk("/dir/held over.txt", &err);
+
+        check(renamed && renamed == n, "the new name of a held file reaches the node it had");
+        if (renamed) {
+            OPS->put(&mnt, renamed);
+        }
+    }
     if (n) {
         OPS->put(&mnt, n);
     }
