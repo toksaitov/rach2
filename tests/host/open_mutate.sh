@@ -8,7 +8,8 @@
 # has, a chdir's pin of a directory on a type that keeps a node only while it
 # is open, a read and a write of a /proc file, and a read of /dev/bootlog,
 # that hold the description while a sharer's seek waits, the log's seeks
-# checked past the offsets they can return, and the release of the last
+# checked past the offsets they can return, a sum past the largest signed
+# one among them, and the release of the last
 # holder of a nameless file
 # of the KRFFS root under the root's lock, by a descriptor or a file mapping,
 # before, during and after each fault.
@@ -84,7 +85,7 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
     chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record proc-read-unheld \
     proc-write-unheld orphan-release-unlocked mapping-left-unlocked log-read-unheld \
-    log-seek-unlocked log-seek-wraps; do
+    log-seek-unlocked log-seek-wraps log-seek-past-signed; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     [ "$fault" != mapping-left-unlocked ] || source="$work/sys/mm/filemap.c"
@@ -264,6 +265,8 @@ changes = {
     "log-seek-wraps": ("        rc = seek_add(entry->ofd->offset, off, &at);\n    } else if (whence == 2) {\n",
                        "        at = (int32_t)(uint32_t)(entry->ofd->offset + (uint64_t)off);\n"
                        "    } else if (whence == 2) {\n"),
+    "log-seek-past-signed": ("    if (rc == -EOVERFLOW || (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu))) {\n",
+                             "    if (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu)) {\n"),
     "mapping-left-unlocked": [
         ("    struct vfs_mount *locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n",
          "    struct vfs_mount *locked;\n"),
@@ -320,6 +323,7 @@ PY
         log-read-unheld) message='a seek waits for a /dev/bootlog read that sleeps in its copy' ;;
         log-seek-unlocked) message='an _llseek waits for a /dev/bootlog read that sleeps in its copy' ;;
         log-seek-wraps) message='an lseek of /dev/bootlog past 4294967295 is EINVAL and leaves the offset' ;;
+        log-seek-past-signed) message='an _llseek of /dev/bootlog past the largest signed offset is EINVAL' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

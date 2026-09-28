@@ -3144,9 +3144,10 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
  *
  * SEEK_SET, SEEK_CUR and SEEK_END take the sum by `seek_add`, so a
  * displacement cannot overflow it. A place before 0 or past 0xFFFFFFFF, the
- * last the log's offset has, is -EINVAL, and one past `limit`, the largest
- * offset the call can return, -EOVERFLOW. A caller with nowhere to return
- * the offset asks with `store` clear and fails the call itself.
+ * last the log's offset has, is -EINVAL, a sum past what `seek_add` holds
+ * among them, and one past `limit`, the largest offset the call can return,
+ * -EOVERFLOW. A caller with nowhere to return the offset asks with `store`
+ * clear and fails the call itself.
  */
 static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t limit, int store,
                         long long *out)
@@ -3164,7 +3165,7 @@ static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t l
     } else if (whence != 0) {
         rc = -EINVAL;
     }
-    if (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu)) {
+    if (rc == -EOVERFLOW || (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu))) {
         rc = -EINVAL;
     }
     if (rc == 0 && (uint64_t)at > limit) {

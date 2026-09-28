@@ -2294,8 +2294,9 @@ static void offset_seek_waits(void)
  * Seeks of /dev/bootlog 32 bytes on: from 0x7FFFFFF0 lseek is EOVERFLOW,
  * since the old call returns no offset past 2147483647, and from 0xFFFFFFF0,
  * which _llseek can set, lseek and _llseek are EINVAL, since the log's
- * offset has 32 bits; each leaves the offset. lseek to the end gives the
- * ring's length.
+ * offset has 32 bits, and so is an _llseek from 1 whose sum passes the
+ * largest signed 64-bit offset; each leaves the offset. lseek to the end
+ * gives the ring's length.
  */
 static void log_seek_range(void)
 {
@@ -2325,6 +2326,10 @@ static void log_seek_range(void)
     rc = llseek_bootlog(e, 0x20, 1, (long long __user *)&result);
     check(rc == -EINVAL && e->ofd->offset == 0xFFFFFFF0u,
           "an _llseek of /dev/bootlog past 4294967295 is EINVAL and leaves the offset");
+    e->ofd->offset = 1;
+    rc = llseek_bootlog(e, 0x7FFFFFFFFFFFFFFFll, 1, (long long __user *)&result);
+    check(rc == -EINVAL && e->ofd->offset == 1,
+          "an _llseek of /dev/bootlog past the largest signed offset is EINVAL");
     params.ecx = 0;
     params.edx = 2;
     rc = sys_lseek(&params);
