@@ -388,7 +388,7 @@ int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, ui
 /**
  * The working directory's hold on its mount: a process whose directory is
  * inside a mount counts as a reference on it, so the mount cannot be
- * unmounted from under it. The permanent mounts need no pin and take none.
+ * unmounted from under it. /dev and /proc need no pin and take none.
  * `vfs_cwd_set` replaces the previous hold, storing the new one before it
  * lets go of the old, a put that may sleep; `vfs_cwd_clear` drops it.
  */

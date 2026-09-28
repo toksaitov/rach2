@@ -7,8 +7,10 @@
  * and utimensat of a file a write moves, an open that truncates while
  * another thread sharing its table asks for the table's last free slot, the
  * key a file's locks are found by on each kind of mount, a mkdir of a name
- * another process makes while the call waits for the parent's lock, and the
- * locks of an orphan's last description dropped before the orphan is freed.
+ * another process makes while the call waits for the parent's lock, the
+ * locks of an orphan's last description dropped before the orphan is freed,
+ * and an rmdir on the KRFFS root of a directory a description or a working
+ * directory has, or an open publishes a descriptor on while the call waits.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -171,10 +173,11 @@ static krffs_file_system_t root_fs;
 static int removals, keeps;
 /* The node of the root an address space keeps as its program's file. */
 static const krffs_node_t *program;
-/* The directory of the mkdir rows, named once a mkdir has made it, and the
- * working directories and umask of their calling process. */
+/* The directory of the mkdir and rmdir rows, named once a mkdir has made
+ * it, the working directories and umask of their calling process, and those
+ * of another process. */
 static krffs_node_t made_dir;
-static struct fs_struct row_fs;
+static struct fs_struct row_fs, other_fs;
 static int mkdir_row;
 /* The description whose last close an orphan row makes, and the last
  * description whose locks went. */
@@ -753,6 +756,15 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     return 0;
 }
 
+/** No row's directory is a process's root. */
+int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
+{
+    (void)mnt;
+    (void)node;
+    (void)name;
+    return 0;
+}
+
 /** Whether a change to the root runs in the hold of the root's lock that
  * its lookups ran in, so that the holder count between them did too. */
 static void changed_in_lookup_hold(void)
@@ -775,6 +787,18 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
     k_strncpy((char *)made_dir.name, name, sizeof(made_dir.name));
     made_dir.type = KRFFS_RESERVED_NODE;
     made_dir.mode = KRFFS_S_IFDIR | 0755;
+    return 0;
+}
+
+/** Remove the directory "made", as the root does once the syscall layer has
+ * made its refusals. */
+int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    check(mnt == &mount && dir == &root_dir && __builtin_strcmp(name, "made") == 0,
+          "the rmdir removes the name it was given");
+    changed_in_lookup_hold();
+    made_dir.name[0] = '\0';
+    removals++;
     return 0;
 }
 
@@ -1108,6 +1132,139 @@ static void orphan_locks(void)
         orphan_ofd = 0;
         root_row_end();
     }
+}
+
+/** A descriptor of this process on the directory "made" of the KRFFS root,
+ * opened for reading or, with `path`, with O_PATH, as an open installs one;
+ * its number. */
+static int made_desc(int path)
+{
+    int fd = fd_alloc(proc.fds);
+    fd_entry_t *e;
+
+    check(fd >= 0, "a descriptor on the directory");
+    if (fd < 0) {
+        return fd;
+    }
+    e = &proc.fds->entries[fd];
+    e->ofd->vmnt = &mount;
+    e->ofd->vnode = &made_dir;
+    e->node = &made_dir;
+    e->flags = path ? FD_FLAG_PATH : FD_FLAG_READ;
+    e->type = FD_TYPE_DIR;
+    return fd;
+}
+
+/** Close a descriptor `made_desc` made, whose description opened nothing
+ * on the root and so has nothing for the file system to close. */
+static void made_desc_close(int fd)
+{
+    if (fd >= 0) {
+        proc.fds->entries[fd].ofd->vmnt = 0;
+        fd_free(proc.fds, fd);
+    }
+}
+
+/* The descriptor the open an rmdir row's call waits for publishes. */
+static int published = -1;
+
+/** The open an rmdir row's call waits for: it has walked to the directory
+ * "made" holding the root's lock, and publishes an O_PATH descriptor on it
+ * before it lets the lock go. */
+static void open_dir_publishes(void)
+{
+    published = made_desc(1);
+}
+
+/** Begin an rmdir row on the root, whose directory "made" nothing uses. */
+static void rmdir_row_begin(void)
+{
+    root_row_begin();
+    k_memset(&made_dir, 0, sizeof(made_dir));
+    k_strncpy((char *)made_dir.name, "made", sizeof(made_dir.name));
+    made_dir.type = KRFFS_RESERVED_NODE;
+    made_dir.mode = KRFFS_S_IFDIR | 0755;
+    k_memset(&row_fs, 0, sizeof(row_fs));
+    k_memset(&other_fs, 0, sizeof(other_fs));
+}
+
+static void rmdir_row_end(void)
+{
+    proc.fs = 0;
+    root_row_end();
+}
+
+/**
+ * An rmdir on the KRFFS root of a directory in use is EBUSY, and the
+ * directory stays: a descriptor has it, opened for reading or with O_PATH;
+ * a description in flight has it with no descriptor; it is the working
+ * directory of the caller or of another process; or an open publishes a
+ * descriptor on it while the rmdir waits for the root's lock, which the
+ * rmdir sees only because it looks under that lock. A descriptor of the
+ * root finds its directory by the node's place, and a directory freed under
+ * one would leave it on whatever node the allocator put there next. A
+ * directory nothing uses is removed.
+ */
+static void rmdir_in_use(void)
+{
+    struct open_file *flight;
+    int path;
+    int other_cwd;
+    int fd;
+
+    rmdir_row_begin();
+    check(do_rmdir("/made") == 0 && removals == 1,
+          "an rmdir of a directory nothing uses removes it");
+    rmdir_row_end();
+
+    for (path = 0; path < 2; path++) {
+        rmdir_row_begin();
+        fd = made_desc(path);
+        check(do_rmdir("/made") == -EBUSY && removals == 0,
+              path ? "an rmdir of a directory an O_PATH descriptor has is EBUSY"
+                   : "an rmdir of a directory a descriptor has open is EBUSY");
+        made_desc_close(fd);
+        rmdir_row_end();
+    }
+
+    rmdir_row_begin();
+    flight = fd_ofd_new();
+    check(flight != 0, "a description in flight");
+    if (flight) {
+        flight->vmnt = &mount;
+        flight->vnode = &made_dir;
+        check(do_rmdir("/made") == -EBUSY && removals == 0,
+              "an rmdir of a directory a description in flight has is EBUSY");
+        flight->vmnt = 0;
+        fd_ofd_unref(flight);
+    }
+    rmdir_row_end();
+
+    for (other_cwd = 0; other_cwd < 2; other_cwd++) {
+        struct fs_struct *fs = other_cwd ? &other_fs : &row_fs;
+
+        rmdir_row_begin();
+        fs->cwd_mnt = &mount;
+        fs->cwd_node = &made_dir;
+        if (other_cwd) {
+            other.fs = fs;
+            proc.next = &other;
+        } else {
+            proc.fs = fs;
+        }
+        check(do_rmdir("/made") == -EBUSY && removals == 0,
+              other_cwd ? "an rmdir of another process's working directory is EBUSY"
+                        : "an rmdir of the caller's working directory is EBUSY");
+        rmdir_row_end();
+    }
+
+    rmdir_row_begin();
+    waiting = open_dir_publishes;
+    check(do_rmdir("/made") == -EBUSY && removals == 0,
+          "an rmdir of a directory an open publishes a descriptor on while it waits is EBUSY");
+    made_desc_close(published);
+    published = -1;
+    rmdir_row_end();
 }
 
 /** The write a row's call waits for: it holds the mount's lock and moves
@@ -1538,6 +1695,7 @@ int main(void)
     rename_over_installing();
     mkdir_race();
     orphan_locks();
+    rmdir_in_use();
     attrs_after_move();
     stats_after_move();
     times_after_move();

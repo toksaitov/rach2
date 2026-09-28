@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt FCNTL 2
 .Os
 .Sh NAME
@@ -224,9 +224,11 @@ moves its locks, and the waits for them, with it: a lock taken before a
 rename or a move meets one taken after it, and two files whose names have
 one hash, and so one inode number on the boot root, have locks of their
 own.
-The boot root frees a directory removed while a descriptor has it open,
-and the locks of that descriptor stay on the place, where a node made
-later meets them; Linux keeps them with the removed directory.
+A place stays the file's while a descriptor has it: neither file system
+frees a file a descriptor has, and
+.Xr rmdir 2
+refuses a directory a descriptor has with
+.Er EBUSY .
 On FAT32 and exFAT a lock is found by the file's node, which a rename
 keeps, since their inode number is the file's directory entry, which a
 rename changes.

@@ -2689,17 +2689,17 @@ static void hold_release(struct vfs_mount *mnt, void *node)
  * Hold the new working directory, store it, and only then let go of the old
  * one, whose put may sleep: a thread that shares the working directory
  * (CLONE_FS) and changes it meanwhile replaces a hold that is in the record,
- * and the pair in the record stays the directory its path names. /dev,
- * /proc and the KRFFS boot root need no hold and take none; a root of
- * another type does.
+ * and the pair in the record stays the directory its path names. /dev and
+ * /proc need no hold and take none. The KRFFS boot root, whose type has no
+ * `hold`, takes only the mount's count, and the record keeps its node for
+ * `rmdir`, which refuses a directory that is a working directory.
  */
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
     struct vfs_mount *was = p->fs->cwd_mnt;
     void *was_node = p->fs->cwd_node;
 
-    if (mnt && (mnt == mounts[1] || mnt == mounts[2] ||
-                (mnt == mounts[0] && mnt->type == &vfs_krffs_type))) {
+    if (mnt && (mnt == mounts[1] || mnt == mounts[2])) {
         mnt = 0;
     }
     if (mnt) {

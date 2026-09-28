@@ -83,8 +83,8 @@ struct fs_struct {
      * from the heap when it does not; `proc_cwd` reads whichever it is. */
     char cwd[CWD_MAX];
     char *cwd_long;
-    /* The working directory's hold on a mount that can be unmounted: the
-     * mount and the held node, or NULL on a permanent mount (vfs_cwd_set). */
+    /* The working directory's hold: its mount and node, the node held on a
+     * type with `hold`, or NULL on /dev and /proc (vfs_cwd_set). */
     struct vfs_mount *cwd_mnt;
     void *cwd_node;
     /* The root directory chroot set: its mount and held node, or NULL for

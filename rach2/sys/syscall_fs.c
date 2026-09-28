@@ -991,9 +991,9 @@ int canonicalize_abs(char *path)
  * regular-file descriptor by the lifetime, not by this check: no address
  * a descriptor has is handed out while it has it.
  *
- * A NULL node is the root directory and needs no check. Directories are
- * deliberately out of scope: `rmdir` still frees the node under an open
- * directory descriptor, so a relative path through one still answers -EBADF.
+ * A NULL node is the root directory and needs no check. A directory is
+ * checked the same way, though `rmdir` refuses one a description has: one
+ * that fails was removed by a route that did not look for its descriptors.
  */
 int fd_node_check(fd_entry_t *entry)
 {
@@ -1105,11 +1105,13 @@ static int names_tree_root(const char *path)
  * of it, behind the path of the directory the mount covers; a type without a
  * `path` operation keeps the path the directory was opened by. A directory of
  * the KRFFS boot root is named by its node, which must still resolve back to
- * itself: KRFFS nodes are not counted, and `rmdir` frees a directory another
- * descriptor has open. A path from the root of the mount table becomes the
- * one the calling process has from its own root (`path_in_root`). Returns 0,
- * -ENOTDIR for a descriptor on anything but a directory, -EBADF for a
- * removed one, -ENOENT for one outside the process's root, or -ENAMETOOLONG.
+ * itself: KRFFS nodes are not counted, and though `rmdir` refuses a directory
+ * a description has, the test does not rest on that. A path from the root of
+ * the mount table becomes the one the calling process has from its own root
+ * (`path_in_root`). Returns 0, -ENOTDIR for a descriptor on anything but a
+ * directory, -EBADF for a boot-root directory that no longer resolves to its
+ * node, -ENOENT for one outside the process's root or one tmpfs removed, or
+ * -ENAMETOOLONG.
  */
 static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap)
 {
@@ -3791,7 +3793,7 @@ static int synth_kind_is_dir(int kind)
 /**
  * Make `path`, the canonical path of the directory at (`mnt`, `node`), the
  * working directory, and hold the mount it is on: `vfs_cwd_set` takes no hold
- * on a permanent mount, and a synthetic directory, whose `mnt` is NULL, has
+ * on /dev or /proc, and a synthetic directory, whose `mnt` is NULL, has
  * none to take. The path and the hold are stored with nothing between them
  * that sleeps, and the old hold is let go after both, so a thread that shares
  * them (CLONE_FS) finds the path and the hold of one directory. Returns 0, or
@@ -3938,10 +3940,10 @@ int32_t sys_chdir(isr_params_t *params)
  * The working directory's path is the one the descriptor's `*at` calls
  * resolve against (`fd_dir_path`), so it follows a directory a type can name
  * after a rename; a descriptor on anything but a directory is -ENOTDIR, and
- * one on a directory of the KRFFS boot root removed since is -EBADF. Entering
- * takes search permission on the directory, which a synthetic one grants
- * everybody, and the mount hold chdir takes. A descriptor opened with O_PATH
- * does as well as any other.
+ * one on a directory tmpfs removed since is -ENOENT. Entering takes search
+ * permission on the directory, which a synthetic one grants everybody, and
+ * the mount hold chdir takes. A descriptor opened with O_PATH does as well as
+ * any other.
  */
 int32_t sys_fchdir(isr_params_t *params)
 {
@@ -8522,15 +8524,81 @@ int32_t sys_mknodat(isr_params_t *params)
 }
 
 /**
+ * Whether the directory `dir` of the KRFFS root on `mnt` is in use: a
+ * description has it, an O_PATH descriptor's or one in flight on a socket
+ * among them, or it is a process's working directory. A descriptor of the
+ * root finds its directory by the node's place, which the allocator gives
+ * the next node it makes once the directory is freed, so `rmdir` refuses a
+ * directory in use, as a KRFFS volume and ext2 refuse theirs.
+ */
+static int root_dir_in_use(const struct vfs_mount *mnt, const krffs_node_t *dir)
+{
+    process_t *pr;
+
+    if (fd_ofd_holders(mnt, dir, NULL) > 0) {
+        return 1;
+    }
+    for (pr = proc_list; pr; pr = pr->next) {
+        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Remove the directory `leaf` from the KRFFS root's directory `parent`: the
+ * root's half of `do_rmdir`, run under the root's namespace lock, which the
+ * caller took with its walk and keeps until this returns.
+ *
+ * The answers come in this order: a missing name, -ENOENT; a name that is
+ * not a directory, -ENOTDIR; a parent the caller may not write, -EACCES;
+ * the sticky rule, -EPERM; a directory in use, -EBUSY (`root_dir_in_use`);
+ * and a directory with names in it, -ENOTEMPTY from the core. The use is
+ * right only under the lock: an open holds it from its walk until it has
+ * published its descriptor, and a chdir sleeps nowhere between the lookup
+ * that finds the directory and its record of it.
+ */
+static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
+{
+    krffs_node_t *node;
+    void *found;
+    int32_t rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
+
+    if (rc != 0) {
+        return rc;
+    }
+    node = found;
+    if (!KRFFS_IS_DIR(node->mode)) {
+        return -ENOTDIR;
+    }
+    rc = cred_access_node((krffs_node_t *)parent->node, CRED_W, 0);
+    if (rc == 0) {
+        rc = cred_sticky_ok((krffs_node_t *)parent->node, node);
+    }
+    if (rc == 0 && root_dir_in_use(parent->mnt, node)) {
+        rc = -EBUSY;
+    }
+    return rc != 0 ? rc : vfs_rmdir(parent->mnt, parent->node, leaf);
+}
+
+/**
  * Remove the empty directory `path`, an absolute canonical path: the core of
  * rmdir(2) and of unlinkat(2) with AT_REMOVEDIR. Returns 0 or -errno
- * (-ENOENT, -ENOTDIR, -ENOTEMPTY). The root is -EBUSY, a last name of "."
- * -EINVAL and one of ".." -ENOTEMPTY once the walk to them is made, as on
- * Linux, whatever the directory holds.
+ * (-ENOENT, -ENOTDIR, -EBUSY, -ENOTEMPTY). The root is -EBUSY, a last name
+ * of "." -EINVAL and one of ".." -ENOTEMPTY once the walk to them is made, as
+ * on Linux, whatever the directory holds. A mount point and a process's root
+ * are -EBUSY.
+ *
+ * The walk keeps the parent's namespace lock, where its type takes one,
+ * until the directory is gone: on the KRFFS root the use `rmdir_root_name`
+ * finds is right only under that lock.
  */
 static int32_t do_rmdir(const char *pathbuf)
 {
-    krffs_node_t *node;
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc;
 
     if (!vfs_root_mounted()) {
         return -ENOENT;
@@ -8538,65 +8606,30 @@ static int32_t do_rmdir(const char *pathbuf)
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
         return -EBUSY;
     }
-    {
-        struct vfs_ref parent;
-        char leaf[VFS_NAME_MAX + 1];
-        void *found;
-        int32_t rc;
-
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
-        if (rc != 0) {
-            return rc;
-        }
-        if (leaf_is_dot(leaf)) {
-            vfs_ref_release(&parent);
-            return leaf[1] == '\0' ? -EINVAL : -ENOTEMPTY;
-        }
-        if (vfs_synth_vpath(parent.mnt, parent.node)) {
-            vfs_ref_release(&parent);
-            return -EROFS; /* the synthetic mounts are read-only */
-        }
-        if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
-            vfs_leaf_root(parent.mnt, parent.node, leaf)) {
-            vfs_ref_release(&parent);
-            return -EBUSY; /* a mount point, or a process's root */
-        }
-        if (!mnt_is_root(parent.mnt)) {
-            vfs_ns_lock(parent.mnt);
-            rc = cred_remove_ref(&parent, leaf);
-            if (rc == 0) {
-                rc = vfs_rmdir(parent.mnt, parent.node, leaf);
-            }
-            vfs_ns_unlock(parent.mnt);
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        node = found;
-        if (!KRFFS_IS_DIR(node->mode)) {
-            vfs_ref_release(&parent);
-            return -ENOTDIR;
-        }
-        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc; /* removing an entry writes its directory */
-        }
-        rc = cred_sticky_ok((krffs_node_t *)parent.node, node);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_rmdir(parent.mnt, parent.node, leaf);
-        vfs_ns_unlock(parent.mnt);
-        vfs_ref_release(&parent);
+    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
         return rc;
     }
+    if (leaf_is_dot(leaf)) {
+        rc = leaf[1] == '\0' ? -EINVAL : -ENOTEMPTY;
+    } else if (vfs_synth_vpath(parent.mnt, parent.node)) {
+        rc = -EROFS; /* the synthetic mounts are read-only */
+    } else if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
+               vfs_leaf_root(parent.mnt, parent.node, leaf)) {
+        rc = -EBUSY;
+    } else if (mnt_is_root(parent.mnt)) {
+        rc = rmdir_root_name(&parent, leaf);
+    } else {
+        vfs_ns_lock(parent.mnt);
+        rc = cred_remove_ref(&parent, leaf);
+        if (rc == 0) {
+            rc = vfs_rmdir(parent.mnt, parent.node, leaf);
+        }
+        vfs_ns_unlock(parent.mnt);
+    }
+    vfs_walk_unlock(parent.mnt);
+    vfs_ref_release(&parent);
+    return rc;
 }
 
 /* rmdir(2): EBX = path. */
