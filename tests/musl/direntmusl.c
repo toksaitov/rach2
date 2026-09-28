@@ -488,8 +488,10 @@ static int at_ends(const char *dir, const struct ends *p)
     return 0;
 }
 
-/* A script whose interpreter is named with a trailing slash: the kernel
- * refuses it, and a kernel that ran the interpreter would print the line. */
+/* A script whose interpreter is named with a trailing slash, which the
+ * kernel refuses. The row judges by the child's status (`exec_refused`),
+ * since the default image's /bin/sh reads its commands from its input and not
+ * from the script; a shell that read the script would print the line. */
 static const char slash_script[] =
     "#!/bin/sh/\n"
     "echo 'DIRENTMUSL FAIL (a script whose interpreter is named with a trailing slash ran)'\n";
@@ -499,15 +501,21 @@ static const char slash_script[] =
  * child, so a kernel that wrongly runs the program leaves this process to
  * report the row and remove what the rows made: the child exits with 3 when
  * the call returned -1 with `err` and with 4 when it returned otherwise, and
- * any other end, a program that ran, is a failure.
+ * any other end, a program that ran, is a failure. The child's input is
+ * /dev/null, so a shell that runs ends at once and does not wait for a line.
  */
 static int exec_refused(const char *path, int err)
 {
     static char *const args[] = {"direntmusl", NULL};
     pid_t pid = fork();
     int status;
+    int null;
 
     if (pid == 0) {
+        null = open("/dev/null", O_RDONLY);
+        if (null < 0 || dup2(null, 0) != 0) {
+            _exit(5);
+        }
         _exit(refused(execve(path, args, args + 1), err) ? 3 : 4);
     }
     return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
@@ -916,11 +924,14 @@ static int device_ends(void)
  * end as directories (`synth_name_rows`) or exist (`synth_taken_rows`), /fb
  * and /mouse as directories (`device_ends`), and the other calls given a
  * path that names a directory by its end, there and in /dev/shm
- * (`dir_end_calls`). 0, or 1 once the failure is reported.
+ * (`dir_end_calls`). The groups from `root_rows` on each run whether or not
+ * one before failed, so a kernel fault that breaks several reports each. 0,
+ * or 1 once a failure is reported.
  */
 static int own_dir_rows(void)
 {
     int seek;
+    int rc;
 
     if (dir_ends(file) != 0) {
         return 1;
@@ -933,11 +944,12 @@ static int own_dir_rows(void)
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
-    if (root_rows() != 0 || synth_name_rows() != 0 || synth_taken_rows() != 0 ||
-        device_ends() != 0) {
-        return 1;
-    }
-    return dir_end_calls(base, 0) != 0 || shm_dir_end_calls() != 0;
+    rc = root_rows();
+    rc |= synth_name_rows();
+    rc |= synth_taken_rows();
+    rc |= device_ends();
+    rc |= dir_end_calls(base, 0);
+    return rc | shm_dir_end_calls();
 }
 
 /** Remove what the probe made. */
