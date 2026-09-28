@@ -64,6 +64,7 @@
 #include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 /* The renameat2 flag, which musl does not declare. */
@@ -486,6 +487,26 @@ static const char slash_script[] =
     "#!/bin/sh/\n"
     "echo 'DIRENTMUSL FAIL (a script whose interpreter is named with a trailing slash ran)'\n";
 
+/**
+ * Whether execve of `path` returned -1 with `err`. The call is made by a
+ * child, so a kernel that wrongly runs the program leaves this process to
+ * report the row and remove what the rows made: the child exits with 3 when
+ * the call returned -1 with `err` and with 4 when it returned otherwise, and
+ * any other end, a program that ran, is a failure.
+ */
+static int exec_refused(const char *path, int err)
+{
+    static char *const args[] = {"direntmusl", NULL};
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        _exit(refused(execve(path, args, args + 1), err) ? 3 : 4);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 3;
+}
+
 /** bind(2) of the socket `fd` to the path `path`. */
 static int bind_path(int fd, const char *path)
 {
@@ -573,11 +594,10 @@ static int write_elf(const char *path, const char *interp)
  */
 static int interp_ends(const struct ends *p)
 {
-    static char *const args[] = {"direntmusl", NULL};
-    int ok = write_elf(p->x, p->fs) == 0 && refused(execve(p->x, args, args + 1), ENOTDIR) &&
-             write_elf(p->x, p->fdot) == 0 && refused(execve(p->x, args, args + 1), ENOTDIR) &&
-             write_elf(p->x, p->ss) == 0 && refused(execve(p->x, args, args + 1), EACCES) &&
-             write_elf(p->x, p->sdotdot) == 0 && refused(execve(p->x, args, args + 1), EACCES);
+    int ok = write_elf(p->x, p->fs) == 0 && exec_refused(p->x, ENOTDIR) &&
+             write_elf(p->x, p->fdot) == 0 && exec_refused(p->x, ENOTDIR) &&
+             write_elf(p->x, p->ss) == 0 && exec_refused(p->x, EACCES) &&
+             write_elf(p->x, p->sdotdot) == 0 && exec_refused(p->x, EACCES);
 
     unlink(p->x);
     if (!ok) {
@@ -590,18 +610,16 @@ static int interp_ends(const struct ends *p)
  * execve given a path that names a directory by its end: the file so named
  * is ENOTDIR and the directory EACCES, and a script whose interpreter is
  * named with a trailing slash is ENOTDIR, and so is an ELF image whose
- * PT_INTERP is (`interp_ends`). 0, or 1 once the failure is reported.
+ * PT_INTERP is (`interp_ends`). Each exec is a child's (`exec_refused`). 0,
+ * or 1 once the failure is reported.
  */
 static int exec_ends(const struct ends *p)
 {
-    static char *const args[] = {"direntmusl", NULL};
     int fd;
     int ok;
 
-    if (!refused(execve(p->fs, args, args + 1), ENOTDIR) ||
-        !refused(execve(p->fdot, args, args + 1), ENOTDIR) ||
-        !refused(execve(p->ss, args, args + 1), EACCES) ||
-        !refused(execve(p->sdot, args, args + 1), EACCES)) {
+    if (!exec_refused(p->fs, ENOTDIR) || !exec_refused(p->fdot, ENOTDIR) ||
+        !exec_refused(p->ss, EACCES) || !exec_refused(p->sdot, EACCES)) {
         return fail("execve of a path that names a directory by its end was not ENOTDIR or EACCES");
     }
     fd = open(p->x, O_WRONLY | O_CREAT | O_TRUNC, 0755);
@@ -610,7 +628,7 @@ static int exec_ends(const struct ends *p)
     if (fd >= 0) {
         close(fd);
     }
-    ok = ok && refused(execve(p->x, args, args + 1), ENOTDIR);
+    ok = ok && exec_refused(p->x, ENOTDIR);
     unlink(p->x);
     if (!ok) {
         return fail("a script whose interpreter has a trailing slash was not ENOTDIR");
