@@ -5,15 +5,16 @@
 # through the table when the copy fails, as they were; the slot a receive
 # of SCM_RIGHTS reserves given its type before the copy; pipe2's ends given
 # before the copy; connect's check of the socket's state after its sleeps
-# removed; the bind lock and the receive lock never waited for; a stream
-# send judged after its copy as before and a datagram send not at all; and
-# a receive's descriptors in flight not found by the holder count while it
-# installs or closes them, the one being closed counted as its own file's
-# holder, or one it installed still counted; and a descriptor in flight
-# whose file moved counted, installed or released by the node it had
-# before. Each compiled fault must fail its named row and end the run with
-# status 1; each restored source is touched, rebuilt and must pass again
-# under ASan and UBSan.
+# removed; the bind lock and the receive lock never waited for, or let go
+# with no wake; bind's check of a named socket made before it waits for the
+# lock; a stream send judged after its copy as before and a datagram send
+# not at all; a receive's descriptors in flight not found by the holder
+# count while it installs or closes them, the one being closed counted as
+# its own file's holder, or one it installed still counted; and a
+# descriptor in flight whose file moved counted, installed or released by
+# the node it had before. Each compiled fault must fail its named row and
+# end the run with status 1; each restored source is touched, rebuilt and
+# must pass again under ASan and UBSan.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -75,8 +76,9 @@ run_phase()
 
 echo "unix-proof: logs: $work"
 run_phase fixed 0 'unix-hosttest: result: pass:'
-for fault in accept socketpair rights pipe2 connect bind receive send-stream send-datagram \
-    transit-count transit-release transit-installed moved-count moved-install moved-release; do
+for fault in accept socketpair rights pipe2 connect bind bind-wake bind-check receive receive-wake \
+    send-stream send-datagram transit-count transit-release transit-installed moved-count \
+    moved-install moved-release; do
     python3 - "$work/sys/ipc" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -113,6 +115,16 @@ faults = {
         ('    if (s->state != US_UNCONNECTED) {\n'
          '        return s->state == US_CONNECTED ? -EISCONN : -EINVAL;\n    }\n', '')]),
     'bind': ('unix.c', [('        rc = bind_lock(s);\n', '        rc = 0;\n')]),
+    'bind-wake': ('unix.c', [
+        ('    s->binding = 0;\n    wq_wake_all(&s->lock_wq);\n', '    s->binding = 0;\n')]),
+    'bind-check': ('unix.c', [
+        ('    if (s->bound || s->closed) {\n        return -EINVAL;\n    }\n'
+         '    if (n->len == 0) {\n', '    if (n->len == 0) {\n'),
+        ('    if (rc == 0) {\n        rc = bind_lock(s);\n    }\n',
+         '    if (rc == 0 && (s->bound || s->closed)) {\n        rc = -EINVAL;\n    }\n'
+         '    if (rc == 0) {\n        rc = bind_lock(s);\n    }\n')]),
+    'receive-wake': ('unix.c', [
+        ('    s->reading = 0;\n    wq_wake_all(&s->lock_wq);\n', '    s->reading = 0;\n')]),
     'receive': ('unix.c', [
         ('    while (s->reading) {\n        wq_wait_event_nointr(&s->lock_wq, recv_idle, s);\n',
          '    while (0 && s->reading) {\n'
@@ -155,7 +167,10 @@ PY
         pipe2) message="a sibling's close of the numbers pipe2 reserved finds nothing" ;;
         connect) message='a connect whose copy of the address sleeps while a sibling connects' ;;
         bind) message='a second bind of a socket waits for the bind lock' ;;
+        bind-wake) message="the first bind's end wakes the bind that waits" ;;
+        bind-check) message='the bind that waited goes on from its wait, finds the socket named' ;;
         receive) message="a datagram receive while another's copy of a message sleeps waits" ;;
+        receive-wake) message="the end of a receive's hold of the lock wakes the receive that" ;;
         send-stream) message='a stream send whose copy sleeps while the socket is shut down' ;;
         send-datagram) message='a datagram send whose copy sleeps while the socket is shut down' ;;
         transit-count) message='a file is not freed by the close of its last descriptor while a receive installs' ;;
