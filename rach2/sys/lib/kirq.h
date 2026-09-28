@@ -24,4 +24,7 @@ uint32_t kirq_save(void);
 /** Put the flags back as `kirq_save` found them. */
 void kirq_restore(uint32_t flags);
 
+/** Whether interrupts are on where the caller runs. */
+int kirq_enabled(void);
+
 #endif /* _KIRQ_H_ */

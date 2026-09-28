@@ -17,3 +17,11 @@ void kirq_restore(uint32_t flags)
 {
     __asm__ __volatile__("pushl %0; popfl" : : "r"(flags) : "memory", "cc");
 }
+
+int kirq_enabled(void)
+{
+    uint32_t flags;
+
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(flags) : : "memory");
+    return (flags & 0x200u) != 0; /* EFLAGS.IF */
+}

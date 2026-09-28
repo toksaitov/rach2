@@ -21,6 +21,8 @@
  * returned and what it left behind, not on what it printed.
  */
 
+#include <stdarg.h>
+
 extern int printf(const char *fmt, ...);
 extern int strcmp(const char *a, const char *b);
 extern int fork(void);
@@ -52,8 +54,11 @@ static unsigned stop_reads;
 static unsigned complete_after;
 static unsigned pending_reads;
 /* Warnings the driver logged, since a polled command that fails is reported
-   only as EIO to its caller and the log is what says why. */
+   only as EIO to its caller and the log is what says why, with the command
+   and the reason the last one gave, when it gave them. */
 static unsigned ahci_warnings;
+static unsigned logged_command;
+static const char *logged_why;
 static unsigned issued;
 static unsigned stale_issues;
 static unsigned completed;
@@ -326,12 +331,31 @@ int diskcmd_allowed(uint8_t command)
     return policy_allows;
 }
 
+/* The policy's name, which the driver's refusal logs. */
+const char diskcmd_policy_banner[] = "the model's policy";
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void)format;
-    if (level == KLOG_WARN && strcmp(subsystem, "ahci") == 0) {
-        ahci_warnings++;
+    va_list ap;
+
+    if (level != KLOG_WARN || strcmp(subsystem, "ahci") != 0) {
+        return;
     }
+    ahci_warnings++;
+    logged_command = 0;
+    logged_why = NULL;
+    if (strcmp(format, "port %d: command 0x%X failed: %s") == 0) {
+        va_start(ap, format);
+        (void)va_arg(ap, int);
+        logged_command = va_arg(ap, unsigned);
+        logged_why = va_arg(ap, const char *);
+        va_end(ap);
+    }
+}
+
+int kirq_enabled(void)
+{
+    return !interrupts_masked;
 }
 
 void console_printf(const char *format, ...)
@@ -640,33 +664,62 @@ static void polled_queue_restart(int fault)
     CHECK("the queued completion and the other port remain pending", reg[R_IS] == 3);
 }
 
+/** Issue IDENTIFY on the model's port, with interrupts on or off as
+ * `masked` says, for a command that completes after `after` polls of the
+ * command-issue register, or never for `after` of 0 with completion off. */
+static int polled_identify(unsigned after, int masked)
+{
+    static uint8_t buf[512];
+    int rc;
+
+    model_reset();
+    (void)ahci_select_port();
+    (void)ahci_port_start(&ahci_disks[0]);
+    command_completes = after != 0;
+    complete_after = after;
+    ci_reads = 0;
+    ahci_warnings = 0;
+    interrupts_masked = (uint32_t)masked;
+    rc = ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0);
+    interrupts_masked = 0;
+    return rc;
+}
+
 /**
  * A polled command's wait: one that never completes is refused after the wait
- * polled and gave up, and the driver logs why, since its caller sees only
- * EIO; one that completes only after a second and a half of polls, as a flush
- * on a busy emulator's host can, completes, with nothing logged.
+ * polled and gave up, and the driver logs the command and why, since its
+ * caller sees only EIO. With interrupts on, one that answers after ten
+ * seconds of polls, as a flush on a busy emulator's host can, completes;
+ * with them off, where every tick of the wait is lost to the clock, it is
+ * refused after five, and one that answers after a second and a half
+ * completes. A command that moves fewer bytes than asked is refused and
+ * logged.
  */
 static void command_waits(void)
 {
     static uint8_t buf[512];
 
-    model_reset();
-    (void)ahci_select_port();
-    (void)ahci_port_start(&ahci_disks[0]);
-    command_completes = 0;
-    ci_reads = 0;
-    CHECK("a command that never completes is refused",
-          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
+    CHECK("a command that never completes is refused", polled_identify(0, 0) != 0);
     CHECK("and the wait polled and then gave up", ci_reads > 1);
-    CHECK("and the driver logged why", ahci_warnings == 1);
+    CHECK("and the driver logged the command and why",
+          ahci_warnings == 1 && logged_command == ATA_IDENTIFY && logged_why &&
+              same_text(logged_why, "no answer in thirty seconds"));
+    CHECK("with interrupts on, a command that answers after ten seconds of polls completes",
+          polled_identify(1000000, 0) == 0 && ahci_warnings == 0);
+    CHECK("with interrupts off, it is refused after five seconds",
+          polled_identify(1000000, 1) != 0 && ahci_warnings == 1 && logged_why &&
+              same_text(logged_why, "no answer in five seconds with interrupts off"));
+    CHECK("with interrupts off, one that answers after a second and a half completes",
+          polled_identify(150000, 1) == 0 && ahci_warnings == 0);
 
     model_reset();
     (void)ahci_select_port();
     (void)ahci_port_start(&ahci_disks[0]);
-    complete_after = 150000;
-    CHECK("a command that answers after a second and a half of polls completes",
-          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
-    CHECK("and nothing was logged", ahci_warnings == 0);
+    moved_bytes = 256;
+    ahci_warnings = 0;
+    CHECK("a command that moves fewer bytes than asked is refused and logged",
+          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0 &&
+              ahci_warnings == 1);
 }
 
 int main(void)

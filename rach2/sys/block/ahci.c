@@ -112,15 +112,19 @@
    register reads are a moment on the QEMU loop and several seconds on the
    laptop this drives. The budgets: one second for a handshake (the host reset
    is allowed exactly that by the specification, and the rest are shorter in
-   practice), and thirty seconds at a fine grain for a command. A healthy
-   device answers a read in microseconds, but a write here ends with a flush,
-   which waits for the medium, and an emulator's host under load or a disk
-   spinning up can take seconds for that; thirty is the sleeping path's
-   deadline period and Linux's ATA command timeout. */
-#define AHCI_WAIT_POLL_US 100u
-#define AHCI_WAIT_STEPS   10000u
-#define AHCI_CMD_POLL_US  10u
-#define AHCI_CMD_STEPS    3000000u
+   practice), and at a fine grain for a command thirty seconds with
+   interrupts on and five with them off. A healthy device answers a read in
+   microseconds, but a write here ends with a flush, which waits for the
+   medium, and an emulator's host under load or a disk spinning up can take
+   seconds for that; thirty is the sleeping path's deadline period and
+   Linux's ATA command timeout. With interrupts off the timer does not tick,
+   so every tick of the wait is lost to the clock and to each timer, and the
+   bound is the IDE driver's polled one. */
+#define AHCI_WAIT_POLL_US     100u
+#define AHCI_WAIT_STEPS       10000u
+#define AHCI_CMD_POLL_US      10u
+#define AHCI_CMD_STEPS        3000000u
+#define AHCI_CMD_STEPS_MASKED 500000u
 
 /* The two waits that follow a COMRESET are measured, not counted, since
    what they wait for happens on the wire and in the device, not at the
@@ -984,11 +988,14 @@ static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf
 
     if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
         (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
+        klog(KLOG_WARN, "ahci", "port %d: a command failed: the device reported an error", d->port);
         return ahci_io_error(d);
     }
     if (bytes > 0) {
         ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
         if (hdr->prdbc != bytes) {
+            klog(KLOG_WARN, "ahci", "port %d: a command failed: it moved %d of %d bytes", d->port,
+                 (unsigned)hdr->prdbc, (unsigned)bytes);
             return ahci_io_error(d);
         }
     }
@@ -1014,6 +1021,13 @@ static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
 static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why);
 
+/** The polled wait's bound in steps: `AHCI_CMD_STEPS` with interrupts on, and
+ * `AHCI_CMD_STEPS_MASKED` with them off, as the budgets above say. */
+static uint32_t ahci_cmd_steps(void)
+{
+    return kirq_enabled() ? AHCI_CMD_STEPS : AHCI_CMD_STEPS_MASKED;
+}
+
 /**
  * Issue one polled command on `d`'s port and spin to completion.
  *
@@ -1035,6 +1049,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
     uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
     uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+    uint32_t steps = ahci_cmd_steps();
     uint32_t spin;
     int rc;
 
@@ -1052,7 +1067,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     d->polling = 1;
 
     /* The task file must be idle before a command issues (AHCI 5.5.1). */
-    spin = AHCI_CMD_STEPS;
+    spin = steps;
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
         block_count_poll();
         if (--spin == 0) {
@@ -1068,7 +1083,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     }
     ahci_write32(ci_off, 1u << AHCI_SLOT);
 
-    spin = AHCI_CMD_STEPS;
+    spin = steps;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
         uint32_t is;
 
@@ -1079,7 +1094,10 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
             return ahci_polled_failed(d, command, "the controller reported an error");
         }
         if (--spin == 0) {
-            return ahci_polled_failed(d, command, "no answer in thirty seconds");
+            return ahci_polled_failed(d, command,
+                                      steps == AHCI_CMD_STEPS
+                                          ? "no answer in thirty seconds"
+                                          : "no answer in five seconds with interrupts off");
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
@@ -1222,7 +1240,7 @@ static void ahci_drain(struct ahci_disk *d)
     }
     flags = kirq_save();
     while (d->active) {
-        uint32_t spin = AHCI_CMD_STEPS;
+        uint32_t spin = AHCI_CMD_STEPS_MASKED;
 
         for (;;) {
             uint32_t ci = ahci_read32(ci_off);
