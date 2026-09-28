@@ -147,6 +147,21 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 }
 
 /**
+ * Free `node`, an orphan of the KRFFS root whose last holder is `e`, once the
+ * locks the description of `e` owns are gone. A lock of the root is keyed by
+ * its node's place (`fd_lock_key`), and a node the allocator makes there
+ * later must meet none of them; the description's own end drops them only
+ * after this, when `fd_free` lets its last reference go.
+ */
+static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node)
+{
+    if (e->ofd && e->ofd->refcount == 1 && lock_any()) {
+        lock_ofd_gone(e->ofd);
+    }
+    krffs_remove_reserved_node(krffs_fs, node);
+}
+
+/**
  * Free the node of a FIFO of the KRFFS root that lost its name while open,
  * when `e`, an end of it or the reservation of an open of it that did not
  * finish, is the last to hold it: the release of a file's last descriptor
@@ -163,7 +178,7 @@ static void fd_fifo_orphan(const fd_entry_t *e)
     if (fifo && fifo != krffs_fs->node && fifo->type == KRFFS_RESERVED_NODE &&
         krffs_mode_type(fifo->mode) == KRFFS_S_IFIFO && fifo->name[0] == '\0' &&
         fd_node_holders(fifo, e) == 0) {
-        krffs_remove_reserved_node(krffs_fs, fifo);
+        fd_free_orphan(e, fifo);
     }
 }
 
@@ -299,7 +314,7 @@ static void fd_release_objects(fd_entry_t *e)
      * needs no ordering rule between two functions. */
     if (e->type == FD_TYPE_FILE && e->node && krffs_fs && e->node != krffs_fs->node &&
         e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
-        krffs_remove_reserved_node(krffs_fs, e->node);
+        fd_free_orphan(e, e->node);
         e->node = NULL;
     }
     if (e->type == FD_TYPE_PIPE) {

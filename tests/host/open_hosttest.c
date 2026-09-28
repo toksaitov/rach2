@@ -3,8 +3,9 @@
  * close of a descriptor whose release sleeps, by one thread or by the end of
  * another thread's call, an unlink and a rename on the KRFFS root of a file
  * an open is installing, a chmod and a chown of a file a write moves, the
- * key a file's locks are found by on each kind of mount, and a mkdir of a
- * name another process makes while the call waits for the parent's lock.
+ * key a file's locks are found by on each kind of mount, a mkdir of a name
+ * another process makes while the call waits for the parent's lock, and the
+ * locks of an orphan's last description dropped before the orphan is freed.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -167,6 +168,9 @@ static int removals, keeps;
 static krffs_node_t made_dir;
 static struct fs_struct row_fs;
 static int mkdir_row;
+/* The description whose last close an orphan row makes, and the last
+ * description whose locks went. */
+static const struct open_file *orphan_ofd, *ofd_gone;
 /* The call that holds the root's namespace lock when a row's call first
  * asks for it, which runs before the row's call has the lock, the depth of
  * the lock, the number of times it was taken from a depth of 0, and that
@@ -206,9 +210,10 @@ int lock_any(void)
     return locking;
 }
 
+/** Record the end of a description's locks, for the orphan rows. */
 void lock_ofd_gone(const struct open_file *ofd)
 {
-    (void)ofd;
+    ofd_gone = ofd;
 }
 
 /** Count host allocations. */
@@ -332,6 +337,9 @@ void vfs_leave(struct vfs_mount *mnt)
  * sleeps: run what the row has happen meanwhile. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
+    if (orphan_ofd) {
+        return; /* the orphan rows' descriptions open nothing on the root */
+    }
     check(at == (relocate ? &moved : &node), "close retains current node identity");
     if (in_release) {
         void (*meanwhile)(void) = in_release;
@@ -356,13 +364,16 @@ int filemap_holds(const void *node)
     return 0;
 }
 
-/** No row frees a node of the KRFFS root, owns the display or has a
+/** Free an orphan of the KRFFS root, which only the orphan rows do, once the
+ * closing description's locks are gone; no row owns the display or has a
  * socket. */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
     (void)fs;
-    (void)node;
-    check(0, "unexpected root node removal");
+    check(orphan_ofd != 0 && node == &victim, "unexpected root node removal");
+    check(ofd_gone == orphan_ofd,
+          "a description's locks go before the orphan they are on is freed");
+    removals++;
 }
 
 void vga_mode13h_exit(void)
@@ -815,6 +826,48 @@ static void mkdir_race(void)
     }
 }
 
+/**
+ * The last close of a file of the KRFFS root that lost its name while open,
+ * and of the last end of such a FIFO: the node is freed, and the locks of
+ * the closing description go before it is, since a lock of the root is
+ * keyed by its node's place and a node made there later must meet none of
+ * them.
+ */
+static void orphan_locks(void)
+{
+    int fifo;
+
+    for (fifo = 0; fifo < 2; fifo++) {
+        fd_entry_t *e;
+        int fd;
+
+        root_row_begin();
+        fd = fd_alloc(proc.fds);
+        check(fd >= 0, "a descriptor of the orphan");
+        if (fd < 0) {
+            root_row_end();
+            continue;
+        }
+        e = &proc.fds->entries[fd];
+        victim.name[0] = '\0';
+        if (fifo) {
+            victim.mode = KRFFS_S_IFIFO | 0600;
+            e->type = FD_TYPE_PIPE;
+        } else {
+            e->type = FD_TYPE_FILE;
+            e->node = &victim;
+        }
+        e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+        e->ofd->vmnt = &mount;
+        e->ofd->vnode = &victim;
+        orphan_ofd = e->ofd;
+        ofd_gone = 0;
+        check(close_fd(fd) == 0 && removals == 1, "the last close of an orphan frees it");
+        orphan_ofd = 0;
+        root_row_end();
+    }
+}
+
 /** The write a row's call waits for: it holds the mount's lock and moves
  * the file, as a growing write on a mounted KRFFS volume does. */
 static void write_moves(void)
@@ -1073,6 +1126,7 @@ int main(void)
     unlink_installing();
     rename_over_installing();
     mkdir_race();
+    orphan_locks();
     attrs_after_move();
     loop_handles();
     lock_keys();
