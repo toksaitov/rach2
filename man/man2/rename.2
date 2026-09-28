@@ -52,7 +52,10 @@ that exists with
 after a missing
 .Fa oldpath
 has given
-.Er ENOENT .
+.Er ENOENT
+and before the
+.Er ENOTDIR
+of a slash after a name that is not a directory, as on Linux.
 Both names are looked up under the mount's namespace lock, which every
 change of a name on the mount takes, and the rename is made before the
 lock is released, so no other process can create the new name between

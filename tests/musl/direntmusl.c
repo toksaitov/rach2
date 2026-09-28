@@ -17,28 +17,28 @@
  * after rewinddir, and seekdir to the place telldir gave after the first
  * entry lists the second next.
  *
- * The other calls that take a path answer one that names a directory by its
- * end as Linux does, in the probe's own directory and in one of /dev/shm: a
- * regular file so named is ENOTDIR to open, access, chmod, chown, lchown,
- * truncate, utimensat, readlink, statfs, link, unlink and rename, and a new
- * name so named is EISDIR to open with O_CREAT and ENOENT or EEXIST to link,
- * symlink, mknod and mkdir, which make nothing; rmdir is EINVAL for a last
- * "." and ENOTEMPTY for a last "..", and rename EBUSY for either, and so do
- * unlinkat and renameat through a directory descriptor. execve of a file so
- * named is ENOTDIR and of a directory EACCES, and so is a script whose
- * interpreter is named with a trailing slash ENOTDIR, and an ELF image whose
- * PT_INTERP names the file or the directory so ENOTDIR or EACCES; bind to a
- * name so named makes nothing, connect to a socket so named is ENOTDIR, and
- * so is umount2 of a file so named, and open of /fb and /mouse so named or
- * with O_DIRECTORY, which opens neither device. rmdir and rename of the root
- * are EBUSY, link, symlink and mknod with the root as the new name EEXIST
- * and bind to it EADDRINUSE. open with O_CREAT is EISDIR for an existing
- * directory, one of the probe's, one of /dev/shm and /proc, even to read,
- * and with O_DIRECTORY EINVAL before the path is read, unless O_PATH is
- * given too, which drops O_CREAT. A symbolic link to a directory named with
- * a trailing slash is followed by the calls that look it up, O_NOFOLLOW and
- * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename,
- * in /dev/shm and on an ext2 root.
+ * The other calls that take a path answer one that names a directory by its end
+ * as Linux does, in the probe's own directory and in one of /dev/shm: a regular
+ * file so named is ENOTDIR to open, access, chmod, chown, lchown, truncate,
+ * utimensat, readlink, statfs, link, unlink and rename, where renameat2 with
+ * RENAME_NOREPLACE onto a name that exists is EEXIST, and a new name so named
+ * is EISDIR to open with O_CREAT and ENOENT or EEXIST to link, symlink, mknod
+ * and mkdir, which make nothing; rmdir is EINVAL for a last "." and ENOTEMPTY
+ * for a last "..", and rename EBUSY for either, and so do unlinkat and renameat
+ * through a directory descriptor. execve of a file so named is ENOTDIR and of a
+ * directory EACCES, and so is a script whose interpreter is named with a
+ * trailing slash ENOTDIR, and an ELF image whose PT_INTERP names the file or
+ * the directory so ENOTDIR or EACCES; bind to a name so named makes nothing,
+ * connect to a socket so named is ENOTDIR, and so is umount2 of a file so
+ * named, and open of /fb and /mouse so named or with O_DIRECTORY, which opens
+ * neither device. rmdir and rename of the root are EBUSY, link, symlink and
+ * mknod with the root as the new name EEXIST and bind to it EADDRINUSE. open
+ * with O_CREAT is EISDIR for an existing directory, one of the probe's, one of
+ * /dev/shm and /proc, even to read, and with O_DIRECTORY EINVAL before the path
+ * is read, unless O_PATH is given too, which drops O_CREAT. A symbolic link to
+ * a directory named with a trailing slash is followed by the calls that look it
+ * up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to
+ * unlink and rename, in /dev/shm and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -62,6 +62,9 @@
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+/* The renameat2 flag, which musl does not declare. */
+#define RENAME_NOREPLACE 1
 
 /* The directory the probe makes, and its entries. */
 static char base[256], file[300], sub[300], link_name[300];
@@ -410,8 +413,10 @@ static int make_ends(const struct ends *p)
  * and EISDIR for a last "." after a directory; rmdir is EINVAL for a last
  * "." and ENOTEMPTY for a last "..";
  * rename is EBUSY for either as the last component of either name, and
- * ENOTDIR for the file with a slash after either name; and none of them
- * takes f or e away. 0, or 1 once the failure is reported.
+ * ENOTDIR for the file with a slash after either name, unless
+ * RENAME_NOREPLACE finds the new name s there, which is EEXIST first, as on
+ * Linux; and none of them takes f or e away. 0, or 1 once the failure is
+ * reported.
  */
 static int remove_ends(const struct ends *p)
 {
@@ -432,6 +437,12 @@ static int remove_ends(const struct ends *p)
     if (!refused(rename(p->fs, p->n), ENOTDIR) || !refused(rename(p->f, p->ns), ENOTDIR) ||
         lstat(p->f, &st) != 0) {
         return fail("rename of a file named with a trailing slash");
+    }
+    if (!refused(syscall(SYS_renameat2, AT_FDCWD, p->fs, AT_FDCWD, p->s, RENAME_NOREPLACE),
+                 EEXIST) ||
+        !refused(syscall(SYS_renameat2, AT_FDCWD, p->f, AT_FDCWD, p->ss, RENAME_NOREPLACE),
+                 EEXIST)) {
+        return fail("a RENAME_NOREPLACE rename onto a name that exists was not EEXIST first");
     }
     return 0;
 }

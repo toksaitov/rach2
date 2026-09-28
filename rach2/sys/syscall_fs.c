@@ -8820,15 +8820,17 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
  * Rename `oleaf` in `opar` to `nleaf` in `npar` on the KRFFS root: the
  * root's half of `do_rename`, run under the root's namespace lock, which the
  * caller takes after both walks and keeps until this returns.
- * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST.
+ * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST,
+ * once a missing source has given -ENOENT, as `rename_mounted_names` does.
  *
- * A source that is not a directory is -ENOTDIR when either name had a slash
- * after it, `slash`. The sticky rule applies to both names, since taking an
- * entry out of its directory is a removal and so is renaming over one; a
- * caller that checked only the source would leave the attack open while a
- * probe that tries only unlink passes. A directory source is -EPERM, since a
- * directory's children reference its id; a directory destination is -EISDIR;
- * a destination a loop device stands on is -EBUSY.
+ * Then a source that is not a directory is -ENOTDIR when either name had a
+ * slash after it, `slash`, the order Linux keeps. The sticky rule applies to
+ * both names, since taking an entry out of its directory is a removal and so
+ * is renaming over one; a caller that checked only the source would leave
+ * the attack open while a probe that tries only unlink passes. A directory
+ * source is -EPERM, since a directory's children reference its id; a
+ * directory destination is -EISDIR; a destination a loop device stands on
+ * is -EBUSY.
  *
  * A destination the rename replaces loses its name first when a descriptor
  * holds it, so the holder keeps reading the file it opened, and is freed by
@@ -8850,6 +8852,10 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
         return rc;
     }
     node = found;
+    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;
+    if (rc != 0) {
+        return rc;
+    }
     if (slash && node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
         return -ENOTDIR;
     }
@@ -8861,8 +8867,7 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
         return -EPERM;
     }
     if (flags & RENAME_NOREPLACE) {
-        rc = rename_noreplace(opar, oleaf, npar, nleaf);
-        return rc != 0 ? rc : vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
+        return vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
     }
     if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {
         existing = found;
