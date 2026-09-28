@@ -2,6 +2,8 @@
 #include "ptrace.h"
 #include "tgroup.h"
 #include "../fs/vfs.h"
+#include "../mm/mm.h"
+#include "../mm/paging.h"
 
 /**
  * End the current thread: release what it holds, and when it is the last
@@ -18,23 +20,24 @@
  * run outside a system call.
  *
  * The thread's own part comes first: the word CLONE_CHILD_CLEARTID names and
- * its robust futexes, its file descriptions and working directory, and a
- * parent waiting in vfork. A descriptor table another process shares keeps
- * its record locks, which it owns (`lock.h`), and the release of a table by
- * its last sharer drops them. A thread that is not the last becomes a zombie
- * no wait reports but its tracer's; one that is not the leader and has no
- * tracer is freed from the next return to user mode, a traced one by its
- * tracer's wait, and the leader, whose id is the process id, waits for the
- * rest of its group. The last thread detaches the process's own tracees,
- * reparents the children onto init, gives the process its status, the
- * group's when exit_group or a fatal signal ended it and the leader's own
- * otherwise, and notifies the parent; or, when a process other than the
- * parent traces the leader, the tracer, whose wait reports the end first and
- * then tells the parent (`ptrace_exit_release`). The address space and the
- * descriptor-table allocation are not released here: a normal exit leaves
- * them to the reap, and a death by signal drops the address space before it
- * calls this, since a release that sleeps must come before the zombie is
- * published.
+ * its robust futexes, which are in its address space; then the address space,
+ * whose last user frees the memory and lets go of the program's file, as
+ * Linux's exit_mm does before the zombie can be reaped, and the processor goes
+ * on in the kernel's directory; then its file descriptions and working
+ * directory, and a parent waiting in vfork. A descriptor table another process
+ * shares keeps its record locks, which it owns (`lock.h`), and the release of a
+ * table by its last sharer drops them. A thread that is not the last becomes a
+ * zombie no wait reports but its tracer's; one that is not the leader and has
+ * no tracer is freed from the next return to user mode, a traced one by its
+ * tracer's wait, and the leader, whose id is the process id, waits for the rest
+ * of its group. The last thread detaches the process's own tracees, reparents
+ * the children onto init, gives the process its status, the group's when
+ * exit_group or a fatal signal ended it and the leader's own otherwise, and
+ * notifies the parent; or, when a process other than the parent traces the
+ * leader, the tracer, whose wait reports the end first and then tells the
+ * parent (`ptrace_exit_release`). The descriptor-table allocation is not
+ * released here: the reap frees it. A death by signal writes its core file
+ * before it calls this, while the address space is there.
  *
  * `status` is the thread's encoded wait status. Returns nonzero when the
  * process ended with this thread. The caller must not return to user mode.
@@ -48,6 +51,8 @@ int proc_exit_cleanup(int32_t status)
 
     self->in_syscall = 1;
     proc_thread_gone(self);
+    mm_drop(self);
+    switch_page_directory(_kernel_dir);
     proc_files_put(self);
     proc_fs_put(self);
     proc_vfork_release(self);

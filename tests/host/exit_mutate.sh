@@ -1,5 +1,7 @@
 #!/bin/sh
 # Compile each phase from a private copy; no running kernel image is replaced.
+# Two faults: death published before the cleanup, and an exit that keeps its
+# address space for the reap.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -43,13 +45,21 @@ run_phase()
     wait "$child" || status=$?
     child=
     cat "$binary.log"
-    if [ "$phase" = mutated ]; then
-        [ "$status" -eq 1 ] &&
-            grep -q 'exit-test: fail: cleanup ends as a zombie' "$binary.log" &&
-            grep -q 'exit-test: fail: cleanup is not yet reapable' "$binary.log" || exit 1
-    else
-        [ "$status" -eq 0 ] || exit 1
-    fi
+    case $phase in
+        mutated)
+            [ "$status" -eq 1 ] &&
+                grep -q 'exit-test: fail: cleanup ends as a zombie' "$binary.log" &&
+                grep -q 'exit-test: fail: cleanup is not yet reapable' "$binary.log" || exit 1
+            ;;
+        kept)
+            [ "$status" -eq 1 ] &&
+                grep -q "exit-test: fail: the address space goes once, at the thread's end" \
+                    "$binary.log" || exit 1
+            ;;
+        *)
+            [ "$status" -eq 0 ] || exit 1
+            ;;
+    esac
     echo "exit-mutation: result: $phase status $status"
 }
 
@@ -63,4 +73,13 @@ touch "$work/proc/exit.c"
 run_phase mutated
 cleanup
 run_phase restored
+cmp "$work/exit.saved" "$work/proc/exit.c"
+[ "$(grep -c 'mm_drop(self);' "$work/exit.saved")" -eq 1 ]
+[ "$(grep -c 'switch_page_directory(_kernel_dir);' "$work/exit.saved")" -eq 1 ]
+sed '/mm_drop(self);/d; /switch_page_directory(_kernel_dir);/d' "$work/exit.saved" \
+    > "$work/proc/exit.c"
+touch "$work/proc/exit.c"
+run_phase kept
+cleanup
+run_phase restored-again
 cmp "$work/exit.saved" "$work/proc/exit.c"

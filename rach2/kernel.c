@@ -413,15 +413,6 @@ void terminate_current_process(int32_t signo)
         terminate_release_session(pid);
     }
 
-    /* The address space goes now, not at the reap, and before the zombie is
-     * published, since its release may sleep; the thread's futex words go
-     * first, while it is there. `mm_drop` switches off it first when this was
-     * its last user, since free_page_directory refuses the directory in CR3.
-     * One another thread or a vfork parent shares stays. */
-    proc_thread_gone(current_proc);
-    mm_drop(current_proc);
-    switch_page_directory(_kernel_dir);
-
     last = proc_exit_cleanup(signo);
     __asm__ __volatile__("cli" ::: "memory");
 

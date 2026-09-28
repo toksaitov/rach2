@@ -210,14 +210,23 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: krffs root data operations under the mount's lock" >&2
         fail=1
     fi
-    # Two rows over functions extracted from sources no host test can
-    # compile whole: a new kernel stack cleared and guarded (syscall_proc.c)
-    # and the set-id rules of a mounted chown (syscall_fs.c).
+    # Three rows over functions extracted from sources no host test can
+    # compile whole: a new kernel stack cleared and guarded and the end of
+    # the other processes before an init under the debug shell hands the
+    # machine back (syscall_proc.c), and the set-id rules of a mounted chown
+    # (syscall_fs.c).
     if sh tests/host/kstack_mutate.sh --check >"$VDIR/kstack.rlog" 2>&1; then
         echo "hosttest: result: pass: a new kernel stack is cleared and guarded"
     else
         cat "$VDIR/kstack.rlog"
         echo "hosttest: result: fail: a new kernel stack is cleared and guarded" >&2
+        fail=1
+    fi
+    if sh tests/host/endothers_mutate.sh --check >"$VDIR/endothers.rlog" 2>&1; then
+        echo "hosttest: result: pass: an init's end waits for the processes still ending"
+    else
+        cat "$VDIR/endothers.rlog"
+        echo "hosttest: result: fail: an init's end waits for the processes still ending" >&2
         fail=1
     fi
     if sh tests/host/chown_mutate.sh --check >"$VDIR/chown.rlog" 2>&1; then

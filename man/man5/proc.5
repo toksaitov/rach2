@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -7,8 +7,18 @@
 .Sh SYNOPSIS
 .Pa /proc
 .Sh DESCRIPTION
-Each file is generated into a buffer when opened.
-Every read through that descriptor uses the same snapshot.
+Each file is generated into a buffer when opened, and every read through
+that descriptor uses the same snapshot, except
+.Pa /proc/PID/oom_score_adj
+and
+.Pa /proc/PID/mem ,
+which each read reaches as they are then.
+A read or a write holds the descriptor's open file description for its
+length, as
+.Xr lseek 2
+holds it to move the offset, so a seek through a descriptor that shares
+it waits for the transfer and is not lost when the transfer ends; Linux
+holds the file's position lock the same way.
 A report whose text cannot be allocated is refused with
 .Er ENOMEM ,
 and
@@ -438,7 +448,9 @@ Fields 9 through 13, interval timer, start time, virtual size, and
 resident size are zero.
 .It Pa /proc/PID/cmdline
 The arguments as the program's initial stack has them, each ended by a
-NUL; a process with no address space shows its program name alone.
+NUL; a process with no address space, as one that has ended has none,
+shows its program name alone, where Linux shows nothing for one that has
+ended.
 At most the first 128 KiB of them are read, so a longer list ends inside
 a string, without that string's NUL, and a page the address space cannot
 read ends it early.
@@ -625,7 +637,8 @@ with
 .Dv CLONE_VM ,
 as on Linux: once the last of them has run another program with
 .Xr execve 2
-or ended, a read or a write returns 0, so a program the process executes
+or ended, before its parent reaps it, a read or a write returns 0, so a
+program the process executes
 later, a set-user-ID one among them, is not reached through a descriptor
 opened before.
 The descriptor keeps none of the memory, which goes when the last of them

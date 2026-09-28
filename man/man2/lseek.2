@@ -99,11 +99,27 @@ removed since.
 .Pp
 A
 .Pa /proc
-file seeks the same way, to any place through 4294967295: its offset is
-a byte of the text its open took, or for
+file seeks the same way, to any place through 4294967295.
+Its offset is a byte of its text, or for
 .Pa /proc/ Ns Ar pid Ns Pa /mem
 an address.
-Both seeks read and set the offset under the description's lock.
+The text of a
+.Pa /proc
+file is the snapshot its open took, except for
+.Pa /proc/ Ns Ar pid Ns Pa /oom_score_adj ,
+whose text each read makes from the value as it is then;
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+has no text, and each read or write reaches the memory as it is then.
+.Pp
+A seek of a directory or a
+.Pa /proc
+file reads and sets the offset under the description's lock.
+A read or a write of a
+.Pa /proc
+file holds that lock for its length, as Linux holds such a file's
+position lock, so a seek through a descriptor that shares the description
+waits for a transfer in progress and moves the offset on from where the
+transfer left it.
 .Ss System call interface
 Musl's
 .Vt off_t

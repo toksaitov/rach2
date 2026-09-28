@@ -359,13 +359,30 @@ for
 .Dv O_CREAT Ns | Ns Dv O_EXCL
 before allocating a descriptor or pseudoterminal pair.
 .Pp
-Proc files contain a snapshot taken at open.
-They refuse write access or
+Proc files contain a snapshot taken at open, except
+.Pa /proc/ Ns Ar pid Ns Pa /oom_score_adj
+and
+.Pa /proc/ Ns Ar pid Ns Pa /mem ,
+which reach the process at each read and write and may be opened for
+writing, as
+.Xr proc 5
+describes.
+The others refuse write access or
 .Dv O_CREAT
 with
 .Er EACCES ,
 after checking exclusive creation and
-.Dv O_DIRECTORY .
+.Dv O_DIRECTORY ;
+.Pa mem
+refuses
+.Dv O_CREAT
+too, and
+.Pa oom_score_adj
+takes
+.Dv O_CREAT
+and
+.Dv O_TRUNC
+as a file that exists does.
 Synthetic directories refuse write access and
 .Dv O_CREAT
 with

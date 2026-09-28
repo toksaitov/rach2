@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt EXIT 2
 .Os
 .Sh NAME
@@ -93,6 +93,8 @@ A process in a kernel operation completes the operation and releases
 its locks before the terminating signal takes effect.
 A process running in user mode receives the signal on return from an
 interrupt.
+A process already in its own end, which has given up its address space,
+is sent no signal and is waited for until it has ended.
 Kernel threads and the idle process remain.
 The scheduler is disabled when control returns to the debug shell.
 .Sh RETURN VALUES

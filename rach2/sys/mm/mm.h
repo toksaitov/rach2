@@ -97,8 +97,14 @@ void mm_set_exe(struct mm *mm, const char *path);
  */
 int mm_exe_open(struct mm *mm, const struct vfs_ref *ref);
 
-/** Let go of the program's file `mm` keeps, if any, and take `mm` off the
- * list first; the release may sleep. */
+/**
+ * Let go of the program's file `mm` keeps, if any. The lock the release needs
+ * (`fs_exe_lock`), the KRFFS root's namespace lock for a file of the root, is
+ * taken while `mm` is still on the list, and `mm` leaves the list under it,
+ * so that no count of the file's holders runs between its leaving and the
+ * release, which frees a file that lost its name when no other holder is
+ * left. The release, and the wait for the lock, may sleep.
+ */
 void mm_exe_close(struct mm *mm);
 
 /** Whether an address space keeps the node `node` of `mnt` as its program's
@@ -139,11 +145,15 @@ void mm_drop(struct process *p);
  * The file system's part, in syscall_fs.c: a description of the file at
  * `ref` that opens nothing, with a hold of its own on the node and a
  * reference on the mount, or NULL when the heap has no room or the type
- * cannot pin the node; and the release of one that no list has any more,
- * which frees a file of the KRFFS root that lost its name when nothing else
- * holds it.
+ * cannot pin the node; the lock the release of one needs, which
+ * `fs_exe_lock` takes and returns the mount of, the KRFFS root's namespace
+ * lock for a file of the root and none, NULL, for another; and the release
+ * of one that no list has any more, with that lock held, which frees a file
+ * of the KRFFS root that lost its name when nothing else holds it and then
+ * gives the lock back.
  */
 struct open_file *fs_exe_open(const struct vfs_ref *ref);
-void fs_exe_close(struct open_file *ofd);
+struct vfs_mount *fs_exe_lock(const struct open_file *ofd);
+void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked);
 
 #endif /* _MM_H_ */

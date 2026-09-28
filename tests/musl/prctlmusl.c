@@ -21,7 +21,9 @@
  * copy of the probe that renames itself reads its new path from the link, and
  * an exec of the link runs the copy and not a script put at its old path; the
  * image that exec runs removes the copy's name, and an open of the link still
- * reaches the copy's ELF header.
+ * reaches the copy's ELF header. A copy of the probe on a tmpfs that has
+ * ended, which waitid with WNOWAIT reports, lets go of its file at its end, so
+ * the tmpfs unmounts before the copy is reaped.
  *
  * Prints "PRCTLMUSL OK" on success and "PRCTLMUSL FAIL (detail)" otherwise.
  */
@@ -34,6 +36,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -46,6 +49,10 @@ static int report_fd = -1;
  * moves itself to. */
 #define EXE_COPY  "/tmp/prctlmusl.a"
 #define EXE_MOVED "/tmp/prctlmusl.b"
+
+/* The tmpfs the exit row mounts, and the copy of the probe it runs there. */
+#define EXIT_MOUNT "/tmp/prctlmusl.mnt"
+#define EXIT_COPY  "/tmp/prctlmusl.mnt/prctlmusl"
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -495,6 +502,56 @@ static int exe_follows(void)
     return 0;
 }
 
+/**
+ * The end of a process lets go of its program's file, and of the mount the
+ * file is on, with the rest of its address space, before its parent reaps it,
+ * as Linux's exit_mm does: a copy of the probe on a tmpfs runs and ends, and
+ * with its exit seen by waitid with WNOWAIT and the copy not yet reaped, the
+ * tmpfs must unmount.
+ */
+static int exit_lets_go(void)
+{
+    siginfo_t si;
+    pid_t child;
+    int ended, freed = 0;
+
+    mkdir(EXIT_MOUNT, 0755);
+    if (mount("tmpfs", EXIT_MOUNT, "tmpfs", 0, NULL) != 0) {
+        rmdir(EXIT_MOUNT);
+        return fail("a tmpfs for the exit row could not be mounted");
+    }
+    if (copy_program("/proc/self/exe", EXIT_COPY) != 0) {
+        umount2(EXIT_MOUNT, 0);
+        rmdir(EXIT_MOUNT);
+        return fail("a copy of the probe on the tmpfs could not be made");
+    }
+    child = fork();
+    if (child == 0) {
+        execl(EXIT_COPY, "prctlmusl", "exit-now", (char *)0);
+        _exit(1);
+    }
+    ended = child > 0 && waitid(P_PID, (id_t)child, &si, WEXITED | WNOWAIT) == 0 &&
+            si.si_code == CLD_EXITED && si.si_status == 0;
+    if (ended) {
+        freed = umount2(EXIT_MOUNT, 0) == 0;
+    }
+    if (child > 0) {
+        waitpid(child, NULL, 0);
+    }
+    if (!freed) {
+        unlink(EXIT_COPY);
+        umount2(EXIT_MOUNT, 0);
+    }
+    rmdir(EXIT_MOUNT);
+    if (!ended) {
+        return fail("the copy of the probe on the tmpfs did not end with 0");
+    }
+    if (!freed) {
+        return fail("an ended child's program kept its file system busy until the reap");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "name") == 0) {
@@ -506,8 +563,11 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "exe-ran") == 0) {
         return exe_ran();
     }
+    if (argc > 1 && strcmp(argv[1], "exit-now") == 0) {
+        return 0;
+    }
     if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0 ||
-        exe_follows() != 0) {
+        exe_follows() != 0 || exit_lets_go() != 0) {
         return 1;
     }
     printf("PRCTLMUSL OK\n");

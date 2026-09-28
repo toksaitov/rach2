@@ -9,15 +9,21 @@
  * key a file's locks are found by on each kind of mount, a mkdir of a name
  * another process makes while the call waits for the parent's lock, the
  * locks of an orphan's last description dropped before the orphan is freed,
- * and an rmdir on the KRFFS root of a directory a description or a working
- * directory has, or an open publishes a descriptor on while the call waits.
+ * the release of a program's file that lost its name, under the root's lock,
+ * an rmdir on the KRFFS root of a directory a description or a working
+ * directory has, or an open publishes a descriptor on while the call waits,
+ * and a seek of a /proc file's description while a read or a write of it
+ * sleeps.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
- * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * Unused syscall and loop exports are private so their hardware paths are
- * removed. The model uses distinct nodes and open handles.
+ * removed. The model uses distinct nodes and open handles. A call of another
+ * process that must wait for a description a sleeping call holds parks in
+ * its wait with its frames kept (`compat/park_host.c`), and the row resumes
+ * it there once the holder has let the description go and woken its queue.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -27,7 +33,8 @@
 #include "network/socket/socket.h"
 static int fs_node_is_held(const krffs_node_t *node);
 static struct open_file *fs_exe_open(const struct vfs_ref *ref);
-static void fs_exe_close(struct open_file *ofd);
+static struct vfs_mount *fs_exe_lock(const struct open_file *ofd);
+static void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked);
 static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
 static void fd_holds_release(void);
@@ -132,6 +139,12 @@ static int loop_control_write(const char *buffer, uint32_t count);
 extern int printf(const char *format, ...);
 extern void *calloc(unsigned long count, unsigned long size);
 extern void free(void *ptr);
+extern void exit(int status);
+
+int park_run(void (*call)(void));
+int park_resume(void);
+int park_active(void);
+void park(void);
 
 static process_t proc, other, third;
 static fd_table_t files;
@@ -179,6 +192,8 @@ static process_t *lock_closer;
 static krffs_node_t root_dir, victim, source;
 static krffs_file_system_t root_fs;
 static int removals, keeps;
+/* The frees of that file made with the root's namespace lock held. */
+static int removals_locked;
 /* The node of the root an address space keeps as its program's file. */
 static const krffs_node_t *program;
 /* The directory of the mkdir and rmdir rows, named once a mkdir has made
@@ -201,6 +216,10 @@ static int attr_row;
 /* The path pages the rows' calls have taken and not given back. */
 static char path_pages[4][VFS_PATH_MAX];
 static int path_pages_out[4];
+/* The queue a call that waits for a description parked on, and the wakes of
+ * that queue since. */
+static wait_queue_t *parked_on;
+static int parked_wakes;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -615,6 +634,9 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
     check(ofd_gone == orphan_ofd,
           "a description's locks go before the orphan they are on is freed");
     removals++;
+    if (ns_depth > 0) {
+        removals_locked++;
+    }
 }
 
 void vga_mode13h_exit(void)
@@ -648,19 +670,83 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
-/** Ignore unused descriptor wakeups. */
-void wq_wake_all(wait_queue_t *wq)
+/** The device calls the dispatch of a transfer and a seek make: no row's
+ * descriptor is a device, and no row seeks one. */
+int devfs_fd_is_raw(struct fd_entry *e)
 {
-    (void)wq;
+    (void)e;
+    return 0;
 }
 
-/** Reject unexpected description waits. */
+int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
+{
+    (void)e;
+    (void)size;
+    check(0, "unexpected raw window seek");
+    return 0;
+}
+
+int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
+{
+    (void)e;
+    (void)size;
+    check(0, "unexpected log seek");
+    return 0;
+}
+
+int devfs_lseek_zero(struct fd_entry *e)
+{
+    (void)e;
+    check(0, "unexpected device seek");
+    return 0;
+}
+
+int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out)
+{
+    (void)cur;
+    (void)size;
+    (void)delta;
+    (void)whence;
+    (void)out;
+    check(0, "unexpected raw window seek");
+    return -EINVAL;
+}
+
+/** No row seeks a directory, whose listing a seek would read. */
+int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
+{
+    (void)mnt;
+    (void)handle;
+    (void)cursor;
+    (void)ent;
+    check(0, "unexpected directory listing");
+    return -EIO;
+}
+
+/** Count a wake of the queue a parked call waits on. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    if (parked_on && wq == parked_on) {
+        parked_wakes++;
+    }
+}
+
+/**
+ * A description wait: it ends when `cond` holds, and a call of another
+ * process that a row runs in a sleep parks until the row resumes it, then
+ * asks again. Any other wait is one that nothing can end, which ends the run.
+ */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    (void)wq;
-    (void)cond;
-    (void)arg;
-    check(0, "unexpected description wait");
+    while (!cond(arg)) {
+        if (!park_active()) {
+            printf("open-hosttest: fail: a description wait that nothing can end\n");
+            exit(1);
+        }
+        parked_on = wq;
+        parked_wakes = 0;
+        park();
+    }
     return 0;
 }
 
@@ -1131,6 +1217,38 @@ static void program_kept(void)
     check(do_rename("/src", "/kept", 0, 0) == 0 && keeps == 1 && removals == 0,
           "a rename over the file a program runs from keeps it");
     program = NULL;
+    root_row_end();
+}
+
+/**
+ * The release, by the last address space that kept it, of a program's file of
+ * the KRFFS root that lost its name and that nothing else holds: it takes the
+ * root's lock (`fs_exe_lock`), frees the node with the lock held, as an
+ * unlink does, since the reclaim may sleep in the page cache and no
+ * allocation may take the extent meanwhile, and gives the lock back.
+ */
+static void program_reclaim(void)
+{
+    struct open_file *ofd;
+    struct vfs_mount *locked;
+
+    root_row_begin();
+    victim.name[0] = '\0';
+    ofd = fd_ofd_new();
+    check(ofd != NULL, "a description of the program's file");
+    if (ofd) {
+        ofd->vmnt = &mount;
+        ofd->vnode = &victim;
+        orphan_ofd = ofd;
+        ofd_gone = 0;
+        removals_locked = 0;
+        locked = fs_exe_lock(ofd);
+        check(locked == &mount && ns_depth == 1, "the release of a program's file takes the lock");
+        fs_exe_close(ofd, locked);
+        check(removals == 1 && removals_locked == 1, "and frees the nameless file under it");
+        check(ns_depth == 0, "and gives the lock back");
+        orphan_ofd = 0;
+    }
     root_row_end();
 }
 
@@ -1830,6 +1948,114 @@ static void lock_keys(void)
           "a file of another type is keyed by its inode number at the open");
 }
 
+/* The /proc row: the table of the process that shares the description, the
+ * value its seek returned, and whether the seek parked. */
+static fd_table_t sharer_files;
+static int32_t sharer_seek;
+static int sharer_parked;
+
+/** The seek of the process that shares the description: SEEK_CUR, 16 bytes
+ * on, through its descriptor 0. */
+static void sharer_seeks(void)
+{
+    isr_params_t params;
+
+    k_memset(&params, 0, sizeof(params));
+    params.ecx = 16;
+    params.edx = 1;
+    current_proc = &other;
+    sharer_seek = sys_lseek(&params);
+}
+
+/** Bring in a page of the process for a /proc/PID/mem transfer: a sleep, in
+ * which the process that shares the description seeks. */
+static void page_fetch(void)
+{
+    sharer_parked = !park_run(sharer_seeks);
+    current_proc = &proc;
+}
+
+/** A transfer of /proc/PID/mem as `procfs_mem_access` makes it: at the
+ * address the offset has, through the page fetch, and the offset set past
+ * the bytes moved. */
+static int32_t mem_transfer(fd_entry_t *e, uint32_t count)
+{
+    uint32_t addr = (uint32_t)e->ofd->offset;
+
+    page_fetch();
+    e->ofd->offset = addr + count;
+    return (int32_t)count;
+}
+
+static int32_t mem_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    (void)buf;
+    return mem_transfer(e, count);
+}
+
+static int32_t mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)buf;
+    return mem_transfer(e, count);
+}
+
+static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0};
+
+/**
+ * A read, then a write, of 32 bytes of a /proc/PID/mem descriptor at 0x1000,
+ * as read(2) and write(2) dispatch them, whose page fetch sleeps while a
+ * process that shares the description seeks 16 bytes on: the transfer holds
+ * the description as the seek does, so the seek waits, and resumed in its
+ * wait once the transfer's end has woken it, it moves the offset on from
+ * 0x1020, where the transfer left it, and is not lost.
+ */
+static void proc_seek_waits(void)
+{
+    char buf[32];
+    fd_entry_t *e;
+    int32_t moved_bytes;
+    int writing, fd, resumed;
+
+    for (writing = 0; writing < 2; writing++) {
+        row_begin();
+        fd = fd_alloc(proc.fds);
+        if (fd != 0 || fd_table_init(&sharer_files) != 0) {
+            check(0, "the /proc row's two tables");
+            row_end();
+            return;
+        }
+        e = &proc.fds->entries[0];
+        e->type = FD_TYPE_PROC;
+        e->ops = &mem_ops;
+        e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+        e->ofd->offset = 0x1000;
+        sharer_files.refs = 1;
+        sharer_files.entries[0] = *e;
+        e->ofd->refcount++;
+        other.fds = &sharer_files;
+        parked_on = 0;
+        sharer_seek = 0;
+        moved_bytes = writing ? write_ops(e, buf, sizeof(buf)) : read_ops(e, buf, sizeof(buf));
+        check(moved_bytes == 32, "the /proc transfer moves its 32 bytes");
+        check(sharer_parked, writing ? "a seek waits for a /proc write that sleeps in a page fetch"
+                                     : "a seek waits for a /proc read that sleeps in a page fetch");
+        if (sharer_parked) {
+            check(parked_wakes != 0, "the end of the /proc transfer wakes the seek that waits");
+            current_proc = &other;
+            resumed = park_resume();
+            current_proc = &proc;
+            check(resumed && sharer_seek == 0x1030,
+                  "the seek that waited moves on from where the /proc transfer left the offset");
+        }
+        check(e->ofd->offset == 0x1030 && !e->ofd->busy,
+              "a seek made while a /proc transfer sleeps is not lost");
+        fd_free(&sharer_files, 0);
+        fd_table_free(&sharer_files);
+        parked_on = 0;
+        row_end();
+    }
+}
+
 /** Exercise mounted open and loop references. */
 int main(void)
 {
@@ -1841,6 +2067,7 @@ int main(void)
     descriptor_errors();
     unlink_installing();
     program_kept();
+    program_reclaim();
     rename_over_installing();
     mkdir_race();
     orphan_locks();
@@ -1852,6 +2079,7 @@ int main(void)
     open_last_slot();
     loop_handles();
     lock_keys();
+    proc_seek_waits();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }

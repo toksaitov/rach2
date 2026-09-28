@@ -114,10 +114,12 @@ void mm_exe_close(struct mm *mm)
 {
     struct open_file *ofd = mm->exe_file;
     struct mm **link = &exe_list;
+    struct vfs_mount *locked;
 
     if (!ofd) {
         return;
     }
+    locked = fs_exe_lock(ofd);
     while (*link && *link != mm) {
         link = &(*link)->exe_next;
     }
@@ -126,7 +128,7 @@ void mm_exe_close(struct mm *mm)
     }
     mm->exe_file = NULL;
     mm->exe_next = NULL;
-    fs_exe_close(ofd);
+    fs_exe_close(ofd, locked);
 }
 
 int mm_exe_holds(const struct vfs_mount *mnt, const void *node)

@@ -382,42 +382,85 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
 }
 
 /**
- * Let go of `ofd`, the description an address space kept its program's file
- * by, once that address space is off the list `mm_exe_holds` reads: a file of
- * the KRFFS root that lost its name is freed when nothing else holds it, as
- * the release of a file's last descriptor frees one (`fd_release_objects`),
- * and the description's last reference closes it. May sleep.
+ * Take the lock the release of `ofd`, the description of an address space's
+ * program's file, needs, before the address space leaves the list
+ * `mm_exe_holds` reads: for a file of the KRFFS root the root's namespace
+ * lock, which the unlink and the rename of a file hold while they count its
+ * holders and take its name, and which the allocation of an extent holds.
+ * Under it no count of the file's holders runs between the address space's
+ * leaving and the release, and no allocation takes the extent of a file the
+ * release frees while its reclaim sleeps in the page cache. The mount
+ * locked, or NULL for a file of another type, whose release needs no lock.
+ * May sleep, and so is taken with no namespace lock held.
  */
-void fs_exe_close(struct open_file *ofd)
+struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
+{
+    if (!mnt_is_root(ofd->vmnt)) {
+        return NULL;
+    }
+    vfs_ns_lock(ofd->vmnt);
+    return ofd->vmnt;
+}
+
+/**
+ * Let go of `ofd`, the description an address space kept its program's file
+ * by, once that address space is off the list `mm_exe_holds` reads, with
+ * `locked` held as `fs_exe_lock` returned it: a file of the KRFFS root that
+ * lost its name is freed when nothing else holds it, as the release of a
+ * file's last descriptor frees one (`fd_release_objects`), at the node the
+ * file is at now; then the lock goes, and the description's last reference
+ * closes it. May sleep.
+ */
+void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 {
     fd_entry_t e;
 
-    k_memset(&e, 0, sizeof(e));
-    e.type = FD_TYPE_FILE;
-    e.flags = FD_FLAG_PATH;
-    e.ofd = ofd;
-    if (mnt_is_root(ofd->vmnt) && ofd->vnode != krffs_fs->node) {
-        e.node = ofd->vnode;
+    if (locked) {
+        k_memset(&e, 0, sizeof(e));
+        e.type = FD_TYPE_FILE;
+        e.flags = FD_FLAG_PATH;
+        e.ofd = ofd;
+        if (ofd->vnode != krffs_fs->node) {
+            e.node = ofd->vnode;
+        }
+        fd_release_objects(&e);
+        vfs_ns_unlock(locked);
     }
-    fd_release_objects(&e);
     fd_ofd_unref(ofd);
 }
 
-/** Dispatch an ops-backed write, serializing a raw device's offset. */
+/**
+ * The description an ops-backed read or write of `entry` holds for its
+ * length, as lseek holds it to move the offset, or NULL. A raw disk window's
+ * transfer uses `raw_offset`, and a /proc file's the offset, a byte of its
+ * text or an address of /proc/PID/mem; either may sleep before it sets the
+ * offset past what it moved, a /proc one in a fault on the caller's buffer
+ * or in bringing in a page of the process, and a seek through a descriptor
+ * that shares the description must wait for it or be lost. Linux holds such
+ * a file's position lock across read, write and lseek alike. pread64 and
+ * pwrite64 hold nothing, since they work on a copy (`pio_view`).
+ */
+static struct open_file *ops_offset_held(fd_entry_t *entry)
+{
+    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;
+}
+
+/** Dispatch an ops-backed write, holding the description of one whose write
+ * uses its offset (`ops_offset_held`). */
 static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
-    int raw = devfs_fd_is_raw(entry);
+    struct open_file *held = ops_offset_held(entry);
     int32_t rc;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
     }
-    if (raw) {
-        fd_ofd_lock(entry->ofd);
+    if (held) {
+        fd_ofd_lock(held);
     }
     rc = entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
-    if (raw) {
-        fd_ofd_unlock(entry->ofd);
+    if (held) {
+        fd_ofd_unlock(held);
     }
     return rc;
 }
@@ -1561,7 +1604,8 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
  * Open a path that classified as synthetic (/dev or /proc).
  *
  * Devices bind their file_ops; directories get a synthetic dir fd; /proc files
- * snapshot their text. A synthetic mount is never created or fallen through to
+ * snapshot their text, but for oom_score_adj and mem, which reach the process
+ * at each read. A synthetic mount is never created or fallen through to
  * KRFFS.
  */
 static int32_t synth_open(const struct vpath *vp, int flags)
@@ -2971,11 +3015,14 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
 /**
  * lseek(2) and _llseek(2) on a directory or a /proc file: the offset
  * `whence` and `off` give, stored in the description under its lock and
- * returned in `*out`, or a negative errno with the offset unchanged.
+ * returned in `*out`, or a negative errno with the offset unchanged. A read
+ * or a write of a /proc file holds the same lock (`ops_offset_held`), so a
+ * seek waits for one that sleeps.
  *
  * SEEK_SET and SEEK_CUR move the offset; SEEK_END is -EINVAL, as Linux's
  * /proc files and tmpfs directories answer, since neither has a size to
- * seek from. A /proc file's offset is a byte of its snapshot or, for
+ * seek from. A /proc file's offset is a byte of its text, the snapshot its
+ * open took or the text a read of oom_score_adj makes, or, for
  * /proc/PID/mem, an address, so it takes any place through 0xFFFFFFFF, the
  * last address. A directory's offset is the cursor of its listing, which
  * getdents64 reports after each entry as the entry's d_off: a directory of
@@ -3151,21 +3198,22 @@ int sock_is_query(const struct socket *sock)
     return sock->type == SOCK_RAW && sock->protocol == 0;
 }
 
-/** Dispatch an ops-backed read, serializing a raw device's offset. */
+/** Dispatch an ops-backed read, holding the description of one whose read
+ * uses its offset (`ops_offset_held`). */
 static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
-    int raw = devfs_fd_is_raw(entry);
+    struct open_file *held = ops_offset_held(entry);
     int32_t rc;
 
     if (!(entry->flags & FD_FLAG_READ)) {
         return -EBADF;
     }
-    if (raw) {
-        fd_ofd_lock(entry->ofd);
+    if (held) {
+        fd_ofd_lock(held);
     }
     rc = entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
-    if (raw) {
-        fd_ofd_unlock(entry->ofd);
+    if (held) {
+        fd_ofd_unlock(held);
     }
     return rc;
 }

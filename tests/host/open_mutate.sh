@@ -5,8 +5,9 @@
 # the lock their walk takes, the key of a file's locks, a mkdir's lookup under
 # the lock of its parent, an orphan's locks dropped before it is freed, an
 # rmdir on the KRFFS root of a directory a description or a working directory
-# has, and a chdir's pin of a directory on a type that keeps a node only while
-# it is open, before, during and after each fault.
+# has, a chdir's pin of a directory on a type that keeps a node only while it
+# is open, and a read and a write of a /proc file that hold its description
+# while a sharer's seek waits, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -47,8 +48,9 @@ run_phase()
         -Wall -Wextra -Werror -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
         -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        tests/host/open_hosttest.c "$work/sys/fs/fd.c" \
-        "$work/sys/lib/kstring.c" "$work/sys/lib/kctypes.c" -o "$binary" >"$binary.compile.log" 2>&1; then
+        tests/host/open_hosttest.c "$work/sys/fs/fd.c" "$work/sys/lib/kstring.c" \
+        "$work/sys/lib/kctypes.c" tests/host/compat/park_host.c \
+        -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi
@@ -70,10 +72,11 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked \
     stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked \
     utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
-    open-emfile dup-enomem dup2-enomem program-holder root-lock-key volume-lock-key \
-    fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
+    open-emfile dup-enomem dup2-enomem program-holder program-reclaim-unlocked root-lock-key \
+    volume-lock-key fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
     rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
-    chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record; do
+    chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record proc-read-unheld \
+    proc-write-unheld; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -153,6 +156,8 @@ changes = {
     "program-holder": ("    if (unix_inflight_holds(node) || filemap_holds(node) || "
                        "mm_exe_holds(vfs_root_mount(), node)) {",
                        "    if (unix_inflight_holds(node) || filemap_holds(node)) {"),
+    "program-reclaim-unlocked": ("        fd_release_objects(&e);\n        vfs_ns_unlock(locked);\n",
+                                 "        vfs_ns_unlock(locked);\n        fd_release_objects(&e);\n"),
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
@@ -225,6 +230,14 @@ changes = {
                                      "        if (pin) {\n"
                                      "            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n"
                                      "        rc = chdir_mounted(&ref, path);\n"),
+    "proc-read-unheld": ("static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n"
+                         "    struct open_file *held = ops_offset_held(entry);",
+                         "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n"
+                         "    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"),
+    "proc-write-unheld": ("static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n"
+                          "    struct open_file *held = ops_offset_held(entry);",
+                          "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n"
+                          "    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"),
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -253,6 +266,7 @@ PY
         dup-enomem) message='a dup the heap has no room for is ENOMEM' ;;
         dup2-enomem) message='a dup2 past the end of a table the heap cannot grow is ENOMEM' ;;
         program-holder) message='an unlink keeps the file a program runs from' ;;
+        program-reclaim-unlocked) message='and frees the nameless file under it' ;;
         root-lock-key) message='a file of the KRFFS root is keyed by its node' ;;
         volume-lock-key) message='a file of a KRFFS volume is keyed by its node' ;;
         fat-lock-key) message='a file of a FAT32 volume is keyed by its node, which a rename keeps' ;;
@@ -266,6 +280,8 @@ PY
         chdir-unpinned) message='the directory is pinned while the chdir sleeps before its record' ;;
         chdir-walk-unlocked) message='a chdir pins the node under the lock of the walk that found it' ;;
         chdir-unpinned-before-record) message='the directory is pinned when the working directory records it' ;;
+        proc-read-unheld) message='a seek waits for a /proc read that sleeps in a page fetch' ;;
+        proc-write-unheld) message='a seek waits for a /proc write that sleeps in a page fetch' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

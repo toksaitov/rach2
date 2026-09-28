@@ -15,7 +15,10 @@
  * The file system's part of the program's file is a model that makes a
  * description with a count and, at each release, notes whether the holder
  * count still finds the file: an address space must be off the list before
- * its release, so a release sees only the others that keep the file.
+ * its release, so a release sees only the others that keep the file. It
+ * notes the same when the release's lock is taken, which must come while the
+ * address space is still on the list, so that no count runs between its
+ * leaving and the release.
  */
 #include "mm/mm.c"
 #include "fs/vfs.h"
@@ -35,6 +38,7 @@ static struct vfs_mount root;
 static int program_node, other_node;
 static int exe_opens, exe_closes, refuse_exe;
 static int held_at_close[4];
+static int exe_locks, held_at_lock[4];
 
 #define CHECK(c, detail)                           \
     do {                                           \
@@ -119,10 +123,19 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
     return ofd;
 }
 
-/** Note whether the holder count finds the file still, and drop the
- * reference. */
-void fs_exe_close(struct open_file *ofd)
+/** Take the release's lock, noting whether the holder count finds the file
+ * then; the mount locked. */
+struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
 {
+    held_at_lock[exe_locks++ & 3] = mm_exe_holds(ofd->vmnt, ofd->vnode);
+    return &root;
+}
+
+/** Note whether the holder count finds the file still, and drop the
+ * reference; the lock the release took comes with it. */
+void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
+{
+    CHECK(locked == &root && exe_locks == exe_closes + 1, "a release comes with its lock");
     held_at_close[exe_closes++ & 3] = mm_exe_holds(ofd->vmnt, ofd->vnode);
     if (--ofd->refcount == 0) {
         free(ofd);
@@ -212,9 +225,10 @@ static void drop_switches(void)
 /**
  * An address space keeps its program's file on the list the holder count
  * reads; a fork's copy shares the description and is on it too; the last
- * user's put of each takes it off the list before the release, so the first
- * release finds the file still held by the other and the last finds it held
- * no more; and one whose description the heap has no room for keeps none.
+ * user's put of each takes the release's lock while it is still on the list,
+ * then leaves the list before the release, so the first release finds the
+ * file still held by the other and the last finds it held no more; and one
+ * whose description the heap has no room for keeps none.
  */
 static void program_file(void)
 {
@@ -240,6 +254,8 @@ static void program_file(void)
     CHECK(exe_closes == 1 && held_at_close[0] == 1 && mm_exe_holds(&root, &program_node),
           "the first end leaves the file held by the copy");
     mm_put(child);
+    CHECK(exe_locks == 2 && held_at_lock[1] == 1,
+          "the last end takes the release's lock while it still holds the file");
     CHECK(exe_closes == 2 && held_at_close[1] == 0 && !mm_exe_holds(&root, &program_node),
           "the last end releases the file off the list");
     refuse_exe = 1;
