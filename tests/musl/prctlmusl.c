@@ -413,13 +413,17 @@ static int put_script(const char *path)
  * The image of the probe's copy at EXE_COPY, which `exe_follows` runs: it
  * renames its program to EXE_MOVED, where the link must now read, puts at the
  * old path a script that ends with 7, and executes /proc/self/exe, which must
- * run the program itself, in the "exe-ran" mode, and not the script. Returns
- * the step that failed, when the exec returns.
+ * run the program itself, in the "exe-ran" mode, and not the script. The
+ * script is also the exec's input, since the default image's /bin/sh reads
+ * its commands from its input and not from the script it is given, so a
+ * shell the kernel wrongly runs ends with 7 either way. Returns the step
+ * that failed, when the exec returns.
  */
 static int exe_moved(void)
 {
     char link[64];
     ssize_t n;
+    int in;
 
     if (rename(EXE_COPY, EXE_MOVED) != 0) {
         return 2;
@@ -430,6 +434,13 @@ static int exe_moved(void)
     }
     if (put_script(EXE_COPY) != 0) {
         return 2;
+    }
+    in = open(EXE_COPY, O_RDONLY);
+    if (in < 0 || dup2(in, 0) != 0) {
+        return 2;
+    }
+    if (in != 0) {
+        close(in);
     }
     execl("/proc/self/exe", "prctlmusl", "exe-ran", (char *)0);
     return 5;
