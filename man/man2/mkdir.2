@@ -105,16 +105,13 @@ A directory in use is not removed:
 .Fn rmdir
 returns
 .Er EBUSY .
-On the KRFFS boot root a directory is in use while a descriptor refers
-to it, an
+On KRFFS, the boot root and a mounted volume alike, a directory is in
+use while a descriptor refers to it, an
 .Dv O_PATH
 one or one in flight on a socket included, or while it is a process's
 working directory, and the refusal comes before the check for
-emptiness.
-A mounted KRFFS volume refuses a directory a descriptor refers to, an
-.Dv O_PATH
-one included, also before that check, and removes one that is only a
-working directory, which keeps its path.
+emptiness: KRFFS keeps no node for such a holder, and a freed directory's
+place would go to the next node made while the holder still refers to it.
 ext2, FAT32 and exFAT refuse a directory a descriptor or a working
 directory refers to, after the check for emptiness.
 tmpfs removes such a directory, as Linux does, and leaves its

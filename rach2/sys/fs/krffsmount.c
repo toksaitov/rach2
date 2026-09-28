@@ -778,11 +778,30 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
 }
 
 /**
+ * Whether the node at `at` is some process's working directory, which the
+ * process record keeps as the mount and the node's handle (`vfs_cwd_set`).
+ * The record holds nothing here, since this type counts no handles, so a
+ * removal looks for it in the records themselves.
+ */
+static int cwd_at(struct vfs_mount *mnt, uint64_t at)
+{
+    const process_t *pr;
+
+    for (pr = proc_list; pr; pr = pr->next) {
+        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == handle_of(at)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Remove the directory `name` from `dir`.
  *
- * A directory somebody has open stays, with -EBUSY: this file system has no
- * name for a directory nobody can reach, and freeing it would leave that
- * holder's offset in the allocator's hands.
+ * A directory a descriptor has open or pinned, or that is a process's
+ * working directory, stays, with -EBUSY: this file system has no name for a
+ * directory nobody can reach, and freeing it would leave its offset in the
+ * allocator's hands while the holder still refers to it.
  */
 static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
@@ -800,7 +819,7 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     {
         uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
 
-        if (at != KRFFS_NO_NODE && open_at(vol, at)) {
+        if (at != KRFFS_NO_NODE && (open_at(vol, at) || cwd_at(mnt, at))) {
             return -EBUSY;
         }
     }

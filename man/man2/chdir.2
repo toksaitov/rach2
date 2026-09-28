@@ -78,15 +78,21 @@ them.
 and
 .Pa /proc
 take no reference.
-The KRFFS boot root, which is never unmounted, counts the reference and
-keeps the node, and
+KRFFS, the boot root and a mounted volume, counts no reference to a node;
+the working directory keeps the mount and the node all the same, and
 .Xr rmdir 2
 refuses a directory that is a process's working directory with
 .Er EBUSY ,
-as ext2, FAT32 and exFAT do; a mounted KRFFS volume and tmpfs remove it,
-and the working directory keeps its path.
+as ext2, FAT32 and exFAT do; tmpfs removes it, and the working directory
+keeps its path.
 Linux removes it and leaves the working directory on the removed
 directory.
+On a mounted KRFFS volume
+.Fn chdir
+keeps the directory from removal, by an open record as an
+.Dv O_PATH
+descriptor keeps one, from the lookup that finds it until the working
+directory records it, since the checks between may wait for the disk.
 Changing the working directory releases the previous reference.
 .Pp
 .Fn getcwd
@@ -180,10 +186,11 @@ The directory
 .Fn fchdir
 names is outside the process's root, or tmpfs removed it.
 .It Er ENOMEM
-Path lookup cannot allocate a file-system node, the kernel has no page to
-copy the path into or no memory for a working directory path of 64 bytes
-or more, or musl cannot allocate the requested copy of the working
-directory.
+Path lookup cannot allocate a file-system node, a mounted KRFFS volume
+cannot allocate the open record that keeps the directory during the
+call, the kernel has no page to copy the path into or no memory for a
+working directory path of 64 bytes or more, or musl cannot allocate the
+requested copy of the working directory.
 .It Er ENOTDIR
 The target or a component used as a directory is not a directory, or
 .Fa fd

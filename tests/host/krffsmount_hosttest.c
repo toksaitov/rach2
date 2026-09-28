@@ -34,6 +34,7 @@ static void (*flush_hook)(void);
 static void *original;
 static char payload[8192];
 process_t *current_proc;
+process_t *proc_list;
 const struct vfs_type vfs_krffs_type = {0};
 
 /** Record every failed invariant. */
@@ -598,6 +599,52 @@ static void taken_identifier(void)
     teardown();
 }
 
+/** Remove the directory `name` of the volume's root under the mount's lock,
+ * as `do_rmdir` calls the type. */
+static int remove_dir(const char *name)
+{
+    int rc;
+
+    vfs_ns_lock(&mount);
+    rc = kv_rmdir(&mount, mount.root, name);
+    vfs_ns_unlock(&mount);
+    return rc;
+}
+
+/**
+ * A directory that is a process's working directory stays, with EBUSY. The
+ * process record keeps the directory by the mount and the node's handle and
+ * takes no hold, since the volume counts none, so a directory removed under
+ * it would give its place to the next node made while the record still
+ * names it: once the process has left, the rmdir removes the directory and
+ * the next node made takes that place.
+ */
+static void working_directory(void)
+{
+    static process_t walker;
+    static struct fs_struct walker_fs;
+    void *dir;
+
+    setup();
+    vfs_ns_lock(&mount);
+    check(kv_mkdir(&mount, mount.root, "work", 0755) == 0, "a directory is made");
+    vfs_ns_unlock(&mount);
+    check(kv_lookup(&mount, mount.root, "work", &dir) == 0, "look up the directory");
+    create("after");
+    walker.fs = &walker_fs;
+    walker_fs.cwd_mnt = &mount;
+    walker_fs.cwd_node = dir;
+    proc_list = &walker;
+    check(remove_dir("work") == -EBUSY, "an rmdir of a process's working directory is EBUSY");
+    check(create("next") != dir, "a working directory keeps its place");
+    walker_fs.cwd_mnt = NULL;
+    walker_fs.cwd_node = NULL;
+    check(remove_dir("work") == 0, "an rmdir of the directory the process left removes it");
+    check(create("again") == dir, "the next node made takes the removed directory's place");
+    proc_list = NULL;
+    teardown();
+}
+
 /** Exercise both relocating operations and the unmount write order. */
 int main(void)
 {
@@ -612,6 +659,7 @@ int main(void)
     creation_errors();
     owner_across();
     taken_identifier();
+    working_directory();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }

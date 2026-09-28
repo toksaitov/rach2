@@ -3809,35 +3809,85 @@ static int32_t cwd_enter(const char *path, struct vfs_mount *mnt, void *node)
 }
 
 /**
+ * Enter the directory `ref` holds, a node of a mounted type, for `do_chdir`,
+ * `path` being the request as the walk took it. The node must be a directory
+ * the caller may search (-ENOTDIR, -EACCES). The working directory is named
+ * by the type when it can name it, so a walk through a link records where it
+ * arrived and not what was typed, and otherwise by the request with its dots
+ * collapsed, which the physical walk that found the node makes exact.
+ */
+static int32_t chdir_mounted(const struct vfs_ref *ref, char *path)
+{
+    struct vfs_stat vst;
+    char *named;
+    int32_t rc = vfs_getattr(ref->mnt, ref->node, &vst);
+
+    if (rc == 0 && (vst.mode & 0170000u) != 0040000u) {
+        rc = -ENOTDIR;
+    }
+    if (rc == 0) {
+        rc = (int)cred_access_ref(ref, CRED_X, 0);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    collapse_dots(path);
+    named = ref->mnt->type->ops->path ? path_buf_get() : NULL;
+    if (named && vfs_node_path(ref->mnt, ref->node, named, VFS_PATH_MAX) == 0 &&
+        path_in_root(named) == 0) {
+        rc = cwd_enter(named, ref->mnt, ref->node);
+    } else {
+        rc = cwd_enter(path, ref->mnt, ref->node);
+    }
+    path_buf_put(named);
+    return rc;
+}
+
+/**
  * Change the working directory to `path`, an absolute canonical path in a
  * path page, which this may write over.
  *
  * The working directory keeps a canonical path from the process's root
  * (`path_in_root`), so each kind of directory is named its own way: a
  * synthetic one by its kind, with /proc/self resolved to the caller's pid so
- * that a later relative name classifies right; one of another type by the
- * type, when it can name it, so a walk through a link records where it
- * arrived and not what was typed, and otherwise by the request with its dots
- * collapsed, which the physical walk that just succeeded makes exact; one of
- * the KRFFS boot root by its node. Entering a directory takes search
- * permission on it; anything else is -ENOTDIR. The KRFFS root is a directory
- * whatever its stored mode says: it is the file system's anchor, not a node
- * `mkdir` made. "/" is taken without a walk only when it names the KRFFS boot
- * root itself, which everyone may search; a root chroot gave the process is
- * resolved and checked like any other directory.
+ * that a later relative name classifies right; one of another type as
+ * `chdir_mounted` names it; one of the KRFFS boot root by its node. Entering
+ * a directory takes search permission on it; anything else is -ENOTDIR. The
+ * KRFFS root is a directory whatever its stored mode says: it is the file
+ * system's anchor, not a node `mkdir` made. "/" is taken without a walk only
+ * when it names the KRFFS boot root itself, which everyone may search; a
+ * root chroot gave the process is resolved and checked like any other
+ * directory.
+ *
+ * A type that keeps a node only while it is open, mounted KRFFS, counts no
+ * hold for the walk's reference, and the checks between the walk and the
+ * record may sleep for the disk. The node is pinned (`pin`) under the lock
+ * the walk ends with, and the pin is let go once the working directory
+ * records the node, so an rmdir that comes between finds the pin, and one
+ * that comes after finds the working directory, and neither frees the
+ * directory the record then names.
  */
 static int32_t do_chdir(char *path)
 {
     struct vfs_ref ref;
     const struct vpath *svp;
     krffs_node_t *node;
+    void *pin = NULL;
     int32_t rc;
 
     if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         return cwd_enter("/", NULL, NULL);
     }
-    rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+    rc = vfs_resolve(0, path, VFS_WALK_LOCK, &ref, 0, 0);
     if (rc != 0) {
+        return rc;
+    }
+    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {
+        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);
+    }
+    vfs_walk_unlock(ref.mnt);
+    if (rc != 0) {
+        vfs_ref_release(&ref);
         return rc;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
@@ -3861,29 +3911,10 @@ static int32_t do_chdir(char *path)
     }
     node = ref.node;
     if (!mnt_is_root(ref.mnt)) {
-        struct vfs_stat vst;
-        char *named;
-
-        rc = vfs_getattr(ref.mnt, node, &vst);
-        if (rc == 0 && (vst.mode & 0170000u) != 0040000u) {
-            rc = -ENOTDIR;
+        rc = chdir_mounted(&ref, path);
+        if (pin) {
+            ref.mnt->type->ops->unpin(ref.mnt, pin);
         }
-        if (rc == 0) {
-            rc = (int)cred_access_ref(&ref, CRED_X, 0);
-        }
-        if (rc != 0) {
-            vfs_ref_release(&ref);
-            return rc;
-        }
-        collapse_dots(path);
-        named = ref.mnt->type->ops->path ? path_buf_get() : NULL;
-        if (named && vfs_node_path(ref.mnt, node, named, VFS_PATH_MAX) == 0 &&
-            path_in_root(named) == 0) {
-            rc = cwd_enter(named, ref.mnt, node);
-        } else {
-            rc = cwd_enter(path, ref.mnt, node);
-        }
-        path_buf_put(named);
         vfs_ref_release(&ref);
         return rc;
     }

@@ -37,10 +37,12 @@
  * returns -EPERM and the name stays readable, through the held descriptor and
  * through a fresh open alike. An implementation that orphans before it refuses
  * cannot pass that. The other shape refuses for the destination, not the
- * source: renaming a file onto an open directory returns -EISDIR, which this
- * kernel decides after it takes the orphan, so the directory's name survives
- * only because a directory descriptor is not a holder. The assertion is what
- * keeps the answer right if one ever becomes one.
+ * source: renaming a file onto an open directory returns -EISDIR, which the
+ * boot root decides once it has looked the destination up and before it
+ * counts the destination's holders, so it takes no orphan, and ext2 before it
+ * writes anything. The directory's name must survive the refusal; were the
+ * refusal moved after the count, the name would still survive, but only
+ * because a directory descriptor is not a holder.
  *
  * The rename onto the reader's name is the case the whole change exists for,
  * and it runs across two processes, since a holder scan that looked only at
@@ -600,11 +602,6 @@ static void orphan_scan_case(void)
     want_eq("close the orphan", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 }
 
-/* A refusal must destroy nothing, in both the shapes this kernel has: the
- * directory source, refused before the destination is resolved, and the
- * directory destination, refused after the orphan is taken. The second name
- * survives only because a directory descriptor is not a holder, so it is
- * asserted, not assumed. */
 /* Whether the root this probe runs on is the boot root. A rename row below
  * owes different answers on the two file systems, and reads the type out of
  * `/proc/mounts` rather than assuming the one it was written on. A root whose
@@ -642,6 +639,12 @@ static int root_moves_directories(void)
     return !root_is_krffs();
 }
 
+/* A refusal must destroy nothing, in both the shapes this kernel has: the
+ * directory source, which the boot root refuses before it looks the
+ * destination up and ext2 before it writes anything, and the directory
+ * destination, which the boot root refuses with EISDIR once it has looked
+ * the destination up and before it counts the destination's holders, so it
+ * takes no orphan. Both names are asserted to survive, not assumed to. */
 static void failed_rename_case(void)
 {
     int len = (int)slen(KEEP_LINE);
