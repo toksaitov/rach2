@@ -123,6 +123,41 @@ static uint32_t model_r32(uint32_t off)
     return reg[off];
 }
 
+/*
+ * A command the controller completes clears its bit and reports the bytes it
+ * moved; one it does not leaves the bit set until the driver's wait gives up,
+ * and a slow one clears it after `complete_after` reads of the register. The
+ * byte count is the controller's word for what it did, and the driver checks
+ * it, so the model must give one.
+ */
+static void model_issue(uint32_t v)
+{
+    if (reg[R_IS] & 1u) {
+        stale_issues++;
+    }
+    issued++;
+    if (complete_after && command_completes) {
+        reg[P0 + P_CI] = v;
+        pending_reads = complete_after;
+        return;
+    }
+    reg[P0 + P_CI] = command_completes ? 0 : v;
+    if (command_completes && on_command_issued) {
+        on_command_issued();
+        if (immediate_interrupt) {
+            reg[P0 + P_IS] |= 1u;
+            reg[R_IS] |= 1u;
+        }
+    }
+    if (fatal_status == 2) {
+        reg[P0 + P_IS] |= 0x40000000u;
+        reg[R_IS] |= 1u;
+    }
+    if (fatal_status) {
+        reg[P0 + P_TFD] = 0x81; /* BSY clear, ERR set */
+    }
+}
+
 static void model_w32(uint32_t off, uint32_t v)
 {
     if (off >= REGS) {
@@ -192,34 +227,7 @@ static void model_w32(uint32_t off, uint32_t v)
         return;
     }
     if (off == P0 + P_CI) {
-        /* A command the controller completes clears its bit and reports the
-           bytes it moved; one it does not leaves the bit set until the
-           driver's wait gives up. The byte count is the controller's word for
-           what it did, and the driver checks it, so the model must give one. */
-        if (reg[R_IS] & 1u) {
-            stale_issues++;
-        }
-        issued++;
-        if (complete_after && command_completes) {
-            reg[off] = v;
-            pending_reads = complete_after;
-            return;
-        }
-        reg[off] = command_completes ? 0 : v;
-        if (command_completes && on_command_issued) {
-            on_command_issued();
-            if (immediate_interrupt) {
-                reg[P0 + P_IS] |= 1u;
-                reg[R_IS] |= 1u;
-            }
-        }
-        if (fatal_status == 2) {
-            reg[P0 + P_IS] |= 0x40000000u;
-            reg[R_IS] |= 1u;
-        }
-        if (fatal_status) {
-            reg[P0 + P_TFD] = 0x81; /* BSY clear, ERR set */
-        }
+        model_issue(v);
         return;
     }
     reg[off] = v;
