@@ -4732,8 +4732,9 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         int rpid = procfs_resolve_id(vp);
 
         /* The resolver follows the link to the program itself, so only an
-         * un-followed stat, or one of a process with no program, is here. */
-        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) < 0) {
+         * un-followed stat, or one of a process with no program, is here.
+         * A link the caller may not read exists all the same, as on Linux. */
+        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) == -ENOENT) {
             return -ENOENT;
         }
         kst->st_dev = PROCFS_FSID;
@@ -6914,8 +6915,8 @@ static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
  * error, -ENOENT for a name the namespace does not have, when it does not.
  * The two synthetic types look whole paths up, so the name is looked up by
  * `path`, and a device name they classify exists only when `synth_stat`
- * finds its device; a name whose attributes the caller may not read, such
- * as another user's `/proc/PID/exe`, exists all the same.
+ * finds its device; any other failure of `synth_stat` is of a name that
+ * exists.
  */
 static int32_t synth_name_exists(const char *path)
 {

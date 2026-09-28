@@ -4370,9 +4370,9 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (a name in /proc whose link the caller may not read was not EEXIST)
 old
-    return rc == -ENOENT ? rc : -EEXIST;
+        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) == -ENOENT) {
 new
-    return rc != 0 ? rc : -EEXIST;
+        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) < 0) {
 end
 
 fault make-dir-end-mount-missed

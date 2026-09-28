@@ -501,6 +501,10 @@ privileged caller, one whose effective user ID is 0 and which kept its
 capabilities
 .Pq see Xr capget 2 ,
 or the process's real user ID and a process that is not privileged.
+An
+.Xr lstat 2
+of the link itself needs none of these, as on Linux; the link is absent
+only while the process runs no program.
 .It Pa /proc/PID/task
 A directory with an entry for each thread of the process, named by its
 thread ID, the thread whose ID is the process ID first.
