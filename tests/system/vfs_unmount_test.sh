@@ -15,7 +15,7 @@ trap 'exit 143' TERM
 run_phase()
 {
     awk '
-        /^(static int streq|int vfs_mount_gone|static int mount_permanent|static void unmount_abandoned|static int unmount_target|static struct vfs_mount \*unmount_below_gone|int vfs_do_umount)\(/ {copy = 1}
+        /^(static int streq|int vfs_mount_gone|static int mount_permanent|static void unmount_abandoned|static int unmount_target|static struct vfs_mount \*unmount_below_gone|static int unmount_found|int vfs_do_umount)\(/ {copy = 1}
         copy {print}
         copy && /^}/ {copy = 0}
     ' "$work/vfs.c" > "$work/unmount.inc"
@@ -42,6 +42,15 @@ if [ "$#" -ne 0 ]; then
     [ "$status" -eq 1 ]
     grep -q "failed: a target named from the caller's root is found below it" "$work/unrooted.log"
     echo 'vfs-unmount: result: a target compared without the caller root detected'
+    [ "$(grep -c 'if (rc == 0 && dir && !VFS_IS_DIR(st.mode)) {' "$work/saved.c")" -eq 1 ]
+    sed 's/if (rc == 0 \&\& dir \&\& !VFS_IS_DIR(st.mode)) {/if (rc == 0 \&\& dir \&\& 0) {/' \
+        "$work/saved.c" > "$work/vfs.c"
+    status=0
+    run_phase unchecked || status=$?
+    [ "$status" -eq 1 ]
+    grep -q 'failed: a target named as a directory that reaches a file is ENOTDIR from the one walk' \
+        "$work/unchecked.log"
+    echo 'vfs-unmount: result: a directory target not checked in the walk detected'
     cp "$work/saved.c" "$work/vfs.c"
     run_phase restored
     cat "$work/restored.log"

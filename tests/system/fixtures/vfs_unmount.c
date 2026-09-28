@@ -2,7 +2,9 @@
  * Run the production unmount path with a missing ancestor and counted releases.
  * The generated include contains whole functions from vfs.c. Filesystem and
  * scheduler substitutes check ownership and writes; the USB rows test real I/O.
- * A caller with a root of its own names the target from that root.
+ * A caller with a root of its own names the target from that root. A target
+ * named as a directory by its end must reach one, and the node the one walk
+ * found is the node checked.
  */
 #include <errno.h>
 #include <stdint.h>
@@ -48,6 +50,10 @@ struct vfs_ref {
     struct vfs_mount *mnt;
     void *node;
 };
+struct vfs_stat {
+    uint32_t mode;
+};
+#define VFS_IS_DIR(mode) (((mode) & 0170000u) == 0040000u)
 struct fs_struct {
     struct vfs_mount *root_mnt;
     void *root_node;
@@ -65,6 +71,8 @@ static struct process caller = {&caller_fs};
 static struct process *current_proc = &caller;
 static const char *root_path; /* the path of the caller's root, when it has one */
 static int root_holds, ref_releases;
+static uint32_t node_mode; /* the mode the node a walk finds has */
+static int getattrs;
 
 static unsigned block_flags(struct block_device *d)
 {
@@ -115,6 +123,15 @@ static void vfs_ref_release(struct vfs_ref *r)
 {
     (void)r;
     ref_releases++;
+}
+/** The node a walk found is a directory unless a row says otherwise. */
+static int vfs_getattr(struct vfs_mount *m, void *node, struct vfs_stat *st)
+{
+    (void)m;
+    (void)node;
+    getattrs++;
+    st->mode = node_mode;
+    return 0;
 }
 static int vfs_enter(struct vfs_mount *m)
 {
@@ -227,6 +244,8 @@ static void setup(void)
     memset(&caller_fs, 0, sizeof(caller_fs));
     root_path = NULL;
     root_holds = ref_releases = 0;
+    node_mode = 0040755;
+    getattrs = 0;
 }
 
 static void check(int condition, const char *name)
@@ -241,60 +260,76 @@ int main(void)
 {
     setup();
     records[4].refs = 1;
-    check(vfs_do_umount("/mnt/a/b") == -EBUSY, "child description remains busy");
+    check(vfs_do_umount("/mnt/a/b", 0) == -EBUSY, "child description remains busy");
     check(records[4].state == VFS_ACTIVE && !syncs && !claims, "busy child stays intact");
     records[4].refs = 0;
     records[4].inprogress = 1;
-    check(vfs_do_umount("/mnt/a/b") == 0, "live child below removed parent unmounts");
+    check(vfs_do_umount("/mnt/a/b", 0) == 0, "live child below removed parent unmounts");
     check(records[3].refs == 0 && !records[4].state && claims == 1 && puts_count == 2 &&
               releases == 1 && invalidates == 1 && !locks && waits == 1,
           "child releases its claim, nodes and parent after draining");
     check(syncs == 1 && prepares == 1 && flushes == 1 && resolve_calls == 2,
           "live child flushes without another ancestor lookup");
     lookup_error = 0;
-    check(vfs_do_umount("/mnt/a") == 0 && records[0].refs == 0 && claims == 2 && syncs == 1 &&
+    check(vfs_do_umount("/mnt/a", 0) == 0 && records[0].refs == 0 && claims == 2 && syncs == 1 &&
               flushes == 1,
           "removed parent releases without writes");
     setup();
     disks[4].backing_flags = BLOCK_GONE;
-    check(vfs_do_umount("/mnt/a/b") == 0 && !syncs && !prepares && !flushes,
+    check(vfs_do_umount("/mnt/a/b", 0) == 0 && !syncs && !prepares && !flushes,
           "removed child backing receives no writes");
     setup();
     sync_error = -EIO;
-    check(vfs_do_umount("/mnt/a/b") == -EIO && records[3].refs == 1 && !claims &&
+    check(vfs_do_umount("/mnt/a/b", 0) == -EIO && records[3].refs == 1 && !claims &&
               records[4].state == VFS_ACTIVE && !locks,
           "live child sync failure retains ownership");
     setup();
     lookup_error = -ENOENT;
-    check(vfs_do_umount("/mnt/a/b") == -ENOENT, "ordinary lookup error is retained");
+    check(vfs_do_umount("/mnt/a/b", 0) == -ENOENT, "ordinary lookup error is retained");
     setup();
     disks[3].flags = 0;
-    check(vfs_do_umount("/mnt/a/b") == -EIO, "present ancestor cannot use recovery lookup");
+    check(vfs_do_umount("/mnt/a/b", 0) == -EIO, "present ancestor cannot use recovery lookup");
     setup();
-    check(vfs_do_umount("/mnt/a/b/file") == -EIO, "target must match the whole recorded name");
+    check(vfs_do_umount("/mnt/a/b/file", 0) == -EIO, "target must match the whole recorded name");
     records[5].parent = &records[3];
     records[5].covered_path = records[4].covered_path;
-    check(vfs_do_umount("/mnt/a/b") == -EIO, "ambiguous recorded names are refused");
+    check(vfs_do_umount("/mnt/a/b", 0) == -EIO, "ambiguous recorded names are refused");
     setup();
     records[5].parent = &records[4];
     records[5].covered_path = "/mnt/a/b/c";
     records[4].refs = 1;
-    check(vfs_do_umount("/mnt/a/b/c") == 0 && !records[4].refs,
+    check(vfs_do_umount("/mnt/a/b/c", 0) == 0 && !records[4].refs,
           "removed grandparent permits deepest mount to unmount");
     setup();
     caller_fs.root_mnt = &records[0];
     caller_fs.root_node = &caller_fs;
     root_path = "/mnt";
-    check(vfs_do_umount("/a/b") == 0 && !records[4].state && root_holds == 1 && ref_releases == 1,
+    check(vfs_do_umount("/a/b", 0) == 0 && !records[4].state && root_holds == 1 &&
+              ref_releases == 1,
           "a target named from the caller's root is found below it");
     setup();
     caller_fs.root_mnt = &records[0];
     caller_fs.root_node = &caller_fs;
     root_path = "/elsewhere";
-    check(vfs_do_umount("/a/b") == -EIO && records[4].state == VFS_ACTIVE,
+    check(vfs_do_umount("/a/b", 0) == -EIO && records[4].state == VFS_ACTIVE,
           "a target outside the caller's root matches nothing");
+    setup();
+    lookup_error = 0;
+    node_mode = 0100644;
+    check(vfs_do_umount("/mnt/a", 1) == -ENOTDIR && records[3].state == VFS_ACTIVE &&
+              resolve_calls == 1 && getattrs == 1 && ref_releases == 1,
+          "a target named as a directory that reaches a file is ENOTDIR from the one walk");
+    setup();
+    lookup_error = 0;
+    records[3].refs = 0;
+    check(vfs_do_umount("/mnt/a", 1) == 0 && !records[3].state && resolve_calls == 1 &&
+              getattrs == 1,
+          "a target named as a directory that reaches a mount point unmounts it");
+    setup();
+    check(vfs_do_umount("/mnt/a/b", 1) == 0 && !records[4].state && !getattrs,
+          "a target named as a directory below a removed device unmounts by its recorded name");
     if (failures)
         return 1;
-    puts("vfs-unmount: result: 15 checks passed");
+    puts("vfs-unmount: result: 18 checks passed");
     return 0;
 }

@@ -1309,8 +1309,6 @@ static int path_from_user(int dirfd, const char __user *upath, char **out)
     return path_from_user_dir(dirfd, upath, out, NULL);
 }
 
-static int32_t path_dir_check(const char *path, int end);
-
 /**
  * The path of execve(2), copied into `pathbuf` of `size` bytes as
  * `copy_path_at` copies it for `AT_FDCWD`, for the program it runs, with
@@ -2537,13 +2535,13 @@ int32_t sys_mount(isr_params_t *params)
  * the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
  * promises this kernel cannot keep and answer EINVAL.
  *
- * A target that names a directory by its end must reach one
- * (`path_dir_check`), so a file named with a trailing slash is -ENOTDIR, as
- * on Linux, where a file named without one is not a mount point, -EINVAL.
- * A walk that meets a removed device answers -EIO, which `vfs_do_umount`
- * recovers from by the recorded target, so that error is left to it, and the
- * last "." put back comes off the target first, since a recorded target has
- * none.
+ * A target that names a directory by its end must reach one, which the walk
+ * that finds the mount checks (`vfs_do_umount`), so a file named with a
+ * trailing slash is -ENOTDIR, as on Linux, where a file named without one is
+ * not a mount point, -EINVAL. The last "." put back comes off the target
+ * first: a walk that meets a removed device answers -EIO, which
+ * `vfs_do_umount` recovers from by the recorded target, and a recorded
+ * target has none.
  */
 int32_t sys_umount2(isr_params_t *params)
 {
@@ -2567,11 +2565,8 @@ int32_t sys_umount2(isr_params_t *params)
     if (n != 0) {
         return n;
     }
-    n = path_dir_check(tpath, end);
-    if (n == 0 || n == -EIO) {
-        path_drop_dot(tpath, end);
-        n = vfs_do_umount(tpath);
-    }
+    path_drop_dot(tpath, end);
+    n = vfs_do_umount(tpath, end != 0);
     path_buf_put(tpath);
     return n;
 }
@@ -4774,28 +4769,6 @@ int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
             }
             vfs_ref_release(ref);
         }
-    }
-    return rc;
-}
-
-/**
- * Whether the absolute canonical path `path`, which named a directory by its
- * end as `end` says and has its last "." put back, reaches one: 0 when `end`
- * is 0 or it does, -ENOTDIR when it reaches anything else, through a final
- * symbolic link, or the walk's error. For umount2, which goes on with the
- * path in a walk of its own.
- */
-static int32_t path_dir_check(const char *path, int end)
-{
-    struct vfs_ref ref;
-    int32_t rc;
-
-    if (!end) {
-        return 0;
-    }
-    rc = resolve_named(path, 0, end, &ref);
-    if (rc == 0) {
-        vfs_ref_release(&ref);
     }
     return rc;
 }
