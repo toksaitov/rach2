@@ -56,21 +56,27 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
 int main(void)
 {
     static struct socket sock;
-    static uint8_t datagram[28];
-    uint8_t first;
+    static uint8_t datagram[28], copy[28];
+    uint32_t i;
 
     datagram[0] = 0x45;
     datagram[9] = 1;
     datagram[12] = 10;
     datagram[15] = 2;
+    for (i = 20; i < sizeof(datagram); i++) {
+        datagram[i] = (uint8_t)(0xA0 + i);
+    }
     CHECK(raw_register(&sock, 1) == 0, "a socket registers for ICMP");
     raw_rx(17, datagram, sizeof(datagram));
     CHECK(!raw_ready(&sock) && woken == NULL, "a datagram of another protocol wakes nothing");
     raw_rx(1, datagram, sizeof(datagram));
     CHECK(raw_ready(&sock) && raw_pending(&sock) == (int)sizeof(datagram),
           "a datagram of the registered protocol is queued whole");
-    CHECK(raw_peek(&sock, 0, &first, 1) == 1 && first == 0x45,
-          "the queued datagram is the one sent");
+    CHECK(raw_peek(&sock, 0, copy, (int)sizeof(copy)) == (int)sizeof(copy),
+          "a peek gives the whole datagram");
+    for (i = 0; i < sizeof(copy) && copy[i] == datagram[i]; i++) {
+    }
+    CHECK(i == sizeof(copy), "the queued datagram is the one sent, every byte of it");
     raw_consume(&sock);
     CHECK(raw_last_src(&sock) == 0x0A000002u, "the datagram's source is kept");
     CHECK(woken == &sock.waiters && woken_kinds == WQ_DATA,

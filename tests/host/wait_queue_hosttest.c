@@ -108,9 +108,9 @@ static void dequeue(wait_queue_t *wq, process_t *p)
 }
 
 /**
- * Each wake is counted for every kind it names, with waiters or none, and an
- * init starts the counts over; a wake of one kind, or of none, still wakes
- * every waiter.
+ * Each wake is counted for every kind it names, with waiters or none, a kind
+ * woken twice twice, and an init starts the counts over; a wake of one kind,
+ * or of none, still wakes every waiter.
  */
 static void wake_kinds(void)
 {
@@ -138,6 +138,9 @@ static void wake_kinds(void)
     wq_wake(&wq, 0);
     CHECK(b.state == PROC_READY && total_queued(&wq) == 0);
     CHECK(wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 0 && wq_wakes(&wq, WQ_ROOM) == 1);
+    wq_wake(&wq, WQ_DATA);
+    wq_wake(&wq, WQ_DATA);
+    CHECK(wq_wakes(&wq, WQ_DATA) == 2);
 }
 
 int main(void)

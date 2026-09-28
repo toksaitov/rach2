@@ -6,7 +6,8 @@
 #
 # wait_queue_hosttest requires a wait that a wake does not end to arm the
 # caller's deadline again before it blocks again (entry 217), and a wake to be
-# counted for the kinds of change it names and no others, every kind for
+# counted for the kinds of change it names and no others, each time it comes,
+# every kind for
 # wq_wake_all, the count of the kinds asked for to be read back, and a wake
 # that names none to wake its waiters still (entry 246);
 # poll_deadline_hosttest requires the poll, ppoll and select timeouts to end a
@@ -162,6 +163,10 @@ prove wake-every-kind wait_queue_hosttest proc/wait_queue.c \
     '        if (k < WQ_KINDS) {
             wq->wakes[k]++;' \
     'wq_wakes(&wq, WQ_ROOM) == 0 && wq_wakes(&wq, WQ_HANGUP) == 0|wq_wakes(&wq, WQ_ALL) == 3'
+prove wake-count-set wait_queue_hosttest proc/wait_queue.c \
+    '            wq->wakes[k]++;' \
+    '            wq->wakes[k] = 1;' \
+    'wq_wakes(&wq, WQ_DATA) == 2'
 prove wakes-every-kind wait_queue_hosttest proc/wait_queue.c \
     '        if (kinds & (1u << k)) {
             sum += wq->wakes[k];' \
