@@ -494,17 +494,20 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 /**
  * The description an ops-backed read or write of `entry` holds for its
  * length, as lseek holds it to move the offset, or NULL. A raw disk window's
- * transfer uses `raw_offset`, and a /proc file's the offset, a byte of its
- * text or an address of /proc/PID/mem; either may sleep before it sets the
- * offset past what it moved, a /proc one in a fault on the caller's buffer
- * or in bringing in a page of the process, and a seek through a descriptor
- * that shares the description must wait for it or be lost. Linux holds such
- * a file's position lock across read, write and lseek alike. pread64 and
+ * transfer uses `raw_offset`; a /proc file's the offset, a byte of its text
+ * or an address of /proc/PID/mem; and `/dev/bootlog`'s the offset, a byte
+ * of the kernel log's ring. Each may sleep before it sets the offset past
+ * what it moved, in a disk request, or in a fault on the caller's buffer or
+ * in bringing in a page of a process, and a seek through a descriptor that
+ * shares the description must wait for it or be lost. Linux holds such a
+ * file's position lock across read, write and lseek alike. pread64 and
  * pwrite64 hold nothing, since they work on a copy (`pio_view`).
  */
 static struct open_file *ops_offset_held(fd_entry_t *entry)
 {
-    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;
+    return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || entry->type == FD_TYPE_PROC
+               ? entry->ofd
+               : NULL;
 }
 
 /** Dispatch an ops-backed write, holding the description of one whose write
@@ -3130,6 +3133,51 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     return rc;
 }
 
+/**
+ * lseek(2) and _llseek(2) on `/dev/bootlog`, whose offset counts from the
+ * oldest byte the kernel log's ring holds: the offset `whence` and `off`
+ * give, returned in `*out` and, when `store` is set, stored in the
+ * description, or a negative errno with the offset unchanged. The whole
+ * seek holds the description's lock, which the log's read holds across its
+ * copy, so a seek through a descriptor that shares the description waits
+ * for a read in progress and moves on from where the read left the offset.
+ *
+ * SEEK_SET, SEEK_CUR and SEEK_END take the sum by `seek_add`, so a
+ * displacement cannot overflow it. A place before 0 or past 0xFFFFFFFF, the
+ * last the log's offset has, is -EINVAL, and one past `limit`, the largest
+ * offset the call can return, -EOVERFLOW. A caller with nowhere to return
+ * the offset asks with `store` clear and fails the call itself.
+ */
+static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t limit, int store,
+                        long long *out)
+{
+    uint32_t size = 0;
+    long long at = off;
+    int rc = 0;
+
+    fd_ofd_lock(entry->ofd);
+    (void)devfs_fd_log_size(entry, &size);
+    if (whence == 1) {
+        rc = seek_add(entry->ofd->offset, off, &at);
+    } else if (whence == 2) {
+        rc = seek_add((uint64_t)size, off, &at);
+    } else if (whence != 0) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu)) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (uint64_t)at > limit) {
+        rc = -EOVERFLOW;
+    }
+    if (rc == 0 && store) {
+        entry->ofd->offset = (uint64_t)at;
+    }
+    fd_ofd_unlock(entry->ofd);
+    *out = at;
+    return rc;
+}
+
 int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -3138,7 +3186,6 @@ int32_t sys_lseek(isr_params_t *params)
     fd_entry_t *entry;
     uint64_t file_size;
     int seek_rc;
-    int32_t new_offset;
     long long at;
 
     if (!current_proc) {
@@ -3153,30 +3200,12 @@ int32_t sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        uint32_t log_size;
-
         if (devfs_fd_is_raw(entry)) {
             return raw_lseek(entry, offset, whence);
         }
-        if (devfs_fd_log_size(entry, &log_size)) {
-            switch (whence) {
-            case 0: /* SEEK_SET */
-                new_offset = offset;
-                break;
-            case 1: /* SEEK_CUR */
-                new_offset = (int32_t)entry->ofd->offset + offset;
-                break;
-            case 2: /* SEEK_END */
-                new_offset = (int32_t)log_size + offset;
-                break;
-            default:
-                return -EINVAL;
-            }
-            if (new_offset < 0) {
-                return -EINVAL;
-            }
-            entry->ofd->offset = (uint32_t)new_offset;
-            return new_offset;
+        if (devfs_fd_log_size(entry, NULL)) {
+            seek_rc = seek_bootlog(entry, (long long)offset, whence, 0x7FFFFFFFull, 1, &at);
+            return seek_rc != 0 ? seek_rc : (int32_t)at;
         }
         /* mem devices (null/zero/full) accept a seek that always lands at 0;
          * the stream devices (random/urandom) are not seekable. */
@@ -7182,44 +7211,24 @@ static long long off_from(uint32_t high, uint32_t low)
 }
 
 /**
- * `_llseek` on `/dev/bootlog`, whose window is the kernel log's ring: the
- * three origins, the sum taken by `seek_add` so a caller's displacement
- * cannot overflow the addition, and the resolved offset written back to the
- * caller. Returns 0 or a negative errno.
+ * `_llseek` on `/dev/bootlog`, by `seek_bootlog`'s rules, with the new offset
+ * written to the caller's `result`: -EFAULT with the offset unchanged when
+ * `result` is NULL, and -EFAULT with it moved when the copy fails. Returns 0
+ * or a negative errno.
  */
-static int32_t llseek_bootlog(fd_entry_t *entry, uint32_t log_size, long long off, int whence,
+static int32_t llseek_bootlog(fd_entry_t *entry, long long off, int whence,
                               long long __user *result)
 {
-    long long new_off = 0;
-    int rc = 0;
+    long long at;
+    int rc = seek_bootlog(entry, off, whence, 0xFFFFFFFFull, result != NULL, &at);
 
-    switch (whence) {
-    case 0: /* SEEK_SET */
-        new_off = off;
-        break;
-    case 1: /* SEEK_CUR */
-        rc = seek_add(entry->ofd->offset, off, &new_off);
-        break;
-    case 2: /* SEEK_END */
-        rc = seek_add((uint64_t)log_size, off, &new_off);
-        break;
-    default:
-        return -EINVAL;
+    if (rc == 0 && !result) {
+        rc = -EFAULT;
     }
     if (rc != 0) {
         return rc;
     }
-    if (new_off < 0 || new_off > (long long)0xFFFFFFFFu) {
-        return -EINVAL;
-    }
-    if (!result) {
-        return -EFAULT;
-    }
-    entry->ofd->offset = (uint32_t)new_off;
-    if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
-        return -EFAULT;
-    }
-    return 0;
+    return copy_to_user(result, &at, sizeof(at)) != 0 ? -EFAULT : 0;
 }
 
 /**
@@ -7299,7 +7308,6 @@ int32_t sys__llseek(isr_params_t *params)
     }
     if (entry->type == FD_TYPE_DEVICE) {
         uint64_t raw_size;
-        uint32_t log_size;
 
         if (devfs_fd_is_raw(entry)) {
             uint64_t resolved;
@@ -7328,9 +7336,8 @@ int32_t sys__llseek(isr_params_t *params)
             }
             return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;
         }
-        if (devfs_fd_log_size(entry, &log_size)) {
-            return llseek_bootlog(entry, log_size, off_from(offset_high, offset_low), whence,
-                                  result);
+        if (devfs_fd_log_size(entry, NULL)) {
+            return llseek_bootlog(entry, off_from(offset_high, offset_low), whence, result);
         }
         if (devfs_lseek_zero(entry)) {
             long long zero = 0;

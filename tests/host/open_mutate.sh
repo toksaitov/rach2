@@ -6,8 +6,10 @@
 # the lock of its parent, an orphan's locks dropped before it is freed, an
 # rmdir on the KRFFS root of a directory a description or a working directory
 # has, a chdir's pin of a directory on a type that keeps a node only while it
-# is open, a read and a write of a /proc file that hold its description while
-# a sharer's seek waits, and the release of the last holder of a nameless file
+# is open, a read and a write of a /proc file, and a read of /dev/bootlog,
+# that hold the description while a sharer's seek waits, the log's seeks
+# checked past the offsets they can return, and the release of the last
+# holder of a nameless file
 # of the KRFFS root under the root's lock, by a descriptor or a file mapping,
 # before, during and after each fault.
 set -eu
@@ -81,7 +83,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     volume-lock-key fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
     rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
     chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record proc-read-unheld \
-    proc-write-unheld orphan-release-unlocked mapping-left-unlocked; do
+    proc-write-unheld orphan-release-unlocked mapping-left-unlocked log-read-unheld \
+    log-seek-unlocked log-seek-wraps; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     [ "$fault" != mapping-left-unlocked ] || source="$work/sys/mm/filemap.c"
@@ -251,6 +254,17 @@ changes = {
         ("        fd_fifo_orphan(e);\n    }\n    vfs_ns_unlock(locked);\n}\n",
          "        fd_fifo_orphan(e);\n    }\n}\n"),
     ],
+    "log-read-unheld": ("    return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || "
+                        "entry->type == FD_TYPE_PROC\n",
+                        "    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC\n"),
+    "log-seek-unlocked": [
+        ("    fd_ofd_lock(entry->ofd);\n    (void)devfs_fd_log_size(entry, &size);\n",
+         "    (void)devfs_fd_log_size(entry, &size);\n"),
+        ("    fd_ofd_unlock(entry->ofd);\n    *out = at;\n", "    *out = at;\n"),
+    ],
+    "log-seek-wraps": ("        rc = seek_add(entry->ofd->offset, off, &at);\n    } else if (whence == 2) {\n",
+                       "        at = (int32_t)(uint32_t)(entry->ofd->offset + (uint64_t)off);\n"
+                       "    } else if (whence == 2) {\n"),
     "mapping-left-unlocked": [
         ("    struct vfs_mount *locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n",
          "    struct vfs_mount *locked;\n"),
@@ -304,6 +318,9 @@ PY
         proc-write-unheld) message='a seek waits for a /proc write that sleeps in a page fetch' ;;
         orphan-release-unlocked) message='an allocation on the root waits for the reclaim of a nameless file to end' ;;
         mapping-left-unlocked) message="a mapping counts among a file's holders until its release has the root's lock" ;;
+        log-read-unheld) message='a seek waits for a /dev/bootlog read that sleeps in its copy' ;;
+        log-seek-unlocked) message='an _llseek waits for a /dev/bootlog read that sleeps in its copy' ;;
+        log-seek-wraps) message='an lseek of /dev/bootlog past 4294967295 is EINVAL and leaves the offset' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

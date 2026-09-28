@@ -51,8 +51,11 @@ The older 32-bit call cannot return a position above 2147483647 and
 refuses it with
 .Er EOVERFLOW .
 .Pp
-The boot log is seekable; its 64-bit call accepts positions through
-4294967295.
+The boot log is seekable, through position 4294967295 with either call,
+and a read of it holds the description's lock, which its seek takes, as a
+read of a
+.Pa /proc
+file does, below.
 Seeks on
 .Pa /dev/null ,
 .Pa /dev/zero ,
@@ -170,8 +173,8 @@ The 64-bit result cannot be written to user memory, or a required
 result pointer is null.
 .It Bq Er EINVAL
 The origin is unsupported, the resulting position would be negative,
-the 64-bit boot-log position exceeds 4294967295, or the file system
-cannot supply the file's attributes.
+a boot-log position exceeds 4294967295, or the file system cannot
+supply the file's attributes.
 The origin is
 .Dv SEEK_END
 on a directory or a
@@ -186,8 +189,8 @@ The file's metadata could not be read or its device was removed.
 .It Bq Er ENXIO
 A raw disk window was withdrawn while its descriptor remained open.
 .It Bq Er EOVERFLOW
-The resulting file or raw disk position exceeds the call's representable
-range.
+The resulting position of a file, a raw disk window or the boot log
+exceeds the call's representable range.
 .It Bq Er ESPIPE
 The descriptor refers to a pipe, the console, the mouse, or a device
 without a seek operation.

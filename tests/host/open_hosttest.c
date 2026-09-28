@@ -12,8 +12,9 @@
  * the release of a program's file that lost its name, under the root's lock,
  * an rmdir on the KRFFS root of a directory a description or a working
  * directory has, or an open publishes a descriptor on while the call waits,
- * a seek of a /proc file's description while a read or a write of it
- * sleeps, and the release of the last holder of a file of the KRFFS root
+ * a seek of a /proc file's or /dev/bootlog's description while a read or a
+ * write of it sleeps, the log's seeks past the offsets they can return, and
+ * the release of the last holder of a file of the KRFFS root
  * that lost its name, by each path a descriptor or a file mapping ends on,
  * while another process's allocation on the root runs in the reclaim's
  * sleep.
@@ -733,8 +734,13 @@ void wait_queue_init(wait_queue_t *wq)
     wq->head = NULL;
 }
 
-/** The device calls the dispatch of a transfer and a seek make: no row's
- * descriptor is a device, and no row seeks one. */
+/* The model's /dev/bootlog: the device descriptor with these operations, and
+ * the bytes its ring holds. */
+static const struct file_ops log_ops;
+static uint32_t log_len;
+
+/** The device calls the dispatch of a transfer and a seek make: the one
+ * device a row has is the log, and no row seeks another. */
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     (void)e;
@@ -751,10 +757,13 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
 
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 {
-    (void)e;
-    (void)size;
-    check(0, "unexpected log seek");
-    return 0;
+    if (!e || e->type != FD_TYPE_DEVICE || e->ops != &log_ops) {
+        return 0;
+    }
+    if (size) {
+        *size = log_len;
+    }
+    return 1;
 }
 
 int devfs_lseek_zero(struct fd_entry *e)
@@ -2072,10 +2081,13 @@ static void lock_keys(void)
           "a file of another type is keyed by its inode number at the open");
 }
 
-/* The /proc row: the table of the process that shares the description, the
- * value its seek returned, and whether the seek parked. */
+/* The /proc and log rows: the table of the process that shares the
+ * description, the seek it makes, the value that seek returned, where
+ * _llseek wrote it, and whether the seek parked. */
 static fd_table_t sharer_files;
+static void (*sharer_call)(void);
 static int32_t sharer_seek;
+static long long sharer_result;
 static int sharer_parked;
 
 /** The seek of the process that shares the description: SEEK_CUR, 16 bytes
@@ -2091,11 +2103,25 @@ static void sharer_seeks(void)
     sharer_seek = sys_lseek(&params);
 }
 
-/** Bring in a page of the process for a /proc/PID/mem transfer: a sleep, in
+/** The 64-bit seek of the process that shares the description, as `_llseek`
+ * makes it on the log: SEEK_CUR, 16 bytes on, the new offset written to
+ * `sharer_result` and kept in `sharer_seek`. */
+static void sharer_llseeks(void)
+{
+    current_proc = &other;
+    sharer_seek =
+        llseek_bootlog(&sharer_files.entries[0], 16, 1, (long long __user *)&sharer_result);
+    if (sharer_seek == 0) {
+        sharer_seek = (int32_t)sharer_result;
+    }
+}
+
+/** Bring in a page for a transfer: of the process, for a /proc/PID/mem
+ * transfer, or of the caller's buffer, for the log's copy to it. A sleep, in
  * which the process that shares the description seeks. */
 static void page_fetch(void)
 {
-    sharer_parked = !park_run(sharer_seeks);
+    sharer_parked = !park_run(sharer_call);
     current_proc = &proc;
 }
 
@@ -2125,59 +2151,142 @@ static int32_t mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 
 static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0};
 
+/** A read of /dev/bootlog as `dev_bootlog_read` makes it: from the offset,
+ * through the copy to the caller's buffer, whose page fault sleeps, and the
+ * offset set past the bytes read. */
+static int32_t log_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    uint32_t off = (uint32_t)e->ofd->offset;
+
+    (void)buf;
+    page_fetch();
+    e->ofd->offset = off + count;
+    return (int32_t)count;
+}
+
+static const struct file_ops log_ops = {log_read, 0, 0, 0, 0};
+
+/* A transfer a row makes through the dispatch of read(2) or write(2), on a
+ * descriptor of `type` with `ops`; the seek of the sharer that waits for it;
+ * and the failure that names the case. */
+struct offset_case {
+    fd_type_t type;
+    const struct file_ops *ops;
+    int writing;
+    void (*seek)(void);
+    const char *waits;
+};
+
 /**
  * A read, then a write, of 32 bytes of a /proc/PID/mem descriptor at 0x1000,
- * as read(2) and write(2) dispatch them, whose page fetch sleeps while a
- * process that shares the description seeks 16 bytes on: the transfer holds
- * the description as the seek does, so the seek waits, and resumed in its
- * wait once the transfer's end has woken it, it moves the offset on from
- * 0x1020, where the transfer left it, and is not lost.
+ * and a read of 32 bytes of /dev/bootlog there, as read(2) and write(2)
+ * dispatch them, which sleep in a page fetch while a process that shares the
+ * description seeks 16 bytes on, with lseek, and for the log with _llseek
+ * too: the transfer holds the description as the seek does, so the seek
+ * waits, and resumed in its wait once the transfer's end has woken it, it
+ * moves the offset on from 0x1020, where the transfer left it, and is not
+ * lost.
  */
-static void proc_seek_waits(void)
+static void offset_seek_waits(void)
 {
+    static const struct offset_case cases[4] = {
+        {FD_TYPE_PROC, &mem_ops, 0, sharer_seeks,
+         "a seek waits for a /proc read that sleeps in a page fetch"},
+        {FD_TYPE_PROC, &mem_ops, 1, sharer_seeks,
+         "a seek waits for a /proc write that sleeps in a page fetch"},
+        {FD_TYPE_DEVICE, &log_ops, 0, sharer_seeks,
+         "a seek waits for a /dev/bootlog read that sleeps in its copy"},
+        {FD_TYPE_DEVICE, &log_ops, 0, sharer_llseeks,
+         "an _llseek waits for a /dev/bootlog read that sleeps in its copy"},
+    };
     char buf[32];
     fd_entry_t *e;
     int32_t moved_bytes;
-    int writing, fd, resumed;
+    int i, fd, resumed;
 
-    for (writing = 0; writing < 2; writing++) {
+    for (i = 0; i < 4; i++) {
         row_begin();
         fd = fd_alloc(proc.fds);
         if (fd != 0 || fd_table_init(&sharer_files) != 0) {
-            check(0, "the /proc row's two tables");
+            check(0, "the offset row's two tables");
             row_end();
             return;
         }
         e = &proc.fds->entries[0];
-        e->type = FD_TYPE_PROC;
-        e->ops = &mem_ops;
+        e->type = cases[i].type;
+        e->ops = cases[i].ops;
         e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
         e->ofd->offset = 0x1000;
+        log_len = 0x2000;
         sharer_files.refs = 1;
         sharer_files.entries[0] = *e;
         e->ofd->refcount++;
         other.fds = &sharer_files;
         parked_on = 0;
         sharer_seek = 0;
-        moved_bytes = writing ? write_ops(e, buf, sizeof(buf)) : read_ops(e, buf, sizeof(buf));
-        check(moved_bytes == 32, "the /proc transfer moves its 32 bytes");
-        check(sharer_parked, writing ? "a seek waits for a /proc write that sleeps in a page fetch"
-                                     : "a seek waits for a /proc read that sleeps in a page fetch");
+        sharer_call = cases[i].seek;
+        moved_bytes =
+            cases[i].writing ? write_ops(e, buf, sizeof(buf)) : read_ops(e, buf, sizeof(buf));
+        check(moved_bytes == 32, "the transfer moves its 32 bytes");
+        check(sharer_parked, cases[i].waits);
         if (sharer_parked) {
-            check(parked_wakes != 0, "the end of the /proc transfer wakes the seek that waits");
+            check(parked_wakes != 0, "the end of the transfer wakes the seek that waits");
             current_proc = &other;
             resumed = park_resume();
             current_proc = &proc;
             check(resumed && sharer_seek == 0x1030,
-                  "the seek that waited moves on from where the /proc transfer left the offset");
+                  "the seek that waited moves on from where the transfer left the offset");
         }
         check(e->ofd->offset == 0x1030 && !e->ofd->busy,
-              "a seek made while a /proc transfer sleeps is not lost");
+              "a seek made while a transfer sleeps is not lost");
         fd_free(&sharer_files, 0);
         fd_table_free(&sharer_files);
         parked_on = 0;
         row_end();
     }
+}
+
+/**
+ * Seeks of /dev/bootlog 32 bytes on: from 0x7FFFFFF0 lseek is EOVERFLOW,
+ * since the old call returns no offset past 2147483647, and from 0xFFFFFFF0,
+ * which _llseek can set, lseek and _llseek are EINVAL, since the log's
+ * offset has 32 bits; each leaves the offset. lseek to the end gives the
+ * ring's length.
+ */
+static void log_seek_range(void)
+{
+    isr_params_t params;
+    long long result = 0;
+    fd_entry_t *e;
+    int32_t rc;
+
+    row_begin();
+    check(fd_alloc(proc.fds) == 0, "the log row's descriptor");
+    e = &proc.fds->entries[0];
+    e->type = FD_TYPE_DEVICE;
+    e->ops = &log_ops;
+    e->flags = FD_FLAG_READ;
+    log_len = 0x2000;
+    e->ofd->offset = 0x7FFFFFF0u;
+    k_memset(&params, 0, sizeof(params));
+    params.ecx = 0x20;
+    params.edx = 1;
+    rc = sys_lseek(&params);
+    check(rc == -EOVERFLOW && e->ofd->offset == 0x7FFFFFF0u,
+          "an lseek of /dev/bootlog past 2147483647 is EOVERFLOW and leaves the offset");
+    e->ofd->offset = 0xFFFFFFF0u;
+    rc = sys_lseek(&params);
+    check(rc == -EINVAL && e->ofd->offset == 0xFFFFFFF0u,
+          "an lseek of /dev/bootlog past 4294967295 is EINVAL and leaves the offset");
+    rc = llseek_bootlog(e, 0x20, 1, (long long __user *)&result);
+    check(rc == -EINVAL && e->ofd->offset == 0xFFFFFFF0u,
+          "an _llseek of /dev/bootlog past 4294967295 is EINVAL and leaves the offset");
+    params.ecx = 0;
+    params.edx = 2;
+    rc = sys_lseek(&params);
+    check(rc == 0x2000 && e->ofd->offset == 0x2000,
+          "an lseek to the end of /dev/bootlog gives the ring's length");
+    row_end();
 }
 
 /** Another process takes an extent of the root, under the root's lock, as
@@ -2389,7 +2498,8 @@ int main(void)
     open_last_slot();
     loop_handles();
     lock_keys();
-    proc_seek_waits();
+    offset_seek_waits();
+    log_seek_range();
     orphan_reclaims();
     mapping_reclaims();
     if (!failures) {
