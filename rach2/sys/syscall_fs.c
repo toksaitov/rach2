@@ -1313,38 +1313,32 @@ static int32_t path_dir_check(const char *path, int end);
 
 /**
  * The path of execve(2), copied into `pathbuf` of `size` bytes as
- * `copy_path_at` copies it for `AT_FDCWD`, for the program it runs: a path
- * that names a directory by its end, which no program is, must reach one
- * (`path_dir_check`), so a file so named is -ENOTDIR and a directory is left
- * for the open's -EACCES, as on Linux. Returns the length, or a negative
- * errno.
+ * `copy_path_at` copies it for `AT_FDCWD`, for the program it runs, with
+ * `*end` saying how it named a directory by its end and a last "." put back.
+ * Such a path must reach a directory, which no program is, so the one walk
+ * that finds the program answers for the end (`resolve_named`): a file so
+ * named is -ENOTDIR and a directory the open's -EACCES, as on Linux. Returns
+ * the length, or a negative errno.
  */
-int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
+int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath, int *end)
 {
-    int end = 0;
-    int len = copy_path_at(pathbuf, size, AT_FDCWD, upath, &end);
-    int32_t rc = len < 0 ? len : path_dir_check(pathbuf, end);
-
-    return rc < 0 ? rc : len;
+    return copy_path_at(pathbuf, size, AT_FDCWD, upath, end);
 }
 
 /**
  * Make the absolute path `path`, which the kernel read from a file, canonical
- * in place, and hold a path that named a directory by its end to the rule
- * `copy_path_cwd` holds execve's to: the interpreter a script names, or an
- * ELF image's PT_INTERP. Returns the length, or a negative errno.
+ * in place, as `copy_path_cwd` makes execve's, with `*end` saying how it
+ * named a directory by its end and a last "." put back: the interpreter a
+ * script names, or an ELF image's PT_INTERP, whose one walk answers for the
+ * end as the program's does. Returns the length.
  */
-int canonicalize_named(char *path)
+int canonicalize_named(char *path, int *end)
 {
-    int end = path_names_dir(path, (int)k_strlen(path));
-    int len = canonicalize_abs(path);
-    int32_t rc;
+    int len;
 
-    if (end == PATH_END_DOT) {
-        len = path_put_dot(path, len);
-    }
-    rc = path_dir_check(path, end);
-    return rc < 0 ? rc : len;
+    *end = path_names_dir(path, (int)k_strlen(path));
+    len = canonicalize_abs(path);
+    return *end == PATH_END_DOT ? path_put_dot(path, len) : len;
 }
 
 /** Whether `leaf`, the last name a walk to its parent gave, is "." or "..",
@@ -4762,8 +4756,13 @@ static int32_t leaf_dir_check(const struct vfs_ref *parent, const char *leaf)
  * directory, as Linux's walk requires, or the call is -ENOTDIR, with nothing
  * held and no lock kept. Returns 0 with `ref` held, and the final mount
  * locked under VFS_WALK_LOCK, or a negative errno.
+ *
+ * The node checked is the node returned, so a call that goes on with `ref`
+ * acts on what was checked; execve opens its program and interpreters
+ * through it (`exec_open` in `syscall_proc.c`), since a second walk could
+ * meet a symbolic link replaced in between.
  */
-static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
+int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
 {
     int32_t rc = vfs_resolve(0, name, dir ? walk & ~VFS_WALK_NOFOLLOW : walk, ref, 0, 0);
 
@@ -4783,8 +4782,8 @@ static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref
  * Whether the absolute canonical path `path`, which named a directory by its
  * end as `end` says and has its last "." put back, reaches one: 0 when `end`
  * is 0 or it does, -ENOTDIR when it reaches anything else, through a final
- * symbolic link, or the walk's error. For the calls that go on with the
- * path in a walk of their own: execve, a script's interpreter, and umount2.
+ * symbolic link, or the walk's error. For umount2, which goes on with the
+ * path in a walk of its own.
  */
 static int32_t path_dir_check(const char *path, int end)
 {
