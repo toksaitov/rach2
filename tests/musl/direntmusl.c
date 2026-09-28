@@ -36,7 +36,10 @@
  * named is ENOTDIR, and so is umount2 of a file so named, and open of /fb and
  * /mouse so named or with O_DIRECTORY, which opens neither device. rmdir and
  * rename of the root are EBUSY, link, symlink and mknod with the root as the
- * new name EEXIST and bind to it EADDRINUSE. open with O_CREAT is EISDIR for an
+ * new name EEXIST and bind to it EADDRINUSE; a mount point, /dev or /proc, is
+ * EEXIST as a new name with a trailing slash and as a RENAME_NOREPLACE
+ * rename's, and so is another user's /proc/1/exe to symlink, though its link
+ * may not be read. open with O_CREAT is EISDIR for an
  * existing directory, one of the probe's, one of /dev/shm and /proc, even to
  * read, and with O_DIRECTORY EINVAL before the path is read, unless O_PATH is
  * given too, which drops O_CREAT. A symbolic link to a directory named with a
@@ -841,10 +844,11 @@ static int root_rows(void)
  * Names in /proc and /dev, where nothing is made or renamed (EROFS), which
  * the calls answer first as Linux does, before it asks for write access:
  * "/proc/." as the old name of a rename and "/proc/.." as the new are
- * EBUSY, and "/proc/." as the new name under RENAME_NOREPLACE EEXIST; a new
- * name with a slash after it is ENOENT to symlink and link when the
- * namespace does not have it, and EEXIST to symlink and mknod, and
- * EADDRINUSE to bind, when it does. 0, or 1 once the failure is reported.
+ * EBUSY, and "/proc/." as the new name under RENAME_NOREPLACE EEXIST, as is
+ * the mount point /dev; a new name with a slash after it is ENOENT to
+ * symlink and link when the namespace does not have it, and EEXIST to
+ * symlink and mknod, and EADDRINUSE to bind, when it does, a mount point
+ * among them. 0, or 1 once the failure is reported.
  */
 static int synth_name_rows(void)
 {
@@ -858,12 +862,18 @@ static int synth_name_rows(void)
                  EEXIST)) {
         return fail("a rename of a last . or .. in /proc was not EBUSY or EEXIST");
     }
+    if (!refused(syscall(SYS_renameat2, AT_FDCWD, file, AT_FDCWD, "/dev", RENAME_NOREPLACE),
+                 EEXIST)) {
+        return fail("a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST");
+    }
     s = socket(AF_UNIX, SOCK_STREAM, 0);
     made = s < 0 || !refused(symlink("x", "/proc/nonexistent/"), ENOENT) ||
            !refused(symlink("x", "/proc/meminfo/"), EEXIST) ||
            !refused(mknod("/dev/null/", S_IFIFO | 0644, 0), EEXIST) ||
            !refused(link(file, "/proc/nonexistent/"), ENOENT) ||
-           !refused(bind_path(s, "/proc/meminfo/"), EADDRINUSE);
+           !refused(bind_path(s, "/proc/meminfo/"), EADDRINUSE) ||
+           !refused(symlink("x", "/dev/"), EEXIST) ||
+           !refused(mknod("/proc/", S_IFIFO | 0644, 0), EEXIST);
     if (s >= 0) {
         close(s);
     }
@@ -900,6 +910,32 @@ static int synth_taken_rows(void)
 }
 
 /**
+ * A name that exists in /proc whose link the caller may not read: symlink
+ * onto /proc/1/exe, init's, is EEXIST, plainly and with a trailing slash,
+ * for a child that runs as user 1000. 0, or 1 once the failure is reported.
+ */
+static int unreadable_taken_rows(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        if (setgid(1000) != 0 || setuid(1000) != 0) {
+            _exit(2);
+        }
+        _exit(refused(symlink("x", "/proc/1/exe"), EEXIST) &&
+                      refused(symlink("x", "/proc/1/exe/"), EEXIST)
+                  ? 0
+                  : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("a name in /proc whose link the caller may not read was not EEXIST");
+    }
+    return 0;
+}
+
+/**
  * The names /fb and /mouse, which open takes for the framebuffer and the
  * mouse before any walk, given as directories: a trailing slash, a last "."
  * or "..", and O_DIRECTORY are ENOTDIR, and neither device is opened. 0, or
@@ -921,7 +957,8 @@ static int device_ends(void)
  * The rows that read the probe's own directory beyond the types of its listing:
  * the path ends of `dir_ends`, rewinddir and seekdir of it and of /proc/self
  * (`rewinds`), the root as a name (`root_rows`), names in /proc and /dev that
- * end as directories (`synth_name_rows`) or exist (`synth_taken_rows`), /fb
+ * end as directories (`synth_name_rows`) or exist (`synth_taken_rows`,
+ * `unreadable_taken_rows`), /fb
  * and /mouse as directories (`device_ends`), and the other calls given a
  * path that names a directory by its end, there and in /dev/shm
  * (`dir_end_calls`). The groups from `root_rows` on each run whether or not
@@ -947,6 +984,7 @@ static int own_dir_rows(void)
     rc = root_rows();
     rc |= synth_name_rows();
     rc |= synth_taken_rows();
+    rc |= unreadable_taken_rows();
     rc |= device_ends();
     rc |= dir_end_calls(base, 0);
     return rc | shm_dir_end_calls();

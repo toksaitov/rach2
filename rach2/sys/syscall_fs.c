@@ -6914,7 +6914,8 @@ static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
  * error, -ENOENT for a name the namespace does not have, when it does not.
  * The two synthetic types look whole paths up, so the name is looked up by
  * `path`, and a device name they classify exists only when `synth_stat`
- * finds its device.
+ * finds its device; a name whose attributes the caller may not read, such
+ * as another user's `/proc/PID/exe`, exists all the same.
  */
 static int32_t synth_name_exists(const char *path)
 {
@@ -6929,7 +6930,7 @@ static int32_t synth_name_exists(const char *path)
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     rc = vp ? synth_stat(vp, &kst, 0) : 0;
     vfs_ref_release(&ref);
-    return rc != 0 ? rc : -EEXIST;
+    return rc == -ENOENT ? rc : -EEXIST;
 }
 
 /**
@@ -6937,9 +6938,10 @@ static int32_t synth_name_exists(const char *path)
  * the held directory `parent`, the last name of `path`, when `path` named a
  * directory by its end, `end` (`path_names_dir`), as Linux answers it before
  * a read-only mount's EROFS: -EEXIST for a last "." or "..", which exists,
- * and after a slash -EEXIST for a name that exists and the lookup's -ENOENT
- * for one that does not, in /dev and /proc too (`synth_name_exists`), where
- * the call's -EROFS comes after. 0 for any other path.
+ * and after a slash -EEXIST for a name that exists, a mount point among
+ * them, and the lookup's -ENOENT for one that does not, in /dev and /proc
+ * too (`synth_name_exists`), where the call's -EROFS comes after. 0 for any
+ * other path.
  */
 static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int end,
                             const char *path)
@@ -6955,6 +6957,9 @@ static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int 
     }
     if (vfs_synth_vpath(parent->mnt, parent->node)) {
         return synth_name_exists(path);
+    }
+    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
+        return -EEXIST;
     }
     rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
     if (rc != 0) {
@@ -8942,10 +8947,11 @@ int32_t sys_unlinkat(isr_params_t *params)
 
 /**
  * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
- * not there, as the rename would answer, then -EEXIST for a new name that is.
- * The caller holds the mount's namespace lock from this check through the
- * rename, and every namespace change takes that lock, so no name can appear
- * between the two.
+ * not there, as the rename would answer, then -EEXIST for a new name that is,
+ * a mount point among them, before the EBUSY a mount point is otherwise, as
+ * on Linux. The caller holds the mount's namespace lock from this check
+ * through the rename, and every namespace change takes that lock, so no name
+ * can appear between the two.
  */
 static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
                                 const struct vfs_ref *npar, const char *nleaf)
@@ -8954,6 +8960,9 @@ static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
 
     if (rc <= 0) {
         return rc == 0 ? -ENOENT : rc;
+    }
+    if (vfs_leaf_mount(npar->mnt, npar->node, nleaf)) {
+        return -EEXIST;
     }
     rc = name_present(npar->mnt, npar->node, nleaf);
     return rc == 1 ? -EEXIST : rc;
@@ -9167,7 +9176,8 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
     if (rc != 0) {
         goto out;
     }
-    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
+    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) ||
+        (!(flags & RENAME_NOREPLACE) && vfs_leaf_mount(npar.mnt, npar.node, nleaf))) {
         rc = -EBUSY; /* a mount point moves for no one */
         goto out;
     }

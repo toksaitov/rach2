@@ -4362,3 +4362,38 @@ new
         return -EINVAL; /* more than a process can hold */
     }
 end
+
+# Mount points and unreadable names as names that exist.
+
+fault synth-unreadable-name-absent
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name in /proc whose link the caller may not read was not EEXIST)
+old
+    return rc == -ENOENT ? rc : -EEXIST;
+new
+    return rc != 0 ? rc : -EEXIST;
+end
+
+fault make-dir-end-mount-missed
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST)
+old
+    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
+        return -EEXIST;
+    }
+    rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
+new
+    rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
+end
+
+fault rename-noreplace-mount-busy
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST)
+old
+        (!(flags & RENAME_NOREPLACE) && vfs_leaf_mount(npar.mnt, npar.node, nleaf))) {
+new
+        vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
+end
