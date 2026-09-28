@@ -18,26 +18,6 @@
 
 # execve.
 
-fault exec-failed-unshares
-probe threadmusl
-file rach2/sys/syscall_proc.c
-expect THREADMUSL FAIL (a descriptor a thread opened after its execve failed
-old
-    if (!user_path) {
-        return -EFAULT;
-    }
-    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
-new
-    if (!user_path) {
-        return -EFAULT;
-    }
-    rc = proc_files_unshare();
-    if (rc < 0) {
-        return rc;
-    }
-    rc = copy_path_cwd(s->path, sizeof(s->path), user_path);
-end
-
 fault exec-robust-tid
 probe threadmusl
 file rach2/sys/syscall_proc.c
@@ -1155,9 +1135,9 @@ probe epollmusl
 file rach2/sys/io/epoll.c
 expect EPOLLMUSL FAIL (a registration of no events was not told of the hangup: errno
 old
-    if (*gone || it->off) {
+    if (it->off) {
 new
-    if (*gone || it->off || (it->events & EPOLL_EVENTS) == 0) {
+    if (it->off || (it->events & EPOLL_EVENTS) == 0) {
 end
 
 fault epoll-pwait2-seconds-32-bit
@@ -2654,10 +2634,10 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (link to a new name with a trailing slash or a last .)
 old
-    rc = make_dir_end(&parent, leaf, newend);
+    rc = make_dir_end(&parent, leaf, newend, newname);
 new
     (void)newend;
-    rc = make_dir_end(&parent, leaf, 0);
+    rc = make_dir_end(&parent, leaf, 0, newname);
 end
 
 fault make-dot-leaf-passed
@@ -2668,9 +2648,9 @@ old
     if (leaf_is_dot(leaf)) {
         return -EEXIST;
     }
-    if (end != PATH_END_SLASH || vfs_synth_vpath(parent->mnt, parent->node)) {
+    if (end != PATH_END_SLASH) {
 new
-    if (end != PATH_END_SLASH || vfs_synth_vpath(parent->mnt, parent->node)) {
+    if (end != PATH_END_SLASH) {
 end
 
 fault symlink-new-dir-end-ignored
@@ -2678,18 +2658,10 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (symlink to a new name with a trailing slash or a last .)
 old
-    rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
-    if (rc != 0) {
-        return rc;
-    }
-    rc = make_dir_end(&parent, leaf, end);
+    rc = make_dir_end(&parent, leaf, end, newname);
 new
-    rc = new_name_parent(newname, &parent, leaf, sizeof(leaf));
-    if (rc != 0) {
-        return rc;
-    }
     (void)end;
-    rc = make_dir_end(&parent, leaf, 0);
+    rc = make_dir_end(&parent, leaf, 0, newname);
 end
 
 fault mknod-new-dir-end-ignored
@@ -2697,18 +2669,24 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (mknod of a new name with a trailing slash or a last .)
 old
-    rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
+    rc = make_dir_end(&parent, leaf, end, path);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, path);
+    }
     if (rc != 0) {
+        vfs_ref_release(&parent);
         return rc;
     }
-    rc = make_dir_end(&parent, leaf, end);
 new
-    rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
+    (void)end;
+    rc = make_dir_end(&parent, leaf, 0, path);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, path);
+    }
     if (rc != 0) {
+        vfs_ref_release(&parent);
         return rc;
     }
-    (void)end;
-    rc = make_dir_end(&parent, leaf, 0);
 end
 
 fault mknod-end-not-asked
@@ -2917,12 +2895,12 @@ end
 
 fault exec-dir-end-unchecked
 probe direntmusl
-file rach2/sys/syscall_fs.c
+file rach2/sys/syscall_proc.c
 expect DIRENTMUSL FAIL (execve of a path that names a directory by its end was not ENOTDIR or EACCES)
 old
-    int32_t rc = len < 0 ? len : path_dir_check(pathbuf, end);
+    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
 new
-    int32_t rc = len;
+    rc = exec_open(&s->prog, s->path, 0, &s->id, s->mm);
 end
 
 fault exec-directory-runs
@@ -2942,11 +2920,9 @@ probe direntmusl
 file rach2/sys/syscall_proc.c
 expect DIRENTMUSL FAIL (a script whose interpreter is named with a trailing slash ran)
 old
-    rc = canonicalize_named(s->path);
-    return rc < 0 ? rc : 1;
+    rc = exec_open(&s->prog, s->path, s->path_end, NULL, s->mm);
 new
-    rc = canonicalize_abs(s->path);
-    return rc < 0 ? rc : 1;
+    rc = exec_open(&s->prog, s->path, 0, NULL, s->mm);
 end
 
 fault bind-dir-end-unchecked
@@ -2954,11 +2930,15 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (a bind to a name ending in a slash or . was not refused as on Linux)
 old
-    if (rc >= 0 && end) {
-        rc = path_make_dir_end(buf, end);
-    }
+        rc = make_dir_end(&parent, leaf, end, path);
+        if (rc == 0) {
+            rc = new_name_taken(&parent, leaf, path);
+        }
 new
-    (void)path_make_dir_end;
+        rc = make_dir_end(&parent, leaf, end == PATH_END_SLASH ? 0 : end, path);
+        if (rc == 0) {
+            rc = new_name_taken(&parent, leaf, path);
+        }
 end
 
 fault connect-dir-end-unchecked
@@ -2976,9 +2956,9 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (umount2 of a file named with a trailing slash was not ENOTDIR)
 old
-    n = path_dir_check(tpath, end);
+    n = vfs_do_umount(tpath, end != 0);
 new
-    n = 0;
+    n = vfs_do_umount(tpath, 0);
 end
 
 fault rename-root-einval
@@ -3007,9 +2987,9 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (mkdir of a path whose last name is .)
 old
-    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);
+    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);
 new
-    rc = mkdir_in(&parent, leaf, mode);
+    rc = mkdir_in(&parent, leaf, mode, pathbuf);
 end
 
 fault open-excl-dot-eisdir
@@ -3198,14 +3178,279 @@ probe direntmusl
 file rach2/sys/syscall_proc.c
 expect DIRENTMUSL FAIL (an ELF image whose PT_INTERP names a directory by its end was not refused)
 old
-    rc = canonicalize_named(s->layout.interp);
-    if (rc < 0) {
+    rc = exec_open(&s->prog, s->layout.interp, end, NULL, NULL);
+new
+    (void)end;
+    rc = exec_open(&s->prog, s->layout.interp, 0, NULL, NULL);
+end
+
+fault device-directory-flag-ignored
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (an open of /fb or /mouse as a directory was not ENOTDIR)
+old
+    if (fb == 2 || mouse == 2 || (flags & O_DIRECTORY)) {
+new
+    (void)flags;
+    if (fb == 2 || mouse == 2) {
+end
+
+fault device-dot-end-walked
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (an open of /fb or /mouse as a directory was not ENOTDIR)
+old
+    return (name_is(name, "/.") || name_is(name, "/..")) ? 2 : 0;
+new
+    return name_is(name, "") ? 2 : 0;
+end
+
+fault rename-root-slash-before-noreplace
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a RENAME_NOREPLACE rename onto a name that exists was not EEXIST first)
+old
+    node = found;
+    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;
+new
+    node = found;
+    if (slash && node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+        return -ENOTDIR;
+    }
+    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;
+end
+
+fault rename-synth-erofs-before-dots
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a rename of a last . or .. in /proc was not EBUSY or EEXIST)
+old
+    if (leaf_is_dot(oleaf) || leaf_is_dot(nleaf)) {
+        rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
+        goto out;
+    }
+new
+    if (vfs_synth_vpath(opar.mnt, opar.node)) {
+        rc = -EROFS;
+        goto out;
+    }
+    if (leaf_is_dot(oleaf) || leaf_is_dot(nleaf)) {
+        rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
+        goto out;
+    }
+end
+
+fault make-dir-end-synth-skipped
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST)
+old
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return synth_name_exists(path);
+    }
+new
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return path[0] == '\0' ? synth_name_exists(path) : 0;
+    }
+end
+
+fault proc-seek-cur-not-kept
+probe preadmusl
+file rach2/sys/syscall_fs.c
+expect PREADMUSL FAIL (lseek of a /proc snapshot or of /proc/self/mem)
+old
+    if (rc == 0) {
+        entry->ofd->offset = (uint64_t)at;
+        *out = at;
+    }
+new
+    if (rc == 0 && whence != 1) {
+        entry->ofd->offset = (uint64_t)at;
+    }
+    if (rc == 0) {
+        *out = at;
+    }
+end
+
+fault lchown-dir-end-changes-link
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)
+old
+    rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);
+    if (rc != 0) {
         return rc;
     }
 new
-    if (canonicalize_abs(s->layout.interp) < 0) {
-        return -ENOENT;
+    rc = resolve_named(name, (follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);
+    if (rc == 0 && !follow && dir) {
+        vfs_walk_unlock(ref.mnt);
+        vfs_ref_release(&ref);
+        rc = resolve_named(name, VFS_WALK_NOFOLLOW | VFS_WALK_LOCK, 0, &ref);
     }
+    if (rc != 0) {
+        return rc;
+    }
+end
+
+fault utimensat-dir-end-changes-link
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a symbolic link to a directory named with a trailing slash was not followed)
+old
+        path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);
+new
+        path, ((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK,
+        (flags & AT_SYMLINK_NOFOLLOW) ? 0 : dir, &ref);
+end
+
+fault exec-failed-unshares
+probe threadmusl
+file rach2/sys/syscall_proc.c
+expect THREADMUSL FAIL (a descriptor a thread opened after its execve failed
+old
+    if (!user_path) {
+        return -EFAULT;
+    }
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path, &s->path_end);
+new
+    if (!user_path) {
+        return -EFAULT;
+    }
+    rc = proc_files_unshare();
+    if (rc < 0) {
+        return rc;
+    }
+    rc = copy_path_cwd(s->path, sizeof(s->path), user_path, &s->path_end);
+end
+
+fault exe-exec-old-path
+probe prctlmusl
+file rach2/sys/syscall_proc.c
+expect PRCTLMUSL FAIL (an exec of /proc/self/exe ran the file put at the program's old path)
+old
+    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
+    if (rc == 0) {
+        rc = exec_link_name(s->path);
+    }
+new
+    {
+        struct vpath vp;
+
+        if (synth_classify(s->path, &vp) == VNODE_PROC_EXE && current_proc->mm->exe) {
+            k_memcpy(s->path, current_proc->mm->exe, k_strlen(current_proc->mm->exe) + 1);
+        }
+    }
+    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);
+    if (rc == 0) {
+        rc = exec_link_name(s->path);
+    }
+end
+
+fault symlink-name-taken-late
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)
+old
+    rc = make_dir_end(&parent, leaf, end, newname);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, newname);
+    }
+new
+    rc = make_dir_end(&parent, leaf, end, newname);
+end
+
+fault link-name-taken-late
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)
+old
+    rc = make_dir_end(&parent, leaf, newend, newname);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, newname);
+    }
+new
+    rc = make_dir_end(&parent, leaf, newend, newname);
+end
+
+fault mknod-name-taken-late
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)
+old
+    rc = make_dir_end(&parent, leaf, end, path);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, path);
+    }
+    if (rc != 0) {
+        vfs_ref_release(&parent);
+        return rc;
+    }
+new
+    rc = make_dir_end(&parent, leaf, end, path);
+    if (rc != 0) {
+        vfs_ref_release(&parent);
+        return rc;
+    }
+end
+
+fault mkdir-synth-erofs-first
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)
+old
+    rc = new_name_taken(parent, leaf, path);
+    if (rc != 0) {
+        return rc;
+    }
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return -EROFS; /* nothing is created under /dev or /proc */
+    }
+new
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return -EROFS; /* nothing is created under /dev or /proc */
+    }
+    rc = new_name_taken(parent, leaf, path);
+    if (rc != 0) {
+        return rc;
+    }
+end
+
+fault bind-name-taken-late
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)
+old
+        rc = make_dir_end(&parent, leaf, end, path);
+        if (rc == 0) {
+            rc = new_name_taken(&parent, leaf, path);
+        }
+new
+        rc = make_dir_end(&parent, leaf, end, path);
+end
+
+fault new-name-taken-synth-absent
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV)
+old
+        rc = synth_name_exists(path);
+        return rc == -ENOENT ? 0 : rc;
+new
+        rc = synth_name_exists(path);
+        return rc == -ENOENT || rc == -EEXIST ? 0 : rc;
+end
+
+fault new-name-taken-lookup-ignored
+probe direntmusl
+file rach2/sys/syscall_fs.c
+expect DIRENTMUSL FAIL (symlink or link onto a name that exists was not EEXIST)
+old
+    rc = name_present(parent->mnt, parent->node, leaf);
+    return rc == 1 ? -EEXIST : rc;
+new
+    rc = name_present(parent->mnt, parent->node, leaf);
+    return rc == 1 ? 0 : rc;
 end
 
 # An address space's two counts and the program's file it keeps.
@@ -3243,27 +3488,32 @@ new
                 if (vfs_synth_vpath(cur.mnt, found)->kind == VNODE_PROC_EXE && locked < 0) {
 end
 
-fault exe-exec-old-path
-probe prctlmusl
-file rach2/sys/syscall_proc.c
-expect PRCTLMUSL FAIL (an exec of /proc/self/exe ran the file put at the program's old path)
+fault exit-keeps-address-space-mem
+probe ptracemusl
+file rach2/sys/proc/exit.c
+expect PTRACEMUSL FAIL (a /proc/PID/mem read reached a child that had ended
 old
-    rc = exec_open(&s->prog, s->path, &s->id, s->mm);
-    if (rc == 0) {
-        rc = exec_link_name(s->path);
-    }
+    proc_thread_gone(self);
+    mm_drop(self);
+    switch_page_directory(_kernel_dir);
+    proc_files_put(self);
 new
-    {
-        struct vpath vp;
+    proc_thread_gone(self);
+    proc_files_put(self);
+end
 
-        if (synth_classify(s->path, &vp) == VNODE_PROC_EXE && current_proc->mm->exe) {
-            k_memcpy(s->path, current_proc->mm->exe, k_strlen(current_proc->mm->exe) + 1);
-        }
-    }
-    rc = exec_open(&s->prog, s->path, &s->id, s->mm);
-    if (rc == 0) {
-        rc = exec_link_name(s->path);
-    }
+fault exit-keeps-address-space-exe
+probe prctlmusl
+file rach2/sys/proc/exit.c
+expect PRCTLMUSL FAIL (an ended child's program kept its file system busy until the reap)
+old
+    proc_thread_gone(self);
+    mm_drop(self);
+    switch_page_directory(_kernel_dir);
+    proc_files_put(self);
+new
+    proc_thread_gone(self);
+    proc_files_put(self);
 end
 
 # Locks keyed by the file, and a directory identifier KRFFS cannot hold.
@@ -3398,18 +3648,32 @@ new
     }
 end
 
-fault root-rmdir-always-busy
+fault root-cwd-kept-after-leaving
 probe fdstale
-file rach2/sys/syscall_fs.c
+file rach2/sys/fs/vfs.c
 expect FDSTALE FAIL: rmdir once nothing refers to the directory
 old
-    if (fd_ofd_holders(mnt, dir, NULL) > 0) {
-        return 1;
-    }
+    p->fs->cwd_mnt = mnt;
+    p->fs->cwd_node = mnt ? node : 0;
+    hold_release(was, was_node);
+}
 new
-    if (fd_ofd_holders(mnt, dir, NULL) >= 0) {
-        return 1;
+    if (mnt) {
+        p->fs->cwd_mnt = mnt;
+        p->fs->cwd_node = node;
+        hold_release(was, was_node);
     }
+}
+end
+
+fault root-rmdir-caller-cwd-skipped
+probe fdstale
+file rach2/sys/syscall_fs.c
+expect FDSTALE FAIL: rmdir refused under the caller's own working directory
+old
+        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
+new
+        if (pr != current_proc && pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {
 end
 
 fault posix-owner-is-the-process
@@ -3643,13 +3907,13 @@ probe epollmusl
 file rach2/sys/network/socket/socket.c
 expect EPOLLMUSL FAIL (data that came to a TCP connection watched for output alone was reported
 old
-    tcb->recv_tail += copy_len;
-
-    wq_wake(&sock->waiters, WQ_DATA);
+    if (copy_len > 0) {
+        wq_wake(&sock->waiters, WQ_DATA);
+    }
 new
-    tcb->recv_tail += copy_len;
-
-    wq_wake_all(&sock->waiters);
+    if (copy_len > 0) {
+        wq_wake_all(&sock->waiters);
+    }
 end
 
 fault epoll-nest-above-uncounted
@@ -3701,9 +3965,9 @@ probe epollmusl
 file rach2/sys/io/epoll.c
 expect EPOLLMUSL FAIL (a sixth set added above five, the innermost first, was not ELOOP
 old
-            below = sets_below((struct epoll *)e->priv, ep, depth + 1) + 1;
+            int below = sets_below(it->set, ep, depth + 1) + 1;
 new
-            below = sets_below((struct epoll *)e->priv, ep, 1) > EP_MAX_NESTS ? EP_MAX_NESTS + 1 : 0;
+            int below = sets_below(it->set, ep, 1) > EP_MAX_NESTS ? EP_MAX_NESTS + 1 : 0;
 end
 
 fault epoll-nest-shorter-path
@@ -3745,6 +4009,56 @@ new
             if (pipe_available(p) == chunk) {
                 pipe_wake(p, &p->read_wq, WQ_DATA);
             }
+end
+
+fault epoll-nest-above-by-table
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a child's add under five sets, one number closed, was not ELOOP
+old
+    for (h = ep->holders; h && most <= EP_MAX_NESTS; h = h->hold_next) {
+        int above = sets_above(h->owner, depth + 1) + 1;
+new
+    for (h = ep->holders; h && most <= EP_MAX_NESTS; h = h->hold_next) {
+        int above = item_names(h, fd_get(current_proc->fds, h->fd))
+                        ? sets_above(h->owner, depth + 1) + 1
+                        : 0;
+end
+
+fault epoll-nest-below-by-table
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a child's add of five sets under a sixth, one number closed, was not ELOOP
+old
+        if (it->set) {
+            int below = sets_below(it->set, ep, depth + 1) + 1;
+new
+        if (it->set && item_names(it, fd_get(current_proc->fds, it->fd))) {
+            int below = sets_below(it->set, ep, depth + 1) + 1;
+end
+
+fault epoll-gone-by-table
+probe epollmusl
+file rach2/sys/io/epoll.c
+expect EPOLLMUSL FAIL (a child's close and wait took the parent's registration of a set
+old
+        *gone = !it->set && !fd_ofd_live(it->ofd, it->serial);
+new
+        *gone = 1;
+end
+
+fault tty-input-room-unnamed
+probe epollmusl
+file rach2/sys/tty/tty.c
+expect EPOLLMUSL FAIL (room a VINTR made in a pseudoterminal was not an edge of its master
+old
+    n_tty_receive(&t->ldisc, c, t->sink, t->sink_ctx, &signo);
+    if (n_tty_held(&t->ldisc) < held) {
+        wq_wake(t->space_wq, WQ_ROOM);
+    }
+new
+    n_tty_receive(&t->ldisc, c, t->sink, t->sink_ctx, &signo);
+    (void)held;
 end
 
 # Core files, the framebuffer from a second thread, children's statuses
