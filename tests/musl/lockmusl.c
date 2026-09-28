@@ -381,6 +381,27 @@ static int byte_free(void)
 }
 
 /**
+ * Whether a child's write lock of byte `at` of the file at `path`, through
+ * an open of its own, fails because another owner holds the byte: the child
+ * must exit normally, having seen EAGAIN or EACCES, so a child that could
+ * not open the file, or that died, is no proof that the byte is held.
+ */
+static int byte_held_at(const char *path, off_t at)
+{
+    int status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        int fd = open(path, O_RDWR);
+        int refused = fd >= 0 && lk(fd, F_SETLK, F_WRLCK, at, 1) == -1 &&
+                      (errno == EAGAIN || errno == EACCES);
+
+        _exit(refused ? 0 : 1);
+    }
+    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/**
  * A thread waits in F_SETLKW for a byte a child holds, and the main thread,
  * once it sees the thread asleep, closes the descriptor it waits through.
  * When the child lets go, the wait gains the lock, lets it go for the close,
@@ -552,7 +573,7 @@ static int shared_table(int fd)
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the process that shares the table");
     }
-    if (byte_free_at(LOCK_PATH, 74)) {
+    if (!byte_held_at(LOCK_PATH, 74)) {
         return fail("the exit of a process sharing the table dropped the table's locks");
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 0);
@@ -567,11 +588,16 @@ static int shared_table(int fd)
  * Two files whose names hash alike are two files: `bC` and `cb` in one
  * directory have one inode number on the KRFFS root, and a child's write
  * lock on byte 0 of one must leave byte 0 of the other free.
+ *
+ * The child tells the parent it has tried its lock before it judges the
+ * attempt, and the parent lets it go and reaps it before it judges its own
+ * lock, so a failed row leaves no child behind holding byte 0 of `bC` while
+ * the probe goes on past the row.
  */
 static int same_hash(void)
 {
     int to_child[2], to_parent[2];
-    int one, two, status;
+    int one, two, status, refused, err, reaped;
     pid_t pid;
 
     one = open(KEY_DIR "/bC", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -581,21 +607,20 @@ static int same_hash(void)
     }
     pid = fork();
     if (pid == 0) {
-        if (lk(one, F_SETLK, F_WRLCK, 0, 1) != 0) {
-            _exit(1);
-        }
+        int rc = lk(one, F_SETLK, F_WRLCK, 0, 1);
+
         post(to_parent[1]);
         await(to_child[0]);
-        _exit(0);
+        _exit(rc == 0 ? 0 : 1);
     }
-    await(to_parent[0]);
-    if (lk(two, F_SETLK, F_WRLCK, 0, 1) != 0) {
-        return fail("a lock on one file refused a lock on another whose name hashes alike");
+    if (pid > 0) {
+        await(to_parent[0]);
     }
+    refused = lk(two, F_SETLK, F_WRLCK, 0, 1) != 0;
+    err = errno;
     post(to_child[1]);
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the child that locked the file whose name hashes alike");
-    }
+    reaped =
+        pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     close(one);
     close(two);
     close(to_child[0]);
@@ -604,6 +629,13 @@ static int same_hash(void)
     close(to_parent[1]);
     unlink(KEY_DIR "/bC");
     unlink(KEY_DIR "/cb");
+    if (refused) {
+        errno = err;
+        return fail("a lock on one file refused a lock on another whose name hashes alike");
+    }
+    if (!reaped) {
+        return fail("the child that locked the file whose name hashes alike");
+    }
     return 0;
 }
 
@@ -611,17 +643,7 @@ static int same_hash(void)
  * open of its own, fails because another process holds the byte. */
 static int byte_held(const char *path)
 {
-    int status;
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        int fd = open(path, O_RDWR);
-        int refused =
-            fd >= 0 && lk(fd, F_SETLK, F_WRLCK, 0, 1) == -1 && (errno == EAGAIN || errno == EACCES);
-
-        _exit(refused ? 0 : 1);
-    }
-    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return byte_held_at(path, 0);
 }
 
 /**
