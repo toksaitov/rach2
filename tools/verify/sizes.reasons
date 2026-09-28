@@ -299,7 +299,6 @@ tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the
 tests/ext2probe.c:links_rows lines 138 a probe, one sequence of steps in the order the log records them
 
 tests/host/ahci_hosttest.c:main lines 176 a test's rows, each a case, read as one table
-tests/host/ahci_hosttest.c:model_w32 complexity 29 a test's rows, each a case, read as one table
 
 tests/host/ata_hosttest.c:main lines 155 a test's rows, each a case, read as one table
 
