@@ -197,12 +197,12 @@ static int rewinds(const char *dir)
     char second[256];
     struct dirent *de = NULL;
     DIR *d = opendir(dir);
-    long place = 0;
     int count = 0;
     int again = -1;
 
     if (d && readdir(d)) {
-        place = telldir(d);
+        long place = telldir(d);
+
         de = readdir(d);
         if (de) {
             snprintf(second, sizeof(second), "%s", de->d_name);

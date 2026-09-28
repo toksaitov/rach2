@@ -217,6 +217,7 @@ void kstack_overrun_test(void)
     thread = alloc_process();
     if (!thread || !base) {
         k_panic("kstack: overrun: no record or stack for the thread");
+        return;
     }
     thread->kernel_stack = base + KERNEL_STACK_SIZE;
     thread->cr3 = 0;
