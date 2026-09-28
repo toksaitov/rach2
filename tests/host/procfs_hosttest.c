@@ -207,7 +207,9 @@ void switch_page_directory(page_dir_t *dir)
  * process 13 are all 'a': their first read sleeps for the page, and
  * meanwhile the process ends, putting its user's count of its address space,
  * and is reaped, which frees its record; each read then looks the page up in
- * `mm`, as `paging_access` looks up the region and the page after a sleep.
+ * `mm`, as `paging_access` looks up the region and the page after a sleep,
+ * and finds none once no user is left, since the last user's put frees the
+ * pages whatever holds keep the record.
  */
 int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int write)
 {
@@ -224,6 +226,10 @@ int paging_access(struct mm *mm, uint32_t addr, void *buf, uint32_t len, int wri
         reading = NULL;
         mm_put(own);
         reaps++;
+    }
+    if (mm->users == 0) {
+        check(0, "a read of the arguments reaches pages a user keeps");
+        return -EFAULT;
     }
     check(addr >= mm->arg_start && addr + len <= mm->arg_end,
           "a read of the arguments stays in them");

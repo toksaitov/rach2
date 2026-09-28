@@ -73,7 +73,7 @@ faults()
     case $1 in
         devfs) echo ptmx ;;
         procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
-            record-after-sleep oom-range oom-floor oom-floor-kept oom-open-emfile ;;
+            record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile ;;
     esac
 }
 
@@ -119,6 +119,9 @@ else:
         'unheld-space': [("    mm_get(mm);\n    while (start < end) {", "    while (start < end) {"),
                          ("        start += n;\n    }\n    procfs_mm_put(mm);\n}",
                           "        start += n;\n    }\n}")],
+        'hold-not-user': [("    mm_get(mm);\n    while (start < end) {", "    mm_hold(mm);\n    while (start < end) {"),
+                          ("        start += n;\n    }\n    procfs_mm_put(mm);\n}",
+                           "        start += n;\n    }\n    mm_unhold(mm);\n}")],
         'record-after-sleep': [("        if (paging_access(mm, start, chunk, n, 0) != 0) {\n"
                                 "            break;\n        }\n        for (i = 0; i < n; i++) {",
                                 "        if (paging_access(p->mm, start, chunk, n, 0) != 0) {\n"
@@ -149,6 +152,7 @@ PY
             exe-present) message="fail: the link reads a renamed program's present path" ;;
             exe-deleted) message="fail: a program whose name is gone reads as its exec's path, deleted" ;;
             unheld-space | record-after-sleep) message='heap-use-after-free' ;;
+            hold-not-user) message='a read of the arguments reaches pages a user keeps' ;;
             oom-range) message='a value past -1000 to 1000 is EINVAL and changes nothing' ;;
             oom-floor) message='and may not lower it below the floor' ;;
             oom-floor-kept) message='a privileged write sets the floor' ;;
