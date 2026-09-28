@@ -28,7 +28,11 @@
  * and the other ends: the probe traces the second and holds it at the entry of
  * its call until the first waits for it. A robust mutex a thread other than the
  * first holds when it calls execve is released, and its next locker gets
- * EOWNERDEAD. A thread that calls exit ends them all.
+ * EOWNERDEAD. A thread that calls exit ends them all. A thread other than
+ * the first opens the framebuffer, sets its palette, writes a pixel, reads
+ * the console as the display's owner reads it, raw scancodes that do not
+ * wait, and closes it, which gives the display back for another process to
+ * open: the display belongs to the process, whichever thread opened it.
  *
  * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
  * otherwise.
@@ -43,6 +47,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
 #include <sys/stat.h>
@@ -54,6 +59,9 @@
 
 #define THREADS 4
 #define ROUNDS  10000
+
+/* The framebuffer's requests, as the kernel numbers them. */
+#define FB_SETPALETTE 0x4603
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ready = PTHREAD_COND_INITIALIZER;
@@ -698,13 +706,100 @@ static int lost_status_row(void)
     return 0;
 }
 
+/* The errno of the step `use_framebuffer` failed at. */
+static volatile int fb_errno;
+
+/**
+ * The thread of `framebuffer_row`, which is not the first: open the
+ * framebuffer, set its palette, write a pixel, read the console with
+ * O_NONBLOCK, which for the display's owner reads raw scancodes and answers
+ * 0 when there are none, where the line discipline would answer EAGAIN, and
+ * close it. 0, or the number of the step that failed, with its errno in
+ * `fb_errno`.
+ */
+static void *use_framebuffer(void *arg)
+{
+    static unsigned char palette[768];
+    unsigned char keys[16];
+    long step = 0;
+    int fd, flags;
+
+    (void)arg;
+    fd = open("/fb", O_RDWR);
+    if (fd < 0) {
+        fb_errno = errno;
+        step = 1;
+        return (void *)step;
+    }
+    flags = fcntl(0, F_GETFL);
+    if (ioctl(fd, FB_SETPALETTE, palette) != 0) {
+        step = 2;
+    } else if (write(fd, "\017", 1) != 1) {
+        step = 3;
+    } else if (flags < 0 || fcntl(0, F_SETFL, flags | O_NONBLOCK) != 0 ||
+               read(0, keys, sizeof(keys)) < 0) {
+        step = 4;
+    }
+    if (step != 0) {
+        fb_errno = errno;
+    }
+    if (flags >= 0) {
+        fcntl(0, F_SETFL, flags);
+    }
+    if (close(fd) != 0 && step == 0) {
+        fb_errno = errno;
+        step = 5;
+    }
+    return (void *)step;
+}
+
+/**
+ * The framebuffer, opened, used and closed by a thread that is not the
+ * first: the display is the process's, so the thread's palette and pixel
+ * are taken, its read of the console is the owner's, and its close gives the
+ * display back, which a child process then opens.
+ */
+static int framebuffer_row(void)
+{
+    static const char *const steps[] = {"a thread's open of the framebuffer",
+                                        "a thread's palette on the framebuffer it opened",
+                                        "a thread's pixel on the framebuffer it opened",
+                                        "a thread that owns the framebuffer reads raw scancodes",
+                                        "a thread's close of the framebuffer"};
+    pthread_t t;
+    void *result;
+    pid_t child;
+    int status;
+
+    if (pthread_create(&t, NULL, use_framebuffer, NULL) != 0 || pthread_join(t, &result) != 0) {
+        return fail("a thread for the framebuffer");
+    }
+    if ((long)result != 0) {
+        errno = fb_errno;
+        return fail(steps[(long)result - 1]);
+    }
+    child = fork();
+    if (child == 0) {
+        int fd = open("/fb", O_RDWR);
+
+        _exit(fd >= 0 && close(fd) == 0 ? 0 : 1);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("the display a thread's close gave back");
+    }
+    return 0;
+}
+
 /** The rows that follow the first ones: what the threads share, a signal a
- * handler's mask blocks, and a wait whose status page goes; 0 when all pass.
- * They are one call so that `main` stays within the complexity
- * tools/verify/sizes.reasons allows it. */
+ * handler's mask blocks, a wait whose status page goes, and the framebuffer
+ * a thread that is not the first uses; 0 when all pass. They are one call so
+ * that `main` stays within the complexity tools/verify/sizes.reasons allows
+ * it. */
 static int later_rows(void)
 {
-    return sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0;
+    return sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0 ||
+           framebuffer_row() != 0;
 }
 
 static void *exec_self(void *arg)

@@ -510,8 +510,43 @@ run_one() {
         echo "run: $1: PASS in $(($(now) - start))s"
     else
         echo "run: $1: FAIL in $(($(now) - start))s" >&2
+        keep_logs "$1"
     fi
     return "$rc"
+}
+
+# A failing suite's serial logs, kept where no later run writes over them:
+# the files under build/images whose names end in `.log`, of the globs the
+# suite owns, that this run wrote, and the console of every machine it
+# booted, which the shim recorded and which goes with this run's scratch
+# directory. They are copied to a directory of their own under
+# build/tests/failed, named for the suite, the time and this run's pid; the
+# next run writes over the logs under build/images, never over the copies.
+keep_logs() { # keep_logs NAME
+    kept="build/tests/failed/$1.$(date '+%Y%m%d-%H%M%S').$$"
+    image_patterns "$1" > "$WORK/$1.kept.patterns"
+    newer=""
+    [ -f "$WORK/images.stamp" ] && newer="$WORK/images.stamp"
+    ( cd "$REPO/build/images" 2>/dev/null &&
+      find . -type f -name '*.log' ${newer:+-newer "$newer"} | sed 's|^\./||' | sort ) > "$WORK/$1.kept.logs"
+    while IFS= read -r f; do
+        case "$1" in
+            *-e1000) ;;
+            *) case "$f" in *-e1000.*|*-e1000-*|*-e1000/*) continue ;; esac ;;
+        esac
+        while IFS= read -r g; do
+            # shellcheck disable=SC2254 # the glob is the pattern
+            case "$f" in
+                $g) mkdir -p "$REPO/$kept/$(dirname "$f")" &&
+                        cp "$REPO/build/images/$f" "$REPO/$kept/$f"
+                    break ;;
+            esac
+        done < "$WORK/$1.kept.patterns"
+    done < "$WORK/$1.kept.logs"
+    if [ -s "$WORK/$1.machines.console" ]; then
+        mkdir -p "$REPO/$kept" && cp "$WORK/$1.machines.console" "$REPO/$kept/console.log"
+    fi
+    [ ! -d "$REPO/$kept" ] || echo "run: $1: logs kept in $kept" >&2
 }
 
 # The given suites, at most $WORKERS at a time, each one's output held while

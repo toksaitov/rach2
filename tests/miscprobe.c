@@ -135,7 +135,7 @@ void _start(void)
     if (pid == 0) {
         sys_exit(getppid() == me ? 0 : 1);
     }
-    check(pid > 0 && waitpid(pid, &st, 0) == pid && ((st >> 8) & 0xff) == 0,
+    check(pid > 0 && waitpid(pid, &st, 0) == pid && (st & 0x7f) == 0 && ((st >> 8) & 0xff) == 0,
           "child getppid() == parent pid");
 
     /* umask: set returns the previous mask; the value is remembered. */

@@ -508,6 +508,47 @@ keeps both IDs: its link names that path, and a name relative to it is
 found under it.
 .It Pa /proc/PID/comm
 The program name and a newline.
+.It Pa /proc/PID/oom_score_adj
+The adjustment Linux's out-of-memory killer adds to the process's score,
+from \-1000 to 1000, in decimal and a newline, read as it is at each read
+and not from a snapshot.
+It is 0 at first, a child of
+.Xr fork 2
+takes its parent's,
+.Xr execve 2
+keeps it, and the threads of a process share it, so
+.Pa /proc/PID/task/TID/oom_score_adj
+is the process's.
+This kernel has no out-of-memory killer and reads the value nowhere
+else; it is kept for the programs that set it, as Chromium sets it for
+its renderers.
+.Pp
+A write takes its first 12 bytes as one integer, as Linux reads them:
+spaces at either end are stripped, and the number is decimal, hexadecimal
+after
+.Ql 0x
+or octal after
+.Ql 0 .
+Text that is no integer, and a value out of the range, are
+.Er EINVAL ,
+and a number an int does not hold is
+.Er ERANGE .
+A caller that is not privileged may not write a value below the floor,
+the value the last privileged write left, 0 before any, and gets
+.Er EACCES ;
+a privileged caller may write any value, and its write sets the floor to
+what it wrote, as a caller with Linux's
+.Dv CAP_SYS_RESOURCE
+does.
+Opening the file for writing needs a privileged caller or its owner, the
+process's effective user ID while the process is dumpable and root
+otherwise, as
+.Xr stat 2
+reports it with mode 0644.
+On Linux a write sets the value of every other process that shares the
+address space too, a
+.Xr vfork 2
+child excepted; here it sets the one process's.
 .It Pa /proc/PID/maps
 A line for each region of the address space:
 .Dl start-end perms offset 00:00 0 path

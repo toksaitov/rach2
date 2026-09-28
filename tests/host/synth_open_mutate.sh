@@ -1,5 +1,14 @@
 #!/bin/sh
-# Compile synthetic-file regressions before, during and after each fault.
+# Compile synthetic-file regressions before, during and after each fault:
+# the ptmx dispatch before the flag checks, the text's terminator written
+# with no buffer, a read of a process's arguments that holds no reference to
+# the address space or reads the process's record after the first read,
+# which may sleep while the process is reaped, a /proc/PID/mem open that
+# takes a user's count in place of a hold, a read of it that takes one when
+# no user remains, the exe link without the program's present path or
+# without its deleted mark, and an oom_score_adj write that takes a value
+# out of range, lowers the value below the floor without privilege, or
+# leaves the floor where a privileged write found it.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -35,7 +44,7 @@ run_phase()
     phase=$2
     expected=$3
     message=$4
-    binary="$work/$test-$phase"
+    binary="$work/$phase"
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror \
         -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
@@ -63,7 +72,8 @@ faults()
 {
     case $1 in
         devfs) echo ptmx ;;
-        procfs) echo terminator mem-hold mem-live exe-present exe-deleted ;;
+        procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
+            record-after-sleep oom-range oom-floor oom-floor-kept ;;
     esac
 }
 
@@ -100,10 +110,29 @@ elif fault == 'exe-present':
     old = '    if (node && !deleted && cap > 0) {\n'
     assert source.count(old) == 1
     source = source.replace(old, '    if (node && !deleted && cap < 0) {\n')
-else:
+elif fault == 'exe-deleted':
     old = '    if (deleted && mark) {\n'
     assert source.count(old) == 1
     source = source.replace(old, '    if (deleted && mark && cap < 0) {\n')
+else:
+    changes = {
+        'unheld-space': [("    mm_get(mm);\n    while (start < end) {", "    while (start < end) {"),
+                         ("        start += n;\n    }\n    procfs_mm_put(mm);\n}",
+                          "        start += n;\n    }\n}")],
+        'record-after-sleep': [("        if (paging_access(mm, start, chunk, n, 0) != 0) {\n"
+                                "            break;\n        }\n        for (i = 0; i < n; i++) {",
+                                "        if (paging_access(p->mm, start, chunk, n, 0) != 0) {\n"
+                                "            break;\n        }\n        for (i = 0; i < n; i++) {")],
+        'oom-range': [("    if (v < OOM_SCORE_ADJ_MIN || v > OOM_SCORE_ADJ_MAX) {", "    if (0) {")],
+        'oom-floor': [("    if (v < p->tg->oom_score_adj_min && !proc_privileged(current_proc)) {",
+                       "    if (0) {")],
+        'oom-floor-kept': [("    p->tg->oom_score_adj = v;\n    if (proc_privileged(current_proc)) {\n"
+                            "        p->tg->oom_score_adj_min = v;\n    }\n",
+                            "    p->tg->oom_score_adj = v;\n")],
+    }
+    for old, new in changes[fault]:
+        assert source.count(old) == 1
+        source = source.replace(old, new)
 path.write_text(source)
 PY
         case $fault in
@@ -113,6 +142,10 @@ PY
             mem-live) message='fail: a read once the process has ended returns 0 and reaches no memory' ;;
             exe-present) message="fail: the link reads a renamed program's present path" ;;
             exe-deleted) message="fail: a program whose name is gone reads as its exec's path, deleted" ;;
+            unheld-space | record-after-sleep) message='heap-use-after-free' ;;
+            oom-range) message='a value past -1000 to 1000 is EINVAL and changes nothing' ;;
+            oom-floor) message='and may not lower it below the floor' ;;
+            oom-floor-kept) message='a privileged write sets the floor' ;;
         esac
         run_phase "$test" "$fault" 1 "$message"
         cleanup

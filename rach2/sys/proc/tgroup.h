@@ -40,6 +40,14 @@ struct tgroup {
      * record, whose end a tracer's wait reports, may outlive the leader's. */
     uint32_t cutime;
     uint32_t cstime;
+    /* The OOM score adjustment /proc/<pid>/oom_score_adj reads and writes,
+     * -1000 to 1000, and the least value a caller without privilege may
+     * write there, which a privileged caller's write sets to what it wrote,
+     * as Linux keeps `oom_score_adj_min`. Both start at 0, a fork passes them
+     * on and an exec keeps them. Nothing else reads them: this kernel has no
+     * OOM killer to weigh a process by them. */
+    int32_t oom_score_adj;
+    int32_t oom_score_adj_min;
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no

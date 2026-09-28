@@ -1008,6 +1008,8 @@ static const char *procfs_pid_file_name(int kind)
         return "comm";
     case SYNTH_PROC_MEM:
         return "mem";
+    case SYNTH_PROC_OOM_ADJ:
+        return "oom_score_adj";
     default:
         return "stat";
     }
@@ -2333,6 +2335,246 @@ static int procfs_gen_audio(struct procfs_text *t)
     return t->nomem ? -1 : t->len;
 }
 
+/* The range of an OOM score adjustment, Linux's OOM_SCORE_ADJ_MIN and
+ * OOM_SCORE_ADJ_MAX. */
+#define OOM_SCORE_ADJ_MIN (-1000)
+#define OOM_SCORE_ADJ_MAX 1000
+
+int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid)
+{
+    process_t *p = procfs_proc(pid);
+
+    if (!p) {
+        return -ENOENT;
+    }
+    *uid = 0;
+    *gid = 0;
+    if (p->mm && p->mm->dumpable) {
+        *uid = p->euid;
+        *gid = p->egid;
+    }
+    return 0;
+}
+
+int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid)
+{
+    const struct procfs_file *f;
+
+    if (!e || e->type != FD_TYPE_PROC || !e->priv) {
+        return -1;
+    }
+    f = (const struct procfs_file *)e->priv;
+    if (f->origin_file != SYNTH_PROC_OOM_ADJ || procfs_oom_owner(f->origin_pid, uid, gid) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/** Whether `c` is a space as Linux's `isspace` has it. */
+static int oom_space(char c)
+{
+    return c == ' ' || (c >= '\t' && c <= '\r');
+}
+
+/** The value of the digit `c` in any base up to 16, or 16 for none. */
+static uint32_t oom_digit(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return (uint32_t)(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return (uint32_t)(c - 'a') + 10u;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return (uint32_t)(c - 'A') + 10u;
+    }
+    return 16u;
+}
+
+/**
+ * Read the integer of the NUL-ended text `s` into `*v` as Linux's
+ * oom_score_adj reads a write, `kstrtoint` in base 0 of the text with its
+ * spaces stripped at both ends: a sign, then a decimal number, a hexadecimal
+ * one after `0x` or an octal one after `0`. 0, -EINVAL for text that is no
+ * such number, or -ERANGE for a number an int does not hold.
+ */
+static int oom_parse(const char *s, int32_t *v)
+{
+    const char *end = s + k_strlen(s);
+    uint32_t base = 10, mag = 0, limit = 0x7FFFFFFFu, d;
+    int neg = 0, digits = 0;
+
+    while (oom_space(*s)) {
+        s++;
+    }
+    while (end > s && oom_space(end[-1])) {
+        end--;
+    }
+    if (*s == '-' || *s == '+') {
+        neg = *s == '-';
+        s++;
+    }
+    if (neg) {
+        limit = 0x80000000u;
+    }
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && oom_digit(s[2]) < 16u) {
+        base = 16;
+        s += 2;
+    } else if (s[0] == '0') {
+        base = 8;
+    }
+    for (; s < end; s++, digits++) {
+        d = oom_digit(*s);
+        if (d >= base) {
+            return -EINVAL;
+        }
+        if (mag > (limit - d) / base) {
+            return -ERANGE;
+        }
+        mag = mag * base + d;
+    }
+    if (digits == 0) {
+        return -EINVAL;
+    }
+    *v = neg ? (int32_t)(0u - mag) : (int32_t)mag;
+    return 0;
+}
+
+/**
+ * Read /proc/<pid>/oom_score_adj: the adjustment of the process the
+ * descriptor was opened on, as it is at this read, and a newline, from the
+ * descriptor's offset, which moves past what is read. -ESRCH once the
+ * process has been reaped.
+ */
+static int32_t procfs_oom_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    process_t *p = f ? procfs_proc(f->origin_pid) : NULL;
+    uint32_t off = (uint32_t)e->ofd->offset;
+    struct procfs_text t;
+    uint32_t n = 0;
+
+    if (!p) {
+        return -ESRCH;
+    }
+    procfs_text_init(&t);
+    ap_int(&t, p->tg->oom_score_adj);
+    ap_ch(&t, '\n');
+    if (t.nomem) {
+        kfree(t.buf);
+        return -ENOMEM;
+    }
+    if (off < (uint32_t)t.len) {
+        n = (uint32_t)t.len - off < count ? (uint32_t)t.len - off : count;
+        if (copy_to_user(buf, t.buf + off, n) != 0) {
+            kfree(t.buf);
+            return -EFAULT;
+        }
+    }
+    kfree(t.buf);
+    e->ofd->offset = off + n;
+    return (int32_t)n;
+}
+
+/**
+ * Write /proc/<pid>/oom_score_adj: the first 12 bytes of `buf` are an
+ * integer from -1000 to 1000, which becomes the adjustment of the process's
+ * thread group, as `oom_parse` reads it. A value below the group's floor,
+ * `oom_score_adj_min`, needs a privileged caller, whose write sets the floor
+ * as well, as on Linux, where the privilege is CAP_SYS_RESOURCE. The bytes
+ * taken, at most 12, or -EFAULT, -EINVAL for text that is no integer or one
+ * out of the range, -ERANGE for one an int does not hold, -ESRCH once the
+ * process has been reaped, or -EACCES.
+ */
+static int32_t procfs_oom_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    char text[13];
+    uint32_t n = count < sizeof(text) - 1u ? count : (uint32_t)sizeof(text) - 1u;
+    process_t *p;
+    int32_t v;
+    int rc;
+
+    k_memset(text, 0, sizeof(text));
+    if (copy_from_user(text, buf, n) != 0) {
+        return -EFAULT;
+    }
+    rc = oom_parse(text, &v);
+    if (rc != 0) {
+        return rc;
+    }
+    if (v < OOM_SCORE_ADJ_MIN || v > OOM_SCORE_ADJ_MAX) {
+        return -EINVAL;
+    }
+    p = f ? procfs_proc(f->origin_pid) : NULL;
+    if (!p) {
+        return -ESRCH;
+    }
+    if (v < p->tg->oom_score_adj_min && !proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    p->tg->oom_score_adj = v;
+    if (proc_privileged(current_proc)) {
+        p->tg->oom_score_adj_min = v;
+    }
+    return (int32_t)n;
+}
+
+static const struct file_ops procfs_oom_ops = {procfs_oom_read, procfs_oom_write, procfs_poll,
+                                               procfs_ioctl, procfs_close};
+
+/**
+ * Open /proc/<pid>/oom_score_adj for reading, writing or both; O_CREAT and
+ * O_TRUNC are taken as they are for a file that exists, which is what a
+ * shell's redirection asks for. Writing needs a privileged caller or one
+ * whose effective user ID owns the file (`procfs_oom_owner`), whose mode is
+ * 0644. The descriptor keeps the id of the process, `pid` as
+ * `procfs_resolve_id` gave it for the path `vp`, and no text: each read and
+ * write reaches the adjustment as it is then.
+ */
+static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    uint32_t uid, gid;
+    int acc = flags & 3;
+    int fd;
+
+    if (acc == 3) {
+        return -EACCES;
+    }
+    if (procfs_oom_owner(pid, &uid, &gid) != 0) {
+        return -ENOENT;
+    }
+    if (acc != 0 && !proc_privileged(current_proc) && current_proc->euid != uid) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_pid = pid;
+    f->origin_file = SYNTH_PROC_OOM_ADJ;
+    f->origin_task = vp->tid != 0 ? procfs_resolve_pid(vp->pid) : 0;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return -EMFILE;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_oom_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 0 ? FD_FLAG_READ : acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /** Distinguish global snapshots from files whose process must still exist. */
 static int procfs_needs_pid(int kind)
 {
@@ -2353,7 +2595,9 @@ static int procfs_needs_pid(int kind)
  * files are read-only regular files, so the open-flag checks are ordered to
  * report the conventional errno: O_CREAT|O_EXCL on an existing file is
  * -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
- * intent is -EACCES.
+ * intent is -EACCES. After the first two, /proc/<pid>/oom_score_adj and
+ * /proc/<pid>/mem, which have no snapshot, go to opens of their own
+ * (`procfs_open_oom`, `procfs_open_mem`).
  *
  * The snapshot grows as text is appended. If allocation fails, discard
  * the partial text and return -ENOMEM.
@@ -2382,6 +2626,9 @@ int procfs_open(const struct vpath *vp, int flags)
     }
     if (flags & 0200000 /* O_DIRECTORY */) {
         return -ENOTDIR;
+    }
+    if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_OOM_ADJ) {
+        return procfs_open_oom(vp, pid, flags);
     }
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
         return procfs_open_mem(vp, pid, flags);

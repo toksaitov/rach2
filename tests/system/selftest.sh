@@ -102,6 +102,7 @@ remaker|-|full
 stray|-|full
 hungry1|-|full||3000
 hungry2|-|full||3000
+logging|-|full
 REG
 # A script the runner hashes, so a suite that edits one can be tried.
 mkdir -p "$WORK/tests/system"
@@ -139,6 +140,10 @@ run-stray:
 	@mkdir -p build/images; echo stray > build/images/orphan.img; echo "stray ran"
 run-failing:
 	@echo "failing ran"; exit 1
+run-logging:
+	@n=$$(($$(cat logging.count 2>/dev/null || echo 0) + 1)); echo $$n > logging.count; \
+	 mkdir -p build/images; echo "logging run $$n" > build/images/logging-test.log; \
+	 qemu-system-i386 --selftest-say $$n; exit 1
 run-leaky:
 	@qemu-system-i386 --selftest-hold & \
 	 i=0; while [ ! -s "$$RACH2_QEMU_LEDGER" ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done
@@ -237,6 +242,7 @@ case "$*" in
         i=0; while [ "$i" -lt 6 ]; do echo console-progress; sleep 1; i=$((i+1)); done
         exit 0 ;;
     *--selftest-stuck*) echo console-last-line; trap '' TERM; exec sleep 30 ;;
+    *--selftest-say*) for word in "$@"; do said=$word; done; echo "machine said $said"; exit 0 ;;
 esac
 exec sleep 30
 Q
@@ -291,6 +297,21 @@ check "the idle limit is never scaled" 1 "$(printf '%s\n' "$out" | grep -c 'run:
 out=$(run failing); rc=$?
 check "a failing suite exits nonzero" 1 "$rc"
 check "and says which" 1 "$(printf '%s\n' "$out" | grep -c 'run: failing: FAIL')"
+
+# A failing suite's serial logs are kept where the next run does not write
+# over them: each failing run copies the log it wrote under build/images and
+# its machine's console into a directory of its own.
+rm -rf "$WORK/build/tests/failed" "$WORK/logging.count"
+out=$(run logging); rc=$?
+check "a failing suite that writes a log fails" 1 "$rc"
+check "and says where its logs are kept" 1 \
+    "$(printf '%s\n' "$out" | grep -c '^run: logging: logs kept in build/tests/failed/logging\.')"
+out=$(run logging)
+check "each failing run keeps the log it wrote, which the next run does not write over" \
+    'logging run 1 logging run 2 ' \
+    "$(cat "$WORK"/build/tests/failed/logging.*/logging-test.log 2>/dev/null | sort | tr '\n' ' ')"
+check "and its machine's console" 'machine said 1 machine said 2 ' \
+    "$(cat "$WORK"/build/tests/failed/logging.*/console.log 2>/dev/null | sort | tr '\n' ' ')"
 
 out=$(run nosuch); rc=$?
 check "an unknown name is refused" 2 "$rc"

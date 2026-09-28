@@ -193,7 +193,7 @@ static int synth_pid_file(struct comp name)
     } files[] = {{"maps", SYNTH_PROC_MAPS},       {"status", SYNTH_PROC_STATUS},
                  {"statm", SYNTH_PROC_STATM},     {"auxv", SYNTH_PROC_AUXV},
                  {"environ", SYNTH_PROC_ENVIRON}, {"comm", SYNTH_PROC_COMM},
-                 {"mem", SYNTH_PROC_MEM}};
+                 {"mem", SYNTH_PROC_MEM},         {"oom_score_adj", SYNTH_PROC_OOM_ADJ}};
     uint32_t i;
 
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {

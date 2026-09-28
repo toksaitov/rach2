@@ -1976,18 +1976,21 @@ static int32_t fork_nproc(const process_t *parent)
 /**
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
- * setsid or setpgid, the nice value, the persona, the no_new_privs flag, the
- * limits, the credentials, and the program name, which `execve` sets and a
- * child that never execs would otherwise never have: a daemon that forks
- * itself into the background is such a child, and without it shows in `ps`
- * and in /proc/<pid>/stat with no name. The dumpable flag comes with the
- * address space (`fork_mm`).
+ * setsid or setpgid, the nice value, the OOM score adjustment and its floor,
+ * the persona, the no_new_privs flag, the limits, the credentials, and the
+ * program name, which `execve` sets and a child that never execs would
+ * otherwise never have: a daemon that forks itself into the background is
+ * such a child, and without it shows in `ps` and in /proc/<pid>/stat with no
+ * name. The dumpable flag comes with the address space (`fork_mm`). A thread
+ * shares its process's adjustment, since the group it joins keeps it.
  */
 static void fork_ids(process_t *child, const process_t *parent)
 {
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->nice = parent->nice;
+    child->tg->oom_score_adj = parent->tg->oom_score_adj;
+    child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
     child->persona = parent->persona;
     child->no_new_privs = parent->no_new_privs;
     child->nocaps = parent->nocaps;
