@@ -2566,15 +2566,22 @@ static struct vfs_mount *unmount_below_gone(const char *target)
  * target that named a directory by its end, `dir`, and reached anything
  * else, -EINVAL for a node that is no mount's root, or -EBUSY for a
  * permanent mount. The reference is released.
+ *
+ * A mount's root is a directory, so a target that reached one needs no
+ * attribute read, which the file system of a device that has gone refuses.
  */
 static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
 {
     struct vfs_stat st;
-    int rc = dir ? vfs_getattr(tref->mnt, tref->node, &st) : 0;
+    int rc = 0;
 
-    if (rc == 0 && dir && !VFS_IS_DIR(st.mode)) {
-        rc = -ENOTDIR;
-    } else if (rc == 0 && tref->node != tref->mnt->root) {
+    if (dir && tref->node != tref->mnt->root) {
+        rc = vfs_getattr(tref->mnt, tref->node, &st);
+        if (rc == 0 && !VFS_IS_DIR(st.mode)) {
+            rc = -ENOTDIR;
+        }
+    }
+    if (rc == 0 && tref->node != tref->mnt->root) {
         rc = -EINVAL; /* not a mount point */
     } else if (rc == 0 && mount_permanent(tref->mnt)) {
         rc = -EBUSY;

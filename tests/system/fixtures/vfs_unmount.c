@@ -73,6 +73,8 @@ static const char *root_path; /* the path of the caller's root, when it has one 
 static int root_holds, ref_releases;
 static uint32_t node_mode; /* the mode the node a walk finds has */
 static int getattrs;
+static int file_node;    /* a node that is no mount's root */
+static void *walk_node; /* the node a walk finds, or NULL for the mount's root */
 
 static unsigned block_flags(struct block_device *d)
 {
@@ -116,7 +118,7 @@ static int resolve_path(int a, const char *path, int b, struct vfs_ref *ref, int
     (void)unmount;
     resolve_calls++;
     ref->mnt = &records[3];
-    ref->node = records[3].root;
+    ref->node = walk_node ? walk_node : records[3].root;
     return lookup_error;
 }
 static void vfs_ref_release(struct vfs_ref *r)
@@ -124,12 +126,15 @@ static void vfs_ref_release(struct vfs_ref *r)
     (void)r;
     ref_releases++;
 }
-/** The node a walk found is a directory unless a row says otherwise. */
+/** The node a walk found is a directory unless a row says otherwise; the
+ * file system of a device that has gone refuses the read with EIO. */
 static int vfs_getattr(struct vfs_mount *m, void *node, struct vfs_stat *st)
 {
-    (void)m;
     (void)node;
     getattrs++;
+    if (m->dev->flags & BLOCK_GONE) {
+        return -EIO;
+    }
     st->mode = node_mode;
     return 0;
 }
@@ -246,6 +251,7 @@ static void setup(void)
     root_holds = ref_releases = 0;
     node_mode = 0040755;
     getattrs = 0;
+    walk_node = NULL;
 }
 
 static void check(int condition, const char *name)
@@ -315,16 +321,18 @@ int main(void)
           "a target outside the caller's root matches nothing");
     setup();
     lookup_error = 0;
+    disks[3].flags = 0;
+    walk_node = &file_node;
     node_mode = 0100644;
-    check(vfs_do_umount("/mnt/a", 1) == -ENOTDIR && records[3].state == VFS_ACTIVE &&
+    check(vfs_do_umount("/mnt/a/f", 1) == -ENOTDIR && records[3].state == VFS_ACTIVE &&
               resolve_calls == 1 && getattrs == 1 && ref_releases == 1,
           "a target named as a directory that reaches a file is ENOTDIR from the one walk");
     setup();
     lookup_error = 0;
     records[3].refs = 0;
     check(vfs_do_umount("/mnt/a", 1) == 0 && !records[3].state && resolve_calls == 1 &&
-              getattrs == 1,
-          "a target named as a directory that reaches a mount point unmounts it");
+              getattrs == 0,
+          "a target named as a directory that reaches a removed device's mount point unmounts it");
     setup();
     check(vfs_do_umount("/mnt/a/b", 1) == 0 && !records[4].state && !getattrs,
           "a target named as a directory below a removed device unmounts by its recorded name");

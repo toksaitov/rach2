@@ -42,8 +42,8 @@ if [ "$#" -ne 0 ]; then
     [ "$status" -eq 1 ]
     grep -q "failed: a target named from the caller's root is found below it" "$work/unrooted.log"
     echo 'vfs-unmount: result: a target compared without the caller root detected'
-    [ "$(grep -c 'if (rc == 0 && dir && !VFS_IS_DIR(st.mode)) {' "$work/saved.c")" -eq 1 ]
-    sed 's/if (rc == 0 \&\& dir \&\& !VFS_IS_DIR(st.mode)) {/if (rc == 0 \&\& dir \&\& 0) {/' \
+    [ "$(grep -c 'if (rc == 0 && !VFS_IS_DIR(st.mode)) {' "$work/saved.c")" -eq 1 ]
+    sed 's/if (rc == 0 \&\& !VFS_IS_DIR(st.mode)) {/if (rc == 0 \&\& 0) {/' \
         "$work/saved.c" > "$work/vfs.c"
     status=0
     run_phase unchecked || status=$?
@@ -51,6 +51,15 @@ if [ "$#" -ne 0 ]; then
     grep -q 'failed: a target named as a directory that reaches a file is ENOTDIR from the one walk' \
         "$work/unchecked.log"
     echo 'vfs-unmount: result: a directory target not checked in the walk detected'
+    [ "$(grep -c 'if (dir && tref->node != tref->mnt->root) {' "$work/saved.c")" -eq 1 ]
+    sed 's/if (dir \&\& tref->node != tref->mnt->root) {/if (dir) {/' "$work/saved.c" \
+        > "$work/vfs.c"
+    status=0
+    run_phase rootread || status=$?
+    [ "$status" -eq 1 ]
+    grep -q "failed: a target named as a directory that reaches a removed device's mount point unmounts it" \
+        "$work/rootread.log"
+    echo "vfs-unmount: result: a mount point's attributes read for a directory target detected"
     cp "$work/saved.c" "$work/vfs.c"
     run_phase restored
     cat "$work/restored.log"
