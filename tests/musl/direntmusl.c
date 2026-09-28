@@ -39,8 +39,9 @@
  * /dev/shm and /proc, even to read, and with O_DIRECTORY EINVAL before the path
  * is read, unless O_PATH is given too, which drops O_CREAT. A symbolic link to
  * a directory named with a trailing slash is followed by the calls that look it
- * up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to
- * unlink and rename, in /dev/shm and on an ext2 root.
+ * up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW notwithstanding, lchown and utimensat
+ * changing the directory and not the link, and is ENOTDIR to unlink and rename,
+ * in /dev/shm and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -662,14 +663,16 @@ static int socket_ends(const struct ends *p)
  * A symbolic link to a directory named with a trailing slash names the
  * directory, and the calls that look the path up follow it, as Linux's do,
  * even where they would not follow a final link otherwise: open with
- * O_NOFOLLOW, lchown, utimensat with AT_SYMLINK_NOFOLLOW, and readlink,
- * which is EINVAL for the directory. unlink and rename judge the name
- * itself, a link and no directory, and are ENOTDIR, leaving it. 0, or 1 once
- * the failure is reported.
+ * O_NOFOLLOW; lchown and utimensat with AT_SYMLINK_NOFOLLOW, which must set
+ * the group and the times of the directory s and leave the link's; and
+ * readlink, which is EINVAL for the directory. unlink and rename judge the
+ * name itself, a link and no directory, and are ENOTDIR, leaving it. 0, or 1
+ * once the failure is reported.
  */
 static int link_ends(const struct ends *p)
 {
-    struct stat st;
+    static const struct timespec when[2] = {{1000000, 0}, {2000000, 0}};
+    struct stat st, lst;
     char buf[16];
     int fd = open(p->lds, O_RDONLY | O_NOFOLLOW);
     int ok = fd >= 0;
@@ -677,9 +680,11 @@ static int link_ends(const struct ends *p)
     if (fd >= 0) {
         close(fd);
     }
-    ok = ok && lchown(p->lds, (uid_t)-1, (gid_t)-1) == 0 &&
-         utimensat(AT_FDCWD, p->lds, NULL, AT_SYMLINK_NOFOLLOW) == 0 &&
-         refused(readlink(p->lds, buf, sizeof(buf)), EINVAL);
+    ok = ok && lchown(p->lds, (uid_t)-1, 1) == 0 &&
+         utimensat(AT_FDCWD, p->lds, when, AT_SYMLINK_NOFOLLOW) == 0 &&
+         refused(readlink(p->lds, buf, sizeof(buf)), EINVAL) && stat(p->s, &st) == 0 &&
+         lstat(p->ld, &lst) == 0 && st.st_gid == 1 && st.st_mtime == 2000000 && lst.st_gid != 1 &&
+         lst.st_mtime != 2000000;
     if (!ok) {
         return fail("a symbolic link to a directory named with a trailing slash was not followed");
     }
