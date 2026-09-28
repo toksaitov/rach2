@@ -1595,7 +1595,8 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
  * Open a path that classified as synthetic (/dev or /proc).
  *
  * Devices bind their file_ops; directories get a synthetic dir fd; /proc files
- * snapshot their text. A synthetic mount is never created or fallen through to
+ * snapshot their text, but for oom_score_adj and mem, which reach the process
+ * at each read. A synthetic mount is never created or fallen through to
  * KRFFS.
  */
 static int32_t synth_open(const struct vpath *vp, int flags)
@@ -2970,7 +2971,8 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
  *
  * SEEK_SET and SEEK_CUR move the offset; SEEK_END is -EINVAL, as Linux's
  * /proc files and tmpfs directories answer, since neither has a size to
- * seek from. A /proc file's offset is a byte of its snapshot or, for
+ * seek from. A /proc file's offset is a byte of its text, the snapshot its
+ * open took or the text a read of oom_score_adj makes, or, for
  * /proc/PID/mem, an address, so it takes any place through 0xFFFFFFFF, the
  * last address. A directory's offset is the cursor of its listing, which
  * getdents64 reports after each entry as the entry's d_off: a directory of

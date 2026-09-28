@@ -99,10 +99,17 @@ removed since.
 .Pp
 A
 .Pa /proc
-file seeks the same way, to any place through 4294967295: its offset is
-a byte of the text its open took, or for
+file seeks the same way, to any place through 4294967295.
+Its offset is a byte of its text, or for
 .Pa /proc/ Ns Ar pid Ns Pa /mem
 an address.
+The text of a
+.Pa /proc
+file is the snapshot its open took, except for
+.Pa /proc/ Ns Ar pid Ns Pa /oom_score_adj ,
+whose text each read makes from the value as it is then;
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+has no text, and each read or write reaches the memory as it is then.
 Both seeks read and set the offset under the description's lock.
 .Ss System call interface
 Musl's

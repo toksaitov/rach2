@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt READ 2
 .Os
 .Sh NAME
@@ -86,7 +86,11 @@ A signal can interrupt a wait with
 .Er EINTR .
 Files under
 .Pa /proc
-read from the snapshot made when opened.
+read from the snapshot made when opened, except
+.Pa /proc/ Ns Ar pid Ns Pa /oom_score_adj ,
+whose text each read makes, and
+.Pa /proc/ Ns Ar pid Ns Pa /mem ,
+which reads the memory as it is then.
 Other devices use their own read operation.
 Mouse reads return whole packets without waiting and return zero when
 the buffer cannot hold one packet.

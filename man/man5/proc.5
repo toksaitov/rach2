@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -7,8 +7,12 @@
 .Sh SYNOPSIS
 .Pa /proc
 .Sh DESCRIPTION
-Each file is generated into a buffer when opened.
-Every read through that descriptor uses the same snapshot.
+Each file is generated into a buffer when opened, and every read through
+that descriptor uses the same snapshot, except
+.Pa /proc/PID/oom_score_adj
+and
+.Pa /proc/PID/mem ,
+which each read reaches as they are then.
 A report whose text cannot be allocated is refused with
 .Er ENOMEM ,
 and
