@@ -766,6 +766,44 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     return 1;
 }
 
+/** No row stats a name of /dev; `synth_stat`, which the check of a new
+ * name reaches, links against it. */
+int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
+{
+    (void)name;
+    (void)mode;
+    (void)rdev;
+    (void)ino;
+    check(0, "unexpected stat of a /dev name");
+    return -ENOENT;
+}
+
+/* No row stats a file of /proc; `synth_stat` links against these. */
+#define NO_PROC_INO(name)                            \
+    uint32_t name(void)                              \
+    {                                                \
+        check(0, "unexpected stat of a /proc file"); \
+        return 0;                                    \
+    }
+NO_PROC_INO(procfs_ino_audio)
+NO_PROC_INO(procfs_ino_cmdline)
+NO_PROC_INO(procfs_ino_console)
+NO_PROC_INO(procfs_ino_dir)
+NO_PROC_INO(procfs_ino_disk)
+NO_PROC_INO(procfs_ino_filesystems)
+NO_PROC_INO(procfs_ino_interrupts)
+NO_PROC_INO(procfs_ino_loop)
+NO_PROC_INO(procfs_ino_meminfo)
+NO_PROC_INO(procfs_ino_mounts)
+NO_PROC_INO(procfs_ino_netarp)
+NO_PROC_INO(procfs_ino_netdev)
+NO_PROC_INO(procfs_ino_netdir)
+NO_PROC_INO(procfs_ino_netroute)
+NO_PROC_INO(procfs_ino_nettcp)
+NO_PROC_INO(procfs_ino_statsys)
+NO_PROC_INO(procfs_ino_uptime)
+NO_PROC_INO(procfs_ino_usb)
+
 /** The log is the model's one device, and its read moves the offset. */
 int devfs_fd_moves_offset(struct fd_entry *e)
 {
