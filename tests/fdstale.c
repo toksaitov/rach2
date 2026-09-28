@@ -101,9 +101,9 @@
  * the directory, on the boot root as on ext2. A descriptor of the boot root
  * finds its directory by the node's place, so a directory freed under one
  * would leave it on whatever node the allocator put there next. The case
- * holds the directory each way in turn, the working directory in a child,
- * and requires the descriptor to go on listing it and the rmdir to succeed
- * once nothing refers to it.
+ * holds the directory each way in turn, as the working directory of a child
+ * and then of the caller, and requires the descriptor to go on listing it
+ * and the rmdir to succeed once nothing refers to it.
  *
  * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
@@ -963,10 +963,11 @@ static void cwd_child(void)
 
 /* A directory in use is refused with EBUSY, which POSIX permits, on the boot
  * root as on ext2: while a descriptor has it, one opened for reading and then
- * one opened with O_PATH, and while it is a child's working directory. The
- * descriptor opened for reading still lists the directory and resolves a
- * relative path through it, and the rmdir succeeds once nothing refers to
- * the directory. */
+ * one opened with O_PATH, while it is a child's working directory, and while
+ * it is the caller's own. The descriptor opened for reading still lists the
+ * directory and resolves a relative path through it, and the rmdir succeeds
+ * once nothing refers to the directory, the caller having gone back to the
+ * root, which on the boot root leaves the working directory no node. */
 static void directory_case(void)
 {
     static char dbuf[256];
@@ -998,6 +999,11 @@ static void directory_case(void)
             -EBUSY);
     notify("the parent releases the working-directory child", down[1]);
     reap(pid, "the working-directory child");
+
+    want_eq("chdir into the directory", syscall1(SYS_CHDIR, (int)DDIR), 0);
+    want_eq("rmdir refused under the caller's own working directory",
+            syscall3(SYS_RMDIR, (int)DDIR, 0, 0), -EBUSY);
+    want_eq("chdir back to the root", syscall1(SYS_CHDIR, (int)"/"), 0);
     want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
 }
 
