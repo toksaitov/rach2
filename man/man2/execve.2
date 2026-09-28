@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt EXECVE 2
 .Os
 .Sh NAME
@@ -107,6 +107,9 @@ terminator, must fit 4096 bytes.
 The kernel checks search permission on ancestor directories and execute
 permission on the program.
 Even effective user ID 0 requires at least one execute bit on a regular file.
+A directory is refused with
+.Er EACCES ,
+as on Linux.
 Execution from the synthetic
 .Pa /dev
 and
@@ -114,6 +117,15 @@ and
 mounts, or from a mount with
 .Dv MS_NOEXEC ,
 is refused.
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+names a directory, which no program is: it returns
+.Er ENOTDIR
+when it reaches anything else, through a final symbolic link, and
+.Er EACCES
+for a directory, as on Linux.
 .Ss Interpreter scripts
 A file beginning with
 .Ql #!
@@ -137,7 +149,10 @@ a script is refused.
 A first line that fills the 128-byte read buffer without a newline is
 also refused.
 The interpreter is checked for execute permission and loaded as an ELF
-executable.
+executable, and its path is held to the rule for a path that names a
+directory by its end: an interpreter named with a trailing slash returns
+.Er ENOTDIR ,
+as on Linux.
 .Ss Credentials and descriptors
 For an ELF executable, set-user-ID changes the effective user ID to the
 file's owner.
@@ -290,7 +305,8 @@ limit as described above, a string exceeds 131072 bytes, or the strings a
 script adds do not fit.
 .It Bq Er EACCES
 Search or execute permission was denied, the program or interpreter is
-on a noexec mount, or its path resolves into a synthetic mount.
+a directory or on a noexec mount, or its path resolves into a synthetic
+mount.
 .It Bq Er EAGAIN
 The process is ending, or another thread's
 .Fn execve
@@ -305,8 +321,6 @@ The path, a vector, or a string cannot be read from user memory.
 The file system cannot supply a required attribute or read operation.
 .It Bq Er EIO
 Reading the program or file system metadata failed, or the device was removed.
-.It Bq Er EISDIR
-Reading the executable failed because the file system reported a directory.
 .It Bq Er ELIBBAD
 The interpreter a
 .Dv PT_INTERP
@@ -338,7 +352,12 @@ needed to resolve or open the program could not be allocated; the
 interpreter would cover the program; or the image's regions exceed
 .Dv RLIMIT_AS .
 .It Bq Er ENOTDIR
-A path component used as a directory is not a directory.
+A path component used as a directory is not a directory, or the path or a
+script's interpreter path ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+and reaches something else.
 .It Bq Er ESRCH
 There is no current process.
 .El

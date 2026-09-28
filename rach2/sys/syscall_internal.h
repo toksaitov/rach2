@@ -54,6 +54,8 @@ int canonicalize_abs(char *path);
 
 int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath);
 
+int canonicalize_named(char *path);
+
 int fd_node_check(fd_entry_t *entry);
 
 int cred_privileged(void);

@@ -881,38 +881,6 @@ int canonicalize_abs(char *path)
 }
 
 /**
- * Copy a user path into `pathbuf` as an absolute, canonical path.
- *
- * An absolute user path is taken as it is; a relative one is joined onto the
- * process's working directory, so the resolver, which walks from the root,
- * walks the right tree. `size` is at most `VFS_PATH_MAX`: the path the caller
- * gives may be that long with its terminator, and so may the joined one.
- * Returns the length, or a negative errno: -EFAULT for a pointer outside the
- * caller's memory, -ENOENT for the empty path, which names no file, and
- * -ENAMETOOLONG for either path longer than the buffer. The "fb"/"mouse"
- * device names resolve only when the joined path has no directory part, so a
- * program names them absolutely rather than relying on its working directory.
- */
-int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
-{
-    int len = strncpy_from_user(pathbuf, upath, size);
-
-    if (len < 0) {
-        return len;
-    }
-    if (len == 0) {
-        return -ENOENT;
-    }
-    if (pathbuf[0] != '/') {
-        len = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
-        if (len < 0) {
-            return len;
-        }
-    }
-    return canonicalize_abs(pathbuf);
-}
-
-/**
  * Re-validate a descriptor's cached KRFFS node before a file operation.
  *
  * A held node is never freed now, so this stops being an identity test and
@@ -1150,6 +1118,18 @@ static int path_put_dot(char *path, int len)
     return len;
 }
 
+/** Take off the absolute path `path` the last "." `path_put_dot` put back,
+ * when `end` says it named a directory by one, for a call that keeps the
+ * path as a name. */
+static void path_drop_dot(char *path, int end)
+{
+    uint32_t len = (uint32_t)k_strlen(path);
+
+    if (end == PATH_END_DOT && len >= 2) {
+        path[len > 2 ? len - 2 : 1] = '\0';
+    }
+}
+
 /**
  * Copy a user path into `pathbuf` as an absolute, canonical path, a
  * relative one joined to the directory `dirfd` is open on, or to the working
@@ -1158,12 +1138,15 @@ static int path_put_dot(char *path, int len)
  * the canonical path no longer shows, or 0; a last "." is then put back
  * (`path_put_dot`).
  *
- * The rules and the errors are `copy_path_cwd`'s, with the directory's:
- * -EBADF for a descriptor that is not open and -ENOTDIR for one that is not
- * a directory, both for a relative path only, since an absolute one does not
- * read `dirfd`. The joined path, like the caller's, must fit `size`, at most
- * `VFS_PATH_MAX`. The empty path is -ENOENT; a call that takes AT_EMPTY_PATH
- * looks for it before copying.
+ * The join is what lets the resolver, which walks from the root, walk the
+ * right tree. `size` is at most `VFS_PATH_MAX`: the path the caller gives may
+ * be that long with its terminator, and so may the joined one. Returns the
+ * length, or a negative errno: -EFAULT for a pointer outside the caller's
+ * memory, -ENOENT for the empty path, which names no file (a call that takes
+ * AT_EMPTY_PATH looks for it before copying), -ENAMETOOLONG for either path
+ * longer than the buffer, and for a relative path only, since an absolute
+ * one does not read `dirfd`, -EBADF for a descriptor that is not open and
+ * -ENOTDIR for one that is not a directory.
  */
 static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath, int *dir)
 {
@@ -1236,6 +1219,44 @@ static int path_from_user_dir(int dirfd, const char __user *upath, char **out, i
 static int path_from_user(int dirfd, const char __user *upath, char **out)
 {
     return path_from_user_dir(dirfd, upath, out, NULL);
+}
+
+static int32_t path_dir_check(const char *path, int end);
+
+/**
+ * The path of execve(2), copied into `pathbuf` of `size` bytes as
+ * `copy_path_at` copies it for `AT_FDCWD`, for the program it runs: a path
+ * that names a directory by its end, which no program is, must reach one
+ * (`path_dir_check`), so a file so named is -ENOTDIR and a directory is left
+ * for the open's -EACCES, as on Linux. Returns the length, or a negative
+ * errno.
+ */
+int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
+{
+    int end = 0;
+    int len = copy_path_at(pathbuf, size, AT_FDCWD, upath, &end);
+    int32_t rc = len < 0 ? len : path_dir_check(pathbuf, end);
+
+    return rc < 0 ? rc : len;
+}
+
+/**
+ * Make the absolute path `path`, which the kernel read from a file, canonical
+ * in place, and hold a path that named a directory by its end to the rule
+ * `copy_path_cwd` holds execve's to: the interpreter a script names. Returns
+ * the length, or a negative errno.
+ */
+int canonicalize_named(char *path)
+{
+    int end = path_names_dir(path, (int)k_strlen(path));
+    int len = canonicalize_abs(path);
+    int32_t rc;
+
+    if (end == PATH_END_DOT) {
+        len = path_put_dot(path, len);
+    }
+    rc = path_dir_check(path, end);
+    return rc < 0 ? rc : len;
 }
 
 /** Whether `leaf`, the last name a walk to its parent gave, is "." or "..",
@@ -2389,10 +2410,19 @@ int32_t sys_mount(isr_params_t *params)
  * umount2(2): EBX = target, ECX = flags. Effective uid 0 is required, and
  * the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
  * promises this kernel cannot keep and answer EINVAL.
+ *
+ * A target that names a directory by its end must reach one
+ * (`path_dir_check`), so a file named with a trailing slash is -ENOTDIR, as
+ * on Linux, where a file named without one is not a mount point, -EINVAL.
+ * A walk that meets a removed device answers -EIO, which `vfs_do_umount`
+ * recovers from by the recorded target, so that error is left to it, and the
+ * last "." put back comes off the target first, since a recorded target has
+ * none.
  */
 int32_t sys_umount2(isr_params_t *params)
 {
     char *tpath;
+    int end;
     int n;
 
     if (!current_proc) {
@@ -2407,11 +2437,15 @@ int32_t sys_umount2(isr_params_t *params)
     if (!params->ebx) {
         return -EFAULT;
     }
-    n = path_from_user(AT_FDCWD, (const char __user *)params->ebx, &tpath);
+    n = path_from_user_dir(AT_FDCWD, (const char __user *)params->ebx, &tpath, &end);
     if (n != 0) {
         return n;
     }
-    n = vfs_do_umount(tpath);
+    n = path_dir_check(tpath, end);
+    if (n == 0 || n == -EIO) {
+        path_drop_dot(tpath, end);
+        n = vfs_do_umount(tpath);
+    }
     path_buf_put(tpath);
     return n;
 }
@@ -4558,6 +4592,28 @@ static int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref
             }
             vfs_ref_release(ref);
         }
+    }
+    return rc;
+}
+
+/**
+ * Whether the absolute canonical path `path`, which named a directory by its
+ * end as `end` says and has its last "." put back, reaches one: 0 when `end`
+ * is 0 or it does, -ENOTDIR when it reaches anything else, through a final
+ * symbolic link, or the walk's error. For the calls that go on with the
+ * path in a walk of their own: execve, a script's interpreter, and umount2.
+ */
+static int32_t path_dir_check(const char *path, int end)
+{
+    struct vfs_ref ref;
+    int32_t rc;
+
+    if (!end) {
+        return 0;
+    }
+    rc = resolve_named(path, 0, end, &ref);
+    if (rc == 0) {
+        vfs_ref_release(&ref);
     }
     return rc;
 }
@@ -9548,10 +9604,12 @@ int32_t sys_dup3(isr_params_t *params)
 
 /**
  * The kernel path `path`, relative to the working directory unless it is
- * absolute, as a canonical absolute path in `buf` of VFS_PATH_MAX bytes.
- * Returns its length, or -ENOENT, -ENAMETOOLONG.
+ * absolute, as a canonical absolute path in `buf` of VFS_PATH_MAX bytes, with
+ * `*end` how it named a directory by its end and a last "." put back, as
+ * `copy_path_at` does for a user path. Returns its length, or -ENOENT,
+ * -ENAMETOOLONG.
  */
-static int kernel_path_cwd(char *buf, const char *path)
+static int kernel_path_cwd(char *buf, const char *path, int *end)
 {
     uint32_t len = (uint32_t)k_strlen(path);
     int r;
@@ -9562,6 +9620,7 @@ static int kernel_path_cwd(char *buf, const char *path)
     if (len >= VFS_PATH_MAX) {
         return -ENAMETOOLONG;
     }
+    *end = path_names_dir(path, (int)len);
     k_memcpy(buf, path, len + 1u);
     if (buf[0] != '/') {
         r = path_prepend(buf, VFS_PATH_MAX, len, proc_cwd(current_proc));
@@ -9569,25 +9628,53 @@ static int kernel_path_cwd(char *buf, const char *path)
             return r;
         }
     }
-    return canonicalize_abs(buf);
+    r = canonicalize_abs(buf);
+    return *end == PATH_END_DOT ? path_put_dot(buf, r) : r;
+}
+
+/**
+ * `make_dir_end`'s answer for a node other than a directory made at `path`,
+ * an absolute canonical path that named a directory by its end as `end`
+ * says, once the walk to its parent is made: for the socket file of a bind,
+ * which `open_create` would make whatever the path's end.
+ */
+static int32_t path_make_dir_end(const char *path, int end)
+{
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc = vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+
+    if (rc == 0) {
+        rc = make_dir_end(&parent, leaf, end);
+        vfs_ref_release(&parent);
+    }
+    return rc;
 }
 
 /**
  * Make the socket file an AF_UNIX bind names. The file is made as O_CREAT
  * with O_EXCL makes one, with the socket type bits; the hold its creation
  * gave is kept for the socket's life, as a working directory keeps its own,
- * so the mount counts it and refuses to go while the socket is bound.
+ * so the mount counts it and refuses to go while the socket is bound. A name
+ * that names a directory by its end makes nothing (`path_make_dir_end`), as
+ * on Linux: -ENOENT after a slash for a name nothing has, and -EADDRINUSE,
+ * which a name that exists answers, for one that does and for a last "." or
+ * "..".
  */
 int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino)
 {
     char *buf = path_buf_get();
     struct vfs_stat st;
+    int end;
     int rc;
 
     if (!buf) {
         return -ENOMEM;
     }
-    rc = kernel_path_cwd(buf, path);
+    rc = kernel_path_cwd(buf, path, &end);
+    if (rc >= 0 && end) {
+        rc = path_make_dir_end(buf, end);
+    }
     if (rc >= 0) {
         rc = open_create(buf, O_EXCL, S_IFSOCK | (mode & 07777u), ref);
         if (rc == 0) {
@@ -9600,12 +9687,10 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
             } else {
                 vfs_ref_release(ref);
             }
-        } else if (rc == 1 || rc == -EEXIST) {
-            rc = -EADDRINUSE;
         }
     }
     path_buf_put(buf);
-    return rc;
+    return (rc == 1 || rc == -EEXIST) ? -EADDRINUSE : rc;
 }
 
 void fs_socket_unbind(struct vfs_ref *ref)
@@ -9618,21 +9703,24 @@ void fs_socket_unbind(struct vfs_ref *ref)
 
 /**
  * Find the socket file a connect or a send names: its mount and inode
- * number, after the caller's write permission on it is checked.
+ * number, after the caller's write permission on it is checked. A name that
+ * names a directory by its end must reach one (`resolve_named`), so a socket
+ * file so named is -ENOTDIR, as on Linux.
  */
 int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino)
 {
     char *buf = path_buf_get();
     struct vfs_ref ref;
     struct vfs_stat st;
+    int end;
     int rc;
 
     if (!buf) {
         return -ENOMEM;
     }
-    rc = kernel_path_cwd(buf, path);
+    rc = kernel_path_cwd(buf, path, &end);
     if (rc >= 0) {
-        rc = vfs_resolve(0, buf, 0, &ref, 0, 0);
+        rc = resolve_named(buf, 0, end, &ref);
     }
     path_buf_put(buf);
     if (rc != 0) {

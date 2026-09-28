@@ -21,7 +21,11 @@
  * truncate, utimensat, readlink, statfs, link, unlink and rename, and a new
  * name so named is EISDIR to open with O_CREAT and ENOENT or EEXIST to link,
  * symlink, mknod and mkdir, which make nothing; rmdir is EINVAL for a last
- * "." and ENOTEMPTY for a last "..", and rename EBUSY for either.
+ * "." and ENOTEMPTY for a last "..", and rename EBUSY for either. execve of
+ * a file so named is ENOTDIR and of a directory EACCES, and so is a script
+ * whose interpreter is named with a trailing slash ENOTDIR; bind to a name
+ * so named makes nothing, connect to a socket so named is ENOTDIR, and so is
+ * umount2 of a file so named.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -37,9 +41,12 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mount.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 /* The directory the probe makes, and its entries. */
@@ -215,13 +222,15 @@ static int refused(long rc, int err)
 
 /* The paths the rows of `dir_end_calls` name in one directory: the regular
  * file f and the directory s, which the directory has, the empty directory
- * e, which the rows make, and the name n, which nothing has, each also with
- * a slash after it, "s", or a last "." or "..". */
+ * e, which the rows make, the name n, which nothing has, the socket file k
+ * and the script x, which the rows make and remove, each also with a slash
+ * after it, "s", or a last "." or "..". */
 struct ends {
     char f[300], fs[304], fdot[304];
     char s[300], ss[304], sdot[304], sdotdot[304];
     char e[300], edot[304], edotdot[304];
     char n[300], ns[304], ndot[304];
+    char k[300], ks[304], x[300];
 };
 
 /** Fill `p` with the paths of the rows in `dir`. */
@@ -240,6 +249,9 @@ static void ends_in(struct ends *p, const char *dir)
     snprintf(p->n, sizeof(p->n), "%s/n", dir);
     snprintf(p->ns, sizeof(p->ns), "%s/n/", dir);
     snprintf(p->ndot, sizeof(p->ndot), "%s/n/.", dir);
+    snprintf(p->k, sizeof(p->k), "%s/k", dir);
+    snprintf(p->ks, sizeof(p->ks), "%s/k/", dir);
+    snprintf(p->x, sizeof(p->x), "%s/x", dir);
 }
 
 /**
@@ -353,12 +365,115 @@ static int remove_ends(const struct ends *p)
     return 0;
 }
 
+/* A script whose interpreter is named with a trailing slash: the kernel
+ * refuses it, and a kernel that ran the interpreter would print the line. */
+static const char slash_script[] =
+    "#!/bin/sh/\n"
+    "echo 'DIRENTMUSL FAIL (a script whose interpreter is named with a trailing slash ran)'\n";
+
+/** bind(2) of the socket `fd` to the path `path`. */
+static int bind_path(int fd, const char *path)
+{
+    struct sockaddr_un a;
+
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
+    return bind(fd, (struct sockaddr *)&a, sizeof(a));
+}
+
+/** connect(2) of the socket `fd` to the path `path`. */
+static int connect_path(int fd, const char *path)
+{
+    struct sockaddr_un a;
+
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
+    return connect(fd, (struct sockaddr *)&a, sizeof(a));
+}
+
+/**
+ * execve given a path that names a directory by its end: the file so named
+ * is ENOTDIR and the directory EACCES, and a script whose interpreter is
+ * named with a trailing slash is ENOTDIR. 0, or 1 once the failure is
+ * reported.
+ */
+static int exec_ends(const struct ends *p)
+{
+    static char *const args[] = {"direntmusl", NULL};
+    int fd;
+    int ok;
+
+    if (!refused(execve(p->fs, args, args + 1), ENOTDIR) ||
+        !refused(execve(p->fdot, args, args + 1), ENOTDIR) ||
+        !refused(execve(p->ss, args, args + 1), EACCES) ||
+        !refused(execve(p->sdot, args, args + 1), EACCES)) {
+        return fail("execve of a path that names a directory by its end was not ENOTDIR or EACCES");
+    }
+    fd = open(p->x, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    ok = fd >= 0 &&
+         write(fd, slash_script, sizeof(slash_script) - 1) == (ssize_t)(sizeof(slash_script) - 1);
+    if (fd >= 0) {
+        close(fd);
+    }
+    ok = ok && refused(execve(p->x, args, args + 1), ENOTDIR);
+    unlink(p->x);
+    if (!ok) {
+        return fail("execve of a script whose interpreter is named with a trailing slash was not "
+                    "ENOTDIR");
+    }
+    return 0;
+}
+
+/**
+ * The AF_UNIX calls and umount2 given a path that names a directory by its
+ * end: bind is ENOENT after a name nothing has, EADDRINUSE after the file
+ * and for a last "." after the directory, and ENOTDIR for one after the
+ * file, making nothing; connect to a bound socket named with a trailing
+ * slash is ENOTDIR; and umount2 of the file so named is ENOTDIR. 0, or 1
+ * once the failure is reported.
+ */
+static int socket_ends(const struct ends *p)
+{
+    struct stat st;
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    int c = socket(AF_UNIX, SOCK_STREAM, 0);
+    int bound, connected;
+
+    bound = s >= 0 && refused(bind_path(s, p->ns), ENOENT) &&
+            refused(bind_path(s, p->fs), EADDRINUSE) &&
+            refused(bind_path(s, p->sdot), EADDRINUSE) && refused(bind_path(s, p->fdot), ENOTDIR) &&
+            lstat(p->n, &st) != 0;
+    connected = bound && bind_path(s, p->k) == 0 && listen(s, 1) == 0 && c >= 0 &&
+                refused(connect_path(c, p->ks), ENOTDIR);
+    if (s >= 0) {
+        close(s);
+    }
+    if (c >= 0) {
+        close(c);
+    }
+    unlink(p->k);
+    if (!bound) {
+        return fail("bind to a name that names a directory by its end was not ENOENT, EADDRINUSE "
+                    "or ENOTDIR");
+    }
+    if (!connected) {
+        return fail("connect to a socket named with a trailing slash was not ENOTDIR");
+    }
+    if (!refused(umount2(p->fs, 0), ENOTDIR)) {
+        return fail("umount2 of a file named with a trailing slash was not ENOTDIR");
+    }
+    return 0;
+}
+
 /**
  * The calls that take a path, other than the stat calls, given one that
  * names a directory by its end, in `dir`, which has the regular file f and
- * the directory s: `lookup_ends`, `make_ends` and `remove_ends`, with the
- * empty directory e made for them and taken away after, as is whatever a
- * failing row made at n. 0, or 1 once the failure is reported.
+ * the directory s: `lookup_ends`, `make_ends`, `remove_ends`, `exec_ends`
+ * and `socket_ends`, with the empty directory e made for them and taken away
+ * after, as is whatever a failing row made at n. 0, or 1 once the failure is
+ * reported.
  */
 static int dir_end_calls(const char *dir)
 {
@@ -375,6 +490,12 @@ static int dir_end_calls(const char *dir)
     }
     if (rc == 0) {
         rc = remove_ends(&p);
+    }
+    if (rc == 0) {
+        rc = exec_ends(&p);
+    }
+    if (rc == 0) {
+        rc = socket_ends(&p);
     }
     rmdir(p.e);
     unlink(p.n);
