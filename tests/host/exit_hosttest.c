@@ -6,6 +6,11 @@
  * The file callbacks wait on the real queue. The scheduler substitute releases
  * the lock only after observing the blocked waiter, then wakes it. No timer or
  * probability decides whether cleanup sleeps.
+ *
+ * The thread's address space must go at its end, once, after its futex words,
+ * which are in it, and before its files and the publication of its death, as
+ * Linux's exit_mm drops it before the zombie can be reaped, and the processor
+ * must go on in the kernel's directory.
  */
 #define WAIT_QUEUE_HOSTTEST
 #include "proc/wait_queue.c"
@@ -20,6 +25,10 @@ static struct tgroup child_group;
 static struct tgroup parent_group;
 process_t *current_proc;
 uint32_t proc_dead_threads;
+page_dir_t *_kernel_dir;
+static page_dir_t kernel_dir;
+static page_dir_t *loaded;
+static int dropped;
 static wait_queue_t lock_wait;
 static int lock_free;
 static int fd_wait;
@@ -114,8 +123,24 @@ void ptrace_tracer_gone(uint32_t tgid)
 
 void proc_thread_gone(process_t *p)
 {
-    CHECK(p == &child && !closed, "the thread's futexes go before its files");
+    CHECK(p == &child && !closed && !dropped,
+          "the thread's futexes go before its address space and its files");
     thread_released++;
+}
+
+void mm_drop(struct process *p)
+{
+    CHECK(p == &child && thread_released == 1 && !closed,
+          "the address space goes after the futex words and before the files");
+    CHECK(child.state != PROC_ZOMBIE, "the address space goes before death is published");
+    dropped++;
+}
+
+void switch_page_directory(page_dir_t *dir)
+{
+    CHECK(dir == _kernel_dir && dropped == 1,
+          "the processor goes on in the kernel's directory once the address space is gone");
+    loaded = dir;
 }
 
 void proc_vfork_release(process_t *p)
@@ -157,7 +182,9 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
     cwd_wait = directory;
     with_parent = has_parent;
     closed = cwd_released = root_released = adopted = notified = switches = vfork_released = 0;
-    thread_released = 0;
+    thread_released = dropped = 0;
+    loaded = 0;
+    _kernel_dir = &kernel_dir;
     child.pid = 42;
     child.tgid = 42;
     child.tg = &child_group;
@@ -179,6 +206,8 @@ static void run_case(int files, int directory, int has_parent, int32_t status)
 
     CHECK(switches == files + directory, "every requested wait was reached");
     CHECK(thread_released == 1, "the thread's futexes are released once");
+    CHECK(dropped == 1 && loaded == _kernel_dir,
+          "the address space goes once, at the thread's end");
     CHECK(child_group.live == 0, "the process has no thread left");
     CHECK(child.state == PROC_ZOMBIE, "cleanup ends as a zombie");
     CHECK(child.exit_code == status, "the encoded wait status is preserved");

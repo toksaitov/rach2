@@ -336,6 +336,11 @@ which must run the copy and not the script; the image that runs removes
 the copy's name, and an open of
 .Pa /proc/self/exe
 must still reach the copy.
+A copy of it on a tmpfs that has ended, and that
+.Xr waitid 2
+with
+.Dv WNOWAIT
+reports without reaping it, must leave the tmpfs free to unmount.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er E2BIG

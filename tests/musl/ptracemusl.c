@@ -5,9 +5,10 @@
  * parent. The parent reads and changes a word of the child's memory with
  * PEEKDATA and POKEDATA, and through /proc/PID/mem, where a read and a write
  * that run from a page into a hole do the bytes before the hole, and whose
- * descriptor keeps none of the memory of a child that has ended: the free
- * memory /proc/meminfo reports is back once a child that touched 16 MiB is
- * reaped, while a descriptor of its memory is still open; reads the
+ * descriptor keeps none of the memory of a child that has ended: once a child
+ * that touched 16 MiB has ended, and before it is reaped, a read through a
+ * descriptor of its memory returns 0 and the free memory /proc/meminfo
+ * reports is back; reads the
  * registers with GETREGS and the floating-point state with GETFPXREGS; steps
  * one instruction with SINGLESTEP, which moves the instruction pointer; plants
  * a breakpoint with POKETEXT on a read-only text page, continues to it, finds
@@ -478,18 +479,22 @@ static long mem_free_kib(void)
 }
 
 /*
- * A child touches 16 MiB and waits; the parent opens its /proc/PID/mem, lets
- * it end and reaps it. With the descriptor still open, the free memory
- * /proc/meminfo reports must be back within 8 MiB of what it was before the
- * fork: the descriptor keeps the record of the address space, and the pages
- * go with the child.
+ * A child touches 16 MiB and waits; the parent opens its /proc/PID/mem, reads
+ * a word of it, and lets it end, which waitid with WNOWAIT reports and leaves
+ * the child unreaped. Before the reap, with the descriptor still open, a read
+ * through it must return 0 and the free memory /proc/meminfo reports must be
+ * back within 8 MiB of what it was before the fork: the child's address space
+ * went at its end, as Linux's exit_mm drops it, and the descriptor keeps only
+ * its record.
  */
 static int mem_after_end(void)
 {
     int ready[2], go[2];
     long before, after;
     char path[32];
-    int status, fd = -1;
+    siginfo_t si;
+    int fd = -1, word = 0;
+    ssize_t got;
     char c;
     pid_t pid;
 
@@ -519,16 +524,23 @@ static int mem_after_end(void)
     if (read(ready[0], &c, 1) == 1) {
         fd = open(path, O_RDONLY);
     }
-    if (fd < 0 || write(go[1], "g", 1) != 1) {
+    if (fd < 0 || pread(fd, &word, sizeof(word), (off_t)(uintptr_t)&target) != sizeof(word) ||
+        write(go[1], "g", 1) != 1) {
         return abandon(pid, "a child whose memory was opened");
     }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the child that touched 16 MiB");
+    if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT) != 0 || si.si_code != CLD_EXITED ||
+        si.si_status != 0) {
+        return abandon(pid, "the child that touched 16 MiB");
     }
+    got = pread(fd, &word, sizeof(word), (off_t)(uintptr_t)&target);
     after = mem_free_kib();
     close(fd);
     close(ready[0]);
     close(go[1]);
+    waitpid(pid, NULL, 0);
+    if (got != 0) {
+        return fail("a /proc/PID/mem read reached a child that had ended");
+    }
     if (before < 0 || after < 0) {
         return fail("/proc/meminfo");
     }

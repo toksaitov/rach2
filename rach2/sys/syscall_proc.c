@@ -229,10 +229,11 @@ void kstack_overrun_test(void)
 
 /**
  * Give back the record `p` of a thread or a process that has ended: its
- * address space reference, its kernel stack and the record. The release of
- * the address space may sleep, on a file's close or its writeback, and
- * another reaper may run then, so the caller has first taken `p` off the
- * zombies by marking it `PROC_UNUSED`, which no reaper and no wait takes.
+ * kernel stack and the record, and an address space it still has, which one
+ * that ended through `proc_exit_cleanup` gave up then. A release of an
+ * address space may sleep, on a file's close or its writeback, and another
+ * reaper may run then, so the caller has first taken `p` off the zombies by
+ * marking it `PROC_UNUSED`, which no reaper and no wait takes.
  */
 static void proc_release(process_t *p)
 {
@@ -479,7 +480,8 @@ void proc_group_exit(int32_t code)
  * A thread that is not its process's last only releases what it holds and
  * leaves. The last one releases the process's session, reparents the
  * children to init, publishes the zombie and wakes its parent, then
- * reschedules. A normal child leaves its mappings, descriptor-table storage,
+ * reschedules. Every thread gives up its address space at its end
+ * (`proc_exit_cleanup`); a normal child leaves its descriptor-table storage,
  * record and stack to do_wait. A real init's exit is fatal
  * (panic_init_died); an init exiting under the debug shell returns to it.
  *
@@ -558,11 +560,6 @@ static int32_t exit_current(int32_t code)
          exiting_pid, status);
     console_puts("Init process exited. Returning to kernel debug shell.");
 
-    /* Clean up the init process resources; `mm_drop` switches off the
-     * address space first, since free_page_directory refuses the directory
-     * in CR3. */
-    mm_drop(current_proc);
-    switch_page_directory(_kernel_dir);
     /* Freed and replaced with interrupts off: a handler between the two
      * would count its entry in the record just freed. */
     __asm__ __volatile__("cli");
