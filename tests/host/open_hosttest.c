@@ -9,6 +9,7 @@
  * key a file's locks are found by on each kind of mount, a mkdir of a name
  * another process makes while the call waits for the parent's lock, the
  * locks of an orphan's last description dropped before the orphan is freed,
+ * the release of a program's file that lost its name, under the root's lock,
  * and an rmdir on the KRFFS root of a directory a description or a working
  * directory has, or an open publishes a descriptor on while the call waits.
  *
@@ -27,7 +28,8 @@
 #include "network/socket/socket.h"
 static int fs_node_is_held(const krffs_node_t *node);
 static struct open_file *fs_exe_open(const struct vfs_ref *ref);
-static void fs_exe_close(struct open_file *ofd);
+static struct vfs_mount *fs_exe_lock(const struct open_file *ofd);
+static void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked);
 static void fs_node_moved(const krffs_node_t *from, krffs_node_t *to);
 static void fd_release_backing(fd_entry_t *e);
 static void fd_holds_release(void);
@@ -171,6 +173,8 @@ static process_t *lock_closer;
 static krffs_node_t root_dir, victim, source;
 static krffs_file_system_t root_fs;
 static int removals, keeps;
+/* The frees of that file made with the root's namespace lock held. */
+static int removals_locked;
 /* The node of the root an address space keeps as its program's file. */
 static const krffs_node_t *program;
 /* The directory of the mkdir and rmdir rows, named once a mkdir has made
@@ -602,6 +606,9 @@ void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
     check(ofd_gone == orphan_ofd,
           "a description's locks go before the orphan they are on is freed");
     removals++;
+    if (ns_depth > 0) {
+        removals_locked++;
+    }
 }
 
 void vga_mode13h_exit(void)
@@ -1027,6 +1034,38 @@ static void program_kept(void)
     check(do_rename("/src", "/kept", 0, 0) == 0 && keeps == 1 && removals == 0,
           "a rename over the file a program runs from keeps it");
     program = NULL;
+    root_row_end();
+}
+
+/**
+ * The release, by the last address space that kept it, of a program's file of
+ * the KRFFS root that lost its name and that nothing else holds: it takes the
+ * root's lock (`fs_exe_lock`), frees the node with the lock held, as an
+ * unlink does, since the reclaim may sleep in the page cache and no
+ * allocation may take the extent meanwhile, and gives the lock back.
+ */
+static void program_reclaim(void)
+{
+    struct open_file *ofd;
+    struct vfs_mount *locked;
+
+    root_row_begin();
+    victim.name[0] = '\0';
+    ofd = fd_ofd_new();
+    check(ofd != NULL, "a description of the program's file");
+    if (ofd) {
+        ofd->vmnt = &mount;
+        ofd->vnode = &victim;
+        orphan_ofd = ofd;
+        ofd_gone = 0;
+        removals_locked = 0;
+        locked = fs_exe_lock(ofd);
+        check(locked == &mount && ns_depth == 1, "the release of a program's file takes the lock");
+        fs_exe_close(ofd, locked);
+        check(removals == 1 && removals_locked == 1, "and frees the nameless file under it");
+        check(ns_depth == 0, "and gives the lock back");
+        orphan_ofd = 0;
+    }
     root_row_end();
 }
 
@@ -1692,6 +1731,7 @@ int main(void)
     descriptor_errors();
     unlink_installing();
     program_kept();
+    program_reclaim();
     rename_over_installing();
     mkdir_race();
     orphan_locks();

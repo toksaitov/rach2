@@ -382,24 +382,50 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
 }
 
 /**
- * Let go of `ofd`, the description an address space kept its program's file
- * by, once that address space is off the list `mm_exe_holds` reads: a file of
- * the KRFFS root that lost its name is freed when nothing else holds it, as
- * the release of a file's last descriptor frees one (`fd_release_objects`),
- * and the description's last reference closes it. May sleep.
+ * Take the lock the release of `ofd`, the description of an address space's
+ * program's file, needs, before the address space leaves the list
+ * `mm_exe_holds` reads: for a file of the KRFFS root the root's namespace
+ * lock, which the unlink and the rename of a file hold while they count its
+ * holders and take its name, and which the allocation of an extent holds.
+ * Under it no count of the file's holders runs between the address space's
+ * leaving and the release, and no allocation takes the extent of a file the
+ * release frees while its reclaim sleeps in the page cache. The mount
+ * locked, or NULL for a file of another type, whose release needs no lock.
+ * May sleep, and so is taken with no namespace lock held.
  */
-void fs_exe_close(struct open_file *ofd)
+struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
+{
+    if (!mnt_is_root(ofd->vmnt)) {
+        return NULL;
+    }
+    vfs_ns_lock(ofd->vmnt);
+    return ofd->vmnt;
+}
+
+/**
+ * Let go of `ofd`, the description an address space kept its program's file
+ * by, once that address space is off the list `mm_exe_holds` reads, with
+ * `locked` held as `fs_exe_lock` returned it: a file of the KRFFS root that
+ * lost its name is freed when nothing else holds it, as the release of a
+ * file's last descriptor frees one (`fd_release_objects`), at the node the
+ * file is at now; then the lock goes, and the description's last reference
+ * closes it. May sleep.
+ */
+void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 {
     fd_entry_t e;
 
-    k_memset(&e, 0, sizeof(e));
-    e.type = FD_TYPE_FILE;
-    e.flags = FD_FLAG_PATH;
-    e.ofd = ofd;
-    if (mnt_is_root(ofd->vmnt) && ofd->vnode != krffs_fs->node) {
-        e.node = ofd->vnode;
+    if (locked) {
+        k_memset(&e, 0, sizeof(e));
+        e.type = FD_TYPE_FILE;
+        e.flags = FD_FLAG_PATH;
+        e.ofd = ofd;
+        if (ofd->vnode != krffs_fs->node) {
+            e.node = ofd->vnode;
+        }
+        fd_release_objects(&e);
+        vfs_ns_unlock(locked);
     }
-    fd_release_objects(&e);
     fd_ofd_unref(ofd);
 }
 

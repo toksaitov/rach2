@@ -69,8 +69,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked \
     stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked \
     utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
-    open-emfile dup-enomem dup2-enomem program-holder root-lock-key volume-lock-key \
-    fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
+    open-emfile dup-enomem dup2-enomem program-holder program-reclaim-unlocked root-lock-key \
+    volume-lock-key fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
     rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
@@ -151,6 +151,8 @@ changes = {
     "program-holder": ("    if (unix_inflight_holds(node) || filemap_holds(node) || "
                        "mm_exe_holds(vfs_root_mount(), node)) {",
                        "    if (unix_inflight_holds(node) || filemap_holds(node)) {"),
+    "program-reclaim-unlocked": ("        fd_release_objects(&e);\n        vfs_ns_unlock(locked);\n",
+                                 "        vfs_ns_unlock(locked);\n        fd_release_objects(&e);\n"),
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
@@ -233,6 +235,7 @@ PY
         dup-enomem) message='a dup the heap has no room for is ENOMEM' ;;
         dup2-enomem) message='a dup2 past the end of a table the heap cannot grow is ENOMEM' ;;
         program-holder) message='an unlink keeps the file a program runs from' ;;
+        program-reclaim-unlocked) message='and frees the nameless file under it' ;;
         root-lock-key) message='a file of the KRFFS root is keyed by its node' ;;
         volume-lock-key) message='a file of a KRFFS volume is keyed by its node' ;;
         fat-lock-key) message='a file of a FAT32 volume is keyed by its node, which a rename keeps' ;;
