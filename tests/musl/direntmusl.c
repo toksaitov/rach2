@@ -29,13 +29,14 @@
  * interpreter is named with a trailing slash ENOTDIR, and an ELF image whose
  * PT_INTERP names the file or the directory so ENOTDIR or EACCES; bind to a
  * name so named makes nothing, connect to a socket so named is ENOTDIR, and
- * so is umount2 of a file so named. rmdir and rename of the root are EBUSY,
- * link, symlink and mknod with the root as the new name EEXIST and bind to
- * it EADDRINUSE. open with O_CREAT is EISDIR for an existing directory, one
- * of the probe's, one of /dev/shm and /proc, even to read, and with
- * O_DIRECTORY EINVAL before the path is read, unless O_PATH is given too,
- * which drops O_CREAT. A symbolic link to a directory named with a trailing
- * slash is followed by the calls that look it up, O_NOFOLLOW and
+ * so is umount2 of a file so named, and open of /fb and /mouse so named or
+ * with O_DIRECTORY, which opens neither device. rmdir and rename of the root
+ * are EBUSY, link, symlink and mknod with the root as the new name EEXIST
+ * and bind to it EADDRINUSE. open with O_CREAT is EISDIR for an existing
+ * directory, one of the probe's, one of /dev/shm and /proc, even to read,
+ * and with O_DIRECTORY EINVAL before the path is read, unless O_PATH is
+ * given too, which drops O_CREAT. A symbolic link to a directory named with
+ * a trailing slash is followed by the calls that look it up, O_NOFOLLOW and
  * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename,
  * in /dev/shm and on an ext2 root.
  *
@@ -231,6 +232,22 @@ static int rewinds(const char *dir)
 static int refused(long rc, int err)
 {
     return rc == -1 && errno == err;
+}
+
+/**
+ * Whether an open of `path` with `flags` returned -1 with `err`. A
+ * descriptor an open returns in error is closed at once, so it keeps no
+ * directory the probe removes busy and no device open.
+ */
+static int open_refused(const char *path, int flags, int err)
+{
+    int fd = open(path, flags, 0644);
+
+    if (fd >= 0) {
+        close(fd);
+        return 0;
+    }
+    return errno == err;
 }
 
 /* The paths the rows of `dir_end_calls` name in one directory: the regular
@@ -768,11 +785,29 @@ static int root_rows(void)
 }
 
 /**
+ * The names /fb and /mouse, which open takes for the framebuffer and the
+ * mouse before any walk, given as directories: a trailing slash, a last "."
+ * or "..", and O_DIRECTORY are ENOTDIR, and neither device is opened. 0, or
+ * 1 once the failure is reported.
+ */
+static int device_ends(void)
+{
+    if (!open_refused("/fb/", O_RDONLY, ENOTDIR) || !open_refused("/fb/.", O_RDONLY, ENOTDIR) ||
+        !open_refused("/mouse/", O_RDONLY, ENOTDIR) ||
+        !open_refused("/mouse/..", O_RDONLY, ENOTDIR) ||
+        !open_refused("/fb", O_RDONLY | O_DIRECTORY, ENOTDIR)) {
+        return fail("an open of /fb or /mouse as a directory was not ENOTDIR");
+    }
+    return 0;
+}
+
+/**
  * The rows that read the probe's own directory beyond the types of its
  * listing: the path ends of `dir_ends`, rewinddir and seekdir of it and of
- * /proc/self (`rewinds`), the root as a name (`root_rows`), and the other
- * calls given a path that names a directory by its end, there and in
- * /dev/shm (`dir_end_calls`). 0, or 1 once the failure is reported.
+ * /proc/self (`rewinds`), the root as a name (`root_rows`), /fb and /mouse
+ * as directories (`device_ends`), and the other calls given a path that
+ * names a directory by its end, there and in /dev/shm (`dir_end_calls`). 0,
+ * or 1 once the failure is reported.
  */
 static int own_dir_rows(void)
 {
@@ -789,7 +824,7 @@ static int own_dir_rows(void)
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
-    if (root_rows() != 0) {
+    if (root_rows() != 0 || device_ends() != 0) {
         return 1;
     }
     return dir_end_calls(base, 0) != 0 || shm_dir_end_calls() != 0;

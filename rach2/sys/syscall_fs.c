@@ -1812,6 +1812,50 @@ static int32_t open_mouse(void)
 }
 
 /**
+ * Whether `name` is the legacy device name `lit`: 1 for the name alone, 2
+ * for the name followed by the last "." or ".." a path that names a
+ * directory by its end keeps (`path_put_dot`), 0 for any other name.
+ */
+static int device_name(const char *name, const char *lit)
+{
+    while (*lit != '\0' && *name == *lit) {
+        name++;
+        lit++;
+    }
+    if (*lit != '\0') {
+        return 0;
+    }
+    if (*name == '\0') {
+        return 1;
+    }
+    return (name_is(name, "/.") || name_is(name, "/..")) ? 2 : 0;
+}
+
+/**
+ * The open of a legacy device name, "fb" or "mouse", which `do_open` makes
+ * before any walk: 1 with the descriptor or the errno in `*result` when
+ * `name` is one of the two, 0 when it is not. Neither device is a
+ * directory, so the name with a last "." or "..", and O_DIRECTORY, which a
+ * trailing slash sets (`open_named`), are -ENOTDIR, before the display or
+ * the mouse is touched. The other flags are ignored.
+ */
+static int open_device_name(const char *name, int flags, int *result)
+{
+    int fb = device_name(name, "fb");
+    int mouse = device_name(name, "mouse");
+
+    if (fb == 0 && mouse == 0) {
+        return 0;
+    }
+    if (fb == 2 || mouse == 2 || (flags & O_DIRECTORY)) {
+        *result = -ENOTDIR;
+    } else {
+        *result = fb ? open_framebuffer() : open_mouse();
+    }
+    return 1;
+}
+
+/**
  * The target of a symbolic link at `name` whose own target is missing, for
  * O_CREAT to create: as on Linux, the target is what is created. Returns 1
  * with the target's path in `through`, the link's directory in front of a
@@ -2342,9 +2386,10 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
  *
  * `name` is a kernel-space path with any leading '/' already stripped; `flags`
  * are the Linux open flags and `mode` the permission bits to stamp on a file
- * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
- * path on any mounted type and installs a descriptor. Returns the fd or
- * -errno. Opening "/" opens the root directory for getdents64. A symbolic
+ * created by O_CREAT (ignored otherwise). Opens a legacy device ("fb" or
+ * "mouse", `open_device_name`) or resolves a path on any mounted type and
+ * installs a descriptor. Returns the fd or -errno. Opening "/" opens the
+ * root directory for getdents64. A symbolic
  * link at the end is followed, and one whose target is missing is what
  * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
  * O_CREAT|O_EXCL, which answers EEXIST for the link. On a type that sets
@@ -2372,11 +2417,8 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     if (flags & O_PATH) {
         return open_path(name, flags);
     }
-    if (name_is(name, "fb")) {
-        return open_framebuffer();
-    }
-    if (name_is(name, "mouse")) {
-        return open_mouse();
+    if (open_device_name(name, flags, &rc)) {
+        return rc;
     }
     fd = fd_alloc(current_proc->fds);
     if (fd < 0) {
