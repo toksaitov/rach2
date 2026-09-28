@@ -73,7 +73,7 @@ static const char *root_path; /* the path of the caller's root, when it has one 
 static int root_holds, ref_releases;
 static uint32_t node_mode; /* the mode the node a walk finds has */
 static int getattrs;
-static int file_node;    /* a node that is no mount's root */
+static int file_node;   /* a node that is no mount's root */
 static void *walk_node; /* the node a walk finds, or NULL for the mount's root */
 
 static unsigned block_flags(struct block_device *d)

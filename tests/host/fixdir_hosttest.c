@@ -15,8 +15,8 @@
  * failed check does, keeps its directory with the files in it; one that said
  * it passed has it removed, files and all, unless LeakSanitizer finds a leak,
  * which fails it at its end, as a row on Linux checks. Each child must exit
- * with the status it was given. This process makes no fixture directory of its own,
- * so the children's are their own.
+ * with the status it was given. This process makes no fixture directory of
+ * its own, so the children's are their own.
  */
 #include <stdio.h>
 #include <stdlib.h>

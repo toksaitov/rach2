@@ -4732,9 +4732,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         char scratch[1];
         int rpid = procfs_resolve_id(vp);
 
-        /* The resolver follows the link to the program itself, so only an
-         * un-followed stat, or one of a process with no program, is here.
-         * A link the caller may not read exists all the same, as on Linux. */
+        /* Only an un-followed stat comes here. A link the caller may not
+         * read exists, as on Linux; one of no program does not. */
         if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) == -ENOENT) {
             return -ENOENT;
         }
