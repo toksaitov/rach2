@@ -463,8 +463,7 @@ static int exec_ends(const struct ends *p)
     ok = ok && refused(execve(p->x, args, args + 1), ENOTDIR);
     unlink(p->x);
     if (!ok) {
-        return fail("execve of a script whose interpreter is named with a trailing slash was not "
-                    "ENOTDIR");
+        return fail("a script whose interpreter has a trailing slash was not ENOTDIR");
     }
     return 0;
 }
@@ -498,8 +497,7 @@ static int socket_ends(const struct ends *p)
     }
     unlink(p->k);
     if (!bound) {
-        return fail("bind to a name that names a directory by its end was not ENOENT, EADDRINUSE "
-                    "or ENOTDIR");
+        return fail("a bind to a name ending in a slash or . was not refused as on Linux");
     }
     if (!connected) {
         return fail("connect to a socket named with a trailing slash was not ENOTDIR");
@@ -537,8 +535,7 @@ static int link_ends(const struct ends *p)
     }
     if (!refused(unlink(p->lds), ENOTDIR) || !refused(rename(p->lds, p->n), ENOTDIR) ||
         lstat(p->ld, &st) != 0 || !S_ISLNK(st.st_mode)) {
-        return fail("unlink or rename of a symbolic link named with a trailing slash was not "
-                    "ENOTDIR");
+        return fail("unlink or rename of a link named with a trailing slash was not ENOTDIR");
     }
     return 0;
 }
