@@ -26,12 +26,13 @@
  * "." and ENOTEMPTY for a last "..", and rename EBUSY for either, and so do
  * unlinkat and renameat through a directory descriptor. execve of a file so
  * named is ENOTDIR and of a directory EACCES, and so is a script whose
- * interpreter is named with a trailing slash ENOTDIR; bind to a name so
- * named makes nothing, connect to a socket so named is ENOTDIR, and so is
- * umount2 of a file so named. rmdir and rename of the root are EBUSY, link,
- * symlink and mknod with the root as the new name EEXIST and bind to it
- * EADDRINUSE, and open with O_CREAT and without O_DIRECTORY is EISDIR for
- * an existing directory, one of the probe's, one of /dev/shm and /proc,
+ * interpreter is named with a trailing slash ENOTDIR, and an ELF image whose
+ * PT_INTERP names the file or the directory so ENOTDIR or EACCES; bind to a
+ * name so named makes nothing, connect to a socket so named is ENOTDIR, and
+ * so is umount2 of a file so named. rmdir and rename of the root are EBUSY,
+ * link, symlink and mknod with the root as the new name EEXIST and bind to
+ * it EADDRINUSE, and open with O_CREAT and without O_DIRECTORY is EISDIR
+ * for an existing directory, one of the probe's, one of /dev/shm and /proc,
  * even to read. A symbolic link to a directory named with a trailing slash
  * is followed by the calls that look it up, O_NOFOLLOW and
  * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename,
@@ -47,6 +48,7 @@
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -233,8 +235,9 @@ static int refused(long rc, int err)
 /* The paths the rows of `dir_end_calls` name in one directory: the regular
  * file f and the directory s, which the directory has, the empty directory
  * e, which the rows make, the name n, which nothing has, the socket file k,
- * the script x and the symbolic link ld to s, which the rows make and
- * remove, each also with a slash after it, "s", or a last "." or "..". */
+ * the program x, a script and then an ELF image, and the symbolic link ld to
+ * s, which the rows make and remove, each also with a slash after it, "s",
+ * or a last "." or "..". */
 struct ends {
     char f[300], fs[304], fdot[304];
     char s[300], ss[304], sdot[304], sdotdot[304];
@@ -446,10 +449,88 @@ static int connect_path(int fd, const char *path)
 }
 
 /**
+ * Write the ELF image `path`, mode 0755, whose PT_INTERP is `interp`: the
+ * ELF header, the PT_INTERP, and one PT_LOAD at 0x08048000 that covers the
+ * whole file, headers and interpreter path included, which the kernel loads
+ * before it opens the interpreter. 0, or -1 when the file could not be
+ * written.
+ */
+static int write_elf(const char *path, const char *interp)
+{
+    unsigned char img[sizeof(Elf32_Ehdr) + 2 * sizeof(Elf32_Phdr) + 320];
+    Elf32_Ehdr eh;
+    Elf32_Phdr ph[2];
+    size_t at = sizeof(eh) + sizeof(ph);
+    size_t size = at + strlen(interp) + 1;
+    int fd;
+    int ok;
+
+    if (size > sizeof(img)) {
+        return -1;
+    }
+    memset(&eh, 0, sizeof(eh));
+    memcpy(eh.e_ident, ELFMAG, SELFMAG);
+    eh.e_ident[EI_CLASS] = ELFCLASS32;
+    eh.e_ident[EI_DATA] = ELFDATA2LSB;
+    eh.e_ident[EI_VERSION] = EV_CURRENT;
+    eh.e_type = ET_EXEC;
+    eh.e_machine = EM_386;
+    eh.e_version = EV_CURRENT;
+    eh.e_entry = 0x08048000 + at;
+    eh.e_phoff = sizeof(eh);
+    eh.e_ehsize = sizeof(eh);
+    eh.e_phentsize = sizeof(Elf32_Phdr);
+    eh.e_phnum = 2;
+    memset(ph, 0, sizeof(ph));
+    ph[0].p_type = PT_INTERP;
+    ph[0].p_offset = at;
+    ph[0].p_vaddr = 0x08048000 + at;
+    ph[0].p_filesz = size - at;
+    ph[0].p_memsz = size - at;
+    ph[0].p_flags = PF_R;
+    ph[1].p_type = PT_LOAD;
+    ph[1].p_vaddr = 0x08048000;
+    ph[1].p_filesz = size;
+    ph[1].p_memsz = size;
+    ph[1].p_flags = PF_R | PF_X;
+    ph[1].p_align = 4096;
+    memcpy(img, &eh, sizeof(eh));
+    memcpy(img + sizeof(eh), ph, sizeof(ph));
+    memcpy(img + at, interp, size - at);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    ok = fd >= 0 && write(fd, img, size) == (ssize_t)size;
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : -1;
+}
+
+/**
+ * execve of an ELF image, x, whose PT_INTERP names a directory by its end,
+ * which is held to the rule for the program's own path: the file f so named
+ * is ENOTDIR, and the directory s, which is no program, EACCES. 0, or 1 once
+ * the failure is reported.
+ */
+static int interp_ends(const struct ends *p)
+{
+    static char *const args[] = {"direntmusl", NULL};
+    int ok = write_elf(p->x, p->fs) == 0 && refused(execve(p->x, args, args + 1), ENOTDIR) &&
+             write_elf(p->x, p->fdot) == 0 && refused(execve(p->x, args, args + 1), ENOTDIR) &&
+             write_elf(p->x, p->ss) == 0 && refused(execve(p->x, args, args + 1), EACCES) &&
+             write_elf(p->x, p->sdotdot) == 0 && refused(execve(p->x, args, args + 1), EACCES);
+
+    unlink(p->x);
+    if (!ok) {
+        return fail("an ELF image whose PT_INTERP names a directory by its end was not refused");
+    }
+    return 0;
+}
+
+/**
  * execve given a path that names a directory by its end: the file so named
  * is ENOTDIR and the directory EACCES, and a script whose interpreter is
- * named with a trailing slash is ENOTDIR. 0, or 1 once the failure is
- * reported.
+ * named with a trailing slash is ENOTDIR, and so is an ELF image whose
+ * PT_INTERP is (`interp_ends`). 0, or 1 once the failure is reported.
  */
 static int exec_ends(const struct ends *p)
 {
@@ -474,7 +555,7 @@ static int exec_ends(const struct ends *p)
     if (!ok) {
         return fail("a script whose interpreter has a trailing slash was not ENOTDIR");
     }
-    return 0;
+    return interp_ends(p);
 }
 
 /**

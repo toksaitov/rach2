@@ -1339,8 +1339,8 @@ int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 /**
  * Make the absolute path `path`, which the kernel read from a file, canonical
  * in place, and hold a path that named a directory by its end to the rule
- * `copy_path_cwd` holds execve's to: the interpreter a script names. Returns
- * the length, or a negative errno.
+ * `copy_path_cwd` holds execve's to: the interpreter a script names, or an
+ * ELF image's PT_INTERP. Returns the length, or a negative errno.
  */
 int canonicalize_named(char *path)
 {
