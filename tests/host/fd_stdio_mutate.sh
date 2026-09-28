@@ -4,7 +4,9 @@
 # both make: one takes the mount's namespace for KRFFS alone, the other for
 # every mounted file system whether or not its type asks to be serialised.
 # The six allocation faults answer -1 where a refusal of a descriptor
-# answers EMFILE, ENOMEM or EBADF.
+# answers EMFILE, ENOMEM or EBADF. The two faults of `fd_ofd_live` call a
+# description open for a later serial than its own, or while its last
+# reference is closed.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -62,7 +64,7 @@ run_phase()
 echo "fd-stdio-mutation: logs: $work"
 run_phase fixed 0 'fd_hosttest: pass:'
 for fault in unchecked rollback process repoint namespace unserialised alloc-description \
-    alloc-growth alloc-minimum alloc-limit reach-growth reach-range; do
+    alloc-growth alloc-minimum alloc-limit reach-growth reach-range live-serial live-closing; do
     source="$work/sys/fs/fd.c"
     [ "$fault" != process ] || source="$work/sys/proc/process.c"
     python3 - "$source" "$fault" <<'PY'
@@ -95,6 +97,10 @@ changes = {
                      "    return fd_table_grow(table, fd + 1) ? -1 : 0;"),
     "reach-range": ("    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -EBADF;",
                     "    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -1;"),
+    "live-serial": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
+                    "return rec->ofd.refcount > 0 && rec->ofd.serial <= serial;"),
+    "live-closing": ("return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
+                     "return rec->ofd.serial == serial;"),
 }
 old, new = changes[sys.argv[2]]
 if sys.argv[2] in ("namespace", "unserialised"):
@@ -124,6 +130,8 @@ PY
         alloc-limit) message='the process with a limit of 4 is held to it in the shared table' ;;
         reach-growth) message='a dup2 past the end of a table the heap cannot grow is ENOMEM' ;;
         reach-range) message='a dup2 destination outside the limit is EBADF' ;;
+        live-serial) message='a description is not one with another serial' ;;
+        live-closing) message='a description its file system closes after its last reference is not open' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

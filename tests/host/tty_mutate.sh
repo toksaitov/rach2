@@ -159,6 +159,11 @@ elif case == 'output-kind':
 elif case == 'flush-kind':
     replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
             '    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);')
+elif case == 'signal-room':
+    replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {\n'
+                    '        wq_wake(t->space_wq, WQ_ROOM);\n    }\n', '')
+elif case == 'erase-room':
+    replace('tty.c', '    if (n_tty_held(&t->ldisc) < held) {', '    if (signo != 0 && held) {')
 else:
     raise SystemExit('tty-mutation: unknown mutation: ' + case)
 PY
@@ -168,7 +173,7 @@ PY
 echo "tty-mutation: logs: $work"
 for case_name in split-queue flush termios-flush partial-slave partial-master \
                  latency-lock veol-byte line-end slot-reset input-kind echo-kind \
-                 room-kind output-kind flush-kind; do
+                 room-kind output-kind flush-kind signal-room erase-room; do
     test='tty'
     case "$case_name" in
         split-queue) expected='slave read wakes master POLLOUT' ;;
@@ -185,6 +190,8 @@ for case_name in split-queue flush termios-flush partial-slave partial-master \
         room-kind) expected='a slave read is room for the master and no data' ;;
         output-kind) expected='slave output is data for the master and no room' ;;
         flush-kind) expected='an input flush is room for the master and no data' ;;
+        signal-room) expected='a signal char the master writes into full input is room for the master' ;;
+        erase-room) expected='an erase the master writes is room for the master' ;;
     esac
     run_phase fixed
     mutate

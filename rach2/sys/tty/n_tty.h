@@ -113,6 +113,10 @@ int n_tty_readable(const struct n_tty *t);
 /** Whether the discipline can take a whole line more without dropping. */
 int n_tty_has_room(const struct n_tty *t);
 
+/** The bytes the discipline holds, the read queue and the line under edit:
+ * what `n_tty_has_room` counts as taken. */
+unsigned int n_tty_held(const struct n_tty *t);
+
 /** Install `tio`. Returns nonzero when a read would not block, since a
  * partial canonical line is readable once ICANON is off. */
 int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio);

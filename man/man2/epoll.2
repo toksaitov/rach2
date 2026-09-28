@@ -124,10 +124,15 @@ shortened to that.
 A timeout is rounded up to whole 10 ms ticks.
 .Pp
 A registration belongs to the descriptor number and the open file it
-named when it was added.
-When the number is closed, or names another open file, the next wait
-drops the registration; Linux keeps it while the open file stays open
-through another descriptor.
+named when it was added, and lasts while that open file is open in any
+process, as in Linux: a child of
+.Xr fork 2
+that closes its copy of the number leaves the registration to its
+parent, and the wait after the open file's last close drops it.
+A wait reports a registration only while the caller's descriptor at its
+number names its open file, since a wait sleeps only on what the
+caller's own descriptors keep open; Linux reports it through the open
+file whatever became of the number.
 .Xr poll 2
 and
 .Xr select 2
@@ -141,7 +146,8 @@ Sets nest four deep at most below a set, a chain of five, as in Linux:
 adding a set that would make a cycle, or a longer chain, fails with
 .Er ELOOP ,
 whether the chain would grow below the set added or above the set it is
-added to.
+added to, through every registration that lasts, whichever process made
+it.
 .Sh RETURN VALUES
 .Fn epoll_create1
 returns the new descriptor,
@@ -197,7 +203,7 @@ counting the sets that hold
 .Fa epfd
 as well as those that
 .Fa fd
-holds.
+holds, whichever process made the registrations.
 .It Er EMFILE
 .Fn epoll_create
 or
@@ -219,5 +225,6 @@ is a regular file or a directory, which is always ready.
 .El
 .Sh SEE ALSO
 .Xr eventfd 2 ,
+.Xr fork 2 ,
 .Xr poll 2 ,
 .Xr select 2

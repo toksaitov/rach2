@@ -33,6 +33,11 @@ static void rq_push(struct n_tty *t, unsigned char c)
     }
 }
 
+unsigned int n_tty_held(const struct n_tty *t)
+{
+    return rq_count(t) + (unsigned int)t->line_len;
+}
+
 /**
  * Whether a whole line more fits: the read queue's free space beyond what
  * the line under edit will need. A pump that stops here leaves its bytes
@@ -40,7 +45,7 @@ static void rq_push(struct n_tty *t, unsigned char c)
  */
 int n_tty_has_room(const struct n_tty *t)
 {
-    return rq_count(t) + (unsigned int)t->line_len + N_TTY_LINE_MAX <= N_TTY_READ_MAX;
+    return n_tty_held(t) + N_TTY_LINE_MAX <= N_TTY_READ_MAX;
 }
 
 /**

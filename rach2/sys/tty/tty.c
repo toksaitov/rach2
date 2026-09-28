@@ -43,7 +43,8 @@ static void null_sink(void *ctx, unsigned char c)
 
 /**
  * Initialize a terminal with default termios, window size and input wait.
- * An input producer may set `space_wq` to receive flush and termios wakeups.
+ * An input producer may set `space_wq` to be woken for room: after a flush,
+ * a termios change, or an input byte that took bytes out of the discipline.
  */
 void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
 {
@@ -142,9 +143,13 @@ int tty_console_owned_by_leader(int sid, int pid)
 
 void tty_input_char(struct tty *t, unsigned char c)
 {
+    unsigned int held = n_tty_held(&t->ldisc);
     int signo = 0;
 
     n_tty_receive(&t->ldisc, c, t->sink, t->sink_ctx, &signo);
+    if (n_tty_held(&t->ldisc) < held) {
+        wq_wake(t->space_wq, WQ_ROOM);
+    }
     if (signo != 0) {
         tty_deliver_signal(t, signo);
     }

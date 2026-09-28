@@ -88,7 +88,9 @@ void tty_console_poll(void);
  * Feed one input byte from an IRQ or poll source: run it through the discipline
  * (cook + echo via sink), wake a blocked reader once a line/byte is ready, and
  * for an ISIG control char post its signal to the foreground process group.
- * Safe to call with interrupts off / from interrupt context.
+ * A byte that takes bytes out of the discipline, the flush of a signal char or
+ * an erase, word erase or kill, wakes `space_wq` for room. Safe to call with
+ * interrupts off / from interrupt context.
  */
 void tty_input_char(struct tty *t, unsigned char c);
 

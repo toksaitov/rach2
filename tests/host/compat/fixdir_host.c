@@ -4,6 +4,7 @@
  * need to.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,15 +16,32 @@
 #define FIX_NAMES    64
 
 #ifndef FIXDIR
-static char own[FIX_PATH_MAX];
-static int keep;
+/* The characters a shell passes through unchanged, which a directory the
+ * tests put in their commands unquoted may have. */
+#define FIX_PLAIN "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._+-"
 
-/** Remove the test's own directory, unless `fix_keep` asked to keep it. */
+/* The longest $TMPDIR taken, so that every command the tests format has
+ * room for the paths in it. */
+#define FIX_TMP_MAX 100
+
+static char own[FIX_PATH_MAX];
+static int passed;
+
+/** Whether $TMPDIR, `tmp`, can hold the fixture directory: an absolute path
+ * of at most FIX_TMP_MAX characters, each one a shell passes unchanged. */
+static int fix_plain(const char *tmp)
+{
+    return tmp != NULL && tmp[0] == '/' && strlen(tmp) <= FIX_TMP_MAX &&
+           tmp[strspn(tmp, FIX_PLAIN)] == '\0';
+}
+
+/** At exit, remove the test's own directory if it passed, or else keep it
+ * and say where, so that a failed test's fixtures can be read. */
 static void fix_remove(void)
 {
     char cmd[FIX_PATH_MAX + 16];
 
-    if (keep) {
+    if (!passed) {
         printf("fixtures: kept in %s\n", own);
         return;
     }
@@ -46,8 +64,7 @@ const char *fix_dir(void)
         return own;
     }
     tmp = getenv("TMPDIR");
-    if (tmp == NULL || tmp[0] == '\0' || strpbrk(tmp, " \t\n'\"\\$`") != NULL ||
-        strlen(tmp) > FIX_PATH_MAX / 2) {
+    if (!fix_plain(tmp)) {
         tmp = "/tmp";
     }
     len = strlen(tmp);
@@ -80,13 +97,27 @@ const char *fix_path(const char *name)
         exit(1);
     }
     snprintf(names[i], sizeof(names[i]), "%s", name);
-    snprintf(paths[i], sizeof(paths[i]), "%s/%s", fix_dir(), name);
+    fix_format(paths[i], sizeof(paths[i]), "%s/%s", fix_dir(), name);
     return paths[i];
 }
 
-void fix_keep(void)
+void fix_passed(void)
 {
 #ifndef FIXDIR
-    keep = 1;
+    passed = 1;
 #endif
+}
+
+void fix_format(char *buf, unsigned long size, const char *format, ...)
+{
+    va_list ap;
+    int n;
+
+    va_start(ap, format);
+    n = vsnprintf(buf, size, format, ap);
+    va_end(ap);
+    if (n < 0 || (unsigned long)n >= size) {
+        printf("fixtures: %d bytes do not fit in %lu: %.60s\n", n, size, buf);
+        exit(1);
+    }
 }

@@ -13,8 +13,9 @@
  * Each wake of a pair names its kind of change for an edge-triggered epoll
  * registration, and the queues count them: input written to the master is data
  * for the slave, and its echo data for the master, or no change with echo off;
- * a slave read and an input flush are room for the master, and slave output is
- * data for it.
+ * a slave read and an input flush are room for the master, and so is input the
+ * master writes that takes bytes out of the slave's discipline, a signal
+ * char's flush or an erase; and slave output is data for it.
  */
 #define WAIT_QUEUE_HOSTTEST
 #define wq_wait_event model_wait_event
@@ -483,6 +484,35 @@ static void wake_kinds(void)
           "an input flush is room for the master and no data");
 }
 
+/**
+ * Input the master writes that takes bytes out of the slave's discipline is
+ * room for the master: with the slave's input full, a VINTR written with
+ * ISIG on and echo off flushes it and wakes a parked master poller for
+ * room; in canonical mode an erase of a typed byte is room too.
+ */
+static void input_room(void)
+{
+    wait_queue_t *wq;
+    uint32_t rooms;
+
+    setup_pair();
+    current_proc = &producer;
+    pair.slave.ldisc.tio.c_lflag |= ISIG;
+    fill_input();
+    wq = park_poller();
+    rooms = wq_wakes(&pair.m_read_wq, WQ_ROOM);
+    CHECK(ptm_write(&master, "\003", 1) == 1, "the master writes VINTR into full input");
+    CHECK(wq_wakes(&pair.m_read_wq, WQ_ROOM) == rooms + 1 && poller.state == PROC_READY,
+          "a signal char the master writes into full input is room for the master");
+    CHECK(ptm_poll(&master, POLLOUT, &wq) == POLLOUT, "the flush of a signal char makes room");
+    wq_poll_remove(wq, &poller.waiter);
+    pair.slave.ldisc.tio.c_lflag |= ICANON;
+    CHECK(ptm_write(&master, "ab", 2) == 2, "the master types part of a line");
+    rooms = wq_wakes(&pair.m_read_wq, WQ_ROOM);
+    CHECK(ptm_write(&master, "\177", 1) == 1 && wq_wakes(&pair.m_read_wq, WQ_ROOM) == rooms + 1,
+          "an erase the master writes is room for the master");
+}
+
 /** Run the independent wake and locking regressions. */
 int main(void)
 {
@@ -493,6 +523,7 @@ int main(void)
     partial_wakes_reader(1);
     latency_read();
     wake_kinds();
+    input_room();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

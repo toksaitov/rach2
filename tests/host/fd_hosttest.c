@@ -1,7 +1,8 @@
 /**
  * Check standard description allocation, locking across relocation, the
- * descriptor limit of each process that shares a table, and the errors of
- * an allocation the limit or the heap refuses.
+ * descriptor limit of each process that shares a table, the errors of an
+ * allocation the limit or the heap refuses, and whether a description is
+ * open still.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -189,12 +190,22 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     depth--;
 }
 
-/** No backing resources exist in this lock test. */
+/* The description a row has its file system close, with its serial, and
+ * whether `fd_ofd_live` called it open meanwhile. */
+static const struct open_file *closing;
+static uint32_t closing_serial;
+static int closing_live = -1;
+
+/** No backing resources exist in this lock test; a row that names the
+ * description being closed learns whether it is open meanwhile. */
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     (void)mnt;
     (void)node;
     (void)handle;
+    if (closing) {
+        closing_live = fd_ofd_live(closing, closing_serial);
+    }
 }
 
 /** Model the root adapter's by-value handle and recursive namespace lock. */
@@ -449,6 +460,39 @@ static void description_holders(void)
           "released descriptions hold nothing");
 }
 
+/**
+ * Whether a description is open still, which an epoll registration asks of
+ * the one it was made for: while a reference is left, by the serial it was
+ * made with and no other, which a later description at its address has; not
+ * while its file system closes it after its last reference, nor after.
+ */
+static void description_live(void)
+{
+    struct vfs_mount mnt = {0};
+    struct open_file *ofd = fd_ofd_new();
+    uint32_t serial;
+
+    check(ofd != 0, "a description");
+    if (!ofd) {
+        return;
+    }
+    serial = ofd->serial;
+    check(fd_ofd_live(ofd, serial), "a description with a reference is open");
+    check(!fd_ofd_live(ofd, serial + 1), "a description is not one with another serial");
+    fd_ofd_ref(ofd);
+    fd_ofd_unref(ofd);
+    check(fd_ofd_live(ofd, serial), "a description a second reference kept is open");
+    ofd->vmnt = &mnt;
+    closing = ofd;
+    closing_serial = serial;
+    fd_ofd_unref(ofd);
+    closing = 0;
+    check(closing_live == 0,
+          "a description its file system closes after its last reference is not open");
+    check(!fd_ofd_live(ofd, serial) && allocations == 0,
+          "a description is not open after its last reference");
+}
+
 /** Exercise a waiting independent open, a shared open, and other file types. */
 int main(void)
 {
@@ -462,6 +506,7 @@ int main(void)
     table_copies();
     allocation_errors();
     description_holders();
+    description_live();
     if (fd_table_init(&table) != 0 || (fd = fd_alloc(&table)) < 0) {
         return 1;
     }
@@ -501,8 +546,8 @@ int main(void)
     fd_free(&table, fd);
     fd_table_free(&table);
     if (!fails) {
-        printf("fd_hosttest: pass: stdio allocation, description ordering, shared limits and "
-               "allocation errors\n");
+        printf("fd_hosttest: pass: stdio allocation, description ordering, shared limits, "
+               "allocation errors and open descriptions\n");
     }
     return fails != 0;
 }

@@ -183,15 +183,15 @@ static void load(const char *opt)
 
     /* Built once per run, so an edited builder is the one that runs. */
     if (!builder_built) {
-        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
-                 fix_dir());
+        fix_format(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
+                   fix_dir());
         if (system(cmd) != 0) {
             printf("fat32_hosttest: cannot build the fixture builder\n");
             exit(1);
         }
         builder_built = 1;
     }
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", fix_dir(), fix_dir(), opt);
+    fix_format(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", fix_dir(), fix_dir(), opt);
     if (system(cmd) != 0) {
         printf("fat32_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
@@ -787,7 +787,8 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
         exit(1);
     }
     fclose(f);
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img", fix_dir(), fix_dir());
+    fix_format(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img", fix_dir(),
+               fix_dir());
     f = popen(cmd, "r");
     if (!f) {
         printf("fat32_hosttest: cannot run the check\n");
@@ -1333,8 +1334,8 @@ static int run_check_list(char *out, unsigned long cap)
         exit(1);
     }
     fclose(f);
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img --list", fix_dir(),
-             fix_dir());
+    fix_format(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img --list", fix_dir(),
+               fix_dir());
     f = popen(cmd, "r");
     if (!f) {
         exit(1);
@@ -1523,11 +1524,11 @@ static void long_rows(void)
     if (system("which mdir >/dev/null 2>&1") == 0) {
         char cmd[2048];
 
-        snprintf(cmd, sizeof(cmd),
-                 "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q 'moved name.txt'",
-                 fix_dir());
+        fix_format(cmd, sizeof(cmd),
+                   "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q 'moved name.txt'",
+                   fix_dir());
         check(system(cmd) == 0, "mtools lists the long name this driver wrote");
-        snprintf(
+        fix_format(
             cmd, sizeof(cmd),
             "mdir -i %s/fat32_write.img ::/ 2>/dev/null | grep -q 'LONGNA~2 TXT.*longname1.txt'",
             fix_dir());
@@ -1893,7 +1894,7 @@ static void write_rows(void)
         void *f;
         unsigned long got;
 
-        snprintf(
+        fix_format(
             cmd, sizeof(cmd),
             "mcopy -n -i %s/fat32_write.img ::/BOOT/R3.TXT %s/fat32_mtools.out >/dev/null 2>&1",
             fix_dir(), fix_dir());
@@ -1905,8 +1906,8 @@ static void write_rows(void)
         }
         check(got == 700 && __builtin_memcmp(back, pattern, 700) == 0,
               "with the bytes this driver wrote");
-        snprintf(cmd, sizeof(cmd), "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q RD2",
-                 fix_dir());
+        fix_format(cmd, sizeof(cmd), "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q RD2",
+                   fix_dir());
         check(system(cmd) == 0, "and lists the directory this driver moved");
     } else {
         printf("fat32_hosttest: mtools absent, its comparison skipped\n");
@@ -2255,6 +2256,7 @@ int main(int argc, char **argv)
         matrix_rows();
         durability_rows();
         printf("fat32_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     well_formed_rows();
@@ -2269,11 +2271,11 @@ int main(int argc, char **argv)
     durability_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     /* Not the count: an exit status keeps its low eight bits, and 256
        failures would read as a pass. */
     printf("fat32_hosttest: %d failure(s)\n", fails);
-    fix_keep();
     return 1;
 }

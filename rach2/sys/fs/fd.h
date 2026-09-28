@@ -281,6 +281,14 @@ void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
 /** Whether a description of (`mnt`, `node`) is inside an operation now. */
 int fd_node_busy(struct vfs_mount *mnt, void *node);
 
+/**
+ * Whether the description at `ofd`, made with `serial`, is open still: some
+ * descriptor or other holder has a reference to it. Only the list of live
+ * descriptions is read, so `ofd` may be the address of one freed since, or
+ * of a later one at that address, whose serial is another.
+ */
+int fd_ofd_live(const struct open_file *ofd, uint32_t serial);
+
 /** How many descriptions of (`mnt`, `node`) there are, `going` counted only
  * when it keeps a reference besides the one its release drops: the holders
  * of a KRFFS root node that no descriptor's `node` names, a FIFO's ends

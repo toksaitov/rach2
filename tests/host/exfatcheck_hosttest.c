@@ -26,7 +26,7 @@ static const char *tool(void)
 {
     static char text[1200];
 
-    snprintf(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkexfatfixture"));
+    fix_format(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkexfatfixture"));
     return text;
 }
 
@@ -47,13 +47,13 @@ static void row(const char *opt, int want_rc, const char *want)
     int rc;
     size_t n = 0;
 
-    snprintf(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("exfatcheck.img"), opt);
+    fix_format(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("exfatcheck.img"), opt);
     if (system(cmd) != 0) {
         printf("exfatcheck_hosttest: the builder failed for '%s'\n", opt);
         fails++;
         return;
     }
-    snprintf(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("exfatcheck.img"));
+    fix_format(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("exfatcheck.img"));
     p = popen(cmd, "r");
     if (p == NULL) {
         printf("exfatcheck_hosttest: cannot run the check\n");
@@ -67,8 +67,8 @@ static void row(const char *opt, int want_rc, const char *want)
     }
     rc = pclose(p);
     rc = rc != -1 && WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
-    snprintf(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", opt[0] ? opt : "(default)", want_rc,
-             want);
+    fix_format(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", opt[0] ? opt : "(default)", want_rc,
+               want);
     check(rc == want_rc && strstr(out, want) != NULL, cmd);
     if (rc != want_rc || strstr(out, want) == NULL) {
         printf("exfatcheck_hosttest: got exit %d and:\n%s", rc, out);
@@ -134,8 +134,9 @@ static void read_row(const char *path, const unsigned char *want, size_t size,
     int status, ok, byte;
     size_t i, n;
 
-    snprintf(cmd, sizeof(cmd), "%s --check %s --read '%s' > %s 2> %s", tool(),
-             fix_path("exfatread.img"), path, fix_path("exfatread.out"), fix_path("exfatread.err"));
+    fix_format(cmd, sizeof(cmd), "%s --check %s --read '%s' > %s 2> %s", tool(),
+               fix_path("exfatread.img"), path, fix_path("exfatread.out"),
+               fix_path("exfatread.err"));
     status = system(cmd);
     ok = status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == (diagnostic ? 1 : 0);
     f = fopen(fix_path("exfatread.err"), "rb");
@@ -230,7 +231,7 @@ static void read_rows(void)
     uint32_t first;
     static const size_t path_lengths[] = {599, 600, 601, 2048};
 
-    snprintf(cmd, sizeof(cmd), "%s %s", tool(), fix_path("exfatread.img"));
+    fix_format(cmd, sizeof(cmd), "%s %s", tool(), fix_path("exfatread.img"));
     if (system(cmd) != 0) {
         check(0, "build read fixture");
         return;
@@ -296,10 +297,10 @@ int main(void)
     char cmd[2048];
     const char *cc = getenv("CC");
 
-    snprintf(cmd, sizeof(cmd),
-             "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-             "-fno-sanitize-recover=all -o %s tests/host/mkexfatfixture.c",
-             cc ? cc : "cc", fix_path("mkexfatfixture"));
+    fix_format(cmd, sizeof(cmd),
+               "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
+               "-fno-sanitize-recover=all -o %s tests/host/mkexfatfixture.c",
+               cc ? cc : "cc", fix_path("mkexfatfixture"));
     if (system(cmd) != 0) {
         printf("exfatcheck_hosttest: cannot build the fixture builder\n");
         return 1;
@@ -367,9 +368,9 @@ int main(void)
 
     if (fails == 0) {
         printf("exfatcheck_hosttest: OK\n");
+        fix_passed();
         return 0;
     }
     printf("exfatcheck_hosttest: %d failure(s)\n", fails);
-    fix_keep();
     return 1;
 }
