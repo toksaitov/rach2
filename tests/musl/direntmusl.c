@@ -1,6 +1,8 @@
 /**
  * The type getdents64 reports in d_type, which GNU libc's and musl's readdir
- * hand on and programs such as find and ls act on without a stat.
+ * hand on and programs such as find and ls act on without a stat; the seeks
+ * of a directory's listing; and the answer each call that takes a path
+ * gives one that names a directory by its end.
  *
  * Every entry of /dev, /dev/pts, /proc, /proc/self, /proc/self/fd, /proc/net
  * and a directory the probe makes must report the type lstat gives it, the
@@ -21,10 +23,11 @@
  * truncate, utimensat, readlink, statfs, link, unlink and rename, and a new
  * name so named is EISDIR to open with O_CREAT and ENOENT or EEXIST to link,
  * symlink, mknod and mkdir, which make nothing; rmdir is EINVAL for a last
- * "." and ENOTEMPTY for a last "..", and rename EBUSY for either. execve of
- * a file so named is ENOTDIR and of a directory EACCES, and so is a script
- * whose interpreter is named with a trailing slash ENOTDIR; bind to a name
- * so named makes nothing, connect to a socket so named is ENOTDIR, and so is
+ * "." and ENOTEMPTY for a last "..", and rename EBUSY for either, and so do
+ * unlinkat and renameat through a directory descriptor. execve of a file so
+ * named is ENOTDIR and of a directory EACCES, and so is a script whose
+ * interpreter is named with a trailing slash ENOTDIR; bind to a name so
+ * named makes nothing, connect to a socket so named is ENOTDIR, and so is
  * umount2 of a file so named. rmdir and rename of the root are EBUSY. A
  * symbolic link to a directory named with a trailing slash is followed by
  * the calls that look it up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW
@@ -377,6 +380,34 @@ static int remove_ends(const struct ends *p)
     return 0;
 }
 
+/**
+ * unlinkat with AT_REMOVEDIR and renameat through a descriptor of `dir`,
+ * given a relative path whose last component is "." or "..": EINVAL and
+ * ENOTEMPTY, and EBUSY, as rmdir and rename answer, leaving e and s where
+ * they are. 0, or 1 once the failure is reported.
+ */
+static int at_ends(const char *dir, const struct ends *p)
+{
+    struct stat st;
+    int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+    int removed, renamed;
+
+    removed = dfd >= 0 && refused(unlinkat(dfd, "e/.", AT_REMOVEDIR), EINVAL) &&
+              refused(unlinkat(dfd, "e/..", AT_REMOVEDIR), ENOTEMPTY) && lstat(p->e, &st) == 0;
+    renamed = dfd >= 0 && refused(renameat(dfd, "s/.", dfd, "n"), EBUSY) &&
+              refused(renameat(dfd, "f", dfd, "s/.."), EBUSY) && lstat(p->s, &st) == 0;
+    if (dfd >= 0) {
+        close(dfd);
+    }
+    if (!removed) {
+        return fail("unlinkat with AT_REMOVEDIR of a directory's . or .. through a descriptor");
+    }
+    if (!renamed) {
+        return fail("renameat of a name whose last component is . or .. through a descriptor");
+    }
+    return 0;
+}
+
 /* A script whose interpreter is named with a trailing slash: the kernel
  * refuses it, and a kernel that ran the interpreter would print the line. */
 static const char slash_script[] =
@@ -515,11 +546,11 @@ static int link_ends(const struct ends *p)
 /**
  * The calls that take a path, other than the stat calls, given one that
  * names a directory by its end, in `dir`, which has the regular file f and
- * the directory s: `lookup_ends`, `make_ends`, `remove_ends`, `exec_ends`
- * and `socket_ends`, and `link_ends` where the symbolic link ld can be made,
- * which `need_links` requires, with the empty directory e and the link made
- * for them and taken away after, as is whatever a failing row made at n. 0,
- * or 1 once the failure is reported.
+ * the directory s: `lookup_ends`, `make_ends`, `remove_ends`, `at_ends`,
+ * `exec_ends` and `socket_ends`, and `link_ends` where the symbolic link ld
+ * can be made, which `need_links` requires, with the empty directory e and
+ * the link made for them and taken away after, as is whatever a failing row
+ * made at n. 0, or 1 once the failure is reported.
  */
 static int dir_end_calls(const char *dir, int need_links)
 {
@@ -542,6 +573,9 @@ static int dir_end_calls(const char *dir, int need_links)
     }
     if (rc == 0) {
         rc = remove_ends(&p);
+    }
+    if (rc == 0) {
+        rc = at_ends(dir, &p);
     }
     if (rc == 0) {
         rc = exec_ends(&p);
