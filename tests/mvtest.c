@@ -1,7 +1,8 @@
 /**
  * Exercises the rename syscall: rename a file, confirm the old name is gone
- * and the new name resolves, reject renaming a missing source, and overwrite an
- * existing destination.
+ * and the new name resolves, reject renaming a missing source, refuse the root
+ * as a source with EBUSY, as Linux does, and overwrite an existing
+ * destination.
  *
  * The negative cases assert the exact errno, not the sign. The file system
  * reports every refusal as a bare -1, which userspace decodes as EPERM whatever
@@ -36,8 +37,8 @@ typedef unsigned int size_t;
 /* The errno values the negative cases name. */
 #define ENOENT 2
 #define EPERM  1
+#define EBUSY  16
 #define EISDIR 21
-#define EINVAL 22
 
 /* Open flags */
 #define O_RDONLY 0
@@ -342,12 +343,11 @@ void _start(void)
         failed++;
     }
 
-    /* Test 6d: The root as a source is -EINVAL, not -ENOENT: the root exists,
-     * so "no such file" would be false, and canonicalizing "/" leaves no
-     * component to name. */
-    print("Test 6d: rename(\"/\", \"mvtest.x\") == -EINVAL... ");
+    /* Test 6d: The root as a source is -EBUSY, as on Linux, not -ENOENT:
+     * the root exists, so "no such file" would be false. */
+    print("Test 6d: rename(\"/\", \"mvtest.x\") == -EBUSY... ");
     result = sys_rename("/", "mvtest.x");
-    if (result == -EINVAL) {
+    if (result == -EBUSY) {
         puts("OK");
         passed++;
     } else {

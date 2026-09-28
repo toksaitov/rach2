@@ -8401,9 +8401,9 @@ int32_t sys_mknodat(isr_params_t *params)
 /**
  * Remove the empty directory `path`, an absolute canonical path: the core of
  * rmdir(2) and of unlinkat(2) with AT_REMOVEDIR. Returns 0 or -errno
- * (-ENOENT, -ENOTDIR, -ENOTEMPTY). A last name of "." is -EINVAL and one of
- * ".." -ENOTEMPTY once the walk to them is made, as on Linux, whatever the
- * directory holds.
+ * (-ENOENT, -ENOTDIR, -ENOTEMPTY). The root is -EBUSY, a last name of "."
+ * -EINVAL and one of ".." -ENOTEMPTY once the walk to them is made, as on
+ * Linux, whatever the directory holds.
  */
 static int32_t do_rmdir(const char *pathbuf)
 {
@@ -8411,6 +8411,9 @@ static int32_t do_rmdir(const char *pathbuf)
 
     if (!vfs_root_mounted()) {
         return -ENOENT;
+    }
+    if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
+        return -EBUSY;
     }
     {
         struct vfs_ref parent;
@@ -8693,15 +8696,14 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
  * A last name of "." or ".." in either path, which the walk to its parent
  * returns as the name, is -EBUSY once both walks are made and the two are on
  * one mount, and in the new path -EEXIST under RENAME_NOREPLACE, as on
- * Linux.
- * Either path naming the root is `-EINVAL`, from the empty-name check below:
- * the path copy canonicalizes it to "/", which loses its only component.
- * `-ENOENT` would be a lie, since the root exists, and POSIX names `EINVAL`
- * for a pathname that is the root, where Linux answers `EBUSY`. The identity
- * tests of `rename_root_names` are therefore unreachable today and are kept
- * as defence: freeing the root as a replaced destination would take the
- * file system with it, and that guarantee should not rest on a canonicalizer
- * in another function.
+ * Linux. Either path naming the root is answered the same way, -EBUSY, or
+ * -EEXIST for the new path under RENAME_NOREPLACE, before either path is
+ * walked, where Linux walks both first: the path copy canonicalizes the root
+ * to "/", which has no last name for a walk to the parent to give. The
+ * identity tests of `rename_root_names` are therefore unreachable today and
+ * are kept as defence: freeing the root as a replaced destination would take
+ * the file system with it, and that guarantee should not rest on a
+ * canonicalizer in another function.
  *
  * Both names are walked without the namespace lock, which is taken for the
  * lookups and the rename that follow. A walk takes the lock of each mount it
@@ -8732,7 +8734,7 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
     }
 
     if (old_name[0] == '\0' || new_name[0] == '\0') {
-        return -EINVAL; /* empty filename, and either path naming the root */
+        return (old_name[0] != '\0' && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
     }
 
     /* A rename writes both directories: the entry leaves one and lands in

@@ -25,7 +25,7 @@
  * a file so named is ENOTDIR and of a directory EACCES, and so is a script
  * whose interpreter is named with a trailing slash ENOTDIR; bind to a name
  * so named makes nothing, connect to a socket so named is ENOTDIR, and so is
- * umount2 of a file so named.
+ * umount2 of a file so named. rmdir and rename of the root are EBUSY.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -536,9 +536,10 @@ static int shm_dir_end_calls(void)
 /**
  * The rows that read the probe's own directory beyond the types of its
  * listing: the path ends of `dir_ends`, rewinddir and seekdir of it and of
- * /proc/self (`rewinds`), and the other calls given a path that names a
- * directory by its end, there and in /dev/shm (`dir_end_calls`). 0, or 1
- * once the failure is reported.
+ * /proc/self (`rewinds`), the root as the name rmdir removes and rename moves
+ * or replaces, which is EBUSY with both names on the root's mount, and the
+ * other calls given a path that names a directory by its end, there and in
+ * /dev/shm (`dir_end_calls`). 0, or 1 once the failure is reported.
  */
 static int own_dir_rows(void)
 {
@@ -554,6 +555,10 @@ static int own_dir_rows(void)
     }
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
+    }
+    if (!refused(rmdir("/"), EBUSY) || !refused(rename("/", sub), EBUSY) ||
+        !refused(rename(file, "/"), EBUSY)) {
+        return fail("rmdir or rename of the root was not EBUSY");
     }
     return dir_end_calls(base) != 0 || shm_dir_end_calls() != 0;
 }

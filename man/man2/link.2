@@ -203,8 +203,12 @@ path uses an invalid or stale directory descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted,
 .Fn unlink
-selected a mount point, or the file on the KRFFS boot root backs an
-attached loop device.
+selected a mount point,
+.Fn unlinkat
+with
+.Dv AT_REMOVEDIR
+selected the root, or the file on the KRFFS boot root backs an attached
+loop device.
 .It Bq Er EEXIST
 The ext2 destination name already exists, or a
 .Fn link
