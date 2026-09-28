@@ -177,11 +177,12 @@ is refused with
 holds a directory by a descriptor opened for reading, then by one opened
 with
 .Dv O_PATH ,
-then as a child's working directory, checks that
+then as a child's working directory, then as its own, checks that
 .Fn rmdir
 returns
 .Er EBUSY
-each time, and removes the directory once nothing refers to it.
+each time, and removes the directory once it has gone back to the root
+and nothing refers to the directory.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
