@@ -3,9 +3,10 @@
 # get no descriptor, the KRFFS root's unlink and rename under the root's lock
 # and of a program's file, the calls by path that read or change a node under
 # the lock their walk takes, the key of a file's locks, a mkdir's lookup under
-# the lock of its parent, an orphan's locks dropped before it is freed, and an
+# the lock of its parent, an orphan's locks dropped before it is freed, an
 # rmdir on the KRFFS root of a directory a description or a working directory
-# has, before, during and after each fault.
+# has, and a read and a write of a /proc file that hold its description while
+# a sharer's seek waits, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -46,8 +47,9 @@ run_phase()
         -Wall -Wextra -Werror -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
         -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        tests/host/open_hosttest.c "$work/sys/fs/fd.c" \
-        "$work/sys/lib/kstring.c" "$work/sys/lib/kctypes.c" -o "$binary" >"$binary.compile.log" 2>&1; then
+        tests/host/open_hosttest.c "$work/sys/fs/fd.c" "$work/sys/lib/kstring.c" \
+        "$work/sys/lib/kctypes.c" tests/host/compat/park_host.c \
+        -o "$binary" >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1
     fi
@@ -71,7 +73,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
     open-emfile dup-enomem dup2-enomem program-holder program-reclaim-unlocked root-lock-key \
     volume-lock-key fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
-    rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only; do
+    rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
+    proc-read-unheld proc-write-unheld; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -207,6 +210,14 @@ changes = {
                               "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {",
                               "    for (pr = current_proc; pr; pr = NULL) {\n"
                               "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {"),
+    "proc-read-unheld": ("static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n"
+                         "    struct open_file *held = ops_offset_held(entry);",
+                         "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n"
+                         "    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"),
+    "proc-write-unheld": ("static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n"
+                          "    struct open_file *held = ops_offset_held(entry);",
+                          "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n"
+                          "    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"),
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -246,6 +257,8 @@ PY
         rmdir-tables-only) message='an rmdir of a directory a description in flight has is EBUSY' ;;
         rmdir-cwd-ignored) message="an rmdir of the caller's working directory is EBUSY" ;;
         rmdir-cwd-caller-only) message="an rmdir of another process's working directory is EBUSY" ;;
+        proc-read-unheld) message='a seek waits for a /proc read that sleeps in a page fetch' ;;
+        proc-write-unheld) message='a seek waits for a /proc write that sleeps in a page fetch' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

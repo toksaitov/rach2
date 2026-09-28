@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt WRITE 2
 .Os
 .Sh NAME
@@ -122,6 +122,16 @@ See
 .Pp
 A framebuffer write requires graphics mode and copies at most 64000
 bytes to the start of the mode 13h framebuffer.
+.Pp
+A write of
+.Pa /proc/ Ns Ar pid Ns Pa /mem
+or
+.Pa /proc/ Ns Ar pid Ns Pa /oom_score_adj
+is the file's own, as
+.Xr proc 5
+describes it, and holds the open file description for its length, as
+.Xr lseek 2
+holds it to move the offset.
 .Ss Gather writes
 .Fn writev
 writes the buffers described by

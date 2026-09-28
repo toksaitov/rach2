@@ -429,21 +429,38 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
     fd_ofd_unref(ofd);
 }
 
-/** Dispatch an ops-backed write, serializing a raw device's offset. */
+/**
+ * The description an ops-backed read or write of `entry` holds for its
+ * length, as lseek holds it to move the offset, or NULL. A raw disk window's
+ * transfer uses `raw_offset`, and a /proc file's the offset, a byte of its
+ * text or an address of /proc/PID/mem; either may sleep before it sets the
+ * offset past what it moved, a /proc one in a fault on the caller's buffer
+ * or in bringing in a page of the process, and a seek through a descriptor
+ * that shares the description must wait for it or be lost. Linux holds such
+ * a file's position lock across read, write and lseek alike. pread64 and
+ * pwrite64 hold nothing, since they work on a copy (`pio_view`).
+ */
+static struct open_file *ops_offset_held(fd_entry_t *entry)
+{
+    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;
+}
+
+/** Dispatch an ops-backed write, holding the description of one whose write
+ * uses its offset (`ops_offset_held`). */
 static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)
 {
-    int raw = devfs_fd_is_raw(entry);
+    struct open_file *held = ops_offset_held(entry);
     int32_t rc;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
     }
-    if (raw) {
-        fd_ofd_lock(entry->ofd);
+    if (held) {
+        fd_ofd_lock(held);
     }
     rc = entry->ops->write ? entry->ops->write(entry, buf, count) : -EBADF;
-    if (raw) {
-        fd_ofd_unlock(entry->ofd);
+    if (held) {
+        fd_ofd_unlock(held);
     }
     return rc;
 }
@@ -2967,7 +2984,9 @@ static int dir_cursor_valid(fd_entry_t *entry, uint32_t target)
 /**
  * lseek(2) and _llseek(2) on a directory or a /proc file: the offset
  * `whence` and `off` give, stored in the description under its lock and
- * returned in `*out`, or a negative errno with the offset unchanged.
+ * returned in `*out`, or a negative errno with the offset unchanged. A read
+ * or a write of a /proc file holds the same lock (`ops_offset_held`), so a
+ * seek waits for one that sleeps.
  *
  * SEEK_SET and SEEK_CUR move the offset; SEEK_END is -EINVAL, as Linux's
  * /proc files and tmpfs directories answer, since neither has a size to
@@ -3148,21 +3167,22 @@ int sock_is_query(const struct socket *sock)
     return sock->type == SOCK_RAW && sock->protocol == 0;
 }
 
-/** Dispatch an ops-backed read, serializing a raw device's offset. */
+/** Dispatch an ops-backed read, holding the description of one whose read
+ * uses its offset (`ops_offset_held`). */
 static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)
 {
-    int raw = devfs_fd_is_raw(entry);
+    struct open_file *held = ops_offset_held(entry);
     int32_t rc;
 
     if (!(entry->flags & FD_FLAG_READ)) {
         return -EBADF;
     }
-    if (raw) {
-        fd_ofd_lock(entry->ofd);
+    if (held) {
+        fd_ofd_lock(held);
     }
     rc = entry->ops->read ? entry->ops->read(entry, buf, count) : -EBADF;
-    if (raw) {
-        fd_ofd_unlock(entry->ofd);
+    if (held) {
+        fd_ofd_unlock(held);
     }
     return rc;
 }

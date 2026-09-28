@@ -13,6 +13,12 @@ that descriptor uses the same snapshot, except
 and
 .Pa /proc/PID/mem ,
 which each read reaches as they are then.
+A read or a write holds the descriptor's open file description for its
+length, as
+.Xr lseek 2
+holds it to move the offset, so a seek through a descriptor that shares
+it waits for the transfer and is not lost when the transfer ends; Linux
+holds the file's position lock the same way.
 A report whose text cannot be allocated is refused with
 .Er ENOMEM ,
 and

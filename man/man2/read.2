@@ -91,6 +91,10 @@ read from the snapshot made when opened, except
 whose text each read makes, and
 .Pa /proc/ Ns Ar pid Ns Pa /mem ,
 which reads the memory as it is then.
+A read of one holds the open file description for its length, as
+.Xr lseek 2
+holds it to move the offset, so a seek through a descriptor that shares
+it waits for the read.
 Other devices use their own read operation.
 Mouse reads return whole packets without waiting and return zero when
 the buffer cannot hold one packet.
