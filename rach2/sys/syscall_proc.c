@@ -915,8 +915,9 @@ static void exec_release(void)
  *
  * @param argc the argument count, updated when the vector grows.
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
- *         errno for one whose first line names nothing or whose arguments no
- *         longer fit.
+ *         errno for one whose first line names nothing, whose arguments no
+ *         longer fit, or whose interpreter is named as a directory by its
+ *         end, which `canonicalize_named` refuses.
  */
 static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
                             int (*read)(void *, void *, uint32_t, uint32_t), void *ctx)
@@ -1004,10 +1005,8 @@ static int32_t exec_shebang(struct exec_state *s, uint32_t *argc,
        does not collapse `.` or `..`, so an interpreter named
        `/bin/../dev/something` would pass it while the file system resolved the
        name it really wrote. */
-    if (canonicalize_abs(s->path) < 0) {
-        return -ENOENT;
-    }
-    return 1;
+    rc = canonicalize_named(s->path);
+    return rc < 0 ? rc : 1;
 }
 
 /**
@@ -1193,15 +1192,16 @@ static int32_t exec_copy_args(struct exec_state *s, const char __user *user_path
  * The walk may not arrive on the synthetic /dev and /proc mounts, which
  * hold no programs, so execve sees the mount boundary open sees and cannot
  * reach a file a hostile image placed below the synthetic prefix; a mount
- * with MS_NOEXEC holds none either. The caller needs the execute right,
- * root too. The set-id facts are taken while the node is at hand and apply
- * only once the exec commits. Setgid counts only with the group-execute
- * bit beside it, which is Linux's rule: without it a 02700 file owned
- * 1000:0 passes the execute check on its owner bits, since the check judges
- * one identity class and the owner's first, and would hand its executor
- * egid 0. Setgid without group-execute is the mark of mandatory locking in
- * Unix, which nothing here implements. On a mount with MS_NOSUID the bits
- * are read and ignored. 0 or a negative errno.
+ * with MS_NOEXEC holds none either. A directory is no program and is
+ * -EACCES, as Linux's open for an exec answers. The caller needs the execute
+ * right, root too. The set-id facts are taken while the node is at hand and
+ * apply only once the exec commits. Setgid counts only with the
+ * group-execute bit beside it, which is Linux's rule: without it a 02700
+ * file owned 1000:0 passes the execute check on its owner bits, since the
+ * check judges one identity class and the owner's first, and would hand its
+ * executor egid 0. Setgid without group-execute is the mark of mandatory
+ * locking in Unix, which nothing here implements. On a mount with MS_NOSUID
+ * the bits are read and ignored. 0 or a negative errno.
  */
 static int32_t exec_open(struct exec_file *f, const char *path, struct exec_setid *id,
                          struct mm *keep)
@@ -1222,6 +1222,8 @@ static int32_t exec_open(struct exec_file *f, const char *path, struct exec_seti
     }
     nosuid = (ref.mnt->flags & VFS_MS_NOSUID) != 0;
     if (vfs_synth_vpath(ref.mnt, ref.node) || (ref.mnt->flags & VFS_MS_NOEXEC)) {
+        rc = -EACCES;
+    } else if (vfs_getattr(ref.mnt, ref.node, &vst) == 0 && (vst.mode & 0170000u) == 0040000u) {
         rc = -EACCES;
     } else if (mnt_is_root(ref.mnt)) {
         const krffs_node_t *node = ref.node;

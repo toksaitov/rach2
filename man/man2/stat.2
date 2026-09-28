@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt STAT 2
 .Os
 .Sh NAME
@@ -44,6 +44,16 @@ which it then follows, as Linux does.
 Both follow links in preceding components, and a path that names a
 directory by its end and reaches anything else fails with
 .Er ENOTDIR .
+A last
+.Pa \&.
+is looked up in the directory before it, which takes search permission
+there, so without it
+.Pa dir/.\&
+fails with
+.Er EACCES
+where
+.Pa dir/
+does not, as on Linux.
 .Fn fstat
 reports the object referred to by
 .Fa fd .

@@ -113,10 +113,14 @@ A directory and a nondirectory cannot replace each other.
 .Pp
 The root itself,
 .Pa / ,
-is refused with
-.Er EINVAL ,
-where Linux returns
-.Er EBUSY .
+as either path is refused with
+.Er EBUSY ,
+and as the new path under
+.Dv RENAME_NOREPLACE
+with
+.Er EEXIST ,
+as on Linux, though before either path is walked, where Linux walks
+both first.
 A path whose last component is
 .Pa \&.
 or
@@ -182,17 +186,18 @@ A relative path's directory descriptor is not open.
 .Dv RENAME_NOREPLACE
 was given and
 .Fa newpath
-exists, or its last component is
+exists, is the root, or has
 .Pa \&.
 or
-.Pa \&.. .
+.Pa \&..
+as its last component.
 .It Er EBUSY
 A path entered a mount being mounted or unmounted, either entry is a
-mount point, the last component of either path is
+mount point, either path is the root or has
 .Pa \&.
 or
-.Pa \&.. ,
-or a destination directory is held open.
+.Pa \&..
+as its last component, or a destination directory is held open.
 On the KRFFS boot root, a different destination file backs an attached
 loop device.
 .It Er EFAULT
@@ -201,7 +206,7 @@ A path cannot be read from user memory, or there is no current process.
 An ext2 directory cannot grow further or a required block exceeds the
 file system's addressing limit.
 .It Er EINVAL
-Either path is the root, a destination has no leaf component, a
+A destination has no leaf component, a
 directory would move into itself or below itself, a file system
 rejects the name or cannot supply required attributes, or
 .Fn renameat2

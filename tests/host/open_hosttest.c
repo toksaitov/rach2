@@ -35,6 +35,7 @@ static int32_t sys_write(isr_params_t *params);
 static int32_t sys_writev(isr_params_t *params);
 static int canonicalize_abs(char *path);
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath);
+static int canonicalize_named(char *path);
 static int fd_node_check(fd_entry_t *entry);
 static int cred_privileged(void);
 static void cred_kill_setid(krffs_node_t *node);

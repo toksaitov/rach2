@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -203,6 +203,14 @@ read-only.
 requires
 .Fa target
 to resolve to the root of a mount.
+A target that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+must reach a directory, so a file named with a trailing slash returns
+.Er ENOTDIR ,
+as on Linux, where the same file named without one returns
+.Er EINVAL .
 .Fa flags
 must be zero;
 .Dv MNT_FORCE ,
@@ -303,7 +311,12 @@ or the selected loop device is unattached.
 Memory for path resolution, a mount record, or file-system state is
 unavailable, or the sector-claim table is full.
 .It Bq Er ENOTDIR
-The mount target or a directory component is not a directory.
+The mount target or a directory component is not a directory, or the
+unmount target ends in a slash or in
+.Pa \&.
+or
+.Pa \&..
+and reaches something else.
 .It Bq Er EPERM
 The caller's effective user ID is not 0.
 .It Bq Er EROFS

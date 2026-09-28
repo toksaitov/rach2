@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt UNIX 7
 .Os
 .Sh NAME
@@ -51,6 +51,19 @@ when the path exists; a connect or a send to it needs write permission on
 it.
 The file stays after the socket is closed, as in Linux, and a connect to
 it then fails with
+.Er ECONNREFUSED .
+A path that ends in a slash, or whose last component is
+.Pa \&.
+or
+.Pa \&.. ,
+names a directory, which no socket file is, as in Linux: a bind to one
+makes nothing and fails with
+.Er ENOENT
+when a slash follows a name nothing has and with
+.Er EADDRINUSE
+otherwise, and a connect or a send to one fails with
+.Er ENOTDIR
+unless it reaches a directory, which is not a socket and fails with
 .Er ECONNREFUSED .
 A name whose first byte is NUL is in the abstract namespace: it names no
 file, lasts as long as its socket, and is found only by sockets of the
