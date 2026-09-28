@@ -10,8 +10,11 @@
  * covered in-guest by waitprobe and by the live httpd accept/recv wake; here we
  * exercise exactly the array bookkeeping wq_wake_all relies on.
  *
- * A wake is counted in the queue's `wakes`, with waiters or none, which an
- * edge-triggered epoll registration reads to tell that its object changed.
+ * A wake is counted in the queue's `wakes` for each kind of change it names,
+ * data, room or hangup, with waiters or none, and wq_wake_all names all three;
+ * an edge-triggered epoll registration reads the kinds it watches to tell
+ * that its object changed. A wake that names none still wakes every waiter,
+ * and wq_wakes sums the kinds asked for.
  *
  * One row does run the wait: a model `schedule` records the deadline the
  * waiter blocked with and wakes it as `signal_post` does, clearing that
@@ -104,6 +107,39 @@ static void dequeue(wait_queue_t *wq, process_t *p)
     wq_dequeue(wq, &p->waiter);
 }
 
+/**
+ * Each wake is counted for every kind it names, with waiters or none, and an
+ * init starts the counts over; a wake of one kind, or of none, still wakes
+ * every waiter.
+ */
+static void wake_kinds(void)
+{
+    wait_queue_t wq;
+    static process_t a, b;
+
+    wait_queue_init(&wq);
+    wq_wake(&wq, WQ_DATA);
+    CHECK(wq_wakes(&wq, WQ_DATA) == 1);
+    CHECK(wq_wakes(&wq, WQ_ROOM) == 0 && wq_wakes(&wq, WQ_HANGUP) == 0);
+    wq_wake(&wq, WQ_ROOM | WQ_HANGUP);
+    CHECK(wq_wakes(&wq, WQ_DATA) == 1 && wq_wakes(&wq, WQ_ROOM) == 1);
+    CHECK(wq_wakes(&wq, WQ_HANGUP) == 1 && wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 2);
+    wq_wake(&wq, 0);
+    CHECK(wq_wakes(&wq, WQ_ALL) == 3);
+    wait_queue_init(&wq);
+    CHECK(wq_wakes(&wq, WQ_ALL) == 0);
+
+    a.state = PROC_BLOCKED;
+    b.state = PROC_BLOCKED;
+    enqueue(&wq, &a);
+    wq_wake(&wq, WQ_ROOM);
+    CHECK(a.state == PROC_READY && total_queued(&wq) == 0);
+    enqueue(&wq, &b);
+    wq_wake(&wq, 0);
+    CHECK(b.state == PROC_READY && total_queued(&wq) == 0);
+    CHECK(wq_wakes(&wq, WQ_DATA | WQ_HANGUP) == 0 && wq_wakes(&wq, WQ_ROOM) == 1);
+}
+
 int main(void)
 {
     wait_queue_t wq;
@@ -144,12 +180,9 @@ int main(void)
     CHECK(c.state == PROC_READY);
     CHECK(total_queued(&wq) == 0); /* multi-waiter wake clears all slots */
 
-    /* Each wake is counted, with waiters or none, and init starts over. */
-    CHECK(wq.wakes == 1);
-    wq_wake_all(&wq);
-    CHECK(wq.wakes == 2);
-    wait_queue_init(&wq);
-    CHECK(wq.wakes == 0);
+    /* The wake is counted for every kind (wake_kinds). */
+    CHECK(wq_wakes(&wq, WQ_DATA) == 1 && wq_wakes(&wq, WQ_ROOM) == 1);
+    CHECK(wq_wakes(&wq, WQ_HANGUP) == 1 && wq_wakes(&wq, WQ_ALL) == 3);
 
     /* A non-BLOCKED waiter is left alone but still dequeued. */
     wait_queue_init(&wq);
@@ -195,5 +228,6 @@ int main(void)
         CHECK(sleeper.state == PROC_RUNNING && total_queued(&wq) == 0);
         current_proc = 0;
     }
+    wake_kinds();
     return fails > 255 ? 255 : fails;
 }

@@ -12,14 +12,17 @@
  *
  * A registration is level-triggered, reported at every wait while its
  * descriptor is ready, or with EPOLLET edge-triggered, reported when an event
- * appears or its descriptor's wait queue is woken, and not again until then.
+ * appears or its descriptor's wait queue is woken for a kind of change among
+ * its events (data, room, or a hangup), and not again until then.
  * EPOLLONESHOT stops the reports after the first until epoll_ctl changes the
  * registration. A registration ends when its descriptor is closed: the next
  * wait finds the number naming another open file, or none, and drops it. A
  * wait uses the poll core (poll.c). An epoll set inside another is ready
  * while a wait on it would report an event, and a wait on the outer set is
  * on the queues of the sets inside it and of what they watch, four sets
- * deep at most, as Linux nests them.
+ * deep at most, as Linux nests them; an add that would nest sets deeper,
+ * counting those above the set added to as well as those below the set
+ * added, or make a cycle, is refused.
  */
 
 struct isr_params;

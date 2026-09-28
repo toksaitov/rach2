@@ -100,7 +100,7 @@ static void (*fs_sibling)(void);
 static void (*release_sibling)(void);
 static int ran, parked;
 static wait_queue_t *parked_on;
-static uint32_t wakes_at_park;
+static uint32_t parked_wakes;
 /* Set by a row whose sleeping copy reads what a sibling that got through
  * would have freed: that copy fails, rather than read freed memory. */
 static int copy_needs_park;
@@ -268,7 +268,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     }
     if (park_active()) {
         parked_on = wq;
-        wakes_at_park = wq->wakes;
+        parked_wakes = 0;
         park();
     }
     return -EINTR;
@@ -282,7 +282,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     }
     if (park_active()) {
         parked_on = wq;
-        wakes_at_park = wq->wakes;
+        parked_wakes = 0;
         park();
     }
     dprintf(2, "unix-hosttest: fail: an uninterruptible wait that no call can end\n");
@@ -290,15 +290,33 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/**
+ * A wake counts one for each kind of change it names, as wait_queue.c
+ * does, and one in `parked_wakes` when it is of the queue a sibling parked
+ * on, whatever its kinds, since it would end that sibling's wait.
+ */
+void wq_wake(wait_queue_t *wq, uint32_t kinds)
+{
+    int k;
+
+    for (k = 0; k < WQ_KINDS; k++) {
+        if (kinds & (1u << k)) {
+            wq->wakes[k]++;
+        }
+    }
+    if (wq == parked_on) {
+        parked_wakes++;
+    }
+}
+
 void wq_wake_all(wait_queue_t *wq)
 {
-    wq->wakes++;
+    wq_wake(wq, WQ_ALL);
 }
 
 void wait_queue_init(wait_queue_t *wq)
 {
-    wq->head = NULL;
-    wq->wakes = 0;
+    k_memset(wq, 0, sizeof(*wq));
 }
 
 void fd_ofd_ref(struct open_file *ofd)
@@ -1037,7 +1055,7 @@ static void bind_row(void)
               same(sockfiles[0].path, "/tmp/first"),
           "the first bind names the socket with the file it made");
     if (parked) {
-        check(s->lock_wq.wakes != wakes_at_park, "the first bind's end wakes the bind that waits");
+        check(parked_wakes != 0, "the first bind's end wakes the bind that waits");
         check(park_run(bind_sibling) && sibling_rc[0] == -EINVAL,
               "the bind that waited finds the socket named and fails with EINVAL");
     }

@@ -240,7 +240,7 @@ void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint
         q->proto[slot] = ethertype;
         q->ifindex[slot] = (uint8_t)arrived_on;
         q->count++;
-        wq_wake_all(&b->sock->waiters);
+        wq_wake(&b->sock->waiters, WQ_DATA);
     }
 }
 

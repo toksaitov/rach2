@@ -93,6 +93,18 @@ static void pty_slave_sink(void *ctx, unsigned char c)
 }
 
 /**
+ * Wake the master's queue after slave output or echo: a change of data when
+ * the slave's sink has put bytes in m_buf since the count `*from`, which moves
+ * on to the present one, and of no kind otherwise, as input written with echo
+ * off, or output the full ring dropped, gives the master nothing to read.
+ */
+static void wake_master(struct pty *p, uint32_t *from)
+{
+    wq_wake(&p->m_read_wq, p->m_tail != *from ? WQ_DATA : 0u);
+    *from = p->m_tail;
+}
+
+/**
  * Allocate a pair at the lowest free index, or return NULL when the heap has
  * no room. One queue serves the master's readers, writers and pollers; the
  * slave's `space_wq` points at it, so a flush or termios change wakes a
@@ -242,6 +254,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     struct pty *p = (struct pty *)e->priv;
     uint8_t kbuf[256];
     uint32_t done = 0;
+    uint32_t pushed = p->m_tail;
 
     if (count == 0) {
         return 0;
@@ -257,7 +270,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             chunk = sizeof(kbuf);
         }
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
-            wq_wake_all(&p->m_read_wq);
+            wake_master(p, &pushed);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         for (i = 0; i < chunk; i++) {
@@ -271,7 +284,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
                     i++;
                     continue;
                 }
-                wq_wake_all(&p->m_read_wq);
+                wake_master(p, &pushed);
                 if (done + i > 0 || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK))) {
                     return done + i > 0 ? (int32_t)(done + i) : -EAGAIN;
                 }
@@ -287,7 +300,7 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         done += chunk;
     }
     /* The echo just pushed into m_buf: wake any master reader/poller once. */
-    wq_wake_all(&p->m_read_wq);
+    wake_master(p, &pushed);
     return (int32_t)done;
 }
 
@@ -449,7 +462,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
     }
     if (n > 0) {
-        wq_wake_all(&p->m_read_wq);
+        wq_wake(&p->m_read_wq, WQ_ROOM);
     }
     if (n < 0) {
         return n;
@@ -474,6 +487,7 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     struct pty *p = (struct pty *)e->priv;
     uint8_t kbuf[256];
     uint32_t done = 0;
+    uint32_t pushed = p->m_tail;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -500,13 +514,13 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             chunk = sizeof(kbuf);
         }
         if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
-            wq_wake_all(&p->m_read_wq);
+            wake_master(p, &pushed);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         tty_write(&p->slave, kbuf, (int)chunk);
         done += chunk;
     }
-    wq_wake_all(&p->m_read_wq); /* output pushed into m_buf: wake the master */
+    wake_master(p, &pushed); /* output pushed into m_buf: wake the master */
     return (int32_t)done;
 }
 

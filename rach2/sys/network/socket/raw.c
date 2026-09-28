@@ -145,7 +145,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
         q->len[slot] = copy_len;
         q->src[slot] = src;
         q->count++;
-        wq_wake_all(&b->sock->waiters);
+        wq_wake(&b->sock->waiters, WQ_DATA);
     }
 }
 

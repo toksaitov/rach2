@@ -106,14 +106,14 @@ if case == 'split-queue':
             '    wait_queue_init(&p->m_read_wq);\n    wait_queue_init(&p->m_write_wq);')
     replace('pty.c', 'wq_wait_event(&p->m_read_wq, ptm_has_room, p)',
             'wq_wait_event(&p->m_write_wq, ptm_has_room, p)')
-    replace('pty.c', '    if (n > 0) {\n        wq_wake_all(&p->m_read_wq);',
-            '    if (n > 0) {\n        wq_wake_all(&p->m_write_wq);')
+    replace('pty.c', '    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);',
+            '    if (n > 0) {\n        wq_wake(&p->m_write_wq, WQ_ROOM);')
 elif case == 'flush':
-    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);',
+    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
             '    n_tty_flush(&t->ldisc);')
 elif case == 'termios-flush':
     replace('tty.c', '    readable = n_tty_set_termios(&t->ldisc, kt);\n'
-                    '    wq_wake_all(t->space_wq);',
+                    '    wq_wake(t->space_wq, WQ_ROOM);',
             '    readable = n_tty_set_termios(&t->ldisc, kt);')
 elif case in ('partial-master', 'partial-slave'):
     path = root / 'pty.c'
@@ -121,7 +121,7 @@ elif case in ('partial-master', 'partial-slave'):
     begin = text.index('static int32_t ' + ('ptm_write' if case == 'partial-master' else 'pts_write'))
     end = text.index('\nstatic ', begin + 1)
     part = text[begin:end]
-    old = '            wq_wake_all(&p->m_read_wq);\n            return (done > 0)'
+    old = '            wake_master(p, &pushed);\n            return (done > 0)'
     if part.count(old) != 1:
         raise SystemExit('tty-mutation: copy failure branch does not match once')
     path.write_text(text[:begin] + part.replace(old, '            return (done > 0)') + text[end:])
@@ -143,6 +143,22 @@ elif case == 'line-end':
             't->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 0;')
 elif case == 'slot-reset':
     replace('n_tty.c', '        t->rq_end[t->rq_tail & (N_TTY_READ_MAX - 1)] = 0;\n', '')
+elif case == 'input-kind':
+    replace('tty.c', '            t->ready_us = pit_now_us();\n        }\n'
+                    '        wq_wake(&t->input_wq, WQ_DATA);',
+            '            t->ready_us = pit_now_us();\n        }\n'
+            '        wq_wake_all(&t->input_wq);')
+elif case == 'echo-kind':
+    replace('pty.c', 'p->m_tail != *from ? WQ_DATA : 0u', 'WQ_DATA')
+elif case == 'room-kind':
+    replace('pty.c', '    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);',
+            '    if (n > 0) {\n        wq_wake_all(&p->m_read_wq);')
+elif case == 'output-kind':
+    replace('pty.c', '    wake_master(p, &pushed); /* output pushed into m_buf: wake the master */',
+            '    wq_wake_all(&p->m_read_wq);')
+elif case == 'flush-kind':
+    replace('tty.c', '    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);',
+            '    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);')
 else:
     raise SystemExit('tty-mutation: unknown mutation: ' + case)
 PY
@@ -151,7 +167,8 @@ PY
 
 echo "tty-mutation: logs: $work"
 for case_name in split-queue flush termios-flush partial-slave partial-master \
-                 latency-lock veol-byte line-end slot-reset; do
+                 latency-lock veol-byte line-end slot-reset input-kind echo-kind \
+                 room-kind output-kind flush-kind; do
     test='tty'
     case "$case_name" in
         split-queue) expected='slave read wakes master POLLOUT' ;;
@@ -163,6 +180,11 @@ for case_name in split-queue flush termios-flush partial-slave partial-master \
         veol-byte) test=n_tty; expected='VEOL byte and boundary survive termios change' ;;
         line-end) test=n_tty; expected='VEOF boundary precedes a later newline' ;;
         slot-reset) test=n_tty; expected='ring reuse clears old end markers' ;;
+        input-kind) expected='input written to the master is data for the slave' ;;
+        echo-kind) expected='input written with echo off is no change for the master' ;;
+        room-kind) expected='a slave read is room for the master and no data' ;;
+        output-kind) expected='slave output is data for the master and no room' ;;
+        flush-kind) expected='an input flush is room for the master and no data' ;;
     esac
     run_phase fixed
     mutate

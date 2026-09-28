@@ -10,7 +10,9 @@
  * the second read must find the counter taken, the first must return the
  * whole value, and the counter must end at zero, not wrap below it. With
  * EFD_SEMAPHORE and a counter of 2, each of the two reads takes one. A copy
- * that fails loses the value it took, as in Linux.
+ * that fails loses the value it took, as in Linux. A read wakes the counter's
+ * queue for room alone and a write for data alone, so an edge-triggered epoll
+ * registration for output is not told of a write.
  */
 #include "io/eventfd.c"
 
@@ -23,6 +25,7 @@ static process_t reader;
 process_t *current_proc = &reader;
 static uint64_t user[4];
 static int failures, wakes, inner_reads;
+static uint32_t wake_kinds;
 static int32_t inner_result;
 static uint64_t inner_value;
 static int nested;
@@ -69,10 +72,11 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
-void wq_wake_all(wait_queue_t *wq)
+void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;
     wakes++;
+    wake_kinds |= kinds;
 }
 
 void wait_queue_init(wait_queue_t *wq)
@@ -138,6 +142,7 @@ static void setup(uint64_t value, int semaphore)
     inner_result = 0;
     inner_reads = 0;
     wakes = 0;
+    wake_kinds = 0;
 }
 
 int main(void)
@@ -150,6 +155,13 @@ int main(void)
           "a read during the first read's copy finds the counter taken");
     CHECK(counter.count == 0, "the counter ends at zero");
     CHECK(wakes >= 1, "the read wakes the writers");
+    CHECK(wake_kinds == WQ_ROOM, "a read wakes the queue for room alone");
+
+    setup(0, 0);
+    user[0] = 3;
+    CHECK(eventfd_write(&entry, (const char *)user, 8) == 8 && counter.count == 3,
+          "a write adds to the counter");
+    CHECK(wakes == 1 && wake_kinds == WQ_DATA, "a write wakes the queue for data alone");
 
     setup(2, 1);
     nested = 1;

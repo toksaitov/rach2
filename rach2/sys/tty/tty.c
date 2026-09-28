@@ -152,7 +152,7 @@ void tty_input_char(struct tty *t, unsigned char c)
         if (t->ready_us == 0) {
             t->ready_us = pit_now_us();
         }
-        wq_wake_all(&t->input_wq);
+        wq_wake(&t->input_wq, WQ_DATA);
     }
 }
 
@@ -319,9 +319,9 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
         n_tty_flush(&t->ldisc);
     }
     readable = n_tty_set_termios(&t->ldisc, kt);
-    wq_wake_all(t->space_wq);
+    wq_wake(t->space_wq, WQ_ROOM);
     if (readable) {
-        wq_wake_all(&t->input_wq);
+        wq_wake(&t->input_wq, WQ_DATA);
     }
     kirq_restore(flags);
 }
@@ -336,7 +336,7 @@ void tty_flush_input(struct tty *t)
         serial_rx_flush();
     }
     n_tty_flush(&t->ldisc);
-    wq_wake_all(t->space_wq);
+    wq_wake(t->space_wq, WQ_ROOM);
     kirq_restore(flags);
 }
 

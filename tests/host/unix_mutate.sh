@@ -85,8 +85,8 @@ ipc = Path(sys.argv[1])
 release = '            fd_release_backing(fd_get(table(), %s));\n            fd_free(table(), %s);\n'
 faults = {
     'accept': ('unix.c', [
-        ('    s->acc_len--;\n    wq_wake_all(&s->wq);\n',
-         '    s->acc_len--;\n    wq_wake_all(&s->wq);\n    publish(fd, c, flags);\n'),
+        ('    s->acc_len--;\n    wq_wake(&s->wq, 0);\n',
+         '    s->acc_len--;\n    wq_wake(&s->wq, 0);\n    publish(fd, c, flags);\n'),
         ('            fd_free(table(), fd);\n            unix_release(c, 0);\n',
          release % ('fd', 'fd'))]),
     'socketpair': ('unix.c', [

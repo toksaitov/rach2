@@ -130,12 +130,13 @@ static int fd_is_nonblock(fd_entry_t *e)
 }
 
 /* Wake the waiters of one end's queue `wq`, and the pollers of a FIFO's
- * descriptions open on both ends, whose readiness any change moves. */
-static void pipe_wake(pipe_t *p, wait_queue_t *wq)
+ * descriptions open on both ends, whose readiness any change moves, for a
+ * change of the kinds `kinds` (`wq_wake`). */
+static void pipe_wake(pipe_t *p, wait_queue_t *wq, uint32_t kinds)
 {
-    wq_wake_all(wq);
+    wq_wake(wq, kinds);
     if (p->rdwr_open) {
-        wq_wake_all(&p->rdwr_wq);
+        wq_wake(&p->rdwr_wq, kinds);
     }
 }
 
@@ -220,7 +221,7 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
         pipe_ring_consume(p, chunk);
         done += chunk;
-        pipe_wake(p, &p->write_wq);
+        pipe_wake(p, &p->write_wq, WQ_ROOM);
     }
 
     return (int32_t)done;
@@ -313,7 +314,7 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             pipe_ring_produce(p, chunk);
             done += chunk;
             if (was_empty) {
-                pipe_wake(p, &p->read_wq);
+                pipe_wake(p, &p->read_wq, WQ_DATA);
             }
         }
     }
@@ -407,11 +408,11 @@ static void pipe_close(fd_entry_t *e)
     }
     if (e->flags & FD_FLAG_READ) {
         p->read_open--;
-        pipe_wake(p, &p->write_wq); /* writers now get SIGPIPE */
+        pipe_wake(p, &p->write_wq, WQ_ALL); /* writers now get SIGPIPE */
     }
     if (e->flags & FD_FLAG_WRITE) {
         p->write_open--;
-        pipe_wake(p, &p->read_wq); /* readers now get EOF */
+        pipe_wake(p, &p->read_wq, WQ_ALL); /* readers now get EOF */
     }
     if ((e->flags & FD_FLAG_READ) && (e->flags & FD_FLAG_WRITE)) {
         p->rdwr_open--;

@@ -24,13 +24,23 @@
  * has a size. The single-CPU lock between a sleeper
  * and an IRQ waker is just "interrupts off"; there is no second core to
  * race.
+ *
+ * A wake says what kind of change it is for the pollers of the queue: data
+ * to read, room to write, or a hangup or an error. The queue counts the
+ * wakes of each kind, whoever was on it, so a reader can tell that its
+ * object changed in a way it watches since it looked, as an edge-triggered
+ * epoll registration does.
  */
+#define WQ_DATA   1u
+#define WQ_ROOM   2u
+#define WQ_HANGUP 4u
+#define WQ_ALL    (WQ_DATA | WQ_ROOM | WQ_HANGUP)
+#define WQ_KINDS  3
+
 typedef struct wait_queue {
     struct wq_waiter *head;
-    /* The times `wq_wake_all` has woken the queue, whoever was on it, so a
-     * reader can tell that its object changed since it looked, as an
-     * edge-triggered epoll registration does. It wraps. */
-    uint32_t wakes;
+    /* The wakes of each kind, in the order of their bits. They wrap. */
+    uint32_t wakes[WQ_KINDS];
 } wait_queue_t;
 
 /*
@@ -70,17 +80,26 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
 /*
  * Make every process currently blocked on wq runnable, with one preferred
- * selection by the scheduler, empty the queue, and count the wake in
- * `wakes`. Safe to call from IRQ context (it disables interrupts around the
- * walk); a woken sleeper re-checks its own condition, so a spurious wake is
- * harmless.
+ * selection by the scheduler, empty the queue, and count the wake for each
+ * kind of change among `kinds`. The kinds are those the change can bring to
+ * a poller of the queue; a wake for sleepers alone, such as room in a
+ * socket's queue for the senders that wait on it, passes none. Safe to call
+ * from IRQ context (it disables interrupts around the walk); a woken sleeper
+ * re-checks its own condition, so a spurious wake is harmless.
  */
+void wq_wake(wait_queue_t *wq, uint32_t kinds);
+
+/* wq_wake for every kind of change: for a queue no poller watches, and for a
+ * change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);
+
+/* The wakes `wq` has counted of the kinds among `kinds`, summed. */
+uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds);
 
 /*
  * poll/select support: a poller puts a record of its own on every polled
  * object's queue with wq_poll_add, sleeps once, and on any wake takes each
- * record off with wq_poll_remove; any object's wq_wake_all wakes it. Both
+ * record off with wq_poll_remove; a wake of any object's queue wakes it. Both
  * are idempotent (a wake already removed the waiter) and must be called
  * with interrupts off. They do NOT block or change process state; the poll
  * core owns the BLOCKED/schedule()/RUNNING transitions, the same

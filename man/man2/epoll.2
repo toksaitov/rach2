@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt EPOLL 2
 .Os
 .Sh NAME
@@ -64,11 +64,29 @@ descriptor is ready.
 With
 .Dv EPOLLET
 it is edge-triggered: a wait reports it when an event appears, or when
-the descriptor has changed since its last report, as a pipe drained and
-filled again between two waits has, and not again until then.
-A change is a wake of the descriptor's wait queue, of whatever kind, so
-an edge may be reported where Linux, which looks at the events of the
-change, reports none.
+the descriptor has changed since its last report in a way its events
+watch, as a pipe drained and filled again between two waits has, and not
+again until then.
+A change is data that came, which
+.Dv EPOLLIN ,
+.Dv EPOLLPRI ,
+.Dv EPOLLRDNORM
+and
+.Dv EPOLLRDBAND
+watch; room made to write, which
+.Dv EPOLLOUT ,
+.Dv EPOLLWRNORM
+and
+.Dv EPOLLWRBAND
+watch; or a hangup, an error, a close or a shutdown, which every
+registration watches.
+So a socket watched for
+.Dv EPOLLOUT
+alone is not reported again when data comes to it, and one watched for
+.Dv EPOLLIN
+is reported for each arrival, as in Linux.
+A write to a pipe that is not empty is no change here, where Linux
+wakes the pollers of a pipe at every write and so reports it again.
 With
 .Dv EPOLLONESHOT
 the first report disables it, errors and hangups included, until an
@@ -119,9 +137,11 @@ is off, does not make it readable.
 A set may be added to another: the outer set is ready while a wait on
 the inner one would report an event, and a change in what the inner set
 watches wakes a wait on the outer one, as in Linux.
-A scan looks four sets deep at most; adding a set that would make a
-cycle, or nest deeper, fails with
-.Er ELOOP .
+Sets nest four deep at most below a set, a chain of five, as in Linux:
+adding a set that would make a cycle, or a longer chain, fails with
+.Er ELOOP ,
+whether the chain would grow below the set added or above the set it is
+added to.
 .Sh RETURN VALUES
 .Fn epoll_create1
 returns the new descriptor,
@@ -172,8 +192,12 @@ or the timeout of
 has negative seconds, or nanoseconds outside 0 to 999999999.
 .It Er ELOOP
 .Dv EPOLL_CTL_ADD
-of a set would make a cycle of sets, or sets nested more than four
-deep.
+of a set would make a cycle of sets, or a chain of more than five sets,
+counting the sets that hold
+.Fa epfd
+as well as those that
+.Fa fd
+holds.
 .It Er EMFILE
 .Fn epoll_create
 or
