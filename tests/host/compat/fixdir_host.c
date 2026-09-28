@@ -35,13 +35,25 @@ static int fix_plain(const char *tmp)
            tmp[strspn(tmp, FIX_PLAIN)] == '\0';
 }
 
-/** At exit, remove the test's own directory if it passed, or else keep it
- * and say where, so that a failed test's fixtures can be read. */
+/* LeakSanitizer's check, when the test is built with it; the reference is
+ * weak, so a test built without it links. */
+extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
+
+/** Whether LeakSanitizer finds a leak now, which its own check at the end of
+ * the process, after this one, reports as the test's failure. */
+static int fix_leaks(void)
+{
+    return __lsan_do_recoverable_leak_check != NULL && __lsan_do_recoverable_leak_check() != 0;
+}
+
+/** At exit, remove the test's own directory if it passed and leaks nothing,
+ * or else keep it and say where, so that a failed test's fixtures can be
+ * read. */
 static void fix_remove(void)
 {
     char cmd[FIX_PATH_MAX + 16];
 
-    if (!passed) {
+    if (!passed || fix_leaks()) {
         printf("fixtures: kept in %s\n", own);
         return;
     }

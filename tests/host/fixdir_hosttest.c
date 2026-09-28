@@ -13,8 +13,9 @@
  * cannot fit ends the process with status 1, where snprintf would cut it
  * short. A child whose exit comes without `fix_passed`, as an exit on a
  * failed check does, keeps its directory with the files in it; one that said
- * it passed has it removed, files and all. Each child must exit with the
- * status it was given. This process makes no fixture directory of its own,
+ * it passed has it removed, files and all, unless LeakSanitizer finds a leak,
+ * which fails it at its end, as a row on Linux checks. Each child must exit
+ * with the status it was given. This process makes no fixture directory of its own,
  * so the children's are their own.
  */
 #include <stdio.h>
@@ -182,6 +183,55 @@ static void tmpdir_rows(void)
     rmdir(base);
 }
 
+#if defined(__linux__)
+static void *volatile lost;
+
+/** A child that says it passed and leaks, which LeakSanitizer reports as a
+ * failure at its end, keeps its directory. The row runs on Linux, where the
+ * host suite's sanitizer finds leaks. */
+static void leak_row(void)
+{
+    char dir[FIX_PATH_MAX], cmd[FIX_PATH_MAX + 16];
+    struct stat st;
+    int ends[2], there = 0;
+    ssize_t n = 0;
+    pid_t pid;
+
+    if (pipe(ends) != 0) {
+        CHECK(0, "a pipe for the leaking child");
+        return;
+    }
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+        const char *made = fix_dir();
+
+        if (write(ends[1], made, strlen(made)) < 0) {
+            _exit(3);
+        }
+        lost = malloc(64);
+        lost = NULL;
+        fix_passed();
+        exit(0);
+    }
+    close(ends[1]);
+    if (pid > 0) {
+        n = read(ends[0], dir, sizeof(dir) - 1);
+        waitpid(pid, NULL, 0);
+    }
+    close(ends[0]);
+    if (n > 0) {
+        dir[n] = '\0';
+        there = stat(dir, &st) == 0;
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
+        if (there && system(cmd) != 0) {
+            there = 0;
+        }
+    }
+    CHECK(there, "a test that said it passed and leaks keeps its fixture directory");
+}
+#endif
+
 int main(void)
 {
     plain_bases();
@@ -192,6 +242,9 @@ int main(void)
     CHECK(left_after(0, 0) == 1, "a test that exits without saying it passed keeps it");
     CHECK(left_after(1, 0) == 0,
           "a test that said it passed has its directory removed, files and all");
+#if defined(__linux__)
+    leak_row();
+#endif
     printf("fixdir-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
