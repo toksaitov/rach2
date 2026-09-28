@@ -10,9 +10,10 @@
 # lock; a stream send judged after its copy as before and a datagram send
 # not at all; a receive's descriptors in flight not found by the holder
 # count while it installs or closes them, the one being closed counted as
-# its own file's holder, or one it installed still counted; and a
-# descriptor in flight whose file moved counted, installed or released by
-# the node it had before. Each compiled fault must fail its named row and
+# its own file's holder, or one it installed still counted; a descriptor in
+# flight whose file moved counted, installed or released by the node it had
+# before; and a descriptor in flight taken from its place before its drop
+# has the root's lock. Each compiled fault must fail its named row and
 # end the run with status 1; each restored source is touched, rebuilt and
 # must pass again under ASan and UBSan.
 set -eu
@@ -78,7 +79,7 @@ echo "unix-proof: logs: $work"
 run_phase fixed 0 'unix-hosttest: result: pass:'
 for fault in accept socketpair rights pipe2 connect bind bind-wake bind-check receive receive-wake \
     send-stream send-datagram transit-count transit-release transit-installed moved-count \
-    moved-install moved-release; do
+    moved-install moved-release flight-left-unlocked; do
     python3 - "$work/sys/ipc" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -139,8 +140,10 @@ faults = {
         ('    for (in = transits; in; in = in->transit) {\n',
          '    for (in = NULL; in; in = in->transit) {\n')]),
     'transit-release': ('unix.c', [
-        ('        fds[i].type = FD_TYPE_NONE;\n        flight_drop(&e);\n',
-         '        flight_drop(&e);\n        fds[i].type = FD_TYPE_NONE;\n')]),
+        ('    if (count) {\n        (*count)--;\n    } else {\n        slot->type = FD_TYPE_NONE;\n'
+         '    }\n    flight_sync(&e);\n    fd_release_backing(&e);\n',
+         '    flight_sync(&e);\n    fd_release_backing(&e);\n    if (count) {\n'
+         '        (*count)--;\n    } else {\n        slot->type = FD_TYPE_NONE;\n    }\n')]),
     'transit-installed': ('unix.c', [
         ('        in->fds[given++].type = FD_TYPE_NONE;\n', '        given++;\n')]),
     'moved-count': ('unix.c', [
@@ -148,7 +151,14 @@ faults = {
          '        if (e->type == FD_TYPE_FILE && e->node == node) {\n')]),
     'moved-install': ('unix.c', [('        flight_sync(slot);\n', '')]),
     'moved-release': ('unix.c', [
-        ('    flight_sync(e);\n    fd_release_backing(e);\n', '    fd_release_backing(e);\n')]),
+        ('    flight_sync(&e);\n    fd_release_backing(&e);\n', '    fd_release_backing(&e);\n')]),
+    'flight-left-unlocked': ('unix.c', [
+        ('    struct vfs_mount *locked = fd_release_lock(slot);\n    fd_entry_t e = *slot;\n\n'
+         '    if (count) {\n        (*count)--;\n    } else {\n        slot->type = FD_TYPE_NONE;\n'
+         '    }\n',
+         '    struct vfs_mount *locked;\n    fd_entry_t e = *slot;\n\n'
+         '    if (count) {\n        (*count)--;\n    } else {\n        slot->type = FD_TYPE_NONE;\n'
+         '    }\n    locked = fd_release_lock(&e);\n')]),
 }
 name, changes = faults[sys.argv[2]]
 path = ipc / name
@@ -179,6 +189,7 @@ PY
         moved-count) message='a descriptor in flight is counted by the node its file moved to' ;;
         moved-install) message='a descriptor received after its file moved is installed with the node' ;;
         moved-release) message='a descriptor in flight never received releases the node its file moved to' ;;
+        flight-left-unlocked) message='a descriptor in flight is counted until its drop has the root' ;;
     esac
     run_phase "$fault-mutated" 1 "unix-hosttest: fail: $message"
     restore

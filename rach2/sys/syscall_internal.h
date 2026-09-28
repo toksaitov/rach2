@@ -18,6 +18,11 @@ extern volatile uint32_t fb_owner_pid;
 
 void fd_release_backing(fd_entry_t *e);
 
+/** The root's namespace lock, taken for the release of `e` when it may free
+ * a nameless node of the KRFFS root, or NULL (syscall_fs.c). A holder in a
+ * list of its own takes it before it leaves the list. May sleep. */
+struct vfs_mount *fd_release_lock(const fd_entry_t *e);
+
 /** At the end of a system call: let go of the descriptors the call held in
  * its shared table, and release those another sharer closed meanwhile that
  * no other call holds. May sleep. */

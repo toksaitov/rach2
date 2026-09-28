@@ -184,6 +184,73 @@ static void fd_fifo_orphan(const fd_entry_t *e)
 }
 
 /**
+ * Take the lock the release of `e`, a descriptor or a copy of one, needs when
+ * the release may free a node of the KRFFS root that lost its name: the
+ * root's namespace lock, for a file of the root, or for an end of a FIFO of
+ * the root or the reservation of an open of one. The mount locked, or NULL,
+ * with nothing taken, for any other descriptor.
+ *
+ * The unlink and the rename of a file hold that lock while they count its
+ * holders and take its name, and every allocation on the root holds it, so
+ * under it the release's count of the holders and its reclaim of the node,
+ * which marks the node's extent free and may sleep reading a neighbouring
+ * header, come with no count and no allocation between them. A holder that
+ * the count finds in a list of its own, a file mapping or a descriptor in
+ * flight, takes the lock before it leaves that list, as the address space
+ * that runs the file does (`fs_exe_lock`): until then a release of the
+ * file's other holders counts it. The release takes the lock again, which
+ * its holder may do. May sleep; no caller holds the namespace lock of
+ * another mount or the lock of a description on a mount.
+ */
+struct vfs_mount *fd_release_lock(const fd_entry_t *e)
+{
+    struct vfs_mount *root = vfs_root_mount();
+    int orphanable;
+
+    if (!krffs_fs) {
+        return NULL;
+    }
+    if (e->type == FD_TYPE_FILE) {
+        orphanable = e->node && e->node != krffs_fs->node;
+    } else {
+        orphanable = (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_NONE) && e->ofd &&
+                     e->ofd->vmnt == root && mnt_is_root(root);
+    }
+    if (!orphanable) {
+        return NULL;
+    }
+    vfs_ns_lock(root);
+    return root;
+}
+
+/**
+ * Free the node of the KRFFS root that `e` holds, when the node lost its name
+ * and `e` is its last holder: a file, or a FIFO whose end or reservation of
+ * an open `e` is (`fd_fifo_orphan`). The count of the holders and the reclaim
+ * run under the root's namespace lock (`fd_release_lock`). A descriptor in a
+ * table stays there, and so among the holders, until the release that calls
+ * this ends; a holder kept in a list of its own leaves the list under the
+ * same lock, which it took first.
+ */
+static void fd_release_orphan(fd_entry_t *e)
+{
+    struct vfs_mount *locked = fd_release_lock(e);
+
+    if (!locked) {
+        return;
+    }
+    if (e->type == FD_TYPE_FILE) {
+        if (e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
+            fd_free_orphan(e, e->node);
+            e->node = NULL;
+        }
+    } else {
+        fd_fifo_orphan(e);
+    }
+    vfs_ns_unlock(locked);
+}
+
+/**
  * Whether any descriptor anywhere has `node`. For callers outside this file.
  *
  * The debug shell removes and renames through the file system directly, below
@@ -295,22 +362,17 @@ static void fd_close_locks(const fd_entry_t *e)
  * reference, refcount about to reach 0). The socket reference, by contrast,
  * is counted per descriptor (socket_ref on dup/fork), so it is always
  * dropped here. No descriptor is both an ops object and a socket.
+ *
+ * A KRFFS node is a backing kind like any other here. An orphan, a reserved
+ * node no path names, is freed by its last holder, under the root's
+ * namespace lock (`fd_release_orphan`), and this runs while the closing
+ * slot is still populated, which is what the count's `except` is for: the
+ * closing descriptor is skipped, not cleared first, so it is counted by
+ * every other release until its own has the lock.
  */
 static void fd_release_objects(fd_entry_t *e)
 {
-    /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
-     * node no path names) is freed by its LAST holder, and this runs while the
-     * closing slot is still populated, which is what `except` is for: the
-     * closing descriptor is skipped, not cleared first, so "last holder"
-     * needs no ordering rule between two functions. */
-    if (e->type == FD_TYPE_FILE && e->node && krffs_fs && e->node != krffs_fs->node &&
-        e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
-        fd_free_orphan(e, e->node);
-        e->node = NULL;
-    }
-    if (e->type == FD_TYPE_PIPE) {
-        fd_fifo_orphan(e);
-    }
+    fd_release_orphan(e);
     /* A synthetic directory fd's pooled cookie, or an O_PATH leaf's node, is
      * freed when its last descriptor closes (dup/fork share it via the OFD
      * refcount, like an ops backing). */
@@ -407,9 +469,9 @@ struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
  * by, once that address space is off the list `mm_exe_holds` reads, with
  * `locked` held as `fs_exe_lock` returned it: a file of the KRFFS root that
  * lost its name is freed when nothing else holds it, as the release of a
- * file's last descriptor frees one (`fd_release_objects`), at the node the
- * file is at now; then the lock goes, and the description's last reference
- * closes it. May sleep.
+ * file's last descriptor frees one (`fd_release_objects`, which takes the
+ * lock again), at the node the file is at now; then the lock goes, and the
+ * description's last reference closes it. May sleep.
  */
 void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 {
@@ -2076,7 +2138,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_leave(mnt);
     rc = fifo_attach(e, mnt, ino, flags);
     if (rc != 0) {
-        fd_fifo_orphan(e);
+        fd_release_orphan(e);
         fd_free(current_proc->fds, fd);
         return rc;
     }

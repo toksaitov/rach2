@@ -322,28 +322,47 @@ static void flight_sync(fd_entry_t *e)
     }
 }
 
-static void flight_drop(fd_entry_t *e)
+/**
+ * Close the descriptor in flight at `slot`, as a close of it in a table
+ * would, and take it from where `unix_inflight_holds` finds it: the slot is
+ * emptied, or, when `count` is not NULL, `slot` is the last of the `*count`
+ * a message carries and the count is lowered. It is closed from a copy,
+ * taken from its place first, since the close can sleep and the one being
+ * closed is no holder of its own file. A descriptor of a file of the KRFFS
+ * root leaves its place only once the root's namespace lock is held
+ * (`fd_release_lock`): a release of the file's last descriptor elsewhere
+ * counts it until then, and the count and any reclaim of the file its own
+ * close makes come in the same hold.
+ */
+static void flight_drop(fd_entry_t *slot, uint32_t *count)
 {
-    flight_sync(e);
-    fd_release_backing(e);
-    fd_ofd_unref(e->ofd);
+    struct vfs_mount *locked = fd_release_lock(slot);
+    fd_entry_t e = *slot;
+
+    if (count) {
+        (*count)--;
+    } else {
+        slot->type = FD_TYPE_NONE;
+    }
+    flight_sync(&e);
+    fd_release_backing(&e);
+    fd_ofd_unref(e.ofd);
+    if (locked) {
+        vfs_ns_unlock(locked);
+    }
 }
 
 /*
- * Close the descriptors in flight `fds[from..n)` and free the array. Each is
- * closed from a copy, with its place in the array emptied first: the close
- * can sleep, and the ones after it stay where `unix_inflight_holds` finds
- * them, while the one being closed is no holder of its own file.
+ * Close the descriptors in flight `fds[from..n)` and free the array. The ones
+ * after the descriptor being closed stay where `unix_inflight_holds` finds
+ * them while its close sleeps (`flight_drop`).
  */
 static void drop_fds(fd_entry_t *fds, uint32_t from, uint32_t n)
 {
     uint32_t i;
 
     for (i = from; i < n; i++) {
-        fd_entry_t e = fds[i];
-
-        fds[i].type = FD_TYPE_NONE;
-        flight_drop(&e);
+        flight_drop(&fds[i], NULL);
     }
     kfree(fds);
 }
@@ -425,8 +444,7 @@ static void msg_free(struct unix_msg *m)
     while (reap_head) {
         m = reap_head;
         if (m->nfds > 0) {
-            m->nfds--;
-            flight_drop(&m->fds[m->nfds]);
+            flight_drop(&m->fds[m->nfds - 1], &m->nfds);
             continue;
         }
         reap_head = m->next;

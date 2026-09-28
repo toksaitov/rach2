@@ -6,8 +6,10 @@
 # the lock of its parent, an orphan's locks dropped before it is freed, an
 # rmdir on the KRFFS root of a directory a description or a working directory
 # has, a chdir's pin of a directory on a type that keeps a node only while it
-# is open, and a read and a write of a /proc file that hold its description
-# while a sharer's seek waits, before, during and after each fault.
+# is open, a read and a write of a /proc file that hold its description while
+# a sharer's seek waits, and the release of the last holder of a nameless file
+# of the KRFFS root under the root's lock, by a descriptor or a file mapping,
+# before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -21,6 +23,7 @@ mkdir "$work/vendor"
 cp rach2/vendor/multiboot.h "$work/vendor/multiboot.h"
 cp "$work/sys/syscall_fs.c" "$work/open.saved"
 cp "$work/sys/block/loop.c" "$work/loop.saved"
+cp "$work/sys/mm/filemap.c" "$work/filemap.saved"
 
 cleanup()
 {
@@ -31,7 +34,8 @@ cleanup()
     fi
     cp "$work/open.saved" "$work/sys/syscall_fs.c"
     cp "$work/loop.saved" "$work/sys/block/loop.c"
-    touch "$work/sys/syscall_fs.c" "$work/sys/block/loop.c"
+    cp "$work/filemap.saved" "$work/sys/mm/filemap.c"
+    touch "$work/sys/syscall_fs.c" "$work/sys/block/loop.c" "$work/sys/mm/filemap.c"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -54,7 +58,8 @@ run_phase()
         cat "$binary.compile.log" >&2
         exit 1
     fi
-    cksum "$work/sys/syscall_fs.c" "$work/sys/block/loop.c" "$binary" >"$binary.cksum"
+    cksum "$work/sys/syscall_fs.c" "$work/sys/block/loop.c" "$work/sys/mm/filemap.c" "$binary" \
+        >"$binary.cksum"
     perl -e 'alarm 10; exec @ARGV or die "open-mutation: exec: $!\n"' \
         "$binary" >"$binary.log" 2>&1 &
     child=$!
@@ -76,9 +81,10 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     volume-lock-key fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
     rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
     chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record proc-read-unheld \
-    proc-write-unheld; do
+    proc-write-unheld orphan-release-unlocked mapping-left-unlocked; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
+    [ "$fault" != mapping-left-unlocked ] || source="$work/sys/mm/filemap.c"
     python3 - "$source" "$fault" <<'PY'
 import pathlib
 import sys
@@ -238,6 +244,20 @@ changes = {
                           "    struct open_file *held = ops_offset_held(entry);",
                           "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n"
                           "    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"),
+    "orphan-release-unlocked": [
+        ("    if (!locked) {\n        return;\n    }\n    if (e->type == FD_TYPE_FILE) {\n",
+         "    if (!locked) {\n        return;\n    }\n    vfs_ns_unlock(locked);\n"
+         "    if (e->type == FD_TYPE_FILE) {\n"),
+        ("        fd_fifo_orphan(e);\n    }\n    vfs_ns_unlock(locked);\n}\n",
+         "        fd_fifo_orphan(e);\n    }\n}\n"),
+    ],
+    "mapping-left-unlocked": [
+        ("    struct vfs_mount *locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n",
+         "    struct vfs_mount *locked;\n"),
+        ("    if (*link) {\n        *link = m->next;\n    }\n    if (m->sh) {\n",
+         "    if (*link) {\n        *link = m->next;\n    }\n"
+         "    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n    if (m->sh) {\n"),
+    ],
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -266,7 +286,7 @@ PY
         dup-enomem) message='a dup the heap has no room for is ENOMEM' ;;
         dup2-enomem) message='a dup2 past the end of a table the heap cannot grow is ENOMEM' ;;
         program-holder) message='an unlink keeps the file a program runs from' ;;
-        program-reclaim-unlocked) message='and frees the nameless file under it' ;;
+        program-reclaim-unlocked) message="a program's release counts the file's descriptor in the hold it took" ;;
         root-lock-key) message='a file of the KRFFS root is keyed by its node' ;;
         volume-lock-key) message='a file of a KRFFS volume is keyed by its node' ;;
         fat-lock-key) message='a file of a FAT32 volume is keyed by its node, which a rename keeps' ;;
@@ -282,10 +302,13 @@ PY
         chdir-unpinned-before-record) message='the directory is pinned when the working directory records it' ;;
         proc-read-unheld) message='a seek waits for a /proc read that sleeps in a page fetch' ;;
         proc-write-unheld) message='a seek waits for a /proc write that sleeps in a page fetch' ;;
+        orphan-release-unlocked) message='an allocation on the root waits for the reclaim of a nameless file to end' ;;
+        mapping-left-unlocked) message="a mapping counts among a file's holders until its release has the root's lock" ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
     run_phase "$fault-restored" 0 'open-hosttest: result: pass:'
     cmp "$work/open.saved" "$work/sys/syscall_fs.c"
     cmp "$work/loop.saved" "$work/sys/block/loop.c"
+    cmp "$work/filemap.saved" "$work/sys/mm/filemap.c"
 done
