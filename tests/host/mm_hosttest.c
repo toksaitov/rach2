@@ -187,10 +187,11 @@ static void live_user(void)
     CHECK(mm_get_live(mm) == 1 && mm->users == 2,
           "a holder takes a user's count while a user remains");
     mm_put(mm);
-    CHECK(pages_freed == 0 && dirs_freed == 0 && mm->dir != NULL,
+    CHECK(pages_freed == 0 && dirs_freed == 0 && regions_freed == 0 && mm->dir != NULL,
           "whose put, not the last, frees nothing");
     mm_put(mm);
-    CHECK(pages_freed == 1 && dirs_freed == 1, "and the last user's put frees the memory");
+    CHECK(pages_freed == 1 && dirs_freed == 1 && regions_freed != 0,
+          "and the last user's put frees the memory");
     mm_unhold(mm);
     rows++;
 }
@@ -227,8 +228,9 @@ static void drop_switches(void)
  * reads; a fork's copy shares the description and is on it too; the last
  * user's put of each takes the release's lock while it is still on the list,
  * then leaves the list before the release, so the first release finds the
- * file still held by the other and the last finds it held no more; and one
- * whose description the heap has no room for keeps none.
+ * file still held by the other and the last finds it held no more, and a
+ * hold on the record, as a `/proc/PID/mem` descriptor has, keeps no file past
+ * that put; and one whose description the heap has no room for keeps none.
  */
 static void program_file(void)
 {
@@ -250,9 +252,11 @@ static void program_file(void)
     mm_copy_info(child, parent);
     CHECK(child->exe_file == parent->exe_file && parent->exe_file->refcount == 2,
           "a fork's copy shares the description");
+    mm_hold(parent);
     mm_put(parent);
     CHECK(exe_closes == 1 && held_at_close[0] == 1 && mm_exe_holds(&root, &program_node),
-          "the first end leaves the file held by the copy");
+          "the first end leaves the file held by the copy, with a hold on its record left");
+    mm_unhold(parent);
     mm_put(child);
     CHECK(exe_locks == 2 && held_at_lock[1] == 1,
           "the last end takes the release's lock while it still holds the file");

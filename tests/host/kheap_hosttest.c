@@ -148,8 +148,8 @@ static void give_singles(unsigned n)
  * taken and never mapped, takes no frame, and is given to no other
  * allocation while the run is out; the free gives back the run's frames and
  * the guard's place. A shortage of frames inside the run leaves no guard
- * behind, and a run with no guard below it is refused by the guarded free
- * and kept, with the page below it untouched.
+ * behind and no page of the run mapped, and a run with no guard below it is
+ * refused by the guarded free and kept, with the page below it untouched.
  */
 static void guard_rows(void)
 {
@@ -180,11 +180,18 @@ static void guard_rows(void)
     give_singles(n);
 
     kheap_init();
+    for (i = 0, hit = 0; i < REGION_PAGES; i++) {
+        hit += mapped[i];
+    }
     frame_limit = frames_out + 2;
     klogs = 0;
     CHECK(kalloc_guarded(4) == 0 && frames_out == 0 && klogs == 1,
           "a guarded run the frames cannot fill is refused, with a record and no frame kept");
     frame_limit = 0xffffffffu;
+    for (i = 0; i < REGION_PAGES; i++) {
+        hit -= mapped[i];
+    }
+    CHECK(hit == 0, "and unmaps each page it had mapped");
     n = take_singles();
     CHECK(n == REGION_PAGES - RESERVE_PAGES, "and leaves no guard behind");
     give_singles(n);
