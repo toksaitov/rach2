@@ -493,7 +493,7 @@ static int mem_after_end(void)
     long before, after;
     char path[32];
     siginfo_t si;
-    int fd = -1, word = 0;
+    int fd = -1, word = 0, rc = 0;
     ssize_t got;
     char c;
     pid_t pid;
@@ -538,16 +538,16 @@ static int mem_after_end(void)
     close(ready[0]);
     close(go[1]);
     waitpid(pid, NULL, 0);
-    if (got != 0) {
-        return fail("a /proc/PID/mem read reached a child that had ended");
-    }
     if (before < 0 || after < 0) {
         return fail("/proc/meminfo");
     }
-    if (after < before - 8192) {
-        return fail("a /proc/PID/mem descriptor kept the memory of a child that ended");
+    if (got != 0) {
+        rc = fail("a /proc/PID/mem read reached a child that had ended");
     }
-    return 0;
+    if (after < before - 8192) {
+        rc = fail("a /proc/PID/mem descriptor kept the memory of a child that ended");
+    }
+    return rc;
 }
 
 /** Wait up to ten seconds for a change in the child `pid` that waitpid
