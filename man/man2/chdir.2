@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt CHDIR 2
 .Os
 .Sh NAME
@@ -50,10 +50,14 @@ is open on the working directory.
 Its path is the one the descriptor's
 .Li *at
 calls resolve against: a directory of a file system that rebuilds its
-path is named where it is now, after a rename too, and a directory of
-the KRFFS boot root removed since returns
-.Er EBADF ;
-Linux enters a removed directory.
+path is named where it is now, after a rename too.
+A directory a descriptor refers to is not removed, as
+.Xr rmdir 2
+says, except on tmpfs, where
+.Fn fchdir
+of a directory removed since returns
+.Er ENOENT
+and Linux enters the removed directory.
 A descriptor on anything but a directory returns
 .Er ENOTDIR .
 Entering takes search permission on the directory, as
@@ -67,13 +71,22 @@ gave the process returns
 .Er ENOENT ,
 where Linux enters it.
 .Pp
-A working directory on a mounted file system holds a reference to its
-node and mount, preventing unmount while it remains in use.
-The permanent KRFFS boot root,
+A working directory holds a reference to its mount, which keeps the
+mount from being unmounted, and to its node on a file system that counts
+them.
 .Pa /dev
 and
 .Pa /proc
-do not take this reference; a root of another type does.
+take no reference.
+The KRFFS boot root, which is never unmounted, counts the reference and
+keeps the node, and
+.Xr rmdir 2
+refuses a directory that is a process's working directory with
+.Er EBUSY ,
+as ext2, FAT32 and exFAT do; a mounted KRFFS volume and tmpfs remove it,
+and the working directory keeps its path.
+Linux removes it and leaves the working directory on the removed
+directory.
 Changing the working directory releases the previous reference.
 .Pp
 .Fn getcwd
@@ -141,7 +154,7 @@ on a file returns
 Search permission is denied on a directory in the path or on the target.
 .It Er EBADF
 .Fa fd
-is not open, or is open on a KRFFS boot-root directory removed since.
+is not open.
 .It Er EBUSY
 Path resolution enters a mount being mounted or unmounted.
 .It Er EFAULT
@@ -163,6 +176,9 @@ collapsed request instead.
 .It Er ENOENT
 The path is empty or a component or synthetic process directory is missing.
 A symbolic link has an empty target.
+The directory
+.Fn fchdir
+names is outside the process's root, or tmpfs removed it.
 .It Er ENOMEM
 Path lookup cannot allocate a file-system node, the kernel has no page to
 copy the path into or no memory for a working directory path of 64 bytes

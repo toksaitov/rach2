@@ -99,23 +99,27 @@ symbolic link so named is not followed and is refused as a
 non-directory.
 On a mounted KRFFS volume, a missing final entry or a final entry that
 is not a directory also returns
-.Er ENOTEMPTY ;
-an entry that a descriptor refers to, an
-.Dv O_PATH
-one included, returns
-.Er EBUSY .
+.Er ENOTEMPTY .
 .Pp
-On the KRFFS boot root, an open directory can be removed.
-Subsequent directory reads and relative
-.Li *at
-calls through its descriptor return
-.Er EBADF .
-A mounted KRFFS volume refuses removal of a directory that a descriptor
-refers to, an
+A directory in use is not removed:
+.Fn rmdir
+returns
+.Er EBUSY .
+On the KRFFS boot root a directory is in use while a descriptor refers
+to it, an
 .Dv O_PATH
-one included.
-ext2, FAT32, and exFAT also refuse removal while an open descriptor or
-working directory refers to the directory.
+one or one in flight on a socket included, or while it is a process's
+working directory, and the refusal comes before the check for
+emptiness.
+A mounted KRFFS volume refuses a directory a descriptor refers to, an
+.Dv O_PATH
+one included, also before that check, and removes one that is only a
+working directory, which keeps its path.
+ext2, FAT32 and exFAT refuse a directory a descriptor or a working
+directory refers to, after the check for emptiness.
+tmpfs removes such a directory, as Linux does, and leaves its
+descriptors and working directories on an empty directory that takes no
+new entry; POSIX permits either answer.
 .Pp
 Relative paths are resolved from the current working directory.
 Both calls require search permission on ancestor directories and
@@ -172,6 +176,15 @@ and checks that
 .Pa /ids/cb
 is refused with
 .Er EINVAL .
+.Pa tests/fdstale.c
+holds a directory by a descriptor opened for reading, then by one opened
+with
+.Dv O_PATH ,
+then as a child's working directory, checks that
+.Fn rmdir
+returns
+.Er EBUSY
+each time, and removes the directory once nothing refers to it.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES
@@ -181,12 +194,13 @@ was denied.
 .Fn mkdirat
 was given a relative path and a
 .Fa dirfd
-that is not open, or one on a KRFFS boot-root directory removed since.
+that is not open.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted, or
 .Fn rmdir
 selected the root, a mount point, a process's root directory, or a
-directory whose references prevent removal.
+directory in use: one a descriptor refers to, or on the file systems
+that count them, a process's working directory.
 .It Bq Er EEXIST
 The name passed to
 .Fn mkdir

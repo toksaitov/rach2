@@ -8,19 +8,20 @@
  * Advisory file locks, of the three kinds Linux has.
  *
  * A POSIX record lock (fcntl F_SETLK) covers a range of bytes and belongs to
- * a process: a second lock of the same process over the range replaces the
- * first, and any close by the process of a descriptor of the file drops all
- * its record locks on the file. An open file description lock (F_OFD_SETLK)
- * is a record lock that belongs to the description instead. A flock(2) lock
- * covers the whole file, belongs to the description, and does not interact
- * with the record locks. A description's locks go when its last reference
- * does.
+ * a descriptor table, as Linux's belongs to a files_struct, so the threads
+ * of a process and the processes that share a table (CLONE_FILES) are one
+ * owner: a second lock of the owner over the range replaces the first, and
+ * any close through the table of a descriptor of the file drops all the
+ * table's record locks on the file. An open file description lock
+ * (F_OFD_SETLK) is a record lock that belongs to the description instead. A
+ * flock(2) lock covers the whole file, belongs to the description, and does
+ * not interact with the record locks. A description's locks go when its
+ * last reference does.
  *
  * Locks of two owners conflict when their ranges overlap and one of them is
  * a write lock. A request that conflicts fails with EAGAIN, or waits until
  * the conflict is gone; a wait for a record lock that would close a cycle of
- * waiting processes fails with EDEADLK. lock.Readme.md has the whole
- * contract.
+ * waiting owners fails with EDEADLK. lock.Readme.md has the whole contract.
  */
 
 /* The file a lock is on: its mount and a number that names the file while a
@@ -43,9 +44,10 @@ struct lock_key {
 #define F_UNLCK 2
 
 /* A record-lock request, and for LOCK_GET the answer: the conflicting
- * lock's type, range and owner, or F_UNLCK for none. `end` is the last byte,
- * LOCK_EOF for the end of the file, which is also how a range that ends at
- * the largest offset, 2^63 - 1, is given, since it is the same range. */
+ * lock's type, range and the process that took it, -1 for a description's,
+ * or F_UNLCK for none. `end` is the last byte, LOCK_EOF for the end of the
+ * file, which is also how a range that ends at the largest offset,
+ * 2^63 - 1, is given, since it is the same range. */
 struct lock_req {
     int type;
     uint64_t start;
@@ -66,10 +68,11 @@ struct lock_req {
 
 /**
  * A record lock request `cmd` (LOCK_GET, LOCK_SET or LOCK_WAIT) on the file
- * `key`, for the calling process, or with `ofd` non-NULL for that open file
- * description. Returns 0 or -errno. A wait goes on with a copy of `key`,
- * which `lock_repoint` moves with the file's locks, so the caller's own key
- * is not the file's after a wait the file moved in.
+ * `key`, for the calling thread's descriptor table, or with `ofd` non-NULL
+ * for that open file description; a lock set records the calling process's
+ * id for LOCK_GET to report. Returns 0 or -errno. A wait goes on with a copy
+ * of `key`, which `lock_repoint` moves with the file's locks, so the
+ * caller's own key is not the file's after a wait the file moved in.
  */
 int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
                     struct lock_req *req);
@@ -83,8 +86,8 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op);
 /** Whether any lock exists: a close has nothing to drop when none does. */
 int lock_any(void);
 
-/** Drop the record locks the calling process has on `key`: it closed a
- * descriptor of the file. */
+/** Drop the record locks the calling thread's descriptor table has on `key`:
+ * a descriptor of the file in that table was closed. */
 void lock_close(const struct lock_key *key);
 
 /** Drop the locks `ofd` owns: its last reference is gone. */

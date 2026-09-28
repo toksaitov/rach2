@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd September 28, 2026
 .Dt FCNTL 2
 .Os
 .Sh NAME
@@ -91,7 +91,7 @@ A lock that conflicts with another owner's fails with
 As
 .Dv F_SETLK ,
 but wait for a conflicting lock to go.
-A wait that would close a cycle of processes waiting for each other's
+A wait that would close a cycle of lock owners waiting for each other's
 locks fails with
 .Er EDEADLK ,
 when it begins or when the lock it waits for passes to another owner
@@ -104,8 +104,8 @@ restarts.
 .It Dv F_GETLK , F_GETLK64
 Report the first lock of another owner that the described lock would
 conflict with: its type, its range from the start of the file, with a
-length of 0 for a lock to the end, and its owner's process ID, -1 for
-an open file description's.
+length of 0 for a lock to the end, and the ID of the process that took
+it, -1 for an open file description's.
 When none would conflict, set
 .Va l_type
 to
@@ -113,7 +113,7 @@ to
 and leave the other fields as they were.
 .It Dv F_OFD_SETLK , F_OFD_SETLKW , F_OFD_GETLK
 The same three for open file description locks, which belong to the
-open-file description rather than the process.
+open-file description rather than the descriptor table.
 .Va l_pid
 must be 0.
 .It Dv F_ADD_SEALS
@@ -186,23 +186,35 @@ a write lock.
 Setting a read lock needs a descriptor open for reading and a write
 lock one open for writing.
 .Pp
-A POSIX lock belongs to the process that set it.
-Another lock of the same process over the same bytes replaces it,
+A POSIX lock belongs to the descriptor table of the process that set it,
+as a Linux lock belongs to the files_struct: the threads of a process
+and the processes
+.Xr clone 2
+makes with
+.Dv CLONE_FILES
+share one table and are one owner, and two tables are two owners even in
+one process.
+.Dv F_GETLK
+names the process that took the lock.
+Another lock of the same owner over the same bytes replaces it,
 splitting or shortening what it covered, and adjacent locks of one type
 are joined.
 Every
 .Xr close 2
-by the process of any descriptor of the file drops all of its locks on
-the file, and so do
+through the table of any descriptor of the file drops all of the table's
+locks on the file, whichever of its sharers took them, and so do
 .Xr dup2 2
-over such a descriptor, close-on-exec and exit; the close of a
-descriptor opened with
+over such a descriptor and close-on-exec; the close of a descriptor
+opened with
 .Dv O_PATH
 drops none, as on Linux.
+The exit of a process leaves the locks of a table another process still
+shares, and the release of a table by its last sharer drops them.
 .Xr fork 2
 does not pass the locks to the child;
 .Xr execve 2
-keeps them.
+keeps them, but for a caller whose table is shared, which gets a table
+of its own and leaves the locks with the table the others share.
 .Pp
 An open file description lock belongs to the description: descriptors
 made by
@@ -224,9 +236,11 @@ moves its locks, and the waits for them, with it: a lock taken before a
 rename or a move meets one taken after it, and two files whose names have
 one hash, and so one inode number on the boot root, have locks of their
 own.
-The boot root frees a directory removed while a descriptor has it open,
-and the locks of that descriptor stay on the place, where a node made
-later meets them; Linux keeps them with the removed directory.
+A place stays the file's while a descriptor has it: neither file system
+frees a file a descriptor has, and
+.Xr rmdir 2
+refuses a directory a descriptor has with
+.Er EBUSY .
 On FAT32 and exFAT a lock is found by the file's node, which a rename
 keeps, since their inode number is the file's directory entry, which a
 rename changes.
@@ -271,8 +285,8 @@ return the requested flags.
 The other supported commands return 0.
 When a set lock command fails, no lock has changed, but for one whose
 descriptor another thread closed during the call: that close drops the
-process's locks on the file, and a POSIX lock the call gained after it
-is let go too.
+table's locks on the file, and a POSIX lock the call gained after it is
+let go too.
 On failure,
 .Fn fcntl
 returns -1 and sets
@@ -288,15 +302,18 @@ The kernel interface returns the negative error number.
 sets record locks from two processes and checks the conflict, the
 report of
 .Dv F_GETLK ,
-a split, the close that drops a process's locks, locks of the largest
+a split, the close that drops a table's locks, locks of the largest
 offset and of every byte before it joining into one to the end of the
 file, a wait, one
 .Er EDEADLK
 for two processes that wait for each other, a wait whose descriptor
-another thread closes, also while a write moves the file, a lock on one
-of two files whose names hash alike, a lock taken before a rename and
-before a move, and open file description locks against a second open
-and a POSIX lock.
+another thread closes, also while a write moves the file, the locks of
+a table a child made with
+.Dv CLONE_FILES
+shares, which a close by the child drops and its exit leaves, a lock on
+one of two files whose names hash alike, a lock taken before a rename
+and before a move, and open file description locks against a second
+open and a POSIX lock.
 .Pp
 The default suite's
 .Pa tests/ofdprobe.c
@@ -325,7 +342,7 @@ the descriptor while the call waited, after letting go of the lock it
 gained, as on Linux.
 .It Bq Er EDEADLK
 .Dv F_SETLKW
-would wait in a cycle of processes waiting for each other's locks.
+would wait in a cycle of lock owners waiting for each other's locks.
 .It Bq Er EFAULT
 A lock command cannot read or write the lock structure.
 .It Bq Er EINTR

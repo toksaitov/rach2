@@ -3,8 +3,9 @@
 # get no descriptor, the KRFFS root's unlink and rename under the root's lock
 # and of a program's file, the calls by path that read or change a node under
 # the lock their walk takes, the key of a file's locks, a mkdir's lookup under
-# the lock of its parent, and an orphan's locks dropped before it is freed,
-# before, during and after each fault.
+# the lock of its parent, an orphan's locks dropped before it is freed, and an
+# rmdir on the KRFFS root of a directory a description or a working directory
+# has, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -69,7 +70,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked \
     utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
     open-emfile dup-enomem dup2-enomem program-holder root-lock-key volume-lock-key \
-    fat-lock-key mkdir-walk-unlocked orphan-locks-after; do
+    fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
+    rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -164,12 +166,45 @@ changes = {
                            "    krffs_remove_reserved_node(krffs_fs, node);\n",
                            "    (void)e;\n    krffs_remove_reserved_node(krffs_fs, node);\n"),
     "mkdir-walk-unlocked": [
-        ("rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));",
-         "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));"),
+        ("rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));\n"
+         "    if (rc != 0) {\n        return rc; /* a missing parent, or a denied ancestor */",
+         "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n"
+         "    if (rc != 0) {\n        return rc; /* a missing parent, or a denied ancestor */"),
         ("    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);\n"
          "    vfs_walk_unlock(parent.mnt);\n",
          "    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);\n"),
     ],
+    "rmdir-checked-unlocked": [
+        ("    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));\n"
+         "    if (rc != 0) {\n        return rc;\n    }\n    if (leaf_is_dot(leaf)) {\n"
+         "        rc = leaf[1] == '\\0' ? -EINVAL : -ENOTEMPTY;",
+         "    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n"
+         "    if (rc != 0) {\n        return rc;\n    }\n    if (leaf_is_dot(leaf)) {\n"
+         "        rc = leaf[1] == '\\0' ? -EINVAL : -ENOTEMPTY;"),
+        ("        vfs_ns_unlock(parent.mnt);\n    }\n    vfs_walk_unlock(parent.mnt);\n"
+         "    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2): EBX = path. */",
+         "        vfs_ns_unlock(parent.mnt);\n    }\n"
+         "    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2): EBX = path. */"),
+        ("    return rc != 0 ? rc : vfs_rmdir(parent->mnt, parent->node, leaf);",
+         "    if (rc == 0) {\n        vfs_ns_lock(parent->mnt);\n"
+         "        rc = vfs_rmdir(parent->mnt, parent->node, leaf);\n"
+         "        vfs_ns_unlock(parent->mnt);\n    }\n    return rc;"),
+    ],
+    "rmdir-descriptions-ignored": ("    if (fd_ofd_holders(mnt, dir, NULL) > 0) {\n        return 1;\n    }\n", ""),
+    "rmdir-tables-only": ("    if (fd_ofd_holders(mnt, dir, NULL) > 0) {\n        return 1;\n    }\n",
+                          "    for (pr = proc_list; pr; pr = pr->next) {\n        int i;\n\n"
+                          "        for (i = 0; i < fd_table_cap(pr->fds); i++) {\n"
+                          "            if (pr->fds->entries[i].ofd && pr->fds->entries[i].ofd->vmnt == mnt &&\n"
+                          "                pr->fds->entries[i].ofd->vnode == dir) {\n"
+                          "                return 1;\n            }\n        }\n    }\n"),
+    "rmdir-cwd-ignored": ("    for (pr = proc_list; pr; pr = pr->next) {\n"
+                          "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {\n"
+                          "            return 1;\n        }\n    }\n",
+                          "    (void)pr;\n"),
+    "rmdir-cwd-caller-only": ("    for (pr = proc_list; pr; pr = pr->next) {\n"
+                              "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {",
+                              "    for (pr = current_proc; pr; pr = NULL) {\n"
+                              "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {"),
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -203,6 +238,11 @@ PY
         fat-lock-key) message='a file of a FAT32 volume is keyed by its node, which a rename keeps' ;;
         mkdir-walk-unlocked) message='a mkdir of a name another process made while it waited is EEXIST' ;;
         orphan-locks-after) message="a description's locks go before the orphan they are on is freed" ;;
+        rmdir-checked-unlocked) message='an rmdir of a directory an open publishes a descriptor on while it waits is EBUSY' ;;
+        rmdir-descriptions-ignored) message='an rmdir of a directory a descriptor has open is EBUSY' ;;
+        rmdir-tables-only) message='an rmdir of a directory a description in flight has is EBUSY' ;;
+        rmdir-cwd-ignored) message="an rmdir of the caller's working directory is EBUSY" ;;
+        rmdir-cwd-caller-only) message="an rmdir of another process's working directory is EBUSY" ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

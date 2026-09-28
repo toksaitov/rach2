@@ -4,16 +4,21 @@
  * host-deps:
  *
  * Includes the source with the wait queue and the heap stood in by the host.
- * A record lock of one process blocks another's over any byte it covers and
- * F_GETLK reports it; an unlock of its middle splits it and frees the middle;
- * a lock of the same process replaces its own and joins the ranges it
- * touches; a lock to the end of the file covers bytes past any size; a close
- * drops the closing process's locks on that file only. An open file
- * description lock conflicts with another description's and with a
- * process's record lock. A flock lock of one description blocks another's,
- * a conversion lets go first, and a description's end frees its locks. A
- * file that moves takes its locks, and the waits for them, with it.
- * Returns the failed-check count.
+ * Each process of a row has a descriptor table of its own, the owner of its
+ * record locks, but for the two that share one. A record lock of one
+ * process blocks another's over any byte it covers and F_GETLK reports it;
+ * an unlock of its middle splits it and frees the middle; a lock of the
+ * same process replaces its own and joins the ranges it touches; a lock to
+ * the end of the file covers bytes past any size; a close drops the closing
+ * table's locks on that file only. Two processes that share a table are one
+ * owner, whose locks F_GETLK names by the process that took each and a
+ * close by either drops, and through which a cycle of waits is found; two
+ * tables of one process are two owners. An open file description lock
+ * conflicts with another description's and with a process's record lock. A
+ * flock lock of one description blocks another's, a conversion lets go
+ * first, and a description's end frees its locks. A file that moves takes
+ * its locks, and the waits for them, with it. Returns the failed-check
+ * count.
  */
 
 #include "fs/lock.c"
@@ -34,6 +39,11 @@ static int fails;
 
 static process_t process;
 process_t *current_proc = &process;
+/* The descriptor table of each process a row names, by its pid, the owner
+ * of its record locks: a table of its own, or the one `table_of` names for
+ * it while a row has it share one. */
+static fd_table_t tables[10];
+static fd_table_t *table_of[10];
 
 void *kzalloc(size_t n)
 {
@@ -73,12 +83,19 @@ static const struct lock_key other = {(const void *)0x1000, 43};
 /* Where `file` moves to in the rows of a move. */
 static const struct lock_key there = {(const void *)0x1000, 4242};
 
+/** Run as process `pid`, with the table `table_of` names for it or its own. */
+static void be(uint32_t pid)
+{
+    process.pid = process.tgid = pid;
+    process.fds = table_of[pid] ? table_of[pid] : &tables[pid];
+}
+
 static int32_t as_on(const struct lock_key *key, uint32_t pid, struct open_file *ofd, int cmd,
                      int type, uint64_t start, uint64_t end, struct lock_req *out)
 {
     struct lock_req req;
 
-    process.pid = process.tgid = pid;
+    be(pid);
     req.type = type;
     req.start = start;
     req.end = end;
@@ -125,7 +142,7 @@ static void records(void)
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 12, 12, NULL) == -EAGAIN);
     /* Pid 1's read lock over everything meets pid 2's write locks. */
     CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, LOCK_EOF, NULL) == -EAGAIN);
-    process.pid = process.tgid = 2;
+    be(2);
     lock_close(&file);
     CHECK(count_locks() == 2);
     /* Its own locks give way: a read lock over both of pid 1's pieces, which
@@ -133,11 +150,11 @@ static void records(void)
     CHECK(as(1, NULL, LOCK_SET, F_RDLCK, 0, LOCK_EOF, NULL) == 0 && count_locks() == 1);
     CHECK(as(3, NULL, LOCK_SET, F_RDLCK, 1000000, 1000000, NULL) == 0);
     CHECK(as(3, NULL, LOCK_SET, F_WRLCK, 1000001, 1000001, NULL) == -EAGAIN);
-    process.pid = process.tgid = 1;
+    be(1);
     lock_close(&other);
     CHECK(count_locks() == 2);
     lock_close(&file);
-    process.pid = process.tgid = 3;
+    be(3);
     lock_close(&file);
     CHECK(count_locks() == 0);
 
@@ -164,13 +181,13 @@ static void descriptions(void)
     lock_ofd_gone(&b);
     CHECK(count_locks() == 0);
 
-    process.pid = process.tgid = 1;
+    be(1);
     CHECK(lock_flock(&file, &a, LOCK_EX) == 0);
     CHECK(lock_flock(&file, &b, LOCK_EX | LOCK_NB) == -EAGAIN);
     CHECK(lock_flock(&file, &b, LOCK_SH | LOCK_NB) == -EAGAIN);
     /* flock and record locks do not meet. */
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 0, LOCK_EOF, NULL) == 0);
-    process.pid = process.tgid = 2;
+    be(2);
     lock_close(&file);
     CHECK(lock_flock(&file, &a, LOCK_SH) == 0);
     CHECK(lock_flock(&file, &b, LOCK_SH | LOCK_NB) == 0);
@@ -214,9 +231,9 @@ static void wait_cycle(void)
     CHECK(as(3, NULL, LOCK_WAIT, F_WRLCK, 0, 0, NULL) == -EINTR);
     CHECK(cycle_result == -EDEADLK);
     CHECK(waits == NULL);
-    process.pid = process.tgid = 1;
+    be(1);
     lock_close(&file);
-    process.pid = process.tgid = 3;
+    be(3);
     lock_close(&file);
     CHECK(count_locks() == 0);
 }
@@ -271,9 +288,9 @@ static void moves(void)
     CHECK(lock_flock(&there, &b, LOCK_EX | LOCK_NB) == -EAGAIN);
     CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 0, 29, NULL) == 0);
     CHECK(lock_flock(&file, &b, LOCK_EX | LOCK_NB) == 0);
-    process.pid = process.tgid = 1;
+    be(1);
     lock_close(&there);
-    process.pid = process.tgid = 2;
+    be(2);
     lock_close(&file);
     lock_ofd_gone(&a);
     lock_ofd_gone(&b);
@@ -317,9 +334,9 @@ static void moving_waits(void)
     CHECK(as(2, NULL, LOCK_WAIT, F_WRLCK, 0, 0, NULL) == 0 && step == 2);
     CHECK(as_on(&there, 3, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == -EAGAIN);
     CHECK(as(3, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == 0);
-    process.pid = process.tgid = 2;
+    be(2);
     lock_close(&there);
-    process.pid = process.tgid = 3;
+    be(3);
     lock_close(&file);
     CHECK(count_locks() == 0 && waiting_keys == NULL);
 
@@ -336,6 +353,82 @@ static void moving_waits(void)
     CHECK(count_locks() == 0 && waiting_keys == NULL);
 }
 
+/* The table processes 6 and 7 share, as clone with CLONE_FILES and without
+ * CLONE_THREAD makes one, and two tables of one process, as threads made
+ * without CLONE_FILES have. */
+static fd_table_t shared_fds, thread_fds[2];
+
+/**
+ * A descriptor table is one owner, as Linux's files_struct is. Processes 6
+ * and 7 share a table: 7's read lock of byte 5 replaces that byte of 6's
+ * write lock of bytes 0 to 9, where another owner's would conflict, and
+ * F_GETLK in process 8 names the process that took each piece. A close by
+ * 7 drops every lock of the table on the file, 6's among them. The two
+ * tables of one process are two owners, whose locks conflict.
+ */
+static void shared_table(void)
+{
+    struct lock_req got;
+
+    table_of[6] = table_of[7] = &shared_fds;
+    CHECK(as(6, NULL, LOCK_SET, F_WRLCK, 0, 9, NULL) == 0);
+    CHECK(as(7, NULL, LOCK_SET, F_RDLCK, 5, 5, NULL) == 0);
+    CHECK(as(8, NULL, LOCK_GET, F_WRLCK, 0, 0, &got) == 0 && got.type == F_WRLCK &&
+          got.start == 0 && got.end == 4 && got.pid == 6);
+    CHECK(as(8, NULL, LOCK_GET, F_WRLCK, 5, 5, &got) == 0 && got.type == F_RDLCK && got.pid == 7);
+    be(7);
+    lock_close(&file);
+    CHECK(count_locks() == 0);
+    CHECK(as(8, NULL, LOCK_SET, F_WRLCK, 0, 9, NULL) == 0);
+    be(8);
+    lock_close(&file);
+    table_of[6] = table_of[7] = NULL;
+
+    table_of[9] = &thread_fds[0];
+    CHECK(as(9, NULL, LOCK_SET, F_WRLCK, 20, 20, NULL) == 0);
+    table_of[9] = &thread_fds[1];
+    CHECK(as(9, NULL, LOCK_SET, F_WRLCK, 20, 20, NULL) == -EAGAIN);
+    table_of[9] = &thread_fds[0];
+    be(9);
+    lock_close(&file);
+    table_of[9] = NULL;
+    CHECK(count_locks() == 0);
+}
+
+static int32_t sharer_result;
+
+/** Process 8 waits for byte 0, which the table of processes 6 and 7 holds. */
+static void eight_waits(void)
+{
+    sharer_result = as(8, NULL, LOCK_WAIT, F_WRLCK, 0, 0, NULL);
+}
+
+/**
+ * A cycle of waits through a shared table is found. Process 6 locks byte 0
+ * in the table it shares with process 7, and process 8 locks byte 1; 7
+ * waits for byte 1, and 8's wait for byte 0 then closes a cycle and fails
+ * with EDEADLK, since the owner of the lock 8 waits for waits for 8, though
+ * in another process than the one that took the lock.
+ */
+static void shared_cycle(void)
+{
+    table_of[6] = table_of[7] = &shared_fds;
+    CHECK(as(6, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == 0);
+    CHECK(as(8, NULL, LOCK_SET, F_WRLCK, 1, 1, NULL) == 0);
+    steps[0] = eight_waits;
+    steps[1] = NULL;
+    step = 0;
+    CHECK(as(7, NULL, LOCK_WAIT, F_WRLCK, 1, 1, NULL) == -EINTR);
+    CHECK(sharer_result == -EDEADLK);
+    CHECK(waits == NULL);
+    be(8);
+    lock_close(&file);
+    be(6);
+    lock_close(&file);
+    table_of[6] = table_of[7] = NULL;
+    CHECK(count_locks() == 0);
+}
+
 int main(void)
 {
     records();
@@ -344,5 +437,7 @@ int main(void)
     shared_wait();
     moves();
     moving_waits();
+    shared_table();
+    shared_cycle();
     return fails > 100 ? 100 : fails;
 }

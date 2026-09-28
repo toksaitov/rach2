@@ -222,7 +222,9 @@ A caller that shares its descriptor table, through
 with
 .Dv CLONE_FILES ,
 first gets a copy of its own, so the marked descriptors are closed for it
-alone and the other sharers keep the table.
+alone and the other sharers keep the table, with the
+.Xr fcntl 2
+record locks it owns.
 .Ss The program's file
 The new image keeps the program's file, the interpreter's for a script,
 from the moment its path is resolved until the last thread that runs the

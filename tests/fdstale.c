@@ -94,13 +94,14 @@
  * the condition on the orphan is judged by, since an orphan taken at either
  * call site with no holder is one nobody is left to close.
  *
- * Directories stay out of scope, as a scope line and not an oversight: rmdir
- * still frees the node under an open directory descriptor, and getdents64 and
- * a relative path through that descriptor both answer -EBADF. A directory
- * descriptor in Rach2 is a name, and an orphan directory has no name for a
- * relative path to join. It is asserted last and asserts nothing between the
- * rmdir and the two answers, since a freed node the allocator hands out again
- * would be a live node under that descriptor.
+ * A directory is not kept as an orphan but refused: rmdir answers -EBUSY while
+ * a descriptor, an O_PATH one among them, or a working directory refers to
+ * the directory, on the boot root as on ext2. A descriptor of the boot root
+ * finds its directory by the node's place, so a directory freed under one
+ * would leave it on whatever node the allocator put there next. The case
+ * holds the directory each way in turn, the working directory in a child,
+ * and requires the descriptor to go on listing it and the rmdir to succeed
+ * once nothing refers to it.
  *
  * Every wait checks WIFEXITED before WEXITSTATUS: a signal death has the
  * signal in the low bits and would otherwise decode as exit 0, scoring a
@@ -123,6 +124,7 @@ typedef unsigned int u32;
 #define SYS_WAITPID    7
 #define SYS_CREAT      8
 #define SYS_UNLINK     10
+#define SYS_CHDIR      12
 #define SYS_LSEEK      19
 #define SYS_RENAME     38
 #define SYS_MKDIR      39
@@ -149,6 +151,7 @@ typedef unsigned int u32;
 #define O_RDWR      2
 #define O_CREAT     0100
 #define O_DIRECTORY 0200000
+#define O_PATH      010000000
 #define SEEK_END    2
 
 /* i386 struct stat64: the 64-bit size field is at offset 44. */
@@ -182,7 +185,7 @@ typedef unsigned int u32;
 #define SOLO  "/fdstale.solo" /* the loop that removes what nothing has */
 #define STAGE "/fdstale.stg"  /* the rename loop's new file */
 #define REPL  "/fdstale.repl" /* the name it lands on, which nobody has */
-#define DDIR  "/fdstale.ddir" /* rmdir'd under an open directory descriptor */
+#define DDIR  "/fdstale.ddir" /* the directory rmdir refuses while in use */
 
 /* The pairs a torn read would betray are the same length, so that only their
  * bytes, and not a byte count, can tell them apart. */
@@ -602,8 +605,8 @@ static void orphan_scan_case(void)
  * directory destination, refused after the orphan is taken. The second name
  * survives only because a directory descriptor is not a holder, so it is
  * asserted, not assumed. */
-/* Whether the root this probe runs on is the boot root. Two rows below owe
- * different answers on the two file systems, and each reads the type out of
+/* Whether the root this probe runs on is the boot root. A rename row below
+ * owes different answers on the two file systems, and reads the type out of
  * `/proc/mounts` rather than assuming the one it was written on. A root whose
  * line cannot be read is taken for the boot root, which is what an image
  * without `/proc` boots. */
@@ -943,38 +946,56 @@ static void leak_by_rename_case(void)
     want_eq("remove the replaced name", syscall3(SYS_UNLINK, (int)REPL, 0, 0), 0);
 }
 
-/* The scope line, asserted, and it is not the same line on the two roots.
- * On the boot root a directory descriptor is a name, so rmdir takes the
- * directory out from under it and the descriptor answers EBADF from then on;
- * nothing is allocated between the rmdir and the two answers, since a freed
- * node handed out again would be a live node under this descriptor. ext2
- * refuses a directory a description holds, with EBUSY (`ext2.Readme.md`),
- * which POSIX permits, so there the row asserts the refusal, that the
- * descriptor still reads, and that the close is what releases the name. */
-static void directory_scope_case(void)
+/* The child of the directory case: its working directory is the directory
+ * the parent tries to remove. */
+static void cwd_child(void)
+{
+    int rc = syscall1(SYS_CHDIR, (int)DDIR);
+
+    notify("the working-directory child signals its chdir", up[1]);
+    want_eq("the child enters the directory", rc, 0);
+    wait_for("the working-directory child waits for the rmdir", down[0]);
+    syscall1(SYS_EXIT, 0);
+}
+
+/* A directory in use is refused with EBUSY, which POSIX permits, on the boot
+ * root as on ext2: while a descriptor has it, one opened for reading and then
+ * one opened with O_PATH, and while it is a child's working directory. The
+ * descriptor opened for reading still lists the directory and resolves a
+ * relative path through it, and the rmdir succeeds once nothing refers to
+ * the directory. */
+static void directory_case(void)
 {
     static char dbuf[256];
     int fd;
+    int dot;
+    int pid;
 
     want_eq("mkdir the directory to be removed", syscall3(SYS_MKDIR, (int)DDIR, 0755, 0), 0);
     fd = syscall3(SYS_OPEN, (int)DDIR, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory", fd);
-    if (!root_is_krffs()) {
-        want_eq("rmdir refused under the directory descriptor",
-                syscall3(SYS_RMDIR, (int)DDIR, 0, 0), -EBUSY);
-        want_ok("getdents64 through the held directory",
-                syscall3(SYS_GETDENTS64, fd, (int)dbuf, (int)sizeof(dbuf)));
-        want_eq("close the held directory", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-        want_eq("rmdir once the descriptor is closed", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
-        return;
-    }
-    want_eq("rmdir under the directory descriptor", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
+    want_eq("rmdir refused under the directory descriptor", syscall3(SYS_RMDIR, (int)DDIR, 0, 0),
+            -EBUSY);
+    want_ok("getdents64 through the held directory",
+            syscall3(SYS_GETDENTS64, fd, (int)dbuf, (int)sizeof(dbuf)));
+    dot = syscall4(SYS_OPENAT, fd, (int)".", O_RDONLY | O_DIRECTORY, 0);
+    want_ok("a relative path through the held directory", dot);
+    want_eq("close what the relative path opened", syscall3(SYS_CLOSE, dot, 0, 0), 0);
+    want_eq("close the held directory", syscall3(SYS_CLOSE, fd, 0, 0), 0);
 
-    want_eq("getdents64 through the removed directory",
-            syscall3(SYS_GETDENTS64, fd, (int)dbuf, (int)sizeof(dbuf)), -EBADF);
-    want_eq("a relative path through the removed directory",
-            syscall4(SYS_OPENAT, fd, (int)"kid", O_RDONLY, 0), -EBADF);
-    want_eq("close the removed directory", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    fd = syscall3(SYS_OPEN, (int)DDIR, O_PATH, 0);
+    want_ok("open the directory with O_PATH", fd);
+    want_eq("rmdir refused under the O_PATH descriptor", syscall3(SYS_RMDIR, (int)DDIR, 0, 0),
+            -EBUSY);
+    want_eq("close the O_PATH descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+
+    pid = spawn(cwd_child, "fork the working-directory child");
+    wait_for("the parent waits for the child's chdir", up[0]);
+    want_eq("rmdir refused under a working directory", syscall3(SYS_RMDIR, (int)DDIR, 0, 0),
+            -EBUSY);
+    notify("the parent releases the working-directory child", down[1]);
+    reap(pid, "the working-directory child");
+    want_eq("rmdir once nothing refers to the directory", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
 }
 
 void _start(void)
@@ -996,6 +1017,7 @@ void _start(void)
     cross_process_case();
     exit_release_case();
     cross_reloc_case();
+    directory_case();
     want_eq("close the child's signal read end", syscall3(SYS_CLOSE, up[0], 0, 0), 0);
     want_eq("close the child's signal write end", syscall3(SYS_CLOSE, up[1], 0, 0), 0);
     want_eq("close the parent's signal read end", syscall3(SYS_CLOSE, down[0], 0, 0), 0);
@@ -1006,7 +1028,6 @@ void _start(void)
     leak_by_close_case();
     leak_by_unlink_case();
     leak_by_rename_case();
-    directory_scope_case();
 
     puts_("FDSTALE OK\n");
     syscall1(SYS_EXIT, 0);
