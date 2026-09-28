@@ -94,6 +94,8 @@ destination for
 a caller without them gets
 .Er EACCES
 where Linux reports
+.Er ENOENT
+or
 .Er EEXIST .
 In a sticky directory, removing the source entry or replacing the
 destination entry additionally requires effective user ID 0, ownership
@@ -145,7 +147,12 @@ so named returns
 .Er EEXIST
 under
 .Dv RENAME_NOREPLACE ,
-as on Linux.
+as on Linux: before the parent write checks, and before the
+.Er EROFS
+of
+.Pa /dev
+and
+.Pa /proc .
 A slash after either final name requires the source to be a directory:
 anything else, a symbolic link to a directory among them, returns
 .Er ENOTDIR ,
@@ -155,7 +162,9 @@ The synthetic
 .Pa /dev
 and
 .Pa /proc
-namespaces are read-only.
+namespaces are read-only: a rename in either returns
+.Er EROFS
+after the parent write checks.
 On the KRFFS boot root, replacing a different file that backs an attached
 loop device returns
 .Er EBUSY .

@@ -8928,8 +8928,8 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
  * refuses a new name that exists with -EEXIST, decided with the rename under
  * one namespace lock. The directories' write permission is checked before
  * either name is looked up, so a caller without it sees -EACCES where Linux
- * would report -EEXIST or -EBUSY. `slash` says that either path had a slash
- * after its last name. Returns 0 or -errno.
+ * would report the lookups' -ENOENT or -EEXIST. `slash` says that either
+ * path had a slash after its last name. Returns 0 or -errno.
  *
  * As in `unlink`, every refusal is decided here, because `krffs_rename`
  * answers all of them with a bare -1, which the wrapper reports as `EIO`.
@@ -8947,7 +8947,9 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
  * A last name of "." or ".." in either path, which the walk to its parent
  * returns as the name, is -EBUSY once both walks are made and the two are on
  * one mount, and in the new path -EEXIST under RENAME_NOREPLACE, as on
- * Linux. Either path naming the root is answered the same way, -EBUSY, or
+ * Linux, which checks these before it asks for write access: before the
+ * write bits, and before the -EROFS of /dev and /proc, where nothing is
+ * renamed. Either path naming the root is answered the same way, -EBUSY, or
  * -EEXIST for the new path under RENAME_NOREPLACE, before either path is
  * walked, where Linux walks both first: the path copy canonicalizes the root
  * to "/", which has no last name for a walk to the parent to give. The
@@ -8988,30 +8990,14 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         return (old_name[0] != '\0' && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
     }
 
-    /* A rename writes both directories: the entry leaves one and lands in
-     * the other. Both write bits are checked before the source is even
-     * looked up, as unlink orders it. */
     rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf, sizeof(oleaf));
     if (rc != 0) {
         return rc;
     }
-    rc = mnt_is_root(opar.mnt) ? cred_access_node((krffs_node_t *)opar.node, CRED_W, 0)
-                               : cred_access_ref(&opar, CRED_W, 0);
-    if (rc == 0) {
-        rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf, sizeof(nleaf));
-    }
+    rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf, sizeof(nleaf));
     if (rc != 0) {
         vfs_ref_release(&opar);
         return rc;
-    }
-    rc = mnt_is_root(npar.mnt) ? cred_access_node((krffs_node_t *)npar.node, CRED_W, 0)
-                               : cred_access_ref(&npar, CRED_W, 0);
-    if (rc != 0) {
-        goto out;
-    }
-    if (vfs_synth_vpath(opar.mnt, opar.node) || vfs_synth_vpath(npar.mnt, npar.node)) {
-        rc = -EROFS;
-        goto out;
     }
     /* rename is within one mount; across two it is the common layer's
      * EXDEV, and a program falls back to copy and unlink. */
@@ -9021,6 +9007,21 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
     }
     if (leaf_is_dot(oleaf) || leaf_is_dot(nleaf)) {
         rc = (!leaf_is_dot(oleaf) && (flags & RENAME_NOREPLACE)) ? -EEXIST : -EBUSY;
+        goto out;
+    }
+    /* A rename writes both directories: the entry leaves one and lands in
+     * the other. Both write bits are checked before the source is even
+     * looked up, as unlink orders it. */
+    rc = mnt_is_root(opar.mnt) ? cred_access_node((krffs_node_t *)opar.node, CRED_W, 0)
+                               : cred_access_ref(&opar, CRED_W, 0);
+    if (rc == 0) {
+        rc = mnt_is_root(npar.mnt) ? cred_access_node((krffs_node_t *)npar.node, CRED_W, 0)
+                                   : cred_access_ref(&npar, CRED_W, 0);
+    }
+    if (rc == 0 && vfs_synth_vpath(opar.mnt, opar.node)) {
+        rc = -EROFS; /* nothing is renamed in /dev or /proc */
+    }
+    if (rc != 0) {
         goto out;
     }
     if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
