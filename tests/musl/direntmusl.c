@@ -196,15 +196,17 @@ static int count_rest(DIR *d)
  * rewinddir, and whether seekdir to the place telldir gave after its first
  * entry then lists its second entry: 0, 1 when the rewind differs or the
  * directory lists fewer than two entries, or 2 when the seek differs. Prints
- * what differs.
+ * what differs. The entry the seek lists is compared before closedir, which
+ * frees the buffer it is in.
  */
 static int rewinds(const char *dir)
 {
     char second[256];
-    struct dirent *de = NULL;
+    struct dirent *de;
     DIR *d = opendir(dir);
     int count = 0;
     int again = -1;
+    int listed = 0;
 
     if (d && readdir(d)) {
         long place = telldir(d);
@@ -217,6 +219,7 @@ static int rewinds(const char *dir)
             again = count_rest(d);
             seekdir(d, place);
             de = readdir(d);
+            listed = de != NULL && strcmp(de->d_name, second) == 0;
         }
     }
     if (d) {
@@ -226,7 +229,7 @@ static int rewinds(const char *dir)
         printf("direntmusl: %s: %d entries, %d after rewinddir\n", dir, count, again);
         return 1;
     }
-    if (!de || strcmp(de->d_name, second) != 0) {
+    if (!listed) {
         printf("direntmusl: %s: seekdir did not list %s again\n", dir, second);
         return 2;
     }
