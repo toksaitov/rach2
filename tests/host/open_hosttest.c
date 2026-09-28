@@ -152,6 +152,13 @@ static const struct vfs_type mounted_type = {0};
 static const struct vfs_type locked_type = {"locked", 0, 0, 1, 0};
 /* A serialised mounted type with the root's lookup, for the mkdir rows. */
 static const struct vfs_type mkdir_type = {"mkdir", 0, &root_ops, 1, 0};
+/* A serialised mounted type that keeps a node only while it is open and
+ * pins one for a holder that opens nothing, as a KRFFS volume does, for the
+ * chdir row. */
+static int dir_pin(struct vfs_mount *mnt, void *at, void **token);
+static void dir_unpin(struct vfs_mount *mnt, void *token);
+static const struct vfs_ops pinning_ops = {.pin = dir_pin, .unpin = dir_unpin};
+static const struct vfs_type pinning_type = {"pinning", 0, &pinning_ops, 1, 0};
 static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
@@ -467,6 +474,11 @@ int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
         run_waiting();
     }
     k_memset(st, 0, sizeof(*st));
+    if (mount.type == &pinning_type) {
+        check(mnt == &mount && at == &node, "a chdir checks the directory its walk found");
+        st->mode = 040755;
+        return 0;
+    }
     if (mkdir_row) {
         check(mnt == &mount && at == &root_dir,
               "a mkdir checks the directory it makes the name in");
@@ -763,6 +775,97 @@ int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
     (void)node;
     (void)name;
     return 0;
+}
+
+/* The pins the chdir row's directory has, and the pins it had while the
+ * chdir slept between its walk and its record and when the working
+ * directory recorded it; and what the working directory recorded. */
+static int dir_pins, pins_asleep, pins_at_record;
+static struct vfs_mount *cwd_mnt_recorded;
+static void *cwd_node_recorded;
+
+/** Pin the chdir row's directory, which the walk that found it must still
+ * have locked, as a KRFFS volume pins a node for an O_PATH description. */
+static int dir_pin(struct vfs_mount *mnt, void *at, void **token)
+{
+    check(mnt == &mount && at == &node && ns_depth > 0,
+          "a chdir pins the node under the lock of the walk that found it");
+    dir_pins++;
+    *token = &dir_pins;
+    return 0;
+}
+
+static void dir_unpin(struct vfs_mount *mnt, void *token)
+{
+    check(mnt == &mount && token == &dir_pins && dir_pins > 0, "an unpin matches a pin");
+    dir_pins--;
+}
+
+/** No row's path is a directory of /proc. */
+int procfs_resolve_id(const struct vpath *vp)
+{
+    (void)vp;
+    check(0, "unexpected /proc lookup");
+    return -1;
+}
+
+int procfs_resolve_pid(int pid)
+{
+    (void)pid;
+    check(0, "unexpected /proc lookup");
+    return 0;
+}
+
+void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
+{
+    (void)kind;
+    (void)pid;
+    (void)tid;
+    (void)out;
+    (void)cap;
+    check(0, "unexpected synthetic directory path");
+}
+
+/** The working directory's path, which no row reads. */
+int proc_cwd_set(struct process *p, const char *path)
+{
+    (void)p;
+    (void)path;
+    return 0;
+}
+
+/** Record the working directory, and the pins its node has then. */
+void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *at)
+{
+    (void)p;
+    cwd_mnt_recorded = mnt;
+    cwd_node_recorded = at;
+    pins_at_record = dir_pins;
+}
+
+/** No row's type names its nodes, and no row's process has a root of its
+ * own. */
+int vfs_node_path(struct vfs_mount *mnt, void *at, char *out, uint32_t cap)
+{
+    (void)mnt;
+    (void)at;
+    (void)out;
+    (void)cap;
+    check(0, "unexpected node path");
+    return -ENOENT;
+}
+
+int vfs_enter(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    check(0, "unexpected entry to a process's root");
+    return -EBUSY;
+}
+
+void vfs_ref_hold(const struct vfs_ref *r)
+{
+    (void)r;
+    check(0, "unexpected hold of a process's root");
 }
 
 /** Whether a change to the root runs in the hold of the root's lock that
@@ -1267,6 +1370,51 @@ static void rmdir_in_use(void)
     rmdir_row_end();
 }
 
+/** The call that runs while the chdir row's chdir sleeps for the disk
+ * between its walk and its record, where an rmdir would look for the pin. */
+static void chdir_sleeps(void)
+{
+    pins_asleep = dir_pins;
+}
+
+/** The call that holds the lock the chdir row's walk asks for last; the
+ * chdir's next sleep comes after its walk. */
+static void chdir_walks(void)
+{
+    waiting = chdir_sleeps;
+}
+
+/**
+ * A chdir into a directory of a type that keeps a node only while it is
+ * open, as a KRFFS volume does. The walk's reference holds nothing there,
+ * and the checks before the record may sleep for the disk, so the chdir
+ * pins the node under the lock its walk ends with and lets the pin go once
+ * the working directory records the node: an rmdir while the chdir sleeps
+ * finds the pin, and one after it finds the working directory.
+ */
+static void chdir_pins(void)
+{
+    char path[] = "/dir";
+
+    row_begin();
+    mount.type = &pinning_type;
+    k_memset(&row_fs, 0, sizeof(row_fs));
+    proc.fs = &row_fs;
+    dir_pins = pins_asleep = pins_at_record = 0;
+    cwd_mnt_recorded = NULL;
+    cwd_node_recorded = NULL;
+    waiting = chdir_walks;
+    check(do_chdir(path) == 0, "a chdir into a directory of a pinning type");
+    check(pins_asleep == 1, "the directory is pinned while the chdir sleeps before its record");
+    check(cwd_mnt_recorded == &mount && cwd_node_recorded == &node && pins_at_record == 1,
+          "the directory is pinned when the working directory records it");
+    check(dir_pins == 0 && ns_depth == 0 && !waiting, "the chdir lets its pin and the lock go");
+    waiting = 0;
+    proc.fs = 0;
+    mount.type = &mounted_type;
+    row_end();
+}
+
 /** The write a row's call waits for: it holds the mount's lock and moves
  * the file, as a growing write on a mounted KRFFS volume does, and repoints
  * the descriptions open on it. */
@@ -1696,6 +1844,7 @@ int main(void)
     mkdir_race();
     orphan_locks();
     rmdir_in_use();
+    chdir_pins();
     attrs_after_move();
     stats_after_move();
     times_after_move();

@@ -56,7 +56,8 @@ echo "krffsmount-mutation: logs: $work"
 run_phase fixed 0 'krffsmount-hosttest: result: pass:'
 if [ "$#" -eq 0 ]; then
     set -- read-identity write-identity truncate-identity write-repoint truncate-repoint \
-        write-failure truncate-failure flush readonly directory clean-flush pin taken-errno
+        write-failure truncate-failure flush readonly directory clean-flush pin taken-errno \
+        cwd-by-offset
 fi
 for fault in "$@"; do
     python3 - "$work/sys/fs/krffsmount.c" "$fault" <<'PY'
@@ -110,6 +111,8 @@ else:
         "taken-errno": ("    if (rc == KRFFS_ETAKEN) {\n        return -EINVAL;\n    }\n"
                         "    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;",
                         "    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;"),
+        "cwd-by-offset": ("pr->fs->cwd_node == handle_of(at)) {",
+                          "pr->fs->cwd_node == (void *)(uintptr_t)at) {"),
     }
     old, new = changes[fault]
     if source.count(old) != 1:
@@ -128,6 +131,7 @@ PY
         clean-flush) message='write after failed clean-flag flush is refused' ;;
         pin) message='pinned node keeps its offset' ;;
         taken-errno) message='a directory whose identifier another directory has is EINVAL' ;;
+        cwd-by-offset) message="an rmdir of a process's working directory is EBUSY" ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

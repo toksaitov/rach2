@@ -3,9 +3,10 @@
 # get no descriptor, the KRFFS root's unlink and rename under the root's lock
 # and of a program's file, the calls by path that read or change a node under
 # the lock their walk takes, the key of a file's locks, a mkdir's lookup under
-# the lock of its parent, an orphan's locks dropped before it is freed, and an
+# the lock of its parent, an orphan's locks dropped before it is freed, an
 # rmdir on the KRFFS root of a directory a description or a working directory
-# has, before, during and after each fault.
+# has, and a chdir's pin of a directory on a type that keeps a node only while
+# it is open, before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -71,7 +72,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
     open-emfile dup-enomem dup2-enomem program-holder root-lock-key volume-lock-key \
     fat-lock-key mkdir-walk-unlocked orphan-locks-after rmdir-checked-unlocked \
-    rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only; do
+    rmdir-descriptions-ignored rmdir-tables-only rmdir-cwd-ignored rmdir-cwd-caller-only \
+    chdir-unpinned chdir-walk-unlocked chdir-unpinned-before-record; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -205,6 +207,24 @@ changes = {
                               "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {",
                               "    for (pr = current_proc; pr; pr = NULL) {\n"
                               "        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {"),
+    "chdir-unpinned": ("    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {\n"
+                       "        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n"
+                       "    }\n    vfs_walk_unlock(ref.mnt);\n",
+                       "    vfs_walk_unlock(ref.mnt);\n"),
+    "chdir-walk-unlocked": [
+        ("    rc = vfs_resolve(0, path, VFS_WALK_LOCK, &ref, 0, 0);\n    if (rc != 0) {\n"
+         "        return rc;\n    }\n    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {",
+         "    rc = vfs_resolve(0, path, 0, &ref, 0, 0);\n    if (rc != 0) {\n"
+         "        return rc;\n    }\n    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {"),
+        ("        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n"
+         "    }\n    vfs_walk_unlock(ref.mnt);\n",
+         "        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n    }\n"),
+    ],
+    "chdir-unpinned-before-record": ("        rc = chdir_mounted(&ref, path);\n        if (pin) {\n"
+                                     "            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n",
+                                     "        if (pin) {\n"
+                                     "            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n"
+                                     "        rc = chdir_mounted(&ref, path);\n"),
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -243,6 +263,9 @@ PY
         rmdir-tables-only) message='an rmdir of a directory a description in flight has is EBUSY' ;;
         rmdir-cwd-ignored) message="an rmdir of the caller's working directory is EBUSY" ;;
         rmdir-cwd-caller-only) message="an rmdir of another process's working directory is EBUSY" ;;
+        chdir-unpinned) message='the directory is pinned while the chdir sleeps before its record' ;;
+        chdir-walk-unlocked) message='a chdir pins the node under the lock of the walk that found it' ;;
+        chdir-unpinned-before-record) message='the directory is pinned when the working directory records it' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup
