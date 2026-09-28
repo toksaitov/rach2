@@ -107,8 +107,8 @@ static void wake_master(struct pty *p, uint32_t *from)
 /**
  * Allocate a pair at the lowest free index, or return NULL when the heap has
  * no room. One queue serves the master's readers, writers and pollers; the
- * slave's `space_wq` points at it, so a flush or termios change wakes a
- * master writer waiting for room.
+ * slave's `space_wq` points at it, so a flush, a termios change, or a signal
+ * char or an erase the master wrote wakes a master writer waiting for room.
  */
 static struct pty *pty_alloc(void)
 {

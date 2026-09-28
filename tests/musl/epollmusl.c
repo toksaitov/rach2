@@ -43,8 +43,9 @@
  * a shutdown of the end is an edge of every kind; a listener is not reported
  * again when an accept leaves a connection queued; a datagram, or a TCP
  * segment over the loopback, that comes to a socket watched for output is no
- * edge; and each write to a pipe is an edge of its read end watched for
- * input, the pipe empty before it or not.
+ * edge; each write to a pipe is an edge of its read end watched for input,
+ * the pipe empty before it or not; and room a VINTR makes in a full
+ * pseudoterminal is an edge of its master watched for output.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -59,6 +60,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
@@ -67,6 +69,7 @@
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -889,6 +892,56 @@ static int tcp_arrival(void)
     return 0;
 }
 
+/* Room a signal character makes in a pseudoterminal is an edge of its master
+ * watched for output: with ISIG on and echo off on the slave, the master's
+ * first report is taken, the master is written until it has no room, and a
+ * VINTR written then flushes the slave's input, which the next wait reports
+ * with no wait between to see the room go. */
+static int pty_signal_room(void)
+{
+    struct epoll_event ev, out;
+    struct termios tio;
+    int master = posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK);
+    int ep = epoll_create1(0);
+    int slave = -1;
+    const char *name;
+    void (*was)(int);
+    int i;
+
+    if (master < 0 || ep < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
+        (name = ptsname(master)) == NULL || (slave = open(name, O_RDWR | O_NOCTTY)) < 0 ||
+        tcgetattr(slave, &tio) != 0) {
+        return fail("setup for a pseudoterminal's room");
+    }
+    tio.c_lflag |= ISIG;
+    tio.c_lflag &= ~(tcflag_t)(ECHO | ICANON);
+    was = signal(SIGINT, SIG_IGN);
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLOUT | EPOLLET;
+    if (tcsetattr(slave, TCSANOW, &tio) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, master, &ev) != 0) {
+        return fail("setup for a pseudoterminal's room");
+    }
+    if (wait_one(ep, 0, &out) != 1) {
+        return fail("a pseudoterminal master with room was not reported for output");
+    }
+    for (i = 0; i < 65536 && write(master, "x", 1) == 1; i++) {
+    }
+    if (i == 65536 || errno != EAGAIN) {
+        return fail("a pseudoterminal master was not filled to EAGAIN");
+    }
+    if (write(master, "\003", 1) != 1) {
+        return fail("a VINTR written to a full pseudoterminal master was not taken");
+    }
+    if (wait_one(ep, 0, &out) != 1 || !(out.events & EPOLLOUT)) {
+        return fail("room a VINTR made in a pseudoterminal was not an edge of its master");
+    }
+    signal(SIGINT, was);
+    close(slave);
+    close(master);
+    close(ep);
+    return 0;
+}
+
 /* Six sets, each added to the one before: five may nest, as in Linux, and a
  * pipe in the fifth is reported by a wait on the first; the sixth is ELOOP,
  * counting the sets above the one it is added to when the chain is built from
@@ -1049,8 +1102,8 @@ int main(void)
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
         long_timeout() || pipe_each_write() || unix_kinds() || unix_shutdown_edge() ||
-        unix_own_room() || unix_accept_edge() || udp_arrival() || tcp_arrival() || nested_six() ||
-        nested_two_paths() || nested_forked()) {
+        unix_own_room() || unix_accept_edge() || udp_arrival() || tcp_arrival() ||
+        pty_signal_room() || nested_six() || nested_two_paths() || nested_forked()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");
