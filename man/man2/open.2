@@ -69,6 +69,15 @@ FAT32 and exFAT ignore the requested mode and report the mount's user
 ID, group ID, and permissions 0777 with the mount mask removed.
 Their read-only attribute removes write permission.
 An existing file's ownership and mode are unchanged.
+An existing directory returns
+.Er EISDIR ,
+as on Linux, since the flag asks for a file.
+With
+.Dv O_DIRECTORY
+as well, a path that does not name a directory by its end, as
+described below, opens the directory it reaches and makes a regular
+file where nothing exists; Linux since 6.4 refuses the pair with
+.Er EINVAL .
 .It Dv O_EXCL
 With
 .Dv O_CREAT ,
@@ -148,8 +157,11 @@ On an existing ordinary target, the checks for
 .Dv O_CREAT Ns | Ns Dv O_EXCL ,
 a final symbolic link under
 .Dv O_NOFOLLOW ,
-a directory opened for writing or truncation, and a non-directory
-under
+a directory opened for writing, for truncation, or with
+.Dv O_CREAT
+and without
+.Dv O_DIRECTORY ,
+and a non-directory under
 .Dv O_DIRECTORY
 precede the read-only mount and access checks.
 A write open, creation, or truncation on a read-only mount returns
@@ -354,8 +366,12 @@ with
 .Er EACCES ,
 after checking exclusive creation and
 .Dv O_DIRECTORY .
-Synthetic directories refuse write access with
-.Er EISDIR
+Synthetic directories refuse write access, and
+.Dv O_CREAT
+without
+.Dv O_DIRECTORY ,
+with
+.Er EISDIR ,
 but ignore
 .Dv O_TRUNC
 when opened read-only.
@@ -568,8 +584,11 @@ past
 File-system I/O failed, the device was removed, or a pseudo-terminal
 slave is still locked.
 .It Bq Er EISDIR
-A directory was opened for writing, an ordinary directory was
-selected for truncation, or
+A directory was opened for writing or with
+.Dv O_CREAT
+without
+.Dv O_DIRECTORY ,
+an ordinary directory was selected for truncation, or
 .Dv O_CREAT
 was given with a path that names a directory by its end.
 .It Bq Er ELOOP

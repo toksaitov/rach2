@@ -28,7 +28,9 @@
  * named is ENOTDIR and of a directory EACCES, and so is a script whose
  * interpreter is named with a trailing slash ENOTDIR; bind to a name so
  * named makes nothing, connect to a socket so named is ENOTDIR, and so is
- * umount2 of a file so named. rmdir and rename of the root are EBUSY. A
+ * umount2 of a file so named. rmdir and rename of the root are EBUSY, and
+ * open with O_CREAT and without O_DIRECTORY is EISDIR for an existing
+ * directory, one of the probe's, one of /dev/shm and /proc, even to read. A
  * symbolic link to a directory named with a trailing slash is followed by
  * the calls that look it up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW
  * notwithstanding, and is ENOTDIR to unlink and rename, in /dev/shm and on
@@ -317,7 +319,9 @@ static int lookup_ends(const struct ends *p)
  * last "." after a directory, and mknod ENOTDIR for one after the file;
  * mkdir is EEXIST for a last "." after a directory, in /proc too, where
  * nothing is made, and ENOENT for one after a name nothing has; and none of
- * them makes n. 0, or 1 once the failure is reported.
+ * them makes n. open with O_CREAT, which asks for a file, is EISDIR for the
+ * directory s and for /proc too, even to read. 0, or 1 once the failure is
+ * reported.
  */
 static int make_ends(const struct ends *p)
 {
@@ -329,6 +333,10 @@ static int make_ends(const struct ends *p)
         !refused(open(p->sdotdot, O_RDONLY | O_CREAT | O_EXCL, 0644), EEXIST) ||
         lstat(p->n, &st) == 0) {
         return fail("an open with O_CREAT of a path that names a directory by its end");
+    }
+    if (!refused(open(p->s, O_RDONLY | O_CREAT, 0644), EISDIR) ||
+        !refused(open("/proc", O_RDONLY | O_CREAT, 0644), EISDIR)) {
+        return fail("an open with O_CREAT of an existing directory was not EISDIR");
     }
     if (!refused(link(p->f, p->ns), ENOENT) || !refused(link(p->f, p->sdot), EEXIST)) {
         return fail("link to a new name with a trailing slash or a last .");

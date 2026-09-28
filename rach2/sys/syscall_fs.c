@@ -1699,11 +1699,12 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     /* The directory exists, so honour flags that contradict that. An exclusive
      * create of an existing object is -EEXIST regardless of access mode (the
      * usual O_CREAT|O_EXCL form implies write access), so that check comes
-     * first; then a directory cannot be opened for writing. */
+     * first; then a directory cannot be opened for writing, nor by O_CREAT
+     * without O_DIRECTORY, which asks for a file. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
     }
-    if ((flags & 3) != 0) {
+    if ((flags & 3) != 0 || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT) {
         return -EISDIR;
     }
     sd = synth_dir_alloc(vp->kind, pid, vp->tid);
@@ -2112,9 +2113,10 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
 /**
  * The checks on an existing node of a mounted type, from its attributes in
  * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the mount's EROFS
- * for a write-side request, then permission and loop attachment. Truncation
- * uses the open handle in `open_install`. On an error the reference is
- * released.
+ * for a write-side request, then permission and loop attachment. A directory
+ * is EISDIR to an open for writing, to O_TRUNC, and to O_CREAT without
+ * O_DIRECTORY, which asks for a file, as on Linux. Truncation uses the open
+ * handle in `open_install`. On an error the reference is released.
  */
 static int open_mounted_node(struct vfs_ref *ref, int flags)
 {
@@ -2137,7 +2139,8 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -ELOOP; /* the link itself, under O_NOFOLLOW */
     }
-    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {
+    if ((vst.mode & 0170000u) == 0040000u &&
+        (acc != 0 || (flags & O_TRUNC) || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT)) {
         vfs_ref_release(ref);
         return -EISDIR;
     }
@@ -2183,10 +2186,10 @@ static int open_root_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -EEXIST;
     }
-    /* A directory cannot be opened for writing or truncated into a
-     * file (the access mode is the low two bits); O_DIRECTORY
-     * requires one. */
-    if (is_dir && (acc != 0 || (flags & O_TRUNC))) {
+    /* A directory cannot be opened for writing, truncated, or opened by
+     * O_CREAT without O_DIRECTORY, which asks for a file (the access mode
+     * is the low two bits); O_DIRECTORY requires one. */
+    if (is_dir && (acc != 0 || (flags & O_TRUNC) || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT)) {
         vfs_ref_release(ref);
         return -EISDIR;
     }
