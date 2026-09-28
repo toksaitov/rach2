@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd September 28, 2026
 .Dt BOOTLOG 4
 .Os
 .Sh NAME
@@ -20,6 +20,18 @@ reads the retained kernel records from the current boot.
 The offset counts from the oldest retained byte.
 Records may be evicted between chunk copies, including within one read.
 The returned bytes are not a snapshot.
+.Pp
+The device seeks to any place through 4294967295, the last its offset
+has, and
+.Dv SEEK_END
+seeks from the end of the retained bytes; the older 32-bit
+.Xr lseek 2
+returns no place past 2147483647 and refuses one with
+.Er EOVERFLOW .
+A read holds the open file description for its length, as a seek of it
+does, so a seek through a descriptor that shares the description waits
+for a read in progress and moves the offset on from where the read left
+it, as Linux holds a file's position lock.
 The
 .Xr dmesg 1
 script reads this device.

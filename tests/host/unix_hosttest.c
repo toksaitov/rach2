@@ -92,6 +92,11 @@ static int pages[PAGES];
 static krffs_node_t nodes[FILES];
 static int freed[FILES];
 
+/* The root's namespace lock, which the release of a descriptor of one of
+ * those files takes (`fd_release_lock`): how deep the holder has it. */
+static struct vfs_mount rootmount;
+static int root_depth;
+
 static struct sockfile sockfiles[SOCKFILES];
 static struct vfs_mount sockmount;
 static int files_made;
@@ -102,6 +107,9 @@ static int files_made;
 static void (*page_sibling)(void);
 static void (*fs_sibling)(void);
 static void (*release_sibling)(void);
+/* The sibling's call that holds the root's lock when a release first asks
+ * for it, which runs before the release has it. */
+static void (*lock_sibling)(void);
 /* How many siblings ran, and whether the last one is parked in a wait: on
  * which queue, and how many wakes of that queue came since it parked. */
 static int ran, parked;
@@ -440,19 +448,50 @@ static int holders(const krffs_node_t *node, const fd_entry_t *except)
 }
 
 /**
+ * Take the root's lock for the release of `e`, as `fd_release_lock` does for
+ * a descriptor of a KRFFS file, or NULL for any other. A request the caller
+ * does not already hold first runs the sibling armed for it, the process
+ * that holds the lock, whose call ends before the caller has it.
+ */
+struct vfs_mount *fd_release_lock(const fd_entry_t *e)
+{
+    if (e->type != FD_TYPE_FILE || !e->node) {
+        return NULL;
+    }
+    if (root_depth == 0) {
+        run_sibling(&lock_sibling);
+    }
+    root_depth++;
+    return &rootmount;
+}
+
+/** Give back the root's lock `fd_release_lock` took. */
+void vfs_ns_unlock(struct vfs_mount *mnt)
+{
+    check(mnt == &rootmount && root_depth > 0, "a release gives back the root's lock it took");
+    root_depth--;
+}
+
+/**
  * Release what a descriptor holds, as `fd_release_objects` does for the
  * kinds the rows make: a file is freed by the release of its last holder,
- * and a socket or a pipe end is closed with its description's last
- * descriptor.
+ * which counts the holders and frees it under the root's lock, and a socket
+ * or a pipe end is closed with its description's last descriptor.
  */
 void fd_release_backing(fd_entry_t *e)
 {
+    struct vfs_mount *locked;
+
     if (!e) {
         return;
     }
+    locked = fd_release_lock(e);
     if (e->type == FD_TYPE_FILE && e->node && holders(e->node, e) == 0) {
         freed[e->node - nodes]++;
         e->node = NULL;
+    }
+    if (locked) {
+        vfs_ns_unlock(locked);
     }
     if (e->ops && e->ops->close && e->ofd && e->ofd->refcount == 1) {
         e->ops->close(e);
@@ -745,6 +784,8 @@ static void setup(void)
     page_sibling = NULL;
     fs_sibling = NULL;
     release_sibling = NULL;
+    lock_sibling = NULL;
+    root_depth = 0;
     ran = 0;
     parked = 0;
     parked_on = NULL;
@@ -787,7 +828,7 @@ static void end_row(const char *name)
             break;
         }
     }
-    if (socks || pipes || transits || reap_head || live != 0 || i < SOCKFILES) {
+    if (socks || pipes || transits || reap_head || live != 0 || i < SOCKFILES || root_depth != 0) {
         dprintf(2, "unix-hosttest: fail: the %s row leaves something allocated\n", name);
         failures++;
     }
@@ -1305,6 +1346,31 @@ static void moved_row(void)
     end_row("moved and dropped");
 }
 
+/**
+ * A descriptor in flight on a queue that its socket's close drops, whose
+ * file's last descriptor in a table a sibling closes while the drop's
+ * request for the root's lock waits: the descriptor in flight must still be
+ * where the holder count finds it then, so the sibling's close leaves the
+ * file, and the drop's own close, under the lock, frees it once.
+ */
+static void flight_lock_row(void)
+{
+    int f;
+
+    setup();
+    check(pair(SOCK_STREAM) == 0, "flight lock: a stream pair");
+    f = open_orphan(0);
+    check(f == 2 && send_rights(0, &f, 1) == 1, "flight lock: a file's descriptor sent");
+    reserved[0] = 2;
+    lock_sibling = close_and_look;
+    check(do_close(1) == 0, "flight lock: the close of the socket whose queue has the descriptor");
+    check(ran == 1 && sibling_rc[0] == 0 && seen[0] == 0,
+          "a descriptor in flight is counted until its drop has the root's lock: a close of the "
+          "file's last descriptor meanwhile leaves the file");
+    check(freed[0] == 1, "the drop of a descriptor in flight frees its file once");
+    end_row("flight lock");
+}
+
 int main(void)
 {
     unix_init();
@@ -1335,6 +1401,7 @@ int main(void)
                          "writing queues nothing and fails with EPIPE");
     transit_row();
     moved_row();
+    flight_lock_row();
     dprintf(1, "unix-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

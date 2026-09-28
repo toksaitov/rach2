@@ -62,10 +62,20 @@ static void *filemap_node(const struct filemap *m)
                                                                           : NULL;
 }
 
+/**
+ * Let go of the mapping `f` with the last region that maps it, and of the
+ * copy of the descriptor it keeps, as a close of the descriptor would. A
+ * mapping of a file of the KRFFS root is one of the file's holders, which
+ * `filemap_holds` finds on the list of mappings, and it leaves the list only
+ * once the root's namespace lock is held (`fd_release_lock`): a release of
+ * the file's last descriptor elsewhere counts it until then, and the count
+ * and any reclaim of the file its own release makes come in the same hold.
+ */
 static void filemap_release(struct vm_file *f)
 {
     struct filemap *m = (struct filemap *)f;
     struct filemap **link = &maps;
+    struct vfs_mount *locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;
 
     while (*link && *link != m) {
         link = &(*link)->next;
@@ -80,6 +90,9 @@ static void filemap_release(struct vm_file *f)
         m->entry.node = filemap_node(m);
         fd_release_backing(&m->entry);
         fd_ofd_unref(m->entry.ofd);
+    }
+    if (locked) {
+        vfs_ns_unlock(locked);
     }
     if (m->sh == &m->own) {
         shmem_free(&m->own);

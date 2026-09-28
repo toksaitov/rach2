@@ -184,6 +184,73 @@ static void fd_fifo_orphan(const fd_entry_t *e)
 }
 
 /**
+ * Take the lock the release of `e`, a descriptor or a copy of one, needs when
+ * the release may free a node of the KRFFS root that lost its name: the
+ * root's namespace lock, for a file of the root, or for an end of a FIFO of
+ * the root or the reservation of an open of one. The mount locked, or NULL,
+ * with nothing taken, for any other descriptor.
+ *
+ * The unlink and the rename of a file hold that lock while they count its
+ * holders and take its name, and every allocation on the root holds it, so
+ * under it the release's count of the holders and its reclaim of the node,
+ * which marks the node's extent free and may sleep reading a neighbouring
+ * header, come with no count and no allocation between them. A holder that
+ * the count finds in a list of its own, a file mapping or a descriptor in
+ * flight, takes the lock before it leaves that list, as the address space
+ * that runs the file does (`fs_exe_lock`): until then a release of the
+ * file's other holders counts it. The release takes the lock again, which
+ * its holder may do. May sleep; no caller holds the namespace lock of
+ * another mount or the lock of a description on a mount.
+ */
+struct vfs_mount *fd_release_lock(const fd_entry_t *e)
+{
+    struct vfs_mount *root = vfs_root_mount();
+    int orphanable;
+
+    if (!krffs_fs) {
+        return NULL;
+    }
+    if (e->type == FD_TYPE_FILE) {
+        orphanable = e->node && e->node != krffs_fs->node;
+    } else {
+        orphanable = (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_NONE) && e->ofd &&
+                     e->ofd->vmnt == root && mnt_is_root(root);
+    }
+    if (!orphanable) {
+        return NULL;
+    }
+    vfs_ns_lock(root);
+    return root;
+}
+
+/**
+ * Free the node of the KRFFS root that `e` holds, when the node lost its name
+ * and `e` is its last holder: a file, or a FIFO whose end or reservation of
+ * an open `e` is (`fd_fifo_orphan`). The count of the holders and the reclaim
+ * run under the root's namespace lock (`fd_release_lock`). A descriptor in a
+ * table stays there, and so among the holders, until the release that calls
+ * this ends; a holder kept in a list of its own leaves the list under the
+ * same lock, which it took first.
+ */
+static void fd_release_orphan(fd_entry_t *e)
+{
+    struct vfs_mount *locked = fd_release_lock(e);
+
+    if (!locked) {
+        return;
+    }
+    if (e->type == FD_TYPE_FILE) {
+        if (e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
+            fd_free_orphan(e, e->node);
+            e->node = NULL;
+        }
+    } else {
+        fd_fifo_orphan(e);
+    }
+    vfs_ns_unlock(locked);
+}
+
+/**
  * Whether any descriptor anywhere has `node`. For callers outside this file.
  *
  * The debug shell removes and renames through the file system directly, below
@@ -295,22 +362,17 @@ static void fd_close_locks(const fd_entry_t *e)
  * reference, refcount about to reach 0). The socket reference, by contrast,
  * is counted per descriptor (socket_ref on dup/fork), so it is always
  * dropped here. No descriptor is both an ops object and a socket.
+ *
+ * A KRFFS node is a backing kind like any other here. An orphan, a reserved
+ * node no path names, is freed by its last holder, under the root's
+ * namespace lock (`fd_release_orphan`), and this runs while the closing
+ * slot is still populated, which is what the count's `except` is for: the
+ * closing descriptor is skipped, not cleared first, so it is counted by
+ * every other release until its own has the lock.
  */
 static void fd_release_objects(fd_entry_t *e)
 {
-    /* A KRFFS node is a backing kind like any other here. An orphan (a reserved
-     * node no path names) is freed by its LAST holder, and this runs while the
-     * closing slot is still populated, which is what `except` is for: the
-     * closing descriptor is skipped, not cleared first, so "last holder"
-     * needs no ordering rule between two functions. */
-    if (e->type == FD_TYPE_FILE && e->node && krffs_fs && e->node != krffs_fs->node &&
-        e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
-        fd_free_orphan(e, e->node);
-        e->node = NULL;
-    }
-    if (e->type == FD_TYPE_PIPE) {
-        fd_fifo_orphan(e);
-    }
+    fd_release_orphan(e);
     /* A synthetic directory fd's pooled cookie, or an O_PATH leaf's node, is
      * freed when its last descriptor closes (dup/fork share it via the OFD
      * refcount, like an ops backing). */
@@ -407,9 +469,9 @@ struct vfs_mount *fs_exe_lock(const struct open_file *ofd)
  * by, once that address space is off the list `mm_exe_holds` reads, with
  * `locked` held as `fs_exe_lock` returned it: a file of the KRFFS root that
  * lost its name is freed when nothing else holds it, as the release of a
- * file's last descriptor frees one (`fd_release_objects`), at the node the
- * file is at now; then the lock goes, and the description's last reference
- * closes it. May sleep.
+ * file's last descriptor frees one (`fd_release_objects`, which takes the
+ * lock again), at the node the file is at now; then the lock goes, and the
+ * description's last reference closes it. May sleep.
  */
 void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 {
@@ -432,17 +494,20 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 /**
  * The description an ops-backed read or write of `entry` holds for its
  * length, as lseek holds it to move the offset, or NULL. A raw disk window's
- * transfer uses `raw_offset`, and a /proc file's the offset, a byte of its
- * text or an address of /proc/PID/mem; either may sleep before it sets the
- * offset past what it moved, a /proc one in a fault on the caller's buffer
- * or in bringing in a page of the process, and a seek through a descriptor
- * that shares the description must wait for it or be lost. Linux holds such
- * a file's position lock across read, write and lseek alike. pread64 and
+ * transfer uses `raw_offset`; a /proc file's the offset, a byte of its text
+ * or an address of /proc/PID/mem; and `/dev/bootlog`'s the offset, a byte
+ * of the kernel log's ring. Each may sleep before it sets the offset past
+ * what it moved, in a disk request, or in a fault on the caller's buffer or
+ * in bringing in a page of a process, and a seek through a descriptor that
+ * shares the description must wait for it or be lost. Linux holds such a
+ * file's position lock across read, write and lseek alike. pread64 and
  * pwrite64 hold nothing, since they work on a copy (`pio_view`).
  */
 static struct open_file *ops_offset_held(fd_entry_t *entry)
 {
-    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;
+    return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || entry->type == FD_TYPE_PROC
+               ? entry->ofd
+               : NULL;
 }
 
 /** Dispatch an ops-backed write, holding the description of one whose write
@@ -2076,7 +2141,7 @@ static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
     vfs_leave(mnt);
     rc = fifo_attach(e, mnt, ino, flags);
     if (rc != 0) {
-        fd_fifo_orphan(e);
+        fd_release_orphan(e);
         fd_free(current_proc->fds, fd);
         return rc;
     }
@@ -3068,6 +3133,51 @@ static int seek_listing(fd_entry_t *entry, long long off, int whence, uint64_t l
     return rc;
 }
 
+/**
+ * lseek(2) and _llseek(2) on `/dev/bootlog`, whose offset counts from the
+ * oldest byte the kernel log's ring holds: the offset `whence` and `off`
+ * give, returned in `*out` and, when `store` is set, stored in the
+ * description, or a negative errno with the offset unchanged. The whole
+ * seek holds the description's lock, which the log's read holds across its
+ * copy, so a seek through a descriptor that shares the description waits
+ * for a read in progress and moves on from where the read left the offset.
+ *
+ * SEEK_SET, SEEK_CUR and SEEK_END take the sum by `seek_add`, so a
+ * displacement cannot overflow it. A place before 0 or past 0xFFFFFFFF, the
+ * last the log's offset has, is -EINVAL, and one past `limit`, the largest
+ * offset the call can return, -EOVERFLOW. A caller with nowhere to return
+ * the offset asks with `store` clear and fails the call itself.
+ */
+static int seek_bootlog(fd_entry_t *entry, long long off, int whence, uint64_t limit, int store,
+                        long long *out)
+{
+    uint32_t size = 0;
+    long long at = off;
+    int rc = 0;
+
+    fd_ofd_lock(entry->ofd);
+    (void)devfs_fd_log_size(entry, &size);
+    if (whence == 1) {
+        rc = seek_add(entry->ofd->offset, off, &at);
+    } else if (whence == 2) {
+        rc = seek_add((uint64_t)size, off, &at);
+    } else if (whence != 0) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu)) {
+        rc = -EINVAL;
+    }
+    if (rc == 0 && (uint64_t)at > limit) {
+        rc = -EOVERFLOW;
+    }
+    if (rc == 0 && store) {
+        entry->ofd->offset = (uint64_t)at;
+    }
+    fd_ofd_unlock(entry->ofd);
+    *out = at;
+    return rc;
+}
+
 int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -3076,7 +3186,6 @@ int32_t sys_lseek(isr_params_t *params)
     fd_entry_t *entry;
     uint64_t file_size;
     int seek_rc;
-    int32_t new_offset;
     long long at;
 
     if (!current_proc) {
@@ -3091,30 +3200,12 @@ int32_t sys_lseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        uint32_t log_size;
-
         if (devfs_fd_is_raw(entry)) {
             return raw_lseek(entry, offset, whence);
         }
-        if (devfs_fd_log_size(entry, &log_size)) {
-            switch (whence) {
-            case 0: /* SEEK_SET */
-                new_offset = offset;
-                break;
-            case 1: /* SEEK_CUR */
-                new_offset = (int32_t)entry->ofd->offset + offset;
-                break;
-            case 2: /* SEEK_END */
-                new_offset = (int32_t)log_size + offset;
-                break;
-            default:
-                return -EINVAL;
-            }
-            if (new_offset < 0) {
-                return -EINVAL;
-            }
-            entry->ofd->offset = (uint32_t)new_offset;
-            return new_offset;
+        if (devfs_fd_log_size(entry, NULL)) {
+            seek_rc = seek_bootlog(entry, (long long)offset, whence, 0x7FFFFFFFull, 1, &at);
+            return seek_rc != 0 ? seek_rc : (int32_t)at;
         }
         /* mem devices (null/zero/full) accept a seek that always lands at 0;
          * the stream devices (random/urandom) are not seekable. */
@@ -7120,44 +7211,24 @@ static long long off_from(uint32_t high, uint32_t low)
 }
 
 /**
- * `_llseek` on `/dev/bootlog`, whose window is the kernel log's ring: the
- * three origins, the sum taken by `seek_add` so a caller's displacement
- * cannot overflow the addition, and the resolved offset written back to the
- * caller. Returns 0 or a negative errno.
+ * `_llseek` on `/dev/bootlog`, by `seek_bootlog`'s rules, with the new offset
+ * written to the caller's `result`: -EFAULT with the offset unchanged when
+ * `result` is NULL, and -EFAULT with it moved when the copy fails. Returns 0
+ * or a negative errno.
  */
-static int32_t llseek_bootlog(fd_entry_t *entry, uint32_t log_size, long long off, int whence,
+static int32_t llseek_bootlog(fd_entry_t *entry, long long off, int whence,
                               long long __user *result)
 {
-    long long new_off = 0;
-    int rc = 0;
+    long long at;
+    int rc = seek_bootlog(entry, off, whence, 0xFFFFFFFFull, result != NULL, &at);
 
-    switch (whence) {
-    case 0: /* SEEK_SET */
-        new_off = off;
-        break;
-    case 1: /* SEEK_CUR */
-        rc = seek_add(entry->ofd->offset, off, &new_off);
-        break;
-    case 2: /* SEEK_END */
-        rc = seek_add((uint64_t)log_size, off, &new_off);
-        break;
-    default:
-        return -EINVAL;
+    if (rc == 0 && !result) {
+        rc = -EFAULT;
     }
     if (rc != 0) {
         return rc;
     }
-    if (new_off < 0 || new_off > (long long)0xFFFFFFFFu) {
-        return -EINVAL;
-    }
-    if (!result) {
-        return -EFAULT;
-    }
-    entry->ofd->offset = (uint32_t)new_off;
-    if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
-        return -EFAULT;
-    }
-    return 0;
+    return copy_to_user(result, &at, sizeof(at)) != 0 ? -EFAULT : 0;
 }
 
 /**
@@ -7237,7 +7308,6 @@ int32_t sys__llseek(isr_params_t *params)
     }
     if (entry->type == FD_TYPE_DEVICE) {
         uint64_t raw_size;
-        uint32_t log_size;
 
         if (devfs_fd_is_raw(entry)) {
             uint64_t resolved;
@@ -7266,9 +7336,8 @@ int32_t sys__llseek(isr_params_t *params)
             }
             return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;
         }
-        if (devfs_fd_log_size(entry, &log_size)) {
-            return llseek_bootlog(entry, log_size, off_from(offset_high, offset_low), whence,
-                                  result);
+        if (devfs_fd_log_size(entry, NULL)) {
+            return llseek_bootlog(entry, off_from(offset_high, offset_low), whence, result);
         }
         if (devfs_lseek_zero(entry)) {
             long long zero = 0;

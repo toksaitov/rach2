@@ -600,6 +600,14 @@ int devfs_fd_is_raw(struct fd_entry *e)
     return 0;
 }
 
+/** No row's descriptor is the kernel log. */
+int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
+{
+    (void)e;
+    (void)size;
+    return 0;
+}
+
 struct pty *pty_get(int index)
 {
     (void)index;
