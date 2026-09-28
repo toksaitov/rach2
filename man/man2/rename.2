@@ -157,13 +157,15 @@ A slash after either final name requires the source to be a directory:
 anything else, a symbolic link to a directory among them, returns
 .Er ENOTDIR ,
 as on Linux.
-Mount points cannot be renamed or replaced; a mount point as
-.Fa newpath
-under
+Mount points cannot be renamed or replaced; under
 .Dv RENAME_NOREPLACE
-returns
-.Er EEXIST ,
-as a name that exists does, as on Linux.
+a
+.Fa newpath
+that exists, a mount point among them, returns
+.Er EEXIST
+first, whether or not
+.Fa oldpath
+is a mount point, as on Linux.
 The synthetic
 .Pa /dev
 and

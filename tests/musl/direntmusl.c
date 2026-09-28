@@ -38,8 +38,8 @@
  * rename of the root are EBUSY, link, symlink and mknod with the root as the
  * new name EEXIST and bind to it EADDRINUSE; a mount point, /dev or /proc, is
  * EEXIST as a new name with a trailing slash and as a RENAME_NOREPLACE
- * rename's, and so is another user's /proc/1/exe to symlink, though its link
- * may not be read. open with O_CREAT is EISDIR for an
+ * rename's, and so is another user's /proc/PID/exe to symlink, though its
+ * link may not be read. open with O_CREAT is EISDIR for an
  * existing directory, one of the probe's, one of /dev/shm and /proc, even to
  * read, and with O_DIRECTORY EINVAL before the path is read, unless O_PATH is
  * given too, which drops O_CREAT. A symbolic link to a directory named with a
@@ -863,6 +863,8 @@ static int synth_name_rows(void)
         return fail("a rename of a last . or .. in /proc was not EBUSY or EEXIST");
     }
     if (!refused(syscall(SYS_renameat2, AT_FDCWD, file, AT_FDCWD, "/dev", RENAME_NOREPLACE),
+                 EEXIST) ||
+        !refused(syscall(SYS_renameat2, AT_FDCWD, "/proc", AT_FDCWD, "/dev", RENAME_NOREPLACE),
                  EEXIST)) {
         return fail("a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST");
     }
@@ -911,22 +913,25 @@ static int synth_taken_rows(void)
 
 /**
  * A name that exists in /proc whose link the caller may not read: symlink
- * onto /proc/1/exe, init's, is EEXIST, plainly and with a trailing slash,
- * for a child that runs as user 1000. 0, or 1 once the failure is reported.
+ * onto the exe link of this process, which runs as root, is EEXIST, plainly
+ * and with a trailing slash, for a child that runs as user 1000. 0, or 1
+ * once the failure is reported.
  */
 static int unreadable_taken_rows(void)
 {
-    pid_t pid = fork();
+    char exe[40], exe_slash[40];
+    pid_t pid;
     int status;
 
+    snprintf(exe, sizeof(exe), "/proc/%d/exe", (int)getpid());
+    snprintf(exe_slash, sizeof(exe_slash), "%s/", exe);
+    pid = fork();
     if (pid == 0) {
         if (setgid(1000) != 0 || setuid(1000) != 0) {
             _exit(2);
         }
-        _exit(refused(symlink("x", "/proc/1/exe"), EEXIST) &&
-                      refused(symlink("x", "/proc/1/exe/"), EEXIST)
-                  ? 0
-                  : 1);
+        _exit(refused(symlink("x", exe), EEXIST) && refused(symlink("x", exe_slash), EEXIST) ? 0
+                                                                                             : 1);
     }
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {

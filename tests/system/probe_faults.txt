@@ -4393,7 +4393,13 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST)
 old
-        (!(flags & RENAME_NOREPLACE) && vfs_leaf_mount(npar.mnt, npar.node, nleaf))) {
+        if (flags & RENAME_NOREPLACE) {
+            vfs_ns_lock(opar.mnt);
+            rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
+            vfs_ns_unlock(opar.mnt);
+            if (rc == 0) {
+                rc = -EBUSY;
+            }
+        }
 new
-        vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
 end

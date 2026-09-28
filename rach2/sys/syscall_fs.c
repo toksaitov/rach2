@@ -8949,15 +8949,17 @@ int32_t sys_unlinkat(isr_params_t *params)
 /**
  * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
  * not there, as the rename would answer, then -EEXIST for a new name that is,
- * a mount point among them, before the EBUSY a mount point is otherwise, as
- * on Linux. The caller holds the mount's namespace lock from this check
- * through the rename, and every namespace change takes that lock, so no name
- * can appear between the two.
+ * a mount point being there for either, before the EBUSY a mount point is
+ * otherwise, as on Linux. The caller holds the mount's namespace lock from
+ * this check through the rename, and every namespace change takes that
+ * lock, so no name can appear between the two.
  */
 static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
                                 const struct vfs_ref *npar, const char *nleaf)
 {
-    int rc = name_present(opar->mnt, opar->node, oleaf);
+    int rc = vfs_leaf_mount(opar->mnt, opar->node, oleaf)
+                 ? 1
+                 : name_present(opar->mnt, opar->node, oleaf);
 
     if (rc <= 0) {
         return rc == 0 ? -ENOENT : rc;
@@ -9177,9 +9179,16 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
     if (rc != 0) {
         goto out;
     }
-    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) ||
-        (!(flags & RENAME_NOREPLACE) && vfs_leaf_mount(npar.mnt, npar.node, nleaf))) {
+    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
         rc = -EBUSY; /* a mount point moves for no one */
+        if (flags & RENAME_NOREPLACE) {
+            vfs_ns_lock(opar.mnt);
+            rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
+            vfs_ns_unlock(opar.mnt);
+            if (rc == 0) {
+                rc = -EBUSY;
+            }
+        }
         goto out;
     }
     if (!mnt_is_root(opar.mnt)) {
