@@ -260,12 +260,13 @@ static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 }
 
 /**
- * Drop the calling process's record locks on what `e` is open on, when `e`
- * is one of its own descriptors, as POSIX has every close do. The copy of an
- * entry a file mapping or a message in flight keeps is not a descriptor of
- * the process (`fd_in_table`), and its release drops none; nor does the
- * close of an O_PATH descriptor, which Linux does not count as a close of
- * the file.
+ * Drop the record locks of the calling thread's descriptor table on what `e`
+ * is open on, when `e` is one of the table's descriptors, as POSIX has every
+ * close do; the table owns them for every thread and process that shares it
+ * (`lock.h`), so a close by any of them drops them all. The copy of an entry
+ * a file mapping or a message in flight keeps is not a descriptor of the
+ * table (`fd_in_table`), and its release drops none; nor does the close of
+ * an O_PATH descriptor, which Linux does not count as a close of the file.
  */
 static void fd_close_locks(const fd_entry_t *e)
 {
@@ -279,20 +280,9 @@ static void fd_close_locks(const fd_entry_t *e)
     lock_close(&key);
 }
 
-void fd_table_drop_locks(fd_table_t *table)
-{
-    int i;
-
-    for (i = 0; i < fd_table_cap(table); i++) {
-        if (table->entries[i].type != FD_TYPE_NONE) {
-            fd_close_locks(&table->entries[i]);
-        }
-    }
-}
-
 /**
  * Release every backing reference a descriptor holds before its slot is
- * freed, the calling process's record locks apart.
+ * freed, the table's record locks apart.
  *
  * Drops framebuffer ownership, the per-fd socket reference, and an ops-backed
  * object (pipe/tty/pty). Every fd-teardown site routes through this, most of
@@ -347,10 +337,10 @@ static void fd_release_objects(fd_entry_t *e)
 
 /**
  * Release every backing reference a descriptor holds before its slot is
- * freed (`fd_release_objects`), and first, for a close of one of the
- * process's own descriptors, its record locks on the file
+ * freed (`fd_release_objects`), and first, for a close of a descriptor of
+ * the calling thread's table, the table's record locks on the file
  * (`fd_close_locks`): the close, the dup2 replacement of an open target, the
- * execve CLOEXEC sweep, and the process-exit fd-table release.
+ * execve CLOEXEC sweep, and the release of the table by its last sharer.
  */
 void fd_release_backing(fd_entry_t *e)
 {
@@ -2668,7 +2658,7 @@ static void fd_teardown(fd_table_t *table, int fd)
 }
 
 /**
- * Close descriptor `fd` of the caller's table. The caller's record locks on
+ * Close descriptor `fd` of the caller's table. The table's record locks on
  * the file go at once, as Linux drops them at every close. Then the entry
  * is released and its slot freed (`fd_teardown`), or, while a call of
  * another thread sharing the table holds it, marked closing, so that the
@@ -7452,21 +7442,21 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
  * `arg` the caller's struct flock, 16 bytes with 32-bit offsets for F_GETLK,
  * F_SETLK and F_SETLKW, or struct flock64, 24 bytes, for the rest.
  *
- * A POSIX lock belongs to the process and an open file description lock
- * (F_OFD_*, whose `l_pid` must be 0) to the description, as lock.Readme.md
- * describes. Setting a read lock needs a descriptor open for reading and a
- * write lock one open for writing (EBADF). F_GETLK reports the first lock
- * that conflicts, with its range from the start of the file, a length of 0
- * for one to the end, and its owner's pid, -1 for a description's; or
- * F_UNLCK in `l_type` alone when none does. The 32-bit form answers
- * EOVERFLOW for a lock it cannot describe.
+ * A POSIX lock belongs to the descriptor table and an open file description
+ * lock (F_OFD_*, whose `l_pid` must be 0) to the description, as
+ * lock.Readme.md describes. Setting a read lock needs a descriptor open for
+ * reading and a write lock one open for writing (EBADF). F_GETLK reports the
+ * first lock that conflicts, with its range from the start of the file, a
+ * length of 0 for one to the end, and the pid of the process that took it,
+ * -1 for a description's; or F_UNLCK in `l_type` alone when none does. The
+ * 32-bit form answers EOVERFLOW for a lock it cannot describe.
  *
  * A thread that shares the descriptor table may close the descriptor while
  * this call waits for a lock or reads the caller's structure; the close
- * drops the process's locks on the file and only marks the descriptor
- * closing while the call has it. A POSIX lock gained after that is let go
- * with the process's others on the file and the call answers EBADF, as
- * Linux's does, so no lock outlives the close that should have dropped it.
+ * drops the table's locks on the file and only marks the descriptor closing
+ * while the call has it. A POSIX lock gained after that is let go with the
+ * table's others on the file and the call answers EBADF, as Linux's does,
+ * so no lock outlives the close that should have dropped it.
  * The file's key is taken again for that, since a KRFFS file a write moved
  * during the wait has a new one. An OFD lock belongs to the description,
  * which the call still holds.

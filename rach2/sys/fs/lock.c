@@ -15,9 +15,9 @@
 
 enum { LK_POSIX, LK_OFD, LK_FLOCK };
 
-/* One lock. The owner is the process id of a POSIX lock, or the open file
- * description of the other two kinds; `pid` is the process that took it,
- * which F_GETLK reports. */
+/* One lock. The owner is the descriptor table of a POSIX lock
+ * (`posix_owner`), or the open file description of the other two kinds;
+ * `pid` is the process that took it, which F_GETLK reports. */
 struct file_lock {
     struct file_lock *next;
     struct lock_key key;
@@ -29,13 +29,13 @@ struct file_lock {
     uint64_t end;
 };
 
-/* A process waiting for a record lock, and the process whose lock it waits
- * for: the links a cycle of waits is found by. Each is on the waiter's
- * stack for the length of its wait. */
+/* An owner waiting for a record lock, and the owner of the lock it waits
+ * for, or 0 for a lock of another kind: the links a cycle of waits is found
+ * by. Each is on the waiter's stack for the length of its wait. */
 struct lock_wait {
     struct lock_wait *next;
-    uint32_t pid;
-    uint32_t blocker;
+    uintptr_t owner;
+    uintptr_t blocker;
 };
 
 /* The key of a wait under way, a copy of the caller's on the waiter's stack
@@ -54,6 +54,14 @@ static wait_queue_t lock_wq;
 int lock_any(void)
 {
     return locks != NULL;
+}
+
+/* The owner of the calling thread's POSIX record locks: its descriptor
+ * table, as Linux's owner is the files_struct, so the threads of a process
+ * and the processes that share a table (CLONE_FILES) are one owner. */
+static uintptr_t posix_owner(void)
+{
+    return (uintptr_t)current_proc->fds;
 }
 
 static int same_key(const struct lock_key *a, const struct lock_key *b)
@@ -208,19 +216,21 @@ static int32_t record_apply(const struct record_want *w, uint32_t pid)
     return 0;
 }
 
-/* Whether a wait by `pid` for a lock of `blocker` would close a cycle: the
- * chain of waits from the blocker comes back to `pid`. */
-static int deadlock(uint32_t pid, uint32_t blocker)
+/* Whether a wait by `owner` for a lock of `blocker` would close a cycle:
+ * the chain of waits from the blocker comes back to `owner`. Of an owner
+ * that waits in more than one thread, the chain follows the first wait it
+ * finds, as Linux's does. */
+static int deadlock(uintptr_t owner, uintptr_t blocker)
 {
     int hops;
 
     for (hops = 0; hops < DEADLOCK_HOPS; hops++) {
         const struct lock_wait *w;
 
-        if (blocker == pid) {
+        if (blocker == owner) {
             return 1;
         }
-        for (w = waits; w && w->pid != blocker; w = w->next) {
+        for (w = waits; w && w->owner != blocker; w = w->next) {
         }
         if (!w) {
             return 0;
@@ -288,8 +298,8 @@ static int record_ready(void *arg)
     if (!c) {
         return 1;
     }
-    rw->me->blocker = c->kind == LK_POSIX ? c->pid : 0u;
-    if (w->kind == LK_POSIX && c->kind == LK_POSIX && deadlock(rw->me->pid, c->pid)) {
+    rw->me->blocker = c->kind == LK_POSIX ? c->owner : 0u;
+    if (w->kind == LK_POSIX && c->kind == LK_POSIX && deadlock(rw->me->owner, c->owner)) {
         rw->deadlock = 1;
         return 1;
     }
@@ -313,7 +323,7 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
     }
     want.key = key;
     want.kind = ofd ? LK_OFD : LK_POSIX;
-    want.owner = ofd ? (uintptr_t)ofd : (uintptr_t)pid;
+    want.owner = ofd ? (uintptr_t)ofd : posix_owner();
     want.type = req->type;
     want.start = req->start;
     want.end = req->end;
@@ -341,7 +351,7 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
     if (cmd != LOCK_WAIT) {
         return -EAGAIN;
     }
-    me.pid = pid;
+    me.owner = want.owner;
     me.blocker = 0;
     me.next = waits;
     waits = &me;
@@ -470,7 +480,7 @@ void lock_close(const struct lock_key *key)
     int dropped = 0;
 
     while ((l = *link) != NULL) {
-        if (mine(l, key, LK_POSIX, (uintptr_t)current_proc->tgid)) {
+        if (mine(l, key, LK_POSIX, posix_owner())) {
             unlink_lock(link);
             dropped = 1;
         } else {

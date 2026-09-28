@@ -169,7 +169,9 @@ typedef struct fd_entry {
  * them. A shared table has all FD_TABLE_LIMIT entries, so an entry stays
  * where it is while a call of one sharer sleeps with it and another opens
  * files. The table has no limit of its own below FD_TABLE_LIMIT: each
- * sharer is held to its own RLIMIT_NOFILE (`fd_limit`).
+ * sharer is held to its own RLIMIT_NOFILE (`fd_limit`). The table is the
+ * owner of its sharers' POSIX record locks (`lock.h`), which its release
+ * drops as it closes the descriptors.
  */
 typedef struct fd_table {
     fd_entry_t *entries;
@@ -179,12 +181,6 @@ typedef struct fd_table {
 
 /** Close every descriptor's backing object before releasing its slot. */
 void release_fd_table(fd_table_t *table);
-
-/** Drop the current process's record locks on every file `table`, its own
- * descriptor table, has open: at the process's end when the table outlives
- * it, shared with another process, whose close of the files would not drop
- * this one's locks. Defined in syscall_fs.c. */
-void fd_table_drop_locks(fd_table_t *table);
 
 /** Give a fresh table its first entries; 0, or -1 when the heap has none. */
 int fd_table_init(fd_table_t *table);
@@ -296,9 +292,8 @@ int fd_is_valid(fd_table_t *table, int fd);
 
 /**
  * Whether `e` is one of `table`'s entries, and not a copy of one that a file
- * mapping or a message in flight keeps: a close of a descriptor of the
- * process drops the process's record locks, and the release of such a copy
- * does not.
+ * mapping or a message in flight keeps: a close of a descriptor of the table
+ * drops the table's record locks, and the release of such a copy does not.
  */
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e);
 

@@ -16,15 +16,19 @@
  * other way. A thread's F_SETLKW whose descriptor another thread closes
  * during the wait fails with EBADF when the holder lets go, and leaves the
  * byte free, and so does one whose file a write moves during the wait. A
- * lock is on the file: a child's lock on a file leaves free another file
- * whose name hashes alike, and a lock taken before a rename, or before a
- * write that moves the file on the KRFFS root, refuses a child's lock
- * through an open after it. A flock LOCK_EX on one open makes
- * LOCK_EX|LOCK_NB on another fail with EWOULDBLOCK, and a dup shares the
- * lock. A description's lock stays through the close of one of its two
- * descriptors, as another open's LOCK_EX|LOCK_NB finds, and goes at the last
- * close. An open file description lock conflicts with a second open in the
- * same process, and with that process's POSIX lock.
+ * process that clone makes with CLONE_FILES shares its parent's descriptor
+ * table, which owns the locks: F_GETLK in another process names the one of
+ * the two that took each lock, a close by the child drops the parent's lock
+ * too, and the child's exit leaves the table's locks. A lock is on the file:
+ * a child's lock on a file leaves free another file whose name hashes
+ * alike, and a lock taken before a rename, or before a write that moves the
+ * file on the KRFFS root, refuses a child's lock through an open after it.
+ * A flock LOCK_EX on one open makes LOCK_EX|LOCK_NB on another fail with
+ * EWOULDBLOCK, and a dup shares the lock. A description's lock stays
+ * through the close of one of its two descriptors, as another open's
+ * LOCK_EX|LOCK_NB finds, and goes at the last close. An open file
+ * description lock conflicts with a second open in the same process, and
+ * with that process's POSIX lock.
  *
  * Prints "LOCKMUSL OK" on success and "LOCKMUSL FAIL (detail)" otherwise.
  */
@@ -34,6 +38,8 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sched.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/file.h>
@@ -433,6 +439,130 @@ static int closed_wait(void)
     return 0;
 }
 
+static char sharer_stack[16384] __attribute__((aligned(16)));
+static int to_sharer[2], from_sharer[2];
+
+/**
+ * The process of `shared_table`, which shares its parent's descriptor table:
+ * it locks byte 72 of the file whose descriptor `arg` points to, and when
+ * the parent says so closes a descriptor of the file it opens for that; then
+ * it exits when the parent says so.
+ */
+static int sharer(void *arg)
+{
+    int rc = lk(*(int *)arg, F_SETLK, F_WRLCK, 72, 1);
+    int other;
+
+    post(from_sharer[1]);
+    if (rc != 0) {
+        return 1;
+    }
+    await(to_sharer[0]);
+    other = open(LOCK_PATH, O_RDONLY);
+    if (other >= 0) {
+        close(other);
+    }
+    post(from_sharer[1]);
+    await(to_sharer[0]);
+    return other >= 0 ? 0 : 2;
+}
+
+/** Fail with `what`, and let the process of `shared_table` run to its end. */
+static int sharer_fail(const char *what)
+{
+    int rc = fail(what);
+
+    post(to_sharer[1]);
+    post(to_sharer[1]);
+    return rc;
+}
+
+/** The process F_GETLK in a child names as the holder of byte `at` of the
+ * file, or -1 when the child finds the byte free. */
+static pid_t holder_of(off_t at)
+{
+    int p[2], status;
+    pid_t pid, holder = -1;
+
+    if (pipe(p) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid == 0) {
+        int fd = open(LOCK_PATH, O_RDONLY);
+        struct flock q;
+        pid_t got = -1;
+
+        memset(&q, 0, sizeof(q));
+        q.l_type = F_WRLCK;
+        q.l_whence = SEEK_SET;
+        q.l_start = at;
+        q.l_len = 1;
+        if (fd >= 0 && fcntl(fd, F_GETLK, &q) == 0 && q.l_type != F_UNLCK) {
+            got = q.l_pid;
+        }
+        _exit(write(p[1], &got, sizeof(got)) == (ssize_t)sizeof(got) ? 0 : 1);
+    }
+    if (pid > 0) {
+        if (read(p[0], &holder, sizeof(holder)) != (ssize_t)sizeof(holder)) {
+            holder = -1;
+        }
+        waitpid(pid, &status, 0);
+    }
+    close(p[0]);
+    close(p[1]);
+    return holder;
+}
+
+/**
+ * A descriptor table owns its record locks, as Linux's files_struct does: a
+ * process that clone makes with CLONE_FILES and not CLONE_THREAD shares its
+ * parent's table, and so its locks. It locks byte 72 and the parent byte
+ * 70, which do not touch and so stay two locks, and F_GETLK in another
+ * process names the process that took each. Its close of a descriptor of
+ * the file drops both, and its exit, while the parent holds byte 74, leaves
+ * that lock with the table.
+ */
+static int shared_table(int fd)
+{
+    int status;
+    pid_t pid;
+
+    if (pipe(to_sharer) != 0 || pipe(from_sharer) != 0 || lk(fd, F_SETLK, F_WRLCK, 70, 1) != 0) {
+        return fail("setup for the shared table");
+    }
+    pid = clone(sharer, sharer_stack + sizeof(sharer_stack), CLONE_FILES | SIGCHLD, &fd);
+    if (pid < 0) {
+        return fail("clone with CLONE_FILES");
+    }
+    await(from_sharer[0]);
+    if (holder_of(70) != getpid() || holder_of(72) != pid) {
+        return sharer_fail(
+            "F_GETLK did not name the process of a shared table that took each lock");
+    }
+    post(to_sharer[1]);
+    await(from_sharer[0]);
+    if (!byte_free_at(LOCK_PATH, 70) || !byte_free_at(LOCK_PATH, 72)) {
+        return sharer_fail("a close by a process sharing the table left the table's locks");
+    }
+    if (lk(fd, F_SETLK, F_WRLCK, 74, 1) != 0) {
+        return sharer_fail("a lock after the close in the shared table");
+    }
+    post(to_sharer[1]);
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the process that shares the table");
+    }
+    if (byte_free_at(LOCK_PATH, 74)) {
+        return fail("the exit of a process sharing the table dropped the table's locks");
+    }
+    lk(fd, F_SETLK, F_UNLCK, 0, 0);
+    close(to_sharer[0]);
+    close(to_sharer[1]);
+    close(from_sharer[0]);
+    close(from_sharer[1]);
+    return 0;
+}
+
 /**
  * Two files whose names hash alike are two files: `bC` and `cb` in one
  * directory have one inode number on the KRFFS root, and a child's write
@@ -707,7 +837,8 @@ int main(void)
     if (mkdir(KEY_DIR, 0755) != 0 && errno != EEXIST) {
         return fail("the directory of the rows about which file a lock is on");
     }
-    if (records(fd) || largest(fd) || waits(fd) || closed_wait() || which_file() || flocks()) {
+    if (records(fd) || largest(fd) || waits(fd) || closed_wait() || shared_table(fd) ||
+        which_file() || flocks()) {
         return 1;
     }
     close(fd);

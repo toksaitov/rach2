@@ -263,9 +263,10 @@ releases
 .Fa fd ,
 including descriptors 0, 1, and 2, for reuse.
 It drops the descriptor's socket reference and its reference to the
-shared open-file description, and the calling process's
+shared open-file description, and the
 .Xr fcntl 2
-record locks on the file, whichever descriptor took them; the
+record locks of the caller's descriptor table on the file, whichever
+descriptor and whichever process sharing the table took them; the
 description's own locks,
 .Xr flock 2
 locks and open file description locks, go with its last reference.
@@ -316,7 +317,7 @@ call of another thread is using, one that looked it up since it began,
 leaves the call what it had, as Linux's reference to the file does: the
 number answers
 .Er EBADF
-and the caller's record locks on the file go at once, and the other
+and the table's record locks on the file go at once, and the other
 releases above happen, and the number is free again, as that call ends.
 A release may sleep, in a file system's release of the last reference to
 a description among other places; until it ends, the number answers
