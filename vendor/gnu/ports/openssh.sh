@@ -3,13 +3,14 @@
 # OpenSSL for its cryptography and zlib for compression. The configuration is
 # in /etc/ssh, the server's privilege-separated child runs as the user sshd
 # in /var/empty, and there is no PAM. The child that talks to a client before
-# it authenticates runs in the rlimit sandbox, with no file to grow, no
-# descriptor to open and no process to fork. configure would choose the
+# it authenticates runs in the rlimit sandbox, with no descriptor to open and
+# no process to fork; the sandbox's limit of 0 on file growth this kernel
+# takes and does not enforce (prlimit64(2)). configure would choose the
 # seccomp sandbox for a Linux target, which this kernel does not have, and
 # takes the rlimit sandbox only when a test program shows that poll and
 # select work under a descriptor limit of 0, which a cross build cannot run;
-# they do on this kernel, as pollmusl checks, and port_build gives configure
-# that answer. The programs are installed without the build host's strip and
+# they do on this kernel, as limitprobe checks, and port_build gives
+# configure that answer. The programs are installed without the build host's strip and
 # without host keys, which the target makes itself.
 VERSION=10.5p1
 DEPENDS="openssl zlib"
