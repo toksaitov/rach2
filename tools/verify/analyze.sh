@@ -36,7 +36,7 @@
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO" || exit 1
-VDIR=/tmp/rach2_verify
+VDIR="$REPO/build/verify/analyze"
 mkdir -p "$VDIR"
 fail=0
 fast=0
