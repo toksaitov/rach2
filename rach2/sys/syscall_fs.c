@@ -1131,11 +1131,32 @@ static int path_names_dir(const char *raw, int len)
 }
 
 /**
+ * Put back the last "." of a path that named a directory by it, which the
+ * canonical `path` of `len` bytes has dropped (`path_names_dir`), and return
+ * the new length. The walk then looks "." up in the directory before it, as
+ * Linux's walk does, which takes search permission there and answers
+ * -ENOTDIR for a name that is not a directory, and a walk to the parent
+ * returns "." as the last name, which the calls that make or remove a name
+ * answer for. The bytes the canonical path dropped leave room for the two
+ * put back.
+ */
+static int path_put_dot(char *path, int len)
+{
+    if (len > 1) {
+        path[len++] = '/';
+    }
+    path[len++] = '.';
+    path[len] = '\0';
+    return len;
+}
+
+/**
  * Copy a user path into `pathbuf` as an absolute, canonical path, a
  * relative one joined to the directory `dirfd` is open on, or to the working
  * directory for `AT_FDCWD`, and say in `*dir`, when `dir` is not NULL, how
  * the path as written named a directory by its end (`path_names_dir`), which
- * the canonical path no longer shows, or 0.
+ * the canonical path no longer shows, or 0; a last "." is then put back
+ * (`path_put_dot`).
  *
  * The rules and the errors are `copy_path_cwd`'s, with the directory's:
  * -EBADF for a descriptor that is not open and -ENOTDIR for one that is not
@@ -1148,7 +1169,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
 {
     fd_entry_t *entry;
     char *dirpath;
-    int len, r;
+    int len, r = 0;
 
     len = strncpy_from_user(pathbuf, upath, size);
     if (len < 0) {
@@ -1160,34 +1181,35 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
     if (dir) {
         *dir = path_names_dir(pathbuf, len);
     }
-    if (pathbuf[0] == '/') {
-        return canonicalize_abs(pathbuf);
-    }
-    if (dirfd == AT_FDCWD) {
+    if (pathbuf[0] != '/' && dirfd == AT_FDCWD) {
         r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
-        return r < 0 ? r : canonicalize_abs(pathbuf);
+    } else if (pathbuf[0] != '/') {
+        entry = fd_get(current_proc->fds, dirfd);
+        if (!entry) {
+            return -EBADF;
+        }
+        dirpath = path_buf_get();
+        if (!dirpath) {
+            return -ENOMEM;
+        }
+        r = fd_dir_path(entry, dirpath, VFS_PATH_MAX);
+        if (r == 0) {
+            r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
+        }
+        path_buf_put(dirpath);
     }
-    entry = fd_get(current_proc->fds, dirfd);
-    if (!entry) {
-        return -EBADF;
+    if (r < 0) {
+        return r;
     }
-    dirpath = path_buf_get();
-    if (!dirpath) {
-        return -ENOMEM;
-    }
-    r = fd_dir_path(entry, dirpath, VFS_PATH_MAX);
-    if (r == 0) {
-        r = path_prepend(pathbuf, size, (uint32_t)len, dirpath);
-    }
-    path_buf_put(dirpath);
-    return r < 0 ? r : canonicalize_abs(pathbuf);
+    len = canonicalize_abs(pathbuf);
+    return (dir && *dir == PATH_END_DOT) ? path_put_dot(pathbuf, len) : len;
 }
 
 /**
  * The path a caller named, in a path page: absolute, canonical, and joined to
  * the directory `dirfd` is open on when it is relative, or to the working
- * directory for `AT_FDCWD`; with `dir` not NULL, whether it named a
- * directory by its end, as `copy_path_at` says.
+ * directory for `AT_FDCWD`; with `dir` not NULL, how it named a directory by
+ * its end, and with a last "." put back, as `copy_path_at` says.
  *
  * Returns 0 with the page in `*out`, which the caller gives back with
  * `path_buf_put`, or a negative errno with nothing taken: -ENOMEM when the
@@ -1216,31 +1238,6 @@ static int path_from_user(int dirfd, const char __user *upath, char **out)
     return path_from_user_dir(dirfd, upath, out, NULL);
 }
 
-/**
- * The path of a call that walks to the parent of its last name, as
- * `path_from_user_dir` copies it, with `*end` how it named a directory by
- * its end, and with a last "." the canonical copy drops put back: the walk
- * then stops in the directory the "." is in and returns "." as the last
- * name, as Linux's does, and the call answers for "." and ".." by name.
- * What was dropped leaves room for the two bytes. Returns 0 or the errno of
- * `path_from_user_dir`.
- */
-static int path_from_user_parent(int dirfd, const char __user *upath, char **out, int *end)
-{
-    int rc = path_from_user_dir(dirfd, upath, out, end);
-    uint32_t len;
-
-    if (rc == 0 && *end == PATH_END_DOT) {
-        len = (uint32_t)k_strlen(*out);
-        if (len > 1) {
-            (*out)[len++] = '/';
-        }
-        (*out)[len++] = '.';
-        (*out)[len] = '\0';
-    }
-    return rc;
-}
-
 /** Whether `leaf`, the last name a walk to its parent gave, is "." or "..",
  * which a path names only as a directory, and no call makes or removes. */
 static int leaf_is_dot(const char *leaf)
@@ -1252,6 +1249,28 @@ static int leaf_is_dot(const char *leaf)
 static const char *path_name(const char *abs)
 {
     return abs[0] == '/' ? abs + 1 : abs;
+}
+
+/**
+ * Record `name`, the path a description was opened by with its leading '/'
+ * stripped, in `ofd`, for /proc/PID/fd to show and for a directory of a type
+ * without `path` to resolve names against: without the last "." that
+ * `path_put_dot` put back, and empty when the path is too long for the
+ * record.
+ */
+static void ofd_record_path(struct open_file *ofd, const char *name)
+{
+    uint32_t len = (uint32_t)k_strlen(name);
+
+    if (len > 0 && name[len - 1] == '.' && (len == 1 || name[len - 2] == '/')) {
+        len = len > 1 ? len - 2 : 0;
+    }
+    ofd->dirpath[0] = '\0';
+    if (len + 2 <= sizeof(ofd->dirpath)) {
+        ofd->dirpath[0] = '/';
+        k_memcpy(ofd->dirpath + 1, name, len);
+        ofd->dirpath[len + 1] = '\0';
+    }
 }
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
@@ -2128,11 +2147,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
         }
         type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->ofd->ino = vst.ino;
-        entry->ofd->dirpath[0] = '\0';
-        if (k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
-            entry->ofd->dirpath[0] = '/';
-            k_memcpy(entry->ofd->dirpath + 1, name, k_strlen(name) + 1);
-        }
+        ofd_record_path(entry->ofd, name);
     } else if (node == krffs_fs->node) {
         type = FD_TYPE_DIR;
         entry->ofd->ino = 1;
@@ -4651,11 +4666,7 @@ static int32_t synth_open_path(const struct vpath *vp, const char *name, int fla
     e->ops = NULL;
     e->priv = copy;
     e->dev = NULL;
-    e->ofd->dirpath[0] = '\0';
-    if (k_strlen(name) + 1 < sizeof(e->ofd->dirpath)) {
-        e->ofd->dirpath[0] = '/';
-        k_memcpy(e->ofd->dirpath + 1, name, k_strlen(name) + 1);
-    }
+    ofd_record_path(e->ofd, name);
     e->flags = FD_FLAG_PATH | ((flags & O_CLOEXEC) ? FD_FLAG_CLOEXEC : 0);
     return fd;
 }
@@ -4714,9 +4725,8 @@ static int32_t path_install(struct vfs_ref *ref, const char *name, int flags)
     entry->type = is_dir ? FD_TYPE_DIR : FD_TYPE_FILE;
     entry->node = (mnt_is_root(ref->mnt) && node != krffs_fs->node) ? node : NULL;
     entry->ofd->dirpath[0] = '\0';
-    if (!mnt_is_root(ref->mnt) && k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
-        entry->ofd->dirpath[0] = '/';
-        k_memcpy(entry->ofd->dirpath + 1, name, k_strlen(name) + 1);
+    if (!mnt_is_root(ref->mnt)) {
+        ofd_record_path(entry->ofd, name);
     }
     entry->ofd->vmnt = ref->mnt;
     entry->ofd->vnode = ref->node;
@@ -6644,7 +6654,7 @@ static int32_t symlink_from_user(const char __user *utarget, int newdirfd, const
         rc = -ENOENT; /* an empty target, as Linux answers */
     }
     if (rc > 0) {
-        rc = path_from_user_parent(newdirfd, unew, &newpath, &end);
+        rc = path_from_user_dir(newdirfd, unew, &newpath, &end);
     }
     if (rc == 0) {
         rc = do_symlink(target, path_name(newpath), end);
@@ -6693,7 +6703,7 @@ static int32_t link_from_user(int olddirfd, const char __user *uold, int newdirf
     int32_t rc = path_from_user_dir(olddirfd, uold, &oldpath, &olddir);
 
     if (rc == 0) {
-        rc = path_from_user_parent(newdirfd, unew, &newpath, &newend);
+        rc = path_from_user_dir(newdirfd, unew, &newpath, &newend);
     }
     if (rc == 0) {
         rc = do_link(path_name(oldpath), path_name(newpath), follow, olddir, newend);
@@ -7958,7 +7968,7 @@ int32_t sys_unlink(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent(AT_FDCWD, upath, &path, &end);
+    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8158,7 +8168,7 @@ int32_t sys_mkdir(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent(AT_FDCWD, upath, &path, &end);
+    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8179,7 +8189,7 @@ int32_t sys_mkdirat(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent((int)params->ebx, upath, &path, &end);
+    rc = path_from_user_dir((int)params->ebx, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8295,7 +8305,7 @@ int32_t sys_mknod(isr_params_t *params)
     if (!upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent(AT_FDCWD, upath, &path, &end);
+    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8323,7 +8333,7 @@ int32_t sys_mknodat(isr_params_t *params)
     if (!upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent((int)params->ebx, upath, &path, &end);
+    rc = path_from_user_dir((int)params->ebx, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8418,7 +8428,7 @@ int32_t sys_rmdir(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent(AT_FDCWD, upath, &path, &end);
+    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8449,7 +8459,7 @@ int32_t sys_unlinkat(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    rc = path_from_user_parent((int)params->ebx, upath, &path, &end);
+    rc = path_from_user_dir((int)params->ebx, upath, &path, &end);
     if (rc != 0) {
         return rc;
     }
@@ -8725,7 +8735,7 @@ out:
  * rename(2), renameat(2) and renameat2(2) after their arguments: both paths
  * are copied, each relative one joined to its own directory, before either
  * is resolved, a last "." kept as the name the walk to the parent returns
- * (`path_from_user_parent`).
+ * (`path_put_dot`).
  */
 static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdirfd,
                                 const char __user *unew, int flags)
@@ -8734,10 +8744,10 @@ static int32_t rename_from_user(int olddirfd, const char __user *uold, int newdi
     char *newpath = NULL;
     int oldend = 0;
     int newend = 0;
-    int32_t rc = path_from_user_parent(olddirfd, uold, &oldpath, &oldend);
+    int32_t rc = path_from_user_dir(olddirfd, uold, &oldpath, &oldend);
 
     if (rc == 0) {
-        rc = path_from_user_parent(newdirfd, unew, &newpath, &newend);
+        rc = path_from_user_dir(newdirfd, unew, &newpath, &newend);
     }
     if (rc == 0) {
         rc = do_rename(oldpath, newpath, flags,
