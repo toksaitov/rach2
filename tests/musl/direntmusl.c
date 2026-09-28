@@ -24,24 +24,26 @@
  * RENAME_NOREPLACE onto a name that exists is EEXIST, and a new name so named
  * is EISDIR to open with O_CREAT and ENOENT or EEXIST to link, symlink, mknod
  * and mkdir, which make nothing, and symlink, link and mknod give those answers
- * in /dev and /proc too, before their EROFS, and bind EADDRINUSE there; rmdir
- * is EINVAL for a last "." and ENOTEMPTY for a last "..", and rename EBUSY for
- * either, in /proc too, where nothing is renamed, and so do unlinkat and
- * renameat through a directory descriptor. execve of a file so named is ENOTDIR
- * and of a directory EACCES, and so is a script whose interpreter is named with
- * a trailing slash ENOTDIR, and an ELF image whose PT_INTERP names the file or
- * the directory so ENOTDIR or EACCES; bind to a name so named makes nothing,
- * connect to a socket so named is ENOTDIR, and so is umount2 of a file so
- * named, and open of /fb and /mouse so named or with O_DIRECTORY, which opens
- * neither device. rmdir and rename of the root are EBUSY, link, symlink and
- * mknod with the root as the new name EEXIST and bind to it EADDRINUSE. open
- * with O_CREAT is EISDIR for an existing directory, one of the probe's, one of
- * /dev/shm and /proc, even to read, and with O_DIRECTORY EINVAL before the path
- * is read, unless O_PATH is given too, which drops O_CREAT. A symbolic link to
- * a directory named with a trailing slash is followed by the calls that look it
- * up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW notwithstanding, lchown and utimensat
- * changing the directory and not the link, and is ENOTDIR to unlink and rename,
- * in /dev/shm and on an ext2 root.
+ * in /dev and /proc too, before their EROFS, and bind EADDRINUSE there, and a
+ * name that exists, named plainly, is EEXIST to them and to mkdir, and
+ * EADDRINUSE to bind, before EROFS, EPERM or EXDEV; rmdir is EINVAL for a last
+ * "." and ENOTEMPTY for a last "..", and rename EBUSY for either, in /proc too,
+ * where nothing is renamed, and so do unlinkat and renameat through a directory
+ * descriptor. execve of a file so named is ENOTDIR and of a directory EACCES,
+ * and so is a script whose interpreter is named with a trailing slash ENOTDIR,
+ * and an ELF image whose PT_INTERP names the file or the directory so ENOTDIR
+ * or EACCES; bind to a name so named makes nothing, connect to a socket so
+ * named is ENOTDIR, and so is umount2 of a file so named, and open of /fb and
+ * /mouse so named or with O_DIRECTORY, which opens neither device. rmdir and
+ * rename of the root are EBUSY, link, symlink and mknod with the root as the
+ * new name EEXIST and bind to it EADDRINUSE. open with O_CREAT is EISDIR for an
+ * existing directory, one of the probe's, one of /dev/shm and /proc, even to
+ * read, and with O_DIRECTORY EINVAL before the path is read, unless O_PATH is
+ * given too, which drops O_CREAT. A symbolic link to a directory named with a
+ * trailing slash is followed by the calls that look it up, O_NOFOLLOW and
+ * AT_SYMLINK_NOFOLLOW notwithstanding, lchown and utimensat changing the
+ * directory and not the link, and is ENOTDIR to unlink and rename, in /dev/shm
+ * and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -376,7 +378,9 @@ static int create_dir_pair(const struct ends *p)
  * last "." after a directory, and mknod ENOTDIR for one after the file;
  * mkdir is EEXIST for a last "." after a directory, in /proc too, where
  * nothing is made, and ENOENT for one after a name nothing has; and none of
- * them makes n. open with O_CREAT, which asks for a file, is EISDIR for the
+ * them makes n. symlink onto f and link onto s, names that exist, are
+ * EEXIST, before the EPERM of the KRFFS root, which has neither kind of
+ * link. open with O_CREAT, which asks for a file, is EISDIR for the
  * directory s and for /proc too, even to read, and with O_DIRECTORY EINVAL
  * (`create_dir_pair`). 0, or 1 once the failure is reported.
  */
@@ -400,6 +404,9 @@ static int make_ends(const struct ends *p)
     }
     if (!refused(symlink("f", p->ns), ENOENT) || !refused(symlink("f", p->sdot), EEXIST)) {
         return fail("symlink to a new name with a trailing slash or a last .");
+    }
+    if (!refused(symlink("f", p->f), EEXIST) || !refused(link(p->f, p->s), EEXIST)) {
+        return fail("symlink or link onto a name that exists was not EEXIST");
     }
     if (!refused(mknod(p->ns, S_IFIFO | 0644, 0), ENOENT) ||
         !refused(mknod(p->sdot, S_IFIFO | 0644, 0), EEXIST) ||
@@ -859,6 +866,32 @@ static int synth_name_rows(void)
 }
 
 /**
+ * Names that exist in /proc and /dev, given without a path ending, to the
+ * calls that make a node: EEXIST to symlink, mknod, mkdir and link, and
+ * EADDRINUSE to bind, before the EROFS of those namespaces and the EXDEV of
+ * a link from another mount, as Linux answers. 0, or 1 once the failure is
+ * reported.
+ */
+static int synth_taken_rows(void)
+{
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    int taken = s >= 0 && refused(symlink("x", "/proc/meminfo"), EEXIST) &&
+                refused(mknod("/dev/null", S_IFIFO | 0644, 0), EEXIST) &&
+                refused(mkdir("/proc/self", 0755), EEXIST) &&
+                refused(mkdir("/dev/shm", 0755), EEXIST) &&
+                refused(link(file, "/proc/meminfo"), EEXIST) &&
+                refused(bind_path(s, "/proc/meminfo"), EADDRINUSE);
+
+    if (s >= 0) {
+        close(s);
+    }
+    if (!taken) {
+        return fail("a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV");
+    }
+    return 0;
+}
+
+/**
  * The names /fb and /mouse, which open takes for the framebuffer and the
  * mouse before any walk, given as directories: a trailing slash, a last "."
  * or "..", and O_DIRECTORY are ENOTDIR, and neither device is opened. 0, or
@@ -880,10 +913,10 @@ static int device_ends(void)
  * The rows that read the probe's own directory beyond the types of its listing:
  * the path ends of `dir_ends`, rewinddir and seekdir of it and of /proc/self
  * (`rewinds`), the root as a name (`root_rows`), names in /proc and /dev that
- * end as directories (`synth_name_rows`), /fb and /mouse as directories
- * (`device_ends`), and the other calls given a path that names a directory by
- * its end, there and in /dev/shm (`dir_end_calls`). 0, or 1 once the failure is
- * reported.
+ * end as directories (`synth_name_rows`) or exist (`synth_taken_rows`), /fb
+ * and /mouse as directories (`device_ends`), and the other calls given a
+ * path that names a directory by its end, there and in /dev/shm
+ * (`dir_end_calls`). 0, or 1 once the failure is reported.
  */
 static int own_dir_rows(void)
 {
@@ -900,7 +933,8 @@ static int own_dir_rows(void)
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
-    if (root_rows() != 0 || synth_name_rows() != 0 || device_ends() != 0) {
+    if (root_rows() != 0 || synth_name_rows() != 0 || synth_taken_rows() != 0 ||
+        device_ends() != 0) {
         return 1;
     }
     return dir_end_calls(base, 0) != 0 || shm_dir_end_calls() != 0;

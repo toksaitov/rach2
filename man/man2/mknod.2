@@ -123,7 +123,10 @@ or
 .Pa /proc ,
 which answer
 .Er EROFS
-after the answers above for a path that names a directory by its end.
+after the answers above for a path that names a directory by its end,
+and after
+.Er EEXIST
+for a name that exists there, as on Linux.
 .Pp
 The i386 system call numbers are 14 for
 .Fn mknod

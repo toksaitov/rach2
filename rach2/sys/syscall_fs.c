@@ -1309,8 +1309,6 @@ static int path_from_user(int dirfd, const char __user *upath, char **out)
     return path_from_user_dir(dirfd, upath, out, NULL);
 }
 
-static int32_t path_dir_check(const char *path, int end);
-
 /**
  * The path of execve(2), copied into `pathbuf` of `size` bytes as
  * `copy_path_at` copies it for `AT_FDCWD`, for the program it runs, with
@@ -2537,13 +2535,13 @@ int32_t sys_mount(isr_params_t *params)
  * the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
  * promises this kernel cannot keep and answer EINVAL.
  *
- * A target that names a directory by its end must reach one
- * (`path_dir_check`), so a file named with a trailing slash is -ENOTDIR, as
- * on Linux, where a file named without one is not a mount point, -EINVAL.
- * A walk that meets a removed device answers -EIO, which `vfs_do_umount`
- * recovers from by the recorded target, so that error is left to it, and the
- * last "." put back comes off the target first, since a recorded target has
- * none.
+ * A target that names a directory by its end must reach one, which the walk
+ * that finds the mount checks (`vfs_do_umount`), so a file named with a
+ * trailing slash is -ENOTDIR, as on Linux, where a file named without one is
+ * not a mount point, -EINVAL. The last "." put back comes off the target
+ * first: a walk that meets a removed device answers -EIO, which
+ * `vfs_do_umount` recovers from by the recorded target, and a recorded
+ * target has none.
  */
 int32_t sys_umount2(isr_params_t *params)
 {
@@ -2567,11 +2565,8 @@ int32_t sys_umount2(isr_params_t *params)
     if (n != 0) {
         return n;
     }
-    n = path_dir_check(tpath, end);
-    if (n == 0 || n == -EIO) {
-        path_drop_dot(tpath, end);
-        n = vfs_do_umount(tpath);
-    }
+    path_drop_dot(tpath, end);
+    n = vfs_do_umount(tpath, end != 0);
     path_buf_put(tpath);
     return n;
 }
@@ -4779,28 +4774,6 @@ int32_t resolve_named(const char *name, int walk, int dir, struct vfs_ref *ref)
 }
 
 /**
- * Whether the absolute canonical path `path`, which named a directory by its
- * end as `end` says and has its last "." put back, reaches one: 0 when `end`
- * is 0 or it does, -ENOTDIR when it reaches anything else, through a final
- * symbolic link, or the walk's error. For umount2, which goes on with the
- * path in a walk of its own.
- */
-static int32_t path_dir_check(const char *path, int end)
-{
-    struct vfs_ref ref;
-    int32_t rc;
-
-    if (!end) {
-        return 0;
-    }
-    rc = resolve_named(path, 0, end, &ref);
-    if (rc == 0) {
-        vfs_ref_release(&ref);
-    }
-    return rc;
-}
-
-/**
  * The open with O_CREAT, which asks for a file, of a path that named a
  * directory by its end (`end`), which no file can be: -EISDIR once the
  * directories before its last name are walked, as Linux answers, and for a
@@ -6776,6 +6749,27 @@ static int32_t new_name_parent(const char *path, struct vfs_ref *parent, char *l
 }
 
 /**
+ * Whether `name` is in directory `dir` of `mnt`: 1 or 0, or a negative errno
+ * for a lookup that failed another way. The node a lookup takes goes back.
+ */
+static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    void *found;
+    int rc = mnt->type->ops->lookup(mnt, dir, name, &found);
+
+    if (rc == -ENOENT) {
+        return 0;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (mnt->type->ops->put) {
+        mnt->type->ops->put(mnt, found);
+    }
+    return 1;
+}
+
+/**
  * Whether the name the path `path` ends in, in a directory of /dev or /proc,
  * exists: -EEXIST when it does, a final link not followed, and the walk's
  * error, -ENOENT for a name the namespace does not have, when it does not.
@@ -6833,6 +6827,32 @@ static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int 
     return -EEXIST;
 }
 
+/**
+ * Whether the new name `leaf` in the held directory `parent`, the last name
+ * of `path`, is taken, for a call that makes a node there: -EEXIST when a
+ * node has it, or a mount stands at it, whatever the type's own lookup says
+ * (a KRFFS /dev would shadow the synthetic mount), 0 when nothing does, or
+ * the lookup's error. Linux's walk to a new name answers this first, so a
+ * name that exists is -EEXIST before the refusals of a read-only mount, of
+ * /dev and /proc, of another mount, of a file system without the kind, and
+ * of the write permission. A directory of /dev or /proc has the name looked
+ * up by `path` (`synth_name_exists`).
+ */
+static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, const char *path)
+{
+    int32_t rc;
+
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        rc = synth_name_exists(path);
+        return rc == -ENOENT ? 0 : rc;
+    }
+    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
+        return -EEXIST;
+    }
+    rc = name_present(parent->mnt, parent->node, leaf);
+    return rc == 1 ? -EEXIST : rc;
+}
+
 /*
  * A hard link: the source resolved as itself unless `follow`, a directory
  * refused with EPERM, another mount with EXDEV, and the new name made by
@@ -6841,7 +6861,8 @@ static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int 
  * `olddir`, follows a final link and must reach a directory
  * (`resolve_named`), which is EPERM after it, and a new name that did,
  * `newend`, is `make_dir_end`'s; the root as the new name is EEXIST
- * (`new_name_parent`).
+ * (`new_name_parent`), and so is a new name that exists (`new_name_taken`),
+ * before every refusal after the walks.
  */
 static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
 {
@@ -6859,10 +6880,13 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
         vfs_ref_release(&src);
         return rc;
     }
-    /* Linux's order: the new name's end, another mount, then a directory or
-     * a type without links, then a read-only mount, then the parent's write
-     * bit. */
+    /* Linux's order: the new name's end, a name that exists, another mount,
+     * then a directory or a type without links, then a read-only mount, then
+     * the parent's write bit. */
     rc = make_dir_end(&parent, leaf, newend, newname);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, newname);
+    }
     if (rc != 0) {
         goto out;
     }
@@ -6892,7 +6916,9 @@ out:
  * A symbolic link `newname` to `target`, made by the type under the
  * namespace lock; a type without them answers EPERM. A new name that named a
  * directory by its end, `end`, is `make_dir_end`'s, and the root is EEXIST
- * (`new_name_parent`).
+ * (`new_name_parent`), and so is a new name that exists (`new_name_taken`),
+ * before the refusals of a read-only mount, of /dev and /proc and of a type
+ * without symbolic links.
  */
 static int32_t do_symlink(const char *target, const char *newname, int end)
 {
@@ -6908,6 +6934,9 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
         return rc;
     }
     rc = make_dir_end(&parent, leaf, end, newname);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, newname);
+    }
     if (rc != 0) {
         vfs_ref_release(&parent);
         return rc;
@@ -8376,32 +8405,29 @@ out:
 }
 
 /**
- * Make the directory `leaf` in `parent`, which the caller's walk reached and
- * whose namespace lock it holds where the type takes one: the body of
- * `do_mkdir`. The lookup that answers -EEXIST and the creation are one hold
- * of that lock, so a directory of the same name that another process makes
- * while this one waits for the lock is a name that exists here, and not one
- * handed to the file system, which refuses it as it refuses a full volume
- * (ENOSPC on the KRFFS root) or a failing one (EIO on a KRFFS volume).
+ * Make the directory `leaf` in `parent`, the last name of `path`, which the
+ * caller's walk reached and whose namespace lock it holds where the type
+ * takes one: the body of `do_mkdir`. The lookup that answers -EEXIST
+ * (`new_name_taken`) and the creation are one hold of that lock, so a
+ * directory of the same name that another process makes while this one
+ * waits for the lock is a name that exists here, and not one handed to the
+ * file system, which refuses it as it refuses a full volume (ENOSPC on the
+ * KRFFS root) or a failing one (EIO on a KRFFS volume). A name that exists
+ * in /dev or /proc is -EEXIST too, before the -EROFS of a name that does
+ * not, as on Linux.
  */
-static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode)
+static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode,
+                        const char *path)
 {
     void *found;
     int32_t rc;
 
+    rc = new_name_taken(parent, leaf, path);
+    if (rc != 0) {
+        return rc;
+    }
     if (vfs_synth_vpath(parent->mnt, parent->node)) {
         return -EROFS; /* nothing is created under /dev or /proc */
-    }
-    /* A name a mount stands at exists, whatever the type's own lookup
-     * says: a KRFFS /dev would shadow the synthetic mount. */
-    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
-        return -EEXIST;
-    }
-    if (parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
-        if (parent->mnt->type->ops->put) {
-            parent->mnt->type->ops->put(parent->mnt, found);
-        }
-        return -EEXIST;
     }
     if (!mnt_is_root(parent->mnt)) {
         rc = cred_access_ref(parent, CRED_W, 0);
@@ -8450,7 +8476,7 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     if (rc != 0) {
         return rc; /* a missing parent, or a denied ancestor */
     }
-    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);
+    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);
     vfs_walk_unlock(parent.mnt);
     vfs_ref_release(&parent);
     return rc;
@@ -8526,10 +8552,11 @@ static int32_t mknod_kind(uint32_t mode)
  * is the kernel's own. The refusals after the kind's and the path's come in
  * Linux's order: the root (EEXIST, `new_name_parent`), a path that named a
  * directory by its end, `end`, as `make_dir_end` answers it, a name that
- * exists (EEXIST, a symbolic link included), a read-only mount, the write
+ * exists (EEXIST, a symbolic link included, `new_name_taken`), then /dev and
+ * /proc, where nothing is made (EROFS), a read-only mount, the write
  * permission on the directory, and last a device node made by a caller who
  * is not root (EPERM). A file system that cannot keep the kind answers
- * EPERM; nothing is made under /dev or /proc (EROFS).
+ * EPERM.
  */
 static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
 {
@@ -8544,6 +8571,9 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
         return rc;
     }
     rc = make_dir_end(&parent, leaf, end, path);
+    if (rc == 0) {
+        rc = new_name_taken(&parent, leaf, path);
+    }
     if (rc != 0) {
         vfs_ref_release(&parent);
         return rc;
@@ -8551,17 +8581,6 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     if (vfs_synth_vpath(parent.mnt, parent.node)) {
         vfs_ref_release(&parent);
         return -EROFS; /* nothing is created under /dev or /proc */
-    }
-    if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
-        vfs_ref_release(&parent);
-        return -EEXIST;
-    }
-    if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &made) == 0) {
-        if (parent.mnt->type->ops->put) {
-            parent.mnt->type->ops->put(parent.mnt, made);
-        }
-        vfs_ref_release(&parent);
-        return -EEXIST;
     }
     if (mnt_is_root(parent.mnt)) {
         rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
@@ -8803,27 +8822,6 @@ int32_t sys_unlinkat(isr_params_t *params)
 
 /* The renameat2 flag this kernel does: refuse to replace the new name. */
 #define RENAME_NOREPLACE 1
-
-/**
- * Whether `name` is in directory `dir` of `mnt`: 1 or 0, or a negative errno
- * for a lookup that failed another way. The node a lookup takes goes back.
- */
-static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
-{
-    void *found;
-    int rc = mnt->type->ops->lookup(mnt, dir, name, &found);
-
-    if (rc == -ENOENT) {
-        return 0;
-    }
-    if (rc != 0) {
-        return rc;
-    }
-    if (mnt->type->ops->put) {
-        mnt->type->ops->put(mnt, found);
-    }
-    return 1;
-}
 
 /**
  * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
@@ -9917,13 +9915,14 @@ static int kernel_path_cwd(char *buf, const char *path, int *end)
 }
 
 /**
- * `make_dir_end`'s answer for a node other than a directory made at `path`,
- * an absolute canonical path that named a directory by its end as `end`
- * says, once the walk to its parent is made, and -EEXIST for the root
- * (`new_name_parent`): for the socket file of a bind, which `open_create`
- * would make whatever the path's end.
+ * The answers for the name of the socket file a bind makes, `path`, an
+ * absolute canonical path that named a directory by its end as `end` says,
+ * once the walk to its parent is made and before the file is: `make_dir_end`'s
+ * for such an end, -EEXIST for the root (`new_name_parent`), and -EEXIST for
+ * a name that exists (`new_name_taken`), before the -EROFS of a read-only
+ * mount and of /dev and /proc that `open_create` would give, as on Linux.
  */
-static int32_t path_make_dir_end(const char *path, int end)
+static int32_t bind_name_check(const char *path, int end)
 {
     struct vfs_ref parent;
     char leaf[VFS_NAME_MAX + 1];
@@ -9931,6 +9930,9 @@ static int32_t path_make_dir_end(const char *path, int end)
 
     if (rc == 0) {
         rc = make_dir_end(&parent, leaf, end, path);
+        if (rc == 0) {
+            rc = new_name_taken(&parent, leaf, path);
+        }
         vfs_ref_release(&parent);
     }
     return rc;
@@ -9941,10 +9943,11 @@ static int32_t path_make_dir_end(const char *path, int end)
  * with O_EXCL makes one, with the socket type bits; the hold its creation
  * gave is kept for the socket's life, as a working directory keeps its own,
  * so the mount counts it and refuses to go while the socket is bound. A name
- * that names a directory by its end makes nothing (`path_make_dir_end`), as
- * on Linux: -ENOENT after a slash for a name nothing has, and -EADDRINUSE,
- * which a name that exists answers, for one that does, for a last "." or
- * "..", and for the root.
+ * that exists, or one that names a directory by its end, makes nothing
+ * (`bind_name_check`), as on Linux: -ENOENT after a slash for a name nothing
+ * has, and -EADDRINUSE, which a name that exists answers, for one that does,
+ * for a last "." or "..", and for the root, before a read-only mount's
+ * -EROFS.
  */
 int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uint32_t *ino)
 {
@@ -9957,8 +9960,8 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
         return -ENOMEM;
     }
     rc = kernel_path_cwd(buf, path, &end);
-    if (rc >= 0 && end) {
-        rc = path_make_dir_end(buf, end);
+    if (rc >= 0) {
+        rc = bind_name_check(buf, end);
     }
     if (rc >= 0) {
         rc = open_create(buf, O_EXCL, S_IFSOCK | (mode & 07777u), ref);

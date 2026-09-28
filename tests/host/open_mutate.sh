@@ -172,9 +172,9 @@ changes = {
          "    if (rc != 0) {\n        return rc; /* a missing parent, or a denied ancestor */",
          "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n"
          "    if (rc != 0) {\n        return rc; /* a missing parent, or a denied ancestor */"),
-        ("    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);\n"
+        ("    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);\n"
          "    vfs_walk_unlock(parent.mnt);\n",
-         "    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);\n"),
+         "    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);\n"),
     ],
     "rmdir-checked-unlocked": [
         ("    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));\n"

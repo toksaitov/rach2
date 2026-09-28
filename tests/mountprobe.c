@@ -4,7 +4,8 @@
  * The suite's disk has a FAT32 volume on /dev/disk0p2 holding `hello.txt`
  * and a copy of the `hello` program. The rows: a writable mount is placed
  * and taken away, then a read-only one is placed; the files on it stat, open,
- * read and list, and its statfs is vfat's; a program on a `noexec` mount is
+ * read and list, its statfs is vfat's, and a symlink onto a name that exists
+ * there is EEXIST before the mount's EROFS; a program on a `noexec` mount is
  * refused with EACCES though its mode allows it; a mount is busy while any
  * description on it lives, in this process or a forked one, through `dup`,
  * `dup2` and `F_DUPFD`, and a close-on-exec descriptor is dropped by
@@ -34,6 +35,7 @@ typedef unsigned int size_t;
 #define SYS_PIPE       42
 #define SYS_SETUID     213
 #define SYS_RENAME     38
+#define SYS_SYMLINK    83
 #define SYS_MKDIR      39
 #define SYS_RMDIR      40
 #define SYS_DUP        41
@@ -71,6 +73,7 @@ typedef unsigned int size_t;
 #define RLIMIT_NOFILE 7
 #define EBADF         9
 #define EBUSY         16
+#define EEXIST        17
 #define EXDEV         18
 #define ENOTDIR       20
 #define EINVAL        22
@@ -363,6 +366,10 @@ static void rows_reading(void)
     }
     if (sys2(SYS_MKDIR, (int)MNT "/newdir", 0755) != -EROFS) {
         fail("mkdir on the read-only mount is EROFS");
+    }
+    if (sys2(SYS_SYMLINK, (int)"x", (int)MNT "/hello.txt") != -EEXIST ||
+        sys2(SYS_SYMLINK, (int)"x", (int)MNT "/newlink") != -EROFS) {
+        fail("symlink on the read-only mount is EEXIST for a name that exists, else EROFS");
     }
     if (sys1(SYS_UNLINK, (int)MNT "/hello.txt") != -EROFS) {
         fail("unlink on the read-only mount is EROFS");

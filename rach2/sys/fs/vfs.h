@@ -447,11 +447,13 @@ void vfs_walk_unlock(struct vfs_mount *mnt);
 /**
  * mount(2) and umount2(2), after the syscall layer has copied the strings.
  * The order of work and every error they answer are in the syscall's
- * contract; both require effective uid 0, checked by the caller.
+ * contract; both require effective uid 0, checked by the caller. `dir` says
+ * that the umount2 target named a directory by its end, which the walk that
+ * finds the mount checks.
  */
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options);
-int vfs_do_umount(const char *target);
+int vfs_do_umount(const char *target, int dir);
 
 /**
  * A write to `dev` failed at `lba` with `rc`: every mount on the device goes

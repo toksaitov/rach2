@@ -2562,6 +2562,29 @@ static struct vfs_mount *unmount_below_gone(const char *target)
 }
 
 /**
+ * The mount an unmount's walk found at `tref`, in `*out`: 0, -ENOTDIR for a
+ * target that named a directory by its end, `dir`, and reached anything
+ * else, -EINVAL for a node that is no mount's root, or -EBUSY for a
+ * permanent mount. The reference is released.
+ */
+static int unmount_found(struct vfs_ref *tref, int dir, struct vfs_mount **out)
+{
+    struct vfs_stat st;
+    int rc = dir ? vfs_getattr(tref->mnt, tref->node, &st) : 0;
+
+    if (rc == 0 && dir && !VFS_IS_DIR(st.mode)) {
+        rc = -ENOTDIR;
+    } else if (rc == 0 && tref->node != tref->mnt->root) {
+        rc = -EINVAL; /* not a mount point */
+    } else if (rc == 0 && mount_permanent(tref->mnt)) {
+        rc = -EBUSY;
+    }
+    *out = tref->mnt;
+    vfs_ref_release(tref);
+    return rc;
+}
+
+/**
  * umount2(2): the mount goes to `unmounting`, which refuses new work; the
  * in-progress count drains; the reference count is checked; sync and
  * prepare_unmount; the cache's dirty buffers are written and the device's
@@ -2573,8 +2596,15 @@ static struct vfs_mount *unmount_below_gone(const char *target)
  * writeback and the flush are skipped for it: each would fail, and an
  * unmount that failed on a stick that is no longer there would keep the
  * mount for good.
+ *
+ * A target that named a directory by its end, `dir`, must reach one, and
+ * the walk that finds the mount answers for it: anything else is -ENOTDIR,
+ * as on Linux, before the -EINVAL of a name that is no mount point. The node
+ * checked is the node unmounted, so a symbolic link replaced between two
+ * walks cannot change the answer. A target found by its recorded name below
+ * a removed device is a mount's root, a directory.
  */
-int vfs_do_umount(const char *target)
+int vfs_do_umount(const char *target, int dir)
 {
     int gone;
     struct vfs_ref tref;
@@ -2588,16 +2618,10 @@ int vfs_do_umount(const char *target)
         return rc;
     }
     if (rc == 0) {
-        m = tref.mnt;
-        if (tref.node != m->root) {
-            vfs_ref_release(&tref);
-            return -EINVAL; /* not a mount point */
+        rc = unmount_found(&tref, dir, &m);
+        if (rc != 0) {
+            return rc;
         }
-        if (mount_permanent(m)) {
-            vfs_ref_release(&tref);
-            return -EBUSY;
-        }
-        vfs_ref_release(&tref);
     }
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
