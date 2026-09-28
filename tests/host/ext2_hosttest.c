@@ -15,11 +15,11 @@
  * setidcheck's reader, which shares nothing with this driver. A 1 KiB
  * volume has a sparse file with a byte behind each level of indirection
  * and mounts read-only by name, as a dir_index volume does; an unknown
- * incompatible feature refuses the mount. The tree, the volumes and what the
- * host's tools print are kept in a directory of the test's own
- * (compat/fixdir_host.c), which main names to the shell commands as `$FIX`,
- * so that runs at once share nothing. No hosted headers: the kernel headers
- * define the fixed-width types.
+ * incompatible feature refuses the mount. The tree, the volumes, setidcheck,
+ * built at every run, and what the host's tools print are kept in a
+ * directory of the test's own (compat/fixdir_host.c), which main names to
+ * the shell commands as `$FIX`, so that runs at once share nothing. No
+ * hosted headers: the kernel headers define the fixed-width types.
  */
 #include "../../rach2/sys/fs/ext2.h"
 #include "../../rach2/sys/fs/bcache.h"
@@ -458,8 +458,7 @@ static void against_reader(const char *img)
     void *f;
     int listed = 0, agreed = 0;
 
-    snprintf(cmd, sizeof(cmd), "build/tools/inspect/setidcheck --nodes --ext2 %s > $FIX/nodes.txt",
-             img);
+    snprintf(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt", img);
     if (!run(cmd)) {
         check(0, "setidcheck lists the image's nodes");
         return;
@@ -1324,8 +1323,7 @@ static int reader_walks(const char *img)
 {
     char cmd[512];
 
-    snprintf(cmd, sizeof(cmd),
-             "build/tools/inspect/setidcheck --nodes --ext2 %s > $FIX/nodes.txt 2>&1", img);
+    snprintf(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt 2>&1", img);
     return system(cmd) == 0;
 }
 
@@ -3611,8 +3609,7 @@ int main(int argc, char **argv)
         printf("ext2_hosttest: mke2fs is not on the path; e2fsprogs is a required host tool\n");
         return 1;
     }
-    if (!run("test -x build/tools/inspect/setidcheck || "
-             "cc -O2 -o build/tools/inspect/setidcheck tools/inspect/setidcheck.c")) {
+    if (!run("cc -O2 -o $FIX/setidcheck tools/inspect/setidcheck.c")) {
         printf("ext2_hosttest: setidcheck did not build\n");
         return 1;
     }

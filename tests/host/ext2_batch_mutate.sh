@@ -102,7 +102,6 @@ echo "ext2-batch-mutation: logs: $work"
 make -s build/tests/system/runutil \
     >"$work/tools.build.log" 2>&1
 cat "$work/tools.build.log"
-mkdir -p build/tools/inspect
 run_phase fixed pass
 python3 - "$source" <<'PY'
 from pathlib import Path
