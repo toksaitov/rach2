@@ -29,6 +29,7 @@ extern void _exit(int status);
 
 #include "../../rach2/sys/block/ahci.h"
 #include "../../rach2/sys/block/block.h"
+#include "../../rach2/sys/klog.h"
 #include "../../rach2/sys/latency.h"
 
 /* ---- the model ---- */
@@ -45,6 +46,14 @@ static int fatal_status;
 static int engine_stuck;
 static int immediate_interrupt;
 static unsigned stop_reads;
+/* Reads of the command-issue register a command takes to complete, 0 for at
+   once: a slow device, such as a flush a busy emulator's host takes seconds
+   over, which the driver's polled wait must outlast. */
+static unsigned complete_after;
+static unsigned pending_reads;
+/* Warnings the driver logged, since a polled command that fails is reported
+   only as EIO to its caller and the log is what says why. */
+static unsigned ahci_warnings;
 static unsigned issued;
 static unsigned stale_issues;
 static unsigned completed;
@@ -99,6 +108,12 @@ static uint32_t model_r32(uint32_t off)
     }
     if (off == P0 + P_CI) {
         ci_reads++;
+        if (pending_reads && --pending_reads == 0) {
+            reg[off] = 0;
+            if (on_command_issued) {
+                on_command_issued();
+            }
+        }
     }
     return reg[off];
 }
@@ -180,6 +195,11 @@ static void model_w32(uint32_t off, uint32_t v)
             stale_issues++;
         }
         issued++;
+        if (complete_after && command_completes) {
+            reg[off] = v;
+            pending_reads = complete_after;
+            return;
+        }
         reg[off] = command_completes ? 0 : v;
         if (command_completes && on_command_issued) {
             on_command_issued();
@@ -308,9 +328,10 @@ int diskcmd_allowed(uint8_t command)
 
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void)level;
-    (void)subsystem;
     (void)format;
+    if (level == KLOG_WARN && strcmp(subsystem, "ahci") == 0) {
+        ahci_warnings++;
+    }
 }
 
 void console_printf(const char *format, ...)
@@ -469,6 +490,9 @@ static void model_reset(void)
     reg[P0 + P_SIG] = 0x00000101u; /* a disk, not an ATAPI device */
     reg[P0 + P_TFD] = 0;
     ci_reads = 0;
+    complete_after = 0;
+    pending_reads = 0;
+    ahci_warnings = 0;
     moved_bytes = 512;
     on_command_issued = complete_command;
     reset_completes = 1;
@@ -545,7 +569,7 @@ static void stuck_recovery(int path)
             reg[P0 + P_IS] = AHCI_PxIS_FATAL;
             ahci_handler(0);
         } else {
-            ahci_polled_failed(d);
+            ahci_polled_failed(d, ATA_IDENTIFY, "the row's recovery");
         }
         _exit(45);
     }
@@ -614,6 +638,35 @@ static void polled_queue_restart(int fault)
     CHECK("the polled command starts the queued request", ahci_disks[0].active == &queued_request);
     CHECK("the queue resumes after the polled interrupt is acknowledged", stale_issues == 0);
     CHECK("the queued completion and the other port remain pending", reg[R_IS] == 3);
+}
+
+/**
+ * A polled command's wait: one that never completes is refused after the wait
+ * polled and gave up, and the driver logs why, since its caller sees only
+ * EIO; one that completes only after a second and a half of polls, as a flush
+ * on a busy emulator's host can, completes, with nothing logged.
+ */
+static void command_waits(void)
+{
+    static uint8_t buf[512];
+
+    model_reset();
+    (void)ahci_select_port();
+    (void)ahci_port_start(&ahci_disks[0]);
+    command_completes = 0;
+    ci_reads = 0;
+    CHECK("a command that never completes is refused",
+          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
+    CHECK("and the wait polled and then gave up", ci_reads > 1);
+    CHECK("and the driver logged why", ahci_warnings == 1);
+
+    model_reset();
+    (void)ahci_select_port();
+    (void)ahci_port_start(&ahci_disks[0]);
+    complete_after = 150000;
+    CHECK("a command that answers after a second and a half of polls completes",
+          ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
+    CHECK("and nothing was logged", ahci_warnings == 0);
 }
 
 int main(void)
@@ -753,14 +806,7 @@ int main(void)
             }
         }
 
-        model_reset();
-        (void)ahci_select_port();
-        (void)ahci_port_start(&ahci_disks[0]);
-        command_completes = 0;
-        ci_reads = 0;
-        CHECK("a command that never completes is refused",
-              ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
-        CHECK("and the wait polled and then gave up", ci_reads > 1);
+        command_waits();
 
         model_reset();
         (void)ahci_select_port();

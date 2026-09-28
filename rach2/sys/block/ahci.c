@@ -112,12 +112,15 @@
    register reads are a moment on the QEMU loop and several seconds on the
    laptop this drives. The budgets: one second for a handshake (the host reset
    is allowed exactly that by the specification, and the rest are shorter in
-   practice), and one second at a fine grain for a command, which a healthy
-   device answers in microseconds. */
+   practice), and thirty seconds at a fine grain for a command. A healthy
+   device answers a read in microseconds, but a write here ends with a flush,
+   which waits for the medium, and an emulator's host under load or a disk
+   spinning up can take seconds for that; thirty is the sleeping path's
+   deadline period and Linux's ATA command timeout. */
 #define AHCI_WAIT_POLL_US 100u
 #define AHCI_WAIT_STEPS   10000u
 #define AHCI_CMD_POLL_US  10u
-#define AHCI_CMD_STEPS    100000u
+#define AHCI_CMD_STEPS    3000000u
 
 /* The two waits that follow a COMRESET are measured, not counted, since
    what they wait for happens on the wire and in the device, not at the
@@ -1009,7 +1012,7 @@ static void ahci_acknowledge(struct ahci_disk *d)
 
 static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
-static int ahci_polled_failed(struct ahci_disk *d);
+static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why);
 
 /**
  * Issue one polled command on `d`'s port and spin to completion.
@@ -1053,7 +1056,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
         block_count_poll();
         if (--spin == 0) {
-            return ahci_polled_failed(d);
+            return ahci_polled_failed(d, command, "the device stayed busy");
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
@@ -1073,10 +1076,10 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
         is = ahci_read32(is_off);
         block_count_poll();
         if (is & AHCI_PxIS_FATAL) {
-            return ahci_polled_failed(d);
+            return ahci_polled_failed(d, command, "the controller reported an error");
         }
         if (--spin == 0) {
-            return ahci_polled_failed(d);
+            return ahci_polled_failed(d, command, "no answer in thirty seconds");
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
@@ -1087,12 +1090,15 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     return rc;
 }
 
-/* A polled command that failed: the queue behind it is started again, or
- * every request in it waits out its deadline and the disk is declared
+/* A polled command that failed, `why` saying how: the failure is logged,
+ * since the caller sees only EIO, and the queue behind it is started again,
+ * or every request in it waits out its deadline and the disk is declared
  * stalled with nothing wrong. */
-static int ahci_polled_failed(struct ahci_disk *d)
+static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why)
 {
     int rc = ahci_io_error(d);
+
+    klog(KLOG_WARN, "ahci", "port %d: command 0x%X failed: %s", d->port, (unsigned)command, why);
 
     d->polling = 0;
     ahci_acknowledge(d);
