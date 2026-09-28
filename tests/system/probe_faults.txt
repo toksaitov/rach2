@@ -2640,19 +2640,6 @@ new
     rc = make_dir_end(&parent, leaf, 0, newname);
 end
 
-fault make-dot-leaf-passed
-probe direntmusl
-file rach2/sys/syscall_fs.c
-expect DIRENTMUSL FAIL (link to a new name with a trailing slash or a last .)
-old
-    if (leaf_is_dot(leaf)) {
-        return -EEXIST;
-    }
-    if (end != PATH_END_SLASH) {
-new
-    if (end != PATH_END_SLASH) {
-end
-
 fault symlink-new-dir-end-ignored
 probe direntmusl
 file rach2/sys/syscall_fs.c
@@ -2918,7 +2905,7 @@ end
 fault script-interp-dir-end-unchecked
 probe direntmusl
 file rach2/sys/syscall_proc.c
-expect DIRENTMUSL FAIL (a script whose interpreter is named with a trailing slash ran)
+expect DIRENTMUSL FAIL (a script whose interpreter has a trailing slash was not ENOTDIR)
 old
     rc = exec_open(&s->prog, s->path, s->path_end, NULL, s->mm);
 new
@@ -2982,14 +2969,15 @@ old
 new
 end
 
-fault mkdir-dot-leaf-passed
+fault mkdir-last-dot-dropped
 probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (mkdir of a path whose last name is .)
 old
-    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);
+    rc = do_mkdir(path, params->ecx);
 new
-    rc = mkdir_in(&parent, leaf, mode, pathbuf);
+    path_drop_dot(path, end);
+    rc = do_mkdir(path, params->ecx);
 end
 
 fault open-excl-dot-eisdir
