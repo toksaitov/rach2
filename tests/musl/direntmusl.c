@@ -28,13 +28,14 @@
  * named is ENOTDIR and of a directory EACCES, and so is a script whose
  * interpreter is named with a trailing slash ENOTDIR; bind to a name so
  * named makes nothing, connect to a socket so named is ENOTDIR, and so is
- * umount2 of a file so named. rmdir and rename of the root are EBUSY, and
- * open with O_CREAT and without O_DIRECTORY is EISDIR for an existing
- * directory, one of the probe's, one of /dev/shm and /proc, even to read. A
- * symbolic link to a directory named with a trailing slash is followed by
- * the calls that look it up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW
- * notwithstanding, and is ENOTDIR to unlink and rename, in /dev/shm and on
- * an ext2 root.
+ * umount2 of a file so named. rmdir and rename of the root are EBUSY, link,
+ * symlink and mknod with the root as the new name EEXIST and bind to it
+ * EADDRINUSE, and open with O_CREAT and without O_DIRECTORY is EISDIR for
+ * an existing directory, one of the probe's, one of /dev/shm and /proc,
+ * even to read. A symbolic link to a directory named with a trailing slash
+ * is followed by the calls that look it up, O_NOFOLLOW and
+ * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename,
+ * in /dev/shm and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -629,11 +630,40 @@ static int shm_dir_end_calls(void)
 }
 
 /**
+ * The root as the name a call removes, moves or makes: rmdir, and rename
+ * with it as either name, are EBUSY, with both names on the root's mount;
+ * link, symlink and mknod are EEXIST, as for any name that exists, and bind
+ * EADDRINUSE. 0, or 1 once the failure is reported.
+ */
+static int root_rows(void)
+{
+    int s;
+    int bound;
+
+    if (!refused(rmdir("/"), EBUSY) || !refused(rename("/", sub), EBUSY) ||
+        !refused(rename(file, "/"), EBUSY)) {
+        return fail("rmdir or rename of the root was not EBUSY");
+    }
+    if (!refused(link(file, "/"), EEXIST) || !refused(symlink("f", "/"), EEXIST) ||
+        !refused(mknod("/", S_IFIFO | 0644, 0), EEXIST)) {
+        return fail("link, symlink or mknod with the root as the new name was not EEXIST");
+    }
+    s = socket(AF_UNIX, SOCK_STREAM, 0);
+    bound = s >= 0 && refused(bind_path(s, "/"), EADDRINUSE);
+    if (s >= 0) {
+        close(s);
+    }
+    if (!bound) {
+        return fail("a bind to the root was not EADDRINUSE");
+    }
+    return 0;
+}
+
+/**
  * The rows that read the probe's own directory beyond the types of its
  * listing: the path ends of `dir_ends`, rewinddir and seekdir of it and of
- * /proc/self (`rewinds`), the root as the name rmdir removes and rename moves
- * or replaces, which is EBUSY with both names on the root's mount, and the
- * other calls given a path that names a directory by its end, there and in
+ * /proc/self (`rewinds`), the root as a name (`root_rows`), and the other
+ * calls given a path that names a directory by its end, there and in
  * /dev/shm (`dir_end_calls`). 0, or 1 once the failure is reported.
  */
 static int own_dir_rows(void)
@@ -651,9 +681,8 @@ static int own_dir_rows(void)
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
-    if (!refused(rmdir("/"), EBUSY) || !refused(rename("/", sub), EBUSY) ||
-        !refused(rename(file, "/"), EBUSY)) {
-        return fail("rmdir or rename of the root was not EBUSY");
+    if (root_rows() != 0) {
+        return 1;
     }
     return dir_end_calls(base, 0) != 0 || shm_dir_end_calls() != 0;
 }

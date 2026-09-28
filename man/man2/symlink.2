@@ -39,7 +39,8 @@ when something does, and with a last component of
 or
 .Pa \&..
 it returns
-.Er EEXIST .
+.Er EEXIST ,
+as the root does.
 These come before the refusals of a read-only mount and of a file
 system without symbolic links.
 .Pp
@@ -176,7 +177,8 @@ A relative path uses an invalid or removed directory descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EEXIST
-The new link's name already exists, or its last component is
+The new link's name already exists or is the root, or its last
+component is
 .Pa \&.
 or
 .Pa \&.. .
@@ -188,9 +190,9 @@ process.
 The ext2 parent directory cannot grow further or a required block
 exceeds the addressing limit.
 .It Bq Er EINVAL
-The creation path is the root; the object to read is not a symbolic link;
-the file system has no readlink operation; or a raw kernel readlink call
-has a null buffer or zero size.
+The object to read is not a symbolic link, the file system has no
+readlink operation, or a raw kernel readlink call has a null buffer or
+zero size.
 .It Bq Er EIO
 File-system I/O or metadata validation failed, a stored link is malformed,
 or a mount's device was removed.

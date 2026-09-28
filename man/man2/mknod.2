@@ -66,7 +66,8 @@ when something does, and with a last component of
 or
 .Pa \&..
 it returns
-.Er EEXIST .
+.Er EEXIST ,
+as the root does.
 .Pp
 .Fa dev
 is Linux's 32-bit encoding, which musl's
@@ -163,8 +164,8 @@ that is not open.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EEXIST
-The name exists, as any kind of node or as a mount point, or the last
-component of the path is
+The name exists, as any kind of node or as a mount point, the path is
+the root, or its last component is
 .Pa \&.
 or
 .Pa \&.. .
