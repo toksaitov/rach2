@@ -8,11 +8,14 @@
  * since the tests put the fixture paths in their commands unquoted: a
  * semicolon, a space, a redirection, an ampersand, a wildcard, a quote or a
  * dollar sign sends the directory to /tmp, and so do a relative path and one
- * of 101 characters. A text `fix_format` cannot fit ends the process with
- * status 1, where snprintf would cut it short. A child whose exit comes
- * without `fix_passed`, as an exit on a failed check does, keeps its
- * directory; one that said it passed has it removed. This process makes no
- * fixture directory of its own, so the children's are their own.
+ * of 101 characters. A child given such a $TMPDIR makes its directory in
+ * /tmp, and one given a plain $TMPDIR makes it there. A text `fix_format`
+ * cannot fit ends the process with status 1, where snprintf would cut it
+ * short. A child whose exit comes without `fix_passed`, as an exit on a
+ * failed check does, keeps its directory with the files in it; one that said
+ * it passed has it removed, files and all. Each child must exit with the
+ * status it was given. This process makes no fixture directory of its own,
+ * so the children's are their own.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,17 +83,21 @@ static void format_fits(void)
 }
 
 /**
- * The fixture directory a child makes and tells through a pipe, whether it
- * is there after the child's exit, with status `code`, and after a
- * `fix_passed` first when `pass`; a directory left is removed.
+ * Run a child that, with $TMPDIR set to `tmp` when that is not NULL, makes
+ * its fixture directory, writes `sub/kept` in it, tells the directory through
+ * a pipe into `dir`, calls `fix_passed` when `pass`, and exits with `code`.
+ * Returns whether the directory is there after the exit, with the file and
+ * its text, or -1 when the child exited otherwise or the file is not whole.
+ * A directory left is removed.
  */
-static int left_after(int pass, int code)
+static int run_child(const char *tmp, int pass, int code, char *dir, size_t size)
 {
-    char dir[FIX_PATH_MAX], cmd[FIX_PATH_MAX + 16];
+    char cmd[FIX_PATH_MAX + 16], text[8] = {0};
     struct stat st;
     int ends[2], status = 0, there;
     ssize_t n;
     pid_t pid;
+    FILE *f;
 
     if (pipe(ends) != 0) {
         return -1;
@@ -98,10 +105,16 @@ static int left_after(int pass, int code)
     fflush(stdout);
     pid = fork();
     if (pid == 0) {
-        const char *made = fix_dir();
+        const char *made;
 
-        if (write(ends[1], made, strlen(made)) < 0) {
-            _exit(2);
+        if (tmp && setenv("TMPDIR", tmp, 1) != 0) {
+            _exit(3);
+        }
+        made = fix_dir();
+        f = mkdir(fix_path("sub"), 0700) == 0 ? fopen(fix_path("sub/kept"), "w") : NULL;
+        if (!f || fputs("kept\n", f) < 0 || fclose(f) != 0 ||
+            write(ends[1], made, strlen(made)) < 0) {
+            _exit(3);
         }
         if (pass) {
             fix_passed();
@@ -109,14 +122,23 @@ static int left_after(int pass, int code)
         exit(code);
     }
     close(ends[1]);
-    n = read(ends[0], dir, sizeof(dir) - 1);
+    n = read(ends[0], dir, size - 1);
     close(ends[0]);
-    if (pid < 0 || n <= 0 || waitpid(pid, &status, 0) != pid) {
+    if (pid < 0 || n <= 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != code) {
         return -1;
     }
     dir[n] = '\0';
     there = stat(dir, &st) == 0;
     if (there) {
+        snprintf(cmd, sizeof(cmd), "%s/sub/kept", dir);
+        f = fopen(cmd, "r");
+        if (!f || fread(text, 1, sizeof(text) - 1, f) != 5 || strcmp(text, "kept\n") != 0) {
+            there = -1;
+        }
+        if (f) {
+            fclose(f);
+        }
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
         if (system(cmd) != 0) {
             return -1;
@@ -125,13 +147,51 @@ static int left_after(int pass, int code)
     return there;
 }
 
+/** The fixture directory a child keeps after its exit with status `code`,
+ * after a `fix_passed` first when `pass`, as `run_child` answers. */
+static int left_after(int pass, int code)
+{
+    char dir[FIX_PATH_MAX];
+
+    return run_child(NULL, pass, code, dir, sizeof(dir));
+}
+
+/** A child given a $TMPDIR with a semicolon, which exists, makes its
+ * directory in /tmp, and one given a plain $TMPDIR makes it there. */
+static void tmpdir_rows(void)
+{
+    char base[32], dir[FIX_PATH_MAX];
+
+    strcpy(base, "/tmp/fixdir;XXXXXX");
+    if (!mkdtemp(base)) {
+        CHECK(0, "a directory with a semicolon in /tmp");
+        return;
+    }
+    CHECK(run_child(base, 1, 0, dir, sizeof(dir)) == 0 &&
+              strncmp(dir, "/tmp/rach2_fixtures.", 20) == 0,
+          "a child given a $TMPDIR with a semicolon makes its directory in /tmp");
+    rmdir(base);
+    strcpy(base, "/tmp/fixdir_plain.XXXXXX");
+    if (!mkdtemp(base)) {
+        CHECK(0, "a plain directory in /tmp");
+        return;
+    }
+    CHECK(run_child(base, 1, 0, dir, sizeof(dir)) == 0 && strncmp(dir, base, strlen(base)) == 0 &&
+              dir[strlen(base)] == '/',
+          "a child given a plain $TMPDIR makes its directory there");
+    rmdir(base);
+}
+
 int main(void)
 {
     plain_bases();
+    tmpdir_rows();
     format_fits();
-    CHECK(left_after(0, 1) == 1, "a test that exits failed keeps its fixture directory");
+    CHECK(left_after(0, 1) == 1,
+          "a test that exits failed keeps its fixture directory, files and all");
     CHECK(left_after(0, 0) == 1, "a test that exits without saying it passed keeps it");
-    CHECK(left_after(1, 0) == 0, "a test that said it passed has its directory removed");
+    CHECK(left_after(1, 0) == 0,
+          "a test that said it passed has its directory removed, files and all");
     printf("fixdir-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
