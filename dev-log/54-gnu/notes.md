@@ -1,0 +1,143 @@
+# Milestone 54: notes
+
+## Where the work stands
+
+On 2026-09-28 the close's fixes and its leftovers, every entry the close had carried and the fourteen problems the leftovers found, are in and proved in the emulator, and the last full set passed but for a size reason fixed after it. The machine's phase waits for the owner: the system of phases 0 to 6 goes onto the Lenovo with the owner there once, and the last `tests/run all` follows it. Entry 261 keeps three features for the owner to schedule, and entry 262 a cause to confirm.
+
+## The build
+
+The batch was built on 2026-09-27, in branches merged into master.
+
+* Phase 0: an i686-linux-gnu cross toolchain with glibc 2.44, built from fetched tarballs checked by their digests (9e1e7e69), and coreutils, GNU make and bash built with it (19f68d88).
+* Phase 1, the calls static GNU programs make: `clone` in the form glibc's fork uses, `futex` within one address space and `set_tid_address` (a2f0d3dc); signals in Linux's i386 frames with siginfo and `SA_RESTART` (7399a9e8); `mprotect`, `MAP_FIXED`, address hints and reuse of freed space (509fdaed); the clocks and CPU times, priorities, the scheduler calls, `waitid`, `prctl`, `RLIMIT_STACK`, paths of 4096 bytes, the `*at` calls, `pread64` and `truncate` (merged in 09281346 and afce6abe).
+* Phase 2, sharing and IPC: file mappings filled on first touch (3bbed090), a poll core other waits call (da8173be), `eventfd` and `epoll` (97d678b8), tmpfs over a store of file pages a shared mapping can map (dfaa62b0), record, description and flock locks (9c467f39), and FIFO files (e27bd7fb).
+* Phase 3, dynamic linking and the ports: a position-independent image loaded at a base with the interpreter it names (a62deb65), and glibc's runtime, zlib, OpenSSL, OpenSSH, ncurses, less, Vim, Perl, curl, Git and the GNU tools (dfdf7f93).
+* Phases 4 to 6: threads, `ptrace`, `O_PATH`, `lchown` of a link and `getdents64`'s entry types (c3acb487, 1c4f746d), the native compiler, GDB, the SpiderMonkey shell and Debian's chromium-headless-shell root (d30a55e7), the per-process `/proc` files and `/proc/PID/mem` (f8aa16a8), core files (9cd78d64), and the GNU system's root image, the os-real system with the GNU layer over it and OpenSSH in Dropbear's place, with the gnu suite (4ea04a85).
+
+## The close: the compile and the style checks
+
+The first `tests/run style` found cppcheck's, shellcheck's, clang-format's and the column rule's findings in the batch's own files, each fixed in a commit of its own: the probes' cppcheck findings (cf087927), a null test before a comparison in `vfs_cwd_set` and `vfs_root_set` (a9655867), ext2's operations table and the unmount fixture's defines in the judge's format (490cc4c9), the kernel guest makefile's header at 80 columns (82fff449), `deadline_mutate.sh`'s host-deps read as shellcheck asks (2539959f), and a GCC truncation warning in `lchownmusl` (92ec3bf7). The host suite then failed the KRFFS open proof, whose fixture's processes had a descriptor limit of 0 once the table read RLIMIT_NOFILE at each allocation (82c00b57). `tests/run style host` then passed.
+
+## The close: the review
+
+The Codex review of the whole batch ran as 55 units. [review.md](review.md) lists every finding by its code, what became of it and what proves it, in 292 entries. 81 are the session's, which name 96 findings, since an entry may group findings of one cause; the session fixed them but D8-4, rejected since the Readme already lists what it asked for, and X6-1 and X6-2, which were area 8's S1-3 and S1-1. The other 211 fell in eight areas of the kernel and the probes, each fixed by an agent on a branch of its own that was merged into master. Two of those were another area's defect and were fixed there, F5-4 and N5-2, and one is left: F3-6, the target of `/proc/PID/exe`, which the process does not hold (entry 236 of the shortcomings list).
+
+## The close: the rows and their faults
+
+Each guest row the review's fixes added or strengthened is proved by a fault, but for the rows listed at the end of this section: `tests/system/probe_faults.sh` puts each block of `tests/system/probe_faults.txt` into the tree alone, boots the default suite, and requires the suite to fail, the runner not to pass the probe, and the boot's log to have the words the probe prints only when that row fails. The kernel and the programs rebuilt at the end must be the first build's, byte for byte. On the testing host the list ran as eight shards in eight copies of the tree, beside the GNU build.
+
+The agents wrote the faults of their areas and the session wrote its own. Writing them found rows that could not fail with their words:
+
+* ptracemusl's seize and interrupt rows waited with no bound, so their faults hung the suite; they wait for at most ten seconds now, and the interrupt comes once the tracee is seen asleep in its read (851d74d4).
+* three of threadmusl's task rows were too weak for their defects: a name relative to a thread's directory now reads the thread's own stat, another process's task directory is a live child's, and the process's time comes from a thread that is not the first (1935dd1e).
+* five wake rows, three in epollmusl, one in fifomusl and one in unixmusl, waited with a time limit, and the scan at the limit found the event and passed them late; they wait with none now, under an alarm, while a process keeps running (7efc9f57). A wait the alarm ends still finds its event as it wakes, so each fails when its alarm fired (4974a8f7), and so does epollmusl's first wake row, which already waited under an alarm and had the same gap.
+
+The first boot of the default suite on the batch's tree failed five probes, among them unixmusl, which hung, so the sixteen after it never ran: `92 of 108 probes, 21 failures`, in the runner's summary. Each failure was the batch's: an AF_UNIX stream read at the end of input spun in the kernel (ed13a6f6, entry 227); `lstat("/proc/self/.")` reported the `self` link (33733e3b, entry 230); procprobe counted three permanent mounts, before the tmpfs at /dev/shm (72244af1); authmusl took a write lock on a descriptor for reading, which record locks that lock refuse with `EBADF` (f9ef26f2); and sigframemusl's overflow child inherited a mask in which the rows before it block SIGUSR1 (9283f593).
+
+The second boot ran all 108 probes and failed eleven (`108 of 108 probes, 11 failures`). Nine had no /tmp in the test image, where the milestone's probes make their files (0f7c5ac4); ptracemusl read a stopped thread as running in its stat file (b0959283, entry 232); and threadmusl was reported killed by SIGKILL, since a transient init whose last thread `exit_group`'s SIGKILL ended reported that signal and not the group's exit. The third boot failed threadmusl alone, and the fix of its report (8f750831, entry 233) left the fourth with `108 of 108 probes, 0 failures`.
+
+The list's first run, of 156 faults, reported 153 caught. Three were not:
+
+* exec-two-owners: threadmusl's two-exec row holds the second thread at the entry stop of its execve, and the first exec's SIGKILL ends that stop with no call run, as on Linux (3bf934a3), so the check that refuses a second exec is not reached. The row's comment says so now (9d197aa8), and the fault is out of the list.
+* epoll-registration-by-address: its row fails only when the new eventfd's open file record takes the closed one's address, which the heap did not do. The fault is out of the list.
+* altstack-frame-below: with the check taken back, the frames below the alternate stack are no longer counted as on it, the next one starts at its top over live ones, and the child never ends, so the boot hung with no words. The fault now moves both tests a page down, so the frames overwrite the marked page and the fifth is refused; the row fails with its words.
+
+Rows with no fault, each for the reason given:
+
+* The setup steps the agents listed, which check calls that prepare a later row and that no fix changed.
+* mapmusl's first touch of shared memory at a page offset of 2^31, and tmpfsmusl's deep tree and unixmusl's closed chain of pairs, whose faults kill the probe or overrun the kernel stack before any line can print (entry 248).
+* epollmusl's add at a closed eventfd's number, whose defect fails the row before it first.
+* The races no probe can time, which [review.md](review.md) names finding by finding (entries 242 and 249).
+* threadmusl's wait for SIGUSR1 and miscprobe's vfork row, whose fixes are to the probes' own code.
+
+## The close: the build from clean
+
+`make clean` and `make` on the testing host, then `make os-real-gnu-ext2`, which rebuilt the GNU layer from its cross toolchain up, since the review changed the toolchain's script. OpenSSH's configure refused the rlimit sandbox B2-1's fix chose, since it takes it only after a test program a cross build cannot run, and OpenSSH is built with no sandbox (8a8d1a2e, entry 235). The Chromium check took the package's `.so.TOC` tables for shared objects (e8ece28f, 181c4994). The musl patch's text had said the kernel has no `clone`, and spawnmusl had required `clone` with CLONE_VM and CLONE_VFORK to be refused, which the kernel now answers (4c91dfdc), so musl and the four ports that link against it were rebuilt too.
+
+The set-id check passed the real GNU image, and failed two copies of it, one with a set-uid `/usr/bin/bash` and one with a world-writable `/usr/libexec/sshd-session`, each planted with debugfs, naming the file each time.
+
+## The close: the first full set
+
+The first `tests/run all` on the built tree failed nine suites. `style` failed on the sizes of functions the close had grown, each brought within its entry or given one. The rest were faults:
+
+* The self-build and install suites: the kernel no longer built on Rach2, since TinyCC's assembler has no `stmxcsr` (f0859c63, entry 228).
+* The gnu suite: OpenSSH's server ended every connection over the four bytes `getsockopt` gave for `IP_OPTIONS` (2673f6ce, entry 229).
+* The memory suite: an 8 MiB machine panicked where the boot promises a refusal by name (64a13b7c, entry 234), and the grow suite, which ran on 16 MiB, had too little left for `growroot` once the recovery kernel grew (1a024862).
+* The install, grow, selfbuild and selfbuild-ext2 suites passed when they were run again on the fixed tree. stress-ahci had printed `STRESSPROBE FAIL` 27 seconds into its run, and passed in both sets after it; its log was overwritten before it was read, and the cause is not known (entry 262).
+
+Running them again left four: `style`, on a size the close's fix grew (e3b1628b); memory, whose fail mode at 64 MiB reported `rach2.framefail` missing (c90c464e, entry 253); gnu, whose password login ended at a forced password change and a terminal GNU libc could not see (entries 255 and 256); and ext2, whose lchown row stopped at the shell's prompt.
+
+Booted by hand on the same disk, `lchownmusl` passed; in the suite, the boot's log ended at the prompt three runs out of three, with no echo of the command. The harness's own output, which `boot_root` discarded, gave the cause: the step after the one that typed the command, `expect=LCHOWNMUSL OK (links)`, has a group, which the harness's matcher refuses, and the harness, which writes the boot's log, ended with status 2 at that step, before the command's echo came. The rows escape their parentheses now (bcbb04a6, entry 260), and the harness compiles every pattern before it starts a machine (c10b9dac); a refused pattern had also left the machines of two runs made outside the runner going for half an hour.
+
+## The close: the GNU system's rows
+
+The gnu suite's rows ran for the first time once its password login passed. Two failed, and each named a gap between the kernel and the Linux GNU libc and its programs are built against.
+
+* curl's HTTPS row: OpenSSL's `s_server` set its socket non-blocking with `ioctl(FIONBIO)`, which the kernel answered only on pipes, ptys and AF_UNIX sockets, and ended at once. `FIONBIO` is answered now for every descriptor not opened with `O_PATH`, as Linux answers it in its common layer (2d04e6c2, entry 257).
+* Chromium's row: the browser ended with `GPU process isn't usable. Goodbye.` after six launches of its GPU process had failed. Run with more logging on a booted GNU machine, the processes the zygote forked were the ones stopping: its check that it runs one thread reads the link count of `/proc/self/task/`, which was 1 (f2cce45c, entry 258), and the next thing a forked process does is give up every capability with `capset`, which the kernel did not have (44893094, entry 259). With `--no-zygote` the browser loaded the page while those two were open; with both fixed, it loads the page through its zygote, as the row runs it: `<html><head></head><body><p id="x">chromium row</p></body></html>`. What it still logs is in entry 261.
+
+The capability change keeps a thread's capabilities whole: a thread has every one or none, and `capset` may give them all up, after which the thread is not privileged whatever its user IDs, until an exec undoes that, except under `no_new_privs`, a tracer that is not privileged or directories another process shares; the thread is then privileged while its effective user ID is 0, as any thread is. Every privilege decision of the kernel reads `proc_privileged`; `syscalls(2)` says that a page's "effective user ID 0" means a privileged thread.
+
+## The close: the reviews of the fixes
+
+Every fix after the batch's review was reviewed against the claims it must make true, and the fixes a review asked for were reviewed in turn, until a review found nothing. What the reviews found:
+
+* The first full set's fixes: two findings, the stat calls following a final link through a directory suffix without requiring a directory, and syscall 107 left out (a8ff38f9). The round after: the inode proof's fixture lacking what the stat calls now use (bf6368d1), and the fault proof checking the run lock without taking it and losing, on an interrupt, the rebuild of a restored file (9d39861d). The next: the dirent fault's words (a3f91f61), the proof's lock owner written in two steps, which `tests/run` could read half written (dbe9fffe), and `IP_OPTIONS` answered past the pointer checks every option has (ac793f8c).
+* Area 5's unlink and rename fix: its host rows could not see the lock taken and given back before the change, nor a rename that walked its second name holding the first name's lock (73723737); the next round, a rename that took the lock again between its two lookups (4a4ef099). The rename's lock order itself had been found by reading before the review, and fixed (43253b76).
+* The termios2, shadow and memprobe fixes: the termios2 faults pointing at text the helpers had moved (24e221ff), a stale `shadow.tmp` that could publish the hashes with its old mode, and passwd(5)'s rule for OpenSSH's expiry (a9177cd3).
+* The fixes of the second full set and of the GNU rows: most findings were in the capability change of entry 259, the most serious an exec that gave a thread its capabilities back while a sibling could make a new sharer of its directories, a root thread without capabilities writing its privileged parent's memory, and a privileged `PTRACE_TRACEME` to a parent that had given them up (b346b1ce, 18554d8b, 2b4dd1e7, 04233ab1); the others were a sentence each in `ioctl(2)` and the ipc Readme (1ef3fcff, 665e11c1).
+* The review of those fixes: the tracer's privilege read from an ended leader's record, which keeps its capabilities (5a4e0bb8), clang's warning on `capset`'s pid (be12b1c2), and points where the pages claimed more than the code does or left a difference from Linux unstated (c865eb88, ac53b156).
+* The review after that: nothing in the code, and two points in the pages (afacb1bf); and of those, the robust-list rule stated against Linux's ptrace check by the difference alone (e94b7a90) and the case the comparison holds in (ec44eeca). The next found nothing.
+* The stress probe's report: the failing step with its file and the call's result, where it printed the step alone (db3ce7d7); its header described a memory cap and a cache no longer in the kernel (1f2bed80), and the reviews of the header asked for the cache's size in plain words (d52ef388, 9e636f7c). The last found nothing.
+* The review of the records: entry 239 was a loss of data and not P2, and `chmod` and `chown` now walk with the lock of the mount they end on and keep it through the store (fb6f952c), whose review found nothing; the entries and these notes were corrected where they claimed more than the code or the ledger shows.
+
+## The close: the proofs
+
+* The probe faults: the list has 180 faults, run in eight shards in eight copies of the tree. 179 failed their rows, and the restored products equalled the first build's. The words of `task-dir-one-link` ended at the parenthesis where threadmusl prints the errno before it (218fd43a); run alone, it failed its row.
+* The gnu suite's fixes S1-1 to S1-4 each failed with their words; a set whose GNU image changed during the run was voided by name (S1-5); the suite passed with its time limits doubled (S1-6), and passed restored.
+* The host mutation scripts: 54 of the 55 passed. `account_mutate.sh`'s init-block fault looked for code 9ce8ace3 had moved into a helper, and the SSH server's fork rows that commit added had no fault; the fault is in the helper now, three faults prove those rows, and the 25 pass (b49a4753). `syscall_mutate.sh`'s sleep-early-return fault made the CPU-clock row 24bdd0c6 added loop for good, since the model's clock moved only in a sleep; a row of the model ends after a thousand yields now, and the 68 faults pass (c78f7dc3). `open_mutate.sh` passed with its twelve.
+* The system mutation scripts: the 27 ran in the eight copies, and 22 passed. `rows_mutate.sh`'s one-shot fault looked for the handler's reset where 7399a9e8's delivery no longer does it, and `framebuffer_mutate.sh`'s owner fault for the pid where F2-6's fix compares the thread group (cceccba5); `sb16_mutate.sh` recorded its scale on the host's clock, which the audio suite's row stopped doing on 2026-09-21 (entry 153), so its notes fell wrong under load and at times without it, and it records under the instruction clock now (33a529d6); `usbdisk_mutate.sh` and `rehearse_group_mutate.sh` need a disk their suites make, which a copy of the tree does not carry. Rerun, all five passed.
+
+## The leftovers: the build
+
+The close had carried nineteen entries of the shortcomings list, and the milestone that finds a problem fixes it, so on 2026-09-28 they were fixed in one more batch, built in branches merged into master: the path endings of entry 231, OpenSSH's rlimit sandbox (235), the program's file kept with the address space (236), locks keyed by the node's place (238), an address space's users apart from its holds (240), seeks of directories and `/proc` files (241), the rows area 5's fixes lacked (242), KRFFS's taken identifier and whole-block rule (243, 244), `recvfrom`'s `EFAULT` (245), wakes that name their kinds and epoll nesting from above (246, 247), guard pages under the kernel stacks (248), the host test of the AF_UNIX calls (249), the probes' child statuses (252), `ENOMEM` from the calls that make a descriptor (254), `/proc/PID/oom_score_adj` (261), the runner's kept logs (262), and the stat calls' locked walks (263). The entries say what each fix is and which rows prove it. The work found entries 264 to 276 and fixed each.
+
+## The leftovers: the review
+
+Codex reviewed the batch in units of at most six files, at most three at once: twenty units of the diff, three of its host tests (U15, U18a, U18b), and five of its 139 new guest faults (F1 to F5). Nine units found nothing. What the others found, each fixed:
+
+* The P1: `fs_exe_close` could reclaim a nameless KRFFS root file without the root's lock (8b8bb7eb), and the fix of it found the same on every other path a last holder ends on (6b12744c, entry 274).
+* Path endings: `/fb/` opened the framebuffer (ab9d8662); the KRFFS root answered a slash before `RENAME_NOREPLACE`, and `/proc` renames and new names gave `EROFS` before the dot and slash answers (6419fe73, e14a8e40, 8262971b, b1126aa7); a `PT_INTERP` path and `umount2` checked the ending in one walk and acted on a second (38abaf96, 97e1728f); two pages claimed answers the code does not give (27ab879a, 091aa7bd).
+* `/proc`: a seek was lost under a read that slept (2b0c66a5, and for the boot and screen logs b2d1d7bb and 0e977015, entry 275); `lseek(2)` called every `/proc` file a snapshot (1aa32327); an ended child's pages stayed until its reap (24176a2d, 6b1806b7, 1389292d); the `oom_score_adj` open answered `EMFILE` for a heap with no room (4a70f1ef), and its parser differed from `kstrtoint` at 0xa0 and at an overflow followed by junk (de1909f6).
+* Wakes: a forked child could nest sets past the limit (6683013f); a pty master and a TCP connection were woken for the wrong kind (cd8f458a, ed4d97e3, entries 272 and 273).
+* Rows that could pass with their defect: the runner's selftest (e8e054fc), the unix host test's parked calls (662b03d5), the procfs model and threadmusl's framebuffer read (2a6199ba, c561dc1c), direntmusl's seekdir, link and exec rows and preadmusl's `SEEK_CUR` row (330a3a78, 9b44a691, 26a5e0e3, b7e017f2, 30bd5825), fdstale's rmdir fault (4ffe2842), lockmusl and rawprobe (dfc3f5ed, f0e02631, a2012bec, entry 276), and the rows U15 and U18 named (a17cca01, 241dd118, de5e4f64); the fixtures' paths (e5860f31, 8b620642, 6c3eeaf0, 0175124d, entry 271); and OpenSSH's recipe, which named the wrong probe and a limit the kernel does not enforce (5031f33b).
+* The fault list: six faults whose words an earlier row printed first, or that no longer failed their row, since later fixes had added rows and checks. direntmusl now runs each group of rows whatever the one before it did, an exec row's child reads /dev/null, so a shell the kernel wrongly runs ends at once (41f7e7ec), the mkdir fault takes back the dot the walk keeps, and the fault of the dot guard in `make_dir_end` is dropped (847f91ee): `new_name_taken` answers `EEXIST` for a last `.` on KRFFS and tmpfs, where the rows run, so the guard answers only for a type whose lookup does not find `.`, and no row reaches it.
+* Rejected: F2 held that `renameat-ignores-olddirfd`, which gives `renameat` the working directory for its first descriptor, fails its row by a lookup and not by the path's ending. The row's own claim is the descriptor: the ending through a descriptor is `copy_path_at`'s, which at-dirfd-dot-dropped proves with unlinkat's row, and rename's answer for a last `.` the rename rows prove; the fault is the one defect this row alone can show.
+
+## The leftovers: the build from clean and the first full set
+
+`make clean`, `make` and `make os-real-gnu-ext2` on the testing host rebuilt everything but the vendored trees, and the GNU ports, whose OpenSSH recipe had changed, from their toolchain. The full set on that tree, 847f91ee, passed 90 of its 91 suites. The host suite failed on `open_hosttest`, which did not link on Linux: `synth_stat`, which a new name's check reaches since 8262971b, calls the device stat and the `/proc` inode functions, and the test had no stubs for them; the Mac's link had let them go unreferenced, so the host tests run there did not show it (c7deb4e6).
+
+## The leftovers: the reviews of the fixes
+
+Every fix of the batch's review was reviewed in turn, in twelve units of at most six files, and the fixes that review asked for in two more rounds, until a round found nothing. What they found, each fixed:
+
+* A P2 in 97e1728f: `umount2` of a removed device's mount named with a trailing slash read the gone device's attributes, which it refuses, so the mount stayed; the unmount fixture's attribute read had succeeded for a gone device, which hid it (b30a6433).
+* The answers of the calls that make or move a name: a mount point as a new name with a trailing slash was `ENOENT` where it exists, a RENAME_NOREPLACE rename onto a mount point, or of one, was `EBUSY` before `EEXIST`, and `lstat` of another user's `/proc/PID/exe` said it was not there, where Linux gives the link (2a2fabaa, f81a68bc, 6504c3bd). The first row of that change counted on a process 1, which the default runner does not have, and judges the probe's own link now (6504c3bd).
+* The boot log's seek answered `EOVERFLOW` for a sum past the largest signed offset, where every place past 4294967295 is `EINVAL` (203c5396), and `lseek(2)` gave both calls the log's whole range (facde846).
+* Rows: lockmusl judged a child after a fork that gave none, rawprobe counted a table full when its last socket failed for want of memory (02bc0053), and a host test that failed only by a leak LeakSanitizer finds at its end lost its fixtures, since the removal comes first (c24c18f2).
+
+The round after found nothing.
+
+## The leftovers: the proofs
+
+* The probe faults: the list has 319 faults, run in eight shards in eight copies of the tree at 8feb0206. 318 failed their rows, and the restored products equalled the first build's. `exe-exec-old-path` left prctlmusl waiting: the row puts a script at the program's old path, and the test image's `/bin/sh`, ish, reads its commands from its input and not from the script it is given. The script is the exec's input now (f5c76da9), and run alone on the fixed tree the fault failed its row.
+* The host mutation scripts: the 58 passed.
+* The system mutation scripts: 27 of the 29 passed, `vfs_unmount_test.sh --mutate` and the new `stackoverrun_mutate.sh` among them. `fdlock_mutate.sh`'s raw transfer faults looked for the check `ops_offset_held` replaced, and its lseek fault ran on into the seeks the leftovers put after `raw_lseek`; pointed at the code as it is (10db8308), its seven faults failed their rows and the restored tree passed. `rehearse_group_mutate.sh` needs the installer root the tree builds now, which the last full set's installer suite makes.
+* Rows of suites other than the default: in a copy of the tree, a fault that drops a raw socket's registration once the socket tables fill failed rawprobe's row that a socket opened before still receives, and one that kills a child of rawprobe at its exit failed the row that the child held sockets; a fault that kills the program mountprobe runs from the mount at its exit failed that row, once the fault was narrowed to that program, since killing every child of mountprobe fails an earlier row first. Each suite passed restored.
+
+## The leftovers: the full sets at the end
+
+The full set on 10db8308 passed 90 of its 91 suites, and `rehearse_group_mutate.sh`, run after it on the installer root the set had built, passed. The gnu suite failed: its machine's first write, at the mount of its root, returned `EIO` with nothing in the log but `bcache: write: sector 0 failed (-5)`, and the boot came up with no root. Run alone, the suite passed. The write had taken the AHCI driver's polled path, which gave a command one second and logged nothing when it gave up, where the queued path waits four thirty-second periods and IDE's polled path at least five seconds (entry 277). A polled command now has thirty seconds with interrupts on and five with them off, since there every tick of the wait is lost to the clock, and every failed command is logged with why (8e296c77, 8814a034); the review of the first change found the lost ticks and the unlogged failures of a completed command, and the review of the second found nothing. Entry 262's stress-ahci failure, which wrote through the page cache's polled path on the same driver while IDE passed, likely had the same cause.
+
+The last full set, on 395cd20f, passed 90 of its 91 suites, and `rehearse_group_mutate.sh` passed after it. The style suite failed on the size of the AHCI model's register write, which the slow command's branch had grown; the branch is a function of its own now (29c89eda) and the reason that no longer applies is gone (3155e1a8), and on that tree the style and host suites passed. The Mac's own size checker had not flagged the function, so the testing host's style suite is the one to trust for sizes.
