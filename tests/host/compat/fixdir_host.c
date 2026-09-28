@@ -4,6 +4,7 @@
  * need to.
  */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,7 +97,7 @@ const char *fix_path(const char *name)
         exit(1);
     }
     snprintf(names[i], sizeof(names[i]), "%s", name);
-    snprintf(paths[i], sizeof(paths[i]), "%s/%s", fix_dir(), name);
+    fix_format(paths[i], sizeof(paths[i]), "%s/%s", fix_dir(), name);
     return paths[i];
 }
 
@@ -105,4 +106,18 @@ void fix_passed(void)
 #ifndef FIXDIR
     passed = 1;
 #endif
+}
+
+void fix_format(char *buf, unsigned long size, const char *format, ...)
+{
+    va_list ap;
+    int n;
+
+    va_start(ap, format);
+    n = vsnprintf(buf, size, format, ap);
+    va_end(ap);
+    if (n < 0 || (unsigned long)n >= size) {
+        printf("fixtures: %d bytes do not fit in %lu: %.60s\n", n, size, buf);
+        exit(1);
+    }
 }

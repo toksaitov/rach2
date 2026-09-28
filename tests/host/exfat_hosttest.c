@@ -253,16 +253,16 @@ static void load(const char *opt)
     char cmd[2048];
 
     if (!builder_built) {
-        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkexfatfixture.c",
-                 fix_path("mkexfatfixture"));
+        fix_format(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkexfatfixture.c",
+                   fix_path("mkexfatfixture"));
         if (system(cmd) != 0) {
             printf("exfat_hosttest: cannot build the fixture builder\n");
             exit(1);
         }
         builder_built = 1;
     }
-    snprintf(cmd, sizeof(cmd), "%s %s %s", fix_path("mkexfatfixture"), fix_path("exfat_case.img"),
-             opt);
+    fix_format(cmd, sizeof(cmd), "%s %s %s", fix_path("mkexfatfixture"), fix_path("exfat_case.img"),
+               opt);
     if (system(cmd) != 0) {
         printf("exfat_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
@@ -651,7 +651,7 @@ static void external_rows(void)
     void *m;
     int rc;
 
-    snprintf(cmd, sizeof(cmd), "sh tests/host/mkexfat_external.sh %s", fix_dir());
+    fix_format(cmd, sizeof(cmd), "sh tests/host/mkexfat_external.sh %s", fix_dir());
     rc = system(cmd);
     rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
     if (rc == 3) {
@@ -702,7 +702,7 @@ static void external_rows(void)
         check(OPS->getattr(&mnt, n, &st) == 0 && (long)st.size == size && st.mtime_sec <= mtime &&
                   st.mtime_sec + 2 > mtime,
               what);
-        snprintf(src, sizeof(src), "%s/exfat_src/%s", fix_dir(), line);
+        fix_format(src, sizeof(src), "%s/exfat_src/%s", fix_dir(), line);
         f = fopen(src, "rb");
         got = f ? fread(want, 1, sizeof(want), f) : 0;
         if (f) {
@@ -787,8 +787,8 @@ static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
         exit(1);
     }
     fclose(f);
-    snprintf(cmd, sizeof(cmd), "%s --check %s", fix_path("mkexfatfixture"),
-             fix_path("exfat_write.img"));
+    fix_format(cmd, sizeof(cmd), "%s --check %s", fix_path("mkexfatfixture"),
+               fix_path("exfat_write.img"));
     f = popen(cmd, "r");
     if (!f) {
         printf("exfat_hosttest: cannot run the check\n");
@@ -834,7 +834,7 @@ static void dump_named(const char *kind, const char *name)
     char path[2048];
     void *f;
 
-    snprintf(path, sizeof(path), "%s/exfat_%s_%s.img", fix_dir(), kind, name);
+    fix_format(path, sizeof(path), "%s/exfat_%s_%s.img", fix_dir(), kind, name);
     f = fopen(path, "wb");
     if (f) {
         fwrite(image, 1, (unsigned long)image_sectors * 512, f);
@@ -1769,8 +1769,8 @@ static void write_rows(void)
         unsigned char *bitmap;
 
         run_check(check_out, sizeof(check_out));
-        snprintf(cmd, sizeof(cmd), "%s --check %s --list", fix_path("mkexfatfixture"),
-                 fix_path("exfat_write.img"));
+        fix_format(cmd, sizeof(cmd), "%s --check %s --list", fix_path("mkexfatfixture"),
+                   fix_path("exfat_write.img"));
         pf = popen(cmd, "r");
         while (pf && fgets(line, sizeof(line), pf)) {
             if (strstr(line, "/hello.txt") && strstr(line, "nofat")) {

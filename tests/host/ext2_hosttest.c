@@ -440,7 +440,7 @@ static void same_as_tree(const char *guest, const char *what)
         fails++;
         return;
     }
-    snprintf(host, sizeof(host), "%s/tree%s", fix_dir(), guest);
+    fix_format(host, sizeof(host), "%s/tree%s", fix_dir(), guest);
     hgot = host_read(host, bbuf, sizeof(bbuf), 0);
     igot = read_at(n, abuf, sizeof(abuf), 0);
     OPS->put(&mnt, n);
@@ -458,7 +458,7 @@ static void against_reader(const char *img)
     void *f;
     int listed = 0, agreed = 0;
 
-    snprintf(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt", img);
+    fix_format(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt", img);
     if (!run(cmd)) {
         check(0, "setidcheck lists the image's nodes");
         return;
@@ -548,20 +548,19 @@ static uint64_t build_image(const char *img, int block, int inode, const char *f
 {
     char cmd[2048];
 
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; rm -f %s; : > %s; "
-             "E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b %d -I %d -O %s -d $FIX"
-             "/%s %s %luM >/dev/null 2>&1 && "
-             "debugfs -w -R 'mknod cold c 4 5' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'mknod cnew c 1 1' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'set_inode_field /cnew block[0] 0' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'set_inode_field /cnew block[1] 286338160' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'mknod bdev b 8 1' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'set_inode_field /hello.txt uid 7' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'set_inode_field /hello.txt gid 9' %s >/dev/null 2>&1 && "
-             "debugfs -w -R 'set_inode_field /hello.txt mode 0104755' %s >/dev/null 2>&1",
-             img, img, block, inode, features, tree, img, mib, img, img, img, img, img, img, img,
-             img);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; img=%s; rm -f $img; : > $img; "
+               "E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b %d -I %d -O %s -d $FIX"
+               "/%s $img %luM >/dev/null 2>&1 && "
+               "debugfs -w -R 'mknod cold c 4 5' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'mknod cnew c 1 1' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'set_inode_field /cnew block[0] 0' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'set_inode_field /cnew block[1] 286338160' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'mknod bdev b 8 1' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'set_inode_field /hello.txt uid 7' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'set_inode_field /hello.txt gid 9' $img >/dev/null 2>&1 && "
+               "debugfs -w -R 'set_inode_field /hello.txt mode 0104755' $img >/dev/null 2>&1",
+               img, block, inode, features, tree, mib);
     if (!run(cmd)) {
         printf("ext2_hosttest: mke2fs or debugfs failed for %s\n", img);
         exit(1);
@@ -1223,8 +1222,8 @@ static int e2fsck_clean(const char *img)
 {
     char cmd[512];
 
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
     return system(cmd) == 0;
 }
 
@@ -1235,8 +1234,8 @@ static int e2fsck_status(const char *img)
     char cmd[512];
     int rc;
 
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > $FIX/fsck.out 2>&1", img);
     rc = system(cmd);
     /* Each question e2fsck asked, with the message before a bare one. */
     system(
@@ -1323,7 +1322,7 @@ static int reader_walks(const char *img)
 {
     char cmd[512];
 
-    snprintf(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt 2>&1", img);
+    fix_format(cmd, sizeof(cmd), "$FIX/setidcheck --nodes --ext2 %s > $FIX/nodes.txt 2>&1", img);
     return system(cmd) == 0;
 }
 
@@ -1332,9 +1331,9 @@ static int debugfs_says(const char *img, const char *request, const char *text)
 {
     char cmd[600];
 
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null | grep -qF '%s'",
-             request, img, text);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null | grep -qF '%s'",
+               request, img, text);
     return system(cmd) == 0;
 }
 
@@ -1342,7 +1341,7 @@ static int debugfs_lists(const char *img, const char *dir, const char *name)
 {
     char cmd[600];
 
-    snprintf(
+    fix_format(
         cmd, sizeof(cmd),
         ". tools/setup/e2fsprogs_path.sh; debugfs -R 'ls -l %s' %s 2>/dev/null | grep -q ' %s$'",
         dir, img, name);
@@ -1885,10 +1884,10 @@ static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int 
     int n = 0;
     void *f;
 
-    snprintf(line, sizeof(line),
-             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > $FIX"
-             "/debugfs.txt 2>/dev/null",
-             cmd, wimg);
+    fix_format(line, sizeof(line),
+               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > $FIX"
+               "/debugfs.txt 2>/dev/null",
+               cmd, wimg);
     run(line);
     f = fopen(fix_path("debugfs.txt"), "r");
     if (!f) {
@@ -1919,10 +1918,10 @@ static int debugfs_list(const char *cmd, const char *key, uint64_t *out, int cap
     int n = 0;
     void *f;
 
-    snprintf(line, sizeof(line),
-             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > $FIX"
-             "/debugfs.txt 2>/dev/null",
-             cmd, wimg);
+    fix_format(line, sizeof(line),
+               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > $FIX"
+               "/debugfs.txt 2>/dev/null",
+               cmd, wimg);
     run(line);
     f = fopen(fix_path("debugfs.txt"), "r");
     if (!f) {
@@ -3183,10 +3182,10 @@ static int repaired_ok(const char *img, uint64_t bytes, int i, int stop, int nam
     char cmd[700];
     int rc;
 
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; cp %s $FIX/repair.ext2 && e2fsck -fy $FIX"
-             "/repair.ext2 > $FIX/repair.out 2>&1; s=$?; test $s -le 2",
-             img);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; cp %s $FIX/repair.ext2 && e2fsck -fy $FIX"
+               "/repair.ext2 > $FIX/repair.out 2>&1; s=$?; test $s -le 2",
+               img);
     if (system(cmd) != 0) {
         printf("  e2fsck -fy could not repair '%s' stopped after write %d\n", sequences[i].name,
                stop);
@@ -3222,8 +3221,9 @@ static int debugfs_script(const char *img, const char *script)
     }
     fwrite(script, 1, strlen(script), f);
     fclose(f);
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; debugfs -w -f $FIX/dbg.cmd %s >/dev/null 2>&1", img);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; debugfs -w -f $FIX/dbg.cmd %s >/dev/null 2>&1",
+               img);
     return run(cmd);
 }
 
@@ -3234,9 +3234,9 @@ static long debugfs_number(const char *img, const char *request, const char *key
     void *f;
     long v = -1;
 
-    snprintf(cmd, sizeof(cmd),
-             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null > $FIX/dbg.out",
-             request, img);
+    fix_format(cmd, sizeof(cmd),
+               ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null > $FIX/dbg.out",
+               request, img);
     if (!run(cmd)) {
         return -1;
     }
@@ -3392,9 +3392,9 @@ static void dirty_rows(void)
     check(mount_rw() == 0 && strstr(last_check, "1 lost blocks") != 0 && unmount_rw() == 0 &&
               disk_state(img) == 2,
           "the error bit survives a mount and an unmount");
-    snprintf(script, sizeof(script),
-             ". tools/setup/e2fsprogs_path.sh; e2fsck -fp %s >/dev/null 2>&1; test $? -eq 1", img);
-    check(run(script), "e2fsck -p repairs it");
+    check(run(". tools/setup/e2fsprogs_path.sh; e2fsck -fp $FIX/dirty.ext2 >/dev/null 2>&1; "
+              "test $? -eq 1"),
+          "e2fsck -p repairs it");
     use_image(img, bytes);
     last_check[0] = 0;
     check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && last_check[0] == 0 &&
@@ -3582,11 +3582,11 @@ static void matrix_rows(void)
     {
         char cmd[512];
 
-        snprintf(cmd, sizeof(cmd),
-                 ". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'write /dev/null hello.txt' %s "
-                 ">/dev/null 2>&1; "
-                 "debugfs -w -R 'set_inode_field /hello.txt size 5' %s >/dev/null 2>&1",
-                 wimg, wimg);
+        fix_format(cmd, sizeof(cmd),
+                   ". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'write /dev/null hello.txt' %s "
+                   ">/dev/null 2>&1; "
+                   "debugfs -w -R 'set_inode_field /hello.txt size 5' %s >/dev/null 2>&1",
+                   wimg, wimg);
         system(cmd);
     }
     use_image(wimg, wbytes);

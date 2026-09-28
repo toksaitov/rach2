@@ -90,15 +90,16 @@ static void load(const char *opt)
     FILE *f;
 
     if (!built) {
-        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkfatfixture.c",
-                 fix_path("mkfatfixture"));
+        fix_format(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkfatfixture.c",
+                   fix_path("mkfatfixture"));
         if (system(cmd) != 0) {
             fprintf(stderr, "bootctl_hosttest: cannot build the fixture builder\n");
             exit(1);
         }
         built = 1;
     }
-    snprintf(cmd, sizeof(cmd), "%s %s %s", fix_path("mkfatfixture"), fix_path("fat_case.img"), opt);
+    fix_format(cmd, sizeof(cmd), "%s %s %s", fix_path("mkfatfixture"), fix_path("fat_case.img"),
+               opt);
     if (system(cmd) != 0) {
         fprintf(stderr, "bootctl_hosttest: fixture builder failed\n");
         exit(1);

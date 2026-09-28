@@ -31,4 +31,12 @@ const char *fix_path(const char *name);
  */
 void fix_passed(void);
 
+/**
+ * Format into `buf` of `size` bytes, as snprintf does, and end the test when
+ * the text does not fit: a command or a path cut short would run or name
+ * something else.
+ */
+void fix_format(char *buf, unsigned long size, const char *format, ...)
+    __attribute__((format(printf, 3, 4)));
+
 #endif /* FIXDIR_HOST_H */

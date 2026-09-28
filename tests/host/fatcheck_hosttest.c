@@ -25,7 +25,7 @@ static const char *tool(void)
 {
     static char text[1200];
 
-    snprintf(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkfatfixture"));
+    fix_format(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkfatfixture"));
     return text;
 }
 
@@ -46,7 +46,7 @@ static void judge(int want_rc, const char *want, const char *label)
     int rc;
     size_t n = 0;
 
-    snprintf(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("fatcheck.img"));
+    fix_format(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("fatcheck.img"));
     p = popen(cmd, "r");
     if (p == NULL) {
         printf("fatcheck_hosttest: cannot run the check\n");
@@ -60,7 +60,7 @@ static void judge(int want_rc, const char *want, const char *label)
     }
     rc = pclose(p);
     rc = rc != -1 && WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
-    snprintf(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", label, want_rc, want);
+    fix_format(cmd, sizeof(cmd), "'%s' exits %d and says '%s'", label, want_rc, want);
     check(rc == want_rc && strstr(out, want) != NULL, cmd);
     if (rc != want_rc || strstr(out, want) == NULL) {
         printf("fatcheck_hosttest: got exit %d and:\n%s", rc, out);
@@ -72,7 +72,7 @@ static void row(const char *opt, int want_rc, const char *want)
 {
     char cmd[2400];
 
-    snprintf(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("fatcheck.img"), opt);
+    fix_format(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("fatcheck.img"), opt);
     if (system(cmd) != 0) {
         check(0, "build fixture");
         return;
@@ -91,7 +91,7 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
     FILE *f;
     int ok;
 
-    snprintf(cmd, sizeof(cmd), "%s %s --cluster8", tool(), fix_path("fatcheck.img"));
+    fix_format(cmd, sizeof(cmd), "%s %s --cluster8", tool(), fix_path("fatcheck.img"));
     if (system(cmd) != 0) {
         check(0, "build long-name fixture");
         return;
@@ -136,10 +136,10 @@ int main(void)
     char cmd[2048];
     const char *cc = getenv("CC");
 
-    snprintf(cmd, sizeof(cmd),
-             "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-             "-fno-sanitize-recover=all -o %s tests/host/mkfatfixture.c",
-             cc ? cc : "cc", fix_path("mkfatfixture"));
+    fix_format(cmd, sizeof(cmd),
+               "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
+               "-fno-sanitize-recover=all -o %s tests/host/mkfatfixture.c",
+               cc ? cc : "cc", fix_path("mkfatfixture"));
     if (system(cmd) != 0) {
         printf("fatcheck_hosttest: cannot build the fixture builder\n");
         return 1;

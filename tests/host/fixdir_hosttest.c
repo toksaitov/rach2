@@ -8,10 +8,11 @@
  * since the tests put the fixture paths in their commands unquoted: a
  * semicolon, a space, a redirection, an ampersand, a wildcard, a quote or a
  * dollar sign sends the directory to /tmp, and so do a relative path and one
- * of 101 characters. A child whose exit comes without `fix_passed`, as an
- * exit on a failed check does, keeps its directory; one that said it passed
- * has it removed. This process makes no fixture directory of its own, so
- * the children's are their own.
+ * of 101 characters. A text `fix_format` cannot fit ends the process with
+ * status 1, where snprintf would cut it short. A child whose exit comes
+ * without `fix_passed`, as an exit on a failed check does, keeps its
+ * directory; one that said it passed has it removed. This process makes no
+ * fixture directory of its own, so the children's are their own.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +56,27 @@ static void plain_bases(void)
     longest[FIX_TMP_MAX] = 'a';
     longest[FIX_TMP_MAX + 1] = '\0';
     CHECK(!fix_plain(longest), "a $TMPDIR of 101 characters is not taken");
+}
+
+/** A text that fits is formatted whole; one that does not ends the child
+ * that formats it, with status 1. */
+static void format_fits(void)
+{
+    char buf[8];
+    pid_t pid;
+    int status = 0;
+
+    fix_format(buf, sizeof(buf), "%s-%d", "ab", 42);
+    CHECK(strcmp(buf, "ab-42") == 0, "a text that fits is formatted whole");
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+        fix_format(buf, sizeof(buf), "%s", "twelve bytes");
+        _exit(0);
+    }
+    CHECK(pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+              WEXITSTATUS(status) == 1,
+          "a text that does not fit ends the test with status 1");
 }
 
 /**
@@ -106,6 +128,7 @@ static int left_after(int pass, int code)
 int main(void)
 {
     plain_bases();
+    format_fits();
     CHECK(left_after(0, 1) == 1, "a test that exits failed keeps its fixture directory");
     CHECK(left_after(0, 0) == 1, "a test that exits without saying it passed keeps it");
     CHECK(left_after(1, 0) == 0, "a test that said it passed has its directory removed");
