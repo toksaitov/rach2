@@ -40,6 +40,7 @@ typedef unsigned char uint8_t;
 #define SYS_SETUID32   213
 #define SYS_OPEN       5
 #define SYS_READ       3
+#define SYS_PIPE       42
 
 #define SC_SOCKET     1
 #define SC_SENDTO     11
@@ -114,6 +115,11 @@ static int sys_close(int fd)
 static int socketcall(int call, uint32_t *args)
 {
     return syscall3(SYS_SOCKETCALL, call, (int)(size_t)args, 0);
+}
+/** pipe(2): the two ends in `fds`; 0, or the negative errno. */
+static int sys_pipe(int *fds)
+{
+    return syscall1(SYS_PIPE, (int)(size_t)fds);
 }
 static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
 {
@@ -348,6 +354,105 @@ static uint8_t frame_a[1600];
 static uint8_t frame_b[1600];
 static uint8_t icmp[1600];
 static uint8_t sa[16];
+
+/**
+ * The body of a child of `socket_pressure`: open ordinary datagram sockets,
+ * not raw ones, up to the descriptor limit, say on `ready_w` whether it held
+ * any, and hold them until the parent closes the other end of `release_r`,
+ * then let them go. Exits 0 when it held some.
+ */
+static void fill_and_hold(uint32_t *args, int ready_w, int release_r)
+{
+    int held = 0;
+    char c;
+
+    for (;;) {
+        args[0] = AF_INET;
+        args[1] = SOCK_DGRAM;
+        args[2] = 0;
+        if (socketcall(SC_SOCKET, args) < 0) {
+            break;
+        }
+        held++;
+    }
+    c = held > 0 ? 'y' : 'n';
+    syscall3(SYS_WRITE, ready_w, (int)(size_t)&c, 1);
+    sys_close(ready_w);
+    syscall3(SYS_READ, release_r, (int)(size_t)&c, 1);
+    sys_exit(held > 0 ? 0 : 4);
+}
+
+/**
+ * Sockets come from the heap, and a process is bounded by its descriptor
+ * limit, not by a pool: two children open sockets until their tables are
+ * full and hold them, and a socket for this process still opens beside them,
+ * and `fd_a`, the raw socket it already has, goes on receiving. Each child
+ * says through `ready` that its table is full and holds its sockets until
+ * this process closes `release`, so the checks run while both tables are
+ * full, however long the children take to fill them.
+ */
+static void socket_pressure(uint32_t *args, int fd_a)
+{
+    int kids[2], ready[2] = {-1, -1}, release[2] = {-1, -1};
+    int k, n, status, full = 0;
+    char c;
+
+    check(sys_pipe(ready) == 0 && sys_pipe(release) == 0,
+          "two pipes for the children that fill their tables");
+    for (k = 0; k < 2; k++) {
+        kids[k] = syscall1(SYS_FORK, 0);
+        if (kids[k] == 0) {
+            sys_close(ready[0]);
+            sys_close(release[1]);
+            fill_and_hold(args, ready[1], release[0]);
+        }
+    }
+    sys_close(ready[1]);
+    sys_close(release[0]);
+    check(kids[0] > 0 && kids[1] > 0, "two children forked to fill their tables");
+    for (k = 0; k < 2; k++) {
+        c = 0;
+        if (syscall3(SYS_READ, ready[0], (int)(size_t)&c, 1) == 1 && c == 'y') {
+            full++;
+        }
+    }
+    check_n(full == 2, "both children filled their tables before the checks", full);
+
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    n = socketcall(SC_SOCKET, args);
+    check_n(n >= 0, "a socket opens while two others hold a thousand each", n);
+    if (n >= 0) {
+        sys_close(n);
+    }
+
+    /* And the descriptor this process already had still works, which is
+       the property that matters: a machine whose tables are full must
+       not drop the session someone is already using. */
+    args[0] = GATEWAY_IP;
+    n = socketcall(SC_PING, args);
+    check_n(n >= 0, "the machine can still reach the gateway", n);
+    n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
+    check(n > 0, "and a socket opened before the tables filled still receives");
+
+    sys_close(release[1]);
+    sys_close(ready[0]);
+    for (k = 0; k < 2; k++) {
+        status = -1;
+        check(syscall3(SYS_WAITPID, kids[k], (int)(size_t)&status, 0) == kids[k] &&
+                  (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
+              "the child that held sockets held some");
+    }
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    n = socketcall(SC_SOCKET, args);
+    check_n(n >= 0, "and a socket opens after they are closed", n);
+    if (n >= 0) {
+        sys_close(n);
+    }
+}
 
 void _start(void)
 {
@@ -721,70 +826,7 @@ void _start(void)
         }
     }
 
-    /* Sockets come from the heap, and a process is bounded by its descriptor
-       limit, not by a pool: two children open sockets until their tables are
-       full and hold them, and a socket for this process still opens beside
-       them, and the socket it already has goes on receiving. */
-    {
-        int kids[2], k;
-
-        for (k = 0; k < 2; k++) {
-            kids[k] = syscall1(SYS_FORK, 0);
-            if (kids[k] == 0) {
-                int held = 0;
-
-                /* Ordinary datagram sockets, not raw ones, up to the
-                   descriptor limit. */
-                for (;;) {
-                    args[0] = AF_INET;
-                    args[1] = SOCK_DGRAM;
-                    args[2] = 0;
-                    if (socketcall(SC_SOCKET, args) < 0) {
-                        break;
-                    }
-                    held++;
-                }
-                /* Hold them while the parent looks, then let them go. */
-                nap_ms(3000);
-                sys_exit(held > 0 ? 0 : 4);
-            }
-        }
-        check(kids[0] > 0 && kids[1] > 0, "two children forked to fill their tables");
-        nap_ms(700);
-
-        args[0] = AF_INET;
-        args[1] = SOCK_DGRAM;
-        args[2] = 0;
-        n = socketcall(SC_SOCKET, args);
-        check_n(n >= 0, "a socket opens while two others hold a thousand each", n);
-        if (n >= 0) {
-            sys_close(n);
-        }
-
-        /* And the descriptor this process already had still works, which is
-           the property that matters: a machine whose tables are full must
-           not drop the session someone is already using. */
-        args[0] = GATEWAY_IP;
-        n = socketcall(SC_PING, args);
-        check_n(n >= 0, "the machine can still reach the gateway", n);
-        n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
-        check(n > 0, "and a socket opened before the tables filled still receives");
-
-        for (k = 0; k < 2; k++) {
-            status = -1;
-            check(syscall3(SYS_WAITPID, kids[k], (int)(size_t)&status, 0) == kids[k] &&
-                      (status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
-                  "the child that held sockets held some");
-        }
-        args[0] = AF_INET;
-        args[1] = SOCK_DGRAM;
-        args[2] = 0;
-        n = socketcall(SC_SOCKET, args);
-        check_n(n >= 0, "and a socket opens after they are closed", n);
-        if (n >= 0) {
-            sys_close(n);
-        }
-    }
+    socket_pressure(args, fd_a);
 
     sys_close(fd_a);
 
