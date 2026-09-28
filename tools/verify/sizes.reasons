@@ -651,7 +651,6 @@ tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order th
 
 tests/rawprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:_start lines 443 a probe, one sequence of steps in the order the log records them
-tests/rawprobe.c:_start nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/rmtest.c:_start lines 152 a probe, one sequence of steps in the order the log records them
 
