@@ -1699,12 +1699,12 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     /* The directory exists, so honour flags that contradict that. An exclusive
      * create of an existing object is -EEXIST regardless of access mode (the
      * usual O_CREAT|O_EXCL form implies write access), so that check comes
-     * first; then a directory cannot be opened for writing, nor by O_CREAT
-     * without O_DIRECTORY, which asks for a file. */
+     * first; then a directory cannot be opened for writing, nor by O_CREAT,
+     * which asks for a file. */
     if ((flags & O_CREAT) && (flags & O_EXCL)) {
         return -EEXIST;
     }
-    if ((flags & 3) != 0 || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT) {
+    if ((flags & 3) != 0 || (flags & O_CREAT)) {
         return -EISDIR;
     }
     sd = synth_dir_alloc(vp->kind, pid, vp->tid);
@@ -2114,9 +2114,9 @@ static int open_special(struct vfs_ref *ref, int fd, int flags, int32_t *result)
  * The checks on an existing node of a mounted type, from its attributes in
  * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the mount's EROFS
  * for a write-side request, then permission and loop attachment. A directory
- * is EISDIR to an open for writing, to O_TRUNC, and to O_CREAT without
- * O_DIRECTORY, which asks for a file, as on Linux. Truncation uses the open
- * handle in `open_install`. On an error the reference is released.
+ * is EISDIR to an open for writing, to O_TRUNC, and to O_CREAT, which asks
+ * for a file, as on Linux. Truncation uses the open handle in
+ * `open_install`. On an error the reference is released.
  */
 static int open_mounted_node(struct vfs_ref *ref, int flags)
 {
@@ -2139,8 +2139,7 @@ static int open_mounted_node(struct vfs_ref *ref, int flags)
         vfs_ref_release(ref);
         return -ELOOP; /* the link itself, under O_NOFOLLOW */
     }
-    if ((vst.mode & 0170000u) == 0040000u &&
-        (acc != 0 || (flags & O_TRUNC) || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT)) {
+    if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
         vfs_ref_release(ref);
         return -EISDIR;
     }
@@ -2187,9 +2186,9 @@ static int open_root_node(struct vfs_ref *ref, int flags)
         return -EEXIST;
     }
     /* A directory cannot be opened for writing, truncated, or opened by
-     * O_CREAT without O_DIRECTORY, which asks for a file (the access mode
-     * is the low two bits); O_DIRECTORY requires one. */
-    if (is_dir && (acc != 0 || (flags & O_TRUNC) || (flags & (O_CREAT | O_DIRECTORY)) == O_CREAT)) {
+     * O_CREAT, which asks for a file (the access mode is the low two
+     * bits); O_DIRECTORY requires one. */
+    if (is_dir && (acc != 0 || (flags & (O_TRUNC | O_CREAT)))) {
         vfs_ref_release(ref);
         return -EISDIR;
     }
@@ -2582,46 +2581,26 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
     return est.uid == current_proc->euid ? 0 : -EPERM;
 }
 
-int32_t sys_open(isr_params_t *params)
-{
-    const char __user *upath = (const char __user *)params->ebx;
-    int flags = (int)params->ecx;
-    uint32_t mode = params->edx; /* open(2): the O_CREAT mode is the third arg */
-    char *path;
-    int end;
-    int32_t rc;
-
-    if (!current_proc || !upath) {
-        return -EFAULT;
-    }
-    rc = path_from_user_dir(AT_FDCWD, upath, &path, &end);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = open_named(path_name(path), flags, mode, end);
-    path_buf_put(path);
-    return rc;
-}
-
-/*
- * openat (syscall 295): EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl's
- * openat() issues it; its open() and <stdio.h> use the legacy open on i386,
- * which has the number. An absolute path is taken as-is, a relative path
- * resolves against the cwd
- * (AT_FDCWD) or against the directory the dirfd refers to (see
- * copy_path_at).
+/**
+ * open(2) and openat(2) after their arguments: the path `upath`, a relative
+ * one resolved from `dirfd`, opened by `open_named` with the Linux open
+ * `flags` and the permission bits `mode` of a file O_CREAT makes.
+ *
+ * O_CREAT with O_DIRECTORY asks for a file and for a directory at once, and
+ * is -EINVAL before the path is read, as Linux answers it since 6.4; an
+ * older Linux made a regular file. O_PATH, which drops O_CREAT, takes the
+ * pair, as Linux's open and openat do.
  */
-int32_t sys_openat(isr_params_t *params)
+static int32_t open_from_user(int dirfd, const char __user *upath, int flags, uint32_t mode)
 {
-    int dirfd = (int)params->ebx;
-    const char __user *upath = (const char __user *)params->ecx;
-    int flags = (int)params->edx;
-    uint32_t mode = params->esi; /* openat(2): the O_CREAT mode is the fourth arg */
     char *path;
     int end;
     int32_t rc;
 
-    if (!current_proc || !upath) {
+    if ((flags & (O_CREAT | O_DIRECTORY | O_PATH)) == (O_CREAT | O_DIRECTORY)) {
+        return -EINVAL;
+    }
+    if (!upath) {
         return -EFAULT;
     }
     rc = path_from_user_dir(dirfd, upath, &path, &end);
@@ -2631,6 +2610,32 @@ int32_t sys_openat(isr_params_t *params)
     rc = open_named(path_name(path), flags, mode, end);
     path_buf_put(path);
     return rc;
+}
+
+/* open(2): EBX = path, ECX = flags, EDX = the O_CREAT mode. */
+int32_t sys_open(isr_params_t *params)
+{
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    return open_from_user(AT_FDCWD, (const char __user *)params->ebx, (int)params->ecx,
+                          params->edx);
+}
+
+/*
+ * openat (syscall 295): EBX = dirfd, ECX = path, EDX = flags, ESI = the
+ * O_CREAT mode. musl's openat() issues it; its open() and <stdio.h> use the
+ * legacy open on i386, which has the number. An absolute path is taken
+ * as-is, a relative path resolves against the cwd (AT_FDCWD) or against the
+ * directory the dirfd refers to (see copy_path_at).
+ */
+int32_t sys_openat(isr_params_t *params)
+{
+    if (!current_proc) {
+        return -EFAULT;
+    }
+    return open_from_user((int)params->ebx, (const char __user *)params->ecx, (int)params->edx,
+                          params->esi);
 }
 
 /** Whether a call of a thread other than the caller that shares `table`

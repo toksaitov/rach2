@@ -31,10 +31,11 @@
  * name so named makes nothing, connect to a socket so named is ENOTDIR, and
  * so is umount2 of a file so named. rmdir and rename of the root are EBUSY,
  * link, symlink and mknod with the root as the new name EEXIST and bind to
- * it EADDRINUSE, and open with O_CREAT and without O_DIRECTORY is EISDIR
- * for an existing directory, one of the probe's, one of /dev/shm and /proc,
- * even to read. A symbolic link to a directory named with a trailing slash
- * is followed by the calls that look it up, O_NOFOLLOW and
+ * it EADDRINUSE. open with O_CREAT is EISDIR for an existing directory, one
+ * of the probe's, one of /dev/shm and /proc, even to read, and with
+ * O_DIRECTORY EINVAL before the path is read, unless O_PATH is given too,
+ * which drops O_CREAT. A symbolic link to a directory named with a trailing
+ * slash is followed by the calls that look it up, O_NOFOLLOW and
  * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename,
  * in /dev/shm and on an ext2 root.
  *
@@ -316,6 +317,32 @@ static int lookup_ends(const struct ends *p)
 }
 
 /**
+ * open with O_CREAT and O_DIRECTORY, which ask for a file and for a
+ * directory at once: EINVAL before the path is read, for the directory s,
+ * for the name n, which it does not make, and for the empty path, by open
+ * and by openat; with O_PATH, which drops O_CREAT, a descriptor on s. 0, or
+ * 1 once the failure is reported.
+ */
+static int create_dir_pair(const struct ends *p)
+{
+    struct stat st;
+    int fd;
+
+    if (!refused(open(p->s, O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
+        !refused(open(p->n, O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
+        !refused(openat(AT_FDCWD, "", O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
+        lstat(p->n, &st) == 0) {
+        return fail("an open with O_CREAT and O_DIRECTORY was not EINVAL");
+    }
+    fd = open(p->s, O_PATH | O_CREAT | O_DIRECTORY, 0644);
+    if (fd < 0) {
+        return fail("an open with O_PATH, O_CREAT and O_DIRECTORY did not name the directory");
+    }
+    close(fd);
+    return 0;
+}
+
+/**
  * The calls that make a node, given a new name as a directory by its end:
  * open with O_CREAT is EISDIR, and with O_EXCL too EEXIST for a last "." or
  * "..", which names a directory that exists; link, symlink and mknod are
@@ -324,8 +351,8 @@ static int lookup_ends(const struct ends *p)
  * mkdir is EEXIST for a last "." after a directory, in /proc too, where
  * nothing is made, and ENOENT for one after a name nothing has; and none of
  * them makes n. open with O_CREAT, which asks for a file, is EISDIR for the
- * directory s and for /proc too, even to read. 0, or 1 once the failure is
- * reported.
+ * directory s and for /proc too, even to read, and with O_DIRECTORY EINVAL
+ * (`create_dir_pair`). 0, or 1 once the failure is reported.
  */
 static int make_ends(const struct ends *p)
 {
@@ -357,7 +384,7 @@ static int make_ends(const struct ends *p)
         !refused(mkdir(p->ndot, 0755), ENOENT) || lstat(p->n, &st) == 0) {
         return fail("mkdir of a path whose last name is .");
     }
-    return 0;
+    return create_dir_pair(p);
 }
 
 /**
