@@ -384,7 +384,8 @@ static int byte_free_at(const char *path, off_t at)
 
         _exit(fd >= 0 && lk(fd, F_SETLK, F_WRLCK, at, 1) == 0 ? 0 : 1);
     }
-    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
 }
 
 /** Whether a child can take a write lock of byte 50. */
@@ -411,7 +412,8 @@ static int byte_held_at(const char *path, off_t at)
 
         _exit(refused ? 0 : 1);
     }
-    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
 }
 
 /**

@@ -65,6 +65,7 @@ typedef unsigned char uint8_t;
 
 #define EPERM           1
 #define EAGAIN          11
+#define EMFILE          24
 #define EMSGSIZE        90
 #define ENOBUFS         105
 #define ENETUNREACH     101
@@ -357,25 +358,28 @@ static uint8_t sa[16];
 
 /**
  * The body of a child of `socket_pressure`: open ordinary datagram sockets,
- * not raw ones, up to the descriptor limit, say on `ready_w` whether it held
- * any, and hold them until the parent closes the other end of `release_r`,
- * then let them go. Exits 0 when it held some.
+ * not raw ones, up to the descriptor limit, say on `ready_w` whether its
+ * table filled, some held and the last open refused with EMFILE and not for
+ * want of memory, and hold them until the parent closes the other end of
+ * `release_r`, then let them go. Exits 0 when it held some.
  */
 static void fill_and_hold(uint32_t *args, int ready_w, int release_r)
 {
     int held = 0;
+    int rc;
     char c;
 
     for (;;) {
         args[0] = AF_INET;
         args[1] = SOCK_DGRAM;
         args[2] = 0;
-        if (socketcall(SC_SOCKET, args) < 0) {
+        rc = socketcall(SC_SOCKET, args);
+        if (rc < 0) {
             break;
         }
         held++;
     }
-    c = held > 0 ? 'y' : 'n';
+    c = held > 0 && rc == -EMFILE ? 'y' : 'n';
     syscall3(SYS_WRITE, ready_w, (int)(size_t)&c, 1);
     sys_close(ready_w);
     syscall3(SYS_READ, release_r, (int)(size_t)&c, 1);
