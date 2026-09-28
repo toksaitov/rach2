@@ -218,7 +218,6 @@ rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys_getdents64 lines 134 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:sys_lseek lines 125 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:write_fd complexity 41 one system call's contract, its checks in the order the manual page lists the errors
@@ -530,6 +529,7 @@ tests/mountprobe.c:rows_flags lines 105 a probe, one sequence of steps in the or
 tests/mountprobe.c:rows_lifetime complexity 30 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_lifetime lines 138 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_placing complexity 26 a probe, one sequence of steps in the order the log records them
+tests/mountprobe.c:rows_reading complexity 26 a probe, one sequence of steps in the order the log records them
 
 tests/musl/addusermusl.c:check_concurrent complexity 53 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_concurrent lines 177 a test's rows, each a case, read as one table
@@ -554,6 +554,7 @@ tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one tabl
 
 tests/musl/direntmusl.c:main complexity 29 a test's rows, each a case, read as one table
 
+tests/musl/epollmusl.c:nested_forked complexity 29 a probe, one sequence of steps in the order the log records them
 tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
 
 tests/musl/execargmusl.c:child complexity 26 a test's rows, each a case, read as one table
@@ -673,7 +674,7 @@ tests/system/checkers/wavcheck.c:main lines 147 an inspector's check, one walk o
 
 tests/system/fixtures/runutil_owned.c:main complexity 35 a fixture builder, the volume written in on-disk order
 
-tests/system/fixtures/vfs_unmount.c:main complexity 30 a fixture builder, the volume written in on-disk order
+tests/system/fixtures/vfs_unmount.c:main complexity 39 a fixture builder, the volume written in on-disk order
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order
 
 tests/system/runner/harness.c:main complexity 168 a parser over an external format, one check per field in the format's order
