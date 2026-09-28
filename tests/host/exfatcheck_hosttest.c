@@ -1,13 +1,14 @@
 /*
  * exfatcheck_hosttest.c: `mkexfatfixture --check` against every fixture.
  *
- * host-deps:
+ * host-deps: tests/host/compat/fixdir_host.c
  *
  * The check is the reader every exFAT write test relies on, and the pair of
  * the kernel's own check, so it is proved before the reader in the kernel
  * exists: every well-formed fixture is accepted, and every malformed one
  * refused with the finding named for its fault. The builder is compiled
- * here on every run.
+ * here on every run, into the test's own fixture directory
+ * (compat/fixdir_host.c).
  */
 
 #include <stdint.h>
@@ -16,12 +17,18 @@
 #include <string.h>
 #include <sys/wait.h>
 
-#ifndef FIXDIR
-#define FIXDIR "/tmp/rach2_verify"
-#endif
-#define TOOL "ASAN_OPTIONS=detect_leaks=0 " FIXDIR "/mkexfatfixture"
+#include "fixdir_host.h"
 
 static int fails;
+
+/** The builder's command, run with leak detection off. */
+static const char *tool(void)
+{
+    static char text[1200];
+
+    snprintf(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkexfatfixture"));
+    return text;
+}
 
 /** Record an assertion failure. */
 static void check(int ok, const char *what)
@@ -35,18 +42,18 @@ static void check(int ok, const char *what)
 /** Build a fixture and require the checker to return its named finding. */
 static void row(const char *opt, int want_rc, const char *want)
 {
-    char cmd[512], line[512], out[8192];
+    char cmd[4096], line[512], out[8192];
     FILE *p;
     int rc;
     size_t n = 0;
 
-    snprintf(cmd, sizeof(cmd), TOOL " " FIXDIR "/exfatcheck.img %s", opt);
+    snprintf(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("exfatcheck.img"), opt);
     if (system(cmd) != 0) {
         printf("exfatcheck_hosttest: the builder failed for '%s'\n", opt);
         fails++;
         return;
     }
-    snprintf(cmd, sizeof(cmd), TOOL " --check " FIXDIR "/exfatcheck.img");
+    snprintf(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("exfatcheck.img"));
     p = popen(cmd, "r");
     if (p == NULL) {
         printf("exfatcheck_hosttest: cannot run the check\n");
@@ -109,7 +116,7 @@ static unsigned char *file_set(unsigned char *img, const char *name)
 /** Write a complete image before starting the reader. */
 static int write_image(const unsigned char *img, size_t bytes)
 {
-    FILE *f = fopen(FIXDIR "/exfatread.img", "wb");
+    FILE *f = fopen(fix_path("exfatread.img"), "wb");
     int ok;
 
     if (!f)
@@ -127,13 +134,11 @@ static void read_row(const char *path, const unsigned char *want, size_t size,
     int status, ok, byte;
     size_t i, n;
 
-    snprintf(cmd, sizeof(cmd),
-             TOOL " --check " FIXDIR "/exfatread.img --read '%s' > " FIXDIR
-                  "/exfatread.out 2> " FIXDIR "/exfatread.err",
-             path);
+    snprintf(cmd, sizeof(cmd), "%s --check %s --read '%s' > %s 2> %s", tool(),
+             fix_path("exfatread.img"), path, fix_path("exfatread.out"), fix_path("exfatread.err"));
     status = system(cmd);
     ok = status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == (diagnostic ? 1 : 0);
-    f = fopen(FIXDIR "/exfatread.err", "rb");
+    f = fopen(fix_path("exfatread.err"), "rb");
     if (!f) {
         check(0, "open reader diagnostics");
         return;
@@ -143,7 +148,7 @@ static void read_row(const char *path, const unsigned char *want, size_t size,
     fclose(f);
     ok = ok && (diagnostic ? strstr(errors, diagnostic) != NULL : n == 0);
     ok = ok && strstr(errors, "Sanitizer") == NULL && strstr(errors, "runtime error:") == NULL;
-    f = fopen(FIXDIR "/exfatread.out", "rb");
+    f = fopen(fix_path("exfatread.out"), "rb");
     if (!f) {
         check(0, "open reader output");
         return;
@@ -220,16 +225,17 @@ static void read_rows(void)
 {
     FILE *f;
     unsigned char *img, expected[12288], *set;
-    char path[2049];
+    char path[2049], cmd[2400];
     size_t bytes, i;
     uint32_t first;
     static const size_t path_lengths[] = {599, 600, 601, 2048};
 
-    if (system(TOOL " " FIXDIR "/exfatread.img") != 0) {
+    snprintf(cmd, sizeof(cmd), "%s %s", tool(), fix_path("exfatread.img"));
+    if (system(cmd) != 0) {
         check(0, "build read fixture");
         return;
     }
-    f = fopen(FIXDIR "/exfatread.img", "rb");
+    f = fopen(fix_path("exfatread.img"), "rb");
     if (!f) {
         check(0, "open read fixture");
         return;
@@ -287,13 +293,13 @@ static void read_rows(void)
 /** Run the checker and export rows against freshly compiled code. */
 int main(void)
 {
-    char cmd[1024];
+    char cmd[2048];
     const char *cc = getenv("CC");
 
     snprintf(cmd, sizeof(cmd),
              "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-             "-fno-sanitize-recover=all -o " FIXDIR "/mkexfatfixture tests/host/mkexfatfixture.c",
-             cc ? cc : "cc");
+             "-fno-sanitize-recover=all -o %s tests/host/mkexfatfixture.c",
+             cc ? cc : "cc", fix_path("mkexfatfixture"));
     if (system(cmd) != 0) {
         printf("exfatcheck_hosttest: cannot build the fixture builder\n");
         return 1;
@@ -364,5 +370,6 @@ int main(void)
         return 0;
     }
     printf("exfatcheck_hosttest: %d failure(s)\n", fails);
+    fix_keep();
     return 1;
 }

@@ -35,8 +35,9 @@ cd "$repo"
 }
 mkdir -p build/tests
 work=$(mktemp -d "$repo/build/tests/exfat-scan-proof.XXXXXX")
-# The test's fixtures, private to this run: the host suite's directory is
-# shared, and another proof may be running the same test.
+# The test's fixtures, in a directory of this run's that the trap removes: a
+# test given none makes its own and keeps it when it fails, as each fault
+# makes it do.
 fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
 mkdir -p "$work/rach2" "$work/tests/host"
 cp -R rach2/sys "$work/rach2/sys"

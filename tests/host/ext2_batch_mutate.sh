@@ -19,6 +19,10 @@ cp tests/host/ext2_hosttest.c tests/host/ext2_batch_cases.h \
 source="$work/rach2/sys/fs/ext2.c"
 cp "$source" "$work/source.saved"
 child=
+# Each phase's fixtures, in a directory of the phase's own that cleanup
+# removes: a test given none makes its own and keeps it when it fails, as
+# each fault makes it do.
+fixtures=
 
 cleanup()
 {
@@ -29,6 +33,10 @@ cleanup()
             sleep 1
         done
         child=
+    fi
+    if [ -n "$fixtures" ]; then
+        rm -rf "$fixtures"
+        fixtures=
     fi
     cp "$work/source.saved" "$source"
     touch "$source"
@@ -45,7 +53,9 @@ run_phase()
     message=${3:-}
     want_status=${4:-1}
     binary="$work/$phase"
+    fixtures=$(mktemp -d /tmp/rach2-fix.XXXXXX)
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
+        -DFIXDIR="\"$fixtures\"" \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
         -g -O1 -Wno-empty-body -ffreestanding \
         -I "$work/rach2/sys" -I "$work/rach2/sys/lib" -I "$work/rach2/sys/proc" \
@@ -55,7 +65,7 @@ run_phase()
         "$work/rach2/sys/fs/fd.c" "$work/rach2/sys/fs/lock.c" "$work/rach2/sys/block/chain.c" \
         "$work/rach2/sys/lib/kstring.c" \
         "$work/rach2/sys/lib/kctypes.c" "$work/tests/host/compat/kheap_host.c" \
-        "$work/tests/host/compat/pressure_host.c" \
+        "$work/tests/host/compat/pressure_host.c" "$work/tests/host/compat/fixdir_host.c" \
         >"$binary.compile.log" 2>&1; then
         cat "$binary.compile.log" >&2
         exit 1

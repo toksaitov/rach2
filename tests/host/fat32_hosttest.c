@@ -5,18 +5,19 @@
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
- * host-deps: tests/host/compat/pressure_host.c
+ * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-seconds: 150
  *
- * The volumes are mkfatfixture's, built here on first use the way the
- * bootctl test builds them. The well-formed volume (`--vfs`) must read back
- * exactly what the builder wrote: the long names, the one across a 4 KiB
- * boundary, the surrogate pair, the bad checksum falling back to a
- * lower-cased short name, the 0x05 short name reachable by its long name,
- * the fragmented file, the empty file, `..` back to the root, and the
- * bytes of every file. The malformed volumes are refused at mount or fail
- * at the file they damage, under AddressSanitizer. No hosted headers: the
- * kernel headers define the fixed-width types.
+ * The volumes are mkfatfixture's, built here on first use the way the bootctl
+ * test builds them, in the test's own fixture directory (compat/fixdir_host.c),
+ * or in the one a mutation proof names with FIXDIR, so that runs at once do not
+ * share one. The well-formed volume (`--vfs`) must read back exactly what the
+ * builder wrote: the long names, the one across a 4 KiB boundary, the surrogate
+ * pair, the bad checksum falling back to a lower-cased short name, the 0x05
+ * short name reachable by its long name, the fragmented file, the empty file,
+ * `..` back to the root, and the bytes of every file. The malformed volumes are
+ * refused at mount or fail at the file they damage, under AddressSanitizer. No
+ * hosted headers: the kernel headers define the fixed-width types.
  *
  * With `--barriers` the program runs only the interruption matrix and the
  * durability rows, the rows that judge the driver's barriers, and ends at
@@ -28,6 +29,7 @@
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
 #include "devmodel.h"
+#include "fixdir_host.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
@@ -39,11 +41,6 @@ extern unsigned long fread(void *buf, unsigned long size, unsigned long n, void 
 extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
 extern int fclose(void *f);
 
-/* The fixtures' directory: the host suite's, unless a mutation proof names
- * its own, so that two proofs can run this test at once. */
-#ifndef FIXDIR
-#define FIXDIR "/tmp/rach2_verify"
-#endif
 #define IMG_BYTES (8192u * 512u)
 
 /* ---- stubs for what the driver and the cache reach outside themselves ---- */
@@ -181,19 +178,20 @@ static int builder_built;
 /** Build the named fixture and load it into the image. */
 static void load(const char *opt)
 {
-    char cmd[256];
+    char cmd[2048];
     void *f;
 
     /* Built once per run, so an edited builder is the one that runs. */
     if (!builder_built) {
-        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
+        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c",
+                 fix_dir());
         if (system(cmd) != 0) {
             printf("fat32_hosttest: cannot build the fixture builder\n");
             exit(1);
         }
         builder_built = 1;
     }
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", FIXDIR, FIXDIR, opt);
+    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", fix_dir(), fix_dir(), opt);
     if (system(cmd) != 0) {
         printf("fat32_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
@@ -203,7 +201,7 @@ static void load(const char *opt)
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
-    f = fopen(FIXDIR "/fat32_case.img", "rb");
+    f = fopen(fix_path("fat32_case.img"), "rb");
     if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
         printf("fat32_hosttest: fixture did not load\n");
         exit(1);
@@ -778,18 +776,18 @@ static int mount_rw(const char *options)
 /* The image to a file and the check over it; its output in `out`. */
 static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
-    char cmd[300], line[300];
+    char cmd[2048], line[300];
     void *f;
     unsigned long n = 0;
     int rc;
 
-    f = fopen(FIXDIR "/fat32_write.img", "wb");
+    f = fopen(fix_path("fat32_write.img"), "wb");
     if (!f || fwrite(what, 1, IMG_BYTES, f) != IMG_BYTES) {
         printf("fat32_hosttest: cannot dump the image\n");
         exit(1);
     }
     fclose(f);
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img", FIXDIR, FIXDIR);
+    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img", fix_dir(), fix_dir());
     f = popen(cmd, "r");
     if (!f) {
         printf("fat32_hosttest: cannot run the check\n");
@@ -1241,7 +1239,7 @@ static void load_dump(void)
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
-    f = fopen(FIXDIR "/fat32_write.img", "rb");
+    f = fopen(fix_path("fat32_write.img"), "rb");
     if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
         printf("fat32_hosttest: cannot read the dump back\n");
         exit(1);
@@ -1325,17 +1323,18 @@ static int oracle_ok(void)
 /* The check's listing of the dumped image, for the long names it shows. */
 static int run_check_list(char *out, unsigned long cap)
 {
-    char cmd[300], line[600];
+    char cmd[2048], line[600];
     void *f;
     unsigned long n = 0;
     int rc;
 
-    f = fopen(FIXDIR "/fat32_write.img", "wb");
+    f = fopen(fix_path("fat32_write.img"), "wb");
     if (!f || fwrite(image, 1, IMG_BYTES, f) != IMG_BYTES) {
         exit(1);
     }
     fclose(f);
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img --list", FIXDIR, FIXDIR);
+    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img --list", fix_dir(),
+             fix_dir());
     f = popen(cmd, "r");
     if (!f) {
         exit(1);
@@ -1512,16 +1511,16 @@ static void long_rows(void)
     unmount_image();
     check_consistent("the volume is consistent and clean after the long-name rows", 0);
     if (system("which mdir >/dev/null 2>&1") == 0) {
-        char cmd[300];
+        char cmd[2048];
 
         snprintf(cmd, sizeof(cmd),
                  "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q 'moved name.txt'",
-                 FIXDIR);
+                 fix_dir());
         check(system(cmd) == 0, "mtools lists the long name this driver wrote");
         snprintf(
             cmd, sizeof(cmd),
             "mdir -i %s/fat32_write.img ::/ 2>/dev/null | grep -q 'LONGNA~2 TXT.*longname1.txt'",
-            FIXDIR);
+            fix_dir());
         check(system(cmd) == 0, "and the alias this driver gave beside it");
     }
 }
@@ -1880,16 +1879,16 @@ static void write_rows(void)
     unmount_image();
     check_consistent("the volume is consistent and clean after the unmount", 0);
     if (system("which mcopy >/dev/null 2>&1") == 0) {
-        char cmd[300];
+        char cmd[2048];
         void *f;
         unsigned long got;
 
         snprintf(
             cmd, sizeof(cmd),
             "mcopy -n -i %s/fat32_write.img ::/BOOT/R3.TXT %s/fat32_mtools.out >/dev/null 2>&1",
-            FIXDIR, FIXDIR);
+            fix_dir(), fix_dir());
         check(system(cmd) == 0, "mtools copies a file this driver wrote");
-        f = fopen(FIXDIR "/fat32_mtools.out", "rb");
+        f = fopen(fix_path("fat32_mtools.out"), "rb");
         got = f ? fread(back, 1, sizeof(back), f) : 0;
         if (f) {
             fclose(f);
@@ -1897,7 +1896,7 @@ static void write_rows(void)
         check(got == 700 && __builtin_memcmp(back, pattern, 700) == 0,
               "with the bytes this driver wrote");
         snprintf(cmd, sizeof(cmd), "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q RD2",
-                 FIXDIR);
+                 fix_dir());
         check(system(cmd) == 0, "and lists the directory this driver moved");
     } else {
         printf("fat32_hosttest: mtools absent, its comparison skipped\n");
@@ -2265,5 +2264,6 @@ int main(int argc, char **argv)
     /* Not the count: an exit status keeps its low eight bits, and 256
        failures would read as a pass. */
     printf("fat32_hosttest: %d failure(s)\n", fails);
+    fix_keep();
     return 1;
 }

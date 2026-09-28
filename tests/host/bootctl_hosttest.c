@@ -1,7 +1,7 @@
 /**
  * Host test for the boot-slot library bootctl drives (utils/bootslot.c).
  *
- * host-deps: utils/bootslot.c
+ * host-deps: utils/bootslot.c tests/host/compat/fixdir_host.c
  *
  * The fixtures come from tests/host/mkfatfixture.c, an independent FAT32
  * writer, so two implementations of the format meet over every image. The
@@ -19,13 +19,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "bootslot.h"
+#include "fixdir_host.h"
 
 #define IMG_BYTES (8192 * 512)
-#define FIXDIR    "/tmp/rach2_verify"
 
 static int fails;
 
@@ -33,6 +31,7 @@ static int fails;
     do {                                           \
         if (!(cond)) {                             \
             fails++;                               \
+            fix_keep();                            \
             fprintf(stderr, "  FAIL: %s\n", what); \
         }                                          \
     } while (0)
@@ -80,42 +79,32 @@ static int io_write(void *ctx, uint32_t lba, const void *buf)
 
 static const struct bootslot_io IO = {io_read, io_write, NULL};
 
-/** Whether the fixture builder's source is newer than the binary at `path`. */
-static int source_newer_than(const char *path)
-{
-    struct stat src, bin;
-
-    if (stat("tests/host/mkfatfixture.c", &src) != 0 || stat(path, &bin) != 0) {
-        return 1;
-    }
-    return src.st_mtime > bin.st_mtime;
-}
-
 /** Build the named fixture and load it; aborts the test run on builder
  *  failure, which would make every case meaningless. The builder is
- *  compiled here on first use, since this test is compiled and run
- *  directly and has no build system to ask. */
+ *  compiled at the first load, into the test's own fixture directory
+ *  (compat/fixdir_host.c), since this test is compiled and run directly and
+ *  has no build system to ask. */
 static void load(const char *opt)
 {
-    char cmd[256];
+    static int built;
+    char cmd[2048];
     FILE *f;
 
-    /* The builder is rebuilt when its source is newer: the directory
-       outlives a run, and a builder from before an option was added would
-       build the fixture without it. */
-    if (access(FIXDIR "/mkfatfixture", X_OK) != 0 || source_newer_than(FIXDIR "/mkfatfixture")) {
-        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
+    if (!built) {
+        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkfatfixture.c",
+                 fix_path("mkfatfixture"));
         if (system(cmd) != 0) {
             fprintf(stderr, "bootctl_hosttest: cannot build the fixture builder\n");
             exit(1);
         }
+        built = 1;
     }
-    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat_case.img %s", FIXDIR, FIXDIR, opt);
+    snprintf(cmd, sizeof(cmd), "%s %s %s", fix_path("mkfatfixture"), fix_path("fat_case.img"), opt);
     if (system(cmd) != 0) {
         fprintf(stderr, "bootctl_hosttest: fixture builder failed\n");
         exit(1);
     }
-    f = fopen(FIXDIR "/fat_case.img", "rb");
+    f = fopen(fix_path("fat_case.img"), "rb");
     if (!f || fread(img.data, 1, IMG_BYTES, f) != IMG_BYTES) {
         fprintf(stderr, "bootctl_hosttest: fixture did not load\n");
         exit(1);

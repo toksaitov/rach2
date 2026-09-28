@@ -1,7 +1,7 @@
 /**
  * Host test for netup's configuration reader (utils/netcfg.c).
  *
- * host-deps: utils/netcfg.c utils/ipcheck.c
+ * host-deps: utils/netcfg.c utils/ipcheck.c tests/host/compat/fixdir_host.c
  *
  * A machine brings itself up from this file, so a file read wrongly is a
  * machine that comes up wrong or does not come up at all, and the interesting
@@ -10,7 +10,8 @@
  * than there is room for. Each is written here and read back through the
  * library. The judgement of a static stanza is checked the same way, because
  * applying half of one leaves a machine with neither the address it had nor
- * the one it was given.
+ * the one it was given. The file is written in a directory of the test's own
+ * (compat/fixdir_host.c).
  *
  * Returns the failed-check count (0 == pass).
  */
@@ -19,9 +20,9 @@
 #include <string.h>
 
 #include "netcfg.h"
+#include "fixdir_host.h"
 
-#define FIXDIR "/tmp/rach2_verify"
-#define PATH   FIXDIR "/interfaces"
+#define PATH fix_path("interfaces")
 
 static int fails;
 
@@ -29,6 +30,7 @@ static int fails;
     do {                                           \
         if (!(cond)) {                             \
             fails++;                               \
+            fix_keep();                            \
             fprintf(stderr, "  FAIL: %s\n", what); \
         }                                          \
     } while (0)
@@ -205,7 +207,7 @@ static void check_refusals(void)
     n = read_auto(want, 2);
     CHECK(n == -1, "more interfaces than there is room for is refused");
 
-    n = netcfg_read(FIXDIR "/no-such-file", want, 0, 2, 1);
+    n = netcfg_read(fix_path("no-such-file"), want, 0, 2, 1);
     CHECK(n == -1, "a file that is not there is refused");
 
     if (put("# nothing but a comment\n") != 0) {
