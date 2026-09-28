@@ -233,8 +233,9 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
  * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full, or
  * -EINTR if a signal cut a wait short; either returns the count already
  * written instead when there is one. A user-copy fault returns -EFAULT or the
- * count already written. Readers are woken whenever a transfer changes an
- * empty ring to a nonempty one.
+ * count already written. Readers are woken for data at every transfer, the
+ * ring empty before it or not, so an edge-triggered epoll registration of the
+ * read end is told of each write, as Linux tells one of a pipe it polls.
  *
  * Resolve each user page before selecting a ring span. Recheck the ring
  * after any operation that can sleep; copying a span and advancing its
@@ -298,7 +299,6 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         }
         {
             uint8_t *at;
-            int was_empty = pipe_available(p) == 0;
 
             chunk = pipe_ring_write_span(p, &at);
             if (chunk == 0) {
@@ -313,9 +313,7 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             }
             pipe_ring_produce(p, chunk);
             done += chunk;
-            if (was_empty) {
-                pipe_wake(p, &p->read_wq, WQ_DATA);
-            }
+            pipe_wake(p, &p->read_wq, WQ_DATA);
         }
     }
 

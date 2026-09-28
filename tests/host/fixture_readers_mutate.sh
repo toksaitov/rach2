@@ -43,8 +43,9 @@ run_phase()
     binary="$work/${kind}check_hosttest"
     log="$work/$phase-$kind.log"
     if ! "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -g -O1 -Wall -Wextra -Werror \
-        -fsanitize=address,undefined -fno-sanitize-recover=all \
-        "-DFIXDIR=\"$work\"" "tests/host/${kind}check_hosttest.c" -o "$binary" \
+        -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host/compat \
+        "-DFIXDIR=\"$work\"" "tests/host/${kind}check_hosttest.c" \
+        tests/host/compat/fixdir_host.c -o "$binary" \
         > "$log.compile" 2>&1; then
         cat "$log.compile" >&2
         exit 1

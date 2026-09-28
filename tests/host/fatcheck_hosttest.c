@@ -1,12 +1,13 @@
 /*
  * fatcheck_hosttest.c: `mkfatfixture --check` against every fixture.
  *
- * host-deps:
+ * host-deps: tests/host/compat/fixdir_host.c
  *
  * The check is the reader every write test relies on, so it is proved
  * before the writer exists: every malformed fixture must be refused with
  * the finding named for its fault, and every well-formed one accepted.
- * The builder is compiled here on every run.
+ * The builder is compiled here on every run, into the test's own fixture
+ * directory (compat/fixdir_host.c).
  */
 
 #include <stdint.h>
@@ -15,12 +16,18 @@
 #include <string.h>
 #include <sys/wait.h>
 
-#ifndef FIXDIR
-#define FIXDIR "/tmp/rach2_verify"
-#endif
-#define TOOL "ASAN_OPTIONS=detect_leaks=0 " FIXDIR "/mkfatfixture"
+#include "fixdir_host.h"
 
 static int fails;
+
+/** The builder's command, run with leak detection off. */
+static const char *tool(void)
+{
+    static char text[1200];
+
+    snprintf(text, sizeof(text), "ASAN_OPTIONS=detect_leaks=0 %s", fix_path("mkfatfixture"));
+    return text;
+}
 
 /** Record an assertion failure. */
 static void check(int ok, const char *what)
@@ -34,12 +41,12 @@ static void check(int ok, const char *what)
 /** Require the checker to exit normally with the expected finding. */
 static void judge(int want_rc, const char *want, const char *label)
 {
-    char cmd[512], line[512], out[8192];
+    char cmd[2400], line[512], out[8192];
     FILE *p;
     int rc;
     size_t n = 0;
 
-    snprintf(cmd, sizeof(cmd), TOOL " --check " FIXDIR "/fatcheck.img");
+    snprintf(cmd, sizeof(cmd), "%s --check %s", tool(), fix_path("fatcheck.img"));
     p = popen(cmd, "r");
     if (p == NULL) {
         printf("fatcheck_hosttest: cannot run the check\n");
@@ -63,9 +70,9 @@ static void judge(int want_rc, const char *want, const char *label)
 /** Build one standard fixture and check its verdict. */
 static void row(const char *opt, int want_rc, const char *want)
 {
-    char cmd[512];
+    char cmd[2400];
 
-    snprintf(cmd, sizeof(cmd), TOOL " " FIXDIR "/fatcheck.img %s", opt);
+    snprintf(cmd, sizeof(cmd), "%s %s %s", tool(), fix_path("fatcheck.img"), opt);
     if (system(cmd) != 0) {
         check(0, "build fixture");
         return;
@@ -79,11 +86,13 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
     static const unsigned at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
     static const unsigned char alias[] = "BOUND   TXT";
     unsigned char entries[23 * 32], sum = 0;
+    char cmd[2400];
     unsigned i, k;
     FILE *f;
     int ok;
 
-    if (system(TOOL " " FIXDIR "/fatcheck.img --cluster8") != 0) {
+    snprintf(cmd, sizeof(cmd), "%s %s --cluster8", tool(), fix_path("fatcheck.img"));
+    if (system(cmd) != 0) {
         check(0, "build long-name fixture");
         return;
     }
@@ -107,7 +116,7 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
     }
     memcpy(entries + count * 32, alias, sizeof(alias) - 1);
     entries[count * 32 + 11] = 0x20;
-    f = fopen(FIXDIR "/fatcheck.img", "r+b");
+    f = fopen(fix_path("fatcheck.img"), "r+b");
     if (!f) {
         check(0, "open long-name fixture");
         return;
@@ -124,13 +133,13 @@ static void long_name_row(unsigned count, int restart, int want_rc, const char *
 /** Run the standard fixtures and the long-name bounds. */
 int main(void)
 {
-    char cmd[1024];
+    char cmd[2048];
     const char *cc = getenv("CC");
 
     snprintf(cmd, sizeof(cmd),
              "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-             "-fno-sanitize-recover=all -o " FIXDIR "/mkfatfixture tests/host/mkfatfixture.c",
-             cc ? cc : "cc");
+             "-fno-sanitize-recover=all -o %s tests/host/mkfatfixture.c",
+             cc ? cc : "cc", fix_path("mkfatfixture"));
     if (system(cmd) != 0) {
         printf("fatcheck_hosttest: cannot build the fixture builder\n");
         return 1;
@@ -181,6 +190,8 @@ int main(void)
 
     if (fails == 0) {
         printf("fatcheck_hosttest: OK\n");
+    } else {
+        fix_keep();
     }
     return fails > 255 ? 255 : fails;
 }

@@ -5,10 +5,12 @@
  * host-deps: rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
- * host-deps: tests/host/compat/pressure_host.c
+ * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
  * host-seconds: 450
  *
- * The volumes are mkexfatfixture's, built here on every run. The
+ * The volumes are mkexfatfixture's, built here on every run, in the test's
+ * own fixture directory (compat/fixdir_host.c), or in the one a mutation
+ * proof names with FIXDIR, so that runs at once do not share one. The
  * well-formed volume must read back what the builder wrote, through every
  * shape: the contiguous file, the file chained over clusters that are not
  * adjacent, the file whose tail past ValidDataLength reads as zeros, the
@@ -34,6 +36,7 @@
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
 #include "devmodel.h"
+#include "fixdir_host.h"
 
 /* No hosted headers: the kernel headers define the fixed-width types. */
 extern int printf(const char *fmt, ...);
@@ -57,11 +60,6 @@ extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n
 extern void *popen(const char *cmd, const char *mode);
 extern int pclose(void *f);
 
-/* The fixtures' directory: the host suite's, unless a mutation proof names
- * its own, so that two proofs can run this test at once. */
-#ifndef FIXDIR
-#define FIXDIR "/tmp/rach2_verify"
-#endif
 #define IMG_BYTES (65536u * 512u) /* 32 MiB: the fixture is 16, the external volume 16 */
 
 /* ---- what the driver needs of the kernel ---- */
@@ -252,23 +250,24 @@ static int load_file(const char *path)
 /** Build the named fixture and load it into the image. */
 static void load(const char *opt)
 {
-    char cmd[256];
+    char cmd[2048];
 
     if (!builder_built) {
-        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkexfatfixture tests/host/mkexfatfixture.c",
-                 FIXDIR);
+        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s tests/host/mkexfatfixture.c",
+                 fix_path("mkexfatfixture"));
         if (system(cmd) != 0) {
             printf("exfat_hosttest: cannot build the fixture builder\n");
             exit(1);
         }
         builder_built = 1;
     }
-    snprintf(cmd, sizeof(cmd), "%s/mkexfatfixture %s/exfat_case.img %s", FIXDIR, FIXDIR, opt);
+    snprintf(cmd, sizeof(cmd), "%s %s %s", fix_path("mkexfatfixture"), fix_path("exfat_case.img"),
+             opt);
     if (system(cmd) != 0) {
         printf("exfat_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
     }
-    if (load_file(FIXDIR "/exfat_case.img") != 0) {
+    if (load_file(fix_path("exfat_case.img")) != 0) {
         printf("exfat_hosttest: fixture did not load\n");
         exit(1);
     }
@@ -648,11 +647,11 @@ static void damaged_rows(void)
    such tools. */
 static void external_rows(void)
 {
-    char cmd[512], line[600];
+    char cmd[2048], line[600];
     void *m;
     int rc;
 
-    snprintf(cmd, sizeof(cmd), "sh tests/host/mkexfat_external.sh %s", FIXDIR);
+    snprintf(cmd, sizeof(cmd), "sh tests/host/mkexfat_external.sh %s", fix_dir());
     rc = system(cmd);
     rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
     if (rc == 3) {
@@ -663,14 +662,14 @@ static void external_rows(void)
     if (rc != 0) {
         return;
     }
-    check(load_file(FIXDIR "/exfat_external.img") == 0, "the external volume loads");
+    check(load_file(fix_path("exfat_external.img")) == 0, "the external volume loads");
     check(mount_image(VFS_MS_RDONLY, "") == 0,
           "the volume newfs_exfat made and the host filled mounts");
-    m = fopen(FIXDIR "/exfat_external.manifest", "r");
+    m = fopen(fix_path("exfat_external.manifest"), "r");
     check(m != 0, "the manifest exists");
     while (m && fgets(line, sizeof(line), m)) {
         char *bar1 = strchr(line, '|'), *bar2;
-        char path[400], what[600], src[600];
+        char path[400], what[600], src[2048];
         long size, mtime;
         int err;
         void *n;
@@ -703,7 +702,7 @@ static void external_rows(void)
         check(OPS->getattr(&mnt, n, &st) == 0 && (long)st.size == size && st.mtime_sec <= mtime &&
                   st.mtime_sec + 2 > mtime,
               what);
-        snprintf(src, sizeof(src), "%s/exfat_src/%s", FIXDIR, line);
+        snprintf(src, sizeof(src), "%s/exfat_src/%s", fix_dir(), line);
         f = fopen(src, "rb");
         got = f ? fread(want, 1, sizeof(want), f) : 0;
         if (f) {
@@ -776,19 +775,20 @@ static int write_at(void *node, const unsigned char *buf, uint32_t count, uint64
    status, its output in `out`. */
 static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
-    char cmd[300], line[300];
+    char cmd[2048], line[300];
     void *f;
     unsigned long n = 0;
     int rc;
 
-    f = fopen(FIXDIR "/exfat_write.img", "wb");
+    f = fopen(fix_path("exfat_write.img"), "wb");
     if (!f || fwrite(what, 1, (unsigned long)image_sectors * 512, f) !=
                   (unsigned long)image_sectors * 512) {
         printf("exfat_hosttest: cannot dump the image\n");
         exit(1);
     }
     fclose(f);
-    snprintf(cmd, sizeof(cmd), "%s/mkexfatfixture --check %s/exfat_write.img", FIXDIR, FIXDIR);
+    snprintf(cmd, sizeof(cmd), "%s --check %s", fix_path("mkexfatfixture"),
+             fix_path("exfat_write.img"));
     f = popen(cmd, "r");
     if (!f) {
         printf("exfat_hosttest: cannot run the check\n");
@@ -831,10 +831,10 @@ static void load_snapshot(const unsigned char *what)
 /* The image kept under a name, for the external checker run by hand. */
 static void dump_named(const char *kind, const char *name)
 {
-    char path[200];
+    char path[2048];
     void *f;
 
-    snprintf(path, sizeof(path), "%s/exfat_%s_%s.img", FIXDIR, kind, name);
+    snprintf(path, sizeof(path), "%s/exfat_%s_%s.img", fix_dir(), kind, name);
     f = fopen(path, "wb");
     if (f) {
         fwrite(image, 1, (unsigned long)image_sectors * 512, f);
@@ -849,7 +849,7 @@ static void load_dump(void)
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
-    if (load_file(FIXDIR "/exfat_write.img") != 0) {
+    if (load_file(fix_path("exfat_write.img")) != 0) {
         printf("exfat_hosttest: cannot read the dump back\n");
         exit(1);
     }
@@ -1762,15 +1762,15 @@ static void write_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the full volume's clean unmount");
     unmount_image();
     {
-        char cmd[300], line[300];
+        char cmd[2048], line[300];
         void *pf;
         int nofat_seen = 0;
         uint32_t used = 0, c, heap, spc, clusters;
         unsigned char *bitmap;
 
         run_check(check_out, sizeof(check_out));
-        snprintf(cmd, sizeof(cmd), "%s/mkexfatfixture --check %s/exfat_write.img --list", FIXDIR,
-                 FIXDIR);
+        snprintf(cmd, sizeof(cmd), "%s --check %s --list", fix_path("mkexfatfixture"),
+                 fix_path("exfat_write.img"));
         pf = popen(cmd, "r");
         while (pf && fgets(line, sizeof(line), pf)) {
             if (strstr(line, "/hello.txt") && strstr(line, "nofat")) {
@@ -2205,5 +2205,6 @@ int main(int argc, char **argv)
         return 0;
     }
     printf("exfat_hosttest: %d failure(s)\n", fails);
+    fix_keep();
     return 1;
 }
