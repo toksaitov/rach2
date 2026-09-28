@@ -15,8 +15,24 @@
 #define FIX_NAMES    64
 
 #ifndef FIXDIR
+/* The characters a shell passes through unchanged, which a directory the
+ * tests put in their commands unquoted may have. */
+#define FIX_PLAIN "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._+-"
+
+/* The longest $TMPDIR taken, so that every command the tests format has
+ * room for the paths in it. */
+#define FIX_TMP_MAX 100
+
 static char own[FIX_PATH_MAX];
 static int keep;
+
+/** Whether $TMPDIR, `tmp`, can hold the fixture directory: an absolute path
+ * of at most FIX_TMP_MAX characters, each one a shell passes unchanged. */
+static int fix_plain(const char *tmp)
+{
+    return tmp != NULL && tmp[0] == '/' && strlen(tmp) <= FIX_TMP_MAX &&
+           tmp[strspn(tmp, FIX_PLAIN)] == '\0';
+}
 
 /** Remove the test's own directory, unless `fix_keep` asked to keep it. */
 static void fix_remove(void)
@@ -46,8 +62,7 @@ const char *fix_dir(void)
         return own;
     }
     tmp = getenv("TMPDIR");
-    if (tmp == NULL || tmp[0] == '\0' || strpbrk(tmp, " \t\n'\"\\$`") != NULL ||
-        strlen(tmp) > FIX_PATH_MAX / 2) {
+    if (!fix_plain(tmp)) {
         tmp = "/tmp";
     }
     len = strlen(tmp);

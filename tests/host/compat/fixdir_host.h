@@ -6,11 +6,12 @@
  * compiled with FIXDIR, as a mutation proof compiles one, has the directory
  * FIXDIR names. Any other has one of its own, made the first time it is asked
  * for and removed when the test exits, so that two runs at once, of one test
- * or of two, never write the same file. It is made under $TMPDIR, or under
- * /tmp when $TMPDIR is unset or has a character a shell would split or quote
- * a command's words at, so a test may put the path in a command unquoted. The
- * header includes nothing, since the kernel headers the tests include define
- * types the C library's headers would define again.
+ * or of two, never write the same file. It is made under $TMPDIR when that is
+ * an absolute path of at most 100 characters, each a letter, a digit or one
+ * of / . _ + -, which a shell passes through unchanged, so a test may put the
+ * path in a command unquoted; under /tmp otherwise. The header includes
+ * nothing, since the kernel headers the tests include define types the C
+ * library's headers would define again.
  */
 
 /** The fixture directory; a test that cannot have one is ended. */
