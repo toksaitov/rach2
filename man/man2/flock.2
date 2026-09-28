@@ -62,8 +62,10 @@ locks and
 record locks do not conflict with each other.
 A lock is on the file, found as
 .Xr fcntl 2
-finds a record lock's; a descriptor of a pipe, a socket, a device or a
-terminal is locked by the object it is open on.
+finds a record lock's: it stays with the file through a rename, on KRFFS
+also through a write that moves the file, and is not shared with another
+KRFFS file whose name has the same hash; a descriptor of a pipe, a
+socket, a device or a terminal is locked by the object it is open on.
 .Dv LOCK_MAND ,
 which Linux accepts and ignores, is accepted and ignored.
 .Pp

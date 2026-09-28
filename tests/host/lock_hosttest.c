@@ -11,7 +11,8 @@
  * drops the closing process's locks on that file only. An open file
  * description lock conflicts with another description's and with a
  * process's record lock. A flock lock of one description blocks another's,
- * a conversion lets go first, and a description's end frees its locks.
+ * a conversion lets go first, and a description's end frees its locks. A
+ * file that moves takes its locks, and the waits for them, with it.
  * Returns the failed-check count.
  */
 
@@ -69,9 +70,11 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 static const struct lock_key file = {(const void *)0x1000, 42};
 static const struct lock_key other = {(const void *)0x1000, 43};
+/* Where `file` moves to in the rows of a move. */
+static const struct lock_key there = {(const void *)0x1000, 4242};
 
-static int32_t as(uint32_t pid, struct open_file *ofd, int cmd, int type, uint64_t start,
-                  uint64_t end, struct lock_req *out)
+static int32_t as_on(const struct lock_key *key, uint32_t pid, struct open_file *ofd, int cmd,
+                     int type, uint64_t start, uint64_t end, struct lock_req *out)
 {
     struct lock_req req;
 
@@ -81,13 +84,19 @@ static int32_t as(uint32_t pid, struct open_file *ofd, int cmd, int type, uint64
     req.end = end;
     req.pid = 0;
     {
-        int32_t rc = lock_record(&file, ofd, cmd, &req);
+        int32_t rc = lock_record(key, ofd, cmd, &req);
 
         if (out) {
             *out = req;
         }
         return rc;
     }
+}
+
+static int32_t as(uint32_t pid, struct open_file *ofd, int cmd, int type, uint64_t start,
+                  uint64_t end, struct lock_req *out)
+{
+    return as_on(&file, pid, ofd, cmd, type, start, end, out);
 }
 
 static int count_locks(void)
@@ -244,11 +253,96 @@ static void shared_wait(void)
     CHECK(lock_flock(&file, &shared, LOCK_UN) == 0 && count_locks() == 0);
 }
 
+/**
+ * A file that moves takes its locks with it. Pid 1's record lock, an OFD
+ * lock and a flock lock on `file` move to `there`, where each meets another
+ * owner's lock, and none is left on `file`, which is now another file's key.
+ */
+static void moves(void)
+{
+    struct open_file a, b;
+
+    CHECK(as(1, NULL, LOCK_SET, F_WRLCK, 0, 9, NULL) == 0);
+    CHECK(as(1, &a, LOCK_SET, F_WRLCK, 20, 29, NULL) == 0);
+    CHECK(lock_flock(&file, &a, LOCK_EX) == 0);
+    lock_repoint(file.mnt, file.ino, there.ino);
+    CHECK(as_on(&there, 2, NULL, LOCK_SET, F_WRLCK, 5, 5, NULL) == -EAGAIN);
+    CHECK(as_on(&there, 2, &b, LOCK_SET, F_WRLCK, 25, 25, NULL) == -EAGAIN);
+    CHECK(lock_flock(&there, &b, LOCK_EX | LOCK_NB) == -EAGAIN);
+    CHECK(as(2, NULL, LOCK_SET, F_WRLCK, 0, 29, NULL) == 0);
+    CHECK(lock_flock(&file, &b, LOCK_EX | LOCK_NB) == 0);
+    process.pid = process.tgid = 1;
+    lock_close(&there);
+    process.pid = process.tgid = 2;
+    lock_close(&file);
+    lock_ofd_gone(&a);
+    lock_ofd_gone(&b);
+    CHECK(count_locks() == 0);
+}
+
+/** The file pid 2 waits on moves to `there`. */
+static void file_moves(void)
+{
+    lock_repoint(file.mnt, file.ino, there.ino);
+}
+
+/** Pid 1 lets go of byte 0 where the file is now. */
+static void one_unlocks_there(void)
+{
+    CHECK(as_on(&there, 1, NULL, LOCK_SET, F_UNLCK, 0, 0, NULL) == 0);
+}
+
+/** The description that holds the file's flock lock lets it go there. */
+static void holder_lets_go_there(void)
+{
+    CHECK(lock_flock(&there, &holder, LOCK_UN) == 0);
+}
+
+/**
+ * A wait goes where the file goes. Pid 2 waits for byte 0 of `file`, which
+ * pid 1 holds; the file moves, and pid 1 lets go where it is now. The wait
+ * must meet pid 1's lock after the move, sleeping until the unlock, and take
+ * its lock where the file is, leaving `file` free, and a flock wait of
+ * another description must do the same.
+ */
+static void moving_waits(void)
+{
+    struct open_file c;
+
+    CHECK(as(1, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == 0);
+    steps[0] = file_moves;
+    steps[1] = one_unlocks_there;
+    steps[2] = NULL;
+    step = 0;
+    CHECK(as(2, NULL, LOCK_WAIT, F_WRLCK, 0, 0, NULL) == 0 && step == 2);
+    CHECK(as_on(&there, 3, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == -EAGAIN);
+    CHECK(as(3, NULL, LOCK_SET, F_WRLCK, 0, 0, NULL) == 0);
+    process.pid = process.tgid = 2;
+    lock_close(&there);
+    process.pid = process.tgid = 3;
+    lock_close(&file);
+    CHECK(count_locks() == 0 && waiting_keys == NULL);
+
+    CHECK(lock_flock(&file, &holder, LOCK_EX) == 0);
+    steps[0] = file_moves;
+    steps[1] = holder_lets_go_there;
+    steps[2] = NULL;
+    step = 0;
+    CHECK(lock_flock(&file, &shared, LOCK_EX) == 0 && step == 2);
+    CHECK(lock_flock(&there, &c, LOCK_EX | LOCK_NB) == -EAGAIN);
+    CHECK(lock_flock(&file, &c, LOCK_EX | LOCK_NB) == 0);
+    lock_ofd_gone(&shared);
+    lock_ofd_gone(&c);
+    CHECK(count_locks() == 0 && waiting_keys == NULL);
+}
+
 int main(void)
 {
     records();
     descriptions();
     wait_cycle();
     shared_wait();
+    moves();
+    moving_waits();
     return fails > 100 ? 100 : fails;
 }

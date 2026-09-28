@@ -1456,6 +1456,16 @@ static void long_rows(void)
     check(n && boot && OPS->open(&mnt, n, 0, &h) == 0, "an open file to rename");
     check(OPS->rename(&mnt, mnt.root, "SHORT.TXT", boot, "moved name.txt") == 0,
           "renamed across directories while open");
+    {
+        /* The node is the file's while it is held, under its new name too:
+           its advisory locks are found by it (lock.Readme.md). */
+        void *renamed = walk("/BOOT/moved name.txt", &err);
+
+        check(renamed && renamed == n, "the new name of a held file reaches the node it had");
+        if (renamed) {
+            OPS->put(&mnt, renamed);
+        }
+    }
     check(OPS->write(&mnt, h, pattern, 900, 700) == 900, "and written through its description");
     OPS->release(&mnt, h);
     if (n) {

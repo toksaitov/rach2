@@ -22,7 +22,7 @@ A FAT entry is masked to 28 bits. The walk to cluster `n` of a chain is bounded 
 
 ## Nodes and identities
 
-A node is a record allocated from the heap when first needed by a lookup or creation, or for the root at mount. It is added to the mount's node list and freed at its last put. A lookup that cannot allocate a node returns `ENOMEM` and logs the failure. A directory's identity is its first cluster, so two lookups of one directory share a node. A file's identity is its directory's cluster and its entry index. The inode number is built from the identity: a directory's is its cluster, and a file's has its directory's cluster plus one in the high word and its index plus one in the low, so no two entries share a number.
+A node is a record allocated from the heap when first needed by a lookup or creation, or for the root at mount. It is added to the mount's node list and freed at its last put. A lookup that cannot allocate a node returns `ENOMEM` and logs the failure. A directory's identity is its first cluster, so two lookups of one directory share a node. A file's identity is its directory's cluster and its entry index. The inode number is built from the identity: a directory's is its cluster, and a file's has its directory's cluster plus one in the high word and its index plus one in the low, so no two entries share a number. A rename writes the new identity into a node that is held, so the node stays the file's under its new name, and the file's advisory locks, which are found by its node and not by the inode number a rename changes, stay with it ([lock.Readme.md](lock.Readme.md)).
 
 ## Times and modes
 

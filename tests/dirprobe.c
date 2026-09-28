@@ -10,7 +10,8 @@
  * rejects a duplicate mkdir and a create in a missing directory; refuses rmdir
  * on a non-empty directory; then unlinks the file, rmdirs the now-empty
  * directory, and confirms the file is gone. Goes on to test getdents on a
- * subdirectory, the *at API (openat, fstat64, fstatat64, _llseek, fcntl64),
+ * subdirectory, on KRFFS the EINVAL of a directory whose identifier another
+ * has, the *at API (openat, fstat64, fstatat64, _llseek, fcntl64),
  * O_APPEND and O_CREAT mode, and chdir/getcwd with relative-name resolution.
  * Prints "DIRPROBE OK" when every check passes, else "DIRPROBE FAIL".
  *
@@ -50,6 +51,7 @@ typedef unsigned int size_t;
 #define O_APPEND 02000
 
 #define ENOTDIR 20
+#define EINVAL  22
 
 /* Special dir fd: openat/fstatat resolve relative to the current dir ("/"). */
 #define AT_FDCWD (-100)
@@ -291,6 +293,21 @@ void _start(void)
     syscall1(SYS_UNLINK, (int)(size_t)"/e/a");
     syscall1(SYS_UNLINK, (int)(size_t)"/e/b");
     check(syscall1(SYS_RMDIR, (int)(size_t)"/e") == 0, "rmdir emptied /e");
+
+    /* 8b. A KRFFS directory's identifier is its parent's mixed with the hash
+       of its name, which bC and cb share: the second of the two in one
+       directory is a name the format cannot hold, EINVAL, and not a full
+       or a failing volume. */
+    if (root == ROOT_KRFFS) {
+        check(syscall2(SYS_MKDIR, (int)(size_t)"/ids", 0755) == 0 &&
+                  syscall2(SYS_MKDIR, (int)(size_t)"/ids/bC", 0755) == 0,
+              "mkdir /ids and /ids/bC");
+        check(syscall2(SYS_MKDIR, (int)(size_t)"/ids/cb", 0755) == -EINVAL,
+              "mkdir /ids/cb beside /ids/bC is EINVAL on krffs");
+        check(syscall1(SYS_RMDIR, (int)(size_t)"/ids/bC") == 0 &&
+                  syscall1(SYS_RMDIR, (int)(size_t)"/ids") == 0,
+              "rmdir /ids/bC and /ids");
+    }
 
     /* 9. The *at API on a regular file: openat, fstat64, _llseek, fcntl64. */
     fd = syscall2(SYS_CREAT, (int)(size_t)"/g", 0644);

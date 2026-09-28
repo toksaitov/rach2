@@ -4,8 +4,11 @@
  * another thread's call, the errors of an open, a dup and a dup2 that get no
  * descriptor, an unlink and a rename on the KRFFS root of a file an open is
  * installing or a program runs from, a chmod, a chown, the stat calls, access
- * and utimensat of a file a write moves, and an open that truncates while
- * another thread sharing its table asks for the table's last free slot.
+ * and utimensat of a file a write moves, an open that truncates while
+ * another thread sharing its table asks for the table's last free slot, the
+ * key a file's locks are found by on each kind of mount, a mkdir of a name
+ * another process makes while the call waits for the parent's lock, and the
+ * locks of an orphan's last description dropped before the orphan is freed.
  *
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
@@ -135,10 +138,17 @@ krffs_file_system_t *krffs_fs;
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
 static const struct vfs_ops root_ops = {.lookup = root_lookup};
 const struct vfs_type vfs_krffs_type = {"krffs", 0, &root_ops, 1, 0};
+/* A mounted KRFFS volume's type and the two FAT types, which the lock key
+ * row names. */
+const struct vfs_type vfs_krffs_volume_type = {"krffs", 0, 0, 1, 0};
+const struct vfs_type vfs_vfat_type = {"vfat", 0, 0, 0, 0};
+const struct vfs_type vfs_exfat_type = {"exfat", 0, 0, 0, 0};
 static const struct vfs_type mounted_type = {0};
 /* A mounted type whose uses are serialised under its namespace lock, as
  * KRFFS volumes and ext2 are, for the attribute rows. */
 static const struct vfs_type locked_type = {"locked", 0, 0, 1, 0};
+/* A serialised mounted type with the root's lookup, for the mkdir rows. */
+static const struct vfs_type mkdir_type = {"mkdir", 0, &root_ops, 1, 0};
 static struct vfs_mount mount;
 static int node, handle, moved;
 static int failures, allocations, opens, releases, refs, leaves, truncates;
@@ -160,6 +170,14 @@ static krffs_file_system_t root_fs;
 static int removals, keeps;
 /* The node of the root an address space keeps as its program's file. */
 static const krffs_node_t *program;
+/* The directory of the mkdir rows, named once a mkdir has made it, and the
+ * working directories and umask of their calling process. */
+static krffs_node_t made_dir;
+static struct fs_struct row_fs;
+static int mkdir_row;
+/* The description whose last close an orphan row makes, and the last
+ * description whose locks went. */
+static const struct open_file *orphan_ofd, *ofd_gone;
 /* The call that holds the root's namespace lock when a row's call first
  * asks for it, which runs before the row's call has the lock, the depth of
  * the lock, the number of times it was taken from a depth of 0, and that
@@ -392,9 +410,10 @@ int lock_any(void)
     return locking;
 }
 
+/** Record the end of a description's locks, for the orphan rows. */
 void lock_ofd_gone(const struct open_file *ofd)
 {
-    (void)ofd;
+    ofd_gone = ofd;
 }
 
 /* The allocation that fails: 0 the next one, n the one after n more, and
@@ -434,18 +453,31 @@ struct vfs_mount *vfs_root_mount(void)
     return &mount;
 }
 
-/** Report an accessible regular file with set-id bits. A read the mount's
- * lock does not cover may sleep for the disk, and the call queued for the
- * row, a write that moves the file, runs then. */
+/** Report an accessible regular file with set-id bits, or in the mkdir rows
+ * the directory a name is made in. A read the mount's lock does not cover
+ * may sleep for the disk, and the call queued for the row, a write that
+ * moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
     if (ns_depth == 0) {
         run_waiting();
     }
-    check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     k_memset(st, 0, sizeof(*st));
+    if (mkdir_row) {
+        check(mnt == &mount && at == &root_dir,
+              "a mkdir checks the directory it makes the name in");
+        st->mode = 040755;
+        return 0;
+    }
+    check(mnt == &mount && at == (relocate ? &moved : &node), "attributes use node identity");
     st->mode = 0106777;
     return 0;
+}
+
+/** The mkdir rows have a root. */
+int vfs_root_mounted(void)
+{
+    return 1;
 }
 
 /** Require the node the file is at, and, but in the attribute rows,
@@ -522,6 +554,9 @@ void vfs_leave(struct vfs_mount *mnt)
  * sleeps: run what the row has happen meanwhile. */
 void vfs_desc_close(struct vfs_mount *mnt, void *at, void *opened)
 {
+    if (orphan_ofd) {
+        return; /* the orphan rows' descriptions open nothing on the root */
+    }
     check(at == (relocate ? &moved : &node), "close retains current node identity");
     if (in_release) {
         void (*meanwhile)(void) = in_release;
@@ -553,13 +588,16 @@ int mm_exe_holds(const struct vfs_mount *mnt, const void *n)
     return n != NULL && n == program && mnt == &mount;
 }
 
-/** No row frees a node of the KRFFS root, owns the display or has a
+/** Free an orphan of the KRFFS root, which only the orphan rows do, once the
+ * closing description's locks are gone; no row owns the display or has a
  * socket. */
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
 {
     (void)fs;
-    (void)node;
-    check(0, "unexpected root node removal");
+    check(orphan_ofd != 0 && node == &victim, "unexpected root node removal");
+    check(ofd_gone == orphan_ofd,
+          "a description's locks go before the orphan they are on is freed");
+    removals++;
 }
 
 void vga_mode13h_exit(void)
@@ -628,14 +666,15 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     ns_depth--;
 }
 
-/** Find `victim` or `source` by its name in the root directory. */
+/** Find `victim`, `source` or `made_dir` by its name in the root directory. */
 static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found)
 {
-    krffs_node_t *nodes[2];
+    krffs_node_t *nodes[3];
     int i;
 
     nodes[0] = &victim;
     nodes[1] = &source;
+    nodes[2] = &made_dir;
     check(mnt == &mount && dir == &root_dir, "a lookup in the root directory");
     check(ns_depth > 0, "a lookup in the root runs under the root's lock");
     if (lookup_take == 0) {
@@ -643,7 +682,7 @@ static int root_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
     }
     check(ns_takes == lookup_take,
           "the lookups, the count and the change run under one hold of the root's lock");
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 3; i++) {
         if (nodes[i]->name[0] != '\0' &&
             __builtin_strcmp((const char *)nodes[i]->name, name) == 0) {
             *found = nodes[i];
@@ -719,6 +758,23 @@ static void changed_in_lookup_hold(void)
 {
     check(ns_depth > 0 && ns_takes == lookup_take,
           "the lookups, the count and the change run under one hold of the root's lock");
+}
+
+/** Make `name` in the root directory, or refuse a name that is there, as
+ * the KRFFS core refuses one, with the errno its adapter gives every such
+ * refusal: ENOSPC on the root and EIO on a volume. */
+int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
+{
+    (void)mode;
+    check(mnt == &mount && dir == &root_dir, "the mkdir is in the root directory");
+    changed_in_lookup_hold();
+    if (made_dir.name[0] != '\0' && __builtin_strcmp((const char *)made_dir.name, name) == 0) {
+        return mnt->type == &vfs_krffs_type ? -ENOSPC : -EIO;
+    }
+    k_strncpy((char *)made_dir.name, name, sizeof(made_dir.name));
+    made_dir.type = KRFFS_RESERVED_NODE;
+    made_dir.mode = KRFFS_S_IFDIR | 0755;
+    return 0;
 }
 
 /** Free the file an unlink takes the name of, as the root does. */
@@ -947,6 +1003,110 @@ static void program_kept(void)
           "a rename over the file a program runs from keeps it");
     program = NULL;
     root_row_end();
+}
+
+/** The mkdir a row's call waits for: another process has made the
+ * directory "made" while it held the lock the call asks for. */
+static void other_makes_it(void)
+{
+    k_strncpy((char *)made_dir.name, "made", sizeof(made_dir.name));
+    made_dir.type = KRFFS_RESERVED_NODE;
+    made_dir.mode = KRFFS_S_IFDIR | 0755;
+}
+
+/** Begin a mkdir row on the root, or with `mounted` on a serialised mounted
+ * type, with no directory made and a process whose umask is 027. */
+static void mkdir_row_begin(int mounted)
+{
+    root_row_begin();
+    if (mounted) {
+        mount.type = &mkdir_type;
+    }
+    k_memset(&made_dir, 0, sizeof(made_dir));
+    k_memset(&row_fs, 0, sizeof(row_fs));
+    row_fs.umask = 027;
+    proc.fs = &row_fs;
+    proc.egid = 5;
+    mkdir_row = 1;
+}
+
+static void mkdir_row_end(void)
+{
+    mkdir_row = 0;
+    proc.fs = 0;
+    proc.egid = 0;
+    root_row_end();
+}
+
+/**
+ * A mkdir of a name another process makes while this one waits for the
+ * namespace lock, on the KRFFS root and on a serialised mounted type. The
+ * lookup runs under the lock with the creation, so the name is found and
+ * the answer is EEXIST, where the file system would refuse it as it refuses
+ * a full volume on the root (ENOSPC) and a failing one on a KRFFS volume
+ * (EIO). With no other process, the directory is made, and on the root
+ * stamped with its maker's ids and the mode less the umask.
+ */
+static void mkdir_race(void)
+{
+    int mounted;
+
+    for (mounted = 0; mounted < 2; mounted++) {
+        mkdir_row_begin(mounted);
+        waiting = other_makes_it;
+        check(do_mkdir("/made", 0777) == -EEXIST,
+              "a mkdir of a name another process made while it waited is EEXIST");
+        mkdir_row_end();
+
+        mkdir_row_begin(mounted);
+        check(do_mkdir("/made", 0777) == 0 && made_dir.name[0] != '\0',
+              "a mkdir with nobody before it makes the directory");
+        check(mounted || (made_dir.gid == 5 && (made_dir.mode & 07777) == 0750),
+              "the directory a mkdir makes on the root has its maker's group and mode");
+        mkdir_row_end();
+    }
+}
+
+/**
+ * The last close of a file of the KRFFS root that lost its name while open,
+ * and of the last end of such a FIFO: the node is freed, and the locks of
+ * the closing description go before it is, since a lock of the root is
+ * keyed by its node's place and a node made there later must meet none of
+ * them.
+ */
+static void orphan_locks(void)
+{
+    int fifo;
+
+    for (fifo = 0; fifo < 2; fifo++) {
+        fd_entry_t *e;
+        int fd;
+
+        root_row_begin();
+        fd = fd_alloc(proc.fds);
+        check(fd >= 0, "a descriptor of the orphan");
+        if (fd < 0) {
+            root_row_end();
+            continue;
+        }
+        e = &proc.fds->entries[fd];
+        victim.name[0] = '\0';
+        if (fifo) {
+            victim.mode = KRFFS_S_IFIFO | 0600;
+            e->type = FD_TYPE_PIPE;
+        } else {
+            e->type = FD_TYPE_FILE;
+            e->node = &victim;
+        }
+        e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+        e->ofd->vmnt = &mount;
+        e->ofd->vnode = &victim;
+        orphan_ofd = e->ofd;
+        ofd_gone = 0;
+        check(close_fd(fd) == 0 && removals == 1, "the last close of an orphan frees it");
+        orphan_ofd = 0;
+        root_row_end();
+    }
 }
 
 /** The write a row's call waits for: it holds the mount's lock and moves
@@ -1311,6 +1471,58 @@ static void loop_handles(void)
           "memory-root loop handle follows node");
 }
 
+/**
+ * The key a file's locks are found by. A KRFFS file, on the boot root or on
+ * a mounted volume, and a FAT32 or exFAT file are keyed by the node their
+ * description has now, which a move repoints and a rename keeps, and not by
+ * the inode number recorded at the open, which a rename or a move leaves
+ * behind and two KRFFS names with one hash share; a file of another type
+ * is keyed by that inode number, which stays with the file.
+ */
+static void lock_keys(void)
+{
+    struct vfs_mount root_mnt, volume_mnt, vfat_mnt, exfat_mnt, other_mnt;
+    struct open_file desc;
+    struct lock_key key;
+    fd_entry_t e;
+
+    k_memset(&root_mnt, 0, sizeof(root_mnt));
+    k_memset(&volume_mnt, 0, sizeof(volume_mnt));
+    k_memset(&vfat_mnt, 0, sizeof(vfat_mnt));
+    k_memset(&exfat_mnt, 0, sizeof(exfat_mnt));
+    k_memset(&other_mnt, 0, sizeof(other_mnt));
+    k_memset(&desc, 0, sizeof(desc));
+    k_memset(&e, 0, sizeof(e));
+    root_mnt.type = &vfs_krffs_type;
+    volume_mnt.type = &vfs_krffs_volume_type;
+    vfat_mnt.type = &vfs_vfat_type;
+    exfat_mnt.type = &vfs_exfat_type;
+    other_mnt.type = &mounted_type;
+    e.ofd = &desc;
+    desc.vnode = &moved;
+    desc.ino = 7;
+    desc.vmnt = &root_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &root_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of the KRFFS root is keyed by its node");
+    desc.vmnt = &volume_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &volume_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of a KRFFS volume is keyed by its node");
+    desc.vmnt = &vfat_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &vfat_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of a FAT32 volume is keyed by its node, which a rename keeps");
+    desc.vmnt = &exfat_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &exfat_mnt && key.ino == (uint64_t)(uintptr_t)&moved,
+          "a file of an exFAT volume is keyed by its node, which a rename keeps");
+    desc.vmnt = &other_mnt;
+    fd_lock_key(&e, &key);
+    check(key.mnt == &other_mnt && key.ino == 7,
+          "a file of another type is keyed by its inode number at the open");
+}
+
 /** Exercise mounted open and loop references. */
 int main(void)
 {
@@ -1323,11 +1535,14 @@ int main(void)
     unlink_installing();
     program_kept();
     rename_over_installing();
+    mkdir_race();
+    orphan_locks();
     attrs_after_move();
     stats_after_move();
     times_after_move();
     open_last_slot();
     loop_handles();
+    lock_keys();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }

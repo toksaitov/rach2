@@ -485,8 +485,10 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle);
 
 /**
  * Repoint every reference to `from` on `mnt` to `to`: descriptions, working
- * directories, directory descriptors and covering mounts. KRFFS calls it
- * when a relocation moves a node.
+ * directories, directory descriptors, covering mounts, loop devices, and the
+ * advisory locks on the file and the waits for them, since a KRFFS file's
+ * locks are keyed by its node (lock.h). KRFFS calls it when a relocation
+ * moves a node.
  */
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
 

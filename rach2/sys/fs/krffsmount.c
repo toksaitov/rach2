@@ -602,13 +602,18 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
 
 /**
  * The errno of a creation the core refused: -ENOSPC for a volume with no
- * room, and -EIO for a medium that refused a read, a write or a sync, which a
- * device removed during the creation does. A path the core could not use is
- * -EIO too: the directory the name goes in is held, so only a failed read
- * loses it.
+ * room; -EINVAL for a directory whose identifier another directory has
+ * (`KRFFS_ETAKEN`), the answer for a name the file system cannot hold; and
+ * -EIO for a medium that refused a read, a write or a sync, which a device
+ * removed during the creation does. A path the core could not use is -EIO
+ * too: the directory the name goes in is held, so only a failed read loses
+ * it.
  */
 static int made_errno(int rc)
 {
+    if (rc == KRFFS_ETAKEN) {
+        return -EINVAL;
+    }
     return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;
 }
 
@@ -749,8 +754,12 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_unlink_at(&vol->fs, path) == 0 ? 0 : -EIO;
 }
 
-/* A directory `name` in `dir`, with the caller's `mode` and identity on the
- * medium before its name, as `kv_create` makes a file. */
+/**
+ * A directory `name` in `dir`, with the caller's `mode` and identity on the
+ * medium before its name, as `kv_create` makes a file. A refusal of the core
+ * is `made_errno`'s, -EINVAL among them for a name whose directory
+ * identifier another directory has.
+ */
 static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     struct krffs_volume *vol = vol_of(mnt);

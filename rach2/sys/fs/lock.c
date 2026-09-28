@@ -38,8 +38,17 @@ struct lock_wait {
     uint32_t blocker;
 };
 
+/* The key of a wait under way, a copy of the caller's on the waiter's stack
+ * for the length of the wait, so that a file that moves while its locks are
+ * waited for takes the wait's key with its locks (lock_repoint). */
+struct lock_waiting {
+    struct lock_waiting *next;
+    struct lock_key key;
+};
+
 static struct file_lock *locks;
 static struct lock_wait *waits;
+static struct lock_waiting *waiting_keys;
 static wait_queue_t lock_wq;
 
 int lock_any(void)
@@ -233,6 +242,26 @@ static void wait_remove(const struct lock_wait *me)
     }
 }
 
+/* Put `w`, the key of a wait about to sleep, where lock_repoint finds it;
+ * waiting_remove takes it away when the wait is over. */
+static void waiting_add(struct lock_waiting *w)
+{
+    w->next = waiting_keys;
+    waiting_keys = w;
+}
+
+static void waiting_remove(const struct lock_waiting *w)
+{
+    struct lock_waiting **link = &waiting_keys;
+
+    while (*link && *link != w) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = w->next;
+    }
+}
+
 /* A wait for a record lock: what it asks for, its record in the list of
  * waits, and whether it ended by closing a cycle. */
 struct record_wait {
@@ -273,6 +302,7 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
     struct record_want want;
     struct record_wait waiting;
     struct lock_wait me;
+    struct lock_waiting held;
     struct file_lock *c;
     uint32_t pid = current_proc->tgid;
     int rc;
@@ -315,11 +345,15 @@ int32_t lock_record(const struct lock_key *key, struct open_file *ofd, int cmd,
     me.blocker = 0;
     me.next = waits;
     waits = &me;
+    held.key = *key;
+    want.key = &held.key;
+    waiting_add(&held);
     waiting.want = &want;
     waiting.me = &me;
     waiting.deadlock = 0;
     rc = wq_wait_event(&lock_wq, record_ready, &waiting);
     wait_remove(&me);
+    waiting_remove(&held);
     if (waiting.deadlock) {
         return -EDEADLK;
     }
@@ -361,14 +395,17 @@ static int flock_free(void *arg)
  * Linux. Both are looked for again after every wait: the threads that share
  * a description may wait for one lock together, and the first to wake takes
  * it for the description, so the others find it there and take no second
- * lock that one LOCK_UN would leave behind.
+ * lock that one LOCK_UN would leave behind. They are looked for by a copy
+ * of `key`, which a file that moves during the wait moves with its locks.
  */
 int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
 {
     struct flock_want want;
+    struct lock_waiting held;
     struct file_lock **link;
     struct file_lock *l;
     int nb = (op & LOCK_NB) != 0;
+    int rc;
 
     op &= ~LOCK_NB;
     if (op == LOCK_SH) {
@@ -380,11 +417,12 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
     } else {
         return -EINVAL;
     }
-    want.key = key;
+    held.key = *key;
+    want.key = &held.key;
     want.ofd = ofd;
     for (;;) {
         for (link = &locks; (l = *link) != NULL; link = &l->next) {
-            if (mine(l, key, LK_FLOCK, (uintptr_t)ofd)) {
+            if (mine(l, want.key, LK_FLOCK, (uintptr_t)ofd)) {
                 if (l->type == want.type) {
                     return 0;
                 }
@@ -399,7 +437,10 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
         if (nb) {
             return -EAGAIN;
         }
-        if (wq_wait_event(&lock_wq, flock_free, &want) < 0) {
+        waiting_add(&held);
+        rc = wq_wait_event(&lock_wq, flock_free, &want);
+        waiting_remove(&held);
+        if (rc < 0) {
             return -EINTR;
         }
     }
@@ -410,7 +451,7 @@ int32_t lock_flock(const struct lock_key *key, struct open_file *ofd, int op)
     if (!l) {
         return -ENOLCK;
     }
-    l->key = *key;
+    l->key = held.key;
     l->kind = LK_FLOCK;
     l->owner = (uintptr_t)ofd;
     l->pid = current_proc->tgid;
@@ -438,6 +479,23 @@ void lock_close(const struct lock_key *key)
     }
     if (dropped) {
         wq_wake_all(&lock_wq);
+    }
+}
+
+void lock_repoint(const void *mnt, uint64_t from, uint64_t to)
+{
+    struct file_lock *l;
+    struct lock_waiting *w;
+
+    for (l = locks; l; l = l->next) {
+        if (l->key.mnt == mnt && l->key.ino == from) {
+            l->key.ino = to;
+        }
+    }
+    for (w = waiting_keys; w; w = w->next) {
+        if (w->key.mnt == mnt && w->key.ino == from) {
+            w->key.ino = to;
+        }
     }
 }
 

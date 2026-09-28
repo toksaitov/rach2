@@ -36,6 +36,9 @@
 #include "rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
+#include "fs/krffsmount.h"
+#include "fs/fat32.h"
+#include "fs/exfat.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
@@ -145,6 +148,21 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 }
 
 /**
+ * Free `node`, an orphan of the KRFFS root whose last holder is `e`, once the
+ * locks the description of `e` owns are gone. A lock of the root is keyed by
+ * its node's place (`fd_lock_key`), and a node the allocator makes there
+ * later must meet none of them; the description's own end drops them only
+ * after this, when `fd_free` lets its last reference go.
+ */
+static void fd_free_orphan(const fd_entry_t *e, krffs_node_t *node)
+{
+    if (e->ofd && e->ofd->refcount == 1 && lock_any()) {
+        lock_ofd_gone(e->ofd);
+    }
+    krffs_remove_reserved_node(krffs_fs, node);
+}
+
+/**
  * Free the node of a FIFO of the KRFFS root that lost its name while open,
  * when `e`, an end of it or the reservation of an open of it that did not
  * finish, is the last to hold it: the release of a file's last descriptor
@@ -161,7 +179,7 @@ static void fd_fifo_orphan(const fd_entry_t *e)
     if (fifo && fifo != krffs_fs->node && fifo->type == KRFFS_RESERVED_NODE &&
         krffs_mode_type(fifo->mode) == KRFFS_S_IFIFO && fifo->name[0] == '\0' &&
         fd_node_holders(fifo, e) == 0) {
-        krffs_remove_reserved_node(krffs_fs, fifo);
+        fd_free_orphan(e, fifo);
     }
 }
 
@@ -193,18 +211,43 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
 }
 
 /**
- * The key the locks of what `e` is open on are found by (lock.h): the mount
- * and the inode number its description recorded at open, for a file of a
- * mounted type, a FIFO among them; and for any other descriptor the object
- * it is open on, a pipe, a socket, a device or a terminal, with no mount, so
- * that two opens of one object share their locks as two opens of a file do.
+ * Whether a lock on a file of `mnt` is found by the file's node, on a type
+ * whose inode number does not stay with the file: KRFFS, the boot root or a
+ * mounted volume, whose node is the file's place, which a growing write can
+ * move and `vfs_repoint` moves every holder of; and FAT32 and exFAT, whose
+ * node is one record per file while it is held, which a rename updates in
+ * place, where the inode number is the file's directory entry.
+ */
+static int mnt_locks_by_node(const struct vfs_mount *mnt)
+{
+    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||
+           mnt->type == &vfs_vfat_type || mnt->type == &vfs_exfat_type;
+}
+
+/**
+ * The key the locks of what `e` is open on are found by (lock.h), for a file
+ * of a mounted type, a FIFO among them, its mount and a number that names
+ * the file; and for any other descriptor the object it is open on, a pipe, a
+ * socket, a device or a terminal, with no mount, so that two opens of one
+ * object share their locks as two opens of a file do.
+ *
+ * A file of KRFFS, FAT32 or exFAT is named by its node as the description
+ * has it now, which is the file itself while a description has it; a write
+ * that moves a KRFFS node moves the locks with it (`lock_repoint`). Its
+ * inode number would not do: the KRFFS root numbers a file by its directory
+ * and the hash of its name, which a rename changes and two names can share,
+ * a KRFFS volume by the node's offset, which a move changes, and FAT32 and
+ * exFAT by the file's directory entry, which a rename changes. A file of
+ * another type is named by the inode number its description recorded at
+ * the open, which stays with the file.
  */
 static void fd_lock_key(const fd_entry_t *e, struct lock_key *key)
 {
     key->mnt = NULL;
     if (e->ofd && e->ofd->vmnt) {
         key->mnt = e->ofd->vmnt;
-        key->ino = e->ofd->ino;
+        key->ino =
+            mnt_locks_by_node(e->ofd->vmnt) ? (uint64_t)(uintptr_t)e->ofd->vnode : e->ofd->ino;
     } else if (e->dev) {
         key->ino = (uintptr_t)e->dev;
     } else if (e->priv) {
@@ -272,7 +315,7 @@ static void fd_release_objects(fd_entry_t *e)
      * needs no ordering rule between two functions. */
     if (e->type == FD_TYPE_FILE && e->node && krffs_fs && e->node != krffs_fs->node &&
         e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
-        krffs_remove_reserved_node(krffs_fs, e->node);
+        fd_free_orphan(e, e->node);
         e->node = NULL;
     }
     if (e->type == FD_TYPE_PIPE) {
@@ -7356,7 +7399,9 @@ static int32_t flock_write(uint32_t arg, int wide, const struct lock_req *req)
  * closing while the call has it. A POSIX lock gained after that is let go
  * with the process's others on the file and the call answers EBADF, as
  * Linux's does, so no lock outlives the close that should have dropped it.
- * An OFD lock belongs to the description, which the call still holds.
+ * The file's key is taken again for that, since a KRFFS file a write moved
+ * during the wait has a new one. An OFD lock belongs to the description,
+ * which the call still holds.
  */
 static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
 {
@@ -7391,6 +7436,7 @@ static int32_t fcntl_lock(fd_entry_t *entry, int cmd, uint32_t arg)
     rc = lock_record(&key, by_ofd ? entry->ofd : NULL, op, &req);
     if (rc == 0 && op != LOCK_GET && req.type != F_UNLCK && !by_ofd &&
         (entry->flags & FD_FLAG_CLOSING)) {
+        fd_lock_key(entry, &key);
         lock_close(&key);
         return -EBADF;
     }
@@ -8144,14 +8190,69 @@ out:
 }
 
 /**
+ * Make the directory `leaf` in `parent`, which the caller's walk reached and
+ * whose namespace lock it holds where the type takes one: the body of
+ * `do_mkdir`. The lookup that answers -EEXIST and the creation are one hold
+ * of that lock, so a directory of the same name that another process makes
+ * while this one waits for the lock is a name that exists here, and not one
+ * handed to the file system, which refuses it as it refuses a full volume
+ * (ENOSPC on the KRFFS root) or a failing one (EIO on a KRFFS volume).
+ */
+static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode)
+{
+    void *found;
+    int32_t rc;
+
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return -EROFS; /* nothing is created under /dev or /proc */
+    }
+    /* A name a mount stands at exists, whatever the type's own lookup
+     * says: a KRFFS /dev would shadow the synthetic mount. */
+    if (vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
+        return -EEXIST;
+    }
+    if (parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
+        if (parent->mnt->type->ops->put) {
+            parent->mnt->type->ops->put(parent->mnt, found);
+        }
+        return -EEXIST;
+    }
+    if (!mnt_is_root(parent->mnt)) {
+        rc = cred_access_ref(parent, CRED_W, 0);
+        if (rc == 0) {
+            vfs_ns_lock(parent->mnt);
+            rc = vfs_mkdir(parent->mnt, parent->node, leaf,
+                           mode & 07777u & ~current_proc->fs->umask);
+            vfs_ns_unlock(parent->mnt);
+        }
+        return rc;
+    }
+    rc = cred_access_node((krffs_node_t *)parent->node, CRED_W, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    vfs_ns_lock(parent->mnt);
+    rc = vfs_mkdir(parent->mnt, parent->node, leaf, mode);
+    vfs_ns_unlock(parent->mnt);
+    if (rc == 0 && parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found) == 0) {
+        krffs_stamp_new_node(found, mode);
+    }
+    return rc;
+}
+
+/**
  * Create the directory `path`, an absolute canonical path, with the
  * permission bits of `mode` less the umask, as any creation takes them: the
  * core of mkdir(2) and mkdirat(2). Returns 0 or -errno (-EEXIST if it exists,
  * a last name of "." or ".." among them, -ENOENT if a parent is missing).
+ * The walk keeps the parent's namespace lock, where its type takes one,
+ * until the directory is made (`mkdir_in`).
  */
 static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
 {
-    krffs_node_t *node;
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc;
 
     if (!vfs_root_mounted()) {
         return -ENOENT;
@@ -8159,67 +8260,14 @@ static int32_t do_mkdir(const char *pathbuf, uint32_t mode)
     if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
         return -EEXIST; /* the root exists; mkdir -p walks through here */
     }
-    {
-        struct vfs_ref parent;
-        char leaf[VFS_NAME_MAX + 1];
-        void *found;
-        int32_t rc;
-
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
-        if (rc != 0) {
-            return rc; /* a missing parent, or a denied ancestor */
-        }
-        if (leaf_is_dot(leaf)) {
-            vfs_ref_release(&parent);
-            return -EEXIST;
-        }
-        if (vfs_synth_vpath(parent.mnt, parent.node)) {
-            vfs_ref_release(&parent);
-            return -EROFS; /* nothing is created under /dev or /proc */
-        }
-        /* A name a mount stands at exists, whatever the type's own lookup
-         * says: a KRFFS /dev would shadow the synthetic mount. */
-        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
-            vfs_ref_release(&parent);
-            return -EEXIST;
-        }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
-            if (parent.mnt->type->ops->put) {
-                parent.mnt->type->ops->put(parent.mnt, found);
-            }
-            vfs_ref_release(&parent);
-            return -EEXIST;
-        }
-        if (!mnt_is_root(parent.mnt)) {
-            rc = cred_access_ref(&parent, CRED_W, 0);
-            if (rc == 0) {
-                vfs_ns_lock(parent.mnt);
-                rc = vfs_mkdir(parent.mnt, parent.node, leaf,
-                               mode & 07777u & ~current_proc->fs->umask);
-                vfs_ns_unlock(parent.mnt);
-            }
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_mkdir(parent.mnt, parent.node, leaf, mode);
-        vfs_ns_unlock(parent.mnt);
-        if (rc != 0) {
-            vfs_ref_release(&parent);
-            return rc;
-        }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
-            node = found;
-            krffs_stamp_new_node(node, mode);
-        }
-        vfs_ref_release(&parent);
+    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
+        return rc; /* a missing parent, or a denied ancestor */
     }
-    return 0;
+    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);
+    vfs_walk_unlock(parent.mnt);
+    vfs_ref_release(&parent);
+    return rc;
 }
 
 /* mkdir(2): EBX = path, ECX = mode. */

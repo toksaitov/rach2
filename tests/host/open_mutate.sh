@@ -1,8 +1,10 @@
 #!/bin/sh
 # Compile mounted open cleanup, the errors of an open, a dup and a dup2 that
 # get no descriptor, the KRFFS root's unlink and rename under the root's lock
-# and of a program's file, and the calls by path that read or change a node
-# under the lock their walk takes, before, during and after each fault.
+# and of a program's file, the calls by path that read or change a node under
+# the lock their walk takes, the key of a file's locks, a mkdir's lookup under
+# the lock of its parent, and an orphan's locks dropped before it is freed,
+# before, during and after each fault.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -66,7 +68,8 @@ for fault in node release truncate loop registration unlink-lock rename-lock ren
     rename-locked-walk rename-relocked chmod-walk-unlocked chown-walk-unlocked \
     stat64-walk-unlocked old-stat-walk-unlocked fstatat-walk-unlocked access-walk-unlocked \
     utimensat-walk-unlocked utimensat-fd-node-unlocked open-reserves-after-walk open-enomem \
-    open-emfile dup-enomem dup2-enomem program-holder; do
+    open-emfile dup-enomem dup2-enomem program-holder root-lock-key volume-lock-key \
+    fat-lock-key mkdir-walk-unlocked orphan-locks-after; do
     source="$work/sys/syscall_fs.c"
     [ "$fault" != loop ] || source="$work/sys/block/loop.c"
     python3 - "$source" "$fault" <<'PY'
@@ -149,6 +152,24 @@ changes = {
     "rename-relocked": ("    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
                         "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n"
                         "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"),
+    "root-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||",
+                      "    return mnt->type == &vfs_krffs_volume_type ||"),
+    "volume-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||",
+                        "    return mnt->type == &vfs_krffs_type ||"),
+    "fat-lock-key": ("    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||\n"
+                     "           mnt->type == &vfs_vfat_type || mnt->type == &vfs_exfat_type;",
+                     "    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;"),
+    "orphan-locks-after": ("    if (e->ofd && e->ofd->refcount == 1 && lock_any()) {\n"
+                           "        lock_ofd_gone(e->ofd);\n    }\n"
+                           "    krffs_remove_reserved_node(krffs_fs, node);\n",
+                           "    (void)e;\n    krffs_remove_reserved_node(krffs_fs, node);\n"),
+    "mkdir-walk-unlocked": [
+        ("rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));",
+         "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));"),
+        ("    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);\n"
+         "    vfs_walk_unlock(parent.mnt);\n",
+         "    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode);\n"),
+    ],
 }
 edits = changes[sys.argv[2]]
 for old, new in edits if isinstance(edits, list) else [edits]:
@@ -177,6 +198,11 @@ PY
         dup-enomem) message='a dup the heap has no room for is ENOMEM' ;;
         dup2-enomem) message='a dup2 past the end of a table the heap cannot grow is ENOMEM' ;;
         program-holder) message='an unlink keeps the file a program runs from' ;;
+        root-lock-key) message='a file of the KRFFS root is keyed by its node' ;;
+        volume-lock-key) message='a file of a KRFFS volume is keyed by its node' ;;
+        fat-lock-key) message='a file of a FAT32 volume is keyed by its node, which a rename keeps' ;;
+        mkdir-walk-unlocked) message='a mkdir of a name another process made while it waited is EEXIST' ;;
+        orphan-locks-after) message="a description's locks go before the orphan they are on is freed" ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

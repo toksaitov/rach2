@@ -23,6 +23,7 @@
 #include "krffs.h"
 #include "../block/loop.h"
 #include "krffsmount.h"
+#include "lock.h"
 #include "pathbuf.h"
 #include "procfs.h"
 #include "synthfs.h"
@@ -1086,6 +1087,7 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
     }
     fd_ofd_repoint(mnt, from, to);
     loop_repoint(mnt, from, to);
+    lock_repoint(mnt, (uint64_t)(uintptr_t)from, (uint64_t)(uintptr_t)to);
 }
 
 /* The default-answer wrappers. */
@@ -1603,6 +1605,12 @@ static int kfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_unlink(path + (path[0] == '/')) == 0 ? 0 : -EIO;
 }
 
+/**
+ * Make the directory `name` in `dir`. The parent is resolved and held, so
+ * the core refuses one of two things: a name whose directory identifier
+ * another directory has (`KRFFS_ETAKEN`), which is EINVAL, the answer for a
+ * name the file system cannot hold, and a root with no room, ENOSPC.
+ */
 static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     char path[256];
@@ -1613,8 +1621,11 @@ static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (rc != 0) {
         return rc;
     }
-    /* The parent is resolved and held, so the one failure left is space. */
-    return krffs_mkdir(path) == 0 ? 0 : -ENOSPC;
+    rc = krffs_mkdir(path);
+    if (rc == KRFFS_ETAKEN) {
+        return -EINVAL;
+    }
+    return rc == 0 ? 0 : -ENOSPC;
 }
 
 static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)

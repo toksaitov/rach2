@@ -252,11 +252,13 @@ static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t fie
 }
 
 /**
- * A field of any width of a node being made, written as its ids are and for
- * the same reason: nothing reads it until the name is written after it. The
- * mode and the owner go this way; under the whole-unit rule an owner astride
- * two units could not be given to the node at all, and the node would be
- * published as root's.
+ * A field of any width of a node no path reaches yet, written as its ids are
+ * and for the same reason: a node being made is read by nobody until its
+ * name is written after every other field, and a copy being filled for a
+ * move is a free node until its type is written after its own. Every field
+ * of the two goes this way. Under the whole-unit rule a field whose changed
+ * bytes fell in two units could not be written at all, so a node could be
+ * neither made nor moved to a place where one of its fields crosses a unit.
  */
 static int krffs_put_new(krffs_mount_t *mount, uint64_t offset, uint32_t field, const void *value,
                          uint32_t size)
@@ -847,6 +849,29 @@ void krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what)
 }
 
 /**
+ * Give a node being made all three of its times, the moment it came into
+ * being: a file created and never written still has one, and a build tool
+ * compares against it. They are written as the node's other fields are,
+ * through `krffs_put_new`, since nothing reads them until its name is written
+ * after them. Answers 0, or -1 if the medium refused a write.
+ */
+static int krffs_stamp_new(krffs_mount_t *mount, uint64_t node)
+{
+    krffs_node_time_t now;
+    int64_t seconds = 0;
+    int64_t nanoseconds = 0;
+    int rc = 0;
+
+    rtc_realtime(&seconds, &nanoseconds);
+    now.seconds = seconds;
+    now.nanoseconds = nanoseconds;
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_ATIME, &now, (uint32_t)sizeof(now));
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_MTIME, &now, (uint32_t)sizeof(now));
+    rc |= krffs_put_new(mount, node, KRFFS_FIELD_CTIME, &now, (uint32_t)sizeof(now));
+    return rc;
+}
+
+/**
  * The offset of the directory a node lives in.
  *
  * A parent id of `KRFFS_ROOT_ID` names the root, which is not in the node
@@ -939,8 +964,11 @@ static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint6
  *
  * The split writes the tail's header before the size that reveals it, and the
  * node is published by its type, written last, so an interrupted allocation
- * leaves a chain a mount can walk. A node published without a name is one no
- * path reaches, and the check reclaims it; every caller names it next.
+ * leaves a chain a mount can walk. Until then the node is a free one, whose
+ * fields no reader looks at, so every field written before the type, a
+ * copy's name, ids, mode, owner and times and the length of either, goes
+ * through `krffs_put_new`. A node published without a name is one no path
+ * reaches, and the check reclaims it; every caller names it next.
  */
 static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, uint64_t original, int *err)
 {
@@ -998,20 +1026,23 @@ static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, uint64_t
                 if (krffs_head(mount, original, &from) != 0) {
                     return KRFFS_NO_NODE;
                 }
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_NAME, from.name,
-                                KRFFS_FILE_NAME_BUFFER_SIZE);
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_NAME, from.name,
+                                    KRFFS_FILE_NAME_BUFFER_SIZE);
                 rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_ID, from.id);
                 /* keep its directory membership */
                 rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_PARENT, from.parent_id);
-                rc |= krffs_put_u16(mount, offset, KRFFS_FIELD_MODE, from.mode);
-                rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_UID, from.uid);
-                rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_GID, from.gid);
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME, &from.access_time,
-                                (uint32_t)sizeof(from.access_time));
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_MTIME, &from.modification_time,
-                                (uint32_t)sizeof(from.modification_time));
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_CTIME, &from.attribute_change_time,
-                                (uint32_t)sizeof(from.attribute_change_time));
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_MODE, &from.mode,
+                                    (uint32_t)sizeof(from.mode));
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_UID, &from.uid,
+                                    (uint32_t)sizeof(from.uid));
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_GID, &from.gid,
+                                    (uint32_t)sizeof(from.gid));
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_ATIME, &from.access_time,
+                                    (uint32_t)sizeof(from.access_time));
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_MTIME, &from.modification_time,
+                                    (uint32_t)sizeof(from.modification_time));
+                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_CTIME, &from.attribute_change_time,
+                                    (uint32_t)sizeof(from.attribute_change_time));
                 if (rc != 0) {
                     return KRFFS_NO_NODE;
                 }
@@ -1032,14 +1063,14 @@ static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, uint64_t
             if (original == KRFFS_NO_NODE) {
                 uint8_t empty = '\0';
 
-                if (krffs_put(mount, offset, KRFFS_FIELD_NAME, &empty, 1) != 0) {
+                if (krffs_put_new(mount, offset, KRFFS_FIELD_NAME, &empty, 1) != 0) {
                     return KRFFS_NO_NODE;
                 }
             }
             if (krffs_sync_point(mount) != 0) {
                 return KRFFS_NO_NODE;
             }
-            if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, data_size) != 0 ||
+            if (krffs_put_new_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, data_size) != 0 ||
                 krffs_sync_point(mount) != 0) {
                 return KRFFS_NO_NODE;
             }
@@ -1384,21 +1415,21 @@ uint32_t krffs_mode_type(uint16_t mode)
  * Create an empty node at `path` with `mode`, which has the type bits of a
  * FIFO or a socket, or none for a regular file, owned by `uid` and `gid`.
  *
- * The mode and the owner are on the medium before the name, as every field
- * is, so the node is never found with an owner it was not made with. An
- * existing name returns success, as `krffs_create_at` says. Returns 0;
- * KRFFS_EBAD for a path with no last name or whose directory is not found;
- * KRFFS_ENOSPACE when no free node can hold the node; or KRFFS_EIO when the
- * medium refused a read, a write or a sync the creation needed, which a
- * device removed on the way does, so a caller can tell a full volume from a
- * failing one.
+ * The mode, the owner and the three times are on the medium before the name,
+ * as every field is, so the node is never found with an owner it was not made
+ * with; each is written through `krffs_put_new`, since no path reaches the
+ * node before its name. An existing name returns success, as
+ * `krffs_create_at` says. Returns 0; KRFFS_EBAD for a path with no last name
+ * or whose directory is not found; KRFFS_ENOSPACE when no free node can hold
+ * the node; or KRFFS_EIO when the medium refused a read, a write or a sync
+ * the creation needed, which a device removed on the way does, so a caller
+ * can tell a full volume from a failing one.
  */
 int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32_t uid,
                          uint32_t gid)
 {
     uint64_t node;
     uint64_t parent_id;
-    krffs_node_t head;
     char dir[KRFFS_FILE_NAME_BUFFER_SIZE];
     char base[KRFFS_FILE_NAME_BUFFER_SIZE];
     uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE];
@@ -1430,14 +1461,7 @@ int krffs_create_node_at(krffs_mount_t *mount, const char *path, uint16_t mode, 
     rc |= krffs_put_new(mount, node, KRFFS_FIELD_MODE, &mode, (uint32_t)sizeof(mode));
     rc |= krffs_put_new(mount, node, KRFFS_FIELD_UID, &uid, (uint32_t)sizeof(uid));
     rc |= krffs_put_new(mount, node, KRFFS_FIELD_GID, &gid, (uint32_t)sizeof(gid));
-
-    /* Born now, in all three: a file created and never written still has a
-     * moment it came into being, and a build tool compares against it. */
-    krffs_stamp_at(mount, node, KRFFS_STAMP_DATA);
-    if (krffs_head(mount, node, &head) == 0) {
-        rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME, &head.modification_time,
-                        (uint32_t)sizeof(head.modification_time));
-    }
+    rc |= krffs_stamp_new(mount, node);
 
     /* The name last, and on the medium after everything it names: a node
      * reached by a path must already have the directory, the mode and the
@@ -1681,12 +1705,6 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_
 }
 
 /**
- * Create a directory at `path`.
- *
- * Returns 0 on success, -1 if the parent directory is missing or the name is
- * already taken.
- */
-/**
  * Whether a directory on the medium already has the logical id `id`.
  *
  * Two names can mix to one id. A second directory with a taken id would share
@@ -1716,12 +1734,13 @@ static int krffs_id_taken(krffs_mount_t *mount, uint64_t id)
 
 /**
  * Make an empty directory at `path` with the permission bits of `mode`,
- * owned by `uid` and `gid`, all on the medium before its name, as
- * `krffs_create_node_at` makes a node.
+ * owned by `uid` and `gid`, all on the medium before its name with its three
+ * times, as `krffs_create_node_at` makes a node.
  *
- * Returns 0; KRFFS_EBAD for a name that is taken, a directory id another
- * directory has, or a path with no last name or whose directory is not
- * found; or KRFFS_ENOSPACE or KRFFS_EIO as `krffs_create_node_at` does.
+ * Returns 0; KRFFS_EBAD for a name that is taken, or a path with no last name
+ * or whose directory is not found; KRFFS_ETAKEN for a directory whose id,
+ * the mix of its parent's and its name's hash, another directory has; or
+ * KRFFS_ENOSPACE or KRFFS_EIO as `krffs_create_node_at` does.
  */
 int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32_t uid,
                    uint32_t gid)
@@ -1729,7 +1748,6 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32
     uint16_t dmode = (uint16_t)(KRFFS_S_IFDIR | (mode & 07777u));
     uint64_t node;
     uint64_t parent_id;
-    krffs_node_t head;
     char dir[KRFFS_FILE_NAME_BUFFER_SIZE];
     char base[KRFFS_FILE_NAME_BUFFER_SIZE];
     uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE];
@@ -1749,7 +1767,7 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32
     }
 
     if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {
-        return KRFFS_EBAD;
+        return KRFFS_ETAKEN;
     }
 
     node = krffs_allocate_err(mount, 0, KRFFS_NO_NODE, &rc);
@@ -1768,11 +1786,7 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode, uint32
     rc |= krffs_put_new(mount, node, KRFFS_FIELD_MODE, &dmode, (uint32_t)sizeof(dmode));
     rc |= krffs_put_new(mount, node, KRFFS_FIELD_UID, &uid, (uint32_t)sizeof(uid));
     rc |= krffs_put_new(mount, node, KRFFS_FIELD_GID, &gid, (uint32_t)sizeof(gid));
-    krffs_stamp_at(mount, node, KRFFS_STAMP_DATA);
-    if (krffs_head(mount, node, &head) == 0) {
-        rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME, &head.modification_time,
-                        (uint32_t)sizeof(head.modification_time));
-    }
+    rc |= krffs_stamp_new(mount, node);
     if (rc != 0 || krffs_sync_point(mount) != 0 ||
         krffs_put(mount, node, KRFFS_FIELD_NAME, name, KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
         krffs_sync_point(mount) != 0) {

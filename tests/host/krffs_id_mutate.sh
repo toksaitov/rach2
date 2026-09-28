@@ -1,10 +1,17 @@
 #!/bin/sh
-# Prove the KRFFS host test's two rows about a node's id against the faults
-# they were written for. Entry 15 of milestone 50: a create writes the new
-# node's id under the whole-unit rule again, and a node whose id falls across
-# a 4 KiB unit cannot be made; krffs_hosttest.c makes one with the rule on.
-# Entry 125: mkdir makes a directory whose id another directory has, since
-# `bC` and `cb` mix to one id; the test requires `/cb` refused beside `/bC`.
+# Prove the KRFFS host test's rows about the fields of a node no path reaches
+# yet against the faults they were written for. Entry 15 of milestone 50: a
+# create writes the new node's id under the whole-unit rule again, and a node
+# whose id falls across a 4 KiB unit cannot be made; krffs_hosttest.c makes
+# one with the rule on. Entry 125: mkdir makes a directory whose id another
+# directory has, since `bC` and `cb` mix to one id; the test requires `/cb`
+# refused beside `/bC`. Entry 243: that refusal answers KRFFS_EBAD again,
+# which the adapters report as a full or a failing volume; the test requires
+# KRFFS_ETAKEN. Entry 244: a copy being filled for a move writes its access
+# time or its length under the rule again, or a node being made its
+# modification time, and a node whose field falls across a unit can be
+# neither moved there nor made there with its times; the test makes and
+# moves nodes at such places with the rule on.
 #
 # The test is compiled as tests/system/suites/host.sh compiles it, from a
 # private tree laid out as the repository is, so its include of krffs.c
@@ -85,7 +92,8 @@ run_phase()
 
 echo "krffs-id-proof: logs: $work"
 run_phase fixed pass ''
-for fault in new-id-rule id-taken mkdir-id-rule; do
+for fault in new-id-rule id-taken taken-is-bad mkdir-id-rule copy-times-rule copy-length-rule \
+    new-times-rule; do
     python3 - "$source" "$fault" <<'PY'
 from pathlib import Path
 import sys
@@ -104,14 +112,38 @@ faults = {
                     'krffs_calculate_djb_hash(name));\n'),
     'id-taken': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
                  '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
-                 '        return KRFFS_EBAD;\n'
+                 '        return KRFFS_ETAKEN;\n'
                  '    }\n',
                  ''),
+    'taken-is-bad': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
+                     '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
+                     '        return KRFFS_ETAKEN;\n'
+                     '    }\n',
+                     '    if (krffs_id_taken(mount, krffs_mix_id(parent_id, base))) {\n'
+                     '        return KRFFS_EBAD;\n'
+                     '    }\n'),
     'mkdir-id-rule': ('int krffs_mkdir_at(krffs_mount_t *mount, const char *path, uint16_t mode,',
                       '    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, '
                       'krffs_mix_id(parent_id, base));\n',
                       '    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, '
                       'krffs_mix_id(parent_id, base));\n'),
+    'copy-times-rule': ('static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, '
+                        'uint64_t original, int *err)',
+                        '                rc |= krffs_put_new(mount, offset, KRFFS_FIELD_ATIME, '
+                        '&from.access_time,\n',
+                        '                rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME, '
+                        '&from.access_time,\n'),
+    'copy-length-rule': ('static uint64_t krffs_allocate_err(krffs_mount_t *mount, uint64_t size, '
+                         'uint64_t original, int *err)',
+                         '            if (krffs_put_new_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, '
+                         'data_size) != 0 ||\n',
+                         '            if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, '
+                         'data_size) != 0 ||\n'),
+    'new-times-rule': ('static int krffs_stamp_new(krffs_mount_t *mount, uint64_t node)',
+                       '    rc |= krffs_put_new(mount, node, KRFFS_FIELD_MTIME, &now, '
+                       '(uint32_t)sizeof(now));\n',
+                       '    rc |= krffs_put(mount, node, KRFFS_FIELD_MTIME, &now, '
+                       '(uint32_t)sizeof(now));\n'),
 }
 head, old, new = faults[fault]
 if text.count(head) != 1:
@@ -130,7 +162,11 @@ PY
     case $fault in
         new-id-rule) message='a node whose id falls across a block is made with the whole-unit rule on' ;;
         id-taken) message="a second directory with the first one's identifier is refused" ;;
+        taken-is-bad) message='with the result of a taken identifier, which names no full or failing volume' ;;
         mkdir-id-rule) message='a directory whose id falls across a block is made with the whole-unit rule on' ;;
+        copy-times-rule) message='a file that has to move where its field falls across a block moves with the whole-unit rule on' ;;
+        copy-length-rule) message="a node made over a removed node's length across a block is made with the whole-unit rule on" ;;
+        new-times-rule) message='a node whose field falls across a block is made with the whole-unit rule on' ;;
     esac
     run_phase "$fault-mutated" fail "$message"
     restore
