@@ -51,8 +51,13 @@ The older 32-bit call cannot return a position above 2147483647 and
 refuses it with
 .Er EOVERFLOW .
 .Pp
-The boot log is seekable, through position 4294967295 with either call,
-and a read of it holds the description's lock, which its seek takes, as a
+The boot log is seekable through position 4294967295 with the 64-bit
+call; the older call, as above, refuses a position past 2147483647 with
+.Er EOVERFLOW .
+A position past 4294967295 is
+.Er EINVAL
+with either.
+A read of the log holds the description's lock, which its seek takes, as a
 read of a
 .Pa /proc
 file does, below.
