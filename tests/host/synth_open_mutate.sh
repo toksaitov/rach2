@@ -73,7 +73,8 @@ faults()
     case $1 in
         devfs) echo ptmx ;;
         procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
-            record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile ;;
+            record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile \
+            oom-nbsp oom-range-first ;;
     esac
 }
 
@@ -138,6 +139,9 @@ else:
         'oom-floor-kept': [("    p->tg->oom_score_adj = v;\n    if (proc_privileged(current_proc)) {\n"
                             "        p->tg->oom_score_adj_min = v;\n    }\n",
                             "    p->tg->oom_score_adj = v;\n")],
+        'oom-nbsp': [(" || (unsigned char)c == 0xA0;\n", ";\n")],
+        'oom-range-first': [("        if (over || mag > (limit - d) / base) {\n            over = 1;\n",
+                             "        if (over || mag > (limit - d) / base) {\n            return -ERANGE;\n")],
     }
     for old, new in changes[fault]:
         assert source.count(old) == 1
@@ -157,6 +161,8 @@ PY
             oom-floor) message='and may not lower it below the floor' ;;
             oom-floor-kept) message='a privileged write sets the floor' ;;
             oom-open-emfile) message='an open of oom_score_adj the heap has no room for is ENOMEM' ;;
+            oom-nbsp) message="the byte 0xa0 at either end is a space, as Linux's isspace has it" ;;
+            oom-range-first) message='text that is no integer is EINVAL however many digits it begins with' ;;
         esac
         run_phase "$test" "$fault" 1 "$message"
         cleanup

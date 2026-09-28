@@ -556,7 +556,18 @@ static void oom_values(void)
               oom_write(&process, "12a") == -EINVAL && oom_write(&process, "+-5") == -EINVAL &&
               oom_write(&process, "09") == -EINVAL,
           "text that is no integer is EINVAL");
-    check(oom_write(&process, "99999999999") == -ERANGE, "a number an int does not hold is ERANGE");
+    check(oom_write(&process, "99999999999") == -ERANGE &&
+              oom_write(&process, "2147483648") == -ERANGE &&
+              oom_write(&process, "-2147483649") == -ERANGE,
+          "a number an int does not hold is ERANGE");
+    check(oom_write(&process, "-2147483648") == -EINVAL &&
+              oom_write(&process, "2147483647") == -EINVAL,
+          "a number an int holds that is out of the range is EINVAL");
+    check(oom_write(&process, "2147483648x") == -EINVAL &&
+              oom_write(&process, "-2147483649z") == -EINVAL && oom_reads("300\n"),
+          "text that is no integer is EINVAL however many digits it begins with");
+    check(oom_write(&process, "\240100\240") == 5 && oom_reads("100\n"),
+          "the byte 0xa0 at either end is a space, as Linux's isspace has it");
     check(oom_write(&process, "0") == 1 && oom_reads("0\n"), "a write of 0");
 }
 

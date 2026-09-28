@@ -29,13 +29,18 @@
  * its call until the first waits for it. A robust mutex a thread other than the
  * first holds when it calls execve is released, and its next locker gets
  * EOWNERDEAD. A thread that calls exit ends them all. A thread other than
- * the first opens the framebuffer, sets its palette, writes a pixel, reads
- * the console as the display's owner reads it, raw scancodes that do not
- * wait, and closes it, which gives the display back for another process to
- * open: the display belongs to the process, whichever thread opened it.
+ * the first empties the console's queue of lines, opens the framebuffer,
+ * sets its palette, writes a pixel, reads the console as the display's owner
+ * reads it, raw scancodes, of which it finds none, where the line discipline
+ * would answer EAGAIN, and closes it, which gives the display back for
+ * another process to open: the display belongs to the process, whichever
+ * thread opened it.
  *
  * Prints "THREADMUSL OK" on success and "THREADMUSL FAIL (detail)"
  * otherwise.
+ *
+ * Needs: the console as stdin, in canonical mode, as a boot of the default
+ * suite has it; the framebuffer's row reads it.
  */
 
 #define _GNU_SOURCE
@@ -709,36 +714,50 @@ static int lost_status_row(void)
 /* The errno of the step `use_framebuffer` failed at. */
 static volatile int fb_errno;
 
+/** Empty the line discipline's queue of the console, which has O_NONBLOCK
+ * set, reading lines and an end of file until it answers EAGAIN: 0 then, or
+ * -1 when it does not within 64 reads. */
+static int console_emptied(void)
+{
+    unsigned char line[256];
+    int i;
+
+    for (i = 0; i < 64; i++) {
+        if (read(0, line, sizeof(line)) < 0) {
+            return errno == EAGAIN ? 0 : -1;
+        }
+    }
+    return -1;
+}
+
 /**
- * The thread of `framebuffer_row`, which is not the first: open the
- * framebuffer, set its palette, write a pixel, read the console with
- * O_NONBLOCK, which for the display's owner reads raw scancodes and answers
- * 0 when there are none, where the line discipline would answer EAGAIN, and
- * close it. 0, or the number of the step that failed, with its errno in
- * `fb_errno`.
+ * The thread of `framebuffer_row`, which is not the first. With O_NONBLOCK
+ * on the console, empty its queue of lines while no process owns the
+ * display; then open the framebuffer, set its palette, write a pixel, and
+ * read the console, which for the display's owner reads raw scancodes and,
+ * none typed, answers 0, where the line discipline, its queue empty, answers
+ * EAGAIN; and close it. 0, or the number of the step that failed, with its
+ * errno in `fb_errno`.
  */
 static void *use_framebuffer(void *arg)
 {
     static unsigned char palette[768];
     unsigned char keys[16];
     long step = 0;
-    int fd, flags;
+    int fd = -1;
+    int flags = fcntl(0, F_GETFL);
 
     (void)arg;
-    fd = open("/fb", O_RDWR);
-    if (fd < 0) {
-        fb_errno = errno;
+    if (flags < 0 || fcntl(0, F_SETFL, flags | O_NONBLOCK) != 0 || console_emptied() != 0) {
         step = 1;
-        return (void *)step;
-    }
-    flags = fcntl(0, F_GETFL);
-    if (ioctl(fd, FB_SETPALETTE, palette) != 0) {
+    } else if ((fd = open("/fb", O_RDWR)) < 0) {
         step = 2;
-    } else if (write(fd, "\017", 1) != 1) {
+    } else if (ioctl(fd, FB_SETPALETTE, palette) != 0) {
         step = 3;
-    } else if (flags < 0 || fcntl(0, F_SETFL, flags | O_NONBLOCK) != 0 ||
-               read(0, keys, sizeof(keys)) < 0) {
+    } else if (write(fd, "\017", 1) != 1) {
         step = 4;
+    } else if (read(0, keys, sizeof(keys)) != 0) {
+        step = 5;
     }
     if (step != 0) {
         fb_errno = errno;
@@ -746,9 +765,9 @@ static void *use_framebuffer(void *arg)
     if (flags >= 0) {
         fcntl(0, F_SETFL, flags);
     }
-    if (close(fd) != 0 && step == 0) {
+    if (fd >= 0 && close(fd) != 0 && step == 0) {
         fb_errno = errno;
-        step = 5;
+        step = 6;
     }
     return (void *)step;
 }
@@ -761,7 +780,8 @@ static void *use_framebuffer(void *arg)
  */
 static int framebuffer_row(void)
 {
-    static const char *const steps[] = {"a thread's open of the framebuffer",
+    static const char *const steps[] = {"the console's queue of lines could not be emptied",
+                                        "a thread's open of the framebuffer",
                                         "a thread's palette on the framebuffer it opened",
                                         "a thread's pixel on the framebuffer it opened",
                                         "a thread that owns the framebuffer reads raw scancodes",
