@@ -608,6 +608,13 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     return 0;
 }
 
+/** No row's descriptor is a device whose transfers move the offset. */
+int devfs_fd_moves_offset(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
 struct pty *pty_get(int index)
 {
     (void)index;

@@ -254,9 +254,8 @@ changes = {
         ("        fd_fifo_orphan(e);\n    }\n    vfs_ns_unlock(locked);\n}\n",
          "        fd_fifo_orphan(e);\n    }\n}\n"),
     ],
-    "log-read-unheld": ("    return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || "
-                        "entry->type == FD_TYPE_PROC\n",
-                        "    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC\n"),
+    "log-read-unheld": ("    return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;\n",
+                        "    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;\n"),
     "log-seek-unlocked": [
         ("    fd_ofd_lock(entry->ofd);\n    (void)devfs_fd_log_size(entry, &size);\n",
          "    (void)devfs_fd_log_size(entry, &size);\n"),

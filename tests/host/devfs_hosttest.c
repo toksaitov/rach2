@@ -1,5 +1,7 @@
 /**
- * Check exclusive creation before pty or descriptor allocation.
+ * Check exclusive creation before pty or descriptor allocation, and which
+ * devices' transfers move the description's offset, so that read(2) and
+ * write(2) hold the description for them.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -36,7 +38,41 @@ int fd_alloc(fd_table_t *table)
     return -1;
 }
 
-/** Check errno precedence, absent leaves and ordinary pty dispatch. */
+/** Whether a transfer of the device `name`, published or not, moves the
+ * offset of its description, as `devfs_fd_moves_offset` answers. */
+static int moves_offset(const char *name)
+{
+    fd_entry_t e;
+    int i;
+
+    k_memset(&e, 0, sizeof(e));
+    e.type = FD_TYPE_DEVICE;
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        if (name_eq(dev_table[i].name, name)) {
+            e.dev = &dev_table[i];
+        }
+    }
+    check(e.dev != NULL, "every device a row names is in the table");
+    return devfs_fd_moves_offset(&e);
+}
+
+/**
+ * The screen log's read sets the offset past its copy, which may sleep in a
+ * fault on the caller's buffer, as the boot log's read and a boot window's
+ * transfer do; the null, zero and random devices' ignore the offset.
+ */
+static void offset_devices(void)
+{
+    check(moves_offset("screenlog"),
+          "a read of /dev/screenlog holds its description, as it moves the offset");
+    check(moves_offset("bootlog") && moves_offset("bootpart") && moves_offset("grubcore"),
+          "a transfer of the boot log or a boot window holds its description");
+    check(!moves_offset("null") && !moves_offset("zero") && !moves_offset("urandom"),
+          "a device whose transfers ignore the offset holds nothing");
+}
+
+/** Check errno precedence, absent leaves, ordinary pty dispatch and the
+ * devices whose transfers move the offset. */
 int main(void)
 {
     int acc, extra;
@@ -55,8 +91,9 @@ int main(void)
     check(devfs_open("ptmx", DEVFS_O_DIRECTORY) == -ENOTDIR && !master_calls,
           "pty directory open allocates nothing");
     check(devfs_open("ptmx", 2) == 7 && master_calls == 1, "ordinary pty open dispatches");
+    offset_devices();
     if (!failures) {
-        printf("devfs-hosttest: result: pass: exclusive pty creation\n");
+        printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices\n");
     }
     return failures != 0;
 }

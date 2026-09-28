@@ -95,7 +95,10 @@ A read of one holds the open file description for its length, as
 .Xr lseek 2
 holds it to move the offset, so a seek through a descriptor that shares
 it waits for the read; so does a read of
-.Pa /dev/bootlog .
+.Pa /dev/bootlog
+or
+.Pa /dev/screenlog ,
+and a second read through the description waits for the first.
 Other devices use their own read operation.
 Mouse reads return whole packets without waiting and return zero when
 the buffer cannot hold one packet.

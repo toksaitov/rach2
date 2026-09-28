@@ -1,6 +1,7 @@
 #!/bin/sh
 # Compile synthetic-file regressions before, during and after each fault:
-# the ptmx dispatch before the flag checks, the text's terminator written
+# the ptmx dispatch before the flag checks, the screen log dropped from the
+# devices whose transfers move the offset, the text's terminator written
 # with no buffer, a read of a process's arguments that holds no reference to
 # the address space or reads the process's record after the first read,
 # which may sleep while the process is reaped, a /proc/PID/mem open that
@@ -71,7 +72,7 @@ run_phase()
 faults()
 {
     case $1 in
-        devfs) echo ptmx ;;
+        devfs) echo ptmx screenlog-unheld ;;
         procfs) echo terminator mem-hold mem-live exe-present exe-deleted unheld-space \
             record-after-sleep hold-not-user oom-range oom-floor oom-floor-kept oom-open-emfile \
             oom-nbsp oom-range-first ;;
@@ -95,6 +96,10 @@ if fault == 'ptmx':
     source = source.replace(old, '')
     at = source.index('    dev = devfs_find(name);', source.index('int devfs_open('))
     source = source[:at] + old + source[at:]
+elif fault == 'screenlog-unheld':
+    old = '    return e && e->type == FD_TYPE_DEVICE && e->dev && e->dev->ops == &screenlog_ops;\n'
+    assert source.count(old) == 1
+    source = source.replace(old, '    return 0;\n')
 elif fault == 'terminator':
     old = "    if (!t->nomem) {\n        t->buf[t->len] = '\\0';\n    }"
     assert source.count(old) == 1
@@ -150,6 +155,7 @@ path.write_text(source)
 PY
         case $fault in
             ptmx) message='ptmx exclusive create returns EEXIST before dispatch' ;;
+            screenlog-unheld) message='a read of /dev/screenlog holds its description, as it moves the offset' ;;
             terminator) message='runtime error: store to null pointer' ;;
             mem-hold) message='fail: an open of /proc/PID/mem holds the record and is no user of it' ;;
             mem-live) message='fail: a read once the process has ended returns 0 and reaches no memory' ;;

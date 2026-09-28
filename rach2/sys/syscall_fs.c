@@ -495,19 +495,19 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
  * The description an ops-backed read or write of `entry` holds for its
  * length, as lseek holds it to move the offset, or NULL. A raw disk window's
  * transfer uses `raw_offset`; a /proc file's the offset, a byte of its text
- * or an address of /proc/PID/mem; and `/dev/bootlog`'s the offset, a byte
- * of the kernel log's ring. Each may sleep before it sets the offset past
+ * or an address of /proc/PID/mem; and a log device's the offset, a byte of
+ * the kernel log's ring or of the screen log's text
+ * (`devfs_fd_moves_offset`). Each may sleep before it sets the offset past
  * what it moved, in a disk request, or in a fault on the caller's buffer or
- * in bringing in a page of a process, and a seek through a descriptor that
- * shares the description must wait for it or be lost. Linux holds such a
- * file's position lock across read, write and lseek alike. pread64 and
- * pwrite64 hold nothing, since they work on a copy (`pio_view`).
+ * in bringing in a page of a process. A seek through a descriptor that
+ * shares the description must wait for it or be lost, and a second transfer
+ * must wait to start from where the first leaves the offset. Linux holds
+ * such a file's position lock across read, write and lseek alike. pread64
+ * and pwrite64 hold nothing, since they work on a copy (`pio_view`).
  */
 static struct open_file *ops_offset_held(fd_entry_t *entry)
 {
-    return devfs_fd_is_raw(entry) || devfs_fd_log_size(entry, NULL) || entry->type == FD_TYPE_PROC
-               ? entry->ofd
-               : NULL;
+    return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;
 }
 
 /** Dispatch an ops-backed write, holding the description of one whose write

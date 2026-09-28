@@ -766,6 +766,12 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     return 1;
 }
 
+/** The log is the model's one device, and its read moves the offset. */
+int devfs_fd_moves_offset(struct fd_entry *e)
+{
+    return devfs_fd_log_size(e, NULL);
+}
+
 int devfs_lseek_zero(struct fd_entry *e)
 {
     (void)e;

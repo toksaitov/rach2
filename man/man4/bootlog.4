@@ -38,7 +38,15 @@ script reads this device.
 .Ss Screen log level
 .Pa /dev/screenlog
 controls which kernel records appear on the screen.
-A read returns the level as one digit followed by a newline.
+A read returns the level as one digit followed by a newline, and a
+read at the end of those two bytes returns zero.
+A read holds the open file description for its length, so a second read
+through a descriptor that shares it waits and goes on from where the
+first left the offset.
+The device does not seek:
+.Xr lseek 2
+fails with
+.Er ESPIPE .
 A write takes its first digit as the new level and accepts the whole write.
 An empty write returns zero; a first byte other than a decimal digit
 fails with

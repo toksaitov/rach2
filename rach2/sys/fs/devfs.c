@@ -1681,6 +1681,22 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
 }
 
 /**
+ * Whether a read or write of `e` sets the description's offset past what it
+ * moved: a raw disk window's `raw_offset`, the boot log's offset in its ring,
+ * or the screen log's in its two bytes of text. Each transfer may sleep
+ * first, in a disk request or in a fault on the caller's buffer, so its
+ * caller holds the description for the transfer (`ops_offset_held` in
+ * `syscall_fs.c`).
+ */
+int devfs_fd_moves_offset(struct fd_entry *e)
+{
+    if (devfs_fd_is_raw(e) || devfs_fd_log_size(e, NULL)) {
+        return 1;
+    }
+    return e && e->type == FD_TYPE_DEVICE && e->dev && e->dev->ops == &screenlog_ops;
+}
+
+/**
  * Publish /dev/bootpart over the boot partition.
  *
  * The window is bounded below 2 GiB so the legacy 32-bit lseek can name every

@@ -171,6 +171,13 @@ void devfs_disk_publish(struct disk *d, uint64_t window_sectors);
  */
 int devfs_fd_log_size(struct fd_entry *e, uint32_t *size);
 
+/**
+ * Whether a read or write of `e` sets the description's offset past what it
+ * moved, as a raw disk window's, the boot log's and the screen log's do; the
+ * caller holds the description for such a transfer.
+ */
+int devfs_fd_moves_offset(struct fd_entry *e);
+
 /* The leaf name ("null", ...) of an open device fd, for /proc/<pid>/fd
  * readlink. Returns "?" if e is not a devfs device. */
 const char *devfs_fd_name(struct fd_entry *e);
