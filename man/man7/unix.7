@@ -56,8 +56,8 @@ A path that ends in a slash, or whose last component is
 .Pa \&.
 or
 .Pa \&.. ,
-names a directory, which no socket file is, as in Linux: a bind to one
-makes nothing and fails with
+names a directory, which no socket file is, as in Linux: a bind to one,
+the root among them, makes nothing and fails with
 .Er ENOENT
 when a slash follows a name nothing has and with
 .Er EADDRINUSE

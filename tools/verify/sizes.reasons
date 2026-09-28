@@ -135,7 +135,7 @@ rach2/sys/fs/fat32name.c:fat32_name_short complexity 26 a parser over an externa
 
 rach2/sys/fs/fatcommon.c:fat_name_units complexity 29 a parser over an external format, one check per field in the format's order
 
-rach2/sys/fs/krffs.c:krffs_allocate_err lines 112 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/krffs.c:krffs_allocate_err lines 115 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_allocate_err nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at complexity 42 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_repair_at lines 130 one file system operation over the on-disk format, each step a rule of the format
@@ -287,8 +287,8 @@ tests/credprobe.c:child_main lines 112 a probe, one sequence of steps in the ord
 tests/dgramprobe.c:_start complexity 79 a probe, one sequence of steps in the order the log records them
 tests/dgramprobe.c:_start lines 528 a probe, one sequence of steps in the order the log records them
 
-tests/dirprobe.c:_start complexity 58 a probe, one sequence of steps in the order the log records them
-tests/dirprobe.c:_start lines 273 a probe, one sequence of steps in the order the log records them
+tests/dirprobe.c:_start complexity 61 a probe, one sequence of steps in the order the log records them
+tests/dirprobe.c:_start lines 288 a probe, one sequence of steps in the order the log records them
 
 tests/dirtest.c:_start lines 109 a probe, one sequence of steps in the order the log records them
 
@@ -326,8 +326,8 @@ tests/host/exfat_hosttest.c:dirty_rows nesting 5 a test's rows, each a case, rea
 tests/host/exfat_hosttest.c:matrix_pass lines 108 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:oracle_ok complexity 42 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:well_formed_rows complexity 41 a test's rows, each a case, read as one table
-tests/host/exfat_hosttest.c:write_rows complexity 49 a test's rows, each a case, read as one table
-tests/host/exfat_hosttest.c:write_rows lines 202 a test's rows, each a case, read as one table
+tests/host/exfat_hosttest.c:write_rows complexity 54 a test's rows, each a case, read as one table
+tests/host/exfat_hosttest.c:write_rows lines 221 a test's rows, each a case, read as one table
 
 tests/host/ext2_hosttest.c:dirty_rows complexity 37 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:dirty_rows lines 143 a test's rows, each a case, read as one table
@@ -340,8 +340,8 @@ tests/host/ext2_hosttest.c:refusal_rows complexity 66 a test's rows, each a case
 tests/host/ext2_hosttest.c:refusal_rows lines 359 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_write_rows lines 128 a test's rows, each a case, read as one table
 
-tests/host/fat32_hosttest.c:long_rows complexity 51 a test's rows, each a case, read as one table
-tests/host/fat32_hosttest.c:long_rows lines 171 a test's rows, each a case, read as one table
+tests/host/fat32_hosttest.c:long_rows complexity 53 a test's rows, each a case, read as one table
+tests/host/fat32_hosttest.c:long_rows lines 181 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:well_formed_rows complexity 72 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:well_formed_rows lines 214 a test's rows, each a case, read as one table
 tests/host/fat32_hosttest.c:write_rows complexity 70 a test's rows, each a case, read as one table
@@ -370,7 +370,7 @@ tests/host/krffs_hosttest.c:every_stop_file_is_whole params 8 a test's rows, eac
 tests/host/krffs_hosttest.c:every_stop_is_zero_filled nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:every_stop_keeps_its_bytes nesting 6 a test's rows, each a case, read as one table
 tests/host/krffs_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
-tests/host/krffs_hosttest.c:main lines 543 a test's rows, each a case, read as one table
+tests/host/krffs_hosttest.c:main lines 544 a test's rows, each a case, read as one table
 
 tests/host/kstring_hosttest.c:main complexity 70 a test's rows, each a case, read as one table
 tests/host/kstring_hosttest.c:main lines 171 a test's rows, each a case, read as one table
@@ -379,6 +379,7 @@ tests/host/kstring_hosttest.c:main nesting 6 a test's rows, each a case, read as
 tests/host/lapic_hosttest.c:main lines 163 a test's rows, each a case, read as one table
 
 tests/host/lock_hosttest.c:as params 7 the parameters are the arguments of one call the test makes, passed through
+tests/host/lock_hosttest.c:as_on params 8 the parameters are the arguments of one call the test makes, passed through
 
 tests/host/mbr_hosttest.c:main lines 176 a test's rows, each a case, read as one table
 
@@ -461,6 +462,8 @@ tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
 tests/host/synthfs_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
+
+tests/host/tables_hosttest.c:main complexity 28 a test's rows, each a case, read as one table
 
 tests/host/tcp_hosttest.c:main complexity 141 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:main lines 777 a test's rows, each a case, read as one table

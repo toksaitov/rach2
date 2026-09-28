@@ -645,9 +645,9 @@ probe threadmusl
 file rach2/sys/syscall_fs.c
 expect THREADMUSL FAIL (a thread's directory lists a task directory
 old
-        if (n >= (sd->tid != 0 ? 11 : 12)) {
+        if (n >= (sd->tid != 0 ? 12 : 13)) {
 new
-        if (n >= 12) {
+        if (n >= 13) {
 end
 
 fault thread-dir-link-drops-tid
@@ -727,17 +727,11 @@ probe ptracemusl
 file rach2/sys/fs/procfs.c
 expect PTRACEMUSL FAIL (a /proc/PID/mem descriptor opened before the exec
 old
-    if (!p || p->state == PROC_UNUSED || p->mm != mm) {
-        f->mm = NULL;
-        procfs_mm_put(mm);
-        return NULL;
-    }
-    mm_get(mm);
-    return mm;
+    return f->mm && mm_get_live(f->mm) ? f->mm : NULL;
 new
-    if (!p || p->state == PROC_UNUSED || !p->mm) {
-        f->mm = NULL;
-        procfs_mm_put(mm);
+    process_t *p = get_process((uint32_t)f->origin_pid);
+
+    if (!f->mm || !p || p->state == PROC_UNUSED || !p->mm) {
         return NULL;
     }
     mm_get(p->mm);

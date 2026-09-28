@@ -112,6 +112,7 @@ constVariable:*tests/devprobe.c
 constVariable:*tests/exitprobe.c
 constVariable:*tests/sigprobe.c
 unassignedVariable:*tests/devprobe.c
+unassignedVariable:*tests/loopprobe.c
 unassignedVariable:*tests/sigprobe.c
 
 # The interface probe reads a length the kernel writes through a pointer it

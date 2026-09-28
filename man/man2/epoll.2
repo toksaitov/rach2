@@ -85,8 +85,8 @@ So a socket watched for
 alone is not reported again when data comes to it, and one watched for
 .Dv EPOLLIN
 is reported for each arrival, as in Linux.
-A write to a pipe that is not empty is no change here, where Linux
-wakes the pollers of a pipe at every write and so reports it again.
+Each write to a pipe or a FIFO is a change of data for its read end,
+the pipe empty before it or not, as in Linux.
 With
 .Dv EPOLLONESHOT
 the first report disables it, errors and hangups included, until an

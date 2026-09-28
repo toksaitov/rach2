@@ -69,6 +69,16 @@ FAT32 and exFAT ignore the requested mode and report the mount's user
 ID, group ID, and permissions 0777 with the mount mask removed.
 Their read-only attribute removes write permission.
 An existing file's ownership and mode are unchanged.
+An existing directory returns
+.Er EISDIR ,
+as on Linux, since the flag asks for a file.
+With
+.Dv O_DIRECTORY ,
+which asks for a directory, the call returns
+.Er EINVAL
+before the path is read, as Linux does since 6.4, unless
+.Dv O_PATH
+is given too.
 .It Dv O_EXCL
 With
 .Dv O_CREAT ,
@@ -148,8 +158,9 @@ On an existing ordinary target, the checks for
 .Dv O_CREAT Ns | Ns Dv O_EXCL ,
 a final symbolic link under
 .Dv O_NOFOLLOW ,
-a directory opened for writing or truncation, and a non-directory
-under
+a directory opened for writing, for truncation, or with
+.Dv O_CREAT ,
+and a non-directory under
 .Dv O_DIRECTORY
 precede the read-only mount and access checks.
 A write open, creation, or truncation on a read-only mount returns
@@ -355,8 +366,10 @@ with
 .Er EACCES ,
 after checking exclusive creation and
 .Dv O_DIRECTORY .
-Synthetic directories refuse write access with
-.Er EISDIR
+Synthetic directories refuse write access and
+.Dv O_CREAT
+with
+.Er EISDIR ,
 but ignore
 .Dv O_TRUNC
 when opened read-only.
@@ -557,7 +570,12 @@ exceeds the file system's addressing limit.
 .It Bq Er EINTR
 A signal arrived while an open of a FIFO waited for the other end.
 .It Bq Er EINVAL
-A file system rejects the new name, required attributes cannot be
+.Dv O_CREAT
+and
+.Dv O_DIRECTORY
+were given together without
+.Dv O_PATH ,
+a file system rejects the new name, required attributes cannot be
 obtained, truncation selects an ext2 object that is not a regular file,
 or a FIFO was opened with the access mode 3;
 .Fn close_range
@@ -569,8 +587,9 @@ past
 File-system I/O failed, the device was removed, or a pseudo-terminal
 slave is still locked.
 .It Bq Er EISDIR
-A directory was opened for writing, an ordinary directory was
-selected for truncation, or
+A directory was opened for writing or with
+.Dv O_CREAT ,
+an ordinary directory was selected for truncation, or
 .Dv O_CREAT
 was given with a path that names a directory by its end.
 .It Bq Er ELOOP

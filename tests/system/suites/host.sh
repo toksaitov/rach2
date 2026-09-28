@@ -18,7 +18,9 @@ set -u
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO" || exit 1
-VDIR=/tmp/rach2_verify
+# The binaries and logs are the tree's own, under its build directory,
+# which `tests/run`'s lock covers: runs in two trees write no file in common.
+VDIR="$REPO/build/tests/host-suite"
 mkdir -p "$VDIR"
 
 CC="${CC:-cc}"

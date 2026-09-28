@@ -37,9 +37,10 @@
  * reported again when a byte comes to it, nor when a read makes room in its
  * own full queue, while one watched for input is reported for each byte, and
  * a shutdown of the end is an edge of every kind; a listener is not reported
- * again when an accept leaves a connection queued; and a datagram, or a TCP
+ * again when an accept leaves a connection queued; a datagram, or a TCP
  * segment over the loopback, that comes to a socket watched for output is no
- * edge.
+ * edge; and each write to a pipe is an edge of its read end watched for
+ * input, the pipe empty before it or not.
  *
  * Prints "EPOLLMUSL OK" on success and "EPOLLMUSL FAIL (detail)" otherwise.
  */
@@ -680,6 +681,30 @@ static int unix_kinds(void)
     return 0;
 }
 
+/* Each write to a pipe is an edge of an edge-triggered registration of its
+ * read end for input, the pipe empty before it or not, as Linux has it for a
+ * pipe it polls. */
+static int pipe_each_write(void)
+{
+    struct epoll_event ev, out;
+    int ep = epoll_create1(0);
+    int p[2];
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLET;
+    if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
+        write(p[1], "a", 1) != 1 || wait_one(ep, 0, &out) != 1 || wait_one(ep, 0, &out) != 0) {
+        return fail("setup for writes to a pipe watched edge-triggered");
+    }
+    if (write(p[1], "b", 1) != 1 || wait_one(ep, 0, &out) != 1) {
+        return fail("a write to a pipe with data in it was not an edge");
+    }
+    close(p[0]);
+    close(p[1]);
+    close(ep);
+    return 0;
+}
+
 /* A shutdown of an AF_UNIX stream end changes the end itself, and is an
  * edge of every kind: its registration for output is reported again. */
 static int unix_shutdown_edge(void)
@@ -949,8 +974,8 @@ int main(void)
 {
     if (counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
-        long_timeout() || unix_kinds() || unix_shutdown_edge() || unix_own_room() ||
-        unix_accept_edge() || udp_arrival() || tcp_arrival() || nested_six() ||
+        long_timeout() || pipe_each_write() || unix_kinds() || unix_shutdown_edge() ||
+        unix_own_room() || unix_accept_edge() || udp_arrival() || tcp_arrival() || nested_six() ||
         nested_two_paths()) {
         return 1;
     }

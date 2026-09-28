@@ -14,7 +14,7 @@
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO" || exit 1
-COV=/tmp/rach2_verify/coverage
+COV="$REPO/build/verify/coverage"
 GCOV="${GCOV:-gcov}"
 rm -rf "$COV"
 mkdir -p "$COV"
