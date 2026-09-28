@@ -244,14 +244,12 @@ static int refused(long rc, int err)
 }
 
 /**
- * Whether an open of `path` with `flags` returned -1 with `err`. A
+ * Whether an open returned -1 with `err`, given what it returned, `fd`. A
  * descriptor an open returns in error is closed at once, so it keeps no
  * directory the probe removes busy and no device open.
  */
-static int open_refused(const char *path, int flags, int err)
+static int fd_refused(int fd, int err)
 {
-    int fd = open(path, flags, 0644);
-
     if (fd >= 0) {
         close(fd);
         return 0;
@@ -309,8 +307,9 @@ static int lookup_ends(const struct ends *p)
     struct statfs sf;
     char buf[16];
 
-    if (!refused(open(p->fs, O_RDONLY), ENOTDIR) || !refused(open(p->fdot, O_RDONLY), ENOTDIR) ||
-        !refused(open(p->fs, O_PATH), ENOTDIR)) {
+    if (!fd_refused(open(p->fs, O_RDONLY), ENOTDIR) ||
+        !fd_refused(open(p->fdot, O_RDONLY), ENOTDIR) ||
+        !fd_refused(open(p->fs, O_PATH), ENOTDIR)) {
         return fail("open of a file named with a trailing slash or a last . was not ENOTDIR");
     }
     if (!refused(access(p->fs, F_OK), ENOTDIR)) {
@@ -354,9 +353,9 @@ static int create_dir_pair(const struct ends *p)
     struct stat st;
     int fd;
 
-    if (!refused(open(p->s, O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
-        !refused(open(p->n, O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
-        !refused(openat(AT_FDCWD, "", O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
+    if (!fd_refused(open(p->s, O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
+        !fd_refused(open(p->n, O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
+        !fd_refused(openat(AT_FDCWD, "", O_RDONLY | O_CREAT | O_DIRECTORY, 0644), EINVAL) ||
         lstat(p->n, &st) == 0) {
         return fail("an open with O_CREAT and O_DIRECTORY was not EINVAL");
     }
@@ -384,15 +383,15 @@ static int make_ends(const struct ends *p)
 {
     struct stat st;
 
-    if (!refused(open(p->ns, O_WRONLY | O_CREAT, 0644), EISDIR) ||
-        !refused(open(p->sdot, O_WRONLY | O_CREAT, 0644), EISDIR) ||
-        !refused(open(p->sdot, O_WRONLY | O_CREAT | O_EXCL, 0644), EEXIST) ||
-        !refused(open(p->sdotdot, O_RDONLY | O_CREAT | O_EXCL, 0644), EEXIST) ||
+    if (!fd_refused(open(p->ns, O_WRONLY | O_CREAT, 0644), EISDIR) ||
+        !fd_refused(open(p->sdot, O_WRONLY | O_CREAT, 0644), EISDIR) ||
+        !fd_refused(open(p->sdot, O_WRONLY | O_CREAT | O_EXCL, 0644), EEXIST) ||
+        !fd_refused(open(p->sdotdot, O_RDONLY | O_CREAT | O_EXCL, 0644), EEXIST) ||
         lstat(p->n, &st) == 0) {
         return fail("an open with O_CREAT of a path that names a directory by its end");
     }
-    if (!refused(open(p->s, O_RDONLY | O_CREAT, 0644), EISDIR) ||
-        !refused(open("/proc", O_RDONLY | O_CREAT, 0644), EISDIR)) {
+    if (!fd_refused(open(p->s, O_RDONLY | O_CREAT, 0644), EISDIR) ||
+        !fd_refused(open("/proc", O_RDONLY | O_CREAT, 0644), EISDIR)) {
         return fail("an open with O_CREAT of an existing directory was not EISDIR");
     }
     if (!refused(link(p->f, p->ns), ENOENT) || !refused(link(p->f, p->sdot), EEXIST)) {
@@ -849,10 +848,11 @@ static int synth_name_rows(void)
  */
 static int device_ends(void)
 {
-    if (!open_refused("/fb/", O_RDONLY, ENOTDIR) || !open_refused("/fb/.", O_RDONLY, ENOTDIR) ||
-        !open_refused("/mouse/", O_RDONLY, ENOTDIR) ||
-        !open_refused("/mouse/..", O_RDONLY, ENOTDIR) ||
-        !open_refused("/fb", O_RDONLY | O_DIRECTORY, ENOTDIR)) {
+    if (!fd_refused(open("/fb/", O_RDONLY), ENOTDIR) ||
+        !fd_refused(open("/fb/.", O_RDONLY), ENOTDIR) ||
+        !fd_refused(open("/mouse/", O_RDONLY), ENOTDIR) ||
+        !fd_refused(open("/mouse/..", O_RDONLY), ENOTDIR) ||
+        !fd_refused(open("/fb", O_RDONLY | O_DIRECTORY), ENOTDIR)) {
         return fail("an open of /fb or /mouse as a directory was not ENOTDIR");
     }
     return 0;
