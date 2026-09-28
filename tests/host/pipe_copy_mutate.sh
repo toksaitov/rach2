@@ -1,7 +1,7 @@
 #!/bin/sh
 # Compile pipe copies before, during and after each scheduling mutation, and
 # each mutation of the kind of change a transfer or a close wakes the other
-# end for.
+# end for, and of the transfers that wake the readers.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -56,7 +56,7 @@ run_phase()
 
 echo "pipe-copy-mutation: logs: $work"
 run_phase fixed 0 'pipe-copy-hosttest: result: pass:'
-for fault in read write read-kind write-kind close-kind; do
+for fault in read write read-kind write-kind close-kind write-empty-only; do
     python3 - "$work/sys/ipc/pipe.c" "$fault" <<'PY'
 import pathlib
 import sys
@@ -69,6 +69,10 @@ calls = {
     "read-kind": ("pipe_wake(p, &p->write_wq, WQ_ROOM);", "pipe_wake(p, &p->write_wq, WQ_ALL);"),
     "write-kind": ("pipe_wake(p, &p->read_wq, WQ_DATA);", "pipe_wake(p, &p->read_wq, WQ_ALL);"),
     "close-kind": ("pipe_wake(p, &p->read_wq, WQ_ALL);", "pipe_wake(p, &p->read_wq, WQ_DATA);"),
+    "write-empty-only": ("pipe_wake(p, &p->read_wq, WQ_DATA);",
+                         "if (pipe_available(p) == chunk) {\n"
+                         "                pipe_wake(p, &p->read_wq, WQ_DATA);\n"
+                         "            }"),
 }
 old, new = calls[sys.argv[2]]
 if source.count(old) != 1:
@@ -81,6 +85,7 @@ PY
         read-kind) message='a read wakes the writers for room alone' ;;
         write-kind) message='a write wakes the readers for data alone' ;;
         close-kind) message='a close wakes the readers for a hangup' ;;
+        write-empty-only) message='a write into a ring that has data wakes the readers for data' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

@@ -8,8 +8,8 @@
  * model pages; the resolver runs a peer operation before returning a missing
  * or copy-on-write page. Waits, signals and wakeups are recorded substitutes;
  * a wakeup keeps the kinds of change it names, so a read must wake the writers
- * for room alone, a write the readers for data alone, and a close the other
- * end for a hangup.
+ * for room alone, a write the readers for data alone, whether the ring had
+ * data before it or not, and a close the other end for a hangup.
  */
 #include "ipc/pipe.c"
 #include "ipc/pipe_ring.c"
@@ -375,7 +375,19 @@ static void readiness_changes(void)
     peer_count = 2;
     resolve_action = peer_read;
     CHECK(pipe_write(&writer, user_at(0), 3) == 3, "writer copies after peer drains");
-    CHECK(read_wakes == 1, "writer rechecks empty transition after resolution");
+    CHECK(read_wakes == 1, "a write after a peer drained the ring wakes the readers once");
+}
+
+/** A write into a ring that already has data wakes the readers for data, so
+ * an edge-triggered registration of the read end is told of each write. */
+static void write_with_data(void)
+{
+    setup(0);
+    pipe_ring_put(&ring, memory, 2);
+    CHECK(pipe_write(&writer, user_at(0), 3) == 3 && pipe_available(&ring) == 5,
+          "a write into a ring that has data");
+    CHECK(read_wakes == 1 && read_kinds == WQ_DATA,
+          "a write into a ring that has data wakes the readers for data");
 }
 
 /** A second page fault or competing read returns only completed bytes. */
@@ -418,6 +430,7 @@ int main(void)
     write_competition(1);
     state_changes();
     readiness_changes();
+    write_with_data();
     later_page();
     printf("pipe-copy-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
