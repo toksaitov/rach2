@@ -23,23 +23,24 @@
  * utimensat, readlink, statfs, link, unlink and rename, where renameat2 with
  * RENAME_NOREPLACE onto a name that exists is EEXIST, and a new name so named
  * is EISDIR to open with O_CREAT and ENOENT or EEXIST to link, symlink, mknod
- * and mkdir, which make nothing; rmdir is EINVAL for a last "." and ENOTEMPTY
- * for a last "..", and rename EBUSY for either, in /proc too, where nothing is
- * renamed, and so do unlinkat and renameat through a directory descriptor.
- * execve of a file so named is ENOTDIR and of a directory EACCES, and so is a
- * script whose interpreter is named with a trailing slash ENOTDIR, and an ELF
- * image whose PT_INTERP names the file or the directory so ENOTDIR or EACCES;
- * bind to a name so named makes nothing, connect to a socket so named is
- * ENOTDIR, and so is umount2 of a file so named, and open of /fb and /mouse so
- * named or with O_DIRECTORY, which opens neither device. rmdir and rename of
- * the root are EBUSY, link, symlink and mknod with the root as the new name
- * EEXIST and bind to it EADDRINUSE. open with O_CREAT is EISDIR for an existing
- * directory, one of the probe's, one of /dev/shm and /proc, even to read, and
- * with O_DIRECTORY EINVAL before the path is read, unless O_PATH is given too,
- * which drops O_CREAT. A symbolic link to a directory named with a trailing
- * slash is followed by the calls that look it up, O_NOFOLLOW and
- * AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to unlink and rename, in
- * /dev/shm and on an ext2 root.
+ * and mkdir, which make nothing, and symlink, link and mknod give those answers
+ * in /dev and /proc too, before their EROFS, and bind EADDRINUSE there; rmdir
+ * is EINVAL for a last "." and ENOTEMPTY for a last "..", and rename EBUSY for
+ * either, in /proc too, where nothing is renamed, and so do unlinkat and
+ * renameat through a directory descriptor. execve of a file so named is ENOTDIR
+ * and of a directory EACCES, and so is a script whose interpreter is named with
+ * a trailing slash ENOTDIR, and an ELF image whose PT_INTERP names the file or
+ * the directory so ENOTDIR or EACCES; bind to a name so named makes nothing,
+ * connect to a socket so named is ENOTDIR, and so is umount2 of a file so
+ * named, and open of /fb and /mouse so named or with O_DIRECTORY, which opens
+ * neither device. rmdir and rename of the root are EBUSY, link, symlink and
+ * mknod with the root as the new name EEXIST and bind to it EADDRINUSE. open
+ * with O_CREAT is EISDIR for an existing directory, one of the probe's, one of
+ * /dev/shm and /proc, even to read, and with O_DIRECTORY EINVAL before the path
+ * is read, unless O_PATH is given too, which drops O_CREAT. A symbolic link to
+ * a directory named with a trailing slash is followed by the calls that look it
+ * up, O_NOFOLLOW and AT_SYMLINK_NOFOLLOW notwithstanding, and is ENOTDIR to
+ * unlink and rename, in /dev/shm and on an ext2 root.
  *
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must hold a
@@ -797,19 +798,37 @@ static int root_rows(void)
 }
 
 /**
- * Names in /proc, where nothing is renamed (EROFS), which a rename answers
- * first as Linux does, before it asks for write access: "/proc/." as the old
- * name and "/proc/.." as the new are EBUSY, and "/proc/." as the new name
- * under RENAME_NOREPLACE EEXIST. 0, or 1 once the failure is reported.
+ * Names in /proc and /dev, where nothing is made or renamed (EROFS), which
+ * the calls answer first as Linux does, before it asks for write access:
+ * "/proc/." as the old name of a rename and "/proc/.." as the new are
+ * EBUSY, and "/proc/." as the new name under RENAME_NOREPLACE EEXIST; a new
+ * name with a slash after it is ENOENT to symlink and link when the
+ * namespace does not have it, and EEXIST to symlink and mknod, and
+ * EADDRINUSE to bind, when it does. 0, or 1 once the failure is reported.
  */
 static int synth_name_rows(void)
 {
+    int s;
+    int made;
+
     if (!refused(rename("/proc/.", "/proc/new"), EBUSY) ||
         !refused(rename("/proc/meminfo", "/proc/.."), EBUSY) ||
         !refused(syscall(SYS_renameat2, AT_FDCWD, "/proc/meminfo", AT_FDCWD, "/proc/.",
                          RENAME_NOREPLACE),
                  EEXIST)) {
         return fail("a rename of a last . or .. in /proc was not EBUSY or EEXIST");
+    }
+    s = socket(AF_UNIX, SOCK_STREAM, 0);
+    made = s < 0 || !refused(symlink("x", "/proc/nonexistent/"), ENOENT) ||
+           !refused(symlink("x", "/proc/meminfo/"), EEXIST) ||
+           !refused(mknod("/dev/null/", S_IFIFO | 0644, 0), EEXIST) ||
+           !refused(link(file, "/proc/nonexistent/"), ENOENT) ||
+           !refused(bind_path(s, "/proc/meminfo/"), EADDRINUSE);
+    if (s >= 0) {
+        close(s);
+    }
+    if (made) {
+        return fail("a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST");
     }
     return 0;
 }
@@ -832,13 +851,13 @@ static int device_ends(void)
 }
 
 /**
- * The rows that read the probe's own directory beyond the types of its
- * listing: the path ends of `dir_ends`, rewinddir and seekdir of it and of
- * /proc/self (`rewinds`), the root as a name (`root_rows`), a last "." or
- * ".." in /proc (`synth_name_rows`), /fb and /mouse as directories
- * (`device_ends`), and the other calls given a path that names a directory
- * by its end, there and in /dev/shm (`dir_end_calls`). 0, or 1 once the
- * failure is reported.
+ * The rows that read the probe's own directory beyond the types of its listing:
+ * the path ends of `dir_ends`, rewinddir and seekdir of it and of /proc/self
+ * (`rewinds`), the root as a name (`root_rows`), names in /proc and /dev that
+ * end as directories (`synth_name_rows`), /fb and /mouse as directories
+ * (`device_ends`), and the other calls given a path that names a directory by
+ * its end, there and in /dev/shm (`dir_end_calls`). 0, or 1 once the failure is
+ * reported.
  */
 static int own_dir_rows(void)
 {

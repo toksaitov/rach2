@@ -41,8 +41,11 @@ or
 it returns
 .Er EEXIST ,
 as the root does.
-These come before the refusals of a read-only mount and of a file
-system without symbolic links.
+These come before the refusals of a read-only mount, of
+.Pa /dev
+and
+.Pa /proc ,
+and of a file system without symbolic links.
 .Pp
 ext2 and tmpfs, whose mounts include
 .Pa /dev/shm ,

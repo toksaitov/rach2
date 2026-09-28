@@ -6777,14 +6777,40 @@ static int32_t new_name_parent(const char *path, struct vfs_ref *parent, char *l
 }
 
 /**
- * The answer of a call that makes a node other than a directory, `leaf` in
- * the held directory `parent`, when its path named a directory by its end,
- * `end` (`path_names_dir`), as Linux answers it: -EEXIST for a last "." or
- * "..", which exists, and after a slash -EEXIST for a name that exists and
- * the lookup's -ENOENT for one that does not. 0 for any other path, and for
- * a slash in /dev or /proc, where the call's -EROFS comes first.
+ * Whether the name the path `path` ends in, in a directory of /dev or /proc,
+ * exists: -EEXIST when it does, a final link not followed, and the walk's
+ * error, -ENOENT for a name the namespace does not have, when it does not.
+ * The two synthetic types look whole paths up, so the name is looked up by
+ * `path`, and a device name they classify exists only when `synth_stat`
+ * finds its device.
  */
-static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int end)
+static int32_t synth_name_exists(const char *path)
+{
+    struct linux_stat64 kst;
+    const struct vpath *vp;
+    struct vfs_ref ref;
+    int32_t rc = vfs_resolve(0, path, VFS_WALK_NOFOLLOW, &ref, 0, 0);
+
+    if (rc != 0) {
+        return rc;
+    }
+    vp = vfs_synth_vpath(ref.mnt, ref.node);
+    rc = vp ? synth_stat(vp, &kst, 0) : 0;
+    vfs_ref_release(&ref);
+    return rc != 0 ? rc : -EEXIST;
+}
+
+/**
+ * The answer of a call that makes a node other than a directory, `leaf` in
+ * the held directory `parent`, the last name of `path`, when `path` named a
+ * directory by its end, `end` (`path_names_dir`), as Linux answers it before
+ * a read-only mount's EROFS: -EEXIST for a last "." or "..", which exists,
+ * and after a slash -EEXIST for a name that exists and the lookup's -ENOENT
+ * for one that does not, in /dev and /proc too (`synth_name_exists`), where
+ * the call's -EROFS comes after. 0 for any other path.
+ */
+static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int end,
+                            const char *path)
 {
     void *found;
     int rc;
@@ -6792,8 +6818,11 @@ static int32_t make_dir_end(const struct vfs_ref *parent, const char *leaf, int 
     if (leaf_is_dot(leaf)) {
         return -EEXIST;
     }
-    if (end != PATH_END_SLASH || vfs_synth_vpath(parent->mnt, parent->node)) {
+    if (end != PATH_END_SLASH) {
         return 0;
+    }
+    if (vfs_synth_vpath(parent->mnt, parent->node)) {
+        return synth_name_exists(path);
     }
     rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &found);
     if (rc != 0) {
@@ -6834,7 +6863,7 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
     /* Linux's order: the new name's end, another mount, then a directory or
      * a type without links, then a read-only mount, then the parent's write
      * bit. */
-    rc = make_dir_end(&parent, leaf, newend);
+    rc = make_dir_end(&parent, leaf, newend, newname);
     if (rc != 0) {
         goto out;
     }
@@ -6879,7 +6908,7 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
     if (rc != 0) {
         return rc;
     }
-    rc = make_dir_end(&parent, leaf, end);
+    rc = make_dir_end(&parent, leaf, end, newname);
     if (rc != 0) {
         vfs_ref_release(&parent);
         return rc;
@@ -8515,7 +8544,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     if (rc != 0) {
         return rc;
     }
-    rc = make_dir_end(&parent, leaf, end);
+    rc = make_dir_end(&parent, leaf, end, path);
     if (rc != 0) {
         vfs_ref_release(&parent);
         return rc;
@@ -9902,7 +9931,7 @@ static int32_t path_make_dir_end(const char *path, int end)
     int32_t rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
 
     if (rc == 0) {
-        rc = make_dir_end(&parent, leaf, end);
+        rc = make_dir_end(&parent, leaf, end, path);
         vfs_ref_release(&parent);
     }
     return rc;
