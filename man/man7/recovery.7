@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd September 30, 2026
 .Dt RECOVERY 7
 .Os
 .Sh NAME
@@ -114,6 +114,14 @@ reboot, read
 .Ql bootctl status
 and run
 .Ql bootctl commit .
+The disk's recovery entry, which boots with
+.Ql rach2.slot=recovery ,
+can install a kernel too, and a stick's cannot, since
+.Nm bootctl
+installs a kernel only on a boot that names its slot.
+The RAM root has no room for a kernel file; put it in
+.Pa /dev/shm ,
+a tmpfs.
 .It Root file system
 From recovery, run
 .Ql rach2-install --update IMAGE /dev/diskN .
