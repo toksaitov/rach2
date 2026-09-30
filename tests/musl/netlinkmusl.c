@@ -64,9 +64,10 @@ struct nlmsghdr {
     unsigned int nlmsg_pid;
 };
 
+/* An NLMSG_ERROR's body: the error, then the request's header, which the
+ * probe does not read. */
 struct nlmsgerr {
     int error;
-    struct nlmsghdr msg;
 };
 
 struct rtgenmsg {

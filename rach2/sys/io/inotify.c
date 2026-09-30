@@ -250,9 +250,7 @@ void inotify_unmount(struct vfs_mount *mnt)
 
 uint32_t inotify_cookie(void)
 {
-    if (++cookies == 0) {
-        cookies = 1;
-    }
+    cookies = cookies == 0xFFFFFFFFu ? 1u : cookies + 1u;
     return cookies;
 }
 
