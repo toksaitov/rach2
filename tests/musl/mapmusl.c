@@ -22,7 +22,10 @@
  * madvise(MADV_DONTNEED) gives a private anonymous mapping zero pages
  * again, and madvise and msync refuse a length that would round up to 0. A
  * write through /proc/self/mem to a read-only page a fork shared leaves the
- * page read-only.
+ * page read-only. A shared mapping of a file on the root, which is not a
+ * file in memory, carries a child's store to the parent, a store to
+ * read(2), a write(2) to the mapping, and its stores to the file after
+ * munmap and after a mapper's exit.
  *
  * Prints "MAPMUSL OK" on success and "MAPMUSL FAIL (detail)" otherwise.
  */
@@ -427,9 +430,60 @@ static int remap_limit(void)
     return 0;
 }
 
+/* A shared mapping of a file on the root maps the file's pages, which are
+   written back to it. */
+static int root_shared(void)
+{
+    char buf[8];
+    char *m;
+    pid_t pid;
+    int fd = open(FILE_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
+
+    if (fd < 0 || ftruncate(fd, 2 * PAGE) != 0) {
+        return fail("a file on the root for a shared mapping");
+    }
+    m = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (m == MAP_FAILED) {
+        return fail("mmap MAP_SHARED of a file on the root");
+    }
+    pid = fork();
+    if (pid == 0) {
+        memcpy(m + PAGE, "kid", 3);
+        _exit(0);
+    }
+    if (!wait_ok(pid) || memcmp(m + PAGE, "kid", 3) != 0) {
+        return fail("a child's store in a shared mapping of a file on the root");
+    }
+    memcpy(m, "root", 4);
+    if (pread(fd, buf, 4, 0) != 4 || memcmp(buf, "root", 4) != 0) {
+        return fail("a store in a shared mapping of a file on the root did not reach read");
+    }
+    if (pwrite(fd, "WR", 2, 8) != 2 || memcmp(m + 8, "WR", 2) != 0) {
+        return fail("a write to a file on the root was not seen through its shared mapping");
+    }
+    if (msync(m, 2 * PAGE, MS_SYNC) != 0) {
+        return fail("msync of a shared mapping of a file on the root");
+    }
+    munmap(m, 2 * PAGE);
+    pid = fork();
+    if (pid == 0) {
+        char *c = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+        memcpy(c + 16, "gone", 4);
+        _exit(c == MAP_FAILED);
+    }
+    if (!wait_ok(pid) || pread(fd, buf, 4, 16) != 4 || memcmp(buf, "gone", 4) != 0 ||
+        pread(fd, buf, 3, PAGE) != 3 || memcmp(buf, "kid", 3) != 0) {
+        return fail("the stores of a shared mapping of a file on the root did not reach it");
+    }
+    close(fd);
+    unlink(FILE_PATH);
+    return 0;
+}
+
 int main(void)
 {
-    if (private_file() || shared() || truncated_shared() || readonly_shared() || offsets() ||
+    if (private_file() || shared() || root_shared() || truncated_shared() || readonly_shared() || offsets() ||
         remaps() || forced_write() || remap_limit()) {
         return 1;
     }

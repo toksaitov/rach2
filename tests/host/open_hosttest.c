@@ -679,6 +679,85 @@ void *kmalloc(size_t size)
     return kzalloc(size);
 }
 
+/* The shared mappings of disk files, which no row makes: a row's mapping
+ * is private. */
+uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
+{
+    (void)sh;
+    (void)pgoff;
+    return 0;
+}
+
+uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
+{
+    (void)sh;
+    (void)pgoff;
+    (void)phys;
+    check(0, "unexpected page of a disk file's shared mapping");
+    return 0;
+}
+
+int shmem_truncate(struct shmem *sh, uint64_t size)
+{
+    (void)sh;
+    (void)size;
+    check(0, "unexpected truncation of shared pages");
+    return 0;
+}
+
+uintptr_t alloc_user_frame(void)
+{
+    check(0, "unexpected frame for a shared page");
+    return 0;
+}
+
+void frame_ref(uintptr_t phys)
+{
+    (void)phys;
+    check(0, "unexpected reference to a shared page");
+}
+
+void free_frame(uintptr_t phys)
+{
+    (void)phys;
+    check(0, "unexpected free of a shared page");
+}
+
+void vm_file_get(struct vm_file *f)
+{
+    (void)f;
+    check(0, "unexpected hold of a mapping");
+}
+
+void vm_file_put(struct vm_file *f)
+{
+    (void)f;
+    check(0, "unexpected put of a mapping");
+}
+
+int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
+{
+    (void)mnt;
+    (void)handle;
+    (void)buf;
+    (void)count;
+    (void)offset;
+    check(0, "unexpected read of a mapped file");
+    return -EIO;
+}
+
+int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                  uint64_t offset)
+{
+    (void)mnt;
+    (void)handle;
+    (void)buf;
+    (void)count;
+    (void)offset;
+    check(0, "unexpected write of a mapped file");
+    return -EIO;
+}
+
 uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff)
 {
     (void)sh;

@@ -5063,17 +5063,19 @@ static int mmap_fault_readable(const struct vfs_mount *mnt)
  * VM_FILE, and a shared mapping of a file in memory is VM_SHARED, the
  * file's own pages. A file on a device a page fault cannot read
  * (`mmap_fault_readable`) is refused with ENODEV, since the first touch of
- * the mapping would read it there. A shared mapping of a file on a disk
- * file system is served as a private one when it is read-only, which reads
- * the same bytes, and refused with ENODEV when it may be written, since its
- * stores would not reach the file. A shared mapping that may not be written
- * now, since the descriptor is not open for writing or the file is on a
- * disk, is given VM_PROT_NOWRITE, so that mprotect cannot make it writable
- * later. It may sleep, finding the file's path.
+ * the mapping would read it there. A shared mapping of a file on a disk is
+ * VM_SHARED too, the file's pages in memory, which its stores are written
+ * back from (`filemap_disk_shared`), when the descriptor is open for
+ * writing or another shared mapping has the pages in memory already; a
+ * read-only one otherwise is served as a private one, which reads the same
+ * bytes. A shared mapping through a descriptor not open for writing is given
+ * VM_PROT_NOWRITE, so that mprotect cannot make it writable later. It may
+ * sleep, finding the file's path.
  */
 static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *src)
 {
     struct shmem *sh;
+    int disk;
 
     if (e->type != FD_TYPE_FILE || !e->ofd || !e->ofd->vmnt || !mmap_fault_readable(e->ofd->vmnt)) {
         return -ENODEV;
@@ -5083,14 +5085,13 @@ static int32_t mmap_file(fd_entry_t *e, int fd, int shared, struct map_source *s
         return -EACCES;
     }
     sh = (shared && e->ofd->vmnt->type == &vfs_tmpfs_type) ? tmpfs_shmem(e->ofd->vnode) : NULL;
-    if (shared && !sh && (src->prot & VM_PROT_WRITE)) {
-        return -ENODEV;
-    }
-    if (shared && (!sh || !(e->flags & FD_FLAG_WRITE))) {
+    disk = shared && !sh &&
+           ((e->flags & FD_FLAG_WRITE) || filemap_disk_mapped(e->ofd->vmnt, e->ofd->ino));
+    if (shared && !(e->flags & FD_FLAG_WRITE)) {
         src->prot |= VM_PROT_NOWRITE;
     }
-    src->file = sh ? filemap_shared(e, sh) : filemap_new(e);
-    src->type = sh ? VM_SHARED : VM_FILE;
+    src->file = sh ? filemap_shared(e, sh) : disk ? filemap_disk_shared(e) : filemap_new(e);
+    src->type = sh || disk ? VM_SHARED : VM_FILE;
     if (src->file) {
         src->file->path = fd_path_copy(fd);
     }
@@ -5551,11 +5552,44 @@ int32_t sys_madvise(isr_params_t *params)
     return 0;
 }
 
+/**
+ * Write back the shared mappings of disk files among the regions of
+ * [addr, end), which the caller found covered: each region's file whole
+ * (`filemap_msync`). The writes sleep, so each region is found again by
+ * address and its file held across its write. 0, or -EIO when a write
+ * failed.
+ */
+static int32_t msync_range(uint32_t addr, uint32_t end)
+{
+    int32_t rc = 0;
+
+    while (addr < end) {
+        const vma_t *r = vm_find(&current_proc->mm->vm, addr);
+        struct vm_file *f;
+
+        if (!r) {
+            break;
+        }
+        addr = r->end;
+        f = r->type == VM_SHARED ? r->file : NULL;
+        if (f) {
+            vm_file_get(f);
+            if (filemap_msync(f) != 0) {
+                rc = -EIO;
+            }
+            vm_file_put(f);
+        }
+    }
+    vm_file_reap();
+    return rc;
+}
+
 /*
  * sys_msync - write a mapping back. Args: EBX=address, ECX=length,
- * EDX=flags. A shared mapping here maps the file in memory itself, and a
- * mapping of a disk file is private or read-only, so there is nothing to
- * write: the call checks its arguments and returns 0, or ENOMEM for a range
+ * EDX=flags. A shared mapping of a disk file has its file's pages written
+ * back (`msync_range`), with MS_ASYNC as with MS_SYNC; a shared mapping of a
+ * file in memory maps the file's pages themselves, and a private one has
+ * nothing to write. Returns 0, EIO for a failed write, ENOMEM for a range
  * with a page in no region, or EINVAL, which a range that runs past user
  * space is too, judged by the length as given, as `sys_madvise` judges it.
  */
@@ -5576,7 +5610,7 @@ int32_t sys_msync(isr_params_t *params)
     if (vm_covered(&current_proc->mm->vm, addr, addr + len) != len) {
         return -ENOMEM;
     }
-    return 0;
+    return msync_range(addr, addr + len);
 }
 
 /* The three kinds of target setpriority(2) and getpriority(2) take. */

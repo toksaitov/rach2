@@ -36,6 +36,17 @@ int shmem_truncate(struct shmem *sh, uint64_t size);
  * when the page lies at or past SHMEM_MAX_SIZE. */
 uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff);
 
+/** The frame of page `pgoff` if the memory has one, else 0; nothing is
+ * allocated and no reference is taken. */
+uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff);
+
+/** Make `phys`, a frame the caller filled, page `pgoff` unless the memory
+ * has one by now; the table takes the caller's reference, and the caller's
+ * frame is given back when another is there. Returns the page's frame with
+ * a reference taken for the caller's mapping, or 0 when the table cannot
+ * reach the page. */
+uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys);
+
 /** Free every page; the size is 0 after. */
 void shmem_free(struct shmem *sh);
 

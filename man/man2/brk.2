@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -157,10 +157,30 @@ mapping of the file and by
 .Xr read 2 .
 A truncation takes the pages past the new end out of every mapping, and
 a later access maps the page the file has then.
-A shared mapping of a file on a disk file system is served as a private
-one when it is read-only, which reads the same bytes, and refused with
-.Er ENODEV
-when it may be written.
+On a disk file system, the mapping maps the file's pages in memory,
+which every shared mapping of the file maps: a page is read from the file
+on first access, a store is seen by every such mapping, and the pages go
+back to the file at
+.Fn msync ,
+at
+.Xr fsync 2
+and
+.Xr sync 2 ,
+when a mapping through a descriptor open for writing is unmapped or its
+process ends, and before a
+.Xr read 2
+of the bytes they hold, and a
+.Xr write 2
+to the file is copied into them.
+A page goes back whole, up to the file's size, since the kernel does not
+ask the page tables which pages were stored to, and never past the size:
+a store past the end of the file is lost, where Linux sends
+.Dv SIGBUS
+for an access to a page wholly past it.
+A truncation takes the pages past the new end out of every mapping.
+A read-only shared mapping through a descriptor not open for writing is
+served as a private one, which reads the same bytes, unless another
+shared mapping has the file's pages in memory, which it then maps too.
 A writable shared mapping needs a descriptor open for writing.
 .El
 .Pp
@@ -287,10 +307,14 @@ and
 which are refused.
 .Pp
 .Fn msync ,
-kernel call 144, has nothing to write: a shared mapping here maps the
-file's pages in memory, and a mapping of a disk file is private or
-read-only.
-It checks its arguments and the range.
+kernel call 144, writes back the pages of each shared mapping of a disk
+file the range reaches, the whole file's, with
+.Dv MS_ASYNC
+as with
+.Dv MS_SYNC ;
+a shared mapping of a file in memory maps the file's pages themselves,
+and a private mapping has nothing to write.
+It checks its arguments and the range first.
 .Pp
 Both calls take a page-aligned address and judge the length as it is
 given, before rounding it up to a page boundary: a range that runs past
@@ -453,10 +477,12 @@ is not open, for a mapping without
 The range
 .Fn mremap
 is given is not within one VMA.
+.It Er EIO
+.Fn msync
+could not write a page of a shared mapping back to its file.
 .It Er ENODEV
 .Fa fd
-is not a file, the file is on a loop device or a USB stick, or a
-writable shared mapping names a file on a disk file system.
+is not a file, or the file is on a loop device or a USB stick.
 .It Er ENOMEM
 A mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,

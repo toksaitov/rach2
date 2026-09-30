@@ -501,22 +501,39 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uint32_
 /**
  * Back a page of a shared region: map the frame the region's file or shared
  * memory has for it, writable when the region is. The frame is the same one
- * every mapping of that page maps, so a store is seen by all of them. The
- * share does not sleep, so the region is the one the caller found.
+ * every mapping of that page maps, so a store is seen by all of them.
+ *
+ * The share of a disk file's pages reads a page from the file the first
+ * time, which may sleep, so the file is held across it and the region is
+ * looked up again after, as `file_fault` does: a region that changed, or a
+ * page backed meanwhile, has the resolution run again. 1 with the page
+ * mapped, 0 when no frame could be had, -1 to resolve again.
  */
-static int shared_fault(page_dir_t *dir, const vma_t *vma, uint32_t addr)
+static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uint32_t addr)
 {
+    struct vm_file *f = vma->file;
     uint32_t page = addr & ~(PAGE_SIZE - 1);
-    uintptr_t phys = vma->file->share(vma->file, vma->pgoff + (page - vma->start) / PAGE_SIZE);
+    uint32_t pgoff = vma->pgoff + (page - vma->start) / PAGE_SIZE;
+    uint32_t prot = vma->prot;
+    uintptr_t phys;
+    int rc = 1;
 
+    vm_file_get(f);
+    phys = f->share(f, pgoff);
+    vma = vm_find(vm, page);
+    if (!vma || vma->file != f || vma->prot != prot ||
+        vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
+        rc = -1;
+    }
+    vm_file_put(f);
     if (phys == 0) {
-        return 0;
+        return rc < 0 ? -1 : 0;
     }
-    if (map_user_frame(dir, page, phys, (vma->prot & VM_PROT_WRITE) ? 0x7u : 0x5u) != 0) {
-        free_frame(phys);
-        return 0;
+    if (rc == 1 && map_user_frame(dir, page, phys, (prot & VM_PROT_WRITE) ? 0x7u : 0x5u) == 0) {
+        return 1;
     }
-    return 1;
+    free_frame(phys);
+    return rc < 0 ? -1 : 0;
 }
 
 /* Whether the region `vma` allows the access: a write needs write, and a
@@ -563,7 +580,7 @@ static int vm_resolve_once(struct mm *mm, uint32_t addr, int write, uint32_t as_
             return !write || pte_writable(dir, addr) ? 1 : cow_fault(dir, addr);
         }
         if (vma->file) {
-            return vma->type == VM_SHARED ? shared_fault(dir, vma, addr)
+            return vma->type == VM_SHARED ? shared_fault(dir, vm, vma, addr)
                                           : file_fault(dir, vm, vma, addr);
         }
     }

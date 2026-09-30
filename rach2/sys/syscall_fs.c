@@ -601,8 +601,11 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         }
     }
     fd_ofd_unlock(ofd);
-    if (written > 0 && inotify_watches) {
-        inotify_desc(ofd, IN_MODIFY);
+    if (written > 0) {
+        filemap_file_written(entry, pos, (uint32_t)written);
+        if (inotify_watches) {
+            inotify_desc(ofd, IN_MODIFY);
+        }
     }
     return written;
 }
@@ -785,8 +788,11 @@ static int32_t truncate_fd(int fd, uint64_t length)
         }
     }
     fd_ofd_unlock(entry->ofd);
-    if (rc == 0 && inotify_watches) {
-        inotify_desc(entry->ofd, IN_MODIFY);
+    if (rc == 0) {
+        filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, length);
+        if (inotify_watches) {
+            inotify_desc(entry->ofd, IN_MODIFY);
+        }
     }
     return rc;
 }
@@ -2734,9 +2740,10 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
 }
 
 /**
- * What inotify is told of the open that made the descriptor `fd` from
- * `name`, leading '/' stripped: the open, after the truncation O_TRUNC made
- * of a file the open did not create.
+ * What the open that made the descriptor `fd` from `name`, leading '/'
+ * stripped, tells the shared mappings of the file, which lose the pages an
+ * O_TRUNC truncation freed, and inotify: the open, after that truncation of
+ * a file the open did not create.
  * The description records whether it was opened for writing, which its
  * close reports, and, while a watch exists, the directory the name is in and
  * its last component, when they are the file opened, so that the
@@ -2760,6 +2767,9 @@ static void open_done(int fd, const char *name, int flags)
     made = ofd->watch_flags & OFD_WATCH_MADE;
     ofd->watch_flags = OFD_WATCH_OPEN | ((e->flags & FD_FLAG_WRITE) ? OFD_WATCH_WRITE : 0u) |
                        (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
+    if ((flags & O_TRUNC) && !made && (e->flags & FD_FLAG_WRITE) && e->type == FD_TYPE_FILE) {
+        filemap_file_truncated(ofd->vmnt, ofd->ino, 0);
+    }
     if (!inotify_watches) {
         return;
     }
@@ -3022,7 +3032,10 @@ int32_t sys_fsync(isr_params_t *params)
             return -EBADF;
         }
         if (e->ofd && e->ofd->vmnt) {
-            return vfs_fsync(e->ofd->vmnt, e->ofd->fhandle);
+            int32_t mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
+            int32_t rc = vfs_fsync(e->ofd->vmnt, e->ofd->fhandle);
+
+            return mapped != 0 ? -EIO : rc;
         }
     }
     if (pc_sync() != 0) {
@@ -3050,6 +3063,7 @@ int32_t sys_sync(isr_params_t *params)
     uint32_t start;
 
     (void)params;
+    filemap_sync_all();
     vfs_sync_all();
     start = kernel_ticks;
     while (pc_sync() & PC_SYNC_BUSY) {
@@ -3413,6 +3427,9 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
     }
     if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
         return -EFAULT;
+    }
+    if (filemap_file_reading(ofd->vmnt, ofd->ino, at ? *at : ofd->offset, count) != 0) {
+        return -EIO;
     }
     fd_ofd_lock(ofd);
     bytes_read =
@@ -6985,11 +7002,14 @@ static int32_t truncate_path(const char *path, long long length, int dir)
             vfs_kill_setid(desc->vmnt, desc->vnode);
         }
     }
-    if (rc == 0 && inotify_watches) {
+    if (rc == 0) {
         struct vfs_stat st;
 
         if (vfs_getattr(desc->vmnt, desc->vnode, &st) == 0) {
-            inotify_file(desc->vmnt, st.ino, IN_MODIFY);
+            filemap_file_truncated(desc->vmnt, st.ino, (uint64_t)length);
+            if (inotify_watches) {
+                inotify_file(desc->vmnt, st.ino, IN_MODIFY);
+            }
         }
     }
     fd_ofd_unlock(desc);
@@ -10369,6 +10389,24 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
  * description's lock: a read into a mapping of the file being read faults
  * here while that lock is held.
  */
+int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
+{
+    struct open_file *ofd = e->ofd;
+    int32_t n;
+
+    if (e->type != FD_TYPE_FILE || !ofd || !ofd->vmnt) {
+        return -ENODEV;
+    }
+    if (ofd->vmnt->type->ns_serialised) {
+        vfs_ns_lock(ofd->vmnt);
+    }
+    n = vfs_write(ofd->vmnt, ofd->fhandle, buf, count, off);
+    if (ofd->vmnt->type->ns_serialised) {
+        vfs_ns_unlock(ofd->vmnt);
+    }
+    return n;
+}
+
 int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off)
 {
     struct open_file *ofd = e->ofd;

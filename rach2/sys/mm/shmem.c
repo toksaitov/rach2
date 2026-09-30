@@ -176,6 +176,26 @@ uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff)
     return phys;
 }
 
+uintptr_t shmem_resident(const struct shmem *sh, uint32_t pgoff)
+{
+    return pgoff < sh->npages ? sh->pages[pgoff] : 0;
+}
+
+uintptr_t shmem_adopt(struct shmem *sh, uint32_t pgoff, uintptr_t phys)
+{
+    if (pgoff >= SHMEM_MAX_PAGES || reach(sh, pgoff + 1u) != 0) {
+        free_frame(phys);
+        return 0;
+    }
+    if (sh->pages[pgoff]) {
+        free_frame(phys);
+    } else {
+        sh->pages[pgoff] = phys;
+    }
+    frame_ref(sh->pages[pgoff]);
+    return sh->pages[pgoff];
+}
+
 void shmem_free(struct shmem *sh)
 {
     shmem_truncate(sh, 0);

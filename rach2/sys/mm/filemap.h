@@ -31,6 +31,40 @@ struct vm_file *filemap_new(const fd_entry_t *e);
 struct vm_file *filemap_shared(const fd_entry_t *e, struct shmem *sh);
 
 /**
+ * The same for a shared mapping of a file on a disk: the mapping maps the
+ * file's pages in memory, which every shared mapping of the file maps, read
+ * from the file at a page's first touch and written back to it by
+ * `filemap_sync_file`, by `msync`, and when a mapping through a descriptor
+ * open for writing goes. The pages go with the file's last mapping.
+ */
+struct vm_file *filemap_disk_shared(const fd_entry_t *e);
+
+/** Whether the file `ino` of `mnt` has its pages in memory for a shared
+ * mapping, which a new shared mapping of it then maps too. */
+int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
+
+/*
+ * What the calls on a file's descriptors tell the shared mappings of a disk
+ * file, so that the file and its pages in memory agree: each does nothing
+ * when no such mapping exists. A read writes the pages it covers back first
+ * (`filemap_file_reading`), a write puts its bytes into the pages it covers
+ * (`filemap_file_written`), a truncation frees the pages past the new end,
+ * which it first takes out of every mapping (`filemap_file_truncated`), and
+ * fsync writes the file's pages back (`filemap_sync_file`); sync writes back
+ * every file's (`filemap_sync_all`). Each returns 0 or the first failed
+ * write's error, where it has anything to return.
+ */
+int filemap_file_reading(const struct vfs_mount *mnt, uint64_t ino, uint64_t off, uint32_t len);
+void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len);
+void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size);
+int filemap_sync_file(const struct vfs_mount *mnt, uint64_t ino);
+void filemap_sync_all(void);
+
+/** msync of the mapping `f` of a region: its file's pages written back
+ * when it maps a disk file's; 0 or the first failed write's error. */
+int filemap_msync(struct vm_file *f);
+
+/**
  * Shared anonymous memory, for MAP_SHARED|MAP_ANONYMOUS: pages of its own
  * that every region mapping it, in this process and the children it forks,
  * maps; freed with the last region.
@@ -54,8 +88,9 @@ int filemap_holds(const void *node);
  * The file system's part, in syscall_fs.c: read `count` bytes of the file
  * `e` is open on from `off` into the kernel buffer `buf`, without moving the
  * descriptor's offset. Returns the bytes read, fewer at the end of the file,
- * or -errno.
+ * or -errno. `fs_write_at` writes them from the kernel buffer the same way.
  */
 int32_t fs_read_at(fd_entry_t *e, void *buf, uint32_t count, uint64_t off);
+int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off);
 
 #endif /* _FILEMAP_H_ */

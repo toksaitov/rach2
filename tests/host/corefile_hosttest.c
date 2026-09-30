@@ -833,6 +833,14 @@ uint32_t procfs_ino_sys(int entry)
     return 0;
 }
 
+/* The shared mappings of disk files, which no row makes. */
+void filemap_file_written(fd_entry_t *e, uint64_t off, uint32_t len)
+{
+    (void)e;
+    (void)off;
+    (void)len;
+}
+
 uint32_t procfs_ino_mounts(void)
 {
     return 0;
