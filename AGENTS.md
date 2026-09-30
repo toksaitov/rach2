@@ -20,6 +20,7 @@ This file states the rules in force; their history is in commit messages and `de
 
 * Claude Code does the work: code, tests and prose. Codex does work only when the owner asks for it.
 * Codex reviews at the end of each batch, as Batches says, and otherwise when the owner asks.
+* Every agent does its work itself: none starts subagents, parallel workers or other agents of any kind. One Codex review unit runs at a time.
 
 ## Batches
 

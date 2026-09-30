@@ -18,7 +18,7 @@ A milestone runs from its `plan.md` under `dev-log/`, and is built and checked i
 
 * The build from clean empties `build/` of everything but `build/vendor/`, and removes the vendor outputs as well only when a port or its toolchain changed.
 * The style suite runs `prosecheck`, the mechanical half of the register rule; the review covers its contextual half.
-* The Codex review takes the whole batch's diff in units grouped by contract, each of at most six files and sized to finish in ten minutes. Each unit gets the shared interface changes, may read what its diff depends on, and states its most serious findings first. An expired review is incomplete, not clean.
+* The Codex review takes the whole batch's diff in units grouped by contract, each of at most six files and sized to finish in ten minutes, one unit at a time. Each unit gets the shared interface changes, may read what its diff depends on, and states its most serious findings first. An expired review is incomplete, not clean.
 * Fix every finding, or reject it in the milestone's `notes.md` with the source that shows it wrong.
 
 ## The machine sitting
