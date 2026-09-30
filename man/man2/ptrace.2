@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt PTRACE 2
 .Os
 .Sh NAME
@@ -282,11 +282,14 @@ of the stop.
 .It Dv PTRACE_GET_THREAD_AREA , PTRACE_SET_THREAD_AREA
 The TLS descriptor of entry
 .Fa addr ,
-which must be 6, the one entry, as a
+6, 7 or 8, as a
 .Vt user_desc ,
 as
 .Xr set_thread_area 2
 describes it.
+The kernel has one TLS entry, 6.
+Entries 7 and 8 read as Linux reads an unused entry, and a write to them
+must leave them unused.
 .El
 .Pp
 Every request but

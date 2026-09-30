@@ -15,6 +15,7 @@
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../tables/gdt.h"
 
 /* The requests. */
 #define PTRACE_TRACEME         0
@@ -933,27 +934,48 @@ static int siginfo_access(uint32_t pid, process_t *t, uint32_t data, int set)
     return 0;
 }
 
-/** PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA: the TLS entry `idx` of
- * `t`, the thread `pid`, whose one entry is GDT_TLS_ENTRY, as a `user_desc`
- * at `data`. */
+/**
+ * PTRACE_GET_THREAD_AREA and PTRACE_SET_THREAD_AREA: the TLS entry `idx` of
+ * `t`, the thread `pid`, as a `user_desc` at `data`.
+ *
+ * Linux i386 has three TLS entries, 6 to 8, and GDB reads and writes back all
+ * three. The kernel has one, GDT_TLS_ENTRY; the other two read as Linux reads
+ * an unused entry, and a write to them may only leave them unused, in either
+ * of the two forms Linux takes for that.
+ */
 static int tls_access(uint32_t pid, process_t *t, uint32_t idx, uint32_t data, int set)
 {
     user_desc_t desc;
     uint32_t base;
+    uint32_t kind;
 
-    if (idx != 6u) {
+    if (idx < GDT_TLS_ENTRY || idx > GDT_TLS_ENTRY + 2u) {
         return -EINVAL;
     }
     if (!set) {
         desc.entry_number = idx;
-        desc.base_addr = t->tls_base;
-        desc.limit = 0xFFFFFu;
-        desc.flags = UD_SEG_32BIT | UD_LIMIT_IN_PAGES | UD_USEABLE;
+        desc.base_addr = 0;
+        desc.limit = 0;
+        desc.flags = UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT;
+        if (idx == GDT_TLS_ENTRY) {
+            desc.base_addr = t->tls_base;
+            desc.limit = 0xFFFFFu;
+            desc.flags = UD_SEG_32BIT | UD_LIMIT_IN_PAGES | UD_USEABLE;
+        }
         return copy_to_user((void __user *)data, &desc, sizeof(desc)) == 0 ? 0 : -EFAULT;
     }
     if (copy_from_user(&desc, (const void __user *)data, sizeof(desc)) != 0) {
         return -EFAULT;
     }
+    if (idx != GDT_TLS_ENTRY) {
+        kind = desc.flags & 0x7Fu;
+        if (desc.base_addr != 0 || desc.limit != 0 ||
+            (kind != 0 && kind != (UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT))) {
+            return -EINVAL;
+        }
+        return ptrace_tracee(pid) ? 0 : -ESRCH;
+    }
+    desc.entry_number = idx;
     if (tls_resolve_base(&desc, &base) != 0) {
         return -EINVAL;
     }
