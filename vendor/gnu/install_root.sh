@@ -19,13 +19,14 @@
 #             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
 #             them, from the packages fetch_chromium.sh unpacked
 #
-# Then it links /bin/bash and /usr/bin/cc, puts the CA bundle in /etc/ssl,
-# compiles the console's terminfo entry, rach2.ti, takes the set-id bit off
-# OpenSSH's ssh-keysign, and has the root's own ldconfig write
-# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
-# tree already has is refused rather than replaced, so that what the
-# manifest staged is what the image has; the one file replaced is named
-# where it is.
+# Then it links /bin/bash, /usr/bin/cc and /usr/bin/vi, and each BusyBox
+# applet no file of the path answers for, puts the CA bundle in /etc/ssl,
+# compiles the console's terminfo entry, rach2.ti, renders the ports'
+# manual pages with render_man.sh, takes the set-id bit off OpenSSH's
+# ssh-keysign, and has the root's own ldconfig write /etc/ld.so.cache from
+# the /etc/ld.so.conf the manifest staged. A file the tree already has is
+# refused rather than replaced, so that what the manifest staged is what the
+# image has; the one file replaced is named where it is.
 #
 
 set -e
@@ -130,11 +131,37 @@ tar -cf "$WORK/debian.tar" -C "$OUT/chromium" --no-recursion -T "$WORK/debian.li
 tar -xpf "$WORK/debian.tar" -C "$TREE"
 echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
-# bash is /bin/bash, and cc is GCC, as on a Debian system; /bin/sh stays
-# BusyBox's ash. The links are relative, so they resolve wherever the volume is
-# mounted.
+# bash is /bin/bash, cc is GCC and vi is Vim, as on a Debian system; /bin/sh
+# stays BusyBox's ash. The links are relative, so they resolve wherever the
+# volume is mounted.
 ln -s ../usr/bin/bash "$TREE/bin/bash"
 ln -s gcc "$TREE/usr/bin/cc"
+ln -s vim "$TREE/usr/bin/vi"
+
+# BusyBox's applets are not files: ash runs one for its name before it
+# searches the path, and bash and every program that searches the path
+# itself, as Git does for its editor, find only files. So each applet that
+# no file in /usr/bin, /bin, /usr/sbin or /sbin answers for, as ps, mount
+# and which, is linked to /bin/busybox where BusyBox's own install puts it.
+# The build host runs the root's BusyBox, which is static, for the list.
+"$TREE/bin/busybox" --list-full > "$WORK/applets"
+applets=0
+while IFS= read -r applet; do
+    name=${applet##*/}
+    for d in usr/bin bin usr/sbin sbin; do
+        if [ -e "$TREE/$d/$name" ] || [ -L "$TREE/$d/$name" ]; then
+            continue 2
+        fi
+    done
+    case $applet in
+        usr/*) target=../../bin/busybox ;;
+        sbin/*) target=../bin/busybox ;;
+        *) target=busybox ;;
+    esac
+    ln -s "$target" "$TREE/$applet"
+    applets=$((applets + 1))
+done < "$WORK/applets"
+echo "gnu: install: busybox: $applets applets linked"
 
 # The CA bundle, where OpenSSL looks by default, /etc/ssl/cert.pem, which
 # curl and Git use for HTTPS, and under the name Debian gives it.
@@ -146,6 +173,10 @@ ln -s certs/ca-certificates.crt "$TREE/etc/ssl/cert.pem"
 # build host runs the root's tic through the root's loader.
 "$TREE/lib/ld-linux.so.2" --library-path "$TREE/lib:$TREE/usr/lib" \
     "$TREE/usr/bin/tic" -o "$TREE/usr/share/terminfo" "$DIR/rach2.ti"
+
+# The ports' manual pages, rendered to the plain text the system's man
+# reads, which it looks in after the project's own pages.
+sh "$DIR/render_man.sh" "$TREE/usr/share/man"
 
 # ssh-keysign is set-id root so that host-based authentication can read the
 # host keys. The system uses no host-based authentication, and a set-id file

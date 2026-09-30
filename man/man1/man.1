@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 1, 2026
 .Dt MAN 1
 .Os
 .Sh NAME
@@ -29,6 +29,18 @@ a line: every BusyBox applet is an alias of its family page, and every
 member of a system-call family is an alias of the family's page.
 .Nm
 looks a name up as an alias first, then as a page.
+.Pp
+On the GNU system, a name this manual has no page for is looked up in the
+same sections among the pages of the system's ports, under
+.Pa /usr/share/man/gnu/catN/NAME.N ,
+which the image's build renders from the ports' own sources with mandoc.
+Those pages describe the upstream programs, as
+.Ql man git
+and
+.Ql man gcc
+show them; a name both have, such as
+.Ql ls ,
+shows this manual's page.
 .Pp
 When standard output is a terminal, the page goes through the pager named
 by
@@ -71,6 +83,8 @@ Administration.
 Installed preformatted pages.
 .It Pa /usr/share/man/aliases
 The names a page answers for.
+.It Pa /usr/share/man/gnu/catN/NAME.N
+The pages of the GNU system's ports.
 .El
 .Sh EXIT STATUS
 The exit status is the pager's or 0, 1 when no page has the name, and 2
