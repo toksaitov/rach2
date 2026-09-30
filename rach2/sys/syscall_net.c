@@ -1114,8 +1114,10 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
     return new_fd;
 }
 
-/* send(2): write to a connected stream socket (the peer is the
- * connection's). */
+/* send(2): write to the socket's connected peer. On a stream that is the
+ * connection's; any other socket sends as sendto(2) with no address does,
+ * which is what POSIX makes send, and what glibc's DNS resolver asks of a
+ * connected UDP socket through subcall 9. */
 static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
@@ -1129,11 +1131,8 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
     }
-    if (entry->sock->type == SOCK_RAW) {
-        return -EOPNOTSUPP;
-    }
     if (entry->sock->type != SOCK_STREAM) {
-        return -EOPNOTSUPP;
+        return do_sendto(fd, buf_ptr, len, flags, 0, 0);
     }
 
     /* socket_tcp_send copies the payload itself, blocking on send-ring space

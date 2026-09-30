@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt SEND 2
 .Os
 .Sh NAME
@@ -37,7 +37,11 @@ Both therefore use subcall 11 of i386
 system call 102.
 The separate kernel
 .Nm send
-operation, subcall 9, accepts only stream sockets.
+operation, subcall 9, which glibc's
+.Fn send
+makes, sends on any socket: a stream to its peer, and any other socket as
+.Fn sendto
+with no destination sends.
 .Fn sendmsg ,
 subcall 16 or the direct call, number 370, sends the buffers of
 .Fa msg
@@ -237,8 +241,8 @@ A packet destination specifies an unregistered interface index.
 .Fa fd
 is invalid or does not refer to a socket.
 .It Bq Er EOPNOTSUPP
-The socket is ioctl-only, subcall 9 was used on a non-stream socket,
-or a raw ICMP send requested a broadcast destination.
+The socket is ioctl-only, or a raw ICMP send requested a broadcast
+destination.
 .It Bq Er EPIPE
 A stream is not in a sending state and has no pending TCP error.
 .It Bq Er ETIMEDOUT
