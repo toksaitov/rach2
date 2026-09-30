@@ -72,6 +72,8 @@ struct bbuf {
     struct bbuf *lru_prev;  /* the keyed buffers in release order, oldest first */
     struct bbuf *lru_next;
     struct bbuf *empty_next; /* the next buffer keyed to nothing */
+    struct bbuf *dirty_prev; /* the dirty buffers, in no order */
+    struct bbuf *dirty_next;
 };
 
 /** Find or read block `blk` of `dev`; returns it held, or NULL on a failed

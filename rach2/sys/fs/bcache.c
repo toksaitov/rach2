@@ -24,6 +24,7 @@ static uint32_t nbufs;        /* how many */
 static struct bbuf *lru_head; /* the keyed buffers, least recently released first */
 static struct bbuf *lru_tail;
 static struct bbuf *empties;      /* the buffers keyed to nothing */
+static struct bbuf *dirties;      /* the dirty buffers, in no order */
 static struct bbuf *kernel_held;  /* held with no process current */
 static block_device_t *ahead_dev; /* the device and block a sequential reader */
 static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
@@ -201,6 +202,47 @@ static void lru_add_tail(struct bbuf *b)
     lru_tail = b;
 }
 
+/*
+ * The dirty list. A buffer is on it exactly while it is dirty, so a sync and
+ * the ordered writes read the few buffers waiting to be written and not the
+ * whole cache, which on a machine with memory is tens of thousands of
+ * buffers; a sync walked the whole cache once for every metadata write.
+ */
+
+/** Mark `b` dirty and put it on the dirty list, where it is once. */
+static void set_dirty(struct bbuf *b)
+{
+    if (b->dirty) {
+        return;
+    }
+    b->dirty = 1;
+    b->dirty_prev = 0;
+    b->dirty_next = dirties;
+    if (dirties) {
+        dirties->dirty_prev = b;
+    }
+    dirties = b;
+}
+
+/** Mark `b` clean and take it off the dirty list. */
+static void set_clean(struct bbuf *b)
+{
+    if (!b->dirty) {
+        return;
+    }
+    b->dirty = 0;
+    if (b->dirty_prev) {
+        b->dirty_prev->dirty_next = b->dirty_next;
+    } else {
+        dirties = b->dirty_next;
+    }
+    if (b->dirty_next) {
+        b->dirty_next->dirty_prev = b->dirty_prev;
+    }
+    b->dirty_prev = 0;
+    b->dirty_next = 0;
+}
+
 /** Take `b` off the index and the release order, keyed to nothing, and put
  * it on the empties. */
 static void make_empty(struct bbuf *b)
@@ -208,7 +250,7 @@ static void make_empty(struct bbuf *b)
     index_del(b);
     lru_del(b);
     b->dev = 0;
-    b->dirty = 0;
+    set_clean(b);
     b->discard = 0;
     b->order = 0;
     b->empty_next = empties;
@@ -405,7 +447,7 @@ static int write_buffer(struct bbuf *b)
         vfs_device_failed(b->dev, b->blk * BCACHE_BLOCK_SECTORS, rc);
         return rc;
     }
-    b->dirty = 0;
+    set_clean(b);
     b->write_failed = 0;
     b->order = 0;
     write_gen++;
@@ -491,7 +533,7 @@ static int write_run(struct bbuf *first, uint64_t *last)
     }
     for (i = 0; i < n; i++) {
         if (rc == 0) {
-            run[i]->dirty = 0;
+            set_clean(run[i]);
             run[i]->write_failed = 0;
             run[i]->order = 0;
         }
@@ -529,7 +571,7 @@ static int firsts_pending(const block_device_t *dev)
 {
     const struct bbuf *b;
 
-    for (b = bufs; b; b = b->next) {
+    for (b = dirties; b; b = b->dirty_next) {
         stat_visits++;
         if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST &&
             (b->holder != -1 || b->write_failed)) {
@@ -552,7 +594,7 @@ static int write_firsts(block_device_t *dev)
     int wrote = 0;
 
 again:
-    for (b = bufs; b; b = b->next) {
+    for (b = dirties; b; b = b->dirty_next) {
         int rc;
 
         stat_visits++;
@@ -688,7 +730,7 @@ again:
     if (!victim->lru_prev && lru_head != victim) {
         lru_add_tail(victim);
     }
-    victim->dirty = 0;
+    set_clean(victim);
     victim->order = 0;
     /* A mark left by a device that went while this buffer was held for a
      * fill or a writeback: every buffer changes hands here, so this is the
@@ -826,7 +868,7 @@ void bcache_dirty(struct bbuf *b)
         k_panic("bcache: hold rule: a dirty mark by a process that does not hold the buffer");
         return;
     }
-    b->dirty = 1;
+    set_dirty(b);
 }
 
 /** Mark a held buffer dirty with its place in the device's order. */
@@ -854,7 +896,7 @@ int bcache_write(struct bbuf *b)
     if (b->dev->flags & BLOCK_WRITE_FAILED) {
         return -EROFS;
     }
-    b->dirty = 1;
+    set_dirty(b);
     return write_buffer(b);
 }
 
@@ -863,7 +905,7 @@ static struct bbuf *first_dirty(const block_device_t *dev)
 {
     struct bbuf *b;
 
-    for (b = bufs; b; b = b->next) {
+    for (b = dirties; b; b = b->dirty_next) {
         stat_visits++;
         if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST) {
             return b;
@@ -890,7 +932,7 @@ static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t aft
     const struct bbuf *b;
     int n = 0;
 
-    for (b = bufs; b; b = b->next) {
+    for (b = dirties; b; b = b->dirty_next) {
         int i;
 
         stat_visits++;
@@ -1010,7 +1052,7 @@ void bcache_device_gone(block_device_t *dev)
         if (b->dev != dev) {
             continue;
         }
-        b->dirty = 0;
+        set_clean(b);
         if (b->holder != -1) {
             b->discard = 1;
             continue;

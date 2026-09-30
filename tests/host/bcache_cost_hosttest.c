@@ -29,13 +29,19 @@
  * and its release at least three. The bound is eight buffers for a get and
  * its release, where one walk of the cache is 1024.
  *
- * A sync of 1024 dirty blocks, on a device that takes eight blocks a
- * request, walks the cache once for its pass over the firsts, once for each
- * batch of 128, and twice more to find nothing left; each block it reads a
- * few times more, for its lookup in the batch, its place in a run and its
- * hold across the request. The bound allows twelve walks and eight reads a
+ * A sync reads the dirty buffers and not the cache: they are on a list of
+ * their own, since a sync once walked every buffer of the cache for each of
+ * its passes and batches, and a small file's write, which syncs about nine
+ * times, read the whole cache nine times over. A sync of 1024 dirty blocks,
+ * on a device that takes eight blocks a request, walks the dirty list once
+ * for its pass over the firsts and once for each batch of 128, a list that
+ * is 128 shorter after each batch; each block it reads a few times more, for
+ * its lookup in the batch, its place in a run and its hold across the
+ * request. The bound allows twelve walks of the cache and eight reads a
  * block, where a walk for every run written is 128 walks, and the count must
- * be at least the eleven walks.
+ * be at least eleven walks' worth. A sync of eight dirty blocks in a full
+ * cache of 1024 reads the eight, at most twelve times each, where a walk of
+ * the cache is 1024 reads.
  *
  * The last row is entry 40's. A buffer is a page of the kernel heap, which
  * is KVA_HEAP_SIZE whatever the machine's memory, and on a machine of more
@@ -72,6 +78,13 @@ extern uint32_t host_cache_target;
 /* The least such a sync reads: eleven walks of the cache, one for the
  * firsts, one for each batch of 128 and two to find nothing left. */
 #define SYNC_LEAST    (CACHE_BUFFERS * (CACHE_BUFFERS / 128u + 3u))
+/* A sync of a full cache with FEW_DIRTY dirty blocks reads the dirty ones,
+ * at most twelve times each: its walks of the dirty buffers and its reads of
+ * each block to write it. It reads them at least twice, once for the pass
+ * over the firsts and once for the batch it writes. */
+#define FEW_DIRTY     8u
+#define FEW_MOST      (12u * FEW_DIRTY)
+#define FEW_LEAST     (2u * FEW_DIRTY)
 /* What the ATA disk takes in one request: a run of eight blocks. */
 #define RUN_SECTORS   64u
 /* The cap: half the kernel heap's pages. The cap row writes PAST_SHARE
@@ -87,7 +100,7 @@ process_t proc_a;
 process_t *current_proc = &proc_a;
 static int fails;
 static uint32_t writes_made;
-static uint64_t hit_visits, miss_visits, sync_visits;
+static uint64_t hit_visits, miss_visits, sync_visits, few_visits;
 
 static void check(int ok, const char *what)
 {
@@ -263,6 +276,26 @@ static void sync_row(void)
     check(sync_visits >= SYNC_LEAST, "the counter counts the sync's eleven walks of the cache");
 }
 
+/* The cache full of clean blocks 0 to 1023 but blocks 2048 to 2055, which
+ * are dirty, and a sync. */
+static void few_row(void)
+{
+    uint64_t before;
+
+    check(bcache_invalidate(&disk) == 0, "the cache is emptied for the few dirty blocks");
+    key_blocks(0, CACHE_BUFFERS - FEW_DIRTY, 0);
+    key_blocks(2u * CACHE_BUFFERS, FEW_DIRTY, 1);
+    check(bcache_resident() == CACHE_BUFFERS, "the cache is full");
+    writes_made = 0;
+    before = bcache_stat_visits();
+    check(bcache_sync(&disk) == 0, "the sync writes the dirty blocks");
+    few_visits = bcache_stat_visits() - before;
+    check(writes_made == 1, "in one run of eight blocks");
+    check(few_visits <= FEW_MOST,
+          "a sync of a full cache with eight dirty blocks reads the eight, not the cache");
+    check(few_visits >= FEW_LEAST, "the counter counts the sync's two walks of the eight");
+}
+
 /* Every block of the device written through the cache, on a machine whose
  * memory share is three times the cap. */
 static void cap_row(void)
@@ -285,11 +318,12 @@ int main(void)
     hit_row();
     miss_row();
     sync_row();
+    few_row();
     cap_row();
     printf("bcache_cost_hosttest: visits: a hit %llu, 1024 misses %llu, a sync of 1024 blocks "
-           "%llu\n",
+           "%llu, a sync of 8 of 1024 %llu\n",
            (unsigned long long)hit_visits, (unsigned long long)miss_visits,
-           (unsigned long long)sync_visits);
+           (unsigned long long)sync_visits, (unsigned long long)few_visits);
     if (fails == 0) {
         printf("bcache_cost_hosttest: result: pass: a get, a victim and a sync read what they "
                "need, and the cache stops at half the heap\n");
