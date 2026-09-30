@@ -20,11 +20,12 @@
 #             them, from the packages fetch_chromium.sh unpacked
 #
 # Then it links /bin/bash and /usr/bin/cc, puts the CA bundle in /etc/ssl,
-# takes the set-id bit off OpenSSH's ssh-keysign, and has the root's own
-# ldconfig write /etc/ld.so.cache from the /etc/ld.so.conf the manifest
-# staged. A file the tree already has is refused rather than replaced, so
-# that what the manifest staged is what the image has; the one file replaced
-# is named where it is.
+# compiles the console's terminfo entry, rach2.ti, takes the set-id bit off
+# OpenSSH's ssh-keysign, and has the root's own ldconfig write
+# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
+# tree already has is refused rather than replaced, so that what the
+# manifest staged is what the image has; the one file replaced is named
+# where it is.
 #
 
 set -e
@@ -140,6 +141,11 @@ ln -s gcc "$TREE/usr/bin/cc"
 cp "$("$DIR/fetch.sh" --path cacert)" "$TREE/etc/ssl/certs/ca-certificates.crt"
 chmod 0644 "$TREE/etc/ssl/certs/ca-certificates.crt"
 ln -s certs/ca-certificates.crt "$TREE/etc/ssl/cert.pem"
+
+# The console's entry, for the TERM=rach2 the kernel gives its sessions. The
+# build host runs the root's tic through the root's loader.
+"$TREE/lib/ld-linux.so.2" --library-path "$TREE/lib:$TREE/usr/lib" \
+    "$TREE/usr/bin/tic" -o "$TREE/usr/share/terminfo" "$DIR/rach2.ti"
 
 # ssh-keysign is set-id root so that host-based authentication can read the
 # host keys. The system uses no host-based authentication, and a set-id file

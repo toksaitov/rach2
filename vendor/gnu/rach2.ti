@@ -1,0 +1,22 @@
+# rach2.ti: the terminfo entry of the Rach2 console, TERM=rach2.
+#
+# The kernel's VGA text console, 80 columns by 25 rows, interprets the subset
+# of ANSI escapes that rach2/sys/kio.c lists, and this entry lists only those.
+# A line feed also returns the carriage, so the entry moves down with CSI B
+# and has no index; the console has no scroll region and no line or character
+# insertion, so a program redraws where a terminal would scroll. A character
+# in the last column wraps at once, so there is no xenl. The keyboard sends
+# the arrows, Home and End as xterm does, the editing keys as a VT220 does,
+# and DEL for Backspace. install_root.sh compiles the entry into the GNU root.
+rach2|Rach2 VGA text console,
+	am, bw, msgr,
+	colors#8, cols#80, it#8, lines#25, pairs#64,
+	bold=\E[1m, clear=\E[H\E[2J, cr=\r, cub=\E[%p1%dD, cub1=^H,
+	cud=\E[%p1%dB, cud1=\E[B, cuf=\E[%p1%dC, cuf1=\E[C,
+	cup=\E[%i%p1%d;%p2%dH, cuu=\E[%p1%dA, cuu1=\E[A,
+	ech=\E[%p1%dX, ed=\E[J, el=\E[K, el1=\E[1K, home=\E[H,
+	hpa=\E[%i%p1%dG, ht=^I, kbs=\177, kcub1=\E[D, kcud1=\E[B,
+	kcuf1=\E[C, kcuu1=\E[A, kdch1=\E[3~, kend=\E[F, khome=\E[H,
+	kich1=\E[2~, knp=\E[6~, kpp=\E[5~, op=\E[39;49m, rc=\E8,
+	rev=\E[7m, rmso=\E[27m, sc=\E7, setab=\E[4%p1%dm,
+	setaf=\E[3%p1%dm, sgr0=\E[0m, smso=\E[7m, vpa=\E[%i%p1%dd,
