@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 1, 2026
 .Dt PING 1
 .Os
 .Sh NAME
@@ -6,12 +6,17 @@
 .Nd send ICMP echo requests
 .Sh SYNOPSIS
 .Nm
+.Op Fl c Ar count
 .Op Ar host
 .Sh DESCRIPTION
 .Nm
-attempts four ping operations to
-.Ar host ;
-each may send up to four echo requests.
+attempts
+.Ar count
+ping operations to
+.Ar host ,
+four when
+.Fl c
+is not given; each may send up to four echo requests.
 The default host is
 .Ql 10.0.2.2 ,
 QEMU's gateway.
@@ -68,9 +73,11 @@ The files read when the two above are absent.
 returns 0 if at least one reply arrives and no request fails with
 .Er EBUSY .
 It returns 1 if no replies arrive, the host cannot be resolved, or
-another request is in flight.
+another request is in flight, and 2 for an option it does not take or a
+count that is not a positive number.
 .Sh EXAMPLES
 .Dl ping 10.0.2.2
+.Dl ping -c 2 github.com
 .Sh DIAGNOSTICS
 .Bl -tag -width Ds
 .It Ql ping: another ping in flight

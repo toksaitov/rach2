@@ -1,9 +1,10 @@
 /**
  * Send ICMP echo requests through the Rach2 network stack.
  *
- * `ping [host]`, where `host` is an IPv4 address or name (default 10.0.2.2,
- * the SLIRP gateway). Names are resolved through `/etc/hosts`, or `/hosts`
- * where there is no `/etc/hosts`, and then DNS (see `resolv.c`).
+ * `ping [-c count] [host]`, where `host` is an IPv4 address or name (default
+ * 10.0.2.2, the SLIRP gateway) and `count` the number of requests, four by
+ * default. Names are resolved through `/etc/hosts`, or `/hosts` where there
+ * is no `/etc/hosts`, and then DNS (see `resolv.c`).
  *
  * Sends a few echo requests via the `SC_PING` socketcall and reports each
  * round-trip time in milliseconds, counted in kernel ticks of 10 ms, or a
@@ -12,6 +13,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -42,10 +44,26 @@ static int ping_once(unsigned int ip)
 int main(int argc, char **argv)
 {
     unsigned int ip = DEFAULT_IP;
-    int i, replies = 0;
+    int i, opt, replies = 0, count = PING_COUNT;
+    char *end;
 
-    if (argc > 1) {
-        if (resolve_host(argv[1], &ip) != 0) {
+    while ((opt = getopt(argc, argv, "c:")) != -1) {
+        if (opt != 'c') {
+            fputs("usage: ping [-c count] [host]\n", stderr);
+            return 2;
+        }
+        count = (int)strtol(optarg, &end, 10);
+        if (*end != '\0' || count < 1) {
+            fputs("ping: count must be a positive number\n", stderr);
+            return 2;
+        }
+    }
+    if (argc - optind > 1) {
+        fputs("usage: ping [-c count] [host]\n", stderr);
+        return 2;
+    }
+    if (optind < argc) {
+        if (resolve_host(argv[optind], &ip) != 0) {
             fputs("ping: cannot resolve host\n", stderr);
             return 1;
         }
@@ -53,7 +71,7 @@ int main(int argc, char **argv)
 
     printf("PING %u.%u.%u.%u\n", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
 
-    for (i = 0; i < PING_COUNT; i++) {
+    for (i = 0; i < count; i++) {
         int rtt = ping_once(ip);
         if (rtt >= 0) {
             printf("  reply: seq=%d time=%d ms\n", i, rtt * 10);
@@ -67,6 +85,6 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("%d/%d replies\n", replies, PING_COUNT);
+    printf("%d/%d replies\n", replies, count);
     return replies > 0 ? 0 : 1;
 }
