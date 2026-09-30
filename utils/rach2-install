@@ -368,6 +368,35 @@ archive_account_keys() (
 
 # FAT32 records neither owners nor modes. Reconstruct them before cp -a
 # puts these files on the new root, where SSH checks their permissions.
+# keep_image_accounts IMAGE DEST: the image's system accounts, those with an
+# id below 1000 whose name and id DEST's etc/passwd does not have, appended to
+# it, with the image's groups below 1000 that DEST's etc/group has neither the
+# name nor the id of, and the shadow lines of the accounts appended. The files
+# an install writes and an update keeps were made for a root that may not
+# have had them, and a program of the image, such as the GNU root's OpenSSH
+# with its `sshd`, does not start without its own.
+keep_image_accounts() {
+    [ -f "$1/etc/passwd" ] || return 0
+    added=$(awk -F: 'NR == FNR { name[$1] = 1; id[$3] = 1; next }
+        $3 + 0 < 1000 && !($1 in name) && !($3 in id)' "$2/etc/passwd" "$1/etc/passwd") ||
+        return 1
+    [ -n "$added" ] || return 0
+    printf '%s\n' "$added" >> "$2/etc/passwd" || return 1
+    if [ -f "$1/etc/group" ]; then
+        groups=$(awk -F: 'NR == FNR { name[$1] = 1; id[$3] = 1; next }
+            $3 + 0 < 1000 && !($1 in name) && !($3 in id)' "$2/etc/group" "$1/etc/group") ||
+            return 1
+        [ -z "$groups" ] || printf '%s\n' "$groups" >> "$2/etc/group" || return 1
+    fi
+    [ -f "$1/etc/shadow" ] || return 0
+    names=$(printf '%s\n' "$added" | cut -d: -f1 | tr '\n' ' ')
+    lines=$(awk -F: -v names="$names" '
+        BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+        NR == FNR { have[$1] = 1; next }
+        ($1 in want) && !($1 in have)' "$2/etc/shadow" "$1/etc/shadow") || return 1
+    [ -z "$lines" ] || printf '%s\n' "$lines" >> "$2/etc/shadow"
+}
+
 restore_key_directory() { # restore_key_directory SOURCE DESTINATION OWNER
     if ! { mkdir -p "$2" && cp -R "$1/." "$2/" &&
         chown -R "$3" "$2" &&
@@ -620,6 +649,8 @@ whole configuration archived on its recovery partition; its accounts are not the
         die "the new root would not mount"
     mounted_root=$TARGET_MNT
     say "writing the accounts, the policy and the keys back"
+    keep_image_accounts "$TARGET_MNT" "$keep" ||
+        die "the image's system accounts could not be kept beside the machine's"
     for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
         if [ -f "$keep/$f" ]; then
             mkdir -p "$TARGET_MNT/$(dirname "$f")"
@@ -1163,6 +1194,13 @@ put_file() { # put_file PATH MODE CONTENT
     mv "$1.new" "$1" || die "$1 could not be put in place"
 }
 
+image_etc=$(mktemp -d /tmp/rach2-install.XXXXXX) || die "there is nowhere to keep the image's accounts"
+mkdir -p "$image_etc/etc" || die "there is nowhere to keep the image's accounts"
+for f in passwd group shadow; do
+    if [ -f "$root_dir/etc/$f" ]; then
+        cp "$root_dir/etc/$f" "$image_etc/etc/$f" || die "the image's /etc/$f could not be read"
+    fi
+done
 put_file "$root_dir/etc/passwd" 644 "root:x:0:0:root:/root:/bin/sh
 $user_name:x:1000:1000:$user_name:/home/$user_name:/bin/sh
 "
@@ -1172,6 +1210,9 @@ $user_name:x:1000:
 put_file "$root_dir/etc/shadow" 600 "root:$root_hash:0:0:99999:7:::
 $user_name:$user_hash:0:0:99999:7:::
 "
+keep_image_accounts "$image_etc" "$root_dir" ||
+    die "the image's system accounts could not be kept beside the new ones"
+rm -rf "$image_etc"
 
 # The account's home, and the keys if any were given. The demonstration's home
 # and its keys go, whatever they were called.

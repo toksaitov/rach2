@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd September 30, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -112,6 +112,11 @@ and
 .Pa /etc/shadow
 into the ext2 root.
 Each file is written under a separate name and renamed into place.
+The image's system accounts, those with an ID below 1000 whose name and
+ID the new files do not have, are appended to them with their groups and
+shadow lines, so a program of the image keeps its account, as the GNU
+system's OpenSSH server keeps
+.Ql sshd .
 Create the account's home directory and install its keys.
 .It
 Write
@@ -179,7 +184,8 @@ can read as a boot partition and an installed root containing
 Before replacing a readable root, the installer copies its account files,
 SSH policy, server host keys, and account keys, including root's keys.
 These are restored after the write, preserving passwords changed since
-installation.
+installation, and the image's system accounts the restored files lack are
+appended to them, as for an install.
 The absence of account keys is preserved too.
 If the root cannot be read, the account files, policy and keys are taken
 from the recovery partition's archive and the last ext2 partition is replaced.

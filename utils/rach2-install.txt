@@ -90,7 +90,10 @@ DESCRIPTION
      and hashed, and what reached the disk must be the image; the kernel is
      asked to read the disk's new table; the accounts, /etc/passwd, /etc/group
      and /etc/shadow, are written whole into the ext2 root the image carries,
-     each to a name of its own and renamed into place; the account's home is
+     each to a name of its own and renamed into place, and the image's system
+     accounts, those with an id below 1000 whose name and id the new files do
+     not have, are appended to them with their groups and shadow lines, as the
+     GNU system's OpenSSH server needs its sshd; the account's home is
      made and its keys placed; /etc/rach2/sshd.conf is written with
      root-password-login yes, which is what makes init start the SSH server
      without dropbear's -g; and the root is grown into the free space after it
@@ -108,7 +111,8 @@ DESCRIPTION
      carry /etc/rach2. The account files, the SSH policy, the server's host
      keys and the accounts' own keys, root's included and their absence with
      them, are copied off the root first and written back after the write, so a
-     password changed after the install is still the machine's password. A
+     password changed after the install is still the machine's password, and
+     the image's system accounts they lack are appended to them. A
      root that does not read is updated from the archive on the recovery
      partition instead, and the new root goes into the last ext2 partition
      of the table; where both read and disagree, each file that differs is

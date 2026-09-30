@@ -257,6 +257,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: commit-msg hook's refusals" >&2
         fail=1
     fi
+    if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
+        echo "hosttest: result: pass: the installer's kept image accounts"
+    else
+        cat "$VDIR/install_accounts.rlog"
+        echo "hosttest: result: fail: the installer's kept image accounts" >&2
+        fail=1
+    fi
 fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
