@@ -16,10 +16,10 @@
 # nothing; an image that has `sshd` twice, and another account with its id,
 # must add it once; a machine file whose last line has no newline must keep
 # that line whole; an empty machine group file must get the image's system
-# groups, root's and `sshd`'s; and an image with no shadow line for an account it adds must leave
-# the machine's shadow file as it was. With --mutate each fault below is put
-# into the copy of the functions and must fail its row; the rows run again
-# on the functions as they are at the end.
+# groups, root's and `sshd`'s; and an image with no shadow line for an
+# account it adds must leave the machine's shadow file as it was. With
+# --mutate each fault below is put into the copy of the functions and must
+# fail its row; the rows run again on the functions as they are at the end.
 #
 # Usage: sh tests/system/install_accounts_test.sh [--mutate]
 #
