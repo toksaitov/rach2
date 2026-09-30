@@ -127,6 +127,10 @@ struct ext2_writeback {
     uint32_t error_block, error_generation;
 };
 
+/* Policy: the directories whose last lookup a mount remembers, enough for
+ * the walk of a path eight directories deep. */
+#define EXT2_LOOKUP_HINTS 8
+
 struct ext2_mount {
     int used;
     block_device_t *dev;
@@ -158,6 +162,15 @@ struct ext2_mount {
     uint32_t alloc_hint;     /* the block after the last one given out */
     uint8_t *gd;             /* the group descriptors, `groups * 32` bytes, from the heap */
     struct ext2_node *nodes; /* the nodes in memory, from the heap */
+    /* Where the last lookups found their names, one slot for each of the
+     * last EXT2_LOOKUP_HINTS directories, since a path's walk looks up a
+     * name in every directory on the way: the directory's inode and the
+     * block where the next lookup in it starts. `lookup_next` is the slot a
+     * directory without one takes. */
+    struct {
+        uint32_t dir, block;
+    } lookup_hint[EXT2_LOOKUP_HINTS];
+    int lookup_next;
 };
 
 /* A node from the heap, on the mount's list, or NULL when the heap has none;
@@ -648,11 +661,36 @@ static int names_equal(const char *a, const char *b)
     return *a == *b;
 }
 
+/** The lookup-hint slot of directory inode `dir`, or -1 when it has none. */
+static int lookup_slot(const struct ext2_mount *em, uint32_t dir)
+{
+    int i;
+
+    for (i = 0; i < EXT2_LOOKUP_HINTS; i++) {
+        if (em->lookup_hint[i].dir == dir) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Look `name` up in directory `dir`, the mount's root when it is NULL.
+ *
+ * A directory of this format has no index, so the lookup reads entries
+ * until it finds the name. It starts at the block where the last lookup in
+ * the same directory found its name and wraps around to it, as Linux's
+ * ext2 does: `ls` and `find` look up the names of a directory in the order
+ * it lists them, so each is found near the one before, and a directory of
+ * n names is listed in time proportional to n and not to n squared. A block
+ * starts an entry whatever was written since, since no entry crosses one.
+ */
 static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
-    uint32_t cursor = 0;
+    uint32_t start = 0, cursor, limit, at;
+    int pass, slot;
 
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
@@ -662,33 +700,50 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
         *node = d;
         return 0;
     }
-    for (;;) {
-        struct ext2_scan sc;
-        int got = dir_scan(em, d, &cursor, &sc);
+    slot = lookup_slot(em, d->ino);
+    if (slot >= 0 && ((uint64_t)em->lookup_hint[slot].block << em->block_shift) < d->size) {
+        start = em->lookup_hint[slot].block << em->block_shift;
+    }
+    for (pass = 0; pass < 2; pass++) {
+        cursor = pass == 0 ? start : 0;
+        limit = pass == 0 ? (uint32_t)d->size : start;
+        while (cursor < limit) {
+            struct ext2_scan sc;
+            int got;
 
-        if (got < 0) {
-            return got;
-        }
-        if (got == 0) {
-            return -ENOENT;
-        }
-        if (sc.ino != 0 && names_equal(sc.name, name)) {
-            struct ext2_node *n;
-            int rc;
+            at = cursor;
+            got = dir_scan(em, d, &cursor, &sc);
+            if (got < 0) {
+                return got;
+            }
+            if (got == 0) {
+                break;
+            }
+            if (sc.ino != 0 && names_equal(sc.name, name)) {
+                struct ext2_node *n;
+                int rc;
 
-            if (sc.ino == d->ino) {
-                d->refs++;
-                *node = d;
+                if (slot < 0) {
+                    slot = em->lookup_next;
+                    em->lookup_next = (em->lookup_next + 1) % EXT2_LOOKUP_HINTS;
+                    em->lookup_hint[slot].dir = d->ino;
+                }
+                em->lookup_hint[slot].block = at >> em->block_shift;
+                if (sc.ino == d->ino) {
+                    d->refs++;
+                    *node = d;
+                    return 0;
+                }
+                n = node_for(em, sc.ino, &rc);
+                if (!n) {
+                    return rc;
+                }
+                *node = n;
                 return 0;
             }
-            n = node_for(em, sc.ino, &rc);
-            if (!n) {
-                return rc;
-            }
-            *node = n;
-            return 0;
         }
     }
+    return -ENOENT;
 }
 
 /* ---- attributes ---- */
