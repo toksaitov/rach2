@@ -72,7 +72,7 @@ An inotify instance (`inotify.c`) is an anonymous descriptor with a queue of eve
 
 `tests/musl/inotifymusl.c` checks, on tmpfs, which has links, the events of a watched directory and a watched file through a file's life, from its creation to its removal and the watch's `IN_IGNORED`, with a move's cookie and `IN_ISDIR`; a read too small for an event, an empty nonblocking queue, `FIONREAD` and `poll`; the refusals of `inotify_add_watch` and `inotify_rm_watch`, a second watch of a file and `IN_MASK_CREATE`, a one-shot watch, and that `inotify_init` leaves the caller's EBX, which i386 code keeps its global offset table in, as it was.
 
-`tests/musl/epollmusl.c` and `tests/musl/pipemusl.c` check that `eventfd` and `pipe`, which the kernel serves as `eventfd2` and `pipe2` without flags, leave the caller's ECX as it was, since a compiler keeps a value there across a call that does not name it.
+`tests/musl/epollmusl.c` checks that `eventfd` and `pipe`, which the kernel serves as `eventfd2` and `pipe2` without flags, leave the caller's ECX as it was, since a compiler keeps a value there across a call that does not name it.
 
 `tests/musl/pollmusl.c` is built and staged at `/musl/pollmusl` for manual use. Its short timeouts exercise musl's direct `poll(168)` and `_newselect(142)` paths over a pipe, including timeout, readiness, and a cross-process wake. It does not exercise the time64 fallback.
 

@@ -1097,12 +1097,13 @@ static int nested_forked(void)
     return 0;
 }
 
-/* eventfd(323), which the kernel serves as eventfd2 without flags, leaves
- * the caller's ECX as it was: a compiler keeps a value there across a call
- * that does not name it. */
-static int eventfd_ecx(void)
+/* eventfd(323) and pipe(42), which the kernel serves as eventfd2 and pipe2
+ * without flags, leave the caller's ECX as it was: a compiler keeps a value
+ * there across a call that does not name it. */
+static int calls_keep_ecx(void)
 {
     unsigned int c;
+    int fds[2];
     int r;
 
     __asm__ __volatile__("int $0x80"
@@ -1113,12 +1114,21 @@ static int eventfd_ecx(void)
         return fail("eventfd changed the caller's ECX");
     }
     close(r);
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r), "=c"(c)
+                         : "0"(42), "b"(fds), "1"(0x5A5A5A5Au)
+                         : "memory");
+    if (r != 0 || c != 0x5A5A5A5Au) {
+        return fail("pipe changed the caller's ECX");
+    }
+    close(fds[0]);
+    close(fds[1]);
     return 0;
 }
 
 int main(void)
 {
-    if (eventfd_ecx() || counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
+    if (calls_keep_ecx() || counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
         polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
         long_timeout() || pipe_each_write() || unix_kinds() || unix_shutdown_edge() ||
         unix_own_room() || unix_accept_edge() || udp_arrival() || tcp_arrival() ||
