@@ -99,20 +99,22 @@ struct rtattr {
 #define NLMSG_HDRLEN      ((int)NLMSG_ALIGN(sizeof(struct nlmsghdr)))
 #define NLMSG_LENGTH(len) ((unsigned int)(len) + NLMSG_HDRLEN)
 #define NLMSG_DATA(h)     ((void *)((char *)(h) + NLMSG_HDRLEN))
-#define NLMSG_OK(h, len)                                                              \
+#define NLMSG_OK(h, len)                                                                   \
     ((len) >= (int)sizeof(struct nlmsghdr) && (h)->nlmsg_len >= sizeof(struct nlmsghdr) && \
      (int)(h)->nlmsg_len <= (len))
-#define NLMSG_NEXT(h, len)                                   \
-    ((len) -= (int)NLMSG_ALIGN((h)->nlmsg_len),              \
+#define NLMSG_NEXT(h, len)                      \
+    ((len) -= (int)NLMSG_ALIGN((h)->nlmsg_len), \
      (struct nlmsghdr *)((char *)(h) + NLMSG_ALIGN((h)->nlmsg_len)))
-#define RTA_ALIGN(len)  (((len) + 3u) & ~3u)
-#define RTA_OK(a, len)  ((len) >= (int)sizeof(struct rtattr) && (a)->rta_len >= sizeof(struct rtattr) && \
-                        (int)(a)->rta_len <= (len))
-#define RTA_NEXT(a, len) \
-    ((len) -= (int)RTA_ALIGN((a)->rta_len), (struct rtattr *)((char *)(a) + RTA_ALIGN((a)->rta_len)))
-#define RTA_DATA(a)       ((void *)((char *)(a) + RTA_ALIGN(sizeof(struct rtattr))))
-#define PAYLOAD(h, body)  ((int)(h)->nlmsg_len - NLMSG_HDRLEN - (int)NLMSG_ALIGN(sizeof(body)))
-#define FIRST_RTA(p)      ((struct rtattr *)((char *)(p) + NLMSG_ALIGN(sizeof(*(p)))))
+#define RTA_ALIGN(len) (((len) + 3u) & ~3u)
+#define RTA_OK(a, len)                                                               \
+    ((len) >= (int)sizeof(struct rtattr) && (a)->rta_len >= sizeof(struct rtattr) && \
+     (int)(a)->rta_len <= (len))
+#define RTA_NEXT(a, len)                    \
+    ((len) -= (int)RTA_ALIGN((a)->rta_len), \
+     (struct rtattr *)((char *)(a) + RTA_ALIGN((a)->rta_len)))
+#define RTA_DATA(a)      ((void *)((char *)(a) + RTA_ALIGN(sizeof(struct rtattr))))
+#define PAYLOAD(h, body) ((int)(h)->nlmsg_len - NLMSG_HDRLEN - (int)NLMSG_ALIGN(sizeof(body)))
+#define FIRST_RTA(p)     ((struct rtattr *)((char *)(p) + NLMSG_ALIGN(sizeof(*(p)))))
 
 static int fail(const char *what)
 {
@@ -167,16 +169,78 @@ static int ioctl_addr(int index, struct in_addr *out)
     return rc;
 }
 
+/* A link of a dump: it has a name, and the first is kept for the rows
+ * after the dumps. 0, or -1. */
+static int link_ok(struct nlmsghdr *h, int first)
+{
+    struct ifinfomsg *ifi = NLMSG_DATA(h);
+    int l = PAYLOAD(h, struct ifinfomsg);
+    struct rtattr *a;
+    const char *name = NULL;
+
+    for (a = FIRST_RTA(ifi); RTA_OK(a, l); a = RTA_NEXT(a, l)) {
+        if (a->rta_type == IFLA_IFNAME) {
+            name = RTA_DATA(a);
+        }
+    }
+    if (!name) {
+        return failed("a link without a name");
+    }
+    if (first) {
+        first_index = ifi->ifi_index;
+        snprintf(first_name, sizeof first_name, "%s", name);
+    }
+    return 0;
+}
+
+/* An address of a dump: its local address is the one SIOCGIFADDR gives for
+ * its interface. 0, or -1. */
+static int addr_ok(struct nlmsghdr *h)
+{
+    struct ifaddrmsg *ifa = NLMSG_DATA(h);
+    int l = PAYLOAD(h, struct ifaddrmsg);
+    struct rtattr *a;
+    struct in_addr want;
+
+    if (ioctl_addr((int)ifa->ifa_index, &want) != 0) {
+        return failed("SIOCGIFADDR of an address's interface");
+    }
+    for (a = FIRST_RTA(ifa); RTA_OK(a, l); a = RTA_NEXT(a, l)) {
+        if (a->rta_type == IFA_LOCAL && memcmp(RTA_DATA(a), &want, sizeof want) != 0) {
+            return failed("an address that is not its interface's");
+        }
+    }
+    return 0;
+}
+
+/* A message of the dump of sequence `seq`, the `count`-th: 1 for its end,
+ * 0 for a message that checks, -1 for one that does not. */
+static int dump_msg(struct nlmsghdr *h, unsigned int seq, int count)
+{
+    if (h->nlmsg_seq != seq || h->nlmsg_pid != port || !(h->nlmsg_flags & NLM_F_MULTI)) {
+        return failed("a dump's message without its sequence, port id or NLM_F_MULTI");
+    }
+    if (h->nlmsg_type == NLMSG_DONE) {
+        return 1;
+    }
+    if (h->nlmsg_type == RTM_NEWLINK) {
+        return link_ok(h, count == 1);
+    }
+    if (h->nlmsg_type == RTM_NEWADDR) {
+        return addr_ok(h);
+    }
+    return h->nlmsg_type == RTM_NEWROUTE ? 0 : failed("a dump's message of another type");
+}
+
 /**
- * Read a dump of `type` to its NLMSG_DONE and check each message: the
- * sequence number, the port id, NLM_F_MULTI, and what the type's check
- * says. Returns the count of messages before the end, or -1.
+ * Read a dump of `type` to its NLMSG_DONE and check each message
+ * (`dump_msg`). Returns the count of messages before the end, or -1.
  */
 static int dump(int fd, int type, unsigned int seq)
 {
     char buf[8192] __attribute__((aligned(4)));
     struct rtgenmsg g;
-    int n, msgs = 0;
+    int n, rc, msgs = 0;
 
     g.rtgen_family = AF_INET;
     if (request(fd, type, NLM_F_DUMP, seq, &g, sizeof g) != 0) {
@@ -190,51 +254,11 @@ static int dump(int fd, int type, unsigned int seq)
             return failed("recv of a dump");
         }
         for (h = (struct nlmsghdr *)buf; NLMSG_OK(h, n); h = NLMSG_NEXT(h, n)) {
-            if (h->nlmsg_seq != seq || h->nlmsg_pid != port || !(h->nlmsg_flags & NLM_F_MULTI)) {
-                return failed("a dump's message without its sequence, port id or NLM_F_MULTI")
-                           ? -1
-                           : -1;
-            }
-            if (h->nlmsg_type == NLMSG_DONE) {
-                return msgs;
+            rc = dump_msg(h, seq, msgs + 1);
+            if (rc != 0) {
+                return rc > 0 ? msgs : -1;
             }
             msgs++;
-            if (h->nlmsg_type == RTM_NEWLINK) {
-                struct ifinfomsg *ifi = NLMSG_DATA(h);
-                int l = PAYLOAD(h, struct ifinfomsg);
-                struct rtattr *a;
-                const char *name = NULL;
-
-                for (a = FIRST_RTA(ifi); RTA_OK(a, l); a = RTA_NEXT(a, l)) {
-                    if (a->rta_type == IFLA_IFNAME) {
-                        name = RTA_DATA(a);
-                    }
-                }
-                if (!name) {
-                    return failed("a link without a name");
-                }
-                if (msgs == 1) {
-                    first_index = ifi->ifi_index;
-                    snprintf(first_name, sizeof first_name, "%s", name);
-                }
-            } else if (h->nlmsg_type == RTM_NEWADDR) {
-                struct ifaddrmsg *ifa = NLMSG_DATA(h);
-                int l = PAYLOAD(h, struct ifaddrmsg);
-                struct rtattr *a;
-                struct in_addr want;
-
-                if (ioctl_addr((int)ifa->ifa_index, &want) != 0) {
-                    return failed("SIOCGIFADDR of an address's interface");
-                }
-                for (a = FIRST_RTA(ifa); RTA_OK(a, l); a = RTA_NEXT(a, l)) {
-                    if (a->rta_type == IFA_LOCAL &&
-                        memcmp(RTA_DATA(a), &want, sizeof want) != 0) {
-                        return failed("an address that is not its interface's");
-                    }
-                }
-            } else if (h->nlmsg_type != RTM_NEWROUTE) {
-                return failed("a dump's message of another type");
-            }
         }
     }
 }
@@ -244,10 +268,14 @@ static int dump(int fd, int type, unsigned int seq)
 static int one_answer(int fd, int *index, int *error)
 {
     char buf[4096] __attribute__((aligned(4)));
-    struct nlmsghdr *h = (struct nlmsghdr *)buf;
+    struct nlmsghdr *h;
     int n = (int)recv(fd, buf, sizeof buf, 0);
 
-    if (n <= 0 || !NLMSG_OK(h, n) || (int)NLMSG_ALIGN(h->nlmsg_len) != n) {
+    if (n < (int)sizeof(*h)) {
+        return -1;
+    }
+    h = (struct nlmsghdr *)buf;
+    if (!NLMSG_OK(h, n) || (int)NLMSG_ALIGN(h->nlmsg_len) != n) {
         return -1;
     }
     if (h->nlmsg_type == NLMSG_ERROR) {
@@ -272,7 +300,7 @@ static int route_socket(int *out)
         return fail("socket of NETLINK_ROUTE");
     }
     if (getsockname(fd, (struct sockaddr *)&me, &len) != 0 || len != sizeof me ||
-        me.nl_family != AF_NETLINK || me.nl_pid != (unsigned int)getpid()) {
+        me.nl_family != AF_NETLINK || me.nl_pad != 0 || me.nl_pid != (unsigned int)getpid()) {
         return fail("the first socket's port id is not the process ID");
     }
     port = me.nl_pid;

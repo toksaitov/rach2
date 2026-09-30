@@ -1128,11 +1128,12 @@ static int calls_keep_ecx(void)
 
 int main(void)
 {
-    if (calls_keep_ecx() || counters() || sets() || hangup_no_events() || number_reused() || added_while_waiting() ||
-        polled_after_edge() || polled_set_woken() || nested() || in_turn() || failed_copy() ||
-        long_timeout() || pipe_each_write() || unix_kinds() || unix_shutdown_edge() ||
-        unix_own_room() || unix_accept_edge() || udp_arrival() || tcp_arrival() ||
-        pty_signal_room() || nested_six() || nested_two_paths() || nested_forked()) {
+    if (calls_keep_ecx() || counters() || sets() || hangup_no_events() || number_reused() ||
+        added_while_waiting() || polled_after_edge() || polled_set_woken() || nested() ||
+        in_turn() || failed_copy() || long_timeout() || pipe_each_write() || unix_kinds() ||
+        unix_shutdown_edge() || unix_own_room() || unix_accept_edge() || udp_arrival() ||
+        tcp_arrival() || pty_signal_room() || nested_six() || nested_two_paths() ||
+        nested_forked()) {
         return 1;
     }
     printf("EPOLLMUSL OK\n");

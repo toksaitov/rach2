@@ -115,16 +115,30 @@ static int events(int fd, int *wd)
         return fail("the calls watched");
     }
     {
-        static const struct want w[] = {
-            {1, IN_CREATE, "a"},        {1, IN_OPEN, "a"},        {1, IN_MODIFY, "a"},
-            {1, IN_CLOSE_WRITE, "a"},   {2, IN_OPEN, ""},         {1, IN_OPEN, "a"},
-            {2, IN_ATTRIB, ""},         {2, IN_ACCESS, ""},       {1, IN_ACCESS, "a"},
-            {2, IN_CLOSE_NOWRITE, ""},  {1, IN_CLOSE_NOWRITE, "a"}, {1, IN_MOVED_FROM, "a"},
-            {1, IN_MOVED_TO, "b"},      {2, IN_MOVE_SELF, ""},    {2, IN_ATTRIB, ""},
-            {1, IN_CREATE, "c"},        {2, IN_ATTRIB, ""},       {1, IN_DELETE, "c"},
-            {2, IN_ATTRIB, ""},         {1, IN_DELETE, "b"},      {2, IN_DELETE_SELF, ""},
-            {2, IN_IGNORED, ""},        {1, IN_CREATE | IN_ISDIR, "d"},
-            {1, IN_DELETE | IN_ISDIR, "d"}};
+        static const struct want w[] = {{1, IN_CREATE, "a"},
+                                        {1, IN_OPEN, "a"},
+                                        {1, IN_MODIFY, "a"},
+                                        {1, IN_CLOSE_WRITE, "a"},
+                                        {2, IN_OPEN, ""},
+                                        {1, IN_OPEN, "a"},
+                                        {2, IN_ATTRIB, ""},
+                                        {2, IN_ACCESS, ""},
+                                        {1, IN_ACCESS, "a"},
+                                        {2, IN_CLOSE_NOWRITE, ""},
+                                        {1, IN_CLOSE_NOWRITE, "a"},
+                                        {1, IN_MOVED_FROM, "a"},
+                                        {1, IN_MOVED_TO, "b"},
+                                        {2, IN_MOVE_SELF, ""},
+                                        {2, IN_ATTRIB, ""},
+                                        {1, IN_CREATE, "c"},
+                                        {2, IN_ATTRIB, ""},
+                                        {1, IN_DELETE, "c"},
+                                        {2, IN_ATTRIB, ""},
+                                        {1, IN_DELETE, "b"},
+                                        {2, IN_DELETE_SELF, ""},
+                                        {2, IN_IGNORED, ""},
+                                        {1, IN_CREATE | IN_ISDIR, "d"},
+                                        {1, IN_DELETE | IN_ISDIR, "d"}};
 
         return expect(fd, w, (int)(sizeof w / sizeof w[0]), "the events of a directory and a file");
     }

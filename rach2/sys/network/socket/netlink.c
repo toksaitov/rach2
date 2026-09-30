@@ -47,17 +47,17 @@
 #define RTA_PREFSRC    7
 #define RTA_TABLE      15
 
-#define ARPHRD_ETHER       1
-#define IFF_LOWER_UP       0x10000u
-#define IF_OPER_UP         6
-#define IF_OPER_DOWN       2
-#define IFA_F_PERMANENT    0x80u
-#define RT_SCOPE_UNIVERSE  0
-#define RT_SCOPE_LINK      253
-#define RT_TABLE_MAIN      254
-#define RTPROT_KERNEL      2
-#define RTPROT_BOOT        3
-#define RTN_UNICAST        1
+#define ARPHRD_ETHER      1
+#define IFF_LOWER_UP      0x10000u
+#define IF_OPER_UP        6
+#define IF_OPER_DOWN      2
+#define IFA_F_PERMANENT   0x80u
+#define RT_SCOPE_UNIVERSE 0
+#define RT_SCOPE_LINK     253
+#define RT_TABLE_MAIN     254
+#define RTPROT_KERNEL     2
+#define RTPROT_BOOT       3
+#define RTN_UNICAST       1
 
 /* Policy: an answer datagram is at most a page, which every reader's buffer
  * holds: Chromium reads with 4096 bytes and BusyBox with 8192. A message is

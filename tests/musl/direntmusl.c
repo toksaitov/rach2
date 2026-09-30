@@ -11,9 +11,10 @@
  * /proc/self, /proc/meminfo, /proc/cpuinfo, /proc/net and /proc/sys have
  * their own types by name. /proc/cpuinfo is a record of processor 0 with its
  * flags, /proc/sys/fs/inotify/max_user_watches reads 8192, and a working
- * directory of /proc/sys/kernel is named so by getcwd. Each listing must end without an
- * error from readdir and check at least one entry, and lstat may fail only
- * with ENOENT, only in /proc and /dev/pts, whose entries come and go. A path
+ * directory of /proc/sys/kernel is named so by getcwd. Each listing must end
+ * without an error from readdir and check at least one entry, and lstat may
+ * fail only with ENOENT, only in /proc and /dev/pts, whose entries come and
+ * go. A path
  * that names a directory by its end is followed there, by lstat and by the
  * old lstat, and a file named that way is ENOTDIR. The probe's own
  * directory and /proc/self, read to their end, list as many entries again

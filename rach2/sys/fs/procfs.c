@@ -2620,10 +2620,9 @@ static int procfs_needs_pid(int kind)
 {
     return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
            kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
-           kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_SYS_FILE &&
-           kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
-           kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
-           kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
+           kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_SYS_FILE && kind != VNODE_PROC_MOUNTS &&
+           kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS &&
+           kind != VNODE_PROC_LOOP && kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
            kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP && kind != VNODE_PROC_NET_TCP;
 }
 

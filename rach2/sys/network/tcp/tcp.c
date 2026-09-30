@@ -221,8 +221,8 @@ static uint16_t tcp_wnd_field(const struct tcb *tcb, int syn)
  */
 static int tcp_ring_alloc(struct tcb *tcb)
 {
-    uint32_t size = frame_free_count() > TCP_BIG_RING_FRAMES ? TCP_RECV_RING_LARGE
-                                                             : TCP_RECV_RING_SMALL;
+    uint32_t size =
+        frame_free_count() > TCP_BIG_RING_FRAMES ? TCP_RECV_RING_LARGE : TCP_RECV_RING_SMALL;
     uint8_t shift = 0;
 
     tcb->recv_buf = kmalloc(size);
@@ -746,8 +746,8 @@ void tcp_path_mtu(uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
     if (mss >= tcb->snd_mss) {
         return;
     }
-    klog(KLOG_INFO, "tcp", "path mtu: %d to port %d: segments of %d bytes",
-         (int)mtu, (int)remote_port, (int)mss);
+    klog(KLOG_INFO, "tcp", "path mtu: %d to port %d: segments of %d bytes", (int)mtu,
+         (int)remote_port, (int)mss);
     tcb->snd_mss = (uint16_t)mss;
     tcp_enter_rto_recovery(tcb);
 }

@@ -2740,59 +2740,72 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
 }
 
 /**
+ * Record in `ofd`, for inotify, the directory the open's `name` is in and
+ * its last component, when they are the file opened: a name whose last
+ * component was a link the open followed records nothing, where Linux
+ * would report the target's directory.
+ */
+static void open_record_parent(struct open_file *ofd, const char *name)
+{
+    char leaf[VFS_NAME_MAX + 1];
+    struct vfs_ref parent;
+    struct vfs_stat dir, st;
+    uint32_t len;
+    void *found;
+
+    if (vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf)) != 0) {
+        return;
+    }
+    len = (uint32_t)k_strlen(leaf);
+    if (parent.mnt == ofd->vmnt && len > 0 && !leaf_is_dot(leaf) &&
+        vfs_getattr(parent.mnt, parent.node, &dir) == 0 && parent.mnt->type->ops->lookup &&
+        parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
+        if (vfs_getattr(parent.mnt, found, &st) == 0 && st.ino == ofd->ino) {
+            ofd->leaf = kmalloc(len + 1);
+            if (ofd->leaf) {
+                k_memcpy(ofd->leaf, leaf, len + 1);
+                ofd->parent_ino = dir.ino;
+            }
+        }
+        if (parent.mnt->type->ops->put) {
+            parent.mnt->type->ops->put(parent.mnt, found);
+        }
+    }
+    vfs_ref_release(&parent);
+}
+
+/**
  * What the open that made the descriptor `fd` from `name`, leading '/'
  * stripped, tells the shared mappings of the file, which lose the pages an
  * O_TRUNC truncation freed, and inotify: the open, after that truncation of
  * a file the open did not create.
+ *
  * The description records whether it was opened for writing, which its
- * close reports, and, while a watch exists, the directory the name is in and
- * its last component, when they are the file opened, so that the
- * directory's watches hear of what is done through it. A name whose last
- * component was a link the open followed records no directory; Linux would
- * report the target's.
+ * close reports, and, while a watch exists, its directory and name
+ * (`open_record_parent`), so that the directory's watches hear of what is
+ * done through it.
  */
 static void open_done(int fd, const char *name, int flags)
 {
     fd_entry_t *e = fd_get(current_proc->fds, fd);
     struct open_file *ofd = e ? e->ofd : NULL;
-    char leaf[VFS_NAME_MAX + 1];
-    struct vfs_ref parent;
-    struct vfs_stat dir, st;
-    uint32_t made;
-    void *found;
+    int truncated;
 
     if (!ofd || !ofd->vmnt || (e->flags & FD_FLAG_PATH)) {
         return;
     }
-    made = ofd->watch_flags & OFD_WATCH_MADE;
+    truncated = (flags & O_TRUNC) && !(ofd->watch_flags & OFD_WATCH_MADE) &&
+                (e->flags & FD_FLAG_WRITE) && e->type == FD_TYPE_FILE;
     ofd->watch_flags = OFD_WATCH_OPEN | ((e->flags & FD_FLAG_WRITE) ? OFD_WATCH_WRITE : 0u) |
                        (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
-    if ((flags & O_TRUNC) && !made && (e->flags & FD_FLAG_WRITE) && e->type == FD_TYPE_FILE) {
+    if (truncated) {
         filemap_file_truncated(ofd->vmnt, ofd->ino, 0);
     }
     if (!inotify_watches) {
         return;
     }
-    if (vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf)) == 0) {
-        uint32_t len = (uint32_t)k_strlen(leaf);
-
-        if (parent.mnt == ofd->vmnt && len > 0 && !leaf_is_dot(leaf) &&
-            vfs_getattr(parent.mnt, parent.node, &dir) == 0 && parent.mnt->type->ops->lookup &&
-            parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
-            if (vfs_getattr(parent.mnt, found, &st) == 0 && st.ino == ofd->ino) {
-                ofd->leaf = kmalloc(len + 1);
-                if (ofd->leaf) {
-                    k_memcpy(ofd->leaf, leaf, len + 1);
-                    ofd->parent_ino = dir.ino;
-                }
-            }
-            if (parent.mnt->type->ops->put) {
-                parent.mnt->type->ops->put(parent.mnt, found);
-            }
-        }
-        vfs_ref_release(&parent);
-    }
-    if ((flags & O_TRUNC) && !made && (e->flags & FD_FLAG_WRITE) && e->type == FD_TYPE_FILE) {
+    open_record_parent(ofd, name);
+    if (truncated) {
         inotify_desc(ofd, IN_MODIFY);
     }
     inotify_desc(ofd, IN_OPEN);
@@ -6259,8 +6272,7 @@ int32_t sys_inotify_add_watch(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = resolve_named(path_name(path), (mask & IN_DONT_FOLLOW) ? VFS_WALK_NOFOLLOW : 0, dir,
-                       &ref);
+    rc = resolve_named(path_name(path), (mask & IN_DONT_FOLLOW) ? VFS_WALK_NOFOLLOW : 0, dir, &ref);
     path_buf_put(path);
     if (rc != 0) {
         return rc;
@@ -9985,9 +9997,8 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             {"cmdline", procfs_ino_cmdline, DT_REG}, {"disk", procfs_ino_disk, DT_REG},
             {"uptime", procfs_ino_uptime, DT_REG},   {"stat", procfs_ino_statsys, DT_REG},
             {"meminfo", procfs_ino_meminfo, DT_REG}, {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
-            {"mounts", procfs_ino_mounts, DT_REG},
-            {"net", procfs_ino_netdir, DT_DIR},      {"sys", procfs_ino_sysdir, DT_DIR},
-            {"self", procfs_ino_dir, DT_LNK},
+            {"mounts", procfs_ino_mounts, DT_REG},   {"net", procfs_ino_netdir, DT_DIR},
+            {"sys", procfs_ino_sysdir, DT_DIR},      {"self", procfs_ino_dir, DT_LNK},
             {"usb", procfs_ino_usb, DT_REG},         {"loop", procfs_ino_loop, DT_REG},
             {"console", procfs_ino_console, DT_REG}, {"audio", procfs_ino_audio, DT_REG}};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));

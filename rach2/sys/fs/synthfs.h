@@ -111,9 +111,9 @@ int synth_classify(const char *path, struct vpath *vp);
  * A synthetic directory fd's identity: its kind, the process's pid, and
  * for a thread's directory under /proc/<pid>/task the thread's id, 0 for
  * any other. A directory of /proc/sys has its entry of the table
- * (`synth_sys_name`) in `pid`, since it has no process. It does not fit packed in the fd's priv pointer, so it is a
- * record from the heap that priv points at; defined here so /proc/<pid>/fd
- * readlink can render it.
+ * (`synth_sys_name`) in `pid`, since it has no process. It does not fit
+ * packed in the fd's priv pointer, so it is a record from the heap that
+ * priv points at; defined here so /proc/<pid>/fd readlink can render it.
  */
 struct synth_dir {
     int kind;

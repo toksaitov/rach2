@@ -333,29 +333,26 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
     }
 }
 
-/* socket(2): AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
- * ioctl-only descriptor of IPPROTO_RAW), AF_PACKET with SOCK_DGRAM, and
- * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
- * kernel's answers are datagrams: the socket is kept as a datagram socket.
- * The raw and packet forms take effective uid 0. Returns a new socket fd or
- * -errno. */
-static int32_t do_socket(int domain, int type, int protocol)
+/* The kinds of socket socket(2) makes: AF_INET with SOCK_STREAM, SOCK_DGRAM
+ * or SOCK_RAW (ICMP, or the ioctl-only descriptor of IPPROTO_RAW), AF_PACKET
+ * with SOCK_DGRAM, and AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one
+ * thing, since the kernel's answers are datagrams: `*type` is set to
+ * SOCK_DGRAM for it. The raw and packet forms take effective uid 0; a
+ * netlink protocol is judged when the socket is made. 0, or -errno. */
+static int32_t socket_kind(int domain, int *type, int protocol)
 {
-    struct socket *sock;
-    fd_entry_t *entry;
-    int fd;
-
-    /* IPv4, and the packet family the DHCP client needs to see replies that
-     * arrive before this machine owns an address. Any other family is refused,
-     * not made into a socket that cannot work. */
+    /* IPv4, the packet family the DHCP client needs to see replies that
+     * arrive before this machine owns an address, and netlink. Any other
+     * family is refused, not made into a socket that cannot work. */
     if (domain != AF_INET && domain != AF_PACKET && domain != AF_NETLINK) {
         return -EAFNOSUPPORT;
     }
     if (domain == AF_NETLINK) {
-        if (type != SOCK_RAW && type != SOCK_DGRAM) {
+        if (*type != SOCK_RAW && *type != SOCK_DGRAM) {
             return -ESOCKTNOSUPPORT;
         }
-        type = SOCK_DGRAM;
+        *type = SOCK_DGRAM;
+        return 0;
     }
     /* The query descriptor. A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW
      * and does nothing with it but ask the interface ioctls about the machine
@@ -363,7 +360,7 @@ static int32_t do_socket(int domain, int type, int protocol)
      * descriptor that accepts ioctls and closes, and refuses to send or
      * receive, because this stack has no raw IP path to offer. Root's, like
      * every raw socket. */
-    if (domain == AF_INET && type == SOCK_RAW) {
+    if (domain == AF_INET && *type == SOCK_RAW) {
         /* Two raw sockets, and the protocol tells them apart. IPPROTO_RAW is
          * the query descriptor a DHCP client opens for the interface ioctls
          * and nothing else; IPPROTO_ICMP is the one `ping` and `traceroute`
@@ -374,7 +371,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         if (!current_proc || !proc_privileged(current_proc)) {
             return -EPERM;
         }
-    } else if (type != SOCK_DGRAM && type != SOCK_STREAM) {
+    } else if (*type != SOCK_DGRAM && *type != SOCK_STREAM) {
         return -EINVAL;
     }
     if (domain == AF_PACKET) {
@@ -385,7 +382,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         if (!current_proc || !proc_privileged(current_proc)) {
             return -EPERM;
         }
-        if (type != SOCK_DGRAM) {
+        if (*type != SOCK_DGRAM) {
             return -ESOCKTNOSUPPORT;
         }
         /* Zero is legal and means the socket has no protocol yet: `arping`
@@ -395,7 +392,21 @@ static int32_t do_socket(int domain, int type, int protocol)
             return -EINVAL;
         }
     }
+    return 0;
+}
 
+/* socket(2): a socket of a kind `socket_kind` allows. Returns a new socket
+ * fd or -errno. */
+static int32_t do_socket(int domain, int type, int protocol)
+{
+    struct socket *sock;
+    fd_entry_t *entry;
+    int32_t rc = socket_kind(domain, &type, protocol);
+    int fd;
+
+    if (rc != 0) {
+        return rc;
+    }
     sock = socket_alloc(type);
     if (!sock) {
         return -ENOMEM;
@@ -463,8 +474,27 @@ static int32_t socket_with_flags(int domain, int type, int protocol)
     return fd;
 }
 
+/* Bind the netlink socket `sock` to the port id and the groups of the
+ * sockaddr_nl of `addrlen` bytes at user address `sa_ptr`. */
+static int32_t netlink_bind_user(struct socket *sock, uint32_t sa_ptr, int addrlen)
+{
+    uint8_t nl[SOCKADDR_NL_LEN];
+
+    if (addrlen < SOCKADDR_NL_LEN) {
+        return -EINVAL;
+    }
+    if (copy_from_user(nl, (const void __user *)sa_ptr, SOCKADDR_NL_LEN) != 0) {
+        return -EFAULT;
+    }
+    if ((nl[0] | (nl[1] << 8)) != AF_NETLINK) {
+        return -EINVAL;
+    }
+    return netlink_bind(sock, SC_LE32(nl + 4), SC_LE32(nl + 8));
+}
+
 /* bind(2): record the local port from the sockaddr; a datagram socket also
- * registers it with UDP (-EADDRINUSE if taken). */
+ * registers it with UDP (-EADDRINUSE if taken), and a netlink socket takes
+ * a port id (`netlink_bind_user`). */
 static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
@@ -488,20 +518,8 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
         return -ENOTSOCK;
     }
 
-    /* A netlink socket binds to a port id and the groups it would hear. */
     if (entry->sock->family == AF_NETLINK) {
-        uint8_t nl[SOCKADDR_NL_LEN];
-
-        if (addrlen < SOCKADDR_NL_LEN) {
-            return -EINVAL;
-        }
-        if (copy_from_user(nl, (const void __user *)sa_ptr, SOCKADDR_NL_LEN) != 0) {
-            return -EFAULT;
-        }
-        if ((nl[0] | (nl[1] << 8)) != AF_NETLINK) {
-            return -EINVAL;
-        }
-        return netlink_bind(entry->sock, SC_LE32(nl + 4), SC_LE32(nl + 8));
+        return netlink_bind_user(entry->sock, sa_ptr, addrlen);
     }
 
     /* A packet socket binds to an interface, not to a port: the address is a

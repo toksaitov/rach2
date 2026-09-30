@@ -570,9 +570,9 @@ static void path_mtu_row(void)
     tcp_path_mtu(PEER, lport, 89, iss + 1, 1480);
     CHECK("a report for a segment in flight shrinks the segments to the link",
           sock.tcb->snd_mss == 1440);
-    CHECK("and sends the oldest again at that size",
-          n_segs >= 1 && read32be(segs[0].data + 4) == iss + 1 &&
-              segs[0].len - TCP_HDR_SIZE == 1440);
+    CHECK("and sends the oldest again at that size", n_segs >= 1 &&
+                                                         read32be(segs[0].data + 4) == iss + 1 &&
+                                                         segs[0].len - TCP_HDR_SIZE == 1440);
 }
 
 /* A connection whose SYN offers a window scale: a peer that answers with a
@@ -588,7 +588,8 @@ static void window_scale_rows(void)
     for (scale = 7; scale >= -1; scale -= 8) {
         reset_all();
         k_memset(&sock, 0, sizeof(sock));
-        CHECK("a connection that scales its window can be opened", tcp_connect(&sock, PEER, 88) == 0);
+        CHECK("a connection that scales its window can be opened",
+              tcp_connect(&sock, PEER, 88) == 0);
         CHECK("and its SYN offers the scale its 512 KiB ring needs",
               segs[0].len == 28 && segs[0].data[25] == 3 && segs[0].data[27] == 4 &&
                   read16be(segs[0].data + 14) == 65535);
@@ -610,9 +611,8 @@ static void window_scale_rows(void)
         rx((uint16_t)88, lport, 3001, iss + 1, (uint8_t)(F_ACK | F_PSH), 1000, "data", 4);
         CHECK("and the acknowledgement offers the ring, which the stub delivery leaves empty, at "
               "this side's scale, or 65535",
-              n_segs >= 1 &&
-                  read16be(segs[n_segs - 1].data + 14) ==
-                      (scale > 0 ? TCP_RECV_RING_LARGE >> 4 : 65535u));
+              n_segs >= 1 && read16be(segs[n_segs - 1].data + 14) ==
+                                 (scale > 0 ? TCP_RECV_RING_LARGE >> 4 : 65535u));
     }
 }
 

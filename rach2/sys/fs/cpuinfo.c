@@ -12,43 +12,106 @@
  * NULL. The extended leaf's EDX repeats most of leaf 1's, which Linux shows
  * once. */
 static const char *const leaf1_edx[32] = {
-    "fpu",  "vme",  "de",      "pse",  "tsc",  "msr",  "pae",  "mce",   "cx8",  "apic", 0,
-    "sep",  "mtrr", "pge",     "mca",  "cmov", "pat",  "pse36", "pn",   "clflush", 0,
-    "dts",  "acpi", "mmx",     "fxsr", "sse",  "sse2", "ss",   "ht",    "tm",   "ia64",
-    "pbe"};
+    "fpu",  "vme",  "de",   "pse", "tsc",  "msr", "pae",   "mce", "cx8",     "apic", 0,
+    "sep",  "mtrr", "pge",  "mca", "cmov", "pat", "pse36", "pn",  "clflush", 0,      "dts",
+    "acpi", "mmx",  "fxsr", "sse", "sse2", "ss",  "ht",    "tm",  "ia64",    "pbe"};
 
 static const char *const ext1_edx[32] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "syscall", 0, 0, 0, 0, 0, 0, 0, "mp", "nx", 0,
-    "mmxext", 0, 0, "fxsr_opt", "pdpe1gb", "rdtscp", 0, "lm", "3dnowext", "3dnow"};
+    0,         0, 0, 0,          0,         0,        0, 0,    0,          0,      0,
+    "syscall", 0, 0, 0,          0,         0,        0, 0,    "mp",       "nx",   0,
+    "mmxext",  0, 0, "fxsr_opt", "pdpe1gb", "rdtscp", 0, "lm", "3dnowext", "3dnow"};
 
 static const char *const leaf1_ecx[32] = {
-    "pni",    "pclmulqdq", "dtes64", "monitor", "ds_cpl", "vmx",    "smx",
-    "est",    "tm2",       "ssse3",  "cid",     "sdbg",   "fma",    "cx16",
-    "xtpr",   "pdcm",      0,        "pcid",    "dca",    "sse4_1", "sse4_2",
-    "x2apic", "movbe",     "popcnt", "tsc_deadline_timer", "aes", "xsave", 0,
-    "avx",    "f16c",      "rdrand", "hypervisor"};
+    "pni",    "pclmulqdq", "dtes64", "monitor", "ds_cpl",
+    "vmx",    "smx",       "est",    "tm2",     "ssse3",
+    "cid",    "sdbg",      "fma",    "cx16",    "xtpr",
+    "pdcm",   0,           "pcid",   "dca",     "sse4_1",
+    "sse4_2", "x2apic",    "movbe",  "popcnt",  "tsc_deadline_timer",
+    "aes",    "xsave",     0,        "avx",     "f16c",
+    "rdrand", "hypervisor"};
 
-static const char *const ext1_ecx[32] = {
-    "lahf_lm", "cmp_legacy", "svm",   "extapic",   "cr8_legacy", "abm",  "sse4a",
-    "misalignsse", "3dnowprefetch", "osvw", "ibs", "xop",        "skinit", "wdt",
-    0,         "lwp",        "fma4",  "tce",       0,            "nodeid_msr", 0,
-    "tbm",     "topoext",    "perfctr_core", "perfctr_nb", 0, "bpext", "ptsc",
-    "perfctr_llc", "mwaitx", 0,       0};
+static const char *const ext1_ecx[32] = {"lahf_lm",
+                                         "cmp_legacy",
+                                         "svm",
+                                         "extapic",
+                                         "cr8_legacy",
+                                         "abm",
+                                         "sse4a",
+                                         "misalignsse",
+                                         "3dnowprefetch",
+                                         "osvw",
+                                         "ibs",
+                                         "xop",
+                                         "skinit",
+                                         "wdt",
+                                         0,
+                                         "lwp",
+                                         "fma4",
+                                         "tce",
+                                         0,
+                                         "nodeid_msr",
+                                         0,
+                                         "tbm",
+                                         "topoext",
+                                         "perfctr_core",
+                                         "perfctr_nb",
+                                         0,
+                                         "bpext",
+                                         "ptsc",
+                                         "perfctr_llc",
+                                         "mwaitx",
+                                         0,
+                                         0};
 
-static const char *const leaf7_ebx[32] = {
-    "fsgsbase", "tsc_adjust", "sgx",      "bmi1",     "hle",       "avx2",     0,
-    "smep",     "bmi2",       "erms",     "invpcid",  "rtm",       "cqm",      0,
-    "mpx",      "rdt_a",      "avx512f",  "avx512dq", "rdseed",    "adx",      "smap",
-    "avx512ifma", 0,          "clflushopt", "clwb",   "intel_pt",  "avx512pf", "avx512er",
-    "avx512cd", "sha_ni",     "avx512bw", "avx512vl"};
+static const char *const leaf7_ebx[32] = {"fsgsbase", "tsc_adjust",
+                                          "sgx",      "bmi1",
+                                          "hle",      "avx2",
+                                          0,          "smep",
+                                          "bmi2",     "erms",
+                                          "invpcid",  "rtm",
+                                          "cqm",      0,
+                                          "mpx",      "rdt_a",
+                                          "avx512f",  "avx512dq",
+                                          "rdseed",   "adx",
+                                          "smap",     "avx512ifma",
+                                          0,          "clflushopt",
+                                          "clwb",     "intel_pt",
+                                          "avx512pf", "avx512er",
+                                          "avx512cd", "sha_ni",
+                                          "avx512bw", "avx512vl"};
 
-static const char *const leaf7_ecx[32] = {
-    0,        "avx512vbmi", "umip",       "pku",         "ospke",  "waitpkg",
-    "avx512_vbmi2", 0,      "gfni",       "vaes",        "vpclmulqdq", "avx512_vnni",
-    "avx512_bitalg", "tme", "avx512_vpopcntdq", 0,       "la57",   0,
-    0,        0,            0,            0,             "rdpid",  0,
-    "bus_lock_detect", "cldemote", 0,     "movdiri",     "movdir64b", "enqcmd",
-    "sgx_lc", 0};
+static const char *const leaf7_ecx[32] = {0,
+                                          "avx512vbmi",
+                                          "umip",
+                                          "pku",
+                                          "ospke",
+                                          "waitpkg",
+                                          "avx512_vbmi2",
+                                          0,
+                                          "gfni",
+                                          "vaes",
+                                          "vpclmulqdq",
+                                          "avx512_vnni",
+                                          "avx512_bitalg",
+                                          "tme",
+                                          "avx512_vpopcntdq",
+                                          0,
+                                          "la57",
+                                          0,
+                                          0,
+                                          0,
+                                          0,
+                                          0,
+                                          "rdpid",
+                                          0,
+                                          "bus_lock_detect",
+                                          "cldemote",
+                                          0,
+                                          "movdiri",
+                                          "movdir64b",
+                                          "enqcmd",
+                                          "sgx_lc",
+                                          0};
 
 struct text {
     char *out;
@@ -231,7 +294,8 @@ uint32_t cpuinfo_text(char *out, uint32_t cap)
     put_field(&t, "cpu cores\t: ", 1);
     put_field(&t, "apicid\t\t: ", b >> 24);
     put_field(&t, "initial apicid\t: ", b >> 24);
-    put(&t, (d & 1u) ? "fpu\t\t: yes\nfpu_exception\t: yes\n" : "fpu\t\t: no\nfpu_exception\t: no\n");
+    put(&t,
+        (d & 1u) ? "fpu\t\t: yes\nfpu_exception\t: yes\n" : "fpu\t\t: no\nfpu_exception\t: no\n");
     put_field(&t, "cpuid level\t: ", max);
     put(&t, "wp\t\t: yes\nflags\t\t:");
     if (ext_max >= 0x80000001u) {

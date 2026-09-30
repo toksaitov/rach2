@@ -302,8 +302,8 @@ static int32_t inotify_read(fd_entry_t *e, char __user *buf, uint32_t count)
         head[2] = ev->cookie;
         head[3] = ev->len;
         failed = copy_to_user((void __user *)(buf + done), head, EVENT_HEAD) != 0 ||
-                 (ev->len && copy_to_user((void __user *)(buf + done + EVENT_HEAD), ev + 1,
-                                          ev->len) != 0);
+                 (ev->len &&
+                  copy_to_user((void __user *)(buf + done + EVENT_HEAD), ev + 1, ev->len) != 0);
         if (ev == &in->overflow) {
             in->overflow_queued = 0;
         } else {

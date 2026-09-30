@@ -483,8 +483,8 @@ static int root_shared(void)
 
 int main(void)
 {
-    if (private_file() || shared() || root_shared() || truncated_shared() || readonly_shared() || offsets() ||
-        remaps() || forced_write() || remap_limit()) {
+    if (private_file() || shared() || root_shared() || truncated_shared() || readonly_shared() ||
+        offsets() || remaps() || forced_write() || remap_limit()) {
         return 1;
     }
     printf("MAPMUSL OK\n");

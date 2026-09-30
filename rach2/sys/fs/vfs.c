@@ -1469,8 +1469,8 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
     watched = inotify_watches && watched_entry(mnt, olddir, oldname, &moved) == 0 &&
               watched_node(mnt, olddir, &from) == 0 && watched_node(mnt, newdir, &to) == 0;
     if (watched) {
-        had_target = watched_entry(mnt, newdir, newname, &replaced) == 0 &&
-                     replaced.ino != moved.ino;
+        had_target =
+            watched_entry(mnt, newdir, newname, &replaced) == 0 && replaced.ino != moved.ino;
     }
     rc = mnt->type->ops->rename(mnt, olddir, oldname, newdir, newname);
     if (rc == 0 && watched) {

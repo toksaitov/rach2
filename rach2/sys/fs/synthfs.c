@@ -339,8 +339,8 @@ static int synth_classify_sys(const struct comp *c, int n, struct vpath *vp)
             vp->kind = VNODE_ENOTDIR;
             return vp->kind;
         }
-        for (i = 1; i < synth_sys_count() && !(sysents[i].parent == at &&
-                                                comp_eq(c[k], sysents[i].name));
+        for (i = 1;
+             i < synth_sys_count() && !(sysents[i].parent == at && comp_eq(c[k], sysents[i].name));
              i++) {
         }
         if (i == synth_sys_count()) {

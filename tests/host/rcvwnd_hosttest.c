@@ -51,7 +51,8 @@ int main(void)
     /* ---- the quiet cases: silly-window avoidance ---- */
 
     CHECK(rcvwnd_update(0, RING, RING, 65535u, MSS) == 0, "a full buffer has nothing to announce");
-    CHECK(rcvwnd_update(0, RING - 1u, RING, 65535u, MSS) == 0, "one byte read is not worth a segment");
+    CHECK(rcvwnd_update(0, RING - 1u, RING, 65535u, MSS) == 0,
+          "one byte read is not worth a segment");
     CHECK(rcvwnd_update(0, RING - (MSS - 1u), RING, 65535u, MSS) == 0,
           "one byte short of a segment stays quiet");
     CHECK(rcvwnd_update(2048, RING - 2048u, RING, 65535u, MSS) == 0,

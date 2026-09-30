@@ -144,8 +144,8 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_open complexity 61 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 168 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 65 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 180 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
@@ -182,7 +182,7 @@ rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 121 a hardware sequence, t
 rach2/sys/network/netif.c:ifreq_ioctl lines 122 a dispatcher, one arm per command, read as a table
 
 rach2/sys/network/tcp/tcp.c:tcp_rx complexity 90 a state machine, one arm per state, read as a table
-rach2/sys/network/tcp/tcp.c:tcp_rx lines 341 a state machine, one arm per state, read as a table
+rach2/sys/network/tcp/tcp.c:tcp_rx lines 342 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_send_rst_unmatched params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
@@ -197,9 +197,9 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 233 a table, one entry per system call number
-rach2/sys/syscall.c:sys_ioctl complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall.c:sys_ioctl lines 141 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:init_syscall lines 237 a table, one entry per system call number
+rach2/sys/syscall.c:sys_ioctl complexity 33 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall.c:sys_ioctl lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:tty_common_ioctl lines 122 a dispatcher, one arm per command, read as a table
 
@@ -211,7 +211,7 @@ rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its che
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 200 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 204 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 213 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
@@ -221,16 +221,17 @@ rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its
 rach2/sys/syscall_fs.c:write_fd complexity 41 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:write_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 
-rach2/sys/syscall_net.c:do_bind complexity 32 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_bind lines 118 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_bind complexity 33 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_bind lines 122 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_connect complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_connect lines 132 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_connect lines 137 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_getsockopt complexity 36 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:do_recvfrom complexity 27 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_recvfrom lines 105 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_recvfrom lines 106 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvmsg complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_recvmsg lines 105 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_sendmsg complexity 29 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_recvmsg lines 106 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_sendmsg complexity 32 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_sendto complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendto lines 144 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_setsockopt complexity 32 a dispatcher, one arm per command, read as a table
 
@@ -549,7 +550,7 @@ tests/musl/clonemusl.c:raw params 7 the parameters are the arguments of one call
 tests/musl/devtest.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one table
 
-tests/musl/direntmusl.c:main complexity 29 a test's rows, each a case, read as one table
+tests/musl/direntmusl.c:main complexity 34 a test's rows, each a case, read as one table
 
 tests/musl/epollmusl.c:nested_forked complexity 29 a probe, one sequence of steps in the order the log records them
 tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
