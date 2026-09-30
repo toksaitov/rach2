@@ -171,11 +171,11 @@ void input_key(uint8_t scancode)
         return;
     }
 
-    /* Left and right shift. After E0 they are the shifts a PS/2 keyboard
-       sends around a cursor key for Num Lock, not a key pressed. */
-    if (scancode == 0x2A || scancode == 0x36 || scancode == 0xAA || scancode == 0xB6) {
+    /* Left and right shift, pressed or let go. After E0 they are the shifts
+       a PS/2 keyboard sends around a cursor key for Num Lock, not a key. */
+    if ((scancode & 0x7F) == 0x2A || (scancode & 0x7F) == 0x36) {
         if (!was_e0) {
-            shift_held = scancode == 0x2A || scancode == 0x36;
+            shift_held = !(scancode & 0x80);
         }
         return;
     }
