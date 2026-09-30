@@ -1605,6 +1605,104 @@ static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_
 }
 
 /**
+ * Record that the sequence numbers [start, end) are kept past a hole, merged
+ * with the ranges they overlap or touch. A range that would be a ninth is
+ * not recorded, and its bytes are sent again by the peer.
+ */
+static void tcp_ooo_add(struct tcb *tcb, uint32_t start, uint32_t end)
+{
+    int i, j;
+
+    for (i = 0; i < tcb->ooo_count; i++) {
+        if ((int32_t)(end - tcb->ooo_start[i]) < 0) {
+            break;
+        }
+        if ((int32_t)(start - tcb->ooo_end[i]) <= 0) {
+            if ((int32_t)(start - tcb->ooo_start[i]) < 0)
+                tcb->ooo_start[i] = start;
+            if ((int32_t)(end - tcb->ooo_end[i]) > 0)
+                tcb->ooo_end[i] = end;
+            while (i + 1 < tcb->ooo_count &&
+                   (int32_t)(tcb->ooo_start[i + 1] - tcb->ooo_end[i]) <= 0) {
+                if ((int32_t)(tcb->ooo_end[i + 1] - tcb->ooo_end[i]) > 0)
+                    tcb->ooo_end[i] = tcb->ooo_end[i + 1];
+                for (j = i + 1; j + 1 < tcb->ooo_count; j++) {
+                    tcb->ooo_start[j] = tcb->ooo_start[j + 1];
+                    tcb->ooo_end[j] = tcb->ooo_end[j + 1];
+                }
+                tcb->ooo_count--;
+            }
+            return;
+        }
+    }
+    if (tcb->ooo_count == TCP_OOO_RANGES) {
+        return;
+    }
+    for (j = tcb->ooo_count; j > i; j--) {
+        tcb->ooo_start[j] = tcb->ooo_start[j - 1];
+        tcb->ooo_end[j] = tcb->ooo_end[j - 1];
+    }
+    tcb->ooo_start[i] = start;
+    tcb->ooo_end[i] = end;
+    tcb->ooo_count++;
+}
+
+/** Forget the first kept range, which rcv_nxt has reached. */
+static void tcp_ooo_drop_first(struct tcb *tcb)
+{
+    int j;
+
+    for (j = 0; j + 1 < tcb->ooo_count; j++) {
+        tcb->ooo_start[j] = tcb->ooo_start[j + 1];
+        tcb->ooo_end[j] = tcb->ooo_end[j + 1];
+    }
+    tcb->ooo_count--;
+}
+
+/**
+ * Take the data of a segment that starts at `seq` (RFC 9293, section
+ * 3.10.7.4). Bytes before rcv_nxt were taken already and are skipped. Data
+ * at rcv_nxt is delivered, with the kept ranges it reaches; data past it,
+ * which a lost segment left a hole before, is kept in the receive ring, so
+ * that the resend of the lost segment makes the whole run readable and the
+ * peer, whose acknowledgement then covers it, does not send it again.
+ */
+static void tcp_take_data(struct tcb *tcb, uint32_t seq, const uint8_t *payload, uint16_t len)
+{
+    uint32_t skip, n;
+    uint16_t took;
+
+    if ((int32_t)(seq - tcb->rcv_nxt) < 0) {
+        skip = tcb->rcv_nxt - seq;
+        if (skip >= len) {
+            return;
+        }
+        payload += skip;
+        len = (uint16_t)(len - skip);
+        seq = tcb->rcv_nxt;
+    }
+    if (seq != tcb->rcv_nxt) {
+        if (tcb->sock) {
+            took = socket_tcp_hold(tcb->sock, seq - tcb->rcv_nxt, payload, len);
+            if (took > 0) {
+                tcp_ooo_add(tcb, seq, seq + took);
+            }
+        }
+        return;
+    }
+    took = tcp_accept_data(tcb, payload, len);
+    tcb->rcv_nxt += took;
+    while (tcb->ooo_count > 0 && (int32_t)(tcb->ooo_start[0] - tcb->rcv_nxt) <= 0) {
+        if ((int32_t)(tcb->ooo_end[0] - tcb->rcv_nxt) > 0) {
+            n = tcb->ooo_end[0] - tcb->rcv_nxt;
+            socket_tcp_release(tcb->sock, n);
+            tcb->rcv_nxt += n;
+        }
+        tcp_ooo_drop_first(tcb);
+    }
+}
+
+/**
  * Free a passive block that never reached an accept queue, with its socket,
  * which no descriptor holds.
  */
@@ -1787,7 +1885,8 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
  * network and adds one to the congestion window. An ACK that only changes
  * the window updates it. In-order data advances `rcv_nxt` by what the receive
  * ring took, so a truncated tail is not acknowledged and is sent again; data
- * out of order is dropped but acknowledged, so the sender retransmits. A FIN
+ * past a hole is kept by `tcp_take_data` and acknowledged with the byte the
+ * hole starts at, which the peer's duplicate count turns into a resend. A FIN
  * is taken once and only in order, which holds only when its segment's data
  * was taken whole, so a FIN on a truncated segment does not signal EOF before
  * its data is delivered. If the acknowledgement in the same segment let
@@ -2007,9 +2106,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         }
 
         if (payload_len > 0) {
-            if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
-            }
+            tcp_take_data(tcb, seq, payload, payload_len);
             needs_ack = 1;
         }
 

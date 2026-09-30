@@ -47,6 +47,7 @@ static unsigned n_segs;
 
 static unsigned cb_connected, cb_fin, cb_writable, cb_deliver, cb_accept;
 static unsigned delivered_bytes;
+static unsigned held_bytes;
 
 /* How many transmits go through before the driver refuses, how many it
  * refuses then, and with which error: a full ring's -ENOBUFS, or a
@@ -123,6 +124,21 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     cb_deliver++;
     delivered_bytes += len;
     return len;
+}
+
+uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len)
+{
+    (void)sock;
+    (void)offset;
+    (void)data;
+    held_bytes += len;
+    return len;
+}
+
+void socket_tcp_release(struct socket *sock, uint32_t n)
+{
+    (void)sock;
+    delivered_bytes += n;
 }
 
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
@@ -447,6 +463,42 @@ static void test_send_checks(void)
     reset_all();
 }
 
+/* On the open connection `conn` from local port `lport` to the peer's port
+   80, whose next byte is `peer_seq`: a segment past a hole is kept but not
+   delivered, and the acknowledgement still names the byte the receiver is
+   waiting for; the segment that fills the hole is delivered with the one
+   kept after it, and the acknowledgement covers both; and a resend that
+   starts before the byte awaited and runs past it delivers only the new
+   bytes. Returns the peer's next byte after them. */
+static uint32_t hole_rows(struct tcb *conn, uint16_t lport, uint32_t peer_seq, uint32_t iss)
+{
+    cb_deliver = 0;
+    delivered_bytes = 0;
+    held_bytes = 0;
+    n_segs = 0;
+    rx((uint16_t)80, lport, peer_seq + 4, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "ijkl", 4);
+    CHECK("a segment past a hole is kept and not delivered",
+          delivered_bytes == 0 && held_bytes == 4);
+    CHECK("and the acknowledgement still asks for the hole",
+          n_segs >= 1 && read32be(segs[n_segs - 1].data + 8) == peer_seq);
+
+    cb_deliver = 0;
+    delivered_bytes = 0;
+    n_segs = 0;
+    rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "efgh", 4);
+    CHECK("the segment that fills the hole is delivered with the one kept after it",
+          delivered_bytes == 8);
+    CHECK("and the acknowledgement covers both",
+          n_segs >= 1 && read32be(segs[n_segs - 1].data + 8) == peer_seq + 8);
+    peer_seq += 8;
+
+    delivered_bytes = 0;
+    rx((uint16_t)80, lport, peer_seq - 2, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "klmn", 4);
+    CHECK("a segment that overlaps the data taken delivers only what is new",
+          delivered_bytes == 2 && conn->rcv_nxt == peer_seq + 2);
+    return peer_seq + 2;
+}
+
 /* A peer whose SYN asks for smaller segments, as one behind a PPPoE line's
    router does, gets no segment larger than it asked for, and the first
    burst is four of them. */
@@ -559,23 +611,7 @@ int main(void)
         CHECK("and is acknowledged again", n_segs >= 1);
         peer_seq += 4;
 
-        /* A segment past the hole is not delivered, and the acknowledgement
-           still names the byte the receiver is waiting for. */
-        cb_deliver = 0;
-        delivered_bytes = 0;
-        n_segs = 0;
-        rx((uint16_t)80, lport, peer_seq + 4, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "ijkl", 4);
-        CHECK("a segment past a hole is not delivered", delivered_bytes == 0);
-        CHECK("and the acknowledgement still asks for the hole",
-              n_segs >= 1 && read32be(segs[n_segs - 1].data + 8) == peer_seq);
-
-        /* The hole filled: that segment is delivered. The one beyond it is
-           not held by this stack, so the peer sends it again. */
-        cb_deliver = 0;
-        delivered_bytes = 0;
-        rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "efgh", 4);
-        CHECK("the segment that fills the hole is delivered", delivered_bytes == 4);
-        peer_seq += 4;
+        peer_seq = hole_rows(conn, lport, peer_seq, iss);
 
         /* A window of zero stops the sender: data offered while it is closed
            must not go out, and must go out when it reopens. Checking the

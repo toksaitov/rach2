@@ -637,6 +637,47 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
 }
 
 /**
+ * Keep stream bytes that arrived past a hole in the TCB receive ring.
+ *
+ * Called from tcp_rx with interrupts off. The bytes go `offset` bytes past
+ * the ring's tail, where the stream puts them once the hole is filled, and
+ * stay unreadable until `socket_tcp_release`; what does not fit in the ring's
+ * free space is not kept. Data that fills the hole later overwrites none of
+ * them but with the same bytes, since a stream's byte has one value.
+ */
+uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len)
+{
+    struct tcb *tcb;
+    uint32_t free_space, copy_len;
+
+    if (!sock || !sock->tcb)
+        return 0;
+    tcb = sock->tcb;
+
+    free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
+    if (offset >= free_space)
+        return 0;
+    copy_len = (uint32_t)len;
+    if (copy_len > free_space - offset)
+        copy_len = free_space - offset;
+
+    recv_ring_put(tcb, tcb->recv_tail + offset, data, copy_len);
+    return (uint16_t)copy_len;
+}
+
+/**
+ * Make `n` bytes that `socket_tcp_hold` kept past the ring's tail readable,
+ * once the hole before them is filled, and wake a reader for data.
+ */
+void socket_tcp_release(struct socket *sock, uint32_t n)
+{
+    if (!sock || !sock->tcb || n == 0)
+        return;
+    sock->tcb->recv_tail += n;
+    wq_wake(&sock->waiters, WQ_DATA);
+}
+
+/**
  * Blocking stream receive from the TCB ring.
  *
  * Sleeps until data arrives, a FIN signals EOF, or the connection resets; a

@@ -44,6 +44,10 @@
  * that a full card does not hold the tick for every blocked connection's
  * wait and no connection waits behind the others for ever. */
 #define TCP_TICK_PUMPS          4
+/* Policy: a connection keeps data that arrived past a hole in up to eight
+ * ranges of sequence numbers, which covers the losses of one window of a
+ * path that loses a few segments of it. */
+#define TCP_OOO_RANGES          8
 
 /* Reliability constants (100 Hz clock). */
 #define TCP_RTO_INIT        100  /* initial RTO  = 1 s (RFC 6298) */
@@ -110,6 +114,13 @@ struct tcb {
     uint32_t irs;
     uint32_t rcv_nxt; /* next expected sequence number          */
     uint16_t rcv_wnd; /* our advertised receive window          */
+
+    /* Data that arrived past a hole, kept in the receive ring past
+     * `recv_tail`, where it belongs, and not yet readable: the ranges
+     * [ooo_start, ooo_end) of sequence numbers, in order and apart. */
+    uint8_t ooo_count;
+    uint32_t ooo_start[TCP_OOO_RANGES];
+    uint32_t ooo_end[TCP_OOO_RANGES];
 
     /*
      * Send and receive rings. head/tail are monotonic uint32_t; the buffer

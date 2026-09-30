@@ -200,6 +200,12 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
  * (less than `len` if the ring was nearly full, so the caller advances rcv_nxt
  * by only what fit and the peer retransmits the rest). */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
+/** Keep stream bytes that arrived past a hole `offset` bytes past the recv
+ * ring's tail, unreadable; returns how many fit in the ring's free space. */
+uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len);
+/** Make `n` bytes kept past the recv ring's tail readable, and wake a
+ * reader. */
+void socket_tcp_release(struct socket *sock, uint32_t n);
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
 /** Non-blocking variant; SOCK_EAGAIN if no data is buffered (MSG_DONTWAIT). */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);

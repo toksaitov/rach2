@@ -111,6 +111,20 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     return len;
 }
 
+uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *data, uint16_t len)
+{
+    (void)sock;
+    (void)offset;
+    (void)data;
+    return len;
+}
+
+void socket_tcp_release(struct socket *sock, uint32_t n)
+{
+    (void)sock;
+    (void)n;
+}
+
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 {
     (void)listen_sock;
