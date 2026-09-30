@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 1, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -72,6 +72,38 @@ Use
 to submit a tone from SSH.
 .It Pa /proc/cmdline
 The boot command line, followed by a newline.
+.It Pa /proc/cpuinfo
+The processor, in Linux's format for x86, from what
+.Ql cpuid
+reports:
+.Li vendor_id ,
+.Li cpu family ,
+.Li model ,
+.Li model name ,
+.Li stepping ,
+.Li cache size ,
+the last-level cache's,
+.Li apicid ,
+.Li cpuid level ,
+.Li flags ,
+the feature bits by Linux's names,
+.Li clflush size
+and
+.Li address sizes ,
+each a
+.Ql name<TAB>: value
+line, and a blank line after the record.
+The kernel runs on one processor, so there is one record, processor 0,
+with
+.Li siblings
+and
+.Li cpu cores
+1.
+It has no
+.Li cpu MHz
+or
+.Li bogomips
+line, since the kernel does not measure the processor's clock.
 .It Pa /proc/console
 Serial console counters, one
 .Ql name value
@@ -309,6 +341,24 @@ and decimal values with the prefixes
 .Ql refused= ,
 and
 .Ql for= .
+.It Pa /proc/sys
+A few of Linux's sysctl files, read-only, each a value and a newline:
+.Pa fs/inotify/max_queued_events ,
+16384,
+.Pa fs/inotify/max_user_instances ,
+128, and
+.Pa fs/inotify/max_user_watches ,
+8192, the limits of
+.Xr inotify_init 2 ;
+.Pa kernel/ostype ,
+.Ql Rach2 ;
+.Pa kernel/osrelease ,
+the release
+.Xr uname 2
+reports; and
+.Pa kernel/pid_max ,
+2000000000, above which process IDs are not given out: they start again
+from 1.
 .It Pa /proc/stat
 System counters, one named record per line.
 The first two lines have this form:

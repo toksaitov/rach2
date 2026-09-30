@@ -48,6 +48,9 @@ enum vnode_kind {
     VNODE_PROC_CONSOLE,     /* /proc/console: the serial receive path's counters */
     VNODE_PROC_EXE,         /* /proc/<pid>/exe: a link to the program's file */
     VNODE_PROC_TASK_DIR,    /* /proc/<pid>/task: the directory of the threads */
+    VNODE_PROC_CPUINFO,     /* /proc/cpuinfo: what cpuid says of the processor */
+    VNODE_PROC_SYS_DIR,     /* /proc/sys and a directory of its tree */
+    VNODE_PROC_SYS_FILE,    /* a file of /proc/sys: a limit or a name */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -79,6 +82,8 @@ enum vnode_kind {
 #define SYNTH_PROC_COMM        24
 #define SYNTH_PROC_MEM         25
 #define SYNTH_PROC_OOM_ADJ     26
+#define SYNTH_PROC_CPUINFO     27
+#define SYNTH_PROC_SYSCTL      28
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */
@@ -96,6 +101,7 @@ struct vpath {
     int procfile;  /* VNODE_PROC_FILE: SYNTH_PROC_* */
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
     int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
+    int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table */
 };
 
 /** Classify a leading-'/'-stripped path; fills *vp and returns its kind. */
@@ -104,7 +110,8 @@ int synth_classify(const char *path, struct vpath *vp);
 /*
  * A synthetic directory fd's identity: its kind, the process's pid, and
  * for a thread's directory under /proc/<pid>/task the thread's id, 0 for
- * any other. It does not fit packed in the fd's priv pointer, so it is a
+ * any other. A directory of /proc/sys has its entry of the table
+ * (`synth_sys_name`) in `pid`, since it has no process. It does not fit packed in the fd's priv pointer, so it is a
  * record from the heap that priv points at; defined here so /proc/<pid>/fd
  * readlink can render it.
  */
@@ -116,8 +123,21 @@ struct synth_dir {
 };
 
 /** Render a synthetic directory's absolute path from its kind, pid and, for
- * a thread's directory, tid (0 for none) into out. */
+ * a thread's directory, tid (0 for none) into out; for a directory of
+ * /proc/sys, `pid` is its entry. */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
+
+/*
+ * /proc/sys: a few of Linux's sysctl files, read-only, in a table of
+ * entries. Entry 0 is /proc/sys itself; every other entry has its directory
+ * as a `parent` entry, and a file has its text. Each accessor answers NULL
+ * or -1 for an index past the table.
+ */
+int synth_sys_count(void);
+const char *synth_sys_name(int entry);
+int synth_sys_parent(int entry);
+/** The text of a file entry, NULL for a directory. */
+const char *synth_sys_text(int entry);
 
 /* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
 #define VNODE_IS_SYNTH(kind) ((kind) != VNODE_KRFFS)

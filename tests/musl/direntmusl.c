@@ -4,11 +4,14 @@
  * of a directory's listing; and the answer each call that takes a path
  * gives one that names a directory by its end.
  *
- * Every entry of /dev, /dev/pts, /proc, /proc/self, /proc/self/fd, /proc/net
- * and a directory the probe makes must report the type lstat gives it, the
- * mode's type bits shifted down, or DT_UNKNOWN, and never DT_REG for
- * anything but a regular file; /dev/null, /proc/self, /proc/meminfo and
- * /proc/net have their own types by name. Each listing must end without an
+ * Every entry of /dev, /dev/pts, /proc, /proc/self, /proc/self/fd, /proc/net,
+ * /proc/sys and /proc/sys/fs/inotify and a directory the probe makes must
+ * report the type lstat gives it, the mode's type bits shifted down, or
+ * DT_UNKNOWN, and never DT_REG for anything but a regular file; /dev/null,
+ * /proc/self, /proc/meminfo, /proc/cpuinfo, /proc/net and /proc/sys have
+ * their own types by name. /proc/cpuinfo is a record of processor 0 with its
+ * flags, /proc/sys/fs/inotify/max_user_watches reads 8192, and a working
+ * directory of /proc/sys/kernel is named so by getcwd. Each listing must end without an
  * error from readdir and check at least one entry, and lstat may fail only
  * with ENOENT, only in /proc and /dev/pts, whose entries come and go. A path
  * that names a directory by its end is followed there, by lstat and by the
@@ -1004,6 +1007,44 @@ static void tidy(void)
     rmdir(base);
 }
 
+/* The whole of the small file `path` into `buf` of `cap` bytes, NUL-ended;
+ * its length, or -1. */
+static int slurp(const char *path, char *buf, int cap)
+{
+    int fd = open(path, O_RDONLY);
+    int n = fd < 0 ? -1 : (int)read(fd, buf, (size_t)cap - 1);
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n >= 0) {
+        buf[n] = '\0';
+    }
+    return n;
+}
+
+/* /proc/cpuinfo's record, a /proc/sys file, and a working directory in
+ * /proc/sys. */
+static int proc_texts(void)
+{
+    char buf[4096];
+    char cwd[64];
+
+    if (slurp("/proc/cpuinfo", buf, sizeof(buf)) <= 0 ||
+        strncmp(buf, "processor\t: 0\n", 14) != 0 || !strstr(buf, "\nflags\t\t:")) {
+        return fail("/proc/cpuinfo is not a record of processor 0 with its flags");
+    }
+    if (slurp("/proc/sys/fs/inotify/max_user_watches", buf, sizeof(buf)) < 0 ||
+        strcmp(buf, "8192\n") != 0) {
+        return fail("/proc/sys/fs/inotify/max_user_watches");
+    }
+    if (chdir("/proc/sys/kernel") != 0 || !getcwd(cwd, sizeof(cwd)) ||
+        strcmp(cwd, "/proc/sys/kernel") != 0 || chdir("/") != 0) {
+        return fail("a working directory in /proc/sys");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "/";
@@ -1041,13 +1082,18 @@ int main(int argc, char **argv)
         return fail("/dev");
     }
     if (type_of("/proc", "self") != DT_LNK || type_of("/proc", "meminfo") != DT_REG ||
+        type_of("/proc", "cpuinfo") != DT_REG || type_of("/proc", "sys") != DT_DIR ||
         type_of("/proc", "net") != DT_DIR || !types_agree("/proc", 1) ||
+        !types_agree("/proc/sys", 0) || !types_agree("/proc/sys/fs/inotify", 0) ||
         !types_agree("/proc/self", 0) || !types_agree("/proc/self/fd", 0) ||
         !types_agree("/proc/net", 0)) {
         return fail("/proc");
     }
     if (argc > 1 && (!types_agree("/", 0) || !types_agree("/bin", 0))) {
         return fail("the root and /bin");
+    }
+    if (proc_texts() != 0) {
+        return 1;
     }
     printf("DIRENTMUSL OK%s\n", links ? " (links)" : "");
     return 0;

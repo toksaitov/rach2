@@ -39,6 +39,7 @@
 #include "../block/diskinfo.h"
 #include "vfs.h"
 #include "tmpfs.h"
+#include "cpuinfo.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
 #include "../network/arp/arp.h"
@@ -79,6 +80,8 @@
 #define PROCFS_INO_NETROUTE    0x109u
 #define PROCFS_INO_NETARP      0x10Au
 #define PROCFS_INO_NETTCP      0x10Bu
+#define PROCFS_INO_CPUINFO     0x112u
+#define PROCFS_INO_SYS         0x140u /* and the entries of /proc/sys after it */
 #define PROCFS_INO_PID_BASE    0x200u
 
 /*
@@ -123,6 +126,12 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_MEMINFO) {
         return "/proc/meminfo";
+    }
+    if (vp->kind == VNODE_PROC_CPUINFO) {
+        return "/proc/cpuinfo";
+    }
+    if (vp->kind == VNODE_PROC_SYS_FILE) {
+        return "/proc/sys";
     }
     if (vp->kind == VNODE_PROC_MOUNTS) {
         return "/proc/mounts";
@@ -1272,6 +1281,21 @@ uint32_t procfs_ino_meminfo(void)
     return PROCFS_INO_MEMINFO;
 }
 
+uint32_t procfs_ino_cpuinfo(void)
+{
+    return PROCFS_INO_CPUINFO;
+}
+
+uint32_t procfs_ino_sys(int entry)
+{
+    return PROCFS_INO_SYS + (uint32_t)entry;
+}
+
+uint32_t procfs_ino_sysdir(void)
+{
+    return PROCFS_INO_SYS;
+}
+
 uint32_t procfs_ino_mounts(void)
 {
     return PROCFS_INO_MOUNTS;
@@ -1362,6 +1386,12 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_MEMINFO) {
         return PROCFS_INO_MEMINFO;
+    }
+    if (pf->origin_file == SYNTH_PROC_CPUINFO) {
+        return PROCFS_INO_CPUINFO;
+    }
+    if (pf->origin_file == SYNTH_PROC_SYSCTL) {
+        return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
     }
     if (pf->origin_file == SYNTH_PROC_MOUNTS) {
         return PROCFS_INO_MOUNTS;
@@ -2590,6 +2620,7 @@ static int procfs_needs_pid(int kind)
 {
     return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
            kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
+           kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_SYS_FILE &&
            kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
            kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
@@ -2679,6 +2710,14 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_statsys(&text);
     } else if (vp->kind == VNODE_PROC_MEMINFO) {
         len = procfs_gen_meminfo(&text);
+    } else if (vp->kind == VNODE_PROC_CPUINFO) {
+        len = procfs_text_room(&text, CPUINFO_TEXT_MAX) == 0
+                  ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
+                  : -1;
+    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
+        ap_str(&text, synth_sys_text(vp->sysent));
+        len = text.len;
+        pid = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         len = procfs_gen_mounts(&text);
     } else if (vp->kind == VNODE_PROC_AUDIO) {
@@ -2745,6 +2784,10 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_STATSYS;
     } else if (vp->kind == VNODE_PROC_MEMINFO) {
         f->origin_file = SYNTH_PROC_MEMINFO;
+    } else if (vp->kind == VNODE_PROC_CPUINFO) {
+        f->origin_file = SYNTH_PROC_CPUINFO;
+    } else if (vp->kind == VNODE_PROC_SYS_FILE) {
+        f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         f->origin_file = SYNTH_PROC_MOUNTS;
     } else if (vp->kind == VNODE_PROC_AUDIO) {

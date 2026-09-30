@@ -821,6 +821,18 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
     return -ENOENT;
 }
 
+/* /proc's newer files, which no row reads. */
+uint32_t procfs_ino_cpuinfo(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_sys(int entry)
+{
+    (void)entry;
+    return 0;
+}
+
 uint32_t procfs_ino_mounts(void)
 {
     return 0;

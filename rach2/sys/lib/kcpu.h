@@ -16,6 +16,11 @@
 /** The four registers `cpuid` leaf `leaf`, subleaf zero, returns. */
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d);
 
+/** The four registers `cpuid` leaf `leaf` returns for subleaf `sub`, which
+ * the leaves that describe caches and extended features take in ECX. */
+void kcpu_id_sub(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c,
+                 uint32_t *d);
+
 /** Whether `cpuid` reports the model-specific registers (leaf 1, EDX bit 5). */
 int kcpu_msr_present(void);
 

@@ -100,6 +100,10 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
     vp->kind = sd ? sd->kind : VNODE_ENOENT;
     vp->pid = sd ? sd->pid : 0;
     vp->tid = sd ? sd->tid : 0;
+    if (vp->kind == VNODE_PROC_SYS_DIR) {
+        vp->sysent = vp->pid;
+        vp->pid = 0;
+    }
 }
 
 /**
@@ -1740,6 +1744,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_UPTIME:
     case VNODE_PROC_STAT_SYS:
     case VNODE_PROC_MEMINFO:
+    case VNODE_PROC_CPUINFO:
+    case VNODE_PROC_SYS_FILE:
     case VNODE_PROC_MOUNTS:
     case VNODE_PROC_LOOP:
     case VNODE_PROC_AUDIO:
@@ -1765,6 +1771,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PTS_DIR:
     case VNODE_PROC_DIR:
     case VNODE_PROC_NET_DIR:
+    case VNODE_PROC_SYS_DIR:
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
     case VNODE_PROC_TASK_DIR:
@@ -1807,7 +1814,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if ((flags & 3) != 0 || (flags & O_CREAT)) {
         return -EISDIR;
     }
-    sd = synth_dir_alloc(vp->kind, pid, vp->tid);
+    sd = synth_dir_alloc(vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : pid, vp->tid);
     if (!sd) {
         return -ENFILE;
     }
@@ -4030,7 +4037,7 @@ static int synth_kind_is_dir(int kind)
 {
     return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
            kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
-           kind == VNODE_PROC_TASK_DIR;
+           kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR;
 }
 
 /**
@@ -4151,7 +4158,8 @@ static int32_t do_chdir(char *path)
         if (!synth_kind_is_dir(vp.kind)) {
             return -ENOTDIR;
         }
-        synth_dir_path(vp.kind, rpid, vp.tid, path, VFS_PATH_MAX);
+        synth_dir_path(vp.kind, vp.kind == VNODE_PROC_SYS_DIR ? vp.sysent : rpid, vp.tid, path,
+                       VFS_PATH_MAX);
         return cwd_enter(path, NULL, NULL);
     }
     node = ref.node;
@@ -4758,6 +4766,15 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return 0;
     case VNODE_PROC_MEMINFO:
         return synth_proc_stat(kst, procfs_ino_meminfo());
+    case VNODE_PROC_CPUINFO:
+        return synth_proc_stat(kst, procfs_ino_cpuinfo());
+    case VNODE_PROC_SYS_FILE:
+        return synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
+    case VNODE_PROC_SYS_DIR:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = procfs_ino_sys(vp->sysent);
+        return 0;
     case VNODE_PROC_MOUNTS:
         return synth_proc_stat(kst, procfs_ino_mounts());
     case VNODE_PROC_AUDIO:
@@ -9891,6 +9908,26 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         }
         return 0;
     }
+    /* A directory of /proc/sys: the entries of the table under it. */
+    if (kind == VNODE_PROC_SYS_DIR) {
+        int i, c = 0;
+
+        for (i = 1; i < synth_sys_count(); i++) {
+            if (synth_sys_parent(i) == sd->pid && c++ == n) {
+                const char *entry = synth_sys_name(i);
+                int k;
+
+                for (k = 0; entry[k] != '\0'; k++) {
+                    name[k] = entry[k];
+                }
+                name[k] = '\0';
+                *ino = procfs_ino_sys(i);
+                *dtype = synth_sys_text(i) ? DT_REG : DT_DIR;
+                return 1;
+            }
+        }
+        return 0;
+    }
     /* The four files of /proc/net: dev, route, arp and tcp. */
     if (kind == VNODE_PROC_NET_DIR) {
         /* No `tcp6`: there is no IPv6 here, and a file that existed and was
@@ -9927,8 +9964,10 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         } globals[] = {
             {"cmdline", procfs_ino_cmdline, DT_REG}, {"disk", procfs_ino_disk, DT_REG},
             {"uptime", procfs_ino_uptime, DT_REG},   {"stat", procfs_ino_statsys, DT_REG},
-            {"meminfo", procfs_ino_meminfo, DT_REG}, {"mounts", procfs_ino_mounts, DT_REG},
-            {"net", procfs_ino_netdir, DT_DIR},      {"self", procfs_ino_dir, DT_LNK},
+            {"meminfo", procfs_ino_meminfo, DT_REG}, {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
+            {"mounts", procfs_ino_mounts, DT_REG},
+            {"net", procfs_ino_netdir, DT_DIR},      {"sys", procfs_ino_sysdir, DT_DIR},
+            {"self", procfs_ino_dir, DT_LNK},
             {"usb", procfs_ino_usb, DT_REG},         {"loop", procfs_ino_loop, DT_REG},
             {"console", procfs_ino_console, DT_REG}, {"audio", procfs_ino_audio, DT_REG}};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));

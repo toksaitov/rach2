@@ -4535,3 +4535,25 @@ old
     }
 new
 end
+
+# /proc/cpuinfo and /proc/sys.
+
+fault proc-sys-unnamed
+probe direntmusl
+file rach2/sys/fs/synthfs.c
+expect DIRENTMUSL FAIL (/proc
+old
+        if (comp_eq(c[1], "sys")) {
+new
+        if (comp_eq(c[1], "sys-")) {
+end
+
+fault proc-cpuinfo-no-flags
+probe direntmusl
+file rach2/sys/fs/cpuinfo.c
+expect DIRENTMUSL FAIL (/proc/cpuinfo is not a record of processor 0 with its flags
+old
+    put(&t, "wp\t\t: yes\nflags\t\t:");
+new
+    put(&t, "wp\t\t: yes\nflag\t\t:");
+end

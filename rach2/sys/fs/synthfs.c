@@ -143,6 +143,59 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
     }
 }
 
+/* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
+ * kernel's name, its release and the bound of its process IDs. */
+static const struct {
+    int parent;
+    const char *name;
+    const char *text;
+} sysents[] = {{-1, "sys", 0},
+               {0, "fs", 0},
+               {1, "inotify", 0},
+               {2, "max_queued_events", "16384\n"},
+               {2, "max_user_instances", "128\n"},
+               {2, "max_user_watches", "8192\n"},
+               {0, "kernel", 0},
+               {6, "ostype", "Rach2\n"},
+               {6, "osrelease", "1.0.0\n"},
+               {6, "pid_max", "2000000000\n"}};
+
+int synth_sys_count(void)
+{
+    return (int)(sizeof(sysents) / sizeof(sysents[0]));
+}
+
+const char *synth_sys_name(int entry)
+{
+    return entry >= 0 && entry < synth_sys_count() ? sysents[entry].name : 0;
+}
+
+int synth_sys_parent(int entry)
+{
+    return entry >= 0 && entry < synth_sys_count() ? sysents[entry].parent : -1;
+}
+
+const char *synth_sys_text(int entry)
+{
+    return entry >= 0 && entry < synth_sys_count() ? sysents[entry].text : 0;
+}
+
+/** Append /proc and the path of the /proc/sys entry `entry`. */
+static void synth_put_sys(char *out, int cap, int *pos, int entry)
+{
+    if (entry < 0 || entry >= synth_sys_count()) {
+        synth_put(out, cap, pos, "/proc/sys");
+        return;
+    }
+    if (sysents[entry].parent < 0) {
+        synth_put(out, cap, pos, "/proc");
+    } else {
+        synth_put_sys(out, cap, pos, sysents[entry].parent);
+    }
+    synth_put(out, cap, pos, "/");
+    synth_put(out, cap, pos, sysents[entry].name);
+}
+
 /**
  * Render the canonical directory path for a synthetic vnode kind into `out`.
  *
@@ -169,6 +222,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
         synth_put(out, cap, &pos, "/proc/net");
+    } else if (kind == VNODE_PROC_SYS_DIR) {
+        synth_put_sys(out, cap, &pos, pid);
     } else if (kind == VNODE_PROC_PID) {
         synth_put_proc(out, cap, &pos, pid, tid);
     } else if (kind == VNODE_PROC_FD_DIR) {
@@ -274,6 +329,31 @@ static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int
     return vp->kind;
 }
 
+/** Classify the components `c` of `n` below /proc/sys by the table. */
+static int synth_classify_sys(const struct comp *c, int n, struct vpath *vp)
+{
+    int at = 0, i, k;
+
+    for (k = 0; k < n; k++) {
+        if (sysents[at].text) {
+            vp->kind = VNODE_ENOTDIR;
+            return vp->kind;
+        }
+        for (i = 1; i < synth_sys_count() && !(sysents[i].parent == at &&
+                                                comp_eq(c[k], sysents[i].name));
+             i++) {
+        }
+        if (i == synth_sys_count()) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+        at = i;
+    }
+    vp->sysent = at;
+    vp->kind = sysents[at].text ? VNODE_PROC_SYS_FILE : VNODE_PROC_SYS_DIR;
+    return vp->kind;
+}
+
 /** Classify system-wide proc files by their literal leaf names. */
 static int synth_global_file(struct comp name)
 {
@@ -283,6 +363,7 @@ static int synth_global_file(struct comp name)
     } files[] = {{"uptime", VNODE_PROC_UPTIME},
                  {"stat", VNODE_PROC_STAT_SYS},
                  {"meminfo", VNODE_PROC_MEMINFO},
+                 {"cpuinfo", VNODE_PROC_CPUINFO},
                  {"interrupts", VNODE_PROC_INTERRUPTS},
                  {"console", VNODE_PROC_CONSOLE},
                  {"mounts", VNODE_PROC_MOUNTS},
@@ -321,6 +402,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->procfd = -1;
     vp->procfile = 0;
     vp->pts_index = -1;
+    vp->sysent = 0;
 
     n = synth_split(path, c, SYNTH_MAXC + 1);
 
@@ -383,6 +465,9 @@ int synth_classify(const char *path, struct vpath *vp)
             if (n != 2)
                 vp->kind = VNODE_ENOTDIR;
             return vp->kind;
+        }
+        if (comp_eq(c[1], "sys")) {
+            return synth_classify_sys(c + 2, n - 2, vp);
         }
         /* /proc/net and its four files: dev, route, arp and tcp. */
         if (comp_eq(c[1], "net")) {

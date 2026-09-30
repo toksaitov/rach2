@@ -825,6 +825,15 @@ NO_PROC_INO(procfs_ino_filesystems)
 NO_PROC_INO(procfs_ino_interrupts)
 NO_PROC_INO(procfs_ino_loop)
 NO_PROC_INO(procfs_ino_meminfo)
+NO_PROC_INO(procfs_ino_cpuinfo)
+
+uint32_t procfs_ino_sys(int entry)
+{
+    (void)entry;
+    check(0, "unexpected stat of a /proc/sys entry");
+    return 0;
+}
+
 NO_PROC_INO(procfs_ino_mounts)
 NO_PROC_INO(procfs_ino_netarp)
 NO_PROC_INO(procfs_ino_netdev)
