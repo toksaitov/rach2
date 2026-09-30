@@ -51,22 +51,111 @@ void input_mouse(int dx, int dy, int buttons)
 }
 
 /**
+ * Send the escape sequence of the extended key `scancode`, the code after an
+ * E0 prefix, to the console's line discipline, as the `rach2` terminfo entry
+ * lists it: the arrows, Home and End as xterm sends them, and Insert, Delete,
+ * Page Up and Page Down as VT220 editing keys.
+ *
+ * @return 1 when `scancode` is one of those keys, 0 otherwise.
+ */
+static int extended_key(uint8_t scancode)
+{
+    const char *seq;
+
+    switch (scancode) {
+    case 0x48:
+        seq = "\033[A";
+        break;
+    case 0x50:
+        seq = "\033[B";
+        break;
+    case 0x4D:
+        seq = "\033[C";
+        break;
+    case 0x4B:
+        seq = "\033[D";
+        break;
+    case 0x47:
+        seq = "\033[H";
+        break;
+    case 0x4F:
+        seq = "\033[F";
+        break;
+    case 0x52:
+        seq = "\033[2~";
+        break;
+    case 0x53:
+        seq = "\033[3~";
+        break;
+    case 0x49:
+        seq = "\033[5~";
+        break;
+    case 0x51:
+        seq = "\033[6~";
+        break;
+    default:
+        return 0;
+    }
+    while (*seq) {
+        tty_input_char(&console_tty, (unsigned char)*seq++);
+    }
+    return 1;
+}
+
+/**
+ * Give the key of `scancode`, `c` in the keymap and extended when `was_e0`,
+ * to the console's line discipline, for a reader parked on it or the session
+ * that owns it. Shift with Page Up or Page Down scrolls the screen back
+ * instead, and any other key first returns it to the live screen.
+ */
+static void session_key(uint8_t scancode, char c, int was_e0)
+{
+    unsigned char tc = (unsigned char)c;
+
+    if (was_e0 && shift_held && scancode == 0x49) {
+        k_scrollback_page_up();
+        return;
+    }
+    if (was_e0 && shift_held && scancode == 0x51) {
+        k_scrollback_page_down();
+        return;
+    }
+    if (k_scrollback_is_active()) {
+        k_scrollback_end();
+    }
+    if ((was_e0 && extended_key(scancode)) || c == 0) {
+        return;
+    }
+    if (ctrl_held && c >= 'a' && c <= 'z') {
+        tc = (unsigned char)(c - 'a' + 1);
+    } else if (ctrl_held && c >= 'A' && c <= 'Z') {
+        tc = (unsigned char)(c - 'A' + 1);
+    } else if (c == '\b') {
+        tc = 0x7F;
+    }
+    tty_input_char(&console_tty, tc);
+}
+
+/**
  * Route one set-1 scancode.
  *
  * Every code, including the ones consumed here, goes first to the ring a
  * graphics-mode reader drains, since a game needs the modifiers and the
  * releases too. The extended Page Up, Page Down, Home and End scroll the
- * screen whenever the debug shell reads input. When a reader is parked on the
- * console or a session owns it, Ctrl+C goes through the line discipline like
- * every other key: its ISIG path posts SIGINT to the foreground group and
+ * screen whenever the debug shell reads input, and Shift with Page Up or Page
+ * Down scrolls it in a session, where any other key returns it to the live
+ * screen before it is sent, as on Linux's console. When a reader is parked on
+ * the console or a session owns it, Ctrl+C goes through the line discipline
+ * like every other key: its ISIG path posts SIGINT to the foreground group and
  * flushes the pending input, as a serial Ctrl+C does. Otherwise Ctrl+C is
  * `shell_interrupt`, out of band, and other keys go to the debug shell's own
  * buffer when it reads.
  *
  * For the discipline, Backspace, '\b' in the keymap, becomes DEL, its erase
- * character, and Ctrl with a letter becomes that letter's control byte, so
- * line editing and end of file arrive as they would from a terminal. A key
- * nobody is parked for waits in the discipline as type-ahead.
+ * character, Ctrl with a letter becomes that letter's control byte, and the
+ * arrows and editing keys become their escape sequences, so line editing, end
+ * of file and cursor keys arrive as they would from a terminal. A key nobody
+ * is parked for waits in the discipline as type-ahead.
  */
 void input_key(uint8_t scancode)
 {
@@ -82,13 +171,12 @@ void input_key(uint8_t scancode)
         return;
     }
 
-    /* Left and right shift. */
-    if (scancode == 0x2A || scancode == 0x36) {
-        shift_held = 1;
-        return;
-    }
-    if (scancode == 0xAA || scancode == 0xB6) {
-        shift_held = 0;
+    /* Left and right shift. After E0 they are the shifts a PS/2 keyboard
+       sends around a cursor key for Num Lock, not a key pressed. */
+    if (scancode == 0x2A || scancode == 0x36 || scancode == 0xAA || scancode == 0xB6) {
+        if (!was_e0) {
+            shift_held = scancode == 0x2A || scancode == 0x36;
+        }
         return;
     }
 
@@ -136,18 +224,7 @@ void input_key(uint8_t scancode)
     c = (char)(shift_held ? EN_us_shift[scancode & 0x7F] : EN_us[scancode & 0x7F]);
 
     if (wq_active(&console_tty.input_wq) || console_tty.sid != 0) {
-        if (c != 0) {
-            unsigned char tc = (unsigned char)c;
-
-            if (ctrl_held && c >= 'a' && c <= 'z') {
-                tc = (unsigned char)(c - 'a' + 1);
-            } else if (ctrl_held && c >= 'A' && c <= 'Z') {
-                tc = (unsigned char)(c - 'A' + 1);
-            } else if (c == '\b') {
-                tc = 0x7F;
-            }
-            tty_input_char(&console_tty, tc);
-        }
+        session_key(scancode, c, was_e0);
     } else if (c != 0 && shell_reads_input()) {
         shell_input_char(c);
     }

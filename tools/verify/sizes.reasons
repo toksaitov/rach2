@@ -157,8 +157,6 @@ rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/vfs.c:vfs_do_mount lines 148 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/input.c:input_key complexity 32 a dispatcher, one arm per command, read as a table
-
 rach2/sys/ipc/unix.c:build params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 rach2/sys/ipc/unix.c:recv_msg params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 rach2/sys/ipc/unix.c:recv_stream params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
