@@ -47,14 +47,20 @@ static const uint8_t vt_ansi_color[8] = {black, red, green, brown, blue, magenta
 /**
  * Draw one byte at the cursor with no escape interpretation.
  *
- * BS, HT, LF, and CR move the cursor; any other control byte is shown as
- * `CHAR_NON_PRINTABLE`; a printable byte is written with the current color and
- * the cursor advances, wrapping and scrolling at the screen edges.
+ * BS, HT, LF, and CR move the cursor; NUL and BEL draw nothing, since a
+ * program sends them to a terminal as padding and as a warning; any other
+ * control byte is shown as `CHAR_NON_PRINTABLE`; a printable byte is written
+ * with the current color and the cursor advances, wrapping and scrolling at
+ * the screen edges.
  */
 static void vga_putc_raw(char c)
 {
     if (c < 32 || c == 127) {
         switch (c) {
+        case CHAR_NULL:
+        case CHAR_BEL:
+            break;
+
         case CHAR_BS:
             if (x)
                 --x;
@@ -67,6 +73,8 @@ static void vga_putc_raw(char c)
 
         case CHAR_HT:
             x = x - x % TAB_SIZE + TAB_SIZE;
+            if (x >= SCREEN_NUMBER_OF_COLUMNS)
+                x = SCREEN_NUMBER_OF_COLUMNS - 1;
             break;
 
         case CHAR_LF:

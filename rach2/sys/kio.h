@@ -13,14 +13,17 @@
 /** Null character. */
 #define CHAR_NULL '\0'
 
+/** Bell. */
+#define CHAR_BEL 0x07
+
 /** Backspace. */
 #define CHAR_BS '\b'
 
 /** Horizontal tab. */
 #define CHAR_HT '\t'
 
-/** Tab width in spaces. */
-#define TAB_SIZE 4
+/** Tab width in spaces, a terminal's. */
+#define TAB_SIZE 8
 
 /** Line feed. */
 #define CHAR_LF 0x0A
