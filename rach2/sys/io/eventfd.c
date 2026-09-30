@@ -142,9 +142,9 @@ static void eventfd_close(fd_entry_t *e)
 static const struct file_ops eventfd_ops = {eventfd_read, eventfd_write, eventfd_poll, NULL,
                                             eventfd_close};
 
-int32_t sys_eventfd2(struct isr_params *params)
+/** An eventfd with the counter `count` and the flags `flags`. */
+static int32_t eventfd_open(uint32_t count, uint32_t flags)
 {
-    uint32_t flags = params->ecx;
     struct eventfd *ev;
     fd_entry_t *e;
     int fd;
@@ -157,7 +157,7 @@ int32_t sys_eventfd2(struct isr_params *params)
         return -ENOMEM;
     }
     ev->anon.name = "[eventfd]";
-    ev->count = params->ebx;
+    ev->count = count;
     ev->semaphore = (flags & EFD_SEMAPHORE) != 0;
     wait_queue_init(&ev->wq);
     fd = fd_alloc(current_proc->fds);
@@ -176,8 +176,14 @@ int32_t sys_eventfd2(struct isr_params *params)
     return fd;
 }
 
+int32_t sys_eventfd2(struct isr_params *params)
+{
+    return eventfd_open(params->ebx, params->ecx);
+}
+
+/* eventfd() has no flags. The caller's ECX is no argument of it and comes
+ * back as it went, as every register but EAX does. */
 int32_t sys_eventfd(struct isr_params *params)
 {
-    params->ecx = 0;
-    return sys_eventfd2(params);
+    return eventfd_open(params->ebx, 0);
 }

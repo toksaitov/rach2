@@ -4403,3 +4403,27 @@ old
         }
 new
 end
+
+# The calls without flags that the kernel serves as their flagged forms.
+
+fault pipe-clobbers-ecx
+probe pipemusl
+file rach2/sys/ipc/pipe.c
+expect PIPEMUSL FAIL: pipe changed the caller's ECX
+old
+    return pipe_open(params->ebx, 0);
+new
+    params->ecx = 0;
+    return pipe_open(params->ebx, 0);
+end
+
+fault eventfd-clobbers-ecx
+probe epollmusl
+file rach2/sys/io/eventfd.c
+expect EPOLLMUSL FAIL (eventfd changed the caller's ECX
+old
+    return eventfd_open(params->ebx, 0);
+new
+    params->ecx = 0;
+    return eventfd_open(params->ebx, 0);
+end

@@ -539,16 +539,15 @@ int32_t fifo_attach(fd_entry_t *e, const void *mnt, uint64_t ino, int flags)
 }
 
 /**
- * pipe2(2). Both descriptors are reserved, their numbers copied to the
- * caller, and only then given their ends, as Linux's do_pipe2 does: the copy
- * can sleep, and a reserved slot has no type, so a thread sharing the table
- * can neither use nor duplicate an end before the call succeeds, and a copy
- * that fails frees the slots and the pipe, which nothing else can reach.
+ * pipe2(2) of the user array at `fds_ptr` with `flags`. Both descriptors
+ * are reserved, their numbers copied to the caller, and only then given
+ * their ends, as Linux's do_pipe2 does: the copy can sleep, and a reserved
+ * slot has no type, so a thread sharing the table can neither use nor
+ * duplicate an end before the call succeeds, and a copy that fails frees
+ * the slots and the pipe, which nothing else can reach.
  */
-int32_t sys_pipe2(struct isr_params *params)
+static int32_t pipe_open(uint32_t fds_ptr, int flags)
 {
-    uint32_t fds_ptr = params->ebx;
-    int flags = (int)params->ecx;
     pipe_t *pipe;
     int kfds[2];
 
@@ -582,8 +581,14 @@ int32_t sys_pipe2(struct isr_params *params)
     return 0;
 }
 
+int32_t sys_pipe2(struct isr_params *params)
+{
+    return pipe_open(params->ebx, (int)params->ecx);
+}
+
+/* pipe() is pipe2() with no flags. The caller's ECX is no argument of it
+ * and comes back as it went, as every register but EAX does. */
 int32_t sys_pipe(struct isr_params *params)
 {
-    params->ecx = 0; /* pipe() == pipe2() with no flags */
-    return sys_pipe2(params);
+    return pipe_open(params->ebx, 0);
 }
