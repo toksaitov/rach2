@@ -57,6 +57,11 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 /* Largest TCP segment we accept (fits tcp_cksum_buf). */
 #define TCP_SEG_MAX (TCP_HDR_SIZE + 4 + TCP_MSS)
 
+/* The option kinds a SYN's options are read for (RFC 9293). */
+#define TCP_OPT_END 0
+#define TCP_OPT_NOP 1
+#define TCP_OPT_MSS 2
+
 /* Ephemeral source port for active opens. */
 static uint16_t next_ephemeral = 49152;
 
@@ -202,7 +207,46 @@ static void tcb_init(struct tcb *tcb)
     tcb->rcv_wnd = TCP_WINDOW_SIZE;
     tcb->ssthresh = 65535;
     tcb->cwnd = TCP_INIT_CWND;
+    tcb->snd_mss = TCP_MSS_DEFAULT;
     tcb->rto = TCP_RTO_INIT;
+}
+
+/**
+ * Take the peer's segment size from its SYN, `data` with a header of
+ * `hdr_len` bytes: the value of its MSS option, at most TCP_MSS and at least
+ * TCP_MSS_MIN, or TCP_MSS_DEFAULT when it has none. Every segment this side
+ * sends is at most that size, and the congestion window starts at
+ * TCP_INIT_SEGS of them.
+ *
+ * The peer's value is what its end of the path carries, and a router on the
+ * way may have lowered it to fit a smaller link, as a PPPoE line's router
+ * does. The segments are sent with DF set, so one larger than the path
+ * carries is dropped each time it is sent.
+ */
+static void tcp_take_mss(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
+{
+    uint16_t i = TCP_HDR_SIZE;
+    uint16_t mss = TCP_MSS_DEFAULT;
+
+    while (i < hdr_len && data[i] != TCP_OPT_END) {
+        if (data[i] == TCP_OPT_NOP) {
+            i++;
+            continue;
+        }
+        if (i + 1u >= hdr_len || data[i + 1] < 2 || i + data[i + 1] > hdr_len)
+            break;
+        if (data[i] == TCP_OPT_MSS && data[i + 1] == 4) {
+            mss = read16be(data + i + 2);
+            if (mss > TCP_MSS)
+                mss = TCP_MSS;
+            if (mss < TCP_MSS_MIN)
+                mss = TCP_MSS_MIN;
+            break;
+        }
+        i = (uint16_t)(i + data[i + 1]);
+    }
+    tcb->snd_mss = mss;
+    tcb->cwnd = (uint32_t)TCP_INIT_SEGS * mss;
 }
 
 /**
@@ -419,8 +463,8 @@ static int tcp_output(struct tcb *tcb)
         usable = (window > in_flight) ? (window - in_flight) : 0;
 
         send_len = avail;
-        if (send_len > TCP_MSS)
-            send_len = TCP_MSS;
+        if (send_len > tcb->snd_mss)
+            send_len = tcb->snd_mss;
         if (send_len > usable)
             send_len = usable;
 
@@ -491,8 +535,8 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
         return 0;
     }
     send_len = sent_end - seq;
-    if (send_len > TCP_MSS)
-        send_len = TCP_MSS;
+    if (send_len > tcb->snd_mss)
+        send_len = tcb->snd_mss;
     if (send_len > most)
         send_len = most;
 
@@ -574,10 +618,10 @@ static void tcp_enter_rto_recovery(struct tcb *tcb)
     uint32_t flight = tcb->recovering ? tcb->cwnd : sent_end - tcb->snd_una;
     uint32_t new_ss = flight / 2u;
 
-    if (new_ss < 2u * TCP_MSS)
-        new_ss = 2u * TCP_MSS;
+    if (new_ss < 2u * tcb->snd_mss)
+        new_ss = 2u * tcb->snd_mss;
     tcb->ssthresh = new_ss;
-    tcb->cwnd = TCP_MSS;
+    tcb->cwnd = tcb->snd_mss;
     tcb->recovering = TCP_RECOVER_RTO;
     tcb->recover = sent_end;
     tcb->retx_nxt = tcb->snd_una;
@@ -603,14 +647,14 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
     uint32_t sent_end = tcb->snd_una + (tcb->send_head - tcb->send_ack);
     uint32_t new_ss = (sent_end - tcb->snd_una) / 2u;
 
-    if (new_ss < 2u * TCP_MSS)
-        new_ss = 2u * TCP_MSS;
+    if (new_ss < 2u * tcb->snd_mss)
+        new_ss = 2u * tcb->snd_mss;
     tcb->ssthresh = new_ss;
     tcb->recovering = TCP_RECOVER_FAST;
     tcb->recover = sent_end;
     tcb->rtt_start = 0;
-    tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0;
-    tcb->cwnd = new_ss + TCP_DUP_ACKS * TCP_MSS;
+    tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, tcb->snd_mss) < 0;
+    tcb->cwnd = new_ss + TCP_DUP_ACKS * tcb->snd_mss;
 }
 
 /**
@@ -622,7 +666,7 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
 static int tcp_send_more(struct tcb *tcb)
 {
     if (tcb->fast_pending) {
-        if (tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0) {
+        if (tcp_resend(tcb, tcb->snd_una, tcb->snd_mss) < 0) {
             return 1;
         }
         tcb->fast_pending = 0;
@@ -1503,8 +1547,8 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint16_t window)
 
     if (was_fast) {
         if (tcb->recovering) {
-            tcb->cwnd = (tcb->cwnd > acked ? tcb->cwnd - acked : 0) + TCP_MSS;
-            tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0;
+            tcb->cwnd = (tcb->cwnd > acked ? tcb->cwnd - acked : 0) + tcb->snd_mss;
+            tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, tcb->snd_mss) < 0;
         }
     } else {
         tcp_ack_grow(tcb);
@@ -1531,11 +1575,11 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint16_t window)
 static void tcp_ack_grow(struct tcb *tcb)
 {
     if (tcb->cwnd < tcb->ssthresh) {
-        tcb->cwnd += TCP_MSS;
+        tcb->cwnd += tcb->snd_mss;
         if (tcb->cwnd > tcb->ssthresh)
             tcb->cwnd = tcb->ssthresh;
     } else {
-        uint32_t inc = (uint32_t)TCP_MSS * TCP_MSS / tcb->cwnd;
+        uint32_t inc = (uint32_t)tcb->snd_mss * tcb->snd_mss / tcb->cwnd;
         if (inc == 0)
             inc = 1;
         tcb->cwnd += inc;
@@ -1864,6 +1908,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         conn_tcb->irs = seq;
         conn_tcb->rcv_nxt = seq + 1;
         conn_tcb->snd_wnd = window;
+        tcp_take_mss(conn_tcb, data, hdr_len);
         conn_tcb->iss = tcp_isn(conn_tcb);
         conn_tcb->snd_nxt = conn_tcb->iss;
         conn_tcb->snd_una = conn_tcb->iss;
@@ -1908,6 +1953,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
             tcb->irs = seq;
             tcb->rcv_nxt = seq + 1;
             tcb->snd_wnd = window;
+            tcp_take_mss(tcb, data, hdr_len);
             tcb->snd_nxt = tcb->iss;
             tcp_send_flags(tcb, TCP_SYN | TCP_ACK);
             tcb->state = TCP_SYN_RCVD;
@@ -1922,6 +1968,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         tcb->rcv_nxt = seq + 1;
         tcb->snd_una = ack_num;
         tcb->snd_wnd = window;
+        tcp_take_mss(tcb, data, hdr_len);
         tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
         tcb->rto_timer = 0;
@@ -1941,7 +1988,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
             } else if (ack_num == tcb->snd_una && payload_len == 0 && window == tcb->snd_wnd &&
                        !(flags & (TCP_SYN | TCP_FIN)) && tcb->send_head != tcb->send_ack) {
                 if (tcb->recovering == TCP_RECOVER_FAST) {
-                    tcb->cwnd += TCP_MSS;
+                    tcb->cwnd += tcb->snd_mss;
                     tcp_pump(tcb);
                 } else if (tcb->recovering == 0) {
                     if (tcb->dup_acks < TCP_DUP_ACKS)

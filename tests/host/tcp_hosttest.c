@@ -285,10 +285,15 @@ static void reset_all(void)
 }
 
 /* One segment from the peer, with the header this stack reads. */
+/* The MSS option a peer's SYN has, as a real peer's does; a row sets it
+   lower to see the stack keep to it. */
+static uint16_t peer_mss = TCP_MSS;
+
 static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags,
                uint16_t window, const char *payload, uint16_t plen)
 {
     uint8_t seg[128];
+    uint16_t hdr = 20;
     unsigned i;
 
     write16be(seg + 0, sport);
@@ -300,14 +305,21 @@ static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8
     write16be(seg + 14, window);
     write16be(seg + 16, 0);
     write16be(seg + 18, 0); /* the urgent pointer */
+    if (flags & F_SYN) {
+        seg[12] = 0x60;
+        seg[20] = 2;
+        seg[21] = 4;
+        write16be(seg + 22, peer_mss);
+        hdr = 24;
+    }
     for (i = 0; i < plen; i++) {
-        seg[20 + i] = (uint8_t)payload[i];
+        seg[hdr + i] = (uint8_t)payload[i];
     }
     /* The receiver verifies this, so the test computes it the same way the
        sender does: a segment with a wrong checksum is dropped, and every case
        below would then be checking that. */
-    write16be(seg + 16, tcp_checksum(PEER, net_ip_addr, seg, (uint16_t)(20 + plen)));
-    tcp_rx(PEER, net_ip_addr, seg, (uint16_t)(20 + plen));
+    write16be(seg + 16, tcp_checksum(PEER, net_ip_addr, seg, (uint16_t)(hdr + plen)));
+    tcp_rx(PEER, net_ip_addr, seg, (uint16_t)(hdr + plen));
 }
 
 /* The flags of the segment this stack sent last. */
@@ -433,6 +445,37 @@ static void test_send_checks(void)
     CHECK("reset refusal restores interrupts", irq_enabled == 1);
     reset_on_lock = NULL;
     reset_all();
+}
+
+/* A peer whose SYN asks for smaller segments, as one behind a PPPoE line's
+   router does, gets no segment larger than it asked for, and the first
+   burst is four of them. */
+static void peer_mss_row(void)
+{
+    struct socket sock;
+    uint32_t iss, peer_seq = 8000;
+    uint16_t lport;
+    static uint8_t bytes[8000];
+    unsigned j, oversize = 0;
+
+    reset_all();
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("a connection to a peer of a smaller MSS can be opened",
+          tcp_connect(&sock, PEER, 87) == 0);
+    iss = read32be(segs[0].data + 4);
+    lport = read16be(segs[0].data + 0);
+    peer_mss = 1400;
+    rx((uint16_t)87, lport, peer_seq, iss + 1, (uint8_t)(F_SYN | F_ACK), 65535, (const char *)0, 0);
+    peer_mss = TCP_MSS;
+    n_segs = 0;
+    CHECK("the ring takes 8000 bytes", tcp_send(&sock, bytes, (int)sizeof(bytes)) == 8000);
+    for (j = 0; j < n_segs && j < MAX_SEGS; j++) {
+        if (segs[j].len - TCP_HDR_SIZE > 1400) {
+            oversize++;
+        }
+    }
+    CHECK("the first burst is four segments of the peer's size",
+          n_segs == 4 && oversize == 0 && segs[0].len - TCP_HDR_SIZE == 1400);
 }
 
 int main(void)
@@ -701,6 +744,8 @@ int main(void)
               conn->state == TCP_CLOSED && cb_fin == 1 && j > TCP_REFUSE_GIVEUP_TICKS);
         ip_tx_refuse = 0;
     }
+
+    peer_mss_row();
 
     /* A zero window that closes over a refused segment is flow control, not
        a continuing refusal: the connection is kept through the bound and the

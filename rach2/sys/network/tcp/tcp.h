@@ -21,7 +21,13 @@
 /* Protocol constants. */
 #define TCP_HDR_SIZE            20
 #define TCP_MSS                 1460
-#define TCP_INIT_CWND           (4 * TCP_MSS) /* initial congestion window (RFC 6928) */
+#define TCP_INIT_SEGS           4 /* initial congestion window, in segments (RFC 6928) */
+#define TCP_INIT_CWND           (TCP_INIT_SEGS * TCP_MSS)
+/* The segment size a peer gets when its SYN has no MSS option (RFC 9293),
+ * and the least one may ask for: Linux's floor against a peer that asks
+ * for tiny segments to make a sender do more work per byte. */
+#define TCP_MSS_DEFAULT         536
+#define TCP_MSS_MIN             48
 /* Policy: a connection's send and receive rings are 64 KiB each, in the
  * control block, a power of two since the rings' indexes wrap by a mask,
  * and the largest an unscaled window can name, so that a link's round trip
@@ -98,6 +104,7 @@ struct tcb {
     uint32_t snd_una; /* oldest unacknowledged sequence number  */
     uint32_t snd_nxt; /* next sequence number to send           */
     uint16_t snd_wnd; /* remote's advertised receive window     */
+    uint16_t snd_mss; /* largest segment the remote takes       */
 
     /* Receive sequence space. */
     uint32_t irs;
