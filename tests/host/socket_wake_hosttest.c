@@ -186,7 +186,7 @@ int main(void)
 
     reset();
     socket_udp_deliver(&udp, 0x0A000002u, 7, bytes, sizeof(bytes));
-    CHECK(udp.recv_full && woken == &udp.waiters && woken_kinds == WQ_DATA,
+    CHECK(udp.recv_count == 1 && woken == &udp.waiters && woken_kinds == WQ_DATA,
           "a datagram wakes a UDP socket for data alone");
 
     tcp.tcb = &block;

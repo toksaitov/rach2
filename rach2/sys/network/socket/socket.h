@@ -25,6 +25,11 @@
 #define AF_INET             2 /* IPv4 address family */
 /* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
 #define SOCK_RECV_BUF_SIZE  1500
+/* Policy: a UDP socket queues eight datagrams, twelve kilobytes of its
+ * record: room for the answers to the two questions a resolver asks at
+ * once, A and AAAA, which arrive together, and for a burst of others while
+ * the reader is being scheduled. */
+#define SOCK_DGRAM_SLOTS    8
 /* Policy: a listener holds fifteen accepted connections not yet taken by
  * `accept`, a ring of sixteen in the socket record with one place left
  * empty to tell full from empty; a power of two, since the ring's indexes
@@ -104,20 +109,19 @@ typedef struct socket {
     uint32_t inode;
     uint32_t uid;
 
-    /* UDP: sender of the most recent datagram, returned via recvfrom. */
-    uint32_t last_src_ip;
-    uint16_t last_src_port;
-
-    /* UDP single-datagram receive buffer. Occupancy is `recv_full` and not the
-     * length, because a datagram of no bytes is a datagram: UDP has an
-     * empty payload perfectly well, and a slot that read its own emptiness as
-     * "nothing here" would build one, send it, accept it, deliver it to the
-     * right socket, and then drop it at the last step, leaving a blocked
-     * `recvfrom` blocked. So a read of this socket may return 0, which is a
-     * datagram and not end of input. */
-    uint8_t recv_buf[SOCK_RECV_BUF_SIZE];
-    uint16_t recv_len;
-    int recv_full;
+    /* UDP receive queue: the datagrams in arrival order, each with its
+     * length and its sender, which recvfrom returns; `recv_head` is the
+     * oldest and `recv_count` how many wait. A datagram that finds the queue
+     * full is dropped, as Linux drops one that finds the receive buffer full.
+     * Occupancy is the count and not a length, because a datagram of no bytes
+     * is a datagram: a read of this socket may return 0, which is a datagram
+     * and not end of input. */
+    uint8_t recv_buf[SOCK_DGRAM_SLOTS][SOCK_RECV_BUF_SIZE];
+    uint16_t recv_len[SOCK_DGRAM_SLOTS];
+    uint32_t recv_src_ip[SOCK_DGRAM_SLOTS];
+    uint16_t recv_src_port[SOCK_DGRAM_SLOTS];
+    int recv_head;
+    int recv_count;
 
     /* Processes blocked waiting for data, a connection, or an accept. The
      * IRQ-side deliver/accept/connect/fin routines wake every waiter; each

@@ -184,20 +184,25 @@ void socket_unref(struct socket *sock)
 }
 
 /**
- * Deliver a received datagram into a UDP socket and wake its waiters.
+ * Queue a received datagram on a UDP socket and wake its waiters.
  *
- * Called from the receive path with interrupts off. The single-datagram
- * buffer has at most SOCK_RECV_BUF_SIZE bytes; a longer payload is truncated,
- * and a datagram not yet read is overwritten. The source address is recorded
- * for a later recvfrom. A connected socket takes datagrams from its peer and
- * from nobody else, which is what `connect` means for UDP.
+ * Called from the receive path with interrupts off. A slot has at most
+ * SOCK_RECV_BUF_SIZE bytes, and a longer payload is truncated; a datagram
+ * that finds all SOCK_DGRAM_SLOTS slots waiting is dropped. The source
+ * address is kept with the datagram for recvfrom. A connected socket takes
+ * datagrams from its peer and from nobody else, which is what `connect`
+ * means for UDP.
  */
 void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len)
 {
     uint16_t copy_len = len;
+    int slot;
 
     if (sock->connected && (src_ip != sock->remote_ip || src_port != sock->remote_port)) {
+        return;
+    }
+    if (sock->recv_count == SOCK_DGRAM_SLOTS) {
         return;
     }
 
@@ -205,11 +210,12 @@ void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
         copy_len = SOCK_RECV_BUF_SIZE;
     }
 
-    k_memcpy(sock->recv_buf, data, copy_len);
-    sock->recv_len = copy_len;
-    sock->recv_full = 1;
-    sock->last_src_ip = src_ip;
-    sock->last_src_port = src_port;
+    slot = (sock->recv_head + sock->recv_count) % SOCK_DGRAM_SLOTS;
+    k_memcpy(sock->recv_buf[slot], data, copy_len);
+    sock->recv_len[slot] = copy_len;
+    sock->recv_src_ip[slot] = src_ip;
+    sock->recv_src_port[slot] = src_port;
+    sock->recv_count++;
 
     wq_wake(&sock->waiters, WQ_DATA);
 }
@@ -225,7 +231,7 @@ static int udp_recv_ready(void *arg)
     if (sock->type == SOCK_RAW) {
         return raw_ready(sock);
     }
-    return sock->recv_full;
+    return sock->recv_count != 0;
 }
 
 /* Wait predicate: a stream socket has buffered data, saw a FIN (EOF), or its
@@ -250,9 +256,9 @@ int socket_dgram_wait(struct socket *sock)
 }
 
 /**
- * Bytes in the waiting datagram, or -1 when the slot is empty.
+ * Bytes in the oldest waiting datagram, or -1 when none waits.
  *
- * Occupancy is `recv_full` and not the length, since a datagram of no bytes is
+ * Occupancy is `recv_count` and not a length, since a datagram of no bytes is
  * a datagram; a caller that read 0 as emptiness would block forever on one.
  */
 int socket_dgram_pending(struct socket *sock)
@@ -268,27 +274,28 @@ int socket_dgram_pending(struct socket *sock)
     }
 
     flags = net_lock();
-    pending = sock->recv_full ? (int)sock->recv_len : -1;
+    pending = sock->recv_count ? (int)sock->recv_len[sock->recv_head] : -1;
     net_unlock(flags);
 
     return pending;
 }
 
 /**
- * Copy part of the waiting datagram out without consuming it.
+ * Copy part of the oldest waiting datagram out without consuming it.
  *
  * `offset` is how far into the datagram to start, so a caller with several
  * destinations fills them in order from the one message. A copy that starts at
  * or past the end returns 0, which is what ends such a walk. Returns -1 when
  * no datagram is waiting.
  *
- * The slot is read under `net_lock` so the receive interrupt cannot overwrite
- * it mid-copy, which would tear the payload. The caller prefaulted the user
- * buffer, so the copy cannot fault with interrupts off.
+ * The queue is read under `net_lock`, so the receive interrupt does not
+ * change it during the copy. The caller prefaulted the user buffer, so the
+ * copy cannot fault with interrupts off.
  */
 int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     int copy_len;
+    int head;
     uint32_t flags;
 
     if (len < 0) {
@@ -302,28 +309,29 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
     }
 
     flags = net_lock();
-    if (!sock->recv_full) {
+    if (!sock->recv_count) {
         net_unlock(flags);
 
         return -1;
     }
-    if (offset >= (uint32_t)sock->recv_len) {
+    head = sock->recv_head;
+    if (offset >= (uint32_t)sock->recv_len[head]) {
         net_unlock(flags);
 
         return 0;
     }
-    copy_len = (int)((uint32_t)sock->recv_len - offset);
+    copy_len = (int)((uint32_t)sock->recv_len[head] - offset);
     if (copy_len > len) {
         copy_len = len;
     }
-    k_memcpy(buf, sock->recv_buf + offset, (uint32_t)copy_len);
+    k_memcpy(buf, sock->recv_buf[head] + offset, (uint32_t)copy_len);
     net_unlock(flags);
 
     return copy_len;
 }
 
 /**
- * Drop the waiting datagram, reporting its sender.
+ * Drop the oldest waiting datagram, reporting its sender.
  *
  * Whatever of it a caller did not take is discarded here, which is what a
  * datagram read does: the message is the unit. A packet socket reports
@@ -358,14 +366,18 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_p
     }
 
     flags = net_lock();
+    if (sock->recv_count == 0) {
+        net_unlock(flags);
+        return;
+    }
     if (src_ip) {
-        *src_ip = sock->last_src_ip;
+        *src_ip = sock->recv_src_ip[sock->recv_head];
     }
     if (src_port) {
-        *src_port = sock->last_src_port;
+        *src_port = sock->recv_src_port[sock->recv_head];
     }
-    sock->recv_len = 0;
-    sock->recv_full = 0;
+    sock->recv_head = (sock->recv_head + 1) % SOCK_DGRAM_SLOTS;
+    sock->recv_count--;
     net_unlock(flags);
 }
 
@@ -756,7 +768,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     if (sock->type == SOCK_DGRAM || sock->type == SOCK_RAW) {
         if (sock->family == AF_PACKET ? packet_ready(sock)
             : sock->type == SOCK_RAW  ? raw_ready(sock)
-                                      : sock->recv_full) {
+                                      : sock->recv_count != 0) {
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT); /* it can always send */

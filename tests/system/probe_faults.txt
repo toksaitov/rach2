@@ -3881,11 +3881,11 @@ probe epollmusl
 file rach2/sys/network/socket/socket.c
 expect EPOLLMUSL FAIL (a datagram that came to a socket watched for output alone was reported
 old
-    sock->last_src_port = src_port;
+    sock->recv_count++;
 
     wq_wake(&sock->waiters, WQ_DATA);
 new
-    sock->last_src_port = src_port;
+    sock->recv_count++;
 
     wq_wake_all(&sock->waiters);
 end
