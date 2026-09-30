@@ -15,6 +15,11 @@
 
 #define ICMP_ECHO_REQUEST 8
 #define ICMP_ECHO_REPLY   0
+/* Destination unreachable, and its code for a datagram too big for a link
+ * on the way that had DF set, whose bytes 6 and 7 say the link's MTU
+ * (RFC 1191). */
+#define ICMP_UNREACHABLE  3
+#define ICMP_FRAG_NEEDED  4
 
 /** Handle one received ICMP datagram (IP header already stripped). */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);

@@ -36,6 +36,14 @@
  * `tcp_rcv_window`, so that an empty ring never advertises zero. */
 #define TCP_WINDOW_SIZE         65535
 #define TCP_RING_SIZE           65536
+/* Policy: a connection's receive ring is 64 KiB, the most an unscaled window
+ * offers, or 512 KiB when the machine has more than TCP_BIG_RING_FRAMES
+ * frames free as the connection opens, offered through the window scale
+ * option (RFC 7323): a window is what a round trip carries, and the Lenovo's
+ * 67 ms to kernel.org carries 7.8 MB/s in 512 KiB and 978 KB/s in 64. */
+#define TCP_RECV_RING_SMALL     65536u
+#define TCP_RECV_RING_LARGE     524288u
+#define TCP_BIG_RING_FRAMES     32768u
 /* How long queued bytes may wait from the first transmit the driver
  * refused to the last, with no segment sent between, before the connection
  * is given up, in ticks: 30 s, within the retransmission give-up. */
@@ -107,13 +115,19 @@ struct tcb {
     uint32_t iss;
     uint32_t snd_una; /* oldest unacknowledged sequence number  */
     uint32_t snd_nxt; /* next sequence number to send           */
-    uint16_t snd_wnd; /* remote's advertised receive window     */
+    uint32_t snd_wnd; /* remote's receive window, in bytes      */
     uint16_t snd_mss; /* largest segment the remote takes       */
+    /* Window scaling (RFC 7323): the shifts of the remote's window field and
+     * of this side's, 0 when either SYN lacked the option, and whether this
+     * side's SYN carries it. */
+    uint8_t snd_wscale;
+    uint8_t rcv_wscale;
+    uint8_t ws_offer;
 
     /* Receive sequence space. */
     uint32_t irs;
     uint32_t rcv_nxt; /* next expected sequence number          */
-    uint16_t rcv_wnd; /* our advertised receive window          */
+    uint32_t rcv_wnd; /* our advertised receive window, bytes   */
 
     /* Data that arrived past a hole, kept in the receive ring past
      * `recv_tail`, where it belongs, and not yet readable: the ranges
@@ -124,12 +138,15 @@ struct tcb {
 
     /*
      * Send and receive rings. head/tail are monotonic uint32_t; the buffer
-     * index is the value masked with (TCP_RING_SIZE - 1), so unsigned
-     * subtraction always yields the correct occupancy.
+     * index is the value masked with the ring's size less one, TCP_RING_SIZE
+     * for the send ring and `recv_size` for the receive ring, which is from
+     * the heap and a power of two, so unsigned subtraction always yields the
+     * correct occupancy. A listener has no receive ring.
      */
     uint8_t send_buf[TCP_RING_SIZE];
     uint32_t send_head, send_tail; /* head = next to send, tail = next to fill */
-    uint8_t recv_buf[TCP_RING_SIZE];
+    uint8_t *recv_buf;
+    uint32_t recv_size;
     uint32_t recv_head, recv_tail; /* head = next to read, tail = next to fill */
 
     int fin_received; /* a FIN was received: signals EOF to recv */
@@ -185,6 +202,17 @@ struct tcb {
 
 /* Empty the TCB list; called once from init_network. */
 void tcp_init(void);
+
+/**
+ * Take a router's report that a segment sent to `remote_ip` from `local_port`
+ * to `remote_port` at sequence `seq` did not fit a link of `mtu` bytes: the
+ * connection's segments shrink to fit (RFC 1191) and what is unacknowledged
+ * goes again. A report whose sequence is not in flight, or which would make
+ * the segments larger or smaller than TCP_MSS_DEFAULT, changes nothing.
+ * Called from the receive path with interrupts off.
+ */
+void tcp_path_mtu(uint32_t remote_ip, uint16_t local_port, uint16_t remote_port, uint32_t seq,
+                  uint16_t mtu);
 
 /** Drive the per-connection timers; called once per kernel tick. */
 void tcp_tick(void);

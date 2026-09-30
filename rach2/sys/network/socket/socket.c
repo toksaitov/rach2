@@ -576,8 +576,8 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
  * end is two straight runs. */
 static void recv_ring_put(struct tcb *tcb, uint32_t at, const uint8_t *src, uint32_t n)
 {
-    uint32_t head = at & (TCP_RING_SIZE - 1);
-    uint32_t first = TCP_RING_SIZE - head;
+    uint32_t head = at & (tcb->recv_size - 1);
+    uint32_t first = tcb->recv_size - head;
 
     if (first > n) {
         first = n;
@@ -590,8 +590,8 @@ static void recv_ring_put(struct tcb *tcb, uint32_t at, const uint8_t *src, uint
 
 static void recv_ring_get(uint8_t *dst, struct tcb *tcb, uint32_t at, uint32_t n)
 {
-    uint32_t head = at & (TCP_RING_SIZE - 1);
-    uint32_t first = TCP_RING_SIZE - head;
+    uint32_t head = at & (tcb->recv_size - 1);
+    uint32_t first = tcb->recv_size - head;
 
     if (first > n) {
         first = n;
@@ -622,7 +622,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
         return 0;
     tcb = sock->tcb;
 
-    free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
+    free_space = tcb->recv_size - (tcb->recv_tail - tcb->recv_head);
     copy_len = (uint32_t)len;
     if (copy_len > free_space)
         copy_len = free_space;
@@ -654,7 +654,7 @@ uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *da
         return 0;
     tcb = sock->tcb;
 
-    free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
+    free_space = tcb->recv_size - (tcb->recv_tail - tcb->recv_head);
     if (offset >= free_space)
         return 0;
     copy_len = (uint32_t)len;

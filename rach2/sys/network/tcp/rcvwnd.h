@@ -13,17 +13,19 @@
  * maximum segment size or half the buffer, whichever is smaller, then announce
  * the whole new window at once.
  *
- * A window wider than 65535 is reported as 65535, because an unscaled TCP
- * window is a 16-bit field and this stack negotiates no window scale.
+ * A window wider than `most`, the largest the window field says at the
+ * connection's scale, is reported as `most`.
  *
- * @param advertised the window last sent to the peer.
+ * @param advertised the window last sent to the peer, in bytes.
  * @param buffered   bytes the reader has not taken yet, `tail - head`.
  * @param ring       the receive buffer's size.
+ * @param most       65535 shifted by the connection's window scale.
  * @param mss        the maximum segment size.
  * @return the window to advertise, or 0 to send nothing. Zero is never a
  *         window worth announcing, since it is never larger than what was
  *         already advertised, so it is free to mean "stay quiet".
  */
-uint16_t rcvwnd_update(uint16_t advertised, uint32_t buffered, uint32_t ring, uint16_t mss);
+uint32_t rcvwnd_update(uint32_t advertised, uint32_t buffered, uint32_t ring, uint32_t most,
+                       uint32_t mss);
 
 #endif /* _RCVWND_H_ */

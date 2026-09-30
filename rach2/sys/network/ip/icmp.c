@@ -47,6 +47,7 @@
 #include "../../proc/wait_queue.h"
 #include "../../lib/kerrno.h"
 #include "../../proc/sched.h"
+#include "../tcp/tcp.h"
 
 /* Outgoing echo reply (sized for a full datagram) and request buffers. */
 static uint8_t icmp_reply_buf[1500];
@@ -75,12 +76,34 @@ static int ping_wq_ready = 0;
 extern volatile uint32_t kernel_ticks;
 
 /**
+ * A router's report that a datagram of ours was too big for a link with the
+ * MTU at bytes 6 and 7, which quotes the datagram's IP header and at least
+ * its first eight bytes (RFC 792): for a TCP segment, the connection's
+ * ports and the segment's sequence number, which the connection keeps the
+ * MTU for (`tcp_path_mtu`).
+ */
+static void icmp_too_big(const uint8_t *data, uint16_t len)
+{
+    const uint8_t *ip = data + 8;
+    uint16_t ihl = (uint16_t)((ip[0] & 0x0Fu) * 4u);
+    const uint8_t *tcp = ip + ihl;
+
+    if (ihl < 20 || 8u + ihl + 8u > len || ip[9] != IP_PROTO_TCP) {
+        return;
+    }
+    tcp_path_mtu(read32be(ip + 16), read16be(tcp), read16be(tcp + 2), read32be(tcp + 4),
+                 read16be(data + 6));
+}
+
+/**
  * Handle one received ICMP datagram: answer echo requests, match echo replies.
  *
  * An echo request is reflected back to its source: the payload is copied
  * verbatim, the type is changed to reply, and the checksum is recomputed.
  * An echo reply is accepted only if it matches the single ping in flight by
- * source address, identifier, and sequence; a match sets `ping_replied`.
+ * source address, identifier, and sequence; a match sets `ping_replied`. A
+ * report that a TCP segment was too big for a link on its path goes to
+ * `icmp_too_big`.
  *
  * @param src_ip source address of the datagram, host byte order.
  * @param len ICMP length; datagrams shorter than the 8-byte header are dropped.
@@ -101,6 +124,8 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         write16be(icmp_reply_buf + 2, 0x0000);
         write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
         ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT);
+    } else if (data[0] == ICMP_UNREACHABLE && data[1] == ICMP_FRAG_NEEDED && len >= 36) {
+        icmp_too_big(data, len);
     } else if (data[0] == ICMP_ECHO_REPLY) {
         uint16_t id = read16be(data + 4);
         uint16_t seq = read16be(data + 6);

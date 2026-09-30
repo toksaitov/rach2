@@ -304,6 +304,9 @@ static void reset_all(void)
 /* The MSS option a peer's SYN has, as a real peer's does; a row sets it
    lower to see the stack keep to it. */
 static uint16_t peer_mss = TCP_MSS;
+/* The window scale option a peer's SYN has, or -1 for none, as the rows
+   before window scaling have it. */
+static int peer_wscale = -1;
 
 static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags,
                uint16_t window, const char *payload, uint16_t plen)
@@ -327,6 +330,14 @@ static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8
         seg[21] = 4;
         write16be(seg + 22, peer_mss);
         hdr = 24;
+    }
+    if ((flags & F_SYN) && peer_wscale >= 0) {
+        seg[12] = 0x70;
+        seg[24] = 1;
+        seg[25] = 3;
+        seg[26] = 3;
+        seg[27] = (uint8_t)peer_wscale;
+        hdr = 28;
     }
     for (i = 0; i < plen; i++) {
         seg[hdr + i] = (uint8_t)payload[i];
@@ -528,6 +539,81 @@ static void peer_mss_row(void)
     }
     CHECK("the first burst is four segments of the peer's size",
           n_segs == 4 && oversize == 0 && segs[0].len - TCP_HDR_SIZE == 1400);
+}
+
+/* A router's report that a segment in flight was too big for a link of
+   1480 bytes shrinks the connection's segments to 1440 and sends the oldest
+   again at that size; a report for a sequence number not in flight, or one
+   that would make them larger, changes nothing. */
+static void path_mtu_row(void)
+{
+    struct socket sock;
+    uint32_t iss;
+    uint16_t lport;
+    static uint8_t bytes[4000];
+
+    reset_all();
+    k_memset(&sock, 0, sizeof(sock));
+    CHECK("a connection for the path MTU can be opened", tcp_connect(&sock, PEER, 89) == 0);
+    iss = read32be(segs[0].data + 4);
+    lport = read16be(segs[0].data + 0);
+    rx((uint16_t)89, lport, 5000, iss + 1, (uint8_t)(F_SYN | F_ACK), 65535, (const char *)0, 0);
+    n_segs = 0;
+    CHECK("it sends 4000 bytes", tcp_send(&sock, bytes, (int)sizeof(bytes)) == 4000);
+    CHECK("in segments of 1460", n_segs >= 1 && segs[0].len - TCP_HDR_SIZE == TCP_MSS);
+    tcp_path_mtu(PEER, lport, 89, iss + 1 + 8000u, 1480);
+    CHECK("a report for a sequence number not in flight changes nothing",
+          sock.tcb->snd_mss == TCP_MSS);
+    tcp_path_mtu(PEER, lport, 89, iss + 1, 1600);
+    CHECK("a report of a larger MTU changes nothing", sock.tcb->snd_mss == TCP_MSS);
+    n_segs = 0;
+    tcp_path_mtu(PEER, lport, 89, iss + 1, 1480);
+    CHECK("a report for a segment in flight shrinks the segments to the link",
+          sock.tcb->snd_mss == 1440);
+    CHECK("and sends the oldest again at that size",
+          n_segs >= 1 && read32be(segs[0].data + 4) == iss + 1 &&
+              segs[0].len - TCP_HDR_SIZE == 1440);
+}
+
+/* A connection whose SYN offers a window scale: a peer that answers with a
+   scale of its own gets windows scaled both ways, and one that answers
+   without gets neither, and never more than 65535 offered. */
+static void window_scale_rows(void)
+{
+    struct socket sock;
+    uint32_t iss;
+    uint16_t lport;
+    int scale;
+
+    for (scale = 7; scale >= -1; scale -= 8) {
+        reset_all();
+        k_memset(&sock, 0, sizeof(sock));
+        CHECK("a connection that scales its window can be opened", tcp_connect(&sock, PEER, 88) == 0);
+        CHECK("and its SYN offers the scale its 512 KiB ring needs",
+              segs[0].len == 28 && segs[0].data[25] == 3 && segs[0].data[27] == 4 &&
+                  read16be(segs[0].data + 14) == 65535);
+        iss = read32be(segs[0].data + 4);
+        lport = read16be(segs[0].data + 0);
+        peer_wscale = scale;
+        rx((uint16_t)88, lport, 3000, iss + 1, (uint8_t)(F_SYN | F_ACK), 1000, (const char *)0, 0);
+        peer_wscale = -1;
+        CHECK("the SYN's window is not scaled", sock.tcb->snd_wnd == 1000);
+        n_segs = 0;
+        rx((uint16_t)88, lport, 3001, iss + 1, F_ACK, 1000, (const char *)0, 0);
+        if (scale > 0) {
+            CHECK("a scaling peer's window is its field times its scale",
+                  sock.tcb->snd_wnd == 1000u << scale);
+        } else {
+            CHECK("a peer that does not scale gives its field as it is",
+                  sock.tcb->snd_wnd == 1000u);
+        }
+        rx((uint16_t)88, lport, 3001, iss + 1, (uint8_t)(F_ACK | F_PSH), 1000, "data", 4);
+        CHECK("and the acknowledgement offers the ring, which the stub delivery leaves empty, at "
+              "this side's scale, or 65535",
+              n_segs >= 1 &&
+                  read16be(segs[n_segs - 1].data + 14) ==
+                      (scale > 0 ? TCP_RECV_RING_LARGE >> 4 : 65535u));
+    }
 }
 
 int main(void)
@@ -782,6 +868,8 @@ int main(void)
     }
 
     peer_mss_row();
+    window_scale_rows();
+    path_mtu_row();
 
     /* A zero window that closes over a refused segment is flow control, not
        a continuing refusal: the connection is kept through the bound and the

@@ -61,6 +61,7 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 #define TCP_OPT_END 0
 #define TCP_OPT_NOP 1
 #define TCP_OPT_MSS 2
+#define TCP_OPT_WS  3
 
 /* Ephemeral source port for active opens. */
 static uint16_t next_ephemeral = 49152;
@@ -189,15 +190,57 @@ void tcp_init(void)
 }
 
 /**
- * The window to offer: the receive ring's free space, clamped to what the
- * 16-bit field can carry. The ring is larger than the field, so the cast
- * alone would offer zero for an empty ring.
+ * The window to offer, in bytes: the receive ring's free space, clamped to
+ * what the 16-bit field carries at the connection's scale. An unscaled
+ * ring of 64 KiB is one larger than the field, so a cast alone would offer
+ * zero for an empty ring.
  */
-static uint16_t tcp_rcv_window(const struct tcb *tcb)
+static uint32_t tcp_rcv_window(const struct tcb *tcb)
 {
-    uint32_t free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
+    uint32_t free_space = tcb->recv_size - (tcb->recv_tail - tcb->recv_head);
+    uint32_t most = (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale;
 
-    return free_space > TCP_WINDOW_SIZE ? (uint16_t)TCP_WINDOW_SIZE : (uint16_t)free_space;
+    return free_space > most ? most : free_space;
+}
+
+/* The window field of a segment: the window shifted by the connection's
+ * scale, except in a SYN, whose field is never scaled (RFC 7323). */
+static uint16_t tcp_wnd_field(const struct tcb *tcb, int syn)
+{
+    uint32_t field = syn ? tcb->rcv_wnd : tcb->rcv_wnd >> tcb->rcv_wscale;
+
+    return field > TCP_WINDOW_SIZE ? (uint16_t)TCP_WINDOW_SIZE : (uint16_t)field;
+}
+
+/**
+ * Give a connection its receive ring before its first SYN: TCP_RECV_RING_LARGE
+ * when more than TCP_BIG_RING_FRAMES frames are free, TCP_RECV_RING_SMALL
+ * otherwise or when the heap has no room for the large one, and the window
+ * scale the ring needs, which this side's SYN offers. Returns 0, or -1 when
+ * the heap has no room for either.
+ */
+static int tcp_ring_alloc(struct tcb *tcb)
+{
+    uint32_t size = frame_free_count() > TCP_BIG_RING_FRAMES ? TCP_RECV_RING_LARGE
+                                                             : TCP_RECV_RING_SMALL;
+    uint8_t shift = 0;
+
+    tcb->recv_buf = kmalloc(size);
+    if (!tcb->recv_buf && size != TCP_RECV_RING_SMALL) {
+        size = TCP_RECV_RING_SMALL;
+        tcb->recv_buf = kmalloc(size);
+    }
+    if (!tcb->recv_buf) {
+        return -1;
+    }
+    while ((size >> shift) > TCP_WINDOW_SIZE) {
+        shift++;
+    }
+    tcb->recv_size = size;
+    tcb->rcv_wscale = shift;
+    tcb->ws_offer = shift != 0;
+    tcb->rcv_wnd = tcp_rcv_window(tcb);
+    return 0;
 }
 
 static void tcb_init(struct tcb *tcb)
@@ -212,21 +255,29 @@ static void tcb_init(struct tcb *tcb)
 }
 
 /**
- * Take the peer's segment size from its SYN, `data` with a header of
- * `hdr_len` bytes: the value of its MSS option, at most TCP_MSS and at least
- * TCP_MSS_MIN, or TCP_MSS_DEFAULT when it has none. Every segment this side
- * sends is at most that size, and the congestion window starts at
- * TCP_INIT_SEGS of them.
+ * Take the peer's options from its SYN, `data` with a header of `hdr_len`
+ * bytes.
  *
- * The peer's value is what its end of the path carries, and a router on the
- * way may have lowered it to fit a smaller link, as a PPPoE line's router
- * does. The segments are sent with DF set, so one larger than the path
- * carries is dropped each time it is sent.
+ * The segment size is the value of its MSS option, at most TCP_MSS and at
+ * least TCP_MSS_MIN, or TCP_MSS_DEFAULT when it has none; every segment
+ * this side sends is at most that size, and the congestion window starts
+ * at TCP_INIT_SEGS of them. The peer's value is what its end of the path
+ * carries, and a router on the way may have lowered it to fit a smaller
+ * link, as a PPPoE line's router does. The segments are sent with DF set,
+ * so one larger than the path carries is dropped each time it is sent.
+ *
+ * Windows are scaled when both SYNs have the window scale option: the
+ * peer's shift, at most 14, applies to the window fields it sends, and
+ * this side's, which its SYN offered, to the fields it sends. When either
+ * SYN lacks the option neither side scales, and this side offers at most
+ * 65535 bytes whatever its ring holds.
  */
-static void tcp_take_mss(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
+static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
 {
     uint16_t i = TCP_HDR_SIZE;
     uint16_t mss = TCP_MSS_DEFAULT;
+    int scaled = 0;
+    uint8_t shift = 0;
 
     while (i < hdr_len && data[i] != TCP_OPT_END) {
         if (data[i] == TCP_OPT_NOP) {
@@ -241,12 +292,22 @@ static void tcp_take_mss(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
                 mss = TCP_MSS;
             if (mss < TCP_MSS_MIN)
                 mss = TCP_MSS_MIN;
-            break;
+        } else if (data[i] == TCP_OPT_WS && data[i + 1] == 3) {
+            scaled = 1;
+            shift = data[i + 2] > 14 ? 14 : data[i + 2];
         }
         i = (uint16_t)(i + data[i + 1]);
     }
     tcb->snd_mss = mss;
     tcb->cwnd = (uint32_t)TCP_INIT_SEGS * mss;
+    if (scaled && tcb->ws_offer) {
+        tcb->snd_wscale = shift;
+    } else {
+        tcb->snd_wscale = 0;
+        tcb->rcv_wscale = 0;
+        tcb->ws_offer = 0;
+    }
+    tcb->rcv_wnd = tcp_rcv_window(tcb);
 }
 
 /**
@@ -288,6 +349,9 @@ void tcb_free(struct tcb *tcb)
     }
     tcb->in_use = 0;
     tcb->state = TCP_CLOSED;
+    if (tcb->recv_buf) {
+        kfree(tcb->recv_buf);
+    }
     kfree(tcb);
 }
 
@@ -316,7 +380,10 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     uint16_t seg_len;
     int rc;
 
-    hdr_len = (flags & TCP_SYN) ? 24 : 20; /* SYN has an MSS option */
+    hdr_len = 20;
+    if (flags & TCP_SYN) {
+        hdr_len = tcb->ws_offer ? 28 : 24;
+    }
 
     write16be(tcp_tx_buf + 0, tcb->local_port);
     write16be(tcp_tx_buf + 2, tcb->remote_port);
@@ -324,14 +391,20 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     write32be(tcp_tx_buf + 8, (flags & TCP_ACK) ? tcb->rcv_nxt : 0);
     tcp_tx_buf[12] = (uint8_t)((hdr_len >> 2) << 4);
     tcp_tx_buf[13] = flags;
-    write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
+    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, flags & TCP_SYN));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
 
     if (flags & TCP_SYN) {
-        tcp_tx_buf[20] = 2;
+        tcp_tx_buf[20] = TCP_OPT_MSS;
         tcp_tx_buf[21] = 4;
         write16be(tcp_tx_buf + 22, TCP_MSS);
+    }
+    if ((flags & TCP_SYN) && tcb->ws_offer) {
+        tcp_tx_buf[24] = TCP_OPT_NOP;
+        tcp_tx_buf[25] = TCP_OPT_WS;
+        tcp_tx_buf[26] = 3;
+        tcp_tx_buf[27] = tcb->rcv_wscale;
     }
 
     seg_len = hdr_len;
@@ -479,7 +552,7 @@ static int tcp_output(struct tcb *tcb)
         write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
         tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
         tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
-        write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
+        write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, 0));
         write16be(tcp_tx_buf + 16, 0);
         write16be(tcp_tx_buf + 18, 0);
 
@@ -546,7 +619,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
-    write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
+    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, 0));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
 
@@ -655,6 +728,28 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
     tcb->rtt_start = 0;
     tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, tcb->snd_mss) < 0;
     tcb->cwnd = new_ss + TCP_DUP_ACKS * tcb->snd_mss;
+}
+
+void tcp_path_mtu(uint32_t remote_ip, uint16_t local_port, uint16_t remote_port, uint32_t seq,
+                  uint16_t mtu)
+{
+    struct tcb *tcb = tcp_find(local_port, remote_ip, remote_port);
+    uint32_t mss = mtu > 40u ? mtu - 40u : 0;
+
+    if (!tcb || tcb->state < TCP_ESTABLISHED || (int32_t)(seq - tcb->snd_una) < 0 ||
+        (int32_t)(seq - tcb->snd_nxt) >= 0) {
+        return;
+    }
+    if (mss < TCP_MSS_DEFAULT) {
+        mss = TCP_MSS_DEFAULT;
+    }
+    if (mss >= tcb->snd_mss) {
+        return;
+    }
+    klog(KLOG_INFO, "tcp", "path mtu: %d to port %d: segments of %d bytes",
+         (int)mtu, (int)remote_port, (int)mss);
+    tcb->snd_mss = (uint16_t)mss;
+    tcp_enter_rto_recovery(tcb);
 }
 
 /**
@@ -889,7 +984,7 @@ static void tcp_send_zwp(struct tcb *tcb)
     write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK;
-    write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
+    write16be(tcp_tx_buf + 14, tcp_wnd_field(tcb, 0));
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     tcp_tx_buf[TCP_HDR_SIZE] = tcb->send_buf[tcb->send_ack & (TCP_RING_SIZE - 1)];
@@ -1313,6 +1408,10 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
     }
 
     tcb = tcb_alloc();
+    if (tcb && tcp_ring_alloc(tcb) != 0) {
+        tcb_free(tcb);
+        tcb = 0;
+    }
     if (!tcb) {
         net_unlock(flags);
         return -ENOBUFS;
@@ -1450,7 +1549,7 @@ void tcp_window_update(struct socket *sock)
 {
     struct tcb *tcb;
     uint32_t flags;
-    uint16_t wnd;
+    uint32_t wnd;
 
     if (!sock) {
         return;
@@ -1459,7 +1558,8 @@ void tcp_window_update(struct socket *sock)
     flags = net_lock();
     tcb = sock->tcb;
     if (tcb && tcb->state == TCP_ESTABLISHED) {
-        wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head, TCP_RING_SIZE, TCP_MSS);
+        wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head, tcb->recv_size,
+                            (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale, TCP_MSS);
         if (wnd != 0u) {
             tcb->rcv_wnd = wnd;
             tcp_send_flags(tcb, TCP_ACK);
@@ -1514,7 +1614,7 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
  * (RFC 6582). The caller has checked that the acknowledgement is inside
  * (snd_una, snd_nxt].
  */
-static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint16_t window)
+static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
 {
     uint32_t acked = ack_num - tcb->snd_una;
     int was_fast = tcb->recovering == TCP_RECOVER_FAST;
@@ -1913,7 +2013,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     uint16_t src_port, dst_port;
     uint32_t seq, ack_num;
     uint8_t data_off, flags;
-    uint16_t window, hdr_len;
+    uint16_t field, hdr_len;
+    uint32_t window;
     struct tcb *tcb;
     struct tcb *conn_tcb;
     struct socket *conn_sock;
@@ -1934,7 +2035,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
     ack_num = read32be(data + 8);
     data_off = (data[12] >> 4) & 0xF;
     flags = data[13];
-    window = read16be(data + 14);
+    field = read16be(data + 14);
 
     hdr_len = (uint16_t)(data_off * 4);
     if (hdr_len < TCP_HDR_SIZE || hdr_len > len) {
@@ -1960,6 +2061,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         tcp_rx_reset(tcb, seq, ack_num, flags);
         return;
     }
+    window = (flags & TCP_SYN) ? field : (uint32_t)field << tcb->snd_wscale;
 
     switch (tcb->state) {
     case TCP_LISTEN:
@@ -1982,6 +2084,10 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
             return;
         }
         conn_tcb = tcb_alloc();
+        if (conn_tcb && tcp_ring_alloc(conn_tcb) != 0) {
+            tcb_free(conn_tcb);
+            conn_tcb = 0;
+        }
         if (!conn_tcb) {
             klog(KLOG_WARN, "tcp", "accept: no control block for a connection to port %d",
                  (int)dst_port);
@@ -2007,7 +2113,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         conn_tcb->irs = seq;
         conn_tcb->rcv_nxt = seq + 1;
         conn_tcb->snd_wnd = window;
-        tcp_take_mss(conn_tcb, data, hdr_len);
+        tcp_take_options(conn_tcb, data, hdr_len);
         conn_tcb->iss = tcp_isn(conn_tcb);
         conn_tcb->snd_nxt = conn_tcb->iss;
         conn_tcb->snd_una = conn_tcb->iss;
@@ -2052,7 +2158,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
             tcb->irs = seq;
             tcb->rcv_nxt = seq + 1;
             tcb->snd_wnd = window;
-            tcp_take_mss(tcb, data, hdr_len);
+            tcp_take_options(tcb, data, hdr_len);
             tcb->snd_nxt = tcb->iss;
             tcp_send_flags(tcb, TCP_SYN | TCP_ACK);
             tcb->state = TCP_SYN_RCVD;
@@ -2067,7 +2173,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         tcb->rcv_nxt = seq + 1;
         tcb->snd_una = ack_num;
         tcb->snd_wnd = window;
-        tcp_take_mss(tcb, data, hdr_len);
+        tcp_take_options(tcb, data, hdr_len);
         tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
         tcb->rto_timer = 0;

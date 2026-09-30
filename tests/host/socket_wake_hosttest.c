@@ -190,12 +190,14 @@ int main(void)
           "a datagram wakes a UDP socket for data alone");
 
     tcp.tcb = &block;
+    block.recv_buf = ring;
+    block.recv_size = sizeof(ring);
     reset();
     CHECK(socket_tcp_deliver(&tcp, bytes, sizeof(bytes)) == sizeof(bytes),
           "a TCP connection takes the data delivered");
     CHECK(woken == &tcp.waiters && woken_kinds == WQ_DATA,
           "data wakes a TCP connection for data alone");
-    block.recv_tail = block.recv_head + TCP_RING_SIZE;
+    block.recv_tail = block.recv_head + block.recv_size;
     reset();
     CHECK(socket_tcp_deliver(&tcp, bytes, sizeof(bytes)) == 0 && woken == NULL && woken_kinds == 0,
           "data a full TCP receive ring takes none of wakes nothing");

@@ -41,24 +41,24 @@ int main(void)
 {
     /* ---- the case the change exists for ---- */
 
-    CHECK(rcvwnd_update(0, 0, RING, MSS) == RING,
+    CHECK(rcvwnd_update(0, 0, RING, 65535u, MSS) == RING,
           "a buffer drained from full to empty announces the whole ring");
-    CHECK(rcvwnd_update(0, RING - MSS, RING, MSS) == MSS,
+    CHECK(rcvwnd_update(0, RING - MSS, RING, 65535u, MSS) == MSS,
           "draining exactly one segment announces it");
-    CHECK(rcvwnd_update(0, RING - 3000u, RING, MSS) == 3000u,
+    CHECK(rcvwnd_update(0, RING - 3000u, RING, 65535u, MSS) == 3000u,
           "draining past the bar announces the whole new window, not the bar");
 
     /* ---- the quiet cases: silly-window avoidance ---- */
 
-    CHECK(rcvwnd_update(0, RING, RING, MSS) == 0, "a full buffer has nothing to announce");
-    CHECK(rcvwnd_update(0, RING - 1u, RING, MSS) == 0, "one byte read is not worth a segment");
-    CHECK(rcvwnd_update(0, RING - (MSS - 1u), RING, MSS) == 0,
+    CHECK(rcvwnd_update(0, RING, RING, 65535u, MSS) == 0, "a full buffer has nothing to announce");
+    CHECK(rcvwnd_update(0, RING - 1u, RING, 65535u, MSS) == 0, "one byte read is not worth a segment");
+    CHECK(rcvwnd_update(0, RING - (MSS - 1u), RING, 65535u, MSS) == 0,
           "one byte short of a segment stays quiet");
-    CHECK(rcvwnd_update(2048, RING - 2048u, RING, MSS) == 0,
+    CHECK(rcvwnd_update(2048, RING - 2048u, RING, 65535u, MSS) == 0,
           "a window already advertised is not advertised again");
-    CHECK(rcvwnd_update(RING, 0, RING, MSS) == 0,
+    CHECK(rcvwnd_update(RING, 0, RING, 65535u, MSS) == 0,
           "an empty buffer the peer already knows about stays quiet");
-    CHECK(rcvwnd_update(3000, RING - 3500u, RING, MSS) == 0,
+    CHECK(rcvwnd_update(3000, RING - 3500u, RING, 65535u, MSS) == 0,
           "growth below the bar stays quiet even from a large window");
 
     /* ---- which half of the rule wins follows the geometry ---- */
@@ -66,15 +66,15 @@ int main(void)
     /* On a large ring one segment is far smaller than half the buffer, so the
      * segment sets the bar; a kernel that always used half would stay quiet
      * here and lose the throughput this test exists to keep. */
-    CHECK(rcvwnd_update(0, 32768u - MSS, 32768u, MSS) == MSS,
+    CHECK(rcvwnd_update(0, 32768u - MSS, 32768u, 65535u, MSS) == MSS,
           "on a large ring one segment is the bar, not half the buffer");
-    CHECK(rcvwnd_update(0, 32768u - (MSS - 1u), 32768u, MSS) == 0,
+    CHECK(rcvwnd_update(0, 32768u - (MSS - 1u), 32768u, 65535u, MSS) == 0,
           "one byte short of a segment stays quiet on a large ring");
 
     /* On a tiny ring half the buffer is smaller and wins. */
-    CHECK(rcvwnd_update(0, 0, 8u, MSS) == 8u,
+    CHECK(rcvwnd_update(0, 0, 8u, 65535u, MSS) == 8u,
           "on a tiny ring half the buffer is the bar and a full drain clears it");
-    CHECK(rcvwnd_update(0, 6u, 8u, MSS) == 0,
+    CHECK(rcvwnd_update(0, 6u, 8u, 65535u, MSS) == 0,
           "on a tiny ring a two-byte gain is below half and stays quiet");
 
     /* ---- the window is a 16-bit field ---- */
@@ -83,20 +83,24 @@ int main(void)
      * fits, not the low bits of the real one. Truncating 65536 would yield 0,
      * which this function uses to mean "stay quiet", so a fully drained buffer
      * would announce nothing at all. */
-    CHECK(rcvwnd_update(0, 0, 65536u, MSS) == 65535u,
+    CHECK(rcvwnd_update(0, 0, 65536u, 65535u, MSS) == 65535u,
           "a ring at the 16-bit limit announces 65535, not a truncated zero");
-    CHECK(rcvwnd_update(0, 0, 70000u, MSS) == 65535u,
+    CHECK(rcvwnd_update(0, 0, 70000u, 65535u, MSS) == 65535u,
           "a ring past the limit is clamped, not wrapped to its low bits");
-    CHECK(rcvwnd_update(65535u, 0, 65536u, MSS) == 0,
+    CHECK(rcvwnd_update(65535u, 0, 65536u, 65535u, MSS) == 0,
           "a clamped window already advertised is not advertised again");
 
     /* ---- refusals, not wraps ---- */
 
-    CHECK(rcvwnd_update(0, 1u, 0u, MSS) == 0,
+    CHECK(rcvwnd_update(0, 1u, 0u, 65535u, MSS) == 0,
           "a zero ring announces nothing instead of underflowing");
-    CHECK(rcvwnd_update(0, RING + 1u, RING, MSS) == 0,
+    CHECK(rcvwnd_update(0, RING + 1u, RING, 65535u, MSS) == 0,
           "more buffered than the ring has announces nothing instead of wrapping");
-    CHECK(rcvwnd_update(0, 0, 1u, 0) == 1u,
+    CHECK(rcvwnd_update(0, 0, 524288u, 65535u << 4, MSS) == 524288u,
+          "a scaled window offers the whole ring, past what the field says unscaled");
+    CHECK(rcvwnd_update(0, 0, 524288u, 65535u << 3, MSS) == 65535u << 3,
+          "and no more than the field says at the scale");
+    CHECK(rcvwnd_update(0, 0, 1u, 65535u, 0) == 1u,
           "a zero segment size still makes progress instead of dividing by nothing");
 
     return fails > 255 ? 255 : fails;

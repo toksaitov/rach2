@@ -8,9 +8,8 @@
 
 #include "rcvwnd.h"
 
-#define RCVWND_MAX 65535u /* an unscaled TCP window is a 16-bit field */
-
-uint16_t rcvwnd_update(uint16_t advertised, uint32_t buffered, uint32_t ring, uint16_t mss)
+uint32_t rcvwnd_update(uint32_t advertised, uint32_t buffered, uint32_t ring, uint32_t most,
+                       uint32_t mss)
 {
     uint32_t window;
     uint32_t threshold;
@@ -20,14 +19,14 @@ uint16_t rcvwnd_update(uint16_t advertised, uint32_t buffered, uint32_t ring, ui
     }
 
     window = ring - buffered;
-    if (window > RCVWND_MAX) {
-        window = RCVWND_MAX;
+    if (window > most) {
+        window = most;
     }
-    if (window <= (uint32_t)advertised) {
+    if (window <= advertised) {
         return 0u;
     }
 
-    threshold = (uint32_t)mss;
+    threshold = mss;
     if (threshold > ring / 2u) {
         threshold = ring / 2u;
     }
@@ -35,8 +34,8 @@ uint16_t rcvwnd_update(uint16_t advertised, uint32_t buffered, uint32_t ring, ui
         threshold = 1u;
     }
 
-    if (window - (uint32_t)advertised < threshold) {
+    if (window - advertised < threshold) {
         return 0u;
     }
-    return (uint16_t)window;
+    return window;
 }
