@@ -2,7 +2,7 @@
 
 ## Where the work stands
 
-On 2026-09-28 the close's fixes and its leftovers, every entry the close had carried and the fourteen problems the leftovers found, are in and proved in the emulator, and the last full set passed but for a size reason fixed after it. The machine's phase waits for the owner: the system of phases 0 to 6 goes onto the Lenovo with the owner there once, and the last `tests/run all` follows it. Entry 261 keeps three features for the owner to schedule, and entry 262 a cause to confirm.
+On 2026-09-28 the close's fixes and its leftovers, every entry the close had carried and the fourteen problems the leftovers found, are in and proved in the emulator, and the last full set passed but for a size reason fixed after it. On 2026-09-30 the machine's phase put the GNU system on the Lenovo with the owner there once, and the gnu suite's rows passed on it; the last `tests/run all` follows. Entry 261 keeps three features for the owner to schedule, and entry 262 a cause to confirm.
 
 ## The build
 
@@ -135,6 +135,16 @@ The round after found nothing.
 * The host mutation scripts: the 58 passed.
 * The system mutation scripts: 27 of the 29 passed, `vfs_unmount_test.sh --mutate` and the new `stackoverrun_mutate.sh` among them. `fdlock_mutate.sh`'s raw transfer faults looked for the check `ops_offset_held` replaced, and its lseek fault ran on into the seeks the leftovers put after `raw_lseek`; pointed at the code as it is (10db8308), its seven faults failed their rows and the restored tree passed. `rehearse_group_mutate.sh` needs the installer root the tree builds now, which the last full set's installer suite makes.
 * Rows of suites other than the default: in a copy of the tree, a fault that drops a raw socket's registration once the socket tables fill failed rawprobe's row that a socket opened before still receives, and one that kills a child of rawprobe at its exit failed the row that the child held sockets; a fault that kills the program mountprobe runs from the mount at its exit failed that row, once the fault was narrowed to that program, since killing every child of mountprobe fails an earlier row first. Each suite passed restored.
+
+## Phase 7: the machine
+
+On 2026-09-30, with the owner at the Lenovo, the GNU system went onto its disk, a Samsung SSD 870 EVO of 488397168 sectors with serial `S6P2NX0T381638Z`: the boot partition at 2048, the recovery partition at 133120, and the ext2 root at 266240, grown before to the rest of the disk.
+
+* The stick: the Mac built the install stick with the recovery key, as `make rach2-install-stick` builds it, but with `build/images/os-real-gnu-2g.ext2` as the update image on its exFAT volume: the GNU root of `make os-real-gnu-ext2` in a volume of 2048 MiB, sha256 `f78fa2d273cb6584...`, built on the testing host with `mkext2.sh` from the same manifest and overlay, since the machine grows the root after the write, and the smaller volume keeps the file below 2^32 bytes, where a 32-bit length would wrap. `build/images/rach2-install-stick-gnu-with-key.img`, 3633315840 bytes, went onto the flash drive, the SanDisk with serial `00014101091624031318`, checked by its size, serial and bus before the write; its boot region and its three files read back equal to the image's, and macOS's own folders on the volume were all that differed.
+* Access: the installed root had been built on the testing host and trusted that host's demonstration key, and each host makes its own, so the Mac's key reached the machine only through the stick's recovery system, which trusts the key of the host that built it. The owner booted the stick once from the BIOS menu.
+* From the stick's recovery: the disk's recovery partition was rewritten with the sealed disk's, the new recovery system with the key and the fixed installer, sha256 `aed1b4b2b2f52811...` read back equal; then one boot of the disk's recovery was armed, since `bootctl` installs a kernel only on a boot that names its slot, and the stick's does not (recovery(7)).
+* From the disk's recovery: the kernel, sha256 `7cd77e4b73306c25...`, was put in `/dev/shm`, since the RAM root had 215 KiB free, and installed with `bootctl kernel`; `rach2-install --update` wrote the GNU root into the root partition, read it back equal, grew it to 232.8 GiB, kept the machine's accounts and host keys and added the image's `sshd` (entry 278, found while preparing this and fixed before the write), archived the configuration on the recovery partition and armed one trial; the Mac's key was added to root's keys beside the testing host's.
+* The trial boot came up on the new kernel from the candidate slot with the GNU root mounted read-write and OpenSSH's server answering. The gnu suite's 27 rows ran on the machine as the suite runs them, after scp and sftp moved their script and back byte for byte, and each passed: GCC in 3 seconds, Chromium's page in 15. Then `bootctl commit`: the candidate is the saved default.
 
 ## The leftovers: the full sets at the end
 
