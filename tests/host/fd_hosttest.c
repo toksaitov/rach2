@@ -135,6 +135,13 @@ void lock_ofd_gone(const struct open_file *ofd)
     (void)ofd;
 }
 
+/** fd.c reports a description's close to inotify, and no row watches. */
+void inotify_desc(struct open_file *ofd, uint32_t mask)
+{
+    (void)ofd;
+    (void)mask;
+}
+
 /** Stop on any architecture check reached by mistake. */
 void k_panic(const char *message)
 {

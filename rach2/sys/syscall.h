@@ -250,6 +250,12 @@
 #define SYS_TIMERFD_SETTIME64 411
 #define SYS_EPOLL_PWAIT2      441
 
+/* inotify (io/inotify.c; the add is in syscall_fs.c, which resolves paths). */
+#define SYS_INOTIFY_INIT      291
+#define SYS_INOTIFY_ADD_WATCH 292
+#define SYS_INOTIFY_RM_WATCH  293
+#define SYS_INOTIFY_INIT1     332
+
 /*
  * Size of the syscall dispatch table: the highest number Linux i386 has,
  * 462, and one.

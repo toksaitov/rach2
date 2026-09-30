@@ -141,7 +141,24 @@ struct open_file {
      * that keeps a node only while it is open, which the last unref gives
      * to `unpin`; NULL for every other description. */
     void *pin;
+    /* What inotify reports of the description (`io/inotify.h`): the
+     * OFD_WATCH_* bits an open sets, and, for an open made while a watch
+     * existed, the inode number of the directory the file was opened in
+     * and its name there, from the heap, so that the directory's watches
+     * hear of its reads, writes and close. The last unref reports the close
+     * and frees the name. */
+    uint32_t watch_flags;
+    uint64_t parent_ino;
+    char *leaf;
 };
+
+/* An open(2) made the description, which reports its open and close, and
+ * made it for writing; the file it is open on is a directory; the open
+ * created the file, which the open's own report reads and clears. */
+#define OFD_WATCH_OPEN  1u
+#define OFD_WATCH_WRITE 2u
+#define OFD_WATCH_DIR   4u
+#define OFD_WATCH_MADE  8u
 
 /*
  * File descriptor entry. The backing object (type/node/sock, or an ops

@@ -646,6 +646,13 @@ static void working_directory(void)
 }
 
 /** Exercise both relocating operations and the unmount write order. */
+/** fd.c reports a description's close to inotify, and no row watches. */
+void inotify_desc(struct open_file *ofd, uint32_t mask)
+{
+    (void)ofd;
+    (void)mask;
+}
+
 int main(void)
 {
     relocation(0);

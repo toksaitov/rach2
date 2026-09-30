@@ -113,6 +113,8 @@ static const char *const PROBES[] = {
     /* The netlink route socket's dumps and refusals, the interface ioctls
        on an AF_UNIX socket, and a uevent socket that hears nothing. */
     "musl/netlinkmusl",
+    /* inotify's events of a directory and a file, and its refusals. */
+    "musl/inotifymusl",
     /* AF_UNIX: pairs, descriptors and credentials in messages, and names
        in the file system and the abstract namespace. */
     "musl/unixmusl",

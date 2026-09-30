@@ -69,6 +69,7 @@
 #include "network/netconf.h" /* net_ip_addr, for the boot line's address */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 #include "io/eventfd.h"
+#include "io/inotify.h"
 #include "io/epoll.h"
 #include "io/timerfd.h"
 #include "syscall_internal.h"
@@ -2364,6 +2365,10 @@ void init_syscall(void)
     _syscall_table[SYS_MADVISE] = sys_madvise;
     _syscall_table[SYS_EVENTFD] = sys_eventfd;
     _syscall_table[SYS_EVENTFD2] = sys_eventfd2;
+    _syscall_table[SYS_INOTIFY_INIT] = sys_inotify_init;
+    _syscall_table[SYS_INOTIFY_INIT1] = sys_inotify_init1;
+    _syscall_table[SYS_INOTIFY_ADD_WATCH] = sys_inotify_add_watch;
+    _syscall_table[SYS_INOTIFY_RM_WATCH] = sys_inotify_rm_watch;
     _syscall_table[SYS_EPOLL_CREATE] = sys_epoll_create;
     _syscall_table[SYS_EPOLL_CREATE1] = sys_epoll_create1;
     _syscall_table[SYS_EPOLL_CTL] = sys_epoll_ctl;

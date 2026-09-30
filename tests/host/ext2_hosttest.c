@@ -3596,6 +3596,13 @@ static void matrix_rows(void)
     }
 }
 
+/** fd.c reports a description's close to inotify, and no row watches. */
+void inotify_desc(struct open_file *ofd, uint32_t mask)
+{
+    (void)ofd;
+    (void)mask;
+}
+
 int main(int argc, char **argv)
 {
     uint64_t bytes;

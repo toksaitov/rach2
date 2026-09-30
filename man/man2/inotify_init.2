@@ -1,0 +1,205 @@
+.Dd October 1, 2026
+.Dt INOTIFY_INIT 2
+.Os
+.Sh NAME
+.Nm inotify_init ,
+.Nm inotify_init1 ,
+.Nm inotify_add_watch ,
+.Nm inotify_rm_watch
+.Nd a descriptor that reports changes to files
+.Sh SYNOPSIS
+.In sys/inotify.h
+.Ft int
+.Fn inotify_init "void"
+.Ft int
+.Fn inotify_init1 "int flags"
+.Ft int
+.Fn inotify_add_watch "int fd" "const char *path" "uint32_t mask"
+.Ft int
+.Fn inotify_rm_watch "int fd" "int wd"
+.Sh DESCRIPTION
+.Fn inotify_init1 ,
+number 332, returns a new inotify instance: a descriptor on which the
+kernel queues an event when a watched file changes.
+.Fa flags
+may have
+.Dv IN_NONBLOCK
+and
+.Dv IN_CLOEXEC .
+.Fn inotify_init ,
+number 291, is the same call with no flags.
+.Pp
+.Fn inotify_add_watch ,
+number 292, watches the file
+.Fa path
+names for the events of
+.Fa mask
+and returns the watch's descriptor, which each event of it carries.
+The path is followed through a final symbolic link unless
+.Fa mask
+has
+.Dv IN_DONT_FOLLOW ,
+must name a directory under
+.Dv IN_ONLYDIR ,
+and names a file the caller may read.
+A second watch of the same file by the same instance changes the first
+and returns its descriptor: its mask is replaced, or with
+.Dv IN_MASK_ADD
+added to, and with
+.Dv IN_MASK_CREATE
+the call fails instead.
+A watch with
+.Dv IN_ONESHOT
+goes after its first event.
+.Dv IN_EXCL_UNLINK
+is accepted and changes nothing.
+Descriptors count up from 1.
+.Fn inotify_rm_watch ,
+number 293, removes the watch
+.Fa wd .
+.Pp
+A watch of a file reports these events of the file itself:
+.Bl -tag -width IN_CLOSE_NOWRITE
+.It Dv IN_ACCESS
+A read of it.
+.It Dv IN_MODIFY
+A write, a truncation, or an open with
+.Dv O_TRUNC
+of a file the open did not create.
+.It Dv IN_ATTRIB
+A change of its mode, owner or times, or of its count of links.
+.It Dv IN_OPEN , IN_CLOSE_WRITE , IN_CLOSE_NOWRITE
+An
+.Xr open 2 ,
+and the last close of what it opened, for writing or not.
+.It Dv IN_MOVE_SELF
+A rename of it.
+.It Dv IN_DELETE_SELF
+The removal of its last link, or of the directory.
+.El
+.Pp
+A watch of a directory reports the same of the directory, and these of
+the names in it, each with the name:
+.Dv IN_CREATE
+for a file, directory, link or node made in it,
+.Dv IN_DELETE
+for one removed,
+.Dv IN_MOVED_FROM
+and
+.Dv IN_MOVED_TO
+for a rename out of it and into it, the two events of one rename with
+the same cookie, and the events of a file opened by a name in it:
+.Dv IN_ACCESS ,
+.Dv IN_MODIFY ,
+.Dv IN_OPEN
+and the closes.
+An event about a directory has
+.Dv IN_ISDIR .
+When a watch goes, by
+.Fn inotify_rm_watch ,
+by its file's removal, or by the
+.Xr umount 2
+of its file's file system, which first queues
+.Dv IN_UNMOUNT ,
+an
+.Dv IN_IGNORED
+event is queued for it.
+.Pp
+A
+.Xr read 2
+returns as many whole events as fit: a
+.Vt struct inotify_event
+of 16 bytes, the watch's descriptor, the mask, the cookie and the length
+of the name that follows, padded with NULs to a multiple of 16.
+A read with no room for the next event fails with
+.Er EINVAL .
+An empty queue waits, or fails with
+.Er EAGAIN
+with
+.Dv IN_NONBLOCK .
+An event the same as the last one queued and not yet read is not queued
+again, so a file written many times between two reads is one
+.Dv IN_MODIFY .
+An instance queues 16384 events at most; the next is lost, and one
+.Dv IN_Q_OVERFLOW
+event with descriptor \-1 says so.
+.Xr poll 2
+and
+.Xr epoll 2
+report the descriptor readable while an event is queued, and the
+.Dv FIONREAD
+request of
+.Xr ioctl 2
+gives the bytes a read of the whole queue returns.
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+names it
+.Dq anon_inode:inotify .
+.Pp
+A user may have 128 instances and 8192 watches, the limits
+.Pa /proc/sys/fs/inotify
+reports.
+.Pp
+Where Linux differs: a file is gone for its watches when its last link
+is removed, where Linux waits for its last close; the events of a file
+reach the watch of its directory only through a descriptor opened by a
+name in that directory while a watch existed, so a change of a file's
+mode or owner by path, and a file opened before any watch existed, are
+reported to the file's own watches alone; and a watch is found by the
+file's inode number, which a rename changes on a FAT volume, so a watch
+of a file there does not follow it.
+.Sh RETURN VALUES
+.Fn inotify_init ,
+.Fn inotify_init1
+and
+.Fn inotify_add_watch
+return a descriptor, and
+.Fn inotify_rm_watch
+returns 0; on failure each returns -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width ENAMETOOLONG
+.It Er EACCES
+The caller may not read the file, or search a directory of the path.
+.It Er EBADF
+.Fa fd
+is not open.
+.It Er EEXIST
+.Dv IN_MASK_CREATE
+of a file the instance watches.
+.It Er EINVAL
+.Fa flags
+has another bit;
+.Fa fd
+is not an instance;
+.Fa mask
+has no event, or both
+.Dv IN_MASK_ADD
+and
+.Dv IN_MASK_CREATE ;
+.Fa wd
+is not a watch of the instance; or a read was too small for the next
+event.
+.It Er ELOOP
+The path has too many symbolic links.
+.It Er EMFILE
+The user has 128 instances, or the process has no free descriptor below
+its limit.
+.It Er ENAMETOOLONG
+The path is too long.
+.It Er ENOENT
+The path names no file.
+.It Er ENOMEM
+The kernel had no memory for the instance or the watch.
+.It Er ENOSPC
+The user has 8192 watches.
+.It Er ENOTDIR
+.Dv IN_ONLYDIR
+of a file that is not a directory, or a component of the path is not a
+directory.
+.El
+.Sh SEE ALSO
+.Xr epoll 2 ,
+.Xr poll 2 ,
+.Xr read 2 ,
+.Xr proc 5

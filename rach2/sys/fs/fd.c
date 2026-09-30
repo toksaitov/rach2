@@ -3,6 +3,7 @@
 
 #include "vfs.h"
 #include "lock.h"
+#include "../io/inotify.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
@@ -182,6 +183,12 @@ void fd_ofd_unref(struct open_file *ofd)
             if (lock_any()) {
                 lock_ofd_gone(ofd);
             }
+            if (ofd->vmnt && (ofd->watch_flags & OFD_WATCH_OPEN)) {
+                inotify_desc(ofd, (ofd->watch_flags & OFD_WATCH_WRITE) ? IN_CLOSE_WRITE
+                                                                       : IN_CLOSE_NOWRITE);
+            }
+            kfree(ofd->leaf);
+            ofd->leaf = NULL;
             if (ofd->vmnt) {
                 struct vfs_mount *mnt = ofd->vmnt;
                 void *node = ofd->vnode;

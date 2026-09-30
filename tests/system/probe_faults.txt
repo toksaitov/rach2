@@ -4479,3 +4479,59 @@ old
 new
     if (protocol != NETLINK_ROUTE) {
 end
+
+# inotify.
+
+fault inotify-init-clobbers-ebx
+probe inotifymusl
+file rach2/sys/io/inotify.c
+expect INOTIFYMUSL FAIL (inotify_init changed the caller's EBX
+old
+    (void)params;
+    return inotify_open(0);
+new
+    params->ebx = 0;
+    return inotify_open(0);
+end
+
+fault inotify-no-merge
+probe inotifymusl
+file rach2/sys/io/inotify.c
+expect INOTIFYMUSL FAIL (the events of a directory and a file: event 3
+old
+    if (last && last->wd == wd && last->mask == mask && last->cookie == cookie &&
+new
+    if (last && last->wd == wd && last->mask == mask && last->cookie == cookie && !last &&
+end
+
+fault inotify-mkdir-not-dir
+probe inotifymusl
+file rach2/sys/fs/vfs.c
+expect INOTIFYMUSL FAIL (the events of a directory and a file: event 22
+old
+        watch_made(mnt, dir, name, IN_ISDIR);
+new
+        watch_made(mnt, dir, name, 0);
+end
+
+fault inotify-small-read
+probe inotifymusl
+file rach2/sys/io/inotify.c
+expect INOTIFYMUSL FAIL (a read too small for an event was not EINVAL
+old
+    return done ? (int32_t)done : -EINVAL;
+new
+    return done ? (int32_t)done : 0;
+end
+
+fault inotify-oneshot-kept
+probe inotifymusl
+file rach2/sys/io/inotify.c
+expect INOTIFYMUSL FAIL (a one-shot watch
+old
+    if (w->mask & IN_ONESHOT) {
+        drop(w);
+        return 1;
+    }
+new
+end

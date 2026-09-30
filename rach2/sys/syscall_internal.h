@@ -148,6 +148,7 @@ int32_t sys_statx(isr_params_t *params);
 int32_t sys_access(isr_params_t *params);
 
 int32_t sys_faccessat(isr_params_t *params);
+int32_t sys_inotify_add_watch(isr_params_t *params);
 
 int32_t sys_chmod(isr_params_t *params);
 

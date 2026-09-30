@@ -97,6 +97,7 @@ C_SRC = kernel.c \
         sys/io/poll.c \
         sys/io/poll_select.c \
         sys/io/eventfd.c \
+        sys/io/inotify.c \
         sys/io/epoll.c \
         sys/io/timerfd.c \
         sys/tty/n_tty.c \

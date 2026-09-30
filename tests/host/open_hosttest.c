@@ -648,6 +648,37 @@ void kunmap_temp(void *va)
     (void)va;
 }
 
+/* inotify, which no row watches, and the heap an open's name is kept in
+ * for it. */
+int inotify_watches;
+
+void inotify_desc(struct open_file *ofd, uint32_t mask)
+{
+    (void)ofd;
+    (void)mask;
+}
+
+int inotify_is(int fd)
+{
+    (void)fd;
+    return 0;
+}
+
+int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, uint32_t mask)
+{
+    (void)fd;
+    (void)mnt;
+    (void)ino;
+    (void)isdir;
+    (void)mask;
+    return -EINVAL;
+}
+
+void *kmalloc(size_t size)
+{
+    return kzalloc(size);
+}
+
 uintptr_t shmem_map_page(struct shmem *sh, uint32_t pgoff)
 {
     (void)sh;

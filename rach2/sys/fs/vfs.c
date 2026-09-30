@@ -28,6 +28,7 @@
 #include "procfs.h"
 #include "synthfs.h"
 #include "tmpfs.h"
+#include "../io/inotify.h"
 
 #define VFS_S_IFMT       0170000u
 #define VFS_S_IFDIR      0040000u
@@ -1227,8 +1228,93 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return mnt->type->ops->getattr(mnt, node, st);
 }
 
+/* inotify's view of the namespace operations: each asks what it needs only
+ * while a watch exists (`inotify_watches`). */
+
+/** The attributes of `node`, into `st`; 0, or -1 when the type has none. */
+static int watched_node(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    return mnt->type->ops->getattr && mnt->type->ops->getattr(mnt, node, st) == 0 ? 0 : -1;
+}
+
+/** The attributes of the entry `name` of `dir`, into `st`; 0, or -1 when
+ * there is none. */
+static int watched_entry(struct vfs_mount *mnt, void *dir, const char *name, struct vfs_stat *st)
+{
+    void *found;
+    int rc;
+
+    if (!mnt->type->ops->lookup || mnt->type->ops->lookup(mnt, dir, name, &found) != 0) {
+        return -1;
+    }
+    rc = watched_node(mnt, found, st);
+    node_put(mnt, found);
+    return rc;
+}
+
+static uint32_t watched_isdir(const struct vfs_stat *st)
+{
+    return (st->mode & 0170000u) == 0040000u ? IN_ISDIR : 0u;
+}
+
+/** The entry `name` was made in `dir`, a directory when `isdir`. */
+static void watch_made(struct vfs_mount *mnt, void *dir, const char *name, uint32_t isdir)
+{
+    struct vfs_stat st;
+
+    if (inotify_watches && watched_node(mnt, dir, &st) == 0) {
+        inotify_child(mnt, st.ino, name, IN_CREATE | isdir, 0);
+    }
+}
+
+/**
+ * The entry `name` of the directory `dir_ino` is gone, and `was` is what it
+ * named: a file's links changed, as Linux reports with IN_ATTRIB, and a
+ * directory, or a file with no link left, is gone itself. Linux reports
+ * that of a file at its last close; here it is at its last link's removal.
+ */
+static void watch_removed(struct vfs_mount *mnt, uint64_t dir_ino, const char *name,
+                          const struct vfs_stat *was)
+{
+    uint32_t isdir = watched_isdir(was);
+
+    if (!isdir) {
+        inotify_file(mnt, was->ino, IN_ATTRIB);
+    }
+    inotify_child(mnt, dir_ino, name, IN_DELETE | isdir, 0);
+    if (isdir || was->nlink <= 1) {
+        inotify_gone(mnt, was->ino);
+    }
+}
+
+/** The events of a setattr of `what`, by Linux's `fsnotify_change`: the
+ * size and the modification time alone are a change of the data, and both
+ * times together are utime's change of the attributes. */
+static uint32_t setattr_events(int what)
+{
+    uint32_t mask = 0;
+
+    if (what & (VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID)) {
+        mask |= IN_ATTRIB;
+    }
+    if (what & VFS_SET_SIZE) {
+        mask |= IN_MODIFY;
+    }
+    if ((what & (VFS_SET_ATIME | VFS_SET_MTIME)) == (VFS_SET_ATIME | VFS_SET_MTIME)) {
+        mask |= IN_ATTRIB;
+    } else if (what & VFS_SET_ATIME) {
+        mask |= IN_ACCESS;
+    } else if (what & VFS_SET_MTIME) {
+        mask |= IN_MODIFY;
+    }
+    return mask;
+}
+
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
+    struct vfs_stat now;
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -1240,7 +1326,11 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_st
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->setattr) {
         return -EROFS;
     }
-    return mnt->type->ops->setattr(mnt, node, what, st);
+    rc = mnt->type->ops->setattr(mnt, node, what, st);
+    if (rc == 0 && inotify_watches && watched_node(mnt, node, &now) == 0) {
+        inotify_file(mnt, now.ino, setattr_events(what));
+    }
+    return rc;
 }
 
 int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
@@ -1284,62 +1374,129 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
 
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
 {
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->create) {
         return -EROFS;
     }
-    return mnt->type->ops->create(mnt, dir, name, mode, node);
+    rc = mnt->type->ops->create(mnt, dir, name, mode, node);
+    if (rc == 0) {
+        watch_made(mnt, dir, name, 0);
+    }
+    return rc;
 }
 
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    struct vfs_stat was, parent;
+    int watched;
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->unlink) {
         return -EROFS;
     }
-    return mnt->type->ops->unlink(mnt, dir, name);
+    watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
+              watched_node(mnt, dir, &parent) == 0;
+    rc = mnt->type->ops->unlink(mnt, dir, name);
+    if (rc == 0 && watched) {
+        watch_removed(mnt, parent.ino, name, &was);
+    }
+    return rc;
 }
 
 int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->mkdir) {
         return -EROFS;
     }
-    return mnt->type->ops->mkdir(mnt, dir, name, mode);
+    rc = mnt->type->ops->mkdir(mnt, dir, name, mode);
+    if (rc == 0) {
+        watch_made(mnt, dir, name, IN_ISDIR);
+    }
+    return rc;
 }
 
 int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    struct vfs_stat was, parent;
+    int watched;
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->rmdir) {
         return -EROFS;
     }
-    return mnt->type->ops->rmdir(mnt, dir, name);
+    watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
+              watched_node(mnt, dir, &parent) == 0;
+    rc = mnt->type->ops->rmdir(mnt, dir, name);
+    if (rc == 0 && watched) {
+        watch_removed(mnt, parent.ino, name, &was);
+    }
+    return rc;
 }
 
+/**
+ * Rename, and tell inotify: IN_MOVED_FROM and IN_MOVED_TO with one cookie
+ * to the two directories, IN_MOVE_SELF to the file moved, and to a file the
+ * new name replaced what its removal would have told.
+ */
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                const char *newname)
 {
+    struct vfs_stat moved, replaced, from, to;
+    int watched, had_target = 0;
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->rename) {
         return -EROFS;
     }
-    return mnt->type->ops->rename(mnt, olddir, oldname, newdir, newname);
+    watched = inotify_watches && watched_entry(mnt, olddir, oldname, &moved) == 0 &&
+              watched_node(mnt, olddir, &from) == 0 && watched_node(mnt, newdir, &to) == 0;
+    if (watched) {
+        had_target = watched_entry(mnt, newdir, newname, &replaced) == 0 &&
+                     replaced.ino != moved.ino;
+    }
+    rc = mnt->type->ops->rename(mnt, olddir, oldname, newdir, newname);
+    if (rc == 0 && watched) {
+        uint32_t cookie = inotify_cookie();
+        uint32_t isdir = watched_isdir(&moved);
+
+        inotify_child(mnt, from.ino, oldname, IN_MOVED_FROM | isdir, cookie);
+        inotify_child(mnt, to.ino, newname, IN_MOVED_TO | isdir, cookie);
+        inotify_file(mnt, moved.ino, IN_MOVE_SELF);
+        if (had_target) {
+            if (!watched_isdir(&replaced)) {
+                inotify_file(mnt, replaced.ino, IN_ATTRIB);
+            }
+            if (watched_isdir(&replaced) || replaced.nlink <= 1) {
+                inotify_gone(mnt, replaced.ino);
+            }
+        }
+    }
+    return rc;
 }
 
 int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
+    struct vfs_stat st;
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -1349,11 +1506,18 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
     if (!mnt->type->ops->link) {
         return -EPERM; /* a file system without links */
     }
-    return mnt->type->ops->link(mnt, dir, name, node);
+    rc = mnt->type->ops->link(mnt, dir, name, node);
+    if (rc == 0 && inotify_watches && watched_node(mnt, node, &st) == 0) {
+        inotify_file(mnt, st.ino, IN_ATTRIB);
+        watch_made(mnt, dir, name, 0);
+    }
+    return rc;
 }
 
 int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -1363,12 +1527,18 @@ int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *
     if (!mnt->type->ops->symlink) {
         return -EPERM;
     }
-    return mnt->type->ops->symlink(mnt, dir, name, target);
+    rc = mnt->type->ops->symlink(mnt, dir, name, target);
+    if (rc == 0) {
+        watch_made(mnt, dir, name, 0);
+    }
+    return rc;
 }
 
 int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, uint32_t rdev,
               void **node)
 {
+    int rc;
+
     if (vfs_mount_gone(mnt)) {
         return -EIO;
     }
@@ -1378,7 +1548,11 @@ int vfs_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
     if (!mnt->type->ops->mknod) {
         return -EPERM; /* a file system with no such nodes */
     }
-    return mnt->type->ops->mknod(mnt, dir, name, mode, rdev, node);
+    rc = mnt->type->ops->mknod(mnt, dir, name, mode, rdev, node);
+    if (rc == 0) {
+        watch_made(mnt, dir, name, 0);
+    }
+    return rc;
 }
 
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
@@ -2685,6 +2859,7 @@ int vfs_do_umount(const char *target, int dir)
     if (m->type->ops->put) {
         m->type->ops->put(m, m->root);
     }
+    inotify_unmount(m);
     m->type->ops->unmount(m);
     vfs_ns_unlock(m);
     cov.mnt = m->parent;

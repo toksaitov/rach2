@@ -58,7 +58,7 @@ rebootprobe searchprobe
 stickyprobe
 ```
 
-The 52 musl programs in the default suite are:
+The 53 musl programs in the default suite are:
 
 ```text
 authmusl permmusl suidmusl pwauthmusl passwdmusl addusermusl loginmusl
@@ -66,9 +66,9 @@ readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl sigmusl
 clonemusl sigframemusl vmamusl pathmaxmusl fdcallmusl atcallmusl preadmusl
 truncmusl opathmusl lchownmusl direntmusl cputimemusl clockidmusl schedmusl
 waitidmusl prctlmusl stackmusl sockflagmusl capmusl epollmusl timerfdmusl
-netlinkmusl unixmusl mapmusl fifomusl statxmusl lockmusl tmpfsmusl mknodmusl
-memfdmusl chrootmusl vforkmusl ptracemusl callsmusl coremusl threadmusl
-ishmusl
+netlinkmusl inotifymusl unixmusl mapmusl fifomusl statxmusl lockmusl tmpfsmusl
+mknodmusl memfdmusl chrootmusl vforkmusl ptracemusl callsmusl coremusl
+threadmusl ishmusl
 ```
 
 `loopprobe` includes a server that closes immediately after accepting; the client must connect successfully and read EOF. `devprobe` checks graphics reentry and descriptors inherited or retained across a change of framebuffer owner. `sh tests/system/framebuffer_mutate.sh` builds only those two probes and a 2 MiB image, verifies the staged bytes, and runs them through the serial harness with no host network connection. Separate kernels with the framebuffer ownership check or graphics reentry removed must fail `devprobe`. Each restoration touches the source and removes its object before rebuilding; the restored kernel must match the original and both probes must pass. A trap stops test processes before restoring the source. Complete logs, images, kernels and checksums remain under the printed `build/framebuffer-guest.*` directory. The immediate-close row does not force the client's scheduling order; the native `syscall_hosttest` forces FIN before the connect wait resumes and checks the 497-day clock wrap.

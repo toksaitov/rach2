@@ -67,6 +67,7 @@
 #include "network/ip/ip.h"
 #include "network/ip/icmp.h"
 #include "network/net.h"
+#include "io/inotify.h"
 #include "ipc/unix.h"
 #include "mm/filemap.h"
 #include "mm/mm.h"
@@ -596,6 +597,9 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         }
     }
     fd_ofd_unlock(ofd);
+    if (written > 0 && inotify_watches) {
+        inotify_desc(ofd, IN_MODIFY);
+    }
     return written;
 }
 
@@ -777,6 +781,9 @@ static int32_t truncate_fd(int fd, uint64_t length)
         }
     }
     fd_ofd_unlock(entry->ofd);
+    if (rc == 0 && inotify_watches) {
+        inotify_desc(entry->ofd, IN_MODIFY);
+    }
     return rc;
 }
 
@@ -2499,6 +2506,10 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
  * file between the lookup and the registration. O_PATH goes to `open_path`,
  * which names the file and opens nothing.
  *
+ * A file the open creates is empty, so O_TRUNC does nothing to it, and
+ * its description is marked OFD_WATCH_MADE, so that inotify reports no
+ * truncation of it (`open_done`).
+ *
  * The descriptor is reserved before the path is resolved, as Linux reserves
  * it, so that no other thread sharing the table can take the last one while
  * the resolution sleeps and leave a created or truncated file behind an
@@ -2555,6 +2566,8 @@ again:
         if (rc != 0) {
             goto out;
         }
+        flags &= ~O_TRUNC;
+        current_proc->fds->entries[fd].ofd->watch_flags = OFD_WATCH_MADE;
     } else if (rc != 0) {
         goto out;
     } else {
@@ -2714,6 +2727,61 @@ static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
 }
 
 /**
+ * What inotify is told of the open that made the descriptor `fd` from
+ * `name`, leading '/' stripped: the open, after the truncation O_TRUNC made
+ * of a file the open did not create.
+ * The description records whether it was opened for writing, which its
+ * close reports, and, while a watch exists, the directory the name is in and
+ * its last component, when they are the file opened, so that the
+ * directory's watches hear of what is done through it. A name whose last
+ * component was a link the open followed records no directory; Linux would
+ * report the target's.
+ */
+static void open_done(int fd, const char *name, int flags)
+{
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
+    struct open_file *ofd = e ? e->ofd : NULL;
+    char leaf[VFS_NAME_MAX + 1];
+    struct vfs_ref parent;
+    struct vfs_stat dir, st;
+    uint32_t made;
+    void *found;
+
+    if (!ofd || !ofd->vmnt || (e->flags & FD_FLAG_PATH)) {
+        return;
+    }
+    made = ofd->watch_flags & OFD_WATCH_MADE;
+    ofd->watch_flags = OFD_WATCH_OPEN | ((e->flags & FD_FLAG_WRITE) ? OFD_WATCH_WRITE : 0u) |
+                       (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
+    if (!inotify_watches) {
+        return;
+    }
+    if (vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf)) == 0) {
+        uint32_t len = (uint32_t)k_strlen(leaf);
+
+        if (parent.mnt == ofd->vmnt && len > 0 && !leaf_is_dot(leaf) &&
+            vfs_getattr(parent.mnt, parent.node, &dir) == 0 && parent.mnt->type->ops->lookup &&
+            parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
+            if (vfs_getattr(parent.mnt, found, &st) == 0 && st.ino == ofd->ino) {
+                ofd->leaf = kmalloc(len + 1);
+                if (ofd->leaf) {
+                    k_memcpy(ofd->leaf, leaf, len + 1);
+                    ofd->parent_ino = dir.ino;
+                }
+            }
+            if (parent.mnt->type->ops->put) {
+                parent.mnt->type->ops->put(parent.mnt, found);
+            }
+        }
+        vfs_ref_release(&parent);
+    }
+    if ((flags & O_TRUNC) && !made && (e->flags & FD_FLAG_WRITE) && e->type == FD_TYPE_FILE) {
+        inotify_desc(ofd, IN_MODIFY);
+    }
+    inotify_desc(ofd, IN_OPEN);
+}
+
+/**
  * open(2) and openat(2) after their arguments: the path `upath`, a relative
  * one resolved from `dirfd`, opened by `open_named` with the Linux open
  * `flags` and the permission bits `mode` of a file O_CREAT makes.
@@ -2740,6 +2808,9 @@ static int32_t open_from_user(int dirfd, const char __user *upath, int flags, ui
         return rc;
     }
     rc = open_named(path_name(path), flags, mode, end);
+    if (rc >= 0) {
+        open_done(rc, path_name(path), flags);
+    }
     path_buf_put(path);
     return rc;
 }
@@ -3343,6 +3414,9 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
         ofd->offset += (uint64_t)bytes_read;
     }
     fd_ofd_unlock(ofd);
+    if (bytes_read > 0 && inotify_watches) {
+        inotify_desc(ofd, IN_ACCESS);
+    }
     return bytes_read;
 }
 
@@ -6113,6 +6187,81 @@ int32_t sys_access(isr_params_t *params)
     return rc;
 }
 
+/**
+ * inotify_add_watch(292): EBX the instance, ECX the path, EDX the mask.
+ *
+ * The path is resolved through a final link unless IN_DONT_FOLLOW, it must
+ * name a directory under IN_ONLYDIR, and the caller must be able to read
+ * what it names, as on Linux; `inotify_watch` adds the watch. A node of
+ * /dev or /proc can be watched and reports nothing, since no call that
+ * changes one tells inotify.
+ */
+int32_t sys_inotify_add_watch(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
+    uint32_t mask = params->edx;
+    const struct vpath *vp;
+    struct vfs_ref ref;
+    uint64_t ino = 0;
+    int isdir = 0;
+    char *path;
+    int dir;
+    int32_t rc;
+
+    if (((mask & IN_MASK_ADD) && (mask & IN_MASK_CREATE)) || !(mask & IN_ALL_EVENTS)) {
+        return -EINVAL;
+    }
+    if (!current_proc || !fd_get(current_proc->fds, fd)) {
+        return -EBADF;
+    }
+    if (!inotify_is(fd)) {
+        return -EINVAL;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = resolve_named(path_name(path), (mask & IN_DONT_FOLLOW) ? VFS_WALK_NOFOLLOW : 0, dir,
+                       &ref);
+    path_buf_put(path);
+    if (rc != 0) {
+        return rc;
+    }
+    vp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (vp) {
+        struct linux_stat64 s;
+
+        rc = synth_stat(vp, &s, !(mask & IN_DONT_FOLLOW));
+        if (rc == 0) {
+            rc = cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u, CRED_R, 0);
+            ino = s.st_ino;
+            isdir = (s.st_mode & S_IFMT) == S_IFDIR;
+        }
+    } else {
+        struct vfs_stat st;
+
+        rc = mnt_is_root(ref.mnt) ? (int32_t)cred_access_node((krffs_node_t *)ref.node, CRED_R, 0)
+                                  : (int32_t)cred_access_ref(&ref, CRED_R, 0);
+        if (rc == 0) {
+            rc = vfs_getattr(ref.mnt, ref.node, &st);
+            ino = st.ino;
+            isdir = (st.mode & S_IFMT) == S_IFDIR;
+        }
+    }
+    if (rc == 0 && (mask & IN_ONLYDIR) && !isdir) {
+        rc = -ENOTDIR;
+    }
+    if (rc == 0) {
+        rc = inotify_watch(fd, ref.mnt, ino, isdir, mask);
+    }
+    vfs_ref_release(&ref);
+    return rc;
+}
+
 int32_t sys_faccessat(isr_params_t *params)
 {
     int dirfd = (int)params->ebx;
@@ -6817,6 +6966,13 @@ static int32_t truncate_path(const char *path, long long length, int dir)
             cred_kill_setid(desc->vnode);
         } else {
             vfs_kill_setid(desc->vmnt, desc->vnode);
+        }
+    }
+    if (rc == 0 && inotify_watches) {
+        struct vfs_stat st;
+
+        if (vfs_getattr(desc->vmnt, desc->vnode, &st) == 0) {
+            inotify_file(desc->vmnt, st.ino, IN_MODIFY);
         }
     }
     fd_ofd_unlock(desc);

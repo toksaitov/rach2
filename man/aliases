@@ -496,6 +496,9 @@ epoll_wait 2 epoll
 epoll_pwait 2 epoll
 epoll_pwait2 2 epoll
 eventfd2 2 eventfd
+inotify_init1 2 inotify_init
+inotify_add_watch 2 inotify_init
+inotify_rm_watch 2 inotify_init
 timerfd_create 2 timerfd
 timerfd_settime 2 timerfd
 timerfd_gettime 2 timerfd

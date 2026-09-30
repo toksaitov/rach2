@@ -772,6 +772,55 @@ uint32_t procfs_ino_meminfo(void)
     return 0;
 }
 
+/* inotify, which no row watches, and the calls of the path walk of
+ * inotify_add_watch, which no row makes. */
+int inotify_watches;
+
+void inotify_desc(struct open_file *ofd, uint32_t mask)
+{
+    (void)ofd;
+    (void)mask;
+}
+
+int inotify_is(int fd)
+{
+    (void)fd;
+    return 0;
+}
+
+int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, uint32_t mask)
+{
+    (void)fd;
+    (void)mnt;
+    (void)ino;
+    (void)isdir;
+    (void)mask;
+    return -EINVAL;
+}
+
+int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
+{
+    (void)dst;
+    (void)src;
+    (void)n;
+    return -EFAULT;
+}
+
+int vfs_enter(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return -EIO;
+}
+
+int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
+{
+    (void)mnt;
+    (void)node;
+    (void)out;
+    (void)cap;
+    return -ENOENT;
+}
+
 uint32_t procfs_ino_mounts(void)
 {
     return 0;

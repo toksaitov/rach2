@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt SYSCALLS 2
 .Os
 .Sh NAME
@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 212 calls.
+The kernel registers the following 216 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -188,6 +188,9 @@ The kernel registers the following 212 calls.
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
 .It 284 Ta Xr waitid 2
+.It 291 Ta Xr inotify_init 2
+.It 292 Ta Xr inotify_add_watch 2
+.It 293 Ta Xr inotify_rm_watch 2
 .It 295 Ta Xr openat 2
 .It 296 Ta Xr mkdirat 2
 .It 297 Ta Xr mknodat 2
@@ -215,6 +218,7 @@ The kernel registers the following 212 calls.
 .It 329 Ta Xr epoll_create1 2
 .It 330 Ta Xr dup3 2
 .It 331 Ta Xr pipe2 2
+.It 332 Ta Xr inotify_init1 2
 .It 337 Ta Xr recvmmsg 2
 .It 340 Ta Xr prlimit64 2
 .It 345 Ta Xr sendmmsg 2
