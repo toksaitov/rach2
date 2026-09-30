@@ -1,22 +1,25 @@
 #!/bin/sh
-# The single-quoted texts below are the function's own source and account
+# The single-quoted texts below are the functions' own source and account
 # lines, not expansions.
 # shellcheck disable=SC2016
 #
 # install_accounts_test.sh: rach2-install keeps the image's system accounts
 # beside the machine's.
 #
-# `keep_image_accounts` is taken from utils/rach2-install whole and run on
-# account files in a private directory. Each row gives it an image's files
-# and a machine's: the image's `sshd`, id 74, must be appended with its group
-# and its shadow line, and its `test`, id 1000, and `demo`, id 1002, which
-# the machine does not use, must not; running it again
-# must add nothing; an image account whose name or whose id the machine
-# already has, and an image with no account files, must add nothing; an
-# image with no shadow line for an account it adds must leave the machine's
-# shadow file as it was. With --mutate each fault below is put into the copy
-# of the function and must fail its row; the rows run again on the function
-# as it is at the end.
+# `add_lines` and `keep_image_accounts` are taken from utils/rach2-install
+# whole and run on account files in a private directory. Each row gives them
+# an image's files and a machine's: the image's `sshd`, id 74, must be
+# appended with its group and its shadow line, and its `test`, id 1000, and
+# `demo`, id 1002, which the machine does not use, must not; running them
+# again must add nothing; an image account whose id the machine has, written
+# as 074, or whose name it has, and an image with no account files, must add
+# nothing; an image that has `sshd` twice, and another account with its id,
+# must add it once; a machine file whose last line has no newline must keep
+# that line whole; an empty machine group file must get the image's system
+# groups, root's and `sshd`'s; and an image with no shadow line for an account it adds must leave
+# the machine's shadow file as it was. With --mutate each fault below is put
+# into the copy of the functions and must fail its row; the rows run again
+# on the functions as they are at the end.
 #
 # Usage: sh tests/system/install_accounts_test.sh [--mutate]
 #
@@ -35,13 +38,16 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-awk '/^keep_image_accounts\(\) \{$/ { copy = 1 } copy { print } copy && /^\}$/ { exit }' \
-    "$repo/utils/rach2-install" > "$work/function.sh"
-grep -q '^}$' "$work/function.sh" || {
-    echo 'install-accounts-test: keep_image_accounts is not in utils/rach2-install' >&2
-    exit 1
-}
-cp "$work/function.sh" "$work/function.saved"
+for function in add_lines keep_image_accounts; do
+    awk -v f="$function" '$0 == f "() {" { copy = 1 } copy { print } copy && /^\}$/ { exit }' \
+        "$repo/utils/rach2-install" > "$work/$function.sh"
+    grep -q '^}$' "$work/$function.sh" || {
+        echo "install-accounts-test: $function is not in utils/rach2-install" >&2
+        exit 1
+    }
+done
+cat "$work/add_lines.sh" "$work/keep_image_accounts.sh" > "$work/function.saved"
+cp "$work/function.saved" "$work/function.sh"
 
 failures=0
 fail() {
@@ -49,8 +55,8 @@ fail() {
     failures=$((failures + 1))
 }
 
-# files DIR PASSWD GROUP SHADOW: DIR's account files, each line of a text
-# given with a literal \n between lines; an empty text leaves the file out.
+# files DIR PASSWD GROUP SHADOW: DIR's account files, each a text with a
+# literal \n between lines; an empty text leaves the file out.
 files() {
     mkdir -p "$1/etc"
     rm -f "$1/etc/passwd" "$1/etc/group" "$1/etc/shadow"
@@ -59,17 +65,24 @@ files() {
     [ -z "$4" ] || printf '%b' "$4" > "$1/etc/shadow"
 }
 
-# keep IMAGE DEST: the function run in a shell of its own, as the installer
-# runs it.
+# keep IMAGE DEST: the functions run in a shell of their own, as the
+# installer runs them.
 keep() {
     sh -c '. "$1"; keep_image_accounts "$2" "$3"' keep "$work/function.sh" "$1" "$2"
+}
+
+# unchanged IMAGE DEST: whether a run leaves DEST as it was.
+unchanged() {
+    rm -rf "$work/before"
+    cp -R "$2" "$work/before"
+    keep "$1" "$2" && diff -r "$work/before" "$2" > /dev/null
 }
 
 image_passwd='root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\nsshd:x:74:74::/var/empty:/usr/bin/false\ndemo:x:1002:1002:demo:/home/demo:/bin/sh\n'
 image_group='root:x:0:\ntest:x:1000:\nsshd:x:74:\n'
 image_shadow='root:*:0:0:99999:7:::\ntest:*:0:0:99999:7:::\nsshd:!:0:0:99999:7:::\n'
-machine_passwd='root:x:0:0:root:/root:/bin/sh\nowner:x:1000:1000:owner:/home/owner:/bin/sh\n'
-machine_group='root:x:0:\nowner:x:1000:\n'
+machine_passwd='root:x:0:0:root:/root:/bin/sh\nowner:x:1001:1001:owner:/home/owner:/bin/sh\n'
+machine_group='root:x:0:\nowner:x:1001:\n'
 machine_shadow='root:$6$a:0:0:99999:7:::\nowner:$6$b:0:0:99999:7:::\n'
 
 rows() {
@@ -83,33 +96,44 @@ rows() {
     else
         fail "the image's sshd is appended with its group and shadow line, and nothing else is"
     fi
-    cp -R "$work/dest" "$work/once"
-    if ! keep "$work/image" "$work/dest" || ! diff -r "$work/once" "$work/dest" > /dev/null; then
-        fail "a second run adds nothing"
-    fi
-    rm -rf "$work/once"
+    unchanged "$work/image" "$work/dest" || fail "a second run adds nothing"
 
-    files "$work/dest" "${machine_passwd}other:x:74:74::/:/bin/sh\n" "$machine_group" "$machine_shadow"
-    cp -R "$work/dest" "$work/before"
-    if ! keep "$work/image" "$work/dest" || ! diff -r "$work/before" "$work/dest" > /dev/null; then
+    files "$work/dest" "${machine_passwd}other:x:074:74::/:/bin/sh\n" "$machine_group" "$machine_shadow"
+    unchanged "$work/image" "$work/dest" ||
         fail "an image account whose id the machine has is not added"
-    fi
-    rm -rf "$work/before"
 
     files "$work/dest" "${machine_passwd}sshd:x:80:80::/:/bin/sh\n" "$machine_group" "$machine_shadow"
-    cp -R "$work/dest" "$work/before"
-    if ! keep "$work/image" "$work/dest" || ! diff -r "$work/before" "$work/dest" > /dev/null; then
+    unchanged "$work/image" "$work/dest" ||
         fail "an image account whose name the machine has is not added"
-    fi
-    rm -rf "$work/before"
 
     files "$work/image" "" "" ""
     files "$work/dest" "$machine_passwd" "$machine_group" "$machine_shadow"
-    cp -R "$work/dest" "$work/before"
-    if ! keep "$work/image" "$work/dest" || ! diff -r "$work/before" "$work/dest" > /dev/null; then
-        fail "an image with no account files adds nothing"
+    unchanged "$work/image" "$work/dest" || fail "an image with no account files adds nothing"
+
+    files "$work/image" "${image_passwd}sshd:x:74:74::/var/empty:/usr/bin/false\nsshd2:x:74:74::/:/bin/sh\n" \
+        "${image_group}sshd:x:74:\n" "${image_shadow}sshd:!:0:0:99999:7:::\n"
+    files "$work/dest" "$machine_passwd" "$machine_group" "$machine_shadow"
+    if ! keep "$work/image" "$work/dest" || [ "$(grep -c ':74:' "$work/dest/etc/passwd")" != 1 ] ||
+        [ "$(grep -c '^sshd:' "$work/dest/etc/group")" != 1 ] ||
+        [ "$(grep -c '^sshd:' "$work/dest/etc/shadow")" != 1 ]; then
+        fail "an account the image has twice, or with another's id, is added once"
     fi
-    rm -rf "$work/before"
+
+    files "$work/image" "$image_passwd" "$image_group" "$image_shadow"
+    files "$work/dest" 'root:x:0:0:root:/root:/bin/sh\nowner:x:1001:1001:owner:/home/owner:/bin/sh' \
+        "$machine_group" "$machine_shadow"
+    if ! keep "$work/image" "$work/dest" ||
+        ! grep -qx 'owner:x:1001:1001:owner:/home/owner:/bin/sh' "$work/dest/etc/passwd" ||
+        ! grep -qx 'sshd:x:74:74::/var/empty:/usr/bin/false' "$work/dest/etc/passwd"; then
+        fail "a machine file whose last line has no newline keeps that line whole"
+    fi
+
+    files "$work/dest" "$machine_passwd" "" "$machine_shadow"
+    : > "$work/dest/etc/group"
+    if ! keep "$work/image" "$work/dest" ||
+        [ "$(cat "$work/dest/etc/group")" != "$(printf 'root:x:0:\nsshd:x:74:')" ]; then
+        fail "an empty machine group file gets the image's system groups"
+    fi
 
     files "$work/image" "$image_passwd" "$image_group" 'root:*:0:0:99999:7:::\n'
     files "$work/dest" "$machine_passwd" "$machine_group" "$machine_shadow"
@@ -120,16 +144,16 @@ rows() {
     fi
 }
 
-# fault NAME OLD NEW EXPECT: the function with OLD replaced by NEW must fail
-# the row named EXPECT.
+# fault NAME OLD NEW EXPECT: the functions with the first OLD replaced by NEW
+# must fail the row named EXPECT.
 fault() {
     cp "$work/function.saved" "$work/function.sh"
     python3 - "$work/function.sh" "$2" "$3" << 'PY' || exit 1
 import sys
 path, old, new = sys.argv[1:4]
 text = open(path).read()
-assert text.count(old) == 1, old
-open(path, 'w').write(text.replace(old, new))
+assert old in text, old
+open(path, 'w').write(text.replace(old, new, 1))
 PY
     before=$failures
     out=$(rows)
@@ -141,16 +165,22 @@ PY
 }
 
 if [ "$mutate" -eq 1 ]; then
-    fault uid-bound '$3 + 0 < 1000 && !($1 in name) && !($3 in id)'"' \"\$2/etc/passwd\"" \
-        '!($1 in name) && !($3 in id)'"' \"\$2/etc/passwd\"" \
-        "the image's sshd is appended with its group and shadow line, and nothing else is"
-    fault id-taken '$3 + 0 < 1000 && !($1 in name) && !($3 in id)'"' \"\$2/etc/passwd\"" \
-        '$3 + 0 < 1000 && !($1 in name)'"' \"\$2/etc/passwd\"" \
+    sshd_row="the image's sshd is appended with its group and shadow line, and nothing else is"
+    fault uid-bound '$3 + 0 < 1000 && !($1 in name)' '!($1 in name)' "$sshd_row"
+    fault uid-inclusive '$3 + 0 < 1000 && !($1 in name)' '$3 + 0 <= 1000 && !($1 in name)' "$sshd_row"
+    fault id-taken '!($1 in name) && !(($3 + 0) in id)' '!($1 in name)' \
         'an image account whose id the machine has is not added'
-    fault group-left '[ -z "$groups" ] || printf' ': || printf' \
-        "the image's sshd is appended with its group and shadow line, and nothing else is"
-    fault shadow-left '[ -z "$lines" ] || printf' ': || printf' \
-        "the image's sshd is appended with its group and shadow line, and nothing else is"
+    fault id-as-text 'name[$1] = 1; id[$3 + 0] = 1; next' 'name[$1] = 1; id[$3] = 1; next' \
+        'an image account whose id the machine has is not added'
+    fault twice 'print; name[$1] = 1; id[$3 + 0] = 1' 'print' \
+        "an account the image has twice, or with another's id, is added once"
+    fault no-newline 'if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then' 'if false; then' \
+        'a machine file whose last line has no newline keeps that line whole'
+    fault empty-file 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
+            $3 + 0 < 1000' 'NR == FNR { name[$1] = 1; id[$3 + 0] = 1; next }
+            $3 + 0 < 1000' "an empty machine group file gets the image's system groups"
+    fault group-left 'add_lines "$2/etc/group" "$groups" || return 1' ':' "$sshd_row"
+    fault shadow-left 'add_lines "$2/etc/shadow" "$lines"' ':' "$sshd_row"
     cp "$work/function.saved" "$work/function.sh"
 fi
 
