@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -251,8 +251,18 @@ Pass the integer argument to the active driver as a percentage from
 The sample drivers clamp it to that range; the PC speaker ignores it.
 .El
 .Ss Network-interface requests
-A socket descriptor accepts interface queries using a 32-byte i386
+A socket descriptor of any family, an
+.Dv AF_UNIX
+one included, as glibc's
+.Xr if_nametoindex 3
+opens, accepts interface queries using a 32-byte i386
 .Vt "struct ifreq" .
+.Dv SIOCGIFCONF
+fills the buffer of a
+.Vt "struct ifconf"
+with an ifreq, a name and an IPv4 address, for each interface that has an
+address, and sets its length to the bytes filled; with no buffer it sets the
+length all of them would take.
 .Dv SIOCGIFNAME
 takes an interface index and returns its name.
 The other queries select the interface by name:

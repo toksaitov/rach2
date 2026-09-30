@@ -313,10 +313,59 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     return -EOPNOTSUPP;
 }
 
+/**
+ * SIOCGIFCONF: the interfaces that have an IPv4 address, each an ifreq with
+ * its name and its address, in the buffer of the caller's `struct ifconf`,
+ * whose length is set to the bytes filled; with no buffer, the bytes all of
+ * them would take, which is how a caller sizes one. An interface the buffer
+ * has no room for whole is left out, as on Linux.
+ */
+static int32_t ifconf_ioctl(uint32_t arg)
+{
+    uint8_t ifc[8];
+    uint8_t ifr[IFREQ_LEN];
+    uint32_t len, buf, used = 0;
+    int i;
+
+    if (copy_from_user(ifc, (const void __user *)arg, sizeof(ifc)) != 0) {
+        return -EFAULT;
+    }
+    len = (uint32_t)ifc[0] | ((uint32_t)ifc[1] << 8) | ((uint32_t)ifc[2] << 16) |
+          ((uint32_t)ifc[3] << 24);
+    buf = (uint32_t)ifc[4] | ((uint32_t)ifc[5] << 8) | ((uint32_t)ifc[6] << 16) |
+          ((uint32_t)ifc[7] << 24);
+    for (i = 0; i < netdev_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+
+        if (!nd || nd->ip == 0) {
+            continue;
+        }
+        if (buf != 0) {
+            if ((int32_t)len < 0 || used + IFREQ_LEN > len) {
+                break;
+            }
+            k_memset(ifr, 0, sizeof(ifr));
+            k_memcpy(ifr + IFREQ_NAME, nd->name, k_strlen(nd->name));
+            set_sa(ifr, nd->ip);
+            if (copy_to_user((void __user *)(buf + used), ifr, IFREQ_LEN) != 0) {
+                return -EFAULT;
+            }
+        }
+        used += IFREQ_LEN;
+    }
+    ifc[0] = (uint8_t)used;
+    ifc[1] = (uint8_t)(used >> 8);
+    ifc[2] = (uint8_t)(used >> 16);
+    ifc[3] = (uint8_t)(used >> 24);
+    return copy_to_user((void __user *)arg, ifc, 4) == 0 ? 0 : -EFAULT;
+}
+
 int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled)
 {
     *handled = 1;
     switch (request) {
+    case SIOCGIFCONF:
+        return ifconf_ioctl(arg);
     case SIOCGIFNAME:
     case SIOCGIFFLAGS:
     case SIOCSIFFLAGS:

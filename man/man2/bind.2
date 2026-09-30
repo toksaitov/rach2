@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 1, 2026
 .Dt BIND 2
 .Os
 .Sh NAME
@@ -68,6 +68,17 @@ existing interface.
 The protocol, in network byte order, may select IPv4 or ARP; zero keeps
 the socket's existing protocol.
 Changing the interface or protocol discards queued packets.
+.Ss Netlink sockets
+An
+.Dv AF_NETLINK
+socket takes a 12-byte
+.Vt sockaddr_nl :
+its port id, which 0 has the kernel pick, and its multicast groups, which
+are kept and never sent to, as
+.Xr netlink 7
+describes.
+A port id another netlink socket has gives
+.Er EADDRINUSE .
 .Sh RETURN VALUES
 .Fn bind
 returns 0 on success.

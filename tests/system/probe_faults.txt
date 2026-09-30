@@ -4427,3 +4427,55 @@ new
     params->ecx = 0;
     return eventfd_open(params->ebx, 0);
 end
+
+# The netlink route socket and the interface ioctls.
+
+fault netlink-dump-not-multi
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (a dump's message without its sequence, port id or NLM_F_MULTI
+old
+            link_msg(b, nd, NLM_F_MULTI);
+new
+            link_msg(b, nd, 0);
+end
+
+fault netlink-one-link-missed
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (RTM_GETLINK of the first link
+old
+            if (nd && (uint32_t)nd->index == index) {
+new
+            if (nd && (uint32_t)nd->index == index + 1u) {
+end
+
+fault unix-socket-no-interface-ioctls
+probe netlinkmusl
+file rach2/sys/syscall.c
+expect NETLINKMUSL FAIL (if_nametoindex of the first link
+old
+    if ((entry->type == FD_TYPE_SOCKET && entry->sock) || entry->type == FD_TYPE_UNIX) {
+new
+    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+end
+
+fault ifconf-length-not-set
+probe netlinkmusl
+file rach2/sys/network/netif.c
+expect NETLINKMUSL FAIL (SIOCGIFCONF with no buffer
+old
+    ifc[0] = (uint8_t)used;
+new
+    ifc[0] = 0;
+end
+
+fault uevent-socket-refused
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (a socket of NETLINK_KOBJECT_UEVENT
+old
+    if (protocol != NETLINK_ROUTE && protocol != NETLINK_KOBJECT_UEVENT) {
+new
+    if (protocol != NETLINK_ROUTE) {
+end

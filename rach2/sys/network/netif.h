@@ -24,6 +24,7 @@
  * a union: a sockaddr for the addresses, a short for the flags, an int for the
  * index, 32 bytes in all. */
 #define SIOCGIFNAME    0x8910
+#define SIOCGIFCONF    0x8912
 #define SIOCGIFFLAGS   0x8913
 #define SIOCSIFFLAGS   0x8914
 #define SIOCGIFADDR    0x8915

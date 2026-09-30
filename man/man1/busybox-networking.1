@@ -1,4 +1,4 @@
-.Dd September 26, 2026
+.Dd October 1, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -324,18 +324,11 @@ Listen for incoming HTTP requests.
 .It Nm ifconfig
 Configure a network interface through the interface ioctls supported by
 the kernel.
-The kernel does not answer
-.Dv SIOCGIFCONF ,
-the request that lists the interfaces, so
-.Nm ifconfig
-fails with no interface named, with or without
-.Fl a ,
-and with a name
+With no interface named it lists every interface
 .Pa /proc/net/dev
-does not list; name the interface, as in
-.Ic ifconfig eth0
-or
-.Ic ifconfig -a eth0 .
+lists and those
+.Dv SIOCGIFCONF
+reports; the machine has no loopback interface to list.
 .It Nm ifdown
 Deconfigure network interfaces.
 .It Nm ifup

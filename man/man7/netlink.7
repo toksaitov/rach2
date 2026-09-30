@@ -1,0 +1,149 @@
+.Dd October 1, 2026
+.Dt NETLINK 7
+.Os
+.Sh NAME
+.Nm netlink
+.Nd the kernel's answers about interfaces, addresses and routes
+.Sh SYNOPSIS
+.In sys/socket.h
+.In linux/netlink.h
+.In linux/rtnetlink.h
+.Ft int
+.Fn socket "AF_NETLINK" "SOCK_RAW" "NETLINK_ROUTE"
+.Sh DESCRIPTION
+An
+.Dv AF_NETLINK
+socket of protocol
+.Dv NETLINK_ROUTE
+(0) is how a program asks the kernel what network interfaces, IPv4
+addresses and routes it has, as on Linux.
+.Fa type
+is
+.Dv SOCK_RAW
+or
+.Dv SOCK_DGRAM ,
+which are the same socket, and may carry
+.Dv SOCK_CLOEXEC
+and
+.Dv SOCK_NONBLOCK .
+Any user may open one.
+.Pp
+A socket of protocol
+.Dv NETLINK_KOBJECT_UEVENT
+(15), which udev's monitors open to hear of devices that come and go, is
+made, bound and polled like one of
+.Dv NETLINK_ROUTE
+and hears nothing, since the kernel sends no uevents; what is sent on it
+is dropped.
+Another protocol is
+.Er EPROTONOSUPPORT .
+.Pp
+A request is a netlink message, a
+.Vt struct nlmsghdr
+and its body, sent to the kernel with
+.Xr send 2 ,
+.Xr sendto 2
+or
+.Xr sendmsg 2 ;
+the address of a
+.Xr sendto 2
+is not read, since the kernel is the only destination.
+Several messages may be sent in one call.
+The answers are queued on the socket as datagrams of messages, each at
+most 4096 bytes, which
+.Xr recv 2
+reads one at a time; a receive reports the kernel's address, a
+.Vt struct sockaddr_nl
+with port id 0.
+Each answer repeats the request's sequence number and the socket's port
+id.
+.Pp
+The requests answered are:
+.Bl -tag -width "RTM_GETROUTE"
+.It Dv RTM_GETLINK
+With
+.Dv NLM_F_DUMP ,
+an
+.Dv RTM_NEWLINK
+message for each interface, with its index, its flags
+.Dv ( IFF_UP ,
+.Dv IFF_RUNNING
+and
+.Dv IFF_LOWER_UP
+while it is up, and
+.Dv IFF_BROADCAST
+and
+.Dv IFF_MULTICAST ) ,
+and the attributes
+.Dv IFLA_IFNAME ,
+.Dv IFLA_ADDRESS ,
+.Dv IFLA_BROADCAST ,
+.Dv IFLA_MTU
+and
+.Dv IFLA_OPERSTATE .
+Without it, the one message of the interface whose index the
+.Vt struct ifinfomsg
+names, or an
+.Dv NLMSG_ERROR
+of
+.Er ENODEV .
+.It Dv RTM_GETADDR
+With
+.Dv NLM_F_DUMP ,
+an
+.Dv RTM_NEWADDR
+message for each interface with an IPv4 address: its prefix length and
+the attributes
+.Dv IFA_ADDRESS ,
+.Dv IFA_LOCAL ,
+.Dv IFA_BROADCAST
+and
+.Dv IFA_LABEL .
+.It Dv RTM_GETROUTE
+With
+.Dv NLM_F_DUMP ,
+an
+.Dv RTM_NEWROUTE
+message for each interface's own subnet, reached on the link, and one for
+its default route through its gateway when it has one, in the main table.
+.El
+.Pp
+A dump ends with an
+.Dv NLMSG_DONE
+message, and every message of a dump has
+.Dv NLM_F_MULTI .
+A request of another type, or one that would change the configuration,
+such as
+.Dv RTM_NEWADDR ,
+is answered with an
+.Dv NLMSG_ERROR
+of
+.Er EOPNOTSUPP :
+the interface requests of
+.Xr ioctl 2
+are how a program configures this machine.
+.Pp
+.Xr bind 2
+takes a
+.Vt struct sockaddr_nl
+of
+.Dv AF_NETLINK :
+a port id of 0 has the kernel pick one, the process's ID for its first
+socket and a number above 2^31 for the rest, and another taken by a
+socket already is
+.Er EADDRINUSE .
+The multicast groups are kept, and nothing is sent to them: the kernel
+sends no notifications.
+A socket that sends before it is bound, or whose name
+.Xr getsockname 2
+asks for, is bound then, as on Linux.
+.Xr connect 2
+succeeds and changes nothing, and
+.Xr getpeername 2
+reports the kernel.
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr ioctl 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr socket 2

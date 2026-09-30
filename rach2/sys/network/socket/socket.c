@@ -12,6 +12,7 @@
 
 #include "../../klog.h"
 #include "socket.h"
+#include "netlink.h"
 #include "packet.h"
 #include "raw.h"
 #include "../net.h"
@@ -149,7 +150,9 @@ void socket_unref(struct socket *sock)
         return;
     }
 
-    if (sock->family == AF_PACKET) {
+    if (sock->family == AF_NETLINK) {
+        netlink_close(sock);
+    } else if (sock->family == AF_PACKET) {
         packet_unbind(sock);
     } else if (sock->type == SOCK_RAW) {
         raw_unregister(sock);
@@ -225,6 +228,9 @@ static int udp_recv_ready(void *arg)
 {
     socket_t *sock = (socket_t *)arg;
 
+    if (sock->family == AF_NETLINK) {
+        return netlink_ready(sock);
+    }
     if (sock->family == AF_PACKET) {
         return packet_ready(sock);
     }
@@ -266,6 +272,9 @@ int socket_dgram_pending(struct socket *sock)
     int pending;
     uint32_t flags;
 
+    if (sock->family == AF_NETLINK) {
+        return netlink_pending(sock);
+    }
     if (sock->family == AF_PACKET) {
         return packet_pending(sock);
     }
@@ -300,6 +309,9 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
 
     if (len < 0) {
         return 0;
+    }
+    if (sock->family == AF_NETLINK) {
+        return netlink_peek(sock, offset, buf, len);
     }
     if (sock->family == AF_PACKET) {
         return packet_peek(sock, offset, buf, len);
@@ -344,14 +356,18 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_p
 {
     uint32_t flags;
 
-    if (sock->family == AF_PACKET) {
+    if (sock->family == AF_PACKET || sock->family == AF_NETLINK) {
         if (src_ip) {
             *src_ip = 0;
         }
         if (src_port) {
             *src_port = 0;
         }
-        packet_consume(sock);
+        if (sock->family == AF_NETLINK) {
+            netlink_consume(sock);
+        } else {
+            packet_consume(sock);
+        }
         return;
     }
     if (sock->type == SOCK_RAW) {
@@ -807,9 +823,10 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
 
     if (sock->type == SOCK_DGRAM || sock->type == SOCK_RAW) {
-        if (sock->family == AF_PACKET ? packet_ready(sock)
-            : sock->type == SOCK_RAW  ? raw_ready(sock)
-                                      : sock->recv_count != 0) {
+        if (sock->family == AF_NETLINK  ? netlink_ready(sock)
+            : sock->family == AF_PACKET ? packet_ready(sock)
+            : sock->type == SOCK_RAW    ? raw_ready(sock)
+                                        : sock->recv_count != 0) {
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT); /* it can always send */

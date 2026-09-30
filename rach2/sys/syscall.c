@@ -1561,10 +1561,11 @@ static int32_t sys_ioctl(isr_params_t *params)
     }
 
     /* A socket accepts the interface ioctls: this is where a program sets the
-     * machine's address, which is what a DHCP client is for. They are checked
-     * before the tty block because a socket is not a terminal and would
-     * otherwise fall through to -ENOTTY. */
-    if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+     * machine's address, which is what a DHCP client is for. A socket of any
+     * family does, as on Linux: glibc's if_nametoindex asks an AF_UNIX one.
+     * They are checked before the tty block because a socket is not a
+     * terminal and would otherwise fall through to -ENOTTY. */
+    if ((entry->type == FD_TYPE_SOCKET && entry->sock) || entry->type == FD_TYPE_UNIX) {
         int handled;
         int32_t r = netif_ioctl(request, arg, &handled);
 

@@ -47,9 +47,10 @@ typedef struct socket {
     int in_use;
     int refcount; /* descriptors referencing this socket */
     int type;     /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */
-    /* AF_INET, or AF_PACKET for the tap above the Ethernet layer. Nearly every
-     * path below is AF_INET's; the family is what the few that are not branch
-     * on, not a second socket pool. */
+    /* AF_INET, AF_PACKET for the tap above the Ethernet layer, or AF_NETLINK
+     * for the kernel's routing answers. Nearly every path below is AF_INET's;
+     * the family is what the few that are not branch on, not a second socket
+     * pool. */
     uint16_t family;
     uint16_t local_port;
 
@@ -127,6 +128,10 @@ typedef struct socket {
      * IRQ-side deliver/accept/connect/fin routines wake every waiter; each
      * re-checks its own condition. */
     wait_queue_t waiters;
+
+    /* AF_NETLINK only: the socket's port id and its queue of answers
+     * (netlink.c). */
+    void *netlink;
 } socket_t;
 
 /** Start with no sockets; called once from init_network. */

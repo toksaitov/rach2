@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt SOCKET 2
 .Os
 .Sh NAME
@@ -52,6 +52,15 @@ must contain the Ethernet protocol in network byte order:
 IPv4 (0x0800), ARP (0x0806), or zero.
 Zero leaves the protocol unspecified until
 .Xr bind 2 .
+.It Dv AF_NETLINK , SOCK_RAW No or Dv SOCK_DGRAM
+A netlink socket of protocol
+.Dv NETLINK_ROUTE
+(0), which answers requests for the machine's interfaces, addresses and
+routes, or of
+.Dv NETLINK_KOBJECT_UEVENT
+(15), which hears nothing, as
+.Xr netlink 7
+describes.
 .It Dv AF_UNIX , SOCK_STREAM , SOCK_DGRAM No or Dv SOCK_SEQPACKET
 A socket between processes of this machine, described in
 .Xr unix 7 .
@@ -139,6 +148,7 @@ of an unknown bit.
 .Fa domain
 is none of
 .Dv AF_INET ,
+.Dv AF_NETLINK ,
 .Dv AF_PACKET
 and
 .Dv AF_UNIX .
@@ -173,16 +183,23 @@ An IPv4 raw protocol is neither
 .Dv IPPROTO_RAW
 nor
 .Dv IPPROTO_ICMP ,
-or an
+an
 .Dv AF_UNIX
 protocol is neither 0 nor
-.Dv AF_UNIX .
+.Dv AF_UNIX ,
+or a netlink protocol is neither
+.Dv NETLINK_ROUTE
+nor
+.Dv NETLINK_KOBJECT_UEVENT .
 .It Bq Er ESOCKTNOSUPPORT
 A privileged caller requested
 .Dv AF_PACKET , SOCK_STREAM ,
-or an
+an
 .Dv AF_UNIX
-type is not one of the three above.
+type is not one of the three above, or a netlink type is neither
+.Dv SOCK_RAW
+nor
+.Dv SOCK_DGRAM .
 .El
 .Sh SEE ALSO
 .Xr bind 2 ,
@@ -192,4 +209,5 @@ type is not one of the three above.
 .Xr recv 2 ,
 .Xr send 2 ,
 .Xr socketcall 2 ,
+.Xr netlink 7 ,
 .Xr unix 7

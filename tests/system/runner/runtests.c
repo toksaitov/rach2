@@ -110,6 +110,9 @@ static const char *const PROBES[] = {
     /* eventfd, and epoll's level-triggered, edge-triggered and one-shot
        reports; timerfd's expirations, alone and through epoll. */
     "musl/epollmusl", "musl/timerfdmusl",
+    /* The netlink route socket's dumps and refusals, the interface ioctls
+       on an AF_UNIX socket, and a uevent socket that hears nothing. */
+    "musl/netlinkmusl",
     /* AF_UNIX: pairs, descriptors and credentials in messages, and names
        in the file system and the abstract namespace. */
     "musl/unixmusl",

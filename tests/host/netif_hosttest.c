@@ -552,6 +552,20 @@ static void accept_reserved(void)
 }
 
 /** Run the four syscall contracts against distinct addresses and MACs. */
+/** No row opens a netlink socket. */
+int netlink_open(struct socket *sock, int protocol)
+{
+    (void)sock;
+    (void)protocol;
+    return -EPROTONOSUPPORT;
+}
+
+void netlink_name(struct socket *sock, uint8_t *sa)
+{
+    (void)sock;
+    (void)sa;
+}
+
 int main(void)
 {
     int i;

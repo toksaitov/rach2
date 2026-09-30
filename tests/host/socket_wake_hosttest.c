@@ -178,10 +178,43 @@ static void reset(void)
     woken_kinds = 0;
 }
 
+/** No row makes a netlink socket, whose calls socket.c makes. */
+void netlink_close(struct socket *sock)
+{
+    (void)sock;
+}
+
+int netlink_pending(struct socket *sock)
+{
+    (void)sock;
+    return -1;
+}
+
+int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
+{
+    (void)sock;
+    (void)offset;
+    (void)buf;
+    (void)len;
+    return -1;
+}
+
+void netlink_consume(struct socket *sock)
+{
+    (void)sock;
+}
+
+int netlink_ready(struct socket *sock)
+{
+    (void)sock;
+    return 0;
+}
+
 int main(void)
 {
     static struct socket udp, tcp, listener, conn;
     static struct tcb block;
+    static uint8_t ring[TCP_RECV_RING_SMALL];
     static const uint8_t bytes[4] = {1, 2, 3, 4};
 
     reset();

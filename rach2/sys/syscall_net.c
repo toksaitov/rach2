@@ -49,6 +49,7 @@
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
+#include "network/socket/netlink.h"
 #include "network/socket/packet.h"
 #include "network/socket/raw.h"
 #include "network/ethernet/ethernet.h"
@@ -333,8 +334,10 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
 }
 
 /* socket(2): AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
- * ioctl-only descriptor of IPPROTO_RAW), and AF_PACKET with SOCK_DGRAM; the
- * raw and packet forms take effective uid 0. Returns a new socket fd or
+ * ioctl-only descriptor of IPPROTO_RAW), AF_PACKET with SOCK_DGRAM, and
+ * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
+ * kernel's answers are datagrams: the socket is kept as a datagram socket.
+ * The raw and packet forms take effective uid 0. Returns a new socket fd or
  * -errno. */
 static int32_t do_socket(int domain, int type, int protocol)
 {
@@ -345,8 +348,14 @@ static int32_t do_socket(int domain, int type, int protocol)
     /* IPv4, and the packet family the DHCP client needs to see replies that
      * arrive before this machine owns an address. Any other family is refused,
      * not made into a socket that cannot work. */
-    if (domain != AF_INET && domain != AF_PACKET) {
+    if (domain != AF_INET && domain != AF_PACKET && domain != AF_NETLINK) {
         return -EAFNOSUPPORT;
+    }
+    if (domain == AF_NETLINK) {
+        if (type != SOCK_RAW && type != SOCK_DGRAM) {
+            return -ESOCKTNOSUPPORT;
+        }
+        type = SOCK_DGRAM;
     }
     /* The query descriptor. A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW
      * and does nothing with it but ask the interface ioctls about the machine
@@ -392,6 +401,14 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -ENOMEM;
     }
     sock->family = (uint16_t)domain;
+    if (domain == AF_NETLINK) {
+        int opened = netlink_open(sock, protocol);
+
+        if (opened != 0) {
+            socket_unref(sock);
+            return opened;
+        }
+    }
     if (domain == AF_INET && type == SOCK_RAW && protocol == IPPROTO_ICMP) {
         int reg;
 
@@ -469,6 +486,22 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return -ENOTSOCK;
+    }
+
+    /* A netlink socket binds to a port id and the groups it would hear. */
+    if (entry->sock->family == AF_NETLINK) {
+        uint8_t nl[SOCKADDR_NL_LEN];
+
+        if (addrlen < SOCKADDR_NL_LEN) {
+            return -EINVAL;
+        }
+        if (copy_from_user(nl, (const void __user *)sa_ptr, SOCKADDR_NL_LEN) != 0) {
+            return -EFAULT;
+        }
+        if ((nl[0] | (nl[1] << 8)) != AF_NETLINK) {
+            return -EINVAL;
+        }
+        return netlink_bind(entry->sock, SC_LE32(nl + 4), SC_LE32(nl + 8));
     }
 
     /* A packet socket binds to an interface, not to a port: the address is a
@@ -601,6 +634,61 @@ static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uint32
                       (uint16_t)len);
 }
 
+/* The length of the sockaddr a receive on `sock` reports its sender in. */
+static uint32_t sockaddr_len_of(const struct socket *sock)
+{
+    if (sock->family == AF_PACKET) {
+        return (uint32_t)SOCKADDR_LL_LEN;
+    }
+    if (sock->family == AF_NETLINK) {
+        return (uint32_t)SOCKADDR_NL_LEN;
+    }
+    return (uint32_t)SOCKADDR_IN_LEN;
+}
+
+/* Policy: a netlink request is at most 64 KiB, far past the few dozen bytes
+ * of the requests the socket answers. */
+#define NETLINK_SEND_MAX 65536
+
+/* Send the netlink message of `len` bytes at user address `buf_ptr`. */
+static int32_t netlink_send_user(struct socket *sock, uint32_t buf_ptr, int len)
+{
+    uint8_t *copy;
+    int32_t rc;
+
+    if (len > NETLINK_SEND_MAX) {
+        return -EMSGSIZE;
+    }
+    copy = kmalloc(len ? (uint32_t)len : 1u);
+    if (!copy) {
+        return -ENOMEM;
+    }
+    if (copy_from_user(copy, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
+        kfree(copy);
+        return -EFAULT;
+    }
+    rc = netlink_send(sock, copy, (uint32_t)len);
+    kfree(copy);
+    return rc;
+}
+
+/* Copy the sockaddr_nl `nl` to the caller's (sa_ptr, salen_ptr), truncated
+ * to its capacity, with the true length written back. */
+static int32_t netlink_addr_to_user(const uint8_t *nl, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    uint32_t cap, give;
+
+    if (copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {
+        return -EFAULT;
+    }
+    give = cap < (uint32_t)SOCKADDR_NL_LEN ? cap : (uint32_t)SOCKADDR_NL_LEN;
+    if (give > 0 && copy_to_user((void __user *)sa_ptr, nl, give) != 0) {
+        return -EFAULT;
+    }
+    cap = (uint32_t)SOCKADDR_NL_LEN;
+    return copy_to_user((void __user *)salen_ptr, &cap, sizeof(cap)) == 0 ? 0 : -EFAULT;
+}
+
 /* sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
  * first. */
@@ -622,6 +710,12 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
      * datagram that cannot arrive. */
     if (sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
+    }
+
+    /* A netlink socket's message goes to the kernel, which is the only
+     * destination it has. */
+    if (entry->sock->family == AF_NETLINK) {
+        return netlink_send_user(entry->sock, buf_ptr, len);
     }
 
     /* A raw socket sends the ICMP message the caller built, checksum included:
@@ -765,8 +859,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
             copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {
             return -EFAULT;
         }
-        addr_len = (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN
-                                                      : (uint32_t)SOCKADDR_IN_LEN;
+        addr_len = sockaddr_len_of(entry->sock);
         addr_give = cap < addr_len ? cap : addr_len;
         if (addr_give > 0 && !user_buffer_ok(sa_ptr, addr_give, 1)) {
             return -EFAULT;
@@ -821,7 +914,9 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
         uint8_t sa[SOCKADDR_LL_LEN];
 
         k_memset(sa, 0, sizeof(sa));
-        if (entry->sock->family == AF_PACKET) {
+        if (entry->sock->family == AF_NETLINK) {
+            sa[0] = (uint8_t)AF_NETLINK; /* the kernel, port id 0 */
+        } else if (entry->sock->family == AF_PACKET) {
             if (packet_last_addr(entry->sock, sa) == 0) {
                 addr_len = 0;
                 addr_give = 0;
@@ -890,6 +985,11 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
+    }
+    /* A netlink socket's one peer is the kernel, which a connect names and
+     * which it has already. */
+    if (entry->sock->family == AF_NETLINK) {
+        return 0;
     }
     /* A packet socket has no peer to connect to: it is bound to an interface
      * and sends to a hardware address each time. Reaching the datagram arm
@@ -1208,6 +1308,12 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
     }
+    if (entry->sock->family == AF_NETLINK) {
+        uint8_t nl[SOCKADDR_NL_LEN];
+
+        netlink_name(entry->sock, nl);
+        return netlink_addr_to_user(nl, sa_ptr, salen_ptr);
+    }
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
         uint32_t caller_len, copy_len;
@@ -1255,6 +1361,16 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
+    }
+    if (entry->sock->family == AF_NETLINK) {
+        uint8_t nl[SOCKADDR_NL_LEN];
+
+        if (!sa_ptr || !salen_ptr) {
+            return -EFAULT;
+        }
+        k_memset(nl, 0, sizeof(nl));
+        nl[0] = (uint8_t)AF_NETLINK; /* the kernel, port id 0 */
+        return netlink_addr_to_user(nl, sa_ptr, salen_ptr);
     }
     /* A peer exists once the TCP handshake completes (not a listener, not a
      * still-connecting SYN_SENT, not a closed socket), or once a datagram
@@ -1604,8 +1720,7 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
        AF_INET one sixteen, however much the caller declared. Validating the
        whole declared capacity would refuse a call whose address fits
        perfectly. */
-    addr_len =
-        (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN : (uint32_t)SOCKADDR_IN_LEN;
+    addr_len = sockaddr_len_of(entry->sock);
     addr_give = namelen < addr_len ? namelen : addr_len;
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
         return -EFAULT;
@@ -1644,7 +1759,9 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         uint8_t sa[SOCKADDR_LL_LEN];
 
         k_memset(sa, 0, sizeof(sa));
-        if (entry->sock->family == AF_PACKET) {
+        if (entry->sock->family == AF_NETLINK) {
+            sa[0] = (uint8_t)AF_NETLINK; /* the kernel, port id 0 */
+        } else if (entry->sock->family == AF_PACKET) {
             if (packet_last_addr(entry->sock, sa) == 0) {
                 addr_len = 0;
                 addr_give = 0;
@@ -1727,7 +1844,8 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
     if (copy_from_user(iov, (const void __user *)iov_user, iovlen * sizeof(iov[0])) != 0) {
         return -EFAULT;
     }
-    if (iovlen == 1 || entry->sock->type != SOCK_DGRAM || entry->sock->family != AF_INET) {
+    if (iovlen == 1 || entry->sock->type != SOCK_DGRAM ||
+        (entry->sock->family != AF_INET && entry->sock->family != AF_NETLINK)) {
         if (iovlen > 1) {
             return -EOPNOTSUPP;
         }
@@ -1735,7 +1853,9 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
                          name_ptr, (int)namelen);
     }
     for (i = 0; i < iovlen; i++) {
-        if (iov[i].iov_len > 1500u - total) {
+        uint32_t most = entry->sock->family == AF_NETLINK ? NETLINK_SEND_MAX : 1500u;
+
+        if (iov[i].iov_len > most - total) {
             return -EMSGSIZE;
         }
         total += iov[i].iov_len;
@@ -1753,7 +1873,11 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
         }
         total += iov[i].iov_len;
     }
-    rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen);
+    if (entry->sock->family == AF_NETLINK) {
+        rc = netlink_send(entry->sock, gathered, total);
+    } else {
+        rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen);
+    }
     kfree(gathered);
     return rc;
 }
