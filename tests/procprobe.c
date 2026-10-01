@@ -857,8 +857,9 @@ static void smaps_rows(void)
 }
 
 /* The names a listing of directory `dir` gives, by getdents64, in its order
-   and but for . and .., each followed by a space, in `out`. */
-static void listing(const char *dir, char *out, int cap)
+   and but for . and .., each followed by a space, in `out`; 0, or -1 when the
+   directory does not open, a read fails, or the names do not fit. */
+static int listing(const char *dir, char *out, int cap)
 {
     static char d[4096];
     int fd = syscall3(SYS_OPEN, (int)(size_t)dir, O_RDONLY, 0);
@@ -866,7 +867,7 @@ static void listing(const char *dir, char *out, int cap)
 
     out[0] = '\0';
     if (fd < 0) {
-        return;
+        return -1;
     }
     while ((n = syscall3(220, fd, (int)(size_t)d, (int)sizeof(d))) > 0) {
         for (at = 0; at < n; at += *(unsigned short *)(d + at + 16)) {
@@ -875,7 +876,13 @@ static void listing(const char *dir, char *out, int cap)
             if (same_str(name, ".") || same_str(name, "..")) {
                 continue;
             }
-            for (i = 0; name[i] && len < cap - 2; i++) {
+            for (i = 0; name[i]; i++) {
+            }
+            if (len + i + 2 > cap) {
+                syscall1(SYS_CLOSE, fd);
+                return -1;
+            }
+            for (i = 0; name[i]; i++) {
                 out[len++] = name[i];
             }
             out[len++] = ' ';
@@ -883,6 +890,7 @@ static void listing(const char *dir, char *out, int cap)
         }
     }
     syscall1(SYS_CLOSE, fd);
+    return n == 0 ? 0 : -1;
 }
 
 /* A /proc/<pid> directory lists its files in their order, `task` last, and a
@@ -906,16 +914,16 @@ static void pid_dir_rows(void)
         want[i] = files[i];
     }
     want[i] = '\0';
-    listing(dir, got, (int)sizeof(got));
-    check(same_str(got, want), "a thread's directory lists the files of /proc/<pid> but task");
+    check(listing(dir, got, (int)sizeof(got)) == 0 && same_str(got, want),
+          "a thread's directory lists the files of /proc/<pid> but task");
     want[i++] = 't';
     want[i++] = 'a';
     want[i++] = 's';
     want[i++] = 'k';
     want[i++] = ' ';
     want[i] = '\0';
-    listing("/proc/self", got, (int)sizeof(got));
-    check(same_str(got, want), "and /proc/self lists them all in order, task last");
+    check(listing("/proc/self", got, (int)sizeof(got)) == 0 && same_str(got, want),
+          "and /proc/self lists them all in order, task last");
 }
 
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
