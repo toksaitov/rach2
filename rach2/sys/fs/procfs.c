@@ -3307,6 +3307,125 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
+/** The text a read of the /proc/sys file `entry` gives, appended to `t`. */
+static void procfs_sysctl_text(struct procfs_text *t, int entry)
+{
+    if (entry == SYNTH_SYS_HOSTNAME) {
+        ap_str(t, uts_hostname());
+        ap_ch(t, '\n');
+    } else {
+        ap_str(t, synth_sys_text(entry));
+    }
+}
+
+/** Read a /proc/sys file opened for writing as well: its value now. */
+static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    uint32_t off = (uint32_t)e->ofd->offset;
+    struct procfs_text t;
+    uint32_t n = 0;
+
+    procfs_text_init(&t);
+    procfs_sysctl_text(&t, f->origin_pid);
+    if (t.nomem) {
+        kfree(t.buf);
+        return -ENOMEM;
+    }
+    if (off < (uint32_t)t.len) {
+        n = (uint32_t)t.len - off < count ? (uint32_t)t.len - off : count;
+        if (copy_to_user(buf, t.buf + off, n) != 0) {
+            kfree(t.buf);
+            return -EFAULT;
+        }
+    }
+    kfree(t.buf);
+    e->ofd->offset = off + n;
+    return (int32_t)n;
+}
+
+/**
+ * Write a /proc/sys file, as Linux's sysctl handlers take one.
+ *
+ * kernel/hostname becomes the text up to its first newline, at most 64
+ * bytes, as sethostname(2) would set it; the whole count is taken. A write
+ * to net/ipv4/ip_forward is an integer, and 0, which it is, is taken; any
+ * other value is -EINVAL, since the stack forwards nothing between
+ * interfaces, where Linux would begin to.
+ */
+static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct procfs_file *f = (struct procfs_file *)e->priv;
+    char text[65];
+    uint32_t n = count < 64u ? count : 64u;
+    uint32_t len = 0;
+    int32_t v;
+    int rc;
+
+    k_memset(text, 0, sizeof(text));
+    if (copy_from_user(text, buf, n) != 0) {
+        return -EFAULT;
+    }
+    if (f->origin_pid == SYNTH_SYS_HOSTNAME) {
+        while (len < n && text[len] != '\n' && text[len] != '\0') {
+            len++;
+        }
+        uts_set_hostname(text, len);
+        return (int32_t)count;
+    }
+    text[12] = '\0';
+    rc = oom_parse(text, &v);
+    if (rc != 0) {
+        return rc;
+    }
+    return v == 0 ? (int32_t)count : -EINVAL;
+}
+
+static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read, procfs_sysctl_write,
+                                                  procfs_poll, procfs_ioctl, procfs_close};
+
+/**
+ * Open a writable /proc/sys file for writing, or for reading and writing,
+ * which needs a privileged caller, as the file's mode, 0644 and owned by
+ * root, says. O_CREAT and O_TRUNC are taken as they are for a file that
+ * exists, which is what a shell's redirection and BusyBox's `sysctl -w` ask
+ * for. Each read and write reaches the value as it is then.
+ */
+static int procfs_open_sysctl(int entry, int flags)
+{
+    struct procfs_file *f;
+    fd_entry_t *e;
+    int acc = flags & 3;
+    int fd;
+
+    if (acc == 3 || !proc_privileged(current_proc)) {
+        return -EACCES;
+    }
+    f = kzalloc(sizeof(*f));
+    if (!f) {
+        return -ENOMEM;
+    }
+    f->origin_pid = entry;
+    f->origin_file = SYNTH_PROC_SYSCTL;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(f);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_PROC;
+    e->node = NULL;
+    e->sock = NULL;
+    e->ops = &procfs_sysctl_ops;
+    e->priv = f;
+    e->ofd->offset = 0;
+    e->flags = acc == 1 ? FD_FLAG_WRITE : (FD_FLAG_READ | FD_FLAG_WRITE);
+    if (flags & PROCFS_O_CLOEXEC) {
+        e->flags |= FD_FLAG_CLOEXEC;
+    }
+    return fd;
+}
+
 /** Distinguish global snapshots from files whose process must still exist. */
 static int procfs_needs_pid(int kind)
 {
@@ -3368,6 +3487,9 @@ int procfs_open(const struct vpath *vp, int flags)
     if (vp->kind == VNODE_PROC_FILE && vp->procfile == SYNTH_PROC_MEM) {
         return procfs_open_mem(vp, pid, flags);
     }
+    if (vp->kind == VNODE_PROC_SYS_FILE && synth_sys_writable(vp->sysent) && (flags & 3) != 0) {
+        return procfs_open_sysctl(vp->sysent, flags);
+    }
     if ((flags & 3) != 0 || (flags & 0100 /* O_CREAT */)) {
         return -EACCES;
     }
@@ -3413,12 +3535,7 @@ int procfs_open(const struct vpath *vp, int flags)
                   ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
                   : -1;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
-        if (vp->sysent == SYNTH_SYS_HOSTNAME) {
-            ap_str(&text, uts_hostname());
-            ap_ch(&text, '\n');
-        } else {
-            ap_str(&text, synth_sys_text(vp->sysent));
-        }
+        procfs_sysctl_text(&text, vp->sysent);
         len = text.len;
         pid = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

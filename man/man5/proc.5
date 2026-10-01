@@ -421,7 +421,8 @@ fields this kernel keeps:
 1, the retransmission bounds in milliseconds, -1 for no fixed limit, and the
 connections ESTABLISHED or in CLOSE_WAIT.
 .It Pa /proc/sys
-A few of Linux's sysctl files, read-only, each a value and a newline:
+A few of Linux's sysctl files, each a value and a newline, read-only but
+for the two the end of this entry describes:
 .Pa fs/inotify/max_queued_events ,
 16384,
 .Pa fs/inotify/max_user_instances ,
@@ -446,14 +447,21 @@ says;
 .Pa kernel/hostname ,
 the name
 .Xr sethostname 2
-set last, read when the file is opened;
+set last, read when the file is opened, and set by a write of the
+privileged caller to the text before its first newline, at most 64 bytes;
 .Pa kernel/domainname ,
 .Ql (none) ,
 as
 .Xr uname 2
 reports it; and
 .Pa net/ipv4/ip_forward ,
-0, since the stack forwards nothing between interfaces.
+0, since the stack forwards nothing between interfaces: a privileged
+caller's write of 0 succeeds, and of any other number fails with
+.Er EINVAL ,
+where Linux would begin to forward.
+The two writable files have mode 0644, and an open of either for writing
+by a caller without privilege fails with
+.Er EACCES .
 .It Pa /proc/stat
 System counters, one named record per line.
 The first two lines have this form:

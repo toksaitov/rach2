@@ -314,4 +314,8 @@ void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
  * name, for /proc/sys/kernel/hostname. */
 const char *uts_hostname(void);
 
+/** Set the host name to the `len` bytes of `name`, at most 64, which need
+ * not end in a NUL; the caller has checked the privilege. */
+void uts_set_hostname(const char *name, uint32_t len);
+
 #endif

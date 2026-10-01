@@ -78,6 +78,9 @@ typedef unsigned int size_t;
 #define CLOCK_MONOTONIC 1
 
 #define O_RDONLY 0
+#define O_WRONLY 1
+#define O_TRUNC  01000
+#define EINVAL   22
 #define SIGKILL  9
 
 static int syscall1(int n, int a)
@@ -796,6 +799,43 @@ static void sys_rows(void)
     check(contains(buf, n, "\nsysfs /sys sysfs ro,"), "/proc/mounts lists /sys, read-only");
 }
 
+/* A write of `text` through a descriptor of `name` opened for writing; the
+   write's result, or the open's error. */
+static int write_file(const char *name, const char *text, int len)
+{
+    int fd = syscall3(SYS_OPEN, (int)(size_t)name, O_WRONLY | O_TRUNC, 0);
+    int rc;
+
+    if (fd < 0) {
+        return fd;
+    }
+    rc = syscall3(SYS_WRITE, fd, (int)(size_t)text, len);
+    syscall1(SYS_CLOSE, fd);
+    return rc;
+}
+
+/* /proc/sys/kernel/hostname takes a write as sethostname does, the text
+   before its newline, and net/ipv4/ip_forward takes 0 and refuses
+   forwarding, which the stack does not do, with EINVAL. */
+static void sysctl_rows(void)
+{
+    static char old[80];
+    int was = slurp("/proc/sys/kernel/hostname", old, (int)sizeof(old));
+    int n;
+
+    check(was > 1 && write_file("/proc/sys/kernel/hostname", "probehost\n", 10) == 10,
+          "/proc/sys/kernel/hostname takes a write");
+    n = slurp("/proc/sys/kernel/hostname", buf, (int)sizeof(buf));
+    check(n == 10 && contains(buf, n, "probehost\n"),
+          "and the host name is the text before its newline");
+    if (was > 1) {
+        write_file("/proc/sys/kernel/hostname", old, was);
+    }
+    check(write_file("/proc/sys/net/ipv4/ip_forward", "0\n", 2) == 2 &&
+              write_file("/proc/sys/net/ipv4/ip_forward", "1\n", 2) == -EINVAL,
+          "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");
+}
+
 /* /dev/rtc0: the CMOS clock as hwclock reads it, the hour and minute of
    RTC_RD_TIME those of the real time, give or take the minute's turn between
    the two readings. */
@@ -1422,6 +1462,7 @@ void probe_main(unsigned int *sp)
 
     dgram_and_local_rows();
     sys_rows();
+    sysctl_rows();
     rtc_rows();
     smaps_rows();
     pid_dir_rows();

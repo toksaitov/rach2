@@ -2273,6 +2273,15 @@ const char *uts_hostname(void)
     return k_hostname;
 }
 
+void uts_set_hostname(const char *name, uint32_t len)
+{
+    if (len > 64) {
+        len = 64;
+    }
+    k_memcpy(k_hostname, name, len);
+    k_hostname[len] = '\0';
+}
+
 /* Copy a C string into a fixed 65-byte utsname field (always
  * NUL-terminated). */
 static void uname_field(char *dst, const char *src)
@@ -2323,8 +2332,7 @@ static int32_t sys_sethostname(isr_params_t *params)
     if (len > 0 && copy_from_user(buf, name, (uint32_t)len) != 0) {
         return -EFAULT;
     }
-    buf[len] = '\0';
-    k_memcpy(k_hostname, buf, (uint32_t)len + 1);
+    uts_set_hostname(buf, (uint32_t)len);
     return 0;
 }
 

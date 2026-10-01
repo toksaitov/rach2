@@ -150,8 +150,8 @@ struct synth_dir {
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 
 /*
- * /proc/sys: a few of Linux's sysctl files, read-only, in a table of
- * entries. Entry 0 is /proc/sys itself; every other entry has its directory
+ * /proc/sys: a few of Linux's sysctl files, in a table of entries, of which
+ * kernel/hostname and net/ipv4/ip_forward take a write. Entry 0 is /proc/sys itself; every other entry has its directory
  * as a `parent` entry, and a file has its text. Each accessor answers NULL
  * or -1 for an index past the table.
  */
@@ -159,6 +159,10 @@ int synth_sys_count(void);
 /* The entry of kernel/hostname, whose text is the host name of the moment,
  * which procfs reads, and not the table's. */
 #define SYNTH_SYS_HOSTNAME 11
+/* The entry of net/ipv4/ip_forward, which takes a write of 0. */
+#define SYNTH_SYS_IP_FORWARD 15
+/** Whether a privileged caller may write the file entry `entry`. */
+int synth_sys_writable(int entry);
 const char *synth_sys_name(int entry);
 int synth_sys_parent(int entry);
 /** The text of a file entry, NULL for a directory. */

@@ -5075,3 +5075,13 @@ old
 new
     if (0 && !(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 &&
 end
+
+fault sysctl-forward-taken
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: /proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL
+old
+    return v == 0 ? (int32_t)count : -EINVAL;
+new
+    return (int32_t)count;
+end

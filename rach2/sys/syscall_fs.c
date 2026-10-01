@@ -5350,8 +5350,14 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return synth_proc_stat(kst, procfs_ino_loadavg());
     case VNODE_PROC_DISKSTATS:
         return synth_proc_stat(kst, procfs_ino_diskstats());
-    case VNODE_PROC_SYS_FILE:
-        return synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
+    case VNODE_PROC_SYS_FILE: {
+        int32_t rc = synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
+
+        if (synth_sys_writable(vp->sysent)) {
+            kst->st_mode = S_IFREG | 0644;
+        }
+        return rc;
+    }
     case VNODE_PROC_SYS_DIR:
         kst->st_dev = PROCFS_FSID;
         kst->st_mode = S_IFDIR | 0555;

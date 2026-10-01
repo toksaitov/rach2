@@ -176,6 +176,11 @@ int synth_sys_count(void)
     return (int)(sizeof(sysents) / sizeof(sysents[0]));
 }
 
+int synth_sys_writable(int entry)
+{
+    return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_IP_FORWARD;
+}
+
 const char *synth_net_name(int origin)
 {
     static const char *const names[] = {"udp", "raw", "unix", "sockstat", "snmp"};
