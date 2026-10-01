@@ -1423,11 +1423,12 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
                                  entry->sock->remote_ip);
 }
 
-/* shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). Any direction that
- * includes the write side drives the TCP active close (a FIN, so the peer reads
- * EOF); SHUT_RD alone is accepted as a no-op. We have no lingering half-open
- * state, so a write-side shutdown sends the FIN exactly as close() would
- * (documented). */
+/* shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). SHUT_WR closes the
+ * sending half: the FIN goes after the queued data, a later send is EPIPE,
+ * and the peer's data and FIN still reach the reader, as `nc` needs when it
+ * has sent its input and reads the answer. SHUT_RDWR closes the connection as
+ * close() does, and the socket reads end of input. SHUT_RD alone is accepted
+ * as a no-op. */
 #define SHUT_RD 0
 
 #define SHUT_WR 1
@@ -1453,7 +1454,10 @@ static int32_t do_shutdown(int fd, int how)
     if (!tcp_is_connected(entry->sock)) {
         return -ENOTCONN;
     }
-    if (how == SHUT_WR || how == SHUT_RDWR) {
+    if (how == SHUT_WR) {
+        tcp_shutdown_send(entry->sock);
+        wq_wake_all(&entry->sock->waiters);
+    } else if (how == SHUT_RDWR) {
         entry->sock->shut_down = 1;
         tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
         /* `tcp_close` detaches the socket from its block both ways, so no

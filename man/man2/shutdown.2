@@ -28,24 +28,28 @@ Accepted without effect.
 Input remains available.
 .It Dv SHUT_WR
 Value 1.
-Start the normal TCP close and detach the connection record from the
-socket.
-In the established or close-wait state, queued output is sent before
-the FIN, so the peer receives end of input after those bytes.
-In other connected closing states, the connection record is freed.
+Close the sending half, as Linux does.
+In the established or close-wait state, queued output is sent and then
+the FIN, so the peer receives end of input after those bytes, and a
+later send fails with
+.Er EPIPE .
+The connection stays attached to the socket: the peer's data and its
+FIN still reach a read, which is how a client such as
+.Xr nc 1
+sends its request and reads the answer.
+The socket's close finishes the connection's close.
+In a later closing state, whose FIN is on its way already, nothing
+changes.
 .It Dv SHUT_RDWR
 Value 2.
-The same operation as
-.Dv SHUT_WR .
-.El
-.Pp
-Unlike Linux, a write-side shutdown does not preserve the connection
-for continued receiving.
-It uses the same TCP close operation as the final close of the socket.
+Start the normal TCP close and detach the connection record from the
+socket, as the final close of the socket does: a read returns end of
+input at once, and data the peer sends later is not kept.
 The descriptor remains open, but a later
 .Fn shutdown
 fails with
 .Er ENOTCONN .
+.El
 .Pp
 This operation is subcall 13 of i386
 .Xr socketcall 2 ,
@@ -58,11 +62,16 @@ On failure it returns -1 and sets
 The kernel interface returns the negative error number.
 .Sh EXAMPLES
 The default suite's
-.Pa tests/loopprobe.c
-shuts a connected client down with
+.Pa tests/musl/sockflagmusl.c
+sends a request over the loopback, shuts the client's sending half with
 .Dv SHUT_WR ,
 checks that a send then fails with
 .Er EPIPE ,
+and reads the server's answer, which the server sends only after it has
+read the request and its end.
+.Pa tests/loopprobe.c
+shuts a client whose peer has closed with
+.Dv SHUT_WR
 and checks that a blocking and a nonblocking read return zero.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"

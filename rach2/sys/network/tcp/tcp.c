@@ -813,7 +813,7 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     }
     tcb = sock->tcb;
 
-    if (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) {
+    if ((tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT) || tcb->fin_pending) {
         net_unlock(flags);
         return -1;
     }
@@ -1212,7 +1212,7 @@ void tcp_tick(void)
         next = tcb->next;
 
         if (tcb->state == TCP_TIME_WAIT) {
-            if (kernel_ticks >= tcb->timewait_until) {
+            if (kernel_ticks >= tcb->timewait_until && !tcb->sock) {
                 tcb_free(tcb);
                 continue;
             }
@@ -1230,7 +1230,7 @@ void tcp_tick(void)
         }
 
         if (tcb->state == TCP_FIN_WAIT_2) {
-            if (kernel_ticks >= tcb->timewait_until) {
+            if (kernel_ticks >= tcb->timewait_until && !tcb->sock) {
                 tcb_free(tcb);
             }
             continue;
@@ -1447,6 +1447,48 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 }
 
 /**
+ * The peer's FIN, taken in a FIN_WAIT state: a socket the connection's
+ * shutdown left attached reads the end of input after the data before it.
+ */
+static void tcp_take_fin(struct tcb *tcb)
+{
+    tcb->fin_received = 1;
+    if (tcb->sock) {
+        socket_tcp_fin(tcb->sock);
+    }
+}
+
+/**
+ * The end of a closed connection: free the block, or, while a socket that
+ * shut its sending half holds it, keep it as CLOSED with the data its reader
+ * has yet to read, for the socket's close to free.
+ */
+static void tcp_closed_or_free(struct tcb *tcb)
+{
+    if (!tcb->sock) {
+        tcb_free(tcb);
+        return;
+    }
+    tcb->state = TCP_CLOSED;
+    tcb->retx_flags = 0;
+    tcb->rto_timer = 0;
+    tcb->zwp_timer = 0;
+}
+
+void tcp_shutdown_send(struct socket *sock)
+{
+    struct tcb *tcb;
+    uint32_t flags = net_lock();
+
+    tcb = sock ? sock->tcb : NULL;
+    if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT)) {
+        tcb->fin_pending = 1;
+        tcp_pump(tcb);
+    }
+    net_unlock(flags);
+}
+
+/**
  * Detach the socket and begin closing the connection.
  *
  * In ESTABLISHED or CLOSE_WAIT, flushes queued data and sends a FIN after the
@@ -1483,15 +1525,20 @@ void tcp_close(struct socket *sock)
         tcb->fin_pending = 1;
         tcp_pump(tcb);
         break;
+    case TCP_FIN_WAIT_2:
+        tcb->timewait_until = kernel_ticks + TCP_FIN_WAIT2_TICKS;
+        break;
+    case TCP_FIN_WAIT_1:
+    case TCP_CLOSING:
+    case TCP_LAST_ACK:
+    case TCP_TIME_WAIT:
+        /* Half closed by shutdown: the FIN went, and the block finishes
+         * the close without its socket, as it would after a close. */
+        break;
     case TCP_CLOSED:
     case TCP_LISTEN:
     case TCP_SYN_SENT:
     case TCP_SYN_RCVD:
-    case TCP_FIN_WAIT_1:
-    case TCP_FIN_WAIT_2:
-    case TCP_CLOSING:
-    case TCP_LAST_ACK:
-    case TCP_TIME_WAIT:
     default:
         tcb_free(tcb);
         break;
@@ -2248,15 +2295,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         }
 
         if (payload_len > 0) {
-            if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
-            }
+            tcp_take_data(tcb, seq, payload, payload_len);
             needs_ack = 1;
         }
 
         if (flags & TCP_FIN) {
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
+                tcp_take_fin(tcb);
                 tcb->state = (tcb->state == TCP_FIN_WAIT_2) ? TCP_TIME_WAIT : TCP_CLOSING;
                 if (tcb->state == TCP_TIME_WAIT) {
                     tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
@@ -2278,14 +2324,13 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         int needs_ack = 0;
 
         if (payload_len > 0) {
-            if (seq == tcb->rcv_nxt) {
-                tcb->rcv_nxt += tcp_accept_data(tcb, payload, payload_len);
-            }
+            tcp_take_data(tcb, seq, payload, payload_len);
             needs_ack = 1;
         }
         if (flags & TCP_FIN) {
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
+                tcp_take_fin(tcb);
                 tcb->state = TCP_TIME_WAIT;
                 tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
             }
@@ -2317,7 +2362,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 
     case TCP_LAST_ACK:
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
-            tcb_free(tcb);
+            tcp_closed_or_free(tcb);
         } else {
             if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {

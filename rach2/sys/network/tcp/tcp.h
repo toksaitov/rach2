@@ -251,8 +251,8 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port);
 
 /**
  * Queue up to `len` bytes and return the count accepted. Return zero when the
- * send ring is full, or -1 for a missing connection, negative length, or state
- * other than ESTABLISHED or CLOSE_WAIT.
+ * send ring is full, or -1 for a missing connection, negative length, state
+ * other than ESTABLISHED or CLOSE_WAIT, or a sending half shut down.
  *
  * Save and mask interrupts across the connection checks, ring update, and
  * transmit. Retain unacknowledged bytes for retransmission.
@@ -261,6 +261,14 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len);
 
 /** Detach the socket and begin closing the connection. */
 void tcp_close(struct socket *sock);
+
+/**
+ * Close the sending half of the connection, as shutdown(SHUT_WR) asks: the
+ * queued data goes out and a FIN after it, and the socket stays attached, so
+ * the peer's data and its FIN still reach the reader, until the socket's
+ * close. A connection not in ESTABLISHED or CLOSE_WAIT is left as it is.
+ */
+void tcp_shutdown_send(struct socket *sock);
 
 /** Report whether a stream socket has a peer (ESTABLISHED or any later
  * state). */

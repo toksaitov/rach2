@@ -4860,6 +4860,25 @@ new
         }
 end
 
+# shutdown(SHUT_WR), a half close.
+
+fault shutdown-closes-whole
+probe sockflagmusl
+file rach2/sys/syscall_net.c
+expect SOCKFLAGMUSL FAIL (the answer after shutdown(SHUT_WR) did not arrive
+old
+    if (how == SHUT_WR) {
+        tcp_shutdown_send(entry->sock);
+        wq_wake_all(&entry->sock->waiters);
+    } else if (how == SHUT_RDWR) {
+new
+    if (how == SHUT_WR) {
+        entry->sock->shut_down = 1;
+        tcp_close(entry->sock);
+        wq_wake_all(&entry->sock->waiters);
+    } else if (how == SHUT_RDWR) {
+end
+
 # splice, tee and sendfile, which answer EINVAL.
 
 fault splice-missing

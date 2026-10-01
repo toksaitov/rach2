@@ -592,6 +592,7 @@ tests/musl/schedmusl.c:scheduling complexity 54 a test's rows, each a case, read
 
 tests/musl/sigframemusl.c:main complexity 30 a test's rows, each a case, read as one table
 
+tests/musl/sockflagmusl.c:main complexity 26 a probe, one sequence of steps in the order the log records them
 tests/musl/spawnmusl.c:main complexity 36 a test's rows, each a case, read as one table
 tests/musl/spawnmusl.c:main lines 184 a test's rows, each a case, read as one table
 

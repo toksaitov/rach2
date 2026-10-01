@@ -14,7 +14,9 @@
  * no flags has neither, and reports no IP options, which OpenSSH's server
  * reads before it talks to a client and ends a connection that has any.
  * FIONBIO sets and clears that connection's O_NONBLOCK, as OpenSSL's server
- * sets its sockets'.
+ * sets its sockets'. A client that sent its request and shut its sending half
+ * reads the server's answer and then the end of input, as `nc` does, and a
+ * send after the shutdown is EPIPE.
  *
  * Prints "SOCKFLAGMUSL OK" on success and "SOCKFLAGMUSL FAIL (detail)"
  * otherwise.
@@ -25,6 +27,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -124,6 +127,42 @@ static int listener(void)
     return ls;
 }
 
+/** A half close over the loopback on the listener `ls`: the client sends its
+ * request and shuts its sending half, the server reads the request and the
+ * end of input and only then answers, and the client reads the answer. */
+static int half_close(int ls)
+{
+    char buf[16];
+    size_t got = 0;
+    ssize_t n;
+    int cs = connect_one();
+    int as = cs < 0 ? -1 : accept_within(ls, 0);
+
+    signal(SIGPIPE, SIG_IGN);
+    if (as < 0 || send(cs, "ask\n", 4, 0) != 4 || shutdown(cs, SHUT_WR) != 0) {
+        return fail("a request and the shutdown of the sending half");
+    }
+    if (send(cs, "x", 1, 0) != -1 || errno != EPIPE) {
+        return fail("a send after shutdown(SHUT_WR) was not EPIPE");
+    }
+    while ((n = recv(as, buf + got, sizeof(buf) - got, 0)) > 0) {
+        got += (size_t)n;
+    }
+    if (n != 0 || got != 4 || send(as, "answer", 6, 0) != 6) {
+        return fail("the server did not read the request to its end and answer");
+    }
+    close(as);
+    got = 0;
+    while ((n = recv(cs, buf + got, sizeof(buf) - got, 0)) > 0) {
+        got += (size_t)n;
+    }
+    if (n != 0 || got != 6 || memcmp(buf, "answer", 6) != 0) {
+        return fail("the answer after shutdown(SHUT_WR) did not arrive");
+    }
+    close(cs);
+    return 0;
+}
+
 int main(void)
 {
     unsigned char opts[40];
@@ -172,6 +211,9 @@ int main(void)
     on = 0;
     if (ioctl(as, FIONBIO, &on) != 0 || !has(as, 0, 0)) {
         return fail("FIONBIO did not make a connection blocking again");
+    }
+    if (half_close(ls) != 0) {
+        return 1;
     }
 
     printf("SOCKFLAGMUSL OK\n");
