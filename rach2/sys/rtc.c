@@ -340,6 +340,14 @@ static int64_t rtc_anchor_seconds;
 static uint32_t rtc_anchor_uptime;
 static int rtc_anchored;
 
+/* What setting the clock added to the time the anchor keeps, in seconds and
+ * nanoseconds below a second, which every reading of real time adds; and the
+ * last reading, before which no later one may fall until the clock is set. */
+static int64_t rtc_step_seconds;
+static int32_t rtc_step_nanoseconds;
+static int64_t rtc_last_seconds;
+static int64_t rtc_last_nanoseconds;
+
 /** Read one CMOS register. Bit 7 of the address port is left clear, so NMI
  *  stays enabled: this reads the clock, it does not change the machine. */
 static uint8_t rtc_register(uint8_t reg)
@@ -496,26 +504,32 @@ int64_t rtc_boot_time(void)
 int64_t rtc_boot_epoch(void)
 {
     if (!rtc_anchored) {
-        return 0;
+        return rtc_step_seconds;
     }
-    return rtc_anchor_seconds - (int64_t)rtc_anchor_uptime;
+    return rtc_anchor_seconds - (int64_t)rtc_anchor_uptime + rtc_step_seconds;
+}
+
+/** Add the clock's step to a time the anchor keeps. */
+static void rtc_add_step(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds += rtc_step_seconds;
+    *nanoseconds += rtc_step_nanoseconds;
+    while (*nanoseconds >= 1000000000) {
+        *nanoseconds -= 1000000000;
+        (*seconds)++;
+    }
 }
 
 /**
- * The current real time, with the PIT position added to the delivered ticks.
+ * The time the anchor keeps now, with the PIT position added to the delivered
+ * ticks; the caller has interrupts off.
  *
  * IRQ0 can be pending after the counter wraps. Read its pending bit on both
- * sides of the latch with interrupts disabled; if it changed, latch again.
- * A pending tick belongs to the new period even before the handler counts it.
- * The saved result prevents backward steps if interrupts stay masked across
- * several periods, which the PIC cannot count, or a faulty latch reads zero.
- * This only supplies now; callers that set an explicit file time keep it.
+ * sides of the latch; if it changed, latch again. A pending tick belongs to
+ * the new period even before the handler counts it.
  */
-void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
 {
-    static int64_t last_seconds;
-    static int64_t last_nanoseconds;
-    uint32_t flags = kirq_save();
     uint32_t uptime = kernel_uptime_seconds;
     uint32_t ticks = kernel_second_ticks;
     uint32_t phase_ns;
@@ -534,12 +548,75 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
                          nanoseconds);
     *nanoseconds += phase_ns;
-    if (*seconds < last_seconds || (*seconds == last_seconds && *nanoseconds < last_nanoseconds)) {
-        *seconds = last_seconds;
-        *nanoseconds = last_nanoseconds;
+}
+
+/**
+ * The current real time: the time the anchor keeps, with the clock's step
+ * added. The saved result prevents backward steps if interrupts stay masked
+ * across several periods, which the PIC cannot count, or a faulty latch reads
+ * zero, until the clock is set. This only supplies now; callers that set an
+ * explicit file time keep it.
+ */
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t flags = kirq_save();
+
+    rtc_kept_time(seconds, nanoseconds);
+    rtc_add_step(seconds, nanoseconds);
+    if (*seconds < rtc_last_seconds ||
+        (*seconds == rtc_last_seconds && *nanoseconds < rtc_last_nanoseconds)) {
+        *seconds = rtc_last_seconds;
+        *nanoseconds = rtc_last_nanoseconds;
     }
-    last_seconds = *seconds;
-    last_nanoseconds = *nanoseconds;
+    rtc_last_seconds = *seconds;
+    rtc_last_nanoseconds = *nanoseconds;
+    kirq_restore(flags);
+}
+
+/**
+ * The current real time to the last tick, without the PIT's place within it:
+ * the coarse clock, which costs no latch.
+ */
+void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t flags = kirq_save();
+
+    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, kernel_uptime_seconds,
+                         kernel_second_ticks, seconds, nanoseconds);
+    rtc_add_step(seconds, nanoseconds);
+    kirq_restore(flags);
+}
+
+/**
+ * Make the real time `seconds` and `nanoseconds` now, which clock_settime,
+ * settimeofday and stime do for a privileged caller.
+ *
+ * The anchor stays as the boot read it; the difference between the time it
+ * keeps now and the time asked for becomes the step every reading adds, so the
+ * clock goes on from the new time at the same rate. A reading after a step
+ * back may be earlier than one before it, as the step asks, and the boot epoch
+ * moves with the step, as Linux's does, so that a process's start time read
+ * from it stays where it was against the clock.
+ */
+void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
+{
+    int64_t kept_seconds;
+    int64_t kept_nanoseconds;
+    uint32_t flags = kirq_save();
+
+    rtc_kept_time(&kept_seconds, &kept_nanoseconds);
+    while (kept_nanoseconds >= 1000000000) {
+        kept_nanoseconds -= 1000000000;
+        kept_seconds++;
+    }
+    rtc_step_seconds = seconds - kept_seconds;
+    rtc_step_nanoseconds = nanoseconds - (int32_t)kept_nanoseconds;
+    if (rtc_step_nanoseconds < 0) {
+        rtc_step_nanoseconds += 1000000000;
+        rtc_step_seconds--;
+    }
+    rtc_last_seconds = seconds;
+    rtc_last_nanoseconds = nanoseconds;
     kirq_restore(flags);
 }
 

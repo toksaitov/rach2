@@ -96,6 +96,8 @@
 #define SYS_PPOLL           309
 #define SYS_GETRUSAGE       77
 #define SYS_GETTIMEOFDAY    78
+#define SYS_SETTIMEOFDAY    79
+#define SYS_STIME           25
 #define SYS_STAT            106
 #define SYS_LSTAT           107
 #define SYS_UNAME           122
@@ -137,6 +139,7 @@
 #define SYS_GETGID32        200
 #define SYS_GETEUID32       201
 #define SYS_GETEGID32       202
+#define SYS_CLOCK_SETTIME   264
 #define SYS_CLOCK_GETTIME   265
 #define SYS_CLOCK_GETRES    266
 #define SYS_CLOCK_NANOSLEEP 267
@@ -164,6 +167,7 @@
 /* The clock calls with 64-bit times, whose names are longer than the column
  * above. */
 #define SYS_CLOCK_GETTIME64     403
+#define SYS_CLOCK_SETTIME64     404
 #define SYS_CLOCK_GETRES_TIME64 406
 
 /* Auth/identity, resource, and tail syscalls a login server touches. */

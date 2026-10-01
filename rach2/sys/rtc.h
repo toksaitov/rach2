@@ -71,5 +71,7 @@ int rtc_is_anchored(void);
 int64_t rtc_boot_time(void);
 int64_t rtc_boot_epoch(void);
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
+void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
+void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 
 #endif

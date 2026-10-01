@@ -50,6 +50,7 @@ The kernel registers the following 216 calls.
 .It 19 Ta Xr lseek 2
 .It 20 Ta Xr getpid 2
 .It 21 Ta Xr mount 2
+.It 25 Ta Xr stime 2
 .It 26 Ta Xr ptrace 2
 .It 27 Ta Xr alarm 2
 .It 29 Ta Xr pause 2
@@ -77,6 +78,7 @@ The kernel registers the following 216 calls.
 .It 76 Ta Xr getrlimit 2
 .It 77 Ta Xr getrusage 2
 .It 78 Ta Xr gettimeofday 2
+.It 79 Ta Xr settimeofday 2
 .It 82 Ta Xr select 2
 .It 83 Ta Xr symlink 2
 .It 85 Ta Xr readlink 2
@@ -183,6 +185,7 @@ The kernel registers the following 216 calls.
 .It 255 Ta Xr epoll_ctl 2
 .It 256 Ta Xr epoll_wait 2
 .It 258 Ta Xr set_tid_address 2
+.It 264 Ta Xr clock_settime 2
 .It 265 Ta Xr clock_gettime 2
 .It 266 Ta Xr clock_getres 2
 .It 267 Ta Xr clock_nanosleep 2
@@ -248,6 +251,7 @@ The kernel registers the following 216 calls.
 .It 376 Ta Xr mlock2 2
 .It 383 Ta Xr statx 2
 .It 403 Ta Xr clock_gettime64 2
+.It 404 Ta Xr clock_settime64 2
 .It 406 Ta Xr clock_getres_time64 2
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2

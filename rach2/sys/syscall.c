@@ -491,12 +491,9 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
         out->tv_nsec = (int32_t)nanoseconds;
         break;
     case KCLOCK_REAL_COARSE:
-        flags = kirq_save();
-        seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;
-        ticks = kernel_second_ticks;
-        kirq_restore(flags);
+        rtc_coarse_realtime(&seconds, &nanoseconds);
         out->tv_sec = (int32_t)seconds;
-        out->tv_nsec = (int32_t)(ticks * 10000000u);
+        out->tv_nsec = (int32_t)nanoseconds;
         break;
     case KCLOCK_MONO:
         flags = kirq_save();
@@ -595,6 +592,88 @@ static int32_t sys_clock_getres_time64(isr_params_t *params)
         return -EFAULT;
     }
     return 0;
+}
+
+/**
+ * Set the real time to `seconds` and `nanoseconds`, the common end of
+ * clock_settime, settimeofday and stime: a privileged caller's, after the
+ * call has checked its own clock and time. -EPERM for any other caller and
+ * -EINVAL for a time before 1970 or nanoseconds outside a second, as Linux
+ * answers them.
+ */
+static int32_t realtime_set(int64_t seconds, int64_t nanoseconds)
+{
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (seconds < 0 || nanoseconds < 0 || nanoseconds > 999999999) {
+        return -EINVAL;
+    }
+    rtc_set_realtime(seconds, (int32_t)nanoseconds);
+    return 0;
+}
+
+/**
+ * clock_settime (264): EBX = clockid, ECX = the 32-bit timespec. Only
+ * CLOCK_REALTIME may be set, as on Linux; another clock is -EINVAL.
+ */
+static int32_t sys_clock_settime(isr_params_t *params)
+{
+    struct kernel_timespec ts;
+
+    if ((int32_t)params->ebx != CLOCK_REALTIME) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&ts, (const void __user *)params->ecx, sizeof(ts)) != 0) {
+        return -EFAULT;
+    }
+    return realtime_set(ts.tv_sec, ts.tv_nsec);
+}
+
+/** clock_settime64 (404): clock_settime with the 64-bit timespec. */
+static int32_t sys_clock_settime64(isr_params_t *params)
+{
+    struct kernel_timespec64 ts;
+
+    if ((int32_t)params->ebx != CLOCK_REALTIME) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&ts, (const void __user *)params->ecx, sizeof(ts)) != 0) {
+        return -EFAULT;
+    }
+    return realtime_set(ts.tv_sec, ts.tv_nsec);
+}
+
+/**
+ * settimeofday (79): EBX = timeval, ECX = timezone. The time zone is not
+ * kept, so a call with only one is done and changes nothing; a call with
+ * neither is too, as on Linux.
+ */
+static int32_t sys_settimeofday(isr_params_t *params)
+{
+    struct kernel_timeval tv;
+
+    if (!params->ebx) {
+        return proc_privileged(current_proc) ? 0 : -EPERM;
+    }
+    if (copy_from_user(&tv, (const void __user *)params->ebx, sizeof(tv)) != 0) {
+        return -EFAULT;
+    }
+    if (tv.tv_usec < 0 || tv.tv_usec > 999999) {
+        return -EINVAL;
+    }
+    return realtime_set(tv.tv_sec, (int64_t)tv.tv_usec * 1000);
+}
+
+/** stime (25): EBX = the seconds, a 32-bit time_t. */
+static int32_t sys_stime(isr_params_t *params)
+{
+    int32_t seconds;
+
+    if (copy_from_user(&seconds, (const void __user *)params->ebx, sizeof(seconds)) != 0) {
+        return -EFAULT;
+    }
+    return realtime_set(seconds, 0);
 }
 
 /**
@@ -1929,13 +2008,17 @@ static int32_t sys_uname(isr_params_t *params)
 }
 
 /* sethostname(74): set the single mutable host name (uname's nodename, what
- * gethostname reads back). */
+ * gethostname reads back); a privileged caller's alone, -EPERM for another,
+ * as on Linux. */
 static int32_t sys_sethostname(isr_params_t *params)
 {
     const char __user *name = (const char __user *)params->ebx;
     int len = (int)params->ecx;
     char buf[65];
 
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
     if (len < 0 || len > 64) {
         return -EINVAL;
     }
@@ -2207,6 +2290,8 @@ void init_syscall(void)
     _syscall_table[SYS_NEWSELECT] = sys__newselect;
     _syscall_table[SYS_PSELECT6] = sys_pselect6;
     _syscall_table[SYS_GETTIMEOFDAY] = sys_gettimeofday;
+    _syscall_table[SYS_SETTIMEOFDAY] = sys_settimeofday;
+    _syscall_table[SYS_STIME] = sys_stime;
     _syscall_table[SYS_STAT] = sys_stat;
     _syscall_table[SYS_LSTAT] = sys_lstat;
     _syscall_table[SYS_GETCWD] = sys_getcwd;
@@ -2234,6 +2319,7 @@ void init_syscall(void)
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
+    _syscall_table[SYS_CLOCK_SETTIME] = sys_clock_settime;
     _syscall_table[SYS_CLOCK_GETRES] = sys_clock_getres;
     _syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
     _syscall_table[SYS_NANOSLEEP] = sys_nanosleep;
@@ -2346,6 +2432,7 @@ void init_syscall(void)
     _syscall_table[SYS_MLOCK2] = sys_mlock2;
     _syscall_table[SYS_MINCORE] = sys_mincore;
     _syscall_table[SYS_CLOCK_GETTIME64] = sys_clock_gettime64;
+    _syscall_table[SYS_CLOCK_SETTIME64] = sys_clock_settime64;
     _syscall_table[SYS_CLOCK_GETRES_TIME64] = sys_clock_getres_time64;
     _syscall_table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     _syscall_table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;

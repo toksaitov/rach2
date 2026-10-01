@@ -4783,6 +4783,46 @@ new
                {6, "core_name", "core\n"}};
 end
 
+# Who may set the host name and the clock.
+
+fault hostname-unprivileged
+probe authmusl
+file rach2/sys/syscall.c
+expect AUTHMUSL FAIL (an unprivileged caller set the host name)
+old
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (len < 0 || len > 64) {
+new
+    if (len < 0 || len > 64) {
+end
+
+fault clock-set-ignored
+probe authmusl
+file rach2/sys/syscall.c
+expect AUTHMUSL FAIL (root sets the real time forward and back)
+old
+    rtc_set_realtime(seconds, (int32_t)nanoseconds);
+    return 0;
+new
+    (void)nanoseconds;
+    return 0;
+end
+
+fault clock-set-unprivileged
+probe authmusl
+file rach2/sys/syscall.c
+expect AUTHMUSL FAIL (an unprivileged caller set the time)
+old
+    if (!proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (seconds < 0 || nanoseconds < 0 || nanoseconds > 999999999) {
+new
+    if (seconds < 0 || nanoseconds < 0 || nanoseconds > 999999999) {
+end
+
 # splice, tee and sendfile, which answer EINVAL.
 
 fault splice-missing

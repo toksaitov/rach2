@@ -169,6 +169,14 @@ int64_t rtc_boot_epoch(void)
     return 1000000;
 }
 
+/** Coarse real time as the clock keeps it: the boot's epoch plus the uptime
+ * at the tick. */
+void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;
+    *nanoseconds = (int64_t)kernel_second_ticks * 10000000;
+}
+
 /** The model's one other process, pid 9, whose CPU clock a caller may read. */
 static process_t other;
 static struct tgroup group, other_group;

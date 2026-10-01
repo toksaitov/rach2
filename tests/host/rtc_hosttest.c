@@ -159,6 +159,37 @@ static void subtick_rows(void)
     CHECK(sec == 42949672LL && ns == 41000);
 }
 
+/*
+ * Setting the clock from a time the anchor keeps of 20.000041 s, with no
+ * clock read at boot: the reading is the time set, at the same hardware
+ * state, and goes on from it at the ticks' rate; the coarse clock leaves out
+ * the PIT's 41 us; a step back reads back too, though it is earlier than the
+ * reading before it; and the boot epoch moves with the step.
+ */
+static void set_rows(void)
+{
+    int64_t sec, ns;
+
+    kernel_uptime_seconds = 20;
+    kernel_second_ticks = 0;
+    pending = 0;
+    wrap_on_pending = 0;
+    status = 0x80;
+    count = pit_reload - 100u;
+    rtc_set_realtime(1790000000LL, 500000000);
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 1790000000LL && ns == 500000000);
+    kernel_second_ticks = 1;
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 1790000000LL && ns == 510000000);
+    rtc_coarse_realtime(&sec, &ns);
+    CHECK(sec == 1790000000LL && ns == 509959000);
+    rtc_set_realtime(1000, 0);
+    rtc_realtime(&sec, &ns);
+    CHECK(sec == 1000 && ns == 0);
+    CHECK(rtc_boot_epoch() == 979);
+}
+
 /** A BCD byte from a two-digit value, the way the CMOS has one. */
 static unsigned char bcd(int value)
 {
@@ -421,5 +452,6 @@ int main(void)
     }
 
     subtick_rows();
+    set_rows();
     return fails > 100 ? 100 : fails;
 }

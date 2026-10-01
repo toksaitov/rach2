@@ -197,7 +197,7 @@ rach2/sys/proc/elf.c:elf_load_image_at nesting 5 one program loaded and entered,
 rach2/sys/rtc.c:rtc_decode complexity 31 a parser over an external format, one check per field in the format's order
 rach2/sys/rtc.c:rtc_decode lines 105 a parser over an external format, one check per field in the format's order
 
-rach2/sys/syscall.c:init_syscall lines 242 a table, one entry per system call number
+rach2/sys/syscall.c:init_syscall lines 246 a table, one entry per system call number
 rach2/sys/syscall.c:sys_ioctl complexity 33 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl lines 142 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall.c:sys_ioctl nesting 5 a dispatcher, one arm per command, read as a table
@@ -451,7 +451,7 @@ tests/host/pwauth_hosttest.c:main lines 240 a test's rows, each a case, read as 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 
 tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read as one table
-tests/host/rtc_hosttest.c:main lines 240 a test's rows, each a case, read as one table
+tests/host/rtc_hosttest.c:main lines 241 a test's rows, each a case, read as one table
 
 tests/host/rtl8168_hosttest.c:main complexity 97 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as one table
@@ -537,7 +537,8 @@ tests/musl/addusermusl.c:check_injection lines 110 a test's rows, each a case, r
 tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_refusals lines 101 a test's rows, each a case, read as one table
 
-tests/musl/authmusl.c:main complexity 37 a test's rows, each a case, read as one table
+tests/musl/authmusl.c:main complexity 42 a test's rows, each a case, read as one table
+tests/musl/authmusl.c:main lines 112 a test's rows, each a case, read as one table
 
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table

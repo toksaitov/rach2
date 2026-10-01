@@ -42,6 +42,8 @@ clock_getres_time64 2 gettimeofday
 clock_gettime 2 gettimeofday
 clock_gettime64 2 gettimeofday
 clock_nanosleep 2 nanosleep
+clock_settime 2 gettimeofday
+clock_settime64 2 gettimeofday
 clone 2 fork
 close 2 open
 close_range 2 open
@@ -344,6 +346,7 @@ setrlimit 2 prlimit64
 setserial 1 busybox-miscutils
 setsid 1 busybox-util-linux
 setsid 2 getpid
+settimeofday 2 gettimeofday
 setuid32 2 setuid
 setuidgid 8 busybox-runit
 sha1sum 1 busybox-coreutils
@@ -366,6 +369,7 @@ stat 1 busybox-coreutils
 stat64 2 stat
 statfs64 2 statfs
 statx 2 stat
+stime 2 gettimeofday
 strings 1 busybox-miscutils
 stty 1 busybox-coreutils
 sum 1 busybox-coreutils

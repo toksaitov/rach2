@@ -8,13 +8,15 @@
  * test credential "rach2", so this proves the guest verifies exactly what the
  * host's mkhash mints); getrlimit(RLIMIT_NOFILE) reports the real limit,
  * a thousand and twenty-four descriptors; gethostname() round-trips with
- * sethostname(); dup3 onto an
+ * sethostname(); root sets the real time ahead and back again through
+ * clock_settime, settimeofday and stime, and reads back each time it set;
+ * dup3 onto an
  * explicit high fd with O_CLOEXEC dups and sets close-on-exec; an advisory
  * fcntl(F_SETLK) read lock on it is granted, and a write lock refused with
  * EBADF, since the file is open for reading alone, as in Linux; and the
  * credential walk a login server performs works through libc: the seteuid
  * excursion and return, the real drop (gid first, then uid), and no way back
- * up afterward.
+ * up afterward, nor to the host name or the clock.
  *
  * Prints "AUTHMUSL OK" on success, "AUTHMUSL FAIL" otherwise. Linked against
  * the ported musl.
@@ -30,6 +32,68 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <time.h>
+
+/* The i386 calls with 32-bit times, which musl names for time64 programs by
+ * other names. */
+#define NR_STIME        25
+#define NR_SETTIMEOFDAY 79
+
+/** Whether the real time reads `sec` seconds, give or take two. */
+static int reads_near(long long sec)
+{
+    struct timespec ts;
+
+    return clock_gettime(CLOCK_REALTIME, &ts) == 0 && ts.tv_sec >= sec && ts.tv_sec <= sec + 2;
+}
+
+/**
+ * Set the real time `delta` seconds ahead with clock_settime, back with the
+ * kernel's settimeofday, whose timeval has 32-bit fields, and to the second it
+ * reads with stime: 0 when each reads back the time it set, and -1 with the
+ * errno of the first call refused, or EIO for a time that did not take.
+ */
+static int clock_step(long delta)
+{
+    struct timespec now, ahead;
+    struct {
+        int32_t sec;
+        int32_t usec;
+    } tv;
+    int32_t sec;
+
+    if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
+        return -1;
+    }
+    ahead.tv_sec = now.tv_sec + delta;
+    ahead.tv_nsec = now.tv_nsec;
+    if (clock_settime(CLOCK_REALTIME, &ahead) != 0) {
+        return -1;
+    }
+    if (!reads_near(ahead.tv_sec) || clock_gettime(CLOCK_REALTIME, &now) != 0) {
+        errno = EIO;
+        return -1;
+    }
+    tv.sec = (int32_t)(now.tv_sec - delta);
+    tv.usec = (int32_t)(now.tv_nsec / 1000);
+    if (syscall(NR_SETTIMEOFDAY, &tv, NULL) != 0) {
+        return -1;
+    }
+    if (!reads_near(tv.sec)) {
+        errno = EIO;
+        return -1;
+    }
+    sec = tv.sec;
+    if (syscall(NR_STIME, &sec) != 0) {
+        return -1;
+    }
+    if (!reads_near(sec)) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
 
 /** Advisory locks on `fd`, which is open for reading alone: a read lock is
  * granted, and a write lock refused with EBADF. 0, or 1 once the failure is
@@ -98,6 +162,10 @@ int main(void)
         printf("AUTHMUSL FAIL (hostname round-trip: %s)\n", host);
         return 1;
     }
+    if (clock_step(100000) != 0) {
+        printf("AUTHMUSL FAIL (root sets the real time forward and back)\n");
+        return 1;
+    }
 
     /* dup3 onto a high fd: the new fd must be CLOEXEC. */
     fd = open("/etc/passwd", O_RDONLY);
@@ -150,6 +218,14 @@ int main(void)
     }
     if (setuid(0) == 0 || seteuid(0) == 0 || setgid(0) == 0) {
         printf("AUTHMUSL FAIL (regained root after drop)\n");
+        return 1;
+    }
+    if (sethostname("other", 5) == 0 || errno != EPERM) {
+        printf("AUTHMUSL FAIL (an unprivileged caller set the host name)\n");
+        return 1;
+    }
+    if (clock_step(1000) == 0 || errno != EPERM) {
+        printf("AUTHMUSL FAIL (an unprivileged caller set the time)\n");
         return 1;
     }
 

@@ -341,8 +341,8 @@ changes = {
         'out->tv_sec = (int32_t)(kernel_ticks / 100);\n'
         '        out->tv_nsec = (int32_t)((kernel_ticks % 100) * 10000000);'),
     'clock-coarse': ('syscall',
-        'seconds = rtc_boot_epoch() + (int64_t)kernel_uptime_seconds;',
-        'seconds = (int64_t)kernel_uptime_seconds;'),
+        '        rtc_coarse_realtime(&seconds, &nanoseconds);',
+        '        get_current_time(&seconds, &nanoseconds);'),
     'clock-cpu-system': ('syscall',
         'return c->user_only ? user : user + sys;',
         'return user;'),

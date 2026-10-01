@@ -49,7 +49,8 @@ copies
 .Fa len
 bytes from
 .Fa name
-and appends a null byte to set the single system host name.
+and appends a null byte to set the single system host name, for a
+privileged caller alone, as on Linux.
 The length must be from 0 through 64.
 A length of 0 sets an empty name without reading
 .Fa name .
@@ -79,7 +80,12 @@ fraction, as
 .Pa /proc/loadavg
 reports them; see
 .Xr proc 5 .
-.It Va sharedram , bufferram , totalswap , freeswap , totalhigh , freehigh
+.It Va bufferram
+The pages the buffer cache holds, in bytes, which
+.Pa /proc/meminfo
+gives as
+.Li Buffers .
+.It Va sharedram , totalswap , freeswap , totalhigh , freehigh
 Zero.
 .El
 .Pp
@@ -121,4 +127,8 @@ cannot read the specified name bytes.
 The length passed to
 .Fn sethostname
 is outside the range 0 through 64.
+.It Bq Er EPERM
+The caller of
+.Fn sethostname
+is not privileged.
 .El

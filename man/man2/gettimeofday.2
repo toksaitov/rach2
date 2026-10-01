@@ -3,18 +3,27 @@
 .Os
 .Sh NAME
 .Nm gettimeofday ,
+.Nm settimeofday ,
 .Nm clock_gettime ,
+.Nm clock_settime ,
 .Nm clock_getres ,
+.Nm stime ,
 .Nm times ,
 .Nm utimensat
-.Nd read clocks and set file timestamps
+.Nd read and set clocks, and set file timestamps
 .Sh SYNOPSIS
 .In sys/time.h
 .Ft int
 .Fn gettimeofday "struct timeval *restrict tv" "void *restrict tz"
+.Ft int
+.Fn settimeofday "const struct timeval *tv" "const struct timezone *tz"
 .In time.h
 .Ft int
 .Fn clock_gettime "clockid_t clockid" "struct timespec *tp"
+.Ft int
+.Fn clock_settime "clockid_t clockid" "const struct timespec *tp"
+.Ft int
+.Fn stime "const time_t *t"
 .Ft int
 .Fn clock_getres "clockid_t clockid" "struct timespec *res"
 .In sys/times.h
@@ -37,6 +46,32 @@ counted in timer ticks with the PIT counter's place within the current tick
 added, to the microsecond.
 If the clock could not be read, the result is time since boot.
 The hardware clock is read once; no service corrects the clock afterward.
+.Pp
+.Fn clock_settime
+of
+.Dv CLOCK_REALTIME ,
+.Fn settimeofday
+and
+.Fn stime
+set the real time, for a privileged caller alone.
+The difference from the time the clock keeps becomes a step that every
+later reading of real time adds, so the clock goes on from the new time at
+the same rate, and a reading after a step back may be earlier than one
+before it.
+The boot time that
+.Pa /proc/stat
+gives moves with the step, as on Linux.
+The hardware clock is not written, so the next boot reads the CMOS again.
+.Fn settimeofday
+keeps no time zone: one with only
+.Fa tz ,
+or with neither, sets nothing and succeeds.
+Their i386 system call numbers are 264, with a 64-bit timespec 404, for
+.Fn clock_settime ,
+79 for
+.Fn settimeofday
+and 25 for
+.Fn stime .
 .Pp
 .Fn clock_gettime
 stores seconds and nanoseconds in
@@ -336,6 +371,11 @@ the path is null with
 .Dv AT_FDCWD ,
 or there is no current process.
 .It Bq Er EINVAL
+.Fn clock_settime
+was given a clock other than
+.Dv CLOCK_REALTIME ,
+or a time-setting call a time before 1970 or a fraction outside a second;
+or
 .Fa clockid
 is 8 or greater, including Linux's alarm clocks and
 .Dv CLOCK_TAI ,
@@ -385,8 +425,9 @@ or
 .Pa \&..
 and reaches something else.
 .It Bq Er EPERM
-A caller that is neither the owner nor privileged requests a timestamp
-change other than setting both times to the current time.
+A caller that is not privileged sets the real time; or a caller that is
+neither the owner nor privileged requests a timestamp change other than
+setting both times to the current time.
 .It Bq Er EROFS
 .Fn utimensat
 targets a synthetic file, or a descriptor on a pipe, a socket, a
