@@ -127,6 +127,7 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 }
 
 static int32_t dev_disk_rescan(fd_entry_t *e);
+static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg);
 
 /*
  * The size of a raw window, which is what a checker asks a block device
@@ -134,7 +135,8 @@ static int32_t dev_disk_rescan(fd_entry_t *e);
  * 0x80041272 with musl's 32-bit `size_t` and 0x80081272 from a 64-bit
  * header, and both take eight bytes; `BLKGETSIZE` (0x1260) is the sector
  * count in an unsigned long. `BLKRRPART` (0x125F) rereads a whole disk's
- * partition table. Everything else is not a terminal.
+ * partition table, and `HDIO_GETGEO` (0x0301) gives a geometry and the
+ * node's first sector (`dev_getgeo`). Everything else is not a terminal.
  */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
@@ -148,6 +150,9 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
     }
     if (request == 0x125Fu) {
         return dev_disk_rescan(e);
+    }
+    if (request == 0x0301u) {
+        return dev_getgeo(e, arg);
     }
     if (request == 0x1260u) {
         uint32_t sectors;
@@ -1871,6 +1876,36 @@ void devfs_grubcore_publish(struct block_device *backing)
     block_partition_init(&grubcore.part, backing, MBR_GAP_FIRST_LBA,
                          MBR_GAP_END_LBA - MBR_GAP_FIRST_LBA);
     grubcore.present = 1;
+}
+
+/**
+ * HDIO_GETGEO: the `struct hd_geometry` of a raw window, 255 heads and 63
+ * sectors a track, as Linux makes up for a disk without one, the cylinders
+ * those give, cut to 16 bits as Linux cuts them, and the window's first
+ * sector, 0 for a whole disk. BusyBox's `fdisk -l` reads the start to tell a
+ * whole disk, whose name here ends in a digit, from a partition.
+ */
+static int32_t dev_getgeo(fd_entry_t *e, uint32_t arg)
+{
+    struct {
+        uint8_t heads;
+        uint8_t sectors;
+        uint16_t cylinders;
+        uint32_t start;
+    } geo;
+    struct disk_window *w = e->dev ? raw_window_of(e->dev) : NULL;
+    uint64_t sectors;
+
+    if (!w || !w->present) {
+        return -ENOTTY;
+    }
+    sectors = w->part.device.sector_count;
+    geo.heads = 255;
+    geo.sectors = 63;
+    geo.cylinders =
+        (uint16_t)((sectors > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sectors) / (255u * 63u));
+    geo.start = (uint32_t)w->part.start_lba;
+    return copy_to_user((void __user *)arg, &geo, sizeof(geo)) != 0 ? -EFAULT : 0;
 }
 
 /**

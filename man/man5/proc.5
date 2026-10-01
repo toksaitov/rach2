@@ -140,6 +140,17 @@ its node's transfers and those of the boot root mounted on it.
 BusyBox's
 .Xr iostat 1
 reads it.
+.It Pa /proc/partitions
+The header Linux prints and a blank line, then a line for each disk and
+partition
+.Pa /proc/diskstats
+lists: the major and minor numbers, the size in kibibytes and the name,
+in Linux's columns.
+BusyBox's
+.Xr fdisk 8
+reads it to find the disks
+.Fl l
+lists.
 .It Pa /proc/disk
 Disk records and counters, described in
 .Xr disk 7 .

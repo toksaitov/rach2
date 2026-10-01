@@ -91,6 +91,7 @@ uint32_t procfs_ino_cpuinfo(void);
 uint32_t procfs_ino_loadavg(void);
 uint32_t procfs_ino_diskstats(void);
 uint32_t procfs_ino_version(void);
+uint32_t procfs_ino_partitions(void);
 /** The inode of the /proc/sys entry `entry`, and of /proc/sys itself. */
 uint32_t procfs_ino_sys(int entry);
 uint32_t procfs_ino_sysdir(void);

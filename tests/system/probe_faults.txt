@@ -5143,3 +5143,12 @@ old
 new
             s->so_error = 0;
 end
+
+fault proc-partitions-missing
+probe procprobe
+file rach2/sys/fs/synthfs.c
+expect FAIL: /proc/partitions has Linux's header and a line for each disk /proc/diskstats lists
+old
+                 {"partitions", VNODE_PROC_PARTITIONS},
+new
+end

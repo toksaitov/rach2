@@ -60,6 +60,7 @@ enum vnode_kind {
     VNODE_PROC_ROOT,        /* /proc/<pid>/root: a link to the root directory */
     VNODE_PROC_DISKSTATS,   /* /proc/diskstats: the transfers of each disk node */
     VNODE_PROC_VERSION,     /* /proc/version: the kernel's name and release */
+    VNODE_PROC_PARTITIONS,  /* /proc/partitions: the size of each disk node */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -107,6 +108,7 @@ enum vnode_kind {
 #define SYNTH_PROC_SMAPS       37
 #define SYNTH_PROC_DISKSTATS   38
 #define SYNTH_PROC_VERSION     39
+#define SYNTH_PROC_PARTITIONS  40
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

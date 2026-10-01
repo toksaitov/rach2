@@ -146,7 +146,7 @@ rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over
 
 rach2/sys/fs/procfs.c:procfs_fd_ino complexity 27 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 79 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 208 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 212 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
@@ -218,8 +218,8 @@ rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks 
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 200 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_open lines 104 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 237 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_open lines 105 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 239 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys__llseek lines 145 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 132 a dispatcher, one arm per command, read as a table
@@ -660,7 +660,7 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
 tests/procprobe.c:probe_main complexity 72 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 523 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main lines 531 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them

@@ -938,6 +938,7 @@ NO_PROC_INO(procfs_ino_cpuinfo)
 NO_PROC_INO(procfs_ino_loadavg)
 NO_PROC_INO(procfs_ino_diskstats)
 NO_PROC_INO(procfs_ino_version)
+NO_PROC_INO(procfs_ino_partitions)
 
 int synth_sys_writable(int entry)
 {

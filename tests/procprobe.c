@@ -1337,6 +1337,14 @@ void probe_main(unsigned int *sp)
           "/proc/diskstats reads, each line ended, as iostat reads it");
     check(n == 0 || fields_in(buf, n) == 20 * lines_in(buf, n),
           "and each of its lines has Linux's twenty fields");
+    {
+        int disks = lines_in(buf, n);
+
+        n = slurp("/proc/partitions", buf, (int)sizeof(buf));
+        check(n > 0 && contains(buf, n, "major minor  #blocks  name\n\n") &&
+                  lines_in(buf, n) == disks + 2 && buf[n - 1] == '\n',
+              "/proc/partitions has Linux's header and a line for each disk /proc/diskstats lists");
+    }
 
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");

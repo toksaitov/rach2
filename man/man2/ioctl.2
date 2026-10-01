@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -191,6 +191,16 @@ The rescan is refused while the disk has another open descriptor or
 a mounted partition.
 .Fa arg
 is ignored.
+.It Dv HDIO_GETGEO
+Request 0x0301 writes the eight-byte
+.Vt struct hd_geometry :
+255 heads, 63 sectors a track, the cylinders those give cut to 16 bits,
+and the window's first sector on its disk, 0 for a whole disk, as Linux
+makes up a geometry for a disk that has none.
+BusyBox's
+.Xr fdisk 8
+reads the start to tell a whole disk from a partition, since a whole
+disk's name here ends in a digit.
 .El
 .Ss File attribute requests
 A file or a directory of an ext2 volume accepts the requests of

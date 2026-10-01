@@ -88,6 +88,7 @@
 #define PROCFS_INO_LOADAVG     0x113u
 #define PROCFS_INO_DISKSTATS   0x114u
 #define PROCFS_INO_VERSION     0x115u
+#define PROCFS_INO_PARTITIONS  0x116u
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -162,6 +163,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_VERSION) {
         return "/proc/version";
+    }
+    if (vp->kind == VNODE_PROC_PARTITIONS) {
+        return "/proc/partitions";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1464,6 +1468,11 @@ uint32_t procfs_ino_version(void)
     return PROCFS_INO_VERSION;
 }
 
+uint32_t procfs_ino_partitions(void)
+{
+    return PROCFS_INO_PARTITIONS;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1593,6 +1602,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     if (pf->origin_file == SYNTH_PROC_VERSION) {
         return PROCFS_INO_VERSION;
     }
+    if (pf->origin_file == SYNTH_PROC_PARTITIONS) {
+        return PROCFS_INO_PARTITIONS;
+    }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
     }
@@ -1684,6 +1696,43 @@ static int procfs_gen_diskstats(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_u32(t, s->read_ms + s->write_ms);
         ap_str(t, " 0 0 0 0 0 0\n");
+    }
+    return t->nomem ? -1 : t->len;
+}
+
+/**
+ * Render /proc/partitions: the header Linux prints, then a line for each disk
+ * node /proc/diskstats lists, with its device numbers, its size in kibibytes
+ * and its name, in Linux's columns, which BusyBox's `fdisk -l` reads to find
+ * the disks.
+ */
+static int procfs_gen_partitions(struct procfs_text *t)
+{
+    const block_device_t *dev, *alias;
+    const char *name;
+    uint32_t major, minor;
+    int i, got;
+
+    ap_str(t, "major minor  #blocks  name\n\n");
+    for (i = 0; (got = devfs_disk_node_at(i, &name, &major, &minor, &dev, &alias)) >= 0; i++) {
+        uint64_t kib = dev ? dev->sector_count : 0;
+        uint32_t size = dev ? dev->sector_size : 0;
+
+        if (got == 0) {
+            continue;
+        }
+        for (; size > 1024; size >>= 1) {
+            kib <<= 1;
+        }
+        for (; size != 0 && size < 1024; size <<= 1) {
+            kib >>= 1;
+        }
+        ap_u32_width(t, major, 4);
+        ap_u32_width(t, minor, 9);
+        ap_u32_width(t, kib > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)kib, 11);
+        ap_ch(t, ' ');
+        ap_str(t, name);
+        ap_ch(t, '\n');
     }
     return t->nomem ? -1 : t->len;
 }
@@ -3468,8 +3517,9 @@ static int procfs_needs_pid(int kind)
            kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
            kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_LOADAVG &&
            kind != VNODE_PROC_DISKSTATS && kind != VNODE_PROC_VERSION &&
-           kind != VNODE_PROC_SYS_FILE && kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB &&
-           kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
+           kind != VNODE_PROC_PARTITIONS && kind != VNODE_PROC_SYS_FILE &&
+           kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
+           kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
            kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP &&
            kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE && kind != VNODE_SYS_FILE;
@@ -3565,6 +3615,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_loadavg(&text);
     } else if (vp->kind == VNODE_PROC_DISKSTATS) {
         len = procfs_gen_diskstats(&text);
+    } else if (vp->kind == VNODE_PROC_PARTITIONS) {
+        len = procfs_gen_partitions(&text);
     } else if (vp->kind == VNODE_PROC_VERSION) {
         /* Linux's "Linux version 6.8.0 ...", with uname's version after. */
         ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " (" UTS_VERSION ")\n");
@@ -3660,6 +3712,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_DISKSTATS;
     } else if (vp->kind == VNODE_PROC_VERSION) {
         f->origin_file = SYNTH_PROC_VERSION;
+    } else if (vp->kind == VNODE_PROC_PARTITIONS) {
+        f->origin_file = SYNTH_PROC_PARTITIONS;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
