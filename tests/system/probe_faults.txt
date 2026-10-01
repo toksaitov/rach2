@@ -5069,9 +5069,9 @@ int32_t sys_listxattr(isr_params_t *params)
 end
 
 fault pty-open-no-claim
-probe ptymusl
+probe callsmusl
 file rach2/sys/tty/pty.c
-expect PTYMUSL FAIL (a session leader did not take the slave it opened
+expect CALLSMUSL FAIL (a session leader did not take the slave it opened
 old
     if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
 new

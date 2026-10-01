@@ -7,7 +7,11 @@
  * one sent to the process, waits for an alarm under a timeout of more than
  * 2^31 ticks, and with no signal pending its timeout ends it with EAGAIN.
  * kill of a child that has ended and is not yet reaped succeeds, alone and
- * by its group, as on Linux, and fails with ESRCH once it is reaped.
+ * by its group, as on Linux, and fails with ESRCH once it is reaped. A child
+ * that starts a session and opens a free pseudo-terminal slave with
+ * O_NOCTTY does not take it, and opening it again without the flag makes it
+ * the controlling terminal with the child's group in the foreground, the
+ * Linux rule BusyBox's telnetd depends on.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -35,6 +39,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -52,6 +57,38 @@ static int fail(const char *what)
 {
     printf("CALLSMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
+}
+
+/* Whether a session leader takes a free slave it opens without O_NOCTTY. */
+static int terminals(void)
+{
+    char name[32];
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    int status;
+    pid_t pid;
+
+    if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
+        ptsname_r(master, name, sizeof name) != 0) {
+        return fail("a pseudo-terminal pair");
+    }
+    pid = fork();
+    if (pid == 0) {
+        int a, b;
+
+        setsid();
+        a = open(name, O_RDWR | O_NOCTTY);
+        if (a < 0 || tcgetpgrp(a) == getpid()) {
+            _exit(1);
+        }
+        b = open(name, O_RDWR);
+        _exit(b >= 0 && tcgetpgrp(b) == getpid() ? 0 : 2);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return fail("a session leader did not take the slave it opened");
+    }
+    close(master);
+    return 0;
 }
 
 /* A child that has ended is a target until it is reaped. */
@@ -371,7 +408,7 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts() || advises()) {
+        reserves() || adjusts() || advises() || terminals()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");
