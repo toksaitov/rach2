@@ -23,7 +23,9 @@
 # /usr/bin/vi, /etc/mtab and /run, writes autoconf's site file, links each
 # BusyBox applet no file of the path answers for, gives each program of /bin
 # and /usr/bin its name in the other, and of /sbin and /usr/sbin, puts the
-# CA bundle in /etc/ssl, compiles the console's terminfo entry, rach2.ti,
+# CA bundle in /etc/ssl, puts /etc/services, /etc/protocols, /etc/networks,
+# /etc/localtime and /etc/timezone in place, compiles the console's terminfo
+# entry, rach2.ti,
 # renders the ports' manual pages with render_man.sh, takes the set-id bit
 # off OpenSSH's ssh-keysign, and has the root's own ldconfig write
 # /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
@@ -225,6 +227,23 @@ echo "gnu: install: /bin and /usr/bin, /sbin and /usr/sbin: $links names linked"
 cp "$("$DIR/fetch.sh" --path cacert)" "$TREE/etc/ssl/certs/ca-certificates.crt"
 chmod 0644 "$TREE/etc/ssl/certs/ca-certificates.crt"
 ln -s certs/ca-certificates.crt "$TREE/etc/ssl/cert.pem"
+
+# The service, protocol and network names glibc's getservbyname,
+# getprotobyname and getnetbyname read, which Debian's netbase gives, from
+# IANA's numbers in vendor/gnu/etc; and the zone the clock is kept in, UTC,
+# as /etc/localtime and /etc/timezone name it on Debian.
+for f in services protocols networks timezone localtime; do
+    if [ -e "$TREE/etc/$f" ] || [ -L "$TREE/etc/$f" ]; then
+        echo "gnu: install: refused: /etc/$f is already in the tree" >&2
+        exit 1
+    fi
+done
+for f in services protocols networks; do
+    cp "$DIR/etc/$f" "$TREE/etc/$f"
+    chmod 0644 "$TREE/etc/$f"
+done
+ln -s ../usr/share/zoneinfo/Etc/UTC "$TREE/etc/localtime"
+printf 'Etc/UTC\n' > "$TREE/etc/timezone"
 
 # The console's entry, for the TERM=rach2 the kernel gives its sessions. The
 # build host runs the root's tic through the root's loader.

@@ -1,0 +1,4 @@
+# Network names, which getnetbyname(3) reads.
+default         0.0.0.0
+loopback        127.0.0.0
+link-local      169.254.0.0

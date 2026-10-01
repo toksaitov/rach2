@@ -78,11 +78,18 @@ row_names() {
         "65534:65534 65534"
 }
 
+# glibc, its databases of service, protocol and network names, which
+# Debian's netbase gives, and the zone the clock is kept in.
 row_glibc() {
     same "getconf" "$(getconf GNU_LIBC_VERSION)" "glibc 2.44"
     has "the loader" "$(/lib/ld-linux.so.2 --version 2>&1 | head -n 1)" "2.44"
     has "the cache" "$(ldconfig -p | head -n 1)" "libs found in cache"
     same "a locale of the archive" "$(LC_ALL=en_US.UTF-8 locale charmap)" "UTF-8"
+    same "a service by its name" "$(getent services https | tr -s ' ')" "https 443/tcp"
+    same "a protocol by its name" "$(getent protocols tcp | tr -s ' ')" "tcp 6 TCP"
+    same "a port by its name in Perl" "$(perl -e 'print scalar getservbyname("ssh", "tcp")')" "22"
+    same "the zone" "$(readlink /etc/localtime) $(cat /etc/timezone)" \
+        "../usr/share/zoneinfo/Etc/UTC Etc/UTC"
 }
 
 row_zlib() {
