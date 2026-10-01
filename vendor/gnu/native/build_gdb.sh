@@ -9,14 +9,16 @@
 # toolchain `make gnu-toolchain` built, as programs that run on
 # i686-linux-gnu and debug programs there. They link dynamically against the
 # toolchain's glibc and install under the prefix /usr into
-# build/vendor/gnu/gdb, the staging root. GDB needs GMP and MPFR; they are
-# built first as static libraries that GDB links, so that the programs need
-# nothing on Rach2 beyond glibc and the C++ runtime. The steps are gmp, mpfr,
-# gdb and check; with no STEP all four run from nothing, and naming steps runs
-# only those over what an earlier run left. Each step writes its output to a
-# log in build/vendor/gnu/log. Under make the sub-makes share the caller's
-# jobs; run alone, the script uses GNU_JOBS processors, or every processor
-# when GNU_JOBS is not set.
+# build/vendor/gnu/gdb, the staging root. GDB needs GMP and MPFR, expat to
+# read its XML files, the tables of system calls by name among them, and
+# ncurses for its text user interface; they are built first as static
+# libraries that GDB links, so that the programs need nothing on Rach2
+# beyond glibc, the C++ runtime and the terminfo database. The steps are
+# gmp, mpfr, expat, ncurses, gdb and check; with no STEP all six run from
+# nothing, and naming steps runs only those over what an earlier run left.
+# Each step writes its output to a log in build/vendor/gnu/log. Under make
+# the sub-makes share the caller's jobs; run alone, the script uses GNU_JOBS
+# processors, or every processor when GNU_JOBS is not set.
 #
 
 set -e
@@ -98,31 +100,63 @@ step_mpfr()
     make install
 }
 
+step_expat()
+{
+    s="$(extract expat)"
+    cd "$(fresh expat)"
+    "$s/configure" --build="$BUILD" --host="$TARGET" --prefix="$DEPS" \
+        --disable-shared --enable-static --without-docbook --without-examples \
+        --without-tests
+    make ${JOBS:+"$JOBS"}
+    make install
+}
+
+# ncurses is built with wide characters, its default, and without its
+# programs, its database and its C++ binding. The library looks for terminal
+# descriptions in /usr/share/terminfo, where the root's ncurses port installs
+# them.
+step_ncurses()
+{
+    s="$(extract ncurses)"
+    cd "$(fresh ncurses)"
+    "$s/configure" --build="$BUILD" --host="$TARGET" --prefix="$DEPS" \
+        --without-shared --without-debug --without-ada --without-cxx-binding \
+        --without-progs --without-tests --without-manpages --disable-db-install \
+        --with-default-terminfo-dir=/usr/share/terminfo \
+        --with-terminfo-dirs=/usr/share/terminfo
+    make ${JOBS:+"$JOBS"}
+    make install
+}
+
 # The top-level configure looks for GMP and MPFR with --with-gmp and
-# --with-mpfr, and gdb's own with the --with-lib*-prefix options. The
-# optional libraries GDB would look for (Python, Guile, expat, the
-# compressors, debuginfod, source-highlight) are left out, and with no curses
-# library in the sysroot readline gets GDB's own termcap stub and the text
-# user interface is left out. The tarball has the bfd and opcodes of GDB's
-# own release, so only gdb and gdbserver are installed.
+# --with-mpfr, and gdb's own with the --with-lib*-prefix options, expat's
+# among them, which `catch syscall write` needs to find the call by its name.
+# gdb's configure finds ncurses by its header and library alone, so the
+# dependencies' directories are given to the compiler and the linker, and
+# --enable-tui makes a missing ncurses an error. The other optional libraries
+# GDB would look for (Python, Guile, the compressors, debuginfod,
+# source-highlight) are left out. The tarball has the bfd and opcodes of
+# GDB's own release, so only gdb and gdbserver are installed.
 step_gdb()
 {
     s="$(extract gdb)"
     cd "$(fresh gdb)"
-    "$s/configure" --build="$BUILD" --host="$TARGET" --target="$TARGET" \
+    CPPFLAGS="-I$DEPS/include" LDFLAGS="-L$DEPS/lib" \
+        "$s/configure" --build="$BUILD" --host="$TARGET" --target="$TARGET" \
         --prefix=/usr --disable-nls --disable-werror --disable-sim \
         --with-gmp="$DEPS" --with-mpfr="$DEPS" \
         --with-libgmp-prefix="$DEPS" --with-libmpfr-prefix="$DEPS" \
-        --without-python --without-guile --without-expat --without-lzma \
+        --with-expat --with-libexpat-prefix="$DEPS" --enable-tui \
+        --without-python --without-guile --without-lzma \
         --without-zstd --without-xxhash --without-debuginfod \
-        --without-babeltrace --without-intel-pt --disable-tui \
-        --disable-source-highlight
+        --without-babeltrace --without-intel-pt --disable-source-highlight
     make ${JOBS:+"$JOBS"} all-gdb all-gdbserver
     make install-strip-gdb install-strip-gdbserver DESTDIR="$ROOT"
 }
 
 # The check starts both programs through the sysroot's loader, with the cross
-# toolchain's C++ runtime, and prints their versions. Then, in a root that
+# toolchain's C++ runtime, prints their versions, and requires GDB's
+# configuration to have the text user interface. Then, in a root that
 # has the sysroot, the staging root and that runtime, GDB debugs a program:
 # unshare(1) makes the user root of new user, mount and process namespaces,
 # chroots, and mounts a /proc, which GDB reads for the threads of the program
@@ -135,6 +169,8 @@ step_check()
     lib="$SYSROOT/lib:$SYSROOT/usr/lib:$CROSS/$TARGET/lib"
     v="$("$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdb" --version)"
     echo "$v" | sed -n 1p
+    "$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdb" --configuration |
+        grep -e --enable-tui
     v="$("$SYSROOT/lib/ld-linux.so.2" --library-path "$lib" "$ROOT/usr/bin/gdbserver" --version)"
     echo "$v" | sed -n 1p
     r="$(fresh check)/root"
@@ -180,12 +216,12 @@ EOF
 
 if [ $# -eq 0 ]; then
     rm -rf "$SRC" "$WORK"/gdb-* "$ROOT"
-    set -- gmp mpfr gdb check
+    set -- gmp mpfr expat ncurses gdb check
 fi
 mkdir -p "$LOG"
 for step in "$@"; do
     case "$step" in
-        gmp|mpfr|gdb|check) ;;
+        gmp|mpfr|expat|ncurses|gdb|check) ;;
         *) echo "gnu: gdb: no step named $step" >&2; exit 2 ;;
     esac
     echo "gnu: gdb: $step"

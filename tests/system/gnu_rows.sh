@@ -335,7 +335,8 @@ EOF
 }
 
 # GDB runs a program, stops at a breakpoint, steps, prints a variable and
-# a backtrace, and lets it run to its end.
+# a backtrace, and lets it run to its end; it was built with its text user
+# interface.
 row_gdb() {
     cat > "$WORK/g.c" << 'EOF'
 int f(int x)
@@ -356,6 +357,9 @@ EOF
     has "the variable" "$OUT" "\$1 = 40"
     has "the backtrace" "$OUT" "in main () at g.c:"
     has "the end" "$OUT" "exited normally"
+    output "gdb's catch syscall" gdb -nx -batch -ex 'catch syscall exit_group' -ex run -ex continue ./g
+    has "a catchpoint of a call by its name" "$OUT" "Catchpoint 1 (call to syscall exit_group)"
+    has "gdb's text user interface" "$(gdb --configuration)" "--enable-tui"
 }
 
 # The script the shell's build ran: a loop the JIT compiles, and the shell's
