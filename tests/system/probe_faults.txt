@@ -4249,9 +4249,9 @@ probe schedmusl
 file rach2/sys/fs/synthfs.c
 expect SCHEDMUSL FAIL (the OOM score adjustment does not read 0 at first
 old
-                 {"mem", SYNTH_PROC_MEM},       {"oom_score_adj", SYNTH_PROC_OOM_ADJ}};
+                 {"mem", SYNTH_PROC_MEM},       {"oom_score_adj", SYNTH_PROC_OOM_ADJ},
 new
-                 {"mem", SYNTH_PROC_MEM}};
+                 {"mem", SYNTH_PROC_MEM},
 end
 
 fault oom-mode-read-only
