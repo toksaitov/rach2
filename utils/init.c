@@ -14,13 +14,14 @@
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, `init-metal` is `init-login` plus the
- * network and a supervised SSH server, and `init-recovery` is the recovery
- * system's, a shell on the console with the metal build's network, server and
- * file system check beside it. The metal build exists because the machine it
- * is for is across the room: nobody is going to type a command at its console
- * to start a daemon, so the daemon has to be running when the machine
- * finishes booting. The console login stays exactly as it is beside it, and
- * is the way back in when the network is the thing that is broken.
+ * network, a supervised SSH server and, on the GNU system's root, D-Bus's
+ * system bus, and `init-recovery` is the recovery system's, a shell on the
+ * console with the metal build's network, server and file system check beside
+ * it. The metal build exists because the machine it is for is across the room:
+ * nobody is going to type a command at its console to start a daemon, so the
+ * daemon has to be running when the machine finishes booting. The console login
+ * stays exactly as it is beside it, and is the way back in when the network is
+ * the thing that is broken.
  *
  * Built like the other utils, linked against the ported musl (see
  * utils/Makefile), and staged at /sbin/init by the image manifests.
@@ -41,6 +42,8 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
 #include <sys/stat.h>
 
 extern char **environ;
@@ -106,6 +109,19 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * already taken) does not respawn at full speed, and short enough that a
  * machine reachable only over the network is reachable again quickly. */
 #define SSHD_RESPAWN_PAUSE 5
+
+/*
+ * D-Bus's system bus, which the GNU system's root has: init runs it where
+ * the image has `DBUS_PROGRAM` and the user `DBUS_USER`, and no other image
+ * has either. The system's programs, the browser among them, connect to it
+ * at /run/dbus/system_bus_socket, and /run is a link to /var/run there, so
+ * the bus's directory is `DBUS_DIR`. `MACHINE_ID` is the machine's identity,
+ * which the bus and its clients read.
+ */
+#define DBUS_PROGRAM "/usr/bin/dbus-daemon"
+#define DBUS_USER    "messagebus"
+#define DBUS_DIR     "/var/run/dbus"
+#define MACHINE_ID   "/etc/machine-id"
 #endif
 
 #ifdef INIT_CONSOLE_LOGIN
@@ -1206,6 +1222,221 @@ static pid_t spawn_sshd(void)
 }
 #endif
 
+#ifdef INIT_METAL
+/**
+ * Make /etc/machine-id, the 128 random bits that name this machine to D-Bus
+ * and its clients, as 32 lowercase hex digits and a newline, when the file
+ * is missing, which is the first boot of a root, as systemd makes it on
+ * Linux. The bits are the kernel's. The file is written under a temporary
+ * name and renamed into place, so that a power loss leaves it whole or
+ * absent.
+ */
+static void make_machine_id(void)
+{
+    static const char hex[] = "0123456789abcdef";
+    unsigned char raw[16];
+    char text[33];
+    int fd, i, ok;
+
+    if (access(MACHINE_ID, F_OK) == 0) {
+        return;
+    }
+    fd = open("/dev/urandom", O_RDONLY);
+    ok = fd >= 0 && read(fd, raw, sizeof(raw)) == (ssize_t)sizeof(raw);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (!ok) {
+        return;
+    }
+    for (i = 0; i < 16; i++) {
+        text[2 * i] = hex[raw[i] >> 4];
+        text[2 * i + 1] = hex[raw[i] & 15];
+    }
+    text[32] = '\n';
+    fd = open(MACHINE_ID ".new", O_WRONLY | O_CREAT | O_TRUNC, 0444);
+    if (fd < 0) {
+        return;
+    }
+    ok = write(fd, text, sizeof(text)) == (ssize_t)sizeof(text) && fsync(fd) == 0;
+    close(fd);
+    if (!ok || rename(MACHINE_ID ".new", MACHINE_ID) != 0) {
+        unlink(MACHINE_ID ".new");
+    }
+}
+
+/* The ids of the bus's user, which `bus_user` finds at boot. */
+static uid_t bus_uid;
+static gid_t bus_gid;
+
+/**
+ * Fork D-Bus's system bus as its user (`bus_uid`, `bus_gid`), and return its
+ * pid (-1 on failure).
+ *
+ * The child makes the machine's identity on a first boot
+ * (`make_machine_id`) and the bus's directory, owned by the bus's user so
+ * that the bus can make its socket in it, then takes the user's ids and runs
+ * `dbus-daemon --system` in the foreground, with its messages on standard
+ * error, which is the service log. The bus starts as its user and not as
+ * root: started as root, it changes to its user through libcap-ng, which
+ * keeps a part of root's capabilities across the change, and this kernel
+ * keeps all of a process's capabilities or none (capset(2)). The bus needs
+ * none, since it serves a socket. The shutdown signals are blocked across the
+ * fork as for the SSH server (`spawn_sshd`).
+ */
+static pid_t spawn_bus(void)
+{
+    sigset_t saved;
+    pid_t pid;
+
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+        return pid; /* init (the parent), or -1 if fork failed */
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
+    }
+    service_output();
+    make_machine_id();
+    if ((mkdir(DBUS_DIR, 0755) != 0 && errno != EEXIST) || chown(DBUS_DIR, bus_uid, bus_gid) != 0 ||
+        setgroups(0, NULL) != 0 || setgid(bus_gid) != 0 || setuid(bus_uid) != 0) {
+        static const char msg[] = "init: dbus: cannot make " DBUS_DIR " or take its user\n";
+
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        _exit(126);
+    }
+    {
+        static const char msg[] = "init: cannot exec " DBUS_PROGRAM "\n";
+        char *argv[6];
+
+        argv[0] = (char *)DBUS_PROGRAM;
+        argv[1] = (char *)"--system";
+        argv[2] = (char *)"--nofork";
+        argv[3] = (char *)"--nopidfile";
+        argv[4] = (char *)"--nosyslog";
+        argv[5] = 0;
+        execve(DBUS_PROGRAM, argv, environ);
+        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    }
+    _exit(127);
+    return -1; /* unreachable; quiets the compiler */
+}
+
+/**
+ * Whether this image runs D-Bus's system bus: when it has `DBUS_PROGRAM`
+ * and the user `DBUS_USER`, whose ids go in `bus_uid` and `bus_gid`. An
+ * image with the program and not the user is reported once.
+ */
+static int bus_user(void)
+{
+    const struct passwd *pw;
+
+    if (access(DBUS_PROGRAM, X_OK) != 0) {
+        return 0;
+    }
+    pw = getpwnam(DBUS_USER);
+    if (!pw) {
+        fprintf(stderr, "init: dbus: no user %s\n", DBUS_USER);
+        return 0;
+    }
+    bus_uid = pw->pw_uid;
+    bus_gid = pw->pw_gid;
+    return 1;
+}
+
+/* A service the metal build keeps running: its pid, -1 while it is not
+ * running, and when it was last started. */
+struct service {
+    pid_t pid;
+    time_t spawned;
+};
+
+/**
+ * Start each service that is not running: the SSH server where
+ * `anyone_to_let_in` allows one, reported on the console, and D-Bus's
+ * system bus where `bus_wanted`. A failed fork is left for the next turn.
+ */
+static void start_services(struct service *sshd, struct service *bus, int bus_wanted)
+{
+    if (sshd->pid < 0 && anyone_to_let_in()) {
+        sshd->pid = spawn_sshd();
+        if (sshd->pid >= 0) {
+            sshd->spawned = time(0);
+            printf("init: sshd: started as pid %ld\n", (long)sshd->pid);
+            fflush(stdout);
+        }
+    }
+    if (bus->pid < 0 && bus_wanted) {
+        bus->pid = spawn_bus();
+        bus->spawned = time(0);
+    }
+}
+
+/**
+ * Whether `reaped`, a pid `waitpid` returned, is the service `s`'s, which
+ * is then not running, after a pause when it ended within two seconds of
+ * its start. -1 is both a failed wait and the pid of a service not running.
+ */
+static int service_ended(struct service *s, pid_t reaped)
+{
+    if (reaped <= 0 || reaped != s->pid) {
+        return 0;
+    }
+    s->pid = -1;
+    if (time(0) - s->spawned < 2) {
+        sleep(SSHD_RESPAWN_PAUSE);
+    }
+    return 1;
+}
+#endif
+
+/**
+ * Empty the directory `dir` of what a boot leaves there and, `depth` levels
+ * down, each directory in it, which is then removed (`clear_var_run`). Only
+ * an entry that is itself a directory is walked, so a link that could not
+ * be unlinked is not followed out of `dir`.
+ */
+static void clear_dir(const char *dir, int depth)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+
+    if (!d) {
+        return; /* an image without it has nothing to clear */
+    }
+    while ((e = readdir(d)) != NULL) {
+        char path[2 * NAME_MAX + 16];
+        const char *n = e->d_name;
+        struct stat st;
+
+        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
+            continue;
+        }
+        if (strchr(n, '/')) {
+            fprintf(stderr, "init: %s: refusing a name that is not one: %s\n", dir, n);
+            continue;
+        }
+        if (snprintf(path, sizeof(path), "%s/%s", dir, n) >= (int)sizeof(path)) {
+            fprintf(stderr, "init: %s: name too long to remove: %s\n", dir, n);
+            continue;
+        }
+        if (unlink(path) == 0) {
+            continue;
+        }
+        if (depth > 0 && lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            clear_dir(path, depth - 1);
+        }
+        if (rmdir(path) != 0) {
+            fprintf(stderr, "init: %s: cannot remove %s\n", dir, n);
+        }
+    }
+    closedir(d);
+}
+
 /**
  * Empty /var/run.
  *
@@ -1218,46 +1449,18 @@ static pid_t spawn_sshd(void)
  * same reason. This file system has nowhere to put it that a reboot clears, so
  * init clears it, first, before anything reads it.
  *
- * It removes one level: each entry is unlinked, or removed if it is an empty
- * directory, and a directory that is not empty is reported, not descended
- * into. A name holding a slash is refused, since a name read from a damaged
- * file system would otherwise be joined into a path outside this directory,
- * and pid 1 would delete a file elsewhere at every boot.
+ * It removes two levels: each entry is unlinked, and a directory is emptied
+ * of its own entries the same way and removed, so that the system bus's
+ * directory goes with the socket in it; a directory one level deeper that is
+ * not empty is reported, not descended into. Nothing else runs while init
+ * does this, so no entry changes between the unlink and the walk. A name
+ * holding a slash is refused, since a name read from a damaged file system
+ * would otherwise be joined into a path outside this directory, and pid 1
+ * would delete a file elsewhere at every boot.
  */
 static void clear_var_run(void)
 {
-    DIR *d = opendir("/var/run");
-    struct dirent *e;
-
-    if (!d) {
-        return; /* an image without it has nothing to clear */
-    }
-    while ((e = readdir(d)) != NULL) {
-        char path[NAME_MAX + 16];
-        const char *n = e->d_name;
-        size_t i;
-
-        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) {
-            continue;
-        }
-        for (i = 0; n[i]; i++) {
-            if (n[i] == '/') {
-                break;
-            }
-        }
-        if (n[i] == '/') {
-            fprintf(stderr, "init: /var/run: refusing a name that is not one: %s\n", n);
-            continue;
-        }
-        if (snprintf(path, sizeof(path), "/var/run/%s", n) >= (int)sizeof(path)) {
-            fprintf(stderr, "init: /var/run: name too long to remove: %s\n", n);
-            continue;
-        }
-        if (unlink(path) != 0 && rmdir(path) != 0) {
-            fprintf(stderr, "init: /var/run: cannot remove %s\n", n);
-        }
-    }
-    closedir(d);
+    clear_dir("/var/run", 1);
 }
 
 /**
@@ -1379,9 +1582,10 @@ static void apply_limits(void)
  * (a full process table) is retried after a second so the loop does not spin;
  * `/bin/update`; and on the metal builds the network, once, after the console
  * session and before the SSH server that needs it, then the server wherever
- * `anyone_to_let_in` allows one. A failed fork of the server or of `update` is
- * left for the next turn, so the loop keeps reaping the orphans that filled
- * the process table.
+ * `anyone_to_let_in` allows one, and D-Bus's system bus where the image has
+ * it (`bus_user`). A failed fork of a service or of `update` is left for the
+ * next turn, so the loop keeps reaping the orphans that filled the process
+ * table.
  *
  * The wait is a poll, `waitpid` with `WNOHANG` and a second's sleep when no
  * child has changed, because init must also bound the service log while its
@@ -1392,10 +1596,10 @@ static void apply_limits(void)
  * `^Z` at the console prompt stops the session, and there is no shell above it
  * to type `fg`.
  *
- * A console session or SSH server that dies within two seconds of its start
- * has a permanent reason (a missing or crashing binary, no entropy for the
- * host key, no network, a port already taken), and is respawned only after a
- * pause, so the loop does not spin; an interactive session outlives that
+ * A console session, SSH server or bus that dies within two seconds of its
+ * start has a permanent reason (a missing or crashing binary, no entropy for
+ * the host key, no network, a port already taken), and is respawned only after
+ * a pause, so the loop does not spin; an interactive session outlives that
  * window, so an ordinary `exit` brings the prompt back at once.
  */
 int main(void)
@@ -1404,9 +1608,10 @@ int main(void)
     pid_t updater = -1;
     time_t spawned = 0;
 #ifdef INIT_METAL
-    pid_t sshd = -1;
-    time_t sshd_spawned = 0;
+    struct service sshd = {-1, 0};
+    struct service bus = {-1, 0};
     int network_done = 0;
+    int bus_wanted;
 #endif
     unsigned turns = 0;
 
@@ -1424,6 +1629,7 @@ int main(void)
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();
     }
+    bus_wanted = bus_user();
 #endif
 
     for (;;) {
@@ -1450,14 +1656,7 @@ int main(void)
             }
         }
 
-        if (sshd < 0 && anyone_to_let_in()) {
-            sshd = spawn_sshd();
-            if (sshd >= 0) {
-                sshd_spawned = time(0);
-                printf("init: sshd: started as pid %ld\n", (long)sshd);
-                fflush(stdout);
-            }
-        }
+        start_services(&sshd, &bus, bus_wanted);
 #endif
 
         if (++turns >= SERVICE_LOG_CHECK_TURNS) {
@@ -1482,12 +1681,7 @@ int main(void)
             continue;
         }
 #ifdef INIT_METAL
-        /* -1 is both a failed wait and the pid of a server not running. */
-        if (reaped > 0 && reaped == sshd) {
-            sshd = -1;
-            if (time(0) - sshd_spawned < 2) {
-                sleep(SSHD_RESPAWN_PAUSE);
-            }
+        if (service_ended(&sshd, reaped) || service_ended(&bus, reaped)) {
             continue;
         }
 #endif

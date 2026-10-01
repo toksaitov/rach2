@@ -3,23 +3,24 @@
 #
 # gnu.sh: the GNU system on its ext2 root (`tests/run gnu`).
 #
-# Boots the ordinary kernel with `rach2.root=ext2` on a disk whose one
-# partition is a copy of build/images/os-real-gnu.ext2 (vendor/gnu/Readme.md)
-# and drives it over SSH with nobody at its console, the way the machine is
-# driven: init starts OpenSSH's sshd, which makes its host keys on this
-# first boot. Root logs in by key, the test account by key and by password,
-# and root's password is refused. scp and sftp put a file on the machine and
-# take it back. Then each port does its main job on the machine, one row
-# each, as tests/system/gnu_rows.sh runs it: the names the path finds, glibc
-# and its locales, zlib, OpenSSL with the CA bundle, OpenSSH's clients
-# against the machine's own server, ncurses, less, Vim, Perl, curl over TLS,
-# Git, coreutils, bash, grep, sed, gawk, findutils, diffutils, patch, tar,
-# gzip and xz; GNU make building a small project; GCC and G++ compiling and
-# linking a C and a C++ program that run; GDB stopping at a breakpoint,
-# stepping, printing a variable and a backtrace; the SpiderMonkey shell
-# running a script in its JIT; and chromium-headless-shell printing the DOM
-# of a local page. Each row has its own bound and a failed row does not stop
-# the next, so a run reports every row the machine cannot yet do.
+# Boots the ordinary kernel with `rach2.root=ext2` on a disk whose one partition
+# is a copy of build/images/os-real-gnu.ext2 (vendor/gnu/Readme.md) and drives
+# it over SSH with nobody at its console, the way the machine is driven: init
+# starts OpenSSH's sshd, which makes its host keys on this first boot. Root logs
+# in by key, the test account by key and by password, and root's password is
+# refused. scp and sftp put a file on the machine and take it back. Then each
+# port does its main job on the machine, one row each, as
+# tests/system/gnu_rows.sh runs it: the names the path finds, glibc and its
+# locales, zlib, OpenSSL with the CA bundle, OpenSSH's clients against the
+# machine's own server, ncurses, less, Vim, Perl, curl over TLS, Git, coreutils,
+# bash, grep, sed, gawk, findutils, diffutils, patch, tar, gzip and xz;
+# GNU make building a small project; GCC and G++ compiling and linking a C and a
+# C++ program that run; GDB stopping at a breakpoint, stepping, printing a
+# variable and a backtrace; the SpiderMonkey shell running a script in its JIT;
+# D-Bus's system bus and a login's session bus answering a call; and
+# chromium-headless-shell printing the DOM of a local page with no complaint of
+# D-Bus. Each row has its own bound and a failed row does not stop the next, so
+# a run reports every row the machine cannot yet do.
 #
 # Usage: gnu.sh KERNEL IMAGE DISK PORT ROOT_PASSWORD TEST_PASSWORD
 #
@@ -206,7 +207,7 @@ echo "gnu-test: scp puts a file on the machine and sftp takes it back, byte for 
 ROWS="names:120 glibc:120 zlib:120 openssl:180 openssh:600 ncurses:120 less:120
 vim:120 perl:180 curl:600 git:300 coreutils:120 bash:120 grep:120 sed:120
 gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120
-make:600 gcc:900 gdb:600 js:600 chromium:1200"
+make:600 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
 FAILED=""
 TOTAL=0
 for row in $ROWS; do

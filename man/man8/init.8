@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -35,6 +35,28 @@ where the image has
 as the GNU system's root does, and
 .Xr dropbear 8
 on every other image.
+Where the image has
+.Pa /usr/bin/dbus-daemon
+and the user
+.Ql messagebus ,
+as the GNU system's root does, it also supervises D-Bus's system bus,
+started as
+.Ql dbus-daemon --system --nofork --nopidfile --nosyslog
+under that user's ids, with no supplementary groups.
+Before each start it makes the bus's directory,
+.Pa /var/run/dbus ,
+owned by that user, and, when the file is missing,
+.Pa /etc/machine-id ,
+32 lowercase hexadecimal digits from the kernel's random numbers, which
+the bus and its clients read as the machine's identity.
+The bus is started as its own user because, started as root, it would
+drop to that user with libcap-ng, which keeps a part of root's
+capabilities across the change, and this kernel keeps all of a process's
+capabilities or none; see
+.Xr capget 2 .
+An image with the program and no such user reports
+.Ql init: dbus: no user messagebus
+at boot and runs no bus.
 On a boot with
 .Ql rach2.ip=none ,
 it runs BusyBox's
@@ -65,9 +87,10 @@ on the console give it
 set to 0, so the console's prompt waits without a limit; see
 .Xr login 1 .
 .Pp
-Every build clears one level of
+Every build clears two levels of
 .Pa /var/run
-at boot and reads
+at boot, so that a directory such as the bus's goes with what is in it,
+and reads
 .Pa /etc/rach2/limits .
 It sets these resource limits on itself before starting any child;
 see
@@ -94,7 +117,9 @@ console descriptors available for later login sessions.
 The network worker and the SSH server's child reset SIGUSR1, SIGUSR2, and
 SIGTERM to their default dispositions while they are blocked across fork,
 then restore the inherited signal mask.
-These signals terminate either child, the SSH server's while it waits for
+The bus's child does the same.
+These signals terminate any of these children, the SSH server's while it
+waits for
 .Ql ssh-keygen -A
 too, instead of shutting down the machine.
 The console is reserved for the console session.
@@ -150,8 +175,16 @@ OpenSSH's server, which the metal build runs in place of Dropbear
 when the image has it.
 .It Pa /var/log/services
 Service output and diagnostics.
+.It Pa /etc/machine-id
+The machine's identity, made at the first boot of the GNU system's root.
+.It Pa /usr/bin/dbus-daemon
+D-Bus's system bus, which the metal build runs where the image has it.
 .It Pa /var/run
-Entries cleared at boot, without descending into subdirectories.
+Entries cleared at boot, with the entries of its directories, which are
+then removed; a directory deeper than that is reported if it is not empty.
+.It Pa /var/run/dbus
+The bus's directory, with its socket,
+.Pa system_bus_socket .
 .El
 .Sh DIAGNOSTICS
 The recovery file system check reports its status as:

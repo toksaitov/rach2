@@ -2,12 +2,13 @@
 
 #
 # fetch_chromium.sh: Debian's chromium-headless-shell for i386, with the
-# libraries it needs, unpacked into a root of its own.
+# libraries it needs and the D-Bus system bus it asks for, unpacked into a
+# root of its own.
 #
 # Usage: fetch_chromium.sh [STEP...]
 #
-# Takes chromium-headless-shell and the closure of its dependencies from
-# Debian 13 (trixie) for i386, as snapshot.debian.org has the archive at the
+# Takes chromium-headless-shell, dbus-daemon and dbus-system-bus-common and
+# the closure of their dependencies from Debian 13 (trixie) for i386, as snapshot.debian.org has the archive at the
 # time SNAPSHOT below: the stable suite and its security suite, which has
 # Chromium 154. The steps are:
 #
@@ -15,7 +16,7 @@
 #            signature by the Debian archive keys, then fetch the suite's
 #            i386 Packages index and check it against the digest that the
 #            signed text lists
-#   resolve  follow Depends and Pre-Depends from chromium-headless-shell
+#   resolve  follow Depends and Pre-Depends from those three packages
 #            through both indices, the security suite's entry for a package
 #            replacing the stable suite's, and list the closure
 #   fetch    fetch each package of the closure and check it against the
@@ -50,6 +51,14 @@ SHA="$REPO/build/tools/verify/sha256"
 TARGET=i686-linux-gnu
 PACKAGE=chromium-headless-shell
 BROWSER=usr/lib/chromium/chromium-headless-shell
+
+# The packages the closure starts from: the browser, and D-Bus's system bus,
+# which the browser asks for at /run/dbus/system_bus_socket and init starts.
+# A dependency on a package of UNFOLLOWED is taken as met and not followed:
+# adduser, which dbus-system-bus-common's maintainer script runs to make the
+# bus's user, an account the root image has already.
+ROOTS="$PACKAGE dbus-daemon dbus-system-bus-common"
+UNFOLLOWED="adduser"
 
 SNAPSHOT=20260927T082144Z
 
@@ -159,8 +168,9 @@ step_index()
 # Each index becomes one line per package, fields separated by tabs, and the
 # suites are read in order, so that a later suite's entry replaces an earlier
 # one's. A dependency is the first alternative that is a package, or else the
-# first a package provides. Versions are not compared: within one snapshot of
-# a suite and its security updates, the archive keeps them satisfiable.
+# first a package provides, and one of UNFOLLOWED ends the search. Versions
+# are not compared: within one snapshot of a suite and its security updates,
+# the archive keeps them satisfiable.
 step_resolve()
 {
     for s in $SUITES; do
@@ -185,7 +195,7 @@ step_resolve()
             /^$/ { flush() }
             END { flush() }' "$WORK/${rest%%:*}.Packages"
     done > "$WORK/packages.tsv"
-    awk -F '\t' -v roots="$PACKAGE" '
+    awk -F '\t' -v roots="$ROOTS" -v unfollowed="$UNFOLLOWED" '
         function bare(d) {
             sub(/\(.*/, "", d)
             sub(/:[a-z0-9]*/, "", d)
@@ -203,6 +213,9 @@ step_resolve()
             }
         }
         END {
+            nu = split(unfollowed, list, " ")
+            for (u = 1; u <= nu; u++)
+                cut[list[u]] = 1
             nq = split(roots, queue, " ")
             for (h = 1; h <= nq; h++) {
                 name = queue[h]
@@ -220,6 +233,9 @@ step_resolve()
                     na = split(clause[c], alt, "|")
                     pick = ""
                     for (a = 1; a <= na && pick == ""; a++)
+                        if (bare(alt[a]) in cut)
+                            pick = "-"
+                    for (a = 1; a <= na && pick == ""; a++)
                         if (bare(alt[a]) in ver)
                             pick = bare(alt[a])
                     for (a = 1; a <= na && pick == ""; a++)
@@ -228,7 +244,7 @@ step_resolve()
                     if (pick == "") {
                         print "gnu: chromium: " name ": nothing satisfies " clause[c] > "/dev/stderr"
                         bad = 1
-                    } else if (!(pick in seen))
+                    } else if (pick != "-" && !(pick in seen))
                         queue[++nq] = pick
                 }
             }

@@ -337,9 +337,25 @@ EOF
     has "the JIT" "$OUT" "inJit() = true, inIon() = true"
 }
 
+# D-Bus's system bus, which init starts as its own user: it answers a call
+# from root and names that user as its owner, and the machine has the
+# identity the bus reads, 32 hex digits. A login shell has a session bus of
+# its user's, which /etc/profile starts, and the bus answers there.
+row_dbus() {
+    output "dbus-send" dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus org.freedesktop.DBus.GetConnectionUnixUser string:org.freedesktop.DBus
+    has "the bus's user" "$OUT" "uint32 $(id -u messagebus)"
+    same "the machine's identity" "$(grep -cxE '[0-9a-f]{32}' /etc/machine-id)" "1"
+    output "the session bus" bash -lc 'dbus-send --session --print-reply \
+        --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId'
+    has "the session bus's answer" "$OUT" 'string "'
+}
+
 # The browser's libraries are found through the loader's cache, and the
-# browser prints the DOM of a local page whose script writes into it.
+# browser prints the DOM of a local page whose script writes into it, with
+# the system bus found and the session bus of a login shell's.
 row_chromium() {
+    local bus
     cat > "$WORK/page.html" << 'EOF'
 <!DOCTYPE html>
 <html><body><p id="out">not run</p>
@@ -347,10 +363,12 @@ row_chromium() {
 </body></html>
 EOF
     same "the libraries not found" "$(ldd /usr/lib/chromium/chromium-headless-shell | grep -c 'not found')" "0"
-    OUT=$(HOME=$WORK chromium-headless-shell --no-sandbox --headless --dump-dom \
-        --user-data-dir="$WORK/profile" "file://$WORK/page.html" 2> "$WORK/chromium.err") ||
+    bus=$(bash -lc 'printf %s "$DBUS_SESSION_BUS_ADDRESS"')
+    OUT=$(HOME=$WORK DBUS_SESSION_BUS_ADDRESS=$bus chromium-headless-shell --no-sandbox --headless \
+        --dump-dom --user-data-dir="$WORK/profile" "file://$WORK/page.html" 2> "$WORK/chromium.err") ||
         fail "chromium-headless-shell: status $?: $(tail -n 3 "$WORK/chromium.err" | tr '\n' ' ')"
     has "the dumped DOM" "$OUT" '<p id="out">script ran: 42</p>'
+    same "the browser's complaints of D-Bus" "$(grep -c 'dbus/' "$WORK/chromium.err")" "0"
 }
 
 if ! declare -F "row_$ROW" > /dev/null; then

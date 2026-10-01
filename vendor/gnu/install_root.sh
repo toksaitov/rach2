@@ -19,8 +19,8 @@
 #             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
 #             them, from the packages fetch_chromium.sh unpacked
 #
-# Then it links /bin/bash, /usr/bin/cc, /usr/bin/vi and /etc/mtab, and each
-# BusyBox applet no file of the path answers for, puts the CA bundle in
+# Then it links /bin/bash, /usr/bin/cc, /usr/bin/vi, /etc/mtab and /run, and
+# each BusyBox applet no file of the path answers for, puts the CA bundle in
 # /etc/ssl, compiles the console's terminfo entry, rach2.ti, renders the
 # ports' manual pages with render_man.sh, takes the set-id bit off OpenSSH's
 # ssh-keysign, and has the root's own ldconfig write /etc/ld.so.cache from
@@ -141,6 +141,11 @@ ln -s vim "$TREE/usr/bin/vi"
 # The mount table where glibc's getmntent and GNU df look for it, as a
 # Debian system links it.
 ln -s ../proc/self/mounts "$TREE/etc/mtab"
+
+# /run, where D-Bus's programs look for the system bus's socket,
+# /run/dbus/system_bus_socket: a link to /var/run, which init empties at
+# boot as Linux keeps /run in memory.
+ln -s var/run "$TREE/run"
 
 # BusyBox's applets are not files: ash runs one for its name before it
 # searches the path, and bash and every program that searches the path
