@@ -10,6 +10,7 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../proc/process.h"
+#include "../proc/tgroup.h"
 
 /* The address spaces that keep a program's file, linked by `exe_next`. */
 static struct mm *exe_list;
@@ -160,12 +161,36 @@ void mm_copy_info(struct mm *to, const struct mm *from)
     to->dumpable = from->dumpable;
 }
 
+uint32_t mm_resident(const struct mm *mm)
+{
+    uint32_t n = 0;
+    uint32_t i;
+
+    for (i = 0; i < mm->vm.count; i++) {
+        uint32_t a;
+
+        for (a = mm->vm.vmas[i].start; a < mm->vm.vmas[i].end; a += PAGE_SIZE) {
+            if (paging_user_phys(mm->dir, a) != 0) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 void mm_drop(struct process *p)
 {
     struct mm *mm = p->mm;
 
     if (!mm) {
         return;
+    }
+    if (mm->users == 1 && p->tg) {
+        uint32_t kb = mm_resident(mm) * (PAGE_SIZE / 1024u);
+
+        if (kb > p->tg->maxrss_kb) {
+            p->tg->maxrss_kb = kb;
+        }
     }
     if (mm->users == 1 && _curr_dir == mm->dir) {
         switch_page_directory(_kernel_dir);

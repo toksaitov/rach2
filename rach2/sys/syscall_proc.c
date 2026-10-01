@@ -2370,13 +2370,15 @@ int32_t sys_clone(isr_params_t *params)
 
 /* The i386 struct rusage, 72 bytes: the user and system CPU time as two
  * timevals of 32-bit seconds and microseconds, then fourteen longs, maxrss
- * through nivcsw, which this kernel does not count and reports as zero. */
+ * in kilobytes and then ixrss through nivcsw, which this kernel does not
+ * count and reports as zero. */
 struct kernel_rusage {
     int32_t utime_sec;
     int32_t utime_usec;
     int32_t stime_sec;
     int32_t stime_usec;
-    int32_t uncounted[14];
+    int32_t maxrss;
+    int32_t uncounted[13];
 };
 
 #define RUSAGE_BYTES 72
@@ -2404,6 +2406,8 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 
     proc_cpu_time(p, &user, &sys);
     rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
+    ru->maxrss = (int32_t)(p->tg->maxrss_kb > p->tg->cmaxrss_kb ? p->tg->maxrss_kb
+                                                                  : p->tg->cmaxrss_kb);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -2504,6 +2508,12 @@ static void wait_reap(process_t *p)
     proc_cpu_time(p, &user, &sys);
     me->cutime += user + p->tg->cutime;
     me->cstime += sys + p->tg->cstime;
+    if (p->tg->maxrss_kb > me->cmaxrss_kb) {
+        me->cmaxrss_kb = p->tg->maxrss_kb;
+    }
+    if (p->tg->cmaxrss_kb > me->cmaxrss_kb) {
+        me->cmaxrss_kb = p->tg->cmaxrss_kb;
+    }
     proc_release(p);
 }
 
@@ -2970,8 +2980,10 @@ int32_t sys_waitid(isr_params_t *params)
  * are the user and system time of the caller's process, every thread's, for
  * RUSAGE_SELF, the calling thread's for RUSAGE_THREAD, and the totals of the
  * children the process has reaped, each with the children those reaped, for
- * RUSAGE_CHILDREN: the ticks `times` reports, as timevals. The
- * fourteen counters after them, maximum resident size through context
+ * RUSAGE_CHILDREN: the ticks `times` reports, as timevals. `ru_maxrss` is
+ * the larger of the present address space's resident size and the most any
+ * earlier one had when it ended, in kilobytes, or for RUSAGE_CHILDREN the
+ * most a reaped child reported. The other counters, through context
  * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
  * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
  */
@@ -2995,6 +3007,13 @@ int32_t sys_getrusage(isr_params_t *params)
         kirq_restore(flags);
     }
     rusage_from_ticks(&ru, user, sys);
+    if (who == RUSAGE_CHILDREN) {
+        ru.maxrss = (int32_t)current_proc->tg->cmaxrss_kb;
+    } else {
+        uint32_t now = current_proc->mm ? mm_resident(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
+
+        ru.maxrss = (int32_t)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
+    }
     if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
         return -EFAULT;
     }

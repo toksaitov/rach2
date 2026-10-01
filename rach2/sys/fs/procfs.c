@@ -424,8 +424,6 @@ static char proc_state_char(const process_t *p)
     return p->state == PROC_BLOCKED ? 'S' : 'R';
 }
 
-static uint32_t mm_resident(const struct mm *mm);
-
 /**
  * Format /proc/<pid>/stat into `t`, returning its length or -ENOENT.
  *
@@ -947,24 +945,6 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_ch(t, '\n');
     }
     return t->len;
-}
-
-/** The pages of `mm` in memory: the present user pages of its page tables. */
-static uint32_t mm_resident(const struct mm *mm)
-{
-    uint32_t n = 0;
-    uint32_t i;
-
-    for (i = 0; i < mm->vm.count; i++) {
-        uint32_t a;
-
-        for (a = mm->vm.vmas[i].start; a < mm->vm.vmas[i].end; a += PAGE_SIZE) {
-            if (paging_user_phys(mm->dir, a) != 0) {
-                n++;
-            }
-        }
-    }
-    return n;
 }
 
 /** The bytes of `mm`'s regions of type `type`. */

@@ -40,6 +40,13 @@ struct tgroup {
      * record, whose end a tracer's wait reports, may outlive the leader's. */
     uint32_t cutime;
     uint32_t cstime;
+    /* The most memory, in kilobytes, an address space of the process had in
+     * use when it ended, at an exec or at the end of the process, and the
+     * most any reaped child reports, which getrusage and wait4 give as
+     * `ru_maxrss`: Linux keeps the high-water mark at every fault, and this
+     * kernel samples the resident pages where an address space ends. */
+    uint32_t maxrss_kb;
+    uint32_t cmaxrss_kb;
     /* The OOM score adjustment /proc/<pid>/oom_score_adj reads and writes,
      * -1000 to 1000, and the least value a caller without privilege may
      * write there, which a privileged caller's write sets to what it wrote,

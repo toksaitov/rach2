@@ -138,6 +138,13 @@ uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va)
     return 0;
 }
 
+/* The resident pages of an address space, which mm.c counts; none here. */
+uint32_t mm_resident(const struct mm *mm)
+{
+    (void)mm;
+    return 0;
+}
+
 void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
 {
     (void)p;

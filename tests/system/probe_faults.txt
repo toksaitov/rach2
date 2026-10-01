@@ -5110,3 +5110,17 @@ old
                  {"version", VNODE_PROC_VERSION},
 new
 end
+
+fault maxrss-unsampled
+probe callsmusl
+file rach2/sys/mm/mm.c
+expect CALLSMUSL FAIL (wait4 did not report the child's 12 MiB as ru_maxrss
+old
+        if (kb > p->tg->maxrss_kb) {
+            p->tg->maxrss_kb = kb;
+        }
+new
+        if (kb > p->tg->maxrss_kb) {
+            p->tg->maxrss_kb = 0;
+        }
+end

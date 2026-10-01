@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 2, 2026
 .Dt GETRUSAGE 2
 .Os
 .Sh NAME
@@ -32,9 +32,24 @@ are the CPU time the timer charged in user mode and in the kernel, the
 ticks
 .Xr times 2
 reports, as seconds and microseconds.
-The kernel keeps no other resource count, so
+.Pp
 .Va ru_maxrss
-and the thirteen counters after it are zero.
+is the most memory the process had in use, in kilobytes: the larger of
+the resident size of its address space and of each earlier one, as it
+ended at an
+.Xr execve 2 ,
+or for
+.Dv RUSAGE_CHILDREN
+the most any reaped child reported.
+For
+.Dv RUSAGE_THREAD
+it is the process's.
+Linux records the peak at each page fault; this kernel measures an
+address space when it is asked and when it ends, so a process that freed
+memory before either reports less than Linux would.
+The kernel keeps no other resource count, so the thirteen counters after
+.Va ru_maxrss
+are zero.
 .Ss System call interface
 The i386 system call number is 77.
 EBX contains

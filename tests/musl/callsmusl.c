@@ -11,7 +11,9 @@
  * that starts a session and opens a free pseudo-terminal slave with
  * O_NOCTTY does not take it, and opening it again without the flag makes it
  * the controlling terminal with the child's group in the foreground, the
- * Linux rule BusyBox's telnetd depends on.
+ * Linux rule BusyBox's telnetd depends on. getrusage reports the memory a
+ * process has touched as ru_maxrss in kilobytes, and wait4 that of a child
+ * that touched more, as GNU time reads them.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -45,6 +47,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/timex.h>
 #include <sys/xattr.h>
 #include <sys/socket.h>
@@ -57,6 +60,49 @@ static int fail(const char *what)
 {
     printf("CALLSMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
+}
+
+/* Write a byte to each page of `n` bytes at `p`, through a volatile pointer
+   so the compiler cannot drop stores nothing reads. */
+static void touch(char *p, long n)
+{
+    volatile char *v = p;
+    long i;
+
+    for (i = 0; i < n; i += 4096) {
+        v[i] = 1;
+    }
+}
+
+/* ru_maxrss, in kilobytes, of the caller and of a child it waits for. */
+static int peaks(void)
+{
+    struct rusage ru;
+    char *mine = malloc(4 << 20);
+    int status;
+    pid_t pid;
+
+    if (!mine) {
+        return fail("4 MiB to touch");
+    }
+    touch(mine, 4 << 20);
+    if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss < 4096) {
+        return fail("getrusage did not report the 4 MiB touched as ru_maxrss");
+    }
+    pid = fork();
+    if (pid == 0) {
+        char *more = malloc(12 << 20);
+
+        if (more) {
+            touch(more, 12 << 20);
+        }
+        _exit(more ? 0 : 1);
+    }
+    if (pid < 0 || wait4(pid, &status, 0, &ru) != pid || ru.ru_maxrss < 12288) {
+        return fail("wait4 did not report the child's 12 MiB as ru_maxrss");
+    }
+    free(mine);
+    return 0;
 }
 
 /* Whether a session leader takes a free slave it opens without O_NOCTTY. */
@@ -408,7 +454,7 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts() || advises() || terminals()) {
+        reserves() || adjusts() || advises() || terminals() || peaks()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

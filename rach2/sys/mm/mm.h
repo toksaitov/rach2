@@ -138,8 +138,13 @@ struct process;
 
 /** Take `p`'s address space from it and drop its user's count, loading the
  * kernel's directory first when this is the last user and its directory is
- * the one in use. `p` is left with none, as a kernel thread has none. */
+ * the one in use. `p` is left with none, as a kernel thread has none. The
+ * last user records the space's resident size in the thread group's
+ * `maxrss_kb` when it is the largest yet, for `ru_maxrss`. */
 void mm_drop(struct process *p);
+
+/** The pages of `mm` in memory: the present user pages of its page tables. */
+uint32_t mm_resident(const struct mm *mm);
 
 /*
  * The file system's part, in syscall_fs.c: a description of the file at

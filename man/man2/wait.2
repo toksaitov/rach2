@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 2, 2026
 .Dt WAIT 2
 .Os
 .Sh NAME
@@ -108,8 +108,13 @@ and
 .Va ru_stime
 are the ticks the timer charged in user mode and in the kernel, as
 .Xr times 2
-counts them, and the fourteen counters after them, which the kernel does
-not keep, are zero.
+counts them;
+.Va ru_maxrss
+is the most memory in kilobytes the child or a child it reaped had in use,
+as
+.Xr getrusage 2
+describes; and the thirteen counters after it, which the kernel does not
+keep, are zero.
 Reaping a child adds the same two times to the children's totals of the
 caller's process.
 Nonnull status and resource usage pointers are checked for write
