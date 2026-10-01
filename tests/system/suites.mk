@@ -947,8 +947,8 @@ dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image
 	    "expect=# " "send=ifconfig eth0 | grep -q 'addr:0.0.0.0' && echo UNSET\"\"OK" \
 	    "expect=UNSETOK" "send=ifup -a" \
 	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && ping -c 1 192.168.90.2 > /dev/null && echo LEASE\"\"OK" \
-	    "expect=LEASEOK" \
+	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && echo LEASE\"\"OK" \
+	    "expect=LEASEOK" "send=ping -c 1 192.168.90.2 > /dev/null && echo PEER\"\"OK" "expect=PEEROK" \
 	    "send=arping -f -w 5 192.168.90.2 > /tmp/ap 2>&1; echo ARPING\"\"-STATUS:\$$?; cat /tmp/ap" \
 	    "expect=ARPING-STATUS:0" "expect=Received 1 response" \
 	    "send=arping -w 2 192.168.90.9 > /tmp/as 2>&1; echo SILENT\"\"-STATUS:\$$?; cat /tmp/as" \
