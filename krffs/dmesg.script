@@ -21,42 +21,6 @@ usage() {
     exit 1
 }
 
-# The records after the last one printed, from reads of the log a second
-# apart. The ring drops its oldest records as it fills, and a reader's offset
-# counts from the oldest it holds, so a record is found again by its line,
-# and when the ring has dropped it, by its time.
-follow_log() {
-    last=
-    while :; do
-        log=$(cat /dev/bootlog) || exit 1
-        printf '%s\n' "$log" | awk -v last="$last" '
-function stamp(s) {
-    return match(s, /\[[ 0-9.]*\]/) ? substr(s, RSTART + 1, RLENGTH - 2) + 0 : -1
-}
-{ line[NR] = $0 }
-END {
-    start = 1
-    if (last != "") {
-        start = 0
-        for (i = NR; i >= 1 && !start; i--) {
-            if (line[i] == last) {
-                start = i + 1
-            }
-        }
-        if (!start) {
-            for (start = 1; start <= NR && stamp(line[start]) <= stamp(last); start++) {
-            }
-        }
-    }
-    for (i = start; i <= NR; i++) {
-        print line[i]
-    }
-}'
-        last=$(printf '%s\n' "$log" | tail -n 1)
-        sleep 1
-    done
-}
-
 raw=0
 stamp=keep
 decode=0
@@ -97,23 +61,25 @@ if [ "$raw" -eq 1 ] && { [ "$stamp" != keep ] || [ "$decode" -eq 1 ]; }; then
     echo "dmesg: -r is taken with -l alone" >&2
     exit 1
 fi
+for word in $(printf '%s' "$levels" | tr ',' ' '); do
+    case $(printf '%s' "$word" | tr '[:upper:]' '[:lower:]' | sed 's/^+//; s/+$//') in
+        emerg | alert | crit | err | warn | notice | info | debug | [0-7]) ;;
+        *)
+            echo "dmesg: unknown level '$word'" >&2
+            exit 1
+            ;;
+    esac
+done
 if [ ! -r /dev/bootlog ]; then
     echo "dmesg: /dev/bootlog: cannot read the log" >&2
     exit 1
 fi
-
-# The log, and with -w each record after it as it is made.
-read_log() {
-    if [ "$follow" -eq 1 ]; then
-        follow_log
-    else
-        cat /dev/bootlog
-    fi
-}
-
 btime=$(awk '$1 == "btime" { print $2 }' /proc/stat)
-read_log | awk -v raw="$raw" -v stamp="$stamp" -v decode="$decode" -v levels="$levels" \
-    -v btime="${btime:-0}" '
+
+# Print the records on standard input as the options ask.
+format() {
+    awk -v raw="$raw" -v stamp="$stamp" -v decode="$decode" -v levels="$levels" \
+        -v btime="${btime:-0}" '
 BEGIN {
     split("emerg alert crit err warn notice info debug", name, " ")
     n = split(levels, want, ",")
@@ -121,15 +87,10 @@ BEGIN {
         word = tolower(want[i])
         up = sub(/\+$/, "", word)
         down = sub(/^\+/, "", word)
-        found = -1
         for (k = 1; k <= 8; k++) {
             if (word == name[k] || word == k - 1 "") {
                 found = k - 1
             }
-        }
-        if (found < 0) {
-            print "dmesg: unknown level \047" want[i] "\047" > "/dev/stderr"
-            exit 1
         }
         for (k = up ? 0 : found; k <= (down ? 7 : found); k++) {
             keep[k] = 1
@@ -167,3 +128,40 @@ BEGIN {
     print prefix time line
     fflush()
 }'
+}
+
+if [ "$follow" -eq 0 ]; then
+    log=$(cat /dev/bootlog) || exit 1
+    printf '%s\n' "$log" | format
+    exit
+fi
+
+# With -w, the log is read again each second and what was not in the read
+# before is printed. The ring drops its oldest records as it fills, so a read
+# is the one before with some of its first records gone and new ones after:
+# the new records begin where the fewest dropped leave the old read's records
+# a prefix of the new one's. A failed read, or output nobody reads, ends it.
+prev=
+while :; do
+    log=$(cat /dev/bootlog) || exit 1
+    printf '%s\n\001\n%s\n' "$prev" "$log" | awk '
+$0 == "\001" { part = 1; next }
+!part && $0 != "" { old[++olds] = $0; next }
+part { new[++news] = $0 }
+END {
+    for (drop = 0; drop < olds; drop++) {
+        same = 1
+        for (i = drop + 1; i <= olds && same; i++) {
+            same = i - drop <= news && new[i - drop] == old[i]
+        }
+        if (same) {
+            break
+        }
+    }
+    for (i = olds - drop + 1; i <= news; i++) {
+        print new[i]
+    }
+}' | format || exit 1
+    prev=$log
+    sleep 1
+done
