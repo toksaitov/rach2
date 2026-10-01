@@ -973,8 +973,8 @@ static void refusal_rows(void)
             use_image(img, bytes);
             check(mount_image() == 0, "the volume with a record four bytes short mounts");
             check(walk("/hello.txt", &err) == 0 && err == -EIO,
-                  "a header that would run past its block fails the lookup, read from no "
-                  "byte past the block");
+                  "a header that would run past its block fails the lookup, with no byte "
+                  "read past the block's copy, which AddressSanitizer would report");
             unmount_image();
         } else {
             check(0, "the root's block was found for the malformed-entry row");
@@ -2473,12 +2473,12 @@ static void default_mount_row(void)
     check(f && g && write_at(f, block, sizeof(block), 0) == 0 &&
               OPS->unlink(&mnt, mnt.root, "gone") == 0,
           "two creates, a write of three blocks and a remove");
-    flushes = flush_n;
-    check(flushes == 0 && wlog_n > 0,
-          "reach the disk with no flush of its cache on a mount without dirsync");
     if (g) {
-        OPS->put(&mnt, g);
+        OPS->put(&mnt, g); /* the removed file's inode and blocks are freed here */
     }
+    check(flush_n == 0 && wlog_n > 0,
+          "reach the disk with no flush of its cache on a mount without dirsync");
+    flushes = flush_n;
     check(f && OPS->fsync(&mnt, 0) == 0 && flush_n > flushes, "and an fsync flushes it");
     if (f) {
         OPS->put(&mnt, f);
