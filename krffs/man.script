@@ -16,7 +16,8 @@
 # command the path finds by the name is a port's and not BusyBox's, as GNU's
 # ls is on that system. The text goes through the pager on a terminal and
 # straight to standard output otherwise; -P names the pager, in place of
-# MANPAGER and PAGER, and -w prints each page's path instead. -k, which `apropos` is, prints the NAME line of every page whose
+# MANPAGER and PAGER, an empty one showing the page as it is, and -w prints
+# each page's path instead. -k, which `apropos` is, prints the NAME line of every page whose
 # names or summary hold one of the words, in any case, and -f, which
 # `whatis` is, that of every page one of the names names. The lines are
 # read from the pages themselves, so there is no index to go stale.
@@ -38,7 +39,7 @@ while :; do
         -f) mode=whatis; shift ;;
         -P)
             [ $# -gt 1 ] || { echo "$usage" >&2; exit 2; }
-            pager=$2
+            pager=${2:-cat}
             shift 2
             ;;
         -P?*) pager=${1#-P}; shift ;;
