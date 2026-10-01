@@ -137,8 +137,10 @@ A readable region has all its bytes in the file, from an offset aligned
 to a page; a
 .Dv PROT_NONE
 region has none.
-A page the process never touched is a hole in the file, and reads as
-zeros.
+A page of a mapped file the process never touched is read from the file,
+as Linux reads it, so that a debugger finds the file's bytes in the core;
+a page of anonymous memory it never touched is a hole in the file, and
+reads as zeros.
 .Pp
 A process of 65534 regions or more has 65535 program headers or more, a
 count the ELF header's 16-bit field does not hold, since 0xffff there,

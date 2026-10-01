@@ -27,9 +27,10 @@ uint8_t *core_notes(int signo, uint32_t *size);
 /**
  * Write the core file of the current process through `write` with `ctx`,
  * with the notes `core_notes` built: at most `limit` bytes, the soft
- * RLIMIT_CORE, past which the file stops short, as Linux's does. The zeros
- * of pages the process never touched are holes, which do not count toward
- * the limit. 0, or a negative errno: -EFBIG at the limit, -ENOMEM, or the
+ * RLIMIT_CORE, past which the file stops short, as Linux's does. A page of
+ * a file the process never touched is read from the file; the zeros of a
+ * page of anonymous memory it never touched are a hole, which does not
+ * count toward the limit. 0, or a negative errno: -EFBIG at the limit, -ENOMEM, or the
  * writer's.
  *
  * It first waits until the process's other threads, which the caller has

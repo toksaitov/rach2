@@ -16,6 +16,9 @@
  * come before anything is written, and the regions it leaves are the ones
  * the file records; an execve waiting for the dumping thread ends it at once.
  *
+ * A page of a mapped file the process never touched is read for the file,
+ * where one of anonymous memory is a hole.
+ *
  * A process of 65533 inaccessible regions has 65534 program headers, which
  * the header's 16-bit field holds; one of 65534 or 65535 regions has
  * PN_XNUM there and its count in the sh_info of the one section header, at
@@ -249,6 +252,19 @@ static void regions_taken_once(void)
     CHECK(file[16384] == 0 && file[20479] == 0, "and a page it never touched is a hole");
 }
 
+/** A page of a mapped file the process never touched is read for the file,
+ * where the same page of anonymous memory is a hole. */
+static void file_pages_read(void)
+{
+    static struct vm_file mapped;
+
+    regions_set(4);
+    space.vm.vmas[2].file = &mapped;
+    CHECK(dump(1, 0, 0) == 0, "the file of a region of a mapped file is written");
+    CHECK(file[16384] == 0x4D && file[20479] == 0x4D,
+          "a page of a mapped file the process never touched is read from the file");
+}
+
 /**
  * The file is written after the other threads end: none is written before
  * the wait, and a region one of them mapped before it ended is in the file.
@@ -316,6 +332,7 @@ int main(void)
     group.leader = &self;
     sibling.tg = &group;
     regions_taken_once();
+    file_pages_read();
     threads_end_first();
     numbering(65533);
     numbering(65534);
@@ -325,7 +342,7 @@ int main(void)
     if (failures) {
         return 1;
     }
-    printf("coredump-test: pass: the regions taken once, the wait for the threads and the "
-           "extended numbering\n");
+    printf("coredump-test: pass: the regions taken once, the pages of a mapped file, the wait "
+           "for the threads and the extended numbering\n");
     return 0;
 }

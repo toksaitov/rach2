@@ -47,12 +47,13 @@ struct core_out {
     int32_t err;
 };
 
-/* What the file has of a region: its range and protection, taken once
- * before anything is written. */
+/* What the file has of a region: its range and protection, and whether it
+ * maps a file, taken once before anything is written. */
 struct core_region {
     uint32_t start;
     uint32_t end;
     uint32_t prot;
+    int of_file;
 };
 
 static void put16(uint8_t *p, uint16_t v)
@@ -273,10 +274,13 @@ static uint32_t region_file_size(const struct core_region *r)
 
 /**
  * Write the pages of region `r`: a page the process has, read through its
- * address space, and a hole for one it never touched, which is not brought
- * in for the file. Each page is looked up in the address space as it is
- * read, so a page another process sharing the space has unmapped since the
- * regions were taken is a hole.
+ * address space; a page of a file it never touched, brought in from the
+ * file as a read of /proc/PID/mem brings it, as Linux's dump brings it,
+ * since a debugger reads the file's bytes from the core, among them the
+ * version of libc that libthread_db checks; and a hole for a page of
+ * anonymous memory it never touched. Each page is looked up in the address
+ * space as it is read, so a page another process sharing the space has
+ * unmapped since the regions were taken is a hole.
  */
 static void region_write(struct core_out *o, struct mm *mm, const struct core_region *r)
 {
@@ -288,7 +292,7 @@ static void region_write(struct core_out *o, struct mm *mm, const struct core_re
         return;
     }
     for (addr = r->start; addr < r->end && o->err == 0; addr += PAGE_SIZE) {
-        if (paging_user_phys(mm->dir, addr) == 0 ||
+        if ((!r->of_file && paging_user_phys(mm->dir, addr) == 0) ||
             paging_access(mm, addr, page, PAGE_SIZE, 0) != 0) {
             (void)out(o, NULL, PAGE_SIZE);
         } else {
@@ -321,6 +325,7 @@ static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
         regions[i].start = vm->vmas[i].start;
         regions[i].end = vm->vmas[i].end;
         regions[i].prot = vm->vmas[i].prot;
+        regions[i].of_file = vm->vmas[i].file != NULL;
     }
     *count = vm->count;
     return regions;
