@@ -19,8 +19,8 @@
  * posix_fallocate answers EOPNOTSUPP for a file open for writing, a /proc
  * file among them, after which glibc's writes the range itself, EBADF for
  * one open only for reading, EINVAL for a length of 0, ESPIPE for a pipe,
- * and EOPNOTSUPP for a mode Linux does not take before any other check of
- * the descriptor.
+ * and EOPNOTSUPP for a mode Linux does not take before the check that the
+ * descriptor is open for writing.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
