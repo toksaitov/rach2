@@ -5231,3 +5231,13 @@ old
 new
     info->status = 0;
 end
+
+fault pty-output-dropped
+probe callsmusl
+file rach2/sys/tty/pty.c
+expect CALLSMUSL FAIL (a non-blocking slave write past the master ring was not cut and then EAGAIN
+old
+        while ((fit = pty_m_room(p) / pts_growth(p)) == 0) {
+new
+        while ((fit = pty_m_room(p) / pts_growth(p) + 1u) == 0) {
+end

@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt CONSOLE 4
 .Os
 .Sh NAME
@@ -44,8 +44,13 @@ The slave is
 where N is the lowest index not used by a live pair.
 A network login uses one pair per session.
 Master writes become slave input.
-Slave output and echo enter the master's 4096-byte ring; what arrives
-while it is full is discarded and still counted as written.
+Slave output and echo enter the master's 4096-byte ring.
+A slave writer the ring has no room for waits until the master reads, as
+on Linux, or, when non-blocking, returns what fit or fails with
+.Er EAGAIN ;
+.Xr poll 2
+reports the slave writable only while the ring has room.
+Echo that arrives while the ring is full is discarded.
 The slave has the same line discipline and job control as the console.
 The pair is freed after both ends close, and its index may be reused.
 .Ss Line discipline and job control

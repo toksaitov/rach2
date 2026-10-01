@@ -72,13 +72,27 @@ static uint32_t pty_m_avail(struct pty *p)
     return p->m_tail - p->m_head;
 }
 
+/* The bytes the master ring can still take. */
+static uint32_t pty_m_room(struct pty *p)
+{
+    return PTY_BUF_SIZE - pty_m_avail(p);
+}
+
+/* The most bytes one byte of the slave's output can become in the ring:
+ * output processing turns a newline into two bytes and a tab into as many as
+ * eight spaces, and raw output is a byte for a byte. */
+static uint32_t pts_growth(const struct pty *p)
+{
+    return (p->slave.ldisc.tio.c_oflag & OPOST) ? 8u : 1u;
+}
+
 /**
  * Push one byte from the slave's output into the master ring.
  *
- * Drops the byte when the ring is full, which a master that does not drain
- * fast enough leaves; the slave's write still counts it. The caller wakes
- * master readers once per write op (ptm_write echo, pts_write output), not
- * per byte. Runs in thread context, since no IRQ feeds a pty.
+ * Drops the byte when the ring is full, which only echo can find, since a
+ * slave writer waits for room (`pts_write`). The caller wakes master readers
+ * once per write op (ptm_write echo, pts_write output), not per byte. Runs
+ * in thread context, since no IRQ feeds a pty.
  */
 static void pty_slave_sink(void *ctx, unsigned char c)
 {
@@ -200,6 +214,7 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
             p->m_head++;
         }
         kirq_restore(flags);
+        wq_wake(&p->slave.input_wq, WQ_ROOM); /* a slave writer waiting for room */
         if (copy_to_user((void __user *)(buf + got), kbuf, chunk) != 0) {
             return (got > 0) ? (int32_t)got : -EFAULT;
         }
@@ -474,13 +489,24 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return n;
 }
 
+/* A slave writer can go on: the ring has room for a byte of output at its
+ * largest, or the master has closed. */
+static int pts_has_room(void *arg)
+{
+    struct pty *p = (struct pty *)arg;
+
+    return !p->master_open || pty_m_room(p) >= pts_growth(p);
+}
+
 /**
  * Queue slave output and wake master readers even if a later copy fails.
  *
  * Output goes through OPOST processing into m_buf by way of the slave's sink,
- * which drops what does not fit; the write still counts it. Once the master
- * has closed the write fails with EIO. With TOSTOP set, a background writer
- * takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
+ * a piece at a time that fits the ring at its largest (`pts_growth`): a
+ * writer the ring has no room for waits until the master reads, as on Linux,
+ * or takes -EAGAIN, or returns what it wrote, when non-blocking. Once the
+ * master has closed the write fails with EIO. With TOSTOP set, a background
+ * writer takes SIGTTOU, or EIO when SIGTTOU is blocked or ignored, as on the
  * console.
  */
 static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -510,7 +536,22 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     }
     while (done < count) {
         uint32_t chunk = count - done;
+        uint32_t fit;
 
+        while ((fit = pty_m_room(p) / pts_growth(p)) == 0) {
+            int32_t stop = !p->master_open ? -EIO : fd_is_nonblock(e) ? -EAGAIN : 0;
+
+            wake_master(p, &pushed);
+            if (stop == 0 && wq_wait_event(&p->slave.input_wq, pts_has_room, p) < 0) {
+                stop = -EINTR;
+            }
+            if (stop != 0) {
+                return done > 0 ? (int32_t)done : stop;
+            }
+        }
+        if (chunk > fit) {
+            chunk = fit;
+        }
         if (chunk > sizeof(kbuf)) {
             chunk = sizeof(kbuf);
         }
@@ -526,11 +567,13 @@ static int32_t pts_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 }
 
 /**
- * Report the slave's readiness, and POLLHUP once the master has closed.
+ * Report the slave's readiness, POLLOUT only while the master ring has room
+ * for a byte of output, and POLLHUP once the master has closed.
  *
  * tty_poll sets the wait queue only for a POLLIN query, but a master close
- * wakes that same input queue (tty_hangup), so a poller waiting only for the
- * hangup is parked on it too; otherwise it would sleep through ptm_close.
+ * wakes that same input queue (tty_hangup), and a master read wakes it with
+ * room, so a poller waiting only for the hangup or for room is parked on it
+ * too; otherwise it would sleep through ptm_close or the read.
  */
 static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
@@ -542,6 +585,8 @@ static short pts_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     }
     if (!p->master_open) {
         revents |= POLLHUP; /* the master hung up */
+    } else if (pty_m_room(p) < pts_growth(p)) {
+        revents &= (short)~POLLOUT; /* until the master reads */
     }
     return revents;
 }

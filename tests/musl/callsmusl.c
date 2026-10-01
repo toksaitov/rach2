@@ -20,7 +20,9 @@
  * A POSIX timer's signal comes with SI_TIMER and its value, a periodic
  * timer's signal blocked through several periods comes once with the others
  * as its overrun, and a deleted timer's id is EINVAL. sigqueue gives its
- * value and SI_QUEUE to the signal it sends.
+ * value and SI_QUEUE to the signal it sends. A writer to a raw
+ * pseudo-terminal slave whose master has not read waits for room, so the
+ * master reads every byte of 64 KiB, and a non-blocking one takes EAGAIN.
  * A setgid directory gives a file made in it its group, and a directory
  * its group and the bit. A process of another user is refused the maps and
  * the descriptors of a root process under /proc, and reads its own.
@@ -64,6 +66,7 @@
 #include <sys/resource.h>
 #include <sys/timex.h>
 #include <sys/xattr.h>
+#include <termios.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -282,6 +285,57 @@ static int privacies(void)
     if (WEXITSTATUS(status) != 0) {
         return fail("a child of user 4243 could not become it or read its own maps");
     }
+    return 0;
+}
+
+/* A slave written past what the master ring holds: a non-blocking write is
+   cut and then EAGAIN, and a child's 64 KiB, written while the master waits
+   before it reads, all reach the master. */
+static int flows(void)
+{
+    char name[32], buf[4096];
+    struct termios t;
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    int slave, status, n, cut, total = 0;
+    pid_t pid;
+
+    if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
+        ptsname_r(master, name, sizeof name) != 0 ||
+        (slave = open(name, O_RDWR | O_NOCTTY | O_NONBLOCK)) < 0 || tcgetattr(slave, &t) != 0) {
+        return fail("a raw pseudo-terminal pair");
+    }
+    cfmakeraw(&t);
+    tcsetattr(slave, TCSANOW, &t);
+    memset(buf, 'x', sizeof buf);
+    cut = (int)write(slave, buf, sizeof buf);
+    if (cut <= 0 || write(slave, buf, sizeof buf) != -1 || errno != EAGAIN) {
+        return fail("a non-blocking slave write past the master ring was not cut and then EAGAIN");
+    }
+    while (cut > 0 && (n = read(master, buf, sizeof buf)) > 0) {
+        cut -= n;
+    }
+    pid = fork();
+    if (pid == 0) {
+        int i;
+
+        fcntl(slave, F_SETFL, 0);
+        for (i = 0; i < 16; i++) {
+            if (write(slave, buf, sizeof buf) != (int)sizeof buf) {
+                _exit(1);
+            }
+        }
+        _exit(0);
+    }
+    close(slave);
+    usleep(100000);
+    while (total < 16 * (int)sizeof buf && (n = read(master, buf, sizeof buf)) > 0) {
+        total += n;
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0 || total != 16 * (int)sizeof buf) {
+        return fail("a slave writer's 64 KiB did not all reach the master");
+    }
+    close(master);
     return 0;
 }
 
@@ -635,7 +689,7 @@ int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers() || queues()) {
+        privacies() || timers() || queues() || flows()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");
