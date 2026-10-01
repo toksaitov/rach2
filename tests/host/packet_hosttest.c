@@ -273,6 +273,14 @@ struct netdev *netdev_first(void)
     return &the_iface;
 }
 
+/* Whether the card says its link is up, as `netdev.c` judges it. */
+static int link_down;
+
+int netdev_running(struct netdev *nd)
+{
+    return nd && !link_down;
+}
+
 /* What the driver answers a frame with, how many it was handed, and the card
  * and the first bytes of the last one. */
 static int tx_answer;
@@ -459,6 +467,30 @@ static void test_tx_size(unsigned path, uint32_t dst, uint8_t proto, uint16_t le
     }
 }
 
+/** Check that a card whose link is down is handed no frame of any type. */
+static void test_tx_link_down(void)
+{
+    static const uint8_t dst[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    static const uint8_t payload[28];
+
+    the_iface.up = 1;
+    the_iface.tx_dropped = 0;
+    the_iface.tx_packets = 0;
+    tx_answer = NETDEV_TX_OK;
+    tx_frames = 0;
+    link_down = 1;
+    CHECK("a card whose link is down is handed no IP frame",
+          ethernet_tx(&the_iface, dst, ETH_TYPE_IP, payload, 28) == NETDEV_TX_DROPPED);
+    CHECK("and no netconsole frame",
+          ethernet_tx(&the_iface, dst, 0x88b5, payload, 28) == NETDEV_TX_DROPPED);
+    CHECK("and each refusal counts as a transmit drop",
+          tx_frames == 0 && the_iface.tx_dropped == 2 && the_iface.tx_packets == 0);
+    link_down = 0;
+    CHECK("with the link up the frame goes to the card",
+          ethernet_tx(&the_iface, dst, ETH_TYPE_IP, payload, 28) == NETDEV_TX_OK &&
+              tx_frames == 1 && the_iface.tx_packets == 1);
+}
+
 /** Check empty, maximum and oversize payloads with ICMP and UDP protocols. */
 static void test_tx_mtu(void)
 {
@@ -621,6 +653,7 @@ int main(void)
     unsigned n;
 
     test_tx_mtu();
+    test_tx_link_down();
     test_tx_errors();
     test_loop_full();
     test_broadcast_iface();

@@ -78,7 +78,11 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
  * payload is dropped, not truncated. An interface an administrator took down
  * sends no IP and no ARP, but netconsole frames still leave: the log of a
  * machine whose network was just misconfigured is the one most worth having.
- * A frame is counted as sent only once the driver has taken it.
+ * A card that says its link is down is given nothing, as Linux gives a card
+ * nothing while its carrier is off: the frame could not leave, and a card
+ * such as the RTL8168 counts each one it is given as a transmit error.
+ * Both refusals count as transmit drops. A frame is counted as sent only once
+ * the driver has taken it.
  */
 int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *payload, uint16_t plen)
@@ -95,6 +99,10 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
         return ETHERNET_TX_TOOLONG;
     }
     if (!out->up && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
+        out->tx_dropped++;
+        return NETDEV_TX_DROPPED;
+    }
+    if (!netdev_running(out)) {
         out->tx_dropped++;
         return NETDEV_TX_DROPPED;
     }
