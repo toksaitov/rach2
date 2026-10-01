@@ -1024,13 +1024,36 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
     return (int)len;
 }
 
+/* The blocks the volume's own structures take: those before the first
+ * group, each superblock copy and descriptor table, and each group's two
+ * bitmaps and inode table, as Linux's ext2 counts them. */
+static uint32_t overhead_blocks(const struct ext2_mount *em)
+{
+    uint32_t n = em->first_data + em->groups * (2 + inode_table_blocks(em));
+    uint32_t g;
+
+    for (g = 0; g < em->groups; g++) {
+        if (has_super(em, g)) {
+            n += 1 + gd_blocks(em);
+        }
+    }
+    return n;
+}
+
+/**
+ * Report the volume's size, free blocks and inodes. The size leaves out the
+ * blocks of the volume's own structures (`overhead_blocks`), as Linux's
+ * ext2 does under its default `bsddf`, so `df` counts as used only what
+ * files and directories take, as `du` does.
+ */
 static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     struct ext2_mount *em = em_of(mnt);
+    uint32_t overhead = overhead_blocks(em);
 
     st->magic = EXT2_SUPER_MAGIC;
     st->bsize = em->block_size;
-    st->blocks = em->blocks;
+    st->blocks = em->blocks > overhead ? em->blocks - overhead : 0;
     st->bfree = em->free_blocks;
     st->reserved = em->r_blocks;
     st->files = em->inodes;

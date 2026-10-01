@@ -340,7 +340,7 @@ tests/host/ext2_hosttest.c:matrix_rows lines 119 a test's rows, each a case, rea
 tests/host/ext2_hosttest.c:oracle_after complexity 30 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:publication_ok nesting 5 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:read_rows complexity 56 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:read_rows lines 136 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:read_rows lines 138 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_rows complexity 69 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_rows lines 373 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_write_rows lines 128 a test's rows, each a case, read as one table

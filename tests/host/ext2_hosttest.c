@@ -727,8 +727,10 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
         struct vfs_statfs sf;
 
         check(OPS->statfs(&mnt, &sf) == 0 && sf.magic == 0xEF53 && sf.namelen == 255 &&
-                  sf.blocks == bytes / sf.bsize && sf.bfree < sf.blocks,
-              "statfs reports the format's magic, the volume's size and a free count");
+                  sf.blocks < bytes / sf.bsize && sf.blocks > bytes / sf.bsize / 2 &&
+                  sf.bfree < sf.blocks,
+              "statfs reports the format's magic, the volume's size less its own structures "
+              "and a free count");
     }
     unmount_image();
 }

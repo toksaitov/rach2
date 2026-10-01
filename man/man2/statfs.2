@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -37,6 +37,14 @@ The file-system magic number.
 The byte unit of the block counts.
 .It Va f_blocks
 The total count in those units.
+On ext2 it leaves out the blocks of the volume's own structures: those
+before the first group, each copy of the superblock and the group
+descriptors, and each group's two bitmaps and inode table, as Linux's
+ext2 does unless mounted with
+.Cm minixdf ,
+so that
+.Xr df 1
+counts as used what files and directories take.
 .It Va f_bfree
 The free count in those units.
 .It Va f_bavail
