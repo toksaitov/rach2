@@ -140,6 +140,13 @@ void socket_init(void);
 /** Allocate a socket with refcount 1; NULL if the pool is full. */
 struct socket *socket_alloc(int type);
 
+/**
+ * Whether a live stream socket has `port` as its local port, bound or
+ * connected, which an ephemeral port is never chosen over. The caller holds
+ * `net_lock`, which the list of sockets is shared under.
+ */
+int socket_port_bound(uint16_t port);
+
 /** An inode number for a socket of either family: rising, nonzero, and not
  * one a live socket has. */
 uint32_t socket_inode_next(void);

@@ -624,7 +624,14 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
             return -EADDRINUSE;
         }
     }
-    if (entry->sock->type == SOCK_STREAM && port != 0 && tcp_port_listening(port)) {
+    if (entry->sock->type == SOCK_STREAM && port == 0) {
+        /* Port 0 means any port, and a stream is given one at the bind, as on
+         * Linux, so that `getsockname` reports it before `listen`. */
+        port = tcp_bind_ephemeral();
+        if (port == 0) {
+            return -EADDRINUSE;
+        }
+    } else if (entry->sock->type == SOCK_STREAM && tcp_port_listening(port)) {
         /* Advisory, and where a server reports it: the invariant belongs to
          * `tcp_listen`, since `bind` and `listen` are separate syscalls and any
          * check made only here is bypassed by binding both sockets first. */

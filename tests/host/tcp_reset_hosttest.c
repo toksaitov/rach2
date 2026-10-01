@@ -137,6 +137,13 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 static struct socket pool[2];
 static unsigned pooled;
 
+/** No other socket has a port bound here. */
+int socket_port_bound(uint16_t port)
+{
+    (void)port;
+    return 0;
+}
+
 struct socket *socket_alloc(int type)
 {
     struct socket *s;

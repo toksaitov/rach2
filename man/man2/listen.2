@@ -21,10 +21,10 @@ The operation is subcall 4 of i386
 .Xr socketcall 2 ,
 system call 102.
 .Pp
-The socket must have a nonzero local port assigned by
-.Xr bind 2 .
-This kernel does not assign a port at
-.Fn listen .
+A socket with no local port, or one bound to port zero, listens on a free
+port from 49152 through 65535, as on Linux, and
+.Xr getsockname 2
+reports it.
 Only one live listener may use a port.
 A socket that is already listening or has any attached TCP control block
 cannot be made a listener by another call.
@@ -65,17 +65,15 @@ The first
 .Fn listen
 succeeds and the second returns
 .Er EADDRINUSE .
-The probe also checks that listening without a bound port returns
-.Er EDESTADDRREQ .
+The probe also checks that a listener with no bound port, and a socket
+bound to port zero, are given an ephemeral port.
 .Sh ERRORS
-.Bl -tag -width "[EDESTADDRREQ]"
+.Bl -tag -width "[EOPNOTSUPP]"
 .It Bq Er EADDRINUSE
-A live listener already uses the local port.
+A live listener already uses the local port, or no ephemeral port is free.
 .It Bq Er EBADF
 .Fa fd
 is not an open descriptor.
-.It Bq Er EDESTADDRREQ
-The socket has no nonzero local port.
 .It Bq Er EFAULT
 The socketcall argument array cannot be read from user memory.
 .It Bq Er EINVAL

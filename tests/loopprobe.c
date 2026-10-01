@@ -45,7 +45,6 @@ typedef unsigned char uint8_t;
 #define MSG_PEEK       0x2
 #define EAGAIN         11
 #define EFAULT         14
-#define EDESTADDRREQ   89
 
 #define SC_RECVFROM 12
 #define SC_SHUTDOWN 13
@@ -263,6 +262,25 @@ static void learn_canon_ip(void)
     if (canon_ip[0] == 127 || (canon_ip[0] | canon_ip[1] | canon_ip[2] | canon_ip[3]) == 0) {
         fail("the local address read back as a loopback or a zero address");
     }
+}
+
+/* The local port `getsockname` reports for `fd`, or -1 when it refuses. */
+static int local_port(int fd)
+{
+    uint32_t args[6];
+    uint8_t me[16];
+    int len = 16;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        me[i] = 0; /* the kernel fills this; a refusal must not read as a port */
+    }
+    args[0] = (uint32_t)fd;
+    args[1] = (uint32_t)me;
+    args[2] = (uint32_t)&len;
+    if (socketcall(SC_GETSOCKNAME, args) != 0)
+        return -1;
+    return me[2] * 256 + me[3];
 }
 
 /* The three system calls the round-trip row needs, in this file's shape. */
@@ -1250,8 +1268,9 @@ static void tcp_ports(void)
         fail("binding a live listener's port was not reported");
     sys_close(second);
 
-    /* A listener with no bound port at all: this stack assigns none, so port 0
-     * would be a listener no segment could ever reach. */
+    /* A listener with no bound port at all is given an ephemeral one, as
+     * Linux's listen gives it, and a bind to port 0 is given one at the bind,
+     * before any listen: both are what `getsockname` then reports. */
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1260,8 +1279,25 @@ static void tcp_ports(void)
         fail("unbound listener socket");
     args[0] = (uint32_t)second;
     args[1] = 4;
-    if (socketcall(SC_LISTEN, args) != -EDESTADDRREQ)
-        fail("unbound listener not refused");
+    if (socketcall(SC_LISTEN, args) != 0)
+        fail("unbound listener refused");
+    if (local_port(second) < 49152)
+        fail("unbound listener given no ephemeral port");
+    sys_close(second);
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    second = socketcall(SC_SOCKET, args);
+    if (second < 0)
+        fail("port 0 socket");
+    make_sockaddr(sa, 0, 0, 0, 0, 0);
+    args[0] = (uint32_t)second;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("bind to port 0");
+    if (local_port(second) < 49152)
+        fail("bind to port 0 given no ephemeral port");
     sys_close(second);
 
     /* A server restarted on a port its own last session still holds. `tcp_loop`

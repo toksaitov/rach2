@@ -153,6 +153,15 @@ void socket_unref(struct socket *sock)
     (void)sock;
 }
 
+/* The one port another socket has bound, which an ephemeral port must pass
+   over; 0 for none. */
+static uint16_t bound_elsewhere;
+
+int socket_port_bound(uint16_t port)
+{
+    return bound_elsewhere != 0 && port == bound_elsewhere;
+}
+
 struct socket *socket_alloc(int type)
 {
     (void)type;
@@ -616,6 +625,18 @@ static void window_scale_rows(void)
     }
 }
 
+/* An ephemeral port passes over one another socket has bound, as a port
+   a control block uses. */
+static void ephemeral_rows(void)
+{
+    reset_all();
+    next_ephemeral = 50000;
+    bound_elsewhere = 50000;
+    CHECK("an ephemeral port passes over a port another socket has bound",
+          tcp_bind_ephemeral() == 50001);
+    bound_elsewhere = 0;
+}
+
 int main(void)
 {
     struct tcb *t;
@@ -869,6 +890,7 @@ int main(void)
 
     peer_mss_row();
     window_scale_rows();
+    ephemeral_rows();
     path_mtu_row();
 
     /* A zero window that closes over a refused segment is flow control, not

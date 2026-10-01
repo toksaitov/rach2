@@ -109,6 +109,18 @@ struct socket *socket_alloc(int type)
     return sock;
 }
 
+int socket_port_bound(uint16_t port)
+{
+    const socket_t *s;
+
+    for (s = sockets; s; s = s->next) {
+        if (s->type == SOCK_STREAM && s->family == AF_INET && s->local_port == port) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void socket_ref(struct socket *sock)
 {
     uint32_t flags;

@@ -231,11 +231,18 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 int tcp_port_listening(uint16_t port);
 
 /**
- * Bind a socket to a port in LISTEN for passive opens.
+ * A port for a stream socket bound to port 0, which Linux gives at the bind:
+ * the next ephemeral port no control block uses, or 0 when none is free.
+ */
+uint16_t tcp_bind_ephemeral(void);
+
+/**
+ * Bind a socket to a port in LISTEN for passive opens, an ephemeral one when
+ * `port` is 0.
  *
- * 0, `-EADDRINUSE` if a listener already has the port, `-EDESTADDRREQ` if the
- * socket bound none, or `-ENOBUFS` if control-block allocation fails. A bare -1
- * would reach userland as `EPERM` through musl's return convention.
+ * 0, `-EADDRINUSE` if a listener already has the port or no ephemeral port is
+ * free, or `-ENOBUFS` if control-block allocation fails. A bare -1 would reach
+ * userland as `EPERM` through musl's return convention.
  */
 int tcp_listen(struct socket *sock, uint16_t port);
 

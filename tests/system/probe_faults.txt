@@ -4890,3 +4890,31 @@ old
 new
     (void)sys_splice;
 end
+
+# A bind to port 0 and a listen with no port, each given an ephemeral port.
+
+fault listen-no-autobind
+probe loopprobe
+file rach2/sys/network/tcp/tcp.c
+expect LOOPPROBE FAIL (unbound listener refused)
+old
+    if (port == 0) {
+        port = ephemeral_port();
+    }
+    if (port == 0 || tcp_port_has_listener(port)) {
+new
+    if (port == 0 || tcp_port_has_listener(port)) {
+end
+
+fault bind-zero-no-port
+probe loopprobe
+file rach2/sys/syscall_net.c
+expect LOOPPROBE FAIL (bind to port 0 given no ephemeral port)
+old
+        port = tcp_bind_ephemeral();
+        if (port == 0) {
+            return -EADDRINUSE;
+        }
+new
+        (void)tcp_bind_ephemeral;
+end

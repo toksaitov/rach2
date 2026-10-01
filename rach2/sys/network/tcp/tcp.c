@@ -847,6 +847,35 @@ static int tcp_local_port_in_use(uint16_t port)
 }
 
 /**
+ * The next ephemeral port no control block uses, listeners included, and no
+ * other stream socket has bound, or 0 when all 16384 of the range are taken.
+ * Caller holds `net_lock`.
+ */
+static uint16_t ephemeral_port(void)
+{
+    int tries = 0;
+    uint16_t port;
+
+    do {
+        port = next_ephemeral++;
+        if (next_ephemeral < 49152)
+            next_ephemeral = 49152;
+        if (++tries > 16384)
+            return 0;
+    } while (tcp_local_port_in_use(port) || socket_port_bound(port));
+    return port;
+}
+
+uint16_t tcp_bind_ephemeral(void)
+{
+    uint32_t flags = net_lock();
+    uint16_t port = ephemeral_port();
+
+    net_unlock(flags);
+    return port;
+}
+
+/**
  * Return whether a LISTEN control block has `port`. Caller holds `net_lock`.
  *
  * Connections in other states do not prevent a new listener on the same
@@ -1307,27 +1336,24 @@ static int backlog_refusal_logged;
  * `tcp_find_listen_sock` to disagree about. So the scan and the publish are one
  * `net_lock` region, and the check `bind` still makes is advisory.
  *
- * This stack assigns no port at `listen`, so a socket that never bound one is
- * refused: it would listen on port 0, which no segment can reach and which the
- * next such caller would collide with.
+ * A socket that never bound a port listens on the next ephemeral one, as a
+ * `listen` on Linux binds it, and `getsockname` reports the port chosen.
  *
- * @return 0, `-EADDRINUSE` if a listener already has the port,
- *         `-EDESTADDRREQ` if the socket never bound one, or `-ENOBUFS` if the
- *         control-block allocation fails.
+ * @return 0, `-EADDRINUSE` if a listener already has the port or no ephemeral
+ *         port is free, or `-ENOBUFS` if the control-block allocation fails.
  */
 int tcp_listen(struct socket *sock, uint16_t port)
 {
     struct tcb *tcb;
     uint32_t flags;
 
-    if (port == 0) {
-        return -EDESTADDRREQ;
-    }
-
     flags = net_lock();
     tcp_isn_key();
 
-    if (tcp_port_has_listener(port)) {
+    if (port == 0) {
+        port = ephemeral_port();
+    }
+    if (port == 0 || tcp_port_has_listener(port)) {
         net_unlock(flags);
         return -EADDRINUSE;
     }
@@ -1345,6 +1371,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     tcb->uid = sock->uid;
     tcb->inode = sock->inode;
     sock->tcb = tcb;
+    sock->local_port = port;
 
     net_unlock(flags);
     return 0;
@@ -1394,17 +1421,11 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
             return -EADDRINUSE;
         }
     } else {
-        int tries = 0;
-
-        do {
-            local = next_ephemeral++;
-            if (next_ephemeral < 49152)
-                next_ephemeral = 49152;
-            if (++tries > 16384) {
-                net_unlock(flags);
-                return -EADDRNOTAVAIL; /* every ephemeral port is in use */
-            }
-        } while (tcp_local_port_in_use(local));
+        local = ephemeral_port();
+        if (local == 0) {
+            net_unlock(flags);
+            return -EADDRNOTAVAIL; /* every ephemeral port is in use */
+        }
     }
 
     tcb = tcb_alloc();

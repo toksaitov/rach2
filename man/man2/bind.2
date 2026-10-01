@@ -39,12 +39,11 @@ A TCP bind records the port.
 It rejects a nonzero port that already has a live listener, but does
 not reserve the port against another bind before
 .Xr listen 2 .
-Binding TCP port zero assigns no port:
-.Xr connect 2
-then selects an ephemeral one, and
-.Xr listen 2
-fails with
-.Er EDESTADDRREQ .
+Binding TCP port zero selects a free port from 49152 through 65535 that
+no TCP connection or listener uses and no other stream socket has bound, as
+Linux does, and
+.Xr getsockname 2
+reports it.
 .Pp
 There is no loopback interface.
 At the socket boundary, a destination in
@@ -102,7 +101,8 @@ A caller without effective user ID 0 requested a nonzero port below 1024.
 .It Er EADDRINUSE
 A UDP port cannot be shared, no ephemeral port is available, or memory
 for a UDP binding cannot be allocated.
-A TCP port already has a live listener.
+A TCP port already has a live listener, or no ephemeral port is free for
+a bind to port zero.
 .It Er EADDRNOTAVAIL
 A raw ICMP bind requests an address other than zero, the primary local
 address, or an address in
