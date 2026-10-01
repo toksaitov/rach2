@@ -172,7 +172,9 @@ static int icmp_error_allowed(void)
  *
  * The caller has checked that the datagram was addressed to this machine and
  * not broadcast. No error goes to a source of 0.0.0.0, a broadcast or a
- * group, which is no single host, and none past the rate limit.
+ * group, which is no single host, and none past the rate limit, which an
+ * error to this machine's own address is not held to, as Linux does not
+ * limit the errors it sends over its loopback.
  */
 void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
 {
@@ -180,7 +182,7 @@ void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
     uint16_t quote = len < ICMP_QUOTE_MAX ? len : ICMP_QUOTE_MAX;
 
     if (src == 0 || (src & 0xF0000000u) == 0xE0000000u || netdev_is_broadcast(src) ||
-        !icmp_error_allowed()) {
+        (!netdev_owns(src) && !icmp_error_allowed())) {
         return;
     }
     icmp_error_buf[0] = ICMP_UNREACHABLE;

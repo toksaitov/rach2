@@ -5201,3 +5201,13 @@ old
 new
                  };
 end
+
+fault icmp-loopback-limited
+probe callsmusl
+file rach2/sys/network/ip/icmp.c
+expect CALLSMUSL FAIL (poll did not report the port unreachable as POLLERR
+old
+        (!netdev_owns(src) && !icmp_error_allowed())) {
+new
+        !icmp_error_allowed()) {
+end

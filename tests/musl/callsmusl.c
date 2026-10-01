@@ -15,7 +15,8 @@
  * process has touched as ru_maxrss in kilobytes, and wait4 that of a child
  * that touched more, as GNU time reads them. A UDP socket connected to a
  * local port no socket has polls POLLERR once the port unreachable comes
- * back, and its next receive is ECONNREFUSED, as glibc's resolver expects.
+ * back, and its next receive is ECONNREFUSED, as glibc's resolver expects,
+ * ten times in a row, since errors over the loopback are not rate-limited.
  * A setgid directory gives a file made in it its group, and a directory
  * its group and the bit. A process of another user is refused the maps and
  * the descriptors of a root process under /proc, and reads its own.
@@ -115,28 +116,35 @@ static int peaks(void)
     return 0;
 }
 
-/* A datagram to a closed port, answered with a port unreachable. */
+/* Ten datagrams to a closed local port, each answered with a port
+   unreachable, since errors over the loopback are not rate-limited. */
 static int refusals(void)
 {
     struct sockaddr_in a;
     struct pollfd p;
     char c;
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int i;
 
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_port = htons(47);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a) != 0 || send(fd, "x", 1, 0) != 1) {
+    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a) != 0) {
         return fail("a UDP socket connected to a closed local port");
     }
-    p.fd = fd;
-    p.events = POLLIN;
-    if (poll(&p, 1, 3000) != 1 || !(p.revents & POLLERR)) {
-        return fail("poll did not report the port unreachable as POLLERR");
-    }
-    if (recv(fd, &c, 1, 0) != -1 || errno != ECONNREFUSED) {
-        return fail("the receive after a port unreachable was not ECONNREFUSED");
+    for (i = 0; i < 10; i++) {
+        if (send(fd, "x", 1, 0) != 1) {
+            return fail("a send to a closed local port");
+        }
+        p.fd = fd;
+        p.events = POLLIN;
+        if (poll(&p, 1, 1000) != 1 || !(p.revents & POLLERR)) {
+            return fail("poll did not report the port unreachable as POLLERR");
+        }
+        if (recv(fd, &c, 1, 0) != -1 || errno != ECONNREFUSED) {
+            return fail("the receive after a port unreachable was not ECONNREFUSED");
+        }
     }
     close(fd);
     return 0;
