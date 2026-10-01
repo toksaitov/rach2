@@ -144,9 +144,10 @@ static void vfs_kill_setid(struct vfs_mount *mnt, void *node)
 }
 
 /** Reject creation through the memory-root adapter. */
-static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
+static void krffs_stamp_new_node(krffs_node_t *node, const krffs_node_t *parent, uint32_t mode)
 {
     (void)node;
+    (void)parent;
     (void)mode;
     check(0, "unexpected memory-root creation");
 }
