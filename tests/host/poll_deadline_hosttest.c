@@ -73,7 +73,8 @@ int main(void)
     CHECK(poll_ms_deadline(1, &has) == 1001, "a poll of 1 ms from tick 1000 ends at 1001");
     CHECK(poll_ms_deadline(21, &has) == 1003, "a poll of 21 ms rounds up to three ticks");
     phase_now_ns = 4000000;
-    CHECK(poll_ms_deadline(1, &has) == 1001, "a poll of 1 ms begun 4 ms into a tick ends at the next");
+    CHECK(poll_ms_deadline(1, &has) == 1001,
+          "a poll of 1 ms begun 4 ms into a tick ends at the next");
     CHECK(poll_ms_deadline(7, &has) == 1002, "and one of 7 ms at the tick after");
     phase_now_ns = 0;
     CHECK(poll_ms_deadline(0, &has) == 1000 && has == 1, "a zero poll timeout ends at once");

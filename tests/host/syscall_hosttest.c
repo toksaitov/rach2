@@ -719,7 +719,8 @@ static void sleep_races(void)
     ask_sleep(&p, 0, 1000000);
     model_at(1300);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1301, "a sleep of 1 ms begun 4 ms into a tick ends at the next");
+    CHECK(rc == 0 && blocked_until == 1301,
+          "a sleep of 1 ms begun 4 ms into a tick ends at the next");
     ask_sleep(&p, 0, 7000000);
     model_at(1300);
     rc = sleep_call(&p);
