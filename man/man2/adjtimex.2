@@ -60,6 +60,13 @@ and of
 The tick is the timer's 10000 microseconds, the precision 1 microsecond
 and the tolerance Linux's 500 ppm.
 .Pp
+While
+.Dv STA_UNSYNC
+is clear, a privileged call that changes anything also copies the time,
+rounded to the second, to the CMOS clock, at most once in 11 minutes, as
+Linux's 11-minute mode does, so that the next boot starts from the time
+an NTP daemon kept.
+.Pp
 The i386 system call numbers are 124 for
 .Fn adjtimex
 and 343 for

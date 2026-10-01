@@ -851,6 +851,38 @@ static void timex_put(uint8_t *b, int wide, int field, int64_t v)
  * caller's timex at `uaddr`, in the 64-bit layout with `wide`, read,
  * adjusted and written back.
  */
+/* The ticks between two copies of the time to the CMOS clock. */
+#define NTP_RTC_TICKS (11u * 60u * 100u)
+
+/**
+ * Copy the time to the CMOS clock after a change an NTP daemon made while
+ * the clock is synchronized, at most once in 11 minutes, as Linux's
+ * 11-minute mode does, so that the next boot starts from the time the
+ * daemon kept and not from the CMOS clock's own drift. Rounded to the
+ * nearest second, since the CMOS clock keeps no fraction.
+ */
+static void ntp_rtc_sync(void)
+{
+    static uint32_t last; /* kernel_ticks + 1 at the last copy, 0 for none */
+    int64_t sec, nsec;
+    rtc_time_t t;
+
+    if ((ntp.status & STA_UNSYNC) || (last != 0 && kernel_ticks + 1u - last < NTP_RTC_TICKS)) {
+        return;
+    }
+    rtc_realtime(&sec, &nsec);
+    if (nsec >= 500000000) {
+        sec++;
+    }
+    if (sec < 946684800 || sec > 4102444799LL) {
+        return; /* the CMOS clock's century: 2000 to 2099 */
+    }
+    rtc_time_of_seconds((uint32_t)sec, &t);
+    if (rtc_write_clock(&t) == 0) {
+        last = kernel_ticks + 1u;
+    }
+}
+
 static int32_t timex_call(uint32_t uaddr, int wide)
 {
     uint8_t b[208];
@@ -874,6 +906,9 @@ static int32_t timex_call(uint32_t uaddr, int wide)
     rc = ktimex_adjust(&tx);
     if (rc < 0) {
         return rc;
+    }
+    if (tx.modes != 0 && proc_privileged(current_proc)) {
+        ntp_rtc_sync();
     }
     timex_put(b, wide, 1, tx.offset);
     timex_put(b, wide, 2, tx.freq);

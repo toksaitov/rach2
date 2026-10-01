@@ -13,6 +13,9 @@
  * test, because a case that derives its answer the way the implementation does
  * proves only that the implementation is self-consistent.
  *
+ * `rtc_time_of_seconds`, the way back, is checked over the same kind of
+ * hand-worked instants.
+ *
  * Port stubs also drive the real-time reader across pending interrupts and
  * counter wraps, including one during its latch, without executing I/O.
  *
@@ -305,6 +308,21 @@ int main(void)
     rtc_snapshot_t raw;
     rtc_time_t when;
     long long seconds;
+
+    /* Seconds back to the calendar the clock keeps, for the 11-minute
+     * copy: the epoch, a leap day, a time of the century, and its last
+     * second, each worked out by hand. */
+    rtc_time_of_seconds(0, &when);
+    CHECK(when.year == 1970 && when.month == 1 && when.day == 1 && when.hour == 0 &&
+          when.minute == 0 && when.second == 0);
+    rtc_time_of_seconds(951782400u, &when);
+    CHECK(when.year == 2000 && when.month == 2 && when.day == 29 && when.hour == 0);
+    rtc_time_of_seconds(1790000000u, &when);
+    CHECK(when.year == 2026 && when.month == 9 && when.day == 21 && when.hour == 14 &&
+          when.minute == 13 && when.second == 20);
+    rtc_time_of_seconds(4102444799u, &when);
+    CHECK(when.year == 2099 && when.month == 12 && when.day == 31 && when.hour == 23 &&
+          when.minute == 59 && when.second == 59);
 
     /* The epoch itself, in the century this driver assumes: 2000-01-01 is
      * 10957 days after 1970-01-01, and 10957 * 86400 is 946684800. */

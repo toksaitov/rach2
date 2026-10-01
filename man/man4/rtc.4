@@ -9,6 +9,10 @@
 .Sh DESCRIPTION
 The device is the machine's CMOS clock, which keeps the date and time while
 the machine is off and which the kernel reads once at boot to set the time.
+The kernel writes it only while an NTP daemon keeps the time synchronized,
+as
+.Xr adjtimex 2
+describes.
 It answers Linux's two ioctls for reading and setting the clock, with a
 .Vt struct rtc_time
 of nine ints: the second, minute, hour, day of the month, month from 0,
@@ -49,4 +53,5 @@ Another ioctl.
 .El
 .Sh SEE ALSO
 .Xr busybox-util-linux 1 ,
+.Xr adjtimex 2 ,
 .Xr clock_settime 2

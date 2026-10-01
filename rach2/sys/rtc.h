@@ -85,6 +85,9 @@ int rtc_read_clock(rtc_time_t *out);
 /** The day of the week of `*t`, 0 for Sunday, and of the year, from 0. */
 void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday);
 
+/** `*t` for `seconds` since 1970 in UTC, the calendar the CMOS clock keeps. */
+void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t);
+
 /**
  * Set the CMOS clock to `*t`, a time from 2000 to 2099 in UTC, in the
  * encoding and hour format status register B gives, with updates held while

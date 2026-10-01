@@ -526,6 +526,26 @@ void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yeard
     *weekday = (days + *yearday + 4) % 7; /* 1970-01-01 was a Thursday */
 }
 
+void rtc_time_of_seconds(uint32_t seconds, rtc_time_t *t)
+{
+    uint32_t days = seconds / 86400u, rest = seconds % 86400u, len;
+
+    t->year = RTC_EPOCH_YEAR;
+    while (days >= (len = rtc_is_leap(t->year) ? 366u : 365u)) {
+        days -= len;
+        t->year++;
+    }
+    t->month = 1;
+    while (days >= (len = (uint32_t)rtc_days_in_month(t->year, t->month))) {
+        days -= len;
+        t->month++;
+    }
+    t->day = (int32_t)days + 1;
+    t->hour = (int32_t)(rest / 3600u);
+    t->minute = (int32_t)(rest / 60u % 60u);
+    t->second = (int32_t)(rest % 60u);
+}
+
 int rtc_write_clock(const rtc_time_t *t)
 {
     int32_t weekday, yearday, hour12;
