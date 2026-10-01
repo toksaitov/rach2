@@ -108,9 +108,8 @@ step_gcc()
         --enable-languages=c,c++ --with-arch=i686 --with-tune=generic \
         --disable-multilib --disable-nls --disable-bootstrap \
         --enable-shared --enable-threads=posix --enable-__cxa_atexit \
-        --disable-libstdcxx-pch --disable-libgomp --disable-libitm \
-        --disable-libquadmath --disable-libsanitizer --disable-libssp \
-        --disable-libvtv
+        --disable-libstdcxx-pch --disable-libitm --disable-libquadmath \
+        --disable-libssp --disable-libvtv
     make ${JOBS:+"$JOBS"}
     make install-strip DESTDIR="$ROOT"
 }
