@@ -144,7 +144,8 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
 }
 
 /* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
- * kernel's name, its release and the bound of its process IDs. */
+ * kernel's name, its release, the bound of its process IDs and the name it
+ * gives a core file (proc/coredump.h). */
 static const struct {
     int parent;
     const char *name;
@@ -158,7 +159,8 @@ static const struct {
                {0, "kernel", 0},
                {6, "ostype", "Rach2\n"},
                {6, "osrelease", "1.0.0\n"},
-               {6, "pid_max", "2000000000\n"}};
+               {6, "pid_max", "2000000000\n"},
+               {6, "core_pattern", "core\n"}};
 
 int synth_sys_count(void)
 {

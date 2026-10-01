@@ -4771,6 +4771,18 @@ new
         ap_ip_hex(t, row.local_ip);
 end
 
+# /proc/sys/kernel/core_pattern.
+
+fault core-pattern-missing
+probe direntmusl
+file rach2/sys/fs/synthfs.c
+expect DIRENTMUSL FAIL (/proc/sys/kernel/core_pattern is not the name of a core file
+old
+               {6, "core_pattern", "core\n"}};
+new
+               {6, "core_name", "core\n"}};
+end
+
 # splice, tee and sendfile, which answer EINVAL.
 
 fault splice-missing

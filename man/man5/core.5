@@ -71,7 +71,8 @@ only when the whole file was written.
 Linux names the file by
 .Pa /proc/sys/kernel/core_pattern
 and may pipe it to a program; here the name is always
-.Pa core .
+.Pa core ,
+which that file reads and which cannot be changed.
 Linux also writes
 .Dv NT_SIGINFO ,
 .Dv NT_FILE

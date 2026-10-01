@@ -13,7 +13,8 @@
  * flags, /proc/self/mounts reads as /proc/mounts, /proc/loadavg has three
  * loads with two decimals, the running and all tasks, the probe among them,
  * and a last process ID no lower than its own, /proc has no process 0,
- * /proc/sys/fs/inotify/max_user_watches reads 8192, and a working
+ * /proc/sys/fs/inotify/max_user_watches reads 8192,
+ * /proc/sys/kernel/core_pattern the name of a core file, and a working
  * directory of /proc/sys/kernel is named so by getcwd. Each listing must end
  * without an error from readdir and check at least one entry, and lstat may
  * fail only with ENOENT, only in /proc and /dev/pts, whose entries come and
@@ -1088,6 +1089,10 @@ static int proc_texts(void)
     if (slurp("/proc/sys/fs/inotify/max_user_watches", buf, sizeof(buf)) < 0 ||
         strcmp(buf, "8192\n") != 0) {
         return fail("/proc/sys/fs/inotify/max_user_watches");
+    }
+    if (slurp("/proc/sys/kernel/core_pattern", buf, sizeof(buf)) < 0 ||
+        strcmp(buf, "core\n") != 0) {
+        return fail("/proc/sys/kernel/core_pattern is not the name of a core file, core");
     }
     if (chdir("/proc/sys/kernel") != 0 || !getcwd(cwd, sizeof(cwd)) ||
         strcmp(cwd, "/proc/sys/kernel") != 0 || chdir("/") != 0) {

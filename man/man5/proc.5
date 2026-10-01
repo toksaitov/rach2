@@ -368,10 +368,15 @@ A few of Linux's sysctl files, read-only, each a value and a newline:
 .Pa kernel/osrelease ,
 the release
 .Xr uname 2
-reports; and
+reports;
 .Pa kernel/pid_max ,
 2000000000, above which process IDs are not given out: they start again
-from 1.
+from 1; and
+.Pa kernel/core_pattern ,
+.Ql core ,
+the name a core file always has here, as
+.Xr core 5
+says.
 .It Pa /proc/stat
 System counters, one named record per line.
 The first two lines have this form:
