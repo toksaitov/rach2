@@ -144,8 +144,9 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_fd_ino complexity 27 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open complexity 79 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_fd_ino complexity 28 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_kind_name complexity 26 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 81 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 212 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
@@ -339,7 +340,7 @@ tests/host/ext2_hosttest.c:dirty_rows lines 143 a test's rows, each a case, read
 tests/host/ext2_hosttest.c:matrix_rows lines 119 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:oracle_after complexity 30 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:publication_ok nesting 5 a test's rows, each a case, read as one table
-tests/host/ext2_hosttest.c:read_rows complexity 56 a test's rows, each a case, read as one table
+tests/host/ext2_hosttest.c:read_rows complexity 57 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:read_rows lines 138 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_rows complexity 69 a test's rows, each a case, read as one table
 tests/host/ext2_hosttest.c:refusal_rows lines 373 a test's rows, each a case, read as one table
@@ -659,7 +660,7 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
-tests/procprobe.c:probe_main complexity 72 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main complexity 75 a probe, one sequence of steps in the order the log records them
 tests/procprobe.c:probe_main lines 531 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
