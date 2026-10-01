@@ -61,7 +61,14 @@ if [ "$raw" -eq 1 ] && { [ "$stamp" != keep ] || [ "$decode" -eq 1 ]; }; then
     echo "dmesg: -r is taken with -l alone" >&2
     exit 1
 fi
-# The fields between the commas, as the formatter splits them.
+# The fields between the commas, as the formatter splits them, an empty last
+# one included, which the shell's splitting drops.
+case "$levels" in
+    *,)
+        echo "dmesg: unknown level ''" >&2
+        exit 1
+        ;;
+esac
 ifs=$IFS
 IFS=,
 for word in $levels; do
@@ -170,14 +177,16 @@ END {
     }
     start = olds - drop + 1
     if (olds > 0 && drop == olds) {
-        for (start = 1; start <= news && stamp(new[start]) <= stamp(old[olds]); start++) {
+        for (last = olds; last > 1 && stamp(old[last]) < 0; last--) {
+        }
+        for (start = 1; start <= news && stamp(new[start]) <= stamp(old[last]); start++) {
         }
     }
     for (i = start; i <= news; i++) {
         print new[i]
     }
 }' | format || exit 1
-    { : >/dev/stdout; } 2>/dev/null || exit 1
+    { : >>/dev/stdout; } 2>/dev/null || exit 1
     prev=$log
     sleep 1
 done
