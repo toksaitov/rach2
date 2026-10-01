@@ -359,8 +359,8 @@ changes = {
         'if (clk >= 0 || ((uint32_t)clk & CPUCLOCK_WHICH) == 3u) {',
         'if (clk >= 0) {'),
     'clock-res': ('syscall',
-        'res.tv_nsec = c.kind == KCLOCK_REAL ? 1000 : 10000000;',
-        'res.tv_nsec = 10000000;'),
+        '    return c->kind == KCLOCK_REAL || c->kind == KCLOCK_MONO ? 1000 : 10000000;',
+        '    return c->kind == KCLOCK_REAL ? 1000 : 10000000;'),
     'clock-sleep-clock': ('syscall',
         '    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||\n'
         '        clk == CLOCK_REALTIME_COARSE || clk == CLOCK_MONOTONIC_COARSE) {',
@@ -457,7 +457,7 @@ PY
         clock-cpu-pid) detail='a CPU clock by pid reads that process'"'"'s time' ;;
         clock-cpu-thread) detail='a thread clock of another process is refused' ;;
         clock-descriptor) detail='a descriptor'"'"'s clock is refused' ;;
-        clock-res) detail='real time resolves to the microsecond' ;;
+        clock-res) detail='time since boot, raw and boot time resolve to the microsecond' ;;
         clock-sleep-clock) detail='a clock Linux cannot sleep on is refused' ;;
         clock-sleep-thread) detail='a thread CPU clock by id cannot be slept on' ;;
         clock-sleep-due) detail='10.035 s since boot is reached at tick 1004' ;;

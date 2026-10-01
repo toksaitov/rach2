@@ -190,6 +190,53 @@ static void set_rows(void)
     CHECK(rtc_boot_epoch() == 979);
 }
 
+/*
+ * Time since boot at the same hardware states as the real-time rows: the
+ * PIT's place within the tick is added, a pending wrap counts once, also at
+ * the end of a second, a reading is never earlier than the one before, and
+ * setting the real time does not move it.
+ */
+static void monotonic_rows(void)
+{
+    int64_t sec, ns;
+
+    wrap_on_pending = 0;
+    pending = 0;
+    kernel_uptime_seconds = 50;
+    kernel_second_ticks = 0;
+    count = pit_reload - 100u;
+    status = 0x80;
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 50 && ns == 41000);
+    count -= 100u;
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 50 && ns == 83000);
+    pending = 1;
+    count = pit_reload - 100u;
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 50 && ns == 10041000);
+    pending = 0;
+    kernel_second_ticks = 99;
+    status = 0;
+    count = 2;
+    wrap_on_pending = 2;
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 51 && ns == 41000);
+    pending = 0;
+    kernel_uptime_seconds = 50;
+    kernel_second_ticks = 99;
+    status = 0x80;
+    count = pit_reload - 100u;
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 51 && ns == 41000);
+    kernel_uptime_seconds = 51;
+    kernel_second_ticks = 1;
+    rtc_set_realtime(1000, 0);
+    rtc_monotonic(&sec, &ns);
+    CHECK(sec == 51 && ns == 10041000);
+    CHECK(!irq_disabled);
+}
+
 /** A BCD byte from a two-digit value, the way the CMOS has one. */
 static unsigned char bcd(int value)
 {
@@ -453,5 +500,6 @@ int main(void)
 
     subtick_rows();
     set_rows();
+    monotonic_rows();
     return fails > 100 ? 100 : fails;
 }

@@ -452,7 +452,7 @@ tests/host/pwauth_hosttest.c:main lines 240 a test's rows, each a case, read as 
 tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, read as one table
 
 tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read as one table
-tests/host/rtc_hosttest.c:main lines 241 a test's rows, each a case, read as one table
+tests/host/rtc_hosttest.c:main lines 242 a test's rows, each a case, read as one table
 
 tests/host/rtl8168_hosttest.c:main complexity 97 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as one table
@@ -460,6 +460,9 @@ tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
 tests/host/synthfs_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
+
+tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
+tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
 
 tests/host/tables_hosttest.c:main complexity 28 a test's rows, each a case, read as one table
 
@@ -545,6 +548,8 @@ tests/musl/authmusl.c:main lines 112 a test's rows, each a case, read as one tab
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table
 
+tests/musl/clockidmusl.c:clocks complexity 37 a test's rows, each a case, read as one table
+tests/musl/clockidmusl.c:clocks lines 101 a test's rows, each a case, read as one table
 tests/musl/clockidmusl.c:sleeps complexity 29 a test's rows, each a case, read as one table
 
 tests/musl/clonemusl.c:main complexity 26 a test's rows, each a case, read as one table

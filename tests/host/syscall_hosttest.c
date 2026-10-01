@@ -177,6 +177,20 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (int64_t)kernel_second_ticks * 10000000;
 }
 
+/* The PIT's place within the tick, which the model's time since boot adds. */
+static int64_t mono_phase_ns;
+
+/** Time since boot as the clock keeps it: the uptime and its ticks, with the
+ * place within the tick, read with interrupts masked. */
+void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t flags = kirq_save();
+
+    *seconds = (int64_t)kernel_uptime_seconds;
+    *nanoseconds = (int64_t)kernel_second_ticks * 10000000 + mono_phase_ns;
+    kirq_restore(flags);
+}
+
 /** The model's one other process, pid 9, whose CPU clock a caller may read. */
 static process_t other;
 static struct tgroup group, other_group;
@@ -860,7 +874,8 @@ static void timer_first_expiry(void)
     CHECK(call_alarm(0) == 5, "alarm reports 4.5 s left as 5");
 }
 
-/** Read across the tick wrap and the following whole-second boundary. */
+/** Read coarse time since boot, which counts the uptime and its ticks here,
+ * across the tick wrap and the following whole-second boundary. */
 static void clocks(void)
 {
     isr_params_t p;
@@ -870,7 +885,7 @@ static void clocks(void)
     int32_t seconds[] = {42949672, 42949672, 42949672, 42949672, 42949673};
     int32_t nanos[] = {940000000, 950000000, 960000000, 990000000, 0};
     k_memset(&p, 0, sizeof(p));
-    p.ebx = 1;
+    p.ebx = 6;
     p.ecx = 16;
     for (i = 0; i < 5; i++) {
         kernel_ticks = ticks[i];
@@ -938,9 +953,11 @@ static int32_t cpu_clock_id(uint32_t id, int thread, uint32_t which)
  * process's CPU clock by id reads that process's time, pid 0 reading the
  * caller's; one clock reads user time alone. A thread clock names only the
  * caller, a clock of no such process and a descriptor's clock are refused,
- * and so are ids 8 and above. Real time resolves to the microsecond and every
- * other clock to the tick, and a resolution may be asked for with no
- * timespec to write.
+ * and so are ids 8 and above. With the PIT 41 us into the tick, time since
+ * boot, raw and boot time read 42.050041 s and the coarse clock 42.05 s. Real
+ * time and time since boot resolve to the microsecond and the coarse and CPU
+ * clocks to the tick, and a resolution may be asked for with no timespec to
+ * write.
  */
 static void clock_ids(void)
 {
@@ -966,6 +983,14 @@ static void clock_ids(void)
     }
     CHECK(read_clock(5, &ts) == 0 && ts.tv_sec == 1000042 && ts.tv_nsec == 50000000,
           "coarse real time is the boot's epoch plus the uptime at the tick");
+    mono_phase_ns = 41000;
+    CHECK(read_clock(1, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 50041000 &&
+              read_clock(4, &ts) == 0 && ts.tv_nsec == 50041000 && read_clock(7, &ts) == 0 &&
+              ts.tv_nsec == 50041000,
+          "time since boot, raw and boot time read the place within the tick");
+    CHECK(read_clock(6, &ts) == 0 && ts.tv_sec == 42 && ts.tv_nsec == 50000000,
+          "coarse time since boot stops at the tick");
+    mono_phase_ns = 0;
     CHECK(read_clock(2, &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
           "the process CPU clock reads user and system time");
     CHECK(read_clock(3, &ts) == 0 && ts.tv_sec == 3 && ts.tv_nsec == 700000000,
@@ -986,8 +1011,12 @@ static void clock_ids(void)
     CHECK(read_clock(8, &ts) == -EINVAL && read_clock(11, &ts) == -EINVAL,
           "clock ids past 7 are refused");
     CHECK(clock_res(0) == 1000, "real time resolves to the microsecond");
-    for (clk = 1; clk <= 7; clk++) {
-        CHECK(clock_res(clk) == 10000000, "the other clocks resolve to the tick");
+    CHECK(clock_res(1) == 1000 && clock_res(4) == 1000 && clock_res(7) == 1000,
+          "time since boot, raw and boot time resolve to the microsecond");
+    for (clk = 2; clk <= 6; clk++) {
+        if (clk != 4) {
+            CHECK(clock_res(clk) == 10000000, "the coarse and CPU clocks resolve to the tick");
+        }
     }
     CHECK(clock_res(cpu_clock_id(9, 0, 2)) == 10000000, "a CPU clock by pid resolves to the tick");
     CHECK(clock_res(8) == -EINVAL, "an unknown clock has no resolution");
@@ -1138,6 +1167,17 @@ static void clock_sleeps(void)
     uptime_at(1000);
     CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1001,
           "a real time still ahead within the tick is reached at the next tick");
+    mono_phase_ns = 5000000;
+    ask_clock_sleep(&p, 1, 1, 10, 4000000);
+    uptime_at(1000);
+    pending = 1;
+    CHECK(clock_sleep_call(&p) == 0 && sleeps == 0,
+          "a time since boot the clock passed within the tick returns at once");
+    ask_clock_sleep(&p, 1, 1, 10, 8000000);
+    uptime_at(1000);
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1001,
+          "a time since boot still ahead within the tick is reached at the next tick");
+    mono_phase_ns = 0;
     real_sec = 123;
     real_nsec = 450000000;
     ask_clock_sleep(&p, 1, 1, 10, 35000000);

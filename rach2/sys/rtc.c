@@ -521,30 +521,39 @@ static void rtc_add_step(int64_t *seconds, int64_t *nanoseconds)
 }
 
 /**
- * The time the anchor keeps now, with the PIT position added to the delivered
- * ticks; the caller has interrupts off.
+ * Time since boot now: the uptime seconds, the ticks of this second and the
+ * PIT's place within the tick; the caller has interrupts off.
  *
  * IRQ0 can be pending after the counter wraps. Read its pending bit on both
  * sides of the latch; if it changed, latch again. A pending tick belongs to
  * the new period even before the handler counts it.
  */
-static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
+static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns)
 {
-    uint32_t uptime = kernel_uptime_seconds;
-    uint32_t ticks = kernel_second_ticks;
-    uint32_t phase_ns;
-    int pending = pic_irq_pending(0);
+    int pending;
 
-    phase_ns = pit_subtick_ns();
+    *uptime = kernel_uptime_seconds;
+    *ticks = kernel_second_ticks;
+    pending = pic_irq_pending(0);
+    *phase_ns = pit_subtick_ns();
     if (pending != pic_irq_pending(0)) {
         pending = 1;
-        phase_ns = pit_subtick_ns();
+        *phase_ns = pit_subtick_ns();
     }
-    ticks += (uint32_t)pending;
-    if (ticks >= RTC_TICKS_PER_SECOND) {
-        ticks -= RTC_TICKS_PER_SECOND;
-        uptime++;
+    *ticks += (uint32_t)pending;
+    if (*ticks >= RTC_TICKS_PER_SECOND) {
+        *ticks -= RTC_TICKS_PER_SECOND;
+        (*uptime)++;
     }
+}
+
+/* The time the anchor keeps now, with the PIT position added to the
+ * delivered ticks; the caller has interrupts off. */
+static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t uptime, ticks, phase_ns;
+
+    rtc_since_boot(&uptime, &ticks, &phase_ns);
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
                          nanoseconds);
     *nanoseconds += phase_ns;
@@ -570,6 +579,33 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     }
     rtc_last_seconds = *seconds;
     rtc_last_nanoseconds = *nanoseconds;
+    kirq_restore(flags);
+}
+
+/* The last reading of time since boot, which no later one is earlier than. */
+static int64_t rtc_mono_seconds;
+static int64_t rtc_mono_nanoseconds;
+
+/**
+ * Time since boot, with the PIT's place within the tick, as real time reads
+ * it, and never earlier than the reading before it, for the reasons
+ * `rtc_realtime` gives. Setting the clock does not move it.
+ */
+void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t flags = kirq_save();
+    uint32_t uptime, ticks, phase_ns;
+
+    rtc_since_boot(&uptime, &ticks, &phase_ns);
+    *seconds = uptime;
+    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
+    if (*seconds < rtc_mono_seconds ||
+        (*seconds == rtc_mono_seconds && *nanoseconds < rtc_mono_nanoseconds)) {
+        *seconds = rtc_mono_seconds;
+        *nanoseconds = rtc_mono_nanoseconds;
+    }
+    rtc_mono_seconds = *seconds;
+    rtc_mono_nanoseconds = *nanoseconds;
     kirq_restore(flags);
 }
 

@@ -84,7 +84,10 @@ The same real time reported by
 .Fn gettimeofday .
 .It Dv CLOCK_MONOTONIC
 ID 1.
-Time since boot, read from uptime seconds and ticks within the current second.
+Time since boot, read from uptime seconds, the ticks within the current
+second and the PIT counter's place within the tick, as real time reads it.
+A reading is never earlier than the one before it, and setting the real
+time does not move it.
 The clock continues across the 32-bit tick counter's wrap at about 497 days.
 .It Dv CLOCK_PROCESS_CPUTIME_ID
 ID 2.
@@ -96,12 +99,14 @@ counts it.
 ID 3.
 The calling thread's own CPU time; ID 2 reads that of all the process's
 threads, those that have ended included.
-.It Dv CLOCK_MONOTONIC_RAW , CLOCK_MONOTONIC_COARSE , CLOCK_BOOTTIME
-IDs 4, 6 and 7.
+.It Dv CLOCK_MONOTONIC_RAW , CLOCK_BOOTTIME
+IDs 4 and 7.
 The same time since boot as
 .Dv CLOCK_MONOTONIC :
-no service adjusts the clock's rate, the monotonic clock already stops at the
-last tick, and the machine is never suspended.
+no service adjusts the clock's rate, and the machine is never suspended.
+.It Dv CLOCK_MONOTONIC_COARSE
+ID 6.
+Time since boot at the last tick, without the PIT counter's place within it.
 .It Dv CLOCK_REALTIME_COARSE
 ID 5.
 Real time at the last tick, without the PIT counter's place within it, so
@@ -124,8 +129,12 @@ process ID; a thread clock may name any thread of the caller's process.
 stores a clock's resolution in
 .Fa res
 unless it is null: 1 microsecond for
-.Dv CLOCK_REALTIME
-and the 10 ms tick for every other clock, the CPU clocks included.
+.Dv CLOCK_REALTIME ,
+.Dv CLOCK_MONOTONIC ,
+.Dv CLOCK_MONOTONIC_RAW
+and
+.Dv CLOCK_BOOTTIME ,
+and the 10 ms tick for every other clock, the coarse and CPU clocks.
 Each clock advances in steps of its resolution.
 .Pp
 .Fn times

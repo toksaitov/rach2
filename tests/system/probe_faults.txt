@@ -4918,3 +4918,25 @@ old
 new
         (void)tcp_bind_ephemeral;
 end
+
+# Time since boot read within the tick.
+
+fault monotonic-tick-only
+probe clockidmusl
+file rach2/sys/rtc.c
+expect CLOCKIDMUSL FAIL (time since boot does not read within the tick)
+old
+    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
+new
+    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK;
+end
+
+fault getres-time64-tick
+probe clockidmusl
+file rach2/sys/syscall.c
+expect CLOCKIDMUSL FAIL (clock_getres_time64 does not answer as clock_getres)
+old
+    t.tv_nsec = clock_res_ns(&c);
+new
+    t.tv_nsec = 10000000;
+end

@@ -1,18 +1,21 @@
 /**
  * The eight clocks, their resolutions, and the sleeps against them.
  *
- * Every row judges what the kernel counts. The clocks of time since boot are
- * one clock under four names, so each reading taken between two readings of
- * `CLOCK_MONOTONIC` lies between them; coarse real time is no later than real
- * time and no more than two ticks earlier, one for the tick in progress and
- * one for a tick the fine clock counts before its interrupt is taken; the CPU
+ * Every row judges what the kernel counts. Time since boot is read within the
+ * tick: two readings of `CLOCK_MONOTONIC` differ by less than a tick, raw and
+ * boot time are the same clock, so a reading of either taken between two of
+ * `CLOCK_MONOTONIC` lies between them, and the coarse clocks are no later
+ * than their fine ones and no more than two ticks earlier, one for the tick
+ * in progress and one for a tick the fine clock counts before its interrupt
+ * is taken; the CPU
  * clocks advance while this process spins and agree with
  * what `times` reports; a CPU clock by process id, the form
  * `clock_getcpuclockid` returns, reads that process's time, and an id of no
  * process is refused. A child blocked after reporting its own CPU time has a
  * clock by id that reads what it reported, or one tick more, and that
- * advances by the three ticks it spins between two reports. Real time
- * resolves to the microsecond and every other clock to the 10 ms tick.
+ * advances by the three ticks it spins between two reports. Real time and
+ * time since boot resolve to the microsecond, and the coarse and CPU clocks
+ * to the 10 ms tick, and the 64-bit call answers as the 32-bit one.
  *
  * `clock_nanosleep` is called through `syscall`, since musl answers some
  * clocks itself and uses `nanosleep` for a relative sleep of real time. An
@@ -49,7 +52,7 @@ struct ts32 {
     long nsec;
 };
 
-/* One tick, the granularity of every clock but real time, in nanoseconds. */
+/* One tick, the granularity of the coarse and CPU clocks, in nanoseconds. */
 #define TICK_NS 10000000L
 
 /* The most spinning a loop may take to be charged what it asks for, in
@@ -144,16 +147,31 @@ static void alarm_in(long usec)
 /** The eight clocks, their resolutions, and the CPU clocks by id. */
 static int clocks(void)
 {
-    static const clockid_t boot_clocks[] = {CLOCK_MONOTONIC_RAW, CLOCK_MONOTONIC_COARSE,
-                                            CLOCK_BOOTTIME};
+    static const clockid_t boot_clocks[] = {CLOCK_MONOTONIC_RAW, CLOCK_BOOTTIME};
+    static const clockid_t fine[] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW,
+                                     CLOCK_BOOTTIME};
+    static const clockid_t coarse[] = {CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID,
+                                       CLOCK_REALTIME_COARSE, CLOCK_MONOTONIC_COARSE};
     struct timespec res;
     struct tms tm;
     clockid_t cpu;
     long long before;
     long long after;
     long long x;
+    long long step = TICK_NS;
     unsigned int i;
 
+    before = ns_of(CLOCK_MONOTONIC);
+    for (i = 0; i < 1000000 && step >= TICK_NS; i++) {
+        after = ns_of(CLOCK_MONOTONIC);
+        if (after != before) {
+            step = after - before;
+            before = after;
+        }
+    }
+    if (step >= TICK_NS) {
+        return fail("time since boot does not read within the tick");
+    }
     for (i = 0; i < sizeof(boot_clocks) / sizeof(boot_clocks[0]); i++) {
         before = ns_of(CLOCK_MONOTONIC);
         x = ns_of(boot_clocks[i]);
@@ -162,18 +180,36 @@ static int clocks(void)
             return fail("a clock of time since boot does not read CLOCK_MONOTONIC");
         }
     }
+    before = ns_of(CLOCK_MONOTONIC);
+    x = ns_of(CLOCK_MONOTONIC_COARSE);
+    after = ns_of(CLOCK_MONOTONIC);
+    if (x > after || x < before - 2 * TICK_NS) {
+        return fail("coarse time since boot is not time since boot at the last tick");
+    }
     before = ns_of(CLOCK_REALTIME);
     x = ns_of(CLOCK_REALTIME_COARSE);
     after = ns_of(CLOCK_REALTIME);
     if (x > after || x < before - 2 * TICK_NS) {
         return fail("coarse real time is not real time at the last tick");
     }
-    if (clock_getres(CLOCK_REALTIME, &res) != 0 || res.tv_sec != 0 || res.tv_nsec != 1000) {
-        return fail("real time does not resolve to the microsecond");
+    for (i = 0; i < sizeof(fine) / sizeof(fine[0]); i++) {
+        if (clock_getres(fine[i], &res) != 0 || res.tv_sec != 0 || res.tv_nsec != 1000) {
+            return fail("real time or time since boot does not resolve to the microsecond");
+        }
     }
-    for (i = 1; i <= 7; i++) {
-        if (clock_getres((clockid_t)i, &res) != 0 || res.tv_sec != 0 || res.tv_nsec != TICK_NS) {
-            return fail("a clock other than real time does not resolve to the tick");
+    for (i = 0; i < sizeof(coarse) / sizeof(coarse[0]); i++) {
+        if (clock_getres(coarse[i], &res) != 0 || res.tv_sec != 0 || res.tv_nsec != TICK_NS) {
+            return fail("a coarse or CPU clock does not resolve to the tick");
+        }
+    }
+    for (i = 0; i <= 7; i++) {
+        struct ts32 r32;
+        long long r64[2];
+
+        if (syscall(SYS_clock_getres_time32, (long)i, &r32) != 0 ||
+            syscall(SYS_clock_getres_time64, (long)i, r64) != 0 || r64[0] != r32.sec ||
+            r64[1] != r32.nsec) {
+            return fail("clock_getres_time64 does not answer as clock_getres");
         }
     }
     if (syscall(SYS_clock_getres_time32, (long)CLOCK_MONOTONIC, NULL) != 0) {

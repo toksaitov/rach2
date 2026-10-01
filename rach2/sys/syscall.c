@@ -370,10 +370,10 @@ static int32_t sys_gettimeofday(isr_params_t *params)
 #define CPUCLOCK_WHICH     3u
 #define CPUCLOCK_VIRT      1u
 
-/* The kinds of clock the ids name: real time read to the microsecond, real
- * time at the last tick, time since boot, and a process's CPU time. The last
- * three count ticks. */
-enum kclock_kind { KCLOCK_REAL, KCLOCK_REAL_COARSE, KCLOCK_MONO, KCLOCK_CPU };
+/* The kinds of clock the ids name: real time and time since boot read to the
+ * microsecond, the two at the last tick, and a process's CPU time, which
+ * counts ticks. */
+enum kclock_kind { KCLOCK_REAL, KCLOCK_REAL_COARSE, KCLOCK_MONO, KCLOCK_MONO_COARSE, KCLOCK_CPU };
 
 /* What a clock id names: its kind, and for a CPU clock the process whose time
  * it reads and whether that is user time alone. */
@@ -413,9 +413,11 @@ static int32_t clock_resolve(int32_t clk, struct kclock *out)
         return 0;
     case CLOCK_MONOTONIC:
     case CLOCK_MONOTONIC_RAW:
-    case CLOCK_MONOTONIC_COARSE:
     case CLOCK_BOOTTIME:
         out->kind = KCLOCK_MONO;
+        return 0;
+    case CLOCK_MONOTONIC_COARSE:
+        out->kind = KCLOCK_MONO_COARSE;
         return 0;
     case CLOCK_PROCESS_CPUTIME_ID:
         out->kind = KCLOCK_CPU;
@@ -470,9 +472,11 @@ static uint32_t clock_cpu_ticks(const struct kclock *c)
  *
  * Real time is the clock read at boot (sys/rtc.c) with the PIT's place
  * within the tick added; its coarse form stops at the last tick. Time since
- * boot is the uptime seconds and the ticks within the second, read with
- * interrupts masked, so neither a torn second nor the tick counter's wrap at
- * about 497 days can make it step back. No clock is disciplined by anything:
+ * boot is the uptime seconds and the ticks within the second, with the PIT's
+ * place added as well (`rtc_monotonic`), read with interrupts masked, so
+ * neither a torn second nor the tick counter's wrap at about 497 days can
+ * make it step back; its coarse form stops at the tick. No clock is
+ * disciplined by anything:
  * the machine reads the CMOS once and then keeps its own time, and it is never
  * suspended, which is why the four clocks of time since boot read the same.
  * A CPU clock is the ticks the timer charged. The signed seconds field ends in
@@ -497,6 +501,11 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
         out->tv_nsec = (int32_t)nanoseconds;
         break;
     case KCLOCK_MONO:
+        rtc_monotonic(&seconds, &nanoseconds);
+        out->tv_sec = (int32_t)seconds;
+        out->tv_nsec = (int32_t)nanoseconds;
+        break;
+    case KCLOCK_MONO_COARSE:
         flags = kirq_save();
         out->tv_sec = (int32_t)kernel_uptime_seconds;
         out->tv_nsec = (int32_t)(kernel_second_ticks * 10000000);
@@ -509,6 +518,13 @@ static void clock_read(const struct kclock *c, struct kernel_timespec *out)
         out->tv_nsec = (int32_t)((ticks % 100u) * 10000000u);
         break;
     }
+}
+
+/** A clock's resolution in nanoseconds: a microsecond for real time and time
+ * since boot, which the PIT's place is read in, and the tick for the rest. */
+static int32_t clock_res_ns(const struct kclock *c)
+{
+    return c->kind == KCLOCK_REAL || c->kind == KCLOCK_MONO ? 1000 : 10000000;
 }
 
 int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec)
@@ -588,7 +604,7 @@ static int32_t sys_clock_getres_time64(isr_params_t *params)
         return rc;
     }
     t.tv_sec = 0;
-    t.tv_nsec = c.kind == KCLOCK_REAL ? 1000 : 10000000;
+    t.tv_nsec = clock_res_ns(&c);
     if (params->ecx && copy_to_user((void __user *)params->ecx, &t, sizeof(t)) != 0) {
         return -EFAULT;
     }
@@ -681,10 +697,10 @@ static int32_t sys_stime(isr_params_t *params)
  * A clock's resolution (clock_getres, syscall 266, 32-bit timespec).
  *
  * EBX = clockid, ECX = struct timespec*, which may be NULL. Each clock's
- * true granularity: a microsecond for real time, which the PIT's place is
- * read in, and the 10 ms tick for every other clock, coarse real time and
- * the CPU clocks included. Returns 0, -EINVAL for a clock `clock_resolve`
- * refuses, or -EFAULT.
+ * true granularity: a microsecond for real time and time since boot, which
+ * the PIT's place is read in, and the 10 ms tick for every other clock, the
+ * coarse clocks and the CPU clocks. Returns 0, -EINVAL for a clock
+ * `clock_resolve` refuses, or -EFAULT.
  */
 static int32_t sys_clock_getres(isr_params_t *params)
 {
@@ -697,7 +713,7 @@ static int32_t sys_clock_getres(isr_params_t *params)
         return rc;
     }
     res.tv_sec = 0;
-    res.tv_nsec = c.kind == KCLOCK_REAL ? 1000 : 10000000;
+    res.tv_nsec = clock_res_ns(&c);
     if (ures && copy_to_user(ures, &res, sizeof(res)) != 0) {
         return -EFAULT;
     }
@@ -862,14 +878,18 @@ static int32_t sys_nanosleep(isr_params_t *params)
     return 0;
 }
 
-/** Whether real time, read to the microsecond as `clock_gettime` reads it,
- * has reached `when`. */
-static int real_reached(const struct kernel_timespec *when)
+/** Whether real time or time since boot, `kind`, read to the microsecond as
+ * `clock_gettime` reads it, has reached `when`. */
+static int time_reached(enum kclock_kind kind, const struct kernel_timespec *when)
 {
     int64_t sec;
     int64_t nsec;
 
-    get_current_time(&sec, &nsec);
+    if (kind == KCLOCK_REAL) {
+        get_current_time(&sec, &nsec);
+    } else {
+        rtc_monotonic(&sec, &nsec);
+    }
     return sec > when->tv_sec || (sec == when->tv_sec && nsec >= when->tv_nsec);
 }
 
@@ -880,8 +900,8 @@ static int real_reached(const struct kernel_timespec *when)
  * `rtc_boot_epoch`, plus the time since boot, and time since boot at a tick
  * is that tick's count in hundredths of a second. So the sleep ends at the
  * first tick whose count reaches `when`, and a program that reads the clock
- * then reads `when` or later. Real time is read to the microsecond, within
- * the tick, so a time it has reached returns at once, before the deadline
+ * then reads `when` or later. Both are read to the microsecond, within the
+ * tick, so a time the clock has reached returns at once, before the deadline
  * is rounded up to a tick. The tick count and the time since boot are read
  * in one masked step, since the tick changes both. A deadline further than
  * `sleep_until` can wait for, about 248 days, is waited for in pieces, and
@@ -898,7 +918,7 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
         uint64_t due;
         int32_t rc;
 
-        if (kind == KCLOCK_REAL && real_reached(when)) {
+        if (time_reached(kind, when)) {
             return 0;
         }
         flags = kirq_save();
