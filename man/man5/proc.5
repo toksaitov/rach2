@@ -330,6 +330,9 @@ Addresses have the form
 .Ql AAAAAAAA:PPPP :
 an eight-digit hexadecimal IPv4 address in reversed byte order and a
 four-digit hexadecimal port.
+A listener takes its port on every address of the machine, so its local
+address is 0.0.0.0, as Linux gives one bound to
+.Dv INADDR_ANY .
 State is the two-digit hexadecimal Linux state number.
 Queue sizes are paired as
 .Ql TTTTTTTT:RRRRRRRR .

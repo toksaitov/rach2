@@ -4759,6 +4759,18 @@ new
     (void)sys_syncfs;
 end
 
+# /proc/net/tcp's address of a listener.
+
+fault tcp-listener-address
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: the listener, which takes its port on every address, is at 0.0.0.0
+old
+        ap_ip_hex(t, row.state == TCP_LISTEN ? 0 : row.local_ip);
+new
+        ap_ip_hex(t, row.local_ip);
+end
+
 # splice, tee and sendfile, which answer EINVAL.
 
 fault splice-missing

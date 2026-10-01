@@ -1097,6 +1097,8 @@ void probe_main(unsigned int *sp)
                       st[1] == 'A',
                   "the listening socket's row says 0A, the number netstat reads as LISTEN");
         }
+        check(contains(buf, n, ": 00000000:1F90 "),
+              "the listener, which takes its port on every address, is at 0.0.0.0");
 
         check(syscall3(SYS_FSTAT64, sfd, (int)(size_t)stbuf, 0) == 0, "fstat the socket");
         fd_inode = (int)*(unsigned int *)(stbuf + ST_INO64);
