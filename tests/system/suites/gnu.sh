@@ -14,13 +14,14 @@
 # locales, zlib, OpenSSL with the CA bundle, OpenSSH's clients against the
 # machine's own server, ncurses, less, Vim, Perl, curl over TLS, Git, coreutils,
 # bash, grep, sed, gawk, findutils, diffutils, patch, tar, gzip, xz and file;
-# GNU make building a small project; GCC and G++ compiling and linking a C and a
-# C++ program that run; GDB stopping at a breakpoint, stepping, printing a
-# variable and a backtrace; the SpiderMonkey shell running a script in its JIT;
-# D-Bus's system bus and a login's session bus answering a call; and
-# chromium-headless-shell printing the DOM of a local page with no complaint of
-# D-Bus. Each row has its own bound and a failed row does not stop the next, so
-# a run reports every row the machine cannot yet do.
+# GNU make building a small project; GNU sed configured with autoconf's
+# configure, which reads the root's site file, and made; GCC and G++ compiling
+# and linking a C and a C++ program that run; GDB stopping at a breakpoint,
+# stepping, printing a variable and a backtrace; the SpiderMonkey shell running
+# a script in its JIT; D-Bus's system bus and a login's session bus answering a
+# call; and chromium-headless-shell printing the DOM of a local page with no
+# complaint of D-Bus. Each row has its own bound and a failed row does not stop
+# the next, so a run reports every row the machine cannot yet do.
 #
 # Usage: gnu.sh KERNEL IMAGE DISK PORT ROOT_PASSWORD TEST_PASSWORD
 #
@@ -203,11 +204,17 @@ cmp -s "$REPO/tests/system/gnu_rows.sh" "$DISK.back" ||
     fail "the file sftp fetched is not the one scp sent"
 echo "gnu-test: scp puts a file on the machine and sftp takes it back, byte for byte: OK"
 
+# GNU sed's tarball, which the autotools row builds on the machine.
+"$DEADLINE" "$(scaled 120)" scp -P "$PORT" -i "$ROOT_KEY" -o StrictHostKeyChecking=no \
+    -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes "$("$REPO/vendor/gnu/fetch.sh" --path sed)" \
+    root@127.0.0.1:/tmp/gnu/sed.tar.xz > /dev/null 2>&1 ||
+    fail "scp could not put GNU sed's tarball on the machine"
+
 # Each row with the seconds it takes on an idle host under the emulator.
 ROWS="names:120 glibc:120 zlib:120 openssl:180 openssh:600 ncurses:120 less:120
 vim:120 perl:180 curl:600 git:300 coreutils:120 bash:120 grep:120 sed:120
 gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120 file:120
-make:600 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
+make:600 autotools:900 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
 FAILED=""
 TOTAL=0
 for row in $ROWS; do

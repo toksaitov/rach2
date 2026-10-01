@@ -19,14 +19,14 @@
 #             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
 #             them, from the packages fetch_chromium.sh unpacked
 #
-# Then it links /bin/bash, /usr/bin/cc, /usr/bin/vi, /etc/mtab and /run, and
-# each BusyBox applet no file of the path answers for, puts the CA bundle in
-# /etc/ssl, compiles the console's terminfo entry, rach2.ti, renders the
-# ports' manual pages with render_man.sh, takes the set-id bit off OpenSSH's
-# ssh-keysign, and has the root's own ldconfig write /etc/ld.so.cache from
-# the /etc/ld.so.conf the manifest staged. A file the tree already has is
-# refused rather than replaced, so that what the manifest staged is what the
-# image has; the one file replaced is named where it is.
+# Then it links /bin/bash, /usr/bin/cc, /usr/bin/vi, /etc/mtab and /run, writes
+# autoconf's site file, links each BusyBox applet no file of the path answers
+# for, puts the CA bundle in /etc/ssl, compiles the console's terminfo entry,
+# rach2.ti, renders the ports' manual pages with render_man.sh, takes the set-id
+# bit off OpenSSH's ssh-keysign, and has the root's own ldconfig write
+# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the tree
+# already has is refused rather than replaced, so that what the manifest staged
+# is what the image has; the one file replaced is named where it is.
 #
 
 set -e
@@ -146,6 +146,17 @@ ln -s ../proc/self/mounts "$TREE/etc/mtab"
 # /run/dbus/system_bus_socket: a link to /var/run, which init empties at
 # boot as Linux keeps /run in memory.
 ln -s var/run "$TREE/run"
+
+# The site file autoconf's configure reads, for the default prefix and for
+# /usr: config.guess knows no system by the kernel's name, Rach2, and stops
+# every configure that has no --build, so the build is named the GNU/Linux
+# system whose programs the kernel runs.
+mkdir -p "$TREE/usr/local/share"
+cat > "$TREE/usr/share/config.site" << 'EOF'
+# config.site: answers for autoconf configure scripts on Rach2.
+test -n "$build_alias" || build_alias=i686-pc-linux-gnu
+EOF
+ln -s ../../share/config.site "$TREE/usr/local/share/config.site"
 
 # BusyBox's applets are not files: ash runs one for its name before it
 # searches the path, and bash and every program that searches the path
