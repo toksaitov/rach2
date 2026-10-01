@@ -945,7 +945,7 @@ static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
                                 "mem oom_score_adj mounts exe cwd root ";
-    static char got[512], want[512];
+    static char got[512], want[512], names[4096];
     char dir[40] = "/proc/self/task/";
     int pid = syscall1(SYS_GETPID, 0);
     int len = 16, digits = 0, v, i;
@@ -970,6 +970,9 @@ static void pid_dir_rows(void)
     want[i] = '\0';
     check(listing("/proc/self", got, (int)sizeof(got)) == 0 && same_str(got, want),
           "and /proc/self lists them all in order, task last");
+    check(listing("/proc", names, (int)sizeof(names)) == 0 &&
+              contains(names, sizeof(names), " interrupts filesystems "),
+          "/proc lists interrupts and filesystems, which open there");
     {
         static char here[8192], there[8192];
         char cwd[256] = {0}, link[256];

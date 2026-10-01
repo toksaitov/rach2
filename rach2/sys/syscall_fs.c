@@ -10889,16 +10889,26 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             const char *name;
             uint32_t (*inode)(void);
             uint8_t type;
-        } globals[] = {
-            {"cmdline", procfs_ino_cmdline, DT_REG}, {"disk", procfs_ino_disk, DT_REG},
-            {"uptime", procfs_ino_uptime, DT_REG},   {"stat", procfs_ino_statsys, DT_REG},
-            {"meminfo", procfs_ino_meminfo, DT_REG}, {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
-            {"loadavg", procfs_ino_loadavg, DT_REG}, {"diskstats", procfs_ino_diskstats, DT_REG},
-            {"version", procfs_ino_version, DT_REG}, {"partitions", procfs_ino_partitions, DT_REG},
-            {"mounts", procfs_ino_mounts, DT_REG},   {"net", procfs_ino_netdir, DT_DIR},
-            {"sys", procfs_ino_sysdir, DT_DIR},      {"self", procfs_ino_dir, DT_LNK},
-            {"usb", procfs_ino_usb, DT_REG},         {"loop", procfs_ino_loop, DT_REG},
-            {"console", procfs_ino_console, DT_REG}, {"audio", procfs_ino_audio, DT_REG}};
+        } globals[] = {{"cmdline", procfs_ino_cmdline, DT_REG},
+                       {"disk", procfs_ino_disk, DT_REG},
+                       {"uptime", procfs_ino_uptime, DT_REG},
+                       {"stat", procfs_ino_statsys, DT_REG},
+                       {"meminfo", procfs_ino_meminfo, DT_REG},
+                       {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
+                       {"loadavg", procfs_ino_loadavg, DT_REG},
+                       {"diskstats", procfs_ino_diskstats, DT_REG},
+                       {"version", procfs_ino_version, DT_REG},
+                       {"partitions", procfs_ino_partitions, DT_REG},
+                       {"mounts", procfs_ino_mounts, DT_REG},
+                       {"net", procfs_ino_netdir, DT_DIR},
+                       {"sys", procfs_ino_sysdir, DT_DIR},
+                       {"self", procfs_ino_dir, DT_LNK},
+                       {"usb", procfs_ino_usb, DT_REG},
+                       {"loop", procfs_ino_loop, DT_REG},
+                       {"console", procfs_ino_console, DT_REG},
+                       {"audio", procfs_ino_audio, DT_REG},
+                       {"interrupts", procfs_ino_interrupts, DT_REG},
+                       {"filesystems", procfs_ino_filesystems, DT_REG}};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {

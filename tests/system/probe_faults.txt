@@ -5152,3 +5152,12 @@ old
                  {"partitions", VNODE_PROC_PARTITIONS},
 new
 end
+
+fault proc-interrupts-unlisted
+probe procprobe
+file rach2/sys/syscall_fs.c
+expect FAIL: /proc lists interrupts and filesystems, which open there
+old
+                       {"interrupts", procfs_ino_interrupts, DT_REG},
+new
+end
