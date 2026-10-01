@@ -782,7 +782,7 @@ raw-stack: raw-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " \
-	    "send=/bin/ping 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
+	    "send=/bin/ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
 	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" "expect=TRACEDONE"
 	# The in-house ping is still the one an ordinary account runs: busybox's needs
 	# a raw socket, which is root's, and is not built for that reason.
@@ -791,7 +791,7 @@ raw-stack: raw-card
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
 	    "send=`cat krffs/rach2_test_password`" "expect=[$$] " \
-	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" "expect=USERPINGOK"
+	    "send=/bin/ping -c 1 10.0.2.2 && echo USERPING\"\"OK" "expect=USERPINGOK"
 endif
 .PHONY: raw-card raw-stack
 # `tests/run netif`: the interface ioctls, which is how a program sets this
@@ -947,7 +947,7 @@ dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image
 	    "expect=# " "send=ifconfig eth0 | grep -q 'addr:0.0.0.0' && echo UNSET\"\"OK" \
 	    "expect=UNSETOK" "send=ifup -a" \
 	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && ping 192.168.90.2 > /dev/null && echo LEASE\"\"OK" \
+	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && ping -c 1 192.168.90.2 > /dev/null && echo LEASE\"\"OK" \
 	    "expect=LEASEOK" \
 	    "send=arping -f -w 5 192.168.90.2 > /tmp/ap 2>&1; echo ARPING\"\"-STATUS:\$$?; cat /tmp/ap" \
 	    "expect=ARPING-STATUS:0" "expect=Received 1 response" \
@@ -955,7 +955,7 @@ dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image
 	    "expect=SILENT-STATUS:1" "expect=Received 0 response" \
 	    "send=arp -n | grep -q '(192.168.90.2)' && echo ARP\"\"CACHED" \
 	    "expect=ARPCACHED" \
-	    "send=ping 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
+	    "send=ping -c 1 -W 1 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
 	    "expect=ROUTETRIED" "send=echo DHCP\"\"OK" \
 	    "expect=DHCPOK"
 	# An arping at an address nothing answers must end at its deadline with status
@@ -1125,8 +1125,8 @@ dhcp-stack: dhcp-card
 	    "expect=# " \
 	    "send=printf 'auto eth0\niface eth0 inet static\naddress 10.90.0.50\nnetmask 255.255.0.0\ngateway 10.90.0.2\n' > /etc/network/interfaces" \
 	    "send=ifup -a" "expect=net: eth0: IPv4 10.90.0.50/" \
-	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:10.90.0.50' /tmp/if && grep -q 'Mask:255.255.0.0' /tmp/if && ping 10.90.0.2 > /dev/null && echo REALSTATIC\"\"OK" \
-	    "expect=REALSTATICOK" "send=ping 10.200.0.1 > /dev/null 2>&1; echo DONE" \
+	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:10.90.0.50' /tmp/if && grep -q 'Mask:255.255.0.0' /tmp/if && ping -c 1 10.90.0.2 > /dev/null && echo REALSTATIC\"\"OK" \
+	    "expect=REALSTATICOK" "send=ping -c 1 -W 1 10.200.0.1 > /dev/null 2>&1; echo DONE" \
 	    "expect=DONE" "send=poweroff -f" until=15 --must-exit
 	$(PCAPCHECK) bcast $(RSTATIC_PCAP) --source 10.90.0.50 \
 	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1

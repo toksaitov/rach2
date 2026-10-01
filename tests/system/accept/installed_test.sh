@@ -100,7 +100,7 @@ with open(sys.argv[1], 'r+b') as disk:
     disk.seek(478)
     disk.write(bytes(16) + entry)
 PY
-            mcopy -o -i "$work/$row.disk@@1048576" ::/boot/grub/grub.cfg "$work/grub.cfg"
+            mcopy -n -o -i "$work/$row.disk@@1048576" ::/boot/grub/grub.cfg "$work/grub.cfg"
             sed 's/rach2.root=MBRID=1acef00d,3/rach2.root=MBRID=1acef00d,4/g' \
                 "$work/grub.cfg" > "$work/wrong.cfg"
             mcopy -o -i "$work/$row.disk@@1048576" "$work/wrong.cfg" ::/boot/grub/grub.cfg
@@ -112,7 +112,7 @@ PY
                 conv=notrunc 2>/dev/null
             ;;
         fallback)
-            mcopy -o -i "$work/$row.disk@@1048576" ::/boot/grub/grubenv "$work/grubenv"
+            mcopy -n -o -i "$work/$row.disk@@1048576" ::/boot/grub/grubenv "$work/grubenv"
             python3 - "$work/grubenv" "$work/fallback.env" <<'PY'
 from pathlib import Path
 import sys
