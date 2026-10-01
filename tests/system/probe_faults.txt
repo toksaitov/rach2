@@ -4483,9 +4483,9 @@ probe netlinkmusl
 file rach2/sys/network/socket/netlink.c
 expect NETLINKMUSL FAIL (RTM_GETLINK of the first link
 old
-            if (nd && (uint32_t)nd->index == index) {
+        if (index != 0 ? (uint32_t)nd->index == index
 new
-            if (nd && (uint32_t)nd->index == index + 1u) {
+        if (index != 0 ? (uint32_t)nd->index == index + 1u
 end
 
 fault unix-socket-no-interface-ioctls

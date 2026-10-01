@@ -9,6 +9,7 @@
 #include "../net.h"
 #include "../netif.h"
 #include "../driver/netdev.h"
+#include "../arp/arp.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -30,12 +31,15 @@
 #define RTM_GETADDR   22
 #define RTM_NEWROUTE  24
 #define RTM_GETROUTE  26
+#define RTM_NEWNEIGH  28
+#define RTM_GETNEIGH  30
 
 /* Attributes of a link, an address and a route. */
 #define IFLA_ADDRESS   1
 #define IFLA_BROADCAST 2
 #define IFLA_IFNAME    3
 #define IFLA_MTU       4
+#define IFLA_STATS     7
 #define IFLA_OPERSTATE 16
 #define IFA_ADDRESS    1
 #define IFA_LOCAL      2
@@ -46,6 +50,10 @@
 #define RTA_GATEWAY    5
 #define RTA_PREFSRC    7
 #define RTA_TABLE      15
+#define NDA_DST        1
+#define NDA_LLADDR     2
+#define NDA_IFINDEX    8
+#define NTF_PROXY      0x08u
 
 #define ARPHRD_ETHER      1
 #define IFF_LOWER_UP      0x10000u
@@ -58,12 +66,13 @@
 #define RTPROT_KERNEL     2
 #define RTPROT_BOOT       3
 #define RTN_UNICAST       1
+#define NUD_REACHABLE     0x02u
 
 /* Policy: an answer datagram is at most a page, which every reader's buffer
  * holds: Chromium reads with 4096 bytes and BusyBox with 8192. A message is
- * at most 128 bytes. */
+ * at most 256 bytes, a link's with its counters among them. */
 #define NL_DGRAM_MAX 4096u
-#define NL_MSG_MAX   128u
+#define NL_MSG_MAX   256u
 
 /* One queued datagram; its bytes follow the record. */
 struct nl_dgram {
@@ -318,6 +327,9 @@ static uint32_t prefix_of(uint32_t mask)
     return n;
 }
 
+/* A link, with its counters in Linux's `struct rtnl_link_stats`, 24 words
+ * of which this interface keeps seven: the packets, bytes and drops each
+ * way, and the receive errors. */
 static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags)
 {
     uint8_t msg[NL_MSG_MAX];
@@ -325,6 +337,7 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uint32_t up = netif_is_up() ? IFF_UP | IFF_RUNNING | IFF_LOWER_UP : 0;
     uint8_t oper = up ? IF_OPER_UP : IF_OPER_DOWN;
+    uint8_t stats[96];
 
     put16(ifi + 2, ARPHRD_ETHER);
     put32(ifi + 4, (uint32_t)nd->index);
@@ -334,7 +347,132 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     msg_attr(msg, IFLA_BROADCAST, broadcast, 6);
     msg_attr32(msg, IFLA_MTU, 1500);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
+    k_memset(stats, 0, sizeof(stats));
+    put32(stats + 0, nd->rx_packets);
+    put32(stats + 4, nd->tx_packets);
+    put32(stats + 8, nd->rx_bytes);
+    put32(stats + 12, nd->tx_bytes);
+    put32(stats + 16, nd->rx_errors);
+    put32(stats + 24, nd->rx_dropped);
+    put32(stats + 28, nd->tx_dropped);
+    msg_attr(msg, IFLA_STATS, stats, sizeof(stats));
     nl_append(b, msg);
+}
+
+/* A neighbour, the ARP cache's mapping `row`, on the interface of index
+ * `index`. The cache keeps no age, so every mapping is reachable. */
+static void neigh_msg(struct nl_build *b, const struct arp_row *row, int index)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t *ndm = msg_start(b, msg, RTM_NEWNEIGH, NLM_F_MULTI, 12);
+
+    ndm[0] = AF_INET;
+    put32(ndm + 4, (uint32_t)index);
+    put16(ndm + 8, NUD_REACHABLE);
+    ndm[11] = RTN_UNICAST;
+    msg_attr_ip(msg, NDA_DST, row->ip);
+    msg_attr(msg, NDA_LLADDR, row->mac, 6);
+    nl_append(b, msg);
+}
+
+/* Whether the interface name `name`, in an array of `cap` bytes, is the
+ * `len` bytes at `text`, which may end at the name's NUL, run on past it, or
+ * stop at its last letter, since a netlink string needs no terminator. */
+static int same_name(const char *name, uint32_t cap, const char *text, uint32_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        if (i == cap || name[i] != text[i]) {
+            return 0;
+        }
+        if (name[i] == '\0') {
+            return 1;
+        }
+    }
+    return len == cap || name[len] == '\0';
+}
+
+/*
+ * The interface a request for one link names: by the index of its
+ * `ifinfomsg`, or with that 0, by its IFLA_IFNAME attribute, which is how
+ * `ip link show eth0` asks. `body` is the request's length past its header.
+ */
+static const struct netdev *link_asked(const uint8_t *req, uint32_t body)
+{
+    const uint8_t *attr = req + NLMSG_HDRLEN + 16;
+    const uint8_t *end = req + NLMSG_HDRLEN + body;
+    uint32_t index = get32(req + NLMSG_HDRLEN + 4);
+    const char *name = 0;
+    uint32_t name_len = 0;
+    int i, n = netdev_count();
+
+    while (index == 0 && attr + 4 <= end) {
+        uint16_t len = get16(attr);
+
+        if (len < 4 || attr + len > end) {
+            break;
+        }
+        if (get16(attr + 2) == IFLA_IFNAME) {
+            name = (const char *)attr + 4;
+            name_len = len - 4u;
+        }
+        attr += (len + 3u) & ~3u;
+    }
+    for (i = 0; i < n; i++) {
+        const struct netdev *nd = netdev_at(i);
+
+        if (!nd) {
+            continue;
+        }
+        if (index != 0 ? (uint32_t)nd->index == index
+                       : name && same_name(nd->name, sizeof(nd->name), name, name_len)) {
+            return nd;
+        }
+    }
+    return 0;
+}
+
+/*
+ * The neighbours a dump request `req` of `body` bytes asks for, from a
+ * snapshot of the ARP cache: none for a family other than IPv4 or any, or
+ * for the proxy table, which this kernel has none of, and only those of one
+ * interface when its `ndmsg` or an NDA_IFINDEX attribute names one.
+ */
+static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
+{
+    struct arp_row rows[ARP_CACHE_SIZE];
+    const uint8_t *ndm = req + NLMSG_HDRLEN;
+    const uint8_t *attr = ndm + 12;
+    const uint8_t *end = ndm + body;
+    uint32_t want = body >= 8 ? get32(ndm + 4) : 0;
+    int k, i, m, n = netdev_count();
+
+    if ((body >= 1 && ndm[0] != 0 && ndm[0] != AF_INET) || (body >= 11 && (ndm[10] & NTF_PROXY))) {
+        return;
+    }
+    while (body >= 12 && attr + 4 <= end) {
+        uint16_t len = get16(attr);
+
+        if (len < 4 || attr + len > end) {
+            break;
+        }
+        if (get16(attr + 2) == NDA_IFINDEX && len >= 8) {
+            want = get32(attr + 4);
+        }
+        attr += (len + 3u) & ~3u;
+    }
+    m = arp_snapshot(rows, ARP_CACHE_SIZE);
+    for (k = 0; k < m; k++) {
+        for (i = 0; i < n; i++) {
+            const struct netdev *nd = netdev_at(i);
+
+            if (nd && rows[k].iface && (want == 0 || (uint32_t)nd->index == want) &&
+                same_name(nd->name, sizeof(nd->name), rows[k].iface, sizeof(nd->name))) {
+                neigh_msg(b, &rows[k], nd->index);
+            }
+        }
+    }
 }
 
 static void addr_msg(struct nl_build *b, const struct netdev *nd)
@@ -402,24 +540,25 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
                    uint32_t body)
 {
     int i, n = netdev_count();
-    uint32_t index;
 
     if (type == RTM_GETLINK && (flags & NLM_F_DUMP) != NLM_F_DUMP && body >= 16) {
-        index = get32(req + NLMSG_HDRLEN + 4);
-        for (i = 0; i < n; i++) {
-            const struct netdev *nd = netdev_at(i);
+        const struct netdev *nd = link_asked(req, body);
 
-            if (nd && (uint32_t)nd->index == index) {
-                link_msg(b, nd, 0);
-                return;
-            }
+        if (nd) {
+            link_msg(b, nd, 0);
+        } else {
+            end_msg(b, req, -ENODEV);
         }
-        end_msg(b, req, -ENODEV);
         return;
     }
-    if ((flags & NLM_F_DUMP) != NLM_F_DUMP ||
-        (type != RTM_GETLINK && type != RTM_GETADDR && type != RTM_GETROUTE)) {
+    if ((flags & NLM_F_DUMP) != NLM_F_DUMP || (type != RTM_GETLINK && type != RTM_GETADDR &&
+                                               type != RTM_GETROUTE && type != RTM_GETNEIGH)) {
         end_msg(b, req, -EOPNOTSUPP);
+        return;
+    }
+    if (type == RTM_GETNEIGH) {
+        neigh_dump(b, req, body);
+        end_msg(b, 0, 0);
         return;
     }
     for (i = 0; i < n; i++) {

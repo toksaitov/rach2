@@ -13,9 +13,10 @@ struct socket;
  * addresses through one. A request is a netlink message, `struct nlmsghdr`
  * and a body, sent to the kernel; the answer is queued on the socket as
  * datagrams of netlink messages, which the caller reads as a datagram
- * socket's. The socket answers the dump requests RTM_GETLINK, RTM_GETADDR
- * and RTM_GETROUTE, and RTM_GETLINK for one interface, from the interface
- * records the ioctls read and write, IPv4 only; a request that would change
+ * socket's. The socket answers the dump requests RTM_GETLINK, RTM_GETADDR,
+ * RTM_GETROUTE and RTM_GETNEIGH, and RTM_GETLINK for one interface named by
+ * its index or its name, from the interface records the ioctls read and
+ * write and from the ARP cache, IPv4 only; a request that would change
  * the configuration, or one of a type it does not know, is answered with an
  * NLMSG_ERROR of EOPNOTSUPP, since the ioctls are how a program configures
  * this machine. It sends no notifications: a socket bound to multicast
@@ -53,8 +54,10 @@ int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups);
 void netlink_name(struct socket *sock, uint8_t *sa);
 
 /** Take the netlink messages of `buf`, `len` bytes the caller copied in, and
- * queue their answers; returns `len`, or -EINVAL for a message that does not
- * fit its bytes, or -ENOMEM. */
+ * queue their answers; returns `len`, or -ENOMEM. The messages end at one
+ * shorter than a header or longer than the bytes left, and what follows is
+ * ignored, as Linux ignores it: iproute2's ip sends a request in a buffer
+ * longer than the request, with zeros after it. */
 int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len);
 
 /** Bytes in the oldest queued datagram, or -1 when none is queued. */

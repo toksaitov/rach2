@@ -72,7 +72,7 @@ Each answer repeats the request's sequence number and the socket's port
 id.
 .Pp
 The requests answered are:
-.Bl -tag -width "RTM_GETROUTE"
+.Bl -tag -width "RTM_GETNEIGH"
 .It Dv RTM_GETLINK
 With
 .Dv NLM_F_DUMP ,
@@ -91,12 +91,20 @@ and the attributes
 .Dv IFLA_IFNAME ,
 .Dv IFLA_ADDRESS ,
 .Dv IFLA_BROADCAST ,
-.Dv IFLA_MTU
+.Dv IFLA_MTU ,
+.Dv IFLA_OPERSTATE ,
 and
-.Dv IFLA_OPERSTATE .
+.Dv IFLA_STATS
+with the packets, bytes and drops each way and the receive errors, which
+.Ql ip -s link
+prints.
 Without it, the one message of the interface whose index the
 .Vt struct ifinfomsg
-names, or an
+names, or with an index of 0, whose name an
+.Dv IFLA_IFNAME
+attribute holds, with or without its terminating NUL, which is how
+.Ql ip link show eth0
+asks; or an
 .Dv NLMSG_ERROR
 of
 .Er ENODEV .
@@ -119,6 +127,23 @@ an
 .Dv RTM_NEWROUTE
 message for each interface's own subnet, reached on the link, and one for
 its default route through its gateway when it has one, in the main table.
+.It Dv RTM_GETNEIGH
+With
+.Dv NLM_F_DUMP ,
+an
+.Dv RTM_NEWNEIGH
+message for each mapping of the ARP cache, with the attributes
+.Dv NDA_DST
+and
+.Dv NDA_LLADDR ,
+in the state
+.Dv NUD_REACHABLE ,
+since the cache keeps no age; only those of one interface when the
+.Vt struct ndmsg
+or an
+.Dv NDA_IFINDEX
+attribute names it, and none for a family other than IPv4 or any, or for
+the proxy table, which this kernel does not have.
 .El
 .Pp
 A dump ends with an
