@@ -59,6 +59,8 @@ struct mm {
     struct mm *exe_next;        /* the next on the list of those with one */
     /* The path the exec found the program at, from the heap; NULL for none. */
     char *exe;
+    /* The dynamic linker the program names, from the heap; NULL for none. */
+    char *interp;
     uint32_t arg_start;
     uint32_t arg_end;
     uint32_t env_start;
@@ -87,6 +89,10 @@ void mm_copy_info(struct mm *to, const struct mm *from);
  * without its leading slash, as the debug shell names a program from the
  * root, is given one, since /proc/PID/exe is absolute. */
 void mm_set_exe(struct mm *mm, const char *path);
+
+/** Record `path` as the dynamic linker of `mm`'s program, which
+ * /proc/PID/maps gives for the linker's segments. */
+void mm_set_interp(struct mm *mm, const char *path);
 
 /**
  * Keep the file at `ref` as the program of `mm`, which keeps none yet: a

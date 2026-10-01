@@ -1530,6 +1530,9 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->env_end = s->args.env_end;
     k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
     mm_set_exe(s->mm, s->path);
+    if (s->layout.interp[0] != '\0') {
+        mm_set_interp(s->mm, s->layout.interp);
+    }
     return 0;
 }
 

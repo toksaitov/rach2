@@ -823,7 +823,8 @@ for a private region or
 for a shared one, and from column 73 the file the region maps,
 .Ql [heap] ,
 .Ql [stack] ,
-or the program for the segments of its image.
+the program for the segments of its image, or the dynamic linker the
+program names for the segments of the linker's.
 The device and inode are not kept and read 0.
 A region with no path ends at the space after the inode, as on Linux.
 It and
@@ -848,6 +849,10 @@ and
 .Ql gd .
 Rss counts the region's pages in memory, clean or dirty by the page
 table's dirty bit and shared only in a shared region.
+Anonymous counts every page of a private region of no file, and the
+dirty pages of a private region read from a file, which Linux has copied
+from the file; gdb's gcore leaves the other regions of a file out of a
+core.
 The kernel does not count the processes that map a page, so Pss is Rss.
 Swap, SwapPss and Locked read 0.
 BusyBox's

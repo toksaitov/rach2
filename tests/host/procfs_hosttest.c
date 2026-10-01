@@ -5,8 +5,9 @@
  * task directory needs, the counts a /proc/PID/mem descriptor takes of the
  * address space: a hold on its record, and a user's count for a read only
  * while a user remains, the text and the file of /proc/PID/exe, a read of a
- * process's arguments while the process ends and is reaped, and the reads
- * and writes of oom_score_adj.
+ * process's arguments while the process ends and is reaped, the reads
+ * and writes of oom_score_adj, and the paths /proc/PID/maps gives the
+ * segments of the program and of its dynamic linker.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -316,6 +317,7 @@ static krffs_node_t root_dir, program;
 static struct open_file exe_ofd;
 static const char *program_path;
 static char exec_path[] = "/tmp/a";
+static char interp_path[] = "/lib/ld-linux.so.2";
 
 struct vfs_mount *vfs_root_mount(void)
 {
@@ -564,6 +566,27 @@ static void exe_links(void)
     krffs_fs = NULL;
 }
 
+/** The paths /proc/PID/maps gives the segments the exec loaded: the
+ * program's, below the heap, and the dynamic linker's, above it. */
+static void image_paths(void)
+{
+    vma_t r;
+
+    k_memset(&space, 0, sizeof(space));
+    k_memset(&r, 0, sizeof(r));
+    space.exe = exec_path;
+    space.interp = interp_path;
+    space.vm.heap_start = 0x0804d000u;
+    r.start = 0x08048000u;
+    r.end = 0x08049000u;
+    r.type = VM_CODE;
+    check(maps_path(&space, &r) == exec_path, "a segment below the heap is the program's");
+    r.start = 0xaffc2000u;
+    r.end = 0xaffc3000u;
+    r.type = VM_DATA;
+    check(maps_path(&space, &r) == interp_path, "one above it is the dynamic linker's");
+}
+
 /* The descriptor the oom_score_adj rows read and write, on process 7. */
 static struct procfs_file oom_file;
 static struct open_file oom_desc;
@@ -750,6 +773,7 @@ int main(void)
     task_ids();
     mem_descriptor();
     exe_links();
+    image_paths();
     reaped_during_read();
     oom_values();
     oom_floor();
@@ -757,7 +781,7 @@ int main(void)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments and oom_score_adj\n");
+               "process's arguments, oom_score_adj and the paths of the maps\n");
     }
     return failures != 0;
 }

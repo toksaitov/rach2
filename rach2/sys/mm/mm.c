@@ -74,10 +74,13 @@ void mm_unhold(struct mm *mm)
         return;
     }
     kfree(mm->exe);
+    kfree(mm->interp);
     kfree(mm);
 }
 
-void mm_set_exe(struct mm *mm, const char *path)
+/** A copy of `path` from the heap, given a leading slash where it has none,
+ * since /proc gives absolute paths; NULL when the heap has no room. */
+static char *path_copy(const char *path)
 {
     uint32_t len = (uint32_t)k_strlen(path);
     uint32_t slash = path[0] != '/' ? 1u : 0u;
@@ -87,8 +90,23 @@ void mm_set_exe(struct mm *mm, const char *path)
         copy[0] = '/';
         k_memcpy(copy + slash, path, len + 1);
     }
+    return copy;
+}
+
+void mm_set_exe(struct mm *mm, const char *path)
+{
+    char *copy = path_copy(path);
+
     kfree(mm->exe);
     mm->exe = copy;
+}
+
+void mm_set_interp(struct mm *mm, const char *path)
+{
+    char *copy = path_copy(path);
+
+    kfree(mm->interp);
+    mm->interp = copy;
 }
 
 /** Put `mm`, which keeps the description `ofd` of its program's file from
@@ -148,6 +166,9 @@ void mm_copy_info(struct mm *to, const struct mm *from)
 {
     if (from->exe) {
         mm_set_exe(to, from->exe);
+    }
+    if (from->interp) {
+        mm_set_interp(to, from->interp);
     }
     if (from->exe_file) {
         fd_ofd_ref(from->exe_file);

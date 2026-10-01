@@ -810,7 +810,8 @@ static void ap_xlow(struct procfs_text *t, uint32_t v, int width)
 
 /** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
  * [heap], [stack], the program for the segments of its image, which lie
- * below the heap, or none. */
+ * below the heap, the dynamic linker for the segments of its own, above it,
+ * or none. */
 static const char *maps_path(const struct mm *mm, const vma_t *r)
 {
     if (r->file && r->file->path) {
@@ -822,8 +823,8 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
     if (r->type == VM_STACK) {
         return "[stack]";
     }
-    if ((r->type == VM_CODE || r->type == VM_DATA) && r->end <= mm->vm.heap_start) {
-        return mm->exe;
+    if (r->type == VM_CODE || r->type == VM_DATA) {
+        return r->end <= mm->vm.heap_start ? mm->exe : mm->interp;
     }
     return NULL;
 }
@@ -909,10 +910,13 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, uint32_t pages)
  * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
  * BusyBox's pmap and smemcap read. The pages in memory are the present pages
  * of the region's page tables, clean or dirty by the entry's dirty bit, and
- * shared or private by the region's type. The kernel does not count the
- * processes that map a page, so Pss is Rss, a page another process also maps
- * being counted whole to each; there is no swap, no huge page and no locking,
- * so those fields are 0.
+ * shared or private by the region's type. A private region read from a file,
+ * a mapping or a segment of the image, has as anonymous memory the pages
+ * written since, the ones Linux has copied from the file; gdb's gcore leaves
+ * the others out of a core and reads them from the file. The kernel does not
+ * count the processes that map a page, so Pss is Rss, a page another process
+ * also maps being counted whole to each; there is no swap, no huge page and
+ * no locking, so those fields are 0.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
@@ -933,6 +937,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         uint32_t clean = 0, dirty = 0;
         uint32_t a;
         int shared = r->type == VM_SHARED;
+        int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
 
         for (a = r->start; a < r->end; a += PAGE_SIZE) {
             int state = paging_user_state(mm->dir, a);
@@ -951,7 +956,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Private_Clean:", shared ? 0 : clean);
         ap_smaps_kb(t, "Private_Dirty:", shared ? 0 : dirty);
         ap_smaps_kb(t, "Referenced:", clean + dirty);
-        ap_smaps_kb(t, "Anonymous:", r->file ? 0 : clean + dirty);
+        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : dirty);
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
         ap_smaps_kb(t, "Locked:", 0);

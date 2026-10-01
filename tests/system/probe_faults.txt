@@ -5255,3 +5255,13 @@ new
         if (0 && hit) {
             signo = sig_dequeue(hit, &info);
 end
+
+fault smaps-text-anonymous
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: the program's text has no anonymous memory in smaps
+old
+        ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : dirty);
+new
+        ap_smaps_kb(t, "Anonymous:", r->file ? 0 : clean + dirty);
+end

@@ -1051,6 +1051,35 @@ static int field_is(const char *b, int n, int at, const char *w)
     return !w[j] && (at + j == n || b[at + j] == ' ' || b[at + j] == '\n');
 }
 
+/* The kilobytes smaps gives under `name` for the first region whose rights
+   are `perms`, or -1. */
+static int smaps_kb(const char *b, int n, const char *perms, const char *name)
+{
+    int at, k;
+
+    for (at = 0; at < n; at++) {
+        if ((at == 0 || b[at - 1] == '\n') && (k = field_at(b, n, at, 1)) >= 0 &&
+            field_is(b, n, k, perms)) {
+            k = line_starting(b + at, n - at, name);
+            k = k < 0 ? -1 : field_at(b, n, at + k, 1);
+            return k < 0 ? -1 : first_uint(b + k, n - k);
+        }
+    }
+    return -1;
+}
+
+/* Anonymous memory in smaps as Linux counts it, which gdb's gcore reads to
+   choose what a core keeps: none in the program's text, which is read from
+   its file and never written, and some in its data, which it has written. */
+static void anonymous_rows(void)
+{
+    int n = slurp("/proc/self/smaps", buf, (int)sizeof(buf));
+
+    check(smaps_kb(buf, n, "r-xp", "Anonymous:") == 0,
+          "the program's text has no anonymous memory in smaps");
+    check(smaps_kb(buf, n, "rw-p", "Anonymous:") > 0, "and its written data has some");
+}
+
 /* The value under `name` in the /proc/net/snmp group whose two lines begin
    with `group`, or -1. */
 static int mib_value(const char *b, int n, const char *group, const char *name)
@@ -1592,6 +1621,7 @@ void probe_main(unsigned int *sp)
     sysctl_rows();
     rtc_rows();
     smaps_rows();
+    anonymous_rows();
     pid_dir_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
