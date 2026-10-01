@@ -6,6 +6,8 @@
  * its number and sender, takes a signal sent to the thread before a lower
  * one sent to the process, waits for an alarm under a timeout of more than
  * 2^31 ticks, and with no signal pending its timeout ends it with EAGAIN.
+ * kill of a child that has ended and is not yet reaped succeeds, alone and
+ * by its group, as on Linux, and fails with ESRCH once it is reaped.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -42,6 +44,7 @@
 #include <sys/xattr.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -49,6 +52,28 @@ static int fail(const char *what)
 {
     printf("CALLSMUSL FAIL (%s: errno %d)\n", what, errno);
     return 1;
+}
+
+/* A child that has ended is a target until it is reaped. */
+static int zombies(void)
+{
+    siginfo_t info;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        setpgid(0, 0);
+        _exit(0);
+    }
+    if (pid < 0 || waitid(P_PID, (id_t)pid, &info, WEXITED | WNOWAIT) != 0) {
+        return fail("a child that ends, waited for and left unreaped");
+    }
+    if (kill(pid, 0) != 0 || kill(pid, SIGTERM) != 0 || kill(-pid, SIGTERM) != 0) {
+        return fail("kill of a child not yet reaped did not succeed");
+    }
+    if (waitpid(pid, NULL, 0) != pid || kill(pid, 0) != -1 || errno != ESRCH) {
+        return fail("kill of a reaped child was not ESRCH");
+    }
+    return 0;
 }
 
 static int signals(void)
@@ -89,7 +114,7 @@ static int signals(void)
     if (sigtimedwait(&set, &info, &far) != SIGALRM) {
         return fail("sigtimedwait under a timeout past 2^31 ticks did not wait for the alarm");
     }
-    return 0;
+    return zombies();
 }
 
 static int memory(void)

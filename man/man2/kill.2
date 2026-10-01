@@ -35,13 +35,14 @@ Broadcast to all processes is not implemented and returns
 A signal to a process is pending for the process as a whole, and any of
 its threads that does not block it takes it: the kernel wakes the first
 such thread, the one the ID names if it qualifies.
-Processes whose threads have all ended are not targets.
+A process whose threads have all ended remains a target until its parent
+reaps it, as on Linux: the signal is discarded and the call succeeds.
 A group request posts the signal to every member the caller may signal.
 It succeeds if at least one member is permitted, returns
 .Er EPERM
 if members exist but none is permitted, and returns
 .Er ESRCH
-if no live member exists.
+if no member exists.
 .Pp
 A caller with effective user ID 0 may signal any target.
 Otherwise, either the caller's real or effective user ID must match the
@@ -107,11 +108,11 @@ or
 .Nm tgkill
 is not positive.
 .It Bq Er EPERM
-The caller may not signal the target, or may not signal any live member
-of the selected group.
+The caller may not signal the target, or may not signal any member of
+the selected group.
 .It Bq Er ESRCH
-No selected live process exists, the selected group has no live members,
-the thread has ended, or
+No selected process exists, the selected group has no members, the
+thread has ended, or
 .Nm tgkill
 was given a thread that does not belong to the process.
 .Fn kill

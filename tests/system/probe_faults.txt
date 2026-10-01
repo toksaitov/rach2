@@ -5085,3 +5085,17 @@ old
 new
     return (int32_t)count;
 end
+
+fault kill-zombie-esrch
+probe callsmusl
+file rach2/sys/syscall_proc.c
+expect CALLSMUSL FAIL (kill of a child not yet reaped did not succeed
+old
+    if (!target || target->state == PROC_UNUSED) {
+        return -ESRCH;
+    }
+new
+    if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
+        return -ESRCH;
+    }
+end

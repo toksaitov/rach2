@@ -3409,7 +3409,8 @@ static int cred_may_signal(const process_t *target, int signo)
 /* Post signo to a process group: pid==0 is the caller's group, pid<-1 the group
  * (-pid). Signals every member the caller may signal; the POSIX outcome: 0 if
  * any member took it, -EPERM if members exist but none may be signalled,
- * -ESRCH if the group is empty. signo 0 only probes. */
+ * -ESRCH if the group is empty. signo 0 only probes. A member that has ended
+ * and is not yet reaped counts and discards the signal, as on Linux. */
 static int32_t kill_group(int pgid, int signo)
 {
     int found = 0;
@@ -3417,10 +3418,7 @@ static int32_t kill_group(int pgid, int signo)
     process_t *p;
 
     for (p = proc_list; p; p = p->next) {
-        if (p->state == PROC_ZOMBIE) {
-            continue;
-        }
-        if ((int)p->pgid != pgid) {
+        if (p->state == PROC_UNUSED || (int)p->pgid != pgid) {
             continue;
         }
         found = 1;
@@ -3428,7 +3426,7 @@ static int32_t kill_group(int pgid, int signo)
             continue;
         }
         allowed = 1;
-        if (signo != 0) {
+        if (signo != 0 && p->state != PROC_ZOMBIE) {
             struct k_siginfo info;
 
             sender_info(&info, SI_USER);
@@ -3444,7 +3442,9 @@ static int32_t kill_group(int pgid, int signo)
 /* kill(2): pid > 0 a single process, which the id of any of its threads
  * names; pid == 0 the caller's process group; pid < -1 the group (-pid).
  * (pid == -1 "all processes" is not supported here.) signo 0 just probes
- * existence and permission. */
+ * existence and permission. A process whose threads have all ended exists
+ * until its parent reaps it, and takes a signal and discards it, as on
+ * Linux, where `kill -0` of a zombie succeeds. */
 static int32_t do_kill(int pid, int signo)
 {
     process_t *target;
@@ -3466,14 +3466,14 @@ static int32_t do_kill(int pid, int signo)
         return -ESRCH; /* broadcast-to-all is not supported */
     }
     target = get_process((uint32_t)pid);
-    if (!target || target->state == PROC_UNUSED || target->tg->live == 0) {
+    if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
     }
     if (!cred_may_signal(target, signo)) {
         return -EPERM;
     }
-    if (signo == 0) {
-        return 0; /* existence and permission check only */
+    if (signo == 0 || target->tg->live == 0) {
+        return 0;
     }
     sender_info(&info, SI_USER);
     signal_post_info(target, signo, &info);
