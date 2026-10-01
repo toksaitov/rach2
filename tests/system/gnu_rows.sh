@@ -180,6 +180,7 @@ row_git() {
     same "git log" "$(git -C "$WORK/repo" log --format=%s)" "first"
     runs "git clone" "${git[@]}" clone -q "$WORK/repo" "$WORK/clone"
     same "the clone's file" "$(cat "$WORK/clone/file" 2>&1)" "git row"
+    same "git grep -P" "$(git -C "$WORK/repo" grep -oP 'g\w+(?= row)')" "file:git"
 }
 
 row_coreutils() {
@@ -203,6 +204,7 @@ EOF')" "5001"
 
 row_grep() {
     same "an extended pattern" "$(printf 'a1\nb22\nc333\n' | grep -E -c '[0-9]{2}')" "2"
+    same "a Perl pattern" "$(printf 'a1\nb22\nc333\n' | grep -oP '(?<=b)\d+')" "22"
     has "the version" "$(grep --version | head -n 1)" "3.12"
 }
 
