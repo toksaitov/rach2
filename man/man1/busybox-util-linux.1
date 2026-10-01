@@ -246,7 +246,16 @@ Read volumes through the disk nodes described in
 Display a calendar.
 .It Nm chrt
 Request a scheduling priority and class for a process.
-Rach2 does not implement the scheduling calls, so the request fails.
+The request fails with
+.Er ENOSYS ,
+as it does on any Linux whose BusyBox is built with musl: musl answers
+.Fn sched_getscheduler ,
+.Fn sched_setscheduler ,
+.Fn sched_getparam
+and
+.Fn sched_setparam
+itself, without the kernel, which has the calls
+.Pq see Xr sched_setscheduler 2 .
 .It Nm fallocate
 Preallocate space for a file.
 No file system here reserves space ahead of a write, so the request fails
