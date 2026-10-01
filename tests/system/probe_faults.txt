@@ -4259,8 +4259,10 @@ probe schedmusl
 file rach2/sys/syscall_fs.c
 expect SCHEDMUSL FAIL (oom_score_adj is not root's with mode 0644
 old
+            procfs_oom_owner(procfs_resolve_id(vp), &uid, &gid) == 0) {
             kst->st_mode = S_IFREG | 0644;
 new
+            procfs_oom_owner(procfs_resolve_id(vp), &uid, &gid) == 0) {
             kst->st_mode = S_IFREG | 0444;
 end
 
@@ -4407,9 +4409,9 @@ probe direntmusl
 file rach2/sys/syscall_fs.c
 expect DIRENTMUSL FAIL (a name in /proc whose link the caller may not read was not EEXIST)
 old
-        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) == -ENOENT) {
+                 : procfs_readlink_dir(rpid, vp->kind == VNODE_PROC_ROOT, scratch, 0)) == -ENOENT) {
 new
-        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) < 0) {
+                 : procfs_readlink_dir(rpid, vp->kind == VNODE_PROC_ROOT, scratch, 0)) < 0) {
 end
 
 fault make-dir-end-mount-missed
@@ -4777,9 +4779,9 @@ probe direntmusl
 file rach2/sys/fs/synthfs.c
 expect DIRENTMUSL FAIL (/proc/sys/kernel/core_pattern is not the name of a core file
 old
-               {6, "core_pattern", "core\n"}};
+               {6, "core_pattern", "core\n"},
 new
-               {6, "core_name", "core\n"}};
+               {6, "core_name", "core\n"},
 end
 
 # Who may set the host name and the clock.
