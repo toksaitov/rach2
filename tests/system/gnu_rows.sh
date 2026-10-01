@@ -207,6 +207,8 @@ EOF')" "5001"
 row_grep() {
     same "an extended pattern" "$(printf 'a1\nb22\nc333\n' | grep -E -c '[0-9]{2}')" "2"
     same "a Perl pattern" "$(printf 'a1\nb22\nc333\n' | grep -oP '(?<=b)\d+')" "22"
+    runs "a match from a pipe into /dev/null, as configure asks" \
+        bash -c 'printf "a\nb\n" | grep -E a > /dev/null'
     has "the version" "$(grep --version | head -n 1)" "3.12"
 }
 
