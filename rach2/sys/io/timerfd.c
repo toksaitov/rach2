@@ -36,7 +36,6 @@
 #define SIGEV_SIGNAL    0
 #define SIGEV_NONE      1
 #define SIGEV_THREAD_ID 4
-#define SI_TIMER        (-2)
 
 /* Format: the kernel's ticks in a second, and nanoseconds in a tick. The
  * kernel has no 64-bit division, so a time is kept as whole seconds and

@@ -2697,6 +2697,8 @@ void init_syscall(void)
     _syscall_table[SYS_TGKILL] = sys_tgkill;
     _syscall_table[SYS_RT_SIGQUEUEINFO] = sys_rt_sigqueueinfo;
     _syscall_table[SYS_RT_TGSIGQUEUEINFO] = sys_rt_tgsigqueueinfo;
+    _syscall_table[SYS_SIGNALFD] = sys_signalfd;
+    _syscall_table[SYS_SIGNALFD4] = sys_signalfd4;
     _syscall_table[SYS_RT_SIGACTION] = sys_rt_sigaction;
     _syscall_table[SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask;
     _syscall_table[SYS_RT_SIGRETURN] = sys_rt_sigreturn;

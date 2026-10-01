@@ -375,6 +375,7 @@ sha512sum 1 busybox-coreutils
 shred 1 busybox-coreutils
 shuf 1 busybox-coreutils
 sigaltstack 2 sigaction
+signalfd4 2 signalfd
 sigpending 2 sigaction
 sigreturn 2 sigaction
 sleep 1 busybox-coreutils

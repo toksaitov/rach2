@@ -33,6 +33,7 @@
 #include "fs/pathbuf.h"
 #include "ipc/pipe.h"
 #include "io/poll.h"
+#include "io/anon.h"
 #include "tty/tty.h"
 #include "tty/pty.h"
 #include "rtc.h"
@@ -4259,11 +4260,10 @@ void deliver_signals(isr_params_t *tf)
 /**
  * Wait, as rt_sigtimedwait does, for a signal of `set` to be pending for the
  * current thread or its process until the tick `deadline` when `timed`, and
- * take it: its siginfo goes to `uinfo` unless null, and its number is
- * returned. -EINTR for another signal the thread acts on, -EAGAIN at the
- * deadline, -EFAULT.
+ * take it, its siginfo into `info`: its number, or -EINTR for another
+ * signal the thread acts on, or -EAGAIN at the deadline.
  */
-static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __user *uinfo)
+static int32_t sigwait_take(uint64_t set, int timed, uint32_t deadline, struct k_siginfo *info)
 {
     uint32_t flags = sig_irq_save();
 
@@ -4271,18 +4271,10 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
         uint64_t hit = sig_pending_now() & set;
 
         if (hit) {
-            struct k_siginfo info;
-            uint8_t buf[128];
-            int signo = sig_dequeue(hit, &info);
+            int signo = sig_dequeue(hit, info);
 
             current_proc->wakeup_tick = 0;
             sig_irq_restore(flags);
-            if (uinfo) {
-                sigframe_fill_siginfo(buf, signo, &info);
-                if (copy_to_user(uinfo, buf, sizeof(buf)) != 0) {
-                    return -EFAULT;
-                }
-            }
             return signo;
         }
         if (signal_pending() || (timed && (int32_t)(kernel_ticks - deadline) >= 0)) {
@@ -4300,6 +4292,23 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
         }
         current_proc->state = PROC_RUNNING;
     }
+}
+
+/* `sigwait_take`, with the siginfo copied to `uinfo` unless it is null;
+ * -EFAULT when it cannot be. */
+static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __user *uinfo)
+{
+    struct k_siginfo info;
+    uint8_t buf[128];
+    int32_t signo = sigwait_take(set, timed, deadline, &info);
+
+    if (signo > 0 && uinfo) {
+        sigframe_fill_siginfo(buf, (int)signo, &info);
+        if (copy_to_user(uinfo, buf, sizeof(buf)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return signo;
 }
 
 /**
@@ -4362,6 +4371,180 @@ int32_t sys_rt_sigtimedwait(isr_params_t *params)
     rc = sigwait_set(set, timed, deadline, (void __user *)params->ecx);
     signal_set_blocked(saved);
     return rc;
+}
+
+#define SFD_NONBLOCK 04000
+#define SFD_CLOEXEC  02000000
+
+/* A signalfd: the signals its reads take. */
+struct sigfd {
+    struct anon_obj anon;
+    uint64_t mask;
+};
+
+static void put_word(uint8_t *at, uint32_t v)
+{
+    k_memcpy(at, &v, sizeof(v));
+}
+
+/*
+ * The 128-byte struct signalfd_siginfo of `signo` and `info`, in Linux's
+ * fields: a timer's id, overrun and value, a child's pid, uid and status, a
+ * fault's address, or a sender's pid, uid and value.
+ */
+static void sigfd_fill(uint8_t *out, int signo, const struct k_siginfo *info)
+{
+    int fault = (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL || signo == SIGFPE ||
+                 signo == SIGTRAP) &&
+                info->code > 0;
+
+    k_memset(out, 0, 128);
+    put_word(out, (uint32_t)signo);
+    put_word(out + 8, (uint32_t)info->code);
+    if (fault) {
+        put_word(out + 72, info->addr); /* ssi_addr */
+    } else if (info->code == SI_TIMER) {
+        put_word(out + 24, info->pid); /* ssi_tid */
+        put_word(out + 32, info->uid); /* ssi_overrun */
+        put_word(out + 44, (uint32_t)info->status);
+        put_word(out + 48, (uint32_t)info->status);
+    } else {
+        put_word(out + 12, info->pid);
+        put_word(out + 16, info->uid);
+        put_word(out + 40, (uint32_t)info->status); /* ssi_status */
+        put_word(out + 44, (uint32_t)info->status); /* ssi_int */
+        put_word(out + 48, (uint32_t)info->status); /* ssi_ptr */
+    }
+}
+
+/**
+ * read(2) of a signalfd: the pending signals of its mask, a 128-byte record
+ * each, as many as fit, taken off the thread's or the process's pending set
+ * as sigtimedwait takes them. With none pending it waits for one, the mask
+ * counting as unblocked meanwhile, as sigtimedwait's set does, or fails with
+ * EAGAIN when non-blocking; EINVAL for a buffer shorter than a record.
+ */
+static int32_t sigfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    struct sigfd *sf = (struct sigfd *)e->priv;
+    uint8_t one[128];
+    uint32_t done = 0;
+
+    if (count < sizeof(one)) {
+        return -EINVAL;
+    }
+    while (done + sizeof(one) <= count) {
+        struct k_siginfo info;
+        uint64_t hit = sig_pending_now() & sf->mask;
+        int32_t signo;
+
+        if (hit) {
+            signo = sig_dequeue(hit, &info);
+        } else if (done > 0) {
+            break;
+        } else if (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK)) {
+            return -EAGAIN;
+        } else {
+            uint64_t saved = current_proc->sig_blocked;
+
+            signal_set_blocked(saved & ~sf->mask);
+            signo = sigwait_take(sf->mask, 0, 0, &info);
+            signal_set_blocked(saved);
+            if (signo < 0) {
+                return signo;
+            }
+        }
+        sigfd_fill(one, (int)signo, &info);
+        if (copy_to_user((void __user *)(buf + done), one, sizeof(one)) != 0) {
+            return done > 0 ? (int32_t)done : -EFAULT;
+        }
+        done += sizeof(one);
+    }
+    return (int32_t)done;
+}
+
+/* Readable while a signal of the mask is pending for the poller. A signal
+ * sent while it sleeps wakes it as the thread the signal would go to. */
+static short sigfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    struct sigfd *sf = (struct sigfd *)e->priv;
+
+    if (wq) {
+        *wq = NULL;
+    }
+    return (short)((sig_pending_now() & sf->mask) ? (events & POLLIN) : 0);
+}
+
+static void sigfd_close(fd_entry_t *e)
+{
+    kfree(e->priv);
+    e->priv = NULL;
+}
+
+static const struct file_ops sigfd_ops = {sigfd_read, NULL, sigfd_poll, NULL, sigfd_close};
+
+/**
+ * signalfd (321) and signalfd4 (327): EBX = -1 for a new signalfd or one to
+ * change, ECX = the mask, EDX = its size, which must be 8, and for
+ * signalfd4 ESI = SFD_NONBLOCK and SFD_CLOEXEC. SIGKILL and SIGSTOP are left
+ * out of the mask, as Linux leaves them. The descriptor, or EBADF for an
+ * open descriptor that is not a signalfd, EINVAL.
+ */
+static int32_t signalfd_common(isr_params_t *params, uint32_t flags)
+{
+    int fd = (int)params->ebx;
+    uint64_t mask;
+    struct sigfd *sf;
+    fd_entry_t *e;
+
+    if (params->edx != sizeof(mask) || (flags & ~(uint32_t)(SFD_NONBLOCK | SFD_CLOEXEC))) {
+        return -EINVAL;
+    }
+    if (copy_from_user(&mask, (const void __user *)params->ecx, sizeof(mask)) != 0) {
+        return -EFAULT;
+    }
+    mask &= ~(uint64_t)KSIG_UNCATCHABLE;
+    if (fd != -1) {
+        e = fd_get(current_proc->fds, fd);
+        if (!e) {
+            return -EBADF;
+        }
+        if (e->ops != &sigfd_ops) {
+            return -EINVAL;
+        }
+        ((struct sigfd *)e->priv)->mask = mask;
+        return fd;
+    }
+    sf = kzalloc(sizeof(*sf));
+    if (!sf) {
+        return -ENOMEM;
+    }
+    sf->anon.name = "[signalfd]";
+    sf->mask = mask;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0) {
+        kfree(sf);
+        return fd;
+    }
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_ANON;
+    e->ops = &sigfd_ops;
+    e->priv = sf;
+    e->flags = FD_FLAG_READ | ((flags & SFD_CLOEXEC) ? FD_FLAG_CLOEXEC : 0u);
+    if (flags & SFD_NONBLOCK) {
+        e->ofd->status_flags |= OFD_NONBLOCK;
+    }
+    return fd;
+}
+
+int32_t sys_signalfd(isr_params_t *params)
+{
+    return signalfd_common(params, 0);
+}
+
+int32_t sys_signalfd4(isr_params_t *params)
+{
+    return signalfd_common(params, params->esi);
 }
 
 /*

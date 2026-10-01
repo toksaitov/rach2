@@ -312,6 +312,10 @@ int32_t sys_rt_sigqueueinfo(isr_params_t *params);
 
 int32_t sys_rt_tgsigqueueinfo(isr_params_t *params);
 
+int32_t sys_signalfd(isr_params_t *params);
+
+int32_t sys_signalfd4(isr_params_t *params);
+
 int32_t sys_pause(isr_params_t *params);
 
 int32_t sys_rt_sigsuspend(isr_params_t *params);

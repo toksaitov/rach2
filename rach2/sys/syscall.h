@@ -153,6 +153,8 @@
 #define SYS_TGKILL            270
 #define SYS_RT_SIGQUEUEINFO   178
 #define SYS_RT_TGSIGQUEUEINFO 335
+#define SYS_SIGNALFD          321
+#define SYS_SIGNALFD4         327
 
 /* The scheduling calls, whose names are longer than the column above. */
 #define SYS_SCHED_SETPARAM         154

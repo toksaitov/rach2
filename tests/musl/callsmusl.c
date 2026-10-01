@@ -23,6 +23,9 @@
  * value and SI_QUEUE to the signal it sends. A writer to a raw
  * pseudo-terminal slave whose master has not read waits for room, so the
  * master reads every byte of 64 KiB, and a non-blocking one takes EAGAIN.
+ * A signalfd reads a blocked signal sent to the process, with its sender,
+ * and a sigqueue's value, and with none pending a non-blocking read is
+ * EAGAIN.
  * A setgid directory gives a file made in it its group, and a directory
  * its group and the bit. A process of another user is refused the maps and
  * the descriptors of a root process under /proc, and reads its own.
@@ -64,6 +67,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/signalfd.h>
 #include <sys/timex.h>
 #include <sys/xattr.h>
 #include <termios.h>
@@ -218,6 +222,32 @@ static int queues(void)
         si.si_value.sival_int != 4242 || si.si_pid != getpid()) {
         return fail("sigqueue's signal did not come with SI_QUEUE, its value and its sender");
     }
+    return 0;
+}
+
+/* A non-blocking signalfd of SIGUSR2, which stays blocked. */
+static int signalfds(void)
+{
+    struct signalfd_siginfo si;
+    union sigval v;
+    sigset_t set;
+    int fd;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR2);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+    fd = signalfd(-1, &set, SFD_NONBLOCK);
+    if (fd < 0 || read(fd, &si, sizeof si) != -1 || errno != EAGAIN) {
+        return fail("a signalfd with nothing pending did not read EAGAIN");
+    }
+    v.sival_int = 31;
+    if (kill(getpid(), SIGUSR2) != 0 || read(fd, &si, sizeof si) != (int)sizeof si ||
+        si.ssi_signo != SIGUSR2 || si.ssi_pid != (uint32_t)getpid() ||
+        sigqueue(getpid(), SIGUSR2, v) != 0 || read(fd, &si, sizeof si) != (int)sizeof si ||
+        si.ssi_int != 31) {
+        return fail("a signalfd did not read the signal sent, its sender and sigqueue's value");
+    }
+    close(fd);
     return 0;
 }
 
@@ -689,7 +719,7 @@ int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers() || queues() || flows()) {
+        privacies() || timers() || queues() || flows() || signalfds()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

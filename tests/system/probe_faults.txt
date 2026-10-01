@@ -5243,3 +5243,15 @@ old
 new
         while ((fit = pty_m_room(p) / pts_growth(p) + 1u) == 0) {
 end
+
+fault signalfd-empty
+probe callsmusl
+file rach2/sys/syscall_proc.c
+expect CALLSMUSL FAIL (a signalfd did not read the signal sent, its sender and sigqueue's value
+old
+        if (hit) {
+            signo = sig_dequeue(hit, &info);
+new
+        if (0 && hit) {
+            signo = sig_dequeue(hit, &info);
+end

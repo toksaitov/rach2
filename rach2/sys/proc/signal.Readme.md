@@ -23,6 +23,10 @@ The main implementation is in `sys/syscall_proc.c`, which the system-call table 
 
 `kill` supports a positive PID, which may be the id of any thread of the process, PID zero for the caller's process group, and a PID below -1 for the named process group. PID -1 broadcast is not implemented and returns `-ESRCH`. Signal zero checks existence and permission without posting. `tkill` takes a positive thread ID; `tgkill` takes a positive process ID and a positive thread ID of that process.
 
+`rt_sigqueueinfo` and `rt_tgsigqueueinfo`, which `sigqueue` calls, post a signal with the caller's siginfo, its code and the pid, uid and value words, under the same permission; a code of zero or above, or `SI_TKILL`, is the kernel's, and a caller gives one only to its own process. The kernel keeps one pending instance of each signal, its pending bit and one siginfo, so a real-time signal sent again while pending is merged with it, where Linux queues each. A POSIX timer posts its signal with `SI_TIMER` and its id, overrun and value in those three words, and adds later expirations to the pending signal's overrun (`io/timerfd.c`).
+
+A signalfd (`signalfd` and `signalfd4`, in `syscall_proc.c`) reads the pending signals of its mask, which the caller blocks, as `rt_sigtimedwait` takes them (`sigwait_take`): a read with none pending waits with the mask unblocked, and `poll` reports it readable while one is pending for the poller, whom a signal post wakes as the thread `sig_taker` chooses.
+
 Root, identified by effective uid zero, may signal any live process. Otherwise the sender's real or effective uid must match the target's real or saved uid. `SIGCONT` is also allowed between members of one session, but signal zero does not receive that exception. Terminal-generated signals are posted to the foreground process group without applying a process sender's credentials.
 
 ## Dispositions and masks

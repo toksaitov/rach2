@@ -64,6 +64,7 @@
 #define SI_USER       0
 #define SI_KERNEL     0x80
 #define SI_TKILL      (-6)
+#define SI_TIMER      (-2)
 #define ILL_ILLOPN    2
 #define FPE_INTDIV    1
 #define FPE_FLTDIV    3

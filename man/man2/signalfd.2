@@ -1,0 +1,97 @@
+.Dd October 2, 2026
+.Dt SIGNALFD 2
+.Os
+.Sh NAME
+.Nm signalfd ,
+.Nm signalfd4
+.Nd signals read through a descriptor
+.Sh SYNOPSIS
+.In sys/signalfd.h
+.Ft int
+.Fn signalfd "int fd" "const sigset_t *mask" "int flags"
+.Sh DESCRIPTION
+.Fn signalfd ,
+whose C library function calls
+.Fn signalfd4 ,
+number 327, or with no flags
+.Fn signalfd ,
+number 321, makes a descriptor that reads the signals of
+.Fa mask ,
+or with
+.Fa fd
+a signalfd already open, gives it
+.Fa mask
+in place of its own.
+The mask is eight bytes;
+.Dv SIGKILL
+and
+.Dv SIGSTOP
+are left out of it, as Linux leaves them.
+The flags are
+.Dv SFD_NONBLOCK
+and
+.Dv SFD_CLOEXEC .
+The signals are blocked by the caller, so that they wait for the read.
+.Pp
+A
+.Xr read 2
+takes the pending signals of the mask, the thread's own first and then
+the process's, as
+.Xr sigtimedwait 2
+takes them, as many as fit, each a 128-byte
+.Vt struct signalfd_siginfo :
+the number, the code, and a sender's pid and uid and the value in
+.Va ssi_int ,
+a child's in
+.Va ssi_pid ,
+.Va ssi_uid
+and
+.Va ssi_status ,
+a timer's id, overrun and value in
+.Va ssi_tid ,
+.Va ssi_overrun
+and
+.Va ssi_int ,
+or a fault's address in
+.Va ssi_addr .
+With none pending it waits for one, the mask counting as unblocked
+meanwhile, or fails with
+.Er EAGAIN
+when non-blocking.
+.Xr poll 2
+and
+.Xr epoll 2
+report the descriptor readable while a signal of its mask is pending for
+the caller.
+A signal sent while a thread of several sleeps in
+.Fn poll
+wakes the thread the signal would go to, which is not the poller when
+another thread does not block it.
+.Pa /proc/ Ns Ar pid Ns Pa /fd
+names it
+.Dq anon_inode:[signalfd] .
+.Sh RETURN VALUES
+The descriptor, or -1 with
+.Va errno
+set.
+.Sh ERRORS
+.Bl -tag -width EINVAL
+.It Er EBADF
+.Fa fd
+is neither -1 nor an open descriptor.
+.It Er EFAULT
+.Fa mask
+or a read's buffer is not in the caller's memory.
+.It Er EINVAL
+.Fa fd
+is not a signalfd, the mask's size is not eight, a flag is unknown, or a
+read's buffer is shorter than a record.
+.It Er EMFILE
+The process has no free descriptor below its limit.
+.It Er ENOMEM
+The kernel had no memory for the descriptor.
+.El
+.Sh SEE ALSO
+.Xr sigaction 2 ,
+.Xr sigtimedwait 2 ,
+.Xr timerfd 2
