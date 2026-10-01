@@ -64,9 +64,24 @@ as Linux answers when no module handles it, and a request without
 .Dv NLM_F_DUMP
 with
 .Er EOPNOTSUPP .
-A filter's bytecode in the request is not run; the timers, the extensions
+A TCP socket's message carries the timer
+.Xr ss 8 Ns 's
+.Fl o
+shows, the retransmission, zero-window probe or TIME_WAIT timer with its
+milliseconds left, and when
 .Fa idiag_ext
-asks for, and the memory and TCP information are not given.
+asks for
+.Dv INET_DIAG_INFO ,
+the first 104 bytes of
+.Vt struct tcp_info ,
+which
+.Fl i
+prints: the state, the loss recovery, the options and window scales, the
+retransmission timeout, the round trip and its variance in microseconds,
+the segment size, the window and the threshold in segments, and the
+segments sent again.
+A filter's bytecode in the request is not run, and the memory information
+and the other extensions are not given.
 .Pp
 A socket of protocol
 .Dv NETLINK_KOBJECT_UEVENT

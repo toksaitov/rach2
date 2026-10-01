@@ -40,6 +40,12 @@ extern int printf(const char *fmt, ...);
 
 volatile uint32_t kernel_ticks;
 
+/* The microsecond clock TCP times its round trips by, for `ss -i`. */
+uint32_t pit_now_us(void)
+{
+    return kernel_ticks * 10000u;
+}
+
 /* This machine and its peer, as little-endian words of the bytes 00 to 07. */
 #define SELF      0x03020100u
 #define PEER      0x07060504u

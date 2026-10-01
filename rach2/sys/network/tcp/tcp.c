@@ -41,6 +41,7 @@
 #include "../../mm/kheap.h"
 #include "../../mm/pressure.h"
 #include "../../mm/paging.h"
+#include "../../pit.h"
 
 /* The live control blocks, listeners included, each allocated from the heap
  * by `listen`, by an active open, or for an incoming SYN on the interrupt
@@ -651,6 +652,7 @@ static int tcp_output(struct tcb *tcb)
         }
         if (tcb->rtt_start == 0 && !tcb->recovering) {
             tcb->rtt_start = kernel_ticks + 1; /* +1 keeps 0 = no sample */
+            tcb->rtt_start_us = pit_now_us();
             tcb->rtt_seq = tcb->snd_nxt;
         }
     }
@@ -1747,6 +1749,27 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 }
 
 /**
+ * Fold a round trip of `us` microseconds into the estimate `ss -i` reports,
+ * by RFC 6298's weights, as the tick estimate beside it is folded.
+ */
+static void tcp_rtt_us(struct tcb *tcb, uint32_t us)
+{
+    uint32_t delta;
+
+    if (us == 0) {
+        us = 1;
+    }
+    if (tcb->srtt_us == 0) {
+        tcb->srtt_us = us << 3;
+        tcb->rttvar_us = us << 1;
+        return;
+    }
+    delta = (tcb->srtt_us >> 3) > us ? (tcb->srtt_us >> 3) - us : us - (tcb->srtt_us >> 3);
+    tcb->rttvar_us = tcb->rttvar_us - (tcb->rttvar_us >> 2) + delta;
+    tcb->srtt_us = tcb->srtt_us - (tcb->srtt_us >> 3) + us;
+}
+
+/**
  * Take an acknowledgement of new data, in any state where sent data awaits
  * one: the round-trip sample it ends, the ring and the sequence space, the
  * peer's window, the congestion window's growth or the recovery's next step,
@@ -1781,6 +1804,7 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
             new_rto = TCP_RTO_MAX;
         tcb->rto = new_rto;
         tcb->rtt_start = 0;
+        tcp_rtt_us(tcb, pit_now_us() - tcb->rtt_start_us);
     }
 
     tcp_ack_data(tcb, ack_num); /* ends a recovery it reaches */
@@ -2599,6 +2623,8 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].rto = t->rto;
         out[n].srtt = t->srtt;
         out[n].rttvar = t->rttvar;
+        out[n].srtt_us = t->srtt_us;
+        out[n].rttvar_us = t->rttvar_us;
         out[n].ssthresh = t->ssthresh;
         out[n].timewait_left =
             (int32_t)(t->timewait_until - kernel_ticks) > 0 ? t->timewait_until - kernel_ticks : 0;

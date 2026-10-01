@@ -171,6 +171,11 @@ struct tcb {
     uint32_t srtt;       /* smoothed RTT x 8 (fixed point)         */
     uint32_t rttvar;     /* RTT variance x 4 (fixed point)         */
     uint32_t rtt_start;  /* ticks+1 at RTT sample start; 0 = none  */
+    /* The same samples timed to the microsecond, for `ss -i`: the timer
+     * above runs on ticks, and a round trip on a LAN is under one. */
+    uint32_t rtt_start_us; /* pit_now_us() at the sample's start      */
+    uint32_t srtt_us;      /* smoothed RTT x 8, microseconds          */
+    uint32_t rttvar_us;    /* RTT variance x 4, microseconds          */
     uint8_t rto_backoff; /* consecutive timeouts; retransmit count */
     uint32_t cwnd;       /* congestion window (bytes)              */
     uint32_t ssthresh;   /* slow-start threshold (bytes)           */
@@ -353,6 +358,8 @@ struct tcp_row {
     uint32_t rto;
     uint32_t srtt;
     uint32_t rttvar;
+    uint32_t srtt_us;
+    uint32_t rttvar_us;
     uint32_t ssthresh;
     uint32_t timewait_left;
 };

@@ -824,8 +824,9 @@ static uint8_t *inet_diag_msg_of(const struct nl_build *b, uint8_t *msg, const s
  * `ss -i` prints: the state, the loss recovery, the timeouts in a row, the
  * options and window shifts, the retransmission timeout and the round trip
  * in microseconds, the segment size, the segments in flight, the window and
- * threshold in segments, and the segments sent again. The block counts in
- * ticks of 10 ms, so a round trip shorter than a tick is 0.
+ * threshold in segments, and the segments sent again. The timeout counts in
+ * ticks of 10 ms; the round trip and its variance are TCP's own samples
+ * timed to the microsecond (`tcp_rtt_us`).
  */
 static void tcp_info_of(const struct tcp_row *r, uint8_t *info)
 {
@@ -843,8 +844,8 @@ static void tcp_info_of(const struct tcp_row *r, uint8_t *info)
     put32(info + 16, mss);
     put32(info + 24, (r->in_flight + mss - 1) / mss);
     put32(info + 60, mss + 40);
-    put32(info + 68, r->srtt * (DIAG_TICK_US / 8));
-    put32(info + 72, r->rttvar * (DIAG_TICK_US / 4));
+    put32(info + 68, r->srtt_us >> 3);
+    put32(info + 72, r->rttvar_us >> 2);
     put32(info + 76, r->ssthresh / mss);
     put32(info + 80, r->cwnd / mss);
     put32(info + 84, TCP_MSS);
