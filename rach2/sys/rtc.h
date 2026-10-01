@@ -75,7 +75,8 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
 /** The tick count, with a tick whose interrupt is pending counted, and how
- * far into that tick the timer is, in nanoseconds; interrupts are off. */
+ * far into that tick the timer is, in nanoseconds, read together with
+ * interrupts off. */
 void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns);
 void rtc_set_realtime(int64_t seconds, int32_t nanoseconds);
 

@@ -1033,12 +1033,10 @@ static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint32
     process_count_sleep_cut_short();
     if (urem) {
         struct kernel_timespec rem;
-        uint32_t flags = kirq_save();
         uint32_t now, phase_ns, left;
         int32_t ns;
 
         rtc_tick_phase(&now, &phase_ns);
-        kirq_restore(flags);
         left = (int32_t)(target - now) > 0 ? target - now : 0u;
         rem.tv_sec = (int32_t)(left / 100u);
         ns = (int32_t)((left % 100u) * 10000000u) - (int32_t)phase_ns;
@@ -1144,11 +1142,9 @@ static int timespec_valid(const struct kernel_timespec *req)
  */
 static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timespec __user *urem)
 {
-    uint32_t flags, now, phase_ns, us, ticks;
+    uint32_t now, phase_ns, us, ticks;
 
-    flags = kirq_save();
     rtc_tick_phase(&now, &phase_ns);
-    kirq_restore(flags);
     if (req->tv_sec == 0 && req->tv_nsec == 0) {
         return 0;
     }

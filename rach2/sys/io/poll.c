@@ -26,6 +26,7 @@
 #include "../proc/wait_queue.h"
 #include "../proc/sched.h"
 #include "../tty/tty.h"
+#include "../rtc.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -324,19 +325,28 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 }
 
 /**
- * The tick at which a wait of `ticks` whole ticks ends. The tick in progress
- * is not counted, so a nonzero wait is never shorter than asked. The
- * callers clamp `ticks` at 0x7FFFFFFE, so the signed difference
- * `deadline - kernel_ticks` stays valid with that tick added.
+ * The tick at which a wait of `ticks` whole ticks and `us` microseconds ends:
+ * the first tick at or after its end, measured from where in the tick in
+ * progress the call is (`rtc_tick_phase`), so a nonzero wait is never shorter
+ * than asked and at most a tick longer. The callers clamp `ticks` at
+ * 0x7FFFFFFE, and the deadline is at most 0x7FFFFFFF ticks ahead, so the
+ * signed difference `deadline - kernel_ticks` stays valid.
  */
-static uint32_t tick_deadline(uint32_t ticks)
+static uint32_t tick_deadline(uint32_t ticks, uint32_t us)
 {
-    return kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+    uint32_t now, phase_ns;
+
+    rtc_tick_phase(&now, &phase_ns);
+    if (ticks == 0 && us == 0) {
+        return now;
+    }
+    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;
+    return now + (ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks);
 }
 
 /**
- * Convert a poll(2) millisecond timeout to a deadline in 10 ms ticks, rounded
- * up. `*has_deadline` is 0 for an infinite wait (timeout_ms < 0).
+ * Convert a poll(2) millisecond timeout to a deadline tick (`tick_deadline`).
+ * `*has_deadline` is 0 for an infinite wait (timeout_ms < 0).
  */
 uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
 {
@@ -347,11 +357,8 @@ uint32_t poll_ms_deadline(int timeout_ms, int *has_deadline)
         return 0;
     }
     *has_deadline = 1;
-    ticks = ((uint32_t)timeout_ms + 9u) / 10u;
-    if (ticks > 0x7FFFFFFEu) {
-        ticks = 0x7FFFFFFEu;
-    }
-    return tick_deadline(ticks);
+    ticks = (uint32_t)timeout_ms / 10u;
+    return tick_deadline(ticks, (uint32_t)timeout_ms % 10u * 1000u);
 }
 
 /**
@@ -395,7 +402,7 @@ static int tv_to_ms(const struct poll_timeval *tv)
 /** Convert a timespec to a deadline (NULL == infinite). */
 static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
 {
-    uint32_t sec, nsec_ticks, ticks;
+    uint32_t sec, ticks;
 
     if (!ts) {
         *has_deadline = 0;
@@ -403,15 +410,14 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
     }
     *has_deadline = 1;
     sec = (uint32_t)ts->tv_sec;
-    nsec_ticks = ((uint32_t)ts->tv_nsec + 9999999u) / 10000000u;
     if (sec > 21474836u) {
         sec = 21474836u;
     }
-    ticks = sec * 100u + nsec_ticks;
+    ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;
     if (ticks > 0x7FFFFFFEu) {
         ticks = 0x7FFFFFFEu;
     }
-    return tick_deadline(ticks);
+    return tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);
 }
 
 /** Shared poll(2) implementation: ufds/nfds plus an already-computed

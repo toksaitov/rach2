@@ -93,9 +93,10 @@ it is in seconds and nanoseconds.
 A null pointer waits indefinitely; a zero interval performs one scan
 without waiting.
 With no selected descriptors, a finite interval acts as a sleep.
-Timeouts are rounded up to 10 ms timer ticks, and the tick in progress is
-not counted, so a timeout never expires before the time asked, up to the
-limits below.
+A timeout ends at the first 10 ms timer tick at or after its end, measured from
+where in the tick in progress the call is, so a timeout never expires
+before the time asked, up to the limits below, and at most a tick after
+it.
 Timeouts are not written back.
 .Pp
 The raw
@@ -103,9 +104,8 @@ The raw
 and
 .Nm newselect
 calls require nonnegative seconds and microseconds from 0 through 999999.
-They first round up to milliseconds, then to ticks.
-Seconds above 2147482 produce a timeout of 2147483647 milliseconds
-before tick rounding.
+They first round up to milliseconds.
+Seconds above 2147482 produce a timeout of 2147483647 milliseconds.
 Musl normalizes excess microseconds before issuing the call.
 .Pp
 The raw

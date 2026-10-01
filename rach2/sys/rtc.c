@@ -661,6 +661,7 @@ static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns
 
 void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
 {
+    uint32_t flags = kirq_save();
     int pending = pic_irq_pending(0);
 
     *phase_ns = pit_subtick_ns();
@@ -669,6 +670,7 @@ void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
         *phase_ns = pit_subtick_ns();
     }
     *ticks = kernel_ticks + (uint32_t)pending;
+    kirq_restore(flags);
 }
 
 /* The time the anchor keeps now, with the PIT position added to the
