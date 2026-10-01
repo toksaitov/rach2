@@ -201,9 +201,9 @@ static void commit_line(struct n_tty *t)
 /**
  * Reset a line discipline to its default cooked-mode termios and empty buffers.
  *
- * Defaults match a standard tty: ICRNL input, OPOST|ONLCR output, and
- * ISIG|ICANON with ECHO editing, plus the conventional control chars (^C, ^\,
- * DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
+ * Defaults match a standard tty: ICRNL input, OPOST|ONLCR output, 38400 baud
+ * with eight-bit characters, and ISIG|ICANON with ECHO editing, plus the
+ * conventional control chars (^C, ^\, DEL, ^U, ^D, ^Z, ^W) and VMIN 1.
  *
  * A raw read is gated by VMIN alone: VTIME is not implemented, so it is
  * accepted (a TCSETS storing it does not fail) but ignored. A program that
@@ -217,7 +217,7 @@ void n_tty_init(struct n_tty *t)
 
     t->tio.c_iflag = ICRNL;
     t->tio.c_oflag = OPOST | ONLCR;
-    t->tio.c_cflag = 0;
+    t->tio.c_cflag = B38400 | CS8 | CREAD | HUPCL;
     t->tio.c_lflag = ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL;
     t->tio.c_line = 0;
     for (i = 0; i < KNCCS; i++) {

@@ -56,6 +56,13 @@ struct ktermios {
 #define IGNCR  0000200
 #define ICRNL  0000400
 
+/* c_cflag bits: the speed code 38400 and the character size, receiver and
+ * hang-up bits a new Linux terminal starts with (tty_std_termios). */
+#define B38400 0000017
+#define CS8    0000060
+#define CREAD  0000200
+#define HUPCL  0002000
+
 /* c_oflag bits. */
 #define OPOST 0000001
 #define ONLCR 0000004

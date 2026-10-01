@@ -50,6 +50,8 @@ Copy the 36-byte kernel termios to
 .Fa arg .
 This is the i386 kernel layout with 19 control characters, not musl's
 larger termios structure with 32 control characters and speed fields.
+A new terminal has Linux's control flags,
+.Dv B38400 | CS8 | CREAD | HUPCL .
 .It Dv TCSETS , TCSETSW , TCSETSF
 Read a 36-byte kernel termios from
 .Fa arg

@@ -169,6 +169,20 @@ static void reused_markers(void)
     expect_line(&t, "ab", 2, "ring reuse clears old end markers");
 }
 
+/** A new terminal's control flags are Linux's: 38400 baud, eight-bit
+ * characters, the receiver on and a hang-up at the last close, so that
+ * `stty` does not report speed 0, which is the code for hanging up. */
+static void default_cflag(void)
+{
+    struct n_tty t;
+
+    n_tty_init(&t);
+    if (t.tio.c_cflag != (B38400 | CS8 | CREAD | HUPCL)) {
+        dprintf(2, "n-tty-test: fail: a new terminal's c_cflag is 0%o\n", (unsigned)t.tio.c_cflag);
+        fails++;
+    }
+}
+
 int main(void)
 {
     struct n_tty t;
@@ -176,6 +190,7 @@ int main(void)
     unsigned char buf[512];
     int n, i;
 
+    default_cflag();
     veol_lines();
     eof_lines();
     reused_markers();
