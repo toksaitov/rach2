@@ -5982,11 +5982,12 @@ int32_t sys_fstatfs64(isr_params_t *params)
     if (e->type == FD_TYPE_SYNTH_PATH) {
         const struct vpath *vp = (const struct vpath *)e->priv;
         int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
+        uint32_t magic = dev ? STATFS_MAGIC_DEVFS : STATFS_MAGIC_PROC;
 
-        return statfs_fill((struct linux_statfs64 __user *)params->edx,
-                           dev                ? STATFS_MAGIC_DEVFS
-                           : synth_is_sys(vp) ? STATFS_MAGIC_SYSFS
-                                              : STATFS_MAGIC_PROC);
+        if (synth_is_sys(vp)) {
+            magic = STATFS_MAGIC_SYSFS;
+        }
+        return statfs_fill((struct linux_statfs64 __user *)params->edx, magic);
     }
     if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
         e->type == FD_TYPE_SYNTH_DIR) {

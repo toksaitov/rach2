@@ -206,8 +206,8 @@ rach2/sys/syscall.c:tty_common_ioctl lines 122 a dispatcher, one arm per command
 rach2/sys/syscall_fs.c:chown_fd complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_chdir complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:do_old_stat lines 110 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:fstat_fill complexity 34 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:fstat_fill lines 141 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:fstat_fill complexity 36 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:fstat_fill lines 147 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
