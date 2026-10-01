@@ -36,6 +36,10 @@
 #define RTM_GETROUTE  26
 #define RTM_NEWNEIGH  28
 #define RTM_GETNEIGH  30
+#define RTM_NEWRULE   32
+#define RTM_GETRULE   34
+#define RTM_NEWQDISC  36
+#define RTM_GETQDISC  38
 
 /* Attributes of a link, an address and a route. */
 #define IFLA_ADDRESS   1
@@ -66,6 +70,16 @@
 #define RT_SCOPE_UNIVERSE 0
 #define RT_SCOPE_LINK     253
 #define RT_TABLE_MAIN     254
+#define RT_TABLE_DEFAULT  253
+#define RT_TABLE_LOCAL    255
+#define RT_SCOPE_HOST     254
+#define RTN_LOCAL         2
+#define RTM_F_CLONED      0x200u
+#define FRA_PRIORITY      6
+#define FRA_TABLE         15
+#define FR_ACT_TO_TBL     1
+#define TCA_KIND          1
+#define TC_H_ROOT         0xFFFFFFFFu
 #define RTPROT_KERNEL     2
 #define RTPROT_BOOT       3
 #define RTN_UNICAST       1
@@ -558,6 +572,117 @@ static void route_msg(struct nl_build *b, const struct netdev *nd, int gateway)
     nl_append(b, msg);
 }
 
+/* The destination of an RTM_GETROUTE request, its RTA_DST, or 0 when it
+ * names none. */
+static uint32_t route_asked(const uint8_t *req, uint32_t body)
+{
+    const uint8_t *attr = req + NLMSG_HDRLEN + 12;
+    const uint8_t *end = req + NLMSG_HDRLEN + body;
+
+    while (body >= 12 && attr + 4 <= end) {
+        uint16_t len = get16(attr);
+
+        if (len < 4 || attr + len > end) {
+            break;
+        }
+        if (get16(attr + 2) == RTA_DST && len >= 8) {
+            return ((uint32_t)attr[4] << 24) | ((uint32_t)attr[5] << 16) |
+                   ((uint32_t)attr[6] << 8) | attr[7];
+        }
+        attr += (len + 3u) & ~3u;
+    }
+    return 0;
+}
+
+/* The answer to `ip route get`: the route `dst` takes, as Linux reports a
+ * route it looked up (RTM_F_CLONED), through the interface and next hop
+ * `netdev_route` chooses, or `dst` itself as a local route on the interface
+ * that holds it; -ENETUNREACH when nothing reaches it. */
+static int route_get_msg(struct nl_build *b, uint32_t dst)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t *rtm;
+    const struct netdev *nd;
+    uint32_t via = 0;
+    int i, local = 0;
+
+    nd = netdev_route(dst, &via);
+    for (i = 0; i < netdev_count(); i++) {
+        const struct netdev *own = netdev_at(i);
+
+        if (own && own->ip && own->ip == dst) {
+            nd = own;
+            local = 1;
+        }
+    }
+    if (!nd) {
+        return -ENETUNREACH;
+    }
+    rtm = msg_start(b, msg, RTM_NEWROUTE, 0, 12);
+    rtm[0] = AF_INET;
+    rtm[1] = 32;
+    rtm[4] = local ? RT_TABLE_LOCAL : RT_TABLE_MAIN;
+    rtm[6] = local ? RT_SCOPE_HOST : RT_SCOPE_UNIVERSE;
+    rtm[7] = local ? RTN_LOCAL : RTN_UNICAST;
+    put32(rtm + 8, RTM_F_CLONED);
+    msg_attr32(msg, RTA_TABLE, local ? RT_TABLE_LOCAL : RT_TABLE_MAIN);
+    msg_attr_ip(msg, RTA_DST, dst);
+    msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
+    msg_attr_ip(msg, RTA_PREFSRC, nd->ip);
+    if (!local && via != dst) {
+        msg_attr_ip(msg, RTA_GATEWAY, via);
+    }
+    nl_append(b, msg);
+    return 0;
+}
+
+/* The three rules every Linux machine starts with, which are what route
+ * lookups here amount to: the local addresses, then the main table, then
+ * the empty default table. */
+static void rule_dump(struct nl_build *b)
+{
+    static const uint32_t rules[3][2] = {
+        {0, RT_TABLE_LOCAL}, {32766, RT_TABLE_MAIN}, {32767, RT_TABLE_DEFAULT}};
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        uint8_t msg[NL_MSG_MAX];
+        uint8_t *frh = msg_start(b, msg, RTM_NEWRULE, NLM_F_MULTI, 12);
+
+        frh[0] = AF_INET;
+        frh[4] = (uint8_t)rules[i][1];
+        frh[7] = FR_ACT_TO_TBL;
+        msg_attr32(msg, FRA_TABLE, rules[i][1]);
+        if (rules[i][0] != 0) {
+            msg_attr32(msg, FRA_PRIORITY, rules[i][0]);
+        }
+        nl_append(b, msg);
+    }
+}
+
+/* A queueing discipline for each interface: `noqueue`, since a frame here
+ * goes to the card when it is sent, with no queue in front of it. */
+static void qdisc_dump(struct nl_build *b)
+{
+    int i;
+
+    for (i = 0; i < netdev_count(); i++) {
+        const struct netdev *nd = netdev_at(i);
+        uint8_t msg[NL_MSG_MAX];
+        uint8_t *tcm;
+
+        if (!nd) {
+            continue;
+        }
+        tcm = msg_start(b, msg, RTM_NEWQDISC, NLM_F_MULTI, 20);
+        put32(tcm + 4, (uint32_t)nd->index);
+        put32(tcm + 12, TC_H_ROOT);
+        put32(tcm + 16, 2);
+        msg_attr(msg, TCA_KIND, "noqueue", 8);
+        nl_append(b, msg);
+    }
+}
+
 /* The message that ends a dump, or an NLMSG_ERROR of `error` answering the
  * request whose header is `req`, 0 being an acknowledgement. */
 static void end_msg(struct nl_build *b, const uint8_t *req, int32_t error)
@@ -591,6 +716,23 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         } else {
             end_msg(b, req, -ENODEV);
         }
+        return;
+    }
+    if (type == RTM_GETROUTE && (flags & NLM_F_DUMP) != NLM_F_DUMP) {
+        int rc = route_get_msg(b, route_asked(req, body));
+
+        if (rc != 0) {
+            end_msg(b, req, rc);
+        }
+        return;
+    }
+    if ((flags & NLM_F_DUMP) == NLM_F_DUMP && (type == RTM_GETRULE || type == RTM_GETQDISC)) {
+        if (type == RTM_GETRULE) {
+            rule_dump(b);
+        } else {
+            qdisc_dump(b);
+        }
+        end_msg(b, 0, 0);
         return;
     }
     if ((flags & NLM_F_DUMP) != NLM_F_DUMP || (type != RTM_GETLINK && type != RTM_GETADDR &&

@@ -5017,3 +5017,25 @@ old
 new
     (void)sys_fallocate;
 end
+
+# The route socket's answers to ip route get and ip rule.
+
+fault netlink-route-get-missing
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (ip route get of the machine's own address was not a local route
+old
+    if (type == RTM_GETROUTE && (flags & NLM_F_DUMP) != NLM_F_DUMP) {
+new
+    if (0) {
+end
+
+fault netlink-rule-missing
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (ip rule did not list Linux's three rules
+old
+            rule_dump(b);
+new
+            (void)rule_dump;
+end

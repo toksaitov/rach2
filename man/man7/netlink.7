@@ -112,7 +112,7 @@ Each answer repeats the request's sequence number and the socket's port
 id.
 .Pp
 The requests answered are:
-.Bl -tag -width "RTM_GETNEIGH"
+.Bl -tag -width "RTM_GETQDISC"
 .It Dv RTM_GETLINK
 With
 .Dv NLM_F_DUMP ,
@@ -167,6 +167,33 @@ an
 .Dv RTM_NEWROUTE
 message for each interface's own subnet, reached on the link, and one for
 its default route through its gateway when it has one, in the main table.
+Without
+.Dv NLM_F_DUMP ,
+as
+.Ql ip route get
+asks, one
+.Dv RTM_NEWROUTE
+message for the address of the request's
+.Dv RTA_DST :
+a local route in the local table for an address an interface holds, and
+otherwise the unicast route the stack takes, with its interface, source
+address and gateway, marked
+.Dv RTM_F_CLONED
+as Linux marks a route it looked up; an address nothing reaches is
+.Er ENETUNREACH .
+.It Dv RTM_GETRULE
+With
+.Dv NLM_F_DUMP ,
+the three rules every Linux machine starts with, which are what a route
+lookup here amounts to: the local table at priority 0, the main table at
+32766 and the default table at 32767.
+.It Dv RTM_GETQDISC
+With
+.Dv NLM_F_DUMP ,
+a
+.Ql noqueue
+discipline at the root of each interface, since a frame goes to the card
+when it is sent, with no queue before it.
 .It Dv RTM_GETNEIGH
 With
 .Dv NLM_F_DUMP ,

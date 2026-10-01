@@ -17,7 +17,10 @@
  * length, as ip asks it, and a read into a shorter buffer is cut and says so
  * with MSG_TRUNC in msg_flags. if_nametoindex, which asks an AF_UNIX socket,
  * finds the first link, and SIOCGIFCONF lists the interfaces with an
- * address.
+ * address. RTM_GETROUTE of one address, as `ip route get` asks, answers a
+ * local route for the machine's own address and a unicast one on the first
+ * link for a neighbour's; `ip rule`'s dump lists Linux's three rules and
+ * `tc qdisc`'s a discipline for each interface.
  *
  * Prints "NETLINKMUSL OK" on success and "NETLINKMUSL FAIL (detail)"
  * otherwise.
@@ -50,6 +53,14 @@
 #define RTM_GETADDR            22
 #define RTM_NEWROUTE           24
 #define RTM_GETROUTE           26
+#define RTM_NEWRULE            32
+#define RTM_GETRULE            34
+#define RTM_NEWQDISC           36
+#define RTM_GETQDISC           38
+#define RTA_DST                1
+#define RTA_OIF                4
+#define RTN_UNICAST            1
+#define RTN_LOCAL              2
 #define IFLA_IFNAME            3
 #define IFA_LOCAL              2
 
@@ -234,7 +245,10 @@ static int dump_msg(struct nlmsghdr *h, unsigned int seq, int count)
     if (h->nlmsg_type == RTM_NEWADDR) {
         return addr_ok(h);
     }
-    return h->nlmsg_type == RTM_NEWROUTE ? 0 : failed("a dump's message of another type");
+    return h->nlmsg_type == RTM_NEWROUTE || h->nlmsg_type == RTM_NEWRULE ||
+                   h->nlmsg_type == RTM_NEWQDISC
+               ? 0
+               : failed("a dump's message of another type");
 }
 
 /**
@@ -357,6 +371,73 @@ static int requests(int fd)
     if (request(fd, RTM_NEWADDR, NLM_F_CREATE, 6, &ifa, sizeof ifa) != 0 ||
         one_answer(fd, &index, &error) != NLMSG_ERROR || error != -EOPNOTSUPP) {
         return fail("RTM_NEWADDR was not EOPNOTSUPP");
+    }
+    return 0;
+}
+
+/* `ip route get ADDRESS`'s request, an rtmsg and the address's RTA_DST:
+ * the answer's route type and output interface into `*type` and `*oif`;
+ * 0, or -1 for no route message. */
+static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif)
+{
+    struct {
+        unsigned char family, dst_len, src_len, tos, table, protocol, scope, type;
+        unsigned int flags;
+        struct rtattr a;
+        struct in_addr dst;
+    } req;
+    char buf[4096] __attribute__((aligned(4)));
+    struct nlmsghdr *h = (struct nlmsghdr *)buf;
+    struct rtattr *a;
+    int n, left;
+
+    memset(&req, 0, sizeof req);
+    req.family = AF_INET;
+    req.dst_len = 32;
+    req.a.rta_len = sizeof(req.a) + sizeof(req.dst);
+    req.a.rta_type = RTA_DST;
+    req.dst = dst;
+    if (request(fd, RTM_GETROUTE, 0, seq, &req, sizeof req) != 0) {
+        return -1;
+    }
+    n = (int)recv(fd, buf, sizeof buf, 0);
+    if (n < (int)sizeof(*h) || !NLMSG_OK(h, n) || h->nlmsg_type != RTM_NEWROUTE) {
+        return -1;
+    }
+    *type = ((unsigned char *)NLMSG_DATA(h))[7];
+    *oif = 0;
+    left = (int)h->nlmsg_len - NLMSG_HDRLEN - 12;
+    for (a = (struct rtattr *)((char *)NLMSG_DATA(h) + 12); RTA_OK(a, left);
+         a = RTA_NEXT(a, left)) {
+        if (a->rta_type == RTA_OIF) {
+            memcpy(oif, RTA_DATA(a), sizeof(*oif));
+        }
+    }
+    return 0;
+}
+
+/* `ip route get` of the first link's address and of an address it reaches,
+ * and the dumps of `ip rule` and `tc qdisc`. */
+static int lookups(int fd)
+{
+    struct in_addr own, other;
+    int type = -1, oif = -1;
+
+    if (ioctl_addr(first_index, &own) != 0) {
+        return 0; /* a machine with no address has nothing to look up */
+    }
+    if (route_get(fd, 20, own, &type, &oif) != 0 || type != RTN_LOCAL || oif != first_index) {
+        return fail("ip route get of the machine's own address was not a local route");
+    }
+    other.s_addr = own.s_addr ^ htonl(1);
+    if (route_get(fd, 21, other, &type, &oif) != 0 || type != RTN_UNICAST || oif != first_index) {
+        return fail("ip route get of a neighbour was not a unicast route on the first link");
+    }
+    if (dump(fd, RTM_GETRULE, 22) != 3) {
+        return fail("ip rule did not list Linux's three rules");
+    }
+    if (dump(fd, RTM_GETQDISC, 23) < 1) {
+        return fail("tc qdisc listed nothing");
     }
     return 0;
 }
@@ -485,8 +566,8 @@ int main(void)
 {
     int fd;
 
-    if (route_socket(&fd) || requests(fd) || padded(fd) || truncation(fd) || interfaces() ||
-        uevents()) {
+    if (route_socket(&fd) || requests(fd) || lookups(fd) || padded(fd) || truncation(fd) ||
+        interfaces() || uevents()) {
         return 1;
     }
     close(fd);
