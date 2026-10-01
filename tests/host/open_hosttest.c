@@ -866,6 +866,13 @@ void wait_queue_init(wait_queue_t *wq)
 static const struct file_ops log_ops;
 static uint32_t log_len;
 
+/** The type fallocate asks of a device descriptor, which no row has. */
+uint32_t devfs_fd_mode(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** The device calls the dispatch of a transfer and a seek make: the one
  * device a row has is the log, and no row seeks another. */
 int devfs_fd_is_raw(struct fd_entry *e)

@@ -8402,6 +8402,27 @@ static int32_t fallocate_mode_ok(uint32_t mode)
     return 0;
 }
 
+/** The file type, as st_mode has it, of what `entry` is open on, for
+ * fallocate: a file of a mounted file system is regular, a pipe a FIFO, a
+ * /proc file regular, a device as devfs gives its mode, and anything else,
+ * a socket or a terminal among them, no file at all (0). */
+static uint32_t fallocate_type(fd_entry_t *entry)
+{
+    if (entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_PROC) {
+        return S_IFREG;
+    }
+    if (entry->type == FD_TYPE_DIR || entry->type == FD_TYPE_SYNTH_DIR) {
+        return S_IFDIR;
+    }
+    if (entry->type == FD_TYPE_PIPE) {
+        return S_IFIFO;
+    }
+    if (entry->type == FD_TYPE_DEVICE) {
+        return devfs_fd_mode(entry) & S_IFMT;
+    }
+    return 0;
+}
+
 /**
  * fallocate (324): EBX = fd, ECX = mode, EDX:ESI = the offset and EDI:EBP the
  * length, each low word first.
@@ -8422,7 +8443,6 @@ int32_t sys_fallocate(isr_params_t *params)
 {
     uint64_t offset = (uint64_t)params->edx | ((uint64_t)params->esi << 32);
     uint64_t len = (uint64_t)params->edi | ((uint64_t)params->ebp << 32);
-    struct linux_stat64 kst;
     fd_entry_t *entry;
     uint32_t type;
 
@@ -8442,10 +8462,7 @@ int32_t sys_fallocate(isr_params_t *params)
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
     }
-    if (fstat_fill(entry, &kst) != 0) {
-        return -ENODEV;
-    }
-    type = kst.st_mode & S_IFMT;
+    type = fallocate_type(entry);
     if (type == S_IFIFO) {
         return -ESPIPE;
     }

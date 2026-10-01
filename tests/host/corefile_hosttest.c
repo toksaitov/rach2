@@ -595,6 +595,13 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
     return -ENOENT;
 }
 
+/** The type fallocate asks of a device descriptor, which no row has. */
+uint32_t devfs_fd_mode(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     (void)e;
