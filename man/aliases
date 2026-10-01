@@ -262,6 +262,7 @@ pause 2 sigaction
 personality 2 prctl
 pgrep 1 busybox-procps
 pidof 1 busybox-procps
+ping_data 2 ping
 pipe2 2 pipe
 pipe_progress 1 busybox-debianutils
 pivot_root 1 busybox-util-linux

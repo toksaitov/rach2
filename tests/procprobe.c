@@ -971,7 +971,7 @@ static void pid_dir_rows(void)
           "and /proc/self lists them all in order, task last");
     {
         static char here[8192], there[8192];
-        char cwd[256], link[256];
+        char cwd[256] = {0}, link[256];
         int n = syscall3(SYS_READLINK, (int)(size_t)"/proc/self/cwd", (int)(size_t)link,
                          (int)sizeof(link) - 1);
 

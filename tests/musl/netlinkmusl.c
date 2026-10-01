@@ -381,19 +381,18 @@ static int requests(int fd)
 static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, int *oif)
 {
     struct {
-        unsigned char family, dst_len, src_len, tos, table, protocol, scope, type;
-        unsigned int flags;
+        unsigned char rtm[12]; /* struct rtmsg: family, dst_len, then zeros */
         struct rtattr a;
         struct in_addr dst;
     } req;
     char buf[4096] __attribute__((aligned(4)));
-    struct nlmsghdr *h = (struct nlmsghdr *)buf;
+    struct nlmsghdr *h;
     struct rtattr *a;
     int n, left;
 
     memset(&req, 0, sizeof req);
-    req.family = AF_INET;
-    req.dst_len = 32;
+    req.rtm[0] = AF_INET;
+    req.rtm[1] = 32;
     req.a.rta_len = sizeof(req.a) + sizeof(req.dst);
     req.a.rta_type = RTA_DST;
     req.dst = dst;
@@ -401,6 +400,7 @@ static int route_get(int fd, unsigned int seq, struct in_addr dst, int *type, in
         return -1;
     }
     n = (int)recv(fd, buf, sizeof buf, 0);
+    h = (struct nlmsghdr *)buf;
     if (n < (int)sizeof(*h) || !NLMSG_OK(h, n) || h->nlmsg_type != RTM_NEWROUTE) {
         return -1;
     }

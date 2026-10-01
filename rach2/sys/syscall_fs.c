@@ -1032,8 +1032,8 @@ static int cwd_removed(void)
     struct fs_struct *fs = current_proc->fs;
     struct vfs_stat st;
 
-    return fs && fs->cwd_mnt && fs->cwd_node &&
-           vfs_getattr(fs->cwd_mnt, fs->cwd_node, &st) == 0 && st.nlink == 0;
+    return fs && fs->cwd_mnt && fs->cwd_node && vfs_getattr(fs->cwd_mnt, fs->cwd_node, &st) == 0 &&
+           st.nlink == 0;
 }
 
 /**
@@ -10836,11 +10836,11 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             {"uptime", procfs_ino_uptime, DT_REG},   {"stat", procfs_ino_statsys, DT_REG},
             {"meminfo", procfs_ino_meminfo, DT_REG}, {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
             {"loadavg", procfs_ino_loadavg, DT_REG}, {"diskstats", procfs_ino_diskstats, DT_REG},
-            {"version", procfs_ino_version, DT_REG},
-            {"mounts", procfs_ino_mounts, DT_REG},   {"net", procfs_ino_netdir, DT_DIR},
-            {"sys", procfs_ino_sysdir, DT_DIR},      {"self", procfs_ino_dir, DT_LNK},
-            {"usb", procfs_ino_usb, DT_REG},         {"loop", procfs_ino_loop, DT_REG},
-            {"console", procfs_ino_console, DT_REG}, {"audio", procfs_ino_audio, DT_REG}};
+            {"version", procfs_ino_version, DT_REG}, {"mounts", procfs_ino_mounts, DT_REG},
+            {"net", procfs_ino_netdir, DT_DIR},      {"sys", procfs_ino_sysdir, DT_DIR},
+            {"self", procfs_ino_dir, DT_LNK},        {"usb", procfs_ino_usb, DT_REG},
+            {"loop", procfs_ino_loop, DT_REG},       {"console", procfs_ino_console, DT_REG},
+            {"audio", procfs_ino_audio, DT_REG}};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {

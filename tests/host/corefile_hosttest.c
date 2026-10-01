@@ -840,6 +840,22 @@ uint32_t procfs_ino_loadavg(void)
     return 0;
 }
 
+uint32_t procfs_ino_diskstats(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_version(void)
+{
+    return 0;
+}
+
+int synth_sys_writable(int entry)
+{
+    (void)entry;
+    return 0;
+}
+
 uint32_t procfs_ino_sys(int entry)
 {
     (void)entry;

@@ -738,10 +738,11 @@ static int32_t offset_ns(int64_t v, int nano)
  * clock's state. The modes are Linux's, a privileged caller's alone but for
  * reading what a single-shot adjustment has left. This clock has no slew:
  * an offset, at most the half second Linux takes, a single-shot adjustment
- * and ADJ_SETOFFSET step the real time at once, so none is left in progress, and the frequency, the
- * time constant and the errors are kept and reported but change nothing; a tick other than 10000
- * microseconds is -EINVAL, since the timer's period is fixed. Returns Linux's state, TIME_ERROR
- * while STA_UNSYNC is set and TIME_OK otherwise.
+ * and ADJ_SETOFFSET step the real time at once, so none is left in
+ * progress, and the frequency, the time constant and the errors are kept
+ * and reported but change nothing; a tick other than 10000 microseconds is
+ * -EINVAL, since the timer's period is fixed. Returns Linux's state,
+ * TIME_ERROR while STA_UNSYNC is set and TIME_OK otherwise.
  */
 static int32_t ktimex_adjust(struct ktimex *tx)
 {
@@ -813,9 +814,10 @@ static int32_t ktimex_adjust(struct ktimex *tx)
 
 /* The bytes of a timex, in the layout of i386's 128-byte struct timex, or of
  * the 208-byte struct __kernel_timex of the 64-bit calls, at `wide`: each
- * field's offset in each. */
+ * field's offset in each, in the order modes, offset, freq, maxerror,
+ * esterror, status, constant, precision, tolerance, the time's seconds and
+ * fraction, tick, shift, tai and a pad. */
 static const uint8_t timex_off[2][15] = {
-    /* modes offset freq maxerr esterr status const prec tol sec usec tick shift tai pad */
     {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 56, 80, 0},
     {0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 112, 160, 0}};
 

@@ -5071,9 +5071,9 @@ probe ptymusl
 file rach2/sys/tty/pty.c
 expect PTYMUSL FAIL (a session leader did not take the slave it opened
 old
-    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 &&
+    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
 new
-    if (0 && !(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 &&
+    if (0 && !(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
 end
 
 fault sysctl-forward-taken

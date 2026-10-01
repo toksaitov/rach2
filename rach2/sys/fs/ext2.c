@@ -41,7 +41,9 @@
 #define EXT2_NBLOCKS     15u
 #define EXT2_NAME_MAX    255u
 #define EXT2_FAST_LINK   60u /* the bytes of `i_block` a fast link lives in */
-#define EXT2_FL_USER_VISIBLE 0x0003DFFFu /* the `i_flags` lsattr(1) reads */
+
+/* The bits of `i_flags` that lsattr(1) reads. */
+#define EXT2_FL_USER_VISIBLE 0x0003DFFFu
 
 #define EXT2_COMPAT_RESIZE_INODE 0x0010u
 #define EXT2_COMPAT_DIR_INDEX    0x0020u
@@ -85,7 +87,7 @@ struct ext2_node {
     uint32_t atime, mtime, ctime;
     uint32_t flags;      /* i_flags, read and kept but not acted on */
     uint32_t generation; /* i_generation, read and kept */
-    int unlinked; /* no name left; the inode and its blocks go at the last put */
+    int unlinked;        /* no name left; the inode and its blocks go at the last put */
 };
 
 /* `write_bytes`'s ways to write: through to the device, and to the medium

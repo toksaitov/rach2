@@ -197,23 +197,23 @@
 #define SYS_FALLOCATE 324
 
 /* Advice about coming reads, which the page cache accepts and ignores. */
-#define SYS_READAHEAD     225
-#define SYS_FADVISE64     250
-#define SYS_FADVISE64_64  272
+#define SYS_READAHEAD    225
+#define SYS_FADVISE64    250
+#define SYS_FADVISE64_64 272
 
 /* Extended attributes, which no file system here stores. */
-#define SYS_SETXATTR      226
-#define SYS_LSETXATTR     227
-#define SYS_FSETXATTR     228
-#define SYS_GETXATTR      229
-#define SYS_LGETXATTR     230
-#define SYS_FGETXATTR     231
-#define SYS_LISTXATTR     232
-#define SYS_LLISTXATTR    233
-#define SYS_FLISTXATTR    234
-#define SYS_REMOVEXATTR   235
-#define SYS_LREMOVEXATTR  236
-#define SYS_FREMOVEXATTR  237
+#define SYS_SETXATTR     226
+#define SYS_LSETXATTR    227
+#define SYS_FSETXATTR    228
+#define SYS_GETXATTR     229
+#define SYS_LGETXATTR    230
+#define SYS_FGETXATTR    231
+#define SYS_LISTXATTR    232
+#define SYS_LLISTXATTR   233
+#define SYS_FLISTXATTR   234
+#define SYS_REMOVEXATTR  235
+#define SYS_LREMOVEXATTR 236
+#define SYS_FREMOVEXATTR 237
 
 /* Stop the machine, after the same flush sync(2) does. Root only. */
 #define SYS_REBOOT      88

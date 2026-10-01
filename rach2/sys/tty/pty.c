@@ -654,8 +654,8 @@ int pty_open_slave(int index, int flags)
         e->ofd->status_flags |= OFD_NONBLOCK;
     }
     p->slave_opens++;
-    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 &&
-        current_proc->sid == current_proc->tgid && !session_has_ctty((int)current_proc->sid)) {
+    if (!(flags & O_NOCTTY_FLAG) && p->slave.sid == 0 && current_proc->sid == current_proc->tgid &&
+        !session_has_ctty((int)current_proc->sid)) {
         tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
     return fd;
