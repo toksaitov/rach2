@@ -512,6 +512,36 @@ static void test_tx_mtu(void)
     loop_head = loop_tail = 0;
 }
 
+volatile uint32_t kernel_ticks;
+
+/** A datagram sent while its next hop is missing from the ARP cache waits,
+ * and leaves when the mapping is learned, once; one held past three seconds
+ * is dropped. */
+static void test_tx_hold(void)
+{
+    static const uint8_t mac[6] = {0x02, 0x22, 0x33, 0x44, 0x55, 0x66};
+    static uint8_t payload[40];
+
+    reset();
+    ip_hold_forget(0);
+    arp_known = 0;
+    tx_answer = NETDEV_TX_OK;
+    tx_frames = 0;
+    kernel_ticks = 1000;
+    CHECK("a send on an ARP miss is taken and sends no data frame",
+          ip_tx(0x0A000202u, IP_PROTO_ICMP, payload, 40, IP_TTL_DEFAULT) == 0 && tx_frames == 0);
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("the held datagram leaves, whole, when its hop's mapping is learned",
+          tx_frames == 1 && tx_len == 14 + 20 + 40 && tx_frame[0] == 0x02 && tx_frame[5] == 0x66 &&
+              tx_frame[14 + 9] == IP_PROTO_ICMP);
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("and only once", tx_frames == 1);
+    ip_tx(0x0A000202u, IP_PROTO_ICMP, payload, 40, IP_TTL_DEFAULT);
+    kernel_ticks += 301;
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("a datagram held for more than three seconds is dropped", tx_frames == 1);
+}
+
 /** Distinguish driver refusal from oversize rejection. */
 static void test_tx_errors(void)
 {
@@ -655,6 +685,7 @@ int main(void)
     test_tx_mtu();
     test_tx_link_down();
     test_tx_errors();
+    test_tx_hold();
     test_loop_full();
     test_broadcast_iface();
 

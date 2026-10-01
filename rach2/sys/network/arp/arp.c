@@ -15,6 +15,7 @@
 #include "../net.h"
 #include "../netconf.h"
 #include "../../lib/kstring.h"
+#include "../ip/ip.h"
 
 /* One cached IP-to-MAC mapping. `used` orders the entries by how recently the
    mapping was learned or looked up, which is what decides who leaves when the
@@ -113,6 +114,7 @@ void arp_flush(void)
         arp_cache[i].valid = 0;
         arp_cache[i].used = 0;
     }
+    ip_hold_forget(0);
 }
 
 /**
@@ -132,6 +134,7 @@ void arp_forget_dev(struct netdev *nd)
             arp_cache[i].used = 0;
         }
     }
+    ip_hold_forget(nd);
 }
 
 /**
@@ -146,6 +149,9 @@ void arp_forget_dev(struct netdev *nd)
  * without being learned or looked up is replaced. Dropping the new mapping
  * instead would leave a machine whose cache filled with strangers before it
  * learned its gateway unable to reach anything off its own subnet.
+ *
+ * The datagrams the stack held for the address while it was missing leave
+ * once the mapping is stored (`ip_hold_resolved`).
  */
 static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
 {
@@ -161,6 +167,7 @@ static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
         if (arp_cache[i].valid && arp_cache[i].nd == nd && arp_cache[i].ip == ip) {
             k_memcpy(arp_cache[i].mac, mac, 6);
             arp_cache[i].used = arp_stamp();
+            ip_hold_resolved(nd, ip, mac);
             return;
         }
         if (!arp_cache[i].valid && free_slot < 0) {
@@ -179,6 +186,7 @@ static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
     k_memcpy(arp_cache[free_slot].mac, mac, 6);
     arp_cache[free_slot].valid = 1;
     arp_cache[free_slot].used = arp_stamp();
+    ip_hold_resolved(nd, ip, mac);
 }
 
 /**

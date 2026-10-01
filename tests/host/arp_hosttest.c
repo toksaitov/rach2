@@ -94,6 +94,24 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst, uint16_t type, const uin
     return 0;
 }
 
+/* The stack's held datagrams, of which the cache tells the address it learns
+   and which a flush drops. */
+static uint32_t resolved_ip;
+static unsigned resolved_calls;
+
+void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
+{
+    (void)nd;
+    (void)mac;
+    resolved_ip = hop;
+    resolved_calls++;
+}
+
+void ip_hold_forget(struct netdev *nd)
+{
+    (void)nd;
+}
+
 /* The kernel's interrupt bracket. On the host there are no interrupts, so the
    flag value is a token; what the test needs is that every lock is released,
    which the balance counter checks. */
@@ -335,6 +353,7 @@ int main(void)
        machine on the desk. */
     arp_flush();
     frame_count = 0;
+    resolved_calls = 0;
     feed(ARP_OP_REQUEST, 0x00000000u, 0x01, 0xC0A80005u);
     CHECK(cached() == 0, "0.0.0.0 was cached, and nothing can be sent to it");
     CHECK(frame_count == 1, "a probe from 0.0.0.0 for our address went unanswered");
@@ -348,8 +367,11 @@ int main(void)
     CHECK(cached() == 0, "a loopback address was cached, which this stack is itself");
     feed(ARP_OP_REPLY, 0xC0A80000u, 0x07, 0xC0A80005u);
     CHECK(cached() == 0, "the subnet's own network address was cached");
+    CHECK(resolved_calls == 0, "an address that was refused released held datagrams");
     feed(ARP_OP_REPLY, 0xC0A80001u, 0x05, 0xC0A80005u);
     CHECK(cached() == 1, "an ordinary neighbour was not cached");
+    CHECK(resolved_calls == 1 && resolved_ip == 0xC0A80001u,
+          "the neighbour learned did not release the datagrams held for it");
     CHECK(holds(0xC0A80001u), "the neighbour that was cached cannot be looked up");
 
     /* A request for our address is answered, with our own hardware address in

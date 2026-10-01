@@ -168,6 +168,77 @@ static uint16_t ip_id_counter = 0;
 /* TX assembly buffer at file scope. */
 static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
 
+extern volatile uint32_t kernel_ticks;
+
+/* Datagrams that wait for their next hop's hardware address, as Linux's
+ * neighbour queue keeps them, so that the first datagram to a host not yet in
+ * the ARP cache leaves when the reply comes and is not lost: a ping's first
+ * request, a connect's SYN. A slot is free when its length is 0, or once its
+ * datagram has waited longer than any reply takes. */
+#define IP_HOLD_SLOTS 4
+#define IP_HOLD_TICKS 300
+static struct ip_hold {
+    struct netdev *out;
+    uint32_t hop;
+    uint32_t since;
+    uint16_t len;
+    uint8_t datagram[1500];
+} ip_hold[IP_HOLD_SLOTS];
+
+/**
+ * Keep the datagram of `len` bytes in `ip_tx_buf` for `hop` on `out`, in a
+ * free slot, or in place of the one held longest when none is free.
+ */
+static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
+{
+    struct ip_hold *h = &ip_hold[0];
+    int i;
+
+    for (i = 0; i < IP_HOLD_SLOTS; i++) {
+        struct ip_hold *c = &ip_hold[i];
+
+        if (c->len == 0 || (uint32_t)(kernel_ticks - c->since) > IP_HOLD_TICKS) {
+            h = c;
+            break;
+        }
+        if ((int32_t)(c->since - h->since) < 0) {
+            h = c;
+        }
+    }
+    h->out = out;
+    h->hop = hop;
+    h->since = kernel_ticks;
+    h->len = len;
+    k_memcpy(h->datagram, ip_tx_buf, len);
+}
+
+void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
+{
+    int i;
+
+    for (i = 0; i < IP_HOLD_SLOTS; i++) {
+        struct ip_hold *h = &ip_hold[i];
+
+        if (h->len != 0 && h->out == nd && h->hop == hop) {
+            if ((uint32_t)(kernel_ticks - h->since) <= IP_HOLD_TICKS) {
+                ethernet_tx(nd, mac, ETH_TYPE_IP, h->datagram, h->len);
+            }
+            h->len = 0;
+        }
+    }
+}
+
+void ip_hold_forget(struct netdev *nd)
+{
+    int i;
+
+    for (i = 0; i < IP_HOLD_SLOTS; i++) {
+        if (!nd || ip_hold[i].out == nd) {
+            ip_hold[i].len = 0;
+        }
+    }
+}
+
 /* The loopback ring: datagrams addressed to ourselves, copied whole and
  * delivered by `ip_loop_drain_from`, from the timer tick, the idle wait, or a
  * system call's exit. head is the next slot to fill, tail the next to
@@ -248,10 +319,9 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
  * answered by all of them, at whatever address the sender claimed. Whether a
  * datagram may be broadcast at all is the socket's permission, checked before
  * it gets here. Everything else resolves the next hop's MAC by ARP. On an ARP
- * miss it sends a request, drops this datagram and returns 0, since a lost
- * datagram is not an error a sender is told about; the next datagram to that
- * hop leaves resolved, and TCP's retransmission sends a dropped segment
- * again.
+ * miss it sends a request, holds this datagram until the reply comes, for at
+ * most three seconds (`ip_hold_put`), and returns 0, since a datagram that is
+ * lost when no reply comes is not an error a sender is told about.
  *
  * The 1500-byte MTU includes the 20-byte IPv4 header. Payloads above 1480
  * bytes return `-EMSGSIZE` before routing or queueing. Transmit sets DF and
@@ -335,6 +405,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     }
 
     if (!arp_lookup(out, route_ip, dst_mac)) {
+        ip_hold_put(out, route_ip, total_len);
         arp_request(out, route_ip);
         return 0;
     }

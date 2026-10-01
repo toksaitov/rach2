@@ -41,6 +41,17 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
  */
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
+/**
+ * Send the datagrams held for the next hop `hop` on `nd`, whose hardware
+ * address `mac` ARP has just learned. Call with interrupts off.
+ */
+struct netdev;
+void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac);
+
+/** Drop the held datagrams that leave by `nd`, or all of them for NULL, when
+ * an address changes and their source with it. */
+void ip_hold_forget(struct netdev *nd);
+
 /** Deliver queued loopback datagrams; called from the timer IRQ each tick. */
 void ip_loop_drain(void);
 
