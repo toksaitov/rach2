@@ -20,7 +20,8 @@
  * file among them, after which glibc's writes the range itself, EBADF for
  * one open only for reading, EINVAL for a length of 0, ESPIPE for a pipe,
  * and EOPNOTSUPP for a mode Linux does not take before the check that the
- * descriptor is open for writing.
+ * descriptor is open for writing. adjtimex reads an unsynchronized clock
+ * with its 10 ms tick, and clock_adjtime of CLOCK_MONOTONIC is EOPNOTSUPP.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -33,6 +34,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/timex.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -249,6 +251,24 @@ static int copies(void)
     return 0;
 }
 
+/* adjtimex reads the clock's state as Linux's starts, unsynchronized, and
+   clock_adjtime adjusts CLOCK_REALTIME alone. */
+static int adjusts(void)
+{
+    struct timex tx;
+
+    memset(&tx, 0, sizeof tx);
+    if (adjtimex(&tx) != TIME_ERROR || !(tx.status & STA_UNSYNC) || tx.tick != 10000 ||
+        tx.tolerance != (500L << 16)) {
+        return fail("adjtimex did not read an unsynchronized clock with its 10 ms tick");
+    }
+    memset(&tx, 0, sizeof tx);
+    if (clock_adjtime(CLOCK_MONOTONIC, &tx) != -1 || errno != EOPNOTSUPP) {
+        return fail("clock_adjtime of CLOCK_MONOTONIC was not EOPNOTSUPP");
+    }
+    return 0;
+}
+
 static int reserves(void)
 {
     int p[2];
@@ -289,7 +309,7 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves()) {
+        reserves() || adjusts()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

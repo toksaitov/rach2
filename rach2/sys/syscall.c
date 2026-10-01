@@ -661,6 +661,269 @@ static int32_t sys_clock_settime64(isr_params_t *params)
     return realtime_set(ts.tv_sec, ts.tv_nsec);
 }
 
+/* adjtimex's modes and states, Linux's (uapi/linux/timex.h). */
+#define ADJ_OFFSET            0x0001u
+#define ADJ_FREQUENCY         0x0002u
+#define ADJ_MAXERROR          0x0004u
+#define ADJ_ESTERROR          0x0008u
+#define ADJ_STATUS            0x0010u
+#define ADJ_TIMECONST         0x0020u
+#define ADJ_TAI               0x0080u
+#define ADJ_SETOFFSET         0x0100u
+#define ADJ_MICRO             0x1000u
+#define ADJ_NANO              0x2000u
+#define ADJ_TICK              0x4000u
+#define ADJ_OFFSET_SINGLESHOT 0x8001u
+#define ADJ_OFFSET_SS_READ    0xa001u
+#define STA_UNSYNC            0x0040
+#define STA_NANO              0x2000
+#define STA_RONLY             0xff00 /* the PPS, error, nano, mode and clock bits */
+#define TIME_OK               0
+#define TIME_ERROR            5
+/* The tick, 10 ms at 100 Hz, in microseconds, and Linux's tolerance, 500
+ * ppm in its scaled units. */
+#define NTP_TICK_US           10000
+#define NTP_TOLERANCE         (500L << 16)
+#define NTP_FREQ_MAX          (500LL << 16)
+
+/* The clock's state as adjtimex sets and reports it: Linux's at boot, the
+ * clock unsynchronized and its errors at their limit. */
+static struct {
+    int64_t freq, maxerror, esterror, constant;
+    int32_t status, tai;
+} ntp = {0, 16000000, 16000000, 2, STA_UNSYNC, 0};
+
+/* A timex in the kernel's own terms, which the three calls convert their
+ * layouts to and from. */
+struct ktimex {
+    uint32_t modes;
+    int32_t status, shift, tai;
+    int64_t offset, freq, maxerror, esterror, constant, precision, tolerance;
+    int64_t sec, usec, tick;
+};
+
+/** Step the real time by `sec` seconds and `nsec` nanoseconds, each
+ * earlier when negative, `nsec` less than a second either way. */
+static void realtime_step(int64_t sec, int32_t nsec)
+{
+    int64_t now, now_ns;
+
+    rtc_realtime(&now, &now_ns);
+    now += sec;
+    now_ns += nsec;
+    if (now_ns < 0) {
+        now_ns += 1000000000;
+        now--;
+    } else if (now_ns >= 1000000000) {
+        now_ns -= 1000000000;
+        now++;
+    }
+    if (now >= 0) {
+        rtc_set_realtime(now, (int32_t)now_ns);
+    }
+}
+
+/* An offset of `v` microseconds, or nanoseconds with `nano`, as at most the
+ * half second Linux takes one to be (MAXPHASE), in nanoseconds. */
+static int32_t offset_ns(int64_t v, int nano)
+{
+    int64_t limit = nano ? 500000000 : 500000;
+
+    v = v > limit ? limit : v < -limit ? -limit : v;
+    return (int32_t)(nano ? v : v * 1000);
+}
+
+/**
+ * adjtimex's work on `tx`, read and then filled in: the modes, then the
+ * clock's state. The modes are Linux's, a privileged caller's alone but for
+ * reading what a single-shot adjustment has left. This clock has no slew:
+ * an offset, at most the half second Linux takes, a single-shot adjustment
+ * and ADJ_SETOFFSET step the real time at once, so none is left in progress, and the frequency, the
+ * time constant and the errors are kept and reported but change nothing; a tick other than 10000
+ * microseconds is -EINVAL, since the timer's period is fixed. Returns Linux's state, TIME_ERROR
+ * while STA_UNSYNC is set and TIME_OK otherwise.
+ */
+static int32_t ktimex_adjust(struct ktimex *tx)
+{
+    uint32_t m = tx->modes;
+    int64_t sec, nsec;
+
+    if (m != 0 && m != ADJ_OFFSET_SS_READ && !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (m == ADJ_OFFSET_SINGLESHOT) {
+        realtime_step(0, offset_ns(tx->offset, 0));
+    } else if (m != ADJ_OFFSET_SS_READ) {
+        if ((m & ADJ_TICK) && tx->tick != NTP_TICK_US) {
+            return -EINVAL;
+        }
+        if ((m & ADJ_SETOFFSET) &&
+            (tx->usec < 0 || tx->usec >= ((m & ADJ_NANO) ? 1000000000 : 1000000))) {
+            return -EINVAL;
+        }
+        if (m & ADJ_STATUS) {
+            ntp.status = (ntp.status & STA_RONLY) | (tx->status & ~STA_RONLY);
+        }
+        if (m & ADJ_NANO) {
+            ntp.status |= STA_NANO;
+        }
+        if (m & ADJ_MICRO) {
+            ntp.status &= ~STA_NANO;
+        }
+        if (m & ADJ_FREQUENCY) {
+            ntp.freq = tx->freq > NTP_FREQ_MAX    ? NTP_FREQ_MAX
+                       : tx->freq < -NTP_FREQ_MAX ? -NTP_FREQ_MAX
+                                                  : tx->freq;
+        }
+        if (m & ADJ_MAXERROR) {
+            ntp.maxerror = tx->maxerror;
+        }
+        if (m & ADJ_ESTERROR) {
+            ntp.esterror = tx->esterror;
+        }
+        if (m & ADJ_TIMECONST) {
+            ntp.constant = tx->constant;
+        }
+        if (m & ADJ_TAI) {
+            ntp.tai = (int32_t)tx->constant;
+        }
+        if (m & ADJ_SETOFFSET) {
+            realtime_step(tx->sec, (int32_t)(tx->usec * ((m & ADJ_NANO) ? 1 : 1000)));
+        }
+        if (m & ADJ_OFFSET) {
+            realtime_step(0, offset_ns(tx->offset, (ntp.status & STA_NANO) != 0));
+        }
+    }
+    rtc_realtime(&sec, &nsec);
+    tx->offset = 0;
+    tx->freq = ntp.freq;
+    tx->maxerror = ntp.maxerror;
+    tx->esterror = ntp.esterror;
+    tx->status = ntp.status;
+    tx->constant = ntp.constant;
+    tx->precision = 1;
+    tx->tolerance = NTP_TOLERANCE;
+    tx->sec = sec;
+    tx->usec = (ntp.status & STA_NANO) ? nsec : (int64_t)((int32_t)nsec / 1000);
+    tx->tick = NTP_TICK_US;
+    tx->shift = 0;
+    tx->tai = ntp.tai;
+    return (ntp.status & STA_UNSYNC) ? TIME_ERROR : TIME_OK;
+}
+
+/* The bytes of a timex, in the layout of i386's 128-byte struct timex, or of
+ * the 208-byte struct __kernel_timex of the 64-bit calls, at `wide`: each
+ * field's offset in each. */
+static const uint8_t timex_off[2][15] = {
+    /* modes offset freq maxerr esterr status const prec tol sec usec tick shift tai pad */
+    {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 56, 80, 0},
+    {0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 112, 160, 0}};
+
+static int64_t timex_get(const uint8_t *b, int wide, int field)
+{
+    const uint8_t *p = b + timex_off[wide][field];
+    uint32_t lo =
+        (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    uint32_t hi;
+
+    if (!wide || field == 0 || field == 5 || field == 12 || field == 13) {
+        return (int64_t)(int32_t)lo;
+    }
+    hi = (uint32_t)p[4] | ((uint32_t)p[5] << 8) | ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
+    return (int64_t)(((uint64_t)hi << 32) | lo);
+}
+
+static void timex_put(uint8_t *b, int wide, int field, int64_t v)
+{
+    uint8_t *p = b + timex_off[wide][field];
+    int n = (!wide || field == 0 || field == 5 || field == 12 || field == 13) ? 4 : 8;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        p[i] = (uint8_t)((uint64_t)v >> (8 * i));
+    }
+}
+
+/**
+ * The common body of adjtimex, clock_adjtime and clock_adjtime64: the
+ * caller's timex at `uaddr`, in the 64-bit layout with `wide`, read,
+ * adjusted and written back.
+ */
+static int32_t timex_call(uint32_t uaddr, int wide)
+{
+    uint8_t b[208];
+    uint32_t size = wide ? 208u : 128u;
+    struct ktimex tx;
+    int32_t rc;
+
+    if (copy_from_user(b, (const void __user *)uaddr, size) != 0) {
+        return -EFAULT;
+    }
+    tx.modes = (uint32_t)timex_get(b, wide, 0);
+    tx.offset = timex_get(b, wide, 1);
+    tx.freq = timex_get(b, wide, 2);
+    tx.maxerror = timex_get(b, wide, 3);
+    tx.esterror = timex_get(b, wide, 4);
+    tx.status = (int32_t)timex_get(b, wide, 5);
+    tx.constant = timex_get(b, wide, 6);
+    tx.sec = timex_get(b, wide, 9);
+    tx.usec = timex_get(b, wide, 10);
+    tx.tick = timex_get(b, wide, 11);
+    rc = ktimex_adjust(&tx);
+    if (rc < 0) {
+        return rc;
+    }
+    timex_put(b, wide, 1, tx.offset);
+    timex_put(b, wide, 2, tx.freq);
+    timex_put(b, wide, 3, tx.maxerror);
+    timex_put(b, wide, 4, tx.esterror);
+    timex_put(b, wide, 5, tx.status);
+    timex_put(b, wide, 6, tx.constant);
+    timex_put(b, wide, 7, tx.precision);
+    timex_put(b, wide, 8, tx.tolerance);
+    timex_put(b, wide, 9, tx.sec);
+    timex_put(b, wide, 10, tx.usec);
+    timex_put(b, wide, 11, tx.tick);
+    timex_put(b, wide, 12, tx.shift);
+    timex_put(b, wide, 13, tx.tai);
+    if (copy_to_user((void __user *)uaddr, b, size) != 0) {
+        return -EFAULT;
+    }
+    return rc;
+}
+
+/** adjtimex (124): EBX = the 128-byte struct timex. */
+static int32_t sys_adjtimex(isr_params_t *params)
+{
+    return timex_call(params->ebx, 0);
+}
+
+/**
+ * clock_adjtime (343) and clock_adjtime64 (405): EBX = the clock, ECX = the
+ * timex, in the 64-bit layout for the second. CLOCK_REALTIME is the one
+ * clock that adjusts; another of the clocks is -EOPNOTSUPP and anything
+ * else -EINVAL, as Linux answers.
+ */
+static int32_t clock_adjtime_common(isr_params_t *params, int wide)
+{
+    int32_t id = (int32_t)params->ebx;
+
+    if (id != 0) {
+        return id > 0 && id <= 11 ? -EOPNOTSUPP : -EINVAL;
+    }
+    return timex_call(params->ecx, wide);
+}
+
+static int32_t sys_clock_adjtime(isr_params_t *params)
+{
+    return clock_adjtime_common(params, 0);
+}
+
+static int32_t sys_clock_adjtime64(isr_params_t *params)
+{
+    return clock_adjtime_common(params, 1);
+}
+
 /**
  * settimeofday (79): EBX = timeval, ECX = timezone. The time zone is not
  * kept, so a call with only one is done and changes nothing; a call with
@@ -2347,6 +2610,9 @@ void init_syscall(void)
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
     _syscall_table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
     _syscall_table[SYS_CLOCK_SETTIME] = sys_clock_settime;
+    _syscall_table[SYS_ADJTIMEX] = sys_adjtimex;
+    _syscall_table[SYS_CLOCK_ADJTIME] = sys_clock_adjtime;
+    _syscall_table[SYS_CLOCK_ADJTIME64] = sys_clock_adjtime64;
     _syscall_table[SYS_CLOCK_GETRES] = sys_clock_getres;
     _syscall_table[SYS_CLOCK_NANOSLEEP] = sys_clock_nanosleep;
     _syscall_table[SYS_NANOSLEEP] = sys_nanosleep;

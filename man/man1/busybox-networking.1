@@ -353,8 +353,13 @@ using
 .Pa /etc/resolv.conf .
 .It Nm ntpd
 Run an NTP client or server.
-Rach2 has neither the clock-adjusting nor the clock-setting calls the
-client uses, so an update of the clock fails;
+The client sets the clock through
+.Xr clock_settime 2
+and
+.Xr adjtimex 2 ,
+which steps it where Linux would slew it;
+.Fl q
+sets it once and exits, and
 .Fl w
 queries the peers without setting the clock.
 .It Nm pscan

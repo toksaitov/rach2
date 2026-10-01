@@ -5039,3 +5039,15 @@ old
 new
             (void)rule_dump;
 end
+
+# adjtimex, which reads the clock's NTP state.
+
+fault adjtimex-missing
+probe callsmusl
+file rach2/sys/syscall.c
+expect CALLSMUSL FAIL (adjtimex did not read an unsynchronized clock
+old
+    return (ntp.status & STA_UNSYNC) ? TIME_ERROR : TIME_OK;
+new
+    return TIME_OK;
+end

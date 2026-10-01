@@ -168,6 +168,9 @@
  * above. */
 #define SYS_CLOCK_GETTIME64     403
 #define SYS_CLOCK_SETTIME64     404
+#define SYS_CLOCK_ADJTIME64     405
+#define SYS_CLOCK_ADJTIME       343
+#define SYS_ADJTIMEX            124
 #define SYS_CLOCK_GETRES_TIME64 406
 
 /* Auth/identity, resource, and tail syscalls a login server touches. */

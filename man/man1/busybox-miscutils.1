@@ -135,10 +135,9 @@
 These are the miscutils applets of BusyBox 1.36.1 as built for Rach2.
 .Bl -tag -width readahead
 .It Nm adjtimex
-Read or set kernel time variables.
-Rach2 does not implement the
-.Fn adjtimex
-system call, so the applet fails.
+Read or set kernel time variables, through
+.Xr adjtimex 2 ;
+an offset steps the clock, which has no slew.
 .It Nm ascii
 Print an ASCII table.
 .It Nm bc

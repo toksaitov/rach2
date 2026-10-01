@@ -38,6 +38,8 @@ chroot 1 busybox-coreutils
 chrt 1 busybox-util-linux
 cksum 1 busybox-coreutils
 clear 1 busybox-console-tools
+clock_adjtime 2 adjtimex
+clock_adjtime64 2 adjtimex
 clock_getres 2 gettimeofday
 clock_getres_time64 2 gettimeofday
 clock_gettime 2 gettimeofday

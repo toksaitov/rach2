@@ -1,0 +1,112 @@
+.Dd October 2, 2026
+.Dt ADJTIMEX 2
+.Os
+.Sh NAME
+.Nm adjtimex ,
+.Nm clock_adjtime
+.Nd read or adjust the real-time clock's NTP state
+.Sh SYNOPSIS
+.In sys/timex.h
+.Ft int
+.Fn adjtimex "struct timex *buf"
+.Ft int
+.Fn clock_adjtime "clockid_t clock" "struct timex *buf"
+.Sh DESCRIPTION
+.Fn adjtimex
+reads the state the real-time clock keeps for NTP into
+.Fa buf ,
+after making the changes the bits of
+.Fa buf->modes
+ask for, and returns the clock's state:
+.Dv TIME_ERROR
+while
+.Dv STA_UNSYNC
+is set, as it is from boot until a program clears it, and
+.Dv TIME_OK
+otherwise.
+.Fn clock_adjtime
+does the same for
+.Fa clock ,
+which must be
+.Dv CLOCK_REALTIME .
+.Pp
+The modes are Linux's, and any but
+.Dv ADJ_OFFSET_SS_READ
+needs a privileged caller.
+This clock has no slew: an offset of
+.Dv ADJ_OFFSET ,
+at most the half second Linux takes one to be, a single-shot adjustment of
+.Dv ADJ_OFFSET_SINGLESHOT ,
+and the offset of
+.Dv ADJ_SETOFFSET
+step the real time at once, so none is left in progress and
+.Fa offset
+reads 0.
+.Dv ADJ_FREQUENCY ,
+.Dv ADJ_MAXERROR ,
+.Dv ADJ_ESTERROR ,
+.Dv ADJ_TIMECONST ,
+.Dv ADJ_TAI
+and
+.Dv ADJ_STATUS
+are kept and read back but change nothing the clock does;
+.Dv ADJ_NANO
+and
+.Dv ADJ_MICRO
+choose the unit of
+.Fa offset
+and of
+.Fa time.tv_usec .
+The tick is the timer's 10000 microseconds, the precision 1 microsecond
+and the tolerance Linux's 500 ppm.
+.Pp
+The i386 system call numbers are 124 for
+.Fn adjtimex
+and 343 for
+.Fn clock_adjtime ,
+which take the 128-byte
+.Vt struct timex
+of 32-bit fields, and 405 for
+.Fn clock_adjtime64 ,
+which takes the 208-byte
+.Vt struct __kernel_timex
+of 64-bit fields that musl and glibc use.
+.Sh RETURN VALUES
+The clock's state, or -1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+BusyBox's
+.Xr adjtimex 1
+prints the state, and its
+.Xr ntpd 8
+sets the clock through these calls and
+.Xr clock_settime 2 .
+The default suite's
+.Pa tests/musl/callsmusl.c
+reads the state and requires
+.Er EOPNOTSUPP
+of
+.Dv CLOCK_MONOTONIC .
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EFAULT
+.Fa buf
+is not readable and writable.
+.It Bq Er EINVAL
+.Dv ADJ_TICK
+asks for a tick other than 10000 microseconds, the fraction of
+.Dv ADJ_SETOFFSET
+is not under a second, or
+.Fa clock
+is not a clock.
+.It Bq Er EOPNOTSUPP
+.Fa clock
+is a clock other than
+.Dv CLOCK_REALTIME .
+.It Bq Er EPERM
+A mode other than reading was asked for by a caller without privilege.
+.El
+.Sh SEE ALSO
+.Xr clock_settime 2 ,
+.Xr gettimeofday 2
