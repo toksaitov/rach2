@@ -4513,9 +4513,9 @@ probe netlinkmusl
 file rach2/sys/network/socket/netlink.c
 expect NETLINKMUSL FAIL (a socket of NETLINK_KOBJECT_UEVENT
 old
-    if (protocol != NETLINK_ROUTE && protocol != NETLINK_KOBJECT_UEVENT) {
+        protocol != NETLINK_KOBJECT_UEVENT) {
 new
-    if (protocol != NETLINK_ROUTE) {
+        protocol != 0) {
 end
 
 # inotify.
