@@ -145,7 +145,7 @@ rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over th
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/procfs.c:procfs_open complexity 71 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 193 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 195 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
@@ -418,11 +418,11 @@ tests/host/n_tty_hosttest.c:main lines 369 a test's rows, each a case, read as o
 tests/host/netconf_hosttest.c:main complexity 57 a test's rows, each a case, read as one table
 tests/host/netconf_hosttest.c:main lines 346 a test's rows, each a case, read as one table
 
-tests/host/netconsole_hosttest.c:main lines 133 a test's rows, each a case, read as one table
+tests/host/netconsole_hosttest.c:main lines 135 a test's rows, each a case, read as one table
 
 tests/host/netdev_hosttest.c:main lines 149 a test's rows, each a case, read as one table
 
-tests/host/packet_hosttest.c:main lines 141 a test's rows, each a case, read as one table
+tests/host/packet_hosttest.c:main lines 142 a test's rows, each a case, read as one table
 
 tests/host/pagecache_hosttest.c:main lines 121 a test's rows, each a case, read as one table
 
@@ -456,8 +456,8 @@ tests/host/readfile_hosttest.c:put_node params 8 a test's rows, each a case, rea
 tests/host/rtc_hosttest.c:bcd_sample params 7 a test's rows, each a case, read as one table
 tests/host/rtc_hosttest.c:main lines 243 a test's rows, each a case, read as one table
 
-tests/host/rtl8168_hosttest.c:main complexity 97 a test's rows, each a case, read as one table
-tests/host/rtl8168_hosttest.c:main lines 777 a test's rows, each a case, read as one table
+tests/host/rtl8168_hosttest.c:main complexity 98 a test's rows, each a case, read as one table
+tests/host/rtl8168_hosttest.c:main lines 781 a test's rows, each a case, read as one table
 
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
@@ -654,7 +654,7 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
 tests/procprobe.c:probe_main complexity 68 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 504 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main lines 506 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them

@@ -247,32 +247,11 @@ static unsigned frame_be16(unsigned f, unsigned off)
     return ((unsigned)frame_data[f][off] << 8) | (unsigned)frame_data[f][off + 1];
 }
 
-int main(void)
+/** Check that the lines wait in the ring while the card has no link: before
+ * it first comes up, when the ring fills meanwhile, and when it goes down in
+ * the middle of a drain. */
+static void link_rows(void)
 {
-    /* ---- nothing leaves before the device is up ---- */
-    nc_reset();
-    put_string("boot line one\n");
-    put_string("boot line two\n");
-    CHECK(frame_count == 0, "nothing is transmitted before the console is enabled");
-    CHECK(nc_pending() == 28, "the characters are held instead");
-
-    /* ---- enabling sends what was held ---- */
-    netconsole_enable();
-    CHECK(frame_count == 1, "enabling drains the buffer in one frame");
-    CHECK(frame_type[0] == NETCONSOLE_ETHERTYPE, "the frame has the netconsole ethertype");
-    CHECK(frame_dst[0][0] == 0xFF && frame_dst[0][5] == 0xFF, "the frame is broadcast");
-    CHECK(frame_len[0] == NETCONSOLE_HDR_LEN + 28, "the frame is header plus the held bytes");
-    CHECK(frame_data[0][0] == 'R' && frame_data[0][1] == 'C' && frame_data[0][2] == 'H' &&
-              frame_data[0][3] == '2',
-          "the frame has the magic");
-    CHECK(frame_be32(0, 4) == krandom_value, "the boot id is the drawn value");
-    CHECK(frame_be32(0, 8) == 0, "the first frame is sequence zero");
-    CHECK(frame_be16(0, 12) == 28, "the length field is the payload length");
-    CHECK(frame_sum(0) == 0, "the frame sums to zero, as its receiver checks");
-    CHECK(frame_data[0][NETCONSOLE_HDR_LEN] == 'b', "the payload starts at the first held byte");
-    CHECK(nc_pending() == 0, "the buffer is empty afterwards");
-    CHECK(lock_depth == 0 && !lock_ever_negative, "every lock taken was released");
-
     /* ---- a link that is not up yet holds the lines until it is ---- */
     nc_reset();
     link_down = 1;
@@ -328,6 +307,35 @@ int main(void)
                   frame_data[3][NETCONSOLE_HDR_LEN] == '\n',
               "and goes out, in order, once the link is back");
     }
+}
+
+int main(void)
+{
+    /* ---- nothing leaves before the device is up ---- */
+    nc_reset();
+    put_string("boot line one\n");
+    put_string("boot line two\n");
+    CHECK(frame_count == 0, "nothing is transmitted before the console is enabled");
+    CHECK(nc_pending() == 28, "the characters are held instead");
+
+    /* ---- enabling sends what was held ---- */
+    netconsole_enable();
+    CHECK(frame_count == 1, "enabling drains the buffer in one frame");
+    CHECK(frame_type[0] == NETCONSOLE_ETHERTYPE, "the frame has the netconsole ethertype");
+    CHECK(frame_dst[0][0] == 0xFF && frame_dst[0][5] == 0xFF, "the frame is broadcast");
+    CHECK(frame_len[0] == NETCONSOLE_HDR_LEN + 28, "the frame is header plus the held bytes");
+    CHECK(frame_data[0][0] == 'R' && frame_data[0][1] == 'C' && frame_data[0][2] == 'H' &&
+              frame_data[0][3] == '2',
+          "the frame has the magic");
+    CHECK(frame_be32(0, 4) == krandom_value, "the boot id is the drawn value");
+    CHECK(frame_be32(0, 8) == 0, "the first frame is sequence zero");
+    CHECK(frame_be16(0, 12) == 28, "the length field is the payload length");
+    CHECK(frame_sum(0) == 0, "the frame sums to zero, as its receiver checks");
+    CHECK(frame_data[0][NETCONSOLE_HDR_LEN] == 'b', "the payload starts at the first held byte");
+    CHECK(nc_pending() == 0, "the buffer is empty afterwards");
+    CHECK(lock_depth == 0 && !lock_ever_negative, "every lock taken was released");
+
+    link_rows();
 
     /* ---- a zero draw never becomes a zero boot id ---- */
     nc_reset();
