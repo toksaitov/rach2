@@ -2471,8 +2471,8 @@ static void default_mount_row(void)
     f = make_file(mnt.root, "plain", &rc);
     g = f ? make_file(mnt.root, "gone", &rc) : 0;
     check(f && g && write_at(f, block, sizeof(block), 0) == 0 &&
-              OPS->unlink(&mnt, mnt.root, "gone") == 0,
-          "two creates, a write of three blocks and a remove");
+              write_at(g, block, sizeof(block), 0) == 0 && OPS->unlink(&mnt, mnt.root, "gone") == 0,
+          "two creates, writes of three blocks to each and the remove of one");
     if (g) {
         OPS->put(&mnt, g); /* the removed file's inode and blocks are freed here */
     }
