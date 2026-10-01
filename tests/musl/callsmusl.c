@@ -16,6 +16,9 @@
  * and refuses a flag it does not take and a backward range. splice from a
  * pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep takes
  * for a descriptor it must read instead, and EBADF for a closed one.
+ * posix_fallocate answers EOPNOTSUPP for a file open for writing, after
+ * which glibc's writes the range itself, EBADF for one open only for
+ * reading, EINVAL for a length of 0 and ESPIPE for a pipe.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -244,9 +247,39 @@ static int copies(void)
     return 0;
 }
 
+static int reserves(void)
+{
+    int p[2];
+    int fd = open("/tmp/callsmusl.fallocate", O_CREAT | O_RDWR | O_TRUNC, 0600);
+    int ro = open("/tmp/callsmusl.fallocate", O_RDONLY);
+
+    if (fd < 0 || ro < 0 || pipe(p) != 0) {
+        return fail("a file in /tmp, open twice, and a pipe");
+    }
+    if (posix_fallocate(fd, 0, 4096) != EOPNOTSUPP) {
+        return fail("posix_fallocate of a file open for writing was not EOPNOTSUPP");
+    }
+    if (posix_fallocate(ro, 0, 4096) != EBADF) {
+        return fail("posix_fallocate of a file open for reading was not EBADF");
+    }
+    if (posix_fallocate(fd, 0, 0) != EINVAL) {
+        return fail("posix_fallocate of no bytes was not EINVAL");
+    }
+    if (posix_fallocate(p[1], 0, 4096) != ESPIPE) {
+        return fail("posix_fallocate of a pipe was not ESPIPE");
+    }
+    unlink("/tmp/callsmusl.fallocate");
+    close(fd);
+    close(ro);
+    close(p[0]);
+    close(p[1]);
+    return 0;
+}
+
 int main(void)
 {
-    if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies()) {
+    if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
+        reserves()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

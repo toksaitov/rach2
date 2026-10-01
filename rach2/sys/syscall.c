@@ -2409,6 +2409,7 @@ void init_syscall(void)
     _syscall_table[SYS_DUP3] = sys_dup3;
     _syscall_table[SYS_SYNC] = sys_sync;
     _syscall_table[SYS_SYNCFS] = sys_syncfs;
+    _syscall_table[SYS_FALLOCATE] = sys_fallocate;
     _syscall_table[SYS_REBOOT] = sys_reboot;
     _syscall_table[SYS_FSYNC] = sys_fsync;
     _syscall_table[SYS_TRUNCATE] = sys_truncate;

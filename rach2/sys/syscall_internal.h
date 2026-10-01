@@ -192,6 +192,8 @@ int32_t sys_tee(isr_params_t *params);
 
 int32_t sys_sendfile(isr_params_t *params);
 
+int32_t sys_fallocate(isr_params_t *params);
+
 int32_t sys_close_range(isr_params_t *params);
 
 int32_t sys_stat(isr_params_t *params);

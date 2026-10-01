@@ -29,7 +29,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 216 calls.
+The kernel registers the following 247 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
@@ -219,6 +219,7 @@ The kernel registers the following 216 calls.
 .It 320 Ta Xr utimensat 2
 .It 322 Ta Xr timerfd_create 2
 .It 323 Ta Xr eventfd 2
+.It 324 Ta Xr fallocate 2
 .It 325 Ta Xr timerfd_settime 2
 .It 326 Ta Xr timerfd_gettime 2
 .It 328 Ta Xr eventfd2 2

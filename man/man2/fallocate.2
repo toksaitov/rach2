@@ -1,0 +1,80 @@
+.Dd October 1, 2026
+.Dt FALLOCATE 2
+.Os
+.Sh NAME
+.Nm fallocate
+.Nd reserve a file's space, which no file system here does
+.Sh SYNOPSIS
+.In fcntl.h
+.Ft int
+.Fn fallocate "int fd" "int mode" "off_t offset" "off_t len"
+.Sh DESCRIPTION
+On Linux
+.Fn fallocate
+reserves the blocks of a range of a file ahead of the writes to it.
+No file system of this kernel reserves blocks ahead of a write, as Linux's
+ext2 does not, so a call on a regular file open for writing fails with
+.Er EOPNOTSUPP ,
+Linux's answer for a file system without the operation, whatever
+.Fa mode
+is.
+glibc's
+.Fn posix_fallocate
+then writes the range itself, as it does on Linux's ext2; it does not
+after
+.Er ENOSYS ,
+the error the call gave before it was registered.
+musl's
+.Fn posix_fallocate
+returns the error.
+.Pp
+The i386 system call number is 324, with the descriptor in EBX, the mode in
+ECX, the offset in EDX and ESI and the length in EDI and EBP, each low word
+first.
+.Sh RETURN VALUES
+The call returns -1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/callsmusl.c
+requires
+.Er EOPNOTSUPP
+of a file open for writing,
+.Er EBADF
+of one open only for reading,
+.Er EINVAL
+of a length of 0, and
+.Er ESPIPE
+of a pipe.
+.Sh ERRORS
+The checks are made in Linux's order:
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EBADF
+.Fa fd
+is not open, or was opened with
+.Dv O_PATH .
+.It Bq Er EINVAL
+.Fa offset
+is negative or
+.Fa len
+is not positive.
+.It Bq Er EBADF
+.Fa fd
+is not open for writing.
+.It Bq Er ESPIPE
+.Fa fd
+is a pipe.
+.It Bq Er EISDIR
+.Fa fd
+is a directory.
+.It Bq Er ENODEV
+.Fa fd
+is neither a regular file nor one of the above.
+.It Bq Er EOPNOTSUPP
+.Fa fd
+is a regular file open for writing.
+.El
+.Sh SEE ALSO
+.Xr ftruncate 2 ,
+.Xr write 2

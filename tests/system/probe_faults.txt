@@ -5006,3 +5006,15 @@ old
 new
         tm[1] = t.hour;
 end
+
+# fallocate, which answers EOPNOTSUPP for a regular file.
+
+fault fallocate-missing
+probe callsmusl
+file rach2/sys/syscall.c
+expect CALLSMUSL FAIL (posix_fallocate of a file open for writing was not EOPNOTSUPP
+old
+    _syscall_table[SYS_FALLOCATE] = sys_fallocate;
+new
+    (void)sys_fallocate;
+end

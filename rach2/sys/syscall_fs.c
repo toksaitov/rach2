@@ -8367,6 +8367,51 @@ int32_t sys_sendfile(isr_params_t *params)
     return no_copy((int)params->ebx, (int)params->ecx);
 }
 
+/**
+ * fallocate (324): EBX = fd, ECX = mode, EDX:ESI = the offset and EDI:EBP the
+ * length, each low word first.
+ *
+ * No file system here reserves a file's blocks ahead of its writes, as
+ * Linux's ext2 does not, so a call on a regular file open for writing is
+ * -EOPNOTSUPP, Linux's answer for a file system without the operation. glibc's
+ * posix_fallocate then writes the range itself, as it does on Linux's ext2;
+ * it does not after -ENOSYS. The checks before it are Linux's, in its order:
+ * -EBADF for a descriptor that is not open, -EINVAL for a negative offset or
+ * a length that is not positive, -EBADF for one not open for writing, then
+ * -ESPIPE for a pipe, -EISDIR for a directory and -ENODEV for anything else
+ * that is not a regular file.
+ */
+int32_t sys_fallocate(isr_params_t *params)
+{
+    uint64_t offset = (uint64_t)params->edx | ((uint64_t)params->esi << 32);
+    uint64_t len = (uint64_t)params->edi | ((uint64_t)params->ebp << 32);
+    fd_entry_t *entry;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(current_proc->fds, (int)params->ebx);
+    if (!entry || (entry->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if ((offset >> 63) != 0 || len == 0 || (len >> 63) != 0) {
+        return -EINVAL;
+    }
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (entry->type == FD_TYPE_PIPE) {
+        return -ESPIPE;
+    }
+    if (entry->type == FD_TYPE_DIR) {
+        return -EISDIR;
+    }
+    if (entry->type != FD_TYPE_FILE) {
+        return -ENODEV;
+    }
+    return -EOPNOTSUPP;
+}
+
 /* The longest memfd name: Linux's NAME_MAX less the "memfd:" of its link. */
 #define MFD_NAME_MAX 249
 
