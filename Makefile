@@ -917,8 +917,9 @@ rach2-recovery-iso: rach2-recovery rach2-recovery-image $(RECOVERY_ISO)
 # noticed last and matter most. The compiler the guest runs, and the two things
 # it cannot work without: its runtime and its own headers. The ELF check is the
 # one that matters: `file(1)` would call a Mach-O or an arm64 build "an
-# executable" and this kernel would refuse it, and a dynamically linked one it
-# would ACCEPT and then run unrelocated, which is worse. The last check reads
+# executable" and this kernel would refuse it, and a dynamically linked one asks
+# for a loader the musl roots do not have, so exec would refuse it too. The
+# last check reads
 # the output policy's own diagnostics out of the shipped binary, since a patch
 # that did not apply and a compiler that accepts `-run` look identical from
 # outside.

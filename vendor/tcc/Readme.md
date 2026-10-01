@@ -68,14 +68,14 @@ Preprocessing with `-E` and object compilation with `-c` remain available for mu
 
 `rach2-output-policy.patch` rejects four output kinds that the system cannot execute:
 
-* `-run`, because TinyCC's in-memory execution path requires `mprotect`;
-* `-shared`, because Rach2 has no dynamic loader;
-* an executable link without `-static`, because the kernel maps a dynamic ELF without relocating it;
+* `-run`, because code run from memory finds the C library's functions through `dlsym`, which in this static TinyCC finds none;
+* `-shared`, because musl is here only as the static `libc.a`, and nothing loads a shared object built against it;
+* an executable link without `-static`, because a dynamic program asks for a loader, and there is no musl loader;
 * `-Wl,-oformat` for a non-ELF image, because `exec` requires an ELF program-header table.
 
 The checks run in TinyCC's `main` after command-line processing. They do not change `tcc_set_output_type`, because `-print-search-dirs` calls that function with an in-memory output type while initializing search paths.
 
-[`tools/inspect/elfcheck.c`](../../tools/inspect/elfcheck.c) separately rejects an artifact outside the kernel's ELF32 i386 loader contract or one containing `PT_INTERP` or `PT_DYNAMIC`. The kernel ignores those two dynamic-linking headers, so accepting them would start an unrelocated image.
+[`tools/inspect/elfcheck.c`](../../tools/inspect/elfcheck.c) separately rejects an artifact outside the kernel's ELF32 i386 loader contract or one containing `PT_INTERP` or `PT_DYNAMIC`. The musl roots have no loader for a dynamic program, and exec refuses a program whose loader it cannot find, so such an artifact could not run where it is staged.
 
 ## Static link closure
 

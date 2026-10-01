@@ -43,7 +43,7 @@ CC=tcc
 LDFLAGS=-static
 ```
 
-The image has TinyCC as `/bin/tcc` and `/bin/cc`, but it has no `c99` or `c17` command. All three built-in compiler definitions are therefore `CC=tcc`. Rach2 has no dynamic linker, and the staged TinyCC rejects dynamic executable output, so the common `LDFLAGS` definition requests a static link.
+The image has TinyCC as `/bin/tcc` and `/bin/cc`, but it has no `c99` or `c17` command. All three built-in compiler definitions are therefore `CC=tcc`. TinyCC's C library is musl's static archive, with no loader for a dynamic program, and the staged TinyCC rejects dynamic executable output, so the common `LDFLAGS` definition requests a static link.
 
 The build script checks these values after patching and rejects any remaining `CC=cc`, `CC=c99`, or `CC=c17` definition. Command-line definitions still take precedence. For example, `make CC=tcc` overrides a `CC` definition in a makefile and propagates the override through `MAKEFLAGS`.
 

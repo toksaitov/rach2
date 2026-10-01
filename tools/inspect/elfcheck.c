@@ -4,9 +4,9 @@
  * Two commands in one tool, because they share one parser. `elfcheck
  * FILE...` judges user executables the way `exec` does: the LOADER half is
  * `elf_load_image`'s contract (rach2/sys/proc/elf.c) rule for rule, and the
- * POLICY half is this project's, refusing `PT_INTERP` and `PT_DYNAMIC`
- * because the loader does not refuse those, it IGNORES them, which is worse:
- * a dynamic image loads, jumps, and runs with nothing relocated. `elfcheck
+ * POLICY half is this project's, refusing `PT_INTERP` and `PT_DYNAMIC`,
+ * since the musl roots these artifacts are staged in have no loader for a
+ * dynamic program, and exec refuses one whose loader it cannot find. `elfcheck
  * --kernel [--tcc] FILE` checks a kernel against what the multiboot loaders
  * (QEMU's -kernel and GRUB) read: the first checksum-valid multiboot header
  * in the search window with exactly the declared flags, exactly two
@@ -146,12 +146,11 @@ static int user_check(const char *name, const unsigned char *d, size_t n, int qu
         uint32_t page_start;
 
         if (p_type == PT_INTERP)
-            problem(name, "has a PT_INTERP, so it wants a dynamic linker; "
-                          "this system has none and the loader does not refuse "
-                          "it, it ignores it");
+            problem(name, "has a PT_INTERP, so it wants a loader, which "
+                          "a musl root does not have");
         if (p_type == PT_DYNAMIC)
             problem(name, "has a PT_DYNAMIC, so it expects relocation "
-                          "nobody here performs");
+                          "no loader here performs");
         if (p_type != PT_LOAD)
             continue;
         loads++;

@@ -21,8 +21,8 @@ The C library is musl.
 .Pp
 Executables must be linked with
 .Fl static
-and must use ELF format.
-Rach2 has no dynamic linker.
+and must use ELF format: the C library is here only as a static archive,
+with no loader for a dynamic program.
 Running compiled code from memory with
 .Fl run
 and producing shared libraries with
@@ -171,8 +171,8 @@ This is an error on Rach2.
 Set a shared library's runtime name.
 Shared-library output is unavailable on Rach2.
 .It Fl rdynamic
-Export global symbols to a dynamic linker.
-Rach2 has no dynamic linker.
+Export global symbols to a dynamic loader.
+Executables are static here, and no loader reads them.
 .It Fl r
 Combine the input files into one object file.
 .It Fl Wl, Ns Ar option Ns Op , Ns Ar option ...
@@ -183,7 +183,7 @@ Linker options include:
 .Bl -tag -width Ds
 .It Fl Wl,-rpath= Ns Ar path
 Record a search path for dynamic libraries.
-Rach2 has no dynamic linker, and the static output carries no
+The static output carries no
 .Dv DT_RPATH .
 .It Fl Wl,--enable-new-dtags
 Use
@@ -299,11 +299,11 @@ builds the kernel through
 The output-policy errors are:
 .Bl -item
 .It
-.Ql -run is not available on Rach2: running from memory needs mprotect(2), which this kernel does not have. Compile to a file and run that.
+.Ql -run is not available on Rach2: this tcc is a static program, so code it runs from memory cannot reach the C library. Compile to a file and run that.
 .It
-.Ql -shared is not available on Rach2: there is no dynamic linker to load a shared object.
+.Ql -shared is not available on Rach2: this tcc's C library, musl, is here only as a static archive, and nothing loads a shared object built against it.
 .It
-.Ql a program for Rach2 must be linked with -static: there is no dynamic linker, and the kernel does not refuse a dynamic executable, it loads one and jumps into it unrelocated.
+.Ql a program for Rach2 must be linked with -static: this tcc's C library, musl, is here only as a static archive, with no loader for a dynamic program.
 .It
 .Ql a program for Rach2 must be an ELF: -Wl,-oformat asks for a raw image, and exec reads a program header table.
 .El

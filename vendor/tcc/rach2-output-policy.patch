@@ -1,15 +1,19 @@
 Refuse the output kinds this system cannot run.
 
-Rach2 has no dynamic linker and no mprotect, so several of tcc's output modes
-produce something that cannot work here:
+This tcc is a static program, and its C library, musl, is on Rach2 only as a
+static archive, libc.a, with no loader for a dynamic program. So several of
+tcc's output modes produce something that cannot work here:
 
-  -run      compiles into memory and jumps, which needs mprotect(2). This
-            kernel has no such syscall.
-  -shared   makes a shared object nothing can load: there is no loader.
-  a link    without -static emits a dynamic executable. This is the worst of
-            them, because the kernel does NOT refuse it: elf_load_image maps
-            the PT_LOAD segments and never looks at PT_INTERP, so the program
-            loads, jumps, and runs with nothing relocated.
+  -run      compiles into memory and jumps, and finds the C library's
+            functions for that code through dlsym, which in a static
+            program finds none.
+  -shared   makes a shared object of musl's declarations, which nothing here
+            loads.
+  a link    without -static emits a dynamic executable, which asks for a
+            loader. The kernel loads the one a program names, but no musl
+            loader exists, and on the GNU system the loader that does exist
+            is glibc's, which would bind musl's declarations to another C
+            library.
   -Wl,-oformat
             asks for a raw image rather than an ELF. It reaches a different
             field from the three above (output_format, not output_type), so a
@@ -19,7 +23,7 @@ produce something that cannot work here:
 
 Refusing them in the compiler rather than in a wrapper script is deliberate. A
 wrapper is something a student steps around by typing the real name, and then
-meets one of the three failures above with no explanation attached.
+meets one of the failures above with no explanation attached.
 
 Compiling to an object (-c) and preprocessing (-E) are untouched: neither
 produces a program to run, and both are how a multi-step build works.
@@ -33,7 +37,7 @@ runs no code at all.
 
 --- a/tcc.c
 +++ b/tcc.c
-@@ -309,6 +309,33 @@
+@@ -309,6 +309,34 @@
      set_environment(s);
      if (s->output_type == 0)
          s->output_type = TCC_OUTPUT_EXE;
@@ -41,20 +45,21 @@ runs no code at all.
 +    /* Rach2: the output kinds this system cannot run. See
 +     * vendor/tcc/rach2-output-policy.patch. */
 +    if (s->output_type == TCC_OUTPUT_MEMORY) {
-+        tcc_error_noabort("-run is not available on Rach2: running from memory "
-+            "needs mprotect(2), which this kernel does not have. Compile to a "
-+            "file and run that.");
++        tcc_error_noabort("-run is not available on Rach2: this tcc is a "
++            "static program, so code it runs from memory cannot reach the C "
++            "library. Compile to a file and run that.");
 +        return 1;
 +    }
 +    if (s->output_type == TCC_OUTPUT_DLL) {
-+        tcc_error_noabort("-shared is not available on Rach2: there is no "
-+            "dynamic linker to load a shared object.");
++        tcc_error_noabort("-shared is not available on Rach2: this tcc's C "
++            "library, musl, is here only as a static archive, and nothing "
++            "loads a shared object built against it.");
 +        return 1;
 +    }
 +    if (s->output_type == TCC_OUTPUT_EXE && !s->static_link) {
 +        tcc_error_noabort("a program for Rach2 must be linked with -static: "
-+            "there is no dynamic linker, and the kernel does not refuse a "
-+            "dynamic executable, it loads one and jumps into it unrelocated.");
++            "this tcc's C library, musl, is here only as a static archive, "
++            "with no loader for a dynamic program.");
 +        return 1;
 +    }
 +    if (s->output_type == TCC_OUTPUT_EXE &&

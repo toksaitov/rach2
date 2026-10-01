@@ -12,9 +12,9 @@ about their makefile. All three now name the compiler the machine has.
 
 LDFLAGS is empty, so the built-in link rule would ask tcc for a dynamic
 executable. tcc on this machine refuses that by its own pinned patch, because
-this kernel has no dynamic linker and would load and jump into an image with
-nothing relocated. `-static` is not an optimisation here; it is the only kind of
-program that runs.
+its C library, musl, is here only as a static archive, with no loader for a
+dynamic program. `-static` is not an optimisation here; it is the only kind of
+program tcc can make that runs.
 
 Without this a student's first `make` fails at the link, or at the compile if
 they asked for a POSIX mode.
