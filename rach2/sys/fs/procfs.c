@@ -1834,7 +1834,10 @@ static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
  * MemAvailable is the free count and the two together. HeapPages and
  * HeapUsed are the kernel heap's pages and the bytes in use inside it, for a
  * test that makes and frees objects and requires the heap back where it
- * started.
+ * started. Slab, last, is the heap's pages but the buffer cache's, which
+ * the heap holds and Buffers counts, in kilobytes: the kernel's own objects
+ * as Linux's slab holds them, which BusyBox's nmeter adds to MemFree,
+ * Buffers and Cached, and subtracts from MemTotal, for the memory in use.
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
@@ -1842,6 +1845,7 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     uint32_t free_frames = frame_free_count();
     uint32_t buffers = bcache_resident();
     uint32_t cached = pc_resident();
+    uint32_t heap_pages = 0, heap_bytes = 0;
 
     ap_str(t, "MemTotal:       ");
     ap_frames_as_kb(t, total);
@@ -1853,19 +1857,17 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, buffers);
     ap_str(t, "Cached:         ");
     ap_frames_as_kb(t, cached);
-    {
-        uint32_t pages = 0, bytes = 0;
-
-        kheap_stats(&pages, &bytes);
-        ap_str(t, "HeapPages:      ");
-        ap_u32(t, pages);
-        ap_str(t, "\n");
-        ap_str(t, "HeapUsed:       ");
-        ap_u32(t, bytes);
-        ap_str(t, "\n");
-    }
+    kheap_stats(&heap_pages, &heap_bytes);
+    ap_str(t, "HeapPages:      ");
+    ap_u32(t, heap_pages);
+    ap_str(t, "\n");
+    ap_str(t, "HeapUsed:       ");
+    ap_u32(t, heap_bytes);
+    ap_str(t, "\n");
     ap_str(t, "SwapTotal:             0 kB\n");
     ap_str(t, "SwapFree:              0 kB\n");
+    ap_str(t, "Slab:           ");
+    ap_frames_as_kb(t, heap_pages > buffers ? heap_pages - buffers : 0);
     return t->len;
 }
 

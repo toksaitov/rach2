@@ -1152,9 +1152,15 @@ void probe_main(unsigned int *sp)
     n = slurp("/proc/meminfo", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/meminfo ends with its newline");
     check(has_line_starting(buf, n, "MemTotal:"), "/proc/meminfo carries MemTotal");
-    check(has_line_starting(buf, n, "SwapFree:"), "/proc/meminfo runs through to its last line");
+    check(has_line_starting(buf, n, "SwapFree:"), "/proc/meminfo carries SwapFree");
+    check(has_line_starting(buf, n, "Slab:"),
+          "/proc/meminfo runs through to its last line, Slab, which nmeter needs");
     check(uint_after(buf, n, "MemTotal:") >= uint_after(buf, n, "MemFree:"),
           "/proc/meminfo reports no more free memory than there is memory");
+    check(uint_after(buf, n, "MemTotal:") >=
+              uint_after(buf, n, "MemFree:") + uint_after(buf, n, "Buffers:") +
+                  uint_after(buf, n, "Cached:") + uint_after(buf, n, "Slab:"),
+          "and counts no page twice in the four nmeter adds up");
 
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");

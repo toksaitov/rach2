@@ -252,6 +252,10 @@ and
 .Li SwapFree
 are both
 .Ql 0 kB .
+.Li Slab ,
+the last line, is the kernel heap's pages but the buffer cache's, which
+the heap holds, in kibibytes; BusyBox's nmeter reads it to count the memory
+in use.
 .It Pa /proc/mounts
 One line per mount, with six whitespace-separated fields:
 .Dl SOURCE TARGET TYPE OPTIONS 0 0
