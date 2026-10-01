@@ -320,8 +320,9 @@ struct tcp_row {
     uint32_t remote_ip;
     uint16_t remote_port;
     int state;
-    uint32_t txq; /* bytes queued to send, sent and unacknowledged included */
-    uint32_t rxq; /* bytes queued to read */
+    uint32_t txq;     /* bytes queued to send, sent and unacknowledged included */
+    uint32_t rxq;     /* bytes queued to read; for a listener, connections to accept */
+    uint32_t backlog; /* for a listener, the most connections it queues */
     uint32_t uid;
     uint32_t inode;
     /* This stack's own view, after Linux's columns: the peer's window, the

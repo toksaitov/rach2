@@ -2573,6 +2573,12 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].state = (int)t->state;
         out[n].txq = t->send_tail - t->send_ack;
         out[n].rxq = t->recv_tail - t->recv_head;
+        out[n].backlog = 0;
+        if (t->state == TCP_LISTEN && t->sock) {
+            out[n].rxq =
+                (uint32_t)(t->sock->accept_tail - t->sock->accept_head) & (SOCK_ACCEPT_BACKLOG - 1);
+            out[n].backlog = SOCK_ACCEPT_BACKLOG - 1;
+        }
         out[n].uid = t->uid;
         out[n].inode = t->inode;
         out[n].snd_wnd = t->snd_wnd;

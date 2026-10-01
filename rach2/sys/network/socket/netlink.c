@@ -729,8 +729,8 @@ static void tcp_timer_of(const struct tcp_row *r, struct diag_inet *d)
 
 /* The TCP connections whose states are in the mask `wanted`, with the
  * TCP information and the congestion control's name when the mask `ext` of
- * extensions asks for them. */
-static void diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
+ * extensions asks for them; 0, or -ENOMEM when they could not be copied. */
+static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
 {
     struct tcp_row *rows;
     struct diag_inet d;
@@ -749,7 +749,7 @@ static void diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
         d.src = d.state == DIAG_LISTEN ? 0 : rows[i].local_ip;
         d.dst = rows[i].remote_ip;
         d.rqueue = rows[i].rxq;
-        d.wqueue = rows[i].txq;
+        d.wqueue = d.state == DIAG_LISTEN ? rows[i].backlog : rows[i].txq;
         d.uid = rows[i].uid;
         d.inode = rows[i].inode;
         tcp_timer_of(&rows[i], &d);
@@ -763,14 +763,17 @@ static void diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
         }
         nl_append(b, msg);
     }
-    if (n >= 0) {
-        kfree(rows);
+    if (n < 0) {
+        return -ENOMEM;
     }
+    kfree(rows);
+    return 0;
 }
 
 /* The UDP sockets, or with `type` SOCK_RAW the raw ones, whose states are
- * in the mask `wanted`: 1 for a connected socket and 7 for the rest. */
-static void diag_dgram(struct nl_build *b, int type, uint32_t wanted)
+ * in the mask `wanted`: 1 for a connected socket and 7 for the rest; 0, or
+ * -ENOMEM. */
+static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
 {
     struct socket_row *rows;
     struct diag_inet d;
@@ -794,14 +797,16 @@ static void diag_dgram(struct nl_build *b, int type, uint32_t wanted)
         d.inode = rows[i].inode;
         nl_append(b, inet_diag_msg_of(b, msg, &d, type == SOCK_RAW ? d.sport : -1));
     }
-    if (n >= 0) {
-        kfree(rows);
+    if (n < 0) {
+        return -ENOMEM;
     }
+    kfree(rows);
+    return 0;
 }
 
 /* The AF_UNIX sockets whose states are in the mask `wanted`, with the
- * attributes the mask `show` asks for. */
-static void diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
+ * attributes the mask `show` asks for; 0, or -ENOMEM. */
+static int diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
 {
     struct unix_row *rows;
     uint8_t msg[NL_MSG_MAX];
@@ -841,9 +846,11 @@ static void diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
         }
         nl_append(b, msg);
     }
-    if (n >= 0) {
-        kfree(rows);
+    if (n < 0) {
+        return -ENOMEM;
     }
+    kfree(rows);
+    return 0;
 }
 
 /* The protocol of an AF_INET request `r` of `body` bytes: the byte in the
@@ -868,12 +875,15 @@ static uint32_t diag_protocol(const uint8_t *r, uint32_t body)
 }
 
 /* Answer a NETLINK_SOCK_DIAG request of `type` and `flags`, whose header
- * is `req` and whose body of `body` bytes follows it. */
+ * is `req` and whose body of `body` bytes follows it: the dump and its end,
+ * or ENOENT for a family or protocol with no sockets here, as Linux answers
+ * one no module handles, or ENOMEM when the sockets could not be copied. */
 static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                         uint32_t body)
 {
     const uint8_t *r = req + NLMSG_HDRLEN;
     uint32_t protocol;
+    int rc = -ENOENT;
 
     if (type != SOCK_DIAG_BY_FAMILY || body < 1) {
         end_msg(b, req, -EINVAL);
@@ -886,22 +896,18 @@ static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, u
     if (r[0] == AF_INET && body >= DIAG_INET_REQ_LEN) {
         protocol = diag_protocol(r, body);
         if (protocol == IP_PROTO_TCP) {
-            diag_tcp(b, get32(r + 4), r[2]);
+            rc = diag_tcp(b, get32(r + 4), r[2]);
         } else if (protocol == IP_PROTO_UDP) {
-            diag_dgram(b, SOCK_DGRAM, get32(r + 4));
+            rc = diag_dgram(b, SOCK_DGRAM, get32(r + 4));
         } else if (protocol == IPPROTO_RAW) {
-            diag_dgram(b, SOCK_RAW, get32(r + 4));
-        } else {
-            end_msg(b, req, -ENOENT);
-            return;
+            rc = diag_dgram(b, SOCK_RAW, get32(r + 4));
         }
     } else if (r[0] == AF_UNIX && body >= DIAG_UNIX_REQ_LEN) {
-        diag_unix(b, get32(r + 4), get32(r + 12));
-    } else if (r[0] != AF_INET6) {
-        end_msg(b, req, -ENOENT);
-        return;
+        rc = diag_unix(b, get32(r + 4), get32(r + 12));
+    } else if (r[0] == AF_INET6) {
+        rc = 0;
     }
-    end_msg(b, 0, 0);
+    end_msg(b, rc != 0 ? req : 0, rc);
 }
 
 int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)

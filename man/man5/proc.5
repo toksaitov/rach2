@@ -335,7 +335,9 @@ address is 0.0.0.0, as Linux gives one bound to
 .Dv INADDR_ANY .
 State is the two-digit hexadecimal Linux state number.
 Queue sizes are paired as
-.Ql TTTTTTTT:RRRRRRRR .
+.Ql TTTTTTTT:RRRRRRRR ;
+a listener's receive queue is the connections waiting to be accepted, as
+Linux gives it.
 The timer pair is
 .Ql 00:00000000 ;
 the retransmission count has eight hexadecimal digits.

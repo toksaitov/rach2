@@ -40,7 +40,9 @@ For
 and the protocol 6, 17 or 255 it gives the TCP, UDP or raw sockets in the
 states the request's mask has, each a
 .Vt struct inet_diag_msg
-with the ports and addresses, the queues, the owner and the inode, and a
+with the ports and addresses, the queues, the owner and the inode, a
+listener's queues being the connections waiting to be accepted and the most
+it holds, and a
 raw socket's protocol in an
 .Dv INET_DIAG_PROTOCOL
 attribute; the states are TCP's numbers, a datagram socket being 1 when
