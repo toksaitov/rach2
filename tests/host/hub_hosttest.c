@@ -1005,6 +1005,17 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     return 0;
 }
 
+/** The core reads a device's record with interrupts off; the host has none. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 #include "../../rach2/sys/usb/core.c"
 #include "../../rach2/sys/usb/hub.c"
 

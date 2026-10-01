@@ -104,6 +104,12 @@ static void synth_dir_vpath(const struct synth_dir *sd, struct vpath *vp)
         vp->sysent = vp->pid;
         vp->pid = 0;
     }
+    if (vp->kind == VNODE_SYS_DIR) {
+        vp->sysent = vp->pid;
+        vp->syskey = vp->tid;
+        vp->pid = 0;
+        vp->tid = 0;
+    }
 }
 
 /**
@@ -1911,6 +1917,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_NET_ARP:
     case VNODE_PROC_NET_TCP:
     case VNODE_PROC_NET_FILE:
+    case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
         /* Root only. The file has the drive's serial number, and an
@@ -1930,6 +1937,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_PID:
     case VNODE_PROC_FD_DIR:
     case VNODE_PROC_TASK_DIR:
+    case VNODE_SYS_DIR:
+    case VNODE_SYS_LINK:
         return synth_open_dir(vp, flags);
     case VNODE_ENOTDIR:
         return -ENOTDIR;
@@ -1971,7 +1980,16 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     if ((flags & 3) != 0 || (flags & O_CREAT)) {
         return -EISDIR;
     }
-    sd = synth_dir_alloc(vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : pid, vp->tid);
+    if ((vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) &&
+        (vp->sysent == SYSFS_PCI_DEVICE || vp->sysent == SYSFS_USB_DEVICE) &&
+        !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
+        sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
+    } else {
+        sd = synth_dir_alloc(vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : pid, vp->tid);
+    }
     if (!sd) {
         return -ENFILE;
     }
@@ -4252,7 +4270,8 @@ static int synth_kind_is_dir(int kind)
 {
     return kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
            kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
-           kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR;
+           kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
+           kind == VNODE_SYS_LINK;
 }
 
 /**
@@ -4373,8 +4392,16 @@ static int32_t do_chdir(char *path)
         if (!synth_kind_is_dir(vp.kind)) {
             return -ENOTDIR;
         }
-        synth_dir_path(vp.kind, vp.kind == VNODE_PROC_SYS_DIR ? vp.sysent : rpid, vp.tid, path,
-                       VFS_PATH_MAX);
+        if (vp.kind == VNODE_SYS_DIR || vp.kind == VNODE_SYS_LINK) {
+            if ((vp.sysent == SYSFS_PCI_DEVICE || vp.sysent == SYSFS_USB_DEVICE) &&
+                !sysfs_device_exists(vp.sysent, vp.syskey)) {
+                return -ENOENT;
+            }
+            synth_sys_path(vp.sysent, vp.syskey, path, VFS_PATH_MAX);
+        } else {
+            synth_dir_path(vp.kind, vp.kind == VNODE_PROC_SYS_DIR ? vp.sysent : rpid, vp.tid, path,
+                           VFS_PATH_MAX);
+        }
         return cwd_enter(path, NULL, NULL);
     }
     node = ref.node;
@@ -4807,6 +4834,50 @@ static int32_t synth_proc_stat(struct linux_stat64 *kst, uint32_t inode)
 }
 
 /**
+ * The identity of a node of /sys, `follow` taking a device's link for the
+ * directory it leads to. A uevent's size is 4096, as Linux gives every
+ * attribute file, and a device that is not there is -ENOENT.
+ */
+static int32_t synth_sys_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
+{
+    if ((vp->sysent == SYSFS_PCI_DEVICE || vp->sysent == SYSFS_USB_DEVICE) &&
+        !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    kst->st_dev = SYSFS_FSID;
+    if (vp->kind == VNODE_SYS_FILE) {
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_size = 4096;
+        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1);
+    } else if (vp->kind == VNODE_SYS_LINK && !follow) {
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 2);
+    } else {
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 0);
+    }
+    return 0;
+}
+
+/** The target of the device link `vp`, relative as Linux writes it, into
+ * `out` of `cap` bytes; returns its length. */
+static int synth_sys_link(const struct vpath *vp, char *out, int cap)
+{
+    char path[64];
+    const char *up = "../../..";
+    int n = 0, i;
+
+    synth_sys_path(vp->sysent, vp->syskey, path, (int)sizeof(path));
+    for (i = 0; up[i] != '\0' && n < cap; i++) {
+        out[n++] = up[i];
+    }
+    for (i = 4; path[i] != '\0' && n < cap; i++) {
+        out[n++] = path[i];
+    }
+    return n;
+}
+
+/**
  * The root directory's own three times, into a stat64.
  *
  * The root is a real node and creating an entry in it stamps its times, so it
@@ -5034,6 +5105,10 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return 0;
     case VNODE_PROC_NET_FILE:
         return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
+    case VNODE_SYS_DIR:
+    case VNODE_SYS_LINK:
+    case VNODE_SYS_FILE:
+        return synth_sys_stat(vp, kst, follow);
     case VNODE_PROC_DISK:
         /* /proc/disk: what the disk reported, root-readable only. */
         kst->st_dev = PROCFS_FSID;
@@ -5523,6 +5598,9 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     } else if (kind == VNODE_PROC_EXE) {
         pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, link, VFS_PATH_MAX);
+    } else if (kind == VNODE_SYS_LINK) {
+        n = sysfs_device_exists(vp.sysent, vp.syskey) ? synth_sys_link(&vp, link, VFS_PATH_MAX)
+                                                      : -ENOENT;
     } else {
         n = -EINVAL; /* not a symlink */
     }
@@ -5720,6 +5798,7 @@ struct linux_statfs64 {
 #define STATFS_MAGIC_PROC 0x9FA0u
 
 #define STATFS_MAGIC_DEVFS 0x1373u
+#define STATFS_MAGIC_SYSFS 0x62656572u
 
 /**
  * Fill a statfs64 for the boot root or one of the two synthetic mounts;
@@ -5795,6 +5874,9 @@ static uint32_t statfs_magic_for_kind(int kind)
     }
     if (kind == VNODE_KRFFS) {
         return STATFS_MAGIC_KRFFS;
+    }
+    if (kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK || kind == VNODE_SYS_FILE) {
+        return STATFS_MAGIC_SYSFS;
     }
     return STATFS_MAGIC_PROC;
 }
@@ -5875,7 +5957,12 @@ int32_t sys_fstatfs64(isr_params_t *params)
      * is on no file system at all, and Linux answers `-ENOSYS` for those rather
      * than handing back the root's numbers. */
     if (e->type == FD_TYPE_PROC) {
-        return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_PROC);
+        return statfs_fill((struct linux_statfs64 __user *)params->edx,
+                           procfs_fd_is_sys(e) ? STATFS_MAGIC_SYSFS : STATFS_MAGIC_PROC);
+    }
+    if (e->type == FD_TYPE_SYNTH_DIR && e->priv &&
+        ((const struct synth_dir *)e->priv)->kind == VNODE_SYS_DIR) {
+        return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_SYSFS);
     }
     if (e->type == FD_TYPE_SYNTH_PATH) {
         const struct vpath *vp = (const struct vpath *)e->priv;
@@ -5979,7 +6066,8 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_mode = 0100444; /* S_IFREG | 0444 */
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
-        kst->st_dev = PROCFS_FSID;
+        kst->st_dev = procfs_fd_is_sys(entry) ? SYSFS_FSID : PROCFS_FSID;
+        kst->st_size = procfs_fd_is_sys(entry) ? 4096 : 0;
         kst->st_ino = procfs_fd_ino(entry);
         if (procfs_fd_oom_owner(entry, &uid, &gid) == 0) {
             kst->st_mode = 0100644; /* S_IFREG | 0644 */
@@ -10096,6 +10184,62 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
     return 0;
 }
 
+/**
+ * The `n`th entry of the /sys directory `node`, whose device is `key`: its
+ * name, inode and type, and 1, or 0 past the last. The fixed directories
+ * hold the next ones down, a bus's `devices` a link for each device, the
+ * directory the links lead to a directory for each, and a device's
+ * directory its uevent.
+ */
+static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    static const struct {
+        int node;
+        const char *name;
+        int child;
+    } fixed[] = {{SYSFS_ROOT, "bus", SYSFS_BUS},
+                 {SYSFS_ROOT, "devices", SYSFS_DEVICES},
+                 {SYSFS_BUS, "pci", SYSFS_BUS_PCI},
+                 {SYSFS_BUS, "usb", SYSFS_BUS_USB},
+                 {SYSFS_BUS_PCI, "devices", SYSFS_PCI_LINKS},
+                 {SYSFS_BUS_USB, "devices", SYSFS_USB_LINKS},
+                 {SYSFS_DEVICES, "pci0000:00", SYSFS_PCI_ROOT},
+                 {SYSFS_DEVICES, "usb", SYSFS_USB_ROOT}};
+    int i, dev, links;
+
+    for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
+        if (fixed[i].node == node && n-- == 0) {
+            k_strncpy(name, fixed[i].name, 31);
+            name[31] = '\0';
+            *ino = sysfs_ino(fixed[i].child, 0, 0);
+            *dtype = DT_DIR;
+            return 1;
+        }
+    }
+    if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
+        if (n != 0) {
+            return 0;
+        }
+        k_strncpy(name, "uevent", 31);
+        *ino = sysfs_ino(node, key, 1);
+        *dtype = DT_REG;
+        return 1;
+    }
+    links = node == SYSFS_PCI_LINKS || node == SYSFS_USB_LINKS;
+    if (!links && node != SYSFS_PCI_ROOT && node != SYSFS_USB_ROOT) {
+        return 0;
+    }
+    dev = node == SYSFS_PCI_LINKS || node == SYSFS_PCI_ROOT ? SYSFS_PCI_DEVICE : SYSFS_USB_DEVICE;
+    key = sysfs_device_key(dev, n);
+    if (key < 0) {
+        return 0;
+    }
+    synth_sys_device_name(dev, key, name, 32);
+    *ino = sysfs_ino(dev, key, links ? 2 : 0);
+    *dtype = links ? DT_LNK : DT_DIR;
+    return 1;
+}
+
 /*
  * The n-th entry of a synthetic directory (its kind, pid and tid from the
  * dir fd's record `sd`): fills name/ino/dtype and returns 1, or 0 past the
@@ -10194,6 +10338,9 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             }
         }
         return 0;
+    }
+    if (kind == VNODE_SYS_DIR) {
+        return synth_sys_dirent(sd->pid, sd->tid, n, name, ino, dtype);
     }
     /* A directory of /proc/sys: the entries of the table under it. */
     if (kind == VNODE_PROC_SYS_DIR) {

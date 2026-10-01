@@ -224,6 +224,10 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     if (cap <= 0) {
         return;
     }
+    if (kind == VNODE_SYS_DIR) {
+        synth_sys_path(pid, tid, out, cap);
+        return;
+    }
     if (kind == VNODE_DEV_DIR) {
         synth_put(out, cap, &pos, "/dev");
     } else if (kind == VNODE_PTS_DIR) {
@@ -429,6 +433,197 @@ static int synth_global_file(struct comp name)
     return VNODE_ENOENT;
 }
 
+/** The value of hexadecimal digit `ch`, lowercase as sysfs writes it, or -1. */
+static int hex_digit(char ch)
+{
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+    return ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : -1;
+}
+
+/** The key of the PCI function named `name`, 0000:BB:DD.F, or -1. */
+static int sys_pci_key(struct comp name)
+{
+    static const char shape[] = "0000:xx:xx.x";
+    int i, v[5], bus, dev;
+
+    if (name.len != 12) {
+        return -1;
+    }
+    for (i = 0; i < 12; i++) {
+        if (shape[i] != 'x' && name.s[i] != shape[i]) {
+            return -1;
+        }
+    }
+    v[0] = hex_digit(name.s[5]);
+    v[1] = hex_digit(name.s[6]);
+    v[2] = hex_digit(name.s[8]);
+    v[3] = hex_digit(name.s[9]);
+    v[4] = hex_digit(name.s[11]);
+    for (i = 0; i < 5; i++) {
+        if (v[i] < 0) {
+            return -1;
+        }
+    }
+    bus = v[0] * 16 + v[1];
+    dev = v[2] * 16 + v[3];
+    return dev < 32 && v[4] < 8 ? bus << 8 | dev << 3 | v[4] : -1;
+}
+
+/** The key of the USB device named `name`, B-P with .P for each hub, or -1. */
+static int sys_usb_key(struct comp name)
+{
+    int i = 0, part = 0, v = 0, key = 0, digits = 0;
+
+    for (;; i++) {
+        if (i < name.len && name.s[i] >= '0' && name.s[i] <= '9') {
+            v = v * 10 + (name.s[i] - '0');
+            if (++digits > 3) {
+                return -1;
+            }
+            continue;
+        }
+        if (digits == 0 || v == 0 || (part == 0 && v > 4) || (part == 1 && v > 255) ||
+            (part > 1 && v > 15) || part > 6) {
+            return -1;
+        }
+        key |= part == 0 ? (v - 1) << 28 : part == 1 ? v << 20 : v << (4 * (6 - part));
+        if (i == name.len) {
+            return part > 0 ? key : -1;
+        }
+        if (name.s[i] != (part == 0 ? '-' : '.')) {
+            return -1;
+        }
+        part++;
+        v = 0;
+        digits = 0;
+    }
+}
+
+void synth_sys_device_name(int node, int key, char *out, int cap)
+{
+    static const char hex[] = "0123456789abcdef";
+    int pos = 0, shift;
+
+    if (cap <= 0) {
+        return;
+    }
+    if (node == SYSFS_PCI_DEVICE) {
+        char text[13] = "0000:00:00.0";
+
+        text[5] = hex[(key >> 12) & 15];
+        text[6] = hex[(key >> 8) & 15];
+        text[8] = hex[((key >> 3) & 31) >> 4];
+        text[9] = hex[(key >> 3) & 15];
+        text[11] = hex[key & 7];
+        synth_put(out, cap, &pos, text);
+    } else {
+        synth_put_uint(out, cap, &pos, ((unsigned int)(key >> 28) & 3u) + 1u);
+        synth_put(out, cap, &pos, "-");
+        synth_put_uint(out, cap, &pos, (unsigned int)(key >> 20) & 255u);
+        for (shift = 16; shift >= 0 && ((key >> shift) & 15) != 0; shift -= 4) {
+            synth_put(out, cap, &pos, ".");
+            synth_put_uint(out, cap, &pos, (unsigned int)(key >> shift) & 15u);
+        }
+    }
+    out[pos] = '\0';
+}
+
+void synth_sys_path(int node, int key, char *out, int cap)
+{
+    static const char *const paths[] = {"/sys",
+                                        "/sys/bus",
+                                        "/sys/bus/pci",
+                                        "/sys/bus/usb",
+                                        "/sys/bus/pci/devices",
+                                        "/sys/bus/usb/devices",
+                                        "/sys/devices",
+                                        "/sys/devices/pci0000:00",
+                                        "/sys/devices/usb"};
+    int pos = 0;
+
+    if (cap <= 0) {
+        return;
+    }
+    if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
+        synth_put(out, cap, &pos,
+                  paths[node == SYSFS_PCI_DEVICE ? SYSFS_PCI_ROOT : SYSFS_USB_ROOT]);
+        synth_put(out, cap, &pos, "/");
+        synth_sys_device_name(node, key, out + pos, cap - pos);
+        return;
+    }
+    synth_put(out, cap, &pos, node >= 0 && node <= SYSFS_USB_ROOT ? paths[node] : "/sys");
+    out[pos] = '\0';
+}
+
+/** A device's node, SYSFS_PCI_DEVICE or SYSFS_USB_DEVICE, at `c` of `n`
+ * components below its parent `dir`, which is SYSFS_PCI_LINKS or
+ * SYSFS_PCI_ROOT or a USB one: the link or directory, or its uevent. */
+static int synth_classify_sys_device(const struct comp *c, int n, int dir, struct vpath *vp)
+{
+    int pci = dir == SYSFS_PCI_LINKS || dir == SYSFS_PCI_ROOT;
+    int key = pci ? sys_pci_key(c[0]) : sys_usb_key(c[0]);
+
+    if (key < 0) {
+        vp->kind = VNODE_ENOENT;
+        return vp->kind;
+    }
+    vp->sysent = pci ? SYSFS_PCI_DEVICE : SYSFS_USB_DEVICE;
+    vp->syskey = key;
+    if (n == 1) {
+        vp->kind =
+            dir == SYSFS_PCI_LINKS || dir == SYSFS_USB_LINKS ? VNODE_SYS_LINK : VNODE_SYS_DIR;
+    } else if (comp_eq(c[1], "uevent")) {
+        vp->kind = n == 2 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+    } else {
+        vp->kind = VNODE_ENOENT;
+    }
+    return vp->kind;
+}
+
+/**
+ * Classify the components `c` of `n` below /sys: the fixed directories by
+ * their names, and below a bus's `devices` or a device directory's parent
+ * a device by its name.
+ */
+static int synth_classify_sysfs(const struct comp *c, int n, struct vpath *vp)
+{
+    int at;
+
+    vp->kind = VNODE_SYS_DIR;
+    if (n == 0) {
+        vp->sysent = SYSFS_ROOT;
+        return vp->kind;
+    }
+    if (comp_eq(c[0], "bus") && n == 1) {
+        vp->sysent = SYSFS_BUS;
+    } else if (comp_eq(c[0], "bus") && (comp_eq(c[1], "pci") || comp_eq(c[1], "usb"))) {
+        at = comp_eq(c[1], "pci") ? SYSFS_BUS_PCI : SYSFS_BUS_USB;
+        if (n == 2) {
+            vp->sysent = at;
+        } else if (!comp_eq(c[2], "devices")) {
+            vp->kind = VNODE_ENOENT;
+        } else if (n == 3) {
+            vp->sysent = at + 2;
+        } else {
+            return synth_classify_sys_device(c + 3, n - 3, at + 2, vp);
+        }
+    } else if (comp_eq(c[0], "devices") && n == 1) {
+        vp->sysent = SYSFS_DEVICES;
+    } else if (comp_eq(c[0], "devices") && (comp_eq(c[1], "pci0000:00") || comp_eq(c[1], "usb"))) {
+        at = comp_eq(c[1], "usb") ? SYSFS_USB_ROOT : SYSFS_PCI_ROOT;
+        if (n == 2) {
+            vp->sysent = at;
+        } else {
+            return synth_classify_sys_device(c + 2, n - 2, at, vp);
+        }
+    } else {
+        vp->kind = VNODE_ENOENT;
+    }
+    return vp->kind;
+}
+
 /**
  * Classify a normalized path under `/dev` or `/proc` and fill `vp`.
  *
@@ -453,6 +648,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->procfile = 0;
     vp->pts_index = -1;
     vp->sysent = 0;
+    vp->syskey = 0;
 
     n = synth_split(path, c, SYNTH_MAXC + 1);
 
@@ -493,6 +689,10 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = VNODE_ENOENT; /* /dev/<name>/<more>: no such thing */
         }
         return vp->kind;
+    }
+
+    if (comp_eq(c[0], "sys")) {
+        return synth_classify_sysfs(c + 1, n - 1, vp);
     }
 
     if (comp_eq(c[0], "proc")) {

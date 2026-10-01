@@ -53,6 +53,9 @@ enum vnode_kind {
     VNODE_PROC_SYS_FILE,    /* a file of /proc/sys: a limit or a name */
     VNODE_PROC_LOADAVG,     /* /proc/loadavg: the load averages and task counts */
     VNODE_PROC_NET_FILE,    /* /proc/net/{udp,raw,unix,sockstat,snmp}, by `procfile` */
+    VNODE_SYS_DIR,          /* /sys and a directory of its tree, by `sysent` and `syskey` */
+    VNODE_SYS_LINK,         /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
+    VNODE_SYS_FILE,         /* a device's uevent, by `sysent` and `syskey` */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -95,6 +98,8 @@ enum vnode_kind {
 #define SYNTH_PROC_NETUNIX     33
 #define SYNTH_PROC_NETSOCKSTAT 34
 #define SYNTH_PROC_NETSNMP     35
+/* A device's uevent under /sys, as the origin of its snapshot. */
+#define SYNTH_SYS_UEVENT       36
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */
@@ -112,7 +117,8 @@ struct vpath {
     int procfile;  /* VNODE_PROC_FILE: SYNTH_PROC_* */
     int pts_index; /* VNODE_PTS: the pty slave number N in /dev/pts/N */
     int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
-    int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table */
+    int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
+    int syskey;    /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`) */
 };
 
 /** Classify a leading-'/'-stripped path; fills *vp and returns its kind. */
@@ -153,6 +159,37 @@ const char *synth_sys_text(int entry);
 /** The name in /proc/net of the file `origin`, SYNTH_PROC_NETUDP to
  * SYNTH_PROC_NETSNMP, or NULL for another. */
 const char *synth_net_name(int origin);
+
+/*
+ * /sys: the PCI functions and USB devices, as Linux's sysfs has them for
+ * the readers of `uevent`. The nodes of the tree are numbered: /sys, its
+ * `bus` and `devices`, the two buses and their `devices` of links, the two
+ * directories the links lead to, and a device's own directory, whose
+ * `syskey` says which device it is. A PCI function's key is its bus,
+ * device and function as the configuration address has them, below 2^16; a
+ * USB device's is its controller's number less 1 in bits 28 and 29, its
+ * root port in the eight below, and the ports of up to five hubs below it
+ * in four bits each, as its name gives them, at least 2^20.
+ */
+#define SYSFS_ROOT       0  /* /sys */
+#define SYSFS_BUS        1  /* /sys/bus */
+#define SYSFS_BUS_PCI    2  /* /sys/bus/pci */
+#define SYSFS_BUS_USB    3  /* /sys/bus/usb */
+#define SYSFS_PCI_LINKS  4  /* /sys/bus/pci/devices */
+#define SYSFS_USB_LINKS  5  /* /sys/bus/usb/devices */
+#define SYSFS_DEVICES    6  /* /sys/devices */
+#define SYSFS_PCI_ROOT   7  /* /sys/devices/pci0000:00 */
+#define SYSFS_USB_ROOT   8  /* /sys/devices/usb */
+#define SYSFS_PCI_DEVICE 9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
+#define SYSFS_USB_DEVICE 10 /* /sys/devices/usb/B-P[.P...] */
+
+/** Write the name of the device `key` of `node`, SYSFS_PCI_DEVICE or
+ * SYSFS_USB_DEVICE, into `out` of `cap` bytes, NUL-terminated. */
+void synth_sys_device_name(int node, int key, char *out, int cap);
+
+/** The path of the /sys directory `node`, with its device `key`, into `out`
+ * of `cap` bytes, NUL-terminated. */
+void synth_sys_path(int node, int key, char *out, int cap);
 
 /* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
 #define VNODE_IS_SYNTH(kind) ((kind) != VNODE_KRFFS)

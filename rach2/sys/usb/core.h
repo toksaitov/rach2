@@ -189,6 +189,23 @@ int usb_core_idle(void);
 /** How many devices are configured and running. */
 int usb_core_count(void);
 
+/* A running device as /sys/bus/usb/devices names it: its bus, the number
+ * of its controller from 1; its ports from the root port down, each from 1,
+ * `depth` of them; the controller's slot, which is its device number; and
+ * its descriptor's vendor, product and release. */
+struct usb_sys_row {
+    int bus;
+    int depth;
+    int ports[USB_TREE_TIERS + 1];
+    int devnum;
+    uint16_t vendor, product, release;
+};
+
+/** Fill `row` for the device of table entry `index`; 0, or -1 when that
+ * entry is not a running device. The entry is read with interrupts off, so
+ * a device the interrupt side takes away is read whole or not at all. */
+int usb_core_row(int index, struct usb_sys_row *row);
+
 /**
  * Describe one device for `/proc/usb`.
  *

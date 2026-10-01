@@ -1,0 +1,102 @@
+.Dd October 1, 2026
+.Dt SYSFS 5
+.Os
+.Sh NAME
+.Nm sysfs
+.Nd the PCI functions and USB devices under /sys
+.Sh DESCRIPTION
+The kernel mounts a synthetic, read-only file system at
+.Pa /sys ,
+as Linux mounts sysfs there, with the parts of Linux's tree that
+BusyBox's
+.Ic lspci
+and
+.Ic lsusb
+read: each PCI function and each running USB device, and what it says of
+itself in its
+.Pa uevent .
+Any user may read it.
+.Bl -tag -width Ds
+.It Pa /sys/bus/pci/devices/0000:BB:DD.F
+A symbolic link for each PCI function, named by its bus, device and
+function in lowercase hexadecimal, to
+.Pa ../../../devices/pci0000:00/0000:BB:DD.F .
+The functions are listed in the order of bus, device and function.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/uevent
+The function's variables, one
+.Ql NAME=value
+a line:
+.Ql PCI_CLASS ,
+the 24-bit class code in uppercase hexadecimal, at least four digits;
+.Ql PCI_ID
+and
+.Ql PCI_SUBSYS_ID ,
+the vendor and device of the function and of its subsystem, as
+.Ql VVVV:DDDD ;
+.Ql PCI_SLOT_NAME ,
+the directory's name; and
+.Ql MODALIAS ,
+as Linux writes it.
+The subsystem is 0000:0000 for a bridge.
+.It Pa /sys/bus/usb/devices/B-P[.P...]
+A symbolic link for each running USB device, named by its bus, the number
+of its controller from 1, and its port on the controller and on each hub
+below, to
+.Pa ../../../devices/usb/B-P[.P...] .
+.It Pa /sys/devices/usb/B-P[.P...]/uevent
+The device's variables:
+.Ql PRODUCT ,
+its vendor, product and release in lowercase hexadecimal, separated by
+slashes;
+.Ql BUSNUM
+and
+.Ql DEVNUM ,
+its bus and the controller's slot for it, three decimal digits each; and
+.Ql DEVTYPE=usb_device .
+.El
+.Pp
+A
+.Pa uevent
+reports a size of 4096 bytes, as Linux's attribute files do, and reads as
+long as its text.
+.Pp
+Linux's tree has much more: the device classes, the attribute files beside
+each
+.Pa uevent ,
+the CPUs, the power and firmware interfaces.
+Rach2 has none of them.
+Where Linux nests a PCI function under the bridge it is behind, and a USB
+device under its controller's function, they are side by side here under
+.Pa pci0000:00
+and
+.Pa usb ,
+the links lead there, and the root hubs are not listed.
+A USB device's
+.Pa uevent
+leaves out the device node's numbers and name, since no node of the
+device exists, and puts
+.Ql DEVTYPE
+last, since
+.Ic lsusb
+takes a first line of
+.Ql DEVTYPE
+for an interface's.
+.Sh FILES
+.Bl -tag -width /sys/bus/pci/devices
+.It Pa /sys/bus/pci/devices
+The PCI functions.
+.It Pa /sys/bus/usb/devices
+The USB devices.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+$ cat /sys/bus/pci/devices/0000:00:00.0/uevent
+PCI_CLASS=60000
+PCI_ID=8086:0A04
+PCI_SUBSYS_ID=17AA:3978
+PCI_SLOT_NAME=0000:00:00.0
+MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
+.Ed
+.Sh SEE ALSO
+.Xr busybox-util-linux 1 ,
+.Xr proc 5

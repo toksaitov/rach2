@@ -16,6 +16,8 @@ struct vfs_ref;
 
 /* st_dev for /proc nodes, distinct from KRFFS (0) and devfs (DEVFS_FSID). */
 #define PROCFS_FSID 6u
+/* The device number /sys reports for its nodes. */
+#define SYSFS_FSID  7u
 
 /** Resolve a vpath pid (SYNTH_PID_SELF is the caller) to a live pid, or -1. */
 int procfs_resolve_pid(int pid);
@@ -93,6 +95,25 @@ uint32_t procfs_ino_nettcp(void);
 /** The inode of the /proc/net file `origin`, SYNTH_PROC_NETUDP to
  * SYNTH_PROC_NETSNMP. */
 uint32_t procfs_ino_net(int origin);
+
+/** Whether the /proc snapshot descriptor `e` is a device's uevent under
+ * /sys, which fstat and fstatfs report as sysfs's. */
+int procfs_fd_is_sys(struct fd_entry *e);
+
+/** The node of a device's directory under /sys, SYSFS_PCI_DEVICE or
+ * SYSFS_USB_DEVICE, from its key alone (synthfs.h). */
+int sysfs_node_of(int key);
+
+/** The inode of the /sys directory `node`, with its device `key`; with
+ * `file` 1 of the device's uevent, and 2 of its link. */
+uint32_t sysfs_ino(int node, int key, int file);
+
+/** The key of the `n`th device of `node`, SYSFS_PCI_DEVICE or
+ * SYSFS_USB_DEVICE, counting from zero, or -1 when there are no more. */
+int sysfs_device_key(int node, int n);
+
+/** Whether the device `key` of `node` is there. */
+int sysfs_device_exists(int node, int key);
 uint32_t procfs_fd_ino(struct fd_entry *e);
 uint32_t procfs_ino_pid(int pid);
 

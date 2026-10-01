@@ -259,9 +259,11 @@ The root, the synthetic
 .Pa /dev
 and
 .Pa /proc
-mounts, and the tmpfs at
-.Pa /dev/shm
-precede mounts made by programs.
+mounts, the tmpfs at
+.Pa /dev/shm ,
+and the synthetic
+.Pa /sys ,
+read-only, precede mounts made by programs.
 The source, target, type, and options describe the mounted file system.
 Options are comma-separated:
 .Ql ro
@@ -798,6 +800,7 @@ process also names a directory, which is not listed.
 .El
 .Sh SEE ALSO
 .Xr bootlog 4 ,
+.Xr sysfs 5 ,
 .Xr disk 7 ,
 .Xr memory 7 ,
 .Xr rach2 7

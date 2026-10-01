@@ -4972,3 +4972,25 @@ old
 new
     ap_int(t, 0);
 end
+
+# /sys, which lspci and lsusb read.
+
+fault sys-pci-link-absolute
+probe procprobe
+file rach2/sys/syscall_fs.c
+expect FAIL: /sys/bus/pci/devices has the host bridge's link, to its directory
+old
+    const char *up = "../../..";
+new
+    const char *up = "/sys";
+end
+
+fault sys-uevent-no-slot
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: and its uevent has the class, the IDs and the slot lspci reads
+old
+    ap_str(t, "\nPCI_SLOT_NAME=");
+new
+    ap_str(t, "\nPCI_SLOT=");
+end

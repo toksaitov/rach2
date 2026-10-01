@@ -2134,17 +2134,25 @@ static int procfs_rest(struct vfs_mount *mnt, const char *rest, void **node, con
     return synth_rest(mnt, "proc", rest, node, left);
 }
 
+static int sysfs_rest(struct vfs_mount *mnt, const char *rest, void **node, const char **left)
+{
+    return synth_rest(mnt, "sys", rest, node, left);
+}
+
 /* What the resolver needs of a synthetic node: whether it is a directory or
  * a link it follows, /proc/<pid>/exe, and the mode the search rule reads
- * (0755 under /dev, 0555 under /proc, both root's). The syscall layer
- * reports the full attributes itself. */
+ * (0755 under /dev, 0555 under /proc and /sys, all root's). A device's link
+ * under /sys is classified, not resolved, as /proc/self is, so to the
+ * resolver it is the directory it leads to. The syscall layer reports the
+ * full attributes itself. */
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct synth_node *sn = node;
     int kind = sn->vp.kind;
     int is_dir = kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR || kind == VNODE_PROC_DIR ||
                  kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID ||
-                 kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_TASK_DIR;
+                 kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_TASK_DIR ||
+                 kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK;
 
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {
@@ -2234,6 +2242,15 @@ static const struct vfs_ops procfs_vops = {
     0,                                                                       /* unpin */
 };
 
+static const struct vfs_ops sysfs_vops = {
+    0, sysfs_rest, synth_hold, synth_put, synth_getattr,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0,          0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
+    0,                                                                      /* symlink */
+    0,                                                                      /* mknod */
+    0,                                                                      /* pin */
+    0,                                                                      /* unpin */
+};
+
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                             const char *options)
 {
@@ -2261,14 +2278,23 @@ static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t fla
     return synth_mount_root(mnt, dev, flags, "proc");
 }
 
+static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
+                       const char *options)
+{
+    (void)options;
+    return synth_mount_root(mnt, dev, flags, "sys");
+}
+
 const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1};
 const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1};
+const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1};
 
 /** The classification of a synthetic node, or NULL when `mnt` is not one
- * of the two synthetic mounts. The syscall layer's glue reads it. */
+ * of the three synthetic mounts. The syscall layer's glue reads it. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
-    if (mnt->type != &vfs_devfs_type && mnt->type != &vfs_procfs_type) {
+    if (mnt->type != &vfs_devfs_type && mnt->type != &vfs_procfs_type &&
+        mnt->type != &vfs_sysfs_type) {
         return 0;
     }
     return &((struct synth_node *)node)->vp;
@@ -2329,8 +2355,9 @@ static void install(int idx, const struct vfs_type *type, const char *path,
  * root directory, and in /dev's root directory the tmpfs /dev/shm, with
  * `nosuid` and `nodev` as Linux systems mount it and mode 1777. A synthetic
  * type cannot host a mount point, so /dev/shm is a nameless mount entered
- * by its name, as /dev and /proc are. Last the tmpfs of memfd_create, with
- * no parent and no path, which nothing enters by name.
+ * by its name, as /dev and /proc are. Then the tmpfs of memfd_create, with
+ * no parent and no path, which nothing enters by name, and last /sys,
+ * read-only, as /dev and /proc are entered.
  */
 static void install_permanent(void)
 {
@@ -2341,6 +2368,9 @@ static void install_permanent(void)
     k_strncpy(mounts[3]->source, "tmpfs", sizeof(mounts[3]->source));
     install(4, &vfs_tmpfs_type, "", 0);
     mounts[4]->flags = VFS_MS_NOSUID | VFS_MS_NODEV;
+    install(5, &vfs_sysfs_type, "/sys", mounts[0]);
+    mounts[5]->flags = VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
+    k_strncpy(mounts[5]->source, "sysfs", sizeof(mounts[5]->source));
 }
 
 struct vfs_mount *vfs_memfd_mount(void)

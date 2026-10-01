@@ -27,6 +27,7 @@
 #include "devfs.h"
 #include "krffs.h"
 #include "../usb/core.h"
+#include "../pci.h"
 #include "../audio/hda.h"
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
@@ -84,8 +85,19 @@
 #define PROCFS_INO_CPUINFO     0x112u
 #define PROCFS_INO_LOADAVG     0x113u
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
-#define PROCFS_INO_SYS         0x140u /* and the entries of /proc/sys after it */
-#define PROCFS_INO_PID_BASE    0x200u
+
+/* Inode namespace for /sys: the fixed directories by their node; a PCI
+ * function's directory by its key, doubled, with its uevent one more, and
+ * its link by its key in a range of its own; and a USB device's directory
+ * by its key with the top bit set, its uevent with the next bit too, and
+ * its link with that bit alone. The keys are below 2^30 (synthfs.h). */
+#define SYSFS_INO_FIXED     0x100u
+#define SYSFS_INO_PCI       0x01000000u
+#define SYSFS_INO_PCI_LINK  0x02000000u
+#define SYSFS_INO_USB       0x80000000u
+#define SYSFS_INO_FILE      0x40000000u
+#define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
+#define PROCFS_INO_PID_BASE 0x200u
 
 /*
  * A text is built in the heap and grows as it is appended to, so a report
@@ -176,6 +188,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_NET_FILE) {
         return "/proc/net";
+    }
+    if (vp->kind == VNODE_SYS_FILE) {
+        return "/sys";
     }
     if (vp->procfile == SYNTH_PROC_STAT) {
         return "/proc/<pid>/stat";
@@ -1209,6 +1224,15 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                 ap_str(t, synth_net_name(pf->origin_file));
                 break;
             }
+            if (pf->origin_file == SYNTH_SYS_UEVENT) {
+                char where[64];
+
+                synth_sys_path(sysfs_node_of(pf->origin_pid), pf->origin_pid, where,
+                               (int)sizeof(where));
+                ap_str(t, where);
+                ap_str(t, "/uevent");
+                break;
+            }
             ap_str(t, "/proc/");
             if (pf->origin_task != 0) {
                 ap_int(t, pf->origin_task);
@@ -1423,6 +1447,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (synth_net_name(pf->origin_file)) {
         return procfs_ino_net(pf->origin_file);
+    }
+    if (pf->origin_file == SYNTH_SYS_UEVENT) {
+        return sysfs_ino(sysfs_node_of(pf->origin_pid), pf->origin_pid, 1);
     }
     if (pf->origin_file == SYNTH_PROC_UPTIME) {
         return PROCFS_INO_UPTIME;
@@ -2354,6 +2381,202 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
     }
 }
 
+/* /sys: the devices of the PCI and USB buses, and each one's uevent. */
+
+int procfs_fd_is_sys(struct fd_entry *e)
+{
+    const struct procfs_file *pf = e ? (const struct procfs_file *)e->priv : 0;
+
+    return pf && pf->origin_file == SYNTH_SYS_UEVENT;
+}
+
+int sysfs_node_of(int key)
+{
+    return key < 0x10000 ? SYSFS_PCI_DEVICE : SYSFS_USB_DEVICE;
+}
+
+uint32_t sysfs_ino(int node, int key, int file)
+{
+    if (node == SYSFS_PCI_DEVICE && file == 2) {
+        return SYSFS_INO_PCI_LINK + (uint32_t)key;
+    }
+    if (node == SYSFS_PCI_DEVICE) {
+        return SYSFS_INO_PCI + ((uint32_t)key << 1) + (file ? 1u : 0u);
+    }
+    if (node == SYSFS_USB_DEVICE && file == 2) {
+        return SYSFS_INO_FILE | (uint32_t)key;
+    }
+    if (node == SYSFS_USB_DEVICE) {
+        return SYSFS_INO_USB | (file ? SYSFS_INO_FILE : 0u) | (uint32_t)key;
+    }
+    return SYSFS_INO_FIXED + (uint32_t)node;
+}
+
+/** The key of USB device `r`, or -1 when a port of it does not fit one. */
+static int sysfs_usb_key(const struct usb_sys_row *r)
+{
+    int key, k;
+
+    if (r->bus < 1 || r->bus > 4 || r->depth < 1 || r->depth > 6 || r->ports[0] > 255) {
+        return -1;
+    }
+    key = (r->bus - 1) << 28 | r->ports[0] << 20;
+    for (k = 1; k < r->depth; k++) {
+        if (r->ports[k] > 15) {
+            return -1;
+        }
+        key |= r->ports[k] << (4 * (5 - k));
+    }
+    return key;
+}
+
+/** The table entry of the running USB device `key`, or -1. */
+static int sysfs_usb_find(int key, struct usb_sys_row *r)
+{
+    int i;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (usb_core_row(i, r) == 0 && sysfs_usb_key(r) == key) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Whether the PCI function `key` answers: its vendor is not all ones, and
+ * a function past the first is one of a device that has several. */
+static int sysfs_pci_present(int key)
+{
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31);
+
+    return pci_read_config16(bus, dev, (uint8_t)(key & 7), 0x00) != 0xFFFFu &&
+           ((key & 7) == 0 || (pci_read_config8(bus, dev, 0, 0x0E) & 0x80) != 0);
+}
+
+int sysfs_device_key(int node, int n)
+{
+    struct usb_sys_row r;
+    pci_device_t p;
+    int i, key, seen = 0;
+
+    if (node == SYSFS_PCI_DEVICE) {
+        return pci_nth(n, &p) ? p.bus << 8 | p.device << 3 | p.function : -1;
+    }
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (usb_core_row(i, &r) == 0 && (key = sysfs_usb_key(&r)) >= 0 && seen++ == n) {
+            return key;
+        }
+    }
+    return -1;
+}
+
+int sysfs_device_exists(int node, int key)
+{
+    struct usb_sys_row r;
+
+    return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
+}
+
+/** Append `v` in hexadecimal, lowercase and without leading zeros, as
+ * Linux's `%x` writes it. */
+static void ap_hex_lower(struct procfs_text *t, uint32_t v)
+{
+    static const char digits[] = "0123456789abcdef";
+    int shift = 28;
+
+    while (shift > 0 && (v >> shift) == 0) {
+        shift -= 4;
+    }
+    for (; shift >= 0; shift -= 4) {
+        ap_ch(t, digits[(v >> shift) & 15u]);
+    }
+}
+
+/** Append `v` in decimal with leading zeros to three digits, as `%03d`. */
+static void ap_u32_3(struct procfs_text *t, uint32_t v)
+{
+    if (v < 100) {
+        ap_ch(t, '0');
+    }
+    if (v < 10) {
+        ap_ch(t, '0');
+    }
+    ap_u32(t, v);
+}
+
+/**
+ * Render the uevent of the device `key` of `node`, the variables Linux
+ * gives a device of that bus that the readers here use.
+ *
+ * A PCI function has its class, IDs and subsystem IDs, its slot and its
+ * module alias. A USB device has its product, the numbers of its bus and
+ * of itself, and its type last: `lsusb` takes a uevent whose first line is
+ * the type for an interface's, and Linux's first lines, the device node's
+ * numbers and name, are left out, since no node of the device exists here.
+ */
+static int procfs_gen_uevent(struct procfs_text *t, int node, int key)
+{
+    struct usb_sys_row r;
+    char name[16];
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    uint32_t cls, ids, sub = 0;
+
+    if (node == SYSFS_USB_DEVICE) {
+        if (sysfs_usb_find(key, &r) < 0) {
+            return -ENOENT;
+        }
+        ap_str(t, "PRODUCT=");
+        ap_hex_lower(t, r.vendor);
+        ap_ch(t, '/');
+        ap_hex_lower(t, r.product);
+        ap_ch(t, '/');
+        ap_hex_lower(t, r.release);
+        ap_str(t, "\nBUSNUM=");
+        ap_u32_3(t, (uint32_t)r.bus);
+        ap_str(t, "\nDEVNUM=");
+        ap_u32_3(t, (uint32_t)r.devnum);
+        ap_str(t, "\nDEVTYPE=usb_device\n");
+        return t->len;
+    }
+    if (!sysfs_pci_present(key)) {
+        return -ENOENT;
+    }
+    cls = pci_read_config32(bus, dev, fn, 0x08) >> 8;
+    ids = pci_read_config32(bus, dev, fn, 0x00);
+    if ((pci_read_config8(bus, dev, fn, 0x0E) & 0x7F) == 0) {
+        sub = pci_read_config32(bus, dev, fn, 0x2C);
+    }
+    synth_sys_device_name(SYSFS_PCI_DEVICE, key, name, sizeof(name));
+    ap_str(t, "PCI_CLASS=");
+    ap_hex(t, cls, cls > 0xFFFFFu ? 6 : cls > 0xFFFFu ? 5 : 4);
+    ap_str(t, "\nPCI_ID=");
+    ap_hex(t, ids & 0xFFFFu, 4);
+    ap_ch(t, ':');
+    ap_hex(t, ids >> 16, 4);
+    ap_str(t, "\nPCI_SUBSYS_ID=");
+    ap_hex(t, sub & 0xFFFFu, 4);
+    ap_ch(t, ':');
+    ap_hex(t, sub >> 16, 4);
+    ap_str(t, "\nPCI_SLOT_NAME=");
+    ap_str(t, name);
+    ap_str(t, "\nMODALIAS=pci:v");
+    ap_hex(t, ids & 0xFFFFu, 8);
+    ap_ch(t, 'd');
+    ap_hex(t, ids >> 16, 8);
+    ap_str(t, "sv");
+    ap_hex(t, sub & 0xFFFFu, 8);
+    ap_str(t, "sd");
+    ap_hex(t, sub >> 16, 8);
+    ap_str(t, "bc");
+    ap_hex(t, cls >> 16, 2);
+    ap_str(t, "sc");
+    ap_hex(t, (cls >> 8) & 0xFFu, 2);
+    ap_ch(t, 'i');
+    ap_hex(t, cls & 0xFFu, 2);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
 /* the /proc file backing: a snapshot served through file_ops */
 
 /* A snapshot and its text are allocated from the heap at open and freed at
@@ -2886,7 +3109,7 @@ static int procfs_needs_pid(int kind)
            kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
            kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP &&
-           kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE;
+           kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE && kind != VNODE_SYS_FILE;
 }
 
 /**
@@ -3004,6 +3227,9 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_nettcp(&text);
     } else if (vp->kind == VNODE_PROC_NET_FILE) {
         len = procfs_gen_net(&text, vp->procfile);
+    } else if (vp->kind == VNODE_SYS_FILE) {
+        len = procfs_gen_uevent(&text, vp->sysent, vp->syskey);
+        pid = vp->syskey;
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(&text, pid, vp->tid == 0);
     } else if (vp->procfile == SYNTH_PROC_MAPS) {
@@ -3078,6 +3304,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_NETARP;
     } else if (vp->kind == VNODE_PROC_NET_TCP) {
         f->origin_file = SYNTH_PROC_NETTCP;
+    } else if (vp->kind == VNODE_SYS_FILE) {
+        f->origin_file = SYNTH_SYS_UEVENT;
     } else {
         f->origin_file = vp->procfile;
     }

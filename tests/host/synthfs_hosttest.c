@@ -32,6 +32,45 @@ static int eq(const char *a, const char *b)
     return *a == *b;
 }
 
+/**
+ * /sys: the fixed directories, a device's link and directory and uevent by
+ * its name, and the names written back from the keys as they were read; a
+ * name not of a device's form, or a hub port that four bits cannot hold, is
+ * ENOENT, and a path through a uevent is ENOTDIR.
+ */
+static void sys_tree(void)
+{
+    struct vpath vp;
+    char name[32], path[64];
+
+    CHECK(synth_classify("sys", &vp) == VNODE_SYS_DIR && vp.sysent == SYSFS_ROOT);
+    CHECK(synth_classify("sys/bus/usb/devices", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_USB_LINKS);
+    CHECK(synth_classify("sys/devices/pci0000:00", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_PCI_ROOT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_PCI_DEVICE && vp.syskey == (0 << 8 | 0x1f << 3 | 2));
+    synth_sys_device_name(SYSFS_PCI_DEVICE, vp.syskey, name, (int)sizeof(name));
+    CHECK(eq(name, "0000:00:1f.2"));
+    CHECK(synth_classify("sys/bus/pci/devices/0000:03:00.0/uevent", &vp) == VNODE_SYS_FILE &&
+          vp.syskey == 3 << 8);
+    CHECK(synth_classify("sys/devices/usb/2-17.3.4", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_USB_DEVICE && vp.syskey == (1 << 28 | 17 << 20 | 3 << 16 | 4 << 12));
+    synth_sys_device_name(SYSFS_USB_DEVICE, vp.syskey, name, (int)sizeof(name));
+    CHECK(eq(name, "2-17.3.4"));
+    synth_sys_path(SYSFS_USB_DEVICE, vp.syskey, path, (int)sizeof(path));
+    CHECK(eq(path, "/sys/devices/usb/2-17.3.4"));
+    CHECK(synth_classify("sys/bus/usb/devices/1-2", &vp) == VNODE_SYS_LINK);
+    CHECK(synth_classify("sys/bus/usb/devices/1-2/uevent/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/bus/usb/devices/1-2.16", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/usb/devices/5-1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/usb/devices/1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:20.0", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1F.2", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class", &vp) == VNODE_ENOENT);
+}
+
 /** The parser's bounds, of a number and of a path's depth. */
 static void bounds(void)
 {
@@ -174,5 +213,6 @@ int main(void)
 
     bounds();
     paths();
+    sys_tree();
     return fails > 255 ? 255 : fails;
 }

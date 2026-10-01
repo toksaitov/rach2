@@ -480,6 +480,17 @@ void hid_gone(int slot)
 void input_mouse_found(void)
 {}
 
+/** The core reads a device's record with interrupts off; the host has none. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 #include "../../rach2/sys/usb/core.c"
 
 /* ---- the rows ---- */

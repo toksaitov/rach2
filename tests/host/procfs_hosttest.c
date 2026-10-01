@@ -61,6 +61,10 @@ static uint32_t procfs_ino_pid(int pid);
 static uint32_t procfs_task_links(int pid);
 static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
+static int sysfs_node_of(int key);
+static uint32_t sysfs_ino(int node, int key, int file);
+static int sysfs_device_key(int node, int n);
+static int sysfs_device_exists(int node, int key);
 #include "fs/procfs.c"
 
 extern int printf(const char *format, ...);
@@ -346,6 +350,16 @@ const char *synth_net_name(int origin)
 {
     (void)origin;
     return NULL;
+}
+
+/** No device of /sys is opened here. */
+void synth_sys_path(int node, int key, char *out, int cap)
+{
+    (void)node;
+    (void)key;
+    if (cap > 0) {
+        out[0] = '\0';
+    }
 }
 
 /** Whether the stat line `line` has the user and system times `user` and

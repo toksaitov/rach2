@@ -563,17 +563,18 @@ int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap);
 struct vpath;
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node);
 
-/* The three permanent types: the root's adapter and the two synthetic
+/* The four permanent types: the root's adapter and the three synthetic
  * namespaces. */
 extern const struct vfs_type vfs_krffs_type;
 extern const struct vfs_type vfs_devfs_type;
 extern const struct vfs_type vfs_procfs_type;
+extern const struct vfs_type vfs_sysfs_type;
 
 /* The permanent mounts, entries 0 to VFS_PERMANENT - 1: the root, /dev,
- * /proc, the tmpfs /dev/shm, a nameless mount in /dev's root directory, and
- * the tmpfs of memfd_create's files, which no path reaches. umount2 answers
- * EBUSY for each it can name. */
-#define VFS_PERMANENT 5
+ * /proc, the tmpfs /dev/shm, a nameless mount in /dev's root directory, the
+ * tmpfs of memfd_create's files, which no path reaches, and /sys. umount2
+ * answers EBUSY for each it can name. */
+#define VFS_PERMANENT 6
 
 /** The tmpfs memfd_create makes its files on: no path reaches it, no
  * listing shows it, and it lasts as long as the kernel. */

@@ -943,6 +943,40 @@ uint32_t procfs_ino_net(int origin)
     check(0, "unexpected stat of a /proc file");
     return 0;
 }
+uint32_t sysfs_ino(int node, int key, int file)
+{
+    (void)node;
+    (void)key;
+    (void)file;
+    check(0, "unexpected stat of a /sys file");
+    return 0;
+}
+int sysfs_device_exists(int node, int key)
+{
+    (void)node;
+    (void)key;
+    return 0;
+}
+int sysfs_device_key(int node, int n)
+{
+    (void)node;
+    (void)n;
+    return -1;
+}
+int procfs_fd_is_sys(struct fd_entry *e)
+{
+    (void)e;
+    return 0;
+}
+
+void synth_sys_path(int node, int key, char *out, int cap)
+{
+    (void)node;
+    (void)key;
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+}
 NO_PROC_INO(procfs_ino_statsys)
 NO_PROC_INO(procfs_ino_uptime)
 NO_PROC_INO(procfs_ino_usb)

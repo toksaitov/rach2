@@ -25,6 +25,7 @@
 #include "../input.h"
 #include "../klog.h"
 #include "../lib/kstring.h"
+#include "../lib/kirq.h"
 #include "../mm/paging.h"
 #include "hid.h"
 #include "hub.h"
@@ -150,6 +151,7 @@ struct usb_device_state {
     uint32_t config_length;
     uint16_t vendor;
     uint16_t product;
+    uint16_t release; /* bcdDevice */
     int ep0_packet;
     int ep_dci;
     int ep_out_dci; /* a stick's outward endpoint; zero on a device with one */
@@ -1105,6 +1107,7 @@ static void step_device(struct usb_device_state *d)
         }
         d->vendor = (uint16_t)(d->buffer[8] | (d->buffer[9] << 8));
         d->product = (uint16_t)(d->buffer[10] | (d->buffer[11] << 8));
+        d->release = (uint16_t)(d->buffer[12] | (d->buffer[13] << 8));
         if (control_in(d, REQ_GET_DESCRIPTOR, DESC_CONFIG << 8, 0, 9) != 0) {
             fail(d, "its configuration could not be asked for");
             return;
@@ -1783,6 +1786,40 @@ static int put_num(char *out, int size, int at, uint32_t value, int base)
         at++;
     }
     return at;
+}
+
+int usb_core_row(int index, struct usb_sys_row *row)
+{
+    const struct usb_device_state *d;
+    int chain[USB_TREE_TIERS + 1];
+    int depth = 0;
+    uint32_t flags;
+
+    if (index < 0 || index >= USB_MAX_DEVICES) {
+        return -1;
+    }
+    flags = kirq_save();
+    d = dev_at(index);
+    if (d->state != ST_RUNNING) {
+        kirq_restore(flags);
+        return -1;
+    }
+    row->bus = bus_of(d) + 1;
+    row->devnum = d->slot;
+    row->vendor = d->vendor;
+    row->product = d->product;
+    row->release = d->release;
+    while (d != 0 && depth <= USB_TREE_TIERS) {
+        chain[depth++] = d->port + 1;
+        d = d->owner >= 0 ? dev_at(d->owner) : 0;
+    }
+    row->depth = depth;
+    while (depth > 0) {
+        row->ports[row->depth - depth] = chain[depth - 1];
+        depth--;
+    }
+    kirq_restore(flags);
+    return 0;
 }
 
 int usb_core_describe(int index, char *out, int size)

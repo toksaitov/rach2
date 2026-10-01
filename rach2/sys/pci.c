@@ -288,6 +288,32 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
     return pci_find_nth_by_id(vendor_id, device_id, 0, out);
 }
 
+bool pci_nth(int nth, pci_device_t *out)
+{
+    uint16_t bus;
+    uint8_t device, function;
+    int seen = 0;
+
+    for (bus = 0; bus < 256; bus++) {
+        for (device = 0; device < 32; device++) {
+            if (!pci_device_exists((uint8_t)bus, device, 0)) {
+                continue;
+            }
+            for (function = 0; function < 8; function++) {
+                if (pci_device_exists((uint8_t)bus, device, function) && seen++ == nth) {
+                    pci_read_device_info((uint8_t)bus, device, function, out);
+                    return true;
+                }
+                if (function == 0 &&
+                    !(pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE) & 0x80)) {
+                    break;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out)
 {
     uint16_t bus;

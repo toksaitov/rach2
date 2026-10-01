@@ -292,6 +292,7 @@ row_iproute2() {
     has "ss -s" "$(ss -s 2>&1)" "TCP:   "
     same "what ss -s says on stderr" "$(ss -s 2>&1 >/dev/null)" ""
     kill "$pid"
+    has "lspci, from /sys" "$(lspci 2>&1)" "00:00.0 Class 0600: 8086:"
 }
 
 # file names a program, a text and a gzip file from the magic database, and

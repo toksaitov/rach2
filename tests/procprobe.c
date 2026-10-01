@@ -771,6 +771,28 @@ static void done(void)
     sys_exit(fails);
 }
 
+/* /sys: the host bridge every machine here has at 00:00.0, its link in the
+   bus's list leading where Linux's does, and its uevent with the variables
+   lspci reads; and the mount table listing /sys read-only. */
+static void sys_rows(void)
+{
+    char link[64] = {0};
+    int n = syscall3(SYS_READLINK, (int)(size_t)"/sys/bus/pci/devices/0000:00:00.0",
+                     (int)(size_t)link, (int)sizeof(link) - 1);
+
+    if (n > 0) {
+        link[n] = '\0';
+    }
+    check(n > 0 && same_str(link, "../../../devices/pci0000:00/0000:00:00.0"),
+          "/sys/bus/pci/devices has the host bridge's link, to its directory");
+    n = slurp("/sys/bus/pci/devices/0000:00:00.0/uevent", buf, (int)sizeof(buf));
+    check(contains(buf, n, "PCI_CLASS=60000\n") && contains(buf, n, "\nPCI_ID=") &&
+              contains(buf, n, "\nPCI_SLOT_NAME=0000:00:00.0\n"),
+          "and its uevent has the class, the IDs and the slot lspci reads");
+    n = slurp("/proc/mounts", buf, (int)sizeof(buf));
+    check(contains(buf, n, "\nsysfs /sys sysfs ro,"), "/proc/mounts lists /sys, read-only");
+}
+
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
    open. */
 static void count_rows(void)
@@ -1003,7 +1025,7 @@ void probe_main(unsigned int *sp)
 
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
-    check(lines_in(buf, n) == 4, "/proc/mounts names the root, /dev, /proc and /dev/shm");
+    check(lines_in(buf, n) == 5, "/proc/mounts names the root, /dev, /proc, /dev/shm and /sys");
     check(ends_with(buf, n, " 0 0\n"), "/proc/mounts's last line is a whole fstab row");
     print_rootmount(buf, n);
 
@@ -1230,6 +1252,7 @@ void probe_main(unsigned int *sp)
     }
 
     dgram_and_local_rows();
+    sys_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
      * here, because one process cannot hold that many descriptors, and the file

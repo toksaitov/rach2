@@ -110,6 +110,14 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
  */
 bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out);
 
+/**
+ * The `nth` function on the buses, counting from zero in the order of bus,
+ * device and function, as /sys/bus/pci/devices lists them.
+ *
+ * @return true with `*out` filled, false when there are no more.
+ */
+bool pci_nth(int nth, pci_device_t *out);
+
 /*
  * PCIe capability walk. The capability list starts at the pointer in config
  * space and is a singly linked list of (id, next) pairs; a bounded walk is

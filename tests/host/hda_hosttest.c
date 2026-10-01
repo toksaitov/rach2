@@ -38,6 +38,10 @@ static uint32_t procfs_ino_pid(int pid);
 static uint32_t procfs_task_links(int pid);
 static int procfs_oom_owner(int pid, uint32_t *uid, uint32_t *gid);
 static int procfs_fd_oom_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
+static int sysfs_node_of(int key);
+static uint32_t sysfs_ino(int node, int key, int file);
+static int sysfs_device_key(int node, int n);
+static int sysfs_device_exists(int node, int key);
 #include "fs/procfs.c"
 
 #include "fs/synthfs.c"

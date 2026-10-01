@@ -308,11 +308,19 @@ and
 .It Nm lspci
 List PCI devices from
 .Pa /sys/bus/pci/devices ,
-which Rach2 does not have; nothing is listed.
+by slot, class and IDs; see
+.Xr sysfs 5 .
+The kernel binds no driver a device's
+.Pa uevent
+names, so
+.Fl k
+adds nothing.
 .It Nm lsusb
-List USB buses and attached devices from
+List the running USB devices from
 .Pa /sys/bus/usb/devices ,
-which Rach2 does not have; nothing is listed.
+by bus, device number and IDs; see
+.Xr sysfs 5 .
+The root hubs are not listed.
 .It Nm mesg
 Control write access to the terminal.
 The argument
