@@ -277,7 +277,8 @@ row_xz() {
 }
 
 # The interfaces, addresses, routes and neighbours, through the netlink
-# route socket: a link asked for by its name, with its counters. Then the
+# route socket: a link asked for by its name, with its counters, a route
+# looked up, the rules and the queueing disciplines. Then the
 # sockets through the socket diagnostics, which ss asks first and complains
 # of when it cannot, a listener among them, and the counts of ss -s.
 row_iproute2() {
@@ -287,6 +288,9 @@ row_iproute2() {
     has "ip link of one interface by its name" "$(ip link show eth0 2>&1)" "link/ether"
     has "ip -s link's counters" "$(ip -s link show eth0 2>&1)" "RX:"
     has "ip neigh" "$(ip neigh show 2>&1)" "10.0.2.2 dev eth0 lladdr"
+    has "ip route get" "$(ip route get 10.0.2.2 2>&1)" "10.0.2.2 dev eth0 src 10.0.2.15"
+    has "ip rule" "$(ip rule 2>&1)" "32766:	from all lookup main"
+    has "tc qdisc" "$(tc qdisc 2>&1)" "qdisc noqueue 0: dev eth0 root"
     perl -MIO::Socket::INET -e 'my $s = IO::Socket::INET->new(LocalPort => 5999, Listen => 1) or die; sleep 90' &
     local pid=$! i=0
     until grep -q ':176F ' /proc/net/tcp || [ $i -ge 600 ]; do
@@ -300,6 +304,17 @@ row_iproute2() {
     same "what ss -s says on stderr" "$(ss -s 2>&1 >/dev/null)" ""
     kill "$pid"
     has "lspci, from /sys" "$(lspci 2>&1)" "00:00.0 Class 0600: 8086:"
+}
+
+# loopctl attaches a file named relative to the current directory, which it
+# resolves, since the kernel takes an absolute path, and detaches it.
+row_loopctl() {
+    local dev
+    truncate -s 1M "$WORK/loop.img"
+    runs "loopctl attach of a relative name" loopctl attach loop.img
+    dev=$(loopctl | awk -v f="$WORK/loop.img" '$NF == f { sub(/^loop/, "", $1); print $1 }')
+    has "the attachment" "$(loopctl)" " $WORK/loop.img"
+    runs "loopctl detach" loopctl detach "${dev:-none}"
 }
 
 # file names a program, a text and a gzip file from the magic database, and

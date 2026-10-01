@@ -43,6 +43,11 @@ Attach the file to device
 or to the first free device when
 .Ar N
 is omitted.
+A relative
+.Ar file
+is taken from the current directory, as
+.Xr realpath 3
+resolves it, since the kernel takes an absolute path.
 The
 .Fl r
 option makes the device read-only.

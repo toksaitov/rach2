@@ -11,12 +11,16 @@
  * The kernel is spoken to through /dev/loop-control, one command per write,
  * which is what a shell can send and what a program of this size can afford.
  * The device is what `mount(2)` then takes as its source, so a file system in
- * a file is mounted like any other volume.
+ * a file is mounted like any other volume. The kernel takes the file by an
+ * absolute path, so a relative one is resolved here first, as losetup takes
+ * one on Linux.
  */
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -64,6 +68,26 @@ static int command(const char *line)
     return 0;
 }
 
+/**
+ * Send the attach command for `file`, of device `n` ("-" for the first free
+ * one), read-only when `ro` is "ro ". Returns 0, or 1 after a diagnostic.
+ */
+static int attach(const char *ro, const char *n, const char *file)
+{
+    char path[PATH_MAX];
+    char line[PATH_MAX + 32];
+
+    if (!realpath(file, path)) {
+        fprintf(stderr, "loopctl: %s: %s\n", file, strerror(errno));
+        return 1;
+    }
+    if (snprintf(line, sizeof(line), "attach %s%s %s", ro, n, path) >= (int)sizeof(line)) {
+        fprintf(stderr, "loopctl: %s: the path is too long\n", file);
+        return 1;
+    }
+    return command(line);
+}
+
 int main(int argc, char **argv)
 {
     char line[160];
@@ -80,12 +104,10 @@ int main(int argc, char **argv)
             at = 3;
         }
         if (argc == at + 1) {
-            snprintf(line, sizeof(line), "attach %s- %s", ro, argv[at]);
-            return command(line);
+            return attach(ro, "-", argv[at]);
         }
         if (argc == at + 2) {
-            snprintf(line, sizeof(line), "attach %s%s %s", ro, argv[at], argv[at + 1]);
-            return command(line);
+            return attach(ro, argv[at], argv[at + 1]);
         }
     }
     if (argc == 3 && strcmp(argv[1], "detach") == 0) {
