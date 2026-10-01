@@ -639,15 +639,15 @@ static void window_close(struct ext2_window *w)
 }
 
 /* `len` bytes at byte `at` of directory `d`, through window `w` when it has
- * a copy; `len` does not cross a block, since no entry does. */
+ * a copy and the bytes lie inside one block, which a valid entry's do. */
 static int dir_bytes(struct ext2_mount *em, const struct ext2_node *d, struct ext2_window *w,
                      uint32_t at, void *dst, uint32_t len)
 {
     int64_t index = (int64_t)(at >> em->block_shift);
     int rc;
 
-    if (!w || !w->data) {
-        return read_data(em, d, at, dst, len);
+    if (!w || !w->data || (at & (em->block_size - 1)) + len > em->block_size) {
+        return read_data(em, d, at, dst, len); /* a corrupt record's header past its block */
     }
     if (w->index != index) {
         w->index = -1;

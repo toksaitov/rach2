@@ -954,6 +954,18 @@ static void refusal_rows(void)
                       memcmp(last_warn, "directory 2: entry at 24 is malformed", 37) == 0,
                   "an entry naming an inode past the count is malformed by name");
             unmount_image();
+            /* `.` whose record ends four bytes short of its block, so the
+               next header would run past the block. */
+            bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+            b[0] = 0xfc;
+            b[1] = 0x0f;
+            poke(img, (long)root_block * 4096 + 4, b, 2);
+            use_image(img, bytes);
+            check(mount_image() == 0, "the volume with a record four bytes short mounts");
+            check(walk("/hello.txt", &err) == 0 && err == -EIO,
+                  "a header that would run past its block fails the lookup, read from no "
+                  "byte past the block");
+            unmount_image();
         } else {
             check(0, "the root's block was found for the malformed-entry row");
         }
