@@ -206,10 +206,11 @@ static int parse(int argc, char **argv, struct options *o)
 
 /**
  * Send one request to `ip` and wait at most `wait` microseconds, or the
- * kernel's own time with `wait` 0, for its reply; the round trip in
- * microseconds, or -errno: -EINTR for an interrupt or the wait's end.
+ * kernel's own time with `wait` 0, for its reply, whose ICMP length goes to
+ * `*len`; the round trip in microseconds, or -errno: -EINTR for an interrupt
+ * or the wait's end.
  */
-static long long ping_once(unsigned int ip, const struct options *o, long long wait)
+static long long ping_once(unsigned int ip, const struct options *o, long long wait, long *len)
 {
     unsigned int args[3];
     long long t0, rtt;
@@ -221,13 +222,18 @@ static long long ping_once(unsigned int ip, const struct options *o, long long w
     args[2] = (unsigned int)o->ttl;
     t0 = now_us();
     rtt = syscall(SYS_socketcall, SC_PING_DATA, args);
-    rtt = rtt >= 0 ? now_us() - t0 : -errno;
+    if (rtt >= 0) {
+        *len = (long)rtt;
+        rtt = now_us() - t0;
+    } else {
+        rtt = -errno;
+    }
     arm(0);
     return rtt;
 }
 
 /** Count the round trip `rtt` in `t`, and print its line, of a reply of
- * `size` bytes of data, unless `quiet`. */
+ * `size` ICMP bytes, unless `quiet`. */
 static void count_reply(struct tally *t, unsigned int ip, long long rtt, long size, int quiet)
 {
     t->received++;
@@ -240,7 +246,7 @@ static void count_reply(struct tally *t, unsigned int ip, long long rtt, long si
         t->max = rtt;
     }
     if (!quiet) {
-        printf("%ld bytes from %u.%u.%u.%u: icmp_seq=%ld time=", size + 8, (ip >> 24) & 0xFF,
+        printf("%ld bytes from %u.%u.%u.%u: icmp_seq=%ld time=", size, (ip >> 24) & 0xFF,
                (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, t->sent);
         print_ms(rtt);
         puts(" ms");
@@ -268,6 +274,7 @@ static void pause_until(long long from, long long us)
 static int run(unsigned int ip, const struct options *o, struct tally *t, long long start)
 {
     long long rtt, wait, left, t0;
+    long len = 0;
 
     while (!interrupted && (o->count < 0 || t->sent < o->count)) {
         left = o->deadline ? o->deadline - (now_us() - start) : 0;
@@ -279,7 +286,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
             wait = left;
         }
         t0 = now_us();
-        rtt = ping_once(ip, o, wait);
+        rtt = ping_once(ip, o, wait, &len);
         if (rtt == -EBUSY) {
             fputs("ping: another ping is in flight on this machine\n", stderr);
             return 1;
@@ -289,7 +296,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
         }
         t->sent++;
         if (rtt >= 0) {
-            count_reply(t, ip, rtt, o->size, o->quiet);
+            count_reply(t, ip, rtt, len, o->quiet);
         }
         if (o->count >= 0 && t->sent >= o->count) {
             break;

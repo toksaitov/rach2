@@ -33,7 +33,8 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 int icmp_ping(uint32_t dst_ip);
 
 /** `icmp_ping` with `size` bytes of data after the header, at most
- * `ICMP_PING_DATA_MAX`, and the hop limit `ttl`. */
-int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl);
+ * `ICMP_PING_DATA_MAX`, and the hop limit `ttl`; the reply's ICMP length
+ * goes to `*got` unless `got` is NULL. */
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got);
 
 #endif /* _ICMP_H_ */

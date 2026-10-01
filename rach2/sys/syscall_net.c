@@ -2131,11 +2131,16 @@ static int32_t socket_dispatch(int call, uint32_t *args)
         return do_recvfrom((int)args[0], args[1], (int)args[2], (int)args[3], args[4], args[5]);
     case SC_PING:
         return do_ping(args[0]);
-    case SC_PING_DATA:
+    case SC_PING_DATA: {
+        uint16_t got = 0;
+        int rc;
+
         if (args[2] < 1 || args[2] > 255) {
             return -EINVAL;
         }
-        return (int32_t)icmp_ping_data(canonical_dst_ip(args[0]), args[1], (uint8_t)args[2]);
+        rc = icmp_ping_data(canonical_dst_ip(args[0]), args[1], (uint8_t)args[2], &got);
+        return rc < 0 ? rc : (int32_t)got;
+    }
     case SC_CONNECT:
         return do_connect((int)args[0], args[1], (int)args[2]);
     case SC_LISTEN:

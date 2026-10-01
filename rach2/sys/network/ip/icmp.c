@@ -63,6 +63,7 @@ static uint8_t icmp_echo_buf[8 + ICMP_PING_DATA_MAX];
 /* The one in-flight ping, matched against incoming replies. */
 static volatile int ping_active = 0;
 static volatile int ping_replied = 0;
+static volatile uint16_t ping_reply_len; /* the ICMP bytes of the reply */
 static volatile uint16_t ping_seq_wait = 0;
 static volatile uint32_t ping_peer_ip = 0;
 static volatile uint32_t ping_deadline = 0;
@@ -130,6 +131,7 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         uint16_t id = read16be(data + 4);
         uint16_t seq = read16be(data + 6);
         if (ping_active && src_ip == ping_peer_ip && id == ICMP_PING_ID && seq == ping_seq_wait) {
+            ping_reply_len = len;
             ping_replied = 1;
             if (ping_wq_ready) {
                 wq_wake_all(&ping_wq);
@@ -192,11 +194,13 @@ static void ping_release(void)
  *
  * The request carries `size` bytes of data, each its own offset in the data
  * modulo 256, as iputils fills them, and leaves with the hop limit `ttl`.
+ * The reply's ICMP length, which a peer may make shorter or longer than the
+ * request, goes to `*got` when `got` is not NULL.
  *
  * @return round-trip time in ticks, `-ETIMEDOUT` if every attempt expired,
  *         `-EBUSY` if another ping has the slot, or `-EINTR` on a signal.
  */
-int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl)
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got)
 {
     uint32_t start, flags, i;
     uint16_t seq;
@@ -270,6 +274,9 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl)
 
         if (ping_replied) {
             rc = (int)(kernel_ticks - start);
+            if (got) {
+                *got = ping_reply_len;
+            }
             ping_release();
 
             return rc;
@@ -284,5 +291,5 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl)
 
 int icmp_ping(uint32_t dst_ip)
 {
-    return icmp_ping_data(dst_ip, 0, IP_TTL_DEFAULT);
+    return icmp_ping_data(dst_ip, 0, IP_TTL_DEFAULT, 0);
 }

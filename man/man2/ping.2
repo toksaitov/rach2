@@ -54,9 +54,13 @@ without sending a request.
 The request slot is released on success, timeout, or interruption by
 a signal.
 .Sh RETURN VALUES
-The result is the elapsed tick count for the successful attempt.
+Operation 0x1000 returns the elapsed tick count for the successful
+attempt.
 Each tick is 10 ms; a result of zero is valid.
 Earlier attempts are not included.
+Operation 0x1001 returns the length of the reply's ICMP message, its
+8-byte header and its data, which a peer may make other than the
+request's.
 On failure,
 .Fn syscall
 returns -1 and sets
