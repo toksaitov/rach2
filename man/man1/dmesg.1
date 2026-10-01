@@ -1,36 +1,90 @@
-.Dd September 19, 2026
+.Dd October 1, 2026
 .Dt DMESG 1
 .Os
 .Sh NAME
 .Nm dmesg
-.Nd print the kernel boot log
+.Nd print the kernel's log
 .Sh SYNOPSIS
 .Nm
+.Op Fl krtTwx
+.Op Fl l Ar level Ns Op , Ns Ar level ...
 .Sh DESCRIPTION
 The
 .Nm
-command prints
+command prints the kernel's log,
 .Pa /dev/bootlog ,
-which the kernel fills as it starts.
+which the kernel fills from its start, one record a line, as Linux's
+.Nm
+prints its ring buffer.
+Each record is a level, the seconds since boot, and the text; by default
+.Nm
+prints the time and the text, as
+.Ql [6.34] net: eth0: IPv4 192.168.0.106/24 .
 Root may also read the log with any program that reads a file.
 .Pp
+The options are Linux's that read the log:
+.Bl -tag -width Ds
+.It Fl k , Fl Fl kernel
+Print the kernel's records, which are all the log holds.
+.It Fl l Ar list , Fl Fl level Ns = Ns Ar list
+Print the records of the levels in the comma-separated
+.Ar list
+only:
+.Cm emerg ,
+.Cm alert ,
+.Cm crit ,
+.Cm err ,
+.Cm warn ,
+.Cm notice ,
+.Cm info
+and
+.Cm debug .
+.It Fl r , Fl Fl raw
+Print each record as the log holds it, its level in angle brackets first.
+.It Fl t , Fl Fl notime
+Print no time.
+.It Fl T , Fl Fl ctime
+Print the time of day each record was made, from the boot time in
+.Pa /proc/stat ,
+in place of the seconds since boot.
+.It Fl w , Fl Fl follow
+Print the records there are, then each new one as it is made, until
+interrupted.
+.It Fl x , Fl Fl decode
+Print each record's facility and level before it, as
+.Ql kern  :info  : .
+.El
+.Pp
+Short options may be combined, as in
+.Fl Tw .
+Linux's options that clear the buffer, resize it or set the console's
+level are refused, since the log here is not a buffer they could change.
+The BusyBox
 .Nm
-accepts no arguments.
-Linux's options apply to a ring buffer that this kernel does not keep.
-Arguments are refused rather than ignored.
-The BusyBox dmesg applet is not built because it cannot read this kernel's log.
+applet is not built, because it cannot read this kernel's log.
 .Sh FILES
 .Bl -tag -width /dev/bootlog
 .It Pa /bin/dmesg
-Script installed on os-real, metal, and recovery images.
+The script, installed on os-real, metal, GNU and recovery images.
 .It Pa /dev/bootlog
-Kernel boot log, readable by root.
+The kernel's log.
 .El
 .Sh EXIT STATUS
-An invocation with any argument exits with status 1.
+.Nm
+exits with status 1 for an option it does not take or a level it does not
+know, and otherwise with the status of the program that formats the log.
+.Sh EXAMPLES
+.Dl dmesg -T -l err,warn
+.Dl dmesg -w
 .Sh DIAGNOSTICS
-An argument produces:
-.Dl dmesg: this machine's boot log is /dev/bootlog and takes no options
+.Bl -tag -width Ds
+.It Ql dmesg: -c: the boot log, /dev/bootlog, is not cleared, resized or given a console level
+An option that would change the buffer was given.
+.It Ql dmesg: unknown level 'LEVEL'
+A level of
+.Fl l
+is not one of the eight names.
+.El
 .Sh SEE ALSO
 .Xr bootlog 4 ,
 .Xr rach2 7

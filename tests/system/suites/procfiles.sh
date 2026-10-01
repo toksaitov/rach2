@@ -196,7 +196,8 @@ applet 'df / > /tmp.df; echo DF""-STATUS:$?; tail -1 /tmp.df' 'DF-STATUS:'
 applet 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free' 'FREE-STATUS:'
 applet 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up' 'UP-STATUS:'
 applet 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; sed -n "1s/^/DM""ESG-FIRST:/p" /tmp.dm' 'DMESG-FIRST:'
-applet 'grep -c "^<[0-9]>\\[" /tmp.dm | sed s/^/DM""ESG-RECORDS:/' 'DMESG-RECORDS:'
+applet 'dmesg -r | grep -c "^<[0-9]>\\[" | sed s/^/DM""ESG-RECORDS:/' 'DMESG-RECORDS:'
+applet 'dmesg -t -l info | sed -n "1s/^/DM""ESG-INFO:/p"' 'DMESG-INFO:'
 applet 'grep -c "Type .help." /tmp.dm | sed s/^/DM""ESG-CONSOLE:/' 'DMESG-CONSOLE:'
 # Key generation can take minutes in emulation. Dropbear may write after
 # the shell's prompt; the driver still recognises that prompt.
@@ -359,6 +360,15 @@ if ! grep -q "^DMESG-FIRST:.*Rach2 Booting" "$PLAIN_LOG"; then
     exit 1
 fi
 echo "procfiles-test: dmesg prints the machine's own boot log: OK"
+
+# Linux's options that read the log: of the info level only, and with no time,
+# the first record is the kernel's banner by itself.
+if ! grep -q "^DMESG-INFO:boot: Rach2 Booting" "$PLAIN_LOG"; then
+    echo "procfiles-test: FAIL: dmesg -t -l info did not print the banner alone" >&2
+    grep "DMESG-INFO" "$PLAIN_LOG" | head -2 >&2
+    exit 1
+fi
+echo "procfiles-test: dmesg -t -l info prints the info records without their time: OK"
 
 # What the log holds, now that it is the kernel's records and not every byte
 # that crossed the serial port: whole records, and none of the shell's own

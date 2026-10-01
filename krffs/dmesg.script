@@ -1,22 +1,118 @@
-#!/bin/sh
+# shellcheck shell=sh
+# dmesg: what this machine has logged since it started.
 #
-# dmesg: what this machine printed while it was starting.
+# Linux's `dmesg` reads the kernel's ring buffer through `klogctl`, a system
+# call this kernel does not have; the log here is a device, `/dev/bootlog`,
+# with a record a line in the form Linux's `dmesg -r` prints: the level in
+# angle brackets, the seconds since boot in square ones, and the text. So this
+# is the command a person expects, over that device, with Linux's options that
+# read the log: the records raw or without their levels, with no time or the
+# time of day, of some levels only, with the facility and level decoded, and
+# followed as they come. BusyBox's own `dmesg` applet is turned off, since it
+# can only fail here.
 #
-# Linux's `dmesg` reads a ring buffer through `klogctl`, a system call this
-# kernel does not have; the boot log here is a device, `/dev/bootlog`, which
-# the kernel fills as it starts and anything that can read a file can read. So
-# this is the command a person expects, doing what this machine does. busybox's
-# own `dmesg` applet is turned off for the same reason: it can only fail here,
-# and it would answer from the shell's applet table before this file.
-#
-# Arguments are refused rather than ignored. Linux's options are about the ring
-# buffer this kernel does not keep (clearing it, following it, levels), and a
-# caller that passed one and got the log would have been told its request had
-# been carried out.
+# The options that change the buffer, clearing it, resizing it or setting the
+# console's level, are refused rather than ignored: there is no buffer to
+# change, and a caller told nothing would take it as changed.
 
-if [ "$#" -ne 0 ]; then
-    echo "dmesg: this machine's boot log is /dev/bootlog and takes no options" >&2
+usage() {
+    echo "usage: dmesg [-krtTwx] [-l LEVEL[,LEVEL...]]" >&2
     exit 1
-fi
+}
 
-exec cat /dev/bootlog
+raw=0
+stamp=keep
+decode=0
+follow=0
+levels=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -r | --raw) raw=1 ;;
+        -t | --notime) stamp=none ;;
+        -T | --ctime) stamp=ctime ;;
+        -x | --decode) decode=1 ;;
+        -k | --kernel) ;;
+        -w | --follow) follow=1 ;;
+        -l | --level)
+            [ "$#" -gt 1 ] || usage
+            levels=$2
+            shift
+            ;;
+        --level=*) levels=${1#--level=} ;;
+        -l?*) levels=${1#-l} ;;
+        -[krtTwx][krtTwxl]*)
+            rest=${1#-?}
+            first=${1%"$rest"}
+            shift
+            set -- "$first" "-$rest" "$@"
+            continue
+            ;;
+        -c | -C | -D | -E | -n* | -s* | --clear | --read-clear | --console-* | --buffer-size*)
+            echo "dmesg: $1: the boot log, /dev/bootlog, is not cleared, resized or given a console level" >&2
+            exit 1
+            ;;
+        *) usage ;;
+    esac
+    shift
+done
+
+# The log, and with -w each record after it as it is made.
+read_log() {
+    if [ "$follow" -eq 1 ]; then
+        tail -n +1 -f /dev/bootlog
+    else
+        cat /dev/bootlog
+    fi
+}
+
+btime=$(awk '$1 == "btime" { print $2 }' /proc/stat)
+read_log | awk -v raw="$raw" -v stamp="$stamp" -v decode="$decode" -v levels="$levels" \
+    -v btime="${btime:-0}" '
+BEGIN {
+    split("emerg alert crit err warn notice info debug", name, " ")
+    n = split(levels, want, ",")
+    for (i = 1; i <= n; i++) {
+        found = 0
+        for (k = 1; k <= 8; k++) {
+            if (want[i] == name[k]) {
+                keep[k - 1] = 1
+                found = 1
+            }
+        }
+        if (!found) {
+            print "dmesg: unknown level \047" want[i] "\047" > "/dev/stderr"
+            exit 1
+        }
+    }
+}
+{
+    line = $0
+    level = 6
+    if (line ~ /^<[0-7]>/) {
+        level = substr(line, 2, 1) + 0
+        line = substr(line, 4)
+    }
+    if (levels != "" && !(level in keep)) {
+        next
+    }
+    if (raw == 1) {
+        print $0
+        fflush()
+        next
+    }
+    time = ""
+    if (match(line, /^\[[ 0-9.]*\] ?/)) {
+        time = substr(line, 1, RLENGTH)
+        line = substr(line, RLENGTH + 1)
+    }
+    if (stamp == "none") {
+        time = ""
+    } else if (stamp == "ctime" && time != "") {
+        secs = time
+        gsub(/[^0-9.]/, "", secs)
+        time = "[" strftime("%a %b %e %H:%M:%S %Y", btime + int(secs)) "] "
+    }
+    prefix = decode == 1 ? sprintf("%-6s:%-6s: ", "kern", name[level + 1]) : ""
+    print prefix time line
+    fflush()
+}'
