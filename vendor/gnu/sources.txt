@@ -31,6 +31,8 @@
 # * PCRE2: Nicholas Wilson's key, A95536204A3BB489715231282A98E77EB6F24CA8,
 #   which PCRE2's SECURITY.md names for the releases from 10.45, through its
 #   signing subkey BACF71F10404D5761C09D392021DE40BFB63B406.
+# * The time zone database: Paul Eggert's key,
+#   7E3792A9D8ACF7D633BC1588ED97E90E62AA7E34.
 # * expat, which GDB links: Sebastian Pipping's key,
 #   3176EF7DB2367F1FCA4F306B1F9B0E909AF37285.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
@@ -86,4 +88,5 @@ xz 5.8.4 https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4
 less 710 https://www.greenwoodsoftware.com/less/less-710.tar.gz d1008fb78dcae1323ddab664bcb352a61f022b1b131bd8018548e021d975ec7a
 file 5.48 https://astron.com/pub/file/file-5.48.tar.gz ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283
 pcre2 10.49 https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz 929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae
+tzdata 2026e https://data.iana.org/time-zones/releases/tzdata2026e.tar.gz b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652
 expat 2.8.5 https://github.com/libexpat/libexpat/releases/download/R_2_8_5/expat-2.8.5.tar.xz 1e727b8933ec51a77a9a9d9afcf8e688bce45d907c13e36ab7393fe36e703182

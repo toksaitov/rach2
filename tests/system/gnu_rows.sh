@@ -188,6 +188,8 @@ row_coreutils() {
     same "seq, sort and head" "$(seq 1 10 | sort -rn | head -n 1)" "10"
     same "sha256sum" "$(printf abc | sha256sum)" "$ABC  -"
     same "date" "$(date -u -d @0 +%Y-%m-%d)" "1970-01-01"
+    same "a zone of the database" "$(TZ=Europe/Berlin date -d @0 +%H:%M:%Z)" "01:00:CET"
+    same "a zone's old name" "$(TZ=US/Eastern date -d @0 +%H:%Z)" "19:EST"
 }
 
 row_bash() {
