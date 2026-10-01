@@ -87,6 +87,7 @@ struct ext2_node {
     uint32_t atime, mtime, ctime;
     uint32_t flags;      /* i_flags, read and kept but not acted on */
     uint32_t generation; /* i_generation, read and kept */
+    uint32_t add_from;   /* a directory's block where the last entry went */
     int unlinked;        /* no name left; the inode and its blocks go at the last put */
 };
 
@@ -2765,13 +2766,19 @@ static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_s
  * behind its name, split; else in a new block, zeroed with one empty entry
  * spanning it, allocated, chained with `i_blocks`, and covered by the size
  * last. The entry itself is the last write.
+ *
+ * The search for room starts at the block the last entry went into and
+ * wraps around to it, so a directory that grows at its end is not read
+ * whole for each name added to it; a block before that one still takes a
+ * name before the directory grows.
  */
 static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t ino,
                    uint32_t ftype)
 {
     uint32_t name_len = (uint32_t)k_strlen(name);
     uint32_t need = dirent_len(name_len);
-    uint32_t cursor = 0;
+    uint32_t start = d->add_from < d->size ? d->add_from : 0;
+    uint32_t cursor = start, limit = d->size;
     struct ext2_scan sc;
     struct ext2_window w;
     uint8_t entry[8 + EXT2_NAME_MAX + 4];
@@ -2788,11 +2795,17 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         uint32_t here = cursor;
         uint32_t used, room;
         uint64_t off;
-        int got = dir_scan_in(em, d, &w, &cursor, &sc);
+        int got = here < limit ? dir_scan_in(em, d, &w, &cursor, &sc) : 0;
 
         if (got < 0) {
             window_close(&w);
             return got;
+        }
+        if (got == 0 && start != 0) {
+            cursor = 0; /* the blocks before the one the last entry went into */
+            limit = start;
+            start = 0;
+            continue;
         }
         if (got == 0) {
             break;
@@ -2807,6 +2820,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         if (rc != 0) {
             return rc;
         }
+        d->add_from = here & ~(em->block_size - 1u);
         if (used == 0) {
             return dirent_write(em, off, ino, sc.rec_len, name, name_len, ftype);
         }
@@ -2855,6 +2869,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         if (rc != 0) {
             return rc;
         }
+        d->add_from = index << em->block_shift;
         return dirent_write(em, off, ino, em->block_size, name, name_len, ftype);
     }
 }
