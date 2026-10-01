@@ -107,6 +107,9 @@ A TCP port already has a live listener.
 A raw ICMP bind requests an address other than zero, the primary local
 address, or an address in
 .Ql 127/8 .
+.It Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Er EFAULT
 The socketcall argument array or the required address bytes cannot be read.
 .It Er EINVAL
@@ -120,7 +123,7 @@ The packet address names an interface index other than zero or an
 existing interface.
 .It Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Er EOPNOTSUPP
 The socket is the raw descriptor used only for interface queries.
 .El

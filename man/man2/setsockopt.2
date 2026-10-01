@@ -153,6 +153,9 @@ On failure they return -1 and set
 The kernel interface returns the negative error number.
 .Sh ERRORS
 .Bl -tag -width "[ENOPROTOOPT]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Bq Er EFAULT
 A required option value or length cannot be read or written, a required
 pointer is null, or the
@@ -180,7 +183,7 @@ was used for
 .Dv PACKET_AUXDATA .
 .It Bq Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .El
 .Sh SEE ALSO
 .Xr bind 2 ,

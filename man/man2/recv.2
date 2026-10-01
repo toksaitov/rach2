@@ -258,6 +258,9 @@ TCP connection before a read takes the whole message from that byte.
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN
 No message or stream data is available for a nonblocking receive.
+.It Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Er ECONNREFUSED
 A stream connection was refused.
 .It Er ECONNRESET
@@ -279,7 +282,7 @@ exceeds 1024.
 A stream connection was ended by a network configuration change.
 .It Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Er EOPNOTSUPP
 A raw socket was passed to kernel operation 10, an ioctl-only socket
 was passed to recvfrom, or an IPv4 socket other than

@@ -168,6 +168,9 @@ accepted with both flags and with none have exactly those flags.
 .Bl -tag -width EOPNOTSUPP
 .It Er EAGAIN
 The listener is nonblocking and its accept queue is empty.
+.It Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Er EFAULT
 The socketcall argument array cannot be read, the peer address or
 length cannot be read or written as required, or
@@ -195,7 +198,7 @@ The kernel heap has no room for a larger descriptor table or for the
 connection's open-file description; the connection stays queued.
 .It Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Er EOPNOTSUPP
 .Fa fd
 refers to a raw socket or an

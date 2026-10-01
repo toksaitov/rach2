@@ -83,6 +83,9 @@ After connecting to a local TCP listener, it uses
 to check that the peer has that address and the listener's port.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Bq Er EFAULT
 Either pointer is null, the address length cannot be read or written,
 the address cannot be copied to user memory, or the
@@ -93,7 +96,7 @@ argument array cannot be read.
 was called on a socket with no connected peer.
 .It Bq Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Bq Er EOPNOTSUPP
 The socket is a raw socket.
 .El

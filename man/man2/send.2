@@ -204,6 +204,9 @@ A raw ICMP destination has an address family other than
 .It Bq Er EAGAIN
 A nonblocking stream send found no buffer space, or an ephemeral UDP
 port could not be assigned.
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Bq Er ECONNREFUSED
 A pending TCP error reports that the connection was refused.
 .It Bq Er ECONNRESET
@@ -239,7 +242,7 @@ an IPv4 datagram.
 A packet destination specifies an unregistered interface index.
 .It Bq Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Bq Er EOPNOTSUPP
 The socket is ioctl-only, or a raw ICMP send requested a broadcast
 destination.

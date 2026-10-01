@@ -156,6 +156,9 @@ An unbound datagram socket could not acquire an ephemeral binding.
 .It Bq Er EALREADY
 A TCP handshake is already in progress in
 .Dv SYN_SENT .
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Bq Er ECONNREFUSED
 The blocking TCP handshake ended without an established connection.
 .It Bq Er EFAULT
@@ -175,7 +178,7 @@ a state other than
 A TCP control block could not be allocated.
 .It Bq Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Bq Er EOPNOTSUPP
 The socket is raw, belongs to
 .Dv AF_PACKET ,

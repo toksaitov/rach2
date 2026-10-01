@@ -230,6 +230,15 @@ static uint8_t raw_send_buf[1500];
 
 #define IPPROTO_RAW 255
 
+/* The answer of a socket call on a descriptor that is no socket: EBADF for
+ * one that is not open, as Linux gives it, and ENOTSOCK for another kind of
+ * file. gnulib's tests of accept, bind, connect, listen and setsockopt ask
+ * the first of each. */
+static int32_t not_a_socket(const fd_entry_t *entry)
+{
+    return entry ? -ENOTSOCK : -EBADF;
+}
+
 #define IPPROTO_ICMP 1
 
 /* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
@@ -519,7 +528,7 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
 
     if (entry->sock->family == AF_NETLINK) {
@@ -724,7 +733,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
 
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
 
     /* The query descriptor accepts ioctls and nothing else: it has no protocol
@@ -865,7 +874,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
     }
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     /* Where the source address will land is settled here, before a datagram is
      * taken: taking one destroys it, and a fault found afterwards would report
@@ -1004,7 +1013,7 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
      * wrong with an address it was never going to use. */
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1136,7 +1145,7 @@ static int32_t do_listen(int fd, int backlog)
 
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1187,7 +1196,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr, uint32_t f
     }
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1252,7 +1261,7 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type != SOCK_STREAM) {
         return do_sendto(fd, buf_ptr, len, flags, 0, 0);
@@ -1279,7 +1288,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 
     entry = fd_get(current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1323,7 +1332,7 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     uint32_t flags, local_ip;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1382,7 +1391,7 @@ static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1430,7 +1439,7 @@ static int32_t do_shutdown(int fd, int how)
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type == SOCK_RAW) {
         return -EOPNOTSUPP;
@@ -1487,7 +1496,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
     int val = 0;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     /* The one option this stack answers with a refusal, not a blanket
      * success. A DHCP client asks a packet socket for PACKET_AUXDATA so that it
@@ -1594,7 +1603,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
     uint32_t olen, width = (uint32_t)sizeof(val);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (level == SOL_SOCKET && optname == SO_TYPE) {
         val = entry->sock->type;
@@ -1725,7 +1734,7 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     if (entry->sock->type != SOCK_DGRAM) {
         return -EOPNOTSUPP;
@@ -1840,7 +1849,7 @@ static int32_t do_sendmsg(int fd, uint32_t msg_ptr, int flags)
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
-        return -ENOTSOCK;
+        return not_a_socket(entry);
     }
     name_ptr = SC_LE32(hdr + MSGHDR_NAME);
     namelen = SC_LE32(hdr + MSGHDR_NAMELEN);

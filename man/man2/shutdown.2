@@ -66,6 +66,9 @@ checks that a send then fails with
 and checks that a blocking and a nonblocking read return zero.
 .Sh ERRORS
 .Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Bq Er EFAULT
 The
 .Fn socketcall
@@ -79,7 +82,7 @@ datagram socket, an incomplete handshake, or a socket whose
 connection record has been detached.
 .It Bq Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Bq Er EOPNOTSUPP
 The socket is a raw socket.
 .El

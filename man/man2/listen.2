@@ -71,6 +71,9 @@ The probe also checks that listening without a bound port returns
 .Bl -tag -width "[EDESTADDRREQ]"
 .It Bq Er EADDRINUSE
 A live listener already uses the local port.
+.It Bq Er EBADF
+.Fa fd
+is not an open descriptor.
 .It Bq Er EDESTADDRREQ
 The socket has no nonzero local port.
 .It Bq Er EFAULT
@@ -81,7 +84,7 @@ The socket is already listening or has a TCP control block.
 The kernel could not allocate a TCP control block.
 .It Bq Er ENOTSOCK
 .Fa fd
-is invalid or does not refer to a socket.
+does not refer to a socket.
 .It Bq Er EOPNOTSUPP
 The socket is not a stream socket.
 .El
