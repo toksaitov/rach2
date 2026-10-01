@@ -18,7 +18,9 @@
  * the middle of a drain or its transmit ring is full, stays in the ring too,
  * and the drain stops until the next line: the characters leave the ring
  * only once their frame is sent, which also keeps a character that arrives
- * during the send from taking their slot.
+ * during the send from taking their slot. While a drain is held so, only a
+ * newline starts another, not the payload's worth of characters that
+ * otherwise does (`nc_held`), so the card is asked once a line.
  *
  * Two different things can interleave here and each has its own guard.
  *
@@ -72,6 +74,7 @@ static uint32_t nc_frames;
 static uint32_t nc_dropped; /* characters the ring had no room for */
 static int nc_enabled;
 static int nc_sending;
+static int nc_held; /* the last drain stopped for a link or a refused frame */
 
 static const uint8_t nc_broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -103,7 +106,8 @@ void netconsole_putc(char c)
     nc_ring[nc_head] = c;
     nc_head = next;
 
-    send = nc_enabled && !nc_sending && (c == '\n' || nc_pending() >= NETCONSOLE_PAYLOAD_MAX);
+    send = nc_enabled && !nc_sending &&
+           (c == '\n' || (!nc_held && nc_pending() >= NETCONSOLE_PAYLOAD_MAX));
     net_unlock(flags);
 
     if (send) {
@@ -116,7 +120,12 @@ void netconsole_flush(void)
     uint32_t flags = net_lock();
     uint32_t end;
 
-    if (!nc_enabled || nc_sending || !netdev_running(netdev_first())) {
+    if (!nc_enabled || nc_sending) {
+        net_unlock(flags);
+        return;
+    }
+    if (!netdev_running(netdev_first())) {
+        nc_held = 1;
         net_unlock(flags);
         return;
     }
@@ -157,10 +166,12 @@ void netconsole_flush(void)
 
         if (ethernet_tx(netdev_first(), nc_broadcast, NETCONSOLE_ETHERTYPE, nc_payload,
                         (uint16_t)(NETCONSOLE_HDR_LEN + n)) != NETDEV_TX_OK) {
+            nc_held = 1;
             nc_sending = 0;
             net_unlock(flags);
             return;
         }
+        nc_held = 0;
         nc_tail = at;
         nc_seq++;
         nc_frames++;

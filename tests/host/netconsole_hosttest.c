@@ -64,6 +64,9 @@ static struct netdev the_iface;
  * down, which models a link lost in the middle of a drain (0 for never). */
 static int link_down;
 static int link_lost_after;
+/* A card that refuses every frame with its link up, and the frames offered. */
+static int refuse_all;
+static unsigned tx_attempts;
 
 struct netdev *netdev_first(void)
 {
@@ -81,8 +84,9 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
     (void)out;
     unsigned i;
 
-    if (link_down) {
-        return 1; /* NETDEV_TX_DROPPED: Ethernet refuses a card without a link */
+    tx_attempts++;
+    if (link_down || refuse_all) {
+        return 1; /* NETDEV_TX_DROPPED: Ethernet or the card refuses it */
     }
     tx_depth++;
     if (tx_depth > tx_max_depth) {
@@ -215,6 +219,7 @@ static void nc_reset(void)
     nc_dropped = 0;
     nc_enabled = 0;
     nc_sending = 0;
+    nc_held = 0;
     frame_count = 0;
     tx_prints = 0;
     tx_depth = 0;
@@ -300,12 +305,30 @@ static void link_rows(void)
         link_down = 0;
         link_lost_after = 0;
         put_string("back\n");
-        /* The first character of "back" makes a payload's worth, which
-           sends three frames; the newline sends the rest. */
-        CHECK(frame_count == 5 && nc_pending() == 0 && frame_be32(4, 8) == 4 &&
+        /* The held drain waits for the newline, which sends it all. */
+        CHECK(frame_count == 4 && nc_pending() == 0 && frame_be32(3, 8) == 3 &&
                   frame_data[1][NETCONSOLE_HDR_LEN] == 'm' &&
                   frame_data[3][NETCONSOLE_HDR_LEN] == '\n',
-              "and goes out, in order, once the link is back");
+              "and goes out, in order, with the next line once the link is back");
+    }
+
+    /* ---- a card that refuses every frame is asked once a line ---- */
+    {
+        unsigned i;
+
+        nc_reset();
+        netconsole_enable();
+        refuse_all = 1;
+        tx_attempts = 0;
+        for (i = 0; i < 3 * NETCONSOLE_PAYLOAD_MAX; i++) {
+            netconsole_putc('r');
+        }
+        CHECK(tx_attempts == 1, "a card refusing every frame is offered one by a long line");
+        netconsole_putc('\n');
+        CHECK(tx_attempts == 2 && frame_count == 0, "and one more by its newline");
+        refuse_all = 0;
+        netconsole_putc('\n');
+        CHECK(nc_pending() == 0 && frame_count == 4, "and all of it once the card takes frames");
     }
 }
 
