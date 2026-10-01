@@ -808,43 +808,58 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     return netconf_set_address(nd, ip, mask);
 }
 
-/* RTM_NEWROUTE and RTM_DELROUTE: the default route, which is the gateway of
- * the interface RTA_OIF names, or of the one whose subnet has the gateway;
- * and the route a subnet implies, which is there while its address is. */
-static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+/* The interface a route request is for: the one RTA_OIF names, or, with
+ * none named, the one whose subnet has the gateway `gw`, or the first. */
+static struct netdev *route_dev(const uint8_t *req, uint32_t body, uint32_t gw)
 {
-    uint32_t dst_len = body >= 12 ? req[NLMSG_HDRLEN + 1] : 0;
-    uint32_t gw = req_ip(req, body, 12, RTA_GATEWAY);
     uint16_t len;
     const uint8_t *oif = req_attr(req, body, 12, RTA_OIF, &len);
-    struct netdev *nd = oif && len == 4 ? dev_of_index(get32(oif)) : 0;
     int i;
 
-    for (i = 0; !oif && !nd && i < netdev_count(); i++) {
+    if (oif) {
+        return len == 4 ? dev_of_index(get32(oif)) : 0;
+    }
+    for (i = 0; i < netdev_count(); i++) {
         struct netdev *at = netdev_at(i);
 
         if (at && at->mask != 0 && (gw & at->mask) == (at->ip & at->mask)) {
-            nd = at;
+            return at;
         }
     }
-    if (!oif && !nd) {
-        nd = netdev_first();
-    }
-    if (!nd || body < 12) {
-        return -ENODEV;
-    }
-    if (dst_len == 0 && type == RTM_DELROUTE) {
+    return netdev_first();
+}
+
+/* The default route of `nd`, which is its gateway: set to `gw`, which a
+ * route already there refuses with EEXIST unless NLM_F_REPLACE asks, or
+ * cleared, which a route not there refuses with ESRCH. */
+static int32_t default_route_change(struct netdev *nd, uint16_t type, uint16_t flags, uint32_t gw)
+{
+    if (type == RTM_DELROUTE) {
         return nd->gateway == 0 || (gw != 0 && gw != nd->gateway) ? -ESRCH
                                                                   : netconf_set_gateway(nd, 0);
     }
+    if (gw == 0) {
+        return -EINVAL;
+    }
+    if (nd->gateway != 0 && !(flags & NLM_F_REPLACE)) {
+        return nd->gateway == gw && !(flags & NLM_F_EXCL) ? 0 : -EEXIST;
+    }
+    return netconf_set_gateway(nd, gw);
+}
+
+/* RTM_NEWROUTE and RTM_DELROUTE: the default route, and the route a subnet
+ * implies, which is there while its address is. */
+static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+{
+    uint32_t gw = req_ip(req, body, 12, RTA_GATEWAY);
+    struct netdev *nd = body >= 12 ? route_dev(req, body, gw) : 0;
+    uint32_t dst_len = body >= 12 ? req[NLMSG_HDRLEN + 1] : 0;
+
+    if (!nd) {
+        return -ENODEV;
+    }
     if (dst_len == 0) {
-        if (gw == 0) {
-            return -EINVAL;
-        }
-        if (nd->gateway != 0 && !(flags & NLM_F_REPLACE)) {
-            return nd->gateway == gw && !(flags & NLM_F_EXCL) ? 0 : -EEXIST;
-        }
-        return netconf_set_gateway(nd, gw);
+        return default_route_change(nd, type, flags, gw);
     }
     if (type == RTM_NEWROUTE && gw == 0 && nd->mask != 0 && dst_len == prefix_of(nd->mask) &&
         req_ip(req, body, 12, RTA_DST) == (nd->ip & nd->mask)) {
@@ -914,6 +929,18 @@ static void end_msg(struct nl_build *b, const uint8_t *req, int32_t error)
     nl_append(b, msg);
 }
 
+/* Make the change `req` asks for and acknowledge it: with its error, or
+ * with 0 when NLM_F_ACK asks for an acknowledgement. */
+static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
+                          uint32_t body)
+{
+    int32_t rc = change(req, type, flags, body);
+
+    if (rc != 0 || (flags & NLM_F_ACK)) {
+        end_msg(b, req, rc);
+    }
+}
+
 /* Answer the request of `type` and `flags`, whose header is `req` and whose
  * body of `body` bytes follows it. */
 static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
@@ -922,11 +949,7 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
     int i, n = netdev_count();
 
     if (is_change(type)) {
-        int32_t rc = change(req, type, flags, body);
-
-        if (rc != 0 || (flags & NLM_F_ACK)) {
-            end_msg(b, req, rc);
-        }
+        change_answer(b, req, type, flags, body);
         return;
     }
     if (type == RTM_GETLINK && (flags & NLM_F_DUMP) != NLM_F_DUMP && body >= 16) {

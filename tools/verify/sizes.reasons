@@ -183,7 +183,7 @@ rach2/sys/network/driver/rtl8168.c:rtl8168_init lines 121 a hardware sequence, t
 
 rach2/sys/network/netif.c:ifreq_ioctl lines 122 a dispatcher, one arm per command, read as a table
 
-rach2/sys/network/socket/netlink.c:answer complexity 26 a dispatcher, one arm per command, read as a table
+rach2/sys/network/socket/netlink.c:answer complexity 27 a dispatcher, one arm per command, read as a table
 
 rach2/sys/network/tcp/tcp.c:tcp_rx complexity 90 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx lines 331 a state machine, one arm per state, read as a table

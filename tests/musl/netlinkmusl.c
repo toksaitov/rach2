@@ -127,20 +127,6 @@ struct rtattr {
     unsigned short rta_type;
 };
 
-struct rtmsg {
-    unsigned char rtm_family, rtm_dst_len, rtm_src_len, rtm_tos;
-    unsigned char rtm_table, rtm_protocol, rtm_scope, rtm_type;
-    unsigned int rtm_flags;
-};
-
-struct ndmsg {
-    unsigned char ndm_family, ndm_pad1;
-    unsigned short ndm_pad2;
-    int ndm_ifindex;
-    unsigned short ndm_state;
-    unsigned char ndm_flags, ndm_type;
-};
-
 #define NLMSG_ALIGN(len)  (((len) + 3u) & ~3u)
 #define NLMSG_HDRLEN      ((int)NLMSG_ALIGN(sizeof(struct nlmsghdr)))
 #define NLMSG_LENGTH(len) ((unsigned int)(len) + NLMSG_HDRLEN)
@@ -469,9 +455,9 @@ static int address_changes(int fd)
 static int route_changes(int fd)
 {
     char body[48];
-    struct rtmsg rtm;
+    unsigned char rtm[12]; /* struct rtmsg: family, dst_len, src_len, tos, table, ... type */
+    unsigned char ndm[12]; /* struct ndmsg: family, padding, then the index at 4 */
     struct ifinfomsg ifi;
-    struct ndmsg ndm;
     struct in_addr gw, net, other;
     unsigned int oif = (unsigned int)first_index, mtu = 9000;
     int len;
@@ -479,11 +465,11 @@ static int route_changes(int fd)
     gw.s_addr = inet_addr("10.0.2.2");
     net.s_addr = inet_addr("10.99.0.0");
     other.s_addr = inet_addr("10.0.2.99");
-    memset(&rtm, 0, sizeof rtm);
-    rtm.rtm_family = AF_INET;
-    rtm.rtm_table = RT_TABLE_MAIN;
-    rtm.rtm_type = RTN_UNICAST;
-    memcpy(body, &rtm, sizeof rtm);
+    memset(rtm, 0, sizeof rtm);
+    rtm[0] = AF_INET;
+    rtm[4] = RT_TABLE_MAIN;
+    rtm[7] = RTN_UNICAST;
+    memcpy(body, rtm, sizeof rtm);
     len = sizeof rtm;
     attr32(body, &len, RTA_GATEWAY, &gw);
     attr32(body, &len, RTA_OIF, &oif);
@@ -497,7 +483,7 @@ static int route_changes(int fd)
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 48, body, len) != 0) {
         return fail("RTM_DELROUTE of the default route, then again, and setting it back");
     }
-    ((struct rtmsg *)body)->rtm_dst_len = 16;
+    body[1] = 16;
     len = sizeof rtm;
     attr32(body, &len, RTA_DST, &net);
     attr32(body, &len, RTA_GATEWAY, &gw);
@@ -517,10 +503,10 @@ static int route_changes(int fd)
     if (ask(fd, RTM_NEWLINK, 0, 51, body, len) != -EOPNOTSUPP) {
         return fail("RTM_NEWLINK of an MTU of 9000 was not EOPNOTSUPP");
     }
-    memset(&ndm, 0, sizeof ndm);
-    ndm.ndm_family = AF_INET;
-    ndm.ndm_ifindex = first_index;
-    memcpy(body, &ndm, sizeof ndm);
+    memset(ndm, 0, sizeof ndm);
+    ndm[0] = AF_INET;
+    memcpy(ndm + 4, &first_index, 4);
+    memcpy(body, ndm, sizeof ndm);
     len = sizeof ndm;
     attr32(body, &len, NDA_DST, &other);
     if (ask(fd, RTM_DELNEIGH, 0, 52, body, len) != -ENOENT) {
