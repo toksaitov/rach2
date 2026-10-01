@@ -37,8 +37,9 @@ which Rach2 does not implement: its read fails and it exits.
 Write
 .Ar MESSAGE ,
 or standard input, to syslog.
-On Rach2 the message is not delivered, since the kernel refuses the Unix
-domain socket to the log; with
+On Rach2 the message is not delivered, since nothing listens at
+.Pa /dev/log ;
+with
 .Fl s
 it still goes to standard error.
 .It Nm logread
@@ -46,8 +47,13 @@ Display messages in the circular buffer of
 .Nm syslogd .
 .It Nm syslogd
 Provide system logging.
-On Rach2 it cannot start, since the kernel refuses the Unix domain socket
-it listens on; and
+On Rach2 it cannot start: it binds a Unix domain socket at
+.Pa /dev/log ,
+and
+.Pa /dev
+is a synthetic file system that takes no new node, so the bind fails with
+.Er EROFS ;
+and
 .Nm logread
 needs the System V IPC the kernel does not have.
 .El
