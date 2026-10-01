@@ -728,13 +728,65 @@ static int tmpfs_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
     return (int)len;
 }
 
+/** The pages a file's bytes hold: its table's frames, a hole none. */
+static uint32_t held_pages(const struct shmem *sh)
+{
+    uint32_t i, n = 0;
+
+    for (i = 0; i < sh->npages; i++) {
+        if (sh->pages[i] != 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/**
+ * The pages the files under `top` hold, a file of two names counted for
+ * each. The walk goes down into a directory and back up to the name after
+ * it, which it finds again in the parent's list, so it needs no stack.
+ */
+static uint32_t tree_pages(const struct tmpfs_node *top)
+{
+    const struct tmpfs_node *d = top;
+    const struct tmpfs_dirent *e = top->entries;
+    uint32_t pages = 0;
+
+    for (;;) {
+        if (!e) {
+            const struct tmpfs_dirent *up;
+
+            if (d == top) {
+                return pages;
+            }
+            for (up = d->parent->entries; up && up->node != d; up = up->next) {
+            }
+            e = up ? up->next : NULL;
+            d = d->parent;
+        } else if (is_dir(e->node)) {
+            d = e->node;
+            e = d->entries;
+        } else {
+            pages += held_pages(&e->node->data);
+            e = e->next;
+        }
+    }
+}
+
+/**
+ * The machine's frames are the mount's blocks, since tmpfs has no quota of
+ * its own, and the blocks in use are those its files hold, as Linux counts
+ * a tmpfs's use, so that df shows an empty /dev/shm empty.
+ */
 static int tmpfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
-    (void)mnt;
+    uint32_t total = frame_total_count();
+    uint32_t used = tree_pages(((struct tmpfs_mount *)mnt->priv)->root);
+
     st->magic = TMPFS_MAGIC;
     st->bsize = PAGE_SIZE;
-    st->blocks = frame_total_count();
-    st->bfree = frame_free_count();
+    st->blocks = total;
+    st->bfree = used < total ? total - used : 0;
     st->namelen = VFS_NAME_MAX;
     return 0;
 }

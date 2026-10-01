@@ -21,13 +21,14 @@
  * goes on past a name removed during it, and a directory knows its path. A node
  * held after its last name goes stays readable, a removed directory held after
  * its parent is removed keeps the parent for its "..", and a shared mapping's
- * page takes a reference of its own; a page at or past the most a file may have
- * is refused without growing the table, 2^31 and 2^32 - 1 among them, and the
- * last page below it is given; a truncation of mapped memory takes the pages it
- * frees out of the mappings first. A memfd's node has its name and no
- * directory, and goes with its last hold; its seals refuse a shrink, a growth,
- * a write, a change of its execute bits and more seals, and a named file starts
- * sealed against sealing. Returns the failed-check count.
+ * page takes a reference of its own; statfs counts in use the pages the files
+ * hold and not a frame held elsewhere; a page at or past the most a file may
+ * have is refused without growing the table, 2^31 and 2^32 - 1 among them,
+ * and the last page below it is given; a truncation of mapped memory takes
+ * the pages it frees out of the mappings first. A memfd's node has its name
+ * and no directory, and goes with its last hold; its seals refuse a shrink, a
+ * growth, a write, a change of its execute bits and more seals, and a named
+ * file starts sealed against sealing. Returns the failed-check count.
  */
 
 #include "fs/tmpfs.c"
@@ -228,6 +229,13 @@ static void bytes(void)
     CHECK(tmpfs_write(&mnt, f, "xy", 2, 8190) == 2);
     CHECK(tmpfs_getattr(&mnt, f, &st) == 0 && st.size == 8192);
     CHECK(frames_in_use() == 2); /* pages 0 and 1; the hole between is none */
+    {
+        struct vfs_statfs sf;
+        uintptr_t other = alloc_user_frame();
+
+        CHECK(tmpfs_statfs(&mnt, &sf) == 0 && sf.blocks == POOL && sf.blocks - sf.bfree == 2);
+        free_frame(other);
+    }
     CHECK(tmpfs_read(&mnt, f, buf, 5, 0) == 5 && k_memcmp(buf, "hello", 5) == 0);
     CHECK(tmpfs_read(&mnt, f, buf, 4, 8188) == 4 && buf[0] == 0 && buf[1] == 0 && buf[2] == 'x');
     CHECK(tmpfs_read(&mnt, f, buf, 4, 8192) == 0);
