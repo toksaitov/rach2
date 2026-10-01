@@ -3415,7 +3415,7 @@ int32_t sys_readahead(isr_params_t *params)
  * The page cache has one policy for every file, so the advice changes
  * nothing; GNU `cp`, `cat` and `sort` give it and do not look at the
  * result. The call fails as Linux's does: -EBADF for a descriptor not open,
- * -ESPIPE for a pipe or a socket, and -EINVAL for a negative length or an
+ * -ESPIPE for a pipe or a FIFO, and -EINVAL for a negative length or an
  * advice outside POSIX_FADV_NORMAL (0) to POSIX_FADV_NOREUSE (5).
  */
 static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
@@ -3429,7 +3429,7 @@ static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
     if (!e || (e->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
-    if (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_SOCKET || e->type == FD_TYPE_UNIX) {
+    if (e->type == FD_TYPE_PIPE) {
         return -ESPIPE;
     }
     return (len_hi & 0x80000000u) || advice > 5 ? -EINVAL : 0;
