@@ -977,10 +977,10 @@ static int sync_device(block_device_t *dev, int durable);
 /*
  * One pass of `bcache_sync`: the `first` buffers of `dev` in pass 0 and every
  * dirty one in pass 1, written with the request `flags`, except that a run of
- * `first` buffers is written with the disk's flush when `durable` is set.
- * Returns 0 or the first failure's -errno.
+ * `first` buffers is written with `first_flags`. Returns 0 or the first
+ * failure's -errno.
  */
-static int sync_pass(block_device_t *dev, int pass, uint32_t flags, int durable)
+static int sync_pass(block_device_t *dev, int pass, uint32_t flags, uint32_t first_flags)
 {
     uint64_t batch[SYNC_BATCH];
     uint64_t last = 0;
@@ -1037,7 +1037,7 @@ static int sync_pass(block_device_t *dev, int pass, uint32_t flags, int durable)
             if (!victim_may_be_written(next->dev, dev)) {
                 k_panic("bcache: hold rule: a sync while holding a block of another device");
             }
-            rc = write_run(next, &last, next->order == BCACHE_ORDER_FIRST && durable ? 0 : flags);
+            rc = write_run(next, &last, next->order == BCACHE_ORDER_FIRST ? first_flags : flags);
             if (rc != 0) {
                 return rc;
             }
@@ -1086,9 +1086,10 @@ static int sync_device(block_device_t *dev, int durable)
     uint32_t flags = through ? BLOCK_REQ_NOFLUSH : 0;
     int rc, flushed;
 
-    rc = sync_pass(dev, 0, flags, durable);
+    /* A durable sync writes a run of firsts with the disk's flush. */
+    rc = sync_pass(dev, 0, flags, durable ? 0 : flags);
     if (rc == 0) {
-        rc = sync_pass(dev, 1, flags, durable);
+        rc = sync_pass(dev, 1, flags, durable ? 0 : flags);
     }
     if (!through || !durable) {
         return rc;
