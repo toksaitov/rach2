@@ -15,6 +15,7 @@
 #include "../net.h"
 #include "../netconf.h"
 #include "../../lib/kstring.h"
+#include "../../lib/kerrno.h"
 #include "../ip/ip.h"
 
 /* One cached IP-to-MAC mapping. `used` orders the entries by how recently the
@@ -135,6 +136,22 @@ void arp_forget_dev(struct netdev *nd)
         }
     }
     ip_hold_forget(nd);
+}
+
+int arp_forget(struct netdev *nd, uint32_t ip)
+{
+    uint32_t flags = net_lock();
+    int i, rc = -ENOENT;
+
+    for (i = 0; i < ARP_CACHE_SIZE; i++) {
+        if (arp_cache[i].valid && arp_cache[i].ip == ip && (!nd || arp_cache[i].nd == nd)) {
+            arp_cache[i].valid = 0;
+            arp_cache[i].used = 0;
+            rc = 0;
+        }
+    }
+    net_unlock(flags);
+    return rc;
 }
 
 /**

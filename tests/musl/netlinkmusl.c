@@ -11,7 +11,7 @@
  * name, every address is the one SIOCGIFADDR gives for its interface, and
  * every interface with an address has a route to its subnet. RTM_GETLINK of
  * the first link's index answers with that link alone, of no link with
- * ENODEV, and RTM_NEWADDR, a change, with EOPNOTSUPP. A dump request with
+ * ENODEV, and RTM_NEWADDR with no address with EINVAL. A dump request with
  * zeros after it in its buffer is answered, as iproute2's ip sends one, and
  * recvmsg with MSG_PEEK and MSG_TRUNC and no buffer gives an answer's
  * length, as ip asks it, and a read into a shorter buffer is cut and says so
@@ -21,6 +21,13 @@
  * local route for the machine's own address and a unicast one on the first
  * link for a neighbour's; `ip rule`'s dump lists Linux's three rules and
  * `tc qdisc`'s a discipline for each interface.
+ *
+ * The changes `ip` asks for are acknowledged: the first link's address is
+ * EEXIST to add again, is taken away, which SIOCGIFADDR sees, and is given
+ * back; its default route through SLIRP's gateway is set, EEXIST to set
+ * again, removed, ESRCH to remove again, and set as it was; the link is set
+ * up; and an MTU of 9000 and a route to another network are EOPNOTSUPP and
+ * forgetting a neighbour the cache does not have is ENOENT.
  *
  * Prints "NETLINKMUSL OK" on success and "NETLINKMUSL FAIL (detail)"
  * otherwise.
@@ -43,6 +50,8 @@
 #define NETLINK_KOBJECT_UEVENT 15
 #define NLM_F_REQUEST          0x001
 #define NLM_F_MULTI            0x002
+#define NLM_F_ACK              0x004
+#define NLM_F_EXCL             0x200
 #define NLM_F_CREATE           0x400
 #define NLM_F_DUMP             0x300
 #define NLMSG_ERROR            2
@@ -50,15 +59,22 @@
 #define RTM_NEWLINK            16
 #define RTM_GETLINK            18
 #define RTM_NEWADDR            20
+#define RTM_DELADDR            21
 #define RTM_GETADDR            22
 #define RTM_NEWROUTE           24
+#define RTM_DELROUTE           25
 #define RTM_GETROUTE           26
+#define RTM_DELNEIGH           29
 #define RTM_NEWRULE            32
 #define RTM_GETRULE            34
 #define RTM_NEWQDISC           36
 #define RTM_GETQDISC           38
 #define RTA_DST                1
 #define RTA_OIF                4
+#define RTA_GATEWAY            5
+#define IFLA_MTU               4
+#define NDA_DST                1
+#define RT_TABLE_MAIN          254
 #define RTN_UNICAST            1
 #define RTN_LOCAL              2
 #define IFLA_IFNAME            3
@@ -109,6 +125,20 @@ struct ifaddrmsg {
 struct rtattr {
     unsigned short rta_len;
     unsigned short rta_type;
+};
+
+struct rtmsg {
+    unsigned char rtm_family, rtm_dst_len, rtm_src_len, rtm_tos;
+    unsigned char rtm_table, rtm_protocol, rtm_scope, rtm_type;
+    unsigned int rtm_flags;
+};
+
+struct ndmsg {
+    unsigned char ndm_family, ndm_pad1;
+    unsigned short ndm_pad2;
+    int ndm_ifindex;
+    unsigned short ndm_state;
+    unsigned char ndm_flags, ndm_type;
 };
 
 #define NLMSG_ALIGN(len)  (((len) + 3u) & ~3u)
@@ -369,8 +399,132 @@ static int requests(int fd)
     ifa.ifa_family = AF_INET;
     ifa.ifa_index = (unsigned int)first_index;
     if (request(fd, RTM_NEWADDR, NLM_F_CREATE, 6, &ifa, sizeof ifa) != 0 ||
-        one_answer(fd, &index, &error) != NLMSG_ERROR || error != -EOPNOTSUPP) {
-        return fail("RTM_NEWADDR was not EOPNOTSUPP");
+        one_answer(fd, &index, &error) != NLMSG_ERROR || error != -EINVAL) {
+        return fail("RTM_NEWADDR with no address was not EINVAL");
+    }
+    return 0;
+}
+
+/* Append a four-byte attribute of `type` to the body of `*len` bytes. */
+static void attr32(char *body, int *len, int type, const void *value)
+{
+    struct rtattr a;
+
+    a.rta_len = 8;
+    a.rta_type = (unsigned short)type;
+    memcpy(body + *len, &a, sizeof a);
+    memcpy(body + *len + 4, value, 4);
+    *len += 8;
+}
+
+/* Send a change with NLM_F_ACK and read its acknowledgement: its error, 0
+ * when the change was made, or 1 for no acknowledgement. */
+static int ask(int fd, int type, int flags, unsigned int seq, const void *body, int len)
+{
+    int index = -1, error = 1;
+
+    if (request(fd, type, NLM_F_ACK | flags, seq, body, len) != 0 ||
+        one_answer(fd, &index, &error) != NLMSG_ERROR) {
+        return 1;
+    }
+    return error;
+}
+
+/* The first link's address taken away and given back, through RTM_DELADDR
+ * and RTM_NEWADDR with SLIRP's prefix. */
+static int address_changes(int fd)
+{
+    char body[48];
+    struct ifaddrmsg ifa;
+    struct in_addr addr, now;
+    int len;
+
+    if (ioctl_addr(first_index, &addr) != 0) {
+        return fail("SIOCGIFADDR of the first link");
+    }
+    memset(&ifa, 0, sizeof ifa);
+    ifa.ifa_family = AF_INET;
+    ifa.ifa_prefixlen = 24;
+    ifa.ifa_index = (unsigned int)first_index;
+    memcpy(body, &ifa, sizeof ifa);
+    len = sizeof ifa;
+    attr32(body, &len, IFA_LOCAL, &addr);
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 40, body, len) != -EEXIST) {
+        return fail("RTM_NEWADDR of the address the link has was not EEXIST");
+    }
+    if (ask(fd, RTM_DELADDR, 0, 41, body, len) != 0 || ioctl_addr(first_index, &now) != 0 ||
+        now.s_addr != 0) {
+        return fail("RTM_DELADDR did not take the address away");
+    }
+    if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 42, body, len) != 0 ||
+        ioctl_addr(first_index, &now) != 0 || now.s_addr != addr.s_addr) {
+        return fail("RTM_NEWADDR did not give the address back");
+    }
+    return 0;
+}
+
+/* The default route through SLIRP's gateway, which the address's removal
+ * may have taken with it, set and removed and set again, and the changes a
+ * link here cannot hold refused. */
+static int route_changes(int fd)
+{
+    char body[48];
+    struct rtmsg rtm;
+    struct ifinfomsg ifi;
+    struct ndmsg ndm;
+    struct in_addr gw, net, other;
+    unsigned int oif = (unsigned int)first_index, mtu = 9000;
+    int len;
+
+    gw.s_addr = inet_addr("10.0.2.2");
+    net.s_addr = inet_addr("10.99.0.0");
+    other.s_addr = inet_addr("10.0.2.99");
+    memset(&rtm, 0, sizeof rtm);
+    rtm.rtm_family = AF_INET;
+    rtm.rtm_table = RT_TABLE_MAIN;
+    rtm.rtm_type = RTN_UNICAST;
+    memcpy(body, &rtm, sizeof rtm);
+    len = sizeof rtm;
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    attr32(body, &len, RTA_OIF, &oif);
+    (void)ask(fd, RTM_DELROUTE, 0, 43, body, len);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 44, body, len) != 0 ||
+        ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 45, body, len) != -EEXIST) {
+        return fail("RTM_NEWROUTE of the default route, then again");
+    }
+    if (ask(fd, RTM_DELROUTE, 0, 46, body, len) != 0 ||
+        ask(fd, RTM_DELROUTE, 0, 47, body, len) != -ESRCH ||
+        ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 48, body, len) != 0) {
+        return fail("RTM_DELROUTE of the default route, then again, and setting it back");
+    }
+    ((struct rtmsg *)body)->rtm_dst_len = 16;
+    len = sizeof rtm;
+    attr32(body, &len, RTA_DST, &net);
+    attr32(body, &len, RTA_GATEWAY, &gw);
+    if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 49, body, len) != -EOPNOTSUPP) {
+        return fail("RTM_NEWROUTE of another network was not EOPNOTSUPP");
+    }
+    memset(&ifi, 0, sizeof ifi);
+    ifi.ifi_index = first_index;
+    ifi.ifi_flags = IFF_UP;
+    ifi.ifi_change = IFF_UP;
+    memcpy(body, &ifi, sizeof ifi);
+    len = sizeof ifi;
+    if (ask(fd, RTM_NEWLINK, 0, 50, body, len) != 0) {
+        return fail("RTM_NEWLINK setting the link up");
+    }
+    attr32(body, &len, IFLA_MTU, &mtu);
+    if (ask(fd, RTM_NEWLINK, 0, 51, body, len) != -EOPNOTSUPP) {
+        return fail("RTM_NEWLINK of an MTU of 9000 was not EOPNOTSUPP");
+    }
+    memset(&ndm, 0, sizeof ndm);
+    ndm.ndm_family = AF_INET;
+    ndm.ndm_ifindex = first_index;
+    memcpy(body, &ndm, sizeof ndm);
+    len = sizeof ndm;
+    attr32(body, &len, NDA_DST, &other);
+    if (ask(fd, RTM_DELNEIGH, 0, 52, body, len) != -ENOENT) {
+        return fail("RTM_DELNEIGH of a neighbour the cache does not have was not ENOENT");
     }
     return 0;
 }
@@ -566,8 +720,8 @@ int main(void)
 {
     int fd;
 
-    if (route_socket(&fd) || requests(fd) || lookups(fd) || padded(fd) || truncation(fd) ||
-        interfaces() || uevents()) {
+    if (route_socket(&fd) || requests(fd) || address_changes(fd) || route_changes(fd) ||
+        lookups(fd) || padded(fd) || truncation(fd) || interfaces() || uevents()) {
         return 1;
     }
     close(fd);

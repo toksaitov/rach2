@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt NETLINK 7
 .Os
 .Sh NAME
@@ -232,16 +232,75 @@ A dump ends with an
 .Dv NLMSG_DONE
 message, and every message of a dump has
 .Dv NLM_F_MULTI .
-A request of another type, or one that would change the configuration,
-such as
-.Dv RTM_NEWADDR ,
-is answered with an
+.Pp
+A caller with privilege changes the configuration with the requests
+.Xr ip 8
+sends, which do what the interface requests of
+.Xr ioctl 2
+do, and are acknowledged with an
+.Dv NLMSG_ERROR
+of 0 when
+.Dv NLM_F_ACK
+asks for one:
+.Bl -tag -width "RTM_DELNEIGH"
+.It Dv RTM_NEWLINK , RTM_SETLINK
+Take an interface up or down by
+.Dv IFF_UP
+in the change mask.
+An
+.Dv IFLA_MTU
+other than 1500, or an
+.Dv IFLA_IFNAME
+that would rename the interface, is
+.Er EOPNOTSUPP .
+.It Dv RTM_NEWADDR , RTM_DELADDR
+Give an interface without an address the one in
+.Dv IFA_LOCAL
+with the prefix's mask, or take its address away.
+Adding the address it has is
+.Er EEXIST
+under
+.Dv NLM_F_EXCL ,
+adding a second is
+.Er EOPNOTSUPP ,
+since an interface holds one, and removing one it does not have is
+.Er EADDRNOTAVAIL .
+.It Dv RTM_NEWROUTE , RTM_DELROUTE
+Set or clear the default route's gateway on the interface
+.Dv RTA_OIF
+names, or the one whose subnet has the gateway.
+Adding a default route where there is one is
+.Er EEXIST
+unless
+.Dv NLM_F_REPLACE
+asks to replace it, and removing one that is not there is
+.Er ESRCH .
+Adding the route an interface's subnet implies is
+.Er EEXIST
+under
+.Dv NLM_F_EXCL ;
+any other route is
+.Er EOPNOTSUPP .
+.It Dv RTM_DELNEIGH
+Forget the ARP mapping of
+.Dv NDA_DST ,
+or
+.Er ENOENT
+when there is none;
+.Ql ip neigh flush
+sends one for each.
+.Dv RTM_NEWNEIGH
+is
+.Er EOPNOTSUPP ,
+since the cache keeps no mapping it would not replace.
+.El
+.Pp
+A caller without privilege is refused each with
+.Er EPERM .
+A request of a type the kernel does not know is answered with an
 .Dv NLMSG_ERROR
 of
-.Er EOPNOTSUPP :
-the interface requests of
-.Xr ioctl 2
-are how a program configures this machine.
+.Er EOPNOTSUPP .
 .Pp
 .Xr bind 2
 takes a

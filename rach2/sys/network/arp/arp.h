@@ -46,6 +46,13 @@ void arp_flush(void);
 void arp_forget_dev(struct netdev *nd);
 
 /**
+ * Forget the mapping of `ip` learned on `nd`, or on any interface when `nd`
+ * is NULL, for `ip neigh del` and `arp -d`: 0, or -ENOENT when there is
+ * none. Takes `net_lock` itself.
+ */
+int arp_forget(struct netdev *nd, uint32_t ip);
+
+/**
  * Look up the cached MAC for an IP; 1 on a hit, 0 on a miss.
  *
  * A hit counts as use, so the entry moves to the back of the queue for

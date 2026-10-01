@@ -12,6 +12,7 @@
 #include "net.h"
 #include "netconf.h"
 #include "driver/netdev.h"
+#include "arp/arp.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
@@ -38,6 +39,13 @@
 #define RTENTRY_FLAGS   52
 #define RTENTRY_DEV     68
 #define RTENTRY_LEN     84
+
+/* struct arpreq: the protocol address, a sockaddr with its IPv4 address at
+ * 4, the hardware address, the flags, a mask, and the interface's name at
+ * 52, sixteen bytes, for 68 in all. */
+#define ARPREQ_PA_ADDR 4
+#define ARPREQ_DEV     52
+#define ARPREQ_LEN     68
 
 #define RTF_UP      0x0001
 #define RTF_GATEWAY 0x0002
@@ -314,6 +322,35 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
 }
 
 /**
+ * SIOCDARP: forget the mapping the caller's `struct arpreq` names, learned on
+ * the interface its `arp_dev` names or on any when that is empty, for
+ * `arp -d`; ENXIO when there is none, as on Linux. SIOCSARP is refused,
+ * since the cache keeps no mapping it would not replace. Root only.
+ */
+static int32_t arp_ioctl(uint32_t request, uint32_t arg)
+{
+    uint8_t req[ARPREQ_LEN];
+    struct netdev *nd = 0;
+
+    if (!current_proc || !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (request == SIOCSARP) {
+        return -EOPNOTSUPP;
+    }
+    if (copy_from_user(req, (const void __user *)arg, ARPREQ_LEN) != 0) {
+        return -EFAULT;
+    }
+    if (req[ARPREQ_DEV] != 0) {
+        nd = named(req + ARPREQ_DEV);
+        if (!nd) {
+            return -ENODEV;
+        }
+    }
+    return arp_forget(nd, be32(req + ARPREQ_PA_ADDR)) == 0 ? 0 : -ENXIO;
+}
+
+/**
  * SIOCGIFCONF: the interfaces that have an IPv4 address, each an ifreq with
  * its name and its address, in the buffer of the caller's `struct ifconf`,
  * whose length is set to the bytes filled; with no buffer, the bytes all of
@@ -382,6 +419,9 @@ int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled)
     case SIOCADDRT:
     case SIOCDELRT:
         return route_ioctl(request, arg);
+    case SIOCDARP:
+    case SIOCSARP:
+        return arp_ioctl(request, arg);
     case SIOCGIFBR:
     case SIOCSIFBR:
     case SIOCGIFVLAN:

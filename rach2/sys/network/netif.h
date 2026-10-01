@@ -38,6 +38,8 @@
 #define SIOCGIFINDEX   0x8933
 #define SIOCADDRT      0x890b
 #define SIOCDELRT      0x890c
+#define SIOCDARP       0x8953
+#define SIOCSARP       0x8955
 
 /* The bridge and VLAN requests of brctl(8) and vconfig(8), which Linux
  * answers with ENOPKG when neither module is in the kernel. */

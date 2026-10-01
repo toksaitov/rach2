@@ -363,6 +363,21 @@ A null device-name pointer selects the first interface.
 Adding the interface's existing subnet route succeeds without action;
 removing it or changing any other non-default route is unsupported.
 .Pp
+.Dv SIOCDARP
+takes a 68-byte
+.Vt "struct arpreq"
+and requires effective user ID 0.
+It forgets the ARP mapping of the protocol address, learned on the
+interface
+.Va arp_dev
+names or on any when that is empty, or fails with
+.Er ENXIO
+when there is none.
+.Dv SIOCSARP
+is
+.Er EOPNOTSUPP ,
+since the cache keeps no mapping it would not replace.
+.Pp
 The bridge requests,
 .Dv SIOCGIFBR ,
 .Dv SIOCSIFBR ,

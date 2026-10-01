@@ -8,6 +8,7 @@
 #include "socket.h"
 #include "../net.h"
 #include "../netif.h"
+#include "../netconf.h"
 #include "../driver/netdev.h"
 #include "../arp/arp.h"
 #include "../ip/ip.h"
@@ -27,14 +28,21 @@
 #define NLMSG_DONE    3
 #define NLM_F_REQUEST 0x001u
 #define NLM_F_MULTI   0x002u
+#define NLM_F_ACK     0x004u
+#define NLM_F_REPLACE 0x100u
+#define NLM_F_EXCL    0x200u
 #define NLM_F_DUMP    0x300u
 #define RTM_NEWLINK   16
 #define RTM_GETLINK   18
+#define RTM_SETLINK   19
 #define RTM_NEWADDR   20
+#define RTM_DELADDR   21
 #define RTM_GETADDR   22
 #define RTM_NEWROUTE  24
+#define RTM_DELROUTE  25
 #define RTM_GETROUTE  26
 #define RTM_NEWNEIGH  28
+#define RTM_DELNEIGH  29
 #define RTM_GETNEIGH  30
 #define RTM_NEWRULE   32
 #define RTM_GETRULE   34
@@ -454,7 +462,7 @@ static int same_name(const char *name, uint32_t cap, const char *text, uint32_t 
  * `ifinfomsg`, or with that 0, by its IFLA_IFNAME attribute, which is how
  * `ip link show eth0` asks. `body` is the request's length past its header.
  */
-static const struct netdev *link_asked(const uint8_t *req, uint32_t body)
+static struct netdev *link_asked(const uint8_t *req, uint32_t body)
 {
     const uint8_t *attr = req + NLMSG_HDRLEN + 16;
     const uint8_t *end = req + NLMSG_HDRLEN + body;
@@ -476,7 +484,7 @@ static const struct netdev *link_asked(const uint8_t *req, uint32_t body)
         attr += (len + 3u) & ~3u;
     }
     for (i = 0; i < n; i++) {
-        const struct netdev *nd = netdev_at(i);
+        struct netdev *nd = netdev_at(i);
 
         if (!nd) {
             continue;
@@ -683,6 +691,211 @@ static void qdisc_dump(struct nl_build *b)
     }
 }
 
+/*
+ * The changes a privileged caller asks for, which `ip` sends, done through
+ * the operations the interface ioctls use (netif.c, netconf.c): each answers
+ * 0 or a negative errno, which `answer` acknowledges. What an interface here
+ * cannot hold is refused with EOPNOTSUPP rather than accepted and dropped:
+ * a second address, an MTU other than 1500, a rename, a route other than
+ * the default and the one its subnet implies, and a neighbour added by hand.
+ */
+
+/* The payload of attribute `type` in the request `req` of `body` bytes past
+ * its header, whose fixed part is `fixed` bytes, with its length in `*len`;
+ * NULL when it has none. */
+static const uint8_t *req_attr(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type,
+                               uint16_t *len)
+{
+    const uint8_t *attr = req + NLMSG_HDRLEN + fixed;
+    const uint8_t *end = req + NLMSG_HDRLEN + body;
+
+    while (body >= fixed && attr + 4 <= end) {
+        uint16_t alen = get16(attr);
+
+        if (alen < 4 || attr + alen > end) {
+            break;
+        }
+        if (get16(attr + 2) == type) {
+            *len = (uint16_t)(alen - 4u);
+            return attr + 4;
+        }
+        attr += (alen + 3u) & ~3u;
+    }
+    return 0;
+}
+
+/* An IPv4 attribute's address in the host's order, or 0 for none. */
+static uint32_t req_ip(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type)
+{
+    uint16_t len;
+    const uint8_t *a = req_attr(req, body, fixed, type, &len);
+
+    return a && len == 4
+               ? ((uint32_t)a[0] << 24) | ((uint32_t)a[1] << 16) | ((uint32_t)a[2] << 8) | a[3]
+               : 0;
+}
+
+/* The interface of index `index`, or NULL. */
+static struct netdev *dev_of_index(uint32_t index)
+{
+    int i, n = netdev_count();
+
+    for (i = 0; i < n; i++) {
+        struct netdev *nd = netdev_at(i);
+
+        if (nd && (uint32_t)nd->index == index) {
+            return nd;
+        }
+    }
+    return 0;
+}
+
+/* RTM_NEWLINK and RTM_SETLINK: up or down by IFF_UP in the change mask, and
+ * an MTU or a name only as they are. */
+static int32_t link_change(const uint8_t *req, uint32_t body)
+{
+    struct netdev *nd = body >= 16 ? link_asked(req, body) : 0;
+    uint16_t len;
+    const uint8_t *a;
+
+    if (!nd) {
+        return -ENODEV;
+    }
+    a = req_attr(req, body, 16, IFLA_MTU, &len);
+    if (a && (len != 4 || get32(a) != 1500)) {
+        return -EOPNOTSUPP;
+    }
+    a = req_attr(req, body, 16, IFLA_IFNAME, &len);
+    if (a && get32(req + NLMSG_HDRLEN + 4) != 0 &&
+        !same_name(nd->name, sizeof(nd->name), (const char *)a, len)) {
+        return -EOPNOTSUPP;
+    }
+    if (get32(req + NLMSG_HDRLEN + 12) & IFF_UP) {
+        nd->up = (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) ? 1 : 0;
+    }
+    return 0;
+}
+
+/* RTM_NEWADDR and RTM_DELADDR: an interface's one address and its prefix. */
+static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+{
+    struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
+    uint32_t prefix = body >= 8 ? req[NLMSG_HDRLEN + 1] : 0;
+    uint32_t ip = req_ip(req, body, 8, IFA_LOCAL);
+    uint32_t mask = prefix == 0 || prefix > 32 ? 0 : 0xFFFFFFFFu << (32 - prefix);
+
+    if (ip == 0) {
+        ip = req_ip(req, body, 8, IFA_ADDRESS);
+    }
+    if (!nd) {
+        return -ENODEV;
+    }
+    if (type == RTM_DELADDR) {
+        if (nd->ip == 0 || (ip != 0 && ip != nd->ip)) {
+            return -EADDRNOTAVAIL;
+        }
+        return netconf_set_address(nd, 0, 0);
+    }
+    if (ip == 0) {
+        return -EINVAL;
+    }
+    if (nd->ip == ip && nd->mask == mask) {
+        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    }
+    if (nd->ip != 0) {
+        return -EOPNOTSUPP;
+    }
+    return netconf_set_address(nd, ip, mask);
+}
+
+/* RTM_NEWROUTE and RTM_DELROUTE: the default route, which is the gateway of
+ * the interface RTA_OIF names, or of the one whose subnet has the gateway;
+ * and the route a subnet implies, which is there while its address is. */
+static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+{
+    uint32_t dst_len = body >= 12 ? req[NLMSG_HDRLEN + 1] : 0;
+    uint32_t gw = req_ip(req, body, 12, RTA_GATEWAY);
+    uint16_t len;
+    const uint8_t *oif = req_attr(req, body, 12, RTA_OIF, &len);
+    struct netdev *nd = oif && len == 4 ? dev_of_index(get32(oif)) : 0;
+    int i;
+
+    for (i = 0; !oif && !nd && i < netdev_count(); i++) {
+        struct netdev *at = netdev_at(i);
+
+        if (at && at->mask != 0 && (gw & at->mask) == (at->ip & at->mask)) {
+            nd = at;
+        }
+    }
+    if (!oif && !nd) {
+        nd = netdev_first();
+    }
+    if (!nd || body < 12) {
+        return -ENODEV;
+    }
+    if (dst_len == 0 && type == RTM_DELROUTE) {
+        return nd->gateway == 0 || (gw != 0 && gw != nd->gateway) ? -ESRCH
+                                                                  : netconf_set_gateway(nd, 0);
+    }
+    if (dst_len == 0) {
+        if (gw == 0) {
+            return -EINVAL;
+        }
+        if (nd->gateway != 0 && !(flags & NLM_F_REPLACE)) {
+            return nd->gateway == gw && !(flags & NLM_F_EXCL) ? 0 : -EEXIST;
+        }
+        return netconf_set_gateway(nd, gw);
+    }
+    if (type == RTM_NEWROUTE && gw == 0 && nd->mask != 0 && dst_len == prefix_of(nd->mask) &&
+        req_ip(req, body, 12, RTA_DST) == (nd->ip & nd->mask)) {
+        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    }
+    return -EOPNOTSUPP;
+}
+
+/* RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each. */
+static int32_t neigh_change(const uint8_t *req, uint32_t body)
+{
+    uint32_t ip = req_ip(req, body, 12, NDA_DST);
+    uint32_t index = body >= 12 ? get32(req + NLMSG_HDRLEN + 4) : 0;
+    struct netdev *nd = index != 0 ? dev_of_index(index) : 0;
+
+    if (ip == 0 || (index != 0 && !nd)) {
+        return -EINVAL;
+    }
+    return arp_forget(nd, ip);
+}
+
+/* Whether `type` asks for a change rather than a reading. */
+static int is_change(uint16_t type)
+{
+    return type == RTM_NEWLINK || type == RTM_SETLINK || type == RTM_NEWADDR ||
+           type == RTM_DELADDR || type == RTM_NEWROUTE || type == RTM_DELROUTE ||
+           type == RTM_NEWNEIGH || type == RTM_DELNEIGH;
+}
+
+/* The answer to the change `req` asks for: EPERM for a caller without
+ * privilege, else its handler's; RTM_NEWNEIGH is refused. */
+static int32_t change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+{
+    if (!current_proc || !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (type == RTM_NEWLINK || type == RTM_SETLINK) {
+        return link_change(req, body);
+    }
+    if (type == RTM_NEWADDR || type == RTM_DELADDR) {
+        return addr_change(req, type, flags, body);
+    }
+    if (type == RTM_NEWROUTE || type == RTM_DELROUTE) {
+        return route_change(req, type, flags, body);
+    }
+    if (type == RTM_DELNEIGH) {
+        return neigh_change(req, body);
+    }
+    return -EOPNOTSUPP;
+}
+
 /* The message that ends a dump, or an NLMSG_ERROR of `error` answering the
  * request whose header is `req`, 0 being an acknowledgement. */
 static void end_msg(struct nl_build *b, const uint8_t *req, int32_t error)
@@ -708,6 +921,14 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
 {
     int i, n = netdev_count();
 
+    if (is_change(type)) {
+        int32_t rc = change(req, type, flags, body);
+
+        if (rc != 0 || (flags & NLM_F_ACK)) {
+            end_msg(b, req, rc);
+        }
+        return;
+    }
     if (type == RTM_GETLINK && (flags & NLM_F_DUMP) != NLM_F_DUMP && body >= 16) {
         const struct netdev *nd = link_asked(req, body);
 

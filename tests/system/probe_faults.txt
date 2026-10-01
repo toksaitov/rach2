@@ -5161,3 +5161,13 @@ old
                        {"interrupts", procfs_ino_interrupts, DT_REG},
 new
 end
+
+fault netlink-deladdr-ignored
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (RTM_DELADDR did not take the address away
+old
+        return netconf_set_address(nd, 0, 0);
+new
+        return 0;
+end
