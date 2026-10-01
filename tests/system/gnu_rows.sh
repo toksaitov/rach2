@@ -138,6 +138,9 @@ row_perl() {
     same "IO::Compress::Gzip" "$(perl -MIO::Compress::Gzip=gzip -MIO::Uncompress::Gunzip=gunzip \
         -e 'my $in = "perl row"; my ($z, $out); gzip(\$in => \$z) or die;
             gunzip(\$z => \$out) or die; print $out')" "perl row"
+    # shellcheck disable=SC2016 # the dollars are Perl's
+    same "threads" "$(perl -Mthreads -Mthreads::shared -e 'my $n :shared = 0;
+        $_->join for map { threads->create(sub { lock $n; $n += 10 }) } 1 .. 4; print $n')" "40"
 }
 
 # A file URL, and HTTPS from openssl's test server on this machine, whose

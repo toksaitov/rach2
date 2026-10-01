@@ -11,7 +11,8 @@
 # directories in place of its answers before the build, and the root's path
 # is removed from the installed configuration. perl is then linked again
 # without the wrapper's interpreter, so that it asks for /lib/ld-linux.so.2
-# as the other programs do.
+# as the other programs do. It has interpreter threads, as Debian's perl has,
+# so that `use threads` works.
 VERSION=5.44.0
 
 # perl_env COMMAND...: run a step of Perl's build with the wrapper and the
@@ -41,7 +42,7 @@ exec "$CROSS/bin/$TARGET-gcc" --sysroot="$ROOT" "\$@" \\
 EOF
     chmod +x "$WORK/bin/gcc"
     cd "$SRC" || exit
-    perl_env sh Configure -des -Dcc=gcc -Dprefix=/usr -Darchname=i686-linux \
+    perl_env sh Configure -des -Dcc=gcc -Dprefix=/usr -Darchname=i686-linux -Dusethreads \
         -Dlibpth="$ROOT/usr/lib $ROOT/lib" -Dplibpth="$ROOT/usr/lib $ROOT/lib" \
         -Dusrinc="$ROOT/usr/include" -Dlocincpth=' ' -Dloclibpth=' ' \
         -Dman1dir=/usr/share/man/man1 -Dman3dir=/usr/share/man/man3 \
