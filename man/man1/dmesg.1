@@ -66,7 +66,9 @@ Print the records there are, then each new one as it is made, until
 interrupted.
 The log is read again each second and what the read before did not have is
 printed: the log's ring drops its oldest records as it fills, and the new
-read is matched against the old one past the records it dropped.
+read is matched against the old one past the records it dropped, or, when
+the ring changed while the read was taken, by the time of the last record
+printed.
 It ends when the log cannot be read or its output is closed.
 .It Fl x , Fl Fl decode
 Print each record's facility and level before it, as

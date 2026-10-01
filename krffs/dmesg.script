@@ -61,7 +61,10 @@ if [ "$raw" -eq 1 ] && { [ "$stamp" != keep ] || [ "$decode" -eq 1 ]; }; then
     echo "dmesg: -r is taken with -l alone" >&2
     exit 1
 fi
-for word in $(printf '%s' "$levels" | tr ',' ' '); do
+# The fields between the commas, as the formatter splits them.
+ifs=$IFS
+IFS=,
+for word in $levels; do
     case $(printf '%s' "$word" | tr '[:upper:]' '[:lower:]' | sed 's/^+//; s/+$//') in
         emerg | alert | crit | err | warn | notice | info | debug | [0-7]) ;;
         *)
@@ -70,6 +73,7 @@ for word in $(printf '%s' "$levels" | tr ',' ' '); do
             ;;
     esac
 done
+IFS=$ifs
 if [ ! -r /dev/bootlog ]; then
     echo "dmesg: /dev/bootlog: cannot read the log" >&2
     exit 1
@@ -87,6 +91,7 @@ BEGIN {
         word = tolower(want[i])
         up = sub(/\+$/, "", word)
         down = sub(/^\+/, "", word)
+        found = 6
         for (k = 1; k <= 8; k++) {
             if (word == name[k] || word == k - 1 "") {
                 found = k - 1
@@ -140,11 +145,16 @@ fi
 # before is printed. The ring drops its oldest records as it fills, so a read
 # is the one before with some of its first records gone and new ones after:
 # the new records begin where the fewest dropped leave the old read's records
-# a prefix of the new one's. A failed read, or output nobody reads, ends it.
+# a prefix of the new one's. A read the ring changed while it was taken may
+# match no way; then the records after the time of the last one printed are
+# the new ones. A failed read, or output that is closed, ends it.
 prev=
 while :; do
     log=$(cat /dev/bootlog) || exit 1
     printf '%s\n\001\n%s\n' "$prev" "$log" | awk '
+function stamp(s) {
+    return match(s, /\[[ 0-9.]*\]/) ? substr(s, RSTART + 1, RLENGTH - 2) + 0 : -1
+}
 $0 == "\001" { part = 1; next }
 !part && $0 != "" { old[++olds] = $0; next }
 part { new[++news] = $0 }
@@ -158,10 +168,16 @@ END {
             break
         }
     }
-    for (i = olds - drop + 1; i <= news; i++) {
+    start = olds - drop + 1
+    if (olds > 0 && drop == olds) {
+        for (start = 1; start <= news && stamp(new[start]) <= stamp(old[olds]); start++) {
+        }
+    }
+    for (i = start; i <= news; i++) {
         print new[i]
     }
 }' | format || exit 1
+    { : >/dev/stdout; } 2>/dev/null || exit 1
     prev=$log
     sleep 1
 done
