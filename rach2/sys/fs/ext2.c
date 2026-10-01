@@ -85,6 +85,12 @@ struct ext2_node {
     int unlinked; /* no name left; the inode and its blocks go at the last put */
 };
 
+/* `write_bytes`'s ways to write: through to the medium, or through to a
+ * write-through disk without its flush, which the next write through
+ * covers. 0 leaves the bytes dirty in the cache. */
+#define WRITE_THROUGH   1
+#define WRITE_UNFLUSHED 2
+
 #define BATCH_NONE  0
 #define BATCH_ALLOC 1
 #define BATCH_FREE  2
@@ -1175,7 +1181,9 @@ static uint32_t now_seconds(void)
 }
 
 /* Copy `len` bytes at byte offset `off` of the volume from `src`, or zeros
- * with `src` NULL; through to the device when `sync`, else written back. */
+ * with `src` NULL; through to the device when `sync` is WRITE_THROUGH, the
+ * same without the disk's flush when WRITE_UNFLUSHED, for a write the next
+ * write through makes durable, else written back. */
 static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync)
 {
     const uint8_t *in = src;
@@ -1205,7 +1213,9 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         } else {
             k_memset(b->data + at, 0, take);
         }
-        if (sync) {
+        if (sync == WRITE_UNFLUSHED) {
+            rc = bcache_write_unflushed(b);
+        } else if (sync) {
             rc = bcache_write(b);
         } else if (em->batch) {
             int first = meta_noted(em, blk) == (em->batch == BATCH_ALLOC);
@@ -1300,7 +1310,13 @@ static void inode_encode(const struct ext2_node *n, uint8_t *raw)
     }
 }
 
-static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
+/*
+ * Write inode `n` in the way `how` says, over the bytes its slot has, or
+ * over zeros when `fresh`, for an inode just allocated: a freed inode's
+ * slot keeps what it had, and the encoder writes only the fields this
+ * driver keeps. Inside a batch the write is left for the batch's end.
+ */
+static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fresh, int how)
 {
     uint8_t raw[128];
     uint64_t at = inode_offset(em, n->ino);
@@ -1309,9 +1325,13 @@ static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
     if (em->wb && em->wb->count) {
         k_panic("ext2: inode store before writeback drain");
     }
-    rc = read_bytes(em, at, raw, sizeof(raw));
-    if (rc != 0) {
-        return rc;
+    if (fresh) {
+        k_memset(raw, 0, sizeof(raw));
+    } else {
+        rc = read_bytes(em, at, raw, sizeof(raw));
+        if (rc != 0) {
+            return rc;
+        }
     }
     inode_encode(n, raw);
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
@@ -1321,7 +1341,23 @@ static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
             return rc;
         }
     }
-    return write_bytes(em, at, raw, sizeof(raw), !em->batch);
+    return write_bytes(em, at, raw, sizeof(raw), em->batch ? 0 : how);
+}
+
+static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
+{
+    return inode_write(em, n, 0, WRITE_THROUGH);
+}
+
+/**
+ * Write a directory's times into the cache, for the next sync to put on
+ * the disk: after an entry is added or removed only the times are left,
+ * and a crash that loses them loses nothing else, since every inode of
+ * the block goes out whole with each write through of it.
+ */
+static int inode_times_later(struct ext2_mount *em, const struct ext2_node *d)
+{
+    return inode_write(em, d, 0, 0);
 }
 
 /* The primary descriptor of group `g`, written through, or left for the
@@ -1455,7 +1491,10 @@ static int bit_get(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index,
     return 0;
 }
 
-static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value)
+/* Set or clear bit `index` of the bitmap in block `bitmap_block`, written
+ * in the way `how` says unless a batch defers it. */
+static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value,
+                     int how)
 {
     uint64_t at = (uint64_t)bitmap_block * em->block_size + index / 8;
     uint8_t byte;
@@ -1469,7 +1508,12 @@ static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index,
     } else {
         byte = (uint8_t)(byte & ~(1u << (index % 8)));
     }
-    return write_bytes(em, at, &byte, 1, !meta_deferred(em, at));
+    return write_bytes(em, at, &byte, 1, meta_deferred(em, at) ? 0 : how);
+}
+
+static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value)
+{
+    return bit_write(em, bitmap_block, index, value, WRITE_THROUGH);
 }
 
 /* The pointer blocks a file block index can need at most: none below the
@@ -1592,7 +1636,9 @@ static int block_free(struct ext2_mount *em, uint32_t b)
  * Allocate an inode in `parent`'s group when it has one free, else in the
  * first group that has; the bit is set and the counts lowered before the
  * number is returned, and the caller writes the inode initialised and
- * names it, in that order.
+ * names it, in that order. The bit and the counts have no order between
+ * them, so the bitmap's write leaves the disk's cache to the flush of the
+ * descriptor's, which puts both on the medium before the inode is written.
  */
 static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, uint32_t *out)
 {
@@ -1624,7 +1670,7 @@ static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, u
             if (used) {
                 continue;
             }
-            rc = bit_put(em, le32(gd + 4), i, 1);
+            rc = bit_write(em, le32(gd + 4), i, 1, em->batch ? WRITE_THROUGH : WRITE_UNFLUSHED);
             if (rc != 0) {
                 return rc;
             }
@@ -2495,20 +2541,63 @@ static int dir_block_at(struct ext2_mount *em, const struct ext2_node *d, uint32
     return 0;
 }
 
+/* One entry's header, name and padding at `raw`, with the type byte
+ * `type` as the volume keeps it; returns the entry's length. */
+static uint32_t dirent_encode(uint8_t *raw, uint32_t ino, uint32_t rec_len, const char *name,
+                              uint32_t name_len, uint32_t type)
+{
+    uint32_t len = dirent_len(name_len);
+
+    k_memset(raw, 0, len);
+    LE32_PUT(raw, ino);
+    LE16_PUT(raw + 4, rec_len);
+    raw[6] = (uint8_t)name_len;
+    raw[7] = (uint8_t)type;
+    k_memcpy(raw + 8, name, name_len);
+    return len;
+}
+
 /* Write one entry's header and name at `off`. */
 static int dirent_write(struct ext2_mount *em, uint64_t off, uint32_t ino, uint32_t rec_len,
                         const char *name, uint32_t name_len, uint32_t ftype)
 {
     uint8_t raw[8 + EXT2_NAME_MAX + 4]; /* the header, the name and its padding */
-    uint32_t len = dirent_len(name_len);
+    uint32_t type = (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0;
+    uint32_t len = dirent_encode(raw, ino, rec_len, name, name_len, type);
 
-    k_memset(raw, 0, sizeof(raw));
-    LE32_PUT(raw, ino);
-    LE16_PUT(raw + 4, rec_len);
-    raw[6] = (uint8_t)name_len;
-    raw[7] = (uint8_t)((em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
-    k_memcpy(raw + 8, name, name_len);
-    return write_bytes(em, off, raw, len, 1);
+    return write_bytes(em, off, raw, len, WRITE_THROUGH);
+}
+
+/**
+ * Split the entry `old` at `off` for the new entry `entry`, of `len` bytes
+ * with the rest of `old`'s record, which goes behind `old`'s name.
+ *
+ * A sector is the unit the disk writes whole, so when the two headers and
+ * the new name lie in one, one write carries both. Otherwise the new entry
+ * is written into the slack behind the old name first, where the old
+ * record still covers it, and then the old header is shortened to end
+ * where the new one begins; a stop between the two leaves the old entry
+ * spanning its record and the new one unreachable, which is the volume as
+ * it was.
+ */
+static int dirent_split(struct ext2_mount *em, uint64_t off, const struct ext2_scan *old,
+                        const uint8_t *entry, uint32_t len)
+{
+    uint8_t pair[2 * (8 + EXT2_NAME_MAX + 4)];
+    uint32_t used = dirent_len(old->name_len);
+    int rc;
+
+    if ((off >> 9) == ((off + used + len - 1) >> 9)) {
+        dirent_encode(pair, old->ino, used, old->name, old->name_len, old->type);
+        k_memcpy(pair + used, entry, len);
+        return write_bytes(em, off, pair, used + len, WRITE_THROUGH);
+    }
+    rc = write_bytes(em, off + used, entry, len, WRITE_THROUGH);
+    if (rc != 0) {
+        return rc;
+    }
+    used = dirent_encode(pair, old->ino, used, old->name, old->name_len, old->type);
+    return write_bytes(em, off, pair, used, WRITE_THROUGH);
 }
 
 /**
@@ -2524,6 +2613,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     uint32_t need = dirent_len(name_len);
     uint32_t cursor = 0;
     struct ext2_scan sc;
+    uint8_t entry[8 + EXT2_NAME_MAX + 4];
     int rc, fresh;
 
     if (name_len == 0 || name_len > EXT2_NAME_MAX) {
@@ -2553,16 +2643,9 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
         if (used == 0) {
             return dirent_write(em, off, ino, sc.rec_len, name, name_len, ftype);
         }
-        /* Split: the new entry is written into the slack behind the old
-         * name first, where the old record still covers it, and then the
-         * old header is shortened to end where the new one begins. A stop
-         * between the two leaves the old entry spanning its record and the
-         * new one unreachable, which is the volume as it was. */
-        rc = dirent_write(em, off + used, ino, room, name, name_len, ftype);
-        if (rc != 0) {
-            return rc;
-        }
-        return dirent_write(em, off, sc.ino, used, sc.name, sc.name_len, sc.type);
+        used = dirent_encode(entry, ino, room, name, name_len,
+                             (em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
+        return dirent_split(em, off, &sc, entry, used);
     }
     /* A new block. */
     {
@@ -2804,21 +2887,14 @@ static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, 
     n->gid = current_proc ? current_proc->egid : 0;
     n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
     n->atime = n->mtime = n->ctime = now_seconds();
-    /* The image zeroed first: a freed inode's slot keeps what it had, and
-     * `inode_store` writes only the fields this driver keeps. */
-    rc = write_bytes(em, inode_offset(em, ino), 0, 128, 1);
+    /* The image over zeros: a freed inode's slot keeps what it had, and
+     * the encoder writes only the fields this driver keeps. */
+    rc = store ? inode_write(em, n, 1, WRITE_THROUGH)
+               : write_bytes(em, inode_offset(em, ino), 0, 128, WRITE_THROUGH);
     if (rc != 0) {
         node_drop(em, n);
         inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
         return rc;
-    }
-    if (store) {
-        rc = inode_store(em, n);
-        if (rc != 0) {
-            node_drop(em, n);
-            inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
-            return rc;
-        }
     }
     *out = n;
     return 0;
@@ -3200,7 +3276,7 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
         return rc;
     }
     d->mtime = d->ctime = now_seconds();
-    rc = inode_store(em, d);
+    rc = inode_times_later(em, d);
     if (rc != 0) {
         mark_error(em); /* the entry is there; the times are what is missing */
     }
@@ -3269,7 +3345,7 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
         return rc;
     }
     d->mtime = d->ctime = now_seconds();
-    rc = inode_store(em, d);
+    rc = inode_times_later(em, d);
     if (rc != 0) {
         mark_error(em); /* the entry is there; the times are what is missing */
     }
@@ -3317,7 +3393,7 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
         return rc;
     }
     d->mtime = d->ctime = now_seconds();
-    rc = inode_store(em, d);
+    rc = inode_times_later(em, d);
     if (rc != 0) {
         return rc;
     }
@@ -3513,7 +3589,7 @@ static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *n
         return rc;
     }
     d->mtime = d->ctime = now_seconds();
-    return inode_store(em, d);
+    return inode_times_later(em, d);
 }
 
 static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
@@ -3575,7 +3651,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     }
     if (rc == 0) {
         d->mtime = d->ctime = now_seconds();
-        rc = inode_store(em, d);
+        rc = inode_times_later(em, d);
     }
     if (rc != 0) {
         n->nlink = 0;

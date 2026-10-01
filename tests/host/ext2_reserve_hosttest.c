@@ -192,6 +192,13 @@ int bcache_write(struct bbuf *buffer)
     return 0;
 }
 
+/** Complete a write the disk answers before its cache holds it. */
+int bcache_write_unflushed(struct bbuf *buffer)
+{
+    bcache_dirty(buffer);
+    return 0;
+}
+
 /** Complete cache synchronization. */
 int bcache_sync(block_device_t *dev)
 {
