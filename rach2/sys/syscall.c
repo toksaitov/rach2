@@ -39,6 +39,7 @@
 #include "rtc.h"
 #include "block/loop.h"
 #include "fs/krffs.h"
+#include "fs/bcache.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
@@ -1878,9 +1879,10 @@ static int32_t sys_times(isr_params_t *params)
  * Fills the 64-byte i386 struct sysinfo: uptime in seconds, the load
  * averages the scheduler keeps (`sched_loadavg`), with 16 bits of fraction
  * as Linux gives them, the count of process records including unreaped
- * children, total and free RAM from the frame counts, mem_unit = 1; shared,
- * buffer and swap figures are reported as zero (not tracked). EBX = struct
- * sysinfo *.
+ * children, total and free RAM from the frame counts, the buffer cache's
+ * pages as the buffer RAM, which free(1) adds to /proc/meminfo's Cached for
+ * its buff/cache, mem_unit = 1; shared and swap figures are reported as zero
+ * (not tracked). EBX = struct sysinfo *.
  */
 static int32_t sys_sysinfo(isr_params_t *params)
 {
@@ -1915,8 +1917,8 @@ static int32_t sys_sysinfo(isr_params_t *params)
         }
     }
     /* Fill every field of the ABI struct explicitly: uptime, the loads, the
-     * process count, mem_unit, and physical RAM (from the frame bitmap) are
-     * real; swap is not tracked, so it is reported as zero. */
+     * process count, mem_unit, physical RAM (from the frame bitmap) and the
+     * buffer cache are real; swap is not tracked, so it is reported as zero. */
     si.uptime = (int32_t)(kernel_ticks / 100);
     sched_loadavg(avg);
     si.loads[0] = avg[0] << (16 - SCHED_LOAD_SHIFT);
@@ -1925,7 +1927,7 @@ static int32_t sys_sysinfo(isr_params_t *params)
     si.totalram = frame_total_count() * PAGE_SIZE;
     si.freeram = frame_free_count() * PAGE_SIZE;
     si.sharedram = 0;
-    si.bufferram = 0;
+    si.bufferram = bcache_resident() * PAGE_SIZE;
     si.totalswap = 0;
     si.freeswap = 0;
     si.procs = (uint16_t)n;
