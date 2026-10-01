@@ -1674,10 +1674,11 @@ int tcp_is_connected(struct socket *sock)
  * here; without the announcement a peer that filled the buffer waits for its
  * own persist timer before probing again.
  *
- * Only ESTABLISHED sends an update. The one closing state that still has a
- * socket attached is CLOSE_WAIT, entered on the peer's FIN, after which the
- * peer sends no data. The only segment sent is a bare ACK carrying the new
- * window, and the state does not change.
+ * An update is sent in the states where the peer may still send data:
+ * ESTABLISHED, and FIN_WAIT_1 and FIN_WAIT_2, where a reader that shut down
+ * its writing half goes on reading. CLOSE_WAIT is entered on the peer's FIN,
+ * after which the peer sends no data. The only segment sent is a bare ACK
+ * carrying the new window, and the state does not change.
  *
  * Called from syscall context without `net_lock` held, so it takes the lock
  * itself, the same as `tcp_send`, and holds it from the `sock->tcb` snapshot
@@ -1697,7 +1698,8 @@ void tcp_window_update(struct socket *sock)
 
     flags = net_lock();
     tcb = sock->tcb;
-    if (tcb && tcb->state == TCP_ESTABLISHED) {
+    if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_FIN_WAIT_1 ||
+                tcb->state == TCP_FIN_WAIT_2)) {
         wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head, tcb->recv_size,
                             (uint32_t)TCP_WINDOW_SIZE << tcb->rcv_wscale, TCP_MSS);
         if (wnd != 0u) {

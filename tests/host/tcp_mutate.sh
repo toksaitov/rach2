@@ -126,4 +126,9 @@ mutate '    if (tcb->ooo_count == TCP_OOO_RANGES) {
 run_phase sack-full 1 'a segment past a full table is not named'
 cleanup
 run_phase restored-full 0 'tcp_hosttest: PASS'
+mutate '    if (tcb && (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_FIN_WAIT_1 ||
+                tcb->state == TCP_FIN_WAIT_2)) {' '    if (tcb && tcb->state == TCP_ESTABLISHED) {'
+run_phase half-close-quiet 2 'a window reopened in FIN_WAIT_1 is announced'
+cleanup
+run_phase restored-half-close 0 'tcp_hosttest: PASS'
 cmp "$work/tcp.saved" "$source"

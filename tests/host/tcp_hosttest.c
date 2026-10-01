@@ -786,6 +786,38 @@ static void sack_rows(void)
     reset_all();
 }
 
+/* A reader that shut down its writing half goes on reading, so a window
+   its reads reopen is announced in FIN_WAIT_1 and FIN_WAIT_2, as in
+   ESTABLISHED; unannounced, the peer waits for its persist timer. */
+static void half_close_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 6000, fin_seq;
+    uint16_t lport;
+
+    reset_all();
+    conn = open_conn(&sock, 91, &peer_seq, &lport);
+    tcp_shutdown_send(&sock);
+    CHECK("shutting down the writing half sends the FIN",
+          n_segs == 1 && (last_flags() & F_FIN) != 0 && conn->state == TCP_FIN_WAIT_1);
+    fin_seq = read32be(segs[0].data + 4);
+    conn->rcv_wnd = 0;
+    n_segs = 0;
+    tcp_window_update(&sock);
+    CHECK("a window reopened in FIN_WAIT_1 is announced",
+          n_segs == 1 && read16be(segs[0].data + 14) != 0);
+    rx(91, lport, peer_seq, fin_seq + 1, F_ACK, 65535, (const char *)0, 0);
+    CHECK("the peer's acknowledgement of the FIN leads to FIN_WAIT_2",
+          conn->state == TCP_FIN_WAIT_2);
+    conn->rcv_wnd = 0;
+    n_segs = 0;
+    tcp_window_update(&sock);
+    CHECK("and a window reopened there is announced",
+          n_segs == 1 && read16be(segs[0].data + 14) != 0);
+    reset_all();
+}
+
 /* An ephemeral port passes over one another socket has bound, as a port
    a control block uses. */
 static void ephemeral_rows(void)
@@ -1052,6 +1084,7 @@ int main(void)
     peer_mss_row();
     window_scale_rows();
     sack_rows();
+    half_close_rows();
     ephemeral_rows();
     path_mtu_row();
 

@@ -294,9 +294,10 @@ int tcp_is_connected(struct socket *sock);
 
 /**
  * Announce a receive window that reopened after the reader drained the ring.
- * Sends at most one bare ACK, and only from ESTABLISHED. Safe to call after
- * every read: it stays quiet until the window has grown enough to be worth a
- * segment. Takes `net_lock` itself.
+ * Sends at most one bare ACK, and only in ESTABLISHED, FIN_WAIT_1 and
+ * FIN_WAIT_2, where the peer may still send. Safe to call after every read: it
+ * stays quiet until the window has grown enough to be worth a segment. Takes
+ * `net_lock` itself.
  */
 void tcp_window_update(struct socket *sock);
 
