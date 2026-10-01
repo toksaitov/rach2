@@ -1057,7 +1057,9 @@ static int rtl8168_init(struct netdev *nd, int nth)
 
     r8168_up = 1;
     /* The tally outlives a warm restart (rtl8169_init_counter_offsets). */
-    (void)r8168_counters_command(R8168_COUNTER_RESET);
+    if (!r8168_counters_command(R8168_COUNTER_RESET)) {
+        klog(KLOG_WARN, "rtl8168", "tally: not reset; its counts include earlier boots");
+    }
     r8168_interrupts_enable();
     {
         int b;
