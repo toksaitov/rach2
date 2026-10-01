@@ -1134,6 +1134,11 @@ static void refusal_rows(void)
 
 /* ---- the writer's rows ---- */
 
+/* The mount flags the writer's rows mount with. They judge the strict
+ * order, each write on the medium before the next, which `dirsync` asks
+ * for; `default_mount_row` judges a mount without it. */
+static uint32_t rw_flags = VFS_MS_DIRSYNC;
+
 static int mount_rw(void)
 {
     int rc;
@@ -1141,9 +1146,9 @@ static int mount_rw(void)
     __builtin_memset(&mnt, 0, sizeof(mnt));
     mnt.type = &vfs_ext2_type;
     mnt.dev = &dev;
-    mnt.flags = 0;
+    mnt.flags = rw_flags;
     mnt.ns_holder = -1;
-    rc = vfs_ext2_type.mount(&mnt, &dev, 0, "");
+    rc = vfs_ext2_type.mount(&mnt, &dev, rw_flags, "");
     if (rc == 0) {
         vfs_ns_lock(&mnt); /* the test stands in for the syscall layer */
     }
@@ -2418,6 +2423,47 @@ static void order_row_under(uint32_t buffers, int cross_calls, uint32_t first)
    all, so they go to the disk at the unmount's sync in block order, which
    puts a parent pointer block before the child it names. Each order is one
    a machine can produce, and the publication check must hold in both. */
+/**
+ * A mount without `sync` or `dirsync`: creates, a write and a remove make no
+ * flush of the disk, an fsync makes one, and the volume unmounts clean.
+ */
+static void default_mount_row(void)
+{
+    static unsigned char block[3 * 4096];
+    void *f, *g;
+    int rc, flushes;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    rw_flags = 0;
+    rc = mount_rw();
+    rw_flags = VFS_MS_DIRSYNC;
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, "a mount without dirsync mounts writable");
+    if (rc != 0) {
+        return;
+    }
+    wlog_reset();
+    wlog_capture = 1;
+    memset(block, 0x5a, sizeof(block));
+    f = make_file(mnt.root, "plain", &rc);
+    g = f ? make_file(mnt.root, "gone", &rc) : 0;
+    check(f && g && write_at(f, block, sizeof(block), 0) == 0 &&
+              OPS->unlink(&mnt, mnt.root, "gone") == 0,
+          "two creates, a write of three blocks and a remove");
+    flushes = flush_n;
+    check(flushes == 0 && wlog_n > 0,
+          "reach the disk with no flush of its cache on a mount without dirsync");
+    if (g) {
+        OPS->put(&mnt, g);
+    }
+    check(f && OPS->fsync(&mnt, 0) == 0 && flush_n > flushes, "and an fsync flushes it");
+    if (f) {
+        OPS->put(&mnt, f);
+    }
+    wlog_capture = 0;
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
+}
+
 static void order_row(void)
 {
     order_row_under(16, 0, 1035);
@@ -2654,6 +2700,7 @@ static void batch_rows(void)
     order_row_under(512, 1, 11);
     order_row_under(512, 1, 1035);
     order_row_under(512, 1, 2059);
+    default_mount_row();
     batch_error_row();
     for (barrier = 1; barrier <= 5; barrier++) {
         batch_flush_error_row(barrier, 0);

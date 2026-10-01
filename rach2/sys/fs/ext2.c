@@ -85,11 +85,14 @@ struct ext2_node {
     int unlinked; /* no name left; the inode and its blocks go at the last put */
 };
 
-/* `write_bytes`'s ways to write: through to the medium, or through to a
- * write-through disk without its flush, which the next write through
- * covers. 0 leaves the bytes dirty in the cache. */
+/* `write_bytes`'s ways to write: through to the device, and to the medium
+ * as well on a mount with `sync` or `dirsync` (`em_strict`); through to a
+ * write-through disk without its flush, which a later flush covers; and
+ * through to the medium on any mount, for the superblock's valid bit. 0
+ * leaves the bytes dirty in the cache. */
 #define WRITE_THROUGH   1
 #define WRITE_UNFLUSHED 2
+#define WRITE_DURABLE   3
 
 #define BATCH_NONE  0
 #define BATCH_ALLOC 1
@@ -1180,10 +1183,30 @@ static uint32_t now_seconds(void)
     return (uint32_t)sec;
 }
 
+/**
+ * Whether the mount puts each metadata write, and each stage of a file's
+ * write, on the medium before the next, as a mount with `sync` or `dirsync`
+ * asks. Otherwise the writes reach the disk in the same order, which keeps
+ * the order this driver relies on through a stop of the kernel, and the
+ * disk's own cache is flushed at `sync`, `fsync`, unmount and the periodic
+ * sync, as Linux's ext2 leaves it; a power failure between two flushes can
+ * leave the volume in a state the order does not promise, which the check
+ * of an unclean volume, or `e2fsck`, repairs.
+ */
+static int em_strict(const struct ext2_mount *em)
+{
+    return em->mnt && (em->mnt->flags & (VFS_MS_SYNCHRONOUS | VFS_MS_DIRSYNC)) != 0;
+}
+
+/** `bcache_sync` of the mount's device, without the disk's flush on a
+ * mount that is not strict. */
+static int em_sync(struct ext2_mount *em)
+{
+    return em_strict(em) ? bcache_sync(em->dev) : bcache_sync_unflushed(em->dev);
+}
+
 /* Copy `len` bytes at byte offset `off` of the volume from `src`, or zeros
- * with `src` NULL; through to the device when `sync` is WRITE_THROUGH, the
- * same without the disk's flush when WRITE_UNFLUSHED, for a write the next
- * write through makes durable, else written back. */
+ * with `src` NULL, written the way `sync` says, or written back with 0. */
 static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync)
 {
     const uint8_t *in = src;
@@ -1213,10 +1236,10 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         } else {
             k_memset(b->data + at, 0, take);
         }
-        if (sync == WRITE_UNFLUSHED) {
-            rc = bcache_write_unflushed(b);
-        } else if (sync) {
+        if (sync == WRITE_DURABLE || (sync == WRITE_THROUGH && em_strict(em))) {
             rc = bcache_write(b);
+        } else if (sync) {
+            rc = bcache_write_unflushed(b);
         } else if (em->batch) {
             int first = meta_noted(em, blk) == (em->batch == BATCH_ALLOC);
 
@@ -1388,7 +1411,7 @@ static int meta_deferred(struct ext2_mount *em, uint64_t at)
         }
     }
     if (em->metas == (int)(sizeof(em->meta) / sizeof(em->meta[0]))) {
-        if (em->batch != BATCH_FREE || bcache_sync(em->dev) != 0) {
+        if (em->batch != BATCH_FREE || em_sync(em) != 0) {
             return 0;
         }
         em->metas = 0;
@@ -1435,12 +1458,12 @@ static int batch_end(struct ext2_mount *em)
             rc = -EIO;
             break;
         }
-        rc = bcache_write(b);
+        rc = em_strict(em) ? bcache_write(b) : bcache_write_unflushed(b);
         bcache_release(b);
     }
     em->metas = 0;
     if (rc == 0) {
-        rc = bcache_sync(em->dev);
+        rc = em_sync(em);
     }
     return rc;
 }
@@ -1469,12 +1492,12 @@ static int sb_store(struct ext2_mount *em)
 
     LE32_PUT(raw, (uint32_t)em->free_blocks);
     LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
-    rc = write_bytes(em, 1024 + 12, raw, 8, 1);
+    rc = write_bytes(em, 1024 + 12, raw, 8, WRITE_DURABLE);
     if (rc != 0) {
         return rc;
     }
     LE16_PUT(raw, em->state);
-    return write_bytes(em, 1024 + 58, raw, 2, 1);
+    return write_bytes(em, 1024 + 58, raw, 2, WRITE_DURABLE);
 }
 
 /* One bit of a bitmap block, read through, and written through or left for
@@ -2392,7 +2415,7 @@ static int writeback_drain(struct ext2_mount *em)
         int wrote = 0;
 
         count = wb->stage == WB_DATA ? wb->datas : wb->metas;
-        rc = bcache_sync(em->dev);
+        rc = em_sync(em);
         if (rc != 0) {
             goto fail;
         }
@@ -2415,8 +2438,8 @@ static int writeback_drain(struct ext2_mount *em)
             wrote = 1;
         }
         if (wrote) {
-            rc = bcache_sync(em->dev);
-            if (rc == 0) {
+            rc = em_sync(em);
+            if (rc == 0 && em_strict(em)) {
                 rc = block_flush(em->dev);
             }
             if (rc != 0) {
@@ -2999,7 +3022,7 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         /* The gap is a hole; the zeroed tail of the last block, if a
          * shrink left one unsynced, reaches the disk before the size
          * covers it. */
-        rc = bcache_sync(em->dev);
+        rc = em_sync(em);
         if (rc == 0) {
             n->size = size;
             n->mtime = n->ctime = now_seconds();

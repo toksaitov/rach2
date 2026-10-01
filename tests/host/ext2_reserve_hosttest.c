@@ -206,6 +206,12 @@ int bcache_sync(block_device_t *dev)
     return 0;
 }
 
+int bcache_sync_unflushed(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
 /** Complete device synchronization. */
 int block_flush(block_device_t *dev)
 {

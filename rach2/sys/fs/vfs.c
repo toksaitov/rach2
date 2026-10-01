@@ -2471,9 +2471,9 @@ const struct vfs_type *vfs_type_at(int idx)
 
 /* The flags mount(2) accepts here: honoured or recorded ones. Anything
  * else is EINVAL, MS_REMOUNT, MS_BIND and MS_MOVE first among them. */
-#define VFS_MS_KNOWN                                                                 \
-    (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC | VFS_MS_NOATIME | \
-     VFS_MS_NODIRATIME | VFS_MS_SILENT | VFS_MS_RELATIME)
+#define VFS_MS_KNOWN                                                                     \
+    (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC | VFS_MS_SYNCHRONOUS | \
+     VFS_MS_DIRSYNC | VFS_MS_NOATIME | VFS_MS_NODIRATIME | VFS_MS_SILENT | VFS_MS_RELATIME)
 
 /* Wait predicate: no operation is in progress on the mount. */
 static int drained(void *arg)

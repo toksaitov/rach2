@@ -1961,6 +1961,12 @@ static int procfs_gen_mounts(struct procfs_text *t)
         ap_str(t, m->type->name);
         ap_ch(t, ' ');
         ap_str(t, (m->flags & VFS_MS_RDONLY) ? "ro" : "rw");
+        if (m->flags & VFS_MS_SYNCHRONOUS) {
+            ap_str(t, ",sync");
+        }
+        if (m->flags & VFS_MS_DIRSYNC) {
+            ap_str(t, ",dirsync");
+        }
         if (m->flags & VFS_MS_NOSUID) {
             ap_str(t, ",nosuid");
         }

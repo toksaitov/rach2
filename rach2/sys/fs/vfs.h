@@ -61,17 +61,21 @@
 
 /* The mount(2) flags this kernel honours or records, with Linux's values.
  * MS_RDONLY, MS_NOSUID, MS_NOEXEC and MS_NODEV are enforced in the common
- * layer, the last by refusing an open of a device node with EACCES; the
- * atime group and MS_SILENT are recorded because nothing here updates
- * access times. Any other flag answers EINVAL. */
-#define VFS_MS_RDONLY     0x0001u
-#define VFS_MS_NOSUID     0x0002u
-#define VFS_MS_NODEV      0x0004u
-#define VFS_MS_NOEXEC     0x0008u
-#define VFS_MS_NOATIME    0x0400u
-#define VFS_MS_NODIRATIME 0x0800u
-#define VFS_MS_SILENT     0x8000u
-#define VFS_MS_RELATIME   0x200000u
+ * layer, the last by refusing an open of a device node with EACCES;
+ * MS_SYNCHRONOUS and MS_DIRSYNC make ext2 put each metadata write on the
+ * medium before the next; the atime group and MS_SILENT are recorded
+ * because nothing here updates access times. Any other flag answers
+ * EINVAL. */
+#define VFS_MS_RDONLY      0x0001u
+#define VFS_MS_NOSUID      0x0002u
+#define VFS_MS_NODEV       0x0004u
+#define VFS_MS_NOEXEC      0x0008u
+#define VFS_MS_SYNCHRONOUS 0x0010u
+#define VFS_MS_DIRSYNC     0x0080u
+#define VFS_MS_NOATIME     0x0400u
+#define VFS_MS_NODIRATIME  0x0800u
+#define VFS_MS_SILENT      0x8000u
+#define VFS_MS_RELATIME    0x200000u
 
 /* What `lookup_rest` returns when `..` would climb above the mount root, and
  * when the remainder reaches, at the mount's root directory, the name of a

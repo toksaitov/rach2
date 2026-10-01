@@ -132,6 +132,12 @@ int bcache_write_unflushed(struct bbuf *b);
  * -errno with that buffer and the rest still dirty for the next call. */
 int bcache_sync(block_device_t *dev);
 
+/** `bcache_sync` without the disk's flush: every write is answered and has
+ * reached the device, in the same order, and on a write-through disk the
+ * writes may still be in its own cache until the caller's next
+ * `block_flush`, a `bcache_sync` or a `bcache_write`. */
+int bcache_sync_unflushed(block_device_t *dev);
+
 /** Drop `dev`'s buffers at unmount; -EBUSY while any is held or dirty. */
 int bcache_invalidate(block_device_t *dev);
 
