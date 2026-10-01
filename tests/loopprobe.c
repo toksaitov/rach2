@@ -1094,11 +1094,12 @@ static void tcp_refused(void)
 }
 
 /*
- * A stream this end shut down has no connection to send on and no reason
- * recorded for it: the send is EPIPE, as POSIX names it, and a read, blocking
- * or not, is the end of input, not the bare refusal that reads as EPERM. A
- * stream that never connected has no connection either, and its read is
- * ENOTCONN. `cs` is a connected client; `sa` is scratch space of a byte.
+ * A stream this end shut down for sending has nothing to send on and no
+ * reason recorded for it: the send is EPIPE, as POSIX names it, and a read,
+ * blocking or not, is the end of input, since the peer closed its end first,
+ * not the bare refusal that reads as EPERM. A stream that never connected has
+ * no connection, and its read is ENOTCONN. `cs` is a connected client whose
+ * peer has closed; `sa` is scratch space of a byte.
  */
 /*
  * A reader already asleep on a stream another process shuts down wakes with
