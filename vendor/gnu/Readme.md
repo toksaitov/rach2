@@ -90,7 +90,7 @@ The image is built where the layer is, on a Linux host, and is not part of `make
 * The CA bundle as `/etc/ssl/certs/ca-certificates.crt`, Debian's name for it, and `/etc/ssl/cert.pem`, the file OpenSSL reads by default, as a link to it, so that curl and Git verify HTTPS against Mozilla's roots.
 * `ssh-keysign` without its set-id bit: the system uses no host-based authentication, and the guard admits no set-id file the manifest does not declare.
 
-The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1213 pages, and `man` looks a name up there when this project's manual has no page for it, so `man git` shows Git's page and `man ls` this manual's.
+The ports install their upstream manual pages under `/usr/share/man/manN` as troff sources, which the system's `man` does not read: it reads plain text. `render_man.sh` renders the pages of sections 1, 5, 7 and 8 with the build host's mandoc, as `man/render.sh` renders this project's, into `/usr/share/man/gnu/catN`, 1213 pages, and `man` looks a name up there when this project's manual has no page for it, or first when the command the path finds by the name is a port's and not a link to BusyBox, so `man git` shows Git's page and `man ls` GNU's.
 
 ### Which program a name finds
 

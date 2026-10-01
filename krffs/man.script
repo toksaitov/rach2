@@ -1,7 +1,7 @@
 #!/bin/sh
 # man: read a page of this system's manual.
 #
-# Usage: man [SECTION] NAME
+# Usage: man [-w] [SECTION] NAME
 #
 # The pages are the preformatted, gzipped texts under /usr/share/man/catN,
 # and /usr/share/man/aliases lists the names a page answers for besides
@@ -10,36 +10,57 @@
 # and 7 in that order. A name this manual has no page for is looked up among
 # the pages of the GNU system's ports under /usr/share/man/gnu/catN, which
 # vendor/gnu/render_man.sh renders from their upstream sources and which
-# describe the upstream programs. The text goes through the pager on a
-# terminal and straight to standard output otherwise. BusyBox's man applet
+# describe the upstream programs; the ports' page comes first when the
+# command the path finds by the name is a port's and not BusyBox's, as GNU's
+# ls is on that system. The text goes through the pager on a
+# terminal and straight to standard output otherwise; -w prints the page's
+# path instead. BusyBox's man applet
 # is not built: it finds a page only as a file, and a file per alias would
 # put four hundred nodes on every root, which the RAM root and a KRFFS disk
 # walk on every lookup.
 mandir=/usr/share/man
+where=
+if [ "$1" = -w ]; then
+    where=1
+    shift
+fi
 if [ $# -eq 2 ]; then
     sections=$1; name=$2
 elif [ $# -eq 1 ]; then
     sections="1 8 2 4 5 7"; name=$1
 else
-    echo "usage: man [SECTION] NAME" >&2
+    echo "usage: man [-w] [SECTION] NAME" >&2
     exit 2
 fi
 show() {
-    if [ -t 1 ]; then
+    if [ -n "$where" ]; then
+        echo "$1"
+    elif [ -t 1 ]; then
         gunzip -c "$1" | "${MANPAGER:-${PAGER:-less}}"
     else
         gunzip -c "$1"
     fi
     exit $?
 }
+ports() {
+    for section in $sections; do
+        page="$mandir/gnu/cat$section/$name.$section"
+        [ -f "$page" ] && show "$page"
+    done
+}
+# The path is searched here, since this shell would answer for an applet
+# by its name.
+for dir in $(echo "$PATH" | tr ':' ' '); do
+    if [ -x "$dir/$name" ] && [ ! -d "$dir/$name" ]; then
+        [ "$(readlink -f "$dir/$name")" = /bin/busybox ] || ports
+        break
+    fi
+done
 for section in $sections; do
     target=$(awk -v n="$name" -v s="$section" '$1 == n && $2 == s { print $3; exit }' "$mandir/aliases" 2>/dev/null)
     page="$mandir/cat$section/${target:-$name}.$section"
     [ -f "$page" ] && show "$page"
 done
-for section in $sections; do
-    page="$mandir/gnu/cat$section/$name.$section"
-    [ -f "$page" ] && show "$page"
-done
+ports
 echo "man: no page for $name" >&2
 exit 1

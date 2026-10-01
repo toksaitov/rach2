@@ -6,6 +6,7 @@
 .Nd read a manual page
 .Sh SYNOPSIS
 .Nm
+.Op Fl w
 .Op Ar SECTION
 .Ar NAME
 .Sh DESCRIPTION
@@ -38,9 +39,12 @@ Those pages describe the upstream programs, as
 .Ql man git
 and
 .Ql man gcc
-show them; a name both have, such as
+show them.
+A name both have, such as
 .Ql ls ,
-shows this manual's page.
+shows the ports' page when the command the path finds by that name is not
+a link to BusyBox, since that command is the port's, and this manual's
+page otherwise.
 .Pp
 When standard output is a terminal, the page goes through the pager named
 by
@@ -55,6 +59,12 @@ sets; the pages are not reformatted to it.
 Otherwise the page goes to standard output as it is, so
 .Ql man NAME > FILE
 copies the page byte for byte.
+.Pp
+The option is:
+.Bl -tag -width Ds
+.It Fl w
+Print the path of the page that would be shown instead of the page.
+.El
 .Pp
 .Nm
 is a shell script of this project.
@@ -89,11 +99,12 @@ The pages of the GNU system's ports.
 .Sh EXIT STATUS
 The exit status is the pager's or 0, 1 when no page has the name, and 2
 for a wrong argument count, which prints
-.Ql usage: man [SECTION] NAME .
+.Ql usage: man [-w] [SECTION] NAME .
 .Sh EXAMPLES
 .Dl man rach2
 .Dl man 2 open
 .Dl man ls
+.Dl man -w 2 open
 .Sh SEE ALSO
 .Xr less 1 ,
 .Xr rach2 7
