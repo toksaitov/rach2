@@ -138,7 +138,7 @@ tree 0644 /usr/share/man/cat5 build/man/cat5
 tree 0644 /usr/share/man/cat7 build/man/cat7
 tree 0644 /usr/share/man/cat8 build/man/cat8
 
-dir 0755 /root
+dir 0700 /root
 dir 0700 /root/.ssh
 file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
