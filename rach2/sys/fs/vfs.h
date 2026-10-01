@@ -106,6 +106,9 @@ struct vfs_stat {
     int64_t ctime_nsec;
     uint64_t blocks;
     uint32_t blocks_known;
+    uint32_t flags;       /* the inode flags of FS_IOC_GETFLAGS */
+    uint32_t generation;  /* and the generation of FS_IOC_GETVERSION */
+    uint32_t flags_known; /* 0 for a type that keeps neither */
 };
 
 /* Which fields a setattr call is changing. */

@@ -29,8 +29,14 @@ These are the e2fsprogs applets of BusyBox 1.36.1 as built for Rach2.
 .Bl -tag -width chattr
 .It Nm chattr
 Change ext2 file attributes.
-Rach2 does not implement the ext2 attribute, generation, and project
-number ioctl requests this applet uses.
+The kernel stores none: setting the attributes a file already has
+succeeds, and a change fails with
+.Ql Operation not supported .
+.Fl v
+and
+.Fl p
+fail with
+.Ql Inappropriate ioctl for device .
 .It Nm fsck
 Check and repair file systems by running
 .Pa fsck.TYPE
@@ -39,7 +45,13 @@ The recovery system's ext2 checker is the separate e2fsprogs program
 .Xr e2fsck 8 .
 .It Nm lsattr
 List ext2 file attributes.
-Rach2 does not implement the ext2 attribute ioctl requests this applet uses.
+On an ext2 volume the kernel reports each inode's flags and, for
+.Fl v ,
+its generation; it acts on none of the flags.
+A file of another file system, and
+.Fl p ,
+fail with
+.Ql Inappropriate ioctl for device .
 .El
 .Sh OPTIONS
 .Ss chattr

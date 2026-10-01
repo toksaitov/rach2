@@ -84,7 +84,7 @@ The walker follows a symbolic link when it is not the last component. For the la
 
 ## What stays out
 
-ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible groups and large inodes: refused or read-only by the feature rules, which is what the three feature words are for. Extended attributes and access lists: ignored on read. Quotas: no.
+ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible groups and large inodes: refused or read-only by the feature rules, which is what the three feature words are for. Extended attributes and access lists: ignored on read, and the attribute calls answer `EOPNOTSUPP`. The inode flags and generation: read, reported by `FS_IOC_GETFLAGS` and `FS_IOC_GETVERSION`, kept on rewrite and acted on by nothing; `FS_IOC_SETFLAGS` refuses a change. Quotas: no.
 
 ## Verification
 

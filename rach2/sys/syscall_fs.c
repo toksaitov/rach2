@@ -3347,6 +3347,56 @@ int32_t sys_fadvise64_64(isr_params_t *params)
     return fadvise((int)params->ebx, params->edi, params->ebp);
 }
 
+/* The i386 requests of chattr(1) and lsattr(1): _IOR and _IOW of 'f', and
+   _IOR of 'v'. */
+#define FS_IOC_GETFLAGS   0x80046601u
+#define FS_IOC_SETFLAGS   0x40046602u
+#define FS_IOC_GETVERSION 0x80047601u
+
+/**
+ * FS_IOC_GETFLAGS, FS_IOC_SETFLAGS and FS_IOC_GETVERSION on a descriptor,
+ * which set `*handled`.
+ *
+ * Of the types here only ext2 keeps the flags and the generation, and only
+ * for a file or a directory; any other descriptor leaves
+ * the request to the rest of ioctl(2), which answers -ENOTTY, as Linux does
+ * for a file system without them. The flags are read from the inode and
+ * acted on by nothing, so a change is -EOPNOTSUPP: an immutable or
+ * append-only flag stored and not enforced would protect nothing. Setting
+ * the flags a file already has succeeds for its owner, which is what
+ * `chattr -i` does to an ordinary file; another caller is -EPERM, as there.
+ */
+int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uint32_t arg, int *handled)
+{
+    struct vfs_stat st;
+    uint32_t want;
+    int rc;
+
+    *handled = 0;
+    if ((request != FS_IOC_GETFLAGS && request != FS_IOC_SETFLAGS &&
+         request != FS_IOC_GETVERSION) ||
+        (entry->type != FD_TYPE_FILE && entry->type != FD_TYPE_DIR) || !entry->ofd ||
+        !entry->ofd->vmnt || mnt_is_root(entry->ofd->vmnt)) {
+        return 0;
+    }
+    rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &st);
+    if (rc != 0 || !st.flags_known) {
+        return 0;
+    }
+    *handled = 1;
+    if (request != FS_IOC_SETFLAGS) {
+        want = request == FS_IOC_GETFLAGS ? st.flags : st.generation;
+        return copy_to_user((void __user *)arg, &want, sizeof(want)) ? -EFAULT : 0;
+    }
+    if (copy_from_user(&want, (const void __user *)arg, sizeof(want)) != 0) {
+        return -EFAULT;
+    }
+    if (!cred_privileged() && current_proc->euid != st.uid) {
+        return -EPERM;
+    }
+    return want == st.flags ? 0 : -EOPNOTSUPP;
+}
+
 #define XATTR_FOLLOW 0 /* a path, a final symbolic link followed */
 #define XATTR_LINK   1 /* a path, the link itself */
 #define XATTR_FD     2 /* a descriptor */

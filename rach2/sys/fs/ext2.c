@@ -41,6 +41,7 @@
 #define EXT2_NBLOCKS     15u
 #define EXT2_NAME_MAX    255u
 #define EXT2_FAST_LINK   60u /* the bytes of `i_block` a fast link lives in */
+#define EXT2_FL_USER_VISIBLE 0x0003DFFFu /* the `i_flags` lsattr(1) reads */
 
 #define EXT2_COMPAT_RESIZE_INODE 0x0010u
 #define EXT2_COMPAT_DIR_INDEX    0x0020u
@@ -82,6 +83,8 @@ struct ext2_node {
     uint32_t blocks;
     uint32_t block[EXT2_NBLOCKS];
     uint32_t atime, mtime, ctime;
+    uint32_t flags;      /* i_flags, read and kept but not acted on */
+    uint32_t generation; /* i_generation, read and kept */
     int unlinked; /* no name left; the inode and its blocks go at the last put */
 };
 
@@ -414,6 +417,8 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     n->mtime = le32(raw + 16);
     n->nlink = le16(raw + 26);
     n->blocks = le32(raw + 28);
+    n->flags = le32(raw + 32);
+    n->generation = le32(raw + 100);
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         n->block[i] = le32(raw + 40 + i * 4);
     }
@@ -850,6 +855,9 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->ctime_sec = n->ctime;
     st->blocks = n->blocks;
     st->blocks_known = 1;
+    st->flags = n->flags & EXT2_FL_USER_VISIBLE;
+    st->generation = n->generation;
+    st->flags_known = 1;
     vfs_ns_unlock(mnt);
     return 0;
 }

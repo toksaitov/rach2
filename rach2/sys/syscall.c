@@ -1923,6 +1923,14 @@ static int32_t sys_ioctl(isr_params_t *params)
     if (request == FIONBIO) {
         return fd_ioctl_nbio(entry, arg);
     }
+    {
+        int handled;
+        int32_t r = fs_flags_ioctl(entry, request, arg, &handled);
+
+        if (handled) {
+            return r;
+        }
+    }
 
     /* A socket accepts the interface ioctls: this is where a program sets the
      * machine's address, which is what a DHCP client is for. A socket of any

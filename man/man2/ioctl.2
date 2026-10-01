@@ -188,6 +188,35 @@ a mounted partition.
 .Fa arg
 is ignored.
 .El
+.Ss File attribute requests
+A file or a directory of an ext2 volume accepts the requests of
+.Xr chattr 8
+and
+.Xr lsattr 8 ;
+a file of another type answers
+.Er ENOTTY ,
+as Linux does for a file system that keeps no flags.
+.Bl -tag -width "FS_IOC_GETVERSION"
+.It Dv FS_IOC_GETFLAGS
+Request 0x80046601 writes the inode's flags, the bits of
+.Ql i_flags
+that Linux shows, as a 32-bit integer through
+.Fa arg .
+The kernel reads them and acts on none.
+.It Dv FS_IOC_SETFLAGS
+Request 0x40046602 succeeds when the integer at
+.Fa arg
+is the flags the inode has, and the caller owns the file or is
+privileged.
+A change is refused with
+.Er EOPNOTSUPP :
+a flag such as immutable or append-only, stored and not enforced, would
+protect nothing.
+.It Dv FS_IOC_GETVERSION
+Request 0x80047601 writes the inode's generation number as a 32-bit
+integer through
+.Fa arg .
+.El
 .Ss Framebuffer requests
 A framebuffer descriptor accepts the private requests below.
 Mode and palette changes require ownership by the calling process.
@@ -380,11 +409,15 @@ raw window, or
 selected a terminal outside the caller's session.
 .It Bq Er EOPNOTSUPP
 A route change other than a default route or addition of the existing
-subnet route was requested.
+subnet route was requested, or
+.Dv FS_IOC_SETFLAGS
+asked to change a file's flags.
 .It Bq Er EPERM
 A controlling-terminal claim is forbidden, the proposed foreground group
-is outside the terminal's session, or a network setter or route change
-was requested without effective user ID 0.
+is outside the terminal's session, a network setter or route change
+was requested without effective user ID 0, or
+.Dv FS_IOC_SETFLAGS
+came from a caller that neither owns the file nor is privileged.
 An audio driver also gives this error for a refused start or write:
 Sound Blaster 16 refuses rates outside 5000 through 44100, HDA may fail
 to reset its stream, sample writes require active playback and a nonzero
@@ -397,4 +430,5 @@ or has a different nonzero gateway from the one supplied.
 .Xr fcntl 2 ,
 .Xr socket 2 ,
 .Xr console 4 ,
-.Xr disk 4
+.Xr disk 4 ,
+.Xr chattr 8

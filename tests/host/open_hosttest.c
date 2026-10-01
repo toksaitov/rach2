@@ -288,6 +288,12 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
     return 0;
 }
 
+int copy_from_user(void *dst, const void __user *src, uint32_t n)
+{
+    k_memcpy(dst, src, n);
+    return 0;
+}
+
 /** Take a path page from the model's four; every one must come back. */
 char *path_buf_get(void)
 {
