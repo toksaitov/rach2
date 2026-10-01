@@ -3,15 +3,15 @@
  *
  * The socket layer canonicalizes 127/8 to the stack's one address and the IP
  * layer turns a self-addressed datagram around through the loopback ring, so
- * both selves of each exchange live in this one process. A UDP datagram sent
- * to 127.0.0.1 at our own bound port comes back with the payload intact and
- * the canonical source address, and a recvfrom given an address and no
- * length pointer fails with EFAULT and leaves the datagram for the next
- * receive; a TCP connection to our own listener completes its handshake
- * through the timer-driven ring, moves data both ways, and reports the
- * canonical peer; and a connect to a closed loopback port is refused
- * promptly by the reset a matching connection does not answer. Nothing here
- * touches ARP or the wire.
+ * both selves of each exchange live in this one process. A UDP datagram sent to
+ * 127.0.0.1 at our own bound port comes back with the payload intact and the
+ * canonical source address, and a recvfrom given an address and no length
+ * pointer fails with EFAULT and leaves the datagram for the next receive; a
+ * receive with MSG_PEEK leaves a datagram and a stream's bytes for the next
+ * one; a TCP connection to our own listener completes its handshake through the
+ * timer-driven ring, moves data both ways, and reports the canonical peer; and
+ * a connect to a closed loopback port is refused promptly by the reset a
+ * matching connection does not answer. Nothing here touches ARP or the wire.
  *
  * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
  */
@@ -42,6 +42,7 @@ typedef unsigned char uint8_t;
 #define SC_GETPEERNAME 7
 #define SC_SENDTO      11
 #define MSG_DONTWAIT   0x40
+#define MSG_PEEK       0x2
 #define EAGAIN         11
 #define EFAULT         14
 #define EDESTADDRREQ   89
@@ -57,6 +58,9 @@ typedef unsigned char uint8_t;
 
 /* The port of the recvfrom given no length pointer. */
 #define NOLEN_PORT 7101
+
+/* The port of the peek rows, for their datagram and their connection. */
+#define PEEK_PORT 7102
 
 /* The ports the bound-port case uses, distinct from every other case here. */
 #define BOUND_LISTEN_PORT 7300
@@ -508,6 +512,135 @@ static void udp_no_length(void)
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
         fail("a recvfrom refused with EFAULT took the datagram");
     sys_close(s);
+}
+
+/* recvfrom on `s` into `buf` with `flags`, no address asked for, retried
+   for two seconds while it answers EAGAIN. */
+static int recv_spin(int s, char *buf, int len, int flags)
+{
+    uint32_t args[6];
+    int n = -EAGAIN, spin;
+
+    for (spin = 0; spin < 100 && n == -EAGAIN; spin++) {
+        args[0] = (uint32_t)s;
+        args[1] = (uint32_t)buf;
+        args[2] = (uint32_t)len;
+        args[3] = (uint32_t)flags | MSG_DONTWAIT;
+        args[4] = 0;
+        args[5] = 0;
+        n = socketcall(SC_RECVFROM, args);
+        if (n == -EAGAIN)
+            sys_nanosleep_ms(20);
+    }
+    return n;
+}
+
+/* A datagram peeked at with MSG_PEEK stays queued, whole and with its
+   sender, for the next receive, which takes it. */
+static void udp_peek(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16], src[16];
+    uint32_t salen = 16;
+    char rbuf[32];
+    const char *msg = "peek-udp";
+    int s, n;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    s = socketcall(SC_SOCKET, args);
+    if (s < 0)
+        fail("udp socket for the peek");
+    make_sockaddr(sa, PEEK_PORT, 0, 0, 0, 0);
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("udp bind for the peek");
+    make_sockaddr(sa, PEEK_PORT, 127, 0, 0, 1);
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)msg;
+    args[2] = (uint32_t)strlen(msg);
+    args[3] = 0;
+    args[4] = (uint32_t)sa;
+    args[5] = 16;
+    if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
+        fail("udp sendto for the peek");
+    if (recv_spin(s, rbuf, sizeof(rbuf), MSG_PEEK) != (int)strlen(msg))
+        fail("a udp peek did not copy the datagram");
+
+    args[0] = (uint32_t)s;
+    args[1] = (uint32_t)rbuf;
+    args[2] = sizeof(rbuf);
+    args[3] = MSG_PEEK | MSG_DONTWAIT;
+    args[4] = (uint32_t)src;
+    args[5] = (uint32_t)&salen;
+    n = socketcall(SC_RECVFROM, args);
+    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n) ||
+        src[2] != (PEEK_PORT >> 8) || src[3] != (PEEK_PORT & 0xFF))
+        fail("a second udp peek did not find the datagram and its sender");
+
+    args[3] = MSG_DONTWAIT;
+    n = socketcall(SC_RECVFROM, args);
+    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
+        fail("a udp receive after a peek did not take the datagram");
+    if (socketcall(SC_RECVFROM, args) != -EAGAIN)
+        fail("a udp receive after a peek left the datagram queued");
+    sys_close(s);
+}
+
+/* A stream's bytes peeked at with MSG_PEEK stay in its ring: one byte peeked,
+   as Chromium checks a connection it keeps idle, and the read after it gets
+   the whole message from its first byte. */
+static void tcp_peek(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16];
+    char rbuf[32];
+    const char *msg = "peek-tcp";
+    int ls, cs, as, n;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    ls = socketcall(SC_SOCKET, args);
+    cs = socketcall(SC_SOCKET, args);
+    if (ls < 0 || cs < 0)
+        fail("tcp sockets for the peek");
+    make_sockaddr(sa, PEEK_PORT, 0, 0, 0, 0);
+    args[0] = (uint32_t)ls;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("tcp bind for the peek");
+    args[1] = 1;
+    if (socketcall(SC_LISTEN, args) != 0)
+        fail("tcp listen for the peek");
+    make_sockaddr(sa, PEEK_PORT, 127, 0, 0, 1);
+    args[0] = (uint32_t)cs;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != 0)
+        fail("tcp connect for the peek");
+    args[0] = (uint32_t)ls;
+    args[1] = 0;
+    args[2] = 0;
+    as = socketcall(SC_ACCEPT, args);
+    if (as < 0)
+        fail("tcp accept for the peek");
+    if (sys_write(as, msg, strlen(msg)) != (int)strlen(msg))
+        fail("tcp write for the peek");
+
+    n = recv_spin(cs, rbuf, 1, MSG_PEEK);
+    if (n != 1 || rbuf[0] != msg[0])
+        fail("a tcp peek of one byte did not copy it");
+    n = sys_read(cs, rbuf, sizeof(rbuf));
+    if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
+        fail("a tcp read after a peek did not start at the byte peeked");
+    sys_close(cs);
+    sys_close(as);
+    sys_close(ls);
 }
 
 static void tcp_loop(void)
@@ -1406,6 +1539,8 @@ void _start(void)
     learn_canon_ip();
     udp_loop();
     udp_no_length();
+    udp_peek();
+    tcp_peek();
     tcp_loop();
     tcp_accept_close();
     tcp_loop_bulk();

@@ -213,6 +213,18 @@ void raw_consume(struct socket *sock)
     net_unlock(flags);
 }
 
+uint32_t raw_head_src(struct socket *sock)
+{
+    struct raw_queue *q;
+    uint32_t flags, src;
+
+    flags = net_lock();
+    q = queue_of(sock);
+    src = q && q->count > 0 ? q->src[q->head] : 0u;
+    net_unlock(flags);
+    return src;
+}
+
 uint32_t raw_last_src(struct socket *sock)
 {
     struct raw_queue *q;

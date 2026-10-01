@@ -3659,14 +3659,15 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
          * strips the __user tag at the boundary. */
         if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
             if (sock_nonblock) {
-                return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL);
+                return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL,
+                                       0);
             }
-            return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL);
+            return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
         }
         if (sock_nonblock) {
-            return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count);
+            return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
         }
-        return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count);
+        return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
     }
 
     if (entry->type == FD_TYPE_CONSOLE) {
@@ -3834,9 +3835,9 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
             return -EFAULT;
         }
         if (entry->sock->type == SOCK_RAW) {
-            return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL);
+            return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
         }
-        r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count);
+        r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
 
         return (r == SOCK_EAGAIN) ? 0 : r;
     }
@@ -3875,12 +3876,14 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  *
  * `src_ip` and `src_port` report the datagram's sender for a caller that has
  * somewhere to put it, and are NULL for one that has not; the sender is read
- * under the same hold as the copy, since consuming is what publishes it.
+ * under the same hold as the copy, since consuming is what publishes it. With
+ * `peek` the datagram is copied and left waiting for the next receive, as
+ * recvmsg's MSG_PEEK asks.
  *
  * Returns the bytes copied, or a negative errno.
  */
 int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
-                    uint16_t *src_port)
+                    uint16_t *src_port, int peek)
 {
     uint8_t message[SOCK_RECV_BUF_SIZE];
     struct kernel_iovec iov;
@@ -3909,7 +3912,11 @@ int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *
     if (taken < 0) {
         taken = 0; /* it went between the wait and the hold */
     }
-    socket_dgram_consume(entry->sock, src_ip, src_port);
+    if (peek) {
+        socket_dgram_sender(entry->sock, src_ip, src_port);
+    } else {
+        socket_dgram_consume(entry->sock, src_ip, src_port);
+    }
     net_unlock(held);
 
     for (i = 0; i < iovcnt && (int)offset < taken; i++) {
@@ -4031,7 +4038,7 @@ int32_t sys_readv(isr_params_t *params)
 
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
-        return readv_dgram(entry, iov_user, iovcnt, 0, 0);
+        return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0);
     }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
 

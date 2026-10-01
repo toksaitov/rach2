@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 1, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -49,9 +49,12 @@ These nonblocking forms return
 when no input is available and the stream has not ended.
 A signal may interrupt a wait with
 .Er EINTR .
-Other flag bits are ignored:
+.Pp
 .Dv MSG_PEEK
-does not preserve the message,
+copies what the receive would take and leaves it for the next receive:
+the bytes at the front of a stream, which do not change the window the
+connection offers, or the waiting datagram whole, with its sender.
+Other flag bits are ignored:
 .Dv MSG_WAITALL
 does not wait to fill the buffer, and
 .Dv MSG_TRUNC
@@ -158,7 +161,10 @@ and
 describe up to 1024 buffers, filled in order from exactly one datagram.
 Any remainder beyond their capacity is discarded.
 Each nonempty buffer must have at most 2147483647 bytes.
-A list with no capacity still consumes a datagram.
+A list with no capacity still consumes a datagram, unless
+.Dv MSG_PEEK
+is set, which leaves it queued as for
+.Fn recvfrom .
 .Pp
 .Fa msg Ns ->msg_name
 receives the sender in the same form as
@@ -231,6 +237,10 @@ and receives the datagram that call left queued;
 does the same on an
 .Dv AF_UNIX
 datagram pair.
+The same probe peeks at a datagram with
+.Dv MSG_PEEK ,
+twice, before a receive takes it, and peeks at one byte of a loopback
+TCP connection before a read takes the whole message from that byte.
 .Sh ERRORS
 .Bl -tag -width ECONNREFUSED
 .It Er EAGAIN

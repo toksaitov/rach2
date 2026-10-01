@@ -154,12 +154,14 @@ void socket_unref(struct socket *sock);
 void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
 
-/** Blocking UDP receive; returns the byte count or a negative errno. */
-int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port);
+/** Blocking datagram receive; returns the byte count or a negative errno.
+ * With `peek` the datagram stays queued for the next receive (MSG_PEEK). */
+int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+                int peek);
 
 /** Non-blocking variant; SOCK_EAGAIN if no datagram is waiting. */
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
-                    uint16_t *src_port);
+                    uint16_t *src_port, int peek);
 
 /*
  * The same receive taken in three steps, for a caller with more than one
@@ -194,6 +196,10 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
 /** Drop the waiting datagram, reporting its sender through the two pointers. */
 void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
 
+/** Report the waiting datagram's sender as `socket_dgram_consume` does,
+ * leaving the datagram in place. */
+void socket_dgram_sender(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
+
 /* TCP-side helpers, implemented with the TCP layer. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
 void socket_tcp_connected(struct socket *sock);
@@ -211,9 +217,11 @@ uint16_t socket_tcp_hold(struct socket *sock, uint32_t offset, const uint8_t *da
 /** Make `n` bytes kept past the recv ring's tail readable, and wake a
  * reader. */
 void socket_tcp_release(struct socket *sock, uint32_t n);
-int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
+/** Blocking stream receive; with `peek` the bytes stay in the ring for the
+ * next receive (MSG_PEEK). */
+int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek);
 /** Non-blocking variant; SOCK_EAGAIN if no data is buffered (MSG_DONTWAIT). */
-int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
+int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek);
 void socket_tcp_fin(struct socket *sock);
 
 /** Map socket state to poll revents; sets *wq to the wait queue if non-NULL. */

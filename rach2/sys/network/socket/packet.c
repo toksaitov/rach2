@@ -293,6 +293,17 @@ int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
     return copy_len;
 }
 
+/* Keep the waiting datagram's address as the one `packet_last_addr`
+ * reports; the caller holds `net_lock` and has found a datagram waiting. */
+static void keep_head_addr(struct packet_queue *q)
+{
+    k_memcpy(q->last_src, q->src[q->head], 6);
+    q->last_pkttype = q->pkttype[q->head];
+    q->last_proto = q->proto[q->head];
+    q->last_ifindex = q->ifindex[q->head];
+    q->have_last = 1;
+}
+
 void packet_consume(struct socket *sock)
 {
     struct packet_queue *q;
@@ -301,13 +312,22 @@ void packet_consume(struct socket *sock)
     flags = net_lock();
     q = queue_of(sock);
     if (q && q->count > 0) {
-        k_memcpy(q->last_src, q->src[q->head], 6);
-        q->last_pkttype = q->pkttype[q->head];
-        q->last_proto = q->proto[q->head];
-        q->last_ifindex = q->ifindex[q->head];
-        q->have_last = 1;
+        keep_head_addr(q);
         q->head = (q->head + 1) % PACKET_QUEUE_SLOTS;
         q->count--;
+    }
+    net_unlock(flags);
+}
+
+void packet_note_head(struct socket *sock)
+{
+    struct packet_queue *q;
+    uint32_t flags;
+
+    flags = net_lock();
+    q = queue_of(sock);
+    if (q && q->count > 0) {
+        keep_head_addr(q);
     }
     net_unlock(flags);
 }

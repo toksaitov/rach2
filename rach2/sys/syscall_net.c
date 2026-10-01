@@ -221,7 +221,9 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
    goes through the transmit buffers an interrupt also builds in. */
 static uint8_t raw_send_buf[1500];
 
-/* recv flags: only MSG_DONTWAIT is honored. */
+/* recv flags honored: MSG_PEEK leaves what it copies for the next receive,
+ * and MSG_DONTWAIT does not wait. */
+#define MSG_PEEK     0x2
 #define MSG_DONTWAIT 0x40
 
 #define IPPROTO_RAW 255
@@ -842,7 +844,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
  * datagram socket reports the source address, truncated to the caller's
  * capacity. An address with no length pointer is EFAULT before anything is
  * taken, so the message stays queued; Linux fails the call only after it
- * has taken the message. Honors MSG_DONTWAIT and O_NONBLOCK. */
+ * has taken the message. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK. */
 static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr,
                            uint32_t salen_ptr)
 {
@@ -854,6 +856,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
     int want_addr;
     int bytes;
     int nonblock;
+    int peek = (flags & MSG_PEEK) != 0;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -901,21 +904,21 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_
      * with a NULL addr). */
     if (entry->sock->type == SOCK_STREAM) {
         if (nonblock) {
-            return (int32_t)socket_tcp_try_recv(entry->sock,
-                                                (uint8_t __force *)(void __user *)buf_ptr, len);
+            return (int32_t)socket_tcp_try_recv(
+                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, peek);
         }
-        return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
-                                        len);
+        return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
+                                        peek);
     }
 
     /* socket_recv/socket_try_recv write straight into the validated user
      * buffer; __force strips __user at the boundary. */
     if (nonblock) {
         bytes = socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
-                                &src_ip, &src_port);
+                                &src_ip, &src_port, peek);
     } else {
         bytes = socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, &src_ip,
-                            &src_port);
+                            &src_port, peek);
     }
 
     /* A receive that failed leaves the caller's address arguments alone: there
@@ -1260,12 +1263,13 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
         entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
 }
 
-/* recv(2): read from a connected stream socket. Honors MSG_DONTWAIT and
- * O_NONBLOCK. */
+/* recv(2): read from a connected stream socket. Honors MSG_PEEK,
+ * MSG_DONTWAIT and O_NONBLOCK. */
 static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
     int nonblock;
+    int peek = (flags & MSG_PEEK) != 0;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -1290,19 +1294,20 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     if (entry->sock->type == SOCK_DGRAM) {
         if (nonblock) {
             return (int32_t)socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
-                                            len, 0, 0);
+                                            len, 0, 0, peek);
         }
         return (int32_t)socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, 0,
-                                    0);
+                                    0, peek);
     }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
     if (nonblock) {
         return (int32_t)socket_tcp_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
-                                            len);
+                                            len, peek);
     }
-    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
+    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
+                                    peek);
 }
 
 /**
@@ -1763,7 +1768,7 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         return -EAGAIN;
     }
 
-    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port);
+    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port, (flags & MSG_PEEK) != 0);
     if (taken < 0) {
         return taken;
     }

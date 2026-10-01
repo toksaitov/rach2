@@ -169,35 +169,37 @@ int sock_is_query(const struct socket *s)
 }
 
 /** Count the receives that take a datagram or a stream's bytes, each of
- * which finds one byte. */
-int socket_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port)
+ * which finds one byte; a peek takes nothing. */
+int socket_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+                int peek)
 {
     (void)s;
     (void)buf;
     (void)len;
     *src_ip = net_ip_addr;
     *src_port = 7;
-    takes++;
+    takes += peek ? 0 : 1;
     return 1;
 }
 
-int socket_try_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port)
+int socket_try_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+                    int peek)
 {
-    return socket_recv(s, buf, len, src_ip, src_port);
+    return socket_recv(s, buf, len, src_ip, src_port, peek);
 }
 
-int socket_tcp_recv(struct socket *s, uint8_t *buf, int len)
+int socket_tcp_recv(struct socket *s, uint8_t *buf, int len, int peek)
 {
     (void)s;
     (void)buf;
     (void)len;
-    takes++;
+    takes += peek ? 0 : 1;
     return 1;
 }
 
-int socket_tcp_try_recv(struct socket *s, uint8_t *buf, int len)
+int socket_tcp_try_recv(struct socket *s, uint8_t *buf, int len, int peek)
 {
-    return socket_tcp_recv(s, buf, len);
+    return socket_tcp_recv(s, buf, len, peek);
 }
 
 /** Required by the accept allocation failure path. */

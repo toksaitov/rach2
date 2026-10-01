@@ -105,6 +105,11 @@ void packet_consume(struct socket *sock)
     (void)sock;
 }
 
+void packet_note_head(struct socket *sock)
+{
+    (void)sock;
+}
+
 void raw_unregister(struct socket *sock)
 {
     (void)sock;
@@ -137,6 +142,12 @@ void raw_consume(struct socket *sock)
 }
 
 uint32_t raw_last_src(struct socket *sock)
+{
+    (void)sock;
+    return 0;
+}
+
+uint32_t raw_head_src(struct socket *sock)
 {
     (void)sock;
     return 0;

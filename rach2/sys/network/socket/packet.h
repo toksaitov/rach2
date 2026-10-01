@@ -111,6 +111,10 @@ int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len);
 /** Drop the waiting datagram, keeping the address it came from. */
 void packet_consume(struct socket *sock);
 
+/** Keep the waiting datagram's address as `packet_consume` keeps it, and
+ * leave the datagram waiting: what a peek at it reports. */
+void packet_note_head(struct socket *sock);
+
 /**
  * Drop everything queued for `sock`.
  *
@@ -120,11 +124,13 @@ void packet_consume(struct socket *sock);
 void packet_flush(struct socket *sock);
 
 /**
- * Write the `sockaddr_ll` of the datagram most recently taken into `sll`.
+ * Write the `sockaddr_ll` of the datagram most recently taken or peeked at
+ * into `sll`.
  *
  * The address is reported after the datagram it belongs to has been consumed,
  * which is the order a receive runs in, so the last one is kept rather than
- * read from a queue it has left. `sll` must have room for `PACKET_SLL_LEN`
+ * read from a queue it has left; a peek keeps the waiting datagram's the
+ * same way (`packet_note_head`). `sll` must have room for `PACKET_SLL_LEN`
  * bytes.
  *
  * @return PACKET_SLL_LEN, or 0 if this socket has taken no datagram.

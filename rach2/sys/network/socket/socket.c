@@ -398,21 +398,68 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_p
 }
 
 /**
+ * Report the sender of the oldest waiting datagram as `socket_dgram_consume`
+ * reports it, without taking the datagram: for a raw socket the source
+ * address of its IP header and port 0, and 0 for both for a packet or
+ * netlink socket, and with no datagram waiting. A packet socket keeps the
+ * datagram's link address for `packet_last_addr`, as a consume keeps it.
+ */
+void socket_dgram_sender(struct socket *sock, uint32_t *src_ip, uint16_t *src_port)
+{
+    uint32_t ip = 0, flags;
+    uint16_t port = 0;
+
+    if (sock->family == AF_PACKET) {
+        packet_note_head(sock);
+    } else if (sock->family != AF_NETLINK) {
+        if (sock->type == SOCK_RAW) {
+            ip = raw_head_src(sock);
+        } else {
+            flags = net_lock();
+            if (sock->recv_count) {
+                ip = sock->recv_src_ip[sock->recv_head];
+                port = sock->recv_src_port[sock->recv_head];
+            }
+            net_unlock(flags);
+        }
+    }
+    if (src_ip) {
+        *src_ip = ip;
+    }
+    if (src_port) {
+        *src_port = port;
+    }
+}
+
+/** Take the datagram `socket_dgram_peek` copied, or with `peek` leave it
+ * waiting, and report its sender either way. */
+static void socket_dgram_take(struct socket *sock, uint32_t *src_ip, uint16_t *src_port, int peek)
+{
+    if (peek) {
+        socket_dgram_sender(sock, src_ip, src_port);
+    } else {
+        socket_dgram_consume(sock, src_ip, src_port);
+    }
+}
+
+/**
  * Blocking datagram receive: wait for a datagram, then copy it out.
  *
  * Sleeps until a datagram is buffered; a pending signal unwinds the wait and
  * returns -EINTR. A payload longer than `len` is truncated to `len` (the
  * remainder of the single-datagram buffer is discarded, as for SOCK_DGRAM).
- * The copy and the consume run under one net_lock hold, so the receive path
- * cannot put the next datagram in the slot between them and pair one
- * message's bytes with another's sender. The two calls take the lock again
- * inside, which nests.
+ * With `peek` the datagram is copied and left waiting, whole, for the next
+ * receive, as MSG_PEEK asks. The copy and the consume run under one net_lock
+ * hold, so the receive path cannot put the next datagram in the slot between
+ * them and pair one message's bytes with another's sender. The two calls
+ * take the lock again inside, which nests.
  *
  * @param src_ip   if non-NULL, receives the sender's address.
  * @param src_port if non-NULL, receives the sender's port.
  * @return bytes copied, or a negative errno.
  */
-int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port)
+int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+                int peek)
 {
     int copy_len;
     int rc;
@@ -428,7 +475,7 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, ui
     if (copy_len < 0) {
         copy_len = 0;
     }
-    socket_dgram_consume(sock, src_ip, src_port);
+    socket_dgram_take(sock, src_ip, src_port, peek);
     net_unlock(flags);
 
     return copy_len;
@@ -440,7 +487,7 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, ui
  * Same copy and source-address contract as socket_recv but never sleeps.
  */
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
-                    uint16_t *src_port)
+                    uint16_t *src_port, int peek)
 {
     int copy_len;
     uint32_t flags;
@@ -452,7 +499,7 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip
 
         return SOCK_EAGAIN;
     }
-    socket_dgram_consume(sock, src_ip, src_port);
+    socket_dgram_take(sock, src_ip, src_port, peek);
     net_unlock(flags);
 
     return copy_len;
@@ -700,9 +747,11 @@ void socket_tcp_release(struct socket *sock, uint32_t n)
  * pending signal unwinds with -EINTR. Returns the byte count on data, 0 at EOF
  * (FIN with no buffered data, or a block a shutdown detached), and on a
  * reset or closed connection with no data its recorded error or
- * -ECONNRESET; a stream that never connected is -ENOTCONN.
+ * -ECONNRESET; a stream that never connected is -ENOTCONN. With `peek` the
+ * bytes are copied and left in the ring, where the next receive finds them,
+ * as MSG_PEEK asks; the window does not change.
  */
-int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
+int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
     struct tcb *tcb;
     uint32_t avail, copy_len;
@@ -735,9 +784,10 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
         copy_len = (uint32_t)len;
 
     recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
-    tcb->recv_head += copy_len;
-
-    tcp_window_update(sock);
+    if (!peek) {
+        tcb->recv_head += copy_len;
+        tcp_window_update(sock);
+    }
     return (int)copy_len;
 }
 
@@ -747,9 +797,9 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
  * Never sleeps. With no buffered data: 0 on a half-closed peer (FIN) or a
  * block a shutdown detached, the recorded error or -ECONNRESET on a reset or
  * closed connection, -ENOTCONN on a stream that never connected, and
- * SOCK_EAGAIN otherwise.
+ * SOCK_EAGAIN otherwise. `peek` is as for `socket_tcp_recv`.
  */
-int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
+int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len, int peek)
 {
     struct tcb *tcb;
     uint32_t avail, copy_len;
@@ -773,9 +823,10 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
     if (copy_len > (uint32_t)len)
         copy_len = (uint32_t)len;
     recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
-    tcb->recv_head += copy_len;
-
-    tcp_window_update(sock);
+    if (!peek) {
+        tcb->recv_head += copy_len;
+        tcp_window_update(sock);
+    }
     return (int)copy_len;
 }
 

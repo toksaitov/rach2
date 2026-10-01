@@ -75,4 +75,7 @@ void raw_consume(struct socket *sock);
 /** The source address of the datagram most recently taken, or 0. */
 uint32_t raw_last_src(struct socket *sock);
 
+/** The source address of the oldest waiting datagram, or 0 with none. */
+uint32_t raw_head_src(struct socket *sock);
+
 #endif /* _RAW_H_ */

@@ -3796,6 +3796,42 @@ new
                           copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0)) {
 end
 
+fault inet-stream-peek-takes
+probe loopprobe
+file rach2/sys/network/socket/socket.c
+expect LOOPPROBE FAIL (a tcp read after a peek did not start at the byte peeked)
+old
+        copy_len = (uint32_t)len;
+    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
+    if (!peek) {
+new
+        copy_len = (uint32_t)len;
+    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
+    if (peek >= 0) {
+end
+
+fault inet-dgram-peek-takes
+probe loopprobe
+file rach2/sys/network/socket/socket.c
+expect LOOPPROBE FAIL (a second udp peek did not find the datagram and its sender)
+old
+    if (peek) {
+        socket_dgram_sender(sock, src_ip, src_port);
+new
+    if (peek < 0) {
+        socket_dgram_sender(sock, src_ip, src_port);
+end
+
+fault inet-dgram-peek-sender
+probe loopprobe
+file rach2/sys/network/socket/socket.c
+expect LOOPPROBE FAIL (a second udp peek did not find the datagram and its sender)
+old
+                port = sock->recv_src_port[sock->recv_head];
+new
+                port = 0;
+end
+
 # A descriptor in flight whose file a write moved.
 
 fault unix-inflight-count-by-node
