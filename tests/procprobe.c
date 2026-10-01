@@ -856,6 +856,45 @@ static void smaps_rows(void)
           "and gives its sizes and flags");
 }
 
+/* Whether a listing of directory `dir`, by getdents64, has `want`. */
+static int listed(const char *dir, const char *want)
+{
+    static char d[4096];
+    int fd = syscall3(SYS_OPEN, (int)(size_t)dir, O_RDONLY, 0);
+    int n, at, found = 0;
+
+    if (fd < 0) {
+        return 0;
+    }
+    while ((n = syscall3(220, fd, (int)(size_t)d, (int)sizeof(d))) > 0) {
+        for (at = 0; at < n; at += *(unsigned short *)(d + at + 16)) {
+            found |= same_str(d + at + 19, want);
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    return found;
+}
+
+/* A /proc/<pid> directory lists all its files, `task` last, and a thread's
+   directory under `task` lists them but `task`. */
+static void pid_dir_rows(void)
+{
+    char dir[40] = "/proc/self/task/";
+    int pid = syscall1(SYS_GETPID, 0);
+    int len = 16, digits = 0, v;
+
+    for (v = pid; v > 0; v /= 10) {
+        digits++;
+    }
+    for (v = pid; digits > 0; v /= 10) {
+        dir[len + --digits] = (char)('0' + v % 10);
+    }
+    check(listed("/proc/self", "smaps") && listed("/proc/self", "task"),
+          "a listing of /proc/self has smaps and, last, task");
+    check(listed(dir, "exe") && !listed(dir, "task"),
+          "and one of its thread's directory has exe and no task");
+}
+
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
    open. */
 static void count_rows(void)
@@ -1318,6 +1357,7 @@ void probe_main(unsigned int *sp)
     sys_rows();
     rtc_rows();
     smaps_rows();
+    pid_dir_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
      * here, because one process cannot hold that many descriptors, and the file
