@@ -342,13 +342,18 @@ static void msg_attr_ip(uint8_t *msg, uint16_t type, uint32_t ip)
 }
 
 /* Add the finished message `msg` to the answer, in a new datagram when the
- * current one has no room. */
+ * current one has no room. An answer whose datagram could not be queued
+ * takes nothing more: the bytes it holds are still there, with no room
+ * after them. */
 static void nl_append(struct nl_build *b, const uint8_t *msg)
 {
     uint32_t len = get32(msg);
 
     if (b->len + len > NL_DGRAM_MAX) {
         nl_flush(b);
+    }
+    if (b->failed) {
+        return;
     }
     k_memcpy(b->buf + b->len, msg, len);
     b->len += len;
