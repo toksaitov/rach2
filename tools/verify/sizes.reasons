@@ -144,7 +144,7 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_open complexity 71 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 72 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open lines 195 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
@@ -461,7 +461,7 @@ tests/host/rtl8168_hosttest.c:main lines 781 a test's rows, each a case, read as
 
 tests/host/sectorcopy_hosttest.c:check_copy lines 118 a test's rows, each a case, read as one table
 
-tests/host/synthfs_hosttest.c:main complexity 37 a test's rows, each a case, read as one table
+tests/host/synthfs_hosttest.c:main complexity 38 a test's rows, each a case, read as one table
 
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
 tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
