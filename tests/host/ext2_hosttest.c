@@ -2540,7 +2540,7 @@ static void remount_row(void)
     }
     g = make_file(mnt.root, "open", &rc);
     check(g && OPS->unlink(&mnt, mnt.root, "open") == 0 &&
-                  OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY) == -EBUSY,
+              OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY) == -EBUSY,
           "a remount read-only with a removed file still open is EBUSY");
     if (g) {
         OPS->put(&mnt, g);
@@ -2550,8 +2550,7 @@ static void remount_row(void)
           "a remount read-only sets the valid bit and leaves the volume clean, as an unmount "
           "does");
     mnt.flags = rw_flags | VFS_MS_RDONLY;
-    check(make_file(mnt.root, "refused", &rc) == 0 && rc == -EROFS,
-          "and a create on it is EROFS");
+    check(make_file(mnt.root, "refused", &rc) == 0 && rc == -EROFS, "and a create on it is EROFS");
     check(OPS->remount(&mnt, rw_flags) == 0 && host_read(wimg, sb, 2, 1024 + 58) == 2 &&
               (sb[0] & 1) == 0,
           "a remount writable clears the valid bit again");
