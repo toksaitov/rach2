@@ -19,14 +19,17 @@
 #             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
 #             them, from the packages fetch_chromium.sh unpacked
 #
-# Then it links /bin/bash, /usr/bin/cc, /usr/bin/vi, /etc/mtab and /run, writes
-# autoconf's site file, links each BusyBox applet no file of the path answers
-# for, puts the CA bundle in /etc/ssl, compiles the console's terminfo entry,
-# rach2.ti, renders the ports' manual pages with render_man.sh, takes the set-id
-# bit off OpenSSH's ssh-keysign, and has the root's own ldconfig write
-# /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the tree
-# already has is refused rather than replaced, so that what the manifest staged
-# is what the image has; the one file replaced is named where it is.
+# Then it links /bin/bash, /bin/sh, /usr/bin/cc, /usr/bin/vi, /etc/mtab and
+# /run, writes autoconf's site file, links each BusyBox applet no file of the
+# path answers for, gives each program of /bin and /usr/bin its name in the
+# other, and of /sbin and /usr/sbin, puts the CA bundle in /etc/ssl, compiles
+# the console's terminfo entry, rach2.ti, renders the ports' manual pages with
+# render_man.sh, takes the set-id bit off OpenSSH's ssh-keysign, and has the
+# root's own ldconfig write /etc/ld.so.cache from the /etc/ld.so.conf the
+# manifest staged. A file the tree already has is refused rather than
+# replaced, so that what the manifest staged is what the image has; the one
+# file replaced is named where it is, and /bin/sh, which the manifest does not
+# stage, is a name of bash's file.
 #
 
 set -e
@@ -131,10 +134,14 @@ tar -cf "$WORK/debian.tar" -C "$OUT/chromium" --no-recursion -T "$WORK/debian.li
 tar -xpf "$WORK/debian.tar" -C "$TREE"
 echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
-# bash is /bin/bash, cc is GCC and vi is Vim, as on a Debian system; /bin/sh
-# stays BusyBox's ash. The links are relative, so they resolve wherever the
-# volume is mounted.
+# bash is /bin/bash, cc is GCC and vi is Vim, as on a Debian system. The
+# links are relative, so they resolve wherever the volume is mounted. bash is
+# /bin/sh too, a second name of its file, since the set-id guard requires the
+# shell root runs to be a file: BusyBox's ash runs its own applet for a name
+# before it searches the path, so a script, system(3) and a package's test
+# suite would get BusyBox's sed where they name GNU's.
 ln -s ../usr/bin/bash "$TREE/bin/bash"
+ln "$TREE/usr/bin/bash" "$TREE/bin/sh"
 ln -s gcc "$TREE/usr/bin/cc"
 ln -s vim "$TREE/usr/bin/vi"
 
@@ -184,6 +191,28 @@ while IFS= read -r applet; do
     applets=$((applets + 1))
 done < "$WORK/applets"
 echo "gnu: install: busybox: $applets applets linked"
+
+# Debian's /bin and /sbin are links into /usr, so every program has both
+# names, and a script that names /bin/true or /usr/sbin/ldconfig finds it.
+# Here the four are directories, so each program one of a pair lacks is
+# linked from the other. A name both have keeps its two programs.
+links=0
+for pair in bin:usr/bin usr/bin:bin sbin:usr/sbin usr/sbin:sbin; do
+    from=${pair%%:*}
+    to=${pair#*:}
+    case $to in
+        usr/*) up=../.. ;;
+        *) up=.. ;;
+    esac
+    for f in "$TREE/$from"/*; do
+        name=${f##*/}
+        if [ ! -e "$TREE/$to/$name" ] && [ ! -L "$TREE/$to/$name" ]; then
+            ln -s "$up/$from/$name" "$TREE/$to/$name"
+            links=$((links + 1))
+        fi
+    done
+done
+echo "gnu: install: /bin and /usr/bin, /sbin and /usr/sbin: $links names linked"
 
 # The CA bundle, where OpenSSL looks by default, /etc/ssl/cert.pem, which
 # curl and Git use for HTTPS, and under the name Debian gives it.

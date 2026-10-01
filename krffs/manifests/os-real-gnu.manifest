@@ -14,9 +14,14 @@
 #   privilege separation, and /var/empty, the empty directory owned by root
 #   that the server's unprivileged child is confined to; and `messagebus`,
 #   the user D-Bus's system bus runs as, which init starts.
-# * bash is the login shell of root and the test account, and the path
-#   finds the GNU programs in /usr/bin before the files of /bin; /bin/sh
-#   stays BusyBox's ash, which the system's scripts use.
+# * bash is the login shell of root and the test account, and /bin/sh,
+#   which install_root.sh links to it, so that a script and system(3) find
+#   the programs of the path, as on a GNU/Linux system, where BusyBox's ash
+#   would run its own applet for a name first. The path finds what is
+#   installed under /usr/local, then the GNU programs in /usr/bin before the
+#   files of /bin.
+# * `nobody` and `nogroup`, the account and group with nothing of their
+#   own, 65534 as on Debian, which programs and scripts name.
 # * /etc/profile gives a prompt of the user, the machine and the directory,
 #   and a session on a terminal other than the console the C.UTF-8 locale;
 #   and it gives the user a D-Bus session bus, which the browser asks for,
@@ -30,7 +35,6 @@
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
 file 0755 /bin/busybox build/vendor/busybox/busybox
-file 0755 /bin/sh build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
@@ -79,23 +83,25 @@ text 0644 /demo/hello.txt hello, world\n
 dir 0755 /etc
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n
+# What the system is, which scripts that tell systems apart read.
+text 0644 /etc/os-release NAME="Rach2"\nPRETTY_NAME="Rach2 1.0.0 with the GNU system"\nID=rach2\nVERSION_ID="1.0.0"\n
 # The server's privilege separation runs as `sshd`, which has no password
 # and no shell to log in with, and 74, the number Red Hat's systems give it,
 # is below the 100 from which BusyBox's adduser gives out system accounts.
-text 0644 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\n
 file 0600 /etc/shadow krffs/shadow
-text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\n
+text 0644 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\nnogroup:x:65534:\n
 text 0644 /etc/shells /bin/sh\n/bin/bash\n
 dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
-# The path OpenSSH's server gives a session, which finds GCC, GNU make and
-# the rest of the GNU system before the musl programs of /bin; /bin/sh runs
-# a BusyBox applet for its name before it searches the path at all. The
+# The path OpenSSH's server gives a session too, which finds what is
+# installed under /usr/local, then GCC, GNU make and the rest of the GNU
+# system before the musl programs of /bin. The
 # prompt's escapes are bash's, which BusyBox's ash takes too, and it is
 # exported so that a shell started from the login shell has it. The console
 # draws ASCII alone, so only a session on another terminal, over SSH, gets
 # the UTF-8 locale that glibc builds in.
-text 0644 /etc/profile export PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in rach2|linux|dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\ncd "$HOME"\n
+text 0644 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in rach2|linux|dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n127.0.1.1   rach2\n
 # Where glibc looks up accounts and names: the files in /etc, then DNS for

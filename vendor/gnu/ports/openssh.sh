@@ -10,11 +10,14 @@
 # takes the rlimit sandbox only when a test program shows that poll and
 # select work under a descriptor limit of 0, which a cross build cannot run;
 # they do on this kernel, as limitprobe checks, and port_build gives
-# configure that answer. The programs are installed without the build host's strip and
-# without host keys, which the target makes itself.
+# configure that answer. A session's path, which a command run without a
+# login shell keeps, is the one /etc/profile gives a login, with what is
+# installed under /usr/local first, as Debian's server gives it. The programs
+# are installed without the build host's strip and without host keys, which
+# the target makes itself.
 VERSION=10.5p1
 DEPENDS="openssl zlib"
-CONFIGURE_ARGS="--sysconfdir=/etc/ssh --with-privsep-user=sshd --with-privsep-path=/var/empty --without-pam --with-sandbox=rlimit --disable-strip --with-mantype=man"
+CONFIGURE_ARGS="--sysconfdir=/etc/ssh --with-privsep-user=sshd --with-privsep-path=/var/empty --without-pam --with-sandbox=rlimit --disable-strip --with-mantype=man --with-default-path=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin --with-superuser-path=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 port_build()
 {

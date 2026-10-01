@@ -62,15 +62,20 @@ output() {
 }
 
 # The names the path finds: GNU make and GCC as `make` and `cc`, the GNU
-# tools before anything of /bin, /bin/bash as a link to bash, and BusyBox's
-# applets for /bin/sh, which runs them before it searches the path.
+# tools before anything of /bin, /bin/bash and /bin/sh as bash, which finds
+# GNU's grep by the path, each program under its name in /bin and in /usr/bin,
+# as Debian's merged /usr has it, and Debian's account and group of nobody.
 row_names() {
     same "make" "$(type -P make)" "/usr/bin/make"
     same "cc" "$(type -P cc)" "/usr/bin/cc"
     same "grep" "$(type -P grep)" "/usr/bin/grep"
     same "/bin/bash" "$(readlink /bin/bash)" "../usr/bin/bash"
-    has "/bin/sh" "$(/bin/sh --help 2>&1 | head -n 1)" "BusyBox"
-    has "grep in /bin/sh" "$(/bin/sh -c 'grep --help' 2>&1 | head -n 1)" "BusyBox"
+    has "/bin/sh" "$(/bin/sh --version 2>&1 | head -n 1)" "GNU bash"
+    has "grep in /bin/sh" "$(/bin/sh -c 'grep --version' 2>&1 | head -n 1)" "GNU grep"
+    same "/bin/true" "$(readlink /bin/true)" "../usr/bin/true"
+    same "/usr/sbin/ldconfig" "$(readlink /usr/sbin/ldconfig)" "../../sbin/ldconfig"
+    same "nobody" "$(getent passwd nobody | cut -d: -f3,4) $(getent group nogroup | cut -d: -f3)" \
+        "65534:65534 65534"
 }
 
 row_glibc() {
@@ -105,6 +110,9 @@ row_openssh() {
     runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
     cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
     same "ssh" "$(ssh "${opts[@]}" root@127.0.0.1 echo ssh row 2>&1)" "ssh row"
+    # shellcheck disable=SC2016 # the dollar is the remote shell's
+    same "a command's path" "$(ssh "${opts[@]}" root@127.0.0.1 'echo $PATH' 2>&1)" \
+        "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
     has "who in a session with a terminal" "$(ssh -tt "${opts[@]}" root@127.0.0.1 who 2>&1)" "root     pts/"
     printf 'scp row\n' > "$WORK/scp.in"
     runs "scp" scp "${opts[@]}" "$WORK/scp.in" "root@127.0.0.1:$WORK/scp.out"

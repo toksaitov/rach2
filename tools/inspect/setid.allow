@@ -105,19 +105,20 @@ init init-metal
 # OpenSSH's ssh-keysign is installed without its bit. The programs of it
 # that root runs, the SSH server and ssh-keygen, which init starts, the two
 # helpers the server starts as root, bash, root's login shell, which
-# /bin/bash links to, and D-Bus's daemon and dbus-send, which root's login
-# profile runs for its session bus, are declared as overlay files.
+# /bin/bash links to and /bin/sh is a second name of, and D-Bus's daemon and
+# dbus-send, which root's login profile runs for its session bus, are
+# declared as overlay files.
 manifest os-real-gnu
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/login 04755:0:0 build/vendor/busybox/busybox-suid
 trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
-trusted file 0755:0:0 /bin/sh build/vendor/busybox/busybox
-trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\n
+trusted overlay 0755:0:0 /bin/sh build/vendor/gnu/root/usr/bin/bash
+trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\n
 trusted file 0600:0:0 /etc/shadow krffs/shadow
-trusted text 0644:0:0 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\n
+trusted text 0644:0:0 /etc/group root:x:0:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\nnogroup:x:65534:\n
 trusted text 0644:0:0 /etc/shells /bin/sh\n/bin/bash\n
-trusted text 0644:0:0 /etc/profile export PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in rach2|linux|dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\ncd "$HOME"\n
+trusted text 0644:0:0 /etc/profile export PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\nexport HOME="${HOME:-/root}"\nexport PS1='\u@\h:\w\$ '\ncase "$TERM" in rach2|linux|dumb|'') ;; *) export LANG=C.UTF-8 ;; esac\nif [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -x /usr/bin/dbus-daemon ]; then\n    export DBUS_SESSION_BUS_ADDRESS="unix:path=$HOME/.dbus/session_bus_socket"\n    dbus-send --session --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.GetId 2>/dev/null ||\n        { mkdir -p "$HOME/.dbus" && chmod 700 "$HOME/.dbus" &&\n          dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile >/dev/null 2>&1; }\nfi\ncd "$HOME"\n
 trusted text 0644:0:0 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nprotocols: files\nservices: files\n
 trusted text 0644:0:0 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n
 trusted overlay 0755:0:0 /usr/sbin/sshd build/vendor/gnu/root/usr/sbin/sshd
