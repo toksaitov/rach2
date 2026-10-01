@@ -215,13 +215,23 @@ uint32_t block_flags(block_device_t *device)
     return device->flags;
 }
 
-/** A request with flags on the host: a fake device keeps no cache of its
- * own, so a write without the flush is the write. */
+/** A request with flags on the host. A fake device keeps no cache of its
+ * own; one marked write-through counts a write asked for without
+ * `BLOCK_REQ_NOFLUSH` as the write and its flush, as a real disk makes it. */
 int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
                         void *buffer, uint32_t flags)
 {
-    (void)flags;
-    return block_request(device, write, lba, count, buffer);
+    int rc = block_request(device, write, lba, count, buffer);
+
+    if (rc == 0 && write && (device->flags & BLOCK_WRITE_THROUGH) && !(flags & BLOCK_REQ_NOFLUSH) &&
+        wlog_capture) {
+        if (flush_n == WLOG_MAX) {
+            wlog_overflow = 1;
+            return -EIO;
+        }
+        flush_log[flush_n++] = wlog_n;
+    }
+    return rc;
 }
 
 static void wlog_reset(void)
@@ -2456,6 +2466,7 @@ static void default_mount_row(void)
     }
     wlog_reset();
     wlog_capture = 1;
+    dev.flags |= BLOCK_WRITE_THROUGH; /* a disk that flushes each write unless told not to */
     memset(block, 0x5a, sizeof(block));
     f = make_file(mnt.root, "plain", &rc);
     g = f ? make_file(mnt.root, "gone", &rc) : 0;
@@ -2473,6 +2484,7 @@ static void default_mount_row(void)
         OPS->put(&mnt, f);
     }
     wlog_capture = 0;
+    dev.flags &= ~BLOCK_WRITE_THROUGH;
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
 }
 
