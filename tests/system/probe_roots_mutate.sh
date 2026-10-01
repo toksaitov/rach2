@@ -1,5 +1,6 @@
 #!/bin/sh
-# Prove the ext2 link and statfs branches with rebuilt kernel faults.
+# Prove the ext2 link, statfs and block-count branches with rebuilt kernel
+# faults.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -94,7 +95,7 @@ make -s test-image build/tests/system/harness build/tests/system/runutil \
     build/tools/image/mkmbr >"$work/build.log" 2>&1
 cat "$work/build.log"
 run_phase fixed pass
-for fault in link magic; do
+for fault in link magic blocks; do
     changed=1
     python3 - "$source" "$fault" <<'PY'
 from pathlib import Path
@@ -109,15 +110,20 @@ if sys.argv[2] == 'link':
     old = 'if ((n->mode & S_IFMT_) == S_IFDIR_) {'
     assert body.count(old) == 1
     text = text[:start] + body.replace(old, 'if (n != 0) {') + text[end:]
-else:
+elif sys.argv[2] == 'magic':
     old = 'st->magic = EXT2_SUPER_MAGIC;'
     assert text.count(old) == 1
     text = text.replace(old, 'st->magic = 0x4B524646u;')
+else:
+    old = 'st->blocks_known = 1;'
+    assert text.count(old) == 1
+    text = text.replace(old, 'st->blocks_known = 0;')
 path.write_text(text)
 PY
     case "$fault" in
         link) detail='link on ext2 succeeds' ;;
         magic) detail='statfs64 of the root' ;;
+        blocks) detail='st_blocks of a file that is one hole' ;;
     esac
     run_phase "$fault" fail
     if cmp -s "$work/fixed.kernel" "$work/$fault.kernel"; then
