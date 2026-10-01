@@ -35,33 +35,36 @@ A program in the root runs on the build host through the root's own loader, whic
     R=build/vendor/gnu/root
     $R/lib/ld-linux.so.2 --library-path $R/lib:$R/usr/lib $R/usr/bin/git --version
 
-The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping. The whole run took 467 seconds and made a root of 315 MB.
+The table gives each port's version, the time it took under `make -j32 gnu-ports` on the testing host, and the size of what it installs after stripping. The whole run took 565 seconds and made a root of 326 MB.
 
 | Port      | Version    | Time  | Size    |
 | --------- | ---------- | ----- | ------- |
-| runtime   | glibc 2.44 | 2 s   | 65.0 MB |
+| runtime   | glibc 2.44 | 3 s   | 65.0 MB |
 | zlib      | 1.3.2      | 1 s   | 0.4 MB  |
 | OpenSSL   | 4.0.2      | 32 s  | 31.5 MB |
-| OpenSSH   | 10.5p1     | 29 s  | 10.1 MB |
+| OpenSSH   | 10.5p1     | 30 s  | 10.1 MB |
 | ncurses   | 6.6        | 43 s  | 11.1 MB |
 | less      | 710        | 4 s   | 0.5 MB  |
 | Vim       | 9.2.1132   | 17 s  | 38.0 MB |
-| Perl      | 5.44.0     | 71 s  | 80.3 MB |
-| curl      | 8.22.0     | 21 s  | 5.9 MB  |
-| Git       | 2.55.0     | 11 s  | 32.3 MB |
+| Perl      | 5.44.0     | 109 s | 80.3 MB |
+| PCRE2     | 10.49      | 31 s  | 5.2 MB  |
+| curl      | 8.22.0     | 20 s  | 5.9 MB  |
+| Git       | 2.55.0     | 20 s  | 32.3 MB |
 | coreutils | 9.12       | 43 s  | 12.4 MB |
 | bash      | 5.3        | 23 s  | 5.8 MB  |
 | make      | 4.4.1      | 7 s   | 0.9 MB  |
-| grep      | 3.12       | 19 s  | 0.5 MB  |
+| grep      | 3.12       | 30 s  | 0.5 MB  |
 | sed       | 4.10       | 19 s  | 0.5 MB  |
-| gawk      | 5.4.1      | 15 s  | 4.1 MB  |
+| gawk      | 5.4.1      | 14 s  | 4.1 MB  |
 | findutils | 4.11.0     | 28 s  | 1.3 MB  |
-| diffutils | 3.12       | 20 s  | 0.7 MB  |
+| diffutils | 3.12       | 21 s  | 0.7 MB  |
 | patch     | 2.8        | 13 s  | 0.3 MB  |
-| tar       | 1.35       | 21 s  | 1.4 MB  |
-| gzip      | 1.15       | 10 s  | 0.3 MB  |
+| tar       | 1.35       | 22 s  | 1.4 MB  |
+| gzip      | 1.15       | 12 s  | 0.3 MB  |
 | xz        | 5.8.4      | 11 s  | 1.4 MB  |
-| file      | 5.48       | 6 s   | 10.7 MB |
+| file      | 5.48       | 7 s   | 10.7 MB |
+| tzdata    | 2026e      | 0 s   | 1.5 MB  |
+| iproute2  | 7.2.0      | 4 s   | 4.0 MB  |
 
 These notes say what some ports provide and what they leave to the system they are installed on.
 
