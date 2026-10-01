@@ -179,7 +179,7 @@ fi
 if ! wait_token "RUNRC=1" 120; then
     fail "-run was not refused"
 fi
-if ! wait_token "mprotect" 30; then
+if ! wait_token "cannot reach the C library" 30; then
     fail "-run was refused without saying why"
 fi
 if ! wait_token "SHRC=1" 90; then
