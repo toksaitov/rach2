@@ -29,26 +29,46 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-The kernel registers the following 250 calls.
+The kernel registers the following 265 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 1 Ta Xr exit 2
+.It 1 Ta Xr socket 2
 .It 2 Ta Xr fork 2
+.It 2 Ta Xr bind 2
 .It 3 Ta Xr read 2
+.It 3 Ta Xr connect 2
 .It 4 Ta Xr write 2
+.It 4 Ta Xr listen 2
 .It 5 Ta Xr open 2
+.It 5 Ta Xr accept 2
 .It 6 Ta Xr close 2
+.It 6 Ta Xr getsockname 2
 .It 7 Ta Xr waitpid 2
+.It 7 Ta Xr getpeername 2
 .It 8 Ta Xr creat 2
+.It 8 Ta Xr socketpair 2
 .It 9 Ta Xr link 2
+.It 9 Ta Xr send 2
 .It 10 Ta Xr unlink 2
+.It 10 Ta Xr recv 2
 .It 11 Ta Xr execve 2
+.It 11 Ta Xr sendto 2
 .It 12 Ta Xr chdir 2
+.It 12 Ta Xr recvfrom 2
+.It 13 Ta Xr shutdown 2
 .It 14 Ta Xr mknod 2
+.It 14 Ta Xr setsockopt 2
 .It 15 Ta Xr chmod 2
+.It 15 Ta Xr getsockopt 2
 .It 16 Ta Xr lchown 2
+.It 16 Ta Xr sendmsg 2
+.It 17 Ta Xr recvmsg 2
+.It 18 Ta Xr accept4 2
 .It 19 Ta Xr lseek 2
+.It 19 Ta Xr recvmmsg 2
 .It 20 Ta Xr getpid 2
+.It 20 Ta Xr sendmmsg 2
 .It 21 Ta Xr mount 2
 .It 25 Ta Xr stime 2
 .It 26 Ta Xr ptrace 2
@@ -175,12 +195,26 @@ The kernel registers the following 250 calls.
 .It 220 Ta Xr getdents64 2
 .It 221 Ta Xr fcntl64 2
 .It 224 Ta Xr gettid 2
+.It 225 Ta Xr readahead 2
+.It 226 Ta Xr setxattr 2
+.It 227 Ta Xr lsetxattr 2
+.It 228 Ta Xr fsetxattr 2
+.It 229 Ta Xr getxattr 2
+.It 230 Ta Xr lgetxattr 2
+.It 231 Ta Xr fgetxattr 2
+.It 232 Ta Xr listxattr 2
+.It 233 Ta Xr llistxattr 2
+.It 234 Ta Xr flistxattr 2
+.It 235 Ta Xr removexattr 2
+.It 236 Ta Xr lremovexattr 2
+.It 237 Ta Xr fremovexattr 2
 .It 238 Ta Xr tkill 2
 .It 239 Ta Xr sendfile64 2
 .It 240 Ta Xr futex 2
 .It 241 Ta Xr sched_setaffinity 2
 .It 242 Ta Xr sched_getaffinity 2
 .It 243 Ta Xr set_thread_area 2
+.It 250 Ta Xr fadvise64 2
 .It 252 Ta Xr exit_group 2
 .It 254 Ta Xr epoll_create 2
 .It 255 Ta Xr epoll_ctl 2
@@ -193,6 +227,7 @@ The kernel registers the following 250 calls.
 .It 268 Ta Xr statfs64 2
 .It 269 Ta Xr fstatfs64 2
 .It 270 Ta Xr tgkill 2
+.It 272 Ta Xr fadvise64_64 2
 .It 284 Ta Xr waitid 2
 .It 291 Ta Xr inotify_init 2
 .It 292 Ta Xr inotify_add_watch 2
@@ -241,6 +276,12 @@ The kernel registers the following 250 calls.
 .It 361 Ta Xr bind 2
 .It 362 Ta Xr connect 2
 .It 363 Ta Xr listen 2
+.El
+.Ss Socket operations
+The following operation numbers select calls through system call 102,
+.Xr socketcall 2 .
+.Bl -column "Operation" "System call" -compact
+.It Sy Operation Ta Sy System call
 .It 364 Ta Xr accept4 2
 .It 365 Ta Xr getsockopt 2
 .It 366 Ta Xr setsockopt 2
@@ -261,32 +302,6 @@ The kernel registers the following 250 calls.
 .It 411 Ta Xr timerfd_settime64 2
 .It 436 Ta Xr close_range 2
 .It 441 Ta Xr epoll_pwait2 2
-.El
-.Ss Socket operations
-The following operation numbers select calls through system call 102,
-.Xr socketcall 2 .
-.Bl -column "Operation" "System call" -compact
-.It Sy Operation Ta Sy System call
-.It 1 Ta Xr socket 2
-.It 2 Ta Xr bind 2
-.It 3 Ta Xr connect 2
-.It 4 Ta Xr listen 2
-.It 5 Ta Xr accept 2
-.It 6 Ta Xr getsockname 2
-.It 7 Ta Xr getpeername 2
-.It 8 Ta Xr socketpair 2
-.It 9 Ta Xr send 2
-.It 10 Ta Xr recv 2
-.It 11 Ta Xr sendto 2
-.It 12 Ta Xr recvfrom 2
-.It 13 Ta Xr shutdown 2
-.It 14 Ta Xr setsockopt 2
-.It 15 Ta Xr getsockopt 2
-.It 16 Ta Xr sendmsg 2
-.It 17 Ta Xr recvmsg 2
-.It 18 Ta Xr accept4 2
-.It 19 Ta Xr recvmmsg 2
-.It 20 Ta Xr sendmmsg 2
 .It 0x1000 Ta Xr ping 2
 .El
 .Sh ERRORS

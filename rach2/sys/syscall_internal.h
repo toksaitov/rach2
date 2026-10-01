@@ -100,6 +100,25 @@ int32_t sys_sync(isr_params_t *params);
 
 int32_t sys_syncfs(isr_params_t *params);
 
+int32_t sys_readahead(isr_params_t *params);
+
+int32_t sys_fadvise64(isr_params_t *params);
+
+int32_t sys_fadvise64_64(isr_params_t *params);
+
+int32_t sys_setxattr(isr_params_t *params);
+int32_t sys_lsetxattr(isr_params_t *params);
+int32_t sys_fsetxattr(isr_params_t *params);
+int32_t sys_getxattr(isr_params_t *params);
+int32_t sys_lgetxattr(isr_params_t *params);
+int32_t sys_fgetxattr(isr_params_t *params);
+int32_t sys_listxattr(isr_params_t *params);
+int32_t sys_llistxattr(isr_params_t *params);
+int32_t sys_flistxattr(isr_params_t *params);
+int32_t sys_removexattr(isr_params_t *params);
+int32_t sys_lremovexattr(isr_params_t *params);
+int32_t sys_fremovexattr(isr_params_t *params);
+
 int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whence, uint64_t *out);
 
 int32_t sys_lseek(isr_params_t *params);

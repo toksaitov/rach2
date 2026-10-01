@@ -1,0 +1,92 @@
+.Dd October 2, 2026
+.Dt READAHEAD 2
+.Os
+.Sh NAME
+.Nm readahead ,
+.Nm posix_fadvise
+.Nd advise the kernel of reads to come
+.Sh SYNOPSIS
+.In fcntl.h
+.Ft ssize_t
+.Fn readahead "int fd" "off_t offset" "size_t count"
+.Ft int
+.Fn posix_fadvise "int fd" "off_t offset" "off_t len" "int advice"
+.Sh DESCRIPTION
+The page cache fills a page when a read first asks for it and keeps one
+policy for every file, so neither call changes what the kernel does.
+.Fn readahead
+checks
+.Fa fd
+and returns 0, as Linux does once it has queued the reads.
+.Fn posix_fadvise
+checks
+.Fa fd ,
+.Fa len
+and
+.Fa advice ,
+which is one of
+.Dv POSIX_FADV_NORMAL ,
+.Dv POSIX_FADV_RANDOM ,
+.Dv POSIX_FADV_SEQUENTIAL ,
+.Dv POSIX_FADV_WILLNEED ,
+.Dv POSIX_FADV_DONTNEED
+and
+.Dv POSIX_FADV_NOREUSE ,
+and returns 0.
+.Pp
+The i386 system call numbers are 225 for
+.Fn readahead ,
+250 for
+.Fn fadvise64 ,
+which takes a 32-bit length, and 272 for
+.Fn fadvise64_64 ,
+which takes a 64-bit length and is the one musl calls for
+.Fn posix_fadvise .
+.Sh RETURN VALUES
+0, or for
+.Fn readahead
+-1 with
+.Va errno
+set; musl's
+.Fn posix_fadvise
+returns the error number itself.
+.Sh EXAMPLES
+GNU
+.Xr cp 1 ,
+.Xr cat 1
+and
+.Xr sort 1
+call
+.Fn posix_fadvise
+on what they read, and BusyBox's
+.Xr readahead 1
+calls
+.Fn readahead
+on each file it names.
+.Sh ERRORS
+.Bl -tag -width "[ESPIPE]"
+.It Bq Er EBADF
+.Fa fd
+is not open, was opened with
+.Dv O_PATH ,
+or for
+.Fn readahead
+is not open for reading.
+.It Bq Er EINVAL
+For
+.Fn readahead ,
+.Fa fd
+is not a regular file; for
+.Fn posix_fadvise ,
+.Fa len
+is negative or
+.Fa advice
+is none of the six.
+.It Bq Er ESPIPE
+For
+.Fn posix_fadvise ,
+.Fa fd
+is a pipe or a socket.
+.El
+.Sh SEE ALSO
+.Xr read 2

@@ -1,0 +1,94 @@
+.Dd October 2, 2026
+.Dt GETXATTR 2
+.Os
+.Sh NAME
+.Nm getxattr ,
+.Nm setxattr ,
+.Nm listxattr ,
+.Nm removexattr
+.Nd extended attributes, which no file system here stores
+.Sh SYNOPSIS
+.In sys/xattr.h
+.Ft ssize_t
+.Fn getxattr "const char *path" "const char *name" "void *value" "size_t size"
+.Ft int
+.Fn setxattr "const char *path" "const char *name" "const void *value" "size_t size" "int flags"
+.Ft ssize_t
+.Fn listxattr "const char *path" "char *list" "size_t size"
+.Ft int
+.Fn removexattr "const char *path" "const char *name"
+.Sh DESCRIPTION
+An extended attribute is a name and a value kept with a file outside its
+data.
+No file system on Rach2 stores them, and these calls answer as Linux does
+for a file system built without them:
+.Fn getxattr ,
+.Fn setxattr
+and
+.Fn removexattr
+fail with
+.Er EOPNOTSUPP ,
+and
+.Fn listxattr
+returns 0, an empty list.
+.Pp
+Each call first finds the file, so a path that names nothing fails as it
+would for
+.Xr stat 2 .
+The
+.Fn lgetxattr ,
+.Fn lsetxattr ,
+.Fn llistxattr
+and
+.Fn lremovexattr
+forms act on a final symbolic link itself, and the
+.Fn fgetxattr ,
+.Fn fsetxattr ,
+.Fn flistxattr
+and
+.Fn fremovexattr
+forms on an open descriptor in place of
+.Fa path .
+.Pp
+The i386 system call numbers are 226 to 237: set, get, list and remove,
+each as the path, link and descriptor forms in that order.
+.Sh RETURN VALUES
+.Fn listxattr
+returns 0.
+The others return -1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+GNU
+.Xr cp 1
+with
+.Fl a ,
+.Xr tar 1
+with
+.Fl -xattrs
+and
+.Xr setfattr 1
+reach these calls; the first two take
+.Er EOPNOTSUPP
+to mean a file system without attributes and go on.
+.Sh ERRORS
+.Bl -tag -width "[EOPNOTSUPP]"
+.It Bq Er EBADF
+The descriptor is not open, or was opened with
+.Dv O_PATH .
+.It Bq Er EFAULT
+.Fa path
+is not readable.
+.It Bq Er ENOENT
+.Fa path
+names nothing.
+.It Bq Er ENOTDIR
+A directory in
+.Fa path
+is not a directory.
+.It Bq Er EOPNOTSUPP
+The file system stores no extended attributes, which is every one here.
+.El
+.Sh SEE ALSO
+.Xr chattr 1 ,
+.Xr stat 2

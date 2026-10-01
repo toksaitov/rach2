@@ -22,6 +22,10 @@
  * and EOPNOTSUPP for a mode Linux does not take before the check that the
  * descriptor is open for writing. adjtimex reads an unsynchronized clock
  * with its 10 ms tick, and clock_adjtime of CLOCK_MONOTONIC is EOPNOTSUPP.
+ * The extended attribute calls find the file and answer as Linux does for a
+ * file system without attributes: an empty list and EOPNOTSUPP to get one,
+ * and ENOENT for a missing file. readahead and posix_fadvise accept a
+ * regular file, and posix_fadvise refuses a pipe with ESPIPE.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -35,6 +39,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/timex.h>
+#include <sys/xattr.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -269,6 +274,38 @@ static int adjusts(void)
     return 0;
 }
 
+/* Extended attributes, which no file system here stores, and the advice
+   calls, which change nothing but check their descriptor. */
+static int advises(void)
+{
+    char v[16];
+    int p[2];
+    int fd = open("/bin/sh", O_RDONLY);
+
+    if (fd < 0 || pipe(p) != 0) {
+        return fail("/bin/sh and a pipe");
+    }
+    if (listxattr("/bin/sh", v, sizeof v) != 0 || flistxattr(fd, v, sizeof v) != 0) {
+        return fail("listxattr of /bin/sh was not an empty list");
+    }
+    if (getxattr("/bin/sh", "user.x", v, sizeof v) != -1 || errno != EOPNOTSUPP) {
+        return fail("getxattr of /bin/sh was not EOPNOTSUPP");
+    }
+    if (lsetxattr("/nonexistent", "user.x", "1", 1, 0) != -1 || errno != ENOENT) {
+        return fail("lsetxattr of a missing file was not ENOENT");
+    }
+    if (readahead(fd, 0, 4096) != 0 || posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL) != 0) {
+        return fail("readahead and posix_fadvise of /bin/sh did not return 0");
+    }
+    if (posix_fadvise(p[0], 0, 0, POSIX_FADV_NORMAL) != ESPIPE) {
+        return fail("posix_fadvise of a pipe was not ESPIPE");
+    }
+    close(fd);
+    close(p[0]);
+    close(p[1]);
+    return 0;
+}
+
 static int reserves(void)
 {
     int p[2];
@@ -309,7 +346,7 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts()) {
+        reserves() || adjusts() || advises()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

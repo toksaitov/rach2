@@ -3282,6 +3282,179 @@ int32_t sys_syncfs(isr_params_t *params)
 }
 
 /**
+ * Advise the kernel of reads to come (readahead(2), syscall 225).
+ *
+ * EBX = fd, ECX:EDX = the offset, ESI = the count. The page cache fills on
+ * demand, so there is nothing to start early, and the call returns 0, as
+ * Linux does once it has queued the reads. -EBADF for a descriptor not open
+ * for reading, and -EINVAL for one that is not a regular file, as on Linux.
+ */
+int32_t sys_readahead(isr_params_t *params)
+{
+    fd_entry_t *e;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    e = fd_get(current_proc->fds, (int)params->ebx);
+    if (!e || (e->flags & FD_FLAG_PATH) || !(e->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    return e->type == FD_TYPE_FILE ? 0 : -EINVAL;
+}
+
+/**
+ * Check one advice of posix_fadvise(3) and ignore it.
+ *
+ * The page cache has one policy for every file, so the advice changes
+ * nothing; GNU `cp`, `cat` and `sort` give it and do not look at the
+ * result. The call fails as Linux's does: -EBADF for a descriptor not open,
+ * -ESPIPE for a pipe or a socket, and -EINVAL for a negative length or an
+ * advice outside POSIX_FADV_NORMAL (0) to POSIX_FADV_NOREUSE (5).
+ */
+static int32_t fadvise(int fd, uint32_t len_hi, uint32_t advice)
+{
+    fd_entry_t *e;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    e = fd_get(current_proc->fds, fd);
+    if (!e || (e->flags & FD_FLAG_PATH)) {
+        return -EBADF;
+    }
+    if (e->type == FD_TYPE_PIPE || e->type == FD_TYPE_SOCKET || e->type == FD_TYPE_UNIX) {
+        return -ESPIPE;
+    }
+    return (len_hi & 0x80000000u) || advice > 5 ? -EINVAL : 0;
+}
+
+/**
+ * fadvise64(250): EBX = fd, ECX:EDX = the offset, ESI = a 32-bit length,
+ * EDI = the advice.
+ */
+int32_t sys_fadvise64(isr_params_t *params)
+{
+    return fadvise((int)params->ebx, 0, params->edi);
+}
+
+/**
+ * fadvise64_64(272), which musl calls: EBX = fd, ECX:EDX = the offset,
+ * ESI:EDI = the length, EBP = the advice.
+ */
+int32_t sys_fadvise64_64(isr_params_t *params)
+{
+    return fadvise((int)params->ebx, params->edi, params->ebp);
+}
+
+#define XATTR_FOLLOW 0 /* a path, a final symbolic link followed */
+#define XATTR_LINK   1 /* a path, the link itself */
+#define XATTR_FD     2 /* a descriptor */
+
+/**
+ * An extended attribute call on the file EBX names, as a path or as a
+ * descriptor by `how`, which returns `result` once the file is found.
+ *
+ * No file system here stores extended attributes, and Linux answers for a
+ * file system built without them: get, set and remove fail with
+ * -EOPNOTSUPP and a list is empty. The name is resolved first, so a missing
+ * file is -ENOENT and a bad descriptor -EBADF, as there; `cp -a`, `tar` and
+ * `rsync -X` read -EOPNOTSUPP as a file system without attributes and go on.
+ */
+static int32_t xattr_call(isr_params_t *params, int how, int32_t result)
+{
+    const char __user *upath = (const char __user *)params->ebx;
+    struct vfs_ref ref;
+    fd_entry_t *e;
+    char *path;
+    int dir;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (how == XATTR_FD) {
+        e = fd_get(current_proc->fds, (int)params->ebx);
+        return !e || (e->flags & FD_FLAG_PATH) ? -EBADF : result;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    rc = path_from_user_dir(AT_FDCWD, upath, &path, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = resolve_named(path_name(path), how == XATTR_LINK ? VFS_WALK_NOFOLLOW : 0, dir, &ref);
+    path_buf_put(path);
+    if (rc != 0) {
+        return rc;
+    }
+    vfs_ref_release(&ref);
+    return result;
+}
+
+/* setxattr(226) to fremovexattr(237), in Linux's order. */
+int32_t sys_setxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
+}
+
+int32_t sys_lsetxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_LINK, -EOPNOTSUPP);
+}
+
+int32_t sys_fsetxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FD, -EOPNOTSUPP);
+}
+
+int32_t sys_getxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
+}
+
+int32_t sys_lgetxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_LINK, -EOPNOTSUPP);
+}
+
+int32_t sys_fgetxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FD, -EOPNOTSUPP);
+}
+
+int32_t sys_listxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FOLLOW, 0);
+}
+
+int32_t sys_llistxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_LINK, 0);
+}
+
+int32_t sys_flistxattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FD, 0);
+}
+
+int32_t sys_removexattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FOLLOW, -EOPNOTSUPP);
+}
+
+int32_t sys_lremovexattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_LINK, -EOPNOTSUPP);
+}
+
+int32_t sys_fremovexattr(isr_params_t *params)
+{
+    return xattr_call(params, XATTR_FD, -EOPNOTSUPP);
+}
+
+/**
  * Add a seek displacement to a file offset without overflowing.
  *
  * The sum of an offset and a displacement leaves the range of the type
