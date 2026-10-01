@@ -13,7 +13,9 @@
  * recvmmsg receives both, each with its count. clock_gettime64 reads the
  * monotonic clock with 64-bit fields. close_range marks a range of
  * descriptors close-on-exec and closes it, reaches past the table's end,
- * and refuses a flag it does not take and a backward range.
+ * and refuses a flag it does not take and a backward range. splice from a
+ * pipe to /dev/null, tee and sendfile answer EINVAL, which GNU grep takes
+ * for a descriptor it must read instead, and EBADF for a closed one.
  *
  * Prints "CALLSMUSL OK" on success and "CALLSMUSL FAIL (detail)" otherwise.
  */
@@ -214,9 +216,37 @@ static int ranges(void)
     return 0;
 }
 
+static int copies(void)
+{
+    int p[2], q[2];
+    int null = open("/dev/null", O_WRONLY);
+
+    if (null < 0 || pipe(p) != 0 || pipe(q) != 0 || write(p[1], "abc", 3) != 3) {
+        return fail("a pipe with bytes in it and /dev/null");
+    }
+    if (syscall(SYS_splice, p[0], NULL, null, NULL, 16, 0) != -1 || errno != EINVAL) {
+        return fail("splice from a pipe to /dev/null was not EINVAL");
+    }
+    if (syscall(SYS_tee, p[0], q[1], 16, 0) != -1 || errno != EINVAL) {
+        return fail("tee was not EINVAL");
+    }
+    if (syscall(SYS_sendfile64, null, p[0], NULL, 16) != -1 || errno != EINVAL) {
+        return fail("sendfile was not EINVAL");
+    }
+    if (syscall(SYS_splice, 999, NULL, null, NULL, 16, 0) != -1 || errno != EBADF) {
+        return fail("splice from a closed descriptor was not EBADF");
+    }
+    close(null);
+    close(p[0]);
+    close(p[1]);
+    close(q[0]);
+    close(q[1]);
+    return 0;
+}
+
 int main(void)
 {
-    if (signals() || memory() || identity() || messages() || clocks() || ranges()) {
+    if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

@@ -4724,3 +4724,15 @@ old
 new
         return entry->type == FD_TYPE_PIPE ? -EINVAL : -EBADF;
 end
+
+# splice, tee and sendfile, which answer EINVAL.
+
+fault splice-missing
+probe callsmusl
+file rach2/sys/syscall.c
+expect CALLSMUSL FAIL (splice from a pipe to /dev/null was not EINVAL
+old
+    _syscall_table[SYS_SPLICE] = sys_splice;
+new
+    (void)sys_splice;
+end

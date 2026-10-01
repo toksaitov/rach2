@@ -8185,6 +8185,44 @@ static int32_t fcntl_seals(const fd_entry_t *entry, int cmd, uint32_t arg)
 #define MFD_NOEXEC_SEAL   0x08u
 #define MFD_EXEC          0x10u
 
+/**
+ * The descriptor-to-descriptor copies: splice (313) and tee (315), with the
+ * descriptors in EBX and EDX and in EBX and ECX, and sendfile (187) and
+ * sendfile64 (239), with the output descriptor in EBX and the input in ECX.
+ *
+ * The kernel moves no data between two descriptors itself, so each answers
+ * -EINVAL once both descriptors are open, as Linux answers for descriptors it
+ * cannot splice or send from, and -EBADF otherwise. GNU grep drains a pipe
+ * it has read enough of with splice when its output is /dev/null, and copies
+ * through read and write after an EINVAL, which it takes for "not this kind
+ * of descriptor", where any other error is its read's.
+ */
+static int32_t no_copy(int a, int b)
+{
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!fd_get(current_proc->fds, a) || !fd_get(current_proc->fds, b)) {
+        return -EBADF;
+    }
+    return -EINVAL;
+}
+
+int32_t sys_splice(isr_params_t *params)
+{
+    return no_copy((int)params->ebx, (int)params->edx);
+}
+
+int32_t sys_tee(isr_params_t *params)
+{
+    return no_copy((int)params->ebx, (int)params->ecx);
+}
+
+int32_t sys_sendfile(isr_params_t *params)
+{
+    return no_copy((int)params->ebx, (int)params->ecx);
+}
+
 /* The longest memfd name: Linux's NAME_MAX less the "memfd:" of its link. */
 #define MFD_NAME_MAX 249
 

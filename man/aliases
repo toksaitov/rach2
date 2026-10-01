@@ -320,6 +320,8 @@ sched_yield 2 sched_setscheduler
 script 1 busybox-util-linux
 scriptreplay 1 busybox-util-linux
 sed 1 busybox-editors
+sendfile 2 splice
+sendfile64 2 splice
 sendmail 1 busybox-mailutils
 sendmmsg 2 send
 sendto 2 send
@@ -384,6 +386,7 @@ tar 1 busybox-archival
 taskset 1 busybox-util-linux
 tcpsvd 1 busybox-networking
 tee 1 busybox-coreutils
+tee 2 splice
 telnet 1 busybox-networking
 telnetd 1 busybox-networking
 test 1 busybox-coreutils

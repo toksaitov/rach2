@@ -1,0 +1,76 @@
+.Dd October 1, 2026
+.Dt SPLICE 2
+.Os
+.Sh NAME
+.Nm splice ,
+.Nm tee ,
+.Nm sendfile
+.Nd copy between descriptors, which this kernel leaves to read and write
+.Sh SYNOPSIS
+.In fcntl.h
+.Ft ssize_t
+.Fn splice "int fd_in" "off_t *off_in" "int fd_out" "off_t *off_out" "size_t len" "unsigned int flags"
+.Ft ssize_t
+.Fn tee "int fd_in" "int fd_out" "size_t len" "unsigned int flags"
+.In sys/sendfile.h
+.Ft ssize_t
+.Fn sendfile "int out_fd" "int in_fd" "off_t *offset" "size_t count"
+.Sh DESCRIPTION
+On Linux these move data from one descriptor to another without copying it
+through the caller.
+This kernel moves no data between two descriptors itself: once both
+descriptors are open, each call fails with
+.Er EINVAL ,
+as Linux fails for descriptors it cannot splice or send from, and the
+caller copies through
+.Xr read 2
+and
+.Xr write 2
+instead.
+GNU grep, for one, drains a pipe it has read enough of with
+.Fn splice
+when its output is
+.Pa /dev/null ,
+and reads the pipe after an
+.Er EINVAL ,
+which it takes for a descriptor of the wrong kind, where any other error
+would be its read's.
+.Pp
+The i386 system call numbers are 313 for
+.Fn splice ,
+with the descriptors in EBX and EDX, 315 for
+.Fn tee ,
+and 187 for
+.Fn sendfile
+and 239 for
+.Fn sendfile64 ,
+with the output descriptor in EBX and the input in ECX.
+.Sh RETURN VALUES
+Each call returns -1 with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/callsmusl.c
+calls
+.Fn splice
+from a pipe to
+.Pa /dev/null ,
+.Fn tee
+and
+.Fn sendfile ,
+and requires
+.Er EINVAL
+of each and
+.Er EBADF
+of a closed descriptor.
+.Sh ERRORS
+.Bl -tag -width "[EINVAL]"
+.It Bq Er EBADF
+One of the descriptors is not open.
+.It Bq Er EINVAL
+Both descriptors are open; the kernel copies between none.
+.El
+.Sh SEE ALSO
+.Xr read 2 ,
+.Xr write 2

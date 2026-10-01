@@ -2226,6 +2226,10 @@ void init_syscall(void)
     _syscall_table[SYS_FCNTL64] = sys_fcntl64;
     _syscall_table[SYS_FLOCK] = sys_flock;
     _syscall_table[SYS_MEMFD_CREATE] = sys_memfd_create;
+    _syscall_table[SYS_SENDFILE] = sys_sendfile;
+    _syscall_table[SYS_SENDFILE64] = sys_sendfile;
+    _syscall_table[SYS_SPLICE] = sys_splice;
+    _syscall_table[SYS_TEE] = sys_tee;
     _syscall_table[SYS_CLOSE_RANGE] = sys_close_range;
     _syscall_table[SYS_GETDENTS64] = sys_getdents64;
     _syscall_table[SYS_UTIMENSAT] = sys_utimensat;
