@@ -376,6 +376,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->deadline = req_ticks + req_period(device);
             r->overdue = 0;
             r->taken_us = pit_now_us();
+            r->flags = 0;
             if (waited) {
                 latency_span(LAT_DISK_WAIT, wait_from, r->taken_us);
             }
@@ -431,7 +432,7 @@ static int req_done(void *arg)
  * request, which the caller may retry smaller.
  */
 static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t count,
-                       uint8_t *buffer)
+                       uint8_t *buffer, uint32_t req_flags)
 {
     int why;
     struct block_request *r = req_take(device, write, lba, count, 1, &why);
@@ -441,6 +442,7 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
     if (!r) {
         return why;
     }
+    r->flags = req_flags;
     if (write) {
         k_memcpy(r->page, buffer, count * BLOCK_SECTOR_SIZE);
     }
@@ -477,6 +479,12 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
 }
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer)
+{
+    return block_request_flags(device, write, lba, count, buffer, 0);
+}
+
+int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
+                        void *buffer, uint32_t req_flags)
 {
     uint8_t *bytes = buffer;
     uint32_t eflags, most;
@@ -534,7 +542,7 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     most = block_max_sectors(device);
     while (count > 0) {
         uint32_t chunk = count > most ? most : count;
-        int rc = req_run_one(device, write, lba, chunk, bytes);
+        int rc = req_run_one(device, write, lba, chunk, bytes, req_flags);
 
         if (rc == -ENOMEM && chunk > BLOCK_REQ_SECTORS) {
             most = chunk / 2 < BLOCK_REQ_SECTORS ? BLOCK_REQ_SECTORS : chunk / 2;
@@ -560,11 +568,20 @@ int block_flush(block_device_t *device)
     int status;
     uint32_t eflags;
 
+    device = block_submitter(device);
     if (!device || !device->flush) {
         return 0; /* nothing of its own to flush: what was written is on it */
     }
+    if ((device->flags & BLOCK_WRITE_THROUGH) && !device->unflushed) {
+        return 0; /* every write it answered was flushed before the answer */
+    }
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
     if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+        /* A page fault writing through the page cache, with interrupts
+         * off: a disk that can be polled flushes by polling. */
+        if (block_flags(device) & BLOCK_POLLABLE) {
+            return device->flush(device, 0);
+        }
         k_panic("block: a sleeping device was reached outside syscall context");
     }
     if (device->flags & BLOCK_CALLER_SYNC) {
@@ -574,6 +591,7 @@ int block_flush(block_device_t *device)
     if (!r) {
         return -EIO;
     }
+    r->flags = BLOCK_REQ_FLUSH;
     if (device->flush(device, r) != 0) {
         flags = irq_save();
         req_refused(r);

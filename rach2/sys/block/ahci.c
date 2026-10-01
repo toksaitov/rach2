@@ -1020,6 +1020,7 @@ static void ahci_acknowledge(struct ahci_disk *d)
 static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
 static int ahci_polled_failed(struct ahci_disk *d, uint8_t command, const char *why);
+static int ahci_flush(struct ahci_disk *d);
 
 /** The polled wait's bound in steps: `AHCI_CMD_STEPS` with interrupts on, and
  * `AHCI_CMD_STEPS_MASKED` with them off, as the budgets above say. */
@@ -1148,27 +1149,37 @@ static void ahci_issue(struct ahci_disk *d)
 }
 
 /**
- * Start the request `r` on `d`: a read, or the transfer half of a write.
- * Returns 0, or -1 when the command could not be built.
+ * Start the request `r` on `d`: a read, the transfer half of a write, or a
+ * flush alone. Returns 0, or -1 when the command could not be built.
  */
 static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
 {
     uint32_t bytes = r->count * BLOCK_SECTOR_SIZE;
 
-    if (ahci_build_command(d, r->write ? ATA_WRITE_DMA_EXT : ATA_READ_DMA_EXT, r->lba, r->count,
-                           (volatile uint8_t *)r->page, bytes, r->write) != 0) {
-        return -1;
+    if (r->flags & BLOCK_REQ_FLUSH) {
+        if (ahci_build_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0) != 0) {
+            return -1;
+        }
+        d->flushing = 1;
+        block_count_flush();
+    } else {
+        if (ahci_build_command(d, r->write ? ATA_WRITE_DMA_EXT : ATA_READ_DMA_EXT, r->lba, r->count,
+                               (volatile uint8_t *)r->page, bytes, r->write) != 0) {
+            return -1;
+        }
+        d->flushing = 0;
     }
     d->active = r;
     d->active_generation = r->generation;
-    d->flushing = 0;
     ahci_issue(d);
     return 0;
 }
 
 /**
  * The active command has left the slot: judge it, acknowledge its interrupt,
- * then finish its request or start the flush half of a write.
+ * then finish its request or start the flush half of a write. A write asked
+ * for with `BLOCK_REQ_NOFLUSH` is finished at its transfer, and the disk is
+ * marked `unflushed` until a flush, of a write or alone, has finished.
  * Runs from the interrupt, and from the polled path draining the port.
  */
 static void ahci_finish_active(struct ahci_disk *d)
@@ -1182,7 +1193,9 @@ static void ahci_finish_active(struct ahci_disk *d)
     rc = ahci_judge(d, d->flushing ? 0 : r->count * BLOCK_SECTOR_SIZE, (volatile uint8_t *)r->page,
                     r->write);
     ahci_acknowledge(d);
-    if (rc == 0 && r->write && !d->flushing) {
+    if (rc == 0 && r->write && !d->flushing && (r->flags & BLOCK_REQ_NOFLUSH)) {
+        d->dev.unflushed = 1;
+    } else if (rc == 0 && r->write && !d->flushing) {
         if (ahci_build_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0) == 0) {
             d->flushing = 1;
             block_count_flush();
@@ -1190,6 +1203,8 @@ static void ahci_finish_active(struct ahci_disk *d)
             return;
         }
         rc = -EIO;
+    } else if (rc == 0 && d->flushing) {
+        d->dev.unflushed = 0;
     }
     d->active = 0;
     latency_span(LAT_DISK, r->taken_us, pit_now_us());
@@ -1296,6 +1311,18 @@ static int ahci_submit(block_device_t *device, struct block_request *r)
     return 0;
 }
 
+/** The device's `flush`: queue `r`, a flush alone, as `submit` queues a
+ * transfer, or with `r` NULL flush now by polling, for a caller that
+ * cannot sleep. */
+static int ahci_flush_submit(block_device_t *device, struct block_request *r)
+{
+    if (!r) {
+        return ahci_flush((struct ahci_disk *)device->drvdata);
+    }
+    r->flags |= BLOCK_REQ_FLUSH;
+    return ahci_submit(device, r);
+}
+
 /**
  * The controller's interrupt: every port with a disk whose command has
  * left the slot is finished, and its interrupt status cleared.
@@ -1360,6 +1387,7 @@ void ahci_start(void)
         ahci_write32(ahci_port_off(d->port, AHCI_PxIE), AHCI_PxIE_WANTED);
         d->dev.flags &= ~BLOCK_FAULT_SAFE;
         d->dev.submit = ahci_submit;
+        d->dev.flush = ahci_flush_submit;
     }
     ahci_write32(AHCI_IS, 0xFFFFFFFFu);
     ahci_write32(AHCI_GHC, ahci_read32(AHCI_GHC) | AHCI_GHC_IE);
@@ -1404,10 +1432,20 @@ static int ahci_identify(struct ahci_disk *d)
 }
 
 /** Flush the device write cache so a completed write reaches durable media,
-   the durability the dirty-flag and pc_sync write-back contract relies on. */
+   the durability the dirty-flag and pc_sync write-back contract relies on.
+   The `unflushed` mark is cleared before the command, because the queue
+   starts again before the command returns and a write answered then must
+   leave it set; a failed flush sets it again. */
 static int ahci_flush(struct ahci_disk *d)
 {
-    return ahci_run_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
+    int rc;
+
+    d->dev.unflushed = 0;
+    rc = ahci_run_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
+    if (rc != 0) {
+        d->dev.unflushed = 1;
+    }
+    return rc;
 }
 
 /** The device's read: a polled READ DMA EXT of `count` sectors from `lba`. */
@@ -1493,7 +1531,8 @@ int ahci_init(void)
         d->dev.sector_size = BLOCK_SECTOR_SIZE;
         d->dev.sector_count = d->sectors;
         d->dev.max_sectors = AHCI_REQ_SECTORS;
-        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE;
+        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE | BLOCK_WRITE_THROUGH;
+        d->dev.unflushed = 0;
         d->dev.read = ahci_read;
         d->dev.write = ahci_write;
         d->dev.submit = 0;

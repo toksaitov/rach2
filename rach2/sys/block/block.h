@@ -23,33 +23,38 @@ struct block_request;
  * off. ATA, AHCI and every partition view over them have it; a device that
  * sleeps its caller does not, and the page-cache window refuses such a device
  * as a backing store. */
-#define BLOCK_FAULT_SAFE   0x1u
+#define BLOCK_FAULT_SAFE    0x1u
 /* Set by the buffer cache when a write to the device failed; cleared when
  * the cache drops the device at unmount. */
-#define BLOCK_WRITE_FAILED 0x2u
+#define BLOCK_WRITE_FAILED  0x2u
 /* The medium refuses writes and says so: a stick with its switch across, or
  * a partition view over one. Every mount of it is read-only. */
-#define BLOCK_READ_ONLY    0x4u
+#define BLOCK_READ_ONLY     0x4u
 /* The device sleeps its caller and answers in the same call: a loop device
  * over a file, whose read is a read of that file through the file system
  * holding it. It is neither of the two above: it may sleep, so it cannot be
  * called with interrupts off, and it must not take a request slot, because
  * the device under it takes one from the same pool of sixteen while it
  * waits. It is called directly, in syscall context only. */
-#define BLOCK_CALLER_SYNC  0x10u
+#define BLOCK_CALLER_SYNC   0x10u
 /* The device has gone: a stick pulled out. Nothing can reach it again, so an
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
-#define BLOCK_GONE         0x8u
+#define BLOCK_GONE          0x8u
 /* The device answers a polled `read` or `write` from any context, its queue
  * drained first: a SATA disk on its interrupts. A caller that cannot sleep,
  * a page fault with interrupts off, takes that path instead of a request. */
-#define BLOCK_POLLABLE     0x40u
+#define BLOCK_POLLABLE      0x40u
 /* The device stopped answering: every slot of the request pool it held went
  * through its deadline periods unanswered. Its waiters were released with
  * `EIO` and a new request is refused with `EIO`, until a late answer clears
  * it. Set and cleared by the request pool. */
-#define BLOCK_STALLED      0x20u
+#define BLOCK_STALLED       0x20u
+/* The disk makes a write durable before it answers it, with a flush of its
+ * own cache after the transfer, unless the request asks it not to
+ * (`BLOCK_REQ_NOFLUSH`). Its `unflushed` says whether it has answered such a
+ * write since its last flush; `block_flush` sends a flush only then. */
+#define BLOCK_WRITE_THROUGH 0x80u
 
 struct block_device {
     uint32_t sector_size;
@@ -71,7 +76,11 @@ struct block_device {
      * report the end the same way a transfer does. A device with nothing of
      * its own to flush has none of this, and the caller takes that for done.
      * A stick has one, because its cache is the reason a volume can be whole
-     * on the wire and not on the medium. */
+     * on the wire and not on the medium, and so has a disk that answers
+     * writes before they are out of its cache (`BLOCK_WRITE_THROUGH`). With
+     * `request` NULL the flush is done in the call: by the device that
+     * sleeps its caller, and by polling on a `BLOCK_POLLABLE` disk, for a
+     * caller that cannot sleep. */
     int (*flush)(block_device_t *device, struct block_request *request);
     /* The device this one's bytes live on, or NULL for a device that is its
      * own medium. A loop device names the device of the file system holding
@@ -79,6 +88,9 @@ struct block_device {
      * caller holding one device's buffer may take another's. */
     block_device_t *backing;
     void *drvdata;
+    /* A `BLOCK_WRITE_THROUGH` disk answered a write without its flush, and
+     * no flush has reached the disk since. Set and cleared by its driver. */
+    volatile int unflushed;
 };
 
 /* How long a chain of backing devices may be: a loop device stands on a real
@@ -244,7 +256,15 @@ struct block_request {
     int held_by_caller;  /* until the caller has read the answer or given up */
     int held_by_device;  /* until the device has answered */
     uint32_t taken_us;   /* when it was taken, for the completion's delay */
+    uint32_t flags;      /* BLOCK_REQ_NOFLUSH, BLOCK_REQ_FLUSH or 0 */
 };
+
+/* A write a `BLOCK_WRITE_THROUGH` disk answers without flushing its cache,
+ * for a caller that flushes once after several writes, and a request that
+ * is only that flush, with no transfer. A device that is not write-through
+ * ignores the first and never sees the second. */
+#define BLOCK_REQ_NOFLUSH 0x1u
+#define BLOCK_REQ_FLUSH   0x2u
 
 #define BLOCK_REQ_SECTORS     8u
 /* The most any device may take in one request: 1 MiB, 256 pages of a heap
@@ -275,14 +295,27 @@ uint32_t block_max_sectors(block_device_t *device);
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer);
 
 /**
+ * `block_request` with request `flags`: `BLOCK_REQ_NOFLUSH` lets a
+ * write-through disk answer a write on its interrupts before the write is
+ * out of its cache, and the caller then owes a `block_flush` before anything
+ * that must follow the write on the medium. A disk answering by polling, a
+ * device that is not write-through and a read ignore it.
+ */
+int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
+                        void *buffer, uint32_t flags);
+
+/**
  * Put what the device holds in a cache of its own on the medium.
  *
  * Sleeps the caller like `block_request` does, and from syscall context
- * only. A device with no `flush` has nothing of its own to flush and this
- * answers 0 at once; a stick's flush is `SYNCHRONIZE CACHE`, and the mounts
- * call this after the buffer cache has written back, at an unmount, a sync
- * and an fsync, because a volume whole on the wire is not yet whole on the
- * medium.
+ * only. The flush goes to the device a partition view stands on. A device
+ * with no `flush` has nothing of its own to flush, and a write-through disk
+ * with no write answered unflushed has nothing to put out; either answers 0
+ * at once. A stick's flush is `SYNCHRONIZE CACHE` and a disk's `FLUSH CACHE
+ * EXT`; the mounts call this after the buffer cache has written back, at an
+ * unmount, a sync and an fsync, because a volume whole on the wire is not
+ * yet whole on the medium, and the cache calls it at the end of a sync that
+ * wrote without flushing.
  */
 int block_flush(block_device_t *device);
 

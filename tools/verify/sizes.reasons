@@ -71,14 +71,14 @@ rach2/sys/block/loop.c:loop_attach lines 136 one device operation, its steps in 
 
 rach2/sys/block/partition.c:follow_logical params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
-rach2/sys/block/request.c:block_request complexity 30 one transfer split into the parts a device accepts, each with its own error path
+rach2/sys/block/request.c:block_request_flags complexity 30 one transfer split into the parts a device accepts, each with its own error path
 
 rach2/sys/board.c:board_init lines 123 a hardware sequence, the registers written in the order the datasheet requires
 
 rach2/sys/display/vga_gfx.c:vga_set_mode params 9 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 
 rach2/sys/fs/bcache.c:bcache_shrink complexity 28 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/bcache.c:bcache_sync nesting 6 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/bcache.c:sync_pass nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get lines 119 one file system operation over the on-disk format, each step a rule of the format
 

@@ -150,3 +150,18 @@ int block_flush(block_device_t *device)
     (void)device;
     return devmodel_current ? devmodel_barrier(devmodel_current) : 0;
 }
+
+/** The device's flags: a host device has no partition view over it. */
+uint32_t block_flags(block_device_t *device)
+{
+    return device->flags;
+}
+
+/** A request with flags on the host: a fake device keeps no cache of its
+ * own, so a write without the flush is the write. */
+int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_t count,
+                        void *buffer, uint32_t flags)
+{
+    (void)flags;
+    return block_request(device, write, lba, count, buffer);
+}

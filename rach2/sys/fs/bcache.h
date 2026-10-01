@@ -116,6 +116,16 @@ void bcache_dirty_ordered(struct bbuf *b, int order);
  * or the write's -errno with it dirty and the failure recorded. */
 int bcache_write(struct bbuf *b);
 
+/**
+ * `bcache_write` without the disk's flush: the buffer is clean when the
+ * write is answered, but on a write-through disk it may still be in the
+ * disk's own cache, and it is on the medium once the next `bcache_write`
+ * or `block_flush` of the device has been answered. For writes with no
+ * order among themselves that one later write must follow: a caller writes
+ * all but the last this way.
+ */
+int bcache_write_unflushed(struct bbuf *b);
+
 /** Write `dev`'s dirty buffers, the `first` ones in a pass of their own
  * and then the rest, each pass in ascending block order and a `first`
  * dirtied meanwhile still before the next `after`; 0, or the first write's
