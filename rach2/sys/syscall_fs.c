@@ -2841,12 +2841,55 @@ out:
     return rc;
 }
 
+#define MS_REMOUNT 32
+
+/**
+ * mount(2) with MS_REMOUNT: the mount whose root `path` names takes the
+ * flags `flags` (`vfs_remount`); -EINVAL for a path that is no mount's
+ * root. A mount made read-only must have no descriptor open for writing on
+ * it, -EBUSY, as on Linux.
+ */
+static int32_t remount_at(const char *path, uint32_t flags)
+{
+    struct vfs_ref ref;
+    process_t *pr;
+    int i, rc = vfs_resolve(0, path, 0, &ref, 0, 0);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (ref.node != ref.mnt->root) {
+        vfs_ref_release(&ref);
+        return -EINVAL;
+    }
+    if ((flags & VFS_MS_RDONLY) && !(ref.mnt->flags & VFS_MS_RDONLY)) {
+        for (pr = proc_list; pr && rc == 0; pr = pr->next) {
+            for (i = 0; pr->fds && i < fd_table_cap(pr->fds); i++) {
+                fd_entry_t *e = &pr->fds->entries[i];
+
+                if (e->type == FD_TYPE_FILE && (e->flags & FD_FLAG_WRITE) && e->ofd &&
+                    e->ofd->vmnt == ref.mnt) {
+                    rc = -EBUSY;
+                    break;
+                }
+            }
+        }
+    }
+    if (rc == 0) {
+        rc = vfs_remount(ref.mnt, flags);
+    }
+    vfs_ref_release(&ref);
+    return rc;
+}
+
 /**
  * mount(2): EBX = source, ECX = target, EDX = type, ESI = flags, EDI = data.
  *
  * Effective uid 0 is required. The strings are copied here; the order of
  * work and every other refusal are the VFS's (vfs_do_mount). `data` may be
- * NULL, which is an empty option string.
+ * NULL, which is an empty option string. With MS_REMOUNT the source, the
+ * type and the data are not read, as on Linux for the flags here
+ * (`remount_at`).
  */
 int32_t sys_mount(isr_params_t *params)
 {
@@ -2861,6 +2904,17 @@ int32_t sys_mount(isr_params_t *params)
     }
     if (!cred_privileged()) {
         return -EPERM;
+    }
+    if (params->esi & MS_REMOUNT) {
+        if (!params->ecx) {
+            return -EFAULT;
+        }
+        n = path_from_user(AT_FDCWD, (const char __user *)params->ecx, &tpath);
+        if (n == 0) {
+            n = remount_at(tpath, params->esi & ~(uint32_t)MS_REMOUNT);
+            path_buf_put(tpath);
+        }
+        return n;
     }
     if (!params->ebx || !params->ecx || !params->edx) {
         return -EFAULT;

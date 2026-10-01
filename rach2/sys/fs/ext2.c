@@ -160,6 +160,9 @@ struct ext2_mount {
     int writable;
     uint64_t free_blocks, free_inodes;
     int valid_cleared; /* the superblock's valid bit was cleared by this mount */
+    /* Why the volume may only be read, which a remount cannot change, or
+     * NULL for a volume read-only because it was asked to be. */
+    const char *readonly_why;
     /* A write or a free in progress: the bitmap bytes, descriptors and
      * pointer slots it touches are marked dirty and written together at
      * its end. `BATCH_ALLOC` puts the bitmaps and descriptors first, so no
@@ -1111,6 +1114,64 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
         (void)writeback_error(em, rc, 0);
     }
     vfs_ns_unlock(mnt);
+}
+
+static int writeback_init(struct ext2_mount *em);
+static int ext2_check_volume(struct ext2_mount *em, const char **why);
+
+/**
+ * Make the mount read-only or writable, by VFS_MS_RDONLY in `flags`.
+ *
+ * Read-only, the volume is synced and its valid bit set, as an unmount
+ * leaves it, which a node removed while still open would prevent, since its
+ * inode is freed at its last put and a read-only mount frees nothing:
+ * -EBUSY, as Linux answers for such a file. Writable, the volume passes the
+ * check a writable mount of it would pass, a volume not cleanly unmounted
+ * among them, and its valid bit is cleared; a volume whose features or
+ * check keep it read-only is -EROFS.
+ */
+static int ext2_remount(struct vfs_mount *mnt, uint32_t flags)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n;
+    const char *why = 0;
+    int rc = 0;
+
+    if (flags & VFS_MS_RDONLY) {
+        for (n = em->nodes; n; n = n->next) {
+            if (n->unlinked) {
+                return -EBUSY;
+            }
+        }
+        rc = em->writable ? ext2_prepare_unmount(mnt) : 0;
+        if (rc == 0) {
+            em->writable = 0;
+        }
+        return rc;
+    }
+    if (em->readonly_why) {
+        return -EROFS;
+    }
+    vfs_ns_lock(mnt);
+    if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
+        rc = ext2_check_volume(em, &why);
+        if (rc == 0 && why) {
+            em->readonly_why = why;
+            rc = -EROFS;
+        }
+    }
+    if (rc == 0 && !em->wb) {
+        rc = writeback_init(em);
+    } else if (rc == 0) {
+        em->state &= ~EXT2_VALID_FS;
+        rc = sb_store(em);
+    }
+    if (rc == 0) {
+        em->valid_cleared = 1;
+        em->writable = 1;
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
 static void ext2_unmount(struct vfs_mount *mnt)
@@ -4793,6 +4854,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         }
     }
     em->writable = readonly_why == 0 && !(flags & VFS_MS_RDONLY);
+    em->readonly_why = readonly_why;
     if (readonly_why) {
         klog(KLOG_WARN, "ext2", "mounted read-only: %s", readonly_why);
         mnt->flags |= VFS_MS_RDONLY;
@@ -4867,6 +4929,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_mknod,
     0, /* pin: a hold keeps a node */
     0, /* unpin */
+    ext2_remount,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0};

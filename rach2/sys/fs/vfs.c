@@ -1980,6 +1980,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* symlink */
     kfs_mknod,   0,              /* pin: the syscall layer's holders keep a node */
     0,                           /* unpin */
+    0,                           /* remount */
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -2239,6 +2240,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* mknod */
     0, /* pin */
     0, /* unpin */
+    0, /* remount */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -2248,6 +2250,7 @@ static const struct vfs_ops procfs_vops = {
     0,                                                                       /* mknod */
     0,                                                                       /* pin */
     0,                                                                       /* unpin */
+    0,                                                                       /* remount */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -2257,6 +2260,7 @@ static const struct vfs_ops sysfs_vops = {
     0,                                                                      /* mknod */
     0,                                                                      /* pin */
     0,                                                                      /* unpin */
+    0,                                                                      /* remount */
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -2482,6 +2486,38 @@ const struct vfs_type *vfs_type_at(int idx)
 #define VFS_MS_KNOWN                                                                     \
     (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC | VFS_MS_SYNCHRONOUS | \
      VFS_MS_DIRSYNC | VFS_MS_NOATIME | VFS_MS_NODIRATIME | VFS_MS_SILENT | VFS_MS_RELATIME)
+
+int vfs_remount(struct vfs_mount *m, uint32_t flags)
+{
+    int rc;
+
+    if (flags & ~VFS_MS_KNOWN) {
+        return -EINVAL;
+    }
+    if (m->state != VFS_ACTIVE) {
+        return -EBUSY;
+    }
+    if (vfs_mount_gone(m)) {
+        return -EIO;
+    }
+    if ((flags ^ m->flags) & VFS_MS_RDONLY) {
+        if (!m->type->ops->remount) {
+            return -EINVAL;
+        }
+        if (!(flags & VFS_MS_RDONLY) &&
+            ((m->dev && (m->dev->flags & BLOCK_READ_ONLY)) || m->write_error)) {
+            return -EROFS;
+        }
+        rc = m->type->ops->remount(m, flags);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    m->flags = flags;
+    klog(KLOG_INFO, "vfs", "remounted: %s (%s)", m->covered_path,
+         (flags & VFS_MS_RDONLY) ? "read-only" : "writable");
+    return 0;
+}
 
 /* Wait predicate: no operation is in progress on the mount. */
 static int drained(void *arg)

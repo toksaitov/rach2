@@ -79,9 +79,15 @@ The kernel honours or records only
 and
 .Ql silent
 flags.
+.Ql remount
+changes those flags on a mount, as
+.Xr mount 2
+describes: ext2 and tmpfs change between
+.Ql ro
+and
+.Ql rw .
 Other flags are rejected, including those requested by
-.Ql remount ,
-.Ql bind ,
+.Ql bind
 and
 .Ql move .
 .Pa /proc/mounts

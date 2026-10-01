@@ -856,6 +856,13 @@ int synth_sys_writable(int entry)
     return 0;
 }
 
+int vfs_remount(struct vfs_mount *m, uint32_t flags)
+{
+    (void)m;
+    (void)flags;
+    return -EINVAL;
+}
+
 uint32_t procfs_ino_sys(int entry)
 {
     (void)entry;

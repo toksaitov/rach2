@@ -4033,6 +4033,7 @@ static const struct vfs_ops exfat_ops = {
     0,                         /* mknod */
     0,                         /* pin: a hold keeps a node */
     0,                         /* unpin */
+    0,                         /* remount */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops, 0, 0};

@@ -1021,6 +1021,15 @@ const char *tmpfs_label(void *node)
     return ((struct tmpfs_node *)node)->label;
 }
 
+/* A tmpfs has nothing on a device to settle, and the VFS refuses every
+ * write to a read-only mount, so a remount changes nothing here. */
+static int tmpfs_remount(struct vfs_mount *mnt, uint32_t flags)
+{
+    (void)mnt;
+    (void)flags;
+    return 0;
+}
+
 static const struct vfs_ops tmpfs_ops = {
     tmpfs_lookup,
     0, /* lookup_rest */
@@ -1052,6 +1061,7 @@ static const struct vfs_ops tmpfs_ops = {
     tmpfs_mknod,
     0, /* pin: a hold keeps a node */
     0, /* unpin */
+    tmpfs_remount,
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1};

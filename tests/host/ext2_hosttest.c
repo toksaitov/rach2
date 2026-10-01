@@ -2519,6 +2519,51 @@ static void held_rmdir_row(void)
           "and its inode goes at the last put, leaving the volume clean");
 }
 
+/**
+ * A remount read-only syncs the volume and leaves it as an unmount does, a
+ * create on it is refused, and a remount writable takes a create again; a
+ * file removed while open keeps the mount writable with EBUSY.
+ */
+static void remount_row(void)
+{
+    unsigned char sb[2];
+    int rc;
+    void *f, *g;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the remount volume mounts writable");
+    f = make_file(mnt.root, "before", &rc);
+    check(f && write_at(f, pattern, 5000, 0) == 0, "a file written before the remount");
+    if (f) {
+        OPS->put(&mnt, f);
+    }
+    g = make_file(mnt.root, "open", &rc);
+    check(g && OPS->unlink(&mnt, mnt.root, "open") == 0 &&
+                  OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY) == -EBUSY,
+          "a remount read-only with a removed file still open is EBUSY");
+    if (g) {
+        OPS->put(&mnt, g);
+    }
+    check(OPS->remount(&mnt, rw_flags | VFS_MS_RDONLY) == 0 &&
+              host_read(wimg, sb, 2, 1024 + 58) == 2 && (sb[0] & 1) == 1 && e2fsck_clean(wimg),
+          "a remount read-only sets the valid bit and leaves the volume clean, as an unmount "
+          "does");
+    mnt.flags = rw_flags | VFS_MS_RDONLY;
+    check(make_file(mnt.root, "refused", &rc) == 0 && rc == -EROFS,
+          "and a create on it is EROFS");
+    check(OPS->remount(&mnt, rw_flags) == 0 && host_read(wimg, sb, 2, 1024 + 58) == 2 &&
+              (sb[0] & 1) == 0,
+          "a remount writable clears the valid bit again");
+    mnt.flags = rw_flags;
+    f = make_file(mnt.root, "after", &rc);
+    check(f != 0, "and takes a create");
+    if (f) {
+        OPS->put(&mnt, f);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
+}
+
 static void order_row(void)
 {
     order_row_under(16, 0, 1035);
@@ -2757,6 +2802,7 @@ static void batch_rows(void)
     order_row_under(512, 1, 2059);
     default_mount_row();
     held_rmdir_row();
+    remount_row();
     batch_error_row();
     for (barrier = 1; barrier <= 5; barrier++) {
         batch_flush_error_row(barrier, 0);

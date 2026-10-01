@@ -240,6 +240,13 @@ struct vfs_ops {
      * descriptors the syscall layer counts. */
     int (*pin)(struct vfs_mount *mnt, void *node, void **token);
     void (*unpin)(struct vfs_mount *mnt, void *token);
+    /* Make the mount read-only or writable, by VFS_MS_RDONLY in its new
+     * `flags`, for mount(2) with MS_REMOUNT, before the VFS stores them: a
+     * mount made read-only is synced and left as an unmount leaves its
+     * volume, and one made writable is set up as a writable mount is. NULL
+     * for a type that does neither, whose remounts change only the other
+     * flags. */
+    int (*remount)(struct vfs_mount *mnt, uint32_t flags);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the
@@ -469,6 +476,16 @@ void vfs_walk_unlock(struct vfs_mount *mnt);
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options);
 int vfs_do_umount(const char *target, int dir);
+
+/**
+ * mount(2) with MS_REMOUNT: the flags of the active mount `m` become
+ * `flags`. A change between read-only and writable goes through the type's
+ * `remount`, and a type without one refuses it with EINVAL; a device that
+ * refuses writes, or has failed one, keeps its mount read-only, EROFS. The
+ * caller has checked
+ * that no descriptor writes to a mount it makes read-only.
+ */
+int vfs_remount(struct vfs_mount *m, uint32_t flags);
 
 /**
  * A write to `dev` failed at `lba` with `rc`: every mount on the device goes
