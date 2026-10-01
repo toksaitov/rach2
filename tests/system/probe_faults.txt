@@ -5128,7 +5128,7 @@ end
 fault tcp-opens-uncounted
 probe procprobe
 file rach2/sys/network/tcp/tcp.c
-expect FAIL: /proc/net/snmp counts the connection as an active and a passive open
+expect FAIL: /proc/net/snmp counts it as an active open, a failed attempt and a reset sent
 old
     net_mib.tcp_active_opens++;
 new

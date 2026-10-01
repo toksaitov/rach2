@@ -77,11 +77,12 @@ typedef unsigned int size_t;
 
 #define CLOCK_MONOTONIC 1
 
-#define O_RDONLY 0
-#define O_WRONLY 1
-#define O_TRUNC  01000
-#define EINVAL   22
-#define SIGKILL  9
+#define O_RDONLY     0
+#define O_WRONLY     1
+#define O_TRUNC      01000
+#define EINVAL       22
+#define ECONNREFUSED 111
+#define SIGKILL      9
 
 static int syscall1(int n, int a)
 {
@@ -1062,8 +1063,9 @@ static int mib_value(const char *b, int n, const char *group, const char *name)
 }
 
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
-   open on port 8080, and the MIB counters `nstat` reads, after a connection
-   to it over the loopback. */
+   open on port 8080, and the MIB counters `nstat` reads, after a connect to
+   a closed local port, which leaves no connection behind for the pool's
+   rows to count. */
 static void count_rows(void)
 {
     unsigned char sa[16];
@@ -1083,24 +1085,25 @@ static void count_rows(void)
         sa[i] = 0;
     }
     sa[0] = AF_INET;
-    sa[2] = 0x1F; /* port 8080, big-endian */
-    sa[3] = 0x90;
+    sa[2] = 0x1F; /* port 8081, big-endian, where nothing listens */
+    sa[3] = 0x91;
     sa[4] = 127;
     sa[7] = 1;
     args[0] = (unsigned int)fd;
     args[1] = (unsigned int)(size_t)sa;
     args[2] = 16;
-    check(fd >= 0 && syscall3(SYS_SOCKETCALL, SC_CONNECT, (int)(size_t)args, 0) == 0,
-          "a connection to the listener over the loopback");
+    check(fd >= 0 && syscall3(SYS_SOCKETCALL, SC_CONNECT, (int)(size_t)args, 0) == -ECONNREFUSED,
+          "a connect to a closed local port is refused");
+    syscall1(SYS_CLOSE, fd);
     n = slurp("/proc/net/snmp", buf, (int)sizeof(buf));
     check(mib_value(buf, n, "Tcp:", "ActiveOpens") >= 1 &&
-              mib_value(buf, n, "Tcp:", "PassiveOpens") >= 1,
-          "/proc/net/snmp counts the connection as an active and a passive open");
-    check(mib_value(buf, n, "Tcp:", "OutSegs") >= 3 && mib_value(buf, n, "Ip:", "OutRequests") >= 3,
-          "and the handshake's three segments as sent by TCP and IP");
-    check(mib_value(buf, n, "Tcp:", "InSegs") >= 2 && mib_value(buf, n, "Ip:", "InReceives") >= 2,
-          "and the two the connect waited for as received");
-    syscall1(SYS_CLOSE, fd);
+              mib_value(buf, n, "Tcp:", "AttemptFails") >= 1 &&
+              mib_value(buf, n, "Tcp:", "OutRsts") >= 1,
+          "/proc/net/snmp counts it as an active open, a failed attempt and a reset sent");
+    check(mib_value(buf, n, "Tcp:", "OutSegs") >= 2 && mib_value(buf, n, "Tcp:", "InSegs") >= 2 &&
+              mib_value(buf, n, "Ip:", "OutRequests") >= 2 &&
+              mib_value(buf, n, "Ip:", "InReceives") >= 2,
+          "and the SYN and the reset as sent and received by TCP and IP");
 }
 
 /* A datagram socket and a local one, each in its file: the UDP socket by

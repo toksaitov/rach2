@@ -12,7 +12,8 @@
  * group and by the caller's, each beside an exited child of another group,
  * whose exit a wait with WNOHANG passes over; once the selected child is
  * killed, the wait reports it and reaps it alone. The raw call's fifth
- * argument receives the CPU time of a child that spun. No event, an unknown
+ * argument receives the CPU time and the peak memory of a child that spun,
+ * and zero in the counters the kernel does not keep. No event, an unknown
  * option or idtype, a pid of 0 and a pidfd are refused, and no child at all
  * is ECHILD.
  *
@@ -258,8 +259,9 @@ static int selections(void)
         !reports(&si, pid, CLD_EXITED, 0)) {
         return fail("the raw waitid did not reap the spinning child");
     }
-    if (ru.utime_sec * 100 + ru.utime_usec / 10000 < 2 || ru.counters[0] != 0) {
-        return fail("the raw waitid's usage is not the child's CPU time");
+    if (ru.utime_sec * 100 + ru.utime_usec / 10000 < 2 || ru.counters[0] <= 0 ||
+        ru.counters[1] != 0) {
+        return fail("the raw waitid's usage is not the child's CPU time and peak memory");
     }
     pid = idle_child();
     memset(&ru, 0xFF, sizeof(ru));
