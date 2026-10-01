@@ -36,6 +36,7 @@ static int procfs_open(const struct vpath *vp, int flags);
 static int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 static int procfs_readlink_exe(int pid, char *buf, int cap);
 static int procfs_exe_name(int pid, char *buf, int cap);
+static int procfs_readlink_dir(int pid, int root, char *buf, int cap);
 static int procfs_exe_file(int pid, struct vfs_ref *out);
 static int procfs_nth_pid(int n);
 static uint32_t procfs_ino_dir(void);
@@ -309,6 +310,25 @@ static char exec_path[] = "/tmp/a";
 struct vfs_mount *vfs_root_mount(void)
 {
     return &root_mount;
+}
+
+/* The directories /proc/<pid>/cwd and root name, which no row reads. */
+const char *proc_cwd(const struct process *p)
+{
+    (void)p;
+    return "/";
+}
+
+int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
+{
+    (void)mnt;
+    (void)node;
+    if (cap < 2) {
+        return -ENAMETOOLONG;
+    }
+    out[0] = '/';
+    out[1] = '\0';
+    return 0;
 }
 
 int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)

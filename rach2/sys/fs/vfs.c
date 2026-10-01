@@ -2157,7 +2157,7 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {
         st->mode = VFS_S_IFDIR | (mnt == mounts[1] ? 0755u : 0555u);
-    } else if (kind == VNODE_PROC_EXE) {
+    } else if (kind == VNODE_PROC_EXE || kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT) {
         st->mode = 0120000u | 0777u;
     } else {
         st->mode = VFS_S_IFREG | 0444u;
@@ -2167,19 +2167,27 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 }
 
 /* The target of a /proc link as text: /proc/<pid>/exe's, the path of the
- * program the process runs (`procfs_readlink_exe`). The resolver goes on
- * from the program's file itself (`walk_exe`), and readlink(2) reads the
- * text through procfs. */
+ * program the process runs (`procfs_readlink_exe`), and /proc/<pid>/cwd's
+ * and root's, the paths of its directories (`procfs_readlink_dir`). The
+ * resolver goes on from exe's program file itself (`walk_exe`), and from the
+ * text of the other two, and readlink(2) reads the text through procfs. */
 static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     const struct synth_node *sn = node;
     int pid = procfs_resolve_id(&sn->vp);
 
     (void)mnt;
+    if (pid < 0 && (sn->vp.kind == VNODE_PROC_EXE || sn->vp.kind == VNODE_PROC_CWD ||
+                    sn->vp.kind == VNODE_PROC_ROOT)) {
+        return -ENOENT;
+    }
+    if (sn->vp.kind == VNODE_PROC_CWD || sn->vp.kind == VNODE_PROC_ROOT) {
+        return procfs_readlink_dir(pid, sn->vp.kind == VNODE_PROC_ROOT, buf, (int)cap);
+    }
     if (sn->vp.kind != VNODE_PROC_EXE) {
         return -EINVAL;
     }
-    return pid < 0 ? -ENOENT : procfs_readlink_exe(pid, buf, (int)cap);
+    return procfs_readlink_exe(pid, buf, (int)cap);
 }
 
 /**

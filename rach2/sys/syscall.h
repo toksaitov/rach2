@@ -288,4 +288,8 @@ struct krffs_node;
 int fs_node_is_held(const struct krffs_node *node);
 void fs_node_moved(const struct krffs_node *from, struct krffs_node *to);
 
+/** The host name `sethostname` set last, which uname gives as its node
+ * name, for /proc/sys/kernel/hostname. */
+const char *uts_hostname(void);
+
 #endif

@@ -144,8 +144,12 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
 }
 
 /* The /proc/sys table (synthfs.h): the limits of io/inotify.c, and the
- * kernel's name, its release, the bound of its process IDs and the name it
- * gives a core file (proc/coredump.h). */
+ * kernel's name, its release, the bound of its process IDs, the name it
+ * gives a core file (proc/coredump.h), its host name, whose text procfs
+ * reads from what `sethostname` set when the file is opened, and its domain
+ * name,
+ * which uname gives as "(none)"; and IPv4 forwarding, which this stack does
+ * not do. */
 static const struct {
     int parent;
     const char *name;
@@ -160,7 +164,12 @@ static const struct {
                {6, "ostype", "Rach2\n"},
                {6, "osrelease", "1.0.0\n"},
                {6, "pid_max", "2000000000\n"},
-               {6, "core_pattern", "core\n"}};
+               {6, "core_pattern", "core\n"},
+               {6, "hostname", ""},
+               {6, "domainname", "(none)\n"},
+               {0, "net", 0},
+               {13, "ipv4", 0},
+               {14, "ip_forward", "0\n"}};
 
 int synth_sys_count(void)
 {
@@ -302,6 +311,14 @@ static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int
     }
     if (n == 2 && comp_eq(c[1], "exe")) {
         vp->kind = VNODE_PROC_EXE;
+        return vp->kind;
+    }
+    if (n == 2 && comp_eq(c[1], "cwd")) {
+        vp->kind = VNODE_PROC_CWD;
+        return vp->kind;
+    }
+    if (n == 2 && comp_eq(c[1], "root")) {
+        vp->kind = VNODE_PROC_ROOT;
         return vp->kind;
     }
     if (f != 0) {

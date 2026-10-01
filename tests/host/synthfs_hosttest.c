@@ -176,6 +176,11 @@ int main(void)
      * keeping the process's id and the thread's, with no task directory in
      * it; no thread has id 0. */
     CHECK(synth_classify("proc/self/exe", &vp) == VNODE_PROC_EXE && vp.pid == SYNTH_PID_SELF);
+    CHECK(synth_classify("proc/self/cwd", &vp) == VNODE_PROC_CWD && vp.pid == SYNTH_PID_SELF);
+    CHECK(synth_classify("proc/5/root", &vp) == VNODE_PROC_ROOT && vp.pid == 5);
+    CHECK(synth_classify("proc/sys/kernel/hostname", &vp) == VNODE_PROC_SYS_FILE &&
+          vp.sysent == SYNTH_SYS_HOSTNAME);
+    CHECK(synth_classify("proc/sys/net/ipv4/ip_forward", &vp) == VNODE_PROC_SYS_FILE);
     CHECK(synth_classify("proc/7/exe/x", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/7/task", &vp) == VNODE_PROC_TASK_DIR && vp.pid == 7 && !vp.tid);
     CHECK(synth_classify("proc/7/task/9", &vp) == VNODE_PROC_PID && vp.pid == 7 && vp.tid == 9);

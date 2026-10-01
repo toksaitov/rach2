@@ -56,6 +56,16 @@ int procfs_readlink_exe(int pid, char *buf, int cap);
 int procfs_exe_name(int pid, char *buf, int cap);
 
 /**
+ * The text of /proc/<pid>/cwd, or of /proc/<pid>/root with `root` set, into
+ * `buf` of `cap` bytes: the working directory's path as getcwd gives it, or
+ * the path of the directory chroot made the root, "/" when it made none.
+ * Returns the length, -ENOENT for a process that is gone, or -EACCES for a
+ * caller that may not read its memory, as Linux asks of these links what it
+ * asks of exe.
+ */
+int procfs_readlink_dir(int pid, int root, char *buf, int cap);
+
+/**
  * The file /proc/<pid>/exe reaches, which the resolver goes on from: the
  * mount and the node of the program's file the process's address space keeps
  * (`mm_exe_open`), which stay while nothing sleeps. 0, -ENOENT for no such

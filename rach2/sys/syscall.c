@@ -1997,6 +1997,11 @@ struct kernel_utsname {
  * sets). Single global; Rach2 is one host. */
 static char k_hostname[65] = "rach2";
 
+const char *uts_hostname(void)
+{
+    return k_hostname;
+}
+
 /* Copy a C string into a fixed 65-byte utsname field (always
  * NUL-terminated). */
 static void uname_field(char *dst, const char *src)

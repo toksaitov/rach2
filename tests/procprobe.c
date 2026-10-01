@@ -55,6 +55,7 @@ typedef unsigned int size_t;
 #define SYS_SOCKETCALL    102
 #define SYS_FSTAT64       197
 #define SYS_READLINK      85
+#define SYS_GETCWD        183
 #define SYS_STAT64        195
 #define SYS_IOCTL         54
 #define CLOCK_REALTIME    0
@@ -894,11 +895,12 @@ static int listing(const char *dir, char *out, int cap)
 }
 
 /* A /proc/<pid> directory lists its files in their order, `task` last, and a
-   thread's directory under `task` lists them but `task`. */
+   thread's directory under `task` lists them but `task`; its cwd and root
+   are links to the process's directories, which a walk follows. */
 static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
-                                "mem oom_score_adj mounts exe ";
+                                "mem oom_score_adj mounts exe cwd root ";
     static char got[512], want[512];
     char dir[40] = "/proc/self/task/";
     int pid = syscall1(SYS_GETPID, 0);
@@ -924,6 +926,24 @@ static void pid_dir_rows(void)
     want[i] = '\0';
     check(listing("/proc/self", got, (int)sizeof(got)) == 0 && same_str(got, want),
           "and /proc/self lists them all in order, task last");
+    {
+        static char here[8192], there[8192];
+        char cwd[256], link[256];
+        int n = syscall3(SYS_READLINK, (int)(size_t)"/proc/self/cwd", (int)(size_t)link,
+                         (int)sizeof(link) - 1);
+
+        link[n > 0 ? n : 0] = '\0';
+        check(syscall3(SYS_GETCWD, (int)(size_t)cwd, (int)sizeof(cwd), 0) > 0 && n > 0 &&
+                  same_str(link, cwd),
+              "/proc/self/cwd names the working directory getcwd gives");
+        n = syscall3(SYS_READLINK, (int)(size_t)"/proc/self/root", (int)(size_t)link,
+                     (int)sizeof(link) - 1);
+        link[n > 0 ? n : 0] = '\0';
+        check(n == 1 && same_str(link, "/"), "and /proc/self/root names /");
+        check(listing("/proc/self/cwd/", here, (int)sizeof(here)) == 0 &&
+                  listing(cwd, there, (int)sizeof(there)) == 0 && same_str(here, there),
+              "and the directory reached through cwd is the working directory");
+    }
 }
 
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener

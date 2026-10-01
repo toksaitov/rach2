@@ -41,6 +41,8 @@
 #include "vfs.h"
 #include "tmpfs.h"
 #include "cpuinfo.h"
+#include "pathbuf.h"
+#include "../syscall.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
 #include "../network/arp/arp.h"
@@ -615,6 +617,24 @@ int procfs_readlink_exe(int pid, char *buf, int cap)
 int procfs_exe_name(int pid, char *buf, int cap)
 {
     return exe_text(pid, buf, cap, 0);
+}
+
+int procfs_readlink_dir(int pid, int root, char *buf, int cap)
+{
+    process_t *p = procfs_proc(pid);
+
+    if (!p || !p->fs) {
+        return -ENOENT;
+    }
+    if (!procfs_may_read_mem(p)) {
+        return -EACCES;
+    }
+    if (root && p->fs->root_mnt) {
+        int rc = vfs_node_path(p->fs->root_mnt, p->fs->root_node, buf, (uint32_t)cap);
+
+        return rc != 0 ? rc : (int)k_strlen(buf);
+    }
+    return exe_put(buf, cap, 0, root ? "/" : proc_cwd(p));
 }
 
 /**
@@ -3301,7 +3321,12 @@ int procfs_open(const struct vpath *vp, int flags)
                   ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
                   : -1;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
-        ap_str(&text, synth_sys_text(vp->sysent));
+        if (vp->sysent == SYNTH_SYS_HOSTNAME) {
+            ap_str(&text, uts_hostname());
+            ap_ch(&text, '\n');
+        } else {
+            ap_str(&text, synth_sys_text(vp->sysent));
+        }
         len = text.len;
         pid = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

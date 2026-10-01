@@ -56,6 +56,8 @@ enum vnode_kind {
     VNODE_SYS_DIR,          /* /sys and a directory of its tree, by `sysent` and `syskey` */
     VNODE_SYS_LINK,         /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
     VNODE_SYS_FILE,         /* a device's uevent, by `sysent` and `syskey` */
+    VNODE_PROC_CWD,         /* /proc/<pid>/cwd: a link to the working directory */
+    VNODE_PROC_ROOT,        /* /proc/<pid>/root: a link to the root directory */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -152,6 +154,9 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
  * or -1 for an index past the table.
  */
 int synth_sys_count(void);
+/* The entry of kernel/hostname, whose text is the host name of the moment,
+ * which procfs reads, and not the table's. */
+#define SYNTH_SYS_HOSTNAME 11
 const char *synth_sys_name(int entry);
 int synth_sys_parent(int entry);
 /** The text of a file entry, NULL for a directory. */

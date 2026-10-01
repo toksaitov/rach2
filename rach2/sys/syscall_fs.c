@@ -5130,13 +5130,19 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_mode = S_IFREG | 0400;
         kst->st_ino = procfs_ino_disk();
         return 0;
+    case VNODE_PROC_CWD:
+    case VNODE_PROC_ROOT:
     case VNODE_PROC_EXE: {
         char scratch[1];
         int rpid = procfs_resolve_id(vp);
 
         /* Only an un-followed stat comes here. A link the caller may not
-         * read exists, as on Linux; one of no program does not. */
-        if (rpid < 0 || procfs_readlink_exe(rpid, scratch, 0) == -ENOENT) {
+         * read exists, as on Linux; one of no program or no process does
+         * not. */
+        if (rpid < 0 ||
+            (vp->kind == VNODE_PROC_EXE
+                 ? procfs_readlink_exe(rpid, scratch, 0)
+                 : procfs_readlink_dir(rpid, vp->kind == VNODE_PROC_ROOT, scratch, 0)) == -ENOENT) {
             return -ENOENT;
         }
         kst->st_dev = PROCFS_FSID;
@@ -5613,6 +5619,10 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
     } else if (kind == VNODE_PROC_EXE) {
         pid = procfs_resolve_id(&vp);
         n = pid < 0 ? -ENOENT : procfs_readlink_exe(pid, link, VFS_PATH_MAX);
+    } else if (kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT) {
+        pid = procfs_resolve_id(&vp);
+        n = pid < 0 ? -ENOENT
+                    : procfs_readlink_dir(pid, kind == VNODE_PROC_ROOT, link, VFS_PATH_MAX);
     } else if (kind == VNODE_SYS_LINK) {
         n = sysfs_device_exists(vp.sysent, vp.syskey) ? synth_sys_link(&vp, link, VFS_PATH_MAX)
                                                       : -ENOENT;
@@ -10265,7 +10275,8 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
                  {"maps", DT_REG},   {"smaps", DT_REG},   {"status", DT_REG},
                  {"statm", DT_REG},  {"auxv", DT_REG},    {"environ", DT_REG},
                  {"comm", DT_REG},   {"mem", DT_REG},     {"oom_score_adj", DT_REG},
-                 {"mounts", DT_REG}, {"exe", DT_LNK},     {"task", DT_DIR}};
+                 {"mounts", DT_REG}, {"exe", DT_LNK},     {"cwd", DT_LNK},
+                 {"root", DT_LNK},   {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int id, i, c = 0;
