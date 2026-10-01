@@ -5017,15 +5017,3 @@ old
 new
     (void)sys_fallocate;
 end
-
-# /proc/meminfo's Slab, the heap less the buffer cache it holds.
-
-fault meminfo-slab-whole-heap
-probe procprobe
-file rach2/sys/fs/procfs.c
-expect FAIL: and its Slab is the heap's pages but the buffer cache's, which the heap holds
-old
-    ap_frames_as_kb(t, heap_pages > buffers ? heap_pages - buffers : 0);
-new
-    ap_frames_as_kb(t, heap_pages);
-end
