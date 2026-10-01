@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 1, 2026
 .Dt PING 2
 .Os
 .Sh NAME
@@ -13,6 +13,13 @@ unsigned int args[1];
 
 args[0] = address;
 syscall(SYS_socketcall, 0x1000, args);
+
+unsigned int data_args[3];
+
+data_args[0] = address;
+data_args[1] = size;
+data_args[2] = ttl;
+syscall(SYS_socketcall, 0x1001, data_args);
 .Ed
 .Sh DESCRIPTION
 .Nm
@@ -28,6 +35,11 @@ to an array of one 32-bit word.
 That word is the destination IPv4 address in host byte order.
 For example, 0x0a000202 denotes 10.0.2.2.
 Addresses in 127/8 are replaced with the machine's current local address.
+.Pp
+Operation 0x1001 takes three words: the address, the bytes of data the
+request carries, from 0 to 1472, each byte its offset in the data, as
+iputils fills them, and the hop limit, from 1 to 255.
+Operation 0x1000 sends no data with the hop limit 64.
 .Pp
 The call sends an ICMP echo request and waits for a reply.
 It makes at most four attempts, each with a deadline of 100 ticks
@@ -68,6 +80,10 @@ Another ping call is in progress.
 The argument word cannot be read from user memory.
 .It Bq Er EINTR
 A signal interrupted the wait.
+.It Bq Er EINVAL
+The hop limit of operation 0x1001 is not 1 to 255.
+.It Bq Er EMSGSIZE
+The data of operation 0x1001 is more than 1472 bytes.
 .It Bq Er ETIMEDOUT
 No matching reply arrived during the four attempts.
 Transmit errors are not returned separately by this operation.

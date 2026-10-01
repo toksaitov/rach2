@@ -9,6 +9,8 @@
 .Op Fl nq4
 .Op Fl c Ar count
 .Op Fl i Ar interval
+.Op Fl s Ar size
+.Op Fl t Ar ttl
 .Op Fl W Ar timeout
 .Op Fl w Ar deadline
 .Ar host
@@ -48,9 +50,11 @@ socket operation, described in
 through a direct
 .Xr socketcall 2 ,
 since musl has no wrapper for it.
-The kernel sends an echo of no data, 28 bytes with its headers, and waits
-for the reply for up to four attempts of a second each; a signal ends the
-wait.
+The kernel sends an echo of 56 bytes of data, 84 with its headers, as
+iputils sends by default, or the size of
+.Fl s ,
+and waits for the reply for up to four attempts of a second each; a signal
+ends the wait.
 .Nm
 times the round trip on the monotonic clock, to the microsecond, and a
 request with no reply in that time is counted as lost and not printed.
@@ -65,6 +69,15 @@ requests.
 Send a request every
 .Ar interval
 seconds, which may have a fraction, instead of every second.
+.It Fl s Ar size
+Send
+.Ar size
+bytes of data in each request, from 0 to 1472: the stack does not
+fragment, so a request is at most one datagram of the 1500-byte MTU.
+.It Fl t Ar ttl
+Send each request with the hop limit
+.Ar ttl ,
+from 1 to 255, instead of 64.
 .It Fl W Ar timeout
 Count a request as lost when its reply has not come in
 .Ar timeout

@@ -24,8 +24,16 @@
 /** Handle one received ICMP datagram (IP header already stripped). */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 
+/* The most data an echo request carries: an unfragmented datagram of the
+ * 1500-byte MTU less the IP and ICMP headers. */
+#define ICMP_PING_DATA_MAX 1472u
+
 /** Send an echo request to `dst_ip` and wait; the round-trip time in ticks,
  * or `-ETIMEDOUT`, `-EBUSY` or `-EINTR`. */
 int icmp_ping(uint32_t dst_ip);
+
+/** `icmp_ping` with `size` bytes of data after the header, at most
+ * `ICMP_PING_DATA_MAX`, and the hop limit `ttl`. */
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl);
 
 #endif /* _ICMP_H_ */

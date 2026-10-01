@@ -1,13 +1,15 @@
 /**
  * Send ICMP echo requests through the Rach2 network stack.
  *
- * `ping [-nq4] [-c count] [-i interval] [-W timeout] [-w deadline] host`,
+ * `ping [-nq4] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout]
+ * [-w deadline] host`,
  * where `host` is an IPv4 address or a name, resolved through `/etc/hosts`,
  * or `/hosts` where there is no `/etc/hosts`, and then DNS (see `resolv.c`).
  *
- * Each request is the `SC_PING` socketcall, a Rach2 operation with no libc
- * wrapper, so it is issued through a direct `socketcall(2)`. The kernel sends
- * an echo of no data and sleeps the caller until the reply, for up to four
+ * Each request is the `SC_PING_DATA` socketcall, a Rach2 operation with no
+ * libc wrapper, so it is issued through a direct `socketcall(2)`. The kernel
+ * sends an echo of `-s` bytes of data, 56 unless asked, with the hop limit of
+ * `-t`, 64 unless asked, and sleeps the caller until the reply, for up to four
  * attempts of a second each; a signal ends the wait. So the round trip is
  * timed here, on the monotonic clock, and the timeout of `-W` and the deadline
  * of `-w` are an interval timer whose signal ends the wait. Requests go one a
@@ -28,10 +30,16 @@
 
 #include "netdb.h" /* resolve_host */
 
-/* Rach2's socketcall for an ICMP echo, numbered clear of the BSD sub-calls. */
-#define SC_PING 0x1000
+/* Rach2's socketcall for an ICMP echo with a data size and hop limit,
+ * numbered clear of the BSD sub-calls. */
+#define SC_PING_DATA 0x1001
+/* The most data one request carries: a datagram of the 1500-byte MTU, since
+ * the stack does not fragment. */
+#define DATA_MAX     1472
 
-#define USAGE "usage: ping [-nq4] [-c count] [-i interval] [-W timeout] [-w deadline] host\n"
+#define USAGE                                                                                    \
+    "usage: ping [-nq4] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout] [-w deadline] " \
+    "host\n"
 
 /* Set by the handlers: an interrupt ends the run, an alarm ends one wait. */
 static volatile sig_atomic_t interrupted;
@@ -113,7 +121,7 @@ static void print_ms(long long us)
 /* What the options asked for, in microseconds where a time; 0 for a
  * timeout or deadline not given, and a count of -1 for none. */
 struct options {
-    long count;
+    long count, size, ttl;
     long long interval, timeout, deadline;
     int quiet;
 };
@@ -134,7 +142,7 @@ static int parse(int argc, char **argv, struct options *o)
     int opt;
     char *end;
 
-    while ((opt = getopt(argc, argv, "c:i:W:w:nq4")) != -1) {
+    while ((opt = getopt(argc, argv, "c:i:s:t:W:w:nq4")) != -1) {
         switch (opt) {
         case 'c':
             o->count = strtol(optarg, &end, 10);
@@ -145,6 +153,28 @@ static int parse(int argc, char **argv, struct options *o)
             break;
         case 'i':
             o->interval = parse_seconds(optarg);
+            break;
+        case 's':
+            o->size = strtol(optarg, &end, 10);
+            if (*optarg == '\0' || *end != '\0' || o->size < 0) {
+                fprintf(stderr, "ping: invalid argument: '%s'\n", optarg);
+                return 2;
+            }
+            if (o->size > DATA_MAX) {
+                fprintf(stderr,
+                        "ping: local error: message too long, mtu=1500: this stack "
+                        "does not fragment, so -s is at most %d\n",
+                        DATA_MAX);
+                return 2;
+            }
+            break;
+        case 't':
+            o->ttl = strtol(optarg, &end, 10);
+            if (*optarg == '\0' || *end != '\0' || o->ttl < 1 || o->ttl > 255) {
+                fprintf(stderr, "ping: invalid argument: '%s': out of range: 1 <= value <= 255\n",
+                        optarg);
+                return 2;
+            }
             break;
         case 'W':
             o->timeout = parse_seconds(optarg);
@@ -179,23 +209,26 @@ static int parse(int argc, char **argv, struct options *o)
  * kernel's own time with `wait` 0, for its reply; the round trip in
  * microseconds, or -errno: -EINTR for an interrupt or the wait's end.
  */
-static long long ping_once(unsigned int ip, long long wait)
+static long long ping_once(unsigned int ip, const struct options *o, long long wait)
 {
-    unsigned int args[1];
+    unsigned int args[3];
     long long t0, rtt;
 
     alarmed = 0;
     arm(wait);
     args[0] = ip;
+    args[1] = (unsigned int)o->size;
+    args[2] = (unsigned int)o->ttl;
     t0 = now_us();
-    rtt = syscall(SYS_socketcall, SC_PING, args);
+    rtt = syscall(SYS_socketcall, SC_PING_DATA, args);
     rtt = rtt >= 0 ? now_us() - t0 : -errno;
     arm(0);
     return rtt;
 }
 
-/** Count the round trip `rtt` in `t`, and print its line unless `quiet`. */
-static void count_reply(struct tally *t, unsigned int ip, long long rtt, int quiet)
+/** Count the round trip `rtt` in `t`, and print its line, of a reply of
+ * `size` bytes of data, unless `quiet`. */
+static void count_reply(struct tally *t, unsigned int ip, long long rtt, long size, int quiet)
 {
     t->received++;
     t->sum += rtt;
@@ -207,8 +240,8 @@ static void count_reply(struct tally *t, unsigned int ip, long long rtt, int qui
         t->max = rtt;
     }
     if (!quiet) {
-        printf("8 bytes from %u.%u.%u.%u: icmp_seq=%ld time=", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
-               (ip >> 8) & 0xFF, ip & 0xFF, t->sent);
+        printf("%ld bytes from %u.%u.%u.%u: icmp_seq=%ld time=", size + 8, (ip >> 24) & 0xFF,
+               (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, t->sent);
         print_ms(rtt);
         puts(" ms");
         fflush(stdout);
@@ -246,7 +279,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
             wait = left;
         }
         t0 = now_us();
-        rtt = ping_once(ip, wait);
+        rtt = ping_once(ip, o, wait);
         if (rtt == -EBUSY) {
             fputs("ping: another ping is in flight on this machine\n", stderr);
             return 1;
@@ -256,7 +289,7 @@ static int run(unsigned int ip, const struct options *o, struct tally *t, long l
         }
         t->sent++;
         if (rtt >= 0) {
-            count_reply(t, ip, rtt, o->quiet);
+            count_reply(t, ip, rtt, o->size, o->quiet);
         }
         if (o->count >= 0 && t->sent >= o->count) {
             break;
@@ -300,6 +333,8 @@ int main(int argc, char **argv)
     memset(&t, 0, sizeof(t));
     o.count = -1;
     o.interval = 1000000;
+    o.size = 56;
+    o.ttl = 64;
     rc = parse(argc, argv, &o);
     if (rc != 0) {
         return rc;
@@ -314,8 +349,8 @@ int main(int argc, char **argv)
     sa.sa_handler = on_alarm;
     sigaction(SIGALRM, &sa, NULL);
 
-    printf("PING %s (%u.%u.%u.%u) 0(28) bytes of data.\n", argv[optind], (ip >> 24) & 0xFF,
-           (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
+    printf("PING %s (%u.%u.%u.%u) %ld(%ld) bytes of data.\n", argv[optind], (ip >> 24) & 0xFF,
+           (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, o.size, o.size + 28);
     fflush(stdout);
     start = now_us();
     busy = run(ip, &o, &t, start);

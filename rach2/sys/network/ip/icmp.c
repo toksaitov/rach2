@@ -51,7 +51,7 @@
 
 /* Outgoing echo reply (sized for a full datagram) and request buffers. */
 static uint8_t icmp_reply_buf[1500];
-static uint8_t icmp_echo_buf[8];
+static uint8_t icmp_echo_buf[8 + ICMP_PING_DATA_MAX];
 
 /* Identifier we stamp on our own echo requests. */
 #define ICMP_PING_ID 0x5243 /* 'RC' */
@@ -190,15 +190,22 @@ static void ping_release(void)
  * made runnable again. Whether a reply came is read from `ping_replied`, since
  * a wait that returns does not say whether the reply or the deadline ended it.
  *
+ * The request carries `size` bytes of data, each its own offset in the data
+ * modulo 256, as iputils fills them, and leaves with the hop limit `ttl`.
+ *
  * @return round-trip time in ticks, `-ETIMEDOUT` if every attempt expired,
  *         `-EBUSY` if another ping has the slot, or `-EINTR` on a signal.
  */
-int icmp_ping(uint32_t dst_ip)
+int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl)
 {
-    uint32_t start, flags;
+    uint32_t start, flags, i;
     uint16_t seq;
     int attempt;
     int rc = -ETIMEDOUT;
+
+    if (size > ICMP_PING_DATA_MAX) {
+        return -EMSGSIZE;
+    }
 
     if (!ping_wq_ready) {
         wait_queue_init(&ping_wq);
@@ -225,7 +232,10 @@ int icmp_ping(uint32_t dst_ip)
         write16be(icmp_echo_buf + 2, 0x0000);
         write16be(icmp_echo_buf + 4, ICMP_PING_ID);
         write16be(icmp_echo_buf + 6, seq);
-        write16be(icmp_echo_buf + 2, ip_checksum(icmp_echo_buf, 8));
+        for (i = 0; i < size; i++) {
+            icmp_echo_buf[8 + i] = (uint8_t)i;
+        }
+        write16be(icmp_echo_buf + 2, ip_checksum(icmp_echo_buf, (uint16_t)(8 + size)));
 
         ping_peer_ip = dst_ip;
         ping_seq_wait = seq;
@@ -237,7 +247,7 @@ int icmp_ping(uint32_t dst_ip)
             ping_deadline = 1;
         }
 
-        ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, 8, IP_TTL_DEFAULT);
+        ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, (uint16_t)(8 + size), ttl);
 
         net_unlock(flags);
 
@@ -270,4 +280,9 @@ int icmp_ping(uint32_t dst_ip)
     klog(KLOG_INFO, "icmp", "ping: no reply before the timeout");
 
     return rc;
+}
+
+int icmp_ping(uint32_t dst_ip)
+{
+    return icmp_ping_data(dst_ip, 0, IP_TTL_DEFAULT);
 }

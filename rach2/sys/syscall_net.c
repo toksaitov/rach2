@@ -164,7 +164,9 @@
 /* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
  * used to squat on 15 == Linux getsockopt, which a real server needs).
  * Userspace callers (utils/ping.c, tests/pingtest.c) use the same value. */
-#define SC_PING 0x1000
+#define SC_PING      0x1000
+/* The same with the data size and hop limit, for ping's -s and -t. */
+#define SC_PING_DATA 0x1001
 
 /**
  * Canonicalize a destination address at the socket boundary.
@@ -2047,6 +2049,9 @@ int32_t sys_socketcall(isr_params_t *params)
     case SC_PING:
         nargs = 1;
         break;
+    case SC_PING_DATA:
+        nargs = 3;
+        break;
     case SC_LISTEN:
     case SC_SHUTDOWN:
         nargs = 2;
@@ -2108,7 +2113,7 @@ static int32_t socket_dispatch(int call, uint32_t *args)
     if (call == SC_SENDMMSG || call == SC_RECVMMSG) {
         return mmsg(call, args);
     }
-    e = (call != SC_SOCKET && call != SC_PING && current_proc)
+    e = (call != SC_SOCKET && call != SC_PING && call != SC_PING_DATA && current_proc)
             ? fd_get(current_proc->fds, (int)args[0])
             : (fd_entry_t *)0;
     if (e && e->type == FD_TYPE_UNIX) {
@@ -2126,6 +2131,11 @@ static int32_t socket_dispatch(int call, uint32_t *args)
         return do_recvfrom((int)args[0], args[1], (int)args[2], (int)args[3], args[4], args[5]);
     case SC_PING:
         return do_ping(args[0]);
+    case SC_PING_DATA:
+        if (args[2] < 1 || args[2] > 255) {
+            return -EINVAL;
+        }
+        return (int32_t)icmp_ping_data(canonical_dst_ip(args[0]), args[1], (uint8_t)args[2]);
     case SC_CONNECT:
         return do_connect((int)args[0], args[1], (int)args[2]);
     case SC_LISTEN:
