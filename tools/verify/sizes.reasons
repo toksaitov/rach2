@@ -209,6 +209,7 @@ rach2/sys/syscall_fs.c:fstat_fill complexity 33 one system call's contract, its 
 rach2/sys/syscall_fs.c:fstat_fill lines 140 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd complexity 39 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:read_fd lines 180 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 47 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 200 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat lines 215 a dispatcher, one arm per command, read as a table
@@ -228,8 +229,8 @@ rach2/sys/syscall_net.c:do_connect lines 137 one system call's contract, its che
 rach2/sys/syscall_net.c:do_getsockopt complexity 36 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:do_recvfrom complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvfrom lines 107 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_recvmsg complexity 30 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_recvmsg lines 106 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_recvmsg complexity 32 one system call's contract, its checks in the order the manual page lists the errors
+rach2/sys/syscall_net.c:do_recvmsg lines 108 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendmsg complexity 32 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendto complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendto lines 144 one system call's contract, its checks in the order the manual page lists the errors

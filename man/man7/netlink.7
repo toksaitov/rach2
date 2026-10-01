@@ -48,13 +48,26 @@ or
 the address of a
 .Xr sendto 2
 is not read, since the kernel is the only destination.
-Several messages may be sent in one call.
+Several messages may be sent in one call; they end at one shorter than a
+header or longer than the bytes left, and what follows is ignored, as
+Linux ignores it, so a request may be sent in a buffer longer than itself,
+as iproute2's
+.Xr ip 8
+sends one.
 The answers are queued on the socket as datagrams of messages, each at
 most 4096 bytes, which
 .Xr recv 2
 reads one at a time; a receive reports the kernel's address, a
 .Vt struct sockaddr_nl
 with port id 0.
+.Xr recvmsg 2
+with
+.Dv MSG_PEEK
+and
+.Dv MSG_TRUNC
+gives the length of the datagram waiting and leaves it, which is how
+.Xr ip 8
+sizes its buffer.
 Each answer repeats the request's sequence number and the socket's port
 id.
 .Pp

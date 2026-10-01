@@ -467,8 +467,7 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
         uint32_t mlen = get32(buf + at);
 
         if (mlen < NLMSG_HDRLEN || mlen > len - at) {
-            kfree(b);
-            return -EINVAL;
+            break;
         }
         b->seq = get32(buf + at + 8);
         if (get16(buf + at + 6) & NLM_F_REQUEST) {

@@ -3901,12 +3901,14 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  * somewhere to put it, and are NULL for one that has not; the sender is read
  * under the same hold as the copy, since consuming is what publishes it. With
  * `peek` the datagram is copied and left waiting for the next receive, as
- * recvmsg's MSG_PEEK asks.
+ * recvmsg's MSG_PEEK asks. `whole`, when not NULL, is given the datagram's
+ * length, which is more than the bytes copied when the buffers took less,
+ * for recvmsg's MSG_TRUNC.
  *
  * Returns the bytes copied, or a negative errno.
  */
 int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
-                    uint16_t *src_port, int peek)
+                    uint16_t *src_port, int peek, int32_t *whole)
 {
     uint8_t message[SOCK_RECV_BUF_SIZE];
     struct kernel_iovec iov;
@@ -3941,6 +3943,9 @@ int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *
         socket_dgram_consume(entry->sock, src_ip, src_port);
     }
     net_unlock(held);
+    if (whole) {
+        *whole = taken;
+    }
 
     for (i = 0; i < iovcnt && (int)offset < taken; i++) {
         uint32_t chunk;
@@ -4061,7 +4066,7 @@ int32_t sys_readv(isr_params_t *params)
 
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
     if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
-        return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0);
+        return readv_dgram(entry, iov_user, iovcnt, 0, 0, 0, 0);
     }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
 

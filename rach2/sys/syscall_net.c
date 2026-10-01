@@ -222,8 +222,10 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
 static uint8_t raw_send_buf[1500];
 
 /* recv flags honored: MSG_PEEK leaves what it copies for the next receive,
- * and MSG_DONTWAIT does not wait. */
+ * MSG_TRUNC has recvmsg on a datagram socket answer the datagram's whole
+ * length, and MSG_DONTWAIT does not wait. */
 #define MSG_PEEK     0x2
+#define MSG_TRUNC    0x20
 #define MSG_DONTWAIT 0x40
 
 #define IPPROTO_RAW 255
@@ -1696,6 +1698,11 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * with a length of zero, which is the true answer: this stack attaches no
  * ancillary data to anything.
  *
+ * A datagram longer than the buffers is cut, and `msg_flags` says so with
+ * MSG_TRUNC; with MSG_TRUNC in `flags` the call answers the datagram's whole
+ * length, which netlink's programs, iproute2's ip among them, ask with
+ * MSG_PEEK and no buffer before they read a message.
+ *
  * The sender is reported through `msg_name`: a `sockaddr_in` for an AF_INET
  * socket, and for a packet socket the `sockaddr_ll` the frame came from, with
  * the sender's hardware address and who the frame was addressed to.
@@ -1711,6 +1718,7 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     uint16_t src_port = 0;
     uint32_t i;
     int32_t taken;
+    int32_t whole = 0;
 
     if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
         return -EFAULT;
@@ -1768,7 +1776,8 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         return -EAGAIN;
     }
 
-    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port, (flags & MSG_PEEK) != 0);
+    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port, (flags & MSG_PEEK) != 0,
+                        &whole);
     if (taken < 0) {
         return taken;
     }
@@ -1803,11 +1812,11 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
        sender to report. */
     SC_WLE32(hdr + MSGHDR_NAMELEN, name_ptr ? addr_len : 0u);
     SC_WLE32(hdr + MSGHDR_CONTROLLEN, 0);
-    SC_WLE32(hdr + MSGHDR_FLAGS, 0);
+    SC_WLE32(hdr + MSGHDR_FLAGS, whole > taken ? (uint32_t)MSG_TRUNC : 0u);
     if (copy_to_user((void __user *)msg_ptr, hdr, MSGHDR_LEN) != 0) {
         return -EFAULT;
     }
-    return taken;
+    return (flags & MSG_TRUNC) ? whole : taken;
 }
 
 /**

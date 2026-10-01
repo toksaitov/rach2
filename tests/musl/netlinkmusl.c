@@ -11,9 +11,13 @@
  * name, every address is the one SIOCGIFADDR gives for its interface, and
  * every interface with an address has a route to its subnet. RTM_GETLINK of
  * the first link's index answers with that link alone, of no link with
- * ENODEV, and RTM_NEWADDR, a change, with EOPNOTSUPP. if_nametoindex, which
- * asks an AF_UNIX socket, finds the first link, and SIOCGIFCONF lists the
- * interfaces with an address.
+ * ENODEV, and RTM_NEWADDR, a change, with EOPNOTSUPP. A dump request with
+ * zeros after it in its buffer is answered, as iproute2's ip sends one, and
+ * recvmsg with MSG_PEEK and MSG_TRUNC and no buffer gives an answer's
+ * length, as ip asks it, and a read into a shorter buffer is cut and says so
+ * with MSG_TRUNC in msg_flags. if_nametoindex, which asks an AF_UNIX socket,
+ * finds the first link, and SIOCGIFCONF lists the interfaces with an
+ * address.
  *
  * Prints "NETLINKMUSL OK" on success and "NETLINKMUSL FAIL (detail)"
  * otherwise.
@@ -357,6 +361,75 @@ static int requests(int fd)
     return 0;
 }
 
+/* A dump request sent in a buffer longer than it, as iproute2's ip sends
+ * RTM_GETROUTE: the zeros after it are no message, and the dump is answered
+ * to its NLMSG_DONE. */
+static int padded(int fd)
+{
+    union {
+        struct nlmsghdr h;
+        char bytes[NLMSG_LENGTH(sizeof(struct rtgenmsg)) + 128];
+    } req;
+    struct rtgenmsg *g = NLMSG_DATA(&req.h);
+    char buf[8192] __attribute__((aligned(4)));
+    struct nlmsghdr *h;
+    int n, routes = 0;
+
+    memset(req.bytes, 0, sizeof req.bytes);
+    req.h.nlmsg_len = NLMSG_LENGTH(sizeof *g);
+    req.h.nlmsg_type = RTM_GETROUTE;
+    req.h.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    req.h.nlmsg_seq = 8;
+    g->rtgen_family = AF_INET;
+    if (send(fd, req.bytes, sizeof req.bytes, 0) != (ssize_t)sizeof req.bytes) {
+        return fail("a dump request with zeros after it was refused");
+    }
+    for (;;) {
+        n = (int)recv(fd, buf, sizeof buf, 0);
+        if (n <= 0) {
+            return fail("the dump of a request with zeros after it");
+        }
+        for (h = (struct nlmsghdr *)buf; NLMSG_OK(h, n); h = NLMSG_NEXT(h, n)) {
+            if (h->nlmsg_type == NLMSG_DONE) {
+                return routes > 0 ? 0 : fail("the dump of a request with zeros after it");
+            }
+            routes += h->nlmsg_type == RTM_NEWROUTE && h->nlmsg_seq == 8;
+        }
+    }
+}
+
+/* The length of an answer before it is read, and an answer cut short. */
+static int truncation(int fd)
+{
+    struct ifinfomsg ifi;
+    struct msghdr msg;
+    struct iovec iov;
+    char buf[16];
+    ssize_t whole, n;
+
+    memset(&ifi, 0, sizeof ifi);
+    ifi.ifi_index = first_index;
+    if (request(fd, RTM_GETLINK, 0, 7, &ifi, sizeof ifi) != 0) {
+        return fail("RTM_GETLINK for the length of its answer");
+    }
+    memset(&msg, 0, sizeof msg);
+    iov.iov_base = NULL;
+    iov.iov_len = 0;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    whole = recvmsg(fd, &msg, MSG_PEEK | MSG_TRUNC);
+    if (whole <= (ssize_t)sizeof buf) {
+        return fail("MSG_PEEK and MSG_TRUNC did not give the answer's length");
+    }
+    iov.iov_base = buf;
+    iov.iov_len = sizeof buf;
+    n = recvmsg(fd, &msg, 0);
+    if (n != (ssize_t)sizeof buf || !(msg.msg_flags & MSG_TRUNC)) {
+        return fail("an answer longer than the buffer was not cut with MSG_TRUNC");
+    }
+    return 0;
+}
+
 static int interfaces(void)
 {
     struct ifconf ifc;
@@ -412,7 +485,8 @@ int main(void)
 {
     int fd;
 
-    if (route_socket(&fd) || requests(fd) || interfaces() || uevents()) {
+    if (route_socket(&fd) || requests(fd) || padded(fd) || truncation(fd) || interfaces() ||
+        uevents()) {
         return 1;
     }
     close(fd);

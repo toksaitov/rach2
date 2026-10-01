@@ -4823,6 +4823,43 @@ new
     if (seconds < 0 || nanoseconds < 0 || nanoseconds > 999999999) {
 end
 
+# recvmsg's MSG_TRUNC, which iproute2's ip reads netlink's answers with.
+
+fault recvmsg-trunc-length
+probe netlinkmusl
+file rach2/sys/syscall_net.c
+expect NETLINKMUSL FAIL (MSG_PEEK and MSG_TRUNC did not give the answer's length
+old
+    return (flags & MSG_TRUNC) ? whole : taken;
+new
+    return taken;
+end
+
+fault recvmsg-trunc-flag
+probe netlinkmusl
+file rach2/sys/syscall_net.c
+expect NETLINKMUSL FAIL (an answer longer than the buffer was not cut with MSG_TRUNC
+old
+    SC_WLE32(hdr + MSGHDR_FLAGS, whole > taken ? (uint32_t)MSG_TRUNC : 0u);
+new
+    SC_WLE32(hdr + MSGHDR_FLAGS, 0u);
+end
+
+fault netlink-padding-refused
+probe netlinkmusl
+file rach2/sys/network/socket/netlink.c
+expect NETLINKMUSL FAIL (a dump request with zeros after it was refused
+old
+        if (mlen < NLMSG_HDRLEN || mlen > len - at) {
+            break;
+        }
+new
+        if (mlen < NLMSG_HDRLEN || mlen > len - at) {
+            kfree(b);
+            return -EINVAL;
+        }
+end
+
 # splice, tee and sendfile, which answer EINVAL.
 
 fault splice-missing

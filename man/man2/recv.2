@@ -54,11 +54,22 @@ A signal may interrupt a wait with
 copies what the receive would take and leaves it for the next receive:
 the bytes at the front of a stream, which do not change the window the
 connection offers, or the waiting datagram whole, with its sender.
+On a datagram socket,
+.Fn recvmsg
+with
+.Dv MSG_TRUNC
+returns the datagram's whole length, even when its buffers took less, as
+Linux does; netlink's programs ask it with
+.Dv MSG_PEEK
+and no buffer to learn how large a buffer to give.
 Other flag bits are ignored:
 .Dv MSG_WAITALL
 does not wait to fill the buffer, and
-.Dv MSG_TRUNC
-does not request the original message length.
+.Fn recv
+and
+.Fn recvfrom
+do not take
+.Dv MSG_TRUNC .
 On an
 .Dv AF_UNIX
 socket these flags behave as in Linux, and
@@ -184,7 +195,9 @@ is unused and
 .Fa msg Ns ->msg_controllen
 is set to zero, and
 .Fa msg Ns ->msg_flags
-is set to zero, even when data is truncated.
+is
+.Dv MSG_TRUNC
+when the datagram was longer than the buffers and zero otherwise.
 .Ss Kernel interface
 These operations use
 .Xr socketcall 2
