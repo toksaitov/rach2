@@ -270,6 +270,10 @@ uintptr_t paging_virt_to_phys(uintptr_t va);
  * page is not present. */
 uintptr_t paging_user_phys(page_dir_t *dir, uint32_t va);
 
+/** Whether `dir` has the user page at `va`: 0 when it is not present, 1 when
+ * it is and has not been written since it was mapped, 2 when it has. */
+int paging_user_state(page_dir_t *dir, uint32_t va);
+
 struct mm;
 
 /**

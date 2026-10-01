@@ -820,6 +820,42 @@ static void rtc_rows(void)
     syscall1(SYS_CLOSE, fd);
 }
 
+/* An anonymous private mapping of `len` bytes, read and write, by mmap2,
+   whose sixth argument goes in ebp. */
+static unsigned int map_anonymous(int len)
+{
+    int ret;
+
+    __asm__ volatile("push %%ebp\n\tmov $0, %%ebp\n\tint $0x80\n\tpop %%ebp"
+                     : "=a"(ret)
+                     : "a"(192), "b"(0), "c"(len), "d"(3), "S"(0x22), "D"(-1)
+                     : "memory");
+    return (unsigned int)ret;
+}
+
+/* /proc/self/smaps as BusyBox's pmap reads it: each region's maps line and
+   Linux's sizes for it. A region with no path ends its maps line at the
+   space after the inode, as on Linux, where pmap looks for that space. */
+static void smaps_rows(void)
+{
+    static char maps[4096];
+    int m, n, i, first = 0;
+
+    check(map_anonymous(4096) < 0xfffff000u, "an anonymous page is mapped");
+    m = slurp("/proc/self/maps", maps, (int)sizeof(maps));
+    check(contains(maps, m, " 00:00 0 \n"),
+          "and its maps line ends with the space after the inode");
+    n = slurp("/proc/self/smaps", buf, (int)sizeof(buf));
+    while (first < m && maps[first] != '\n') {
+        first++;
+    }
+    for (i = 0; i <= first && i < n && buf[i] == maps[i]; i++) {
+    }
+    check(m > 0 && i == first + 1, "smaps begins with the first region's maps line");
+    check(contains(buf, n, "\nRss:") && contains(buf, n, "\nVmFlags:"),
+          "and gives its sizes and flags");
+}
+
 /* The counts `ss -s` reads, by the names Linux gives them, with a listener
    open. */
 static void count_rows(void)
@@ -1281,6 +1317,7 @@ void probe_main(unsigned int *sp)
     dgram_and_local_rows();
     sys_rows();
     rtc_rows();
+    smaps_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
      * here, because one process cannot hold that many descriptors, and the file

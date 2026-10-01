@@ -733,6 +733,27 @@ for a shared one, and from column 73 the file the region maps,
 .Ql [stack] ,
 or the program for the segments of its image.
 The device and inode are not kept and read 0.
+A region with no path ends at the space after the inode, as on Linux.
+.It Pa /proc/PID/smaps
+Each region's
+.Pa maps
+line, followed by lines of a name, a colon and a size in kilobytes, as
+Linux writes them: Size, KernelPageSize and MMUPageSize, Rss, Pss,
+Shared_Clean, Shared_Dirty, Private_Clean, Private_Dirty, Referenced,
+Anonymous, Swap, SwapPss and Locked, and a VmFlags line of
+.Ql rd ,
+.Ql wr ,
+.Ql ex ,
+.Ql sh
+and
+.Ql gd .
+Rss counts the region's pages in memory, clean or dirty by the page
+table's dirty bit and shared only in a shared region.
+The kernel does not count the processes that map a page, so Pss is Rss.
+Swap, SwapPss and Locked read 0.
+BusyBox's
+.Xr pmap 1
+and smemcap read it.
 .It Pa /proc/PID/status
 Lines of a name, a colon, a tab and a value:
 Name, Umask, State, Tgid, Pid, PPid, TracerPid, Uid and Gid (real,

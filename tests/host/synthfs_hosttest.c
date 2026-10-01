@@ -158,6 +158,8 @@ int main(void)
           vp.procfile == SYNTH_PROC_STATUS && vp.pid == 5);
     CHECK(synth_classify("proc/5/statm", &vp) == VNODE_PROC_FILE &&
           vp.procfile == SYNTH_PROC_STATM);
+    CHECK(synth_classify("proc/5/smaps", &vp) == VNODE_PROC_FILE &&
+          vp.procfile == SYNTH_PROC_SMAPS);
     CHECK(synth_classify("proc/5/auxv", &vp) == VNODE_PROC_FILE && vp.procfile == SYNTH_PROC_AUXV);
     CHECK(synth_classify("proc/5/environ", &vp) == VNODE_PROC_FILE &&
           vp.procfile == SYNTH_PROC_ENVIRON);

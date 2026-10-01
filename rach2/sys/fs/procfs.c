@@ -777,11 +777,39 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
     return NULL;
 }
 
+/** Append region `r` of `mm` as its line of /proc/<pid>/maps. */
+static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t *r)
+{
+    const char *path = maps_path(mm, r);
+    int start = t->len;
+
+    ap_xlow(t, r->start, 8);
+    ap_ch(t, '-');
+    ap_xlow(t, r->end, 8);
+    ap_ch(t, ' ');
+    ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
+    ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
+    ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
+    ap_ch(t, r->type == VM_SHARED ? 's' : 'p');
+    ap_ch(t, ' ');
+    ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
+    ap_str(t, " 00:00 0 ");
+    if (path) {
+        do {
+            ap_ch(t, ' ');
+        } while (t->len - start < 73 && !t->nomem);
+        ap_str(t, path);
+    }
+    ap_ch(t, '\n');
+}
+
 /**
  * /proc/<pid>/maps: a line for each region, in Linux's form: the range, the
  * rights with p or s for private or shared, the offset in the file, a device
- * and inode of 0, which the kernel does not keep, and the path from column
- * 73. GNU libc's pthread_getattr_np finds the stack by its [stack] line.
+ * and inode of 0, which the kernel does not keep, a space, and the path from
+ * column 73. A region with no path ends at that space, as on Linux, where
+ * BusyBox's pmap counts on it to find the end of the fields. GNU libc's
+ * pthread_getattr_np finds the stack by its [stack] line.
  */
 static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
@@ -794,27 +822,86 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
     }
     mm = p->mm;
     for (i = 0; mm && i < mm->vm.count; i++) {
-        const vma_t *r = &mm->vm.vmas[i];
-        const char *path = maps_path(mm, r);
-        int start = t->len;
+        ap_maps_line(t, mm, &mm->vm.vmas[i]);
+    }
+    return t->len;
+}
 
-        ap_xlow(t, r->start, 8);
-        ap_ch(t, '-');
-        ap_xlow(t, r->end, 8);
+/** Append one field of /proc/<pid>/smaps: `name` padded to 16 places, then
+ * the kilobytes of `pages` in eight and " kB", as Linux writes them. */
+static void ap_smaps_kb(struct procfs_text *t, const char *name, uint32_t pages)
+{
+    uint32_t kb = pages * (PAGE_SIZE / 1024u);
+    uint32_t w = 1;
+    uint32_t v;
+    int start = t->len;
+
+    ap_str(t, name);
+    while (t->len - start < 16 && !t->nomem) {
         ap_ch(t, ' ');
-        ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
-        ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
-        ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
-        ap_ch(t, r->type == VM_SHARED ? 's' : 'p');
+    }
+    for (v = kb; v >= 10u; v /= 10u) {
+        w++;
+    }
+    while (w++ < 8u) {
         ap_ch(t, ' ');
-        ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
-        ap_str(t, " 00:00 0");
-        if (path) {
-            do {
-                ap_ch(t, ' ');
-            } while (t->len - start < 73 && !t->nomem);
-            ap_str(t, path);
+    }
+    ap_u32(t, kb);
+    ap_str(t, " kB\n");
+}
+
+/**
+ * /proc/<pid>/smaps: each region's maps line and Linux's fields for it, which
+ * BusyBox's pmap and smemcap read. The pages in memory are the present pages
+ * of the region's page tables, clean or dirty by the entry's dirty bit, and
+ * shared or private by the region's type. The kernel does not count the
+ * processes that map a page, so Pss is Rss, a page another process also maps
+ * being counted whole to each; there is no swap, no huge page and no locking,
+ * so those fields are 0.
+ */
+static int procfs_gen_smaps(struct procfs_text *t, int pid)
+{
+    process_t *p = procfs_proc(pid);
+    const struct mm *mm;
+    uint32_t i;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    mm = p->mm;
+    for (i = 0; mm && i < mm->vm.count; i++) {
+        const vma_t *r = &mm->vm.vmas[i];
+        uint32_t clean = 0, dirty = 0;
+        uint32_t a;
+        int shared = r->type == VM_SHARED;
+
+        for (a = r->start; a < r->end; a += PAGE_SIZE) {
+            int state = paging_user_state(mm->dir, a);
+
+            clean += state == 1;
+            dirty += state == 2;
         }
+        ap_maps_line(t, mm, r);
+        ap_smaps_kb(t, "Size:", (r->end - r->start) / PAGE_SIZE);
+        ap_smaps_kb(t, "KernelPageSize:", 1);
+        ap_smaps_kb(t, "MMUPageSize:", 1);
+        ap_smaps_kb(t, "Rss:", clean + dirty);
+        ap_smaps_kb(t, "Pss:", clean + dirty);
+        ap_smaps_kb(t, "Shared_Clean:", shared ? clean : 0);
+        ap_smaps_kb(t, "Shared_Dirty:", shared ? dirty : 0);
+        ap_smaps_kb(t, "Private_Clean:", shared ? 0 : clean);
+        ap_smaps_kb(t, "Private_Dirty:", shared ? 0 : dirty);
+        ap_smaps_kb(t, "Referenced:", clean + dirty);
+        ap_smaps_kb(t, "Anonymous:", r->file ? 0 : clean + dirty);
+        ap_smaps_kb(t, "Swap:", 0);
+        ap_smaps_kb(t, "SwapPss:", 0);
+        ap_smaps_kb(t, "Locked:", 0);
+        ap_str(t, "VmFlags:");
+        ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
+        ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
+        ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
+        ap_str(t, shared ? " sh" : "");
+        ap_str(t, r->type == VM_STACK ? " gd" : "");
         ap_ch(t, '\n');
     }
     return t->len;
@@ -1045,6 +1132,8 @@ static const char *procfs_pid_file_name(int kind)
         return "cmdline";
     case SYNTH_PROC_MAPS:
         return "maps";
+    case SYNTH_PROC_SMAPS:
+        return "smaps";
     case SYNTH_PROC_STATUS:
         return "status";
     case SYNTH_PROC_STATM:
@@ -3234,6 +3323,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_stat(&text, pid, vp->tid == 0);
     } else if (vp->procfile == SYNTH_PROC_MAPS) {
         len = procfs_gen_maps(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_SMAPS) {
+        len = procfs_gen_smaps(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_STATUS) {
         len = procfs_gen_status(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_STATM) {

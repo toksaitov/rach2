@@ -166,10 +166,11 @@ Send a signal through
 to processes selected by the regular expression
 .Ar PATTERN .
 .It Nm pmap
-Display process memory usage.
-Rach2 has no
-.Pa /proc/PID/smaps ,
-so no mapping is reported.
+Display process memory usage, from
+.Pa /proc/PID/smaps
+.Pq see Xr proc 5 .
+The PSS column equals the resident size, since the kernel does not count
+the processes that map a page.
 .It Nm powertop
 Analyze power consumption on Intel laptops.
 Rach2 has none of the power-state and timer-statistics files it reads, so

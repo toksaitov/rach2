@@ -100,6 +100,7 @@ enum vnode_kind {
 #define SYNTH_PROC_NETSNMP     35
 /* A device's uevent under /sys, as the origin of its snapshot. */
 #define SYNTH_SYS_UEVENT       36
+#define SYNTH_PROC_SMAPS       37
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */
