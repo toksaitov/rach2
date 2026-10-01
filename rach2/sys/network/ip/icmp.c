@@ -48,10 +48,24 @@
 #include "../../lib/kerrno.h"
 #include "../../proc/sched.h"
 #include "../tcp/tcp.h"
+#include "../driver/netdev.h"
+#include "../udp/udp.h"
 
 /* Outgoing echo reply (sized for a full datagram) and request buffers. */
 static uint8_t icmp_reply_buf[1500];
 static uint8_t icmp_echo_buf[8 + ICMP_PING_DATA_MAX];
+
+/* An error quotes as much of the datagram it answers as fits a datagram of
+ * 576 bytes (RFC 1812, 4.3.2.3), as Linux's does. */
+#define ICMP_QUOTE_MAX (576 - 20 - 8)
+static uint8_t icmp_error_buf[8 + ICMP_QUOTE_MAX];
+
+/* Errors leave at most one a second after a burst of six, Linux's
+ * icmp_ratelimit and XRLIM_BURST_FACTOR, kept here as a credit in ticks. */
+#define ICMP_ERROR_TICKS 100
+#define ICMP_ERROR_BURST (6 * ICMP_ERROR_TICKS)
+static uint32_t icmp_error_credit = ICMP_ERROR_BURST;
+static uint32_t icmp_error_last;
 
 /* Identifier we stamp on our own echo requests. */
 #define ICMP_PING_ID 0x5243 /* 'RC' */
@@ -99,10 +113,84 @@ static void icmp_too_big(const uint8_t *data, uint16_t len)
 void icmp_count_out(uint8_t type)
 {
     net_mib.icmp_out_msgs++;
-    if (type == ICMP_ECHO_REQUEST) {
+    if (type == ICMP_UNREACHABLE) {
+        net_mib.icmp_out_dest_unreachs++;
+    } else if (type == ICMP_ECHO_REQUEST) {
         net_mib.icmp_out_echos++;
     } else if (type == ICMP_ECHO_REPLY) {
         net_mib.icmp_out_echo_reps++;
+    }
+}
+
+/**
+ * Pass a port unreachable to UDP: the datagram it quotes says which of our
+ * ports sent it and to which peer. A quote too short to hold the ports, or of
+ * another protocol, is ignored.
+ */
+static void icmp_refused(const uint8_t *data, uint16_t len)
+{
+    const uint8_t *q = data + 8;
+    uint16_t ihl;
+
+    if (len < 8 + 20) {
+        return;
+    }
+    ihl = (uint16_t)((q[0] & 0x0F) * 4);
+    if (ihl < 20 || len < 8 + ihl + 4 || q[9] != IP_PROTO_UDP) {
+        return;
+    }
+    udp_refused(read16be(q + ihl), read32be(q + 16), read16be(q + ihl + 2));
+}
+
+/**
+ * Whether the rate limit lets an error leave now, taking its credit if so.
+ *
+ * The credit grows by a tick each tick, up to the burst, and an error costs
+ * a second of it. Linux keeps a credit for each peer; this one is the
+ * machine's, so a peer that spends it delays the errors to every other.
+ */
+static int icmp_error_allowed(void)
+{
+    uint32_t credit = icmp_error_credit + (kernel_ticks - icmp_error_last);
+
+    if (credit > ICMP_ERROR_BURST || credit < icmp_error_credit) {
+        credit = ICMP_ERROR_BURST;
+    }
+    icmp_error_last = kernel_ticks;
+    if (credit < ICMP_ERROR_TICKS) {
+        icmp_error_credit = credit;
+        return 0;
+    }
+    icmp_error_credit = credit - ICMP_ERROR_TICKS;
+    return 1;
+}
+
+/**
+ * Send a destination unreachable for `dgram`, quoting its header and as much
+ * of the rest as fits, which `traceroute` reads to match the answer to its
+ * probe and a UDP client to its socket.
+ *
+ * The caller has checked that the datagram was addressed to this machine and
+ * not broadcast. No error goes to a source of 0.0.0.0, a broadcast or a
+ * group, which is no single host, and none past the rate limit.
+ */
+void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
+{
+    uint32_t src = read32be(dgram + 12);
+    uint16_t quote = len < ICMP_QUOTE_MAX ? len : ICMP_QUOTE_MAX;
+
+    if (src == 0 || (src & 0xF0000000u) == 0xE0000000u || netdev_is_broadcast(src) ||
+        !icmp_error_allowed()) {
+        return;
+    }
+    icmp_error_buf[0] = ICMP_UNREACHABLE;
+    icmp_error_buf[1] = code;
+    write16be(icmp_error_buf + 2, 0);
+    write32be(icmp_error_buf + 4, 0);
+    k_memcpy(icmp_error_buf + 8, dgram, quote);
+    write16be(icmp_error_buf + 2, ip_checksum(icmp_error_buf, (uint16_t)(8 + quote)));
+    if (ip_tx(src, IP_PROTO_ICMP, icmp_error_buf, (uint16_t)(8 + quote), IP_TTL_DEFAULT) == 0) {
+        icmp_count_out(ICMP_UNREACHABLE);
     }
 }
 
@@ -145,6 +233,8 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         }
     } else if (data[0] == ICMP_UNREACHABLE && data[1] == ICMP_FRAG_NEEDED && len >= 36) {
         icmp_too_big(data, len);
+    } else if (data[0] == ICMP_UNREACHABLE && data[1] == ICMP_PORT_UNREACH) {
+        icmp_refused(data, len);
     } else if (data[0] == ICMP_ECHO_REPLY) {
         uint16_t id = read16be(data + 4);
         uint16_t seq = read16be(data + 6);

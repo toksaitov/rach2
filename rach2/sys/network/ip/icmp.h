@@ -19,6 +19,7 @@
  * on the way that had DF set, whose bytes 6 and 7 say the link's MTU
  * (RFC 1191). */
 #define ICMP_UNREACHABLE  3
+#define ICMP_PORT_UNREACH 3
 #define ICMP_FRAG_NEEDED  4
 
 /** Handle one received ICMP datagram (IP header already stripped). */
@@ -27,6 +28,11 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
 /** Count an ICMP message of type `type` sent, here or by a raw socket, in
  * `net_mib`. */
 void icmp_count_out(uint8_t type);
+
+/** Answer the datagram `dgram` of `len` bytes, which came to this machine and
+ * which nothing here takes, with a destination unreachable of code `code` to
+ * its source. */
+void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code);
 
 /* The most data an echo request carries: an unfragmented datagram of the
  * 1500-byte MTU less the IP and ICMP headers. */

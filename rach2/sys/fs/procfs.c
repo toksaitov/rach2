@@ -2571,14 +2571,15 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     ap_mib(t, m->ip_out_requests);
     ap_mib(t, m->ip_out_discards);
     ap_mib(t, m->ip_out_no_routes);
-    ap_str(t, "\nIcmp: InMsgs InErrors InDestUnreachs InEchos InEchoReps OutMsgs OutEchos"
-              " OutEchoReps\nIcmp:");
+    ap_str(t, "\nIcmp: InMsgs InErrors InDestUnreachs InEchos InEchoReps OutMsgs"
+              " OutDestUnreachs OutEchos OutEchoReps\nIcmp:");
     ap_mib(t, m->icmp_in_msgs);
     ap_mib(t, m->icmp_in_errors);
     ap_mib(t, m->icmp_in_dest_unreachs);
     ap_mib(t, m->icmp_in_echos);
     ap_mib(t, m->icmp_in_echo_reps);
     ap_mib(t, m->icmp_out_msgs);
+    ap_mib(t, m->icmp_out_dest_unreachs);
     ap_mib(t, m->icmp_out_echos);
     ap_mib(t, m->icmp_out_echo_reps);
     ap_str(t, "\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails"

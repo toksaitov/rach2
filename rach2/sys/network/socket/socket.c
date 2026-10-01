@@ -308,7 +308,7 @@ static int udp_recv_ready(void *arg)
     if (sock->type == SOCK_RAW) {
         return raw_ready(sock);
     }
-    return sock->recv_count != 0;
+    return sock->recv_count != 0 || sock->so_error != 0;
 }
 
 /* Wait predicate: a stream socket has buffered data, saw a FIN (EOF), or its
@@ -323,13 +323,42 @@ static int tcp_recv_ready(void *arg)
     return (tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received || tcb->state == TCP_CLOSED;
 }
 
+int socket_dgram_error(struct socket *sock)
+{
+    uint32_t flags = net_lock();
+    int err = sock->so_error;
+
+    sock->so_error = 0;
+    net_unlock(flags);
+    return -err;
+}
+
+int socket_dgram_nowait(struct socket *sock)
+{
+    int rc = socket_dgram_error(sock);
+
+    if (rc == 0 && socket_dgram_pending(sock) < 0) {
+        rc = -EAGAIN;
+    }
+    return rc;
+}
+
 /**
  * Wait for a datagram to be buffered. Returns 0, or -errno if a signal came
- * first.
+ * first or an error waits, which goes before any datagram, as Linux's
+ * receive reports it first.
  */
 int socket_dgram_wait(struct socket *sock)
 {
-    return wq_wait_event(&sock->waiters, udp_recv_ready, sock);
+    int rc = socket_dgram_error(sock);
+
+    if (rc == 0) {
+        rc = wq_wait_event(&sock->waiters, udp_recv_ready, sock);
+    }
+    if (rc == 0) {
+        rc = socket_dgram_error(sock);
+    }
+    return rc;
 }
 
 /**
@@ -563,6 +592,10 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip
     int copy_len;
     uint32_t flags;
 
+    copy_len = socket_dgram_error(sock);
+    if (copy_len < 0) {
+        return copy_len;
+    }
     flags = net_lock();
     copy_len = socket_dgram_peek(sock, 0, buf, len);
     if (copy_len < 0) {
@@ -952,6 +985,9 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT); /* it can always send */
+        if (sock->so_error != 0) {
+            revents |= POLLERR;
+        }
         return revents;
     }
 

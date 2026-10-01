@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -262,7 +262,8 @@ No message or stream data is available for a nonblocking receive.
 .Fa fd
 is not an open descriptor.
 .It Er ECONNREFUSED
-A stream connection was refused.
+A stream connection was refused, or the peer of a connected datagram socket
+answered an earlier datagram with a port unreachable.
 .It Er ECONNRESET
 A stream connection was reset, or a closed stream with no buffered data,
 no received FIN and no recorded error was read.

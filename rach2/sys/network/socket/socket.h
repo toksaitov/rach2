@@ -74,6 +74,12 @@ typedef struct socket {
     uint16_t remote_port;
     int connected;
 
+    /* The error an ICMP message reported for a connected datagram socket's
+     * peer, ECONNREFUSED for a port unreachable, or 0: the next receive,
+     * send or SO_ERROR reports it once, and poll reports POLLERR while it
+     * waits, as Linux does. */
+    int so_error;
+
     /* The three options a program really sets on a socket here. `broadcast` is
      * required before a datagram may go to a broadcast address, because a
      * program that broadcasts by accident wakes every machine on the wire.
@@ -213,8 +219,16 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip
  * itself as well, which nests safely.
  */
 
-/** Wait for a datagram. Returns 0, or a negative errno (-EINTR on a signal). */
+/** Wait for a datagram. Returns 0, or a negative errno: -EINTR on a signal,
+ * or the socket's pending error, which this takes. */
 int socket_dgram_wait(struct socket *sock);
+
+/** Take the socket's pending error: its negative errno, or 0 for none. */
+int socket_dgram_error(struct socket *sock);
+
+/** For a receive that does not wait: the pending error, which this takes,
+ * else -EAGAIN when no datagram waits, else 0. */
+int socket_dgram_nowait(struct socket *sock);
 
 /** Bytes in the waiting datagram, or -1 when the slot is empty. */
 int socket_dgram_pending(struct socket *sock);

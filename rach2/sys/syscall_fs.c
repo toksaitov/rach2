@@ -4270,8 +4270,9 @@ int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *
 
     nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     if (nonblock) {
-        if (socket_dgram_pending(entry->sock) < 0) {
-            return -EAGAIN;
+        taken = socket_dgram_nowait(entry->sock);
+        if (taken < 0) {
+            return taken;
         }
     } else {
         int rc = socket_dgram_wait(entry->sock);

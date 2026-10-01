@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd October 2, 2026
 .Dt SEND 2
 .Os
 .Sh NAME
@@ -208,7 +208,9 @@ port could not be assigned.
 .Fa fd
 is not an open descriptor.
 .It Bq Er ECONNREFUSED
-A pending TCP error reports that the connection was refused.
+A pending TCP error reports that the connection was refused, or the peer of
+a connected datagram socket answered an earlier datagram with a port
+unreachable.
 .It Bq Er ECONNRESET
 A pending TCP error reports that the connection was reset.
 .It Bq Er EDESTADDRREQ

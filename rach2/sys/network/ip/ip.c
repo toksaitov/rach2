@@ -170,7 +170,9 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         break;
     case IP_PROTO_UDP:
         net_mib.ip_in_delivers++;
-        udp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len));
+        if (udp_rx(src_ip, data + hdr_len, (uint16_t)(total_len - hdr_len)) != 0 && !to_broadcast) {
+            icmp_unreachable(data, total_len, ICMP_PORT_UNREACH);
+        }
         break;
     case IP_PROTO_TCP:
         net_mib.ip_in_delivers++;

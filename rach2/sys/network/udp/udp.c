@@ -174,14 +174,16 @@ void udp_unbind(struct socket *sock)
  *
  * @param data the UDP header followed by its payload.
  * @param len  bytes actually received, the upper bound on the wire length.
+ * @return -1 when no socket has the port, which `ip_rx` answers with a port
+ *         unreachable, and 0 otherwise, a malformed datagram included.
  */
-void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
+int udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t dst_port, udp_len, payload_len;
 
     if (len < UDP_HDR_SIZE) {
         net_mib.udp_in_errors++;
-        return;
+        return 0;
     }
 
     dst_port = read16be(data + 2);
@@ -189,7 +191,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 
     if (udp_len < UDP_HDR_SIZE || udp_len > len) {
         net_mib.udp_in_errors++;
-        return;
+        return 0;
     }
     payload_len = (uint16_t)(udp_len - UDP_HDR_SIZE);
 
@@ -208,7 +210,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
                 if (cand->remote_ip == src_ip && cand->remote_port == src_port) {
                     net_mib.udp_in_datagrams++;
                     socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
-                    return;
+                    return 0;
                 }
                 continue;
             }
@@ -216,11 +218,33 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
                 listener = cand;
             }
         }
-        if (listener) {
-            net_mib.udp_in_datagrams++;
-            socket_udp_deliver(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
-        } else {
+        if (!listener) {
             net_mib.udp_no_ports++;
+            return -1;
+        }
+        net_mib.udp_in_datagrams++;
+        socket_udp_deliver(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
+    }
+    return 0;
+}
+
+/**
+ * Report a port unreachable from `remote_ip` for a datagram sent from
+ * `local_port` to `remote_port`: a socket connected to that peer takes
+ * ECONNREFUSED as its pending error and its waiters wake. An unconnected
+ * socket is not told, as Linux tells none without IP_RECVERR.
+ */
+void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
+{
+    const udp_binding_t *b;
+
+    for (b = bindings; b; b = b->next) {
+        struct socket *s = b->sock;
+
+        if (b->port == local_port && s && s->connected && s->remote_ip == remote_ip &&
+            s->remote_port == remote_port) {
+            s->so_error = ECONNREFUSED;
+            wq_wake(&s->waiters, WQ_DATA);
         }
     }
 }

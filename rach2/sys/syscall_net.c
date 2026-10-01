@@ -193,8 +193,11 @@ static uint32_t canonical_dst_ip(uint32_t ip)
 int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len)
 {
-    int r;
+    int r = socket_dgram_error(sock);
 
+    if (r < 0) {
+        return r;
+    }
     if (!sock->broadcast && netconf_is_broadcast(dst_ip)) {
         return -EACCES;
     }
@@ -1631,6 +1634,9 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
         if (entry->sock->tcb) {
             val = (int)entry->sock->tcb->so_error;
             entry->sock->tcb->so_error = 0;
+        } else {
+            val = entry->sock->so_error;
+            entry->sock->so_error = 0;
         }
         net_unlock(flags);
     } else if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
@@ -1797,8 +1803,8 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
         }
     }
 
-    if ((flags & MSG_DONTWAIT) && socket_dgram_pending(entry->sock) < 0) {
-        return -EAGAIN;
+    if ((flags & MSG_DONTWAIT) && (taken = socket_dgram_nowait(entry->sock)) < 0) {
+        return taken;
     }
 
     taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port, (flags & MSG_PEEK) != 0,

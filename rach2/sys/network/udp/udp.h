@@ -14,8 +14,13 @@
 
 struct socket;
 
-/** Receive and dispatch a UDP datagram to its bound socket. */
-void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
+/** Receive and dispatch a UDP datagram to its bound socket: 0, or -1 when
+ * no socket has its port, for `ip_rx` to answer. */
+int udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
+
+/** Give ECONNREFUSED to the socket on `local_port` connected to
+ * `remote_ip`:`remote_port`, which answered with a port unreachable. */
+void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
 
 /**
  * Build and send a UDP datagram with hop limit `ttl`.

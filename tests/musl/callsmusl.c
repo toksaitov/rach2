@@ -13,7 +13,9 @@
  * the controlling terminal with the child's group in the foreground, the
  * Linux rule BusyBox's telnetd depends on. getrusage reports the memory a
  * process has touched as ru_maxrss in kilobytes, and wait4 that of a child
- * that touched more, as GNU time reads them.
+ * that touched more, as GNU time reads them. A UDP socket connected to a
+ * local port no socket has polls POLLERR once the port unreachable comes
+ * back, and its next receive is ECONNREFUSED, as glibc's resolver expects.
  * mlock, munlock, mlockall and munlockall accept a mapped range and refuse a
  * gap with ENOMEM; mincore reports a touched page resident.
  * getcpu reports CPU 0, and personality keeps and returns its value.
@@ -39,8 +41,11 @@
  */
 
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <stdint.h>
@@ -102,6 +107,33 @@ static int peaks(void)
         return fail("wait4 did not report the child's 12 MiB as ru_maxrss");
     }
     free(mine);
+    return 0;
+}
+
+/* A datagram to a closed port, answered with a port unreachable. */
+static int refusals(void)
+{
+    struct sockaddr_in a;
+    struct pollfd p;
+    char c;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons(47);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a) != 0 || send(fd, "x", 1, 0) != 1) {
+        return fail("a UDP socket connected to a closed local port");
+    }
+    p.fd = fd;
+    p.events = POLLIN;
+    if (poll(&p, 1, 3000) != 1 || !(p.revents & POLLERR)) {
+        return fail("poll did not report the port unreachable as POLLERR");
+    }
+    if (recv(fd, &c, 1, 0) != -1 || errno != ECONNREFUSED) {
+        return fail("the receive after a port unreachable was not ECONNREFUSED");
+    }
+    close(fd);
     return 0;
 }
 
@@ -454,7 +486,7 @@ static int reserves(void)
 int main(void)
 {
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts() || advises() || terminals() || peaks()) {
+        reserves() || adjusts() || advises() || terminals() || peaks() || refusals()) {
         return 1;
     }
     printf("CALLSMUSL OK\n");

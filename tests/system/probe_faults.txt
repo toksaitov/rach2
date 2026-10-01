@@ -5133,3 +5133,13 @@ old
     net_mib.tcp_active_opens++;
 new
 end
+
+fault udp-refusal-untold
+probe callsmusl
+file rach2/sys/network/udp/udp.c
+expect CALLSMUSL FAIL (poll did not report the port unreachable as POLLERR
+old
+            s->so_error = ECONNREFUSED;
+new
+            s->so_error = 0;
+end

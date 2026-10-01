@@ -75,6 +75,13 @@ void icmp_rx(uint32_t src, const uint8_t *data, uint16_t len)
     to_icmp++;
 }
 
+void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
+{
+    (void)dgram;
+    (void)len;
+    (void)code;
+}
+
 /* The first two bytes and the length of each UDP payload, in the order they
  * were delivered; the loopback row writes a datagram's number in those
  * bytes. */
@@ -83,7 +90,7 @@ static struct {
     uint16_t number, len;
 } udp_seen[UDP_SEEN_MAX];
 
-void udp_rx(uint32_t src, const uint8_t *data, uint16_t len)
+int udp_rx(uint32_t src, const uint8_t *data, uint16_t len)
 {
     (void)src;
     if (to_udp < UDP_SEEN_MAX) {
@@ -91,6 +98,7 @@ void udp_rx(uint32_t src, const uint8_t *data, uint16_t len)
         udp_seen[to_udp].len = len;
     }
     to_udp++;
+    return 0;
 }
 
 void tcp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)

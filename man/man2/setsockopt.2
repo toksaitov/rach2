@@ -1,4 +1,4 @@
-.Dd September 19, 2026
+.Dd October 2, 2026
 .Dt SETSOCKOPT 2
 .Os
 .Sh NAME
@@ -56,9 +56,11 @@ address.
 Get the socket's actual type.
 Setting it succeeds without changing the type.
 .It Dv SO_ERROR
-Get and clear the pending TCP connection error.
-The result is zero when no error is pending or no TCP connection
-record is attached.
+Get and clear the pending error: a TCP connection's, or a connected
+datagram socket's
+.Er ECONNREFUSED
+from a port unreachable.
+The result is zero when no error is pending.
 The error is cleared before output pointers are checked, so a failed
 copy can consume it.
 Setting this option has no effect.

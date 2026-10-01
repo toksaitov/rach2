@@ -1,4 +1,4 @@
-.Dd September 25, 2026
+.Dd October 2, 2026
 .Dt CONNECT 2
 .Os
 .Sh NAME
@@ -106,6 +106,17 @@ datagrams to that peer.
 There is no handshake or wait.
 An unbound socket acquires an ephemeral local port.
 Another connect replaces the peer.
+When the peer answers a datagram with an ICMP port unreachable, the socket
+keeps
+.Er ECONNREFUSED
+as its pending error:
+.Xr poll 2
+reports
+.Dv POLLERR ,
+and the next receive, send or read of
+.Dv SO_ERROR
+returns it once, as on Linux.
+An unconnected socket is not told.
 .Pp
 An address with family
 .Dv AF_UNSPEC

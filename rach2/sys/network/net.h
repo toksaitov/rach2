@@ -69,6 +69,7 @@ struct net_mib {
     uint32_t icmp_in_echos;
     uint32_t icmp_in_echo_reps;
     uint32_t icmp_out_msgs;
+    uint32_t icmp_out_dest_unreachs;
     uint32_t icmp_out_echos;
     uint32_t icmp_out_echo_reps;
     uint32_t tcp_active_opens;  /* a connect's SYN */
