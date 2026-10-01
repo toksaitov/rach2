@@ -248,6 +248,38 @@ row_xz() {
     has "the version" "$(xz --version | head -n 1)" "5.8.4"
 }
 
+# file names a program, a text and a gzip file from the magic database, and
+# looks into the gzip file with -z.
+row_file() {
+    printf 'plain text\n' > "$WORK/t.txt"
+    gzip -c "$WORK/t.txt" > "$WORK/t.gz"
+    output "file" file -L /bin/bash "$WORK/t.txt" "$WORK/t.gz"
+    has "the program" "$OUT" "ELF 32-bit LSB"
+    has "the text" "$OUT" "t.txt: ASCII text"
+    has "the gzip file" "$OUT" "gzip compressed data"
+    output "file -z" file -bz "$WORK/t.gz"
+    has "the text inside" "$OUT" "ASCII text"
+    output "file --mime-type" file -bL --mime-type /bin/bash
+    has "the program's type" "$OUT" "application/x-"
+}
+
+# An autoconf package built on the machine as a user builds one: GNU sed's
+# configure, which takes the build's name from the root's site file, since
+# config.guess knows no system called Rach2, then make, and the sed it made.
+row_autotools() {
+    runs "the tarball" tar -xJf /tmp/gnu/sed.tar.xz -C "$WORK"
+    cd "$WORK"/sed-* || {
+        fail "no sed directory"
+        return
+    }
+    output "configure" ./configure
+    has "the site file" "$OUT" "loading site script"
+    runs "make" make -j2
+    output "the sed made" ./sed/sed --version
+    has "its version" "$OUT" "(GNU sed)"
+    same "a substitution" "$(echo hello | ./sed/sed 's/l/L/g')" "heLLo"
+}
+
 # GNU make over a project of two objects and a pattern rule, run twice.
 row_make() {
     mkdir -p "$WORK/p"
