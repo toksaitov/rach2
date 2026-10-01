@@ -653,8 +653,8 @@ tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order t
 
 tests/pollprobe.c:_start lines 129 a probe, one sequence of steps in the order the log records them
 
-tests/procprobe.c:probe_main complexity 68 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 512 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main complexity 69 a probe, one sequence of steps in the order the log records them
+tests/procprobe.c:probe_main lines 516 a probe, one sequence of steps in the order the log records them
 
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 168 a probe, one sequence of steps in the order the log records them
