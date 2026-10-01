@@ -1373,7 +1373,7 @@ else
 fi
 
 # Repeat the root-write stop with the newest archive in slot A.
-mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config-a/keys 2>/dev/null || true
+mmd -D s -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config-a/keys 2>/dev/null || true
 mmd -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config-a/keys/2999 ||
     { bad "the orphan directory could not be replanted for row 16"; exit 1; }
 mcopy -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/orphan-key" ::rach2-config-a/keys/2999/authorized_keys ||
