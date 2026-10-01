@@ -112,11 +112,14 @@ one or one in flight on a socket included, or while it is a process's
 working directory, and the refusal comes before the check for
 emptiness: KRFFS keeps no node for such a holder, and a freed directory's
 place would go to the next node made while the holder still refers to it.
-ext2, FAT32 and exFAT refuse a directory a descriptor or a working
+FAT32 and exFAT refuse a directory a descriptor or a working
 directory refers to, after the check for emptiness.
-tmpfs removes such a directory, as Linux does, and leaves its
+ext2 and tmpfs remove such a directory, as Linux does, and leave its
 descriptors and working directories on an empty directory that takes no
-new entry; POSIX permits either answer.
+new entry; ext2 lists it as
+.Er ENOENT
+and frees its inode when the last of them lets go.
+POSIX permits either answer.
 .Pp
 Relative paths are resolved from the current working directory.
 Both calls require search permission on ancestor directories and
@@ -176,6 +179,7 @@ and checks that
 .Pa /ids/cb
 is refused with
 .Er EINVAL .
+On the KRFFS boot root,
 .Pa tests/fdstale.c
 holds a directory by a descriptor opened for reading, then by one opened
 with
@@ -199,9 +203,9 @@ that is not open.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted, or
 .Fn rmdir
-selected the root, a mount point, a process's root directory, or a
-directory in use: one a descriptor refers to, or on the file systems
-that count them, a process's working directory.
+selected the root, a mount point, a process's root directory, or on
+KRFFS, FAT32 or exFAT a directory in use: one a descriptor refers to, or
+a process's working directory.
 .It Bq Er EEXIST
 The name passed to
 .Fn mkdir

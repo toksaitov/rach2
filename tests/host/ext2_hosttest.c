@@ -2488,6 +2488,37 @@ static void default_mount_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "and the volume unmounts clean");
 }
 
+/**
+ * An rmdir of a directory a holder has: the name goes at once, a listing of
+ * the directory and a directory made in it are -ENOENT, and the inode goes
+ * at the last put, leaving the volume clean.
+ */
+static void held_rmdir_row(void)
+{
+    struct vfs_dirent ent;
+    uint32_t cursor = 0;
+    int err;
+    void *d, *gone;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the held directory's volume mounts writable");
+    d = OPS->mkdir(&mnt, mnt.root, "held", 0755) == 0 ? walk("/held", &err) : 0;
+    check(d != 0, "a directory, made and held");
+    if (!d) {
+        return;
+    }
+    check(OPS->rmdir(&mnt, mnt.root, "held") == 0, "an rmdir of the held directory succeeds");
+    gone = walk("/held", &err);
+    check(!gone && err == -ENOENT, "and its name is gone");
+    check(OPS->readdir(&mnt, d, &cursor, &ent) == -ENOENT &&
+              OPS->mkdir(&mnt, d, "in", 0755) == -ENOENT,
+          "and the removed directory lists as ENOENT and takes no entry");
+    OPS->put(&mnt, d);
+    check(unmount_rw() == 0 && e2fsck_clean(wimg),
+          "and its inode goes at the last put, leaving the volume clean");
+}
+
 static void order_row(void)
 {
     order_row_under(16, 0, 1035);
@@ -2725,6 +2756,7 @@ static void batch_rows(void)
     order_row_under(512, 1, 1035);
     order_row_under(512, 1, 2059);
     default_mount_row();
+    held_rmdir_row();
     batch_error_row();
     for (barrier = 1; barrier <= 5; barrier++) {
         batch_flush_error_row(barrier, 0);

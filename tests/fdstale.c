@@ -98,9 +98,10 @@
  *
  * A directory is not kept as an orphan but refused: rmdir answers -EBUSY while
  * a descriptor, an O_PATH one among them, or a working directory refers to
- * the directory, on the boot root as on ext2. A descriptor of the boot root
- * finds its directory by the node's place, so a directory freed under one
- * would leave it on whatever node the allocator put there next. The case
+ * the directory on the boot root, where ext2 keeps one as it keeps a file.
+ * A descriptor of the boot root finds its directory by the node's place, so
+ * a directory freed under one would leave it on whatever node the allocator
+ * put there next. The case
  * holds the directory each way in turn, as the working directory of a child
  * and then of the caller, and requires the descriptor to go on listing it
  * and the rmdir to succeed once nothing refers to it.
@@ -962,9 +963,9 @@ static void cwd_child(void)
 }
 
 /* A directory in use is refused with EBUSY, which POSIX permits, on the boot
- * root as on ext2: while a descriptor has it, one opened for reading and then
- * one opened with O_PATH, while it is a child's working directory, and while
- * it is the caller's own. The descriptor opened for reading still lists the
+ * root: while a descriptor has it, one opened for reading and then one
+ * opened with O_PATH, while it is a child's working directory, and while it
+ * is the caller's own. The descriptor opened for reading still lists the
  * directory and resolves a relative path through it, and the rmdir succeeds
  * once nothing refers to the directory, the caller having gone back to the
  * root, which on the boot root leaves the working directory no node. */

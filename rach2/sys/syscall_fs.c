@@ -1023,6 +1023,52 @@ static int path_prepend(char *buf, uint32_t size, uint32_t len, const char *base
 }
 
 /**
+ * Whether the working directory has been removed while it was one: its
+ * node, which the working directory holds, has no name left, which a type
+ * reports as a link count of 0.
+ */
+static int cwd_removed(void)
+{
+    struct fs_struct *fs = current_proc->fs;
+    struct vfs_stat st;
+
+    return fs && fs->cwd_mnt && fs->cwd_node &&
+           vfs_getattr(fs->cwd_mnt, fs->cwd_node, &st) == 0 && st.nlink == 0;
+}
+
+/**
+ * Take a name off the removed working directory's path, the first `blen`
+ * bytes of `path`, for each `..` the relative path after it begins with.
+ *
+ * The walk of the joined path would fail at the removed directory's name,
+ * where Linux climbs from the directory to the parent it had, so `cd ..`
+ * leaves a directory removed under the shell. The parent is the one the
+ * path names, which is the one it had unless a directory above was renamed.
+ */
+static void removed_cwd_parents(char *path, uint32_t blen)
+{
+    const char *rest = path + blen + 1;
+    uint32_t keep = blen;
+
+    while (rest[0] == '.' && rest[1] == '.' && (rest[2] == '/' || rest[2] == '\0')) {
+        while (keep > 0 && path[keep - 1] != '/') {
+            keep--;
+        }
+        if (keep > 0) {
+            keep--;
+        }
+        rest += 2;
+        while (*rest == '/') {
+            rest++;
+        }
+    }
+    if (rest != path + blen + 1) {
+        path[keep] = '/';
+        k_memmove(path + keep + 1, rest, k_strlen(rest) + 1);
+    }
+}
+
+/**
  * Collapse `.` and `..` in an absolute path that a physical walk has just
  * resolved, for the working directory's string: after the walk succeeded,
  * every `..` names the parent the walk climbed to. `path` must start with
@@ -1395,7 +1441,12 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
         *dir = path_names_dir(pathbuf, len);
     }
     if (pathbuf[0] != '/' && dirfd == AT_FDCWD) {
+        int dotdot = pathbuf[0] == '.' && pathbuf[1] == '.';
+
         r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
+        if (r >= 0 && dotdot && cwd_removed()) {
+            removed_cwd_parents(pathbuf, (uint32_t)(r - len - 1));
+        }
     } else if (pathbuf[0] != '/') {
         entry = fd_get(current_proc->fds, dirfd);
         if (!entry) {

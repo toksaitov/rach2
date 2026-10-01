@@ -113,12 +113,13 @@ an open directory destination gives
 .Er EISDIR .
 Ext2, FAT32, and exFAT can rename directories.
 When one of them replaces a different directory, the destination must be
-empty and not in use, as
+empty.
+On FAT32 and exFAT it must also not be in use, as their
 .Xr rmdir 2
 requires: a directory a descriptor or a working directory refers to
 returns
 .Er EBUSY ,
-where Linux replaces it.
+where Linux replaces it; ext2 replaces it, as Linux does.
 A directory cannot be moved into itself or below itself.
 A directory and a nondirectory cannot replace each other.
 .Pp
@@ -223,7 +224,7 @@ mount point, either path is the root or has
 .Pa \&.
 or
 .Pa \&..
-as its last component, or on ext2, FAT32 or exFAT a destination
+as its last component, or on FAT32 or exFAT a destination
 directory is in use: a descriptor or a working directory refers to it.
 On the KRFFS boot root, a different destination file backs an attached
 loop device.

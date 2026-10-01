@@ -940,6 +940,9 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     if ((d->mode & S_IFMT_) != S_IFDIR_) {
         return -ENOTDIR;
     }
+    if (d->unlinked) {
+        return -ENOENT;
+    }
     for (;;) {
         struct ext2_scan sc;
         int got = dir_scan(em, d, cursor, &sc);
@@ -2711,6 +2714,9 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
     uint8_t entry[8 + EXT2_NAME_MAX + 4];
     int rc, fresh;
 
+    if (d->unlinked) {
+        return -ENOENT;
+    }
     if (name_len == 0 || name_len > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
@@ -3592,7 +3598,7 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
-    struct ext2_node loaded;
+    struct ext2_node loaded, *held;
     struct ext2_scan sc;
     uint32_t at, prev;
     int rc, empty;
@@ -3623,9 +3629,7 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (!empty) {
         return -ENOTEMPTY;
     }
-    if (node_held(em, sc.ino)) {
-        return -EBUSY; /* a description or a working directory is in it */
-    }
+    held = node_held(em, sc.ino);
     rc = dir_remove_at(em, d, at, prev, &sc);
     if (rc != 0) {
         return rc;
@@ -3637,6 +3641,15 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     rc = inode_store(em, d);
     if (rc != 0) {
         return rc;
+    }
+    if (held) {
+        /* A working directory or an open description keeps the inode and
+         * its blocks until the last put, as an open file does; nothing can
+         * be added to it, and a listing of it is -ENOENT, as on Linux. */
+        held->nlink = 0;
+        held->unlinked = 1;
+        held->ctime = now_seconds();
+        return inode_store(em, held);
     }
     loaded.nlink = 0;
     return release_inode(em, &loaded);
@@ -3790,6 +3803,9 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
     if (k_strlen(newname) > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
+    if (nd->unlinked) {
+        return -ENOENT; /* a removed directory takes no entry */
+    }
     rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
     if (rc < 0) {
         return rc;
@@ -3841,9 +3857,6 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
             if (!empty) {
                 return -ENOTEMPTY;
             }
-            if (victim != &victim_loaded) {
-                return -EBUSY;
-            }
         }
     }
     if (is_dir && od != nd) {
@@ -3876,8 +3889,14 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
             if (rc != 0) {
                 return rc;
             }
-            victim_loaded.nlink = 0;
-            rc = release_inode(em, &victim_loaded);
+            victim->nlink = 0;
+            if (victim == &victim_loaded) {
+                rc = release_inode(em, victim);
+            } else {
+                victim->unlinked = 1;
+                victim->ctime = now_seconds();
+                rc = inode_store(em, victim);
+            }
             if (rc != 0) {
                 return rc;
             }
