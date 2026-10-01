@@ -989,53 +989,73 @@ static void pid_dir_rows(void)
     }
 }
 
+/* Where the first line beginning with `head` starts, or -1. */
+static int line_starting(const char *b, int n, const char *head)
+{
+    int at, j;
+
+    for (at = 0; at < n; at++) {
+        if (at == 0 || b[at - 1] == '\n') {
+            for (j = 0; head[j] && at + j < n && b[at + j] == head[j]; j++) {
+            }
+            if (!head[j]) {
+                return at;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Where field `k` of the space-separated line at `at` starts, or -1. */
+static int field_at(const char *b, int n, int at, int k)
+{
+    int i;
+
+    for (i = 0;; i++) {
+        while (at < n && b[at] == ' ') {
+            at++;
+        }
+        if (at >= n || b[at] == '\n') {
+            return -1;
+        }
+        if (i == k) {
+            return at;
+        }
+        while (at < n && b[at] != ' ' && b[at] != '\n') {
+            at++;
+        }
+    }
+}
+
+/* Whether the field at `at` is the word `w`. */
+static int field_is(const char *b, int n, int at, const char *w)
+{
+    int j;
+
+    for (j = 0; w[j] && at + j < n && b[at + j] == w[j]; j++) {
+    }
+    return !w[j] && (at + j == n || b[at + j] == ' ' || b[at + j] == '\n');
+}
+
 /* The value under `name` in the /proc/net/snmp group whose two lines begin
    with `group`, or -1. */
 static int mib_value(const char *b, int n, const char *group, const char *name)
 {
-    int at, s, i, field = -1;
-    int glen = 0;
+    int names = line_starting(b, n, group);
+    int values = names;
+    int k, at;
 
-    while (group[glen]) {
-        glen++;
-    }
-    for (at = 0; at + glen <= n; at++) {
-        for (i = 0; i < glen && b[at + i] == group[i]; i++) {
-        }
-        if (i == glen && (at == 0 || b[at - 1] == '\n')) {
-            break;
-        }
-    }
-    if (at + glen > n) {
+    if (names < 0) {
         return -1;
     }
-    at += glen;
-    for (i = 0; field < 0 && at < n && b[at] != '\n'; i++) {
-        while (at < n && b[at] == ' ') {
-            at++;
-        }
-        for (s = 0; name[s] && at + s < n && b[at + s] == name[s]; s++) {
-        }
-        if (!name[s] && (at + s == n || b[at + s] == ' ' || b[at + s] == '\n')) {
-            field = i;
-        }
-        while (at < n && b[at] != ' ' && b[at] != '\n') {
-            at++;
-        }
+    while (values < n && b[values] != '\n') {
+        values++;
     }
-    while (at < n && b[at] != '\n') {
-        at++;
-    }
-    at += 1 + glen;
-    for (i = 0; field >= 0 && at < n && b[at] != '\n'; i++) {
-        while (at < n && b[at] == ' ') {
-            at++;
-        }
-        if (i == field) {
-            return first_uint(b + at, n - at);
-        }
-        while (at < n && b[at] != ' ' && b[at] != '\n') {
-            at++;
+    values++;
+    for (k = 1; (at = field_at(b, n, names, k)) >= 0; k++) {
+        if (field_is(b, n, at, name)) {
+            at = field_at(b, n, values, k);
+            return at < 0 ? -1 : first_uint(b + at, n - at);
         }
     }
     return -1;

@@ -2406,8 +2406,8 @@ static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 
     proc_cpu_time(p, &user, &sys);
     rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
-    ru->maxrss = (int32_t)(p->tg->maxrss_kb > p->tg->cmaxrss_kb ? p->tg->maxrss_kb
-                                                                  : p->tg->cmaxrss_kb);
+    ru->maxrss =
+        (int32_t)(p->tg->maxrss_kb > p->tg->cmaxrss_kb ? p->tg->maxrss_kb : p->tg->cmaxrss_kb);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -3012,7 +3012,8 @@ int32_t sys_getrusage(isr_params_t *params)
     } else {
         uint32_t now = current_proc->mm ? mm_resident(current_proc->mm) * (PAGE_SIZE / 1024u) : 0;
 
-        ru.maxrss = (int32_t)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
+        ru.maxrss =
+            (int32_t)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
     }
     if (copy_to_user((void __user *)params->ecx, &ru, RUSAGE_BYTES) != 0) {
         return -EFAULT;

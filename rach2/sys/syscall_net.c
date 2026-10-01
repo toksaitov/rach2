@@ -226,6 +226,15 @@ int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, cons
    goes through the transmit buffers an interrupt also builds in. */
 static uint8_t raw_send_buf[1500];
 
+/* Count the ICMP message of `len` bytes in `raw_send_buf` that a raw socket
+   sent, when IP took it (`r` is 0), as Linux counts one. */
+static void raw_count_sent(const struct socket *sock, int r, int len)
+{
+    if (r == 0 && sock->protocol == IP_PROTO_ICMP && len > 0) {
+        icmp_count_out(raw_send_buf[0]);
+    }
+}
+
 /* recv flags honored: MSG_PEEK leaves what it copies for the next receive,
  * MSG_TRUNC has recvmsg on a datagram socket answer the datagram's whole
  * length, and MSG_DONTWAIT does not wait. */
@@ -794,9 +803,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t 
             uint32_t netflags = net_lock();
             r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf, (uint16_t)len,
                       entry->sock->ip_ttl);
-            if (r == 0 && entry->sock->protocol == IP_PROTO_ICMP && len > 0) {
-                icmp_count_out(raw_send_buf[0]);
-            }
+            raw_count_sent(entry->sock, r, len);
             net_unlock(netflags);
         }
         if (r < 0) {
