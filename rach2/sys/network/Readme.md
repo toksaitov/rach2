@@ -123,7 +123,7 @@ Each raw ICMP registration and its queue are allocated together from the heap, w
 
 ## Netconsole
 
-Netconsole is the last destination of the kernel log (see [the kernel Readme](../../Readme.md)), so it is offered every record from the first one, before there is a device to send through. Records collect until `netconsole_enable`, which `rach2.netconsole` asks for once a network device is up, and it then drains them. The ring is 8192 bytes with 8191 usable slots; new characters are dropped when it is full. After enable, a newline or 512 buffered bytes starts a transmission. The debug shell's own output is not a record and never reaches the wire.
+Netconsole is the last destination of the kernel log (see [the kernel Readme](../../Readme.md)), so it is offered every record from the first one, before there is a device to send through. Records collect until `netconsole_enable`, which `rach2.netconsole` asks for once a network device is up, and it then drains them. While the card's link is down, as a real card's is for the seconds its PHY takes to negotiate, they stay in the ring, and the first line after the link comes up drains them. The ring is 8192 bytes with 8191 usable slots; new characters are dropped when it is full. After enable, a newline or 512 buffered bytes starts a transmission. The debug shell's own output is not a record and never reaches the wire.
 
 Each broadcast Ethernet frame uses EtherType `0x88b5`. Its payload starts with a 16-byte big-endian header containing `RCH2`, a nonzero per-boot id, a sequence number, the payload length, and a one's-complement checksum. Frames have no acknowledgement or retry. Fixed buffers, the network interrupt lock, and a recursion guard permit calls from interrupt and error paths.
 

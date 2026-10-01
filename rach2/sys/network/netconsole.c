@@ -10,7 +10,10 @@
  *
  * The buffer exists because the interesting output comes out before the
  * network device is up: the memory layout, the module ranges, the device
- * probes. Those characters accumulate, and the first frames carry them.
+ * probes. Those characters accumulate, and the first frames carry them. A
+ * card whose link is not up yet, as a real one is for the seconds its PHY
+ * takes to negotiate, could not send them, so they wait in the ring until
+ * the link is up and the next line starts a drain.
  *
  * Two different things can interleave here and each has its own guard.
  *
@@ -103,7 +106,7 @@ void netconsole_flush(void)
     uint32_t flags = net_lock();
     uint32_t end;
 
-    if (!nc_enabled || nc_sending) {
+    if (!nc_enabled || nc_sending || !netdev_running(netdev_first())) {
         net_unlock(flags);
         return;
     }

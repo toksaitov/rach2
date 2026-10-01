@@ -65,6 +65,14 @@ struct netdev *netdev_first(void)
     return &the_iface;
 }
 
+/* Whether the card says its link is up. */
+static int link_down;
+
+int netdev_running(struct netdev *nd)
+{
+    return nd && !link_down;
+}
+
 int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
                 const unsigned char *payload, unsigned short plen)
 {
@@ -256,6 +264,18 @@ int main(void)
     CHECK(frame_data[0][NETCONSOLE_HDR_LEN] == 'b', "the payload starts at the first held byte");
     CHECK(nc_pending() == 0, "the buffer is empty afterwards");
     CHECK(lock_depth == 0 && !lock_ever_negative, "every lock taken was released");
+
+    /* ---- a link that is not up yet holds the lines until it is ---- */
+    nc_reset();
+    link_down = 1;
+    netconsole_enable();
+    put_string("before the link\n");
+    CHECK(frame_count == 0 && nc_pending() == 16, "a card without a link is sent nothing");
+    link_down = 0;
+    put_string("link up\n");
+    CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 24 &&
+              frame_data[0][NETCONSOLE_HDR_LEN] == 'b',
+          "the next line after the link comes up sends what was held with it");
 
     /* ---- a zero draw never becomes a zero boot id ---- */
     nc_reset();
