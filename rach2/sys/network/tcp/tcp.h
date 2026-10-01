@@ -58,7 +58,7 @@
 #define TCP_OOO_RANGES          8
 /* The SACK blocks an acknowledgement names at most: four, 36 bytes of
  * options, when a segment has no timestamps (RFC 2018). */
-#define TCP_SACK_BLOCKS 4
+#define TCP_SACK_BLOCKS         4
 
 /* Reliability constants (100 Hz clock). */
 #define TCP_RTO_INIT        100  /* initial RTO  = 1 s (RFC 6298) */
