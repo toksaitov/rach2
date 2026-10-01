@@ -1957,6 +1957,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_CPUINFO:
     case VNODE_PROC_LOADAVG:
     case VNODE_PROC_DISKSTATS:
+    case VNODE_PROC_VERSION:
     case VNODE_PROC_SYS_FILE:
     case VNODE_PROC_MOUNTS:
     case VNODE_PROC_LOOP:
@@ -5350,6 +5351,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         return synth_proc_stat(kst, procfs_ino_loadavg());
     case VNODE_PROC_DISKSTATS:
         return synth_proc_stat(kst, procfs_ino_diskstats());
+    case VNODE_PROC_VERSION:
+        return synth_proc_stat(kst, procfs_ino_version());
     case VNODE_PROC_SYS_FILE: {
         int32_t rc = synth_proc_stat(kst, procfs_ino_sys(vp->sysent));
 
@@ -10833,6 +10836,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
             {"uptime", procfs_ino_uptime, DT_REG},   {"stat", procfs_ino_statsys, DT_REG},
             {"meminfo", procfs_ino_meminfo, DT_REG}, {"cpuinfo", procfs_ino_cpuinfo, DT_REG},
             {"loadavg", procfs_ino_loadavg, DT_REG}, {"diskstats", procfs_ino_diskstats, DT_REG},
+            {"version", procfs_ino_version, DT_REG},
             {"mounts", procfs_ino_mounts, DT_REG},   {"net", procfs_ino_netdir, DT_DIR},
             {"sys", procfs_ino_sysdir, DT_DIR},      {"self", procfs_ino_dir, DT_LNK},
             {"usb", procfs_ino_usb, DT_REG},         {"loop", procfs_ino_loop, DT_REG},

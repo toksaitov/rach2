@@ -87,6 +87,7 @@
 #define PROCFS_INO_CPUINFO     0x112u
 #define PROCFS_INO_LOADAVG     0x113u
 #define PROCFS_INO_DISKSTATS   0x114u
+#define PROCFS_INO_VERSION     0x115u
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 
 /* Inode namespace for /sys: the fixed directories by their node; a PCI
@@ -158,6 +159,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_DISKSTATS) {
         return "/proc/diskstats";
+    }
+    if (vp->kind == VNODE_PROC_VERSION) {
+        return "/proc/version";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1475,6 +1479,11 @@ uint32_t procfs_ino_diskstats(void)
     return PROCFS_INO_DISKSTATS;
 }
 
+uint32_t procfs_ino_version(void)
+{
+    return PROCFS_INO_VERSION;
+}
+
 uint32_t procfs_ino_loadavg(void)
 {
     return PROCFS_INO_LOADAVG;
@@ -1600,6 +1609,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_DISKSTATS) {
         return PROCFS_INO_DISKSTATS;
+    }
+    if (pf->origin_file == SYNTH_PROC_VERSION) {
+        return PROCFS_INO_VERSION;
     }
     if (pf->origin_file == SYNTH_PROC_SYSCTL) {
         return PROCFS_INO_SYS + (uint32_t)pf->origin_pid;
@@ -3432,7 +3444,8 @@ static int procfs_needs_pid(int kind)
     return kind != VNODE_PROC_CMDLINE && kind != VNODE_PROC_DISK && kind != VNODE_PROC_NET_DEV &&
            kind != VNODE_PROC_UPTIME && kind != VNODE_PROC_STAT_SYS && kind != VNODE_PROC_MEMINFO &&
            kind != VNODE_PROC_CPUINFO && kind != VNODE_PROC_LOADAVG &&
-           kind != VNODE_PROC_DISKSTATS && kind != VNODE_PROC_SYS_FILE &&
+           kind != VNODE_PROC_DISKSTATS && kind != VNODE_PROC_VERSION &&
+           kind != VNODE_PROC_SYS_FILE &&
            kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB && kind != VNODE_PROC_AUDIO &&
            kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
@@ -3530,6 +3543,10 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_loadavg(&text);
     } else if (vp->kind == VNODE_PROC_DISKSTATS) {
         len = procfs_gen_diskstats(&text);
+    } else if (vp->kind == VNODE_PROC_VERSION) {
+        /* Linux's "Linux version 6.8.0 ...", with uname's version after. */
+        ap_str(&text, UTS_SYSNAME " version " UTS_RELEASE " (" UTS_VERSION ")\n");
+        len = text.len;
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         len = procfs_text_room(&text, CPUINFO_TEXT_MAX) == 0
                   ? (int)cpuinfo_text(text.buf, CPUINFO_TEXT_MAX)
@@ -3619,6 +3636,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_LOADAVG;
     } else if (vp->kind == VNODE_PROC_DISKSTATS) {
         f->origin_file = SYNTH_PROC_DISKSTATS;
+    } else if (vp->kind == VNODE_PROC_VERSION) {
+        f->origin_file = SYNTH_PROC_VERSION;
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
         f->origin_file = SYNTH_PROC_SYSCTL;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {

@@ -831,6 +831,9 @@ static void sysctl_rows(void)
     if (was > 1) {
         write_file("/proc/sys/kernel/hostname", old, was);
     }
+    n = slurp("/proc/version", buf, (int)sizeof(buf));
+    check(n > 20 && contains(buf, n, "Rach2 version 1.0.0 (") && buf[n - 1] == '\n',
+          "/proc/version gives the kernel's name and release, as uname does");
     check(write_file("/proc/sys/net/ipv4/ip_forward", "0\n", 2) == 2 &&
               write_file("/proc/sys/net/ipv4/ip_forward", "1\n", 2) == -EINVAL,
           "/proc/sys/net/ipv4/ip_forward takes 0 and refuses 1 with EINVAL");

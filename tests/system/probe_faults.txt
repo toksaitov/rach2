@@ -5099,3 +5099,12 @@ new
         return -ESRCH;
     }
 end
+
+fault proc-version-missing
+probe procprobe
+file rach2/sys/fs/synthfs.c
+expect FAIL: /proc/version gives the kernel's name and release, as uname does
+old
+                 {"version", VNODE_PROC_VERSION},
+new
+end

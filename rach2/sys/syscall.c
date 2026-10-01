@@ -2301,10 +2301,10 @@ static int32_t sys_uname(isr_params_t *params)
     struct kernel_utsname uts;
 
     k_memset(&uts, 0, sizeof(uts));
-    uname_field(uts.sysname, "Rach2");
+    uname_field(uts.sysname, UTS_SYSNAME);
     uname_field(uts.nodename, k_hostname);
-    uname_field(uts.release, "1.0.0");
-    uname_field(uts.version, "Rach2 musl port");
+    uname_field(uts.release, UTS_RELEASE);
+    uname_field(uts.version, UTS_VERSION);
     uname_field(uts.machine, "i686");
     uname_field(uts.domainname, "(none)");
 

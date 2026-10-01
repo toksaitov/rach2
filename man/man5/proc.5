@@ -555,6 +555,15 @@ and disks reclaimed since boot:
 .Dl disks FREE free RECLAIMED reclaimed
 The file is empty when no USB devices are configured and no disk
 accounting remains.
+.It Pa /proc/version
+The kernel's name, release and version as
+.Xr uname 2
+gives them, in the form
+.Ql Rach2 version 1.0.0 (Rach2 musl port) ,
+where Linux's line begins
+.Ql Linux version
+and goes on with the builder, the compiler and the build's date, which
+this kernel does not record.
 .It Pa /proc/PID/stat
 One line of 24 space-separated fields:
 .Bd -literal -offset indent

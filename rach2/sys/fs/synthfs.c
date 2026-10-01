@@ -437,6 +437,7 @@ static int synth_global_file(struct comp name)
                  {"cpuinfo", VNODE_PROC_CPUINFO},
                  {"loadavg", VNODE_PROC_LOADAVG},
                  {"diskstats", VNODE_PROC_DISKSTATS},
+                 {"version", VNODE_PROC_VERSION},
                  {"interrupts", VNODE_PROC_INTERRUPTS},
                  {"console", VNODE_PROC_CONSOLE},
                  {"mounts", VNODE_PROC_MOUNTS},
