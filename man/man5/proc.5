@@ -354,6 +354,49 @@ and decimal values with the prefixes
 .Ql refused= ,
 and
 .Ql for= .
+.It Pa /proc/net/udp , /proc/net/raw
+A header followed by a row for each UDP or raw socket, in the columns of
+.Pa /proc/net/tcp
+up to the inode, which are followed by the reference count 2, a pointer of
+zeros and a drop count of 0.
+The local address is 0.0.0.0, since a socket here has no address of its own;
+a raw socket's port is its protocol, 255 for the descriptor that takes only
+configuration ioctls.
+The state is 01 for a connected socket and 07 for the rest, as Linux writes
+them, and only the receive queue is counted.
+.It Pa /proc/net/unix
+A header followed by a row for each
+.Dv AF_UNIX
+socket with a descriptor open: its address, which is zeros, the reference
+count, the protocol 0 and the flags, eight hexadecimal digits each, 00010000
+for a listener; the type, four; the state, 03 for a connected socket and 01
+for the rest; the inode in decimal; and the name, if it has one, an abstract
+name written with
+.Ql @
+for its leading NUL byte.
+.It Pa /proc/net/sockstat
+The sockets in use, the lines Linux has:
+.Ql sockets: used ,
+every socket of every family;
+.Ql TCP: inuse orphan tw alloc mem ,
+the connections in a state other than CLOSED and TIME_WAIT, those of them
+with no socket left, those in TIME_WAIT, every one not in TIME_WAIT, and the
+pages their control blocks and receive rings take;
+.Ql UDP: inuse mem ,
+the UDP sockets and the pages of datagrams waiting to be read;
+.Ql UDPLITE: inuse ,
+.Ql RAW: inuse
+and
+.Ql FRAG: inuse memory ,
+which is always zero, since a fragment is dropped on arrival.
+.It Pa /proc/net/snmp
+Of the MIB groups Linux has, a line of names and a line of values for the
+fields this kernel keeps:
+.Ql Ip: Forwarding DefaultTTL ,
+2, not a router, and 64; and
+.Ql Tcp: RtoAlgorithm RtoMin RtoMax MaxConn CurrEstab ,
+1, the retransmission bounds in milliseconds, -1 for no fixed limit, and the
+connections ESTABLISHED or in CLOSE_WAIT.
 .It Pa /proc/sys
 A few of Linux's sysctl files, read-only, each a value and a newline:
 .Pa fs/inotify/max_queued_events ,

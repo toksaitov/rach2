@@ -121,6 +121,65 @@ int socket_port_bound(uint16_t port)
     return 0;
 }
 
+/** Whether `s` is one of the sockets `type` asks for, as `socket_count` takes
+ * it. */
+static int socket_counted(const socket_t *s, int type)
+{
+    return type == 0 || (s->type == type && s->family == AF_INET);
+}
+
+int socket_count(int type)
+{
+    const socket_t *s;
+    uint32_t flags = net_lock();
+    int n = 0;
+
+    for (s = sockets; s; s = s->next) {
+        n += socket_counted(s, type);
+    }
+    net_unlock(flags);
+    return n;
+}
+
+int socket_snapshot(int type, struct socket_row **rows)
+{
+    const socket_t *s;
+    struct socket_row *out;
+    uint32_t flags;
+    int n, room, i;
+
+    *rows = NULL;
+    room = socket_count(type);
+    if (room == 0) {
+        return 0;
+    }
+    out = kmalloc(sizeof(*out) * (size_t)room);
+    if (!out) {
+        return -1;
+    }
+    n = 0;
+    flags = net_lock();
+    for (s = sockets; s && n < room; s = s->next) {
+        if (!socket_counted(s, type)) {
+            continue;
+        }
+        out[n].local_port = type == SOCK_RAW ? s->protocol : s->local_port;
+        out[n].remote_ip = s->remote_ip;
+        out[n].remote_port = s->remote_port;
+        out[n].connected = s->connected;
+        out[n].rxq = 0;
+        for (i = 0; i < s->recv_count; i++) {
+            out[n].rxq += s->recv_len[(s->recv_head + i) % SOCK_DGRAM_SLOTS];
+        }
+        out[n].uid = s->uid;
+        out[n].inode = s->inode;
+        n++;
+    }
+    net_unlock(flags);
+    *rows = out;
+    return n;
+}
+
 void socket_ref(struct socket *sock)
 {
     uint32_t flags;

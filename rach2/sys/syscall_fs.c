@@ -1910,6 +1910,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_NET_ROUTE:
     case VNODE_PROC_NET_ARP:
     case VNODE_PROC_NET_TCP:
+    case VNODE_PROC_NET_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
         /* Root only. The file has the drive's serial number, and an
@@ -5031,6 +5032,8 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
         kst->st_mode = S_IFREG | 0444;
         kst->st_ino = procfs_ino_nettcp();
         return 0;
+    case VNODE_PROC_NET_FILE:
+        return synth_proc_stat(kst, procfs_ino_net(vp->procfile));
     case VNODE_PROC_DISK:
         /* /proc/disk: what the disk reported, root-readable only. */
         kst->st_dev = PROCFS_FSID;
@@ -10212,33 +10215,36 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         }
         return 0;
     }
-    /* The four files of /proc/net: dev, route, arp and tcp. */
+    /* The files of /proc/net: dev, route, arp and tcp, then the ones known by
+     * their origin, from SYNTH_PROC_NETUDP. */
     if (kind == VNODE_PROC_NET_DIR) {
         /* No `tcp6`: there is no IPv6 here, and a file that existed and was
          * empty would tell netstat the family is present with nothing on it. */
         static const char *const netfiles[] = {"dev", "route", "arp", "tcp"};
         int count = (int)(sizeof(netfiles) / sizeof(netfiles[0]));
+        const char *entry = n < count ? netfiles[n] : synth_net_name(SYNTH_PROC_NETUDP + n - count);
+        int i;
 
-        if (n < count) {
-            int i;
-
-            for (i = 0; netfiles[n][i] != '\0'; i++) {
-                name[i] = netfiles[n][i];
-            }
-            name[i] = '\0';
-            *dtype = DT_REG;
-            if (n == 0) {
-                *ino = procfs_ino_netdev();
-            } else if (n == 1) {
-                *ino = procfs_ino_netroute();
-            } else if (n == 2) {
-                *ino = procfs_ino_netarp();
-            } else {
-                *ino = procfs_ino_nettcp();
-            }
-            return 1;
+        if (!entry) {
+            return 0;
         }
-        return 0;
+        for (i = 0; entry[i] != '\0'; i++) {
+            name[i] = entry[i];
+        }
+        name[i] = '\0';
+        *dtype = DT_REG;
+        if (n == 0) {
+            *ino = procfs_ino_netdev();
+        } else if (n == 1) {
+            *ino = procfs_ino_netroute();
+        } else if (n == 2) {
+            *ino = procfs_ino_netarp();
+        } else if (n == 3) {
+            *ino = procfs_ino_nettcp();
+        } else {
+            *ino = procfs_ino_net(SYNTH_PROC_NETUDP + n - count);
+        }
+        return 1;
     }
     if (kind == VNODE_PROC_DIR) {
         static const struct {

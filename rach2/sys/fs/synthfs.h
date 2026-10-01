@@ -52,6 +52,7 @@ enum vnode_kind {
     VNODE_PROC_SYS_DIR,     /* /proc/sys and a directory of its tree */
     VNODE_PROC_SYS_FILE,    /* a file of /proc/sys: a limit or a name */
     VNODE_PROC_LOADAVG,     /* /proc/loadavg: the load averages and task counts */
+    VNODE_PROC_NET_FILE,    /* /proc/net/{udp,raw,unix,sockstat,snmp}, by `procfile` */
     VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -87,6 +88,13 @@ enum vnode_kind {
 #define SYNTH_PROC_SYSCTL      28
 #define SYNTH_PROC_PIDMOUNTS   29
 #define SYNTH_PROC_LOADAVG     30
+/* The files of /proc/net after the first four, in the order they are listed
+ * (`synth_net_name`). */
+#define SYNTH_PROC_NETUDP      31
+#define SYNTH_PROC_NETRAW      32
+#define SYNTH_PROC_NETUNIX     33
+#define SYNTH_PROC_NETSOCKSTAT 34
+#define SYNTH_PROC_NETSNMP     35
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */
@@ -141,6 +149,10 @@ const char *synth_sys_name(int entry);
 int synth_sys_parent(int entry);
 /** The text of a file entry, NULL for a directory. */
 const char *synth_sys_text(int entry);
+
+/** The name in /proc/net of the file `origin`, SYNTH_PROC_NETUDP to
+ * SYNTH_PROC_NETSNMP, or NULL for another. */
+const char *synth_net_name(int origin);
 
 /* True if a classified kind is one of the synthetic (non-KRFFS) namespaces. */
 #define VNODE_IS_SYNTH(kind) ((kind) != VNODE_KRFFS)

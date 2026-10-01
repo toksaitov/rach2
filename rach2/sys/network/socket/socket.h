@@ -147,6 +147,31 @@ struct socket *socket_alloc(int type);
  */
 int socket_port_bound(uint16_t port);
 
+/* One datagram or raw socket, copied out for /proc/net/udp and
+ * /proc/net/raw. A raw socket's `local_port` is its protocol, 0 for the
+ * descriptor that only takes configuration ioctls. */
+struct socket_row {
+    uint16_t local_port;
+    uint32_t remote_ip;
+    uint16_t remote_port;
+    int connected;
+    uint32_t rxq; /* bytes queued to read */
+    uint32_t uid;
+    uint32_t inode;
+};
+
+/**
+ * Copy the AF_INET sockets of `type`, SOCK_DGRAM or SOCK_RAW, into a
+ * caller-owned array and return the row count, as `tcp_snapshot` does: -1
+ * when the array cannot be had, and a non-NULL result to free even with no
+ * rows.
+ */
+int socket_snapshot(int type, struct socket_row **rows);
+
+/** How many live sockets there are of `type` in AF_INET, or of every type
+ * and family with `type` 0. */
+int socket_count(int type);
+
 /** An inode number for a socket of either family: rising, nonzero, and not
  * one a live socket has. */
 uint32_t socket_inode_next(void);

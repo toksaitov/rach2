@@ -2518,6 +2518,30 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
  * exclude older blocks. Return -1 on allocation failure. The caller must free
  * a non-NULL result even when the returned count is zero.
  */
+void tcp_count(struct tcp_counts *c)
+{
+    uint32_t flags;
+    const struct tcb *t;
+
+    k_memset(c, 0, sizeof(*c));
+    flags = net_lock();
+    for (t = tcbs; t; t = t->next) {
+        c->bytes += (uint32_t)sizeof(*t) + (t->recv_buf ? t->recv_size : 0);
+        if (t->state == TCP_TIME_WAIT) {
+            c->tw++;
+            continue;
+        }
+        c->alloc++;
+        if (t->state == TCP_CLOSED) {
+            continue;
+        }
+        c->inuse++;
+        c->orphan += t->sock == NULL;
+        c->estab += t->state == TCP_ESTABLISHED || t->state == TCP_CLOSE_WAIT;
+    }
+    net_unlock(flags);
+}
+
 int tcp_snapshot(struct tcp_row **rows)
 {
     uint32_t flags;

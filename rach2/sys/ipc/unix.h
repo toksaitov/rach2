@@ -25,6 +25,9 @@
 #define AF_UNIX        1
 #define SOCK_SEQPACKET 5
 
+/* The bytes of a sockaddr_un's sun_path. */
+#define UNIX_PATH_MAX 108
+
 /** Start with no sockets; called once at boot. */
 void unix_init(void);
 
@@ -65,6 +68,29 @@ uint32_t unix_inode(const fd_entry_t *e);
 
 /** Whether a live AF_UNIX socket has the inode number `ino`. */
 int unix_inode_used(uint32_t ino);
+
+/* One AF_UNIX socket with a descriptor open, copied out for /proc/net/unix.
+ * `path` has `name_len` bytes of the name, an abstract one beginning with a
+ * NUL byte, and 0 for none. */
+struct unix_row {
+    uint32_t refs;
+    int type;
+    int listening;
+    int connected;
+    uint32_t inode;
+    uint32_t name_len;
+    char path[UNIX_PATH_MAX + 1];
+};
+
+/**
+ * Copy the sockets with a descriptor open into a caller-owned array and
+ * return the row count: -1 when the array cannot be had, and a non-NULL
+ * result to free even with no rows.
+ */
+int unix_snapshot(struct unix_row **rows);
+
+/** How many AF_UNIX sockets have a descriptor open. */
+int unix_count(void);
 
 /**
  * Whether a descriptor in flight, sent and not yet received, is a KRFFS file

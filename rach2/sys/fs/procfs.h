@@ -90,6 +90,9 @@ uint32_t procfs_ino_filesystems(void);
 uint32_t procfs_ino_netroute(void);
 uint32_t procfs_ino_netarp(void);
 uint32_t procfs_ino_nettcp(void);
+/** The inode of the /proc/net file `origin`, SYNTH_PROC_NETUDP to
+ * SYNTH_PROC_NETSNMP. */
+uint32_t procfs_ino_net(int origin);
 uint32_t procfs_fd_ino(struct fd_entry *e);
 uint32_t procfs_ino_pid(int pid);
 

@@ -341,7 +341,11 @@ Calculate and display network settings from an IP address.
 Connect to a TCP server or listen for incoming connections.
 .It Nm netstat
 Display network information, reading
-.Pa /proc/net/tcp .
+.Pa /proc/net/tcp ,
+.Pa udp ,
+.Pa raw
+and
+.Pa unix .
 .It Nm nslookup
 Query DNS about
 .Ar HOST ,
@@ -730,9 +734,9 @@ display connected sockets.
 .It Fl t , u , w , x
 Select TCP, UDP, raw, or Unix sockets, respectively.
 Without these options, select all socket types.
-Rach2 supplies
-.Pa /proc/net/tcp
-only; the UDP, raw and Unix listings find no file to read.
+Rach2 has no IPv6, so each IPv6 listing reports that its file, such as
+.Pa /proc/net/tcp6 ,
+does not exist, as it does on a Linux built without IPv6.
 .It Fl e
 Display additional information.
 .It Fl n

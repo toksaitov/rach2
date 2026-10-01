@@ -65,7 +65,9 @@ typedef unsigned int size_t;
 #define SYS_FORK        2
 #define SYS_WAITPID     7
 #define AF_INET         2
+#define AF_UNIX         1
 #define SOCK_STREAM     1
+#define SOCK_DGRAM      2
 
 /* i386 struct stat64: the 64-bit st_ino musl reads sits at offset 88. */
 #define ST_INO64 88
@@ -769,6 +771,73 @@ static void done(void)
     sys_exit(fails);
 }
 
+/* The counts `ss -s` reads, by the names Linux gives them, with a listener
+   open. */
+static void count_rows(void)
+{
+    int n = slurp("/proc/net/sockstat", buf, (int)sizeof(buf));
+
+    check(uint_after(buf, n, "sockets: used ") >= 1, "/proc/net/sockstat counts the sockets");
+    check(uint_after(buf, n, "TCP: inuse ") >= 1, "and the listener among the connections in use");
+    n = slurp("/proc/net/snmp", buf, (int)sizeof(buf));
+    check(has_line_starting(buf, n, "Tcp: RtoAlgorithm") &&
+              contains(buf, n, " MaxConn CurrEstab\nTcp: 1 1000 60000 -1 "),
+          "/proc/net/snmp has the Tcp names and under them their values");
+}
+
+/* A datagram socket and a local one, each in its file: the UDP socket by
+ * its port, unconnected, which Linux writes as state 07, and the local
+ * one by its abstract name, which Linux writes with an @ for the NUL. */
+static void dgram_and_local_rows(void)
+{
+    unsigned int args[6];
+    unsigned char sa[16];
+    char st[8];
+    int ufd, xfd, i, n;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    ufd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (int)(size_t)args, 0);
+    for (i = 0; i < 16; i++) {
+        sa[i] = 0;
+    }
+    sa[0] = AF_INET;
+    sa[2] = 0x1F; /* port 8081, big-endian */
+    sa[3] = 0x91;
+    args[0] = (unsigned int)ufd;
+    args[1] = (unsigned int)(size_t)sa;
+    args[2] = 16;
+    check(ufd >= 0 && syscall3(SYS_SOCKETCALL, SC_BIND, (int)(size_t)args, 0) == 0,
+          "a datagram socket opens and binds");
+    n = slurp("/proc/net/udp", buf, (int)sizeof(buf));
+    check(contains(buf, n, " inode ref pointer drops\n"), "/proc/net/udp carries its header");
+    check(line_field(buf, n, ":1F91 ", 3, st, (int)sizeof(st)) == 2 && st[0] == '0' && st[1] == '7',
+          "and the bound socket's row, with the state netstat reads as unconnected");
+    syscall1(SYS_CLOSE, ufd);
+
+    args[0] = AF_UNIX;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    xfd = syscall3(SYS_SOCKETCALL, SC_SOCKET, (int)(size_t)args, 0);
+    sa[0] = AF_UNIX;
+    sa[1] = 0;
+    sa[2] = 0; /* the abstract name "procprobe" */
+    for (i = 0; i < 9; i++) {
+        sa[3 + i] = (unsigned char)"procprobe"[i];
+    }
+    args[0] = (unsigned int)xfd;
+    args[1] = (unsigned int)(size_t)sa;
+    args[2] = 12;
+    check(xfd >= 0 && syscall3(SYS_SOCKETCALL, SC_BIND, (int)(size_t)args, 0) == 0,
+          "a local socket opens and binds to an abstract name");
+    n = slurp("/proc/net/unix", buf, (int)sizeof(buf));
+    check(has_line_starting(buf, n, "Num       RefCount"), "/proc/net/unix carries its header");
+    check(contains(buf, n, " 0001 01 ") && contains(buf, n, " @procprobe\n"),
+          "and the socket's row, a stream not connected, with its name after an @");
+    syscall1(SYS_CLOSE, xfd);
+}
+
 void probe_main(unsigned int *sp);
 
 __asm__(".global _start\n"
@@ -1103,6 +1172,7 @@ void probe_main(unsigned int *sp)
         check(syscall3(SYS_FSTAT64, sfd, (int)(size_t)stbuf, 0) == 0, "fstat the socket");
         fd_inode = (int)*(unsigned int *)(stbuf + ST_INO64);
         check(fd_inode == row_inode, "fstat reports the inode /proc/net/tcp does");
+        count_rows();
 
         fd_path_of(fdpath, sfd);
         n = syscall3(SYS_READLINK, (int)(size_t)fdpath, (int)(size_t)link, (int)sizeof(link) - 1);
@@ -1121,8 +1191,9 @@ void probe_main(unsigned int *sp)
      * were added to the open dispatcher and could have been left out of these
      * two, where a file with no entry falls through to /proc/0/stat. */
     {
-        static const char *const netfiles[3] = {"/proc/net/route", "/proc/net/arp",
-                                                "/proc/net/tcp"};
+        static const char *const netfiles[8] = {
+            "/proc/net/route", "/proc/net/arp",      "/proc/net/tcp",  "/proc/net/udp",
+            "/proc/net/raw",   "/proc/net/sockstat", "/proc/net/snmp", "/proc/net/unix"};
         char st_by_fd[128] = {0};   /* fstat64 fills it through an int-cast pointer */
         char st_by_path[128] = {0}; /* and stat64 the same */
         char pathbuf[128];
@@ -1131,7 +1202,7 @@ void probe_main(unsigned int *sp)
         unsigned int by_fd, by_path;
         int netfd, i, k;
 
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < 8; i++) {
             for (k = 0; netfiles[i][k]; k++) {
                 pathbuf[k] = netfiles[i][k];
             }
@@ -1157,6 +1228,8 @@ void probe_main(unsigned int *sp)
             syscall1(SYS_CLOSE, netfd);
         }
     }
+
+    dgram_and_local_rows();
 
     /* Capacity. The pool is filled to its last block, half in a child and half
      * here, because one process cannot hold that many descriptors, and the file

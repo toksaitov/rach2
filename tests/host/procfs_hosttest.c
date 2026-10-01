@@ -341,6 +341,13 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     }
 }
 
+/** No file of /proc/net is opened here. */
+const char *synth_net_name(int origin)
+{
+    (void)origin;
+    return NULL;
+}
+
 /** Whether the stat line `line` has the user and system times `user` and
  * `sys`, its fields 14 and 15, the twelfth and thirteenth after the
  * command's closing parenthesis. */

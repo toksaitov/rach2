@@ -937,6 +937,12 @@ NO_PROC_INO(procfs_ino_netdev)
 NO_PROC_INO(procfs_ino_netdir)
 NO_PROC_INO(procfs_ino_netroute)
 NO_PROC_INO(procfs_ino_nettcp)
+uint32_t procfs_ino_net(int origin)
+{
+    (void)origin;
+    check(0, "unexpected stat of a /proc file");
+    return 0;
+}
 NO_PROC_INO(procfs_ino_statsys)
 NO_PROC_INO(procfs_ino_uptime)
 NO_PROC_INO(procfs_ino_usb)

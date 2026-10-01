@@ -931,6 +931,12 @@ uint32_t procfs_ino_nettcp(void)
     return 0;
 }
 
+uint32_t procfs_ino_net(int origin)
+{
+    (void)origin;
+    return 0;
+}
+
 /** A fresh table the two processes share, with the file system's counts and
  * the file at zero, and the dumping process the one that runs. */
 static void row_begin(void)

@@ -23,9 +23,8 @@
 #define SOCK_NONBLOCK 04000
 #define AF_UNSPEC     0
 
-/* Format: the bytes of sun_path, and where it starts in a sockaddr_un. */
-#define UNIX_PATH_MAX 108
-#define SUN_PATH_OFF  2
+/* Format: where sun_path starts in a sockaddr_un. */
+#define SUN_PATH_OFF 2
 
 /* Policy: the bytes a socket's receive queue takes before a sender waits,
  * Linux's default buffer size, and the datagrams it takes, Linux's
@@ -257,6 +256,48 @@ int unix_inode_used(uint32_t ino)
         }
     }
     return 0;
+}
+
+int unix_count(void)
+{
+    const struct unix_sock *s;
+    int n = 0;
+
+    for (s = socks; s; s = s->next) {
+        n += !s->closed;
+    }
+    return n;
+}
+
+int unix_snapshot(struct unix_row **rows)
+{
+    const struct unix_sock *s;
+    struct unix_row *out;
+    int n = 0, room = unix_count();
+
+    *rows = NULL;
+    if (room == 0) {
+        return 0;
+    }
+    out = kmalloc(sizeof(*out) * (size_t)room);
+    if (!out) {
+        return -1;
+    }
+    for (s = socks; s && n < room; s = s->next) {
+        if (s->closed) {
+            continue;
+        }
+        out[n].refs = s->refs;
+        out[n].type = s->type;
+        out[n].listening = s->state == US_LISTENING;
+        out[n].connected = s->state == US_CONNECTED;
+        out[n].inode = s->inode;
+        out[n].name_len = s->name.len;
+        k_memcpy(out[n].path, s->name.path, s->name.len);
+        n++;
+    }
+    *rows = out;
+    return n;
 }
 
 uint32_t unix_inode(const fd_entry_t *e)

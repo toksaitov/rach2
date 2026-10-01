@@ -167,6 +167,14 @@ int synth_sys_count(void)
     return (int)(sizeof(sysents) / sizeof(sysents[0]));
 }
 
+const char *synth_net_name(int origin)
+{
+    static const char *const names[] = {"udp", "raw", "unix", "sockstat", "snmp"};
+
+    origin -= SYNTH_PROC_NETUDP;
+    return origin >= 0 && origin < (int)(sizeof(names) / sizeof(names[0])) ? names[origin] : 0;
+}
+
 const char *synth_sys_name(int entry)
 {
     return entry >= 0 && entry < synth_sys_count() ? sysents[entry].name : 0;
@@ -514,9 +522,18 @@ int synth_classify(const char *path, struct vpath *vp)
         if (comp_eq(c[1], "sys")) {
             return synth_classify_sys(c + 2, n - 2, vp);
         }
-        /* /proc/net and its four files: dev, route, arp and tcp. */
+        /* /proc/net: dev, route, arp and tcp, and the files by their
+         * origin after them. */
         if (comp_eq(c[1], "net")) {
-            if (n == 2) {
+            int f = SYNTH_PROC_NETUDP;
+
+            while (n == 3 && synth_net_name(f) && !comp_eq(c[2], synth_net_name(f))) {
+                f++;
+            }
+            if (n == 3 && synth_net_name(f)) {
+                vp->kind = VNODE_PROC_NET_FILE;
+                vp->procfile = f;
+            } else if (n == 2) {
                 vp->kind = VNODE_PROC_NET_DIR;
             } else if (n == 3 && comp_eq(c[2], "dev")) {
                 vp->kind = VNODE_PROC_NET_DEV;

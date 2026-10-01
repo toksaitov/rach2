@@ -4940,3 +4940,35 @@ old
 new
     t.tv_nsec = 10000000;
 end
+
+# The files of /proc/net that netstat and ss -s read.
+
+fault proc-net-udp-state-connected
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: and the bound socket's row, with the state netstat reads as unconnected
+old
+        ap_str(t, rows[i].connected ? " 01 00000000:" : " 07 00000000:");
+new
+        ap_str(t, " 01 00000000:");
+end
+
+fault proc-net-unix-abstract-nul
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: and the socket's row, a stream not connected, with its name after an @
+old
+                ap_ch(t, rows[i].path[k] != '\0' ? rows[i].path[k] : '@');
+new
+                ap_ch(t, rows[i].path[k]);
+end
+
+fault sockstat-tcp-inuse-zero
+probe procprobe
+file rach2/sys/fs/procfs.c
+expect FAIL: and the listener among the connections in use
+old
+    ap_int(t, tc.inuse);
+new
+    ap_int(t, 0);
+end

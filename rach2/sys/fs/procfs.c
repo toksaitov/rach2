@@ -47,6 +47,7 @@
 #include "../network/netconf.h"
 #include "../network/net.h"
 #include "../network/socket/socket.h"
+#include "../ipc/unix.h"
 #include "../ipc/pipe.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
@@ -82,6 +83,7 @@
 #define PROCFS_INO_NETTCP      0x10Bu
 #define PROCFS_INO_CPUINFO     0x112u
 #define PROCFS_INO_LOADAVG     0x113u
+#define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
 #define PROCFS_INO_SYS         0x140u /* and the entries of /proc/sys after it */
 #define PROCFS_INO_PID_BASE    0x200u
 
@@ -106,6 +108,11 @@
     "  sl  local_address rem_address   st tx_queue" \
     " rx_queue tr tm->when retrnsmt   uid  timeout" \
     " inode\n"
+#define PROCFS_NETUDP_HEADER                         \
+    "   sl  local_address rem_address   st tx_queue" \
+    " rx_queue tr tm->when retrnsmt   uid  timeout"  \
+    " inode ref pointer drops\n"
+#define PROCFS_NETUNIX_HEADER "Num       RefCount Protocol Flags    Type St Inode Path\n"
 
 /** The file's name, for the diagnostic of a text that could not be built. */
 static const char *procfs_kind_name(const struct vpath *vp)
@@ -166,6 +173,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_NET_TCP) {
         return "/proc/net/tcp";
+    }
+    if (vp->kind == VNODE_PROC_NET_FILE) {
+        return "/proc/net";
     }
     if (vp->procfile == SYNTH_PROC_STAT) {
         return "/proc/<pid>/stat";
@@ -1194,6 +1204,11 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                 ap_str(t, path);
                 break;
             }
+            if (synth_net_name(pf->origin_file)) {
+                ap_str(t, "/proc/net/");
+                ap_str(t, synth_net_name(pf->origin_file));
+                break;
+            }
             ap_str(t, "/proc/");
             if (pf->origin_task != 0) {
                 ap_int(t, pf->origin_task);
@@ -1370,6 +1385,11 @@ uint32_t procfs_ino_nettcp(void)
     return PROCFS_INO_NETTCP;
 }
 
+uint32_t procfs_ino_net(int origin)
+{
+    return PROCFS_INO_NET + (uint32_t)(origin - SYNTH_PROC_NETUDP);
+}
+
 /**
  * The inode of an open /proc snapshot descriptor, from its origin, so fstat
  * reports the same identity as the stat of the path it was opened by.
@@ -1400,6 +1420,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_NETTCP) {
         return PROCFS_INO_NETTCP;
+    }
+    if (synth_net_name(pf->origin_file)) {
+        return procfs_ino_net(pf->origin_file);
     }
     if (pf->origin_file == SYNTH_PROC_UPTIME) {
         return PROCFS_INO_UPTIME;
@@ -2152,6 +2175,185 @@ static int procfs_gen_nettcp(struct procfs_text *t)
     return t->len;
 }
 
+/**
+ * Render /proc/net/udp or, for `type` SOCK_RAW, /proc/net/raw: the sockets in
+ * the columns of /proc/net/tcp, which netstat and ss parse the same way.
+ *
+ * A socket has no address of its own here, so the local address is 0.0.0.0,
+ * as a socket bound to INADDR_ANY has it. The state is Linux's: 1, its
+ * TCP_ESTABLISHED, for a connected socket and 7, TCP_CLOSE, for the rest. A
+ * raw socket's port is its protocol.
+ */
+static int procfs_gen_netdgram(struct procfs_text *t, int type)
+{
+    struct socket_row *rows;
+    int n = socket_snapshot(type, &rows);
+    int i;
+
+    if (n < 0) {
+        return -ENOMEM;
+    }
+    ap_str(t, PROCFS_NETUDP_HEADER);
+    for (i = 0; i < n; i++) {
+        uint16_t port = rows[i].local_port;
+
+        if (type == SOCK_RAW && port == 0) {
+            port = 255; /* IPPROTO_RAW, which the ioctl descriptor is opened with */
+        }
+        ap_str(t, i < 10 ? "    " : i < 100 ? "   " : i < 1000 ? "  " : " ");
+        ap_u32(t, (uint32_t)i);
+        ap_str(t, ": 00000000:");
+        ap_hex(t, port, 4);
+        ap_ch(t, ' ');
+        ap_ip_hex(t, rows[i].connected ? rows[i].remote_ip : 0);
+        ap_ch(t, ':');
+        ap_hex(t, rows[i].connected ? rows[i].remote_port : 0, 4);
+        ap_str(t, rows[i].connected ? " 01 00000000:" : " 07 00000000:");
+        ap_hex(t, rows[i].rxq, 8);
+        ap_str(t, " 00:00000000 00000000 ");
+        ap_u32(t, rows[i].uid);
+        ap_str(t, "        0 ");
+        ap_u32(t, rows[i].inode);
+        ap_str(t, " 2 00000000 0\n");
+    }
+    kfree(rows);
+    return t->len;
+}
+
+/**
+ * Render /proc/net/unix: the AF_UNIX sockets with a descriptor open, in
+ * Linux's columns, which netstat reads with `sscanf`.
+ *
+ * The first column is the socket's kernel address, which Linux hides as
+ * zeros from a reader without privilege; here it is zeros for everyone. A
+ * listener has the flag `__SO_ACCEPTCON`, 0x10000, and the state is 3,
+ * SS_CONNECTED, for a connected socket and 1, SS_UNCONNECTED, for the rest.
+ * An abstract name is written with `@` for its leading NUL byte.
+ */
+static int procfs_gen_netunix(struct procfs_text *t)
+{
+    struct unix_row *rows;
+    int n = unix_snapshot(&rows);
+    int i;
+    uint32_t k;
+
+    if (n < 0) {
+        return -ENOMEM;
+    }
+    ap_str(t, PROCFS_NETUNIX_HEADER);
+    for (i = 0; i < n; i++) {
+        ap_str(t, "00000000: ");
+        ap_hex(t, rows[i].refs, 8);
+        ap_str(t, " 00000000 ");
+        ap_hex(t, rows[i].listening ? 0x10000u : 0, 8);
+        ap_ch(t, ' ');
+        ap_hex(t, (uint32_t)rows[i].type, 4);
+        ap_str(t, rows[i].connected ? " 03 " : " 01 ");
+        ap_u32(t, rows[i].inode);
+        if (rows[i].name_len > 0) {
+            int abstract = rows[i].path[0] == '\0';
+
+            ap_ch(t, ' ');
+            for (k = 0; k < rows[i].name_len && (abstract || rows[i].path[k] != '\0'); k++) {
+                ap_ch(t, rows[i].path[k] != '\0' ? rows[i].path[k] : '@');
+            }
+        }
+        ap_ch(t, '\n');
+    }
+    kfree(rows);
+    return t->len;
+}
+
+/**
+ * Render /proc/net/sockstat: the sockets in use, counted as Linux counts
+ * them, which `ss -s` reads.
+ *
+ * `mem` is in pages: for TCP the control blocks and their receive rings, and
+ * for UDP the datagrams queued to be read. Fragments are dropped on arrival,
+ * so none is ever held.
+ */
+static int procfs_gen_netsockstat(struct procfs_text *t)
+{
+    struct tcp_counts tc;
+    struct socket_row *rows;
+    int udp = socket_snapshot(SOCK_DGRAM, &rows);
+    uint32_t queued = 0;
+    int i;
+
+    if (udp < 0) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < udp; i++) {
+        queued += rows[i].rxq;
+    }
+    kfree(rows);
+    tcp_count(&tc);
+    ap_str(t, "sockets: used ");
+    ap_int(t, socket_count(0) + unix_count());
+    ap_str(t, "\nTCP: inuse ");
+    ap_int(t, tc.inuse);
+    ap_str(t, " orphan ");
+    ap_int(t, tc.orphan);
+    ap_str(t, " tw ");
+    ap_int(t, tc.tw);
+    ap_str(t, " alloc ");
+    ap_int(t, tc.alloc);
+    ap_str(t, " mem ");
+    ap_u32(t, (tc.bytes + PAGE_SIZE - 1) / PAGE_SIZE);
+    ap_str(t, "\nUDP: inuse ");
+    ap_int(t, udp);
+    ap_str(t, " mem ");
+    ap_u32(t, (queued + PAGE_SIZE - 1) / PAGE_SIZE);
+    ap_str(t, "\nUDPLITE: inuse 0\nRAW: inuse ");
+    ap_int(t, socket_count(SOCK_RAW));
+    ap_str(t, "\nFRAG: inuse 0 memory 0\n");
+    return t->len;
+}
+
+/**
+ * Render /proc/net/snmp: of the MIB counters Linux keeps, the ones this
+ * stack has, a line of names and a line of values for each group, which
+ * `ss -s` and `nstat` read by name.
+ *
+ * Forwarding 2 is "not a router". The retransmission bounds are Linux's
+ * milliseconds; MaxConn is -1, since the number of connections has no fixed
+ * limit, and CurrEstab counts ESTABLISHED and CLOSE_WAIT, as Linux does.
+ */
+static int procfs_gen_netsnmp(struct procfs_text *t)
+{
+    struct tcp_counts tc;
+
+    tcp_count(&tc);
+    ap_str(t, "Ip: Forwarding DefaultTTL\nIp: 2 ");
+    ap_int(t, IP_TTL_DEFAULT);
+    ap_str(t, "\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn CurrEstab\nTcp: 1 ");
+    ap_int(t, TCP_RTO_MIN * 10); /* ticks of 10 ms */
+    ap_ch(t, ' ');
+    ap_int(t, TCP_RTO_MAX * 10);
+    ap_str(t, " -1 ");
+    ap_int(t, tc.estab);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/** Render the /proc/net file `origin`, SYNTH_PROC_NETUDP to
+ * SYNTH_PROC_NETSNMP. */
+static int procfs_gen_net(struct procfs_text *t, int origin)
+{
+    switch (origin) {
+    case SYNTH_PROC_NETUDP:
+        return procfs_gen_netdgram(t, SOCK_DGRAM);
+    case SYNTH_PROC_NETRAW:
+        return procfs_gen_netdgram(t, SOCK_RAW);
+    case SYNTH_PROC_NETUNIX:
+        return procfs_gen_netunix(t);
+    case SYNTH_PROC_NETSOCKSTAT:
+        return procfs_gen_netsockstat(t);
+    default:
+        return procfs_gen_netsnmp(t);
+    }
+}
+
 /* the /proc file backing: a snapshot served through file_ops */
 
 /* A snapshot and its text are allocated from the heap at open and freed at
@@ -2683,7 +2885,8 @@ static int procfs_needs_pid(int kind)
            kind != VNODE_PROC_SYS_FILE && kind != VNODE_PROC_MOUNTS && kind != VNODE_PROC_USB &&
            kind != VNODE_PROC_AUDIO && kind != VNODE_PROC_FILESYSTEMS && kind != VNODE_PROC_LOOP &&
            kind != VNODE_PROC_INTERRUPTS && kind != VNODE_PROC_CONSOLE &&
-           kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP && kind != VNODE_PROC_NET_TCP;
+           kind != VNODE_PROC_NET_ROUTE && kind != VNODE_PROC_NET_ARP &&
+           kind != VNODE_PROC_NET_TCP && kind != VNODE_PROC_NET_FILE;
 }
 
 /**
@@ -2799,6 +3002,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_netarp(&text);
     } else if (vp->kind == VNODE_PROC_NET_TCP) {
         len = procfs_gen_nettcp(&text);
+    } else if (vp->kind == VNODE_PROC_NET_FILE) {
+        len = procfs_gen_net(&text, vp->procfile);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
         len = procfs_gen_stat(&text, pid, vp->tid == 0);
     } else if (vp->procfile == SYNTH_PROC_MAPS) {

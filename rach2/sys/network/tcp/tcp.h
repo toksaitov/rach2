@@ -349,6 +349,20 @@ struct tcp_row {
  */
 int tcp_snapshot(struct tcp_row **rows);
 
+/* The connections as /proc/net/sockstat and /proc/net/snmp count them, in
+ * the terms Linux counts its sockets in. */
+struct tcp_counts {
+    int inuse;      /* in a state other than CLOSED and TIME_WAIT */
+    int orphan;     /* in such a state with no socket left */
+    int tw;         /* in TIME_WAIT */
+    int alloc;      /* every block not in TIME_WAIT */
+    int estab;      /* ESTABLISHED or CLOSE_WAIT, Linux's CurrEstab */
+    uint32_t bytes; /* the blocks and their receive rings */
+};
+
+/** Count the control blocks into `c`, under `net_lock`. */
+void tcp_count(struct tcp_counts *c);
+
 /**
  * This stack's state as the number Linux's `/proc/net/tcp` uses.
  *
