@@ -4835,15 +4835,12 @@ static int32_t synth_proc_stat(struct linux_stat64 *kst, uint32_t inode)
 
 /**
  * The identity of a node of /sys, `follow` taking a device's link for the
- * directory it leads to. A uevent's size is 4096, as Linux gives every
- * attribute file, and a device that is not there is -ENOENT.
+ * directory it leads to, whether or not its device is still there: what a
+ * descriptor open on the node reports after the device has gone. A uevent's
+ * size is 4096, as Linux gives every attribute file.
  */
-static int32_t synth_sys_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
+static void synth_sys_identity(const struct vpath *vp, struct linux_stat64 *kst, int follow)
 {
-    if ((vp->sysent == SYSFS_PCI_DEVICE || vp->sysent == SYSFS_USB_DEVICE) &&
-        !sysfs_device_exists(vp->sysent, vp->syskey)) {
-        return -ENOENT;
-    }
     kst->st_dev = SYSFS_FSID;
     if (vp->kind == VNODE_SYS_FILE) {
         kst->st_mode = S_IFREG | 0444;
@@ -4856,7 +4853,25 @@ static int32_t synth_sys_stat(const struct vpath *vp, struct linux_stat64 *kst, 
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 0);
     }
+}
+
+/** The identity of a node of /sys, as `synth_sys_identity` gives it, or
+ * -ENOENT for a device that is not there. */
+static int32_t synth_sys_stat(const struct vpath *vp, struct linux_stat64 *kst, int follow)
+{
+    if ((vp->sysent == SYSFS_PCI_DEVICE || vp->sysent == SYSFS_USB_DEVICE) &&
+        !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    synth_sys_identity(vp, kst, follow);
     return 0;
+}
+
+/** Whether `vp` is a node of /sys. */
+static int synth_is_sys(const struct vpath *vp)
+{
+    return vp &&
+           (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK || vp->kind == VNODE_SYS_FILE);
 }
 
 /** The target of the device link `vp`, relative as Linux writes it, into
@@ -5969,7 +5984,9 @@ int32_t sys_fstatfs64(isr_params_t *params)
         int dev = vp && (vp->kind == VNODE_DEV || vp->kind == VNODE_PTS);
 
         return statfs_fill((struct linux_statfs64 __user *)params->edx,
-                           dev ? STATFS_MAGIC_DEVFS : STATFS_MAGIC_PROC);
+                           dev                ? STATFS_MAGIC_DEVFS
+                           : synth_is_sys(vp) ? STATFS_MAGIC_SYSFS
+                                              : STATFS_MAGIC_PROC);
     }
     if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
         e->type == FD_TYPE_SYNTH_DIR) {
@@ -6098,6 +6115,9 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_nlink = 1;
             kst->st_blksize = 4096;
             kst->st_dev = PROCFS_FSID;
+            if (synth_is_sys(&vp)) {
+                synth_sys_identity(&vp, kst, 1);
+            }
         }
     } else if (entry->type == FD_TYPE_SYNTH_PATH) {
         /* An O_PATH descriptor on a /dev or /proc leaf, or on a /proc link
@@ -6113,6 +6133,9 @@ static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
             kst->st_mode = dev ? 020600 : (S_IFREG | 0444); /* S_IFCHR | 0600 */
             kst->st_blksize = 4096;
             kst->st_dev = dev ? DEVFS_FSID : PROCFS_FSID;
+            if (synth_is_sys(vp)) {
+                synth_sys_identity(vp, kst, 0);
+            }
         }
     } else if (entry->type == FD_TYPE_PTS) {
         /* A pty slave: report the SAME identity as stat("/dev/pts/N") so
