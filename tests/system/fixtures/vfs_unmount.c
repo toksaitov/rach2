@@ -218,6 +218,13 @@ static void vfs_device_failed(struct block_device *dev, unsigned long long lba, 
     (void)rc;
 }
 
+/* The unmount drops the inotify watches on the mount's files, which this
+ * fixture has none of. */
+static void inotify_unmount(struct vfs_mount *m)
+{
+    (void)m;
+}
+
 #include "unmount.inc"
 
 /** A missing parent, its live child and a spare record for deeper trees. */
