@@ -946,6 +946,9 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     st->bsize = em->block_size;
     st->blocks = em->blocks;
     st->bfree = em->free_blocks;
+    st->reserved = em->r_blocks;
+    st->files = em->inodes;
+    st->ffree = em->free_inodes;
     st->namelen = EXT2_NAME_MAX;
     return 0;
 }

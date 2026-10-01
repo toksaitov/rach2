@@ -3,7 +3,8 @@
  *
  * Each row is one promise: the errno a path answers, what a description
  * keeps across unlink and rename, what the synthetic mounts are and are
- * not, and the statfs identities. The rows run before the migration starts
+ * not, and the statfs identities, with the inode counts ext2 keeps and
+ * KRFFS does not. The rows run before the migration starts
  * and after every family it moves, so a family that changes an answer is
  * caught the commit it moves.
  *
@@ -14,7 +15,8 @@
  *
  * Needs: root privilege, a writable KRFFS or ext2 root, mounted /proc and
  * /dev, and absent /vp and /procx paths. The root type in /proc/mounts selects
- * the hard-link result and statfs magic. An unknown root type fails.
+ * the hard-link result, the statfs magic and the inode counts. An unknown
+ * root type fails.
  *
  * Prints "VFSPROBE OK". Freestanding; direct int 0x80.
  */
@@ -536,6 +538,12 @@ void _start(void)
     }
     if (sys3(SYS_STATFS64, (int)"/", 84, (int)iobuf) != 0 || *(unsigned *)iobuf != magic) {
         fail("statfs64 of the root");
+    }
+    /* f_files at 32 and f_ffree at 40: counted on ext2, not on KRFFS. */
+    if (magic == STATFS_MAGIC_EXT2 ? *(unsigned *)(iobuf + 32) == 0 ||
+                                         *(unsigned *)(iobuf + 40) > *(unsigned *)(iobuf + 32)
+                                   : *(unsigned *)(iobuf + 32) != 0) {
+        fail("statfs64 of the root counts its inodes");
     }
 
     /* ---- the working directory ---- */

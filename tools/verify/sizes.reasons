@@ -144,8 +144,8 @@ rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation ove
 rach2/sys/fs/krffs.c:krffs_resize_at lines 123 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_open complexity 65 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_open lines 180 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open complexity 66 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_open lines 182 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 138 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify complexity 55 a dispatcher, one arm per command, read as a table
@@ -707,8 +707,8 @@ tests/usbdiskprobe.c:part_hold lines 120 a probe, one sequence of steps in the o
 tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
 tests/usbprobe.c:probe_main lines 113 a probe, one sequence of steps in the order the log records them
 
-tests/vfsprobe.c:_start complexity 98 a probe, one sequence of steps in the order the log records them
-tests/vfsprobe.c:_start lines 283 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start complexity 101 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:_start lines 289 a probe, one sequence of steps in the order the log records them
 
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 

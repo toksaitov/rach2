@@ -10,7 +10,8 @@
  * DT_UNKNOWN, and never DT_REG for anything but a regular file; /dev/null,
  * /proc/self, /proc/meminfo, /proc/cpuinfo, /proc/net and /proc/sys have
  * their own types by name. /proc/cpuinfo is a record of processor 0 with its
- * flags, /proc/sys/fs/inotify/max_user_watches reads 8192, and a working
+ * flags, /proc/self/mounts reads as /proc/mounts,
+ * /proc/sys/fs/inotify/max_user_watches reads 8192, and a working
  * directory of /proc/sys/kernel is named so by getcwd. Each listing must end
  * without an error from readdir and check at least one entry, and lstat may
  * fail only with ENOENT, only in /proc and /dev/pts, whose entries come and
@@ -1024,8 +1025,8 @@ static int slurp(const char *path, char *buf, int cap)
     return n;
 }
 
-/* /proc/cpuinfo's record, a /proc/sys file, and a working directory in
- * /proc/sys. */
+/* /proc/cpuinfo's record, /proc/self/mounts, a /proc/sys file, and a working
+ * directory in /proc/sys. */
 static int proc_texts(void)
 {
     char buf[4096];
@@ -1034,6 +1035,14 @@ static int proc_texts(void)
     if (slurp("/proc/cpuinfo", buf, sizeof(buf)) <= 0 ||
         strncmp(buf, "processor\t: 0\n", 14) != 0 || !strstr(buf, "\nflags\t\t:")) {
         return fail("/proc/cpuinfo is not a record of processor 0 with its flags");
+    }
+    {
+        char mounts[4096];
+
+        if (slurp("/proc/mounts", mounts, sizeof(mounts)) <= 0 ||
+            slurp("/proc/self/mounts", buf, sizeof(buf)) <= 0 || strcmp(buf, mounts) != 0) {
+            return fail("/proc/self/mounts is not /proc/mounts");
+        }
     }
     if (slurp("/proc/sys/fs/inotify/max_user_watches", buf, sizeof(buf)) < 0 ||
         strcmp(buf, "8192\n") != 0) {

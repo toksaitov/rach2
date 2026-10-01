@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 1, 2026
 .Dt STATFS 2
 .Os
 .Sh NAME
@@ -40,11 +40,13 @@ The total count in those units.
 .It Va f_bfree
 The free count in those units.
 .It Va f_bavail
-Equal to
-.Va f_bfree ;
-no separate allowance for an unprivileged caller is reported.
+The free count an unprivileged caller may use: on ext2,
+.Va f_bfree
+less the blocks the superblock reserves for root, and elsewhere equal to
+.Va f_bfree .
 .It Va f_files , f_ffree
-Zero; inode counts are not reported.
+The inodes and the free inodes on ext2; zero on the other types, which keep
+no fixed count of them.
 .It Va f_fsid
 Zero.
 .It Va f_namelen

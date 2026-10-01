@@ -134,6 +134,9 @@ struct vfs_statfs {
     uint32_t bsize;
     uint64_t blocks;
     uint64_t bfree;
+    uint64_t reserved; /* of the free blocks, those only a privileged writer takes */
+    uint64_t files;    /* the inodes, and the free ones, or 0 for a type that */
+    uint64_t ffree;    /* has no fixed count of them */
     uint32_t namelen;
 };
 

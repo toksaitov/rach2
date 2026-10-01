@@ -84,6 +84,7 @@ enum vnode_kind {
 #define SYNTH_PROC_OOM_ADJ     26
 #define SYNTH_PROC_CPUINFO     27
 #define SYNTH_PROC_SYSCTL      28
+#define SYNTH_PROC_PIDMOUNTS   29
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

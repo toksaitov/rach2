@@ -19,10 +19,10 @@
 #             it needs in /usr/lib/i386-linux-gnu, as Debian's packages have
 #             them, from the packages fetch_chromium.sh unpacked
 #
-# Then it links /bin/bash, /usr/bin/cc and /usr/bin/vi, and each BusyBox
-# applet no file of the path answers for, puts the CA bundle in /etc/ssl,
-# compiles the console's terminfo entry, rach2.ti, renders the ports'
-# manual pages with render_man.sh, takes the set-id bit off OpenSSH's
+# Then it links /bin/bash, /usr/bin/cc, /usr/bin/vi and /etc/mtab, and each
+# BusyBox applet no file of the path answers for, puts the CA bundle in
+# /etc/ssl, compiles the console's terminfo entry, rach2.ti, renders the
+# ports' manual pages with render_man.sh, takes the set-id bit off OpenSSH's
 # ssh-keysign, and has the root's own ldconfig write /etc/ld.so.cache from
 # the /etc/ld.so.conf the manifest staged. A file the tree already has is
 # refused rather than replaced, so that what the manifest staged is what the
@@ -137,6 +137,10 @@ echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 ln -s ../usr/bin/bash "$TREE/bin/bash"
 ln -s gcc "$TREE/usr/bin/cc"
 ln -s vim "$TREE/usr/bin/vi"
+
+# The mount table where glibc's getmntent and GNU df look for it, as a
+# Debian system links it.
+ln -s ../proc/self/mounts "$TREE/etc/mtab"
 
 # BusyBox's applets are not files: ash runs one for its name before it
 # searches the path, and bash and every program that searches the path

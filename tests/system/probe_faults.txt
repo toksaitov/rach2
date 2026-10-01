@@ -626,9 +626,9 @@ probe threadmusl
 file rach2/sys/syscall_fs.c
 expect THREADMUSL FAIL (a thread's directory lists a task directory
 old
-        if (n >= (sd->tid != 0 ? 12 : 13)) {
+        if (n >= (sd->tid != 0 ? 13 : 14)) {
 new
-        if (n >= 13) {
+        if (n >= 14) {
 end
 
 fault thread-dir-link-drops-tid
@@ -4213,7 +4213,8 @@ probe schedmusl
 file rach2/sys/fs/synthfs.c
 expect SCHEDMUSL FAIL (the OOM score adjustment does not read 0 at first
 old
-                 {"mem", SYNTH_PROC_MEM},         {"oom_score_adj", SYNTH_PROC_OOM_ADJ}};
+                 {"mem", SYNTH_PROC_MEM},
+                 {"oom_score_adj", SYNTH_PROC_OOM_ADJ}};
 new
                  {"mem", SYNTH_PROC_MEM}};
 end
@@ -4584,7 +4585,8 @@ new
     if (shared && !(e->flags & FD_FLAG_WRITE)) {
 end
 
-# The caller's descriptors by their links.
+# The caller's descriptors by their links, /proc/PID/mounts, and statfs's
+# inode counts.
 
 fault fd-link-not-opened
 probe fdcallmusl
@@ -4606,4 +4608,28 @@ old
     if (src->ofd && src->ofd->vmnt && (src->type == FD_TYPE_FILE || src->type == FD_TYPE_DIR)) {
 new
     if (0) {
+end
+
+fault pid-mounts-missing
+probe direntmusl
+file rach2/sys/fs/procfs.c
+expect DIRENTMUSL FAIL (/proc/self/mounts is not /proc/mounts
+old
+    } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
+        len = procfs_gen_mounts(&text);
+new
+    } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
+        len = procfs_gen_cmdline(&text, pid);
+end
+
+fault krffs-statfs-counts-inodes
+probe vfsprobe
+file rach2/sys/syscall_fs.c
+expect VFSPROBE FAIL: statfs64 of the root counts its inodes
+old
+    st.f_files = 0;
+    st.f_ffree = 0;
+new
+    st.f_files = 1;
+    st.f_ffree = 0;
 end

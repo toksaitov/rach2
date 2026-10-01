@@ -640,6 +640,10 @@ On Linux a write sets the value of every other process that shares the
 address space too, a
 .Xr vfork 2
 child excepted; here it sets the one process's.
+.It Pa /proc/PID/mounts
+The text of
+.Pa /proc/mounts ,
+which is the same for every process: the kernel has one table of mounts.
 .It Pa /proc/PID/maps
 A line for each region of the address space:
 .Dl start-end perms offset 00:00 0 path

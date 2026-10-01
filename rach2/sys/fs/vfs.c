@@ -1563,6 +1563,7 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     if (!mnt->type->ops->statfs) {
         return -EINVAL;
     }
+    k_memset(st, 0, sizeof(*st));
     return mnt->type->ops->statfs(mnt, st);
 }
 

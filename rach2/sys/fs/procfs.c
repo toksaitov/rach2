@@ -1015,6 +1015,8 @@ static const char *procfs_pid_file_name(int kind)
         return "environ";
     case SYNTH_PROC_COMM:
         return "comm";
+    case SYNTH_PROC_PIDMOUNTS:
+        return "mounts";
     case SYNTH_PROC_MEM:
         return "mem";
     case SYNTH_PROC_OOM_ADJ:
@@ -1219,7 +1221,8 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
  *
  * Lets a /proc directory read walk the table by index without exposing slots.
  * A process is listed once, by its leader; the ids of its other threads are
- * not listed, as on Linux, though /proc/<tid> still opens.
+ * not listed, as on Linux, though /proc/<tid> still opens. The idle process,
+ * pid 0, is not listed, as Linux lists no pid 0.
  */
 int procfs_nth_pid(int n)
 {
@@ -2749,6 +2752,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_auxv(&text, pid);
     } else if (vp->procfile == SYNTH_PROC_ENVIRON) {
         len = procfs_gen_environ(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
+        len = procfs_gen_mounts(&text);
     } else if (vp->procfile == SYNTH_PROC_COMM) {
         len = procfs_gen_comm(&text, pid);
     } else {

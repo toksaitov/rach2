@@ -5735,7 +5735,9 @@ static int32_t statfs_fill_mount(struct linux_statfs64 __user *out, struct vfs_m
     st.f_frsize = vs.bsize;
     st.f_blocks = vs.blocks;
     st.f_bfree = vs.bfree;
-    st.f_bavail = vs.bfree;
+    st.f_bavail = vs.bfree > vs.reserved ? vs.bfree - vs.reserved : 0;
+    st.f_files = vs.files;
+    st.f_ffree = vs.ffree;
     st.f_namelen = vs.namelen;
     if (copy_to_user(out, &st, sizeof(st)) != 0) {
         return -EFAULT;
@@ -9952,11 +9954,11 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
     static const struct {
         const char *name;
         uint8_t type;
-    } files[13] = {{"stat", DT_REG}, {"cmdline", DT_REG},       {"fd", DT_DIR},
+    } files[14] = {{"stat", DT_REG}, {"cmdline", DT_REG},       {"fd", DT_DIR},
                    {"maps", DT_REG}, {"status", DT_REG},        {"statm", DT_REG},
                    {"auxv", DT_REG}, {"environ", DT_REG},       {"comm", DT_REG},
-                   {"mem", DT_REG},  {"oom_score_adj", DT_REG}, {"exe", DT_LNK},
-                   {"task", DT_DIR}};
+                   {"mem", DT_REG},  {"oom_score_adj", DT_REG}, {"mounts", DT_REG},
+                   {"exe", DT_LNK},  {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int id, i, c = 0;
@@ -9968,7 +9970,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         return 0; /* the process exited: an empty directory (just . and ..) */
     }
     if (sd->kind == VNODE_PROC_PID) {
-        if (n >= (sd->tid != 0 ? 12 : 13)) {
+        if (n >= (sd->tid != 0 ? 13 : 14)) {
             return 0;
         }
         for (i = 0; files[n].name[i]; i++) {
