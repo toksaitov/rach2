@@ -10634,8 +10634,8 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
                  {"maps", DT_REG},   {"smaps", DT_REG},   {"status", DT_REG},
                  {"statm", DT_REG},  {"auxv", DT_REG},    {"environ", DT_REG},
                  {"comm", DT_REG},   {"mem", DT_REG},     {"oom_score_adj", DT_REG},
-                 {"mounts", DT_REG}, {"exe", DT_LNK},     {"cwd", DT_LNK},
-                 {"root", DT_LNK},   {"task", DT_DIR}};
+                 {"mounts", DT_REG}, {"limits", DT_REG},  {"exe", DT_LNK},
+                 {"cwd", DT_LNK},    {"root", DT_LNK},    {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
     int id, i, c = 0;

@@ -873,6 +873,16 @@ The auxiliary vector the program was given, as pairs of 32-bit words
 through the
 .Dv AT_NULL
 pair.
+.It Pa /proc/PID/limits
+Linux's table of the sixteen resource limits, a line of column names and
+a line for each: its name, its soft and hard values or
+.Ql unlimited ,
+and its unit, in Linux's columns.
+The five the kernel keeps, the stack, the core file, the processes, the
+open files and the address space, have the process's values, and the
+others are unlimited, as
+.Xr prlimit64 2
+reports them.
 .It Pa /proc/PID/environ
 The environment strings of the initial stack, each ended by a NUL, at
 most their first 128 KiB, cut as

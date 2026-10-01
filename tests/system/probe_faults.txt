@@ -5191,3 +5191,13 @@ old
 new
     if (vp->kind == VNODE_PROC_FD_DIR && !procfs_may_read(pid) && pid < 0) {
 end
+
+fault proc-limits-missing
+probe procprobe
+file rach2/sys/fs/synthfs.c
+expect FAIL: /proc/self/limits has Linux's header and its sixteen limits
+old
+                 {"limits", SYNTH_PROC_LIMITS}};
+new
+                 };
+end

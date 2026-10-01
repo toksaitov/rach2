@@ -944,7 +944,7 @@ static int listing(const char *dir, char *out, int cap)
 static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
-                                "mem oom_score_adj mounts exe cwd root ";
+                                "mem oom_score_adj mounts limits exe cwd root ";
     static char got[512], want[512], names[4096];
     char dir[40] = "/proc/self/task/";
     int pid = syscall1(SYS_GETPID, 0);
@@ -970,6 +970,16 @@ static void pid_dir_rows(void)
     want[i] = '\0';
     check(listing("/proc/self", got, (int)sizeof(got)) == 0 && same_str(got, want),
           "and /proc/self lists them all in order, task last");
+    {
+        int n = slurp("/proc/self/limits", buf, (int)sizeof(buf));
+
+        check(n > 0 &&
+                  contains(buf, n,
+                           "Limit                     Soft Limit           Hard Limit           "
+                           "Units     \n") &&
+                  contains(buf, n, "\nMax open files            ") && lines_in(buf, n) == 17,
+              "/proc/self/limits has Linux's header and its sixteen limits");
+    }
     check(listing("/proc", names, (int)sizeof(names)) == 0 &&
               contains(names, sizeof(names), " interrupts filesystems "),
           "/proc lists interrupts and filesystems, which open there");

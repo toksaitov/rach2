@@ -1165,6 +1165,89 @@ static int procfs_gen_statm(struct procfs_text *t, int pid)
     return t->len;
 }
 
+/* Append `s` and spaces to `width` bytes, or `s` and one space when it is
+ * as wide: printf's "%-Ns " for a column of N. */
+static void ap_left(struct procfs_text *t, const char *s, int width)
+{
+    int n = (int)k_strlen(s);
+
+    ap_str(t, s);
+    do {
+        ap_ch(t, ' ');
+    } while (++n < width);
+}
+
+/* A limit's value in its column: "unlimited", or the number. */
+static void ap_limit(struct procfs_text *t, uint32_t v)
+{
+    char digits[12];
+    int i = (int)sizeof(digits) - 1;
+
+    if (v == RLIM_INFINITY32) {
+        ap_left(t, "unlimited", 21);
+        return;
+    }
+    digits[i] = '\0';
+    do {
+        digits[--i] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    ap_left(t, digits + i, 21);
+}
+
+/**
+ * /proc/<pid>/limits: Linux's table of the sixteen resource limits, each a
+ * name, the soft and hard values or "unlimited", and a unit, in Linux's
+ * columns. The five the kernel keeps (`rlim`) are the process's, and the
+ * others unlimited, as getrlimit reports them.
+ */
+static int procfs_gen_limits(struct procfs_text *t, int pid)
+{
+    static const struct {
+        const char *name;
+        int slot;
+        const char *unit;
+    } rows[] = {{"Max cpu time", -1, "seconds"},
+                {"Max file size", -1, "bytes"},
+                {"Max data size", -1, "bytes"},
+                {"Max stack size", RLIM_STACK, "bytes"},
+                {"Max core file size", RLIM_CORE, "bytes"},
+                {"Max resident set", -1, "bytes"},
+                {"Max processes", RLIM_NPROC, "processes"},
+                {"Max open files", RLIM_NOFILE, "files"},
+                {"Max locked memory", -1, "bytes"},
+                {"Max address space", RLIM_AS, "bytes"},
+                {"Max file locks", -1, "locks"},
+                {"Max pending signals", -1, "signals"},
+                {"Max msgqueue size", -1, "bytes"},
+                {"Max nice priority", -1, 0},
+                {"Max realtime priority", -1, 0},
+                {"Max realtime timeout", -1, "us"}};
+    process_t *p = procfs_proc(pid);
+    uint32_t i;
+
+    if (!p) {
+        return -ENOENT;
+    }
+    ap_left(t, "Limit", 26);
+    ap_left(t, "Soft Limit", 21);
+    ap_left(t, "Hard Limit", 21);
+    ap_left(t, "Units", 10);
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        int s = rows[i].slot;
+
+        ap_ch(t, '\n');
+        ap_left(t, rows[i].name, 26);
+        ap_limit(t, s < 0 ? RLIM_INFINITY32 : p->rlim[s].cur);
+        ap_limit(t, s < 0 ? RLIM_INFINITY32 : p->rlim[s].max);
+        if (rows[i].unit) {
+            ap_left(t, rows[i].unit, 10);
+        }
+    }
+    ap_ch(t, '\n');
+    return t->len;
+}
+
 /** The name of the /proc/<pid> file of kind `kind`, for a descriptor's link. */
 static const char *procfs_pid_file_name(int kind)
 {
@@ -1191,6 +1274,8 @@ static const char *procfs_pid_file_name(int kind)
         return "mem";
     case SYNTH_PROC_OOM_ADJ:
         return "oom_score_adj";
+    case SYNTH_PROC_LIMITS:
+        return "limits";
     default:
         return "stat";
     }
@@ -3687,6 +3772,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_mounts(&text);
     } else if (vp->procfile == SYNTH_PROC_COMM) {
         len = procfs_gen_comm(&text, pid);
+    } else if (vp->procfile == SYNTH_PROC_LIMITS) {
+        len = procfs_gen_limits(&text, pid);
     } else {
         len = procfs_gen_cmdline(&text, pid);
     }
