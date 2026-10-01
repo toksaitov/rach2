@@ -185,7 +185,8 @@
 #define SYS_PRLIMIT64   340
 
 /* Durability: flush the disk-backed page cache (a no-op when KRFFS is the RAM
-   module). fsync/fdatasync flush per the open fd; sync flushes everything. */
+   module). fsync/fdatasync flush per the open fd; sync and syncfs flush
+   everything. */
 #define SYS_SYNC      36
 #define SYS_FSYNC     118
 #define SYS_FDATASYNC 148

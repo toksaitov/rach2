@@ -2033,7 +2033,7 @@ Request a data-only flush.
 On Rach2, fdatasync uses the same handler as fsync and also flushes metadata.
 .It Fl f
 Request a flush of the file systems containing the files.
-Rach2 has no syncfs system call; this option does not flush them, and the applet ignores the error.
+Rach2's syncfs flushes every file system, as sync does.
 .El
 .Ss tail
 .Bl -tag -width Ds
