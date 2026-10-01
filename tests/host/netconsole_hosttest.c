@@ -60,13 +60,15 @@ struct netdev;
  * so a record of its own is all that is needed. */
 static struct netdev the_iface;
 
+/* Whether the card says its link is up, and the frame after which it goes
+ * down, which models a link lost in the middle of a drain (0 for never). */
+static int link_down;
+static int link_lost_after;
+
 struct netdev *netdev_first(void)
 {
     return &the_iface;
 }
-
-/* Whether the card says its link is up. */
-static int link_down;
 
 int netdev_running(struct netdev *nd)
 {
@@ -79,6 +81,9 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
     (void)out;
     unsigned i;
 
+    if (link_down) {
+        return 1; /* NETDEV_TX_DROPPED: Ethernet refuses a card without a link */
+    }
     tx_depth++;
     if (tx_depth > tx_max_depth) {
         tx_max_depth = tx_depth;
@@ -97,6 +102,9 @@ int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short typ
     if (tx_prints) {
         log_putc('!');
         log_putc('\n');
+    }
+    if (link_lost_after != 0 && frame_count == (unsigned)link_lost_after) {
+        link_down = 1;
     }
     tx_depth--;
     return 0;
@@ -276,6 +284,50 @@ int main(void)
     CHECK(frame_count == 1 && frame_len[0] == NETCONSOLE_HDR_LEN + 24 &&
               frame_data[0][NETCONSOLE_HDR_LEN] == 'b',
           "the next line after the link comes up sends what was held with it");
+
+    /* ---- a full ring still drains once the link is back ---- */
+    {
+        unsigned i;
+
+        nc_reset();
+        link_down = 1;
+        netconsole_enable();
+        for (i = 0; i < NETCONSOLE_RING + 10; i++) {
+            netconsole_putc(i % 64 == 63 ? '\n' : 'f');
+        }
+        CHECK(frame_count == 0 && nc_pending() == NETCONSOLE_RING - 1,
+              "a ring that fills while the link is down holds what it can");
+        link_down = 0;
+        netconsole_putc('\n');
+        CHECK(frame_count > 0 && nc_pending() == 0,
+              "and the next line, which it has no room for, still drains it");
+    }
+
+    /* ---- a link lost in the middle of a drain keeps the rest ---- */
+    {
+        unsigned i;
+
+        nc_reset();
+        link_down = 1;
+        netconsole_enable();
+        for (i = 0; i < 3 * NETCONSOLE_PAYLOAD_MAX; i++) {
+            netconsole_putc('m');
+        }
+        link_down = 0;
+        link_lost_after = 1;
+        netconsole_putc('\n');
+        CHECK(frame_count == 1 && nc_pending() == 2 * NETCONSOLE_PAYLOAD_MAX + 1,
+              "a frame the lost link refuses stays in the ring with the rest");
+        link_down = 0;
+        link_lost_after = 0;
+        put_string("back\n");
+        /* The first character of "back" makes a payload's worth, which
+           sends three frames; the newline sends the rest. */
+        CHECK(frame_count == 5 && nc_pending() == 0 && frame_be32(4, 8) == 4 &&
+                  frame_data[1][NETCONSOLE_HDR_LEN] == 'm' &&
+                  frame_data[3][NETCONSOLE_HDR_LEN] == '\n',
+              "and goes out, in order, once the link is back");
+    }
 
     /* ---- a zero draw never becomes a zero boot id ---- */
     nc_reset();

@@ -13,7 +13,11 @@
  * probes. Those characters accumulate, and the first frames carry them. A
  * card whose link is not up yet, as a real one is for the seconds its PHY
  * takes to negotiate, could not send them, so they wait in the ring until
- * the link is up and the next line starts a drain.
+ * the link is up and the next line starts a drain, even a line the full ring
+ * has no room for. A frame refused because the link went down in the middle
+ * of a drain stays in the ring too; the characters leave the ring only once
+ * their frame is sent, which also keeps a character that arrives during the
+ * send from taking their slot.
  *
  * Two different things can interleave here and each has its own guard.
  *
@@ -87,7 +91,11 @@ void netconsole_putc(char c)
     if (next == nc_tail) {
         /* Full: drop the newest, since the oldest are the boot log. */
         nc_dropped++;
+        send = nc_enabled && !nc_sending && c == '\n';
         net_unlock(flags);
+        if (send) {
+            netconsole_flush();
+        }
         return;
     }
     nc_ring[nc_head] = c;
@@ -117,14 +125,16 @@ void netconsole_flush(void)
 
     for (;;) {
         uint16_t n = 0;
+        uint32_t at;
 
         flags = net_lock();
-        while (nc_tail != end && n < NETCONSOLE_PAYLOAD_MAX) {
-            nc_payload[NETCONSOLE_HDR_LEN + n] = (uint8_t)nc_ring[nc_tail];
+        at = nc_tail;
+        while (at != end && n < NETCONSOLE_PAYLOAD_MAX) {
+            nc_payload[NETCONSOLE_HDR_LEN + n] = (uint8_t)nc_ring[at];
             n++;
-            nc_tail++;
-            if (nc_tail == NETCONSOLE_RING) {
-                nc_tail = 0;
+            at++;
+            if (at == NETCONSOLE_RING) {
+                at = 0;
             }
         }
         if (n == 0) {
@@ -143,8 +153,14 @@ void netconsole_flush(void)
         write16be(nc_payload + 14, 0);
         write16be(nc_payload + 14, ip_checksum(nc_payload, (uint16_t)(NETCONSOLE_HDR_LEN + n)));
 
-        ethernet_tx(netdev_first(), nc_broadcast, NETCONSOLE_ETHERTYPE, nc_payload,
-                    (uint16_t)(NETCONSOLE_HDR_LEN + n));
+        if (ethernet_tx(netdev_first(), nc_broadcast, NETCONSOLE_ETHERTYPE, nc_payload,
+                        (uint16_t)(NETCONSOLE_HDR_LEN + n)) != NETDEV_TX_OK &&
+            !netdev_running(netdev_first())) {
+            nc_sending = 0;
+            net_unlock(flags);
+            return;
+        }
+        nc_tail = at;
         nc_seq++;
         nc_frames++;
         net_unlock(flags);
