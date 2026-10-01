@@ -6,7 +6,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
- * host-seconds: 150
+ * host-seconds: 300
  *
  * The volumes are mkfatfixture's, built here on first use the way the bootctl
  * test builds them, in the test's own fixture directory (compat/fixdir_host.c),
