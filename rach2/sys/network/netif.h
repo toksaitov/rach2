@@ -39,6 +39,15 @@
 #define SIOCADDRT      0x890b
 #define SIOCDELRT      0x890c
 
+/* The bridge and VLAN requests of brctl(8) and vconfig(8), which Linux
+ * answers with ENOPKG when neither module is in the kernel. */
+#define SIOCGIFBR   0x8940
+#define SIOCSIFBR   0x8941
+#define SIOCGIFVLAN 0x8982
+#define SIOCSIFVLAN 0x8983
+#define SIOCBRADDBR 0x89a0
+#define SIOCBRDELBR 0x89a1
+
 /* Interface flags, of which this machine has four to report. */
 #define IFF_UP        0x0001
 #define IFF_BROADCAST 0x0002

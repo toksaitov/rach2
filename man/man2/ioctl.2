@@ -348,6 +348,22 @@ They set or remove the selected interface's default gateway.
 A null device-name pointer selects the first interface.
 Adding the interface's existing subnet route succeeds without action;
 removing it or changing any other non-default route is unsupported.
+.Pp
+The bridge requests,
+.Dv SIOCGIFBR ,
+.Dv SIOCSIFBR ,
+.Dv SIOCBRADDBR
+and
+.Dv SIOCBRDELBR ,
+and the VLAN requests of
+.Xr vconfig 1 ,
+.Dv SIOCGIFVLAN
+and
+.Dv SIOCSIFVLAN ,
+fail with
+.Er ENOPKG ,
+as Linux's do when neither module is in its kernel: there are no
+bridges or VLANs.
 .Sh RETURN VALUES
 .Fn ioctl
 returns 0 or the request's result on success.
@@ -402,6 +418,8 @@ The named network interface or index does not exist, or
 or
 .Dv AUDIO_SET_VOLUME
 has no active driver.
+.It Bq Er ENOPKG
+A bridge or VLAN request was made.
 .It Bq Er ENOTTY
 The object does not support the request, a disk size query has no live
 raw window, or

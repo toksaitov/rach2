@@ -382,6 +382,13 @@ int32_t netif_ioctl(uint32_t request, uint32_t arg, int *handled)
     case SIOCADDRT:
     case SIOCDELRT:
         return route_ioctl(request, arg);
+    case SIOCGIFBR:
+    case SIOCSIFBR:
+    case SIOCGIFVLAN:
+    case SIOCSIFVLAN:
+    case SIOCBRADDBR:
+    case SIOCBRDELBR:
+        return -ENOPKG;
     default:
         *handled = 0;
         return -ENOTTY;
