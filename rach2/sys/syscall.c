@@ -1021,21 +1021,32 @@ static int32_t sys_clock_getres(isr_params_t *params)
 }
 
 /**
- * End a sleep a signal cut short `left` ticks before its deadline: the
+ * End a sleep a signal cut short before its deadline, the tick `target`: the
  * process runs again, the kernel counts the sleep, and `urem`, when there is
- * one, gets the ticks left less the tick added for the tick in progress.
+ * one, gets the time left to that tick, less how far into the tick in
+ * progress the timer is (`rtc_tick_phase`).
  */
-static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint32_t left)
+static int32_t nanosleep_interrupted(struct kernel_timespec __user *urem, uint32_t target)
 {
     current_proc->wakeup_tick = 0;
     current_proc->state = PROC_RUNNING;
     process_count_sleep_cut_short();
     if (urem) {
         struct kernel_timespec rem;
-        uint32_t unslept = left - 1u;
+        uint32_t flags = kirq_save();
+        uint32_t now, phase_ns, left;
+        int32_t ns;
 
-        rem.tv_sec = (int32_t)(unslept / 100u);
-        rem.tv_nsec = (int32_t)((unslept % 100u) * 10000000u);
+        rtc_tick_phase(&now, &phase_ns);
+        kirq_restore(flags);
+        left = (int32_t)(target - now) > 0 ? target - now : 0u;
+        rem.tv_sec = (int32_t)(left / 100u);
+        ns = (int32_t)((left % 100u) * 10000000u) - (int32_t)phase_ns;
+        if (ns < 0 && rem.tv_sec > 0) {
+            rem.tv_sec--;
+            ns += 1000000000;
+        }
+        rem.tv_nsec = ns > 0 ? ns : 0;
         (void)copy_to_user(urem, &rem, sizeof(rem));
     }
     return -EINTR;
@@ -1069,7 +1080,7 @@ static int32_t sleep_until(uint32_t target, struct kernel_timespec __user *urem)
         }
         if (signal_pending()) {
             kirq_restore(flags);
-            return nanosleep_interrupted(urem, (uint32_t)left);
+            return nanosleep_interrupted(urem, target);
         }
         /* 0 means not sleeping, so a deadline of 0 is stored as 1. */
         current_proc->wakeup_tick = target != 0 ? target : 1u;
@@ -1121,30 +1132,42 @@ static int timespec_valid(const struct kernel_timespec *req)
 }
 
 /**
- * Sleep `ticks` whole ticks, not counting the tick in progress, so a sleep is
- * never shorter than asked, up to the clamp in `timespec_ticks`.
+ * Sleep for `req`, to the first tick at or after its end, so a sleep is never
+ * shorter than asked and at most a tick longer, up to the clamp in
+ * `timespec_ticks`. The end is measured from where in the tick in progress
+ * the call is (`rtc_tick_phase`): counting that tick as a whole would make
+ * every sleep of a tick or less last two, so that `usleep(1000)` took 20 ms.
  *
- * A signal's remainder, written to `urem`, is the ticks left to the deadline
- * less the tick added for the tick in progress, so a caller that sleeps again
- * for the remainder in the same tick ends at the first sleep's deadline, and
- * later by the ticks it takes to call again; a signal in the last tick leaves
- * no remainder, so that sleep can end up to a tick before the time first
- * asked.
+ * A signal's remainder, written to `urem`, is the time left to the deadline
+ * tick, so a caller that sleeps again for the remainder ends at the first
+ * sleep's deadline, and later by the time it takes to call again.
  */
-static int32_t sleep_for(uint32_t ticks, struct kernel_timespec __user *urem)
+static int32_t sleep_for(const struct kernel_timespec *req, struct kernel_timespec __user *urem)
 {
-    uint32_t target = kernel_ticks + ticks + (ticks != 0 ? 1u : 0u);
+    uint32_t flags, now, phase_ns, us, ticks;
 
-    return sleep_until(target, urem);
+    flags = kirq_save();
+    rtc_tick_phase(&now, &phase_ns);
+    kirq_restore(flags);
+    if (req->tv_sec == 0 && req->tv_nsec == 0) {
+        return 0;
+    }
+    us = phase_ns / 1000u + ((uint32_t)req->tv_nsec + 999u) / 1000u;
+    ticks = timespec_ticks(req) - ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;
+    ticks += (us + 9999u) / 10000u;
+    if (ticks > 0x7FFFFFFEu) {
+        ticks = 0x7FFFFFFEu;
+    }
+    return sleep_until(now + ticks, urem);
 }
 
 /**
  * Block-and-schedule sleep (nanosleep, syscall 162, 32-bit timespec).
  *
  * EBX = const struct timespec* req, ECX = struct timespec* rem (optional).
- * Rounds up to whole 10 ms ticks and sleeps for them through `sleep_for`,
- * which has the rules of the deadline, the signals and the remainder. rem is
- * written as zero on normal completion.
+ * Sleeps to the first tick at or after the interval's end through
+ * `sleep_for`, which has the rules of the deadline, the signals and the
+ * remainder. rem is written as zero on normal completion.
  */
 static int32_t sys_nanosleep(isr_params_t *params)
 {
@@ -1162,7 +1185,7 @@ static int32_t sys_nanosleep(isr_params_t *params)
     if (!timespec_valid(&req)) {
         return -EINVAL;
     }
-    rc = sleep_for(timespec_ticks(&req), urem);
+    rc = sleep_for(&req, urem);
     if (rc != 0) {
         return rc;
     }
@@ -1353,7 +1376,7 @@ static int32_t sys_clock_nanosleep(isr_params_t *params)
         return sleep_until_cpu(clk, due, urem);
     }
     if (!absolute) {
-        return sleep_for(timespec_ticks(&req), urem);
+        return sleep_for(&req, urem);
     }
     return sleep_until_time(c.kind, &req);
 }

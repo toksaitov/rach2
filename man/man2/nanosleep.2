@@ -22,9 +22,11 @@ field specifies seconds and
 specifies nanoseconds.
 Seconds must be nonnegative; nanoseconds must be from 0 through 999999999.
 .Pp
-The kernel rounds a nonzero interval up to whole 10 ms ticks and adds one
-for the tick in progress, which is not counted, so a sleep that no signal
-ends is never shorter than asked, up to the limit below.
+The kernel ends a nonzero interval at the first 10 ms tick at or after its
+end, measured from where in the tick in progress the call is, so a sleep
+that no signal ends is never shorter than asked, up to the limit below,
+and at most a tick longer: a sleep of 1 ms lasts up to 10 ms, as Linux's
+does with a 100 Hz tick and no high-resolution timer.
 The process blocks until that deadline tick; other runnable processes
 continue to execute.
 A zero interval returns at once.
@@ -37,15 +39,10 @@ process runs before its deadline, the call fails with
 .Er EINTR .
 Unless
 .Fa rem
-is null, the raw call stores there the whole ticks left to the deadline,
-less the one added for the tick in progress.
-A sleep begun again with a nonzero remainder has the first sleep's
-deadline if it begins in the tick in which the remainder was stored, and a
-deadline one tick later for each tick that passes before it begins.
-A signal in the last tick before the deadline leaves a remainder of zero,
-since the kernel counts whole ticks and does not record where in its tick
-the sleep began; a sleep begun again with it returns at once, up to a
-tick before the time first asked.
+is null, the raw call stores there the time left to the deadline tick,
+less how far into the tick in progress the timer is.
+A sleep begun again with the remainder has the first sleep's deadline,
+later by the time it takes to begin it.
 .Ss clock_nanosleep
 .Fn clock_nanosleep
 sleeps against the clock

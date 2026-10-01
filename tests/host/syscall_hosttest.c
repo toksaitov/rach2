@@ -191,6 +191,13 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     kirq_restore(flags);
 }
 
+/** The tick count and the place within the tick, as a sleep reads them. */
+void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
+{
+    *ticks = kernel_ticks;
+    *phase_ns = (uint32_t)mono_phase_ns;
+}
+
 /** The model's one other process, pid 9, whose CPU clock a caller may read. */
 static process_t other;
 static struct tgroup group, other_group;
@@ -552,9 +559,9 @@ static struct kernel_timespec remainder(void)
  * count the kernel keeps of the sleeps a signal cut short rises only for one
  * that ended early.
  *
- * The tick in progress is not counted, so a sleep of three ticks from tick
- * 1000 blocks until 1004 and returns there, not before. A signal already
- * there leaves the whole request as the remainder.
+ * A sleep ends at the first tick at or after its end, so one of three ticks
+ * begun as tick 1000 starts blocks until 1003 and returns there, not before.
+ * A signal already there leaves the whole request as the remainder.
  */
 static void sleeps_masked(void)
 {
@@ -565,9 +572,9 @@ static void sleeps_masked(void)
     model_at(1000);
     pending_masked = blocked_masked = -1;
     state_at_unmask = -1;
-    CHECK(sleep_call(&p) == 0 && kernel_ticks == 1004,
+    CHECK(sleep_call(&p) == 0 && kernel_ticks == 1003,
           "a sleep with no signal runs to its deadline");
-    CHECK(blocked_until == 1004, "a sleep of three ticks from tick 1000 blocks until 1004");
+    CHECK(blocked_until == 1003, "a sleep of three ticks from tick 1000 blocks until 1003");
     CHECK(pending_masked == 1, "the pending check runs with interrupts masked");
     CHECK(blocked_masked == 0, "the yield runs with the mask lifted");
     CHECK(sleeps > 0 && unblocked_unmasks == 0,
@@ -591,15 +598,15 @@ static void sleeps_masked(void)
  * The sleep's edges: its last tick, its deadline, the wakes that do not end
  * it, and deadlines at the wrap.
  *
- * A sleep of three ticks from 3000 blocks until 3004. A signal in its last tick
- * leaves no remainder, since the kernel counts whole ticks and does not record
- * where in its tick the sleep began; a signal at 3004 ends nothing, and the
+ * A sleep of three ticks from 3000 blocks until 3003. A signal as its last
+ * tick begins leaves that tick as the remainder, the time to the deadline
+ * less the place within the tick; a signal at 3003 ends nothing, and the
  * call returns 0. A wake by a signal the sleep does not act on, blocked or
  * ignored, which `signal_post` makes with the deadline cleared, sends it back
  * to sleep with its deadline armed again. A remainder of 199 ticks is 1 s and
  * 990 ms. A sleep resumed for its remainder after a signal at every tick ends
- * within four calls, no earlier than the tick before the first sleep's
- * deadline. The count is clamped so that the longest sleep begun at 0x80000000
+ * within four calls, no earlier than the first sleep's deadline. The count is
+ * clamped so that the longest sleep begun at 0x80000000
  * still lies ahead of it, seconds past the clamp are shortened to it rather
  * than wrapped, and a deadline that wraps to 0, the "not sleeping" value, is
  * stored as 1. A sleep of zero does not block.
@@ -615,8 +622,8 @@ static void sleep_edges(void)
     post_at_block = 1;
     rc = sleep_call(&p);
     rem = remainder();
-    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 0,
-          "a signal in the last tick leaves no remainder");
+    CHECK(rc == -EINTR && rem.tv_sec == 0 && rem.tv_nsec == 10000000,
+          "a signal as the last tick begins leaves that tick");
     CHECK(cut_short == 1, "and the sleep is counted as one a signal cut short");
 
     ask_sleep(&p, 0, 30000000);
@@ -631,7 +638,7 @@ static void sleep_edges(void)
     model_at(7000);
     wake_unacted = 1;
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocks >= 2 && blocked_until == 7004 && kernel_ticks == 7004,
+    CHECK(rc == 0 && blocks >= 2 && blocked_until == 7003 && kernel_ticks == 7003,
           "a sleep woken by a signal it does not act on blocks again with its deadline armed");
 
     ask_sleep(&p, 2, 0);
@@ -668,7 +675,7 @@ static void sleep_edges(void)
           "a sleep of 42949673 s is shortened to the limit, not wrapped to four ticks");
 
     ask_sleep(&p, 21474836, 469999999);
-    model_at(0x80000001u);
+    model_at(0x80000002u);
     rc = sleep_call(&p);
     CHECK(rc == 0 && blocked_until == 1, "a sleep whose deadline wraps to 0 blocks until 1");
 
@@ -682,14 +689,17 @@ static void sleep_edges(void)
  * The sleep's rounding, its checks of the request, and the ticks that come
  * as it masks.
  *
- * A sleep of 15 ms from tick 1100 blocks until 1103, and one of 1 ns from
- * tick 1150 until 1152, since any part of a tick rounds up. A negative
- * second, a negative nanosecond count and one of a whole second are refused.
- * A sleeper that a signal wakes, and that the scheduler switches back to,
- * runs again at once rather than halting, so a sleep begun at 8000 with a
- * signal at 8001 leaves 20 ms. The deadline's tick may come just before the
- * sleep masks, after a yield or after a halt that another interrupt ended;
- * the sleep sees it at once, from 8100 and 8200 alike.
+ * A sleep ends at the first tick at or after its end, measured from where in
+ * the tick in progress it began: one of 15 ms from the start of tick 1100
+ * blocks until 1102, one of 1 ns from 1150 until 1151, and one of 1 ms begun
+ * 4 ms into tick 1300 until 1301, 6 ms later, where one of 7 ms waits until
+ * 1302. A negative second, a negative nanosecond count and one of a whole
+ * second are refused. A sleeper that a signal wakes, and that the scheduler
+ * switches back to, runs again at once rather than halting, so a sleep of
+ * 30 ms begun at 8000 with a signal at 8001 leaves 20 ms. The deadline's
+ * tick may come just before the sleep masks, after a yield or after a halt
+ * that another interrupt ended; the sleep sees it at once, from 8100 and
+ * 8200 alike.
  */
 static void sleep_races(void)
 {
@@ -700,11 +710,21 @@ static void sleep_races(void)
     ask_sleep(&p, 0, 15000000);
     model_at(1100);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1103, "a sleep of 15 ms from tick 1100 blocks until 1103");
+    CHECK(rc == 0 && blocked_until == 1102, "a sleep of 15 ms from tick 1100 blocks until 1102");
     ask_sleep(&p, 0, 1);
     model_at(1150);
     rc = sleep_call(&p);
-    CHECK(rc == 0 && blocked_until == 1152, "a sleep of 1 ns from tick 1150 blocks until 1152");
+    CHECK(rc == 0 && blocked_until == 1151, "a sleep of 1 ns from tick 1150 blocks until 1151");
+    mono_phase_ns = 4000000;
+    ask_sleep(&p, 0, 1000000);
+    model_at(1300);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocked_until == 1301, "a sleep of 1 ms begun 4 ms into a tick ends at the next");
+    ask_sleep(&p, 0, 7000000);
+    model_at(1300);
+    rc = sleep_call(&p);
+    CHECK(rc == 0 && blocked_until == 1302, "and one of 7 ms at the tick after");
+    mono_phase_ns = 0;
 
     ask_sleep(&p, -1, 0);
     model_at(1200);
@@ -726,14 +746,14 @@ static void sleep_races(void)
     model_at(8100);
     tick_after_yield = 1;
     rc = sleep_call(&p);
-    CHECK(rc == 0 && kernel_ticks == 8104,
+    CHECK(rc == 0 && kernel_ticks == 8103,
           "a deadline tick that comes as the sleep masks after a yield is seen");
 
     ask_sleep(&p, 0, 30000000);
     model_at(8200);
     halt_without_tick = 1;
     rc = sleep_call(&p);
-    CHECK(rc == 0 && kernel_ticks == 8204,
+    CHECK(rc == 0 && kernel_ticks == 8203,
           "a deadline tick that comes as the sleep masks after a halt is seen");
 }
 
@@ -1124,8 +1144,8 @@ static void clock_sleeps(void)
 
     ask_clock_sleep(&p, 1, 0, 0, 30000000);
     uptime_at(1000);
-    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1004 && kernel_ticks == 1004,
-          "an interval of three ticks from tick 1000 sleeps until 1004");
+    CHECK(clock_sleep_call(&p) == 0 && blocked_until == 1003 && kernel_ticks == 1003,
+          "an interval of three ticks from tick 1000 sleeps until 1003");
     rem = remainder();
     CHECK(rem.tv_sec == (int32_t)0xA5A5A5A5, "an interval that ran its length writes nothing");
     ask_clock_sleep(&p, 0, 0, 0, 30000000);
