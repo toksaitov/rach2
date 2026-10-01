@@ -267,6 +267,13 @@ row_xz() {
     has "the version" "$(xz --version | head -n 1)" "5.8.4"
 }
 
+# The interfaces, addresses and routes, through the netlink route socket.
+row_iproute2() {
+    has "ip addr" "$(ip -4 addr show 2>&1)" "inet 10.0.2.15/24"
+    has "ip route" "$(ip route show 2>&1)" "default via 10.0.2.2"
+    has "ip link" "$(ip -o link show 2>&1)" "eth0: <"
+}
+
 # file names a program, a text and a gzip file from the magic database, and
 # looks into the gzip file with -z.
 row_file() {

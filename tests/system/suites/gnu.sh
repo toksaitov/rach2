@@ -213,7 +213,7 @@ echo "gnu-test: scp puts a file on the machine and sftp takes it back, byte for 
 # Each row with the seconds it takes on an idle host under the emulator.
 ROWS="names:120 glibc:120 zlib:120 openssl:180 openssh:600 ncurses:120 less:120
 vim:120 perl:180 curl:600 git:300 coreutils:120 bash:120 grep:120 sed:120
-gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120 file:120
+gawk:120 findutils:120 diffutils:120 patch:120 tar:120 gzip:120 xz:120 file:120 iproute2:120
 make:600 autotools:900 gcc:900 gdb:600 js:600 dbus:120 chromium:1200"
 FAILED=""
 TOTAL=0
