@@ -38,9 +38,23 @@ only:
 .Cm notice ,
 .Cm info
 and
-.Cm debug .
+.Cm debug ,
+in either case, or their numbers, 0 to 7.
+A level with
+.Ql +
+after it stands for it and every level of higher priority, and one with
+.Ql +
+before it for it and every level of lower priority:
+.Cm err+
+is
+.Cm emerg
+to
+.Cm err .
 .It Fl r , Fl Fl raw
 Print each record as the log holds it, its level in angle brackets first.
+It is taken with
+.Fl l
+alone.
 .It Fl t , Fl Fl notime
 Print no time.
 .It Fl T , Fl Fl ctime
@@ -50,6 +64,8 @@ in place of the seconds since boot.
 .It Fl w , Fl Fl follow
 Print the records there are, then each new one as it is made, until
 interrupted.
+The log is read again each second, and a new record is told by the last one
+printed, or by its time once the log's ring has dropped that one.
 .It Fl x , Fl Fl decode
 Print each record's facility and level before it, as
 .Ql kern  :info  : .
@@ -71,8 +87,9 @@ The kernel's log.
 .El
 .Sh EXIT STATUS
 .Nm
-exits with status 1 for an option it does not take or a level it does not
-know, and otherwise with the status of the program that formats the log.
+exits with status 1 for an option it does not take, a level it does not
+know, or a log it cannot read, and otherwise with the status of the program
+that formats the log.
 .Sh EXAMPLES
 .Dl dmesg -T -l err,warn
 .Dl dmesg -w
@@ -83,7 +100,16 @@ An option that would change the buffer was given.
 .It Ql dmesg: unknown level 'LEVEL'
 A level of
 .Fl l
-is not one of the eight names.
+is not one of the eight names or numbers.
+.It Ql dmesg: -r is taken with -l alone
+.Fl r
+was given with
+.Fl t ,
+.Fl T
+or
+.Fl x .
+.It Ql dmesg: /dev/bootlog: cannot read the log
+The caller may not read the log, which is root's.
 .El
 .Sh SEE ALSO
 .Xr bootlog 4 ,
