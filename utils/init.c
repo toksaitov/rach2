@@ -957,6 +957,14 @@ static void report_recovery_keys(void)
  * `/var/run/ifstate`, where `ifup` records the interfaces it has brought up,
  * is removed first: on a disk root the previous boot's record survives, and
  * `ifup -a` would refuse eth0 as already configured and bring up nothing.
+ *
+ * `ifup` runs its commands, `ifconfig` and `udhcpc` among them, through
+ * root's login shell, with the path it was given. BusyBox's ash runs its
+ * applets by name whatever the path, but bash, root's login shell on the GNU
+ * system, finds them only through the path, and init's has no `/sbin`, so
+ * `ifup` gets the four directories of programs for its path. It is not given
+ * a shell by `SHELL`, which it would also take: the strict init holds no
+ * shell's path, as `check-setid` requires.
  */
 static void configure_network(void)
 {
@@ -975,6 +983,7 @@ static void configure_network(void)
         argv[0] = (char *)"ifup";
         argv[1] = (char *)"-a";
         argv[2] = NULL;
+        (void)setenv("PATH", "/sbin:/usr/sbin:/bin:/usr/bin", 1);
         execv("/bin/ifup", argv);
         execv("/bin/busybox", argv); /* the applet, where there is no /bin/ifup */
         _exit(127);
