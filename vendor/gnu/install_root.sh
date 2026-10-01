@@ -147,8 +147,10 @@ ln -s ../proc/self/mounts "$TREE/etc/mtab"
 # itself, as Git does for its editor, find only files. So each applet that
 # no file in /usr/bin, /bin, /usr/sbin or /sbin answers for, as ps, mount
 # and which, is linked to /bin/busybox where BusyBox's own install puts it.
-# The build host runs the root's BusyBox, which is static, for the list.
-"$TREE/bin/busybox" --list-full > "$WORK/applets"
+# The build host runs the BusyBox the manifest stages, which is static, for
+# the list, from the build: the stager writes the tree's files without their
+# modes, which mkext2.sh gives the volume afterwards.
+"$REPO/build/vendor/busybox/busybox" --list-full > "$WORK/applets"
 applets=0
 while IFS= read -r applet; do
     name=${applet##*/}
