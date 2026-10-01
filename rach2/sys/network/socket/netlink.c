@@ -1,7 +1,7 @@
 /*
- * netlink.c: NETLINK_ROUTE sockets. The contract is in netlink.h; what is
- * here is the reading of requests and the building of the answers from the
- * interface records.
+ * netlink.c: NETLINK_ROUTE and NETLINK_SOCK_DIAG sockets. The contract is in
+ * netlink.h; what is here is the reading of requests and the building of the
+ * answers from the interface records and the sockets.
  */
 
 #include "netlink.h"
@@ -10,6 +10,9 @@
 #include "../netif.h"
 #include "../driver/netdev.h"
 #include "../arp/arp.h"
+#include "../ip/ip.h"
+#include "../tcp/tcp.h"
+#include "../../ipc/unix.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -67,6 +70,39 @@
 #define RTPROT_BOOT       3
 #define RTN_UNICAST       1
 #define NUD_REACHABLE     0x02u
+
+/* Linux's uapi sock_diag.h, inet_diag.h and unix_diag.h: the request type,
+ * the sizes of the requests and the messages, the attributes, and the
+ * states, which are TCP's numbers for every kind of socket. */
+#define SOCK_DIAG_BY_FAMILY    20
+#define AF_INET6               10
+#define IPPROTO_RAW            255
+#define DIAG_INET_REQ_LEN      56
+#define DIAG_INET_MSG_LEN      72
+#define DIAG_UNIX_REQ_LEN      24
+#define DIAG_UNIX_MSG_LEN      16
+#define INET_DIAG_REQ_PROTOCOL 3
+#define INET_DIAG_INFO         2
+#define INET_DIAG_CONG         4
+#define INET_DIAG_PROTOCOL     10
+#define TCP_INFO_LEN           104
+#define TCPI_OPT_SACK          2
+#define TCPI_OPT_WSCALE        4
+#define DIAG_TIMER_RETRANS     1
+#define DIAG_TIMER_TIMEWAIT    3
+#define DIAG_TIMER_PROBE       4
+#define DIAG_TICK_US           10000
+#define UNIX_DIAG_NAME         0
+#define UNIX_DIAG_PEER         2
+#define UNIX_DIAG_RQLEN        4
+#define UNIX_DIAG_UID          7
+#define UDIAG_SHOW_NAME        0x01u
+#define UDIAG_SHOW_PEER        0x04u
+#define UDIAG_SHOW_RQLEN       0x10u
+#define UDIAG_SHOW_UID         0x40u
+#define DIAG_ESTABLISHED       1
+#define DIAG_CLOSE             7
+#define DIAG_LISTEN            10
 
 /* Policy: an answer datagram is at most a page, which every reader's buffer
  * holds: Chromium reads with 4096 bytes and BusyBox with 8192. A message is
@@ -138,7 +174,8 @@ int netlink_open(struct socket *sock, int protocol)
     struct netlink_state *st;
     uint32_t flags;
 
-    if (protocol != NETLINK_ROUTE && protocol != NETLINK_KOBJECT_UEVENT) {
+    if (protocol != NETLINK_ROUTE && protocol != NETLINK_SOCK_DIAG &&
+        protocol != NETLINK_KOBJECT_UEVENT) {
         return -EPROTONOSUPPORT;
     }
     st = kzalloc(sizeof(*st));
@@ -581,6 +618,287 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
     end_msg(b, 0, 0);
 }
 
+/* An AF_INET socket as `inet_diag_msg_of` writes it, in the host's order:
+ * with a timer, its kind and the milliseconds left. */
+struct diag_inet {
+    uint8_t state;
+    uint8_t retrans;
+    uint8_t timer;
+    uint16_t sport, dport;
+    uint32_t src, dst;
+    uint32_t expires;
+    uint32_t rqueue, wqueue, uid, inode;
+};
+
+static void put_be16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v >> 8);
+    p[1] = (uint8_t)v;
+}
+
+static void put_be32(uint8_t *p, uint32_t v)
+{
+    put_be16(p, (uint16_t)(v >> 16));
+    put_be16(p + 2, (uint16_t)v);
+}
+
+/* Write `d` into `msg` as an inet_diag_msg, the ports and addresses in
+ * network order and the cookie its inode; with `protocol` not -1, a raw
+ * socket's, the INET_DIAG_PROTOCOL attribute too. Returns `msg`, for the
+ * caller to add attributes to and append. */
+static uint8_t *inet_diag_msg_of(const struct nl_build *b, uint8_t *msg, const struct diag_inet *d,
+                                 int protocol)
+{
+    uint8_t *body = msg_start(b, msg, SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, DIAG_INET_MSG_LEN);
+    uint8_t proto = (uint8_t)protocol;
+
+    body[0] = AF_INET;
+    body[1] = d->state;
+    body[2] = d->timer;
+    body[3] = d->retrans;
+    put_be16(body + 4, d->sport);
+    put_be16(body + 6, d->dport);
+    put_be32(body + 8, d->src);
+    put_be32(body + 24, d->dst);
+    put32(body + 44, d->inode);
+    put32(body + 52, d->expires);
+    put32(body + 56, d->rqueue);
+    put32(body + 60, d->wqueue);
+    put32(body + 64, d->uid);
+    put32(body + 68, d->inode);
+    if (protocol >= 0) {
+        msg_attr(msg, INET_DIAG_PROTOCOL, &proto, 1);
+    }
+    return msg;
+}
+
+/*
+ * The first TCP_INFO_LEN bytes of Linux's `struct tcp_info` for `r`, which
+ * `ss -i` prints: the state, the loss recovery, the timeouts in a row, the
+ * options and window shifts, the retransmission timeout and the round trip
+ * in microseconds, the segment size, the segments in flight, the window and
+ * threshold in segments, and the segments sent again. The block counts in
+ * ticks of 10 ms, so a round trip shorter than a tick is 0.
+ */
+static void tcp_info_of(const struct tcp_row *r, uint8_t *info)
+{
+    uint32_t mss = r->snd_mss ? r->snd_mss : TCP_MSS;
+
+    k_memset(info, 0, TCP_INFO_LEN);
+    info[0] = (uint8_t)tcp_state_to_linux(r->state);
+    info[1] = r->recovering == TCP_RECOVER_FAST ? 3 : r->recovering == TCP_RECOVER_RTO ? 4 : 0;
+    info[2] = r->rto_backoff;
+    info[4] = r->rto_backoff;
+    info[5] = (uint8_t)((r->sack_ok ? TCPI_OPT_SACK : 0) |
+                        (r->snd_wscale || r->rcv_wscale ? TCPI_OPT_WSCALE : 0));
+    info[6] = (uint8_t)((r->snd_wscale & 15u) | (r->rcv_wscale & 15u) << 4);
+    put32(info + 8, r->rto * DIAG_TICK_US);
+    put32(info + 16, mss);
+    put32(info + 24, (r->in_flight + mss - 1) / mss);
+    put32(info + 60, mss + 40);
+    put32(info + 68, r->srtt * (DIAG_TICK_US / 8));
+    put32(info + 72, r->rttvar * (DIAG_TICK_US / 4));
+    put32(info + 76, r->ssthresh / mss);
+    put32(info + 80, r->cwnd / mss);
+    put32(info + 84, TCP_MSS);
+    put32(info + 100, r->retransmits);
+}
+
+/* The timer of `r` that `ss -o` shows, into `d`: TIME_WAIT's end, a
+ * retransmission or a zero-window probe, with the milliseconds left. */
+static void tcp_timer_of(const struct tcp_row *r, struct diag_inet *d)
+{
+    d->timer = 0;
+    d->expires = 0;
+    if (r->state == TCP_TIME_WAIT && r->timewait_left) {
+        d->timer = DIAG_TIMER_TIMEWAIT;
+        d->expires = r->timewait_left * (DIAG_TICK_US / 1000);
+    } else if (r->rto_timer) {
+        d->timer = DIAG_TIMER_RETRANS;
+        d->expires = r->rto_timer * (DIAG_TICK_US / 1000);
+    } else if (r->zwp_timer) {
+        d->timer = DIAG_TIMER_PROBE;
+        d->expires = r->zwp_timer * (DIAG_TICK_US / 1000);
+    }
+}
+
+/* The TCP connections whose states are in the mask `wanted`, with the
+ * TCP information and the congestion control's name when the mask `ext` of
+ * extensions asks for them. */
+static void diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
+{
+    struct tcp_row *rows;
+    struct diag_inet d;
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t info[TCP_INFO_LEN];
+    int i, n = tcp_snapshot(&rows);
+
+    for (i = 0; i < n; i++) {
+        d.state = (uint8_t)tcp_state_to_linux(rows[i].state);
+        if (!(wanted & (1u << d.state))) {
+            continue;
+        }
+        d.retrans = (uint8_t)(rows[i].retransmits > 255 ? 255 : rows[i].retransmits);
+        d.sport = rows[i].local_port;
+        d.dport = rows[i].remote_port;
+        d.src = d.state == DIAG_LISTEN ? 0 : rows[i].local_ip;
+        d.dst = rows[i].remote_ip;
+        d.rqueue = rows[i].rxq;
+        d.wqueue = rows[i].txq;
+        d.uid = rows[i].uid;
+        d.inode = rows[i].inode;
+        tcp_timer_of(&rows[i], &d);
+        inet_diag_msg_of(b, msg, &d, -1);
+        if (ext & (1u << (INET_DIAG_INFO - 1))) {
+            tcp_info_of(&rows[i], info);
+            msg_attr(msg, INET_DIAG_INFO, info, TCP_INFO_LEN);
+        }
+        if (ext & (1u << (INET_DIAG_CONG - 1))) {
+            msg_attr(msg, INET_DIAG_CONG, "reno", 5);
+        }
+        nl_append(b, msg);
+    }
+    if (n >= 0) {
+        kfree(rows);
+    }
+}
+
+/* The UDP sockets, or with `type` SOCK_RAW the raw ones, whose states are
+ * in the mask `wanted`: 1 for a connected socket and 7 for the rest. */
+static void diag_dgram(struct nl_build *b, int type, uint32_t wanted)
+{
+    struct socket_row *rows;
+    struct diag_inet d;
+    uint8_t msg[NL_MSG_MAX];
+    int i, n = socket_snapshot(type, &rows);
+
+    k_memset(&d, 0, sizeof(d));
+    for (i = 0; i < n; i++) {
+        d.state = rows[i].connected ? DIAG_ESTABLISHED : DIAG_CLOSE;
+        if (!(wanted & (1u << d.state))) {
+            continue;
+        }
+        d.sport = rows[i].local_port;
+        if (type == SOCK_RAW && d.sport == 0) {
+            d.sport = IPPROTO_RAW; /* the ioctl descriptor is opened with it */
+        }
+        d.dport = rows[i].connected ? rows[i].remote_port : 0;
+        d.dst = rows[i].connected ? rows[i].remote_ip : 0;
+        d.rqueue = rows[i].rxq;
+        d.uid = rows[i].uid;
+        d.inode = rows[i].inode;
+        nl_append(b, inet_diag_msg_of(b, msg, &d, type == SOCK_RAW ? d.sport : -1));
+    }
+    if (n >= 0) {
+        kfree(rows);
+    }
+}
+
+/* The AF_UNIX sockets whose states are in the mask `wanted`, with the
+ * attributes the mask `show` asks for. */
+static void diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
+{
+    struct unix_row *rows;
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t queues[8];
+    int i, n = unix_snapshot(&rows);
+
+    for (i = 0; i < n; i++) {
+        const struct unix_row *r = &rows[i];
+        uint8_t state = r->listening ? DIAG_LISTEN : r->connected ? DIAG_ESTABLISHED : DIAG_CLOSE;
+        uint8_t *body;
+
+        if (!(wanted & (1u << state))) {
+            continue;
+        }
+        body = msg_start(b, msg, SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, DIAG_UNIX_MSG_LEN);
+        body[0] = AF_UNIX;
+        body[1] = (uint8_t)r->type;
+        body[2] = state;
+        put32(body + 4, r->inode);
+        put32(body + 8, r->inode);
+        if ((show & UDIAG_SHOW_NAME) && r->name_len > 0) {
+            /* A path is given with its NUL, as Linux keeps it; an abstract
+             * name has none. */
+            msg_attr(msg, UNIX_DIAG_NAME, r->path,
+                     (uint16_t)(r->path[0] ? r->name_len + 1 : r->name_len));
+        }
+        if ((show & UDIAG_SHOW_PEER) && r->peer != 0) {
+            msg_attr32(msg, UNIX_DIAG_PEER, r->peer);
+        }
+        if (show & UDIAG_SHOW_RQLEN) {
+            put32(queues, r->rqueue);
+            put32(queues + 4, r->wqueue);
+            msg_attr(msg, UNIX_DIAG_RQLEN, queues, 8);
+        }
+        if (show & UDIAG_SHOW_UID) {
+            msg_attr32(msg, UNIX_DIAG_UID, r->uid);
+        }
+        nl_append(b, msg);
+    }
+    if (n >= 0) {
+        kfree(rows);
+    }
+}
+
+/* The protocol of an AF_INET request `r` of `body` bytes: the byte in the
+ * request, or the INET_DIAG_REQ_PROTOCOL attribute after it, which a
+ * protocol numbered past 255 is asked by. */
+static uint32_t diag_protocol(const uint8_t *r, uint32_t body)
+{
+    uint32_t at = DIAG_INET_REQ_LEN;
+
+    while (at + 4 <= body) {
+        uint16_t alen = get16(r + at);
+
+        if (alen < 4 || at + alen > body) {
+            break;
+        }
+        if (get16(r + at + 2) == INET_DIAG_REQ_PROTOCOL && alen >= 8) {
+            return get32(r + at + 4);
+        }
+        at += (alen + 3u) & ~3u;
+    }
+    return r[1];
+}
+
+/* Answer a NETLINK_SOCK_DIAG request of `type` and `flags`, whose header
+ * is `req` and whose body of `body` bytes follows it. */
+static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
+                        uint32_t body)
+{
+    const uint8_t *r = req + NLMSG_HDRLEN;
+    uint32_t protocol;
+
+    if (type != SOCK_DIAG_BY_FAMILY || body < 1) {
+        end_msg(b, req, -EINVAL);
+        return;
+    }
+    if ((flags & NLM_F_DUMP) != NLM_F_DUMP) {
+        end_msg(b, req, -EOPNOTSUPP);
+        return;
+    }
+    if (r[0] == AF_INET && body >= DIAG_INET_REQ_LEN) {
+        protocol = diag_protocol(r, body);
+        if (protocol == IP_PROTO_TCP) {
+            diag_tcp(b, get32(r + 4), r[2]);
+        } else if (protocol == IP_PROTO_UDP) {
+            diag_dgram(b, SOCK_DGRAM, get32(r + 4));
+        } else if (protocol == IPPROTO_RAW) {
+            diag_dgram(b, SOCK_RAW, get32(r + 4));
+        } else {
+            end_msg(b, req, -ENOENT);
+            return;
+        }
+    } else if (r[0] == AF_UNIX && body >= DIAG_UNIX_REQ_LEN) {
+        diag_unix(b, get32(r + 4), get32(r + 12));
+    } else if (r[0] != AF_INET6) {
+        end_msg(b, req, -ENOENT);
+        return;
+    }
+    end_msg(b, 0, 0);
+}
+
 int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
 {
     struct nl_build *b;
@@ -609,7 +927,9 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
             break;
         }
         b->seq = get32(buf + at + 8);
-        if (get16(buf + at + 6) & NLM_F_REQUEST) {
+        if ((get16(buf + at + 6) & NLM_F_REQUEST) && st->protocol == NETLINK_SOCK_DIAG) {
+            diag_answer(b, buf + at, get16(buf + at + 4), get16(buf + at + 6), mlen - NLMSG_HDRLEN);
+        } else if (get16(buf + at + 6) & NLM_F_REQUEST) {
             answer(b, buf + at, get16(buf + at + 4), get16(buf + at + 6), mlen - NLMSG_HDRLEN);
         }
         at += (mlen + 3u) & ~3u;

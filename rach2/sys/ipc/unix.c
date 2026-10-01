@@ -292,8 +292,15 @@ int unix_snapshot(struct unix_row **rows)
         out[n].listening = s->state == US_LISTENING;
         out[n].connected = s->state == US_CONNECTED;
         out[n].inode = s->inode;
+        out[n].uid = s->uid;
+        out[n].peer = s->peer ? s->peer->inode : 0;
+        out[n].rqueue = s->state == US_LISTENING ? s->acc_len : s->rq_bytes;
+        out[n].wqueue = s->state == US_LISTENING ? (uint32_t)s->backlog
+                        : s->peer                ? s->peer->rq_bytes
+                                                 : 0;
         out[n].name_len = s->name.len;
         k_memcpy(out[n].path, s->name.path, s->name.len);
+        out[n].path[s->name.len] = '\0';
         n++;
     }
     *rows = out;

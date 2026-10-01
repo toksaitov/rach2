@@ -2584,6 +2584,18 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].tx_refused = t->tx_refused;
         out[n].retransmits = t->retransmits;
         out[n].refused_for = t->refused_since ? kernel_ticks + 1 - t->refused_since : 0;
+        out[n].snd_mss = t->snd_mss;
+        out[n].snd_wscale = t->snd_wscale;
+        out[n].rcv_wscale = t->rcv_wscale;
+        out[n].sack_ok = t->sack_ok;
+        out[n].rto_backoff = t->rto_backoff;
+        out[n].recovering = t->recovering;
+        out[n].rto = t->rto;
+        out[n].srtt = t->srtt;
+        out[n].rttvar = t->rttvar;
+        out[n].ssthresh = t->ssthresh;
+        out[n].timewait_left =
+            (int32_t)(t->timewait_until - kernel_ticks) > 0 ? t->timewait_until - kernel_ticks : 0;
         n++;
     }
     net_unlock(flags);

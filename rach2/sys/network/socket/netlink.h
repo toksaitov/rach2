@@ -22,6 +22,15 @@ struct socket;
  * this machine. It sends no notifications: a socket bound to multicast
  * groups is taken and hears nothing.
  *
+ * A socket of NETLINK_SOCK_DIAG answers the dump SOCK_DIAG_BY_FAMILY, which
+ * `ss` lists sockets with: for AF_INET the TCP, UDP or raw sockets in the
+ * states asked for, as `struct inet_diag_msg`, the raw ones with their
+ * protocol; for AF_UNIX the local sockets, as `struct unix_diag_msg` with the
+ * name, the peer, the queues and the owner when asked; and for AF_INET6 none.
+ * Another family or protocol is answered with ENOENT, which is what Linux
+ * answers when no module handles it, and a filter's bytecode is not run:
+ * `ss` judges each socket by its filter again.
+ *
  * A socket of NETLINK_KOBJECT_UEVENT, which udev's monitors open to hear of
  * devices that come and go, is made, bound and polled like the other and
  * hears nothing: the kernel sends no uevents. What is sent on it is dropped.
@@ -31,6 +40,7 @@ struct socket;
 
 #define AF_NETLINK             16
 #define NETLINK_ROUTE          0
+#define NETLINK_SOCK_DIAG      4
 #define NETLINK_KOBJECT_UEVENT 15
 
 /* The sockaddr_nl: the family, two bytes of padding, the port id and the
@@ -38,8 +48,8 @@ struct socket;
 #define SOCKADDR_NL_LEN 12
 
 /** Give `sock` the state of a netlink socket of `protocol`; 0, -ENOMEM, or
- * -EPROTONOSUPPORT for a protocol other than NETLINK_ROUTE and
- * NETLINK_KOBJECT_UEVENT. */
+ * -EPROTONOSUPPORT for a protocol other than NETLINK_ROUTE,
+ * NETLINK_SOCK_DIAG and NETLINK_KOBJECT_UEVENT. */
 int netlink_open(struct socket *sock, int protocol);
 
 /** Free the state of a netlink socket and what is queued on it. */

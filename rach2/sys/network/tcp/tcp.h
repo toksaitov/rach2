@@ -337,6 +337,23 @@ struct tcp_row {
     uint32_t tx_refused;
     uint32_t refused_for;
     uint32_t retransmits;
+    /* What `ss -i` and `ss -o` report: the segment size and the window
+     * shifts, whether both sides permit selective acknowledgement, the
+     * retransmission timeout and the smoothed round trip and its variance
+     * in ticks (the last two in eighths and quarters, as the block keeps
+     * them), the slow-start threshold, the timeouts in a row, the loss
+     * recovery under way, and the ticks left of TIME_WAIT. */
+    uint16_t snd_mss;
+    uint8_t snd_wscale;
+    uint8_t rcv_wscale;
+    uint8_t sack_ok;
+    uint8_t rto_backoff;
+    uint8_t recovering;
+    uint32_t rto;
+    uint32_t srtt;
+    uint32_t rttvar;
+    uint32_t ssthresh;
+    uint32_t timewait_left;
 };
 
 /**

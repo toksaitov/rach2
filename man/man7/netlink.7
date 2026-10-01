@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm netlink
-.Nd the kernel's answers about interfaces, addresses and routes
+.Nd the kernel's answers about interfaces, addresses, routes and sockets
 .Sh SYNOPSIS
 .In sys/socket.h
 .In linux/netlink.h
@@ -27,6 +27,44 @@ which are the same socket, and may carry
 and
 .Dv SOCK_NONBLOCK .
 Any user may open one.
+.Pp
+A socket of protocol
+.Dv NETLINK_SOCK_DIAG
+(4) answers the dump request
+.Dv SOCK_DIAG_BY_FAMILY
+(20), with which
+.Xr ss 8
+lists sockets.
+For
+.Dv AF_INET
+and the protocol 6, 17 or 255 it gives the TCP, UDP or raw sockets in the
+states the request's mask has, each a
+.Vt struct inet_diag_msg
+with the ports and addresses, the queues, the owner and the inode, and a
+raw socket's protocol in an
+.Dv INET_DIAG_PROTOCOL
+attribute; the states are TCP's numbers, a datagram socket being 1 when
+connected and 7 otherwise, and a listener's local address is 0.0.0.0.
+For
+.Dv AF_UNIX
+it gives the local sockets with a descriptor open, each a
+.Vt struct unix_diag_msg
+with the name, the peer's inode, the two queues and the owner when the
+request's
+.Fa udiag_show
+asks for them.
+For
+.Dv AF_INET6
+the dump is empty.
+Another family or protocol is answered with
+.Er ENOENT ,
+as Linux answers when no module handles it, and a request without
+.Dv NLM_F_DUMP
+with
+.Er EOPNOTSUPP .
+A filter's bytecode in the request is not run; the timers, the extensions
+.Fa idiag_ext
+asks for, and the memory and TCP information are not given.
 .Pp
 A socket of protocol
 .Dv NETLINK_KOBJECT_UEVENT

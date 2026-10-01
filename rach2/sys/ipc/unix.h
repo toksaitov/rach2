@@ -69,15 +69,22 @@ uint32_t unix_inode(const fd_entry_t *e);
 /** Whether a live AF_UNIX socket has the inode number `ino`. */
 int unix_inode_used(uint32_t ino);
 
-/* One AF_UNIX socket with a descriptor open, copied out for /proc/net/unix.
- * `path` has `name_len` bytes of the name, an abstract one beginning with a
- * NUL byte, and 0 for none. */
+/* One AF_UNIX socket with a descriptor open, copied out for /proc/net/unix
+ * and the socket diagnostics. `path` has `name_len` bytes of the name, an
+ * abstract one beginning with a NUL byte, 0 for none, and a NUL after them.
+ * `peer` is the connected socket's inode, 0 for none; a listener's queues
+ * are the connections waiting for accept and its backlog, and another's the
+ * bytes waiting to be read on it and on its peer. */
 struct unix_row {
     uint32_t refs;
     int type;
     int listening;
     int connected;
     uint32_t inode;
+    uint32_t uid;
+    uint32_t peer;
+    uint32_t rqueue;
+    uint32_t wqueue;
     uint32_t name_len;
     char path[UNIX_PATH_MAX + 1];
 };
