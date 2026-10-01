@@ -1161,6 +1161,10 @@ void probe_main(unsigned int *sp)
               uint_after(buf, n, "MemFree:") + uint_after(buf, n, "Buffers:") +
                   uint_after(buf, n, "Cached:") + uint_after(buf, n, "Slab:"),
           "and counts no page twice in the four nmeter adds up");
+    check(uint_after(buf, n, "HeapPages:") * 4 >= uint_after(buf, n, "Buffers:") &&
+              uint_after(buf, n, "Slab:") ==
+                  uint_after(buf, n, "HeapPages:") * 4 - uint_after(buf, n, "Buffers:"),
+          "and its Slab is the heap's pages but the buffer cache's, which the heap holds");
 
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");

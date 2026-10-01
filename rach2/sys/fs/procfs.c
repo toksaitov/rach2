@@ -1847,6 +1847,9 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     uint32_t cached = pc_resident();
     uint32_t heap_pages = 0, heap_bytes = 0;
 
+    /* Every count before the first append, which may take a heap page. */
+    kheap_stats(&heap_pages, &heap_bytes);
+
     ap_str(t, "MemTotal:       ");
     ap_frames_as_kb(t, total);
     ap_str(t, "MemFree:        ");
@@ -1857,7 +1860,6 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, buffers);
     ap_str(t, "Cached:         ");
     ap_frames_as_kb(t, cached);
-    kheap_stats(&heap_pages, &heap_bytes);
     ap_str(t, "HeapPages:      ");
     ap_u32(t, heap_pages);
     ap_str(t, "\n");
